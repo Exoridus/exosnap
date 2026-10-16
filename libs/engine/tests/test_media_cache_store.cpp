@@ -5,6 +5,7 @@
 #include <gtest/gtest.h>
 
 #include <algorithm>
+#include <array>
 #include <chrono>
 #include <cstdint>
 #include <cstdio>
@@ -241,4 +242,78 @@ TEST(MediaCacheStore, ClearRemovesEverything) {
     EXPECT_EQ(store.EntryCount(), 0u);
     EXPECT_EQ(store.TotalBytes(), 0u);
     EXPECT_TRUE(FilesUnder(dir.path, ".test").empty());
+}
+TEST(MediaCacheStore, StreamingWriterReadsStagingAndPublishesWithIntegrity) {
+    TempDir dir;
+    const auto payload = Payload(180003, 53);
+    const auto key = Key(99);
+    std::string error;
+    {
+        MediaCacheStore store(Config(dir.path));
+        auto writer = store.BeginWrite(key, payload.size(), error);
+        ASSERT_NE(writer, nullptr) << error;
+        EXPECT_FALSE(store.Contains(key));
+        for (std::size_t at = 0; at < payload.size(); at += 4093) {
+            const auto count = std::min<std::size_t>(4093, payload.size() - at);
+            ASSERT_TRUE(writer->Write(at, std::span(payload).subspan(at, count)));
+        }
+        std::array<std::uint8_t, 99> slice{};
+        ASSERT_TRUE(writer->Read(4077, slice));
+        EXPECT_TRUE(std::equal(slice.begin(), slice.end(), payload.begin() + 4077));
+        EXPECT_FALSE(writer->Write(payload.size(), slice));
+        ASSERT_TRUE(writer->Publish(error)) << error;
+        EXPECT_EQ(store.Read(key), payload);
+    }
+    {
+        std::fstream file(dir.path / key.substr(0, 2) / (key + ".v1.test"),
+                          std::ios::in | std::ios::out | std::ios::binary);
+        ASSERT_TRUE(file.good());
+        file.seekp(200);
+        file.put('!');
+    }
+    MediaCacheStore reopened(Config(dir.path));
+    EXPECT_FALSE(reopened.OpenVerified(key));
+    EXPECT_EQ(reopened.Stats().rejected, 1u);
+}
+
+TEST(MediaCacheStore, StreamingAbortAndClearInvalidateWritersWithoutPublication) {
+    TempDir dir;
+    MediaCacheStore store(Config(dir.path));
+    std::string error;
+    {
+        auto writer = store.BeginWrite(Key(1), 200000, error);
+        ASSERT_NE(writer, nullptr);
+        ASSERT_TRUE(writer->Write(200, Payload(8192, 7)));
+        EXPECT_EQ(FilesUnder(dir.path, ".tmp").size(), 1u);
+    }
+    EXPECT_TRUE(FilesUnder(dir.path, ".tmp").empty());
+    auto writer = store.BeginWrite(Key(2), 200000, error);
+    ASSERT_NE(writer, nullptr);
+    store.Clear();
+    EXPECT_FALSE(writer->Write(0, Payload(8192, 1)));
+    EXPECT_FALSE(writer->Publish(error));
+    EXPECT_EQ(store.EntryCount(), 0u);
+    EXPECT_TRUE(FilesUnder(dir.path, ".tmp").empty());
+    EXPECT_NE(store.BeginWrite(Key(3), 200000, error), nullptr);
+}
+
+TEST(MediaCacheStore, StreamingHashCancellationKeepsThePublishedEntryAndRemovesStaging) {
+    TempDir dir;
+    MediaCacheStore store(Config(dir.path));
+    const auto key = Key(42);
+    const auto original = Payload(101, 29);
+    const auto replacement = Payload(4 * 64 * 1024 + 1, 91);
+    std::string error;
+    ASSERT_TRUE(store.Publish(key, original, error));
+    {
+        auto writer = store.BeginWrite(key, replacement.size(), error);
+        ASSERT_NE(writer, nullptr) << error;
+        ASSERT_TRUE(writer->Write(0, replacement));
+        int checkpoints = 0;
+        EXPECT_FALSE(writer->Publish(error, [&]() { return ++checkpoints <= 3; }));
+        EXPECT_EQ(checkpoints, 4);
+        EXPECT_EQ(store.Read(key), original);
+        EXPECT_EQ(store.Stats().published, 1u);
+    }
+    EXPECT_TRUE(FilesUnder(dir.path, ".tmp").empty());
 }

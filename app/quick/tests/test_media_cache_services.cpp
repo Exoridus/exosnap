@@ -91,6 +91,7 @@ std::size_t FilesWithSuffix(const std::filesystem::path& root, const std::string
 struct DecoderControl {
     std::atomic<int> opens{0};
     std::atomic<int> calls{0};
+    std::atomic<int> closes{0};
     std::mutex mutex;
     std::condition_variable cv;
     bool gated = false;
@@ -120,6 +121,9 @@ class SyntheticDecoder final : public engine::WaveformAudioDecoder {
   public:
     explicit SyntheticDecoder(std::shared_ptr<DecoderControl> control) : control_(std::move(control)) {
     }
+    ~SyntheticDecoder() override {
+        control_->closes.fetch_add(1);
+    }
     bool Decode(std::int64_t first, std::uint32_t frames, std::vector<float>& out, std::string&) override {
         {
             std::unique_lock lock(control_->mutex);
@@ -142,7 +146,8 @@ class SyntheticDecoder final : public engine::WaveformAudioDecoder {
 };
 
 WaveformCacheService::DecoderFactory Factory(const std::shared_ptr<DecoderControl>& control) {
-    return [control](const std::filesystem::path&, std::uint32_t, std::string&, const std::atomic<bool>*) {
+    return [control](const std::filesystem::path&, std::uint32_t, std::string&, const std::atomic<bool>*,
+                     const std::array<std::uint8_t, 32>&) {
         control->opens.fetch_add(1);
         return std::make_unique<SyntheticDecoder>(control);
     };
@@ -225,7 +230,34 @@ TEST(WaveformCacheService, AnalysesOnceAndAWarmCacheNeverDecodes) {
     EXPECT_EQ(warm->levelCount(key), engine::WaveformLevelCount(144000));
 }
 
-TEST(WaveformCacheService, AnalysisBudgetRejectsBeforeOpeningDecoder) {
+TEST(WaveformCacheService, LongSourceUsesBoundedAnalysisWorkingSet) {
+    WaveformFixture fixture;
+    WaveformCacheService::Config config;
+    config.root = fixture.root;
+    config.disk_budget_bytes = 64ull << 20;
+    config.analysis_budget_bytes = 2u << 20;
+    config.chunk_frames = 48000;
+    WaveformCacheService service(config, Factory(fixture.control));
+    const auto key = service.request(SourceKey(77), fixture.source_path, 42ll * 60 * 1'000'000);
+    ASSERT_TRUE(WaitFor(
+        [&]() {
+            return service.state(key) == WaveformCacheService::State::Ready ||
+                   service.state(key) == WaveformCacheService::State::Failed;
+        },
+        120000));
+    ASSERT_EQ(service.state(key), WaveformCacheService::State::Ready);
+    EXPECT_EQ(service.completedSamples(key), 42ll * 60 * 48000);
+    EXPECT_EQ(fixture.control->opens.load(), 1);
+    EXPECT_EQ(fixture.control->calls.load(), 42 * 60);
+    EXPECT_LE(service.memoryBytesForTest(), config.memory_budget_bytes);
+    EXPECT_LE(service.analysisMemoryBytesForTest(), config.analysis_budget_bytes);
+    std::vector<WaveformPeak> peaks;
+    const auto last = engine::WaveformBucketCount(42ull * 60 * 48000, 0) - 1;
+    ASSERT_GT(ReadBlockBlocking(service, key, 0, last / kWaveformBlockBuckets, peaks), 0u);
+    EXPECT_EQ(peaks[(last % kWaveformBlockBuckets) * 2].max,
+              engine::QuantizeWaveformValue(StepAmplitude(static_cast<std::int64_t>(last * 128))));
+}
+TEST(WaveformCacheService, DiskBudgetRejectsBeforeOpeningDecoder) {
     WaveformFixture fixture;
     auto service = fixture.Service();
     const auto key = service->request(SourceKey(1), fixture.source_path, 86'400'000'000);
@@ -242,8 +274,8 @@ TEST(WaveformCacheService, DestructionCancelsDecoderOpening) {
     config.root = fixture.root;
     auto service = std::make_unique<WaveformCacheService>(
         config,
-        [&](const std::filesystem::path&, std::uint32_t, std::string&,
-            const std::atomic<bool>* cancelled) -> std::unique_ptr<engine::WaveformAudioDecoder> {
+        [&](const std::filesystem::path&, std::uint32_t, std::string&, const std::atomic<bool>* cancelled,
+            const std::array<std::uint8_t, 32>&) -> std::unique_ptr<engine::WaveformAudioDecoder> {
             opening = true;
             QElapsedTimer timer;
             timer.start();
@@ -320,7 +352,7 @@ TEST(WaveformCacheService, PartialResultsAreReadableAndCancellationPublishesNoth
     ASSERT_TRUE(WaitFor([&]() { return service->completedSamples(key) >= 9600; }));
     EXPECT_EQ(service->state(key), WaveformCacheService::State::Analyzing);
     std::vector<WaveformPeak> peaks;
-    const auto partial = service->readBlock(key, 0, 0, peaks);
+    const auto partial = ReadBlockBlocking(*service, key, 0, 0, peaks);
     EXPECT_EQ(partial, 9600u / 128u);
     EXPECT_NEAR(engine::WaveformPeakToFloat(peaks[0].max), StepAmplitude(0), 1e-4f);
 
@@ -330,6 +362,103 @@ TEST(WaveformCacheService, PartialResultsAreReadableAndCancellationPublishesNoth
     EXPECT_EQ(service->storeForTest().EntryCount(), 0u);
     EXPECT_EQ(FilesWithSuffix(fixture.root, ".wave"), 0u);
     EXPECT_EQ(FilesWithSuffix(fixture.root, ".tmp"), 0u);
+}
+
+TEST(WaveformCacheService, ClearDropsQueuedProgressAndPrivateStaging) {
+    WaveformFixture fixture;
+    fixture.control->gated = true;
+    auto service = fixture.Service();
+    struct UnblockDecoder {
+        std::shared_ptr<DecoderControl> control;
+        ~UnblockDecoder() {
+            control->Open();
+        }
+    } unblock{fixture.control};
+    QSignalSpy progress(service.get(), &WaveformCacheService::progress);
+    QSignalSpy ready(service.get(), &WaveformCacheService::ready);
+    QSignalSpy failed(service.get(), &WaveformCacheService::failed);
+    const auto key = service->request(SourceKey(44), fixture.source_path, kThreeSecondsUs);
+    fixture.control->Release();
+    QElapsedTimer timer;
+    timer.start();
+    while (service->completedSamples(key) < 4736 && timer.elapsed() < 5000)
+        QThread::msleep(1);
+    ASSERT_GE(service->completedSamples(key), 4736);
+    service->clearCache();
+    fixture.control->Open();
+    ASSERT_TRUE(WaitFor([&]() { return fixture.control->closes.load() > 0; }));
+    QCoreApplication::processEvents();
+    EXPECT_EQ(service->state(key), WaveformCacheService::State::Unknown);
+    EXPECT_EQ(progress.count(), 0);
+    EXPECT_EQ(ready.count(), 0);
+    EXPECT_EQ(failed.count(), 0);
+    EXPECT_EQ(FilesWithSuffix(fixture.root, ".tmp"), 0u);
+    EXPECT_EQ(service->storeForTest().EntryCount(), 0u);
+}
+
+TEST(WaveformCacheService, ProgressivePartialBlocksStayFreshThroughOddTailPublication) {
+    WaveformFixture fixture;
+    fixture.control->gated = true;
+    WaveformCacheService::Config config;
+    config.root = fixture.root;
+    config.chunk_frames = 8192;
+    WaveformCacheService service(config, Factory(fixture.control));
+    struct UnblockDecoder {
+        std::shared_ptr<DecoderControl> control;
+        ~UnblockDecoder() {
+            control->Open();
+        }
+    } unblock{fixture.control};
+    const auto key = service.request(SourceKey(45), fixture.source_path, 170688);
+    fixture.control->Release();
+    ASSERT_TRUE(WaitFor([&]() { return service.completedSamples(key) == 8192; }));
+    ASSERT_EQ(service.totalSamples(key), 8193);
+    ASSERT_EQ(service.state(key), WaveformCacheService::State::Analyzing);
+
+    std::vector<WaveformPeak> peaks;
+    ASSERT_EQ(service.readBlock(key, 1, 0, peaks), 32u);
+    EXPECT_EQ(peaks[62].max, engine::QuantizeWaveformValue(0.875));
+    EXPECT_EQ(service.memoryBytesForTest(), 0u);
+    ASSERT_EQ(service.readBlock(key, 0, 0, peaks), 64u);
+    EXPECT_EQ(service.memoryBytesForTest(), 0u);
+
+    fixture.control->Open();
+    ASSERT_TRUE(WaitFor([&]() { return service.state(key) == WaveformCacheService::State::Ready; }));
+    ASSERT_EQ(ReadBlockBlocking(service, key, 1, 0, peaks), 33u);
+    ASSERT_EQ(peaks.size(), 66u);
+    EXPECT_EQ(peaks[64], (WaveformPeak{8192, 8192, 8192}));
+    EXPECT_EQ(peaks[65], (WaveformPeak{-8192, -8192, 8192}));
+    EXPECT_GT(service.memoryBytesForTest(), 0u);
+    EXPECT_EQ(service.readBlock(key, 1, 0, peaks), 33u);
+    ASSERT_EQ(ReadBlockBlocking(service, key, 0, 0, peaks), 65u);
+    EXPECT_EQ(peaks[128], (WaveformPeak{8192, 8192, 8192}));
+    EXPECT_EQ(fixture.control->calls.load(), 2);
+}
+
+TEST(WaveformCacheService, EvictedPublishedLayoutAutomaticallyReanalysesOnce) {
+    WaveformFixture fixture;
+    auto service = fixture.Service(40 * 1024);
+    const auto source_a = SourceKey(46);
+    const auto key_a = service->request(source_a, fixture.source_path, kThreeSecondsUs);
+    ASSERT_TRUE(WaitFor([&]() { return service->state(key_a) == WaveformCacheService::State::Ready; }));
+    const auto key_b = service->request(SourceKey(47), fixture.source_path, kThreeSecondsUs);
+    ASSERT_TRUE(WaitFor([&]() { return service->state(key_b) == WaveformCacheService::State::Ready; }));
+    ASSERT_FALSE(service->storeForTest().Contains(key_a.toStdString()));
+    const auto opens = service->decoderOpensForTest();
+    service->setForegroundBusy(true);
+    std::vector<WaveformPeak> peaks;
+    EXPECT_EQ(service->readBlock(key_a, 0, 0, peaks), 0u);
+    ASSERT_TRUE(WaitFor([&]() { return service->state(key_a) == WaveformCacheService::State::Queued; }, 5000));
+    EXPECT_TRUE(service->sourceAvailable(key_a));
+
+    EXPECT_EQ(service->decoderOpensForTest(), opens);
+    service->setForegroundBusy(false);
+    ASSERT_TRUE(WaitFor([&]() { return service->state(key_a) == WaveformCacheService::State::Ready; }));
+    EXPECT_EQ(service->decoderOpensForTest(), opens + 1);
+    EXPECT_EQ(service->request(source_a, fixture.source_path, kThreeSecondsUs), key_a);
+    ASSERT_GT(ReadBlockBlocking(*service, key_a, 0, 0, peaks), 0u);
+    EXPECT_EQ(peaks[0], (WaveformPeak{4096, 4096, 4096}));
+    EXPECT_EQ(service->decoderOpensForTest(), opens + 1);
 }
 
 TEST(WaveformCacheService, ForegroundBusyPausesAnalysis) {
@@ -431,6 +560,102 @@ TEST(WaveformCacheService, RealFixturesThroughTheServiceAndThroughput) {
     }
 }
 
+TEST(WaveformCacheService, RealSourceBoundedStreamingBenchmark) {
+    const QString path = qEnvironmentVariable("EXOSNAP_WAVEFORM_BENCHMARK_FILE");
+    if (path.isEmpty())
+        GTEST_SKIP() << "Set EXOSNAP_WAVEFORM_BENCHMARK_FILE to real audio.";
+    EnsureApplication();
+    const auto metadata = engine::ProbeEditMedia(std::filesystem::path(path.toStdWString()));
+    ASSERT_TRUE(metadata.error.empty()) << metadata.error;
+    engine::WaveformSourceKey source;
+    source.content_sha256 = metadata.content_sha256;
+    bool found = false;
+    for (const auto& stream : metadata.streams)
+        if (stream.kind == engine::TimelineStreamKind::Audio) {
+            source.container_index = stream.container_index;
+            found = true;
+            break;
+        }
+    ASSERT_TRUE(found);
+    QTemporaryDir temp;
+    WaveformCacheService::Config config;
+    config.root = std::filesystem::path(temp.path().toStdWString());
+    config.analysis_budget_bytes = 2u << 20;
+    QString key;
+    {
+        WaveformCacheService service(config, {});
+        QSignalSpy failures(&service, &WaveformCacheService::failed);
+        const auto started = std::chrono::steady_clock::now();
+        key = service.request(source, path, metadata.duration_us);
+        ASSERT_TRUE(WaitFor(
+            [&]() {
+                return service.state(key) == WaveformCacheService::State::Ready ||
+                       service.state(key) == WaveformCacheService::State::Failed;
+            },
+            600000));
+        ASSERT_EQ(service.state(key), WaveformCacheService::State::Ready)
+            << (failures.empty() ? "" : failures.at(0).at(1).toString().toStdString());
+        const double seconds = std::chrono::duration<double>(std::chrono::steady_clock::now() - started).count();
+        std::cout << "[waveform-benchmark] file=" << path.toStdString() << " elapsed_s=" << seconds
+                  << " samples=" << service.totalSamples(key) << " decode_calls=" << service.decodeCallsForTest()
+                  << " seeks=" << service.decoderSeeksForTest() << " decoded_frames=" << service.decodedFramesForTest()
+                  << " analysis_buffer_bytes=" << service.analysisMemoryBytesForTest()
+                  << " disk_bytes=" << service.storeForTest().TotalBytes() << '\n';
+        EXPECT_LE(service.analysisMemoryBytesForTest(), config.analysis_budget_bytes);
+        std::vector<WaveformPeak> peaks;
+        const auto buckets = engine::WaveformBucketCount(static_cast<std::uint64_t>(service.totalSamples(key)), 0);
+        ASSERT_GT(ReadBlockBlocking(service, key, 0, (buckets - 1) / kWaveformBlockBuckets, peaks), 0u);
+        EXPECT_LE(service.memoryBytesForTest(), config.memory_budget_bytes);
+    }
+    for (int cycle = 0; cycle < 8; ++cycle) {
+        WaveformCacheService warm(config, {});
+        warm.request(source, path, metadata.duration_us);
+        ASSERT_TRUE(WaitFor([&]() { return warm.state(key) == WaveformCacheService::State::Ready; }));
+        EXPECT_EQ(warm.decoderOpensForTest(), 0u) << "cycle=" << cycle;
+        EXPECT_EQ(warm.decodeCallsForTest(), 0u) << "cycle=" << cycle;
+        EXPECT_EQ(warm.decoderSeeksForTest(), 0u) << "cycle=" << cycle;
+        std::vector<WaveformPeak> peaks;
+        EXPECT_GT(ReadBlockBlocking(warm, key, 0, 0, peaks), 0u) << "cycle=" << cycle;
+        EXPECT_LE(warm.memoryBytesForTest(), config.memory_budget_bytes);
+    }
+    std::cout << "[waveform-benchmark] warm_cycles=8 decode_calls=0 seeks=0\n";
+}
+TEST(WaveformCacheService, RealQueuedReplacementCannotPublishUnderOriginalIdentity) {
+    const auto directory = FixtureDirectory();
+    if (!directory)
+        GTEST_SKIP() << "Set EXOSNAP_EDIT_RENDER_FIXTURES to generated red/blue media.";
+    EnsureApplication();
+    const auto original = *directory / "red.mkv";
+    const auto replacement = *directory / "blue.mkv";
+    const auto metadata = engine::ProbeEditMedia(original);
+    ASSERT_TRUE(metadata.error.empty()) << metadata.error;
+    engine::WaveformSourceKey source;
+    source.content_sha256 = metadata.content_sha256;
+    for (const auto& stream : metadata.streams)
+        if (stream.kind == engine::TimelineStreamKind::Audio) {
+            source.container_index = stream.container_index;
+            break;
+        }
+    QTemporaryDir temp;
+    const auto queued = std::filesystem::path(temp.filePath(QStringLiteral("queued.mkv")).toStdWString());
+    std::filesystem::copy_file(original, queued);
+    WaveformCacheService::Config config;
+    config.root = std::filesystem::path(temp.filePath(QStringLiteral("cache")).toStdWString());
+    WaveformCacheService service(config, {});
+    service.setForegroundBusy(true);
+    const auto key = service.request(source, QString::fromStdWString(queued.wstring()), metadata.duration_us);
+    std::filesystem::copy_file(replacement, queued, std::filesystem::copy_options::overwrite_existing);
+    service.setForegroundBusy(false);
+    ASSERT_TRUE(WaitFor([&]() { return service.state(key) == WaveformCacheService::State::Failed; }));
+    EXPECT_EQ(service.decodeCallsForTest(), 0u);
+    EXPECT_FALSE(service.storeForTest().Contains(key.toStdString()));
+    EXPECT_EQ(FilesWithSuffix(config.root, ".tmp"), 0u);
+    EXPECT_EQ(service.request(source, QString::fromStdWString(original.wstring()), metadata.duration_us), key);
+    ASSERT_TRUE(WaitFor([&]() { return service.state(key) == WaveformCacheService::State::Ready; }));
+    std::vector<WaveformPeak> peaks;
+    ASSERT_GT(ReadBlockBlocking(service, key, 0, 0, peaks), 8u);
+    EXPECT_NEAR(engine::WaveformPeakToFloat(peaks[4].max), 0.25f, 1e-3f);
+}
 // ---- Waveform item ----
 
 class TestableWaveformItem : public ExoWaveformItem {

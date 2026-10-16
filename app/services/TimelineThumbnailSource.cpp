@@ -330,7 +330,10 @@ void TimelineThumbnailSource::serveBrokerJob(const ThumbnailRequestBroker::Job& 
         engine.Close();
         engine_path.clear();
         std::string error;
-        if (!engine.Open(source->path, error, &shutdown_cancelled_)) {
+        if (!engine.Open(source->path, error, &shutdown_cancelled_) ||
+            !engine.ValidateContentIdentity(source->content_sha256, error, &shutdown_cancelled_)) {
+            engine.Close();
+            engine_identity.clear();
             broker_->Complete(job, QImage());
             return;
         }
@@ -430,7 +433,13 @@ void TimelineThumbnailSource::workerLoop() {
                         clip_content = source->content_sha256;
             }
             std::string error;
-            open = engine->Open(open_job->path, error);
+            open = engine->Open(open_job->path, error, &shutdown_cancelled_);
+            if (open && clip_content)
+                open = engine->ValidateContentIdentity(*clip_content, error, &shutdown_cancelled_);
+            if (!open) {
+                engine->Close();
+                clip_content.reset();
+            }
             const int w = open ? engine->VideoWidth() : 0;
             const int h = open ? engine->VideoHeight() : 0;
             QStringList audio_names;

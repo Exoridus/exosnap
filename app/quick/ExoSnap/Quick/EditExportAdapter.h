@@ -211,6 +211,7 @@ class EditExportAdapter : public QObject {
     bool overwrite_confirmed_ = false;
     QVariantMap review_outcome_;
     std::shared_ptr<PreparedExport> prepared_;
+    std::function<void(uint64_t)> source_verified_;
 
     struct RunState {
         std::atomic<bool> cancel{false};

@@ -1,9 +1,11 @@
+#include <exosnap/engine/edit_player_engine.h>
 #include <exosnap/engine/edit_timeline.h>
 #include <exosnap/engine/edit_timeline_export.h>
 #include <exosnap/engine/edit_types.h>
 #include <exosnap/engine/media_cache_store.h>
 #include <exosnap/engine/waveform_cache.h>
 
+#include "test_unique_temp.h"
 #include <gtest/gtest.h>
 
 #define WIN32_LEAN_AND_MEAN
@@ -13,17 +15,21 @@
 #include <windows.h>
 
 #include <algorithm>
+#include <array>
 #include <chrono>
 #include <cmath>
+#include <cstddef>
 #include <cstdint>
 #include <cstring>
 #include <filesystem>
+#include <fstream>
 #include <functional>
 #include <iostream>
 #include <numbers>
 #include <optional>
 #include <span>
 #include <string>
+#include <system_error>
 #include <utility>
 #include <vector>
 
@@ -271,4 +277,149 @@ TEST(WaveformAnalysis, RealFixturesYieldConstantDcPerChannel) {
             }
         }
     }
+}
+TEST(WaveformStreaming, PayloadIsByteEquivalentAcrossOddTailsAndChunkSizes) {
+    const auto root = exosnap_test::UniqueTempPath("wave_stream");
+    MediaCacheStoreConfig config;
+    config.root = root;
+    config.budget_bytes = 8u << 20;
+    config.kind = {'W', 'A', 'V', 'E'};
+    config.extension = ".wave";
+    MediaCacheStore store(config);
+    std::string error;
+    for (const std::size_t count : {0u, 1u, 127u, 128u, 129u, 641u, 100003u}) {
+        std::vector<float> samples(count * 2);
+        for (std::size_t i = 0; i < samples.size(); ++i)
+            samples[i] = std::sin(static_cast<float>(i) * 0.071f) * (i % 11 == 0 ? 1.4f : 0.73f);
+        WaveformPyramidBuilder reference(count);
+        reference.Append(samples.data(), count);
+        reference.Finish();
+        const auto expected = SerializeWaveformPyramid(reference);
+        for (const std::size_t chunk : {1u, 113u, 48000u}) {
+            const auto key = WaveformCacheKey(SourceKey(static_cast<std::uint8_t>(chunk)));
+            auto writer = WaveformStreamWriter::Open(store, key, count, error);
+            ASSERT_NE(writer, nullptr) << error;
+            for (std::size_t first = 0; first < count; first += chunk)
+                ASSERT_TRUE(writer->Append(samples.data() + first * 2, std::min(chunk, count - first)));
+            ASSERT_TRUE(writer->Finish());
+            ASSERT_TRUE(writer->Publish(error)) << error;
+            const auto actual = store.Read(key);
+            ASSERT_TRUE(actual);
+            EXPECT_EQ(*actual, expected) << "samples=" << count << " chunk=" << chunk;
+            EXPECT_LT(writer->MemoryBytes(), 1u << 20);
+        }
+    }
+    store.Clear();
+    std::error_code ignored;
+    std::filesystem::remove_all(root, ignored);
+}
+TEST(WaveformAnalysis, ContinuousCursorKeepsSamplesAcrossChunkBoundaries) {
+    wchar_t path[32768]{};
+    if (!GetEnvironmentVariableW(L"EXOSNAP_WAVEFORM_DECODER_FIXTURE", path, 32768))
+        GTEST_SKIP() << "Set EXOSNAP_WAVEFORM_DECODER_FIXTURE to real normalized-audio qualification media.";
+    const auto metadata = ProbeEditMedia(path);
+    ASSERT_TRUE(metadata.error.empty()) << metadata.error;
+    std::optional<std::uint32_t> index;
+    for (const auto& stream : metadata.streams)
+        if (stream.kind == TimelineStreamKind::Audio) {
+            index = stream.container_index;
+            break;
+        }
+    ASSERT_TRUE(index);
+    EditPlayerEngine reference;
+    std::string error;
+    ASSERT_TRUE(reference.OpenAudioStream(path, *index, error)) << error;
+    auto cursor = OpenEditWaveformDecoder(path, *index, error);
+    ASSERT_NE(cursor, nullptr) << error;
+    const auto end = std::min<std::int64_t>(AudioSampleIndex(metadata.duration_us) + 257, 48000 * 16 + 257);
+    std::vector<float> canonical;
+    for (std::int64_t at = 0; at < end; at += 48000) {
+        std::vector<float> block;
+        ASSERT_TRUE(reference.ReadAudioStreamSequential(
+            *index, at, static_cast<std::uint32_t>(std::min<std::int64_t>(48000, end - at)), block, error))
+            << error;
+        canonical.insert(canonical.end(), block.begin(), block.end());
+    }
+    std::int64_t first = 0;
+    std::vector<float> expected, actual;
+    const std::array<std::uint32_t, 7> chunks{1, 127, 48000, 7919, 130, 32768, 47999};
+    for (std::size_t iteration = 0; first < end; ++iteration) {
+        const auto count =
+            static_cast<std::uint32_t>(std::min<std::int64_t>(chunks[iteration % chunks.size()], end - first));
+        expected.assign(canonical.begin() + first * 2, canonical.begin() + (first + count) * 2);
+        ASSERT_TRUE(cursor->Decode(first, count, actual, error)) << error;
+        ASSERT_EQ(actual.size(), expected.size());
+        if (actual != expected) {
+            const auto mismatch = std::mismatch(actual.begin(), actual.end(), expected.begin());
+            const auto at = static_cast<std::size_t>(mismatch.first - actual.begin());
+            std::cout << "[cursor-range-mismatch] sample=" << first + at / 2 << " actual=" << actual[at]
+                      << " range=" << expected[at] << '\n';
+        }
+        ASSERT_EQ(actual, expected) << "first=" << first << " frames=" << count;
+        first += count;
+    }
+    EXPECT_LE(cursor->Seeks(), 1u);
+    EXPECT_EQ(cursor->DecodedFrames(), reference.AudioDecodedFrameCount());
+    ASSERT_TRUE(cursor->Decode(137, 113, actual, error)) << error;
+    EXPECT_LE(cursor->Seeks(), 2u);
+}
+TEST(WaveformAnalysis, ContinuousCursorMatchesIndependentPcm) {
+    wchar_t path[32768]{}, pcm_path[32768]{};
+    if (!GetEnvironmentVariableW(L"EXOSNAP_WAVEFORM_DECODER_FIXTURE", path, 32768) ||
+        !GetEnvironmentVariableW(L"EXOSNAP_WAVEFORM_PCM_REFERENCE", pcm_path, 32768))
+        GTEST_SKIP() << "Set EXOSNAP_WAVEFORM_DECODER_FIXTURE and EXOSNAP_WAVEFORM_PCM_REFERENCE.";
+    std::ifstream input(std::filesystem::path(pcm_path), std::ios::binary | std::ios::ate);
+    ASSERT_TRUE(input.good());
+    const auto bytes = static_cast<std::size_t>(input.tellg());
+    ASSERT_EQ(bytes % (2 * sizeof(float)), 0u);
+    std::vector<float> expected(bytes / sizeof(float));
+    input.seekg(0);
+    input.read(reinterpret_cast<char*>(expected.data()), static_cast<std::streamsize>(bytes));
+    ASSERT_TRUE(input.good());
+    const auto metadata = ProbeEditMedia(path);
+    ASSERT_TRUE(metadata.error.empty()) << metadata.error;
+    std::optional<std::uint32_t> index;
+    for (const auto& stream : metadata.streams)
+        if (stream.kind == TimelineStreamKind::Audio) {
+            index = stream.container_index;
+            break;
+        }
+    ASSERT_TRUE(index);
+    std::string error;
+    auto cursor = OpenEditWaveformDecoder(path, *index, error);
+    ASSERT_NE(cursor, nullptr) << error;
+    const std::array<std::uint32_t, 7> chunks{1, 127, 48000, 7919, 130, 32768, 47999};
+    std::vector<float> actual;
+    double max_error = 0;
+    std::size_t max_at = 0;
+    std::optional<std::size_t> first_actual, first_expected, first_difference;
+    std::vector<float> decoded(expected.size());
+    for (std::size_t first = 0, iteration = 0; first < expected.size() / 2; ++iteration) {
+        const auto count = static_cast<std::uint32_t>(
+            std::min<std::size_t>(chunks[iteration % chunks.size()], expected.size() / 2 - first));
+        ASSERT_TRUE(cursor->Decode(static_cast<std::int64_t>(first), count, actual, error)) << error;
+        std::copy(actual.begin(), actual.end(), decoded.begin() + static_cast<std::ptrdiff_t>(first * 2));
+        for (std::size_t i = 0; i < actual.size(); ++i) {
+            if (!first_actual && std::abs(actual[i]) > 1e-5)
+                first_actual = first + i / 2;
+            if (!first_expected && std::abs(expected[first * 2 + i]) > 1e-5)
+                first_expected = first + i / 2;
+            const auto difference = std::abs(static_cast<double>(actual[i]) - expected[first * 2 + i]);
+            if (!first_difference && difference > 1e-5)
+                first_difference = first + i / 2;
+            if (difference > max_error) {
+                max_error = difference;
+                max_at = first * 2 + i;
+            }
+        }
+        first += count;
+    }
+    std::cout << "[cursor-pcm] max_error=" << max_error << " at_frame=" << max_at / 2 << " seeks=" << cursor->Seeks()
+              << " frames=" << expected.size() / 2 << '\n';
+    std::cout << "[cursor-pcm-alignment] first_actual=" << first_actual.value_or(0)
+              << " first_expected=" << first_expected.value_or(0)
+              << " first_difference=" << first_difference.value_or(0) << " actual_at_max=" << decoded[max_at]
+              << " expected_at_max=" << expected[max_at] << '\n';
+    EXPECT_LE(max_error, 1e-5);
+    EXPECT_LE(cursor->Seeks(), 1u);
 }

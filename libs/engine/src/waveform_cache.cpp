@@ -50,7 +50,14 @@ class EngineWaveformDecoder final : public WaveformAudioDecoder {
     }
     bool Decode(std::int64_t first_sample, std::uint32_t frame_count, std::vector<float>& output,
                 std::string& error) override {
-        return engine_->DecodeAudioStreamRange(container_index_, first_sample, frame_count, output, error);
+        return engine_->ReadAudioStreamSequential(container_index_, first_sample, frame_count, output, error);
+    }
+
+    std::uint64_t Seeks() const override {
+        return engine_->AudioSeekCount();
+    }
+    std::uint64_t DecodedFrames() const override {
+        return engine_->AudioDecodedFrameCount();
     }
 
   private:
@@ -243,6 +250,197 @@ std::vector<std::uint8_t> SerializeWaveformPyramid(const WaveformPyramidBuilder&
     return out;
 }
 
+struct WaveformStreamWriter::Impl {
+    struct Level {
+        std::array<WaveformPeak, kWaveformChannels> pending{};
+        bool has_pending = false;
+        std::uint64_t ready = 0;
+        std::uint64_t written = 0;
+        std::vector<std::uint8_t> bytes;
+    };
+    std::unique_ptr<MediaCacheStore::Writer> writer;
+    WaveformFileLayout layout;
+    std::vector<Level> levels;
+    std::array<double, kWaveformChannels> squares{};
+    std::array<float, kWaveformChannels> min{};
+    std::array<float, kWaveformChannels> max{};
+    std::uint64_t consumed = 0;
+    std::uint32_t fill = 0;
+    bool finished = false;
+    bool ok = true;
+
+    bool Flush(std::uint32_t index) {
+        auto& level = levels[index];
+        if (level.bytes.empty())
+            return ok;
+        ok = ok && writer->Write(layout.levels[index].offset + level.written * kWaveformBucketBytes, level.bytes);
+        if (!ok)
+            return false;
+        level.written += level.bytes.size() / kWaveformBucketBytes;
+        level.bytes.clear();
+        return ok;
+    }
+    void Emit(std::uint32_t index, const std::array<WaveformPeak, kWaveformChannels>& peaks) {
+        auto& level = levels[index];
+        for (const auto& peak : peaks)
+            for (const auto value : {peak.min, peak.max, peak.rms}) {
+                const auto bits = static_cast<std::uint16_t>(value);
+                level.bytes.push_back(static_cast<std::uint8_t>(bits));
+                level.bytes.push_back(static_cast<std::uint8_t>(bits >> 8));
+            }
+        ++level.ready;
+        if (level.bytes.size() >= 2048 * kWaveformBucketBytes)
+            Flush(index);
+        if (index + 1 == levels.size())
+            return;
+        if (!level.has_pending) {
+            level.pending = peaks;
+            level.has_pending = true;
+            return;
+        }
+        std::array<WaveformPeak, kWaveformChannels> parent{};
+        const auto child_samples = WaveformBucketSamples(index);
+        const auto first = (level.ready - 2) * child_samples;
+        const double na = static_cast<double>(std::min(child_samples, layout.sample_count - first));
+        const double nb = static_cast<double>(std::min(child_samples, layout.sample_count - first - child_samples));
+        for (std::size_t channel = 0; channel < parent.size(); ++channel) {
+            const auto& a = level.pending[channel];
+            const auto& b = peaks[channel];
+            const double ra = WaveformPeakToFloat(a.rms);
+            const double rb = WaveformPeakToFloat(b.rms);
+            parent[channel] = {std::min(a.min, b.min), std::max(a.max, b.max),
+                               QuantizeWaveformValue(std::sqrt((ra * ra * na + rb * rb * nb) / (na + nb)))};
+        }
+        level.has_pending = false;
+        Emit(index + 1, parent);
+    }
+    void CloseBucket() {
+        if (!fill)
+            return;
+        std::array<WaveformPeak, kWaveformChannels> peaks{};
+        for (std::size_t channel = 0; channel < peaks.size(); ++channel)
+            peaks[channel] = {QuantizeWaveformValue(min[channel]), QuantizeWaveformValue(max[channel]),
+                              QuantizeWaveformValue(std::sqrt(squares[channel] / fill))};
+        Emit(0, peaks);
+        fill = 0;
+        squares.fill(0);
+        min.fill(std::numeric_limits<float>::infinity());
+        max.fill(-std::numeric_limits<float>::infinity());
+    }
+};
+
+WaveformStreamWriter::WaveformStreamWriter(std::unique_ptr<Impl> impl) : impl_(std::move(impl)) {
+}
+WaveformStreamWriter::~WaveformStreamWriter() = default;
+
+std::shared_ptr<WaveformStreamWriter> WaveformStreamWriter::Open(MediaCacheStore& store, std::string_view key,
+                                                                 std::uint64_t sample_count, std::string& error) {
+    auto impl = std::make_unique<Impl>();
+    impl->layout.sample_count = sample_count;
+    const auto count = WaveformLevelCount(sample_count);
+    std::uint64_t offset = kWaveformFixedHeaderBytes + count * kWaveformLevelEntryBytes;
+    std::vector<std::uint8_t> header;
+    PutU32(header, kWaveformChannels);
+    PutU32(header, kWaveformSampleRate);
+    PutU32(header, kWaveformBaseBucketSamples);
+    PutU32(header, count);
+    PutU64(header, sample_count);
+    for (std::uint32_t level = 0; level < count; ++level) {
+        const auto buckets = WaveformBucketCount(sample_count, level);
+        if (offset > store.BudgetBytes() || buckets > (store.BudgetBytes() - offset) / kWaveformBucketBytes) {
+            error = "The waveform exceeds the disk cache budget.";
+            return {};
+        }
+        impl->layout.levels.push_back({buckets, offset});
+        PutU64(header, buckets);
+        PutU64(header, offset);
+        offset += buckets * kWaveformBucketBytes;
+    }
+    impl->writer = store.BeginWrite(key, offset, error);
+    if (!impl->writer || !impl->writer->Write(0, header))
+        return {};
+    impl->levels.resize(count);
+    for (auto& level : impl->levels)
+        level.bytes.reserve(2048 * kWaveformBucketBytes);
+    impl->min.fill(std::numeric_limits<float>::infinity());
+    impl->max.fill(-std::numeric_limits<float>::infinity());
+    return std::shared_ptr<WaveformStreamWriter>(new WaveformStreamWriter(std::move(impl)));
+}
+
+bool WaveformStreamWriter::Append(const float* samples, std::size_t frames) {
+    if (impl_->finished || !impl_->ok || frames > impl_->layout.sample_count - impl_->consumed)
+        return false;
+    for (std::size_t frame = 0; frame < frames; ++frame) {
+        for (std::size_t channel = 0; channel < kWaveformChannels; ++channel) {
+            float value = samples[frame * kWaveformChannels + channel];
+            if (!std::isfinite(value))
+                value = 0;
+            impl_->min[channel] = std::min(impl_->min[channel], value);
+            impl_->max[channel] = std::max(impl_->max[channel], value);
+            impl_->squares[channel] += static_cast<double>(value) * value;
+        }
+        if (++impl_->fill == kWaveformBaseBucketSamples)
+            impl_->CloseBucket();
+    }
+    impl_->consumed += frames;
+    for (std::uint32_t level = 0; level < impl_->levels.size(); ++level)
+        impl_->Flush(level);
+    return impl_->ok;
+}
+
+bool WaveformStreamWriter::Finish() {
+    if (impl_->finished)
+        return impl_->ok;
+    if (impl_->consumed != impl_->layout.sample_count)
+        return false;
+    impl_->CloseBucket();
+    for (std::uint32_t level = 0; level + 1 < impl_->levels.size(); ++level) {
+        auto& state = impl_->levels[level];
+        if (state.has_pending) {
+            state.has_pending = false;
+            impl_->Emit(level + 1, state.pending);
+        }
+    }
+    for (std::uint32_t level = 0; level < impl_->levels.size(); ++level)
+        impl_->Flush(level);
+    impl_->finished = true;
+    return impl_->ok;
+}
+
+bool WaveformStreamWriter::Publish(std::string& error, const std::function<bool()>& continue_io) {
+    if (!impl_->finished || !impl_->ok) {
+        error = "The waveform analysis is incomplete.";
+        return false;
+    }
+    return impl_->writer->Publish(error, continue_io);
+}
+
+std::uint32_t WaveformStreamWriter::ReadBlock(std::uint32_t level, std::uint64_t first_bucket,
+                                              std::uint32_t max_buckets, std::vector<WaveformPeak>& out) {
+    if (level >= impl_->levels.size() || first_bucket >= impl_->levels[level].written)
+        return 0;
+    const auto count =
+        static_cast<std::uint32_t>(std::min<std::uint64_t>(max_buckets, impl_->levels[level].written - first_bucket));
+    std::vector<std::uint8_t> bytes(static_cast<std::size_t>(count) * kWaveformBucketBytes);
+    if (!impl_->writer->Read(impl_->layout.levels[level].offset + first_bucket * kWaveformBucketBytes, bytes))
+        return 0;
+    DecodeWaveformBuckets(bytes, out);
+    return count;
+}
+
+std::uint64_t WaveformStreamWriter::CompletedSamples() const noexcept {
+    return impl_->finished ? impl_->consumed : impl_->consumed - impl_->fill;
+}
+std::size_t WaveformStreamWriter::MemoryBytes() const noexcept {
+    std::size_t bytes = sizeof(Impl) + impl_->levels.capacity() * sizeof(Impl::Level) +
+                        impl_->layout.levels.capacity() * sizeof(WaveformFileLayout::LevelInfo);
+    for (const auto& level : impl_->levels)
+        bytes += level.bytes.capacity();
+    return bytes;
+}
+const WaveformFileLayout& WaveformStreamWriter::Layout() const noexcept {
+    return impl_->layout;
+}
 std::optional<WaveformFileLayout>
 ParseWaveformLayout(std::uint64_t payload_size,
                     const std::function<bool(std::uint64_t offset, std::span<std::uint8_t> out)>& read) {
@@ -294,9 +492,12 @@ void DecodeWaveformBuckets(std::span<const std::uint8_t> bytes, std::vector<Wave
 
 std::unique_ptr<WaveformAudioDecoder> OpenEditWaveformDecoder(const std::filesystem::path& path,
                                                               std::uint32_t container_index, std::string& error,
-                                                              const std::atomic<bool>* cancelled) {
+                                                              const std::atomic<bool>* cancelled,
+                                                              const std::array<std::uint8_t, 32>* expected_sha256) {
     auto engine = std::make_unique<EditPlayerEngine>();
     if (!engine->OpenAudioStream(path, container_index, error, cancelled))
+        return nullptr;
+    if (expected_sha256 && !engine->ValidateContentIdentity(*expected_sha256, error, cancelled))
         return nullptr;
     return std::make_unique<EngineWaveformDecoder>(std::move(engine), container_index);
 }

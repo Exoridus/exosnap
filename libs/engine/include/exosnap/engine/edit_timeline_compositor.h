@@ -24,8 +24,8 @@ inline constexpr uint64_t kMaxTimelineVideoSourcePixels = uint64_t{4} * 3840 * 2
 
 struct TimelineVideoLayer {
     RawDecodedVideoFrame frame;
-    // Track-local junction weight. The sources of one layer are complementary:
-    // where two clips of one track overlap, their weights sum to one.
+    // Track-local junction weight. Two sources of one layer are complementary:
+    // their weights sum to one. A lone enabled endpoint may retain partial coverage.
     double weight = 1;
     // Clip opacity multiplied by the clip's edge-fade gain.
     double opacity = 1;
@@ -50,8 +50,9 @@ class EditTimelineCompositor {
   public:
     bool Init(ID3D11Device* device, ID3D11DeviceContext* context, FrameSize output, std::string& error);
     // Rejects more than kMaxTimelineVideoSources sources, more than two sources
-    // in one layer and layer weights that do not sum to one. An empty span
-    // produces black.
+    // in one layer and noncomplementary pairs. A single source may have any
+    // weight in [0, 1], retaining its coverage when its partner is disabled.
+    // An empty span produces black.
     bool Compose(std::span<const TimelineVideoLayer> layers, std::string& error);
     [[nodiscard]] ID3D11Texture2D* Result() const {
         return output_.texture.get();

@@ -6,7 +6,8 @@
 // to a clip: every clip over the same stream shares it, and a clip only selects
 // a source sample window. Samples are the editor's normalized audio: 48 kHz
 // interleaved stereo float, mono duplicated to both channels, exactly what
-// EditPlayerEngine::DecodeAudioStreamRange delivers. Sample indices are
+// EditPlayerEngine::ReadAudioStreamSequential delivers. Codec priming and the
+// resampler remain continuous across analysis chunks. Sample indices are
 // media-local, the same ones AudioSampleIndex() derives from source time.
 //
 // The pyramid keeps min, max and RMS per channel and bucket. Level 0 holds
@@ -19,6 +20,7 @@
 #include <array>
 #include <atomic>
 #include <cstdint>
+#include <exosnap/engine/media_cache_store.h>
 #include <filesystem>
 #include <functional>
 #include <memory>
@@ -39,7 +41,7 @@ inline constexpr std::uint32_t kWaveformMaxLevels = 40;
 // resampler, channel policy, sample format or rate changes this string and
 // therefore every key, so a different normalization never reuses old peaks.
 inline constexpr std::string_view kWaveformNormalizationContract =
-    "exosnap.edit.audio-stream;ffmpeg-swr;stereo,mono-duplicated;f32;48000";
+    "exosnap.edit.audio-stream;ffmpeg-swr;stereo,mono-duplicated;f32;48000;continuous-origin-v2";
 
 // Identity of one analysed stream. `stream_identity` is the stream's recorded
 // track identity, or all zero when the source declares none; the content hash
@@ -143,6 +145,30 @@ inline constexpr std::size_t kWaveformFixedHeaderBytes = 24;
 inline constexpr std::size_t kWaveformLevelEntryBytes = 16;
 inline constexpr std::size_t kWaveformBucketBytes = kWaveformChannels * 3 * sizeof(std::int16_t);
 
+// Streams the compatible payload into private store staging. Only one pending
+// child per level and bounded write blocks are retained. Reads expose final
+// buckets before publication. The declared sample count must be delivered.
+// The caller serializes operations, including publication and progressive reads.
+class WaveformStreamWriter {
+  public:
+    static std::shared_ptr<WaveformStreamWriter> Open(MediaCacheStore& store, std::string_view key,
+                                                      std::uint64_t sample_count, std::string& error);
+    ~WaveformStreamWriter();
+    bool Append(const float* samples, std::size_t frames);
+    bool Finish();
+    bool Publish(std::string& error, const std::function<bool()>& continue_io = {});
+    std::uint32_t ReadBlock(std::uint32_t level, std::uint64_t first_bucket, std::uint32_t max_buckets,
+                            std::vector<WaveformPeak>& out);
+    [[nodiscard]] std::uint64_t CompletedSamples() const noexcept;
+    [[nodiscard]] std::size_t MemoryBytes() const noexcept;
+    [[nodiscard]] const WaveformFileLayout& Layout() const noexcept;
+
+  private:
+    struct Impl;
+    explicit WaveformStreamWriter(std::unique_ptr<Impl> impl);
+    std::unique_ptr<Impl> impl_;
+};
+
 // Reads the layout from the first bytes of a payload. `read` fetches payload
 // bytes at an offset. Rejects anything inconsistent with `payload_size`.
 [[nodiscard]] std::optional<WaveformFileLayout>
@@ -158,6 +184,12 @@ void DecodeWaveformBuckets(std::span<const std::uint8_t> bytes, std::vector<Wave
 class WaveformAudioDecoder {
   public:
     virtual ~WaveformAudioDecoder() = default;
+    [[nodiscard]] virtual std::uint64_t Seeks() const {
+        return 0;
+    }
+    [[nodiscard]] virtual std::uint64_t DecodedFrames() const {
+        return 0;
+    }
     // Exactly frame_count stereo frames starting at media-local sample
     // `first_sample`; time the source does not cover is silence.
     virtual bool Decode(std::int64_t first_sample, std::uint32_t frame_count, std::vector<float>& output,
@@ -168,7 +200,8 @@ class WaveformAudioDecoder {
 // decoder. Returns nullptr with a reason on failure.
 [[nodiscard]] std::unique_ptr<WaveformAudioDecoder>
 OpenEditWaveformDecoder(const std::filesystem::path& path, std::uint32_t container_index, std::string& error,
-                        const std::atomic<bool>* cancelled = nullptr);
+                        const std::atomic<bool>* cancelled = nullptr,
+                        const std::array<std::uint8_t, 32>* expected_sha256 = nullptr);
 
 // Upper bound EditPlayerEngine accepts per range call.
 inline constexpr std::uint32_t kWaveformAnalysisChunkFrames = 48000;

@@ -38,6 +38,7 @@
 #include <chrono>
 #include <limits>
 #include <string>
+#include <string_view>
 #include <thread>
 #include <vector>
 
@@ -49,6 +50,9 @@ class EditExportAdapterTestPeer {
     }
     static int progress(const EditExportAdapter& adapter) {
         return adapter.run_->percent.load();
+    }
+    static void observeSourceVerification(EditExportAdapter& adapter, std::function<void(uint64_t)> observer) {
+        adapter.source_verified_ = std::move(observer);
     }
 };
 
@@ -819,6 +823,146 @@ TEST(EditExportAdapterRun, AnEmptyWorkspaceFailsBeforeAnyThreadIsStarted) {
     EXPECT_FALSE(exporter.running());
     EXPECT_EQ(exporter.errorText(), QStringLiteral("No edit master available for export."));
 }
+
+class EditExportSourceLease : public ::testing::TestWithParam<const char*> {};
+
+TEST_P(EditExportSourceLease, AllFrozenSourcesRemainImmutableBetweenChecksAndReleaseOnCancellation) {
+    EnsureApplication();
+    const bool render = std::string_view(GetParam()) == "render";
+    const bool selected_only = std::string_view(GetParam()) == "selected";
+    const bool use_render_fixture = render || selected_only;
+    const auto render_fixtures = qEnvironmentVariable("EXOSNAP_EDIT_RENDER_FIXTURES");
+    if (use_render_fixture && render_fixtures.isEmpty())
+        GTEST_SKIP() << "Set EXOSNAP_EDIT_RENDER_FIXTURES to generated red/blue media.";
+    QTemporaryDir sources;
+    QTemporaryDir output;
+    ASSERT_TRUE(sources.isValid());
+    ASSERT_TRUE(output.isValid());
+    const QString fixture =
+        use_render_fixture
+            ? QDir(render_fixtures).filePath(QStringLiteral("red.mkv"))
+            : QFileInfo(QString::fromUtf8(__FILE__))
+                  .dir()
+                  .absoluteFilePath(QStringLiteral("../../../libs/engine/tests/fixtures/reordered_h264.mp4"));
+    const QString first = sources.filePath(QStringLiteral("first.mp4"));
+    const QString second = sources.filePath(QStringLiteral("second.mp4"));
+    const QString replacement = sources.filePath(QStringLiteral("replacement.mp4"));
+    ASSERT_TRUE(QFile::copy(fixture, first));
+    ASSERT_TRUE(QFile::copy(fixture, second));
+    ASSERT_TRUE(QFile::copy(fixture, replacement));
+    QFile replacement_file(replacement);
+    ASSERT_TRUE(replacement_file.open(QIODevice::Append));
+    ASSERT_EQ(replacement_file.write("replacement", 11), 11);
+    replacement_file.close();
+    QFile original(first);
+    ASSERT_TRUE(original.open(QIODevice::ReadOnly));
+    const auto original_bytes = original.readAll();
+    original.close();
+    EditSessionAdapter session;
+    QEventLoop imported;
+    QObject::connect(&session, &EditSessionAdapter::workspaceChanged, &imported, &QEventLoop::quit);
+    QTimer::singleShot(10000, &imported, &QEventLoop::quit);
+    session.importMediaBatch({QUrl::fromLocalFile(first), QUrl::fromLocalFile(second)}, true);
+    imported.exec();
+    ASSERT_TRUE(session.workspaceError().isEmpty()) << session.workspaceError().toStdString();
+    ASSERT_EQ(session.workspace().assets().size(), 2u);
+    if (use_render_fixture) {
+        for (const auto& asset : session.workspace().assets()) {
+            engine::EditPlayerEngine player;
+            std::string error;
+            ASSERT_TRUE(player.Open(std::filesystem::path(asset.path), error)) << error;
+            const auto metadata = player.AudioMetadata();
+            engine::MonitorSelectionSnapshot selection{
+                metadata.selection_media_id, {1}, {}, true, metadata.unverified_asset_binding};
+            for (const auto& track : metadata.actual_tracks)
+                selection.tracks.push_back({track.track_id, 1.0f, false});
+            session.setAssetMonitorSelection(asset.id, std::move(selection));
+        }
+    }
+    if (render)
+        ASSERT_TRUE(session.applyCrossfade(session.workspace().clips().front().id));
+    if (selected_only) {
+        session.selectClip(session.workspace().clips().front().id);
+        ASSERT_TRUE(QFile::remove(second));
+    }
+    auto exporter = std::make_unique<EditExportAdapter>();
+    exporter->setSession(&session);
+    if (selected_only)
+        exporter->setSpanKey(QStringLiteral("selected"));
+    else if (!render)
+        exporter->setModeKey(QString::fromUtf8(GetParam()));
+    exporter->setOutputDirectoryProvider([&] { return output.path(); });
+    exporter->startExport();
+    QEventLoop review;
+    QObject::connect(exporter.get(), &EditExportAdapter::stateChanged, &review, [&] {
+        if (exporter->state() != EditExportAdapter::Preparing)
+            review.quit();
+    });
+    QTimer::singleShot(10000, &review, &QEventLoop::quit);
+    if (exporter->state() == EditExportAdapter::Preparing)
+        review.exec();
+    ASSERT_EQ(exporter->state(), EditExportAdapter::Review) << exporter->errorText().toStdString();
+    EXPECT_EQ(exporter->reviewOutcome().value(QStringLiteral("path")).toString(),
+              use_render_fixture ? QStringLiteral("Render") : QStringLiteral("Copy"));
+    struct VerificationGate {
+        QSemaphore reached;
+        QSemaphore resume;
+        std::atomic<bool> timed_out{false};
+    };
+    const auto gate = std::make_shared<VerificationGate>();
+    EditExportAdapterTestPeer::observeSourceVerification(
+        *exporter, [gate, first_id = session.workspace().assets().front().id](uint64_t id) {
+            if (id == first_id) {
+                gate->reached.release();
+                gate->timed_out.store(!gate->resume.tryAcquire(1, 10000));
+            }
+        });
+    const auto cleanup = qScopeGuard([&] {
+        if (exporter)
+            exporter->cancel();
+        gate->resume.release();
+        exporter.reset();
+    });
+    exporter->confirmPreparedExport();
+    ASSERT_TRUE(gate->reached.tryAcquire(1, 10000));
+    const bool replaced = MoveFileExW(reinterpret_cast<const wchar_t*>(replacement.utf16()),
+                                      reinterpret_cast<const wchar_t*>(first.utf16()), MOVEFILE_REPLACE_EXISTING);
+    const auto rename_error = GetLastError();
+    EXPECT_FALSE(replaced) << "An already verified source must not be replaceable before another source is checked.";
+    if (!replaced)
+        EXPECT_TRUE(rename_error == ERROR_SHARING_VIOLATION || rename_error == ERROR_ACCESS_DENIED) << rename_error;
+    for (const auto& path : {first, second}) {
+        if (selected_only && path == second)
+            continue;
+        const HANDLE writer = CreateFileW(reinterpret_cast<const wchar_t*>(path.utf16()), GENERIC_WRITE,
+                                          FILE_SHARE_READ | FILE_SHARE_WRITE | FILE_SHARE_DELETE, nullptr,
+                                          OPEN_EXISTING, FILE_ATTRIBUTE_NORMAL, nullptr);
+        const auto write_error = GetLastError();
+        if (writer != INVALID_HANDLE_VALUE)
+            CloseHandle(writer);
+        EXPECT_EQ(writer, INVALID_HANDLE_VALUE) << path.toStdString();
+        if (writer == INVALID_HANDLE_VALUE)
+            EXPECT_EQ(write_error, static_cast<DWORD>(ERROR_SHARING_VIOLATION));
+    }
+    EXPECT_TRUE(QDir(output.path()).entryList(QDir::Files).isEmpty());
+    exporter->cancel();
+    gate->resume.release();
+    exporter.reset();
+    EXPECT_FALSE(gate->timed_out.load());
+    EXPECT_TRUE(QDir(output.path()).entryList(QDir::Files).isEmpty());
+    ASSERT_TRUE(original.open(QIODevice::ReadOnly));
+    EXPECT_TRUE(original.readAll() == original_bytes);
+    original.close();
+    for (const auto& path : {first, second}) {
+        if (selected_only && path == second)
+            continue;
+        QFile writable(path);
+        EXPECT_TRUE(writable.open(QIODevice::ReadWrite)) << path.toStdString();
+    }
+}
+
+INSTANTIATE_TEST_SUITE_P(FinishedAndOriginal, EditExportSourceLease,
+                         ::testing::Values("finishedStereo", "originalStreams", "selected", "render"));
 
 TEST(EditExportAdapterRun, CancellingPreparationAndDestroyingAdapterLeavesNoOutput) {
     EnsureApplication();

@@ -1,3 +1,4 @@
+#include <exosnap/engine/audio_media_manifest.h>
 #include <exosnap/engine/edit_timeline.h>
 #include <exosnap/engine/edit_timeline_export.h>
 #include <exosnap/engine/edit_timeline_render.h>
@@ -8,7 +9,6 @@
 #include "edit_mix_encoder.h"
 #include "matroska_packet_timestamps.h"
 #include "matroska_stream_writer.h"
-#include "media_identity_sidecar.h"
 #include "render_audio_manifest.h"
 
 #include <algorithm>

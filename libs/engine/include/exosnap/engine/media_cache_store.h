@@ -67,6 +67,24 @@ struct MediaCacheStoreStats {
 
 class MediaCacheStore {
   public:
+    class Writer {
+      public:
+        ~Writer();
+        Writer(const Writer&) = delete;
+        Writer& operator=(const Writer&) = delete;
+        bool Write(std::uint64_t offset, std::span<const std::uint8_t> bytes);
+        bool Read(std::uint64_t offset, std::span<std::uint8_t> bytes);
+        // The callback runs synchronously between hash blocks while the store is locked.
+        // It must not reenter the store. False aborts before publication.
+        bool Publish(std::string& error, const std::function<bool()>& continue_io = {});
+
+      private:
+        friend class MediaCacheStore;
+        struct State;
+        explicit Writer(std::shared_ptr<State> state);
+        std::shared_ptr<State> state_;
+    };
+
     explicit MediaCacheStore(MediaCacheStoreConfig config);
     ~MediaCacheStore();
 
@@ -80,6 +98,12 @@ class MediaCacheStore {
     // least recently used entries until the budget holds again. An entry larger
     // than the whole budget is refused.
     bool Publish(std::string_view key, std::span<const std::uint8_t> payload, std::string& error);
+
+    // Creates a bounded-size, private random-access payload. Destruction aborts
+    // unpublished work. Clear invalidates active writers and deletes staging.
+    // Publish hashes the completed payload in bounded chunks before rename.
+    [[nodiscard]] std::unique_ptr<Writer> BeginWrite(std::string_view key, std::uint64_t payload_size,
+                                                     std::string& error);
 
     // The verified payload, or nullopt for a miss. Counts as a use.
     [[nodiscard]] std::optional<std::vector<std::uint8_t>> Read(std::string_view key);
@@ -109,7 +133,7 @@ class MediaCacheStore {
 
   private:
     struct Impl;
-    std::unique_ptr<Impl> impl_;
+    std::shared_ptr<Impl> impl_;
 };
 
 // Lowercase hexadecimal spelling of `bytes`.

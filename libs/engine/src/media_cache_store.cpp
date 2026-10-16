@@ -17,6 +17,7 @@ extern "C" {
 #include <cstdio>
 #include <cstring>
 #include <filesystem>
+#include <functional>
 #include <io.h>
 #include <memory>
 #include <mutex>
@@ -124,6 +125,16 @@ std::array<std::uint8_t, 32> Sha256(std::span<const std::uint8_t> bytes) {
     return sha.Final();
 }
 
+struct MediaCacheStore::Writer::State {
+    std::shared_ptr<MediaCacheStore::Impl> store;
+    std::string key;
+    std::filesystem::path path;
+    FilePtr file;
+    std::uint64_t payload_size = 0;
+    std::uint64_t file_bytes = 0;
+    bool active = true;
+};
+
 struct MediaCacheStore::Impl {
     struct Entry {
         std::uint64_t file_bytes = 0;
@@ -136,6 +147,8 @@ struct MediaCacheStore::Impl {
     std::string suffix; // ".v<schema><extension>"
     mutable std::mutex mutex;
     bool indexed = false;
+    std::uint64_t reserved_bytes = 0;
+    std::vector<std::weak_ptr<Writer::State>> writers;
     std::unordered_map<std::string, Entry> entries;
     std::uint64_t total_bytes = 0;
     MediaCacheStoreStats stats;
@@ -280,7 +293,7 @@ struct MediaCacheStore::Impl {
     }
 };
 
-MediaCacheStore::MediaCacheStore(MediaCacheStoreConfig config) : impl_(std::make_unique<Impl>()) {
+MediaCacheStore::MediaCacheStore(MediaCacheStoreConfig config) : impl_(std::make_shared<Impl>()) {
     impl_->config = std::move(config);
     impl_->suffix = ".v" + std::to_string(impl_->config.schema_version) + impl_->config.extension;
 }
@@ -361,6 +374,143 @@ bool MediaCacheStore::Publish(std::string_view key_view, std::span<const std::ui
     return true;
 }
 
+MediaCacheStore::Writer::Writer(std::shared_ptr<State> state) : state_(std::move(state)) {
+}
+
+MediaCacheStore::Writer::~Writer() {
+    std::lock_guard lock(state_->store->mutex);
+    if (!state_->active)
+        return;
+    state_->active = false;
+    state_->file.reset();
+    state_->store->reserved_bytes -= state_->file_bytes;
+    std::error_code ignored;
+    std::filesystem::remove(state_->path, ignored);
+}
+
+bool MediaCacheStore::Writer::Write(std::uint64_t offset, std::span<const std::uint8_t> bytes) {
+    std::lock_guard lock(state_->store->mutex);
+    if (!state_->active || offset > state_->payload_size || bytes.size() > state_->payload_size - offset)
+        return false;
+    return SeekTo(state_->file.get(), kFixedHeaderBytes + state_->key.size() + offset) &&
+           (bytes.empty() || std::fwrite(bytes.data(), 1, bytes.size(), state_->file.get()) == bytes.size());
+}
+
+bool MediaCacheStore::Writer::Read(std::uint64_t offset, std::span<std::uint8_t> bytes) {
+    std::lock_guard lock(state_->store->mutex);
+    if (!state_->active || offset > state_->payload_size || bytes.size() > state_->payload_size - offset)
+        return false;
+    return SeekTo(state_->file.get(), kFixedHeaderBytes + state_->key.size() + offset) &&
+           (bytes.empty() || std::fread(bytes.data(), 1, bytes.size(), state_->file.get()) == bytes.size());
+}
+
+bool MediaCacheStore::Writer::Publish(std::string& error, const std::function<bool()>& continue_io) {
+    auto& store = *state_->store;
+    std::lock_guard lock(store.mutex);
+    if (!state_->active) {
+        error = "The media cache writer was invalidated.";
+        return false;
+    }
+    std::array<std::uint8_t, kFixedHeaderBytes> header{};
+    std::memcpy(header.data(), kMagic.data(), kMagic.size());
+    std::memcpy(header.data() + 8, store.config.kind.data(), 4);
+    PutU32(header.data() + 12, store.config.schema_version);
+    PutU32(header.data() + 16, static_cast<std::uint32_t>(state_->key.size()));
+    PutU64(header.data() + 24, state_->payload_size);
+    Sha256Stream sha;
+    std::array<std::uint8_t, kHashChunkBytes> chunk{};
+    bool ok = SeekTo(state_->file.get(), kFixedHeaderBytes + state_->key.size());
+    for (std::uint64_t at = 0; ok && at < state_->payload_size;) {
+        if (continue_io && !continue_io()) {
+            error = "Media cache publication was cancelled.";
+            return false;
+        }
+        const auto take = static_cast<std::size_t>(std::min<std::uint64_t>(chunk.size(), state_->payload_size - at));
+        ok = std::fread(chunk.data(), 1, take, state_->file.get()) == take;
+        if (ok)
+            sha.Update(chunk.data(), take);
+        at += take;
+    }
+    const auto digest = sha.Final();
+    if (continue_io && !continue_io()) {
+        error = "Media cache publication was cancelled.";
+        return false;
+    }
+    std::memcpy(header.data() + 32, digest.data(), digest.size());
+    ok = ok && SeekTo(state_->file.get(), 0) &&
+         std::fwrite(header.data(), 1, header.size(), state_->file.get()) == header.size() &&
+         std::fwrite(state_->key.data(), 1, state_->key.size(), state_->file.get()) == state_->key.size() &&
+         std::fflush(state_->file.get()) == 0 && _commit(_fileno(state_->file.get())) == 0;
+    if (!ok) {
+        error = "Cannot finalize a media cache staging file.";
+        return false;
+    }
+    if (continue_io && !continue_io()) {
+        error = "Media cache publication was cancelled.";
+        return false;
+    }
+    state_->file.reset();
+    state_->active = false;
+    store.reserved_bytes -= state_->file_bytes;
+    if (store.config.before_rename && !store.config.before_rename(state_->path)) {
+        error = "Media cache publication was interrupted.";
+        return false;
+    }
+    const auto final_path = store.PathFor(state_->key);
+    if (!MoveFileExW(state_->path.c_str(), final_path.c_str(), MOVEFILE_REPLACE_EXISTING | MOVEFILE_WRITE_THROUGH)) {
+        std::error_code ignored;
+        std::filesystem::remove(state_->path, ignored);
+        error = "Cannot publish a media cache entry.";
+        return false;
+    }
+    store.Drop(state_->key);
+    Impl::Entry entry{state_->file_bytes, std::filesystem::file_time_type::clock::now(), state_->payload_size};
+    std::error_code ignored;
+    std::filesystem::last_write_time(final_path, entry.last_use, ignored);
+    store.entries[state_->key] = entry;
+    store.total_bytes += state_->file_bytes;
+    ++store.stats.published;
+    store.EvictToBudget(state_->key);
+    return true;
+}
+
+std::unique_ptr<MediaCacheStore::Writer> MediaCacheStore::BeginWrite(std::string_view key_view,
+                                                                     std::uint64_t payload_size, std::string& error) {
+    std::lock_guard lock(impl_->mutex);
+    impl_->EnsureIndexed();
+    const auto overhead = kFixedHeaderBytes + key_view.size();
+    if (!IsValidKey(key_view) || overhead > impl_->config.budget_bytes ||
+        payload_size > impl_->config.budget_bytes - overhead ||
+        payload_size + overhead > impl_->config.budget_bytes - impl_->reserved_bytes) {
+        error = "The media cache entry exceeds the cache budget.";
+        return {};
+    }
+    auto state = std::make_shared<Writer::State>();
+    state->store = impl_;
+    state->key = key_view;
+    state->payload_size = payload_size;
+    state->file_bytes = overhead + payload_size;
+    const auto final_path = impl_->PathFor(key_view);
+    state->path = final_path.parent_path() / (state->key + "." + RandomToken() + ".tmp");
+    std::error_code fs_error;
+    std::filesystem::create_directories(final_path.parent_path(), fs_error);
+    std::FILE* raw = nullptr;
+    if (fs_error || _wfopen_s(&raw, state->path.c_str(), L"w+bx") != 0 || !raw) {
+        error = "Cannot create a media cache staging file.";
+        return {};
+    }
+    state->file.reset(raw);
+    if (_chsize_s(_fileno(raw), state->file_bytes) != 0) {
+        state->file.reset();
+        std::filesystem::remove(state->path, fs_error);
+        error = "Cannot size a media cache staging file.";
+        return {};
+    }
+    impl_->reserved_bytes += state->file_bytes;
+    std::erase_if(impl_->writers, [](const auto& writer) { return writer.expired(); });
+    impl_->writers.push_back(state);
+    return std::unique_ptr<Writer>(new Writer(std::move(state)));
+}
 std::optional<std::vector<std::uint8_t>> MediaCacheStore::Read(std::string_view key_view) {
     if (!IsValidKey(key_view))
         return std::nullopt;
@@ -458,6 +608,16 @@ void MediaCacheStore::Remove(std::string_view key_view) {
 std::uint64_t MediaCacheStore::Clear() {
     std::lock_guard lock(impl_->mutex);
     impl_->EnsureIndexed();
+    for (const auto& weak : impl_->writers) {
+        if (const auto writer = weak.lock(); writer && writer->active) {
+            writer->active = false;
+            writer->file.reset();
+            impl_->reserved_bytes -= writer->file_bytes;
+            std::error_code ignored;
+            std::filesystem::remove(writer->path, ignored);
+        }
+    }
+    impl_->writers.clear();
     const auto released = impl_->total_bytes;
     std::vector<std::string> keys;
     keys.reserve(impl_->entries.size());

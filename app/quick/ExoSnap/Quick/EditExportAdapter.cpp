@@ -449,17 +449,38 @@ struct EditExportAdapter::PreparedExport {
         return true;
     }
 
-    bool SourcesUnchanged(std::string& error, const std::atomic<bool>& cancelled) const {
+    bool RetainUnchangedSources(std::vector<std::shared_ptr<void>>& leases, std::string& error,
+                                const std::atomic<bool>& cancelled,
+                                const std::function<void(uint64_t)>& source_verified) const {
         const auto& reviewed_sources = edit_plan ? edit_plan->snapshot.sources : snapshot.sources;
+        const auto changed_error = "A source changed after export review. Review the export outcome again.";
+        // Lock every contributing source before hashing any of them, so a
+        // checked source cannot change while another source is being checked.
         for (const auto& source : reviewed_sources) {
+            if (cancelled.load())
+                return false;
+            if (source.metadata.duration_us == 0)
+                continue;
+            auto acquired = engine::AcquireMediaReadLease(source.path);
+            if (!acquired.succeeded()) {
+                error = changed_error;
+                return false;
+            }
+            leases.push_back(std::move(*acquired.value()));
+        }
+        for (const auto& source : reviewed_sources) {
+            if (cancelled.load())
+                return false;
             if (source.metadata.duration_us == 0)
                 continue;
             if (!SameMediaIdentity(source.metadata, engine::ProbeEditMedia(source.path, {}, {}, &cancelled))) {
-                error = "A source changed after export review. Review the export outcome again.";
+                error = changed_error;
                 return false;
             }
+            if (source_verified)
+                source_verified(source.id);
         }
-        return true;
+        return !cancelled.load();
     }
 };
 
@@ -1031,7 +1052,7 @@ void EditExportAdapter::beginPreparedExport() {
     emit reviewChanged();
     run_ = std::make_shared<RunState>();
     setState(State::Running);
-    export_thread_ = QThread::create([run = run_, prepared] {
+    export_thread_ = QThread::create([run = run_, prepared, source_verified = source_verified_] {
         const auto& recipe = prepared->recipe;
         const auto& render_snapshot = prepared->snapshot;
         const auto& render_config = prepared->config;
@@ -1039,7 +1060,8 @@ void EditExportAdapter::beginPreparedExport() {
         const bool to_mp4 = prepared->to_mp4;
         const bool replace_existing = prepared->replace_existing;
         const auto& marker_plan = prepared->marker_plan;
-        if (!prepared->SourcesUnchanged(run->error, run->cancel))
+        std::vector<std::shared_ptr<void>> source_leases;
+        if (!prepared->RetainUnchangedSources(source_leases, run->error, run->cancel, source_verified))
             return;
         if (!prepared->edit_plan) {
             const auto reassessed = engine::AssessTimelineExport(recipe, to_mp4, &run->cancel);

@@ -207,8 +207,8 @@ bool EditTimelineCompositor::Compose(std::span<const TimelineVideoLayer> layers,
             total += layer.weight;
             ++end;
         }
-        if (end - begin > 2 || std::abs(total - 1) > 0.000001) {
-            error = "A timeline layer needs one source or a complementary junction pair.";
+        if (end - begin > 2 || (end - begin == 2 && std::abs(total - 1) > 0.000001)) {
+            error = "A timeline layer needs one source with partial coverage or a complementary junction pair.";
             return false;
         }
         begin = end;

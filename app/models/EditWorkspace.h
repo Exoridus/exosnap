@@ -860,6 +860,7 @@ class Workspace {
                 junction.in_us = mapRemoval(junction.in_us, intervals);
                 junction.out_us = mapRemoval(junction.out_us, intervals);
                 junction.cut_us = mapRemoval(junction.cut_us, intervals);
+                junction.incoming_anchor_us = mapRemoval(junction.incoming_anchor_us, intervals);
             }
             mapRange(intervals);
         }
@@ -890,6 +891,15 @@ class Workspace {
                 return;
             }
         }
+        for (const auto& clip : clips_) {
+            if (!contains(ids, clip.id) || command.at_us <= clip.start || command.at_us >= clip.end())
+                continue;
+            if (command.at_us - clip.start < clip.fade_in.duration_us ||
+                clip.end() - command.at_us < clip.fade_out.duration_us) {
+                fail(EditErrorCode::TransitionBoundaryConflict, {clip.id});
+                return;
+            }
+        }
         std::vector<Clip> tails;
         std::map<Id, Id> groups;
         std::map<Id, Id> tail_ids;
@@ -907,6 +917,8 @@ class Workspace {
             tail.start = command.at_us;
             tail.source_in += command.at_us - clip.start;
             clip.source_out = tail.source_in;
+            clip.fade_out = {};
+            tail.fade_in = {};
             tail_ids[clip.id] = tail.id;
             tails.push_back(std::move(tail));
         }
@@ -1084,6 +1096,7 @@ class Workspace {
             junction.in_us = mapRemoval(junction.in_us, {command.span});
             junction.out_us = mapRemoval(junction.out_us, {command.span});
             junction.cut_us = mapRemoval(junction.cut_us, {command.span});
+            junction.incoming_anchor_us = mapRemoval(junction.incoming_anchor_us, {command.span});
         }
         mapRange({command.span});
     }
@@ -1294,6 +1307,7 @@ class Workspace {
                 junction.in_us = mapRemoval(junction.in_us, {span});
                 junction.out_us = mapRemoval(junction.out_us, {span});
                 junction.cut_us = mapRemoval(junction.cut_us, {span});
+                junction.incoming_anchor_us = mapRemoval(junction.incoming_anchor_us, {span});
             }
             mapRange({span});
         }
@@ -1339,6 +1353,7 @@ class Workspace {
                    outgoing->end() > command.span.out_us;
         });
         for (auto& junction : transitions_) {
+            junction.incoming_anchor_us -= command.span.in_us;
             junction.in_us -= command.span.in_us;
             junction.out_us -= command.span.in_us;
             junction.cut_us = std::clamp(junction.cut_us, command.span.in_us, command.span.out_us) - command.span.in_us;

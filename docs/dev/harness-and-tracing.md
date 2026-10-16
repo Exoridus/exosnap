@@ -98,6 +98,17 @@ Set `EXOSNAP_PERFORMANCE_TRACE=1` for aggregate decode readback, normalization, 
 
 The `probe_edit_playback` target accepts `--decode-only` or `--decode-upload` after the media path and start timestamp arguments. The latter uses the real GPU frame converter without Qt presentation. `EXOSNAP_EDIT_SOFTWARE_DECODE=1` permits a software comparison. These runs measure callback throughput, not display cadence or seek-to-visible latency. Use representative codecs, resolutions and bit depths and retain the exact fixtures with the measurement.
 
+The opt-in `WaveformCacheService.RealSourceBoundedStreamingBenchmark` case runs the production waveform service against the file named by `EXOSNAP_WAVEFORM_BENCHMARK_FILE`. Use separate 30-minute, 2-hour and 8-hour sources and the existing Debug tree, with no competing builds. The case reports elapsed analysis time, decoded sample count, decode calls, actual seeks, decoded audio frames, owned analysis buffer bytes and persisted cache bytes. It checks eight service reopen cycles with zero decoder work and bounded block reads. Owned buffer bytes exclude codec internals and process overhead; record process peak working set and private bytes separately. These measurements do not establish visible timeline cadence, A/V synchronization or VRAM use.
+
+From the configured Qt/MSVC developer environment, build the existing `media_cache_service_tests` target and select only this case for a long run. Direct binary runs are diagnostics; the canonical `cargo exo-dev test` receipt still qualifies the complete selected test programs.
+
+```powershell
+cmake --build build/windows-x64-ninja-debug --target media_cache_service_tests --parallel 4
+$env:EXOSNAP_WAVEFORM_BENCHMARK_FILE = 'D:\recordings\long-source.mkv'
+.\build\windows-x64-ninja-debug\app\media_cache_service_tests.exe --gtest_filter=WaveformCacheService.RealSourceBoundedStreamingBenchmark
+Remove-Item Env:\EXOSNAP_WAVEFORM_BENCHMARK_FILE
+```
+
 `--preview-benchmark <report.json> --benchmark-seconds <seconds>` measures preview publication and consumption plus process CPU. Optional `EXOSNAP_PREVIEW_BENCHMARK_STATE=record|settings|minimized`, `EXOSNAP_PREVIEW_BENCHMARK_RATE=0|15|30|60|120` and `EXOSNAP_PREVIEW_BENCHMARK_ANIMATION=0|1` select the isolated measurement state. Reports include logical persistent surface bytes. Keep the source stimulus fixed and avoid competing builds during measurements.
 
 The overlay presentation experiment uses the real HUD and dock during recording.

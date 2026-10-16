@@ -1,4 +1,5 @@
 #include "exosnap/engine/edit_player_engine.h"
+#include <array>
 #include <cerrno>
 #include <cstdint>
 #include <cstdlib>
@@ -11,6 +12,7 @@
 #include <limits>
 #include <new>
 #include <optional>
+#include <span>
 #include <string>
 #include <string_view>
 #include <utility>
@@ -521,6 +523,22 @@ bool TryAttachD3D11VA(AVCodecContext* vctx) {
 } // namespace
 
 struct EditPlayerEngine::Impl {
+    std::filesystem::path source_path;
+    uint64_t audio_seeks = 0;
+    uint64_t audio_decoded_frames = 0;
+    struct AudioTail {
+        int64_t at = 0;
+        std::vector<float> samples;
+    };
+    std::deque<AudioTail> audio_tails;
+    bool audio_only = false;
+    bool audio_cursor_valid = false;
+    bool audio_cursor_started = false;
+    bool audio_cursor_eof = false;
+    std::optional<uint32_t> audio_cursor_stream;
+    int64_t audio_cursor_next = 0;
+    int64_t audio_cursor_through = 0;
+    std::optional<int64_t> audio_cursor_next_decoded;
     VideoReadMeasurements video_read_measurements;
     std::optional<RawDecodedVideoFrame> cursor_frame;
     std::optional<RawDecodedVideoFrame> cursor_lookahead;
@@ -586,7 +604,7 @@ struct EditPlayerEngine::Impl {
     }
 
     bool DecodeAudioRange(std::optional<uint32_t> stream, int64_t first_sample, uint32_t frame_count,
-                          std::vector<float>& output, std::string& error);
+                          std::vector<float>& output, std::string& error, bool continuous = false);
 
     [[nodiscard]] float MonitorGain(int stream_index) const {
         const auto description =
@@ -674,6 +692,8 @@ bool EditPlayerEngine::OpenSource(const std::filesystem::path& path, std::string
         return false;
     }
     impl_->media_read_lease = std::move(*lease.value());
+    impl_->source_path = path;
+    impl_->audio_only = audio_stream.has_value();
 
     const std::string path_str = path.string();
 
@@ -871,6 +891,37 @@ bool EditPlayerEngine::DecodeAudioStreamRange(uint32_t container_index, int64_t 
     return impl_->DecodeAudioRange(container_index, first_sample, frame_count, output, error);
 }
 
+bool EditPlayerEngine::ReadAudioStreamSequential(uint32_t container_index, int64_t first_sample, uint32_t frame_count,
+                                                 std::vector<float>& output, std::string& error) {
+    if (!impl_->audio_only) {
+        error = "Continuous analysis requires an audio-only source.";
+        return false;
+    }
+    return impl_->DecodeAudioRange(container_index, first_sample, frame_count, output, error, true);
+}
+bool EditPlayerEngine::ValidateContentIdentity(const std::array<uint8_t, 32>& expected, std::string& error,
+                                               const std::atomic<bool>* cancelled) const {
+    if (!impl_->IsOpen() || !impl_->media_read_lease) {
+        error = "The media source is not open.";
+        return false;
+    }
+    const auto identity = HashFinalMedia(impl_->source_path, {}, {}, cancelled);
+    if (!identity.succeeded()) {
+        error = identity.error()->context;
+        return false;
+    }
+    if (identity.value()->sha256 != expected) {
+        error = "The media source content changed since validation.";
+        return false;
+    }
+    return true;
+}
+uint64_t EditPlayerEngine::AudioSeekCount() const noexcept {
+    return impl_->audio_seeks;
+}
+uint64_t EditPlayerEngine::AudioDecodedFrameCount() const noexcept {
+    return impl_->audio_decoded_frames;
+}
 void EditPlayerEngine::Close() {
     StopPlaybackDecode();
     // Safe only after the join above: the audio thread owns every track's
@@ -879,6 +930,15 @@ void EditPlayerEngine::Close() {
     impl_->cursor_frame.reset();
     impl_->cursor_lookahead.reset();
     impl_->video_read_measurements = {};
+    impl_->audio_tails.clear();
+    impl_->audio_only = false;
+    impl_->audio_cursor_valid = false;
+    impl_->audio_cursor_started = false;
+    impl_->audio_cursor_eof = false;
+    impl_->audio_cursor_next_decoded.reset();
+    impl_->audio_seeks = 0;
+    impl_->audio_decoded_frames = 0;
+    impl_->source_path.clear();
     impl_->audio_tracks.clear();
     impl_->audio_track_descriptions.clear();
     if (impl_->video_codec.ctx)
@@ -1477,7 +1537,8 @@ bool EditPlayerEngine::DecodeAudioRange(int64_t first_sample, uint32_t frame_cou
 }
 
 bool EditPlayerEngine::Impl::DecodeAudioRange(std::optional<uint32_t> stream, int64_t first_sample,
-                                              uint32_t frame_count, std::vector<float>& output, std::string& error) {
+                                              uint32_t frame_count, std::vector<float>& output, std::string& error,
+                                              bool continuous) {
     std::lock_guard lock(playback_mutex);
     if (!IsOpen() || first_sample < 0 || frame_count > 48000 ||
         first_sample > (std::numeric_limits<int64_t>::max)() - frame_count) {
@@ -1519,6 +1580,16 @@ bool EditPlayerEngine::Impl::DecodeAudioRange(std::optional<uint32_t> stream, in
     }
     if (selected_tracks.empty() || frame_count == 0)
         return true;
+    const bool reuse =
+        continuous && audio_cursor_valid && audio_cursor_stream == stream && audio_cursor_next == first_sample;
+    const bool from_open = continuous && !audio_cursor_started && first_sample == 0;
+    audio_cursor_started = true;
+    audio_cursor_valid = false;
+    if (!reuse) {
+        audio_tails.clear();
+        audio_cursor_eof = false;
+        audio_cursor_next_decoded.reset();
+    }
     auto* format = fmt.ctx;
     const int64_t start_us = av_rescale_q(first_sample, AVRational{1, 48000}, AVRational{1, AV_TIME_BASE});
     const int64_t origin_us = stream && format->start_time != AV_NOPTS_VALUE ? format->start_time : 0;
@@ -1531,21 +1602,30 @@ bool EditPlayerEngine::Impl::DecodeAudioRange(std::optional<uint32_t> stream, in
         return false;
     }
     const int64_t seek_us = preroll_us + origin_us;
-    cursor_valid = false;
-    cursor_frame.reset();
-    cursor_lookahead.reset();
-    if (av_seek_frame(format, -1, seek_us, AVSEEK_FLAG_BACKWARD) < 0) {
-        error = "Cannot seek source audio.";
-        return false;
-    }
-    for (auto* track : selected_tracks) {
-        avcodec_flush_buffers(track->codec.ctx);
-        if (track->resampler.ctx)
-            swr_free(&track->resampler.ctx);
-        track->resampler.ctx = BuildPlaybackResampler(track->codec.ctx, stream.has_value());
-        if (!track->resampler.ctx) {
-            error = "Cannot resample source audio to stereo Float32.";
-            return false;
+    if (!reuse) {
+        cursor_valid = false;
+        cursor_frame.reset();
+        cursor_lookahead.reset();
+        // Opening retains priming packets before media time zero. Seeking to zero
+        // can discard them and lose the AAC overlap/filter state for the first frame.
+        if (!from_open) {
+            ++audio_seeks;
+            if (av_seek_frame(format, -1, seek_us, AVSEEK_FLAG_BACKWARD) < 0) {
+                error = "Cannot seek source audio.";
+                return false;
+            }
+        }
+        for (auto* track : selected_tracks) {
+            avcodec_flush_buffers(track->codec.ctx);
+            if (continuous)
+                track->codec.ctx->pkt_timebase = track->time_base;
+            if (track->resampler.ctx)
+                swr_free(&track->resampler.ctx);
+            track->resampler.ctx = BuildPlaybackResampler(track->codec.ctx, stream.has_value());
+            if (!track->resampler.ctx) {
+                error = "Cannot resample source audio to stereo Float32.";
+                return false;
+            }
         }
     }
     PacketGuard packet(av_packet_alloc());
@@ -1555,8 +1635,39 @@ bool EditPlayerEngine::Impl::DecodeAudioRange(std::optional<uint32_t> stream, in
         return false;
     }
     const int64_t last_sample = first_sample + frame_count;
-    std::vector<int64_t> through(selected_tracks.size(), 0);
+    std::vector<int64_t> through(selected_tracks.size(), reuse ? audio_cursor_through : 0);
     std::vector<std::optional<int64_t>> next_sample(selected_tracks.size());
+    if (reuse)
+        next_sample[0] = audio_cursor_next_decoded;
+    const auto mix = [&](size_t index, int64_t at, std::span<const float> samples) {
+        const auto frames = static_cast<int64_t>(samples.size() / 2);
+        for (int64_t sample = std::max(first_sample, at); sample < std::min(last_sample, at + frames); ++sample)
+            for (size_t channel = 0; channel < 2; ++channel)
+                output[static_cast<size_t>(sample - first_sample) * 2 + channel] +=
+                    samples[static_cast<size_t>(sample - at) * 2 + channel] * selected_gains[index];
+    };
+    for (auto it = audio_tails.begin(); it != audio_tails.end();) {
+        mix(0, it->at, it->samples);
+        if (it->at + static_cast<int64_t>(it->samples.size() / 2) <= last_sample)
+            it = audio_tails.erase(it);
+        else
+            ++it;
+    }
+    const auto retain_tail = [&](int64_t at, std::span<const float> samples) {
+        if (!continuous || at + static_cast<int64_t>(samples.size() / 2) <= last_sample)
+            return true;
+        const auto skip = static_cast<size_t>(std::max<int64_t>(0, last_sample - at));
+        const auto tail = samples.subspan(skip * 2);
+        size_t retained = tail.size();
+        for (const auto& block : audio_tails)
+            retained += block.samples.size();
+        if (retained > 480000 * 2) {
+            error = "Source audio lookahead exceeds its bounded block size.";
+            return false;
+        }
+        audio_tails.push_back({at + static_cast<int64_t>(skip), std::vector<float>(tail.begin(), tail.end())});
+        return true;
+    };
     std::vector<float> scratch;
     const auto pump = [&](size_t index) {
         auto& track = *selected_tracks[index];
@@ -1568,6 +1679,7 @@ bool EditPlayerEngine::Impl::DecodeAudioRange(std::optional<uint32_t> stream, in
                 error = "Source audio decode failed: " + std::string(av_err2str(received));
                 return false;
             }
+            ++audio_decoded_frames;
             const int64_t timestamp = frame.frame->best_effort_timestamp;
             if (timestamp == AV_NOPTS_VALUE && !next_sample[index]) {
                 error = "Source audio has no initial timestamp.";
@@ -1595,15 +1707,16 @@ bool EditPlayerEngine::Impl::DecodeAudioRange(std::optional<uint32_t> stream, in
                 error = "Source audio resampling failed.";
                 return false;
             }
-            for (int64_t sample = std::max(first_sample, at); sample < std::min(last_sample, at + produced); ++sample)
-                for (size_t channel = 0; channel < 2; ++channel)
-                    output[static_cast<size_t>(sample - first_sample) * 2 + channel] +=
-                        scratch[static_cast<size_t>(sample - at) * 2 + channel] * selected_gains[index];
+            const std::span<const float> normalized(scratch.data(), static_cast<size_t>(produced) * 2);
+            mix(index, at, normalized);
+            if (!retain_tail(at, normalized))
+                return false;
             through[index] = std::max(through[index], at + produced);
             next_sample[index] = at + produced;
         }
     };
     while (
+        !(continuous && audio_cursor_eof) &&
         !std::all_of(through.begin(), through.end(), [last_sample](int64_t value) { return value >= last_sample; })) {
         const int read = av_read_frame(format, packet.pkt);
         if (read < 0) {
@@ -1629,12 +1742,14 @@ bool EditPlayerEngine::Impl::DecodeAudioRange(std::optional<uint32_t> stream, in
                     return false;
                 }
                 const int64_t at = next_sample[i].value_or(0);
-                for (int64_t sample = std::max(first_sample, at); sample < std::min(last_sample, at + produced);
-                     ++sample)
-                    for (size_t channel = 0; channel < 2; ++channel)
-                        output[static_cast<size_t>(sample - first_sample) * 2 + channel] +=
-                            scratch[static_cast<size_t>(sample - at) * 2 + channel] * selected_gains[i];
+                const std::span<const float> normalized(scratch.data(), static_cast<size_t>(produced) * 2);
+                mix(i, at, normalized);
+                if (!retain_tail(at, normalized))
+                    return false;
+                through[i] = std::max(through[i], at + produced);
+                next_sample[i] = at + produced;
             }
+            audio_cursor_eof = continuous;
             break;
         }
         for (size_t i = 0; i < selected_tracks.size(); ++i)
@@ -1648,6 +1763,13 @@ bool EditPlayerEngine::Impl::DecodeAudioRange(std::optional<uint32_t> stream, in
                 break;
             }
         av_packet_unref(packet.pkt);
+    }
+    if (continuous) {
+        audio_cursor_valid = true;
+        audio_cursor_stream = stream;
+        audio_cursor_next = last_sample;
+        audio_cursor_through = through[0];
+        audio_cursor_next_decoded = next_sample[0];
     }
     return true;
 }

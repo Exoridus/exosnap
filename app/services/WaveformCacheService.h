@@ -10,7 +10,7 @@
 // not paused, because a draw needs only a few kilobytes from disk.
 //
 // Completed analyses are published atomically into the disk store. Peaks of a
-// stream still being analysed are readable from memory as soon as each chunk
+// stream still being analysed are readable from staging as soon as each chunk
 // completes. Disk-backed peaks are read in fixed blocks through a bounded LRU,
 // so no waveform is ever loaded into memory as a whole.
 //
@@ -61,6 +61,8 @@ class WaveformCacheService : public QObject {
         std::filesystem::path root;
         std::uint64_t disk_budget_bytes = kDefaultDiskBudgetBytes;
         std::size_t memory_budget_bytes = kDefaultMemoryBudgetBytes;
+        // Hierarchy, normalized chunk and hash buffers. Decoder allocations
+        // have separate block bounds and are excluded from this budget.
         std::size_t analysis_budget_bytes = 64u * 1024 * 1024;
         // Source-time chunk per decode call, in 48 kHz frames.
         std::uint32_t chunk_frames = engine::kWaveformAnalysisChunkFrames;
@@ -68,7 +70,7 @@ class WaveformCacheService : public QObject {
 
     using DecoderFactory = std::function<std::unique_ptr<engine::WaveformAudioDecoder>(
         const std::filesystem::path& path, std::uint32_t container_index, std::string& error,
-        const std::atomic<bool>* cancelled)>;
+        const std::atomic<bool>* cancelled, const std::array<std::uint8_t, 32>& expected_sha256)>;
 
     enum class State { Unknown, Queued, Analyzing, Ready, Failed };
     Q_ENUM(State)
@@ -122,6 +124,9 @@ class WaveformCacheService : public QObject {
     [[nodiscard]] std::uint64_t decoderOpensForTest() const;
     [[nodiscard]] std::uint64_t decodeCallsForTest() const;
     [[nodiscard]] std::size_t memoryBytesForTest() const;
+    [[nodiscard]] std::size_t analysisMemoryBytesForTest() const;
+    [[nodiscard]] std::uint64_t decoderSeeksForTest() const;
+    [[nodiscard]] std::uint64_t decodedFramesForTest() const;
     [[nodiscard]] engine::MediaCacheStore& storeForTest();
 
   signals:
@@ -137,6 +142,7 @@ class WaveformCacheService : public QObject {
         std::filesystem::path path;
         std::uint32_t container_index = 0;
         std::uint64_t sample_count = 0;
+        std::array<std::uint8_t, 32> expected_sha256{};
     };
     struct Status {
         State state = State::Unknown;
@@ -159,8 +165,9 @@ class WaveformCacheService : public QObject {
     void runJob(const Job& job);
     void loadPendingBlocks();
     bool setStatus(const std::string& key, const Status& status, std::optional<std::uint64_t> generation = {});
-    void postProgress(const std::string& key, std::uint64_t completed, std::uint64_t total);
-    void insertBlock(const BlockId& id, std::vector<engine::WaveformPeak> peaks);
+    void postProgress(const std::string& key, std::uint64_t completed, std::uint64_t total, std::uint64_t generation);
+    void insertBlock(const BlockId& id, std::vector<engine::WaveformPeak> peaks, std::uint64_t generation,
+                     bool from_published_entry = false);
     std::optional<engine::WaveformFileLayout> layoutFor(const std::string& key);
 
     Config config_;
@@ -172,11 +179,14 @@ class WaveformCacheService : public QObject {
     bool stop_ = false;
     bool busy_ = false;
     std::deque<Job> queue_;
+    // Only explicitly requested sources may regenerate an evicted entry.
+    // The recipes are bounded by the same limit as disk layouts.
+    std::map<std::string, Job> requested_jobs_;
     std::optional<std::string> running_;
     std::atomic<bool> cancel_running_{false};
     std::unordered_map<std::string, Status> status_;
-    // The running analysis; readable while it grows.
-    std::shared_ptr<engine::WaveformPyramidBuilder> in_progress_;
+    // The running analysis; completed blocks are readable from staging.
+    std::shared_ptr<engine::WaveformStreamWriter> in_progress_;
     std::string in_progress_key_;
     // Disk layouts of published waveforms, bounded by kMaxLayouts.
     std::map<std::string, engine::WaveformFileLayout> layouts_;
@@ -184,11 +194,13 @@ class WaveformCacheService : public QObject {
     std::map<BlockId, CachedBlock> blocks_;
     std::list<BlockId> block_lru_;
     std::size_t block_bytes_ = 0;
-    std::set<BlockId> touched_blocks_;
     // Bumped by clearCache(); work started under an older generation is discarded.
     std::uint64_t generation_ = 0;
     // Serializes publication with clearCache().
     std::mutex publish_mutex_;
+    std::size_t analysis_peak_bytes_ = 0;
+    std::uint64_t decoder_seeks_ = 0;
+    std::uint64_t decoded_frames_ = 0;
     std::uint64_t decoder_opens_ = 0;
     std::atomic<std::uint64_t> decode_calls_{0};
 
