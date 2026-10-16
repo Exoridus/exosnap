@@ -163,6 +163,10 @@ class EditSessionAdapter : public QObject {
     [[nodiscard]] const edit::Workspace& workspace() const {
         return workspace_;
     }
+    // Last command's model transaction and synchronous publication, in nanoseconds.
+    [[nodiscard]] QVariantMap commandPerformance() const {
+        return {{"modelNs", command_model_ns_}, {"publishNs", command_publish_ns_}};
+    }
     void setAssetMonitorSelection(edit::Id asset, engine::MonitorSelectionSnapshot selection);
     [[nodiscard]] QVariantList media() const;
     [[nodiscard]] QVariantList tracks() const;
@@ -293,6 +297,8 @@ class EditSessionAdapter : public QObject {
     void closeRequested();
 
   private:
+    qint64 command_model_ns_ = 0;
+    qint64 command_publish_ns_ = 0;
     std::shared_ptr<const edit::EditSnapshot> drag_snapshot_;
     std::optional<edit::EditCommand> drag_command_;
     edit::EditPreview drag_preview_;

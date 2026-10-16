@@ -18,6 +18,7 @@
 
 #include "viewmodels/RecordViewModel.h"
 
+#include <algorithm>
 #include <cstdlib>
 #include <exosnap/engine/audio_media_manifest.h>
 #include <exosnap/engine/edit_player_engine.h>
@@ -341,6 +342,224 @@ class MediaPreviewDriver final : public QObject {
                 {"drained", !EditPlayerAdapterTestPeer::dispatchActive(player) &&
                                 EditPlayerAdapterTestPeer::pendingSeekUs(player) < 0},
                 {"requested", player.requestedTimeUs()}};
+    }
+    Q_INVOKABLE QVariantMap timelineBurstProbe() {
+        using exosnap::quick::EditPlayerAdapterTestPeer;
+        EditSessionAdapter session;
+        EditPlayerAdapter player;
+        player.setSession(&session);
+        session.setEditContext(FixtureContext());
+        auto* worker = EditPlayerAdapterTestPeer::worker(player);
+        QVariantMap before;
+        QMetaObject::invokeMethod(
+            worker, [&]() { before = worker->performanceSnapshot(); }, Qt::BlockingQueuedConnection);
+        QSemaphore entered;
+        QSemaphore release;
+        QMetaObject::invokeMethod(
+            worker,
+            [&]() {
+                entered.release();
+                release.acquire();
+            },
+            Qt::QueuedConnection);
+        entered.acquire();
+        session.selectClip(session.workspace().clips().front().id);
+        const auto revision = session.workspace().revision();
+        for (int i = 0; i < 12; ++i)
+            session.nudgeSelected(1);
+        release.release();
+        QVariantMap after;
+        QMetaObject::invokeMethod(
+            worker, [&]() { after = worker->performanceSnapshot(); }, Qt::BlockingQueuedConnection);
+        return {
+            {"revisions", QVariant::fromValue(session.workspace().revision() - revision)},
+            {"updates", after.value("timelineUpdates").toULongLong() - before.value("timelineUpdates").toULongLong()}};
+    }
+    Q_INVOKABLE QVariantMap splitSourceReuseProbe() {
+        using exosnap::quick::EditPlayerAdapterTestPeer;
+        EditSessionAdapter session;
+        EditPlayerAdapter player;
+        exosnap::quick::ExoEditPlayerItem item;
+        player.setVolume(0);
+        player.setSession(&session);
+        session.importMedia(QUrl::fromLocalFile(qEnvironmentVariable("EXOSNAP_EDIT_RENDER_FIXTURES") + "/red.mkv"),
+                            true, 0);
+        QElapsedTimer deadline;
+        deadline.start();
+        while (!session.open() && deadline.elapsed() < 5000)
+            QCoreApplication::processEvents(QEventLoop::AllEvents, 10);
+        if (!session.open())
+            return {{"imported", false}};
+        item.setPlayerAdapter(&player);
+        auto* worker = EditPlayerAdapterTestPeer::worker(player);
+        qint64 source_time = -1;
+        int monitoring_rejections = 0;
+        connect(worker, &exosnap::quick::EditPlayerWorker::monitoringRejected, &player,
+                [&](const QString&) { ++monitoring_rejections; });
+        const auto seek = [&](qint64 target) {
+            (void)item.takePendingFrame();
+            session.requestSeekUs(target);
+            deadline.restart();
+            while (deadline.elapsed() < 5000) {
+                QCoreApplication::processEvents(QEventLoop::AllEvents, 10);
+                const auto frame = item.takePendingFrame();
+                if (frame.frame && frame.timeline_time_us && std::abs(*frame.timeline_time_us - target) < 50000) {
+                    source_time = frame.frame->pts_us;
+                    return true;
+                }
+            }
+            return false;
+        };
+        const bool initial = seek(250000);
+        const bool monitoring_available = !player.monitoringTracks().empty();
+        if (monitoring_available) {
+            const auto id = player.monitoringTracks().front().toMap().value(QStringLiteral("id")).toString();
+            player.confirmMonitoring({id}, true);
+        }
+        deadline.restart();
+        while (player.monitoringConfirmationRequired() && deadline.elapsed() < 5000)
+            QCoreApplication::processEvents(QEventLoop::AllEvents, 10);
+        const bool monitoring_confirmed = monitoring_available && !player.monitoringConfirmationRequired();
+        QVariantMap before;
+        QMetaObject::invokeMethod(
+            worker, [&]() { before = worker->performanceSnapshot(); }, Qt::BlockingQueuedConnection);
+        const auto first = session.workspace().clips().front().id;
+        session.selectClip(first);
+        session.requestSeekUs(1000000);
+        session.splitSelected();
+        const auto clips = session.workspace().clips();
+        const auto suffix =
+            std::find_if(clips.begin(), clips.end(), [](const auto& clip) { return clip.start == 1000000; });
+        if (suffix == clips.end()) {
+            item.setPlayerAdapter(nullptr);
+            return {{"imported", true}, {"split", false}};
+        }
+        const bool before_move = seek(250000);
+        session.moveClip(suffix->id, 3000, false);
+        const bool mapped = seek(3500000);
+        const qint64 mapped_source_time = source_time;
+        const bool back = seek(250000);
+        QVariantMap after;
+        QMetaObject::invokeMethod(
+            worker, [&]() { after = worker->performanceSnapshot(); }, Qt::BlockingQueuedConnection);
+        item.setPlayerAdapter(nullptr);
+        return {{"imported", true},
+                {"split", true},
+                {"initial", initial},
+                {"beforeMove", before_move},
+                {"mapped", mapped},
+                {"mappedSourceUs", mapped_source_time},
+                {"back", back},
+                {"backSourceUs", source_time},
+                {"monitoringConfirmed", monitoring_confirmed},
+                {"monitoringPreserved", !player.monitoringConfirmationRequired()},
+                {"monitoringRejections", monitoring_rejections},
+                {"opens", after.value("sessionOpens").toULongLong() - before.value("sessionOpens").toULongLong()}};
+    }
+    Q_INVOKABLE QVariantMap timelineSeekOrderingProbe() {
+        using exosnap::quick::EditPlayerAdapterTestPeer;
+        EditSessionAdapter session;
+        EditPlayerAdapter player;
+        player.setSession(&session);
+        session.setEditContext(FixtureContext());
+        auto* worker = EditPlayerAdapterTestPeer::worker(player);
+        QSemaphore entered;
+        QSemaphore release;
+        QMetaObject::invokeMethod(
+            worker,
+            [&]() {
+                entered.release();
+                release.acquire();
+            },
+            Qt::QueuedConnection);
+        entered.acquire();
+        session.selectClip(session.workspace().clips().front().id);
+        session.nudgeSelected(1);
+        const auto revision_a = session.workspace().revision();
+        session.requestSeekUs(250000);
+        QVariantMap at_seek;
+        QMetaObject::invokeMethod(worker, [&]() { at_seek = worker->performanceSnapshot(); }, Qt::QueuedConnection);
+        session.nudgeSelected(1);
+        const auto revision_b = session.workspace().revision();
+        release.release();
+        QVariantMap final;
+        QMetaObject::invokeMethod(
+            worker, [&]() { final = worker->performanceSnapshot(); }, Qt::BlockingQueuedConnection);
+        return {{"revisionA", QVariant::fromValue(revision_a)},
+                {"revisionB", QVariant::fromValue(revision_b)},
+                {"atSeekRevision", at_seek.value("timelineRevision")},
+                {"finalRevision", final.value("timelineRevision")}};
+    }
+    Q_INVOKABLE QVariantMap playbackModeChangesProbe() {
+        using exosnap::quick::EditPlayerAdapterTestPeer;
+        EditSessionAdapter session;
+        EditPlayerAdapter player;
+        exosnap::quick::ExoEditPlayerItem item;
+        player.setVolume(0);
+        player.setSession(&session);
+        const auto fixture = qEnvironmentVariable("EXOSNAP_EDIT_RENDER_FIXTURES");
+        session.importMediaBatch(
+            {QUrl::fromLocalFile(fixture + "/red.mkv"), QUrl::fromLocalFile(fixture + "/blue.mkv")}, true, 0);
+        QElapsedTimer deadline;
+        deadline.start();
+        while ((!session.open() || session.workspace().assets().size() != 2) && deadline.elapsed() < 5000)
+            QCoreApplication::processEvents(QEventLoop::AllEvents, 10);
+        if (!session.open() || session.workspace().assets().size() != 2)
+            return {{"imported", false}};
+        item.setPlayerAdapter(&player);
+        const auto seek = [&](qint64 target, bool composed, bool blank = false) {
+            (void)item.takePendingFrame();
+            session.requestSeekUs(target);
+            deadline.restart();
+            while (deadline.elapsed() < 5000) {
+                QCoreApplication::processEvents(QEventLoop::AllEvents, 10);
+                const auto frame = item.takePendingFrame();
+                if (!frame.timeline_time_us || std::abs(*frame.timeline_time_us - target) >= 50000)
+                    continue;
+                if (blank)
+                    return frame.timeline && frame.timeline->layers.empty();
+                if (composed)
+                    return frame.timeline && !frame.timeline->layers.empty() &&
+                           frame.timeline->layers.front().frame.width > 0;
+                return frame.frame && frame.frame->width > 0;
+            }
+            return false;
+        };
+        const auto first = session.workspace().clips().front().id;
+        const auto second = std::find_if(session.workspace().clips().begin(), session.workspace().clips().end(),
+                                         [](const auto& clip) { return clip.start == 2000000; });
+        if (second == session.workspace().clips().end()) {
+            item.setPlayerAdapter(nullptr);
+            return {{"imported", true}, {"twoClips", false}};
+        }
+        const auto second_id = second->id;
+        const bool initial = seek(250000, false);
+        session.setClipFade(first, true, 200);
+        const bool composed = seek(100000, true);
+        session.setClipFade(first, true, 0);
+        const bool raw_restored = seek(250000, false);
+        session.moveClip(second_id, 5000, false);
+        const bool gap = seek(3000000, true, true);
+        const bool after_gap = seek(5500000, false);
+        QVariantMap before;
+        auto* worker = EditPlayerAdapterTestPeer::worker(player);
+        QMetaObject::invokeMethod(
+            worker, [&]() { before = worker->performanceSnapshot(); }, Qt::BlockingQueuedConnection);
+        const bool other_source = seek(250000, false);
+        QVariantMap after;
+        QMetaObject::invokeMethod(
+            worker, [&]() { after = worker->performanceSnapshot(); }, Qt::BlockingQueuedConnection);
+        item.setPlayerAdapter(nullptr);
+        return {{"imported", true},
+                {"twoClips", true},
+                {"initial", initial},
+                {"composed", composed},
+                {"rawRestored", raw_restored},
+                {"gap", gap},
+                {"afterGap", after_gap},
+                {"otherSource", other_source},
+                {"otherSourceOpens",
+                 after.value("sessionOpens").toULongLong() - before.value("sessionOpens").toULongLong()}};
     }
     Q_INVOKABLE QVariantMap supersededOpenReadinessProbe(bool composed) {
         using exosnap::quick::EditPlayerAdapterTestPeer;

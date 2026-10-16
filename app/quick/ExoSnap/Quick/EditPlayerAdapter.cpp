@@ -11,6 +11,7 @@
 #include <QScreen>
 
 #include <algorithm>
+#include <chrono>
 #include <cmath>
 #include <limits>
 #include <utility>
@@ -166,6 +167,7 @@ EditPlayerAdapter::~EditPlayerAdapter() {
 }
 
 void EditPlayerAdapter::setSession(EditSessionAdapter* session) {
+    pending_timeline_current_.reset();
     if (session_)
         disconnect(session_, nullptr, this, nullptr);
     session_ = session;
@@ -173,10 +175,13 @@ void EditPlayerAdapter::setSession(EditSessionAdapter* session) {
         return;
     connect(session_, &EditSessionAdapter::workspaceChanged, this, [this]() {
         duration_ms_ = session_->durationMs();
-        auto workspace = session_->workspace();
-        if (timeline_revision_ == workspace.revision() &&
-            timeline_monitoring_revision_ == workspace.monitoringRevision())
+        const auto& current = session_->workspace();
+        if (timeline_revision_ == current.revision() && timeline_monitoring_revision_ == current.monitoringRevision())
             return;
+        QElapsedTimer copy_clock;
+        copy_clock.start();
+        auto workspace = session_->workspace();
+        workspace_copy_ns_ += copy_clock.nsecsElapsed();
         timeline_revision_ = workspace.revision();
         timeline_monitoring_revision_ = workspace.monitoringRevision();
         const auto generation = sink_->invalidate();
@@ -186,9 +191,20 @@ void EditPlayerAdapter::setSession(EditSessionAdapter* session) {
         seek_pending_ = workspace.duration() > 0;
         setPreviewState(!seek_pending_ ? Empty : presented_time_us_ ? SeekPending : Opening);
         emit previewChanged();
+        if (pending_timeline_current_)
+            pending_timeline_current_->store(false);
+        const auto current_update = std::make_shared<std::atomic<bool>>(true);
+        pending_timeline_current_ = current_update;
+        const auto submitted = std::chrono::steady_clock::now();
         QMetaObject::invokeMethod(
             worker_,
-            [worker = worker_, workspace = std::move(workspace), generation]() mutable {
+            [worker = worker_, workspace = std::move(workspace), generation, submitted, current_update]() mutable {
+                if (!current_update->load())
+                    return;
+                worker->recordQueueWait(
+                    std::chrono::duration_cast<std::chrono::nanoseconds>(std::chrono::steady_clock::now() - submitted)
+                        .count(),
+                    true);
                 worker->setRequestGeneration(generation);
                 worker->setTimeline(std::move(workspace));
             },
@@ -307,6 +323,7 @@ void EditPlayerAdapter::setPlaying(bool playing) {
         return;
     desired_playing_ = playing;
     transport_pending_ = true;
+    pending_timeline_current_.reset();
     if (playing) {
         const qint64 from = session_ != nullptr ? session_->positionUs() : 0;
         QMetaObject::invokeMethod(worker_, "setScreenRefreshHz", Qt::QueuedConnection,
@@ -319,6 +336,7 @@ void EditPlayerAdapter::setPlaying(bool playing) {
 
 void EditPlayerAdapter::confirmMonitoring(QStringList trackIds, bool overlapConfirmed) {
     setPlaying(false);
+    pending_timeline_current_.reset();
     QMetaObject::invokeMethod(
         worker_,
         [worker = worker_, trackIds = std::move(trackIds), overlapConfirmed]() mutable {
@@ -361,6 +379,7 @@ void EditPlayerAdapter::endScrub() {
 }
 
 void EditPlayerAdapter::openClip(const QString& master_path, qint64 duration_ms) {
+    pending_timeline_current_.reset();
     duration_ms_ = duration_ms;
     if (playing_) {
         playing_ = false;
@@ -373,6 +392,7 @@ void EditPlayerAdapter::openClip(const QString& master_path, qint64 duration_ms)
 }
 
 void EditPlayerAdapter::closeClip() {
+    pending_timeline_current_.reset();
     duration_ms_ = 0;
     timeline_revision_.reset();
     timeline_monitoring_revision_ = 0;
@@ -415,12 +435,19 @@ void EditPlayerAdapter::dispatchSeek() {
     if (seek_dispatch_active_ || !pending_seek_)
         return;
     seek_dispatch_active_ = true;
+    // A seek must observe the workspace queued before it, even if a later edit arrives.
+    pending_timeline_current_.reset();
     const auto request = *pending_seek_;
     pending_seek_.reset();
     QPointer<EditPlayerAdapter> self(this);
+    const auto submitted = std::chrono::steady_clock::now();
     QMetaObject::invokeMethod(
         worker_,
-        [worker = worker_, request, self]() {
+        [worker = worker_, request, self, submitted]() {
+            worker->recordQueueWait(
+                std::chrono::duration_cast<std::chrono::nanoseconds>(std::chrono::steady_clock::now() - submitted)
+                    .count(),
+                false);
             worker->setRequestGeneration(request.generation);
             worker->seekUs(request.time_us);
             if (self)

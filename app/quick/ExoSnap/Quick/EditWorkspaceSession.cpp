@@ -3,6 +3,7 @@
 #include "models/EditCommandTypes.h"
 #include "models/EditWorkspace.h"
 
+#include <QElapsedTimer>
 #include <QFileInfo>
 #include <QList>
 #include <QMetaObject>
@@ -451,8 +452,13 @@ void EditSessionAdapter::nudgeSelected(qint64 delta_ms, int edge) {
 }
 
 bool EditSessionAdapter::applyCommand(const edit::EditCommand& command) {
+    QElapsedTimer clock;
+    clock.start();
     const auto result = workspace_.apply(command, workspace_.revision());
+    command_model_ns_ = clock.nsecsElapsed();
+    clock.restart();
     publishWorkspace(result.status != edit::CommandStatus::Rejected);
+    command_publish_ns_ = clock.nsecsElapsed();
     return result.status != edit::CommandStatus::Rejected;
 }
 

@@ -14,6 +14,17 @@ A decode failure therefore leaves an honest Preview unavailable/Timeline preview
 
 Source-open readiness is separate from frame presentation. A seek can supersede the original open generation while retaining its decoder or render reader. Successful access republishes source readiness for the current generation; only the scene-graph handoff acknowledges presentation. Stale open results cannot mark a replaced source ready.
 
+Queued workspace updates retain the newest revision within each playback-command interval.
+Dispatching a seek, transport, monitoring or lifecycle command seals the preceding interval, so a newer revision cannot replace the workspace that command must observe.
+Only preview work is superseded; workspace commands and undo history remain intact.
+
+The non-composited player can retain its session across edits and split segments when the asset, validated source fingerprint, video stream and file size/write time remain compatible.
+It updates the source-to-timeline offset rather than treating a new clip ID as a new source.
+Changing that callback mapping first pauses playback and joins any outstanding scrub read.
+An unchanged mapping retains the asynchronous newest-pending seek behavior.
+Monitoring revisions are applied once per session. Gaps, unavailable sources and transitions between simple playback and composition reset the raw source binding.
+Simultaneous composition contributions keep their independent decoder cursors.
+
 ## Decoder ownership and queues
 
 There are three workers: demux, video decode, and audio decode/resample. The demux worker exclusively owns its `AVFormatContext`; each decoder owns its codec context. No FFmpeg context is concurrently manipulated by multiple workers.

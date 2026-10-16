@@ -37,6 +37,13 @@ namespace exosnap::engine {
 
 class EditPlayerSession {
   public:
+    struct SeekPerformance {
+        uint64_t read_count = 0;
+        int64_t read_ns = 0;
+    };
+    // Completed random-access reads, including engine synchronization and decode.
+    // Playback reads are excluded. Safe to sample while a seek is running.
+    [[nodiscard]] SeekPerformance SeekPerformanceSnapshot() const;
     EditPlayerSession();
     ~EditPlayerSession();
 
@@ -100,6 +107,9 @@ class EditPlayerSession {
     // delivers through SetOnFrameReady's callback -- see that method's doc
     // comment.
     void SeekTo(int64_t target_us, uint64_t generation = 0);
+    // Discards pending seeks and joins an in-flight read before callback remapping.
+    // Call from the owning thread while playback is paused.
+    void CancelPendingSeek();
 
     // Current playback position derived from the audio master clock (0 if no
     // audio stream). While paused, holds steady at the position playback

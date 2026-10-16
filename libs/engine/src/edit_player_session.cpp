@@ -66,6 +66,8 @@ struct EditPlayerSession::Impl {
     };
     std::optional<SeekRequest> pending_seek;
     bool seek_stopped = false;
+    std::mutex seek_performance_mutex;
+    SeekPerformance seek_performance;
 
     void StopSeek() {
         {
@@ -291,8 +293,16 @@ void EditPlayerSession::SeekTo(int64_t target_us, uint64_t generation) {
                 const auto request = *impl_->pending_seek;
                 impl_->pending_seek.reset();
                 seek_lock.unlock();
+                const auto started = std::chrono::steady_clock::now();
                 auto frame =
                     impl_->engine.ReadFrameAtRaw(request.target_us, VideoReadMode::RandomAccess, request.generation);
+                {
+                    std::lock_guard performance_lock(impl_->seek_performance_mutex);
+                    ++impl_->seek_performance.read_count;
+                    impl_->seek_performance.read_ns +=
+                        std::chrono::duration_cast<std::chrono::nanoseconds>(std::chrono::steady_clock::now() - started)
+                            .count();
+                }
                 seek_lock.lock();
                 if (!impl_->seek_stopped && frame && impl_->seek_generation.load() == request.generation)
                     impl_->DeliverFrame(std::move(*frame), request.presentation_generation);
@@ -300,6 +310,13 @@ void EditPlayerSession::SeekTo(int64_t target_us, uint64_t generation) {
         });
     }
     impl_->seek_cv.notify_one();
+}
+EditPlayerSession::SeekPerformance EditPlayerSession::SeekPerformanceSnapshot() const {
+    std::lock_guard lock(impl_->seek_performance_mutex);
+    return impl_->seek_performance;
+}
+void EditPlayerSession::CancelPendingSeek() {
+    impl_->StopSeek();
 }
 int64_t EditPlayerSession::ClockSnapshotUs() const noexcept {
     return impl_->media_clock_us.load(std::memory_order_relaxed);

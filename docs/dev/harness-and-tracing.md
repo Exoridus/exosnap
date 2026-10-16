@@ -60,6 +60,13 @@ Use small, controlled inputs. For foreign media that requires monitoring confirm
 The detached productive player item observes decoded mailbox frames after the adapter's generation filter.
 Seek samples measure request to mailbox observation with a 1 ms event-loop poll and include scheduling overhead.
 Nearest-rank p50/p95/p99 and the raw samples are reported separately from synchronous adapter-commit latency.
+The final cycle also compares a seek without cuts, immediately after 32 cuts, after a worker-slot drain and across adjacent segments of one source.
+Each comparison includes cumulative simple-player open/close, queue-wait, seek-dispatch and completed random-access read costs.
+Counter differences after the cut burst include work performed during the edits, not only work after the final seek request.
+Random-access read time includes engine synchronization and decoding; it is not isolated codec throughput.
+Short inputs whose adjacent targets overlap the mailbox matching tolerance report the segment comparison as skipped.
+Command samples separate model transaction, synchronous workspace publication and the playback adapter's workspace copy within publication.
+Publication includes direct signal subscribers and QML work. None of these measurements establishes physical display latency.
 `GetProcessMemoryInfo`, `GetProcessTimes` and `GetProcessHandleCount` provide process snapshots. Close samples follow a queued player-worker barrier that includes earlier work and decoder closure; they do not prove that every cache or GPU resource has been released. The report records that drain time separately. Missing measurements remain absent.
 The mode does not establish Qt texture handoff, physical presentation, A/V synchronization, audio underruns or GPU/VRAM utilization. Those entries are `SKIP`.
 Its report is separate from pointer-gesture tests and independently decoded export tests; success in one layer does not imply success in another.

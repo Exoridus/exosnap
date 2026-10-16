@@ -208,6 +208,7 @@ int runIsolatedQualification(QuickApplication& application, const AutoEditOption
     QJsonArray cycles;
     QJsonArray seeks;
     QJsonArray edit_samples;
+    QJsonArray seek_comparisons;
     std::vector<double> seek_latencies;
     std::vector<double> commit_latencies;
     const auto initial = processSample();
@@ -241,6 +242,64 @@ int runIsolatedQualification(QuickApplication& application, const AutoEditOption
         if (arrived)
             seek_latencies.push_back(elapsed);
         return arrived;
+    };
+    const auto performance_snapshot = [&]() {
+        struct Snapshot {
+            std::atomic<bool> ready = false;
+            QVariantMap values;
+        };
+        const auto snapshot = std::make_shared<Snapshot>();
+        auto* worker = static_cast<EditPlayerWorker*>(EditPlayerAdapterTestPeer::worker(*player));
+        QElapsedTimer clock;
+        clock.start();
+        QMetaObject::invokeMethod(
+            worker,
+            [worker, snapshot]() {
+                snapshot->values = worker->performanceSnapshot();
+                snapshot->ready.store(true);
+            },
+            Qt::QueuedConnection);
+        const bool ready =
+            waitFor("the player performance snapshot", 30000, 1, [&]() { return snapshot->ready.load(); });
+        return QJsonObject{
+            {QStringLiteral("passed"), ready},
+            {QStringLiteral("workerSlotDrainMs"), clock.elapsed()},
+            {QStringLiteral("counters"), ready ? QJsonObject::fromVariantMap(snapshot->values) : QJsonObject{}}};
+    };
+    const auto compare_seek = [&](const QString& scenario, qint64 target, const QJsonObject& before) {
+        observed_time = -1;
+        (void)mailbox.takePendingFrame();
+        QElapsedTimer clock;
+        clock.start();
+        session->requestSeekUs(target);
+        const bool arrived = waitFor("a controlled decoded mailbox frame", 30000, 1,
+                                     [&]() { return observe() && std::llabs(observed_time - target) <= 100000; });
+        const double elapsed = static_cast<double>(clock.nsecsElapsed()) / 1000000.0;
+        const qint64 decoded_time = observed_time;
+        const auto after = performance_snapshot();
+        const bool passed = arrived && before.value(QStringLiteral("passed")).toBool() &&
+                            after.value(QStringLiteral("passed")).toBool();
+        const auto before_counters = before.value(QStringLiteral("counters")).toObject();
+        const auto after_counters = after.value(QStringLiteral("counters")).toObject();
+        QJsonObject delta;
+        for (auto it = after_counters.begin(); it != after_counters.end(); ++it) {
+            if (it.key() == QStringLiteral("timelineRevision") || it.key() == QStringLiteral("timelinePlayheadUs"))
+                continue;
+            if (it.value().isDouble() && before_counters.value(it.key()).isDouble())
+                delta.insert(it.key(), it.value().toDouble() - before_counters.value(it.key()).toDouble());
+        }
+        seek_comparisons.append(QJsonObject{{QStringLiteral("scenario"), scenario},
+                                            {QStringLiteral("targetUs"), target},
+                                            {QStringLiteral("decodedTimelineUs"), decoded_time},
+                                            {QStringLiteral("requestToMailboxObservedMs"), elapsed},
+                                            {QStringLiteral("before"), before},
+                                            {QStringLiteral("after"), after},
+                                            {QStringLiteral("counterDelta"), delta},
+                                            {QStringLiteral("passed"), passed}});
+        log.record(QStringLiteral("performance.%1").arg(scenario), passed,
+                   QStringLiteral("%1 ms to decoded mailbox; worker-slot barriers do not prove presentation")
+                       .arg(elapsed, 0, 'f', 3));
+        return after;
     };
     for (int cycle = 0; cycle < 5; ++cycle) {
         session->close();
@@ -317,6 +376,8 @@ int runIsolatedQualification(QuickApplication& application, const AutoEditOption
                        session->workspace().clips() == clips_before,
                    QStringLiteral("Record/Edit preserves edits and leaves playback paused"));
         if (cycle == 4) {
+            const qint64 comparison_target = duration / 20;
+            auto before_splits = compare_seek(QStringLiteral("noCuts"), comparison_target, performance_snapshot());
             const auto initial_count = session->workspace().clips().size();
             bool split_ok = true;
             for (int cut = 1; cut <= 32; ++cut) {
@@ -336,6 +397,35 @@ int runIsolatedQualification(QuickApplication& application, const AutoEditOption
             }
             log.record(QStringLiteral("manyClips.split"), split_ok,
                        QStringLiteral("%1 -> %2 clips").arg(initial_count).arg(session->workspace().clips().size()));
+            auto after_immediate =
+                compare_seek(QStringLiteral("immediatelyAfter32Cuts"), comparison_target, before_splits);
+            compare_seek(QStringLiteral("afterWorkerSlotDrain"), comparison_target, after_immediate);
+            const qint64 boundary = duration / 33;
+            const qint64 offset = std::min<qint64>(duration / 132, 200000);
+            const qint64 left_target = boundary - offset;
+            const qint64 right_target = boundary + offset;
+            const auto& split_clips = session->workspace().clips();
+            const auto left = std::find_if(split_clips.begin(), split_clips.end(), [left_target](const auto& clip) {
+                return clip.start <= left_target && clip.end() > left_target;
+            });
+            const auto right = std::find_if(split_clips.begin(), split_clips.end(), [right_target](const auto& clip) {
+                return clip.start <= right_target && clip.end() > right_target;
+            });
+            const bool same_source = left != split_clips.end() && right != split_clips.end() && left->id != right->id &&
+                                     left->asset == right->asset;
+            log.record(QStringLiteral("performance.sameSourceSplitPair"), same_source,
+                       QStringLiteral("distinct adjacent segments of one asset"));
+            if (same_source && offset > 100000) {
+                const auto before_crossing =
+                    compare_seek(QStringLiteral("sameSourceLeftSegment"), left_target, performance_snapshot());
+                compare_seek(QStringLiteral("sameSourceCrossSegment"), right_target, before_crossing);
+            } else if (same_source) {
+                seek_comparisons.append(
+                    QJsonObject{{QStringLiteral("scenario"), QStringLiteral("sameSourceCrossSegment")},
+                                {QStringLiteral("status"), QStringLiteral("SKIP")},
+                                {QStringLiteral("reason"),
+                                 QStringLiteral("Adjacent targets are within the mailbox matching tolerance.")}});
+            }
             for (int i = 0; i < 12; ++i)
                 seek_ok = seek(duration * (1 + (i * 11) % 19) / 20, cycle) && seek_ok;
             log.record(QStringLiteral("manyClips.seek"), seek_ok, QStringLiteral("12 targets after 32 linked splits"));
@@ -350,16 +440,23 @@ int runIsolatedQualification(QuickApplication& application, const AutoEditOption
             const auto old_revision = session->workspace().revision();
             QElapsedTimer clock;
             clock.start();
+            const auto copy_before = player->workspaceCopyTimeNs();
             session->nudgeSelected(1);
             const double elapsed = static_cast<double>(clock.nsecsElapsed()) / 1000000.0;
+            const auto command_performance = session->commandPerformance();
+            const auto copy_ns = player->workspaceCopyTimeNs() - copy_before;
             const bool committed = session->workspace().revision() != old_revision;
             if (committed)
                 commit_latencies.push_back(elapsed);
             session->undo();
             edits_ok = committed && session->workspace().clips() == checkpoint && edits_ok;
-            edit_samples.append(QJsonObject{{QStringLiteral("cycle"), cycle},
-                                            {QStringLiteral("observedMs"), elapsed},
-                                            {QStringLiteral("passed"), committed}});
+            edit_samples.append(
+                QJsonObject{{QStringLiteral("cycle"), cycle},
+                            {QStringLiteral("observedMs"), elapsed},
+                            {QStringLiteral("modelNs"), command_performance.value("modelNs").toDouble()},
+                            {QStringLiteral("publicationNs"), command_performance.value("publishNs").toDouble()},
+                            {QStringLiteral("workspaceCopyNs"), static_cast<double>(copy_ns)},
+                            {QStringLiteral("passed"), committed}});
         }
         log.record(QStringLiteral("cycle.%1.editHistory").arg(cycle), edits_ok,
                    QStringLiteral("16 nudge/undo round trips"));
@@ -451,6 +548,11 @@ int runIsolatedQualification(QuickApplication& application, const AutoEditOption
     report.insert(QStringLiteral("cycles"), cycles);
     report.insert(QStringLiteral("seeks"), seeks);
     report.insert(QStringLiteral("commits"), edit_samples);
+    report.insert(QStringLiteral("controlledSeekComparisons"), seek_comparisons);
+    report.insert(QStringLiteral("performanceCounterBoundary"),
+                  QStringLiteral("Worker-thread cumulative counters; decoder read time includes demux, decode and "
+                                 "conversion. Worker-slot drain does not drain an asynchronous decoder or prove "
+                                 "Qt rendering or physical presentation."));
     report.insert(QStringLiteral("requestToDecodedMailboxObserved"), percentiles(seek_latencies));
     report.insert(QStringLiteral("synchronousAdapterCommit"), percentiles(commit_latencies));
     QJsonArray unavailable;
