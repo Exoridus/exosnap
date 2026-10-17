@@ -153,6 +153,8 @@ struct DeliveryObservation {
     // consumer's present gate would discard those.
     int behind_clock = 0;
     int64_t worst_lead_us = std::numeric_limits<int64_t>::min();
+    // Audible gaps: 48 kHz frames the output had to replace with silence.
+    uint64_t shortfall_frames = 0;
 };
 
 // Plays the fixture for 1.5 s, sampling the clock every tick the way the
@@ -210,6 +212,7 @@ DeliveryObservation PlayAndObserve(const std::filesystem::path& path, std::chron
         samples.push_back({session.CurrentPositionUs(), Clock::now()});
         std::this_thread::sleep_for(tick);
     }
+    observation.shortfall_frames = session.AudioShortfallFrames();
     session.Pause();
     session.Close();
 
@@ -239,6 +242,8 @@ TEST(EditPlayerAvSync, AudioClockedPlaybackNeverDeliversVideoAheadOfTheClock) {
     if (!observed.device_available)
         GTEST_SKIP() << "no audio output endpoint could be opened";
     EXPECT_GE(observed.delivered, 20);
+    // Holding video must never starve the audio output.
+    EXPECT_EQ(observed.shortfall_frames, 0u);
     // The deliberate early release plus scheduling slack. Without the hold the
     // decode thread delivers as far ahead as the demuxer reads, up to a second.
     EXPECT_LE(observed.worst_lead_us, 22'000);

@@ -232,6 +232,8 @@ void WasapiAudioRenderer::Start(std::span<const float> initial_samples, bool tim
         return;
     frames_rendered_.store(0);
     frames_played_latched_.store(0);
+    shortfall_frames_.store(0);
+    audio_arrived_ = false;
     {
         // Reset here, not at the end of Stop(): the decode thread that was
         // pushing into this ring is not guaranteed to have stopped yet when
@@ -437,6 +439,10 @@ void WasapiAudioRenderer::RenderThreadMain() {
             // Explicit template args so windows.h's min() function-like macro
             // cannot expand (this target compiles without NOMINMAX).
             const size_t take = std::min<size_t>(want_floats, ring_.size());
+            if (take > 0)
+                audio_arrived_ = true;
+            if (audio_arrived_ && take < want_floats)
+                shortfall_frames_.fetch_add((want_floats - take) / kEngineChannels, std::memory_order_relaxed);
             engine_buf.assign(ring_.begin(), ring_.begin() + static_cast<std::ptrdiff_t>(take));
             ring_.erase(ring_.begin(), ring_.begin() + static_cast<std::ptrdiff_t>(take));
             if (timeline_mode_) {

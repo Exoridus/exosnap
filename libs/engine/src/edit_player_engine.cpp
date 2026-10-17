@@ -2142,8 +2142,10 @@ void EditPlayerEngine::StartPlaybackDecode(int64_t start_us, VideoFrameCallback 
                         continue; // entirely before the start: nothing to hand over
                     const int64_t block_pts_us = pts_us + static_cast<int64_t>(preroll) * 1'000'000 /
                                                               static_cast<int64_t>(kPlaybackOutSampleRate);
-                    mixer.Submit(index, block_pts_us, pcm.data() + preroll * kPlaybackOutChannels,
-                                 frames_out - preroll);
+                    mixer.Submit(index, block_pts_us, pcm.data() + preroll * kPlaybackOutChannels, frames_out - preroll,
+                                 av_rescale_q_rnd(1, track->time_base,
+                                                  AVRational{1, static_cast<int>(kPlaybackOutSampleRate)},
+                                                  AV_ROUND_UP));
                 }
             };
 

@@ -4,6 +4,7 @@
 #include <algorithm>
 #include <cstddef>
 #include <cstdint>
+#include <cstdlib>
 #include <optional>
 
 namespace exosnap::engine {
@@ -44,13 +45,19 @@ void EditAudioMixer::Reset(size_t track_count, int64_t start_us) {
     limiter_.Reset();
 }
 
-void EditAudioMixer::Submit(size_t track, int64_t pts_us, const float* interleaved_stereo, size_t frame_count) {
+void EditAudioMixer::Submit(size_t track, int64_t pts_us, const float* interleaved_stereo, size_t frame_count,
+                            int64_t timestamp_tolerance_frames) {
     if (track >= track_count_ || interleaved_stereo == nullptr || frame_count == 0)
         return;
 
+    int64_t block_start = FrameIndexForUs(pts_us);
+    // The microsecond stamp itself rounds to the nearest frame, so one frame of
+    // slack applies even to a sample-accurate container.
+    const int64_t tolerance = std::max<int64_t>(timestamp_tolerance_frames, 1);
+    if (has_contributed_[track] && std::abs(block_start - track_through_frame_[track]) <= tolerance)
+        block_start = track_through_frame_[track];
     has_contributed_[track] = true;
 
-    const int64_t block_start = FrameIndexForUs(pts_us);
     const int64_t block_end = block_start + static_cast<int64_t>(frame_count);
     // Monotonic: the through mark is what tells Take() which stretch is still
     // open, so a container reordering that walked it backwards would re-open a

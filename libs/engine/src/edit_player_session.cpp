@@ -379,6 +379,10 @@ int64_t EditPlayerSession::ClockSnapshotUs() const noexcept {
     return impl_->media_clock_us.load(std::memory_order_relaxed);
 }
 
+uint64_t EditPlayerSession::AudioShortfallFrames() const noexcept {
+    return impl_->has_audio ? impl_->audio.ShortfallFrames() : 0;
+}
+
 int64_t EditPlayerSession::CurrentPositionMs() const noexcept {
     return CurrentPositionUs() / 1000;
 }

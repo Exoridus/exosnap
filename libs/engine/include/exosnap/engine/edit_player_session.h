@@ -135,6 +135,10 @@ class EditPlayerSession {
     // class's own single-thread-only members directly.
     [[nodiscard]] int64_t ClockSnapshotUs() const noexcept;
 
+    // 48 kHz frames the audio output replaced with silence since the current
+    // Play() started delivering sound: audible gaps. Zero without audio output.
+    [[nodiscard]] uint64_t AudioShortfallFrames() const noexcept;
+
   private:
     struct Impl;
     std::unique_ptr<Impl> impl_;
