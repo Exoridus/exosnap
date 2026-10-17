@@ -448,7 +448,10 @@ QVariantList EditTimelineAdapter::thumbnailTiles(const QString& identityHex, qin
                                                source->video_height, source->fps_num, source->fps_den);
     result.reserve(static_cast<qsizetype>(tiles.size()));
     for (const auto& tile : tiles) {
-        result.append(QVariantMap{{QStringLiteral("timeUs"), QVariant::fromValue<qint64>(tile.time_us)},
+        // The source time is the tile's identity within one strip, so a keyed
+        // model keeps the tiles a changed window still shows.
+        result.append(QVariantMap{{QStringLiteral("id"), QVariant::fromValue<qulonglong>(tile.time_us)},
+                                  {QStringLiteral("timeUs"), QVariant::fromValue<qint64>(tile.time_us)},
                                   {QStringLiteral("x"), tile.x},
                                   {QStringLiteral("width"), tile.width},
                                   {QStringLiteral("source"), EditThumbnailUrl(identity, tile.time_us, heightPx)}});

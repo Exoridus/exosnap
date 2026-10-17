@@ -491,6 +491,26 @@ Item {
             verify(clear.Accessible.name.length > 0);
             verify(clear.ToolTip.text.length > 0);
         }
+        function test_monitoring_confirmation_is_stated_and_single_track_needs_no_overlap_acknowledgement() {
+            const page = make({ width: 1280, height: 800 });
+            testEditHarness.pageMonitoring([{ id: "a", name: "Positive", selected: true }], true);
+            const hint = child(page, "editMonitoringRequired");
+            tryVerify(() => hint.visible);
+            compare(page.monitoringSelection, ["a"]);
+            page.toggleDetails();
+            tryVerify(() => findChild(page, "editMonitorConfirm") !== null);
+            const overlap = child(page, "editMonitorOverlapConfirmation");
+            verify(child(page, "editMonitorConfirm").visible);
+            verify(!overlap.visible);
+            testEditHarness.pageMonitoring([{ id: "b", name: "System", selected: false },
+                                            { id: "c", name: "Microphone", selected: true }], true);
+            tryVerify(() => overlap.visible);
+            // Track identities are per open; the old choice must not linger.
+            compare(page.monitoringSelection, ["c"]);
+            testEditHarness.pageMonitoring([], false);
+            tryVerify(() => !hint.visible);
+            page.toggleDetails();
+        }
         function test_source_tabs_scroll_without_truncating_labels() {
             const page = make();
             page.toggleMedia();

@@ -991,6 +991,115 @@ TEST(EditWorkspaceAdapter, RealReimportReusesWaveformCacheWithoutChangingSemanti
     EXPECT_EQ(after.content_sha256, metadata.content_sha256);
 }
 
+TEST(EditTimelineAdapterTiles, AShrunkWindowKeepsTheTileIdentitiesItStillShows) {
+    EnsureApplication();
+    const auto fixtures = qEnvironmentVariable("EXOSNAP_EDIT_RENDER_FIXTURES");
+    if (fixtures.isEmpty())
+        GTEST_SKIP() << "Set EXOSNAP_EDIT_RENDER_FIXTURES to generated red/blue media.";
+    const auto path = QDir(fixtures).filePath(QStringLiteral("red.mkv"));
+    const auto metadata = engine::ProbeEditMedia(std::filesystem::path(path.toStdWString()));
+    ASSERT_TRUE(metadata.error.empty()) << metadata.error;
+    const auto identity = QString::fromLatin1(
+        QByteArray(reinterpret_cast<const char*>(metadata.content_sha256.data()), metadata.content_sha256.size())
+            .toHex());
+    EditTimelineAdapter timeline;
+    ASSERT_TRUE(timeline.registerThumbnailSource(identity, path, metadata.width, metadata.height, metadata.fps_num,
+                                                 metadata.fps_den));
+
+    // The same scale before and after, the way a trim or split shrinks a clip.
+    const auto full = timeline.thumbnailTiles(identity, 0, 2'000'000, 800, 44);
+    const auto left = timeline.thumbnailTiles(identity, 0, 1'000'000, 400, 44);
+    ASSERT_GE(full.size(), 4);
+    ASSERT_GE(left.size(), 2);
+    QHash<qulonglong, QString> full_sources;
+    for (const auto& tile : full) {
+        const auto row = tile.toMap();
+        const auto id = row.value(QStringLiteral("id")).toULongLong();
+        EXPECT_FALSE(full_sources.contains(id)) << "tile ids must be unique within one strip";
+        full_sources.insert(id, row.value(QStringLiteral("source")).toString());
+    }
+    for (const auto& tile : left) {
+        const auto row = tile.toMap();
+        const auto id = row.value(QStringLiteral("id")).toULongLong();
+        ASSERT_TRUE(full_sources.contains(id));
+        EXPECT_EQ(full_sources.value(id), row.value(QStringLiteral("source")).toString());
+    }
+
+    EditTimelineClipModel model;
+    model.setRows(full);
+    int resets = 0;
+    int inserted = 0;
+    QObject::connect(&model, &QAbstractItemModel::modelReset, [&resets]() { ++resets; });
+    QObject::connect(&model, &QAbstractItemModel::rowsInserted,
+                     [&inserted](const QModelIndex&, int first, int last) { inserted += last - first + 1; });
+    model.setRows(left);
+    EXPECT_EQ(resets, 0);
+    EXPECT_EQ(inserted, 0);
+    EXPECT_EQ(model.rowCount(), left.size());
+}
+
+TEST(EditWorkspaceAdapter, ExportReviewListsEachSourceStreamOnceWithAName) {
+    EnsureApplication();
+    const auto fixtures = qEnvironmentVariable("EXOSNAP_EDIT_RENDER_FIXTURES");
+    if (fixtures.isEmpty())
+        GTEST_SKIP() << "Set EXOSNAP_EDIT_RENDER_FIXTURES to generated red/blue media.";
+    QTemporaryDir sources;
+    QTemporaryDir output;
+    ASSERT_TRUE(sources.isValid());
+    ASSERT_TRUE(output.isValid());
+    const auto wait_for = [](const auto& predicate) {
+        const auto deadline = std::chrono::steady_clock::now() + std::chrono::seconds(60);
+        while (!predicate() && std::chrono::steady_clock::now() < deadline) {
+            QCoreApplication::processEvents();
+            QThread::msleep(1);
+        }
+        return predicate();
+    };
+    const auto path = sources.filePath(QStringLiteral("red.mkv"));
+    ASSERT_TRUE(QFile::copy(QDir(fixtures).filePath(QStringLiteral("red.mkv")), path));
+    EditSessionAdapter session;
+    session.importMedia(QUrl::fromLocalFile(path), true);
+    ASSERT_TRUE(
+        wait_for([&]() { return session.workspace().assets().size() == 1 || !session.workspaceError().isEmpty(); }));
+    ASSERT_TRUE(session.workspaceError().isEmpty()) << session.workspaceError().toStdString();
+    const auto tracks = session.workspace().tracks();
+    const auto is_audio = [&](const auto& clip) {
+        return std::any_of(tracks.begin(), tracks.end(), [&](const auto& track) {
+            return track.id == clip.track && track.type == edit::TrackType::Audio;
+        });
+    };
+    const auto imported = session.workspace().clips();
+    const auto video =
+        std::find_if(imported.begin(), imported.end(), [&](const auto& clip) { return !is_audio(clip); });
+    ASSERT_NE(video, imported.end());
+    const auto video_id = video->id;
+    for (const qint64 at : {500, 1000, 1500}) {
+        session.selectClip(video_id);
+        session.requestSeek(at);
+        session.splitSelected();
+    }
+    const auto edited = session.workspace().clips();
+    const auto audio_clips =
+        std::count_if(edited.begin(), edited.end(), [&](const auto& clip) { return is_audio(clip); });
+    ASSERT_GE(audio_clips, 4);
+
+    EditExportAdapter exporter;
+    exporter.setSession(&session);
+    exporter.setRenderConfigProvider([] {
+        engine::RecorderConfig config;
+        config.video_codec = engine::VideoCodec::H264;
+        return config;
+    });
+    exporter.setOutputDirectoryProvider([&] { return output.path(); });
+    exporter.startExport();
+    ASSERT_TRUE(wait_for([&]() { return exporter.state() != EditExportAdapter::Preparing; }));
+    ASSERT_EQ(exporter.state(), EditExportAdapter::Review) << exporter.errorText().toStdString();
+    const auto selected = exporter.reviewOutcome().value(QStringLiteral("selectedTracks")).toList();
+    ASSERT_EQ(selected.size(), 1);
+    EXPECT_FALSE(selected.front().toMap().value(QStringLiteral("name")).toString().isEmpty());
+    exporter.reset();
+}
+
 TEST(EditWorkspaceAdapter, RealEditingHistoryAndBlankTimeReachScopedExportsWithoutChangingSources) {
     EnsureApplication();
     const auto fixtures = qEnvironmentVariable("EXOSNAP_EDIT_RENDER_FIXTURES");

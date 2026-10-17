@@ -404,12 +404,13 @@ FocusScope {
                 readonly property real visibleSourceIn: Math.min(modelData.sourceOutUs, modelData.sourceInUs + visibleLeft / root.pixelsPerMs * 1000)
                 readonly property real visibleSourceOut: Math.min(modelData.sourceOutUs, visibleSourceIn + visibleWidth / root.pixelsPerMs * 1000)
                 readonly property bool cachedVisual: modelData.available && modelData.sourceIdentity.length > 0 && root.thumbnails !== null
-                property var thumbnailTiles: []
                 property string waveformKey: ""
                 property string mediaRequest: ""
                 // A delegate outlives most publications, and modelData also changes for selection and
                 // timeline position. Only a changed source or visible source window may replace the
-                // tile and waveform requests: re-requesting them recreates every tile image.
+                // tile and waveform requests. Tiles are keyed by source time, so a window that shrinks
+                // or grows keeps the tile images it still shows instead of reloading every one.
+                EditTimelineClipModel { id: tileModel }
                 function refreshMedia(): void {
                     const shown = cachedVisual && visibleSourceOut > visibleSourceIn;
                     const video = shown && modelData.video;
@@ -421,9 +422,9 @@ FocusScope {
                     mediaRequest = request;
                     if (video) {
                         root.thumbnails.registerThumbnailSource(modelData.sourceIdentity, modelData.path, modelData.width, modelData.height, modelData.fpsNum, modelData.fpsDen);
-                        thumbnailTiles = root.thumbnails.thumbnailTiles(modelData.sourceIdentity, visibleSourceIn, visibleSourceOut, visibleWidth, 44);
+                        tileModel.setRows(root.thumbnails.thumbnailTiles(modelData.sourceIdentity, visibleSourceIn, visibleSourceOut, visibleWidth, 44));
                     } else {
-                        thumbnailTiles = [];
+                        tileModel.setRows([]);
                     }
                     waveformKey = audio ? root.thumbnails.waveformSource(modelData.sourceIdentity, modelData.path, modelData.containerIndex, modelData.streamIdentity, modelData.sourceEndUs) : "";
                 }
@@ -465,7 +466,7 @@ FocusScope {
                     Accessible.ignored: true
                 }
                 Repeater {
-                    model: clipItem.thumbnailTiles
+                    model: tileModel
                     delegate: Image {
                         required property var modelData
                         x: clipItem.visibleLeft + modelData.x

@@ -266,21 +266,39 @@ struct EditExportAdapter::PreparedExport {
             error = "Export has no available video source.";
             return false;
         }
+        // One row per source stream: splitting a clip multiplies its audio clips,
+        // not the tracks the export mixes.
         QVariantList selected;
         QVariantList excluded;
+        std::set<std::pair<uint64_t, int>> selected_streams;
+        std::set<std::pair<uint64_t, int>> excluded_streams;
         for (const auto& clip : snapshot.timeline.clips) {
             if (!clip.audio)
                 continue;
+            const auto key = std::make_pair(clip.asset, static_cast<int>(clip.stream->container_index));
+            if (!(clip.enabled ? selected_streams : excluded_streams).insert(key).second)
+                continue;
             const auto source = std::find_if(snapshot.sources.begin(), snapshot.sources.end(),
                                              [&](const auto& value) { return value.id == clip.asset; });
+            const int position = static_cast<int>(clip.stream->container_index) + 1;
             QVariantMap row{{QStringLiteral("asset"), QVariant::fromValue<qulonglong>(clip.asset)},
-                            {QStringLiteral("position"), clip.stream->container_index + 1}};
+                            {QStringLiteral("position"), position}};
+            QString name;
             if (source != snapshot.sources.end())
                 for (const auto& track : source->metadata.audio_metadata.actual_tracks)
                     if (track.track_id == clip.stream->stream_identity) {
-                        row.insert(QStringLiteral("name"), QString::fromStdString(track.name));
+                        name = QString::fromStdString(track.name);
                         row.insert(QStringLiteral("role"), QString::fromStdString(track.role));
                     }
+            // Foreign media rarely names its streams; the reviewer still has to
+            // tell which file and stream a row stands for.
+            if (name.isEmpty())
+                name = QCoreApplication::translate("EditExportAdapter", "%1, stream %2")
+                           .arg(source != snapshot.sources.end()
+                                    ? QFileInfo(QString::fromStdWString(source->path.wstring())).fileName()
+                                    : QCoreApplication::translate("EditExportAdapter", "Missing source"))
+                           .arg(position);
+            row.insert(QStringLiteral("name"), name);
             (clip.enabled ? selected : excluded).push_back(row);
         }
         QVariantList output_audio;

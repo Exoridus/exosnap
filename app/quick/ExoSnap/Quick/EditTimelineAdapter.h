@@ -171,8 +171,10 @@ class EditTimelineAdapter : public QObject {
                                              int videoHeight, int fpsNum, int fpsDen);
 
     // Tiles covering one clip's source window drawn `widthPx` wide and
-    // `heightPx` high: a list of {timeUs, x, width, source}, `x` relative to
-    // the clip's left edge, `source` an image URL. Also queues a bounded
+    // `heightPx` high: a list of {id, timeUs, x, width, source}, `x` relative to
+    // the clip's left edge, `source` an image URL. `id` is the tile's source
+    // time and stays the same while a changed window still shows that tile,
+    // so a keyed model can keep its image. Also queues a bounded
     // prefetch of the neighbouring window on either side. Empty for an
     // unregistered source.
     Q_INVOKABLE QVariantList thumbnailTiles(const QString& identityHex, qint64 sourceInUs, qint64 sourceOutUs,

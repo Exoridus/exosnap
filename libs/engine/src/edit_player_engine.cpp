@@ -1481,7 +1481,11 @@ bool EditPlayerEngine::SetMonitorSelection(MonitorSelectionSnapshot selection, s
     if (!impl_->audio_metadata.manifest && selection.unverified_asset_binding) {
         const auto& current = impl_->audio_metadata.unverified_asset_binding;
         const auto& frozen = *selection.unverified_asset_binding;
-        if (!selection.overlap_confirmed || !current || !SameUnverifiedAsset(frozen, *current)) {
+        if (!selection.overlap_confirmed) {
+            error = "Legacy audio tracks require explicit monitoring confirmation.";
+            return false;
+        }
+        if (!current || !SameUnverifiedAsset(frozen, *current)) {
             error = "Confirmed legacy selection does not match the current media bytes and track layout.";
             return false;
         }

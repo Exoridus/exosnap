@@ -52,6 +52,14 @@ FocusScope {
             root.exporter.setTimeSelectionUs(root.session.timeSelectionInUs, root.session.timeSelectionOutUs);
         }
     }
+    // Foreign media gets new track identities on every open, so a selection
+    // kept from the previous publication would no longer match any row.
+    Connections {
+        target: root.player
+        function onMonitoringChanged(): void {
+            root.monitoringSelection = root.player.monitoringTracks.filter(track => track.selected).map(track => track.id);
+        }
+    }
     function toggleMedia(): void {
         root.mediaOpen = !root.mediaOpen;
         if (!root.mediaOpen) {
@@ -322,16 +330,21 @@ FocusScope {
                                 }
                                 ExoCheckBox {
                                     id: overlapConfirmation
+                                    objectName: "editMonitorOverlapConfirmation"
                                     Layout.fillWidth: true
-                                    visible: root.player.monitoringTracks.length > 0
+                                    visible: root.player.monitoringTracks.length > 1
                                     text: qsTr("I confirm any overlapping audio in this selection")
                                 }
                                 Button {
+                                    objectName: "editMonitorConfirm"
                                     visible: root.player.monitoringTracks.length > 0
                                     text: qsTr("Confirm selection")
                                     onClicked: {
                                         root.player.setPlaying(false);
-                                        root.player.confirmMonitoring(root.monitoringSelection, overlapConfirmation.checked);
+                                        // A single track cannot overlap anything; the click is the
+                                        // explicit confirmation the engine requires.
+                                        root.player.confirmMonitoring(root.monitoringSelection,
+                                                                      overlapConfirmation.checked || root.monitoringSelection.length <= 1);
                                     }
                                 }
                                 Label { text: qsTr("Export profile") }
@@ -442,7 +455,11 @@ FocusScope {
                             shortcutText: "Space"
                             glyph: root.player.playing ? ExoGlyph.Pause : ExoGlyph.Run
                             enabled: root.session.durationMs > 0 && root.player.clipOpen
-                            onClicked: root.player.togglePlay()
+                            onClicked: {
+                                if (root.player.monitoringConfirmationRequired && !root.detailsOpen)
+                                    root.toggleDetails();
+                                root.player.togglePlay();
+                            }
                         }
                         Label {
                             objectName: "editTransportTimecode"
@@ -514,6 +531,19 @@ FocusScope {
                     Layout.fillWidth: true
                     text: root.session.workspaceError || root.exporter.errorText
                     visible: text.length > 0
+                    color: ExoTheme.textSecondary
+                    wrapMode: Text.Wrap
+                }
+                // The preview placeholder that carries the rejection reason is hidden
+                // behind any presented frame, so the reason playback is refused has to
+                // be stated where the transport is.
+                Label {
+                    objectName: "editMonitoringRequired"
+                    Layout.fillWidth: true
+                    Layout.leftMargin: 8
+                    Layout.rightMargin: 8
+                    text: qsTr("Choose the audio tracks to hear in Details and confirm them before playback.")
+                    visible: root.player.monitoringConfirmationRequired && root.player.monitoringTracks.length > 0
                     color: ExoTheme.textSecondary
                     wrapMode: Text.Wrap
                 }

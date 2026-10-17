@@ -844,6 +844,10 @@ class Setup final : public QObject {
     void exportVisualState(int state) {
         page_exporter_->applyVisualState(static_cast<exosnap::quick::EditExportAdapter::State>(state), 25, {}, {});
     }
+    // What the player worker publishes after opening a source with audio.
+    void pageMonitoring(const QVariantList& tracks, bool confirmation_required) {
+        page_player_->setMonitoringState(tracks, confirmation_required);
+    }
     void applicationAvailable() {
         QCoreApplication::setApplicationName(QStringLiteral("edit-timeline-qml-tests"));
         QQuickStyle::setStyle(QStringLiteral("Basic"));
@@ -877,6 +881,7 @@ class Setup final : public QObject {
         auto* page_session = new EditSessionAdapter(this);
         auto* page_timeline = new EditTimelineAdapter(this);
         auto* page_player = new EditPlayerAdapter(this);
+        page_player_ = page_player;
         auto* page_exporter = new exosnap::quick::EditExportAdapter(this);
         page_exporter_ = page_exporter;
         engine->rootContext()->setContextProperty(QStringLiteral("testEditHarness"), this);
@@ -895,6 +900,7 @@ class Setup final : public QObject {
     EditTimelineAdapter* timeline_ = nullptr;
     EditPlayerAdapter* player_ = nullptr;
     EditPlayerAdapter* transport_player_ = nullptr;
+    EditPlayerAdapter* page_player_ = nullptr;
     exosnap::quick::EditExportAdapter* page_exporter_ = nullptr;
 };
 
