@@ -297,6 +297,15 @@ Item {
                     saved = result.saveToFile(testVisualDirectory + "/edit-crossfade-" + testScale + ".png");
                 }, Qt.size(Math.round(page.width * Number(testScale)), Math.round(page.height * Number(testScale)))));
                 tryVerify(() => saved);
+                testSession.selectClip(videos[1].id);
+                page.toggleDetails();
+                tryVerify(() => findChild(page, "editDetailsFadeIn") !== null);
+                saved = false;
+                verify(page.grabToImage(result => {
+                    saved = result.saveToFile(testVisualDirectory + "/edit-details-" + testScale + ".png");
+                }, Qt.size(Math.round(page.width * Number(testScale)), Math.round(page.height * Number(testScale)))));
+                tryVerify(() => saved);
+                page.toggleDetails();
             }
             child(page, "editCrossfadeOverlay").forceActiveFocus(Qt.TabFocusReason);
             keyClick(Qt.Key_Delete);

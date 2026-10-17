@@ -3524,7 +3524,7 @@ Das Original kann danach nicht wiederhergestellt werden.</translation>
 <context>
     <name>EditPage</name>
     <message>
-        <location filename="../quick/ExoSnap/Quick/EditPage.qml" line="+454"/>
+        <location filename="../quick/ExoSnap/Quick/EditPage.qml" line="+500"/>
         <source>Pause</source>
         <translation>Pause</translation>
     </message>
@@ -3565,12 +3565,12 @@ Das Original kann danach nicht wiederhergestellt werden.</translation>
         <translation>Ausgewählte Clips</translation>
     </message>
     <message>
-        <location line="+5"/>
+        <location line="+3"/>
         <source>Selection source</source>
         <translation>Auswahlgrundlage</translation>
     </message>
     <message>
-        <location line="+53"/>
+        <location line="+55"/>
         <source>Redo</source>
         <translation>Wiederholen</translation>
     </message>
@@ -3600,101 +3600,69 @@ Das Original kann danach nicht wiederhergestellt werden.</translation>
         <translation>Export abbrechen</translation>
     </message>
     <message>
-        <location line="-351"/>
-        <location line="+399"/>
+        <location line="-390"/>
+        <location line="+438"/>
         <source>Media</source>
         <translation>Medien</translation>
     </message>
     <message>
-        <location line="-396"/>
-        <location line="+44"/>
-        <source>Unpin</source>
-        <translation>Lösen</translation>
-    </message>
-    <message>
-        <location line="-44"/>
-        <location line="+44"/>
-        <source>Pin</source>
-        <translation>Anheften</translation>
-    </message>
-    <message>
-        <location line="-37"/>
+        <location line="-434"/>
         <source>Close Media</source>
         <translation>Medien schließen</translation>
     </message>
     <message>
-        <location line="+34"/>
-        <location line="+356"/>
+        <location line="+22"/>
+        <location line="+413"/>
         <source>Details</source>
         <translation>Details</translation>
     </message>
     <message>
-        <location line="-346"/>
+        <location line="-409"/>
         <source>Close Details</source>
         <translation>Details schließen</translation>
     </message>
     <message>
-        <location line="+21"/>
+        <location line="+29"/>
         <source>%1: %2</source>
         <translation>%1: %2</translation>
     </message>
     <message>
-        <location line="+4"/>
-        <source>Fade in (ms)</source>
-        <translation>Einblenden (ms)</translation>
-    </message>
-    <message>
-        <location line="+6"/>
+        <location line="+23"/>
         <source>Fade in duration in milliseconds</source>
         <translation>Einblenddauer in Millisekunden</translation>
     </message>
     <message>
-        <location line="+3"/>
-        <source>Fade out (ms)</source>
-        <translation>Ausblenden (ms)</translation>
-    </message>
-    <message>
-        <location line="+6"/>
+        <location line="+15"/>
         <source>Fade out duration in milliseconds</source>
         <translation>Ausblenddauer in Millisekunden</translation>
     </message>
     <message>
-        <location line="+3"/>
-        <source>Junction start (ms)</source>
-        <translation>Übergangsbeginn (ms)</translation>
-    </message>
-    <message>
-        <location line="+6"/>
+        <location line="+15"/>
         <source>Junction start in milliseconds</source>
         <translation>Übergangsbeginn in Millisekunden</translation>
     </message>
     <message>
-        <location line="+3"/>
-        <source>Junction end (ms)</source>
-        <translation>Übergangsende (ms)</translation>
-    </message>
-    <message>
-        <location line="+6"/>
+        <location line="+15"/>
         <source>Junction end in milliseconds</source>
         <translation>Übergangsende in Millisekunden</translation>
     </message>
     <message>
-        <location line="+5"/>
+        <location line="+11"/>
         <source>Fixed timeline end</source>
         <translation>Festes Zeitleistenende</translation>
     </message>
     <message>
-        <location line="+9"/>
+        <location line="+11"/>
         <source>Timeline end in milliseconds</source>
         <translation>Zeitleistenende in Millisekunden</translation>
     </message>
     <message>
-        <location line="+6"/>
+        <location line="+7"/>
         <source>Close Gap (preview)</source>
         <translation>Lücke schließen (Vorschau)</translation>
     </message>
     <message>
-        <location line="+5"/>
+        <location line="+6"/>
         <location line="+1"/>
         <source>Clear media cache</source>
         <translation>Mediencache leeren</translation>
@@ -3705,34 +3673,34 @@ Das Original kann danach nicht wiederhergestellt werden.</translation>
         <translation>Zwischengespeicherte Vorschaubilder und Wellenformen entfernen. Die Quellaufnahmen bleiben erhalten.</translation>
     </message>
     <message>
-        <location line="+6"/>
+        <location line="+7"/>
         <source>Monitor tracks</source>
         <translation>Spuren abhören</translation>
     </message>
     <message>
-        <location line="+23"/>
+        <location line="+25"/>
         <source>I confirm any overlapping audio in this selection</source>
         <translation>Ich bestätige, dass sich Audio in dieser Auswahl überlagern kann</translation>
     </message>
     <message>
-        <location line="+5"/>
+        <location line="+6"/>
         <source>Confirm selection</source>
         <translation>Auswahl bestätigen</translation>
     </message>
     <message>
-        <location line="+9"/>
+        <location line="+14"/>
         <location line="+8"/>
         <source>Export profile</source>
         <translation>Exportprofil</translation>
     </message>
     <message>
-        <location line="+3"/>
-        <location line="+12"/>
+        <location line="+5"/>
+        <location line="+15"/>
         <source>Export range</source>
         <translation>Exportbereich</translation>
     </message>
     <message>
-        <location line="-7"/>
+        <location line="-5"/>
         <source>Entire Timeline</source>
         <translation>Gesamte Zeitleiste</translation>
     </message>
@@ -3747,7 +3715,7 @@ Das Original kann danach nicht wiederhergestellt werden.</translation>
         <translation>Auswahl</translation>
     </message>
     <message>
-        <location line="+13"/>
+        <location line="+11"/>
         <source>Result range</source>
         <translation>Ergebnisbereich</translation>
     </message>
@@ -3767,13 +3735,58 @@ Das Original kann danach nicht wiederhergestellt werden.</translation>
         <translation>Mit Lückenschluss löschen</translation>
     </message>
     <message>
-        <location line="+75"/>
+        <location line="-101"/>
+        <location line="+176"/>
         <location line="+161"/>
         <source>Export</source>
         <translation>Exportieren</translation>
     </message>
     <message>
-        <location line="-155"/>
+        <location line="-483"/>
+        <source>Clip</source>
+        <translation>Clip</translation>
+    </message>
+    <message>
+        <location line="+3"/>
+        <source>Fade in</source>
+        <translation>Einblenden</translation>
+    </message>
+    <message>
+        <location line="+8"/>
+        <location line="+15"/>
+        <location line="+15"/>
+        <location line="+15"/>
+        <location line="+21"/>
+        <source>ms</source>
+        <translation>ms</translation>
+    </message>
+    <message>
+        <location line="-59"/>
+        <source>Fade out</source>
+        <translation>Ausblenden</translation>
+    </message>
+    <message>
+        <location line="+15"/>
+        <source>Junction start</source>
+        <translation>Übergangsbeginn</translation>
+    </message>
+    <message>
+        <location line="+15"/>
+        <source>Junction end</source>
+        <translation>Übergangsende</translation>
+    </message>
+    <message>
+        <location line="+17"/>
+        <source>Timeline</source>
+        <translation>Zeitleiste</translation>
+    </message>
+    <message>
+        <location line="+47"/>
+        <source>Track %1</source>
+        <translation>Spur %1</translation>
+    </message>
+    <message>
+        <location line="+216"/>
         <source>MP4 delivery in progress. The finalized edit master is ready.</source>
         <translation>Die MP4-Datei wird noch erstellt. Die fertige MKV-Datei ist bereits zum Bearbeiten verfügbar.</translation>
     </message>
@@ -3904,12 +3917,12 @@ Das Original kann danach nicht wiederhergestellt werden.</translation>
         <translation>Export läuft: %1 %</translation>
     </message>
     <message>
-        <location line="-406"/>
+        <location line="-437"/>
         <source>Resize preview and timeline. Use Up and Down.</source>
         <translation>Größe von Vorschau und Zeitleiste ändern. Pfeiltasten nach oben und unten verwenden.</translation>
     </message>
     <message>
-        <location line="+458"/>
+        <location line="+489"/>
         <source>Snapping</source>
         <translation>Einrasten</translation>
     </message>
@@ -4128,6 +4141,24 @@ Das Original kann danach nicht wiederhergestellt werden.</translation>
         <location line="+21"/>
         <source>Skipped %1 marker(s) with an unusable time in %2</source>
         <translation>%1 Marker mit unbrauchbarer Zeit in %2 übersprungen</translation>
+    </message>
+</context>
+<context>
+    <name>EditSidePanel</name>
+    <message>
+        <location filename="../quick/ExoSnap/Quick/EditSidePanel.qml" line="+16"/>
+        <source>Close</source>
+        <translation>Schließen</translation>
+    </message>
+    <message>
+        <location line="+31"/>
+        <source>Unpin</source>
+        <translation>Lösen</translation>
+    </message>
+    <message>
+        <location line="+0"/>
+        <source>Pin</source>
+        <translation>Anheften</translation>
     </message>
 </context>
 <context>
@@ -4367,12 +4398,12 @@ Das Original kann danach nicht wiederhergestellt werden.</translation>
         <translation>Spacer, %1 ms</translation>
     </message>
     <message>
-        <location line="+101"/>
+        <location line="+100"/>
         <source>Media unavailable</source>
         <translation>Medium nicht verfügbar</translation>
     </message>
     <message>
-        <location line="+182"/>
+        <location line="+175"/>
         <source>Fade in</source>
         <translation>Einblenden</translation>
     </message>
@@ -4382,7 +4413,7 @@ Das Original kann danach nicht wiederhergestellt werden.</translation>
         <translation>Ausblenden</translation>
     </message>
     <message>
-        <location line="+24"/>
+        <location line="+23"/>
         <source>Unavailable</source>
         <translation>Nicht verfügbar</translation>
     </message>

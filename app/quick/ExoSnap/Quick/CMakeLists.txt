@@ -64,6 +64,7 @@ qt_add_qml_module(exosnap
         EditActionButton.qml
         EditTimelineRuler.qml
         EditSourceBrowser.qml
+        EditSidePanel.qml
         EditPlayer.qml
         EditTimeline.qml
         ExoBadge.qml
@@ -1242,6 +1243,7 @@ qt_add_qml_module(edit_timeline_qml_tests
     QML_FILES
         EditPage.qml
         EditSourceBrowser.qml
+        EditSidePanel.qml
         EditActionButton.qml
         EditTimelineRuler.qml
         ExoButton.qml
@@ -1254,6 +1256,11 @@ qt_add_qml_module(edit_timeline_qml_tests
         EditTimeline.qml
         ExoFieldErrorMark.qml
         ExoGlyph.qml
+        ExoInfoButton.qml
+        ExoNumberField.qml
+        ExoScrollBar.qml
+        ExoScrollView.qml
+        ExoSettingRow.qml
         ExoTheme.qml
 )
 

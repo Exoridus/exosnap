@@ -436,10 +436,9 @@ FocusScope {
                 y: root.rulerHeight + modelData.trackIndex * root.rowHeight + 3
                 width: Math.max(4, modelData.durationMs * root.pixelsPerMs)
                 height: 56
-                radius: ExoTheme.radiusSm
                 color: modelData.selected || (root.session.linkedSelection && root.hoveredGroup === modelData.group) ? ExoTheme.surfaceHover : ExoTheme.surfaceRaised
                 border.color: modelData.selected ? ExoTheme.accent : ExoTheme.line
-                border.width: modelData.selected ? 2 : 1
+                border.width: 1
                 clip: true
                 Rectangle {
                     anchors.right: parent.right
@@ -580,14 +579,7 @@ FocusScope {
                         width: 8
                         height: clipItem.height
                         cursorShape: Qt.SizeHorCursor
-                        Rectangle {
-                            anchors.centerIn: parent
-                            width: 2
-                            height: 20
-                            radius: 1
-                            color: clipItem.modelData.selected ? ExoTheme.accent : ExoTheme.textMuted
-                            visible: clipItem.modelData.selected || clipMouse.containsMouse
-                        }
+
                         onPressed: mouse => {
                             startX = mapToItem(scroll.contentItem, mouse.x, 0).x;
                             started = false;
@@ -653,7 +645,6 @@ FocusScope {
                 color: "transparent"
                 border.width: 2
                 border.color: root.session.dragValid ? ExoTheme.accent : ExoTheme.warning
-                radius: ExoTheme.radiusSm
                 Accessible.ignored: true
                 Label {
                     anchors.centerIn: parent
