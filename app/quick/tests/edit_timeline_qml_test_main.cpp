@@ -694,8 +694,17 @@ class MediaPreviewDriver final : public QObject {
             }
             return registered;
         };
+        // The first failing request, so a failure names its phase and cause instead of
+        // only cascading into later phases that compare against a missing reference.
+        QString failure;
+        const auto fail = [&failure](const QString& phase, int tile, const QString& reason) {
+            if (failure.isEmpty())
+                failure = QStringLiteral("%1 tile %2: %3").arg(phase).arg(tile).arg(reason);
+            return false;
+        };
         const auto request_rows = [&](EditTimelineAdapter& timeline,
-                                      exosnap::quick::EditThumbnailImageProvider& provider, bool cold) {
+                                      exosnap::quick::EditThumbnailImageProvider& provider, const QString& phase) {
+            const bool cold = phase == QLatin1String("initial");
             int requested = 0;
             for (const auto& value : session.visibleClips(0, 10'000)) {
                 const auto row = value.toMap();
@@ -706,7 +715,7 @@ class MediaPreviewDriver final : public QObject {
                 const auto tiles = timeline.thumbnailTiles(row.value("sourceIdentity").toString(), in, out,
                                                            (out - in) * 96.0 / 1'000'000, 48);
                 if (tiles.empty())
-                    return false;
+                    return fail(phase, requested, QStringLiteral("no tiles for a registered source"));
                 for (const auto& tile : tiles) {
                     const auto url = tile.toMap().value("source").toString();
                     std::unique_ptr<QQuickImageResponse> response(
@@ -717,16 +726,22 @@ class MediaPreviewDriver final : public QObject {
                     deadline.restart();
                     while (!finished && deadline.elapsed() < 5'000)
                         QCoreApplication::processEvents(QEventLoop::AllEvents, 10);
-                    if (!finished || !response->errorString().isEmpty())
-                        return false;
+                    if (!finished)
+                        return fail(phase, requested,
+                                    QStringLiteral("no response within %1 ms").arg(deadline.elapsed()));
+                    if (!response->errorString().isEmpty())
+                        return fail(phase, requested, response->errorString());
                     std::unique_ptr<QQuickTextureFactory> texture(response->textureFactory());
                     const auto image = texture ? texture->image().convertToFormat(QImage::Format_RGBA8888) : QImage();
                     if (image.isNull() || image.height() != 48)
-                        return false;
+                        return fail(phase, requested,
+                                    QStringLiteral("image %1x%2").arg(image.width()).arg(image.height()));
                     if (cold)
                         reference.insert(url, image);
-                    else if (!reference.contains(url) || reference.value(url) != image)
-                        return false;
+                    else if (!reference.contains(url))
+                        return fail(phase, requested, QStringLiteral("no cold reference for %1").arg(url));
+                    else if (reference.value(url) != image)
+                        return fail(phase, requested, QStringLiteral("pixels differ from the cold reference"));
                     ++requested;
                 }
             }
@@ -744,7 +759,7 @@ class MediaPreviewDriver final : public QObject {
             timeline.setSession(&session);
             std::unique_ptr<exosnap::quick::EditThumbnailImageProvider> provider(
                 timeline.createThumbnailImageProvider());
-            initial = register_rows(timeline) && request_rows(timeline, *provider, true);
+            initial = register_rows(timeline) && request_rows(timeline, *provider, QStringLiteral("initial"));
             timeline.setForegroundBusy(true);
             QElapsedTimer stable;
             stable.start();
@@ -763,11 +778,12 @@ class MediaPreviewDriver final : public QObject {
             session.trimClip(red.value("id").toULongLong(), 500, 2000);
             trimmed = session.workspaceError().isEmpty() &&
                       session.workspace().clip(red.value("id").toULongLong())->source_in == 500'000 &&
-                      request_rows(timeline, *provider, false);
+                      request_rows(timeline, *provider, QStringLiteral("trimmed"));
             session.selectClip(red.value("id").toULongLong());
             session.requestSeek(1000);
             session.splitSelected();
-            split = session.workspace().clips().size() == 6 && request_rows(timeline, *provider, false);
+            split =
+                session.workspace().clips().size() == 6 && request_rows(timeline, *provider, QStringLiteral("split"));
             for (const auto& value : session.visibleClips(0, 10'000)) {
                 const auto row = value.toMap();
                 if (row.value("video").toBool() && row.value("sourceIdentity") == red.value("sourceIdentity") &&
@@ -775,7 +791,7 @@ class MediaPreviewDriver final : public QObject {
                     session.moveClip(row.value("id").toULongLong(), 5000, false);
                     moved = session.workspaceError().isEmpty() &&
                             session.workspace().clip(row.value("id").toULongLong())->start == 5'000'000 &&
-                            request_rows(timeline, *provider, false);
+                            request_rows(timeline, *provider, QStringLiteral("moved"));
                     break;
                 }
             }
@@ -786,7 +802,8 @@ class MediaPreviewDriver final : public QObject {
         reopened.setSession(&session);
         reopened.setForegroundBusy(true);
         std::unique_ptr<exosnap::quick::EditThumbnailImageProvider> provider(reopened.createThumbnailImageProvider());
-        const bool disk_reused = register_rows(reopened) && request_rows(reopened, *provider, false);
+        const bool disk_reused =
+            register_rows(reopened) && request_rows(reopened, *provider, QStringLiteral("reopened"));
         const auto stats = reopened.thumbnailBroker()->Stats();
         return {{"imported", true},
                 {"initial", initial},
@@ -799,7 +816,8 @@ class MediaPreviewDriver final : public QObject {
                 {"reopenDecodes", QVariant::fromValue<qulonglong>(stats.decodes)},
                 {"diskHits", QVariant::fromValue<qulonglong>(stats.disk_hits)},
                 {"sourceKeys", reference.size()},
-                {"sources", identities.size()}};
+                {"sources", identities.size()},
+                {"failure", failure}};
     }
   signals:
     void changed();

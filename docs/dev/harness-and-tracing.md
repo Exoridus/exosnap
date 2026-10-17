@@ -59,6 +59,8 @@ Use small, controlled inputs. For foreign media that requires monitoring confirm
 
 The detached productive player item observes decoded mailbox frames after the adapter's generation filter.
 Seek samples measure request to mailbox observation with a 1 ms event-loop poll and include scheduling overhead.
+The poll sleeps on a high-resolution waitable timer; the default 15.6 ms system tick would otherwise quantize every sample.
+Each cycle also reports its first seek after import with the worker counters accumulated since the closed, idle worker, so session open, queue wait and decoder reads of that cold seek are separated. The snapshot after it drains the worker before the next seek.
 Nearest-rank p50/p95/p99 and the raw samples are reported separately from synchronous adapter-commit latency.
 The final cycle also compares a seek without cuts, immediately after 32 cuts, after a worker-slot drain and across adjacent segments of one source.
 Each comparison includes cumulative simple-player open/close, queue-wait, seek-dispatch and completed random-access read costs.

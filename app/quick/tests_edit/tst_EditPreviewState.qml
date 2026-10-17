@@ -127,6 +127,7 @@ TestCase {
             skip("Set EXOSNAP_EDIT_RENDER_FIXTURES for real media.");
         const probe = testMediaPreview.thumbnailEditReuseProbe();
         console.log(JSON.stringify(probe));
+        compare(probe.failure, "");
         compare(probe.imported, true);
         compare(probe.initial, true);
         compare(probe.sources, 2);

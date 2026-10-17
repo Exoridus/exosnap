@@ -68,6 +68,20 @@ QString optionValue(const QStringList& args, const QString& name) {
     return args.at(index + 1);
 }
 
+// Sleeps between polls. Sleep() rounds up to the system timer tick (15.6 ms by
+// default), which would quantize every request-to-mailbox sample to that tick;
+// a high-resolution waitable timer keeps the poll at the requested interval.
+void pollSleep(int ms) {
+    static const HANDLE timer =
+        CreateWaitableTimerExW(nullptr, nullptr, CREATE_WAITABLE_TIMER_HIGH_RESOLUTION, TIMER_ALL_ACCESS);
+    LARGE_INTEGER due{};
+    due.QuadPart = -10'000LL * ms;
+    if (timer != nullptr && SetWaitableTimer(timer, &due, 0, nullptr, nullptr, FALSE) &&
+        WaitForSingleObject(timer, INFINITE) == WAIT_OBJECT_0)
+        return;
+    QThread::msleep(static_cast<unsigned long>(ms));
+}
+
 // Spins the event loop until `predicate` holds or the deadline passes. Returns
 // whether the predicate held. Everything here is asynchronous by design — the
 // decode runs on a worker thread and reports back through queued signals — so a
@@ -94,7 +108,7 @@ template <typename Predicate> bool waitFor(const char* what, int timeout_ms, int
                                      .arg(elapsed);
         }
         QCoreApplication::processEvents(QEventLoop::AllEvents, poll_ms);
-        QThread::msleep(static_cast<unsigned long>(std::max(1, poll_ms / 2)));
+        pollSleep(std::max(1, poll_ms / 2));
     }
     return true;
 }
@@ -209,6 +223,7 @@ int runIsolatedQualification(QuickApplication& application, const AutoEditOption
     QJsonArray seeks;
     QJsonArray edit_samples;
     QJsonArray seek_comparisons;
+    QJsonArray first_seeks;
     std::vector<double> seek_latencies;
     std::vector<double> commit_latencies;
     const auto initial = processSample();
@@ -266,6 +281,18 @@ int runIsolatedQualification(QuickApplication& application, const AutoEditOption
             {QStringLiteral("workerSlotDrainMs"), clock.elapsed()},
             {QStringLiteral("counters"), ready ? QJsonObject::fromVariantMap(snapshot->values) : QJsonObject{}}};
     };
+    const auto counter_delta = [](const QJsonObject& before, const QJsonObject& after) {
+        const auto before_counters = before.value(QStringLiteral("counters")).toObject();
+        const auto after_counters = after.value(QStringLiteral("counters")).toObject();
+        QJsonObject delta;
+        for (auto it = after_counters.begin(); it != after_counters.end(); ++it) {
+            if (it.key() == QStringLiteral("timelineRevision") || it.key() == QStringLiteral("timelinePlayheadUs"))
+                continue;
+            if (it.value().isDouble() && before_counters.value(it.key()).isDouble())
+                delta.insert(it.key(), it.value().toDouble() - before_counters.value(it.key()).toDouble());
+        }
+        return delta;
+    };
     const auto compare_seek = [&](const QString& scenario, qint64 target, const QJsonObject& before) {
         observed_time = -1;
         (void)mailbox.takePendingFrame();
@@ -279,15 +306,7 @@ int runIsolatedQualification(QuickApplication& application, const AutoEditOption
         const auto after = performance_snapshot();
         const bool passed = arrived && before.value(QStringLiteral("passed")).toBool() &&
                             after.value(QStringLiteral("passed")).toBool();
-        const auto before_counters = before.value(QStringLiteral("counters")).toObject();
-        const auto after_counters = after.value(QStringLiteral("counters")).toObject();
-        QJsonObject delta;
-        for (auto it = after_counters.begin(); it != after_counters.end(); ++it) {
-            if (it.key() == QStringLiteral("timelineRevision") || it.key() == QStringLiteral("timelinePlayheadUs"))
-                continue;
-            if (it.value().isDouble() && before_counters.value(it.key()).isDouble())
-                delta.insert(it.key(), it.value().toDouble() - before_counters.value(it.key()).toDouble());
-        }
+        const auto delta = counter_delta(before, after);
         seek_comparisons.append(QJsonObject{{QStringLiteral("scenario"), scenario},
                                             {QStringLiteral("targetUs"), target},
                                             {QStringLiteral("decodedTimelineUs"), decoded_time},
@@ -305,6 +324,9 @@ int runIsolatedQualification(QuickApplication& application, const AutoEditOption
         session->close();
         pumpFor(100);
         const auto before = processSample();
+        // Taken while the closed worker is idle, so the first seek's delta covers the
+        // import, the session open and that seek, and nothing from the previous cycle.
+        const auto cycle_counters = performance_snapshot();
         QElapsedTimer open_clock;
         open_clock.start();
         session->importMedia(QUrl::fromLocalFile(options.media_path), true, 0);
@@ -331,6 +353,17 @@ int runIsolatedQualification(QuickApplication& application, const AutoEditOption
         for (int i = 0; i < 12; ++i) {
             const qint64 target = duration * (1 + (i * 7) % 19) / 20;
             seek_ok = seek(target, cycle) && seek_ok;
+            if (i == 0) {
+                const auto after_first = performance_snapshot();
+                first_seeks.append(
+                    QJsonObject{{QStringLiteral("cycle"), cycle},
+                                {QStringLiteral("requestToMailboxObservedMs"),
+                                 seeks.last().toObject().value(QStringLiteral("observedMs"))},
+                                {QStringLiteral("importToFirstSeekMs"), open_clock.elapsed()},
+                                {QStringLiteral("counterDeltaSinceImport"), counter_delta(cycle_counters, after_first)},
+                                {QStringLiteral("passed"), cycle_counters.value(QStringLiteral("passed")).toBool() &&
+                                                               after_first.value(QStringLiteral("passed")).toBool()}});
+            }
         }
         log.record(QStringLiteral("cycle.%1.seek").arg(cycle), seek_ok,
                    QStringLiteral("12 correlated decoded targets"));
@@ -549,6 +582,7 @@ int runIsolatedQualification(QuickApplication& application, const AutoEditOption
     report.insert(QStringLiteral("seeks"), seeks);
     report.insert(QStringLiteral("commits"), edit_samples);
     report.insert(QStringLiteral("controlledSeekComparisons"), seek_comparisons);
+    report.insert(QStringLiteral("firstSeekAfterImport"), first_seeks);
     report.insert(QStringLiteral("performanceCounterBoundary"),
                   QStringLiteral("Worker-thread cumulative counters; decoder read time includes demux, decode and "
                                  "conversion. Worker-slot drain does not drain an asynchronous decoder or prove "
