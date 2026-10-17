@@ -4,12 +4,16 @@
 #include <gtest/gtest.h>
 
 #include "exosnap/engine/audio_media_manifest.h"
+#include "exosnap/engine/edit_player_engine.h"
 #include "exosnap/engine/edit_player_session.h"
 
 extern "C" {
+#include <libavcodec/codec_id.h>
+#include <libavcodec/codec_par.h>
 #include <libavcodec/packet.h>
 #include <libavformat/avformat.h>
 #include <libavformat/avio.h>
+#include <libavutil/avutil.h>
 #include <libavutil/channel_layout.h>
 #include <libavutil/log.h>
 #include <libavutil/mathematics.h>
