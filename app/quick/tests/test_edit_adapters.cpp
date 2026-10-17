@@ -138,6 +138,77 @@ TEST(EditWorkspacePresentation, SelectingEitherLinkedRowHighlightsTheWholeGroup)
     EXPECT_TRUE(rows[1].toMap().value(QStringLiteral("selected")).toBool());
 }
 
+namespace {
+QVariantMap ClipRow(qulonglong id, qint64 start_ms) {
+    return {{QStringLiteral("id"), id}, {QStringLiteral("startMs"), start_ms}};
+}
+
+std::vector<std::pair<qulonglong, qint64>> ClipModelContent(const EditTimelineClipModel& model) {
+    std::vector<std::pair<qulonglong, qint64>> content;
+    for (int row = 0; row < model.rowCount(); ++row) {
+        const auto map = model.data(model.index(row), EditTimelineClipModel::RowRole).toMap();
+        content.emplace_back(map.value(QStringLiteral("id")).toULongLong(),
+                             map.value(QStringLiteral("startMs")).toLongLong());
+    }
+    return content;
+}
+} // namespace
+
+TEST(EditTimelineClipModel, KeepsRowIdentityAcrossChangesInsteadOfResetting) {
+    EnsureApplication();
+    EditTimelineClipModel model;
+    model.setRows({ClipRow(1, 0), ClipRow(2, 100), ClipRow(3, 200)});
+    int resets = 0;
+    int inserted = 0;
+    int removed = 0;
+    int moved = 0;
+    std::vector<int> changed;
+    QObject::connect(&model, &QAbstractItemModel::modelReset, [&resets]() { ++resets; });
+    QObject::connect(&model, &QAbstractItemModel::rowsInserted,
+                     [&inserted](const QModelIndex&, int first, int last) { inserted += last - first + 1; });
+    QObject::connect(&model, &QAbstractItemModel::rowsRemoved,
+                     [&removed](const QModelIndex&, int first, int last) { removed += last - first + 1; });
+    QObject::connect(&model, &QAbstractItemModel::rowsMoved, [&moved]() { ++moved; });
+    QObject::connect(&model, &QAbstractItemModel::dataChanged,
+                     [&changed](const QModelIndex& top, const QModelIndex& bottom) {
+                         for (int row = top.row(); row <= bottom.row(); ++row)
+                             changed.push_back(row);
+                     });
+
+    model.setRows({ClipRow(1, 0), ClipRow(2, 100), ClipRow(3, 200)});
+    EXPECT_TRUE(changed.empty());
+
+    model.setRows({ClipRow(1, 0), ClipRow(2, 150), ClipRow(3, 200)});
+    EXPECT_EQ(changed, std::vector<int>{1});
+
+    changed.clear();
+    model.setRows({ClipRow(3, 200), ClipRow(4, 250), ClipRow(1, 0)});
+    EXPECT_EQ(removed, 1);
+    EXPECT_EQ(inserted, 1);
+    EXPECT_EQ(moved, 1);
+    EXPECT_TRUE(changed.empty());
+    EXPECT_EQ(ClipModelContent(model), (std::vector<std::pair<qulonglong, qint64>>{{3, 200}, {4, 250}, {1, 0}}));
+
+    model.setRows({});
+    EXPECT_EQ(removed, 4);
+    EXPECT_EQ(model.rowCount(), 0);
+    EXPECT_EQ(resets, 0);
+}
+
+TEST(EditTimelineClipModel, SyncReadsTheSessionWindow) {
+    EnsureApplication();
+    EditSessionAdapter session;
+    session.setEditContext(MakeContext());
+    EditTimelineClipModel model;
+    model.sync(&session, 0, 100000);
+    ASSERT_EQ(model.rowCount(), 2);
+    EXPECT_EQ(model.data(model.index(0), EditTimelineClipModel::RowRole).toMap(),
+              session.visibleClips(0, 100000).front().toMap());
+    EXPECT_EQ(model.roleNames().value(EditTimelineClipModel::RowRole), QByteArrayLiteral("row"));
+    model.sync(nullptr, 0, 100000);
+    EXPECT_EQ(model.rowCount(), 0);
+}
+
 TEST(EditSessionAdapterPresentation, DeliveryPendingChangesNotifyTheOpenEditPage) {
     EnsureApplication();
     EditSessionAdapter session;

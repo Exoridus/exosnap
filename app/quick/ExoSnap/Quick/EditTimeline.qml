@@ -9,7 +9,6 @@ FocusScope {
     property EditTimelineAdapter thumbnails: null
     property real pixelsPerSecond: 40
     readonly property bool snapping: session.snapping
-    property var visibleClips: []
     property real hoveredGroup: 0
     property bool draggingCrossfade: false
     property bool insertDrag: false
@@ -56,15 +55,20 @@ FocusScope {
         root.session.updateClipDrag(delta, track, newTrack, root.insertDrag, 8 / root.pixelsPerMs);
     }
     function refreshClips(): void {
-        root.visibleClips = root.session.visibleClips(root.timeAt(scroll.contentX), root.timeAt(scroll.contentX + scroll.width));
+        clipModel.sync(root.session, root.timeAt(scroll.contentX), root.timeAt(scroll.contentX + scroll.width));
     }
     function visibleCandidates(rows: var): var {
         const from = root.timeAt(scroll.contentX + root.labelWidth);
         const to = root.timeAt(scroll.contentX + scroll.width);
         return rows.filter(value => value.startMs <= to && value.startMs + value.durationMs >= from);
     }
-    onPixelsPerSecondChanged: refreshClips()
+    // Not onPixelsPerSecondChanged: that handler can run before pixelsPerMs is re-evaluated, and
+    // the visible window would then be computed at the previous scale.
+    onPixelsPerMsChanged: refreshClips()
     Component.onCompleted: refreshClips()
+    EditTimelineClipModel {
+        id: clipModel
+    }
     readonly property real pixelsPerMs: pixelsPerSecond / 1000
     objectName: "editClipTimeline"
     activeFocusOnTab: true
@@ -390,7 +394,7 @@ FocusScope {
             }
         }
         Repeater {
-            model: root.visibleClips
+            model: clipModel
             delegate: Rectangle {
                 id: clipItem
                 required property var modelData
@@ -402,17 +406,26 @@ FocusScope {
                 readonly property bool cachedVisual: modelData.available && modelData.sourceIdentity.length > 0 && root.thumbnails !== null
                 property var thumbnailTiles: []
                 property string waveformKey: ""
+                property string mediaRequest: ""
+                // A delegate outlives most publications, and modelData also changes for selection and
+                // timeline position. Only a changed source or visible source window may replace the
+                // tile and waveform requests: re-requesting them recreates every tile image.
                 function refreshMedia(): void {
-                    thumbnailTiles = [];
-                    waveformKey = "";
-                    if (!cachedVisual || visibleSourceOut <= visibleSourceIn)
+                    const shown = cachedVisual && visibleSourceOut > visibleSourceIn;
+                    const video = shown && modelData.video;
+                    const audio = shown && !modelData.video && modelData.streamIdentity.length > 0;
+                    const request = video ? ["video", modelData.sourceIdentity, modelData.path, modelData.width, modelData.height, modelData.fpsNum, modelData.fpsDen, visibleSourceIn, visibleSourceOut, visibleWidth].join("|")
+                                          : audio ? ["audio", modelData.sourceIdentity, modelData.path, modelData.containerIndex, modelData.streamIdentity, modelData.sourceEndUs].join("|") : "";
+                    if (request === mediaRequest)
                         return;
-                    if (modelData.video) {
+                    mediaRequest = request;
+                    if (video) {
                         root.thumbnails.registerThumbnailSource(modelData.sourceIdentity, modelData.path, modelData.width, modelData.height, modelData.fpsNum, modelData.fpsDen);
                         thumbnailTiles = root.thumbnails.thumbnailTiles(modelData.sourceIdentity, visibleSourceIn, visibleSourceOut, visibleWidth, 44);
-                    } else if (modelData.streamIdentity.length > 0) {
-                        waveformKey = root.thumbnails.waveformSource(modelData.sourceIdentity, modelData.path, modelData.containerIndex, modelData.streamIdentity, modelData.sourceEndUs);
+                    } else {
+                        thumbnailTiles = [];
                     }
+                    waveformKey = audio ? root.thumbnails.waveformSource(modelData.sourceIdentity, modelData.path, modelData.containerIndex, modelData.streamIdentity, modelData.sourceEndUs) : "";
                 }
                 onModelDataChanged: refreshMedia()
                 onVisibleSourceInChanged: refreshMedia()

@@ -1,9 +1,13 @@
 #include "EditTimelineModels.h"
 
+#include "EditSessionAdapter.h"
+
 #include <QMutexLocker>
+#include <QSet>
 #include <QStringList>
 
 #include <algorithm>
+#include <cstddef>
 
 namespace exosnap::quick {
 
@@ -86,6 +90,75 @@ std::vector<RecordingMarker> VisibleTimelineMarkers(const std::vector<RecordingM
             break;
     }
     return visible;
+}
+
+EditTimelineClipModel::EditTimelineClipModel(QObject* parent) : QAbstractListModel(parent) {
+}
+
+int EditTimelineClipModel::rowCount(const QModelIndex& parent) const {
+    return parent.isValid() ? 0 : static_cast<int>(rows_.size());
+}
+
+QVariant EditTimelineClipModel::data(const QModelIndex& index, int role) const {
+    if (role != RowRole || !index.isValid() || index.row() < 0 || index.row() >= static_cast<int>(rows_.size()))
+        return {};
+    return rows_[static_cast<std::size_t>(index.row())].second;
+}
+
+QHash<int, QByteArray> EditTimelineClipModel::roleNames() const {
+    return {{RowRole, QByteArrayLiteral("row")}};
+}
+
+void EditTimelineClipModel::sync(EditSessionAdapter* session, qint64 fromMs, qint64 toMs) {
+    setRows(session != nullptr ? session->visibleClips(fromMs, toMs) : QVariantList{});
+}
+
+void EditTimelineClipModel::setRows(const QVariantList& rows) {
+    std::vector<std::pair<qulonglong, QVariantMap>> target;
+    target.reserve(static_cast<std::size_t>(rows.size()));
+    QSet<qulonglong> wanted;
+    for (const auto& value : rows) {
+        auto row = value.toMap();
+        const auto id = row.value(QStringLiteral("id")).toULongLong();
+        wanted.insert(id);
+        target.emplace_back(id, std::move(row));
+    }
+    for (int row = static_cast<int>(rows_.size()) - 1; row >= 0; --row) {
+        if (wanted.contains(rows_[static_cast<std::size_t>(row)].first))
+            continue;
+        int first = row;
+        while (first > 0 && !wanted.contains(rows_[static_cast<std::size_t>(first - 1)].first))
+            --first;
+        beginRemoveRows({}, first, row);
+        rows_.erase(rows_.begin() + first, rows_.begin() + row + 1);
+        endRemoveRows();
+        row = first;
+    }
+    for (std::size_t i = 0; i < target.size(); ++i) {
+        auto& [id, row] = target[i];
+        if (i >= rows_.size() || rows_[i].first != id) {
+            const auto found = std::find_if(rows_.begin() + static_cast<std::ptrdiff_t>(i), rows_.end(),
+                                            [id = id](const auto& entry) { return entry.first == id; });
+            const int destination = static_cast<int>(i);
+            if (found == rows_.end()) {
+                beginInsertRows({}, destination, destination);
+                rows_.emplace(rows_.begin() + destination, id, std::move(row));
+                endInsertRows();
+                continue;
+            }
+            const int source = static_cast<int>(found - rows_.begin());
+            beginMoveRows({}, source, source, {}, destination);
+            auto moved = std::move(*found);
+            rows_.erase(found);
+            rows_.emplace(rows_.begin() + destination, std::move(moved));
+            endMoveRows();
+        }
+        if (rows_[i].second != row) {
+            rows_[i].second = std::move(row);
+            const auto changed = index(static_cast<int>(i));
+            emit dataChanged(changed, changed, {RowRole});
+        }
+    }
 }
 
 EditMarkerModel::EditMarkerModel(QObject* parent) : QAbstractListModel(parent) {

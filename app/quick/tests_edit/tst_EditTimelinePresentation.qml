@@ -716,4 +716,61 @@ TestCase {
         countWarnings(strip);
         compare(warnings, 2);
     }
+    function test_clip_delegates_survive_selection_edits_and_scrolling() {
+        testSession.appendAsset(testSession.media[0].id);
+        const strip = createTemporaryObject(timelineComponent, tests);
+        const scroll = findChild(strip, "editTimelineScroll");
+        strip.fitTimeline();
+        const clips = testSession.visibleClips(0, 1000000);
+        compare(clips.length, 4);
+        const items = clips.map(clip => findChild(strip, "editClip" + clip.id));
+        verify(items.every(item => item !== null));
+        const second = clips.findIndex(clip => clip.startMs > 0 && clip.video);
+        const unchanged = clips.findIndex(clip => clip.startMs === 0 && clip.video);
+        function retained() {
+            // Released delegates are deleted later; flush that before comparing identities.
+            wait(0);
+            clips.forEach((clip, i) => compare(findChild(strip, "editClip" + clip.id), items[i]));
+        }
+        testSession.selectClip(clips[second].id);
+        retained();
+        verify(items[second].modelData.selected && !items[unchanged].modelData.selected);
+        testSession.nudgeSelected(100, 0);
+        retained();
+        compare(items[second].modelData.startMs, clips[second].startMs + 100);
+        compare(items[second].x, strip.positionAt(clips[second].startMs + 100));
+        compare(items[unchanged].modelData.startMs, 0);
+        testSession.undo();
+        retained();
+        compare(items[second].x, strip.positionAt(clips[second].startMs));
+        scroll.contentX = 4;
+        retained();
+    }
+    function test_clip_delegates_follow_removal_and_insertion() {
+        testSession.appendAsset(testSession.media[0].id);
+        const strip = createTemporaryObject(timelineComponent, tests);
+        strip.fitTimeline();
+        const clips = testSession.visibleClips(0, 1000000);
+        const removed = clips.filter(clip => clip.startMs > 0);
+        const kept = clips.filter(clip => clip.startMs === 0);
+        compare(removed.length, 2);
+        const keptItems = kept.map(clip => findChild(strip, "editClip" + clip.id));
+        verify(removed.every(clip => findChild(strip, "editClip" + clip.id) !== null));
+        testSession.selectClip(removed[0].id);
+        testSession.deleteSelected(false);
+        wait(0);
+        removed.forEach(clip => compare(findChild(strip, "editClip" + clip.id), null));
+        kept.forEach((clip, i) => compare(findChild(strip, "editClip" + clip.id), keptItems[i]));
+        testSession.undo();
+        wait(0);
+        removed.forEach(clip => verify(findChild(strip, "editClip" + clip.id) !== null));
+        kept.forEach((clip, i) => compare(findChild(strip, "editClip" + clip.id), keptItems[i]));
+    }
+    function test_zoom_out_instantiates_every_clip_in_the_new_viewport() {
+        testSession.appendAsset(testSession.media[0].id);
+        const strip = createTemporaryObject(timelineComponent, tests);
+        strip.fitTimeline();
+        wait(0);
+        testSession.visibleClips(0, 1000000).forEach(clip => verify(findChild(strip, "editClip" + clip.id) !== null));
+    }
 }

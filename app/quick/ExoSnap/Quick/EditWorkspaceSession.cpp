@@ -89,6 +89,11 @@ QVariantList EditSessionAdapter::visibleClips(qint64 from_ms, qint64 to_ms) cons
         const auto* asset = workspace_.asset(clip.asset);
         const auto track = std::find_if(workspace_.tracks().begin(), workspace_.tracks().end(),
                                         [&clip](const auto& t) { return t.id == clip.track; });
+        auto cache_stream_identity = clip.stream ? clip.stream->stream_identity : engine::AudioTrackId{};
+        // Foreign track UUIDs bind one open, so persistent caches use only verified recording identities.
+        if (clip.stream && clip.stream->kind == engine::TimelineStreamKind::Audio && asset->source_descriptor &&
+            !asset->source_descriptor->audio_identities_verified)
+            cache_stream_identity = {};
         rows.push_back(QVariantMap{
             {QStringLiteral("id"), QVariant::fromValue<qulonglong>(clip.id)},
             {QStringLiteral("name"), QString::fromStdString(asset->name)},
@@ -104,35 +109,27 @@ QVariantList EditSessionAdapter::visibleClips(qint64 from_ms, qint64 to_ms) cons
             {QStringLiteral("selected"), selected && (clip.id == selected->id || (linkedSelection && clip.group != 0 &&
                                                                                   clip.group == selected->group))},
             {QStringLiteral("fadeInMs"), clip.fade_in.duration_us / 1000},
-            {QStringLiteral("fadeOutMs"), clip.fade_out.duration_us / 1000}});
-        auto row = rows.back().toMap();
-        row.insert(QStringLiteral("sourceInUs"), QVariant::fromValue<qint64>(clip.source_in));
-        row.insert(QStringLiteral("sourceOutUs"), QVariant::fromValue<qint64>(clip.source_out));
-        row.insert(QStringLiteral("sourceEndUs"), QVariant::fromValue<qint64>(asset->duration));
-        row.insert(QStringLiteral("width"), asset->width);
-        row.insert(QStringLiteral("height"), asset->height);
-        row.insert(QStringLiteral("fpsNum"), asset->fps_num);
-        row.insert(QStringLiteral("fpsDen"), asset->fps_den);
-        row.insert(QStringLiteral("containerIndex"), clip.stream ? static_cast<int>(clip.stream->container_index) : -1);
-        row.insert(
-            QStringLiteral("sourceIdentity"),
-            asset->source_descriptor
-                ? QString::fromLatin1(QByteArray(reinterpret_cast<const char*>(
-                                                     asset->source_descriptor->asset_identity_fingerprint.data()),
-                                                 32)
-                                          .toHex())
-                : QString());
-        auto cache_stream_identity = clip.stream ? clip.stream->stream_identity : engine::AudioTrackId{};
-        // Foreign track UUIDs bind one open, so persistent caches use only verified recording identities.
-        if (clip.stream && clip.stream->kind == engine::TimelineStreamKind::Audio && asset->source_descriptor &&
-            !asset->source_descriptor->audio_identities_verified)
-            cache_stream_identity = {};
-        row.insert(QStringLiteral("streamIdentity"),
-                   clip.stream
-                       ? QString::fromLatin1(
-                             QByteArray(reinterpret_cast<const char*>(cache_stream_identity.bytes.data()), 16).toHex())
-                       : QString());
-        rows.back() = row;
+            {QStringLiteral("fadeOutMs"), clip.fade_out.duration_us / 1000},
+            {QStringLiteral("sourceInUs"), QVariant::fromValue<qint64>(clip.source_in)},
+            {QStringLiteral("sourceOutUs"), QVariant::fromValue<qint64>(clip.source_out)},
+            {QStringLiteral("sourceEndUs"), QVariant::fromValue<qint64>(asset->duration)},
+            {QStringLiteral("width"), asset->width},
+            {QStringLiteral("height"), asset->height},
+            {QStringLiteral("fpsNum"), asset->fps_num},
+            {QStringLiteral("fpsDen"), asset->fps_den},
+            {QStringLiteral("containerIndex"), clip.stream ? static_cast<int>(clip.stream->container_index) : -1},
+            {QStringLiteral("sourceIdentity"),
+             asset->source_descriptor
+                 ? QString::fromLatin1(QByteArray(reinterpret_cast<const char*>(
+                                                      asset->source_descriptor->asset_identity_fingerprint.data()),
+                                                  32)
+                                           .toHex())
+                 : QString()},
+            {QStringLiteral("streamIdentity"),
+             clip.stream
+                 ? QString::fromLatin1(
+                       QByteArray(reinterpret_cast<const char*>(cache_stream_identity.bytes.data()), 16).toHex())
+                 : QString()}});
     }
     return rows;
 }
