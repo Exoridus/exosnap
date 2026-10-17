@@ -1539,6 +1539,17 @@ exosnap_add_gtest(
 )
 target_include_directories(test_edit_player_session PRIVATE src include)
 
+# EditPlayerSession audio-clocked presentation against the real default output
+# endpoint, played silently. Live: hosted runners have no audio device.
+exosnap_add_gtest(
+    NAME test_edit_player_av_sync
+    TEST_PREFIX engine.
+    LABELS live
+    SOURCES tests/test_edit_player_av_sync.cpp
+    LIBRARIES exosnap_engine FFmpeg::mux
+)
+target_include_directories(test_edit_player_av_sync PRIVATE src include)
+
 # EditFrameGpuConverter (editor-playback GPU render path): WARP-backed proof that
 # the YUV->BGRA shader renders every DecodedPixelFormat exactly like the CPU
 # converters (yuv_to_bgra.cpp) for both the BT.709 and BT.601 matrices, and that

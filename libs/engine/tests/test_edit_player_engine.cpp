@@ -39,6 +39,8 @@ using exosnap::engine::AudioTrackDescription;
 using exosnap::engine::DemuxedThroughUs;
 using exosnap::engine::DemuxReadAheadWaitUs;
 using exosnap::engine::EditPlayerEngine;
+using exosnap::engine::ExtrapolatedClockUs;
+using exosnap::engine::PresentationHoldUs;
 using exosnap::engine::ShouldAdmitDemuxedPacket;
 using exosnap::engine::ShouldConvertDecodedFrame;
 using exosnap::engine::ShouldDemuxMorePackets;
@@ -421,6 +423,29 @@ TEST(EditPlaybackPacing, ClockAtZeroStillDiscardsEarlierFrames) {
     // Boundary: clock 0 is a real clock reading, not the "no clock" sentinel.
     EXPECT_TRUE(ShouldConvertDecodedFrame(0, 0));
     EXPECT_FALSE(ShouldConvertDecodedFrame(-1, 0));
+}
+
+// ---- Presentation hold (video waits for the audio clock) -----------------
+
+TEST(EditPlaybackPacing, FrameAheadOfTheClockIsHeldForItsLead) {
+    EXPECT_EQ(PresentationHoldUs(1'500'000, 1'000'000), 500'000);
+}
+
+TEST(EditPlaybackPacing, DueOrPastFrameIsNotHeld) {
+    EXPECT_EQ(PresentationHoldUs(1'000'000, 1'000'000), 0);
+    EXPECT_EQ(PresentationHoldUs(900'000, 1'000'000), 0);
+}
+
+TEST(EditPlaybackPacing, NoClockNeverHolds) {
+    EXPECT_EQ(PresentationHoldUs(1'000'000, -1), 0);
+}
+
+TEST(EditPlaybackPacing, ClockIsExtrapolatedBetweenSamplesUpToTheBound) {
+    EXPECT_EQ(ExtrapolatedClockUs(1'000'000, 12'000, 100'000), 1'012'000);
+    // A clock that stopped advancing must not let video run on without it.
+    EXPECT_EQ(ExtrapolatedClockUs(1'000'000, 5'000'000, 100'000), 1'100'000);
+    EXPECT_EQ(ExtrapolatedClockUs(1'000'000, -3'000, 100'000), 1'000'000);
+    EXPECT_EQ(ExtrapolatedClockUs(-1, 12'000, 100'000), -1);
 }
 
 // ---- ShouldAdmitDemuxedPacket (the demuxer's soft/hard queue rule) --------
