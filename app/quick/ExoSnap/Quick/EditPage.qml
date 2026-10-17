@@ -46,6 +46,35 @@ FocusScope {
         property: "trackWidth"
         value: clips.width
     }
+    Connections {
+        target: root.session
+        function onTimeSelectionChanged(): void {
+            root.exporter.setTimeSelectionUs(root.session.timeSelectionInUs, root.session.timeSelectionOutUs);
+        }
+    }
+    // Foreign media gets new track identities on every open, so a selection
+    // kept from the previous publication would no longer match any row.
+    Connections {
+        target: root.player
+        function onMonitoringChanged(): void {
+            root.monitoringSelection = root.player.monitoringTracks.filter(track => track.selected).map(track => track.id);
+        }
+    }
+    component PanelSection: ColumnLayout {
+        id: section
+        property string title
+        Layout.fillWidth: true
+        spacing: ExoTheme.spacingSm
+        Label {
+            Layout.fillWidth: true
+            text: section.title
+            color: ExoTheme.textSecondary
+            font.family: ExoTheme.sansFamily
+            font.pixelSize: ExoTheme.fontCaption
+            font.weight: Font.DemiBold
+            Accessible.role: Accessible.Heading
+        }
+    }
     function toggleMedia(): void {
         root.mediaOpen = !root.mediaOpen;
         if (!root.mediaOpen) {
@@ -72,6 +101,7 @@ FocusScope {
     Settings {
         id: layoutPreferences
         objectName: "editLayoutPreferences"
+        location: root.session.layoutSettingsLocation
         category: "EditLayout"
         property real sourceFraction: 0.29
         property real timelineFraction: 0.37
@@ -139,40 +169,22 @@ FocusScope {
                 anchors.top: parent.top
                 anchors.bottom: parent.bottom
                 anchors.left: parent.left
-                sourceComponent: Rectangle {
+                sourceComponent: EditSidePanel {
                     objectName: "editMediaPanel"
-                    color: ExoTheme.surface
-                    radius: ExoTheme.radiusMd
-                    border.color: ExoTheme.lineStrong
-                    ColumnLayout {
+                    title: qsTr("Media")
+                    pinned: root.mediaPinned
+                    canPin: root.canPinMedia
+                    pinObjectName: "editMediaPin"
+                    closeText: qsTr("Close Media")
+                    onPinToggled: root.mediaPinned = !root.mediaPinned
+                    onCloseRequested: root.toggleMedia()
+                    EditSourceBrowser {
                         anchors.fill: parent
-                        anchors.margins: 8
-                        RowLayout {
-                            Layout.fillWidth: true
-                            Label { text: qsTr("Media"); Layout.fillWidth: true }
-                            Button {
-                                objectName: "editMediaPin"
-                                text: root.mediaPinned ? qsTr("Unpin") : qsTr("Pin")
-                                enabled: root.mediaPinned || root.canPinMedia
-                                checkable: true
-                                checked: root.mediaPinned
-                                onClicked: root.mediaPinned = !root.mediaPinned
-                            }
-                            EditActionButton {
-                                text: qsTr("Close Media")
-                                glyph: ExoGlyph.Close
-                                onClicked: root.toggleMedia()
-                            }
-                        }
-                        EditSourceBrowser {
-                            Layout.fillWidth: true
-                            Layout.fillHeight: true
-                            session: root.session
-                            recordings: root.recordings
-                            timeline: root.timeline
-                            currentTab: root.sourceTab
-                            onCurrentTabChanged: root.sourceTab = currentTab
-                        }
+                        session: root.session
+                        recordings: root.recordings
+                        timeline: root.timeline
+                        currentTab: root.sourceTab
+                        onCurrentTabChanged: root.sourceTab = currentTab
                     }
                 }
             }
@@ -183,41 +195,39 @@ FocusScope {
                 anchors.top: parent.top
                 anchors.bottom: parent.bottom
                 anchors.right: parent.right
-                sourceComponent: Rectangle {
+                sourceComponent: EditSidePanel {
                     objectName: "editDetailsPanel"
-                    color: ExoTheme.surface
-                    radius: ExoTheme.radiusMd
-                    border.color: ExoTheme.lineStrong
-                    ColumnLayout {
+                    title: qsTr("Details")
+                    pinned: root.detailsPinned
+                    canPin: root.canPinDetails
+                    pinObjectName: "editDetailsPin"
+                    closeText: qsTr("Close Details")
+                    onPinToggled: root.detailsPinned = !root.detailsPinned
+                    onCloseRequested: root.toggleDetails()
+                    ExoScrollView {
+                        id: detailsScroll
                         anchors.fill: parent
-                        anchors.margins: 8
-                        RowLayout {
-                            Layout.fillWidth: true
-                            Label { text: qsTr("Details"); Layout.fillWidth: true }
-                            Button {
-                                objectName: "editDetailsPin"
-                                text: root.detailsPinned ? qsTr("Unpin") : qsTr("Pin")
-                                enabled: root.detailsPinned || root.canPinDetails
-                                checkable: true
-                                checked: root.detailsPinned
-                                onClicked: root.detailsPinned = !root.detailsPinned
-                            }
-                            EditActionButton {
-                                text: qsTr("Close Details")
-                                glyph: ExoGlyph.Close
-                                onClicked: root.toggleDetails()
-                            }
-                        }
-                        ScrollView {
-                            Layout.fillWidth: true
-                            Layout.fillHeight: true
-                            contentWidth: availableWidth
+                        contentWidth: availableWidth
+                        clip: true
+                        // The vertical bar overlays content, so its gutter is reserved.
+                        rightPadding: ExoTheme.spacingMd
+                        ScrollBar.horizontal.policy: ScrollBar.AlwaysOff
+                        ColumnLayout {
+                            width: detailsScroll.availableWidth
+                            spacing: ExoTheme.spacingLg
+
                             ColumnLayout {
-                                width: parent.width
+                                Layout.fillWidth: true
+                                spacing: ExoTheme.spacingXs
                                 Label {
                                     Layout.fillWidth: true
+                                    visible: text.length > 0
                                     text: root.session.clipTitle
                                     wrapMode: Text.Wrap
+                                    color: ExoTheme.text
+                                    font.family: ExoTheme.sansFamily
+                                    font.pixelSize: ExoTheme.fontBody
+                                    font.weight: Font.DemiBold
                                 }
                                 Repeater {
                                     model: root.session.facts
@@ -226,67 +236,210 @@ FocusScope {
                                         Layout.fillWidth: true
                                         text: qsTr("%1: %2").arg(modelData.label).arg(modelData.value)
                                         wrapMode: Text.Wrap
+                                        color: ExoTheme.textSecondary
+                                        font.family: ExoTheme.sansFamily
+                                        font.pixelSize: ExoTheme.fontCaption
                                     }
                                 }
-                                Label {
+                            }
+
+                            PanelSection {
+                                title: qsTr("Clip")
+                                visible: root.session.selectedClip !== 0 || root.session.selectedTransition !== 0
+                                ExoSettingRow {
+                                    label: qsTr("Fade in")
+                                    stacked: true
+                                    visible: root.session.selectedClip !== 0
                                     Layout.fillWidth: true
-                                    visible: root.player.monitoringTracks.length > 0
-                                    text: qsTr("Monitor tracks")
+                                    ExoNumberField {
+                                        objectName: "editDetailsFadeIn"
+                                        Layout.fillWidth: true
+                                        from: 0; to: 2147483647
+                                        suffix: qsTr("ms")
+                                        value: root.session.selectedClipDetails.fadeInMs ?? 0
+                                        Accessible.name: qsTr("Fade in duration in milliseconds")
+                                        onValueCommitted: value => root.session.setClipFade(root.session.selectedClip, true, value)
+                                    }
                                 }
+                                ExoSettingRow {
+                                    label: qsTr("Fade out")
+                                    stacked: true
+                                    visible: root.session.selectedClip !== 0
+                                    Layout.fillWidth: true
+                                    ExoNumberField {
+                                        objectName: "editDetailsFadeOut"
+                                        Layout.fillWidth: true
+                                        from: 0; to: 2147483647
+                                        suffix: qsTr("ms")
+                                        value: root.session.selectedClipDetails.fadeOutMs ?? 0
+                                        Accessible.name: qsTr("Fade out duration in milliseconds")
+                                        onValueCommitted: value => root.session.setClipFade(root.session.selectedClip, false, value)
+                                    }
+                                }
+                                ExoSettingRow {
+                                    label: qsTr("Junction start")
+                                    stacked: true
+                                    visible: root.session.selectedTransition !== 0
+                                    Layout.fillWidth: true
+                                    ExoNumberField {
+                                        objectName: "editDetailsJunctionStart"
+                                        Layout.fillWidth: true
+                                        from: 0; to: 2147483647
+                                        suffix: qsTr("ms")
+                                        value: root.session.selectedJunctionDetails.startMs ?? 0
+                                        Accessible.name: qsTr("Junction start in milliseconds")
+                                        onValueCommitted: value => root.session.setJunctionWindow(value, root.session.selectedJunctionDetails.endMs)
+                                    }
+                                }
+                                ExoSettingRow {
+                                    label: qsTr("Junction end")
+                                    stacked: true
+                                    visible: root.session.selectedTransition !== 0
+                                    Layout.fillWidth: true
+                                    ExoNumberField {
+                                        objectName: "editDetailsJunctionEnd"
+                                        Layout.fillWidth: true
+                                        from: 0; to: 2147483647
+                                        suffix: qsTr("ms")
+                                        value: root.session.selectedJunctionDetails.endMs ?? 0
+                                        Accessible.name: qsTr("Junction end in milliseconds")
+                                        onValueCommitted: value => root.session.setJunctionWindow(root.session.selectedJunctionDetails.startMs, value)
+                                    }
+                                }
+                            }
+
+                            PanelSection {
+                                title: qsTr("Timeline")
+                                ExoCheckBox {
+                                    objectName: "editFixedTimelineEnd"
+                                    Layout.fillWidth: true
+                                    text: qsTr("Fixed timeline end")
+                                    checked: root.session.fixedTimelineEnd
+                                    onToggledByUser: value => root.session.setFixedTimelineEnd(value, root.session.durationMs)
+                                }
+                                ExoNumberField {
+                                    objectName: "editTimelineEnd"
+                                    Layout.fillWidth: true
+                                    from: 0; to: 2147483647
+                                    suffix: qsTr("ms")
+                                    enabled: root.session.fixedTimelineEnd
+                                    value: root.session.durationMs
+                                    Accessible.name: qsTr("Timeline end in milliseconds")
+                                    onValueCommitted: value => root.session.setFixedTimelineEnd(true, value)
+                                }
+                                ExoButton {
+                                    objectName: "editCloseGap"
+                                    Layout.fillWidth: true
+                                    visible: root.session.selectedGap.endMs !== undefined
+                                    text: qsTr("Close Gap (preview)")
+                                    onClicked: root.session.previewCloseGap()
+                                }
+                                ExoButton {
+                                    objectName: "editClearMediaCache"
+                                    Layout.fillWidth: true
+                                    text: qsTr("Clear media cache")
+                                    Accessible.name: qsTr("Clear media cache")
+                                    onClicked: root.timeline.clearMediaCaches()
+                                    ToolTip.text: qsTr("Remove cached thumbnails and waveforms. Source recordings are kept.")
+                                    ToolTip.visible: hovered
+                                    ToolTip.delay: 500
+                                }
+                            }
+
+                            PanelSection {
+                                title: qsTr("Monitor tracks")
+                                visible: root.player.monitoringTracks.length > 0
                                 Repeater {
                                     model: root.player.monitoringTracks
                                     ExoCheckBox {
                                         required property var modelData
+                                        required property int index
                                         Layout.fillWidth: true
-                                        text: modelData.name
+                                        // Foreign media rarely names its streams.
+                                        text: modelData.name.length > 0 ? modelData.name : qsTr("Track %1").arg(index + 1)
                                         checked: root.monitoringSelection.indexOf(modelData.id) >= 0
                                         onToggledByUser: value => {
                                             const selected = root.monitoringSelection.slice();
-                                            const index = selected.indexOf(modelData.id);
-                                            if (value && index < 0) selected.push(modelData.id);
-                                            else if (!value && index >= 0) selected.splice(index, 1);
+                                            const at = selected.indexOf(modelData.id);
+                                            if (value && at < 0) selected.push(modelData.id);
+                                            else if (!value && at >= 0) selected.splice(at, 1);
                                             root.monitoringSelection = selected;
                                         }
                                     }
                                 }
                                 ExoCheckBox {
                                     id: overlapConfirmation
+                                    objectName: "editMonitorOverlapConfirmation"
                                     Layout.fillWidth: true
-                                    visible: root.player.monitoringTracks.length > 0
+                                    visible: root.player.monitoringTracks.length > 1
                                     text: qsTr("I confirm any overlapping audio in this selection")
                                 }
-                                Button {
-                                    visible: root.player.monitoringTracks.length > 0
+                                ExoButton {
+                                    objectName: "editMonitorConfirm"
+                                    Layout.fillWidth: true
+                                    tone: root.player.monitoringConfirmationRequired ? "primary" : "neutral"
                                     text: qsTr("Confirm selection")
                                     onClicked: {
                                         root.player.setPlaying(false);
-                                        root.player.confirmMonitoring(root.monitoringSelection, overlapConfirmation.checked);
+                                        // A single track cannot overlap anything; the click is the
+                                        // explicit confirmation the engine requires.
+                                        root.player.confirmMonitoring(root.monitoringSelection,
+                                                                      overlapConfirmation.checked || root.monitoringSelection.length <= 1);
                                     }
                                 }
-                                Label { text: qsTr("Export profile") }
-                                ComboBox {
-                                    objectName: "editExportProfiles"
+                            }
+
+                            PanelSection {
+                                title: qsTr("Export")
+                                ExoSettingRow {
+                                    label: qsTr("Export profile")
+                                    stacked: true
                                     Layout.fillWidth: true
-                                    model: root.exporter.profileOptions.filter(option => option.selectable)
-                                    textRole: "label"
-                                    valueRole: "value"
-                                    currentIndex: model.findIndex(option => option.value === root.exporter.profileKey)
-                                    Accessible.name: qsTr("Export profile")
-                                    onActivated: root.exporter.profileKey = currentValue
+                                    ExoSelect {
+                                        objectName: "editExportProfiles"
+                                        Layout.fillWidth: true
+                                        options: root.exporter.profileOptions.filter(option => option.selectable)
+                                        value: root.exporter.profileKey
+                                        Accessible.name: qsTr("Export profile")
+                                        onValueActivated: value => root.exporter.profileKey = value
+                                    }
                                 }
-                                Label { text: qsTr("Export range") }
-                                ComboBox {
-                                    objectName: "editExportSpan"
+                                ExoSettingRow {
+                                    label: qsTr("Export range")
+                                    stacked: true
                                     Layout.fillWidth: true
-                                    model: [
-                                        { value: "result", label: qsTr("Result range") },
-                                        { value: "entire", label: qsTr("Entire timeline") }
-                                    ]
-                                    textRole: "label"
-                                    valueRole: "value"
-                                    currentIndex: model.findIndex(option => option.value === root.exporter.spanKey)
-                                    Accessible.name: qsTr("Export range")
-                                    onActivated: root.exporter.spanKey = currentValue
+                                    ColumnLayout {
+                                        Layout.fillWidth: true
+                                        spacing: ExoTheme.spacingSm
+                                        ExoSelect {
+                                            objectName: "editExportSpan"
+                                            Layout.fillWidth: true
+                                            options: [
+                                                { value: "entire", label: qsTr("Entire Timeline") },
+                                                { value: "occupied", label: qsTr("Occupied Content") },
+                                                { value: "selection", label: qsTr("Selection") }
+                                            ]
+                                            value: root.exporter.spanKey === "entire" || root.exporter.spanKey === "occupied" ? root.exporter.spanKey : "selection"
+                                            Accessible.name: qsTr("Export range")
+                                            onValueActivated: value => root.exporter.spanKey = value === "selection" ? "result" : value
+                                        }
+                                        ExoSelect {
+                                            objectName: "editExportSelectionSpan"
+                                            Layout.fillWidth: true
+                                            visible: root.exporter.spanKey !== "entire" && root.exporter.spanKey !== "occupied"
+                                            options: [
+                                                { value: "result", label: qsTr("Result range") },
+                                                { value: "time", label: qsTr("I/O time range") },
+                                                { value: "selected", label: qsTr("Selected clips") }
+                                            ]
+                                            value: root.exporter.spanKey
+                                            Accessible.name: qsTr("Selection source")
+                                            onValueActivated: value => {
+                                                root.exporter.setTimeSelectionUs(root.session.timeSelectionInUs, root.session.timeSelectionOutUs);
+                                                root.exporter.spanKey = value;
+                                            }
+                                        }
+                                    }
                                 }
                                 ExoCheckBox {
                                     objectName: "editExportOriginalStreams"
@@ -337,8 +490,8 @@ FocusScope {
                         EditActionButton { objectName: "editUndo"; text: qsTr("Undo"); shortcutText: "Ctrl+Z"; glyph: ExoGlyph.Undo; enabled: root.session.canUndo; onClicked: root.session.undo() }
                         EditActionButton { objectName: "editRedo"; text: qsTr("Redo"); shortcutText: "Ctrl+Y"; glyph: ExoGlyph.Redo; enabled: root.session.canRedo; onClicked: root.session.redo() }
                         EditActionButton { objectName: "editSplit"; text: qsTr("Split"); shortcutText: "Ctrl+B"; glyph: ExoGlyph.Scissors; enabled: root.session.durationMs > 0; onClicked: root.session.splitSelected() }
-                        EditActionButton { objectName: "editDelete"; text: qsTr("Delete"); shortcutText: "Delete"; glyph: ExoGlyph.Trash; enabled: root.session.selectedClip !== 0; onClicked: root.session.deleteSelected(false) }
-                        EditActionButton { objectName: "editRippleDeleteAction"; text: qsTr("Ripple delete"); shortcutText: "Shift+Delete"; glyph: ExoGlyph.CloseGap; enabled: root.session.selectedClip !== 0; onClicked: root.session.deleteSelected(true) }
+                        EditActionButton { objectName: "editDelete"; text: qsTr("Delete"); shortcutText: "Delete"; glyph: ExoGlyph.Trash; enabled: root.session.selectedClip !== 0 || root.session.selectedSpacer !== 0; onClicked: root.session.deleteSelected(false) }
+                        EditActionButton { objectName: "editRippleDeleteAction"; text: qsTr("Ripple delete"); shortcutText: "Shift+Delete"; glyph: ExoGlyph.CloseGap; enabled: root.session.selectedClip !== 0 || root.session.selectedSpacer !== 0 || root.session.selectedGap.endMs !== undefined; onClicked: root.session.deleteSelected(true) }
                     }
                     Row {
                         id: transportGroup
@@ -352,7 +505,11 @@ FocusScope {
                             shortcutText: "Space"
                             glyph: root.player.playing ? ExoGlyph.Pause : ExoGlyph.Run
                             enabled: root.session.durationMs > 0 && root.player.clipOpen
-                            onClicked: root.player.togglePlay()
+                            onClicked: {
+                                if (root.player.monitoringConfirmationRequired && !root.detailsOpen)
+                                    root.toggleDetails();
+                                root.player.togglePlay();
+                            }
                         }
                         Label {
                             objectName: "editTransportTimecode"
@@ -427,6 +584,19 @@ FocusScope {
                     color: ExoTheme.textSecondary
                     wrapMode: Text.Wrap
                 }
+                // The preview placeholder that carries the rejection reason is hidden
+                // behind any presented frame, so the reason playback is refused has to
+                // be stated where the transport is.
+                Label {
+                    objectName: "editMonitoringRequired"
+                    Layout.fillWidth: true
+                    Layout.leftMargin: 8
+                    Layout.rightMargin: 8
+                    text: qsTr("Choose the audio tracks to hear in Details and confirm them before playback.")
+                    visible: root.player.monitoringConfirmationRequired && root.player.monitoringTracks.length > 0
+                    color: ExoTheme.textSecondary
+                    wrapMode: Text.Wrap
+                }
                 EditTimeline {
                     id: clips
                     session: root.session
@@ -445,19 +615,23 @@ FocusScope {
                     spacing: 4
                     EditActionButton { id: mediaAccess; objectName: "editMediaAccess"; text: qsTr("Media"); shortcutText: "Ctrl+M"; glyph: ExoGlyph.Folder; panelAccess: true; expanded: root.mediaOpen; pinned: root.mediaPinned; onClicked: root.toggleMedia() }
                     EditActionButton { id: detailsAccess; objectName: "editDetailsAccess"; text: qsTr("Details"); shortcutText: "Ctrl+D"; glyph: ExoGlyph.Info; panelAccess: true; expanded: root.detailsOpen; pinned: root.detailsPinned; onClicked: root.toggleDetails() }
-                    EditActionButton { objectName: "editSnapping"; text: qsTr("Snapping"); glyph: ExoGlyph.Magnet; checkable: true; checked: clips.snapping; onClicked: clips.snapping = checked }
+                    EditActionButton { objectName: "editSnapping"; text: qsTr("Snapping"); glyph: ExoGlyph.Magnet; checkable: true; checked: root.session.snapping; onClicked: root.session.snapping = checked }
+                    EditActionButton { objectName: "editRipple"; text: qsTr("Ripple"); glyph: ExoGlyph.CloseGap; checkable: true; checked: root.session.ripple; onClicked: root.session.ripple = checked }
+                    EditActionButton { objectName: "editAutoCrossfade"; text: qsTr("Auto Crossfade"); glyph: ExoGlyph.Layers; checkable: true; checked: root.session.autoCrossfade; onClicked: root.session.autoCrossfade = checked }
+                    EditActionButton { objectName: "editLinkedSelection"; text: qsTr("Linked Selection"); glyph: ExoGlyph.SplitTrack; checkable: true; checked: root.session.linkedSelection; onClicked: root.session.linkedSelection = checked }
                     Item { Layout.fillWidth: true }
                     EditActionButton { objectName: "editZoomOut"; text: qsTr("Zoom out"); glyph: ExoGlyph.Minus; onClicked: clips.zoomTo(clips.pixelsPerSecond / 1.25) }
                     Slider {
                         objectName: "editZoomSlider"
                         Layout.preferredWidth: root.width < 1000 ? 80 : 110
-                        from: 10
-                        to: 250
-                        value: clips.pixelsPerSecond
+                        from: Math.log(clips.minimumZoom)
+                        to: Math.log(clips.maximumZoom)
+                        value: Math.log(clips.pixelsPerSecond)
                         Accessible.name: qsTr("Timeline zoom")
-                        onMoved: clips.zoomTo(value)
+                        onMoved: clips.zoomTo(Math.exp(value))
                     }
                     EditActionButton { objectName: "editZoomIn"; text: qsTr("Zoom in"); glyph: ExoGlyph.Plus; onClicked: clips.zoomTo(clips.pixelsPerSecond * 1.25) }
+                    EditActionButton { objectName: "editZoomFit"; text: qsTr("Fit timeline"); glyph: ExoGlyph.AppWindow; onClicked: clips.fitTimeline() }
                 }
             }
         }
@@ -541,7 +715,7 @@ FocusScope {
             }
             Label {
                 Layout.fillWidth: true
-                visible: root.exporter.reviewOutcome.replaceExisting
+                visible: root.exporter.reviewOutcome.replaceExisting === true
                 text: qsTr("The existing destination file will be replaced.")
                 wrapMode: Text.Wrap
             }

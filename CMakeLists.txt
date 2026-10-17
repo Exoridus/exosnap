@@ -308,6 +308,7 @@ if(TARGET exosnap_updater)
             libs/engine/src/edit_timeline_reader.cpp
             libs/engine/src/render_audio_manifest.cpp
             libs/engine/src/edit_timeline_export.cpp
+            libs/engine/src/edit_export_plan.cpp
             app/diagnostics/RecommendationEngine.cpp
             app/diagnostics/DiagnosticsController.cpp
             app/models/OutputSettingsModel.cpp

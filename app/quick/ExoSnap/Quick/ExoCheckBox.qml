@@ -66,6 +66,9 @@ CheckBox {
         text: root.text
         textFormat: Text.PlainText
         verticalAlignment: Text.AlignVCenter
+        // Wraps only when a layout gives the control less than its natural
+        // width, which would otherwise cut the label off.
+        wrapMode: Text.Wrap
         visible: root.text !== ""
         color: root.enabled ? ExoTheme.textSecondary : ExoTheme.textDim
         leftPadding: root.indicator.width + ExoTheme.spacingSm

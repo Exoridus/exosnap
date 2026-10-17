@@ -64,6 +64,7 @@ qt_add_qml_module(exosnap
         EditActionButton.qml
         EditTimelineRuler.qml
         EditSourceBrowser.qml
+        EditSidePanel.qml
         EditPlayer.qml
         EditTimeline.qml
         ExoBadge.qml
@@ -195,12 +196,16 @@ qt_add_qml_module(exosnap
         EditWorkspaceSession.cpp
         EditSessionAdapter.cpp
         EditSessionAdapter.h
+        EditThumbnailImageProvider.cpp
+        EditThumbnailImageProvider.h
         EditTimelineAdapter.cpp
         EditTimelineAdapter.h
         EditTimelineModels.cpp
         EditTimelineModels.h
         ExoEditPlayerItem.cpp
         ExoEditPlayerItem.h
+        ExoWaveformItem.cpp
+        ExoWaveformItem.h
         LogEntryModel.cpp
         LogEntryModel.h
         LogsAdapter.cpp
@@ -350,6 +355,10 @@ target_sources(exosnap
         ${PROJECT_SOURCE_DIR}/app/notifications/NotificationNames.h
         ${PROJECT_SOURCE_DIR}/app/services/TimelineThumbnailSource.cpp
         ${PROJECT_SOURCE_DIR}/app/services/TimelineThumbnailSource.h
+        ${PROJECT_SOURCE_DIR}/app/services/ThumbnailCache.cpp
+        ${PROJECT_SOURCE_DIR}/app/services/ThumbnailCache.h
+        ${PROJECT_SOURCE_DIR}/app/services/WaveformCacheService.cpp
+        ${PROJECT_SOURCE_DIR}/app/services/WaveformCacheService.h
         ${PROJECT_SOURCE_DIR}/app/models/OutputPathPolicy.cpp
         ${PROJECT_SOURCE_DIR}/app/models/OutputPathPolicy.h
         ${PROJECT_SOURCE_DIR}/app/models/OutputPathValidator.cpp
@@ -1204,6 +1213,8 @@ qt_add_qml_module(edit_timeline_qml_tests
         EditWorkspaceSession.cpp
         EditSessionAdapter.cpp
         EditSessionAdapter.h
+        EditThumbnailImageProvider.cpp
+        EditThumbnailImageProvider.h
         EditTimelineAdapter.cpp
         EditTimelineAdapter.h
         EditTimelineModels.cpp
@@ -1220,11 +1231,19 @@ qt_add_qml_module(edit_timeline_qml_tests
         QuickThemeTokens.h
         # ExoTheme.qml resolves wheelScrollLines through this singleton.
         QuickWheelMetrics.h
+        # Lets EditTimeline.qml draw audio rows with the waveform item.
+        ExoWaveformItem.cpp
+        ExoWaveformItem.h
         ${PROJECT_SOURCE_DIR}/app/services/TimelineThumbnailSource.cpp
         ${PROJECT_SOURCE_DIR}/app/services/TimelineThumbnailSource.h
+        ${PROJECT_SOURCE_DIR}/app/services/ThumbnailCache.cpp
+        ${PROJECT_SOURCE_DIR}/app/services/ThumbnailCache.h
+        ${PROJECT_SOURCE_DIR}/app/services/WaveformCacheService.cpp
+        ${PROJECT_SOURCE_DIR}/app/services/WaveformCacheService.h
     QML_FILES
         EditPage.qml
         EditSourceBrowser.qml
+        EditSidePanel.qml
         EditActionButton.qml
         EditTimelineRuler.qml
         ExoButton.qml
@@ -1237,6 +1256,11 @@ qt_add_qml_module(edit_timeline_qml_tests
         EditTimeline.qml
         ExoFieldErrorMark.qml
         ExoGlyph.qml
+        ExoInfoButton.qml
+        ExoNumberField.qml
+        ExoScrollBar.qml
+        ExoScrollView.qml
+        ExoSettingRow.qml
         ExoTheme.qml
 )
 
@@ -2041,6 +2065,8 @@ exosnap_add_gtest(
     TEST_PREFIX quick_edit_adapter.
     SOURCES
         ${EXOSNAP_QUICK_TESTS_DIR}/test_edit_adapters.cpp
+        EditThumbnailImageProvider.cpp
+        EditThumbnailImageProvider.h
         EditExportAdapter.cpp
         EditExportAdapter.h
         EditWorkspaceSession.cpp
@@ -2052,6 +2078,10 @@ exosnap_add_gtest(
         EditTimelineModels.h
         ${PROJECT_SOURCE_DIR}/app/services/TimelineThumbnailSource.cpp
         ${PROJECT_SOURCE_DIR}/app/services/TimelineThumbnailSource.h
+        ${PROJECT_SOURCE_DIR}/app/services/ThumbnailCache.cpp
+        ${PROJECT_SOURCE_DIR}/app/services/ThumbnailCache.h
+        ${PROJECT_SOURCE_DIR}/app/services/WaveformCacheService.cpp
+        ${PROJECT_SOURCE_DIR}/app/services/WaveformCacheService.h
         # The export path reports a staging file it could not remove, so the
         # atomic-publish primitives are part of what this target exercises.
         ${PROJECT_SOURCE_DIR}/app/services/AtomicFileOps.cpp
@@ -2077,6 +2107,41 @@ target_include_directories(edit_qml_adapter_tests
 )
 
 target_compile_definitions(edit_qml_adapter_tests PRIVATE NOMINMAX)
+
+# Persistent waveform and thumbnail caches behind the Edit timeline: the
+# waveform service and its scene-graph item, the thumbnail broker, its image
+# provider and the strip worker's disk tier. Decoders are injected or fed by
+# the fixtures named in EXOSNAP_EDIT_RENDER_FIXTURES; the item renders offscreen.
+exosnap_add_gtest(
+    NAME media_cache_service_tests
+    TEST_PREFIX quick_media_cache.
+    SOURCES
+        ${EXOSNAP_QUICK_TESTS_DIR}/test_media_cache_services.cpp
+        EditThumbnailImageProvider.cpp
+        EditThumbnailImageProvider.h
+        ExoWaveformItem.cpp
+        ExoWaveformItem.h
+        ${PROJECT_SOURCE_DIR}/app/services/TimelineThumbnailSource.cpp
+        ${PROJECT_SOURCE_DIR}/app/services/TimelineThumbnailSource.h
+        ${PROJECT_SOURCE_DIR}/app/services/ThumbnailCache.cpp
+        ${PROJECT_SOURCE_DIR}/app/services/ThumbnailCache.h
+        ${PROJECT_SOURCE_DIR}/app/services/WaveformCacheService.cpp
+        ${PROJECT_SOURCE_DIR}/app/services/WaveformCacheService.h
+    LIBRARIES
+        Qt6::Core
+        Qt6::Gui
+        Qt6::Qml
+        Qt6::Quick
+        Qt6::Test
+        exosnap_engine
+)
+target_include_directories(media_cache_service_tests
+    PRIVATE
+        ${CMAKE_CURRENT_SOURCE_DIR}
+        ${PROJECT_SOURCE_DIR}/app
+)
+target_compile_definitions(media_cache_service_tests PRIVATE NOMINMAX)
+set_target_properties(media_cache_service_tests PROPERTIES AUTOMOC ON)
 
 # Startup recovery policy at the QML boundary: what is offered, what a
 # destructive action requires before it runs, and what survives a dismissal.

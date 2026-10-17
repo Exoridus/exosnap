@@ -1041,6 +1041,24 @@ int main(int argc, char* argv[]) {
     for (int i = 0; i < argc; ++i)
         pre_application_arguments.push_back(QString::fromLocal8Bit(argv[i]));
 
+    const bool isolated_edit_qualification = pre_application_arguments.contains(QStringLiteral("--auto-edit-qualify"));
+    if (isolated_edit_qualification) {
+#if defined(EXOSNAP_ENABLE_AUTO_RECORD_HARNESS)
+        for (int i = 1; i < pre_application_arguments.size(); ++i) {
+            const auto& argument = pre_application_arguments.at(i);
+            if (argument.startsWith(QLatin1Char('-')) && !argument.startsWith(QStringLiteral("--auto-edit"))) {
+                reportStartupError(QStringLiteral("--auto-edit-qualify accepts only --auto-edit options"));
+                return 2;
+            }
+        }
+        qputenv("QT_QPA_PLATFORM", "offscreen");
+        qputenv("QT_QUICK_BACKEND", "software");
+#else
+        reportStartupError(QStringLiteral("--auto-edit-qualify requires a harness-enabled build"));
+        return 2;
+#endif
+    }
+
 #if defined(EXOSNAP_ENABLE_AUTO_RECORD_HARNESS)
     if (pre_application_arguments.contains(QStringLiteral("--auto-record-bare"))) {
         QCoreApplication app(argc, argv);
@@ -1077,7 +1095,8 @@ int main(int argc, char* argv[]) {
     }
 #endif
 
-    QQuickWindow::setGraphicsApi(QSGRendererInterface::Direct3D11);
+    QQuickWindow::setGraphicsApi(isolated_edit_qualification ? QSGRendererInterface::Software
+                                                             : QSGRendererInterface::Direct3D11);
 
     // No DWM redirection bitmap for this process's windows.
     //
@@ -1338,6 +1357,9 @@ int main(int argc, char* argv[]) {
     quick_application.applyTraySuppression(preview_mode || auto_record_requested || auto_edit_requested ||
                                            navigation_lifecycle_test ||
                                            arguments.contains(QStringLiteral("--visual-test")));
+
+    if (isolated_edit_qualification)
+        quick_application.applyIsolatedEditHarness();
 
     if (!quick_application.load(diagnostic_mode && !maximize_cycle))
         return -1;

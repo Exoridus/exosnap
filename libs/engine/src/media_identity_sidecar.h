@@ -30,7 +30,6 @@ struct MediaIdentityReferenceCopyGuard {
 };
 
 std::filesystem::path MediaIdentitySidecarPath(const std::filesystem::path& media);
-Outcome<std::shared_ptr<void>> AcquireMediaReadLease(const std::filesystem::path& media);
 Outcome<MediaIdentitySnapshot> HashFinalMedia(const std::filesystem::path& media,
                                               const std::function<bool()>& continue_io = {},
                                               const BackgroundIoAdmission& before_io = {},

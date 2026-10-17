@@ -271,9 +271,9 @@ pub(crate) mod tests {
         StepId::Configure,
         StepId::QmlLint,
         StepId::Build,
+        StepId::ClangTidy,
         StepId::Tests,
         StepId::CppCheck,
-        StepId::ClangTidy,
     ];
 
     pub fn full_test_spec(scoped: bool) -> ProfileSpec {
@@ -357,6 +357,32 @@ pub(crate) mod tests {
                 "{} must not plan clang-tidy locally",
                 profile.spec().name
             );
+        }
+    }
+
+    #[test]
+    fn debug_ci_runs_tidy_after_build_before_the_complete_test_suite() {
+        let scope = Scope::everything();
+        for event in [Event::PullRequest, Event::parse("push")] {
+            let mut request = input(Profile::CiBuildDebug, &scope);
+            request.event = event;
+            let plan = build(&request);
+            assert_eq!(
+                names(&plan),
+                vec![
+                    "sanity",
+                    "configure",
+                    "qmllint",
+                    "build",
+                    "clang-tidy",
+                    "tests"
+                ]
+            );
+            let tests = plan.check(StepId::Tests).unwrap();
+            assert!(tests.applicable);
+            assert_eq!(tests.evidence_str("filter"), Some(""));
+            assert!(StepId::ClangTidy.info().depends_on.contains(&StepId::Build));
+            assert!(StepId::Tests.info().depends_on.contains(&StepId::Build));
         }
     }
 

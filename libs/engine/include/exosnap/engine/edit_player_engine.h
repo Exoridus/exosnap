@@ -31,6 +31,7 @@
 #include <exosnap/engine/audio_media_manifest.h>
 #include <exosnap/engine/color_metadata.h>
 
+#include <array>
 #include <atomic>
 #include <cstdint>
 #include <filesystem>
@@ -161,6 +162,11 @@ class EditPlayerEngine {
     bool OpenAudioStream(const std::filesystem::path& path, uint32_t container_index, std::string& out_error,
                          const std::atomic<bool>* cancelled = nullptr);
 
+    // Validates the bytes retained by the open source's immutable read lease.
+    bool ValidateContentIdentity(const std::array<uint8_t, 32>& expected, std::string& error,
+                                 const std::atomic<bool>* cancelled = nullptr) const;
+    [[nodiscard]] uint64_t AudioSeekCount() const noexcept;
+    [[nodiscard]] uint64_t AudioDecodedFrameCount() const noexcept;
     // Closes the file and stops any running playback decode (see Task 6).
     void Close();
 
@@ -235,6 +241,10 @@ class EditPlayerEngine {
     bool DecodeAudioStreamRange(uint32_t container_index, int64_t first_sample, uint32_t frame_count,
                                 std::vector<float>& output, std::string& error);
 
+    // Audio-only analysis cursor. Adjacent calls retain decoder/resampler state
+    // and bounded frame tails. Discontinuous requests seek with normal preroll.
+    bool ReadAudioStreamSequential(uint32_t container_index, int64_t first_sample, uint32_t frame_count,
+                                   std::vector<float>& output, std::string& error);
     // Every audio track the open file carries, in stream order. `name` comes
     // from the container's track name and is empty for recordings written
     // before names were muxed — callers fall back to a positional label rather

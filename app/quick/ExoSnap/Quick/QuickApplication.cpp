@@ -1,5 +1,7 @@
 #include "QuickApplication.h"
 
+#include "EditThumbnailImageProvider.h"
+
 #include "services/SystemAppearance.h"
 
 #include "NativeMenuAppearance.h"
@@ -1065,9 +1067,11 @@ void QuickApplication::initializeRecordWorkflow() {
     });
     // The Settings card's preview keeps the camera open only while it is on
     // screen; the device rule still requires the webcam to be enabled.
-    QObject::connect(
-        &webcam_preview_feed_, &WebcamPreviewFeed::hasViewersChanged, &record_view_model_adapter_,
-        [this]() { recording_coordinator_->SetWebcamSettingsPreviewActive(webcam_preview_feed_.hasViewers()); });
+    QObject::connect(&webcam_preview_feed_, &WebcamPreviewFeed::hasViewersChanged, &record_view_model_adapter_,
+                     [this]() {
+                         recording_coordinator_->SetWebcamSettingsPreviewActive(!isolated_edit_harness_ &&
+                                                                                webcam_preview_feed_.hasViewers());
+                     });
 
     if (HarnessCaptureTargets()) {
         capture_target_notifier_.setWindowIdentityObserverForTest(
@@ -2254,7 +2258,7 @@ void QuickApplication::updateMeterServices() {
                          record_view_model_.state == UiRecordingState::Recording ||
                          record_view_model_.state == UiRecordingState::Paused ||
                          record_view_model_.state == UiRecordingState::Stopping;
-    if (!visible || session) {
+    if (isolated_edit_harness_ || !visible || session) {
         meter_service_start_timer_.stop();
         recording_coordinator_->StopSysMeter();
         recording_coordinator_->StopAppMeter();
@@ -2266,6 +2270,8 @@ void QuickApplication::updateMeterServices() {
 }
 
 void QuickApplication::startMeterServices() {
+    if (isolated_edit_harness_)
+        return;
     // Same two pages as updateMeterServices(). Reading only the Record page here
     // let the Settings page arm the debounce and then bail out of its own timer,
     // so the per-source rows the user was looking at stayed at silence.
@@ -3898,6 +3904,20 @@ void QuickApplication::initializeEditArea() {
     edit_timeline_adapter_.setSession(&edit_session_adapter_);
     edit_player_adapter_.setSession(&edit_session_adapter_);
     edit_export_adapter_.setSession(&edit_session_adapter_);
+    const auto update_cache_admission = [this]() {
+        edit_timeline_adapter_.setForegroundBusy(edit_player_adapter_.playing() || edit_player_adapter_.seekPending() ||
+                                                 edit_export_adapter_.running() ||
+                                                 record_view_model_adapter_.recording());
+    };
+    QObject::connect(&edit_player_adapter_, &EditPlayerAdapter::playingChanged, &edit_timeline_adapter_,
+                     update_cache_admission);
+    QObject::connect(&edit_player_adapter_, &EditPlayerAdapter::previewChanged, &edit_timeline_adapter_,
+                     update_cache_admission);
+    QObject::connect(&edit_export_adapter_, &EditExportAdapter::stateChanged, &edit_timeline_adapter_,
+                     update_cache_admission);
+    QObject::connect(&record_view_model_adapter_, &RecordViewModelAdapter::changed, &edit_timeline_adapter_,
+                     update_cache_admission);
+    update_cache_admission();
     edit_export_adapter_.setOutputDirectoryProvider(
         [this]() { return QString::fromStdWString(live_config_.output.output_folder.wstring()); });
     edit_export_adapter_.setRenderConfigProvider([this]() {
@@ -4381,6 +4401,23 @@ void QuickApplication::setInDepthDiagnostics(bool enabled) {
 
 void QuickApplication::applyTraySuppression(bool suppressed) {
     tray_suppressed_ = suppressed;
+}
+
+void QuickApplication::applyIsolatedEditHarness() {
+    isolated_edit_harness_ = true;
+    tray_suppressed_ = true;
+    record_preview_adapter_.setHarnessTestCard(true);
+    record_preview_adapter_.setPreviewFrameRate(0);
+    edit_player_adapter_.setVolume(0);
+    const QDir root(qEnvironmentVariable("EXOSNAP_CONFIG_DIR"));
+    ThumbnailRequestBroker::Config thumbnails;
+    thumbnails.disk_root =
+        std::filesystem::path(root.filePath(QStringLiteral("editor-cache/thumbnails")).toStdWString());
+    edit_timeline_adapter_.configureThumbnailCache(thumbnails);
+    WaveformCacheService::Config waveforms;
+    waveforms.root = std::filesystem::path(root.filePath(QStringLiteral("editor-cache/waveforms")).toStdWString());
+    edit_timeline_adapter_.configureWaveformCache(waveforms);
+    updateMeterServices();
 }
 
 void QuickApplication::applyUpdateFeedOverride(const QString& base_url) {
@@ -5769,6 +5806,8 @@ bool QuickApplication::load(bool no_activate) {
     }
     if (!edit_tile_provider_registered_) {
         engine_.addImageProvider(QLatin1String(kEditTileProviderId), edit_tile_provider_);
+        engine_.addImageProvider(QLatin1String(kEditThumbnailProviderId),
+                                 edit_timeline_adapter_.createThumbnailImageProvider());
         edit_tile_provider_registered_ = true;
     }
     if (!shell_icon_provider_registered_) {
@@ -5948,15 +5987,14 @@ bool QuickApplication::load(bool no_activate) {
     if (!tray_suppressed_)
         initializeTray();
 
-    // Unconditional, unlike the tray: a session with the notification area
-    // disabled still has a taskbar button, and the harness modes that suppress
-    // the tray are exactly the ones that would otherwise never exercise this.
-    initializeShellPresence();
+    // The isolated editor harness has no native window for shell integration.
+    if (!isolated_edit_harness_)
+        initializeShellPresence();
 
 #if defined(Q_OS_WIN)
     // Registration needs a live HWND, which only exists once the window has been
     // created -- same ordering constraint the Widgets frontend has in showEvent.
-    if (auto* window = qobject_cast<QWindow*>(engine_.rootObjects().constFirst())) {
+    if (auto* window = qobject_cast<QWindow*>(engine_.rootObjects().constFirst()); window && !isolated_edit_harness_) {
         const auto hwnd = reinterpret_cast<HWND>(window->winId());
         hotkey_registrar_ = std::make_unique<Win32HotkeyRegistrar>(hwnd);
         hotkey_event_filter_ = std::make_unique<QuickHotkeyEventFilter>(

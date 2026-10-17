@@ -4,8 +4,10 @@
 #include "diagnostics/AppLog.h"
 #include "models/EditTimelineModel.h"
 #include "models/MarkerSidecar.h"
+#include "settings/ConfigPaths.h"
 #include <exosnap/engine/edit_timeline_export.h>
 
+#include <QDir>
 #include <QFileInfo>
 #include <QPointer>
 #include <QVariantMap>
@@ -16,6 +18,11 @@
 #include <system_error>
 
 namespace exosnap::quick {
+
+QUrl EditSessionAdapter::layoutSettingsLocation() const {
+    return QUrl::fromLocalFile(QDir(settings::ResolveAppConfigDir()).filePath(QStringLiteral("editor-layout.ini")));
+}
+
 namespace {
 
 const QString kEmptyValue = QStringLiteral("\xe2\x80\x94");
@@ -119,6 +126,18 @@ void EditSessionAdapter::applyEditContext(const EditContext& context, qint64 tim
         asset.width = context.resolution.section(QLatin1Char('x'), 0, 0).toInt();
         asset.height = context.resolution.section(QLatin1Char('x'), 1, 1).toInt();
         asset.fps = context.fps.section(QLatin1Char(' '), 0, 0).toDouble();
+        if (asset.source_descriptor) {
+            for (const auto& stream : asset.source_descriptor->streams)
+                if (stream.ref.kind == engine::TimelineStreamKind::Video && stream.fps.valid()) {
+                    asset.fps_num = static_cast<int>(stream.fps.num);
+                    asset.fps_den = static_cast<int>(stream.fps.den);
+                    break;
+                }
+        } else if (std::isfinite(asset.fps) && asset.fps >= 1 && asset.fps <= 1000 &&
+                   std::floor(asset.fps) == asset.fps) {
+            asset.fps_num = static_cast<int>(asset.fps);
+            asset.fps_den = 1;
+        }
         asset.state = !segment.succeeded                ? edit::AssetState::Failed
                       : QFileInfo::exists(segment.path) ? edit::AssetState::Available
                                                         : edit::AssetState::Missing;
@@ -130,7 +149,7 @@ void EditSessionAdapter::applyEditContext(const EditContext& context, qint64 tim
             assets.push_back(id);
     }
     if (!assets.empty()) {
-        if (!workspace_.insertAssets(assets, append_start))
+        if (!workspace_.insertAssets(assets, append_start, autoCrossfade))
             workspace_error_ = tr("The recording overlaps existing clips.");
         else
             workspace_error_.clear();
@@ -376,6 +395,12 @@ void EditSessionAdapter::close() {
     // is showing any more; advancing the counter drops its result on arrival.
     ++clip_generation_;
     context_ = EditContext{};
+    cancelClipDrag();
+    time_selection_in_us_ = time_selection_out_us_ = -1;
+    selected_gap_ = {};
+    selected_gap_track_ = selected_spacer_ = selected_transition_ = 0;
+    copied_blank_duration_ = 0;
+    emit timeSelectionChanged();
     workspace_ = edit::Workspace{};
     emit workspaceChanged();
     keyframe_timestamps_.clear();

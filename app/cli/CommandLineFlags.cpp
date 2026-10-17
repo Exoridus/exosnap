@@ -46,6 +46,7 @@ constexpr std::array kFlags = {
 
     // --- app/quick/ExoSnap/Quick/QuickAutoEditHarness.cpp ---
     KnownFlag{"--auto-edit", FlagArity::None},
+    KnownFlag{"--auto-edit-qualify", FlagArity::None},
     KnownFlag{"--auto-edit-media", FlagArity::Value},
     KnownFlag{"--auto-edit-add-media", FlagArity::Value},
     KnownFlag{"--auto-edit-report", FlagArity::Value},

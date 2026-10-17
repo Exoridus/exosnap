@@ -1,3 +1,4 @@
+#include <exosnap/engine/audio_media_manifest.h>
 #include <exosnap/engine/edit_timeline.h>
 #include <exosnap/engine/edit_timeline_export.h>
 #include <exosnap/engine/edit_timeline_render.h>
@@ -8,10 +9,10 @@
 #include "edit_mix_encoder.h"
 #include "matroska_packet_timestamps.h"
 #include "matroska_stream_writer.h"
-#include "media_identity_sidecar.h"
 #include "render_audio_manifest.h"
 
 #include <algorithm>
+#include <atomic>
 #include <cstddef>
 #include <cstdint>
 #include <cstdlib>
@@ -49,11 +50,25 @@ struct InputFile {
     ~InputFile() {
         avformat_close_input(&context);
     }
-    bool Open(const std::filesystem::path& path) {
+    const std::atomic<bool>* cancelled = nullptr;
+    bool Open(const std::filesystem::path& path, const std::atomic<bool>* cancellation = nullptr) {
+        cancelled = cancellation;
+        if (cancelled && cancelled->load(std::memory_order_relaxed))
+            return false;
         auto acquired = AcquireMediaReadLease(path);
         if (!acquired.succeeded())
             return false;
         lease = std::move(*acquired.value());
+        context = avformat_alloc_context();
+        if (!context)
+            return false;
+        context->interrupt_callback = {[](void* opaque) {
+                                           const auto* input = static_cast<const InputFile*>(opaque);
+                                           return input->cancelled && input->cancelled->load(std::memory_order_relaxed)
+                                                      ? 1
+                                                      : 0;
+                                       },
+                                       this};
         return avformat_open_input(&context, Utf8Path(path).c_str(), nullptr, nullptr) >= 0 &&
                avformat_find_stream_info(context, nullptr) >= 0;
     }
@@ -88,6 +103,59 @@ bool SourceTimestampsNs(AVPacket& packet, const AVStream& stream, int64_t& pts_n
 }
 
 } // namespace
+
+bool HasUsableCopiedVideoTimestamps(const std::vector<TimelineExportClip>& recipe, const std::atomic<bool>* cancelled) {
+    if (recipe.empty())
+        return false;
+    auto free_packet = [](AVPacket* packet) { av_packet_free(&packet); };
+    std::unique_ptr<AVPacket, decltype(free_packet)> packet(av_packet_alloc(), free_packet);
+    if (!packet)
+        return false;
+    constexpr auto minimum = (std::numeric_limits<int64_t>::min)();
+    constexpr auto maximum = (std::numeric_limits<int64_t>::max)();
+    const auto shifted = [](int64_t value, int64_t offset) -> std::optional<int64_t> {
+        if ((offset > 0 && value > maximum - offset) || (offset < 0 && value < minimum - offset))
+            return std::nullopt;
+        return value + offset;
+    };
+    int64_t last_dts = minimum;
+    for (const auto& clip : recipe) {
+        InputFile source;
+        if (!source.Open(clip.source, cancelled))
+            return false;
+        const int video = source.VideoStream();
+        if (video < 0)
+            return false;
+        const int64_t origin = source.context->start_time == AV_NOPTS_VALUE ? 0 : source.context->start_time;
+        if ((origin > 0 && clip.timeline_start_us < minimum + origin) ||
+            (origin < 0 && clip.timeline_start_us > maximum + origin))
+            return false;
+        const auto offset_us = clip.timeline_start_us - origin;
+        if (offset_us > maximum / 1000 || offset_us < minimum / 1000)
+            return false;
+        const auto offset_ns = offset_us * 1000;
+        int status = 0;
+        while (!(cancelled && cancelled->load(std::memory_order_relaxed)) &&
+               (status = av_read_frame(source.context, packet.get())) >= 0) {
+            if (packet->stream_index == video) {
+                int64_t pts = 0;
+                int64_t dts = 0;
+                if (!SourceTimestampsNs(*packet, *source.context->streams[video], pts, dts))
+                    return false;
+                const auto timeline_pts = shifted(pts, offset_ns);
+                const auto timeline_dts = shifted(dts, offset_ns);
+                if (!timeline_pts || !timeline_dts || *timeline_pts < 0 || *timeline_dts > *timeline_pts ||
+                    *timeline_dts <= last_dts)
+                    return false;
+                last_dts = *timeline_dts;
+            }
+            av_packet_unref(packet.get());
+        }
+        if ((cancelled && cancelled->load(std::memory_order_relaxed)) || status != AVERROR_EOF)
+            return false;
+    }
+    return last_dts != minimum;
+}
 
 RemuxResult ExportEditTimelineWithCopiedVideo(const TimelineRenderSnapshot& snapshot,
                                               const std::vector<TimelineExportClip>& video_recipe,

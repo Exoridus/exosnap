@@ -33,6 +33,37 @@ namespace exosnap::engine {
     return pts_us >= current_media_time_us;
 }
 
+// ---- Video thread: hold a decoded frame until it is due --------------------
+//
+// The decode thread runs ahead of the playback clock by the demuxer's
+// read-ahead, so a frame handed on as soon as it is decoded is shown before the
+// sound it belongs to. A frame is therefore held until the clock reaches its
+// timestamp. The audio clock is only sampled on the presentation tick (its
+// reader has a single-thread contract); between samples the holder
+// extrapolates it by wall time, never further than max_extrapolation_us. The
+// bound keeps a stalled or not-yet-started audio device from letting video run
+// ahead of the sound, and the extrapolation keeps the release from lagging a
+// full tick behind, which the present gate would then count as late.
+
+// The playback clock as of now, extrapolated from its last sample.
+[[nodiscard]] constexpr int64_t ExtrapolatedClockUs(int64_t sampled_clock_us, int64_t elapsed_since_sample_us,
+                                                    int64_t max_extrapolation_us) noexcept {
+    if (sampled_clock_us < 0)
+        return sampled_clock_us;
+    if (elapsed_since_sample_us <= 0)
+        return sampled_clock_us;
+    return sampled_clock_us +
+           (elapsed_since_sample_us < max_extrapolation_us ? elapsed_since_sample_us : max_extrapolation_us);
+}
+
+// How long a frame at pts_us must still be held, in microseconds. Zero when it
+// is due, or when no clock exists (negative current_media_time_us).
+[[nodiscard]] constexpr int64_t PresentationHoldUs(int64_t pts_us, int64_t current_media_time_us) noexcept {
+    if (current_media_time_us < 0 || pts_us <= current_media_time_us)
+        return 0;
+    return pts_us - current_media_time_us;
+}
+
 // ---- Demux thread: how far ahead of the playback position to read --------
 //
 // The demuxer's read-ahead is bounded by the PLAYBACK POSITION, not by how

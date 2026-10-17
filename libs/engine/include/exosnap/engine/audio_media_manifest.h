@@ -95,6 +95,9 @@ struct AudioMetadataReadResult {
 [[nodiscard]] Outcome<std::monostate> ValidateAudioManifest1(const AudioManifest1& manifest);
 [[nodiscard]] Outcome<std::string> SerializeAudioManifest1(const AudioManifest1& manifest);
 [[nodiscard]] Outcome<AudioManifest1> ParseAudioManifest1(std::string_view json);
+// Keeps media readable and denies writes, deletion and replacement until the
+// last copy of the opaque ownership token is released. Does not verify content.
+[[nodiscard]] Outcome<std::shared_ptr<void>> AcquireMediaReadLease(const std::filesystem::path& media);
 // Call after the media writer has closed, on a background I/O owner. The sidecar
 // binds the manifest to the final file identity, size and SHA-256.
 [[nodiscard]] Outcome<std::monostate>

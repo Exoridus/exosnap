@@ -52,6 +52,27 @@ Page capture waits for the requested asynchronous loader to be ready, with a bou
 
 The Edit visual fixture does not open real media. Use `--auto-edit --auto-edit-media <path>` with real media for decoder/export behavior. Add `--auto-edit-add-media <path>` to append a second source for the hard-cut and concatenation export checks. A correct placeholder screenshot does not establish playable video, synchronized audio or successful output.
 
+For autonomous editor stability measurements, a harness-enabled build accepts `--auto-edit-qualify --auto-edit-media <path> --auto-edit-report <json>`.
+This mode forces the offscreen platform before application creation, rejects other diagnostic/Qt platform switches, isolates configuration and preview caches, suppresses capture preview, input meters, global hotkeys and shell integration, and sets edit playback volume to zero.
+It imports real media through the application adapters, repeats five open/play/seek/navigation/close cycles, checks edit/undo round trips, and seeks through 32 linked splits in the final cycle. The first playback interval advances up to 30 seconds, limited to half the source duration; the other intervals advance up to eight seconds. With export enabled, use at least six seconds of media: the first cycle trims, splits, removes a suffix, checks undo/redo and exports the remaining two seconds for independent verification.
+Use small, controlled inputs. For foreign media that requires monitoring confirmation, the test chooses only the first audio stream. Playback still opens the configured audio output endpoint with zero-volume samples.
+
+The detached productive player item observes decoded mailbox frames after the adapter's generation filter.
+Seek samples measure request to mailbox observation with a 1 ms event-loop poll and include scheduling overhead.
+The poll sleeps on a high-resolution waitable timer; the default 15.6 ms system tick would otherwise quantize every sample.
+Each cycle also reports its first seek after import with the worker counters accumulated since the closed, idle worker, so session open, queue wait and decoder reads of that cold seek are separated. The snapshot after it drains the worker before the next seek.
+Nearest-rank p50/p95/p99 and the raw samples are reported separately from synchronous adapter-commit latency.
+The final cycle also compares a seek without cuts, immediately after 32 cuts, after a worker-slot drain and across adjacent segments of one source.
+Each comparison includes cumulative simple-player open/close, queue-wait, seek-dispatch and completed random-access read costs.
+Counter differences after the cut burst include work performed during the edits, not only work after the final seek request.
+Random-access read time includes engine synchronization and decoding; it is not isolated codec throughput.
+Short inputs whose adjacent targets overlap the mailbox matching tolerance report the segment comparison as skipped.
+Command samples separate model transaction, synchronous workspace publication and the playback adapter's workspace copy within publication.
+Publication includes direct signal subscribers and QML work. None of these measurements establishes physical display latency.
+`GetProcessMemoryInfo`, `GetProcessTimes` and `GetProcessHandleCount` provide process snapshots. Close samples follow a queued player-worker barrier that includes earlier work and decoder closure; they do not prove that every cache or GPU resource has been released. The report records that drain time separately. Missing measurements remain absent.
+The mode does not establish Qt texture handoff, physical presentation, A/V synchronization, audio underruns or GPU/VRAM utilization. Those entries are `SKIP`.
+Its report is separate from pointer-gesture tests and independently decoded export tests; success in one layer does not imply success in another.
+
 `cargo exo-dev screenshot` drives this harness. Without a subcommand it takes every named set in the appearance and accent of the developer's own ExoSnap settings. Only those two values are read from there, and every shot still runs in a throwaway configuration. `sweep --set <names>` takes named sets (`list` shows them) in both appearances, and `shot` takes one screenshot from options that mirror the flags and seeds above. All three multiply every shot by `--appearance`, `--accent`, `--size` and `--scale` when those are given. Record states and accents are checked against the product sources, because the app renders an unknown value as a plausible default and still exits 0.
 
 By default, output goes to the local screenshot directory reported by the command, in a `<commit date>_<short hash>` subdirectory, with `-dirty` for a tree with uncommitted changes and `_<label>` for `--label`, unless `--out-dir` is given. Each page has a subdirectory holding `<state>_<appearance>-<accent>_<size>.png` and that shot's overlay grabs. A later run into the same directory replaces the shots it retakes and keeps the others, and `manifest.json` (binary path, build time, SHA-256, HEAD, dirty flag, version, exact invocation per shot) and the `index.html` contact sheet always describe the whole directory. A shot whose log shows a harness option that found nothing to act on, or an unknown record or overlay state, is reported as `warn`, not `ok`.
@@ -97,6 +118,17 @@ Build the ASan preset described in [Build and test](build-and-test.md) for suspe
 Set `EXOSNAP_PERFORMANCE_TRACE=1` for aggregate decode readback, normalization, CPU conversion, GPU upload, shader compilation, resource creation, queue wait, decoder/presentation drops, mailbox replacement and audio polling counts. Durations measure host-side calls, including any blocking, rather than fenced GPU execution. GPU stage timings separately cover luminance, tone mapping, composition and conversion. Unmeasured stages remain unavailable.
 
 The `probe_edit_playback` target accepts `--decode-only` or `--decode-upload` after the media path and start timestamp arguments. The latter uses the real GPU frame converter without Qt presentation. `EXOSNAP_EDIT_SOFTWARE_DECODE=1` permits a software comparison. These runs measure callback throughput, not display cadence or seek-to-visible latency. Use representative codecs, resolutions and bit depths and retain the exact fixtures with the measurement.
+
+The opt-in `WaveformCacheService.RealSourceBoundedStreamingBenchmark` case runs the production waveform service against the file named by `EXOSNAP_WAVEFORM_BENCHMARK_FILE`. Use separate 30-minute, 2-hour and 8-hour sources and the existing Debug tree, with no competing builds. The case reports elapsed analysis time, decoded sample count, decode calls, actual seeks, decoded audio frames, owned analysis buffer bytes and persisted cache bytes. It checks eight service reopen cycles with zero decoder work and bounded block reads. Owned buffer bytes exclude codec internals and process overhead; record process peak working set and private bytes separately. These measurements do not establish visible timeline cadence, A/V synchronization or VRAM use.
+
+From the configured Qt/MSVC developer environment, build the existing `media_cache_service_tests` target and select only this case for a long run. Direct binary runs are diagnostics; the canonical `cargo exo-dev test` receipt still qualifies the complete selected test programs.
+
+```powershell
+cmake --build build/windows-x64-ninja-debug --target media_cache_service_tests --parallel 4
+$env:EXOSNAP_WAVEFORM_BENCHMARK_FILE = 'D:\recordings\long-source.mkv'
+.\build\windows-x64-ninja-debug\app\media_cache_service_tests.exe --gtest_filter=WaveformCacheService.RealSourceBoundedStreamingBenchmark
+Remove-Item Env:\EXOSNAP_WAVEFORM_BENCHMARK_FILE
+```
 
 `--preview-benchmark <report.json> --benchmark-seconds <seconds>` measures preview publication and consumption plus process CPU. Optional `EXOSNAP_PREVIEW_BENCHMARK_STATE=record|settings|minimized`, `EXOSNAP_PREVIEW_BENCHMARK_RATE=0|15|30|60|120` and `EXOSNAP_PREVIEW_BENCHMARK_ANIMATION=0|1` select the isolated measurement state. Reports include logical persistent surface bytes. Keep the source stimulus fixed and avoid competing builds during measurements.
 

@@ -8,15 +8,16 @@ FocusScope {
     required property EditPlayerAdapter player
     property EditTimelineAdapter thumbnails: null
     property real pixelsPerSecond: 40
-    property bool snapping: true
-    property var visibleClips: []
+    readonly property bool snapping: session.snapping
     property real hoveredGroup: 0
-    property real draggedGroup: 0
-    property real dragDeltaMs: 0
     property bool draggingCrossfade: false
+    property bool insertDrag: false
+    property var trackToDelete: ({id: 0, name: ""})
     readonly property real labelWidth: 50
     readonly property real rulerHeight: 32
     readonly property real rowHeight: 64
+    readonly property real minimumZoom: Math.max(1, scroll.width - labelWidth - 10) * 1000 / Math.max(1, session.durationMs)
+    readonly property real maximumZoom: 120000
     function timeAt(contentPosition: real): real {
         return Math.max(0, (contentPosition - root.labelWidth) / root.pixelsPerMs);
     }
@@ -24,17 +25,50 @@ FocusScope {
         return root.labelWidth + milliseconds * root.pixelsPerMs;
     }
     function zoomTo(value: real): void {
+        root.zoomAt(value, -1);
+    }
+    function zoomAt(value: real, pointerX: real): void {
         const playheadX = root.positionAt(root.session.positionMs) - scroll.contentX;
-        const anchorX = playheadX >= root.labelWidth && playheadX <= scroll.width ? playheadX : root.labelWidth;
+        const anchorX = pointerX >= root.labelWidth ? pointerX : playheadX >= root.labelWidth && playheadX <= scroll.width ? playheadX : root.labelWidth;
         const anchorTime = root.timeAt(scroll.contentX + anchorX);
-        root.pixelsPerSecond = Math.max(10, Math.min(250, value));
+        root.pixelsPerSecond = Math.max(root.minimumZoom, Math.min(root.maximumZoom, value));
         scroll.contentX = Math.max(0, Math.min(scroll.contentWidth - scroll.width, root.positionAt(anchorTime) - anchorX));
     }
-    function refreshClips(): void {
-        root.visibleClips = root.session.visibleClips(root.timeAt(scroll.contentX), root.timeAt(scroll.contentX + scroll.width));
+    function fitTimeline(): void {
+        root.pixelsPerSecond = root.minimumZoom;
+        scroll.contentX = 0;
     }
-    onPixelsPerSecondChanged: refreshClips()
+    function previewDrag(delta: real, contentY: real, modifiers: int): void {
+        root.insertDrag = (modifiers & Qt.ControlModifier) !== 0;
+        let track = 0;
+        let newTrack = -1;
+        const row = Math.floor((contentY - root.rulerHeight) / root.rowHeight);
+        const firstAudio = root.session.tracks.findIndex(value => !value.video);
+        if (contentY < root.rulerHeight)
+            newTrack = 0;
+        else if (row >= root.session.tracks.length)
+            newTrack = 2;
+        else if (firstAudio >= 0 && Math.abs(contentY - root.rulerHeight - firstAudio * root.rowHeight) <= 8)
+            newTrack = 1;
+        else if (row >= 0)
+            track = root.session.tracks[row].id;
+        root.session.updateClipDrag(delta, track, newTrack, root.insertDrag, 8 / root.pixelsPerMs);
+    }
+    function refreshClips(): void {
+        clipModel.sync(root.session, root.timeAt(scroll.contentX), root.timeAt(scroll.contentX + scroll.width));
+    }
+    function visibleCandidates(rows: var): var {
+        const from = root.timeAt(scroll.contentX + root.labelWidth);
+        const to = root.timeAt(scroll.contentX + scroll.width);
+        return rows.filter(value => value.startMs <= to && value.startMs + value.durationMs >= from);
+    }
+    // Not onPixelsPerSecondChanged: that handler can run before pixelsPerMs is re-evaluated, and
+    // the visible window would then be computed at the previous scale.
+    onPixelsPerMsChanged: refreshClips()
     Component.onCompleted: refreshClips()
+    EditTimelineClipModel {
+        id: clipModel
+    }
     readonly property real pixelsPerMs: pixelsPerSecond / 1000
     objectName: "editClipTimeline"
     activeFocusOnTab: true
@@ -45,6 +79,16 @@ FocusScope {
         const shift = (event.modifiers & Qt.ShiftModifier) !== 0;
         const alt = (event.modifiers & Qt.AltModifier) !== 0;
         const direction = event.key === Qt.Key_Left ? -1 : 1;
+        if (event.key === Qt.Key_Escape && root.session.dragActive) {
+            root.session.cancelClipDrag();
+            event.accepted = true;
+            return;
+        }
+        if ((event.key === Qt.Key_Return || event.key === Qt.Key_Enter) && root.session.dragActive) {
+            root.session.commitClipDrag();
+            event.accepted = true;
+            return;
+        }
         if (event.key === Qt.Key_Up || event.key === Qt.Key_Down) {
             root.session.selectAdjacentClip(event.key === Qt.Key_Up ? -1 : 1);
             event.accepted = true;
@@ -64,6 +108,12 @@ FocusScope {
             root.zoomTo(root.pixelsPerSecond / 1.25);
         else if (control && event.key === Qt.Key_B)
             root.session.splitSelected();
+        else if (control && event.key === Qt.Key_C)
+            root.session.copyBlankDuration();
+        else if (control && event.key === Qt.Key_V)
+            root.session.pasteSpacer();
+        else if (!control && !alt && (event.key === Qt.Key_I || event.key === Qt.Key_O))
+            root.session.setSelectionBoundary(event.key === Qt.Key_O);
         else if (control && event.key === Qt.Key_Z) {
             if (shift)
                 root.session.redo();
@@ -82,11 +132,32 @@ FocusScope {
                 root.session.deleteSelected(shift);
         } else if (event.key === Qt.Key_Space)
             root.player.togglePlay();
-        else if (event.key === Qt.Key_Left || event.key === Qt.Key_Right)
-            root.session.requestSeek(root.session.positionMs + (event.key === Qt.Key_Left ? -1 : 1) * (shift ? 1000 : 33));
+        else if (event.key === Qt.Key_Left || event.key === Qt.Key_Right) {
+            if (shift)
+                root.session.requestSeek(root.session.positionMs + direction * 1000);
+            else
+                root.session.requestFrameStep(direction);
+        }
         else
             return;
         event.accepted = true;
+    }
+    Menu {
+        id: gapMenu
+        objectName: "editGapMenu"
+        MenuItem { text: qsTr("Copy blank duration"); onTriggered: root.session.copyBlankDuration() }
+        MenuItem { text: qsTr("Paste Spacer"); onTriggered: root.session.pasteSpacer() }
+        MenuItem { text: qsTr("Close Gap (preview)"); onTriggered: root.session.previewCloseGap() }
+    }
+    Dialog {
+        id: trackDeleteConfirmation
+        objectName: "editTrackDeleteConfirmation"
+        anchors.centerIn: parent
+        title: qsTr("Delete track %1?").arg(root.trackToDelete.name)
+        modal: true
+        standardButtons: Dialog.Ok | Dialog.Cancel
+        Label { text: qsTr("Remove this track and all of its timeline content? Source files are kept."); wrapMode: Text.Wrap; width: 280 }
+        onAccepted: root.session.deleteTrack(root.trackToDelete.id, true)
     }
     Menu {
         id: clipMenu
@@ -113,7 +184,7 @@ FocusScope {
         Column {
             spacing: 8
             Label {
-                text: qsTr("Crossfade duration (ms)")
+                text: qsTr("Junction window (ms)")
                 color: ExoTheme.text
             }
             SpinBox {
@@ -123,8 +194,13 @@ FocusScope {
                 to: 600000
                 editable: true
                 Accessible.name: qsTr("Crossfade duration in milliseconds")
-                onValueModified: root.session.applyCrossfade(root.session.selectedTransition, value)
+                onValueModified: root.session.setJunctionWindow(windowStart.value, windowStart.value + value)
             }
+            SpinBox { id: windowStart; objectName: "editJunctionStart"; from: 0; to: 2147483647; editable: true; Accessible.name: qsTr("Junction start in milliseconds"); onValueModified: root.session.setJunctionWindow(value, value + durationInput.value) }
+            ComboBox { id: curveInput; objectName: "editJunctionCurve"; model: [qsTr("Linear"), qsTr("Smooth"), qsTr("Bias")]; Accessible.name: qsTr("Junction curve"); onActivated: root.session.setJunctionCurve(currentIndex, biasInput.value / 100) }
+            SpinBox { id: biasInput; objectName: "editJunctionBias"; from: -100; to: 100; editable: true; Accessible.name: qsTr("Curve bias"); onValueModified: root.session.setJunctionCurve(curveInput.currentIndex, value / 100) }
+            ComboBox { id: lawInput; objectName: "editJunctionAudioLaw"; model: [qsTr("Equal Gain"), qsTr("Equal Power")]; Accessible.name: qsTr("Audio gain law"); onActivated: root.session.setJunctionAudioLaw(currentIndex) }
+            SpinBox { id: cutInput; objectName: "editJunctionCut"; from: 0; to: 2147483647; editable: true; Accessible.name: qsTr("Cut position in milliseconds"); onValueModified: root.session.setJunctionCut(value) }
             Button {
                 text: qsTr("Remove Crossfade")
                 onClicked: {
@@ -136,7 +212,7 @@ FocusScope {
         onOpened: durationInput.forceActiveFocus(Qt.PopupFocusReason)
     }
     ToolTip.visible: activeFocus
-    ToolTip.text: qsTr("Ctrl+wheel to zoom. Menu or Shift+F10 for clip actions.")
+    ToolTip.text: qsTr("Ctrl+wheel to zoom. Ctrl+drag previews insertion. I/O marks a time range. Menu or Shift+F10 opens clip actions.")
     ToolTip.delay: 1000
     ToolTip.timeout: 4000
     Connections {
@@ -144,6 +220,19 @@ FocusScope {
         function onWorkspaceChanged(): void {
             root.refreshClips();
         }
+        function onInteractionSettingsChanged(): void { root.refreshClips(); }
+    }
+    Button {
+        objectName: "editApplyGapPreview"
+        anchors.right: parent.right
+        anchors.top: parent.top
+        z: 20
+        visible: root.session.dragActive && root.session.selectedGap.endMs !== undefined
+        enabled: root.session.dragValid
+        text: root.session.dragValid ? qsTr("Apply gap closure (Enter)") : qsTr("Gap closure unavailable")
+        onClicked: root.session.commitClipDrag()
+        ToolTip.text: qsTr("Review all outlined clips. Enter applies; Escape cancels.")
+        ToolTip.visible: hovered
     }
     Rectangle {
         anchors.fill: parent
@@ -158,7 +247,7 @@ FocusScope {
         onContentXChanged: root.refreshClips()
         onWidthChanged: root.refreshClips()
         contentWidth: Math.max(width, root.positionAt(root.session.durationMs + 10000) + 10)
-        contentHeight: Math.max(height, root.rulerHeight + root.session.tracks.length * root.rowHeight)
+        contentHeight: Math.max(height, root.rulerHeight + Math.max(root.session.tracks.length, root.session.dragTracks.length) * root.rowHeight + (root.session.dragActive ? 16 : 0))
         clip: true
         boundsBehavior: Flickable.StopAtBounds
         ScrollBar.horizontal: ScrollBar {
@@ -172,7 +261,8 @@ FocusScope {
         WheelHandler {
             acceptedModifiers: Qt.ControlModifier
             onWheel: event => {
-                root.zoomTo(root.pixelsPerSecond * Math.pow(1.25, event.angleDelta.y / 120));
+                const viewportPoint = scroll.contentItem.mapToItem(scroll, event.x, event.y);
+                root.zoomAt(root.pixelsPerSecond * Math.pow(1.25, event.angleDelta.y / 120), viewportPoint.x);
                 event.accepted = true;
             }
         }
@@ -180,13 +270,22 @@ FocusScope {
             preventStealing: true
             width: scroll.contentWidth
             height: scroll.contentHeight
+            acceptedButtons: Qt.LeftButton | Qt.RightButton
             onPressed: mouse => {
                 root.forceActiveFocus();
+                const row = Math.floor((mouse.y - root.rulerHeight) / root.rowHeight);
+                if (row >= 0 && row < root.session.tracks.length)
+                    root.session.selectGap(root.session.tracks[row].id, root.timeAt(mouse.x));
+                if (mouse.button === Qt.RightButton) {
+                    if (root.session.selectedGap.endMs !== undefined)
+                        gapMenu.popup();
+                    return;
+                }
                 root.player.beginScrub();
                 root.session.requestSeek(root.timeAt(mouse.x));
             }
             onPositionChanged: mouse => {
-                if (pressed)
+                if (pressed && (pressedButtons & Qt.LeftButton))
                     root.session.requestSeek(root.timeAt(mouse.x));
             }
             onReleased: root.player.endScrub()
@@ -210,23 +309,136 @@ FocusScope {
                     color: ExoTheme.textSecondary
                     font.pixelSize: ExoTheme.fontCaption
                 }
+                MouseArea {
+                    anchors.fill: parent
+                    acceptedButtons: Qt.RightButton
+                    onClicked: {
+                        root.trackToDelete = {id: parent.modelData.id, name: parent.modelData.name};
+                        trackMenu.popup();
+                    }
+                    Menu {
+                        id: trackMenu
+                        MenuItem {
+                            text: qsTr("Delete track")
+                            onTriggered: if (!root.session.deleteTrack(root.trackToDelete.id)) trackDeleteConfirmation.open()
+                        }
+                    }
+                }
+            }
+        }
+        Rectangle {
+            visible: root.session.selectedGap.endMs !== undefined
+            x: root.positionAt(root.session.selectedGap.startMs ?? 0)
+            y: root.rulerHeight + (root.session.selectedGap.trackIndex ?? 0) * root.rowHeight + 3
+            width: Math.max(0, ((root.session.selectedGap.endMs ?? 0) - (root.session.selectedGap.startMs ?? 0)) * root.pixelsPerMs)
+            height: 56
+            color: "transparent"
+            border.color: ExoTheme.accent
+            Accessible.ignored: true
+        }
+        Repeater {
+            model: root.session.spacers
+            delegate: Rectangle {
+                id: spacerItem
+                required property var modelData
+                objectName: "editSpacer" + modelData.id
+                x: root.positionAt(modelData.startMs)
+                y: root.rulerHeight + modelData.trackIndex * root.rowHeight + 3
+                width: Math.max(4, modelData.durationMs * root.pixelsPerMs)
+                height: 56
+                color: ExoTheme.surface
+                border.color: root.session.selectedSpacer === modelData.id ? ExoTheme.accent : ExoTheme.line
+                Label { anchors.centerIn: parent; text: qsTr("Spacer"); color: ExoTheme.textMuted }
+                Accessible.role: Accessible.Button
+                Accessible.name: qsTr("Spacer, %1 ms").arg(modelData.durationMs)
+                Accessible.onPressAction: root.session.selectSpacer(modelData.id)
+                MouseArea {
+                    anchors.fill: parent
+                    preventStealing: true
+                    property real startX: 0
+                    property bool started: false
+                    onPressed: mouse => { startX = mapToItem(scroll.contentItem, mouse.x, 0).x; started = false; root.forceActiveFocus(); }
+                    onPositionChanged: mouse => {
+                        if (!pressed) return;
+                        const delta = mapToItem(scroll.contentItem, mouse.x, 0).x - startX;
+                        if (!started && Math.abs(delta) >= Qt.styleHints.startDragDistance) { started = true; root.session.beginSpacerDrag(spacerItem.modelData.id); }
+                        if (started && root.session.dragActive) root.session.updateClipDrag(delta / root.pixelsPerMs);
+                    }
+                    onReleased: {
+                        if (started) { if (root.session.dragActive) root.session.commitClipDrag(); }
+                        else root.session.selectSpacer(spacerItem.modelData.id);
+                    }
+                    onCanceled: root.session.cancelClipDrag()
+                }
+                Repeater {
+                    model: 2
+                    delegate: MouseArea {
+                        required property int index
+                        property real startX: 0
+                        property bool started: false
+                        x: index === 0 ? 0 : spacerItem.width - width
+                        width: 8; height: spacerItem.height
+                        preventStealing: true
+                        cursorShape: Qt.SizeHorCursor
+                        onPressed: mouse => { startX = mapToItem(scroll.contentItem, mouse.x, 0).x; started = false; root.forceActiveFocus(); }
+                        onPositionChanged: mouse => {
+                            if (!pressed) return;
+                            const delta = mapToItem(scroll.contentItem, mouse.x, 0).x - startX;
+                            if (!started && Math.abs(delta) >= Qt.styleHints.startDragDistance) { started = true; root.session.beginSpacerDrag(spacerItem.modelData.id, index); }
+                            if (started && root.session.dragActive) root.session.updateClipDrag(delta / root.pixelsPerMs);
+                        }
+                        onReleased: if (started && root.session.dragActive) root.session.commitClipDrag()
+                        onCanceled: root.session.cancelClipDrag()
+                    }
+                }
             }
         }
         Repeater {
-            model: root.visibleClips
+            model: clipModel
             delegate: Rectangle {
                 id: clipItem
                 required property var modelData
                 objectName: "editClip" + modelData.id
                 readonly property real visibleLeft: Math.max(10, scroll.contentX + root.labelWidth - x + 6)
-                x: root.positionAt(modelData.startMs + (root.draggedGroup === modelData.group ? root.dragDeltaMs : 0))
+                readonly property real visibleWidth: Math.max(0, Math.min(width - visibleLeft, scroll.width - root.labelWidth))
+                readonly property real visibleSourceIn: Math.min(modelData.sourceOutUs, modelData.sourceInUs + visibleLeft / root.pixelsPerMs * 1000)
+                readonly property real visibleSourceOut: Math.min(modelData.sourceOutUs, visibleSourceIn + visibleWidth / root.pixelsPerMs * 1000)
+                readonly property bool cachedVisual: modelData.available && modelData.sourceIdentity.length > 0 && root.thumbnails !== null
+                property string waveformKey: ""
+                property string mediaRequest: ""
+                // A delegate outlives most publications, and modelData also changes for selection and
+                // timeline position. Only a changed source or visible source window may replace the
+                // tile and waveform requests. Tiles are keyed by source time, so a window that shrinks
+                // or grows keeps the tile images it still shows instead of reloading every one.
+                EditTimelineClipModel { id: tileModel }
+                function refreshMedia(): void {
+                    const shown = cachedVisual && visibleSourceOut > visibleSourceIn;
+                    const video = shown && modelData.video;
+                    const audio = shown && !modelData.video && modelData.streamIdentity.length > 0;
+                    const request = video ? ["video", modelData.sourceIdentity, modelData.path, modelData.width, modelData.height, modelData.fpsNum, modelData.fpsDen, visibleSourceIn, visibleSourceOut, visibleWidth].join("|")
+                                          : audio ? ["audio", modelData.sourceIdentity, modelData.path, modelData.containerIndex, modelData.streamIdentity, modelData.sourceEndUs].join("|") : "";
+                    if (request === mediaRequest)
+                        return;
+                    mediaRequest = request;
+                    if (video) {
+                        root.thumbnails.registerThumbnailSource(modelData.sourceIdentity, modelData.path, modelData.width, modelData.height, modelData.fpsNum, modelData.fpsDen);
+                        tileModel.setRows(root.thumbnails.thumbnailTiles(modelData.sourceIdentity, visibleSourceIn, visibleSourceOut, visibleWidth, 44));
+                    } else {
+                        tileModel.setRows([]);
+                    }
+                    waveformKey = audio ? root.thumbnails.waveformSource(modelData.sourceIdentity, modelData.path, modelData.containerIndex, modelData.streamIdentity, modelData.sourceEndUs) : "";
+                }
+                onModelDataChanged: refreshMedia()
+                onVisibleSourceInChanged: refreshMedia()
+                onVisibleSourceOutChanged: refreshMedia()
+                Component.onCompleted: refreshMedia()
+                x: root.positionAt(modelData.startMs)
                 y: root.rulerHeight + modelData.trackIndex * root.rowHeight + 3
                 width: Math.max(4, modelData.durationMs * root.pixelsPerMs)
                 height: 56
-                radius: ExoTheme.radiusSm
-                color: modelData.selected || root.hoveredGroup === modelData.group ? ExoTheme.surfaceHover : ExoTheme.surfaceRaised
+                color: modelData.selected || (root.session.linkedSelection && root.hoveredGroup === modelData.group) ? ExoTheme.surfaceHover : ExoTheme.surfaceRaised
                 border.color: modelData.selected ? ExoTheme.accent : ExoTheme.line
-                border.width: modelData.selected ? 2 : 1
+                border.width: 1
                 clip: true
                 Rectangle {
                     anchors.right: parent.right
@@ -246,9 +458,41 @@ FocusScope {
                     y: 6
                     width: 64
                     height: 44
-                    source: clipItem.modelData.video && root.thumbnails && clipItem.modelData.path === root.thumbnails.sourcePath ? root.thumbnails.posterSource : ""
+                    source: !clipItem.cachedVisual && clipItem.modelData.video && root.thumbnails && clipItem.modelData.path === root.thumbnails.sourcePath ? root.thumbnails.posterSource : ""
+                    sourceSize: Qt.size(64, 44)
                     visible: status === Image.Ready && clipItem.modelData.available
                     fillMode: Image.PreserveAspectFit
+                    Accessible.ignored: true
+                }
+                Repeater {
+                    model: tileModel
+                    delegate: Image {
+                        required property var modelData
+                        x: clipItem.visibleLeft + modelData.x
+                        y: 6
+                        width: modelData.width
+                        height: 44
+                        source: modelData.source
+                        sourceSize: Qt.size(width, height)
+                        asynchronous: true
+                        cache: false
+                        visible: status === Image.Ready
+                        fillMode: Image.PreserveAspectCrop
+                        Accessible.ignored: true
+                    }
+                }
+                ExoWaveformItem {
+                    x: clipItem.visibleLeft
+                    y: 6
+                    width: clipItem.visibleWidth
+                    height: 44
+                    visible: clipItem.waveformKey.length > 0
+                    service: root.thumbnails ? root.thumbnails.waveformService : null
+                    cacheKey: clipItem.waveformKey
+                    sourceInUs: clipItem.visibleSourceIn
+                    sourceOutUs: clipItem.visibleSourceOut
+                    channelCount: 2
+                    color: ExoTheme.textMuted
                     Accessible.ignored: true
                 }
                 ExoGlyph {
@@ -284,6 +528,8 @@ FocusScope {
                     }
                     acceptedButtons: Qt.LeftButton | Qt.RightButton
                     property real startX: 0
+                    property real startY: 0
+                    property bool started: false
                     onPressed: mouse => {
                         if (mouse.button === Qt.RightButton) {
                             root.session.selectClip(clipItem.modelData.id);
@@ -292,26 +538,31 @@ FocusScope {
                             return;
                         }
                         startX = mapToItem(scroll.contentItem, mouse.x, 0).x;
-                        root.draggedGroup = clipItem.modelData.group;
+                        startY = mapToItem(scroll.contentItem, 0, mouse.y).y;
+                        started = false;
                         root.forceActiveFocus();
                     }
                     onPositionChanged: mouse => {
-                        if (pressed && (pressedButtons & Qt.LeftButton))
-                            root.dragDeltaMs = (mapToItem(scroll.contentItem, mouse.x, 0).x - startX) / root.pixelsPerMs;
+                        if (pressed && (pressedButtons & Qt.LeftButton)) {
+                            const point = mapToItem(scroll.contentItem, mouse.x, mouse.y);
+                            if (!started && Math.hypot(point.x - startX, point.y - startY) >= Qt.styleHints.startDragDistance) {
+                                started = true;
+                                root.session.beginClipDrag(clipItem.modelData.id);
+                            }
+                            if (started && root.session.dragActive)
+                                root.previewDrag((point.x - startX) / root.pixelsPerMs, point.y, mouse.modifiers);
+                        }
                     }
                     onCanceled: {
-                        root.dragDeltaMs = 0;
-                        root.draggedGroup = 0;
+                        root.session.cancelClipDrag();
                     }
                     onReleased: mouse => {
                         if (mouse.button === Qt.RightButton)
                             return;
-                        const delta = root.dragDeltaMs;
-                        root.dragDeltaMs = 0;
-                        root.draggedGroup = 0;
-                        if (Math.abs(delta) > 20)
-                            root.session.moveClip(clipItem.modelData.id, clipItem.modelData.startMs + delta, root.snapping);
-                        else
+                        if (started) {
+                            if (root.session.dragActive)
+                                root.session.commitClipDrag();
+                        } else
                             root.session.selectClip(clipItem.modelData.id);
                     }
                 }
@@ -323,28 +574,143 @@ FocusScope {
                         preventStealing: true
                         required property int index
                         property real startX: 0
+                        property bool started: false
                         x: index === 0 ? 0 : clipItem.width - width
                         width: 8
                         height: clipItem.height
                         cursorShape: Qt.SizeHorCursor
-                        Rectangle {
-                            anchors.centerIn: parent
-                            width: 2
-                            height: 20
-                            radius: 1
-                            color: clipItem.modelData.selected ? ExoTheme.accent : ExoTheme.textMuted
-                            visible: clipItem.modelData.selected || clipMouse.containsMouse
-                        }
+
                         onPressed: mouse => {
                             startX = mapToItem(scroll.contentItem, mouse.x, 0).x;
+                            started = false;
+                            root.forceActiveFocus();
                         }
-                        onReleased: mouse => {
-                            const delta = (mapToItem(scroll.contentItem, mouse.x, 0).x - startX) / root.pixelsPerMs;
-                            root.session.trimClip(clipItem.modelData.id, clipItem.modelData.inMs + (index === 0 ? delta : 0), clipItem.modelData.outMs + (index === 1 ? delta : 0));
+                        onPositionChanged: mouse => {
+                            if (!pressed)
+                                return;
+                            const delta = mapToItem(scroll.contentItem, mouse.x, 0).x - startX;
+                            if (!started && Math.abs(delta) >= Qt.styleHints.startDragDistance) {
+                                started = true;
+                                root.session.beginClipDrag(clipItem.modelData.id, index);
+                            }
+                            if (started && root.session.dragActive)
+                                root.session.updateClipDrag(delta / root.pixelsPerMs, 0, -1, false, 8 / root.pixelsPerMs);
                         }
+                        onReleased: if (started && root.session.dragActive) root.session.commitClipDrag()
+                        onCanceled: root.session.cancelClipDrag()
+                    }
+                }
+                Repeater {
+                    model: clipItem.modelData.selected ? 2 : 0
+                    delegate: MouseArea {
+                        id: fadeHandle
+                        required property int index
+                        objectName: "editFadeHandle" + clipItem.modelData.id + "_" + index
+                        readonly property real fadeMs: index === 0 ? clipItem.modelData.fadeInMs : clipItem.modelData.fadeOutMs
+                        property real startX: 0
+                        property bool started: false
+                        x: index === 0 ? Math.max(8, fadeMs * root.pixelsPerMs) : clipItem.width - Math.max(16, fadeMs * root.pixelsPerMs + 8)
+                        y: 0
+                        width: 8
+                        height: 12
+                        cursorShape: Qt.SizeHorCursor
+                        Rectangle { anchors.fill: parent; color: ExoTheme.accent; radius: 2; Accessible.ignored: true }
+                        onPressed: mouse => { startX = mapToItem(scroll.contentItem, mouse.x, 0).x; started = false; root.forceActiveFocus(); }
+                        onPositionChanged: mouse => {
+                            if (!pressed) return;
+                            const delta = mapToItem(scroll.contentItem, mouse.x, 0).x - startX;
+                            if (!started && Math.abs(delta) >= Qt.styleHints.startDragDistance) { started = true; root.session.beginClipDrag(clipItem.modelData.id, index + 2); }
+                            if (started && root.session.dragActive) root.session.updateClipDrag(delta / root.pixelsPerMs);
+                        }
+                        onReleased: if (started && root.session.dragActive) root.session.commitClipDrag()
+                        onCanceled: root.session.cancelClipDrag()
+                        Accessible.role: Accessible.Slider
+                        Accessible.name: index === 0 ? qsTr("Fade in") : qsTr("Fade out")
+                        activeFocusOnTab: true
                     }
                 }
             }
+        }
+        Repeater {
+            model: root.session.dragActive ? root.visibleCandidates(root.session.dragClips) : []
+            delegate: Rectangle {
+                id: clipGhost
+                required property var modelData
+                objectName: "editDragGhost" + modelData.id
+                x: Math.max(scroll.contentX + root.labelWidth, root.positionAt(modelData.startMs))
+                y: root.rulerHeight + modelData.trackIndex * root.rowHeight + 3
+                width: Math.max(0, Math.min(scroll.contentX + scroll.width, root.positionAt(modelData.startMs + modelData.durationMs)) - x)
+                height: 56
+                z: 7
+                color: "transparent"
+                border.width: 2
+                border.color: root.session.dragValid ? ExoTheme.accent : ExoTheme.warning
+                Accessible.ignored: true
+                Label {
+                    anchors.centerIn: parent
+                    text: root.session.dragValid ? root.session.formatTimestamp(parent.modelData.startMs) : qsTr("Unavailable")
+                    color: root.session.dragValid ? ExoTheme.accent : ExoTheme.warning
+                }
+                Rectangle { x: root.positionAt(clipGhost.modelData.startMs + clipGhost.modelData.fadeInMs) - clipGhost.x; visible: x >= 0 && x <= clipGhost.width - width; y: 0; width: 2; height: 12; color: ExoTheme.accent; Accessible.ignored: true }
+                Rectangle { x: root.positionAt(clipGhost.modelData.startMs + clipGhost.modelData.durationMs - clipGhost.modelData.fadeOutMs) - clipGhost.x - 2; visible: x >= 0 && x <= clipGhost.width - width; y: 0; width: 2; height: 12; color: ExoTheme.accent; Accessible.ignored: true }
+            }
+        }
+        Repeater {
+            model: root.session.dragActive ? root.visibleCandidates(root.session.dragSpacers) : []
+            delegate: Rectangle {
+                required property var modelData
+                objectName: "editSpacerGhost" + modelData.id
+                x: Math.max(scroll.contentX + root.labelWidth, root.positionAt(modelData.startMs))
+                y: root.rulerHeight + modelData.trackIndex * root.rowHeight + 3
+                width: Math.max(0, Math.min(scroll.contentX + scroll.width, root.positionAt(modelData.startMs + modelData.durationMs)) - x)
+                height: 56
+                z: 7
+                color: "transparent"
+                border.width: 2
+                border.color: root.session.dragValid ? ExoTheme.accent : ExoTheme.warning
+                Accessible.ignored: true
+            }
+        }
+        Repeater {
+            model: root.session.dragActive ? root.visibleCandidates(root.session.dragTransitions) : []
+            delegate: Rectangle {
+                required property var modelData
+                objectName: "editDragJunctionGhost"
+                x: Math.max(scroll.contentX + root.labelWidth, root.positionAt(modelData.startMs))
+                y: root.rulerHeight + modelData.trackIndex * root.rowHeight + 20
+                width: Math.max(0, Math.min(scroll.contentX + scroll.width, root.positionAt(modelData.startMs + modelData.durationMs)) - x)
+                height: 24
+                z: 8
+                color: "transparent"
+                border.color: root.session.dragValid ? ExoTheme.accent : ExoTheme.warning
+                Accessible.ignored: true
+            }
+        }
+        Repeater {
+            model: root.session.dragActive ? [0, 1, 2] : []
+            delegate: Rectangle {
+                required property int modelData
+                readonly property int audioIndex: root.session.tracks.findIndex(value => !value.video)
+                objectName: "editNewTrackDrop" + modelData
+                x: scroll.contentX + root.labelWidth
+                y: modelData === 0 ? root.rulerHeight - 8 : modelData === 1 ? root.rulerHeight + (audioIndex < 0 ? root.session.tracks.length : audioIndex) * root.rowHeight - 4 : root.rulerHeight + root.session.tracks.length * root.rowHeight
+                width: scroll.width - root.labelWidth
+                height: 8
+                z: 8
+                color: ExoTheme.accent
+                Accessible.ignored: true
+                Label { anchors.left: parent.left; anchors.bottom: parent.top; text: parent.modelData === 0 ? qsTr("New front video layer") : parent.modelData === 1 ? qsTr("New rear video layer") : qsTr("New audio lane"); color: ExoTheme.accent; Accessible.ignored: true }
+            }
+        }
+        Rectangle {
+            visible: root.session.dragActive && root.insertDrag && root.session.dragClips.length > 0
+            x: root.positionAt(root.session.dragClips[0]?.startMs ?? 0)
+            y: root.rulerHeight
+            width: 2
+            height: scroll.contentHeight - root.rulerHeight
+            z: 8
+            color: root.session.dragValid ? ExoTheme.accent : ExoTheme.warning
+            Accessible.ignored: true
         }
         Repeater {
             model: root.session.transitions
@@ -353,7 +719,7 @@ FocusScope {
                 required property var modelData
                 objectName: "editCrossfadeOverlay"
                 x: root.positionAt(modelData.startMs)
-                y: root.rulerHeight + 20
+                y: root.rulerHeight + modelData.trackIndex * root.rowHeight + 20
                 width: Math.max(14, modelData.durationMs * root.pixelsPerMs)
                 height: 24
                 z: 3
@@ -366,6 +732,12 @@ FocusScope {
                 function adjust(): void {
                     root.session.selectTransition(modelData.outgoing);
                     durationInput.value = modelData.durationMs;
+                    windowStart.value = modelData.startMs;
+                    curveInput.currentIndex = modelData.curve;
+                    biasInput.value = modelData.bias * 100;
+                    lawInput.currentIndex = modelData.audioLaw;
+                    lawInput.visible = !modelData.video;
+                    cutInput.value = modelData.cutMs;
                     transitionDuration.open();
                 }
                 Keys.onReturnPressed: adjust()
@@ -388,6 +760,33 @@ FocusScope {
                         transitionOverlay.forceActiveFocus();
                     }
                     onDoubleClicked: transitionOverlay.adjust()
+                }
+                Repeater {
+                    model: 2
+                    delegate: MouseArea {
+                        required property int index
+                        property real startX: 0
+                        property bool started: false
+                        objectName: "editJunctionHandle" + transitionOverlay.modelData.id + "_" + index
+                        x: index === 0 ? 0 : transitionOverlay.width - width
+                        width: 6
+                        height: transitionOverlay.height
+                        cursorShape: Qt.SizeHorCursor
+                        onPressed: mouse => { startX = mapToItem(scroll.contentItem, mouse.x, 0).x; started = false; root.forceActiveFocus(); }
+                        onPositionChanged: mouse => {
+                            if (!pressed)
+                                return;
+                            const delta = mapToItem(scroll.contentItem, mouse.x, 0).x - startX;
+                            if (!started && Math.abs(delta) >= Qt.styleHints.startDragDistance) {
+                                started = true;
+                                root.session.beginJunctionDrag(transitionOverlay.modelData.outgoing, index);
+                            }
+                            if (started && root.session.dragActive)
+                                root.session.updateClipDrag(delta / root.pixelsPerMs);
+                        }
+                        onReleased: if (started && root.session.dragActive) root.session.commitClipDrag()
+                        onCanceled: root.session.cancelClipDrag()
+                    }
                 }
             }
         }

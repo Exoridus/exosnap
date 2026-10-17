@@ -9,11 +9,14 @@
 #include <QThreadPool>
 #include <QUrl>
 #include <QVariantList>
+#include <QVariantMap>
 #include <QtQmlIntegration/qqmlintegration.h>
 
 #include <exosnap/engine/mp4_remuxer.h>
 
 #include <cstdint>
+#include <memory>
+#include <optional>
 #include <vector>
 
 namespace exosnap::quick {
@@ -37,6 +40,7 @@ class EditSessionAdapter : public QObject {
     QML_UNCREATABLE("EditSessionAdapter is provided by the application")
 
     Q_PROPERTY(bool open READ open NOTIFY openChanged FINAL)
+    Q_PROPERTY(QUrl layoutSettingsLocation READ layoutSettingsLocation CONSTANT FINAL)
     Q_PROPERTY(bool deliveryPending READ deliveryPending NOTIFY clipChanged FINAL)
     Q_PROPERTY(QString clipTitle READ clipTitle NOTIFY clipChanged FINAL)
     Q_PROPERTY(QString clipPath READ clipPath NOTIFY clipChanged FINAL)
@@ -65,8 +69,85 @@ class EditSessionAdapter : public QObject {
     Q_PROPERTY(QString workspaceError READ workspaceError NOTIFY workspaceChanged FINAL)
     Q_PROPERTY(QVariantList transitions READ transitions NOTIFY workspaceChanged FINAL)
     Q_PROPERTY(qulonglong selectedTransition READ selectedTransition NOTIFY workspaceChanged FINAL)
+    Q_PROPERTY(bool snapping MEMBER snapping NOTIFY interactionSettingsChanged FINAL)
+    Q_PROPERTY(bool ripple MEMBER ripple NOTIFY interactionSettingsChanged FINAL)
+    Q_PROPERTY(bool autoCrossfade MEMBER autoCrossfade NOTIFY interactionSettingsChanged FINAL)
+    Q_PROPERTY(bool linkedSelection MEMBER linkedSelection NOTIFY interactionSettingsChanged FINAL)
+    Q_PROPERTY(bool dragActive READ dragActive NOTIFY dragChanged FINAL)
+    Q_PROPERTY(bool dragValid READ dragValid NOTIFY dragChanged FINAL)
+    Q_PROPERTY(QVariantList dragClips READ dragClips NOTIFY dragChanged FINAL)
+    Q_PROPERTY(QVariantList dragTracks READ dragTracks NOTIFY dragChanged FINAL)
+    Q_PROPERTY(QVariantList dragTransitions READ dragTransitions NOTIFY dragChanged FINAL)
+    Q_PROPERTY(QVariantMap selectedClipDetails READ selectedClipDetails NOTIFY workspaceChanged FINAL)
+    Q_PROPERTY(QVariantMap selectedJunctionDetails READ selectedJunctionDetails NOTIFY workspaceChanged FINAL)
+    Q_PROPERTY(qint64 timeSelectionInMs READ timeSelectionInMs NOTIFY timeSelectionChanged FINAL)
+    Q_PROPERTY(qint64 timeSelectionOutMs READ timeSelectionOutMs NOTIFY timeSelectionChanged FINAL)
+    Q_PROPERTY(qint64 timeSelectionInUs READ timeSelectionInUs NOTIFY timeSelectionChanged FINAL)
+    Q_PROPERTY(qint64 timeSelectionOutUs READ timeSelectionOutUs NOTIFY timeSelectionChanged FINAL)
+    Q_PROPERTY(QVariantList spacers READ spacers NOTIFY workspaceChanged FINAL)
+    Q_PROPERTY(QVariantList dragSpacers READ dragSpacers NOTIFY dragChanged FINAL)
+    Q_PROPERTY(qulonglong selectedSpacer READ selectedSpacer NOTIFY workspaceChanged FINAL)
+    Q_PROPERTY(QVariantMap selectedGap READ selectedGap NOTIFY workspaceChanged FINAL)
+    Q_PROPERTY(bool fixedTimelineEnd READ fixedTimelineEnd NOTIFY workspaceChanged FINAL)
 
   public:
+    bool snapping = true;
+    bool ripple = false;
+    bool autoCrossfade = true;
+    bool linkedSelection = true;
+    bool dragActive() const {
+        return bool(drag_snapshot_);
+    }
+    bool dragValid() const {
+        return drag_preview_.valid && drag_snapshot_ && workspace_.revision() == drag_snapshot_->revision;
+    }
+    QVariantList dragClips() const;
+    QVariantList dragTracks() const;
+    QVariantList dragTransitions() const;
+    QVariantMap selectedClipDetails() const;
+    QVariantMap selectedJunctionDetails() const;
+    qint64 timeSelectionInUs() const {
+        return time_selection_in_us_;
+    }
+    qint64 timeSelectionOutUs() const {
+        return time_selection_out_us_;
+    }
+    qint64 timeSelectionInMs() const {
+        return time_selection_in_us_ < 0 ? -1 : time_selection_in_us_ / 1000;
+    }
+    qint64 timeSelectionOutMs() const {
+        return time_selection_out_us_ < 0 ? -1 : time_selection_out_us_ / 1000;
+    }
+    QVariantList spacers() const;
+    QVariantList dragSpacers() const;
+    qulonglong selectedSpacer() const {
+        return selected_spacer_;
+    }
+    QVariantMap selectedGap() const;
+    bool fixedTimelineEnd() const {
+        return workspace_.snapshot()->timeline_end.mode == edit::TimelineEndMode::FixedEnd;
+    }
+    Q_INVOKABLE void selectSpacer(qulonglong id);
+    Q_INVOKABLE void beginSpacerDrag(qulonglong id, int edge = -1);
+    Q_INVOKABLE void selectGap(qulonglong track, qint64 at_ms);
+    Q_INVOKABLE void copyBlankDuration();
+    Q_INVOKABLE void pasteSpacer();
+    Q_INVOKABLE void previewCloseGap();
+    Q_INVOKABLE void setFixedTimelineEnd(bool fixed, qint64 time_ms);
+    Q_INVOKABLE void beginClipDrag(qulonglong id, int edge = -1);
+    Q_INVOKABLE void beginJunctionDrag(qulonglong outgoing, int edge);
+    Q_INVOKABLE void updateClipDrag(qint64 delta_ms, qulonglong track = 0, int new_track = -1, bool insert = false,
+                                    qint64 tolerance_ms = 100);
+    Q_INVOKABLE bool commitClipDrag();
+    Q_INVOKABLE void cancelClipDrag();
+    Q_INVOKABLE void requestFrameStep(int direction);
+    Q_INVOKABLE void setSelectionBoundary(bool out);
+    Q_INVOKABLE void setJunctionWindow(qint64 start_ms, qint64 end_ms);
+    Q_INVOKABLE void setJunctionCurve(int kind, double bias = 0);
+    Q_INVOKABLE void setJunctionAudioLaw(int law);
+    Q_INVOKABLE void setJunctionCut(qint64 at_ms);
+    Q_INVOKABLE void setClipFade(qulonglong id, bool incoming, qint64 duration_ms);
+    Q_INVOKABLE bool deleteTrack(qulonglong id, bool confirmed = false);
     // Severity of the post-flight report, as carried by the header badge.
     enum ReportSeverity {
         Neutral = 0, // Good / Unavailable / no snapshot: quiet info glyph
@@ -77,9 +158,14 @@ class EditSessionAdapter : public QObject {
 
     explicit EditSessionAdapter(QObject* parent = nullptr);
     ~EditSessionAdapter() override;
+    [[nodiscard]] QUrl layoutSettingsLocation() const;
 
     [[nodiscard]] const edit::Workspace& workspace() const {
         return workspace_;
+    }
+    // Last command's model transaction and synchronous publication, in nanoseconds.
+    [[nodiscard]] QVariantMap commandPerformance() const {
+        return {{"modelNs", command_model_ns_}, {"publishNs", command_publish_ns_}};
     }
     void setAssetMonitorSelection(edit::Id asset, engine::MonitorSelectionSnapshot selection);
     [[nodiscard]] QVariantList media() const;
@@ -114,7 +200,7 @@ class EditSessionAdapter : public QObject {
     Q_INVOKABLE void moveClip(qulonglong id, qint64 at_ms, bool snap = true);
     Q_INVOKABLE void trimClip(qulonglong id, qint64 in_ms, qint64 out_ms);
     Q_INVOKABLE void splitSelected();
-    Q_INVOKABLE void deleteSelected(bool ripple = false);
+    Q_INVOKABLE void deleteSelected(bool ripple_delete = false);
     Q_INVOKABLE void undo();
     Q_INVOKABLE void redo();
     Q_INVOKABLE void selectAdjacentClip(int direction);
@@ -185,6 +271,9 @@ class EditSessionAdapter : public QObject {
     void setKeyframeTimestampsForTest(std::vector<int64_t> keyframes_us);
 
   signals:
+    void interactionSettingsChanged();
+    void dragChanged();
+    void timeSelectionChanged();
     void workspaceChanged();
     void historyRequested(const QString& path, qint64 at_ms);
     void editPageRequested();
@@ -208,6 +297,26 @@ class EditSessionAdapter : public QObject {
     void closeRequested();
 
   private:
+    qint64 command_model_ns_ = 0;
+    qint64 command_publish_ns_ = 0;
+    std::shared_ptr<const edit::EditSnapshot> drag_snapshot_;
+    std::optional<edit::EditCommand> drag_command_;
+    edit::EditPreview drag_preview_;
+    edit::Id drag_clip_ = 0;
+    edit::Id drag_junction_ = 0;
+    edit::Id drag_spacer_ = 0;
+    edit::Time drag_playhead_ = 0;
+    edit::Id selected_spacer_ = 0;
+    edit::Id selected_gap_track_ = 0;
+    edit::Span selected_gap_;
+    edit::Time copied_blank_duration_ = 0;
+    edit::Id copied_blank_track_ = 0;
+    edit::Id pending_track_delete_ = 0;
+    edit::Revision pending_track_delete_revision_ = 0;
+    int drag_edge_ = -1;
+    qint64 time_selection_in_us_ = -1;
+    qint64 time_selection_out_us_ = -1;
+    bool applyCommand(const edit::EditCommand& command);
     void applyEditContext(const EditContext& context, qint64 timeline_start_ms,
                           std::vector<edit::SourceImport> imports);
     edit::Id selected_transition_ = 0;

@@ -91,7 +91,16 @@ class EditAudioMixer {
 
     // Adds one track's decoded block. `track` indexes the tracks Reset()
     // announced; anything out of range, empty or null is ignored.
-    void Submit(size_t track, int64_t pts_us, const float* interleaved_stereo, size_t frame_count);
+    //
+    // `timestamp_tolerance_frames` is the track's timestamp resolution in
+    // sample frames. Matroska stores whole milliseconds, so a 1024-frame block
+    // (21.333 ms) is stamped 21 ms and its successor would land 16 frames into
+    // the previous block. A block that starts within that tolerance of where
+    // the track's previous block ended continues it seamlessly instead; placing
+    // it at the rounded stamp drops or doubles samples at every block boundary,
+    // which is heard as continuous crackle.
+    void Submit(size_t track, int64_t pts_us, const float* interleaved_stereo, size_t frame_count,
+                int64_t timestamp_tolerance_frames = 0);
 
     // The stretch the mix is complete through, or nullopt when nothing is
     // ready yet. Call repeatedly after Submit until it returns nullopt.

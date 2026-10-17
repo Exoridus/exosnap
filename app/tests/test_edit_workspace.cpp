@@ -2,6 +2,7 @@
 #include "models/EditSourceImport.h"
 #include "models/EditWorkspace.h"
 #include <algorithm>
+#include <array>
 #include <gtest/gtest.h>
 #include <limits>
 
@@ -15,6 +16,277 @@ Id source(Workspace& workspace, const wchar_t* path = L"clip.mkv") {
     return workspace.addAsset(asset);
 }
 } // namespace
+
+TEST(EditWorkspace, DefaultTrimKeepsUnselectedSuffixAtItsCommittedTime) {
+    Workspace w;
+    const auto asset = source(w);
+    ASSERT_TRUE(w.insert(asset));
+    const auto first = w.selection();
+    ASSERT_TRUE(w.insert(asset));
+    const auto suffix = w.selection();
+    ASSERT_EQ(w.apply(Trim{first, TrimEdge::Right, -1'000'000}, w.revision()).status, CommandStatus::Applied);
+    EXPECT_EQ(w.clip(suffix)->start, 10'000'000);
+    EXPECT_EQ(w.clip(first)->end(), 9'000'000);
+}
+
+TEST(EditWorkspace, FixedEndSurvivesDeletionAndUndoAndExtendsForLaterContent) {
+    Workspace w;
+    const auto asset = source(w);
+    ASSERT_TRUE(w.insert(asset));
+    const auto first = w.selection();
+    ASSERT_EQ(w.apply(SetTimelineEnd{{TimelineEndMode::FixedEnd, 15'000'000}}, w.revision()).status,
+              CommandStatus::Applied);
+    ASSERT_TRUE(w.remove(first, false));
+    EXPECT_EQ(w.duration(), 15'000'000);
+    EXPECT_EQ(w.timeline().result_out_us, 15'000'000);
+    ASSERT_TRUE(w.undo());
+    ASSERT_TRUE(w.move(first, 12'000'000));
+    EXPECT_EQ(w.duration(), 22'000'000);
+    ASSERT_TRUE(w.undo());
+    EXPECT_EQ(w.snapshot()->timeline_end.end_us, 15'000'000);
+    EXPECT_EQ(w.apply(SetTimelineEnd{{TimelineEndMode::FixedEnd, 1}}, w.revision()).status, CommandStatus::Rejected);
+}
+
+TEST(EditWorkspace, SpacerIsTransparentUndoableMetadataAndDoesNotCloseTimeOnRemoval) {
+    Workspace w;
+    const auto track = w.tracks().front().id;
+    ASSERT_EQ(w.apply(AddSpacer{track, 0, 2'000'000}, w.revision()).status, CommandStatus::Applied);
+    const auto spacer = w.snapshot()->spacers.front().id;
+    EXPECT_TRUE(w.assets().empty());
+    EXPECT_TRUE(w.timeline().clips.empty());
+    EXPECT_EQ(w.duration(), 2'000'000);
+    ASSERT_EQ(w.apply(MoveSpacer{spacer, 3'000'000}, w.revision()).status, CommandStatus::Applied);
+    const auto before = w.snapshot();
+    EXPECT_EQ(w.apply(AddSpacer{track, 4'000'000, 2'000'000}, w.revision()).status, CommandStatus::Rejected);
+    EXPECT_EQ(w.revision(), before->revision);
+    ASSERT_EQ(w.apply(RemoveSpacer{spacer}, w.revision()).status, CommandStatus::Applied);
+    ASSERT_TRUE(w.undo());
+    EXPECT_EQ(w.snapshot()->spacers.front().start_us, 3'000'000);
+    EXPECT_EQ(w.apply(TrimSpacer{spacer, TrimEdge::Right, -2'000'000}, w.revision()).status, CommandStatus::Rejected);
+    ASSERT_TRUE(w.redo());
+    EXPECT_TRUE(w.snapshot()->spacers.empty());
+}
+
+TEST(EditWorkspace, MovePreviewShowsRippleSuffixAndRejectsAStaleReleaseAtomically) {
+    Workspace w;
+    const auto asset = source(w);
+    ASSERT_TRUE(w.insert(asset));
+    const auto first = w.selection();
+    ASSERT_TRUE(w.insert(asset));
+    const auto suffix = w.selection();
+    Move command{{first}, 2'000'000};
+    command.ripple = true;
+    const auto frozen = w.snapshot();
+    const auto preview = PreviewEdit(*frozen, command);
+    ASSERT_TRUE(preview.valid);
+    const auto projected = std::find_if(preview.clips.begin(), preview.clips.end(),
+                                        [suffix](const auto& clip) { return clip.id == suffix; });
+    ASSERT_NE(projected, preview.clips.end());
+    EXPECT_EQ(projected->start, 12'000'000);
+    EXPECT_EQ(w.clip(suffix)->start, 10'000'000);
+    ASSERT_EQ(w.apply(command, frozen->revision).status, CommandStatus::Applied);
+    const auto revision = w.revision();
+    EXPECT_EQ(w.apply(command, frozen->revision).status, CommandStatus::Rejected);
+    EXPECT_EQ(w.revision(), revision);
+    ASSERT_TRUE(w.undo());
+    EXPECT_EQ(w.clip(first)->start, 0);
+    EXPECT_EQ(w.clip(suffix)->start, 10'000'000);
+}
+
+TEST(EditWorkspace, AutoCrossfadeOnlyControlsNewJunctions) {
+    Workspace w;
+    const auto asset = source(w);
+    ASSERT_TRUE(w.insert(asset));
+    ASSERT_TRUE(w.insert(asset));
+    const auto incoming = w.selection();
+    Move command{{incoming}, -2'000'000};
+    command.auto_crossfade = false;
+    ASSERT_EQ(w.apply(command, w.revision()).status, CommandStatus::Applied);
+    ASSERT_EQ(w.transitions().size(), 2u);
+    for (const auto& junction : w.transitions())
+        EXPECT_EQ(junction.kind, TransitionKind::HardCut);
+    ASSERT_TRUE(w.undo());
+    command.auto_crossfade = true;
+    ASSERT_EQ(w.apply(command, w.revision()).status, CommandStatus::Applied);
+    for (const auto& junction : w.transitions())
+        EXPECT_EQ(junction.kind, TransitionKind::Crossfade);
+}
+
+TEST(EditWorkspace, CloseGapPreviewsWholeTimelineAndRefusesToCutOtherLayers) {
+    Workspace w;
+    const auto asset = source(w);
+    ASSERT_TRUE(w.insert(asset, 2'000'000));
+    const auto lead = w.selection();
+    ASSERT_EQ(w.apply(SetTimelineEnd{{TimelineEndMode::FixedEnd, 15'000'000}}, w.revision()).status,
+              CommandStatus::Applied);
+    const auto frozen = w.snapshot();
+    const auto preview = PreviewEdit(*frozen, CloseGap{{0, 2'000'000}});
+    ASSERT_TRUE(preview.valid);
+    EXPECT_EQ(w.clip(lead)->start, 2'000'000);
+    ASSERT_EQ(w.apply(CloseGap{{0, 2'000'000}}, frozen->revision).status, CommandStatus::Applied);
+    EXPECT_EQ(w.clip(lead)->start, 0);
+    EXPECT_EQ(w.duration(), 15'000'000);
+    ASSERT_TRUE(w.undo());
+    const auto before = w.snapshot();
+    const auto invalid = PreviewEdit(*before, CloseGap{{1'000'000, 3'000'000}});
+    EXPECT_FALSE(invalid.valid);
+    EXPECT_EQ(w.apply(CloseGap{{1'000'000, 3'000'000}}, before->revision).status, CommandStatus::Rejected);
+    EXPECT_EQ(w.revision(), before->revision);
+    EXPECT_EQ(w.clips(), before->clips);
+}
+
+TEST(EditWorkspace, RemovingEarlierTimePreservesCustomJunctionOffsetsAndHistory) {
+    for (int operation = 0; operation < 4; ++operation) {
+        for (const bool hard_cut : {false, true}) {
+            SCOPED_TRACE(operation);
+            SCOPED_TRACE(hard_cut);
+            Workspace w;
+            const auto asset = source(w);
+            Id prefix = 0;
+            if (operation == 2) {
+                Asset short_asset;
+                short_asset.path = L"prefix.mkv";
+                short_asset.duration = 2'000'000;
+                ASSERT_TRUE(w.insert(w.addAsset(short_asset)));
+                prefix = w.selection();
+            }
+            ASSERT_TRUE(w.insert(asset, 2'000'000));
+            const auto outgoing = w.selection();
+            ASSERT_TRUE(w.insert(asset, 12'000'000));
+            const auto incoming = w.selection();
+            ASSERT_TRUE(w.crossfade(outgoing, incoming, 2'000'000));
+            ASSERT_FALSE(w.transitions().empty());
+            const auto junction_id = w.transitions().front().id;
+            if (hard_cut) {
+                ASSERT_EQ(w.apply(SetHardCut{junction_id, 11'000'000}, w.revision()).status, CommandStatus::Applied);
+            } else {
+                ASSERT_EQ(w.apply(SetJunctionWindow{junction_id, {10'500'000, 11'500'000}}, w.revision()).status,
+                          CommandStatus::Applied);
+            }
+            EditCommand command = CloseGap{{0, 2'000'000}};
+            if (operation == 1)
+                command = RippleRemoveRange{{0, 2'000'000}};
+            else if (operation == 2)
+                command = RippleRemoveClips{{prefix}};
+            else if (operation == 3)
+                command = KeepRange{{2'000'000, 20'000'000}};
+            const auto frozen = w.snapshot();
+            const auto preview = PreviewEdit(*frozen, command);
+            ASSERT_TRUE(preview.valid);
+            const auto projected = std::find_if(preview.junctions.begin(), preview.junctions.end(),
+                                                [junction_id](const auto& item) { return item.id == junction_id; });
+            ASSERT_NE(projected, preview.junctions.end());
+            EXPECT_EQ(projected->incoming_anchor_us, 8'000'000);
+            if (hard_cut) {
+                EXPECT_EQ(projected->kind, TransitionKind::HardCut);
+                EXPECT_EQ(projected->cut_us, 9'000'000);
+            } else {
+                EXPECT_EQ(projected->kind, TransitionKind::Crossfade);
+                EXPECT_EQ(projected->in_us, 8'500'000);
+                EXPECT_EQ(projected->out_us, 9'500'000);
+            }
+            EXPECT_EQ(w.transitions(), frozen->junctions);
+            ASSERT_EQ(w.apply(command, frozen->revision).status, CommandStatus::Applied);
+            EXPECT_EQ(w.transitions(), preview.junctions);
+            ASSERT_TRUE(w.undo());
+            EXPECT_EQ(w.clips(), frozen->clips);
+            EXPECT_EQ(w.transitions(), frozen->junctions);
+            ASSERT_TRUE(w.redo());
+            EXPECT_EQ(w.transitions(), preview.junctions);
+        }
+    }
+}
+
+TEST(EditWorkspace, SplitRetainsOnlyOuterFadesAndPreservesEvaluatedPictureAndAudio) {
+    Workspace w;
+    ASSERT_TRUE(w.insert(source(w)));
+    const auto lead = w.selection();
+    const auto original_clips = w.clips();
+    for (const auto& clip : original_clips) {
+        ASSERT_EQ(w.apply(SetFade{clip.id, FadeEdge::In, {1'000'000, {}}}, w.revision()).status,
+                  CommandStatus::Applied);
+        ASSERT_EQ(w.apply(SetFade{clip.id, FadeEdge::Out, {1'000'000, {}}}, w.revision()).status,
+                  CommandStatus::Applied);
+    }
+    const auto before = w.snapshot();
+    const auto original = w.timeline();
+    const auto preview = PreviewEdit(*before, Split{{lead}, 5'000'000});
+    ASSERT_TRUE(preview.valid);
+    ASSERT_EQ(w.apply(Split{{lead}, 5'000'000}, before->revision).status, CommandStatus::Applied);
+    EXPECT_EQ(w.clips(), preview.clips);
+    ASSERT_EQ(w.clips().size(), 4u);
+    for (const auto& clip : w.clips()) {
+        EXPECT_EQ(clip.fade_in.duration_us, clip.start == 0 ? 1'000'000 : 0);
+        EXPECT_EQ(clip.fade_out.duration_us, clip.start == 0 ? 0 : 1'000'000);
+    }
+    const auto gains = [](const exosnap::engine::TimelineSnapshot& timeline, Time at) {
+        const auto evaluation = exosnap::engine::EvaluateTimeline(timeline, at);
+        EXPECT_TRUE(evaluation.error.empty()) << evaluation.error;
+        std::array<double, 2> result{};
+        for (const auto& contribution : evaluation.video)
+            result[0] += contribution.weight * contribution.opacity;
+        for (const auto& contribution : evaluation.audio)
+            result[1] += contribution.weight;
+        return result;
+    };
+    for (const Time at : {0, 500'000, 1'000'000, 4'500'000, 4'999'999, 5'000'000, 5'500'000, 9'000'000, 9'500'000})
+        EXPECT_EQ(gains(original, at), gains(w.timeline(), at));
+    ASSERT_TRUE(w.undo());
+    EXPECT_EQ(w.clips(), before->clips);
+    ASSERT_TRUE(w.redo());
+    EXPECT_EQ(w.clips(), preview.clips);
+}
+
+TEST(EditWorkspace, SplitInsideAnyLinkedFadeRejectsAtomicallyAndAllowsItsBoundary) {
+    for (const bool fade_in : {false, true}) {
+        Workspace w;
+        ASSERT_TRUE(w.insert(source(w)));
+        const auto lead = w.selection();
+        const auto faded = w.clips().front().id == lead ? w.clips().back().id : w.clips().front().id;
+        ASSERT_EQ(w.apply(SetFade{faded, fade_in ? FadeEdge::In : FadeEdge::Out, {1'000'000, {}}}, w.revision()).status,
+                  CommandStatus::Applied);
+        const auto before = w.snapshot();
+        const Split invalid{{lead}, fade_in ? 500'000 : 9'500'000};
+        const auto preview = PreviewEdit(*before, invalid);
+        EXPECT_FALSE(preview.valid);
+        const auto rejected = w.apply(invalid, before->revision);
+        ASSERT_EQ(rejected.status, CommandStatus::Rejected);
+        ASSERT_TRUE(rejected.error);
+        EXPECT_EQ(rejected.error->code, EditErrorCode::TransitionBoundaryConflict);
+        EXPECT_EQ(w.revision(), before->revision);
+        EXPECT_EQ(w.clips(), before->clips);
+        ASSERT_TRUE(w.undo());
+        EXPECT_EQ(w.clip(faded)->fade_in.duration_us, 0);
+        EXPECT_EQ(w.clip(faded)->fade_out.duration_us, 0);
+        ASSERT_TRUE(w.redo());
+        const Split boundary{{lead}, fade_in ? 1'000'000 : 9'000'000};
+        ASSERT_TRUE(PreviewEdit(*w.snapshot(), boundary).valid);
+        EXPECT_EQ(w.apply(boundary, w.revision()).status, CommandStatus::Applied);
+    }
+}
+
+TEST(EditWorkspace, MovingAnOverlapEndpointToANewLayerDropsOnlyItsOldJunctions) {
+    Workspace w;
+    const auto asset = source(w);
+    ASSERT_TRUE(w.insert(asset));
+    ASSERT_TRUE(w.insert(asset, 8'000'000));
+    const auto incoming = w.selection();
+    ASSERT_EQ(w.transitions().size(), 2u);
+    Move move{{incoming}, 0};
+    move.expand_linked = false;
+    move.new_tracks.push_back({999, TrackType::Video});
+    move.target_tracks.push_back({incoming, 999});
+    move.new_video_front = true;
+    const auto before = w.snapshot();
+    const auto preview = PreviewEdit(*before, move);
+    ASSERT_TRUE(preview.valid);
+    EXPECT_EQ(preview.junctions.size(), 1u);
+    ASSERT_EQ(w.apply(move, before->revision).status, CommandStatus::Applied);
+    EXPECT_EQ(w.clip(incoming)->track, w.tracks().front().id);
+    ASSERT_TRUE(w.undo());
+    EXPECT_EQ(w.clips(), before->clips);
+    EXPECT_EQ(w.transitions(), before->junctions);
+}
 
 TEST(EditWorkspace, InsertOrdersLinkedTracksAndRejectsEqualStartOverlap) {
     Workspace w;
@@ -214,6 +486,12 @@ TEST(EditWorkspace, CrossfadeMovesLinkedSuffixAndRemovalBecomesHardCutInPlace) {
     ASSERT_TRUE(w.undo());
     EXPECT_EQ(videoJunction().kind, TransitionKind::Crossfade);
     ASSERT_TRUE(w.redo());
+    EXPECT_EQ(videoJunction().kind, TransitionKind::HardCut);
+    ASSERT_TRUE(w.crossfade(a, b));
+    EXPECT_EQ(videoJunction().kind, TransitionKind::Crossfade);
+    EXPECT_EQ(videoJunction().anchor, JunctionAnchor::FullOverlap);
+    EXPECT_EQ(w.clips(), faded);
+    ASSERT_TRUE(w.undo());
     EXPECT_EQ(videoJunction().kind, TransitionKind::HardCut);
 }
 

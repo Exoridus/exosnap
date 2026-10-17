@@ -7,12 +7,16 @@
 #include <QObject>
 #include <QString>
 #include <QTimer>
+#include <QVariantMap>
 
 #include <exosnap/engine/edit_player_session.h>
 #include <exosnap/engine/edit_timeline_render.h>
 #include <exosnap/engine/wasapi_audio_render.h>
 
+#include <cstdint>
+#include <filesystem>
 #include <memory>
+#include <optional>
 
 namespace exosnap::quick {
 
@@ -32,6 +36,9 @@ class EditPlayerWorker : public QObject {
     explicit EditPlayerWorker(std::shared_ptr<EditPlayerFrameSink> sink);
     ~EditPlayerWorker() override;
     void setTimeline(edit::Workspace workspace);
+    // Cumulative worker/session costs. Read on the owning worker thread.
+    [[nodiscard]] QVariantMap performanceSnapshot() const;
+    void recordQueueWait(qint64 elapsed_ns, bool timeline);
     void setRequestGeneration(uint64_t generation) {
         request_generation_ = generation;
     }
@@ -75,6 +82,8 @@ class EditPlayerWorker : public QObject {
     void presentBlank(qint64 position_us);
     void publishMonitoring();
     void tickRenderTimeline();
+    bool canReuseSource(const edit::Asset& asset) const;
+    bool bindTimelineSource(const edit::Clip& clip, const edit::Asset& asset);
 
     std::shared_ptr<EditPlayerFrameSink> sink_;
     std::unique_ptr<exosnap::engine::EditPlayerSession> session_;
@@ -99,6 +108,21 @@ class EditPlayerWorker : public QObject {
     qint64 render_origin_us_ = 0;
     int64_t audio_sample_ = 0;
     uint64_t monitor_revision_ = 0;
+    quint64 timeline_updates_ = 0;
+    quint64 session_opens_ = 0;
+    quint64 session_closes_ = 0;
+    qint64 session_open_ns_ = 0;
+    qint64 session_close_ns_ = 0;
+    quint64 seek_dispatches_ = 0;
+    qint64 seek_dispatch_ns_ = 0;
+    qint64 timeline_queue_wait_ns_ = 0;
+    qint64 seek_queue_wait_ns_ = 0;
+    engine::EditPlayerSession::SeekPerformance retired_seek_performance_;
+    std::optional<edit::Asset> active_source_;
+    std::optional<edit::StreamRef> active_stream_;
+    std::filesystem::file_time_type active_source_write_time_;
+    std::uintmax_t active_source_size_ = 0;
+    qint64 active_timeline_offset_ = 0;
 };
 
 } // namespace exosnap::quick

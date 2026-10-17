@@ -13,6 +13,9 @@
 #include <string>
 #include <utility>
 
+#define WIN32_LEAN_AND_MEAN
+#include <windows.h>
+
 namespace exosnap {
 
 namespace {
@@ -38,7 +41,7 @@ int TimelineTileWidth(int row_height, int video_width, int video_height) {
     const double aspect = (video_width > 0 && video_height > 0)
                               ? static_cast<double>(video_width) / static_cast<double>(video_height)
                               : static_cast<double>(kFallbackAspectW) / static_cast<double>(kFallbackAspectH);
-    return std::max(kMinTileWidth, static_cast<int>(std::lround(row_height * aspect)));
+    return (std::max)(kMinTileWidth, static_cast<int>(std::lround(row_height * aspect)));
 }
 
 int TimelineTileCount(int track_width, int tile_width) {
@@ -89,7 +92,7 @@ QImage WrapDecodedFrame(const exosnap::engine::DecodedVideoFrame& frame) {
     // image -- and a null image never runs the cleanup hook, so a keep-alive
     // allocated before the constructor would strand both itself and the
     // decoder's ~15-33 MB frame buffer for the life of the process.
-    constexpr auto kMaxSide = static_cast<uint32_t>(std::numeric_limits<int>::max());
+    constexpr auto kMaxSide = static_cast<uint32_t>((std::numeric_limits<int>::max)());
     if (frame.bgra == nullptr || frame.width == 0 || frame.height == 0 || frame.width > kMaxSide ||
         frame.height > kMaxSide || frame.stride_bytes / 4u < frame.width || frame.stride_bytes > kMaxSide)
         return {};
@@ -140,11 +143,28 @@ void GenerateTimelineTiles(const std::vector<qint64>& times_ms, int row_height, 
     }
 }
 
-TimelineThumbnailSource::TimelineThumbnailSource(QObject* parent) : QObject(parent) {
+TimelineThumbnailSource::TimelineThumbnailSource(QObject* parent) : TimelineThumbnailSource(nullptr, parent) {
+}
+
+TimelineThumbnailSource::TimelineThumbnailSource(std::shared_ptr<ThumbnailRequestBroker> broker, QObject* parent)
+    : QObject(parent), broker_(std::move(broker)) {
+    if (broker_) {
+        broker_->AttachWorker([this]() {
+            {
+                const std::lock_guard<std::mutex> lock(mutex_);
+            }
+            cv_.notify_all();
+        });
+    }
     worker_ = std::thread([this]() { workerLoop(); });
 }
 
 TimelineThumbnailSource::~TimelineThumbnailSource() {
+    shutdown_cancelled_.store(true, std::memory_order_relaxed);
+    // Before the worker stops: outstanding requests complete as unavailable,
+    // and no broker wake can reach this object afterwards.
+    if (broker_)
+        broker_->DetachWorker();
     {
         const std::lock_guard<std::mutex> lock(mutex_);
         stop_ = true;
@@ -256,7 +276,91 @@ void TimelineThumbnailSource::cancel() {
     cv_.notify_all();
 }
 
+void TimelineThumbnailSource::setForegroundBusy(bool busy) {
+    {
+        const std::lock_guard<std::mutex> lock(mutex_);
+        busy_ = busy;
+    }
+    // Outside mutex_: the broker's wake takes it.
+    if (broker_)
+        broker_->SetForegroundBusy(busy);
+    cv_.notify_all();
+}
+
+bool TimelineThumbnailSource::waitForDecodeAdmission() {
+    std::unique_lock<std::mutex> lock(mutex_);
+    cv_.wait(lock, [this]() { return stop_ || !busy_ || cancelled_.load(std::memory_order_relaxed); });
+    return !stop_ && !cancelled_.load(std::memory_order_relaxed);
+}
+
+void TimelineThumbnailSource::serveBrokerJob(const ThumbnailRequestBroker::Job& job,
+                                             exosnap::engine::EditPlayerEngine& engine,
+                                             std::filesystem::path& engine_path, std::string& engine_identity) {
+    if (const auto hit = broker_->MemoryLookup(job.key)) {
+        broker_->Complete(job, *hit);
+        return;
+    }
+    if (!job.disk_checked && broker_->Disk() != nullptr) {
+        if (const auto stored = broker_->Disk()->Load(job.key)) {
+            broker_->CountDiskHit();
+            broker_->Complete(job, *stored);
+            return;
+        }
+    }
+    bool park = false;
+    {
+        const std::lock_guard<std::mutex> lock(mutex_);
+        if (stop_)
+            return;
+        park = busy_;
+    }
+    if (park) {
+        // Parked, not dropped: it decodes once foreground work is idle.
+        auto parked = job;
+        parked.disk_checked = true;
+        broker_->DeferDecode(parked);
+        return;
+    }
+    const auto source = broker_->Source(job.identity);
+    if (!source) {
+        broker_->Complete(job, QImage());
+        return;
+    }
+    if (engine_path != source->path || engine_identity != job.identity) {
+        engine.Close();
+        engine_path.clear();
+        std::string error;
+        if (!engine.Open(source->path, error, &shutdown_cancelled_) ||
+            !engine.ValidateContentIdentity(source->content_sha256, error, &shutdown_cancelled_)) {
+            engine.Close();
+            engine_identity.clear();
+            broker_->Complete(job, QImage());
+            return;
+        }
+        engine_path = source->path;
+        engine_identity = job.identity;
+    }
+    decodes_.fetch_add(1, std::memory_order_relaxed);
+    broker_->CountDecode();
+    QImage scaled;
+    std::int64_t decoded_pts = job.time_us;
+    {
+        const auto frame = engine.DecodeFrameAt(job.time_us);
+        if (frame) {
+            decoded_pts = frame->pts_us;
+            const QImage full = WrapDecodedFrame(*frame);
+            if (!full.isNull())
+                scaled = full.scaled(QSize(job.height * kAspectBoxWidthFactor, job.height), Qt::KeepAspectRatio,
+                                     Qt::SmoothTransformation);
+        }
+    }
+    if (!scaled.isNull())
+        broker_->Publish(job, scaled, decoded_pts);
+    broker_->Complete(job, scaled);
+}
+
 void TimelineThumbnailSource::workerLoop() {
+    SetThreadPriority(GetCurrentThread(), THREAD_MODE_BACKGROUND_BEGIN);
     // Constructed on the worker so the engine (and everything FFmpeg allocates
     // behind it) lives and dies on exactly one thread.
     auto engine = std::make_unique<exosnap::engine::EditPlayerEngine>();
@@ -264,6 +368,14 @@ void TimelineThumbnailSource::workerLoop() {
     // Worker-owned: every read and write happens on this thread, so the cache
     // needs no lock of its own.
     TimelineTileCache tile_cache;
+    // Content identity of the open clip when the broker knows its path; enables
+    // the strip's disk tier.
+    std::optional<std::array<std::uint8_t, 32>> clip_content;
+    // Broker requests decode on their own engine, so serving a tile of another
+    // source never closes the strip's clip.
+    auto request_engine = std::make_unique<exosnap::engine::EditPlayerEngine>();
+    std::filesystem::path request_path;
+    std::string request_identity;
 
     for (;;) {
         std::optional<OpenJob> open_job;
@@ -272,7 +384,8 @@ void TimelineThumbnailSource::workerLoop() {
         {
             std::unique_lock<std::mutex> lock(mutex_);
             cv_.wait(lock, [this]() {
-                return stop_ || pending_close_ || pending_open_.has_value() || pending_tiles_.has_value();
+                return stop_ || pending_close_ || pending_open_.has_value() || pending_tiles_.has_value() ||
+                       (broker_ && broker_->HasWork());
             });
             if (stop_)
                 break;
@@ -284,7 +397,7 @@ void TimelineThumbnailSource::workerLoop() {
             } else if (pending_open_) {
                 open_job = std::move(pending_open_);
                 pending_open_.reset();
-            } else {
+            } else if (pending_tiles_) {
                 tile_job = std::move(pending_tiles_);
                 pending_tiles_.reset();
                 // The run that starts here is the one the flag now applies to.
@@ -292,9 +405,18 @@ void TimelineThumbnailSource::workerLoop() {
             }
         }
 
+        if (!close_job && !open_job && !tile_job) {
+            if (broker_) {
+                if (const auto job = broker_->TakeJob())
+                    serveBrokerJob(*job, *request_engine, request_path, request_identity);
+            }
+            continue;
+        }
+
         if (close_job) {
             engine->Close();
             tile_cache.Clear();
+            clip_content.reset();
             open = false;
             continue;
         }
@@ -304,8 +426,20 @@ void TimelineThumbnailSource::workerLoop() {
             // The key carries no clip identity, so the tiles of the clip being
             // replaced have to go before the new one decodes anything.
             tile_cache.Clear();
+            clip_content.reset();
+            if (broker_) {
+                if (const auto identity = broker_->IdentityForPath(open_job->path))
+                    if (const auto source = broker_->Source(*identity))
+                        clip_content = source->content_sha256;
+            }
             std::string error;
-            open = engine->Open(open_job->path, error);
+            open = engine->Open(open_job->path, error, &shutdown_cancelled_);
+            if (open && clip_content)
+                open = engine->ValidateContentIdentity(*clip_content, error, &shutdown_cancelled_);
+            if (!open) {
+                engine->Close();
+                clip_content.reset();
+            }
             const int w = open ? engine->VideoWidth() : 0;
             const int h = open ? engine->VideoHeight() : 0;
             QStringList audio_names;
@@ -365,6 +499,18 @@ void TimelineThumbnailSource::workerLoop() {
         // The cached positions first, and all of them before any decode starts:
         // after a resize that is most of the strip, and publishing them up front
         // is what turns a re-decode of the whole track into a relayout.
+        // Strip tiles share the broker's disk tier: the key is the clip's content
+        // identity plus the keyframe time, so it survives reopening the clip.
+        const bool disk_tier = broker_ && broker_->Disk() != nullptr && clip_content.has_value();
+        const auto cache_generation = broker_ ? broker_->Generation() : 0;
+        const auto disk_key = [&clip_content, row_height](qint64 time_ms) {
+            return ThumbnailCacheKey(*clip_content, time_ms * 1000, row_height);
+        };
+        const auto disk_tile = [&](qint64 time_ms) -> std::optional<QImage> {
+            if (!disk_tier)
+                return std::nullopt;
+            return broker_->Disk()->Load(disk_key(time_ms));
+        };
         std::vector<qint64> to_decode;
         to_decode.reserve(tile_job->times_ms.size());
         int from_cache = 0;
@@ -374,15 +520,33 @@ void TimelineThumbnailSource::workerLoop() {
             if (const QImage* cached = tile_cache.Lookup(time_ms, row_height)) {
                 ++from_cache;
                 publish(time_ms, *cached);
+            } else if (const auto stored = disk_tile(time_ms)) {
+                ++from_cache;
+                broker_->CountDiskHit();
+                tile_cache.Insert(time_ms, row_height, *stored);
+                publish(time_ms, *stored);
             } else {
                 to_decode.push_back(time_ms);
             }
         }
 
         GenerateTimelineTiles(
-            to_decode, row_height, [&engine](int64_t target_us) { return engine->DecodeFrameAt(target_us); },
-            [&tile_cache, &publish, row_height](TimelineThumbnail&& tile) {
+            to_decode, row_height,
+            [this, &engine](int64_t target_us) -> std::optional<exosnap::engine::DecodedVideoFrame> {
+                if (!waitForDecodeAdmission())
+                    return std::nullopt;
+                decodes_.fetch_add(1, std::memory_order_relaxed);
+                if (broker_)
+                    broker_->CountDecode();
+                return engine->DecodeFrameAt(target_us);
+            },
+            [&](TimelineThumbnail&& tile) {
                 tile_cache.Insert(tile.time_ms, row_height, tile.image);
+                if (disk_tier)
+                    broker_->Publish(
+                        ThumbnailRequestBroker::Job{
+                            disk_key(tile.time_ms), {}, tile.time_ms * 1000, row_height, false, cache_generation},
+                        tile.image, tile.time_ms * 1000);
                 publish(tile.time_ms, tile.image);
             },
             cancelled_);

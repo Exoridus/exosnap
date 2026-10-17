@@ -109,6 +109,14 @@ class WasapiAudioRenderer {
     // The render endpoint's actual sample rate (post-Init; 0 before Init()).
     [[nodiscard]] uint32_t SampleRate() const noexcept;
 
+    // 48 kHz frames the render thread had to replace with silence because the
+    // ring ran short, counted from the first audio of the current Start(). Each is
+    // an audible gap; any steady growth is an underrun the listener hears as
+    // crackle. Safe from any thread.
+    [[nodiscard]] uint64_t ShortfallFrames() const noexcept {
+        return shortfall_frames_.load(std::memory_order_relaxed);
+    }
+
     // Stops the render thread, releases the COM device/client objects, and
     // clears the ring buffer. Safe to call multiple times / without Init().
     void Shutdown();
@@ -161,6 +169,8 @@ class WasapiAudioRenderer {
     // Frames written into the endpoint buffer. Only the fallback clock now --
     // see the class comment on why it is not the playback clock.
     std::atomic<uint64_t> frames_rendered_{0};
+    std::atomic<uint64_t> shortfall_frames_{0};
+    bool audio_arrived_ = false; // render thread only; reset by Start()
 
     bool initialized_ = false;
 };

@@ -68,7 +68,8 @@ Item {
         "StepBack": ExoGlyph.StepBack,
         "Braces": ExoGlyph.Braces,
         "Hash": ExoGlyph.Hash,
-        "Swatch": ExoGlyph.Swatch
+        "Swatch": ExoGlyph.Swatch,
+        "Pin": ExoGlyph.Pin
     })
 
     Component {

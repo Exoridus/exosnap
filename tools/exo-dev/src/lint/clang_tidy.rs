@@ -58,7 +58,7 @@ use crate::lint::{
 /// Scoping (which translation units get analysed) does not affect what a
 /// stored entry means and is not a reason to bump this. Nothing else
 /// enforces the bump.
-pub const CACHE_SCHEMA: u32 = 2;
+pub const CACHE_SCHEMA: u32 = 3;
 
 /// Canary translation units, analysed whenever the analysis configuration
 /// itself changes rather than the code it inspects. A change to `.clang-tidy`
@@ -920,11 +920,17 @@ fn parse_version(banner: &str) -> Option<String> {
 /// the real invocation in [`invoke_clang_tidy`] cannot drift apart if a flag
 /// is ever added here.
 fn invocation_flags(checks_arg: &str, header_filter: &str) -> Vec<String> {
-    vec![
+    let mut flags = vec![
         "--quiet".to_string(),
         format!("--checks={checks_arg}"),
         format!("--header-filter={header_filter}"),
-    ]
+    ];
+    if cfg!(windows) {
+        // The UCRT fallback uses reinterpret_cast and cannot satisfy constexpr
+        // layout assertions in Clang. Keep those assertions on its builtin.
+        flags.push("--extra-arg=-D_CRT_USE_BUILTIN_OFFSETOF".to_string());
+    }
+    flags
 }
 
 fn invoke_clang_tidy(

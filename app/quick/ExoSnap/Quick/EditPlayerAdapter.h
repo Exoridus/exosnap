@@ -14,6 +14,7 @@
 #include <exosnap/engine/edit_timeline_compositor.h>
 
 #include "models/EditWorkspace.h"
+#include <atomic>
 #include <memory>
 #include <mutex>
 
@@ -107,6 +108,10 @@ class EditPlayerAdapter : public QObject {
     }
 
     void setSession(EditSessionAdapter* session);
+    // Cumulative time spent copying workspaces for the playback worker.
+    [[nodiscard]] qint64 workspaceCopyTimeNs() const {
+        return workspace_copy_ns_;
+    }
 
     void attachPlayerItem(ExoEditPlayerItem* item);
     void detachPlayerItem(ExoEditPlayerItem* item);
@@ -189,6 +194,8 @@ class EditPlayerAdapter : public QObject {
     double volume_ = 1.0;
     std::optional<edit::Revision> timeline_revision_;
     uint64_t timeline_monitoring_revision_ = 0;
+    qint64 workspace_copy_ns_ = 0;
+    std::shared_ptr<std::atomic<bool>> pending_timeline_current_;
     struct SeekRequest {
         qint64 time_us = 0;
         uint64_t generation = 0;

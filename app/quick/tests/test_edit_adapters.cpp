@@ -11,7 +11,9 @@
 
 #include <capability/capability_builder.h>
 #include <capability/encoder_device_resolver.h>
+#include <exosnap/engine/audio_media_manifest.h>
 #include <exosnap/engine/edit_player_engine.h>
+#include <exosnap/engine/edit_timeline_export.h>
 
 #include <QByteArray>
 #include <QCoreApplication>
@@ -20,6 +22,9 @@
 #include <QFile>
 #include <QFileInfo>
 #include <QImage>
+#include <QJsonArray>
+#include <QJsonDocument>
+#include <QJsonObject>
 #include <QPointer>
 #include <QScopeGuard>
 #include <QSemaphore>
@@ -37,8 +42,11 @@
 
 #include <chrono>
 #include <limits>
+#include <map>
 #include <string>
+#include <string_view>
 #include <thread>
+#include <tuple>
 #include <vector>
 
 namespace exosnap::quick {
@@ -49,6 +57,9 @@ class EditExportAdapterTestPeer {
     }
     static int progress(const EditExportAdapter& adapter) {
         return adapter.run_->percent.load();
+    }
+    static void observeSourceVerification(EditExportAdapter& adapter, std::function<void(uint64_t)> observer) {
+        adapter.source_verified_ = std::move(observer);
     }
 };
 
@@ -125,6 +136,77 @@ TEST(EditWorkspacePresentation, SelectingEitherLinkedRowHighlightsTheWholeGroup)
     rows = session.visibleClips(0, 100000);
     EXPECT_TRUE(rows[0].toMap().value(QStringLiteral("selected")).toBool());
     EXPECT_TRUE(rows[1].toMap().value(QStringLiteral("selected")).toBool());
+}
+
+namespace {
+QVariantMap ClipRow(qulonglong id, qint64 start_ms) {
+    return {{QStringLiteral("id"), id}, {QStringLiteral("startMs"), start_ms}};
+}
+
+std::vector<std::pair<qulonglong, qint64>> ClipModelContent(const EditTimelineClipModel& model) {
+    std::vector<std::pair<qulonglong, qint64>> content;
+    for (int row = 0; row < model.rowCount(); ++row) {
+        const auto map = model.data(model.index(row), EditTimelineClipModel::RowRole).toMap();
+        content.emplace_back(map.value(QStringLiteral("id")).toULongLong(),
+                             map.value(QStringLiteral("startMs")).toLongLong());
+    }
+    return content;
+}
+} // namespace
+
+TEST(EditTimelineClipModel, KeepsRowIdentityAcrossChangesInsteadOfResetting) {
+    EnsureApplication();
+    EditTimelineClipModel model;
+    model.setRows({ClipRow(1, 0), ClipRow(2, 100), ClipRow(3, 200)});
+    int resets = 0;
+    int inserted = 0;
+    int removed = 0;
+    int moved = 0;
+    std::vector<int> changed;
+    QObject::connect(&model, &QAbstractItemModel::modelReset, [&resets]() { ++resets; });
+    QObject::connect(&model, &QAbstractItemModel::rowsInserted,
+                     [&inserted](const QModelIndex&, int first, int last) { inserted += last - first + 1; });
+    QObject::connect(&model, &QAbstractItemModel::rowsRemoved,
+                     [&removed](const QModelIndex&, int first, int last) { removed += last - first + 1; });
+    QObject::connect(&model, &QAbstractItemModel::rowsMoved, [&moved]() { ++moved; });
+    QObject::connect(&model, &QAbstractItemModel::dataChanged,
+                     [&changed](const QModelIndex& top, const QModelIndex& bottom) {
+                         for (int row = top.row(); row <= bottom.row(); ++row)
+                             changed.push_back(row);
+                     });
+
+    model.setRows({ClipRow(1, 0), ClipRow(2, 100), ClipRow(3, 200)});
+    EXPECT_TRUE(changed.empty());
+
+    model.setRows({ClipRow(1, 0), ClipRow(2, 150), ClipRow(3, 200)});
+    EXPECT_EQ(changed, std::vector<int>{1});
+
+    changed.clear();
+    model.setRows({ClipRow(3, 200), ClipRow(4, 250), ClipRow(1, 0)});
+    EXPECT_EQ(removed, 1);
+    EXPECT_EQ(inserted, 1);
+    EXPECT_EQ(moved, 1);
+    EXPECT_TRUE(changed.empty());
+    EXPECT_EQ(ClipModelContent(model), (std::vector<std::pair<qulonglong, qint64>>{{3, 200}, {4, 250}, {1, 0}}));
+
+    model.setRows({});
+    EXPECT_EQ(removed, 4);
+    EXPECT_EQ(model.rowCount(), 0);
+    EXPECT_EQ(resets, 0);
+}
+
+TEST(EditTimelineClipModel, SyncReadsTheSessionWindow) {
+    EnsureApplication();
+    EditSessionAdapter session;
+    session.setEditContext(MakeContext());
+    EditTimelineClipModel model;
+    model.sync(&session, 0, 100000);
+    ASSERT_EQ(model.rowCount(), 2);
+    EXPECT_EQ(model.data(model.index(0), EditTimelineClipModel::RowRole).toMap(),
+              session.visibleClips(0, 100000).front().toMap());
+    EXPECT_EQ(model.roleNames().value(EditTimelineClipModel::RowRole), QByteArrayLiteral("row"));
+    model.sync(nullptr, 0, 100000);
+    EXPECT_EQ(model.rowCount(), 0);
 }
 
 TEST(EditSessionAdapterPresentation, DeliveryPendingChangesNotifyTheOpenEditPage) {
@@ -432,6 +514,28 @@ TEST(EditWorkspaceAdapter, PositionedSegmentsAreConsecutiveAndUndoAsOneOperation
     session.redo();
     EXPECT_EQ(session.workspace().clips(), positioned);
     EXPECT_EQ(session.durationMs(), 25000);
+}
+
+TEST(EditWorkspaceAdapter, RecordingContextPlacementHonorsDisabledAutoCrossfade) {
+    EnsureApplication();
+    for (const bool segmented : {false, true}) {
+        SCOPED_TRACE(segmented ? "segmented recording" : "single recording");
+        EditSessionAdapter session;
+        session.setEditContext(MakeContext(10));
+        session.autoCrossfade = false;
+        EditContext incoming = MakeContext(10);
+        if (segmented)
+            incoming.segments = {{QStringLiteral("D:/Recordings/segment-0.mkv"), 10, true},
+                                 {QStringLiteral("D:/Recordings/segment-1.mkv"), 5, true}};
+
+        session.setEditContext(incoming, 5000);
+
+        ASSERT_TRUE(session.workspaceError().isEmpty());
+        ASSERT_EQ(session.workspace().transitions().size(), 2U);
+        for (const auto& junction : session.workspace().transitions())
+            EXPECT_EQ(junction.kind, edit::TransitionKind::HardCut);
+        EXPECT_EQ(session.durationMs(), segmented ? 20000 : 15000);
+    }
 }
 
 TEST(EditWorkspaceAdapter, OverlappingSegmentBatchChangesNoClipsAndAddsNoUndoCommand) {
@@ -785,6 +889,530 @@ TEST(EditExportAdapterOptions, MatchSourceIsTheDefaultAndRenderProfilesCannotBeS
     }
 }
 
+TEST(EditWorkspaceAdapter, SyntheticImportDescriptorRetainsVerifiedAudioIdentityAuthority) {
+    engine::EditMediaMetadata metadata;
+    metadata.content_identity_valid = true;
+    metadata.duration_us = 2'000'000;
+    metadata.content_sha256.fill(23);
+    engine::EditSourceStream stream;
+    stream.kind = engine::TimelineStreamKind::Audio;
+    stream.container_index = 4;
+    stream.codec.channels = 2;
+    stream.stream_identity = engine::AudioTrackId{{7, 8, 9}};
+    metadata.streams.push_back(stream);
+    for (const bool verified : {false, true}) {
+        metadata.audio_metadata.status =
+            verified ? engine::AudioMetadataStatus::Verified : engine::AudioMetadataStatus::Missing;
+        const auto imported = edit::DescribeSourceImport(metadata);
+        ASSERT_TRUE(imported.descriptor);
+        EXPECT_EQ(imported.descriptor->audio_identities_verified, verified);
+        ASSERT_EQ(imported.descriptor->streams.size(), 1u);
+        EXPECT_EQ(imported.descriptor->streams.front().ref.stream_identity, *stream.stream_identity);
+    }
+}
+
+TEST(EditWorkspaceAdapter, RealReimportReusesWaveformCacheWithoutChangingSemanticStreamIdentities) {
+    EnsureApplication();
+    const auto fixtures = qEnvironmentVariable("EXOSNAP_EDIT_RENDER_FIXTURES");
+    if (fixtures.isEmpty())
+        GTEST_SKIP() << "Set EXOSNAP_EDIT_RENDER_FIXTURES to generated red/blue media.";
+    QTemporaryDir directory;
+    ASSERT_TRUE(directory.isValid());
+    const auto path = directory.filePath(QStringLiteral("source.mkv"));
+    ASSERT_TRUE(QFile::copy(QDir(fixtures).filePath(QStringLiteral("red.mkv")), path));
+    const auto metadata = engine::ProbeEditMedia(std::filesystem::path(path.toStdWString()));
+    ASSERT_TRUE(metadata.error.empty()) << metadata.error;
+    ASSERT_NE(metadata.audio_metadata.status, engine::AudioMetadataStatus::Verified);
+    const auto wait_for = [](const auto& predicate) {
+        const auto deadline = std::chrono::steady_clock::now() + std::chrono::seconds(10);
+        while (!predicate() && std::chrono::steady_clock::now() < deadline) {
+            QCoreApplication::processEvents();
+            QThread::msleep(1);
+        }
+        return predicate();
+    };
+    EditSessionAdapter session;
+    WaveformCacheService::Config config;
+    config.root = std::filesystem::path(directory.filePath(QStringLiteral("waveforms")).toStdWString());
+    QString first_key;
+    engine::AudioTrackId first_semantic_identity;
+    std::vector<engine::WaveformPeak> first_peaks;
+    for (int cycle = 0; cycle < 2; ++cycle) {
+        SCOPED_TRACE(cycle);
+        session.importMedia(QUrl::fromLocalFile(path), true);
+        ASSERT_TRUE(wait_for(
+            [&]() { return session.workspace().assets().size() == 1 || !session.workspaceError().isEmpty(); }));
+        ASSERT_TRUE(session.workspaceError().isEmpty()) << session.workspaceError().toStdString();
+        EditTimelineAdapter timeline;
+        timeline.configureWaveformCache(config);
+        auto* waveforms = qobject_cast<WaveformCacheService*>(timeline.waveformService());
+        ASSERT_NE(waveforms, nullptr);
+        QVariantMap audio;
+        for (const auto& row : session.visibleClips(0, session.durationMs()))
+            if (!row.toMap().value(QStringLiteral("video")).toBool()) {
+                ASSERT_TRUE(audio.isEmpty());
+                audio = row.toMap();
+            }
+        ASSERT_FALSE(audio.isEmpty());
+        const auto* clip = session.workspace().clip(audio.value(QStringLiteral("id")).toULongLong());
+        ASSERT_NE(clip, nullptr);
+        ASSERT_TRUE(clip->stream);
+        const auto semantic_identity = clip->stream->stream_identity;
+        const auto key = timeline.waveformSource(audio.value(QStringLiteral("sourceIdentity")).toString(),
+                                                 audio.value(QStringLiteral("path")).toString(),
+                                                 audio.value(QStringLiteral("containerIndex")).toInt(),
+                                                 audio.value(QStringLiteral("streamIdentity")).toString(),
+                                                 audio.value(QStringLiteral("sourceEndUs")).toLongLong());
+        ASSERT_FALSE(key.isEmpty());
+        ASSERT_TRUE(wait_for([&]() { return waveforms->state(key) == WaveformCacheService::State::Ready; }));
+        std::vector<engine::WaveformPeak> peaks;
+        ASSERT_TRUE(wait_for([&]() { return waveforms->readBlock(key, 0, 0, peaks) > 0; }));
+        EXPECT_EQ(clip->stream->stream_identity, semantic_identity);
+        if (cycle == 0) {
+            first_key = key;
+            first_semantic_identity = semantic_identity;
+            first_peaks = peaks;
+            EXPECT_EQ(waveforms->decoderOpensForTest(), 1u);
+            EXPECT_GT(waveforms->decodeCallsForTest(), 0u);
+        } else {
+            EXPECT_NE(semantic_identity, first_semantic_identity);
+            EXPECT_EQ(key, first_key);
+            EXPECT_EQ(peaks, first_peaks);
+            EXPECT_EQ(waveforms->decoderOpensForTest(), 0u);
+            EXPECT_EQ(waveforms->decodeCallsForTest(), 0u);
+            EXPECT_EQ(waveforms->decoderSeeksForTest(), 0u);
+        }
+        session.close();
+        EXPECT_TRUE(session.workspace().clips().empty());
+        EXPECT_TRUE(session.workspace().assets().empty());
+    }
+    const auto after = engine::ProbeEditMedia(std::filesystem::path(path.toStdWString()));
+    ASSERT_TRUE(after.error.empty()) << after.error;
+    EXPECT_EQ(after.content_sha256, metadata.content_sha256);
+}
+
+TEST(EditTimelineAdapterTiles, AShrunkWindowKeepsTheTileIdentitiesItStillShows) {
+    EnsureApplication();
+    const auto fixtures = qEnvironmentVariable("EXOSNAP_EDIT_RENDER_FIXTURES");
+    if (fixtures.isEmpty())
+        GTEST_SKIP() << "Set EXOSNAP_EDIT_RENDER_FIXTURES to generated red/blue media.";
+    const auto path = QDir(fixtures).filePath(QStringLiteral("red.mkv"));
+    const auto metadata = engine::ProbeEditMedia(std::filesystem::path(path.toStdWString()));
+    ASSERT_TRUE(metadata.error.empty()) << metadata.error;
+    const auto identity = QString::fromLatin1(
+        QByteArray(reinterpret_cast<const char*>(metadata.content_sha256.data()), metadata.content_sha256.size())
+            .toHex());
+    EditTimelineAdapter timeline;
+    ASSERT_TRUE(timeline.registerThumbnailSource(identity, path, metadata.width, metadata.height, metadata.fps_num,
+                                                 metadata.fps_den));
+
+    // The same scale before and after, the way a trim or split shrinks a clip.
+    const auto full = timeline.thumbnailTiles(identity, 0, 2'000'000, 800, 44);
+    const auto left = timeline.thumbnailTiles(identity, 0, 1'000'000, 400, 44);
+    ASSERT_GE(full.size(), 4);
+    ASSERT_GE(left.size(), 2);
+    QHash<qulonglong, QString> full_sources;
+    for (const auto& tile : full) {
+        const auto row = tile.toMap();
+        const auto id = row.value(QStringLiteral("id")).toULongLong();
+        EXPECT_FALSE(full_sources.contains(id)) << "tile ids must be unique within one strip";
+        full_sources.insert(id, row.value(QStringLiteral("source")).toString());
+    }
+    for (const auto& tile : left) {
+        const auto row = tile.toMap();
+        const auto id = row.value(QStringLiteral("id")).toULongLong();
+        ASSERT_TRUE(full_sources.contains(id));
+        EXPECT_EQ(full_sources.value(id), row.value(QStringLiteral("source")).toString());
+    }
+
+    EditTimelineClipModel model;
+    model.setRows(full);
+    int resets = 0;
+    int inserted = 0;
+    QObject::connect(&model, &QAbstractItemModel::modelReset, [&resets]() { ++resets; });
+    QObject::connect(&model, &QAbstractItemModel::rowsInserted,
+                     [&inserted](const QModelIndex&, int first, int last) { inserted += last - first + 1; });
+    model.setRows(left);
+    EXPECT_EQ(resets, 0);
+    EXPECT_EQ(inserted, 0);
+    EXPECT_EQ(model.rowCount(), left.size());
+}
+
+TEST(EditWorkspaceAdapter, ExportReviewListsEachSourceStreamOnceWithAName) {
+    EnsureApplication();
+    const auto fixtures = qEnvironmentVariable("EXOSNAP_EDIT_RENDER_FIXTURES");
+    if (fixtures.isEmpty())
+        GTEST_SKIP() << "Set EXOSNAP_EDIT_RENDER_FIXTURES to generated red/blue media.";
+    QTemporaryDir sources;
+    QTemporaryDir output;
+    ASSERT_TRUE(sources.isValid());
+    ASSERT_TRUE(output.isValid());
+    const auto wait_for = [](const auto& predicate) {
+        const auto deadline = std::chrono::steady_clock::now() + std::chrono::seconds(60);
+        while (!predicate() && std::chrono::steady_clock::now() < deadline) {
+            QCoreApplication::processEvents();
+            QThread::msleep(1);
+        }
+        return predicate();
+    };
+    const auto path = sources.filePath(QStringLiteral("red.mkv"));
+    ASSERT_TRUE(QFile::copy(QDir(fixtures).filePath(QStringLiteral("red.mkv")), path));
+    EditSessionAdapter session;
+    session.importMedia(QUrl::fromLocalFile(path), true);
+    ASSERT_TRUE(
+        wait_for([&]() { return session.workspace().assets().size() == 1 || !session.workspaceError().isEmpty(); }));
+    ASSERT_TRUE(session.workspaceError().isEmpty()) << session.workspaceError().toStdString();
+    const auto tracks = session.workspace().tracks();
+    const auto is_audio = [&](const auto& clip) {
+        return std::any_of(tracks.begin(), tracks.end(), [&](const auto& track) {
+            return track.id == clip.track && track.type == edit::TrackType::Audio;
+        });
+    };
+    const auto imported = session.workspace().clips();
+    const auto video =
+        std::find_if(imported.begin(), imported.end(), [&](const auto& clip) { return !is_audio(clip); });
+    ASSERT_NE(video, imported.end());
+    const auto video_id = video->id;
+    for (const qint64 at : {500, 1000, 1500}) {
+        session.selectClip(video_id);
+        session.requestSeek(at);
+        session.splitSelected();
+    }
+    const auto edited = session.workspace().clips();
+    const auto audio_clips =
+        std::count_if(edited.begin(), edited.end(), [&](const auto& clip) { return is_audio(clip); });
+    ASSERT_GE(audio_clips, 4);
+
+    EditExportAdapter exporter;
+    exporter.setSession(&session);
+    exporter.setRenderConfigProvider([] {
+        engine::RecorderConfig config;
+        config.video_codec = engine::VideoCodec::H264;
+        return config;
+    });
+    exporter.setOutputDirectoryProvider([&] { return output.path(); });
+    exporter.startExport();
+    ASSERT_TRUE(wait_for([&]() { return exporter.state() != EditExportAdapter::Preparing; }));
+    ASSERT_EQ(exporter.state(), EditExportAdapter::Review) << exporter.errorText().toStdString();
+    const auto selected = exporter.reviewOutcome().value(QStringLiteral("selectedTracks")).toList();
+    ASSERT_EQ(selected.size(), 1);
+    EXPECT_FALSE(selected.front().toMap().value(QStringLiteral("name")).toString().isEmpty());
+    exporter.reset();
+}
+
+TEST(EditWorkspaceAdapter, RealEditingHistoryAndBlankTimeReachScopedExportsWithoutChangingSources) {
+    EnsureApplication();
+    const auto fixtures = qEnvironmentVariable("EXOSNAP_EDIT_RENDER_FIXTURES");
+    if (fixtures.isEmpty())
+        GTEST_SKIP() << "Set EXOSNAP_EDIT_RENDER_FIXTURES to generated red/blue media.";
+    QTemporaryDir sources;
+    QTemporaryDir output;
+    ASSERT_TRUE(sources.isValid());
+    ASSERT_TRUE(output.isValid());
+    const auto wait_for = [](const auto& predicate) {
+        const auto deadline = std::chrono::steady_clock::now() + std::chrono::seconds(60);
+        while (!predicate() && std::chrono::steady_clock::now() < deadline) {
+            QCoreApplication::processEvents();
+            QThread::msleep(1);
+        }
+        return predicate();
+    };
+    QList<QUrl> urls;
+    QJsonArray source_manifest;
+    std::vector<engine::EditMediaMetadata> source_metadata;
+    for (const auto& name : {QStringLiteral("red.mkv"), QStringLiteral("blue.mkv")}) {
+        const auto path = sources.filePath(name);
+        ASSERT_TRUE(QFile::copy(QDir(fixtures).filePath(name), path));
+        auto metadata = engine::ProbeEditMedia(std::filesystem::path(path.toStdWString()));
+        ASSERT_TRUE(metadata.error.empty()) << metadata.error;
+        ASSERT_EQ(metadata.duration_us, 2'000'000);
+        source_manifest.append(
+            QJsonObject{{QStringLiteral("name"), name},
+                        {QStringLiteral("path"), QDir(fixtures).absoluteFilePath(name)},
+                        {QStringLiteral("sha256"),
+                         QString::fromLatin1(QByteArray(reinterpret_cast<const char*>(metadata.content_sha256.data()),
+                                                        metadata.content_sha256.size())
+                                                 .toHex())}});
+        source_metadata.push_back(std::move(metadata));
+        urls.push_back(QUrl::fromLocalFile(path));
+    }
+    EditSessionAdapter session;
+    session.autoCrossfade = false;
+    session.importMedia(urls.front(), true);
+    ASSERT_TRUE(
+        wait_for([&]() { return session.workspace().assets().size() == 1 || !session.workspaceError().isEmpty(); }));
+    ASSERT_TRUE(session.workspaceError().isEmpty()) << session.workspaceError().toStdString();
+    ASSERT_EQ(session.workspace().clips().size(), 2u);
+    ASSERT_EQ(session.durationMs(), 2000);
+    const auto red_asset = session.workspace().assets()[0].id;
+    const auto red = session.workspace().clips()[0].id;
+    const auto red_track = session.workspace().clip(red)->track;
+    EditExportAdapter exporter;
+    exporter.setSession(&session);
+    exporter.setRenderConfigProvider([] {
+        engine::RecorderConfig config;
+        config.video_codec = engine::VideoCodec::H264;
+        return config;
+    });
+    QString evidence;
+    if (const auto root = qEnvironmentVariable("EXOSNAP_EDIT_QUALIFICATION_OUTPUT"); !root.isEmpty()) {
+        ASSERT_TRUE(QDir(root).exists());
+        evidence = QDir(root).filePath(QStringLiteral("adapter-workflow-") + QFileInfo(output.path()).fileName());
+        ASSERT_TRUE(QDir().mkpath(evidence));
+    }
+    QJsonArray exports;
+    const auto export_scope = [&](const QString& scope, const QString& container, qint64 in_us, qint64 out_us,
+                                  const QJsonArray& windows) {
+        const auto destination =
+            output.filePath(scope + QLatin1Char('-') + container + QLatin1Char('-') + exporter.modeKey() +
+                            QLatin1Char('-') + QString::number(out_us - in_us));
+        ASSERT_TRUE(QDir().mkpath(destination));
+        exporter.reset();
+        exporter.setSpanKey(scope);
+        exporter.setContainerKey(container);
+        exporter.setOutputDirectoryProvider([destination] { return destination; });
+        exporter.startExport();
+        ASSERT_TRUE(wait_for([&]() { return exporter.state() != EditExportAdapter::Preparing; }));
+        ASSERT_EQ(exporter.state(), EditExportAdapter::Review) << exporter.errorText().toStdString();
+        EXPECT_FALSE(exporter.reviewOutcome().value(QStringLiteral("videoOnly")).toBool());
+        const auto reviewed = exporter.reviewOutcome();
+        if (session.workspace().assets().size() == 1) {
+            EXPECT_EQ(reviewed.value(QStringLiteral("path")).toString(),
+                      exporter.modeKey() == QStringLiteral("originalStreams") ? QStringLiteral("Copy")
+                                                                              : QStringLiteral("Render"));
+            if (exporter.modeKey() == QStringLiteral("finishedStereo")) {
+                const auto tracks = reviewed.value(QStringLiteral("outputAudioTracks")).toList();
+                ASSERT_EQ(tracks.size(), 1);
+                EXPECT_EQ(tracks.front().toMap().value(QStringLiteral("codec")).toString(), QStringLiteral("PCM24"));
+            }
+        }
+        exporter.confirmPreparedExport();
+        ASSERT_TRUE(wait_for([&]() { return !exporter.running(); }));
+        ASSERT_EQ(exporter.state(), EditExportAdapter::Done) << exporter.errorText().toStdString();
+        EXPECT_FALSE(session.exportRunning());
+        const auto media = engine::ProbeEditMedia(std::filesystem::path(exporter.outputPath().toStdWString()));
+        ASSERT_TRUE(media.error.empty()) << media.error;
+        EXPECT_NEAR(static_cast<double>(media.duration_us), static_cast<double>(out_us - in_us), 50'000);
+        EXPECT_TRUE(media.has_audio);
+        if (session.workspace().assets().size() == 1 && exporter.modeKey() == QStringLiteral("finishedStereo")) {
+            ASSERT_EQ(media.audio_metadata.status, engine::AudioMetadataStatus::Verified);
+            EditSessionAdapter recorded;
+            recorded.importMedia(QUrl::fromLocalFile(exporter.outputPath()), true);
+            ASSERT_TRUE(wait_for(
+                [&]() { return recorded.workspace().assets().size() == 1 || !recorded.workspaceError().isEmpty(); }));
+            ASSERT_TRUE(recorded.workspaceError().isEmpty()) << recorded.workspaceError().toStdString();
+            int audio_rows = 0;
+            for (const auto& value : recorded.visibleClips(0, recorded.durationMs())) {
+                const auto row = value.toMap();
+                if (row.value(QStringLiteral("video")).toBool())
+                    continue;
+                ++audio_rows;
+                const auto* clip = recorded.workspace().clip(row.value(QStringLiteral("id")).toULongLong());
+                ASSERT_NE(clip, nullptr);
+                ASSERT_TRUE(clip->stream);
+                const auto semantic =
+                    QByteArray(reinterpret_cast<const char*>(clip->stream->stream_identity.bytes.data()), 16).toHex();
+                EXPECT_NE(semantic, QByteArray(32, '0'));
+                EXPECT_EQ(row.value(QStringLiteral("streamIdentity")).toString().toLatin1(), semantic);
+            }
+            EXPECT_EQ(audio_rows, 1);
+        }
+        EXPECT_FALSE(QFileInfo::exists(exporter.outputPath() + QStringLiteral(".tmp")));
+        const auto filename = scope + QLatin1Char('-') + exporter.modeKey() + QLatin1Char('-') +
+                              QString::number(out_us - in_us) + QLatin1Char('.') + container;
+        if (!evidence.isEmpty())
+            ASSERT_TRUE(QFile::copy(exporter.outputPath(), QDir(evidence).filePath(filename)));
+        exports.append(
+            QJsonObject{{QStringLiteral("file"), filename},
+                        {QStringLiteral("path"),
+                         evidence.isEmpty() ? exporter.outputPath() : QDir(evidence).absoluteFilePath(filename)},
+                        {QStringLiteral("scope"), scope},
+                        {QStringLiteral("mode"), exporter.modeKey()},
+                        {QStringLiteral("review"), QJsonObject::fromVariantMap(reviewed)},
+                        {QStringLiteral("expectedDurationUs"), out_us - in_us},
+                        {QStringLiteral("timelineInUs"), in_us},
+                        {QStringLiteral("timelineOutUs"), out_us},
+                        {QStringLiteral("contentWindows"), windows}});
+    };
+    const auto window = [](qint64 in_us, qint64 out_us, const char* content) {
+        return QJsonObject{{QStringLiteral("inUs"), in_us},
+                           {QStringLiteral("outUs"), out_us},
+                           {QStringLiteral("content"), QString::fromLatin1(content)},
+                           {QStringLiteral("audioLevel"), std::string_view(content) == "red"    ? 0.25
+                                                          : std::string_view(content) == "blue" ? -0.25
+                                                                                                : 0.0}};
+    };
+    session.selectClip(red);
+    const auto copy_assessment = engine::AssessTimelineExport(
+        {{std::filesystem::path(urls.front().toLocalFile().toStdWString()), 0, 2'000'000, 0}}, false);
+    ASSERT_EQ(copy_assessment.eligibility, engine::TimelineExportEligibility::StreamCopy) << copy_assessment.reason;
+    exporter.setModeKey(QStringLiteral("originalStreams"));
+    export_scope(QStringLiteral("entire"), QStringLiteral("mkv"), 0, 2'000'000, {window(0, 2'000'000, "red")});
+    ASSERT_FALSE(HasFatalFailure());
+    exporter.setModeKey(QStringLiteral("finishedStereo"));
+    export_scope(QStringLiteral("entire"), QStringLiteral("mkv"), 0, 2'000'000, {window(0, 2'000'000, "red")});
+    ASSERT_FALSE(HasFatalFailure());
+    session.importMedia(urls.back(), true);
+    ASSERT_TRUE(
+        wait_for([&]() { return session.workspace().assets().size() == 2 || !session.workspaceError().isEmpty(); }));
+    ASSERT_TRUE(session.workspaceError().isEmpty()) << session.workspaceError().toStdString();
+    ASSERT_EQ(session.workspace().clips().size(), 4u);
+    ASSERT_EQ(session.durationMs(), 4000);
+    const auto imported = session.workspace().snapshot();
+    const auto blue_asset = session.workspace().assets()[1].id;
+    const auto blue =
+        std::find_if(session.workspace().clips().begin(), session.workspace().clips().end(), [&](const auto& clip) {
+            return clip.asset == blue_asset && clip.stream && clip.stream->kind == engine::TimelineStreamKind::Video;
+        });
+    ASSERT_NE(blue, session.workspace().clips().end());
+    const auto blue_id = blue->id;
+    exporter.setModeKey(QStringLiteral("finishedStereo"));
+    WaveformCacheService::Config waveform_config;
+    waveform_config.root = std::filesystem::path(output.filePath(QStringLiteral("waveforms")).toStdWString());
+    auto waveforms = std::make_unique<WaveformCacheService>(waveform_config, WaveformCacheService::DecoderFactory{});
+    std::map<QString, std::vector<engine::WaveformPeak>> original_peaks;
+    const auto request_waveforms = [&](WaveformCacheService& service) {
+        for (const auto& value : session.visibleClips(0, session.durationMs())) {
+            const auto row = value.toMap();
+            if (row.value(QStringLiteral("video")).toBool())
+                continue;
+            engine::WaveformSourceKey source;
+            const auto identity =
+                QByteArray::fromHex(row.value(QStringLiteral("sourceIdentity")).toString().toLatin1());
+            const auto stream = QByteArray::fromHex(row.value(QStringLiteral("streamIdentity")).toString().toLatin1());
+            ASSERT_EQ(identity.size(), source.content_sha256.size());
+            ASSERT_EQ(stream.size(), source.stream_identity.size());
+            std::copy(identity.begin(), identity.end(), source.content_sha256.begin());
+            std::copy(stream.begin(), stream.end(), source.stream_identity.begin());
+            source.container_index = row.value(QStringLiteral("containerIndex")).toUInt();
+            const auto key = service.request(source, row.value(QStringLiteral("path")).toString(),
+                                             row.value(QStringLiteral("sourceEndUs")).toLongLong());
+            ASSERT_TRUE(wait_for([&]() { return service.state(key) == WaveformCacheService::State::Ready; }));
+            std::vector<engine::WaveformPeak> peaks;
+            ASSERT_TRUE(wait_for([&]() { return service.readBlock(key, 0, 0, peaks) > 0; }));
+            if (const auto found = original_peaks.find(key); found != original_peaks.end())
+                EXPECT_EQ(peaks, found->second);
+            else
+                original_peaks.emplace(key, std::move(peaks));
+        }
+    };
+    request_waveforms(*waveforms);
+    ASSERT_FALSE(HasFatalFailure());
+    ASSERT_EQ(original_peaks.size(), 2u);
+    ASSERT_EQ(waveforms->decoderOpensForTest(), 2u);
+    const auto decode_calls = waveforms->decodeCallsForTest();
+    ASSERT_GT(decode_calls, 0u);
+    session.trimClip(red, 500, 1500);
+    ASSERT_TRUE(session.workspaceError().isEmpty()) << session.workspaceError().toStdString();
+    const auto trimmed = session.workspace().snapshot();
+    session.selectClip(red);
+    session.requestSeek(1000);
+    session.splitSelected();
+    ASSERT_EQ(session.workspace().clips().size(), 6u);
+    const auto split = session.workspace().snapshot();
+    session.deleteSelected(false);
+    ASSERT_EQ(session.workspace().clips().size(), 4u);
+    const auto deleted = session.workspace().snapshot();
+    session.undo();
+    EXPECT_EQ(session.workspace().clips(), split->clips);
+    session.undo();
+    EXPECT_EQ(session.workspace().clips(), trimmed->clips);
+    session.redo();
+    session.redo();
+    EXPECT_EQ(session.workspace().clips(), deleted->clips);
+    EXPECT_EQ(imported->clips.size(), 4u);
+    EXPECT_EQ(imported->clips.front().source_in, 0);
+    EXPECT_EQ(imported->clips.front().source_out, 2'000'000);
+    const auto red_tail = std::find_if(session.workspace().clips().begin(), session.workspace().clips().end(),
+                                       [&](const auto& clip) { return clip.asset == red_asset; });
+    ASSERT_NE(red_tail, session.workspace().clips().end());
+    EXPECT_EQ(red_tail->source_in, 1'000'000);
+    EXPECT_EQ(red_tail->source_out, 1'500'000);
+    session.moveClip(blue_id, 2500, false);
+    ASSERT_TRUE(session.workspaceError().isEmpty()) << session.workspaceError().toStdString();
+    session.setFixedTimelineEnd(true, 6000);
+    ASSERT_TRUE(session.fixedTimelineEnd());
+    ASSERT_EQ(session.durationMs(), 6000);
+    session.requestSeek(0);
+    session.selectGap(red_track, 500);
+    ASSERT_EQ(session.selectedGap().value(QStringLiteral("endMs")).toLongLong(), 1000);
+    session.copyBlankDuration();
+    session.pasteSpacer();
+    ASSERT_EQ(session.spacers().size(), 1);
+    const auto blank = session.workspace().snapshot();
+    session.undo();
+    EXPECT_TRUE(session.spacers().isEmpty());
+    session.redo();
+    EXPECT_EQ(session.workspace().snapshot()->spacers, blank->spacers);
+    EXPECT_EQ(session.workspace().clips(), blank->clips);
+    EXPECT_EQ(session.durationMs(), 6000);
+    request_waveforms(*waveforms);
+    ASSERT_FALSE(HasFatalFailure());
+    EXPECT_EQ(original_peaks.size(), 2u);
+    EXPECT_EQ(waveforms->decoderOpensForTest(), 2u);
+    EXPECT_EQ(waveforms->decodeCallsForTest(), decode_calls);
+    waveforms.reset();
+    WaveformCacheService reopened(waveform_config, {});
+    request_waveforms(reopened);
+    ASSERT_FALSE(HasFatalFailure());
+    EXPECT_EQ(reopened.decoderOpensForTest(), 0u);
+    EXPECT_EQ(reopened.decodeCallsForTest(), 0u);
+    EXPECT_EQ(reopened.decoderSeeksForTest(), 0u);
+    const auto timeline = session.workspace().timeline();
+    for (const auto& [time_us, asset, source_us] :
+         {std::tuple{250'000ll, edit::Id{0}, 0ll}, std::tuple{1'250'000ll, red_asset, 1'250'000ll},
+          std::tuple{2'000'000ll, edit::Id{0}, 0ll}, std::tuple{3'000'000ll, blue_asset, 500'000ll},
+          std::tuple{5'000'000ll, edit::Id{0}, 0ll}}) {
+        const auto evaluation = engine::EvaluateTimeline(timeline, time_us);
+        ASSERT_TRUE(evaluation.error.empty()) << evaluation.error;
+        if (!asset)
+            EXPECT_TRUE(evaluation.video.empty());
+        else {
+            ASSERT_EQ(evaluation.video.size(), 1u);
+            EXPECT_EQ(evaluation.video.front().asset, asset);
+            EXPECT_EQ(evaluation.video.front().source_us, source_us);
+        }
+    }
+    session.selectClip(blue_id);
+    session.requestSeekUs(750'000);
+    session.setSelectionBoundary(false);
+    session.requestSeekUs(3'000'000);
+    session.setSelectionBoundary(true);
+    exporter.setTimeSelectionUs(session.timeSelectionInUs(), session.timeSelectionOutUs());
+    const QJsonArray full{window(0, 1'000'000, "black"), window(1'000'000, 1'500'000, "red"),
+                          window(1'500'000, 2'500'000, "black"), window(2'500'000, 4'500'000, "blue"),
+                          window(4'500'000, 6'000'000, "black")};
+    export_scope(QStringLiteral("entire"), QStringLiteral("mkv"), 0, 6'000'000, full);
+    ASSERT_FALSE(HasFatalFailure());
+    export_scope(
+        QStringLiteral("occupied"), QStringLiteral("mkv"), 1'000'000, 4'500'000,
+        {window(0, 500'000, "red"), window(500'000, 1'500'000, "black"), window(1'500'000, 3'500'000, "blue")});
+    ASSERT_FALSE(HasFatalFailure());
+    export_scope(QStringLiteral("selected"), QStringLiteral("mp4"), 2'500'000, 4'500'000,
+                 {window(0, 2'000'000, "blue")});
+    ASSERT_FALSE(HasFatalFailure());
+    export_scope(QStringLiteral("time"), QStringLiteral("mkv"), 750'000, 3'000'000,
+                 {window(0, 250'000, "black"), window(250'000, 750'000, "red"), window(750'000, 1'750'000, "black"),
+                  window(1'750'000, 2'250'000, "blue")});
+    ASSERT_FALSE(HasFatalFailure());
+    export_scope(QStringLiteral("result"), QStringLiteral("mkv"), 0, 6'000'000, full);
+    ASSERT_FALSE(HasFatalFailure());
+    EXPECT_EQ(session.workspace().clips(), blank->clips);
+    EXPECT_EQ(session.workspace().snapshot()->spacers, blank->spacers);
+    for (qsizetype i = 0; i < urls.size(); ++i) {
+        const auto after = engine::ProbeEditMedia(std::filesystem::path(urls[i].toLocalFile().toStdWString()));
+        ASSERT_TRUE(after.error.empty()) << after.error;
+        EXPECT_EQ(after.content_sha256, source_metadata[i].content_sha256);
+    }
+    if (!evidence.isEmpty()) {
+        QFile manifest(QDir(evidence).filePath(QStringLiteral("manifest.json")));
+        ASSERT_TRUE(manifest.open(QIODevice::WriteOnly | QIODevice::NewOnly));
+        const auto bytes = QJsonDocument(QJsonObject{{QStringLiteral("sources"), source_manifest},
+                                                     {QStringLiteral("exports"), exports}})
+                               .toJson();
+        ASSERT_EQ(manifest.write(bytes), bytes.size());
+    }
+}
 TEST(EditExportAdapterRun, AnEmptyWorkspaceFailsBeforeAnyThreadIsStarted) {
     EnsureApplication();
     EditSessionAdapter session;
@@ -797,6 +1425,146 @@ TEST(EditExportAdapterRun, AnEmptyWorkspaceFailsBeforeAnyThreadIsStarted) {
     EXPECT_FALSE(exporter.running());
     EXPECT_EQ(exporter.errorText(), QStringLiteral("No edit master available for export."));
 }
+
+class EditExportSourceLease : public ::testing::TestWithParam<const char*> {};
+
+TEST_P(EditExportSourceLease, AllFrozenSourcesRemainImmutableBetweenChecksAndReleaseOnCancellation) {
+    EnsureApplication();
+    const bool render = std::string_view(GetParam()) == "render";
+    const bool selected_only = std::string_view(GetParam()) == "selected";
+    const bool use_render_fixture = render || selected_only;
+    const auto render_fixtures = qEnvironmentVariable("EXOSNAP_EDIT_RENDER_FIXTURES");
+    if (use_render_fixture && render_fixtures.isEmpty())
+        GTEST_SKIP() << "Set EXOSNAP_EDIT_RENDER_FIXTURES to generated red/blue media.";
+    QTemporaryDir sources;
+    QTemporaryDir output;
+    ASSERT_TRUE(sources.isValid());
+    ASSERT_TRUE(output.isValid());
+    const QString fixture =
+        use_render_fixture
+            ? QDir(render_fixtures).filePath(QStringLiteral("red.mkv"))
+            : QFileInfo(QString::fromUtf8(__FILE__))
+                  .dir()
+                  .absoluteFilePath(QStringLiteral("../../../libs/engine/tests/fixtures/reordered_h264.mp4"));
+    const QString first = sources.filePath(QStringLiteral("first.mp4"));
+    const QString second = sources.filePath(QStringLiteral("second.mp4"));
+    const QString replacement = sources.filePath(QStringLiteral("replacement.mp4"));
+    ASSERT_TRUE(QFile::copy(fixture, first));
+    ASSERT_TRUE(QFile::copy(fixture, second));
+    ASSERT_TRUE(QFile::copy(fixture, replacement));
+    QFile replacement_file(replacement);
+    ASSERT_TRUE(replacement_file.open(QIODevice::Append));
+    ASSERT_EQ(replacement_file.write("replacement", 11), 11);
+    replacement_file.close();
+    QFile original(first);
+    ASSERT_TRUE(original.open(QIODevice::ReadOnly));
+    const auto original_bytes = original.readAll();
+    original.close();
+    EditSessionAdapter session;
+    QEventLoop imported;
+    QObject::connect(&session, &EditSessionAdapter::workspaceChanged, &imported, &QEventLoop::quit);
+    QTimer::singleShot(10000, &imported, &QEventLoop::quit);
+    session.importMediaBatch({QUrl::fromLocalFile(first), QUrl::fromLocalFile(second)}, true);
+    imported.exec();
+    ASSERT_TRUE(session.workspaceError().isEmpty()) << session.workspaceError().toStdString();
+    ASSERT_EQ(session.workspace().assets().size(), 2u);
+    if (use_render_fixture) {
+        for (const auto& asset : session.workspace().assets()) {
+            engine::EditPlayerEngine player;
+            std::string error;
+            ASSERT_TRUE(player.Open(std::filesystem::path(asset.path), error)) << error;
+            const auto metadata = player.AudioMetadata();
+            engine::MonitorSelectionSnapshot selection{
+                metadata.selection_media_id, {1}, {}, true, metadata.unverified_asset_binding};
+            for (const auto& track : metadata.actual_tracks)
+                selection.tracks.push_back({track.track_id, 1.0f, false});
+            session.setAssetMonitorSelection(asset.id, std::move(selection));
+        }
+    }
+    if (render)
+        ASSERT_TRUE(session.applyCrossfade(session.workspace().clips().front().id));
+    if (selected_only) {
+        session.selectClip(session.workspace().clips().front().id);
+        ASSERT_TRUE(QFile::remove(second));
+    }
+    auto exporter = std::make_unique<EditExportAdapter>();
+    exporter->setSession(&session);
+    if (selected_only)
+        exporter->setSpanKey(QStringLiteral("selected"));
+    else if (!render)
+        exporter->setModeKey(QString::fromUtf8(GetParam()));
+    exporter->setOutputDirectoryProvider([&] { return output.path(); });
+    exporter->startExport();
+    QEventLoop review;
+    QObject::connect(exporter.get(), &EditExportAdapter::stateChanged, &review, [&] {
+        if (exporter->state() != EditExportAdapter::Preparing)
+            review.quit();
+    });
+    QTimer::singleShot(10000, &review, &QEventLoop::quit);
+    if (exporter->state() == EditExportAdapter::Preparing)
+        review.exec();
+    ASSERT_EQ(exporter->state(), EditExportAdapter::Review) << exporter->errorText().toStdString();
+    EXPECT_EQ(exporter->reviewOutcome().value(QStringLiteral("path")).toString(),
+              use_render_fixture ? QStringLiteral("Render") : QStringLiteral("Copy"));
+    struct VerificationGate {
+        QSemaphore reached;
+        QSemaphore resume;
+        std::atomic<bool> timed_out{false};
+    };
+    const auto gate = std::make_shared<VerificationGate>();
+    EditExportAdapterTestPeer::observeSourceVerification(
+        *exporter, [gate, first_id = session.workspace().assets().front().id](uint64_t id) {
+            if (id == first_id) {
+                gate->reached.release();
+                gate->timed_out.store(!gate->resume.tryAcquire(1, 10000));
+            }
+        });
+    const auto cleanup = qScopeGuard([&] {
+        if (exporter)
+            exporter->cancel();
+        gate->resume.release();
+        exporter.reset();
+    });
+    exporter->confirmPreparedExport();
+    ASSERT_TRUE(gate->reached.tryAcquire(1, 10000));
+    const bool replaced = MoveFileExW(reinterpret_cast<const wchar_t*>(replacement.utf16()),
+                                      reinterpret_cast<const wchar_t*>(first.utf16()), MOVEFILE_REPLACE_EXISTING);
+    const auto rename_error = GetLastError();
+    EXPECT_FALSE(replaced) << "An already verified source must not be replaceable before another source is checked.";
+    if (!replaced)
+        EXPECT_TRUE(rename_error == ERROR_SHARING_VIOLATION || rename_error == ERROR_ACCESS_DENIED) << rename_error;
+    for (const auto& path : {first, second}) {
+        if (selected_only && path == second)
+            continue;
+        const HANDLE writer = CreateFileW(reinterpret_cast<const wchar_t*>(path.utf16()), GENERIC_WRITE,
+                                          FILE_SHARE_READ | FILE_SHARE_WRITE | FILE_SHARE_DELETE, nullptr,
+                                          OPEN_EXISTING, FILE_ATTRIBUTE_NORMAL, nullptr);
+        const auto write_error = GetLastError();
+        if (writer != INVALID_HANDLE_VALUE)
+            CloseHandle(writer);
+        EXPECT_EQ(writer, INVALID_HANDLE_VALUE) << path.toStdString();
+        if (writer == INVALID_HANDLE_VALUE)
+            EXPECT_EQ(write_error, static_cast<DWORD>(ERROR_SHARING_VIOLATION));
+    }
+    EXPECT_TRUE(QDir(output.path()).entryList(QDir::Files).isEmpty());
+    exporter->cancel();
+    gate->resume.release();
+    exporter.reset();
+    EXPECT_FALSE(gate->timed_out.load());
+    EXPECT_TRUE(QDir(output.path()).entryList(QDir::Files).isEmpty());
+    ASSERT_TRUE(original.open(QIODevice::ReadOnly));
+    EXPECT_TRUE(original.readAll() == original_bytes);
+    original.close();
+    for (const auto& path : {first, second}) {
+        if (selected_only && path == second)
+            continue;
+        QFile writable(path);
+        EXPECT_TRUE(writable.open(QIODevice::ReadWrite)) << path.toStdString();
+    }
+}
+
+INSTANTIATE_TEST_SUITE_P(FinishedAndOriginal, EditExportSourceLease,
+                         ::testing::Values("finishedStereo", "originalStreams", "selected", "render"));
 
 TEST(EditExportAdapterRun, CancellingPreparationAndDestroyingAdapterLeavesNoOutput) {
     EnsureApplication();
@@ -1061,6 +1829,7 @@ TEST(EditExportAdapterRun, DestructionReclaimsFinishedWorkerWithCompletionStillQ
     ASSERT_EQ(exporter->state(), EditExportAdapter::Review) << exporter->errorText().toStdString();
     EXPECT_TRUE(QDir(directory.path()).entryList(QDir::Files).isEmpty());
     QFile source_file(fixture);
+    const auto original_size = source_file.size();
     ASSERT_TRUE(source_file.open(QIODevice::Append));
     ASSERT_EQ(source_file.write("x", 1), 1);
     source_file.close();
@@ -1075,6 +1844,9 @@ TEST(EditExportAdapterRun, DestructionReclaimsFinishedWorkerWithCompletionStillQ
         changed_source.exec();
     ASSERT_EQ(exporter->state(), EditExportAdapter::Failed) << exporter->errorText().toStdString();
     EXPECT_TRUE(QDir(directory.path()).entryList(QDir::Files).isEmpty());
+    ASSERT_TRUE(source_file.open(QIODevice::ReadWrite));
+    ASSERT_TRUE(source_file.resize(original_size));
+    source_file.close();
     session.setAssetMonitorSelection(session.workspace().assets().front().id,
                                      {metadata.selection_media_id, {2}, {}, true, metadata.unverified_asset_binding});
     exporter->retry();
@@ -1557,6 +2329,161 @@ EditContext MakeUndecodableContext() {
     EditContext context = MakeContext();
     context.mkv_master_path = QStringLiteral("D:/Recordings/not-a-real-clip.mkv");
     return context;
+}
+
+TEST(EditSessionDrag, PreviewIsFrozenAndCommitCreatesOneUndoStep) {
+    EnsureApplication();
+    EditSessionAdapter session;
+    session.setEditContext(MakeContext());
+    session.snapping = false;
+    const auto id = session.workspace().clips().front().id;
+    const auto revision = session.workspace().revision();
+    session.beginClipDrag(id);
+    session.updateClipDrag(1000);
+    ASSERT_TRUE(session.dragValid());
+    EXPECT_EQ(session.workspace().revision(), revision);
+    EXPECT_EQ(session.workspace().clip(id)->start, 0);
+    EXPECT_EQ(session.dragClips().size(), 2);
+    session.updateClipDrag(2000);
+    EXPECT_EQ(session.workspace().clip(id)->start, 0);
+    ASSERT_TRUE(session.commitClipDrag());
+    EXPECT_EQ(session.workspace().revision(), revision + 1);
+    EXPECT_EQ(session.workspace().clip(id)->start, 2'000'000);
+    session.undo();
+    EXPECT_EQ(session.workspace().clip(id)->start, 0);
+}
+
+TEST(EditSessionDrag, CancellationInvalidAndStaleCandidatesHaveNoHistoryEntry) {
+    EnsureApplication();
+    EditSessionAdapter session;
+    session.setEditContext(MakeContext());
+    session.snapping = false;
+    const auto id = session.workspace().clips().front().id;
+    const auto revision = session.workspace().revision();
+    session.beginClipDrag(id);
+    session.updateClipDrag(-1000);
+    EXPECT_FALSE(session.dragValid());
+    EXPECT_FALSE(session.commitClipDrag());
+    EXPECT_EQ(session.workspace().revision(), revision);
+    session.beginClipDrag(id);
+    session.updateClipDrag(1000);
+    session.cancelClipDrag();
+    EXPECT_EQ(session.workspace().revision(), revision);
+    session.beginClipDrag(id);
+    session.updateClipDrag(1000);
+    session.moveClip(id, 500, false);
+    const auto changed_revision = session.workspace().revision();
+    EXPECT_FALSE(session.dragActive());
+    EXPECT_TRUE(session.dragClips().empty());
+    EXPECT_FALSE(session.dragValid());
+    EXPECT_FALSE(session.commitClipDrag());
+    EXPECT_EQ(session.workspace().revision(), changed_revision);
+    EXPECT_FALSE(session.workspaceError().isEmpty());
+}
+
+TEST(EditSessionDrag, IndependentControlsAndFixedTrimPreserveUnselectedAudio) {
+    EnsureApplication();
+    EditSessionAdapter session;
+    session.setEditContext(MakeContext());
+    EXPECT_TRUE(session.snapping);
+    EXPECT_FALSE(session.ripple);
+    EXPECT_TRUE(session.autoCrossfade);
+    EXPECT_TRUE(session.linkedSelection);
+    session.linkedSelection = false;
+    session.snapping = false;
+    const auto id = session.workspace().clips().front().id;
+    const auto other = session.workspace().clips().back().id;
+    session.beginClipDrag(id, 0);
+    session.updateClipDrag(1000);
+    ASSERT_TRUE(session.dragValid());
+    EXPECT_EQ(session.dragClips().size(), 1);
+    ASSERT_TRUE(session.commitClipDrag());
+    EXPECT_EQ(session.workspace().clip(id)->start, 1'000'000);
+    EXPECT_EQ(session.workspace().clip(id)->source_in, 1'000'000);
+    EXPECT_EQ(session.workspace().clip(other)->start, 0);
+    EXPECT_EQ(session.workspace().clip(other)->source_in, 0);
+    session.deleteSelected(false);
+    ASSERT_EQ(session.workspace().clips().size(), 1);
+    EXPECT_EQ(session.workspace().clips().front().id, other);
+}
+
+TEST(EditSessionDrag, ExtremeMillisecondsRejectWithoutMutatingHistory) {
+    EnsureApplication();
+    EditSessionAdapter session;
+    session.setEditContext(MakeContext());
+    const auto id = session.workspace().clips().front().id;
+    const auto revision = session.workspace().revision();
+    session.beginClipDrag(id);
+    session.updateClipDrag((std::numeric_limits<qint64>::min)());
+    EXPECT_FALSE(session.dragValid());
+    EXPECT_FALSE(session.commitClipDrag());
+    EXPECT_EQ(session.workspace().revision(), revision);
+    session.beginClipDrag(id);
+    session.updateClipDrag((std::numeric_limits<qint64>::max)());
+    EXPECT_FALSE(session.dragValid());
+    session.cancelClipDrag();
+    session.setClipFade(id, true, (std::numeric_limits<qint64>::max)());
+    session.setFixedTimelineEnd(true, (std::numeric_limits<qint64>::max)());
+    EXPECT_EQ(session.workspace().revision(), revision);
+}
+
+TEST(EditSessionBlankTime, CopyPasteSpacerAndPreviewGapClosureAreUndoable) {
+    EnsureApplication();
+    EditSessionAdapter session;
+    session.setEditContext(MakeContext(10));
+    const auto id = session.workspace().clips().front().id;
+    const auto track = session.workspace().clips().front().track;
+    session.moveClip(id, 10000, false);
+    session.requestSeek(0);
+    session.selectGap(track, 5000);
+    ASSERT_EQ(session.selectedGap().value(QStringLiteral("endMs")).toLongLong(), 10000);
+    const auto gap_revision = session.workspace().revision();
+    session.deleteSelected(false);
+    EXPECT_EQ(session.workspace().revision(), gap_revision);
+    session.copyBlankDuration();
+    session.pasteSpacer();
+    ASSERT_EQ(session.spacers().size(), 1);
+    const auto spacer_id = session.spacers().front().toMap().value(QStringLiteral("id")).toULongLong();
+    session.beginSpacerDrag(spacer_id, 1);
+    session.updateClipDrag(-1000);
+    ASSERT_TRUE(session.dragValid());
+    EXPECT_EQ(session.spacers().front().toMap().value(QStringLiteral("durationMs")).toLongLong(), 10000);
+    ASSERT_TRUE(session.commitClipDrag());
+    EXPECT_EQ(session.spacers().front().toMap().value(QStringLiteral("durationMs")).toLongLong(), 9000);
+    session.selectSpacer(spacer_id);
+    session.deleteSelected(false);
+    EXPECT_TRUE(session.spacers().isEmpty());
+    EXPECT_EQ(session.workspace().clip(id)->start, 10'000'000);
+    session.selectGap(track, 5000);
+    session.previewCloseGap();
+    ASSERT_TRUE(session.dragValid());
+    EXPECT_EQ(session.workspace().clip(id)->start, 10'000'000);
+    ASSERT_TRUE(session.commitClipDrag());
+    EXPECT_EQ(session.workspace().clip(id)->start, 0);
+    session.undo();
+    EXPECT_EQ(session.workspace().clip(id)->start, 10'000'000);
+}
+
+TEST(EditSessionBlankTime, FixedEndAndTrackDeletionRejectStaleConfirmation) {
+    EnsureApplication();
+    EditSessionAdapter session;
+    session.setEditContext(MakeContext(10));
+    session.setFixedTimelineEnd(true, 20000);
+    EXPECT_TRUE(session.fixedTimelineEnd());
+    EXPECT_EQ(session.durationMs(), 20000);
+    const auto id = session.workspace().clips().front().id;
+    const auto track = session.workspace().clips().front().track;
+    EXPECT_FALSE(session.deleteTrack(track));
+    session.moveClip(id, 1000, false);
+    const auto revision = session.workspace().revision();
+    EXPECT_FALSE(session.deleteTrack(track, true));
+    EXPECT_EQ(session.workspace().revision(), revision);
+    EXPECT_EQ(session.workspace().tracks().size(), 2);
+    EXPECT_FALSE(session.deleteTrack(track));
+    EXPECT_TRUE(session.deleteTrack(track, true));
+    EXPECT_EQ(session.durationMs(), 20000);
+    session.undo();
+    EXPECT_EQ(session.workspace().tracks().size(), 2);
 }
 
 TEST(EditTimelinePreviewState, AClipWithNothingToShowIsIdleNotGenerating) {
