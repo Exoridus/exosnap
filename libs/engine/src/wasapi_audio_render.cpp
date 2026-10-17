@@ -5,6 +5,7 @@
 #include "playback_clock.h"
 
 #include <Audioclient.h>
+#include <atomic>
 #include <avrt.h>
 #include <cstddef>
 #include <cstdint>
