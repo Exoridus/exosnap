@@ -427,12 +427,11 @@ jobs:
   build-test-debug:
     name: build-test (windows-x64-debug)
     runs-on: windows-2022
-    # Measured over the last 20 runs: median 12 min at a 97-98 % sccache hit
-    # rate; worst 71 min on a cold cache with a header change that fanned the
-    # scoped clang-tidy set out across the tree (36 min of it). About 1.7x
-    # that worst case: a lint-policy change reaches every unit, and its first
-    # push is the run this ceiling has to let finish.
-    timeout-minutes: 120
+    # A cold full-tree analysis of 664 units projects to about 117 minutes
+    # on this runner, plus roughly 20 minutes for setup, build and tests.
+    # Allow that pass to finish and populate the verdict cache. Fresh results
+    # are stored only after the complete batch's inputs are revalidated.
+    timeout-minutes: 180
     # Not on a branch push: the next commit is the squash of a PR whose own run
     # of this exact job just went green (see "WHAT RUNS WHERE" at the top of this
     # file). Written as a positive list over the events this workflow can see
@@ -515,8 +514,9 @@ jobs:
       # repository's cache budget; entries are a few hundred bytes each, so the
       # set is never what fills it.
       - name: Restore clang-tidy result cache
-        uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
-        # zizmor: ignore[cache-poisoning] -- restored on tag pushes by decision: a cold release build is ~46 min and the key is scoped to runner image + lock files; revisiting it is an ADR, not a lint fix
+        id: tidy-cache
+        uses: actions/cache/restore@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        # zizmor: ignore[cache-poisoning] -- verdict reuse validates inputs and entries within GitHub cache ref isolation
         with:
           path: ${{ runner.temp }}/clang-tidy-cache
           key: clang-tidy-blocking-${{ runner.os }}-${{ github.run_id }}-${{ github.run_attempt }}
@@ -536,13 +536,34 @@ jobs:
         env:
           EVENT: ${{ github.event_name }}
           TIDY_CACHE: ${{ runner.temp }}/clang-tidy-cache
+          EXO_DEV_CLANG_TIDY_PROGRESS: '1'
+          EXO_DEV_CLANG_TIDY_PROFILE: public
         run: >-
           cargo exo-dev verify --profile ci-build-debug --event $env:EVENT
           --tidy-cache-dir $env:TIDY_CACHE --jobs $([Environment]::ProcessorCount)
 
+      # Validated diagnostics remain blocking when replayed. Retain them even
+      # when an analysis finding or a later step fails, so a follow-up run can
+      # reuse unchanged inputs without repeating the completed analysis.
+      - name: Save clang-tidy result cache
+        if: always() && steps.tidy-cache.outputs.cache-primary-key != '' && steps.tidy-cache.outputs.cache-hit != 'true'
+        uses: actions/cache/save@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: ${{ runner.temp }}/clang-tidy-cache
+          key: ${{ steps.tidy-cache.outputs.cache-primary-key }}
+
       - name: sccache stats
         if: always()
         run: sccache --show-stats
+
+      - name: Retain clang-tidy performance profile
+        if: always()
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        with:
+          name: clang-tidy-performance
+          path: .workspace/verify/**/clang-tidy-profile.json
+          include-hidden-files: true
+          if-no-files-found: ignore
 
       - name: Upload test logs (windows-x64-ninja-debug)
         if: failure()
