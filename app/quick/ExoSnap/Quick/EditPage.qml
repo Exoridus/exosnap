@@ -551,15 +551,18 @@ FocusScope {
                         spacing: 8
                         EditActionButton {
                             objectName: "editTransportPlay"
-                            text: root.player.playing ? qsTr("Pause") : qsTr("Play")
+                            text: root.player.desiredPlaying ? qsTr("Pause") : qsTr("Play")
                             shortcutText: "Space"
-                            glyph: root.player.playing ? ExoGlyph.Pause : ExoGlyph.Run
-                            enabled: root.session.durationMs > 0 && root.player.clipOpen
-                            onClicked: {
-                                if (root.player.monitoringConfirmationRequired && !root.detailsOpen)
-                                    root.toggleDetails();
-                                root.player.togglePlay();
-                            }
+                            glyph: root.player.desiredPlaying ? ExoGlyph.Pause : ExoGlyph.Run
+                            enabled: root.session.durationMs > 0
+                            onClicked: root.player.togglePlay()
+                        }
+                        EditActionButton {
+                            objectName: "editAudioChoice"
+                            text: qsTr("Choose audio tracks")
+                            glyph: ExoGlyph.Speaker
+                            visible: root.player.monitoringConfirmationRequired
+                            onClicked: { if (!root.detailsOpen) root.toggleDetails(); }
                         }
                         Label {
                             objectName: "editTransportTimecode"
@@ -636,19 +639,6 @@ FocusScope {
                     Layout.fillWidth: true
                     text: root.session.workspaceError || root.exporter.errorText
                     visible: text.length > 0
-                    color: ExoTheme.textSecondary
-                    wrapMode: Text.Wrap
-                }
-                // The preview placeholder that carries the rejection reason is hidden
-                // behind any presented frame, so the reason playback is refused has to
-                // be stated where the transport is.
-                Label {
-                    objectName: "editMonitoringRequired"
-                    Layout.fillWidth: true
-                    Layout.leftMargin: 8
-                    Layout.rightMargin: 8
-                    text: qsTr("Choose the audio tracks to hear in Details and confirm them before playback.")
-                    visible: root.player.monitoringConfirmationRequired && root.player.monitoringTracks.length > 0
                     color: ExoTheme.textSecondary
                     wrapMode: Text.Wrap
                 }

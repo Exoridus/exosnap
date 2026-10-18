@@ -44,6 +44,11 @@ class EditPlayerWorker : public QObject {
     void setRequestGeneration(uint64_t generation) {
         request_generation_ = generation;
     }
+    void requestTransport(uint64_t command, uint64_t generation, qint64 target_us, bool seek, bool playing);
+    void acknowledgeTransport();
+    void setTransportCommand(uint64_t command) {
+        transport_command_ = command;
+    }
 
   public slots:
     void open(const QString& master_path, qint64 duration_ms, double screen_hz);
@@ -55,23 +60,32 @@ class EditPlayerWorker : public QObject {
     void seekUs(qint64 target_us);
     void setScreenRefreshHz(double screen_hz);
     void setVolume(double volume);
-    void confirmMonitoring(const QStringList& track_ids, bool overlap_confirmed);
+    void confirmMonitoring(const QStringList& track_ids, bool overlap_confirmed, qulonglong request = 0);
 
   signals:
     void openFinished(bool opened, const QString& error);
     void openFinishedForGeneration(qulonglong generation, bool opened, const QString& error);
+    void openFinishedForCommand(qulonglong command, qulonglong generation, bool opened, const QString& error);
     void playbackStateChanged(bool playing);
+    void transportStateChanged(qulonglong command, qulonglong generation, bool playing);
+    void transportCompleted(qulonglong command, qulonglong generation, bool playing);
+    void transportEnded(qulonglong command, qulonglong generation);
     void positionAdvancedUs(qint64 position_us);
+    void positionAdvancedForCommand(qulonglong command, qulonglong generation, qint64 position_us);
     void positionAdvanced(qint64 position_ms);
     void reachedEnd();
     void monitoringChanged(QVariantList tracks, bool confirmation_required);
     void monitoringRejected(QString error);
-    void monitorSelectionConfirmed(qulonglong asset, exosnap::engine::MonitorSelectionSnapshot selection);
+    void monitoringRejectedForCommand(qulonglong command, qulonglong generation, QString error);
+    void monitoringStateChangedForGeneration(qulonglong generation, QVariantList tracks, bool confirmation_required);
+    void monitorSelectionConfirmed(qulonglong request, qulonglong asset,
+                                   exosnap::engine::MonitorSelectionSnapshot selection);
 
   private:
     void ensureTimer();
     void publishOpenResult(bool opened, const QString& error);
     void publishPlaybackState(bool playing);
+    void publishPosition();
     // Re-publishes the session's OWN clock into the item's present gate. Must run
     // after every Play/Pause/SeekTo, not only on the tick: the session resets its
     // clock to -1 on pause (and SeekTo pauses first), and without propagating
@@ -80,6 +94,7 @@ class EditPlayerWorker : public QObject {
     void syncClock();
     void onTick();
     void seekTimeline(qint64 position_us, bool resume, bool preserve_audio = false);
+    void seekWithIntent(qint64 target_us, bool resume);
     void closeSource();
     void openSource(const QString& master_path, qint64 duration_ms, double screen_hz);
     engine::EditTimelineReader* timelineAudioReader();
@@ -89,6 +104,8 @@ class EditPlayerWorker : public QObject {
     bool renderTimeline(qint64 position_us, engine::VideoReadMode mode = engine::VideoReadMode::Sequential);
     void presentBlank(qint64 position_us);
     void publishMonitoring();
+    void publishMonitoringState(QVariantList tracks, bool confirmation_required);
+    void rejectMonitoring(const QString& error);
     void tickRenderTimeline();
     bool canReuseSource(const edit::Asset& asset) const;
     bool bindTimelineSource(const edit::Clip& clip, const edit::Asset& asset);
@@ -106,8 +123,11 @@ class EditPlayerWorker : public QObject {
     bool timeline_mode_ = false;
     bool timeline_playing_ = false;
     bool published_playing_ = false;
+    bool source_opened_ = false;
+    QString source_open_error_;
     double volume_ = 1.0;
     uint64_t request_generation_ = 0;
+    uint64_t transport_command_ = 0;
     bool render_mode_ = false;
     std::unique_ptr<engine::EditTimelineReader> render_reader_;
     std::unique_ptr<engine::EditTimelineReader> timeline_audio_reader_;

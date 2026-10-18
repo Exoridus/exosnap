@@ -1788,7 +1788,8 @@ bool EditPlayerEngine::Impl::DecodeAudioRange(std::optional<uint32_t> stream, in
 }
 
 void EditPlayerEngine::StartPlaybackDecode(int64_t start_us, VideoFrameCallback on_video, AudioBlockCallback on_audio,
-                                           std::function<int64_t()> current_media_time_us) {
+                                           std::function<int64_t()> current_media_time_us,
+                                           PlaybackAudioMode audio_mode) {
     // Same demux/video/audio thread topology, same clock-gated skip decision,
     // same PacketQueue backpressure as DecodeFrameAtRaw's single-frame
     // sibling above -- docs/architecture/edit-and-export.md.
@@ -1803,7 +1804,7 @@ void EditPlayerEngine::StartPlaybackDecode(int64_t start_us, VideoFrameCallback 
     std::lock_guard<std::mutex> lock(impl_->playback_mutex);
     if (!impl_->IsOpen() || impl_->playback_running.load())
         return;
-    if (impl_->audio_metadata.monitoring_confirmation_required) {
+    if (audio_mode == PlaybackAudioMode::MonitorSelection && impl_->audio_metadata.monitoring_confirmation_required) {
         LogWarn("audio monitoring requires explicit track confirmation");
         return;
     }
@@ -1848,6 +1849,8 @@ void EditPlayerEngine::StartPlaybackDecode(int64_t start_us, VideoFrameCallback 
     std::vector<float> playing_gains;
     std::vector<QueuedStream> audio_streams;
     for (const auto& track : impl->audio_tracks) {
+        if (audio_mode == PlaybackAudioMode::Disabled)
+            break;
         const float gain = impl->MonitorGain(track->stream_index);
         if (gain == 0)
             continue;
@@ -1865,10 +1868,12 @@ void EditPlayerEngine::StartPlaybackDecode(int64_t start_us, VideoFrameCallback 
     // Publish it before any thread starts, so a caller reading it right after
     // StartPlaybackDecode() returns sees this run's real answer.
     impl->playback_audio_active.store(audio_enabled);
-    if (!impl->audio_tracks.empty() && !audio_enabled)
-        LogWarn("no playback audio resampler could be built -- this run is video-only");
-    else if (playing_tracks.size() < impl->audio_tracks.size())
-        LogWarn("an audio track has no usable playback resampler -- it stays silent this run");
+    if (audio_mode == PlaybackAudioMode::MonitorSelection) {
+        if (!impl->audio_tracks.empty() && !audio_enabled)
+            LogWarn("no playback audio resampler could be built -- this run is video-only");
+        else if (playing_tracks.size() < impl->audio_tracks.size())
+            LogWarn("an audio track has no usable playback resampler -- it stays silent this run");
+    }
 
     const AVRational vtb = vst->time_base;
     const int video_idx = impl->video_stream_idx;

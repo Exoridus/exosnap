@@ -1178,22 +1178,39 @@ TEST(EditSourceImport, ResolvingAnAmbiguousMixEnablesOnlyTheChosenStreams) {
     EXPECT_EQ(mix.audible(), 2u);
 }
 
-TEST(EditSourceImport, ConfirmedMixIsProvenanceThatUndoAndRedoNeverContradict) {
+TEST(EditSourceImport, FirstAudioChoiceIsOneUndoableAuthoredChange) {
+    UndecidedMix mix;
+    const auto before = mix.workspace.revision();
+    ASSERT_TRUE(mix.workspace.resolveInputMix(mix.asset, kStems));
+    EXPECT_EQ(mix.workspace.revision(), before + 1);
+    ASSERT_TRUE(mix.workspace.undo());
+    EXPECT_TRUE(mix.workspace.asset(mix.asset)->mix_decision_required);
+    EXPECT_EQ(mix.enabled(), (std::vector<bool>{false, false, false}));
+    ASSERT_TRUE(mix.workspace.redo());
+    EXPECT_FALSE(mix.workspace.asset(mix.asset)->mix_decision_required);
+    EXPECT_EQ(mix.enabled(), (std::vector<bool>{false, true, true}));
+}
+
+TEST(EditSourceImport, AudioChoiceUndoPreservesEarlierEditsAndTheirHistory) {
     UndecidedMix mix;
     const auto stem = mix.audioClip(11);
     ASSERT_EQ(mix.workspace.apply(Move{{stem}, Second, {}, {}, false}, mix.workspace.revision()).status,
               CommandStatus::Applied);
     ASSERT_TRUE(mix.workspace.resolveInputMix(mix.asset, kStems));
     const auto resolved = mix.enabled();
-    // Undo reaches the move made before the decision and the insert itself; no
-    // step brings back the undecided all-disabled state.
     ASSERT_TRUE(mix.workspace.undo());
-    EXPECT_EQ(mix.enabled(), resolved);
+    EXPECT_EQ(mix.enabled(), (std::vector<bool>{false, false, false}));
+    EXPECT_EQ(mix.workspace.clip(stem)->start, Second);
+    EXPECT_TRUE(mix.workspace.asset(mix.asset)->mix_decision_required);
+    ASSERT_TRUE(mix.workspace.undo());
     EXPECT_EQ(mix.workspace.clip(stem)->start, 0);
     ASSERT_TRUE(mix.workspace.undo());
     EXPECT_TRUE(mix.workspace.clips().empty());
     ASSERT_TRUE(mix.workspace.redo());
-    EXPECT_EQ(mix.enabled(), resolved);
+    EXPECT_EQ(mix.enabled(), (std::vector<bool>{false, false, false}));
+    ASSERT_TRUE(mix.workspace.redo());
+    EXPECT_EQ(mix.workspace.clip(stem)->start, Second);
+    EXPECT_TRUE(mix.workspace.asset(mix.asset)->mix_decision_required);
     ASSERT_TRUE(mix.workspace.redo());
     EXPECT_EQ(mix.enabled(), resolved);
     EXPECT_EQ(mix.workspace.clip(stem)->start, Second);
@@ -1231,6 +1248,11 @@ TEST(EditSourceImport, ConfirmedSilenceDiffersFromAnUnresolvedMix) {
     ASSERT_TRUE(silent.workspace.asset(silent.asset)->input_mix_selection);
     EXPECT_TRUE(silent.workspace.asset(silent.asset)->input_mix_selection->selected_stream_identities.empty());
     EXPECT_EQ(silent.audible(), 0u);
+    ASSERT_TRUE(silent.workspace.undo());
+    EXPECT_TRUE(silent.workspace.asset(silent.asset)->mix_decision_required);
+    EXPECT_EQ(silent.enabled(), (std::vector<bool>{false, false, false}));
+    ASSERT_TRUE(silent.workspace.redo());
+    EXPECT_FALSE(silent.workspace.asset(silent.asset)->mix_decision_required);
 }
 
 TEST(EditSourceImport, ExplicitEnableEditsSurviveTheDecisionAndMonitoringNeverRewritesIt) {
@@ -1241,6 +1263,10 @@ TEST(EditSourceImport, ExplicitEnableEditsSurviveTheDecisionAndMonitoringNeverRe
     ASSERT_TRUE(mix.workspace.resolveInputMix(mix.asset, kStems));
     EXPECT_EQ(mix.enabled(), (std::vector<bool>{true, true, true}));
     ASSERT_TRUE(mix.workspace.undo());
+    EXPECT_EQ(mix.enabled(), (std::vector<bool>{true, false, false}));
+    ASSERT_TRUE(mix.workspace.redo());
+    ASSERT_EQ(mix.workspace.apply(SetClipEnabled{master, false}, mix.workspace.revision()).status,
+              CommandStatus::Applied);
     EXPECT_EQ(mix.enabled(), (std::vector<bool>{false, true, true}));
     // A later monitoring choice is transient preview state: it neither changes
     // the provenance nor reaches the export snapshot.

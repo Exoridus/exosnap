@@ -6,6 +6,89 @@ TestCase {
     name: "EditPreviewState"
     when: windowShown
 
+    function test_transport_intent_data() {
+        return [
+            {tag: "pending-toggle", action: "toggle", desired: false},
+            {tag: "playing-seek", action: "seek", desired: true},
+            {tag: "nested-scrub-pending-play", action: "scrub", desired: true},
+            {tag: "explicit-pause-during-scrub", action: "pauseDuringScrub", desired: false},
+            {tag: "frame-step-pauses", action: "frameStep", desired: false},
+            {tag: "stale-position", action: "oldPosition", desired: true},
+            {tag: "stale-error", action: "oldError", desired: true},
+            {tag: "stale-open-error-same-generation", action: "oldOpenError", desired: true},
+            {tag: "stale-state-completion-end", action: "oldAcknowledgement", desired: false},
+            {tag: "current-error-clears-intent", action: "currentError", desired: false},
+            {tag: "runtime-failure-clears-intent", action: "runtimeFailure", desired: false}
+        ];
+    }
+
+    function test_transport_intent(data) {
+        const probe = testMediaPreview.transportIntentProbe(data.action);
+        compare(probe.desiredPlaying, data.desired);
+        if (data.action === "seek")
+            compare(probe.requested, 20000000);
+        if (data.action === "oldPosition")
+            compare(probe.playhead, 20000000);
+        if (data.action === "oldOpenError")
+            compare(probe.placeholderUnchanged, true);
+        if (data.action === "oldAcknowledgement")
+            compare(probe.acknowledgedPlaying, false);
+    }
+
+    function test_blank_timeline_transport_preserves_seek_intent() {
+        const probe = testMediaPreview.blankTransportProbe();
+        compare(probe.authored, true);
+        compare(probe.started, true);
+        compare(probe.continued, true);
+        compare(probe.paused, true);
+    }
+
+    function test_authored_audio_admission_data() {
+        return [
+            {tag: "raw", composed: false, file: "red.mkv", video: true, enabledAudio: 1, unresolved: false},
+            {tag: "composed", composed: true, file: "red.mkv", video: true, enabledAudio: 1, unresolved: false},
+            {tag: "raw-unresolved", composed: false, file: "transport-ambiguous.mkv", video: true, enabledAudio: 0, unresolved: true},
+            {tag: "composed-unresolved", composed: true, file: "transport-ambiguous.mkv", video: true, enabledAudio: 0, unresolved: true},
+            {tag: "audio-only", composed: false, file: "transport-audio-only.mka", video: false, enabledAudio: 1, unresolved: false}
+        ];
+    }
+
+    function test_authored_audio_admission(data) {
+        if (!testMediaPreview.available || !testMediaPreview.fixtureAvailable(data.file))
+            skip("Media fixture unavailable: " + data.file);
+        const probe = testMediaPreview.authoredAudioAdmissionProbe(data.composed, data.file);
+        compare(probe.imported, true, probe.error);
+        compare(probe.intentRetained, true);
+        compare(probe.advanced, true, probe.error);
+        compare(probe.selectionIndependent, true);
+        compare(probe.playingSeekContinued, true, probe.error);
+        compare(probe.pausedSeekStayedPaused, true, probe.error);
+        compare(probe.restartedAtEnd, true, probe.error);
+        verify(probe.frames >= 2);
+        compare(probe.sawVideo, data.video);
+        compare(probe.enabledAudio, data.enabledAudio);
+        compare(probe.audioChoiceRequired, data.unresolved);
+    }
+
+    function test_obsolete_transport_burst_does_not_decode_every_intermediate_intent() {
+        const probe = testMediaPreview.transportBurstProbe();
+        compare(probe.desiredPlaying, false);
+        compare(probe.completed, 1);
+    }
+
+    function test_session_replacement_does_not_reuse_an_unrelated_revision() {
+        const probe = testMediaPreview.sessionReplacementProbe();
+        compare(probe.duration, 5000000);
+        compare(probe.closedAfterDestroy, true);
+    }
+
+    function test_pause_does_not_rewind_while_presentation_is_pending() {
+        const probe = testMediaPreview.pauseBeforePresentationProbe();
+        compare(probe.started, true);
+        compare(probe.presentationPending, true);
+        verify(probe.workerAt >= probe.pauseAt);
+    }
+
     function test_raw_generation_rejection_keeps_source_and_timeline_times_separate() {
         const probe = testMediaPreview.rawGenerationProbe();
         compare(probe.staleRejected, true);

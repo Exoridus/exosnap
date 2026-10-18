@@ -77,6 +77,8 @@ class EditPlayerAdapter : public QObject {
     // playhead" from "the preview is paused", because what it draws over the
     // picture differs between the two.
     Q_PROPERTY(bool scrubbing READ scrubbing NOTIFY scrubbingChanged FINAL)
+    Q_PROPERTY(bool desiredPlaying READ desiredPlaying NOTIFY transportChanged FINAL)
+    Q_PROPERTY(bool transportPending READ transportPending NOTIFY transportChanged FINAL)
     Q_PROPERTY(QString placeholderText READ placeholderText NOTIFY placeholderTextChanged FINAL)
     // Is the Edit workspace the surface the user is looking at? Bound by the
     // shell from the navigation state (QCR-001) -- the same shape
@@ -119,6 +121,12 @@ class EditPlayerAdapter : public QObject {
     void detachPlayerItem(ExoEditPlayerItem* item);
 
     [[nodiscard]] bool playing() const noexcept;
+    bool desiredPlaying() const noexcept {
+        return desired_playing_;
+    }
+    bool transportPending() const noexcept {
+        return transport_pending_;
+    }
     [[nodiscard]] bool clipOpen() const noexcept;
     [[nodiscard]] bool scrubbing() const noexcept;
     [[nodiscard]] const QString& placeholderText() const noexcept;
@@ -146,8 +154,8 @@ class EditPlayerAdapter : public QObject {
         return monitoring_confirmation_required_;
     }
     void setMonitoringState(QVariantList tracks, bool confirmationRequired);
-    // Scrubbing pauses; whether it resumes on release depends on whether the
-    // preview was playing when the scrub began.
+    // Scrubbing quiesces playback without changing the requested intent.
+    // Explicit Play/Pause during the gesture determines its release behavior.
     Q_INVOKABLE void beginScrub();
     Q_INVOKABLE void endScrub();
 
@@ -174,6 +182,7 @@ class EditPlayerAdapter : public QObject {
     void surfaceVisibleChanged();
     void volumeChanged();
     void monitoringChanged();
+    void transportChanged();
 
   private:
     friend class EditPlayerAdapterTestPeer;
@@ -181,6 +190,7 @@ class EditPlayerAdapter : public QObject {
     void closeClip();
     void seekUs(qint64 position_us);
     void dispatchSeek();
+    void dispatchTransport(bool seek);
     void setPreviewState(PreviewState state);
     void setPlaceholderText(const QString& text);
     [[nodiscard]] double currentScreenRefreshHz() const;
@@ -196,7 +206,6 @@ class EditPlayerAdapter : public QObject {
     bool desired_playing_ = false;
     bool transport_pending_ = false;
     bool clip_open_ = false;
-    bool resume_after_scrub_ = false;
     bool scrubbing_ = false;
     // True until the shell says otherwise: a session that is handed a clip is
     // handed it on Record, which is the page the workspace is visible on.
@@ -209,10 +218,15 @@ class EditPlayerAdapter : public QObject {
     struct SeekRequest {
         qint64 time_us = 0;
         uint64_t generation = 0;
+        uint64_t command = 0;
+        bool playing = false;
     };
     std::optional<SeekRequest> pending_seek_;
     bool seek_dispatch_active_ = false;
     uint64_t request_generation_ = 0;
+    uint64_t transport_command_ = 0;
+    uint64_t monitoring_request_ = 0;
+    std::shared_ptr<std::atomic<uint64_t>> current_transport_ = std::make_shared<std::atomic<uint64_t>>(0);
     PreviewState preview_state_ = Empty;
     qint64 requested_time_us_ = 0;
     std::optional<qint64> presented_time_us_;

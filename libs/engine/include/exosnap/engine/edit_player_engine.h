@@ -43,6 +43,8 @@
 
 namespace exosnap::engine {
 
+enum class PlaybackAudioMode { MonitorSelection, Disabled };
+
 // One decoded video frame, ready to paint: top-down BGRA8888, already
 // color-converted using the SOURCE FILE's own container color tags (falls
 // back to ColorMetadata::Sdr709() when the container's tags are unspecified,
@@ -308,8 +310,11 @@ class EditPlayerEngine {
     // player's GPU render path (docs/architecture/edit-and-export.md) -- the
     // caller's own EditFrameGpuConverter does the colour conversion, not this
     // engine.
+    // Disabled audio skips source-audio admission and creates no audio decode
+    // queue or resamplers. It does not confirm or change the monitoring choice.
     void StartPlaybackDecode(int64_t start_us, VideoFrameCallback on_video, AudioBlockCallback on_audio,
-                             std::function<int64_t()> current_media_time_us);
+                             std::function<int64_t()> current_media_time_us,
+                             PlaybackAudioMode audio_mode = PlaybackAudioMode::MonitorSelection);
 
     // Stops and joins the playback decode threads, if running. Safe to call
     // even if not running (no-op). Called from Close() and the destructor.

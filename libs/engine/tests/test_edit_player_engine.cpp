@@ -7,6 +7,7 @@
 
 #include "edit_playback_pacing.h"
 #include "exosnap/engine/edit_player_engine.h"
+#include "exosnap/engine/edit_player_session.h"
 #include <exosnap/engine/audio_media_manifest.h>
 
 extern "C" {
@@ -212,6 +213,28 @@ class ScopedTestMkv {
     ScopedQuietAvLog quiet_;
     std::filesystem::path path_;
 };
+
+TEST(EditPlayerSessionAdmission, ExternalVideoClockDoesNotAdmitUnconfirmedSourceAudio) {
+    ScopedTestMkv file("edit_player_external_clock_admission.mkv");
+    ASSERT_TRUE(WriteTestMkv(file.path(), {""}));
+    exosnap::engine::EditPlayerSession session;
+    std::string error;
+    ASSERT_TRUE(session.Open(file.path(), error)) << error;
+    ASSERT_TRUE(session.MonitoringConfirmationRequired());
+    session.Play(100'000);
+    EXPECT_LT(session.ClockSnapshotUs(), 0);
+    int64_t clock = 250'000;
+    session.PlayWithExternalClock(clock, 1, [&]() { return clock; });
+    EXPECT_EQ(session.CurrentPositionUs(), 250'000);
+    clock = 350'000;
+    EXPECT_EQ(session.CurrentPositionUs(), 350'000);
+    EXPECT_TRUE(session.MonitoringConfirmationRequired());
+    session.Pause();
+    EXPECT_EQ(session.CurrentPositionUs(), 350'000);
+    EXPECT_LT(session.ClockSnapshotUs(), 0);
+    session.Play(100'000);
+    EXPECT_LT(session.ClockSnapshotUs(), 0);
+}
 
 TEST(EditPlayerEngine, OpenNonexistentFileFails) {
     EditPlayerEngine engine;

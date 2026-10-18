@@ -18,6 +18,8 @@ Queued workspace updates retain the newest revision within each playback-command
 Dispatching a seek, transport, monitoring or lifecycle command seals the preceding interval, so a newer revision cannot replace the workspace that command must observe.
 Only preview work is superseded; workspace commands and undo history remain intact.
 
+The GUI owns requested transport intent separately from acknowledged worker playback. Each seek or transport request carries a command ID and preview generation. Only matching state, completion, position and end replies may update the current transport. Obsolete queued transport requests yield before decoder work. Ordinary seeking preserves requested playback, whereas explicit frame inspection pauses first. Scrubbing temporarily quiesces playback without replacing intent, so a later explicit Pause cannot be undone by scrub release.
+
 The non-composited player can retain its session across edits and split segments when the asset, validated source fingerprint, video stream and file size/write time remain compatible.
 It updates the source-to-timeline offset rather than treating a new clip ID as a new source.
 Changing that callback mapping first pauses playback and joins any outstanding scrub read.
@@ -34,6 +36,8 @@ Demux reads against the playback clock up to approximately one second ahead. Pac
 Audio output is paced by the WASAPI render ring, which can block only the audio worker. Video has no separate bounded decoded-frame queue. A newest-wins mailbox carries the latest decoded frame, and the presentation gate drops late frames before GPU conversion. Under sustained overload the decoder can skip nonreference pictures and restore normal decoding when it catches up.
 
 ## Playback clock and multiple audio tracks
+
+Externally clocked raw-video playback selects disabled source-audio decode explicitly. This bypasses source monitoring admission without confirming any tracks and creates no source-audio queues or resamplers. Legacy source playback retains its monitoring guard. Timeline preview admission instead follows authored enabled contributions, so an unresolved alternative mix cannot disable video or already admitted timeline audio. Raw and composed preview share timeline audio startup and its silent wall-clock fallback when no output endpoint can initialize.
 
 The master clock is the endpoint's actual play cursor (`IAudioClock`), not the number of samples written into a render buffer. Stop/reset flushes the endpoint so clock and queued playback agree. A caller asks whether audio is **delivering**, not merely whether the file declares an audio stream.
 

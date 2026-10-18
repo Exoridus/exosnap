@@ -120,6 +120,7 @@ struct InputMixSelection {
     InputMixAuthority authority = InputMixAuthority::UserConfirmed;
     std::array<uint8_t, 32> provenance_fingerprint{};
     Id original_recipe_group_id = 0;
+    bool operator==(const InputMixSelection&) const = default;
 };
 
 struct OriginalRecipeAnchor {

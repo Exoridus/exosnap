@@ -315,6 +315,7 @@ class EditSessionAdapter : public QObject {
     // Show the frame at `position_ms` (scrub, or a released trim handle).
     void seekRequested(qint64 position_ms);
     void seekRequestedUs(qint64 position_us);
+    void inspectionRequested();
     void closeRequested();
 
   private:

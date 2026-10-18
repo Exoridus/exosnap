@@ -96,6 +96,7 @@ class EditPlayerSession {
     // Plays raw video without source audio against an absolute source-time
     // clock. Samples the callback only from the owning thread when position is
     // read. Its dependencies must remain alive until Pause or Close returns.
+    // Source audio remains disabled even when its monitoring choice is unresolved.
     void PlayWithExternalClock(int64_t start_us, uint64_t generation, std::function<int64_t()> clock);
 
     // Pauses continuous playback. No-op if not open or not playing.

@@ -115,13 +115,9 @@ class Workspace {
         ++monitoring_revision_;
         return true;
     }
-    // Records the first explicit choice of starting mix for a source whose
-    // provenance was ambiguous. The choice is source provenance, like the import
-    // itself, so it is not an undoable edit: it becomes the original enable state
-    // of that source's audio clips everywhere, including the clip values held by
-    // undo history. Clips still at their import default follow the choice; an
-    // explicit enable/disable edit keeps its value. An empty choice confirms a
-    // deliberately silent source. A later call for a resolved source is refused.
+    // Confirms an unresolved source mix and its default audio enablement as one
+    // undoable change. Explicit clip enablement is preserved. Empty confirms
+    // silence; an already resolved source refuses another initial choice.
     bool resolveInputMix(Id asset_id, const std::vector<engine::AudioTrackId>& selected) {
         const auto found = std::find_if(assets_.begin(), assets_.end(),
                                         [asset_id](const auto& asset) { return asset.id == asset_id; });
@@ -153,24 +149,14 @@ class Workspace {
         };
         auto candidate = workingCopy();
         rebase(candidate.clips_);
-        if (!candidate.validate()) {
-            last_error_ = candidate.last_error_;
-            return false;
-        }
-        clips_ = std::move(candidate.clips_);
-        for (auto& command : history_) {
-            rebase(command.before);
-            rebase(command.after);
-        }
         InputMixSelection mix;
         mix.asset_identity_fingerprint = found->source_descriptor->asset_identity_fingerprint;
         mix.selected_stream_identities = selected;
         mix.authority = InputMixAuthority::UserConfirmed;
-        found->input_mix_selection = std::move(mix);
-        found->mix_decision_required = false;
-        ++revision_;
-        snapshot_cache_.reset();
-        return true;
+        auto& source = candidate.assets_[static_cast<size_t>(found - assets_.begin())];
+        source.input_mix_selection = std::move(mix);
+        source.mix_decision_required = false;
+        return publish(candidate, asset_id);
     }
     [[nodiscard]] const std::vector<Track>& tracks() const {
         return tracks_;
@@ -422,6 +408,7 @@ class Workspace {
         if (!canUndo() || revision_ == (std::numeric_limits<Revision>::max)())
             return false;
         const auto& command = history_[--cursor_];
+        restoreInputMixes(command.mixes_before);
         apply(command.after, command.before);
         patchEntities(transitions_, command.transitions_after, command.transitions_before);
         order(transitions_);
@@ -443,6 +430,7 @@ class Workspace {
         if (!canRedo() || revision_ == (std::numeric_limits<Revision>::max)())
             return false;
         const auto& command = history_[cursor_++];
+        restoreInputMixes(command.mixes_after);
         apply(command.before, command.after);
         patchEntities(transitions_, command.transitions_before, command.transitions_after);
         order(transitions_);
@@ -1579,7 +1567,25 @@ class Workspace {
     template <typename T> void execute(const T&) {
         fail(EditErrorCode::UnsupportedProfile);
     }
+    struct InputMixState {
+        Id asset = 0;
+        std::optional<InputMixSelection> selection;
+        bool decision_required = false;
+        bool operator==(const InputMixState&) const = default;
+    };
+    void restoreInputMixes(const std::vector<InputMixState>& states) {
+        for (const auto& state : states) {
+            const auto found = std::find_if(assets_.begin(), assets_.end(),
+                                            [&](const auto& source) { return source.id == state.asset; });
+            if (found != assets_.end()) {
+                found->input_mix_selection = state.selection;
+                found->mix_decision_required = state.decision_required;
+            }
+        }
+    }
     struct Command {
+        std::vector<InputMixState> mixes_before;
+        std::vector<InputMixState> mixes_after;
         std::vector<Clip> before;
         std::vector<Clip> after;
         std::vector<Transition> transitions_before;
@@ -1723,21 +1729,39 @@ class Workspace {
             (command.tracks_before.capacity() + command.tracks_after.capacity()) * sizeof(Track) +
             (command.spacers_before.capacity() + command.spacers_after.capacity()) * sizeof(Spacer) +
             (command.order_before.capacity() + command.order_after.capacity()) * sizeof(Id);
+        bytes += (command.mixes_before.capacity() + command.mixes_after.capacity()) * sizeof(InputMixState);
+        for (const auto& state : command.mixes_before)
+            if (state.selection)
+                bytes += state.selection->selected_stream_identities.capacity() * sizeof(engine::AudioTrackId);
+        for (const auto& state : command.mixes_after)
+            if (state.selection)
+                bytes += state.selection->selected_stream_identities.capacity() * sizeof(engine::AudioTrackId);
         for (const auto& track : command.tracks_before)
             bytes += track.name.capacity();
         for (const auto& track : command.tracks_after)
             bytes += track.name.capacity();
         return bytes;
     }
-    bool publish(Workspace& candidate) {
+    bool publish(Workspace& candidate, Id mix_asset = 0) {
         if (!candidate.validate()) {
             last_error_ = candidate.last_error_;
             return false;
         }
-        if (candidate.clips_ == clips_ && candidate.transitions_ == transitions_ && candidate.tracks_ == tracks_ &&
-            candidate.result_range_ == result_range_ && candidate.spacers_ == spacers_ &&
-            candidate.timeline_end_ == timeline_end_ && candidate.output_fps_ == output_fps_ &&
-            candidate.output_width_ == output_width_ && candidate.output_height_ == output_height_)
+        std::vector<InputMixState> before_mixes;
+        std::vector<InputMixState> after_mixes;
+        if (mix_asset) {
+            const auto* before = asset(mix_asset);
+            const auto* after = candidate.asset(mix_asset);
+            if (!before || !after)
+                return false;
+            before_mixes.push_back({mix_asset, before->input_mix_selection, before->mix_decision_required});
+            after_mixes.push_back({mix_asset, after->input_mix_selection, after->mix_decision_required});
+        }
+        if (before_mixes == after_mixes && candidate.clips_ == clips_ && candidate.transitions_ == transitions_ &&
+            candidate.tracks_ == tracks_ && candidate.result_range_ == result_range_ &&
+            candidate.spacers_ == spacers_ && candidate.timeline_end_ == timeline_end_ &&
+            candidate.output_fps_ == output_fps_ && candidate.output_width_ == output_width_ &&
+            candidate.output_height_ == output_height_)
             return false;
         if (!candidate_mode_) {
             if (revision_ == (std::numeric_limits<Revision>::max)()) {
@@ -1745,6 +1769,8 @@ class Workspace {
                 return false;
             }
             Command command;
+            command.mixes_before = difference(before_mixes, after_mixes);
+            command.mixes_after = difference(after_mixes, before_mixes);
             command.before = difference(clips_, candidate.clips_);
             command.after = difference(candidate.clips_, clips_);
             command.transitions_before = difference(transitions_, candidate.transitions_);
@@ -1786,6 +1812,7 @@ class Workspace {
             ++cursor_;
             ++revision_;
         }
+        restoreInputMixes(after_mixes);
         clips_ = std::move(candidate.clips_);
         tracks_ = std::move(candidate.tracks_);
         transitions_ = std::move(candidate.transitions_);

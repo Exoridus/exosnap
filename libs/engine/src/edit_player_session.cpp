@@ -244,7 +244,7 @@ void EditPlayerSession::PlayWithExternalClock(int64_t start_us, uint64_t generat
 }
 
 void EditPlayerSession::StartPlayback(int64_t start_us, uint64_t generation, std::function<int64_t()> clock) {
-    if (impl_->playing || !impl_->engine.HasVideoStream() || MonitoringConfirmationRequired())
+    if (impl_->playing || !impl_->engine.HasVideoStream() || (!clock && MonitoringConfirmationRequired()))
         return;
 
     impl_->StopSeek();
@@ -299,7 +299,8 @@ void EditPlayerSession::StartPlayback(int64_t start_us, uint64_t generation, std
                 }
             }
         },
-        [this]() -> int64_t { return impl_->media_clock_us.load(); });
+        [this]() -> int64_t { return impl_->media_clock_us.load(); },
+        impl_->external_clock ? PlaybackAudioMode::Disabled : PlaybackAudioMode::MonitorSelection);
 
     // The engine builds a playback resampler per audio track inside
     // StartPlaybackDecode, and those can fail on a file whose audio streams

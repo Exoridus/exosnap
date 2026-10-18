@@ -96,9 +96,9 @@ EditPlayerAdapter::EditPlayerAdapter(QObject* parent) : QObject(parent) {
     worker_->moveToThread(&worker_thread_);
     connect(&worker_thread_, &QThread::finished, worker_, &QObject::deleteLater);
 
-    connect(worker_, &EditPlayerWorker::openFinishedForGeneration, this,
-            [this](qulonglong generation, bool opened, const QString& error) {
-                if (generation != request_generation_)
+    connect(worker_, &EditPlayerWorker::openFinishedForCommand, this,
+            [this](qulonglong command, qulonglong generation, bool opened, const QString& error) {
+                if (generation != request_generation_ || command != transport_command_)
                     return;
                 if (clip_open_ != opened) {
                     clip_open_ = opened;
@@ -112,44 +112,69 @@ EditPlayerAdapter::EditPlayerAdapter(QObject* parent) : QObject(parent) {
                             : (error.isEmpty() ? QCoreApplication::translate("EditPlayerAdapter", "Preview unavailable")
                                                : TranslateEditRenderReason(error)));
                 if (failed) {
+                    if (!opened)
+                        setPlaying(false);
                     seek_pending_ = false;
                     setPreviewState(duration_ms_ <= 0 ? Empty : presented_time_us_ ? Degraded : Failed);
                     emit previewChanged();
                 }
             });
-    connect(worker_, &EditPlayerWorker::positionAdvancedUs, this, [this](qint64 position_us) {
-        if (session_ != nullptr)
-            session_->setPositionUs(position_us);
-        if (!seek_pending_ && requested_time_us_ != position_us) {
-            requested_time_us_ = position_us;
-            emit previewChanged();
-        }
-    });
-    connect(worker_, &EditPlayerWorker::playbackStateChanged, this, [this](bool playing) {
-        if (playing == desired_playing_)
-            transport_pending_ = false;
-        if (playing_ == playing)
+    connect(worker_, &EditPlayerWorker::positionAdvancedForCommand, this,
+            [this](qulonglong command, qulonglong generation, qint64 position_us) {
+                if (command != transport_command_ || generation != request_generation_)
+                    return;
+                if (session_ != nullptr)
+                    session_->setPositionUs(position_us);
+                if (!seek_pending_ && requested_time_us_ != position_us) {
+                    requested_time_us_ = position_us;
+                    emit previewChanged();
+                }
+            });
+    connect(worker_, &EditPlayerWorker::transportStateChanged, this,
+            [this](qulonglong command, qulonglong generation, bool playing) {
+                if (command != transport_command_ || generation != request_generation_)
+                    return;
+                if (playing_ == playing)
+                    return;
+                playing_ = playing;
+                emit playingChanged();
+            });
+    connect(worker_, &EditPlayerWorker::transportCompleted, this,
+            [this](qulonglong command, qulonglong generation, bool playing) {
+                if (command != transport_command_ || generation != request_generation_)
+                    return;
+                transport_pending_ = false;
+                if (!scrubbing_)
+                    desired_playing_ = playing;
+                emit transportChanged();
+            });
+    connect(worker_, &EditPlayerWorker::transportEnded, this, [this](qulonglong command, qulonglong generation) {
+        if (command != transport_command_ || generation != request_generation_)
             return;
-        playing_ = playing;
-        emit playingChanged();
-    });
-    connect(worker_, &EditPlayerWorker::reachedEnd, this, [this]() {
         desired_playing_ = false;
         transport_pending_ = false;
+        emit transportChanged();
         if (!playing_)
             return;
         playing_ = false;
         emit playingChanged();
     });
 
-    connect(worker_, &EditPlayerWorker::monitoringChanged, this, &EditPlayerAdapter::setMonitoringState);
-    connect(worker_, &EditPlayerWorker::monitoringRejected, this, [this](const QString& error) {
-        setPlaying(false);
-        setPlaceholderText(error);
-    });
+    connect(worker_, &EditPlayerWorker::monitoringStateChangedForGeneration, this,
+            [this](qulonglong generation, QVariantList tracks, bool required) {
+                if (generation == request_generation_)
+                    setMonitoringState(std::move(tracks), required);
+            });
+    connect(worker_, &EditPlayerWorker::monitoringRejectedForCommand, this,
+            [this](qulonglong command, qulonglong generation, const QString& error) {
+                if (command != transport_command_ || generation != request_generation_)
+                    return;
+                setPlaying(false);
+                setPlaceholderText(error);
+            });
     connect(worker_, &EditPlayerWorker::monitorSelectionConfirmed, this,
-            [this](qulonglong asset, engine::MonitorSelectionSnapshot selection) {
-                if (session_)
+            [this](qulonglong request, qulonglong asset, engine::MonitorSelectionSnapshot selection) {
+                if (session_ && request == monitoring_request_)
                     session_->setAssetMonitorSelection(asset, std::move(selection));
             });
 
@@ -158,6 +183,7 @@ EditPlayerAdapter::EditPlayerAdapter(QObject* parent) : QObject(parent) {
 }
 
 EditPlayerAdapter::~EditPlayerAdapter() {
+    current_transport_->store(++transport_command_);
     // Stop delivery first: the decode thread must not reach a half-destroyed
     // item, and close() is what joins that thread.
     sink_->detach(item_.data());
@@ -167,12 +193,19 @@ EditPlayerAdapter::~EditPlayerAdapter() {
 }
 
 void EditPlayerAdapter::setSession(EditSessionAdapter* session) {
+    if (session_ == session)
+        return;
     pending_timeline_current_.reset();
     if (session_)
         disconnect(session_, nullptr, this, nullptr);
+    closeClip();
     session_ = session;
     if (session_ == nullptr)
         return;
+    connect(session_, &QObject::destroyed, this, [this]() {
+        session_ = nullptr;
+        closeClip();
+    });
     connect(session_, &EditSessionAdapter::workspaceChanged, this, [this]() {
         duration_ms_ = session_->durationMs();
         const auto& current = session_->workspace();
@@ -184,6 +217,11 @@ void EditPlayerAdapter::setSession(EditSessionAdapter* session) {
         workspace_copy_ns_ += copy_clock.nsecsElapsed();
         timeline_revision_ = workspace.revision();
         timeline_monitoring_revision_ = workspace.monitoringRevision();
+        desired_playing_ = false;
+        transport_pending_ = true;
+        const auto command = ++transport_command_;
+        current_transport_->store(command);
+        emit transportChanged();
         const auto generation = sink_->invalidate();
         request_generation_ = generation;
         pending_seek_.reset();
@@ -198,7 +236,8 @@ void EditPlayerAdapter::setSession(EditSessionAdapter* session) {
         const auto submitted = std::chrono::steady_clock::now();
         QMetaObject::invokeMethod(
             worker_,
-            [worker = worker_, workspace = std::move(workspace), generation, submitted, current_update]() mutable {
+            [worker = worker_, workspace = std::move(workspace), generation, command, submitted,
+             current_update]() mutable {
                 if (!current_update->load())
                     return;
                 worker->recordQueueWait(
@@ -206,12 +245,16 @@ void EditPlayerAdapter::setSession(EditSessionAdapter* session) {
                         .count(),
                     true);
                 worker->setRequestGeneration(generation);
+                worker->setTransportCommand(command);
+                worker->pause();
                 worker->setTimeline(std::move(workspace));
+                worker->acknowledgeTransport();
             },
             Qt::QueuedConnection);
     });
     connect(session_, &EditSessionAdapter::clipClosed, this, &EditPlayerAdapter::closeClip);
     connect(session_, &EditSessionAdapter::seekRequestedUs, this, &EditPlayerAdapter::seekUs);
+    connect(session_, &EditSessionAdapter::inspectionRequested, this, [this]() { setPlaying(false); });
 }
 
 void EditPlayerAdapter::attachPlayerItem(ExoEditPlayerItem* item) {
@@ -325,40 +368,61 @@ void EditPlayerAdapter::setPlaceholderText(const QString& text) {
 }
 
 void EditPlayerAdapter::togglePlay() {
-    setPlaying(!playing_);
+    setPlaying(!desired_playing_);
 }
 
 void EditPlayerAdapter::setPlaying(bool playing) {
-    if ((!transport_pending_ && playing == playing_) || (transport_pending_ && playing == desired_playing_))
+    if (playing == desired_playing_)
         return;
-    if (playing && (duration_ms_ <= 0 || !clip_open_ || monitoring_confirmation_required_))
+    if (playing && duration_ms_ <= 0) {
+        setPlaceholderText(QCoreApplication::translate("EditPlayerAdapter", "The timeline is empty."));
         return;
-    desired_playing_ = playing;
-    transport_pending_ = true;
-    pending_timeline_current_.reset();
-    if (playing) {
-        const qint64 from = session_ != nullptr ? session_->positionUs() : 0;
-        QMetaObject::invokeMethod(worker_, "setScreenRefreshHz", Qt::QueuedConnection,
-                                  Q_ARG(double, currentScreenRefreshHz()));
-        QMetaObject::invokeMethod(worker_, "playUs", Qt::QueuedConnection, Q_ARG(qint64, from));
-    } else {
-        QMetaObject::invokeMethod(worker_, "pause", Qt::QueuedConnection);
     }
+    if (playing && !session_ && monitoring_confirmation_required_) {
+        setPlaceholderText(QCoreApplication::translate("EditPlayerAdapter",
+                                                       "Confirm the audio monitoring selection before playback."));
+        return;
+    }
+    desired_playing_ = playing;
+    dispatchTransport(!playing && (pending_seek_.has_value() || seek_dispatch_active_));
+}
+
+void EditPlayerAdapter::dispatchTransport(bool seek) {
+    transport_pending_ = true;
+    const auto command = ++transport_command_;
+    current_transport_->store(command);
+    const auto generation = request_generation_;
+    const bool playing = desired_playing_ && !scrubbing_;
+    const qint64 from = seek ? requested_time_us_ : session_ ? session_->positionUs() : 0;
+    pending_seek_.reset();
+    pending_timeline_current_.reset();
+    const auto refresh = currentScreenRefreshHz();
+    QMetaObject::invokeMethod(
+        worker_,
+        [worker = worker_, current = current_transport_, command, generation, from, seek, playing, refresh]() {
+            if (current->load() != command)
+                return;
+            worker->setScreenRefreshHz(refresh);
+            worker->requestTransport(command, generation, from, seek, playing);
+        },
+        Qt::QueuedConnection);
+    emit transportChanged();
 }
 
 void EditPlayerAdapter::confirmMonitoring(QStringList trackIds, bool overlapConfirmed) {
     setPlaying(false);
+    const auto request = ++monitoring_request_;
     pending_timeline_current_.reset();
     QMetaObject::invokeMethod(
         worker_,
-        [worker = worker_, trackIds = std::move(trackIds), overlapConfirmed]() mutable {
-            worker->confirmMonitoring(std::move(trackIds), overlapConfirmed);
+        [worker = worker_, trackIds = std::move(trackIds), overlapConfirmed, request]() mutable {
+            worker->confirmMonitoring(std::move(trackIds), overlapConfirmed, request);
         },
         Qt::QueuedConnection);
 }
 
 void EditPlayerAdapter::setMonitoringState(QVariantList tracks, bool confirmationRequired) {
-    if (confirmationRequired)
+    if (confirmationRequired && !session_)
         setPlaying(false);
     if (monitoring_tracks_ == tracks && monitoring_confirmation_required_ == confirmationRequired)
         return;
@@ -370,22 +434,19 @@ void EditPlayerAdapter::setMonitoringState(QVariantList tracks, bool confirmatio
 }
 
 void EditPlayerAdapter::beginScrub() {
-    resume_after_scrub_ = playing_;
-    setPlaying(false);
     if (!scrubbing_) {
         scrubbing_ = true;
+        dispatchTransport(false);
         emit scrubbingChanged();
     }
 }
 
 void EditPlayerAdapter::endScrub() {
-    if (resume_after_scrub_)
-        setPlaying(true);
-    resume_after_scrub_ = false;
     // After the resume, not before: a surface that hides itself while scrubbing
     // and while playing would otherwise flash for the one frame between the two.
     if (scrubbing_) {
         scrubbing_ = false;
+        dispatchTransport(pending_seek_.has_value() || seek_dispatch_active_);
         emit scrubbingChanged();
     }
 }
@@ -404,6 +465,7 @@ void EditPlayerAdapter::openClip(const QString& master_path, qint64 duration_ms)
 }
 
 void EditPlayerAdapter::closeClip() {
+    ++monitoring_request_;
     pending_timeline_current_.reset();
     duration_ms_ = 0;
     timeline_revision_.reset();
@@ -415,6 +477,9 @@ void EditPlayerAdapter::closeClip() {
     seek_pending_ = false;
     desired_playing_ = false;
     transport_pending_ = false;
+    ++transport_command_;
+    current_transport_->store(transport_command_);
+    emit transportChanged();
     setPreviewState(Empty);
     emit previewChanged();
     setMonitoringState({}, false);
@@ -432,14 +497,16 @@ void EditPlayerAdapter::closeClip() {
 }
 
 void EditPlayerAdapter::seekUs(qint64 position_us) {
-    setPlaying(false);
     const auto generation = sink_->invalidate();
     request_generation_ = generation;
     requested_time_us_ = position_us;
     seek_pending_ = session_ ? session_->workspace().duration() > 0 : duration_ms_ > 0;
     setPreviewState(seek_pending_ ? SeekPending : Empty);
     emit previewChanged();
-    pending_seek_ = SeekRequest{position_us, generation};
+    transport_pending_ = true;
+    pending_seek_ = SeekRequest{position_us, generation, ++transport_command_, desired_playing_ && !scrubbing_};
+    current_transport_->store(transport_command_);
+    emit transportChanged();
     dispatchSeek();
 }
 
@@ -455,13 +522,13 @@ void EditPlayerAdapter::dispatchSeek() {
     const auto submitted = std::chrono::steady_clock::now();
     QMetaObject::invokeMethod(
         worker_,
-        [worker = worker_, request, self, submitted]() {
+        [worker = worker_, current = current_transport_, request, self, submitted]() {
             worker->recordQueueWait(
                 std::chrono::duration_cast<std::chrono::nanoseconds>(std::chrono::steady_clock::now() - submitted)
                     .count(),
                 false);
-            worker->setRequestGeneration(request.generation);
-            worker->seekUs(request.time_us);
+            if (current->load() == request.command)
+                worker->requestTransport(request.command, request.generation, request.time_us, true, request.playing);
             if (self)
                 QMetaObject::invokeMethod(
                     self,

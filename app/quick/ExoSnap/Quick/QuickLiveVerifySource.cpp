@@ -886,6 +886,8 @@ QJsonObject QuickLiveVerifySource::EditorSnapshot() const {
                                                                ? QJsonValue(static_cast<double>(presented.toLongLong()))
                                                                : QJsonValue(QJsonValue::Null));
         playback.insert(QStringLiteral("seekPending"), player->seekPending());
+        playback.insert(QStringLiteral("desiredPlaying"), player->desiredPlaying());
+        playback.insert(QStringLiteral("transportPending"), player->transportPending());
         playback.insert(QStringLiteral("scrubbing"), player->scrubbing());
         playback.insert(QStringLiteral("surfaceVisible"), player->surfaceVisible());
         playback.insert(QStringLiteral("volume"), player->volume());

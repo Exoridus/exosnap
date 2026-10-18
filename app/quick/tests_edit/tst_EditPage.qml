@@ -564,7 +564,7 @@ Item {
         function test_monitoring_confirmation_is_stated_and_single_track_needs_no_overlap_acknowledgement() {
             const page = make({ width: 1280, height: 800 });
             testEditHarness.pageMonitoring([{ id: "a", name: "Positive", selected: true }], true);
-            const hint = child(page, "editMonitoringRequired");
+            const hint = child(page, "editAudioChoice");
             tryVerify(() => hint.visible);
             compare(page.monitoringSelection, ["a"]);
             page.toggleDetails();
@@ -607,7 +607,7 @@ Item {
             const page = make({ session: testSession, timeline: testTimeline, player: testPlayer });
             verify(testSession.durationMs > 0);
             compare(testPlayer.clipOpen, false);
-            compare(child(page, "editTransportPlay").enabled, false);
+            compare(child(page, "editTransportPlay").enabled, true);
             page.player = testTransportPlayer;
             compare(testTransportPlayer.clipOpen, true);
             compare(child(page, "editTransportPlay").enabled, true);

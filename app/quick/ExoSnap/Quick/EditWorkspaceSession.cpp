@@ -744,8 +744,10 @@ QVariantList EditSessionAdapter::dragTransitions() const {
 void EditSessionAdapter::requestFrameStep(int direction) {
     const auto fps = workspace_.snapshot()->output_fps;
     const auto next = direction < 0 ? fps.previousFrame(workspace_.playhead()) : fps.nextFrame(workspace_.playhead());
-    if (next)
+    if (next) {
+        emit inspectionRequested();
         requestSeekUs(*next);
+    }
 }
 
 void EditSessionAdapter::setSelectionBoundary(bool out) {

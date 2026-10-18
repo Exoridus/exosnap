@@ -20,6 +20,7 @@
 #include "viewmodels/RecordViewModel.h"
 
 #include <algorithm>
+#include <atomic>
 #include <cmath>
 #include <cstdlib>
 #include <exosnap/engine/audio_media_manifest.h>
@@ -44,6 +45,12 @@
 namespace exosnap::quick {
 class EditPlayerWorkerTestPeer {
   public:
+    static qint64 duration(const EditPlayerWorker& worker) {
+        return worker.workspace_.duration();
+    }
+    static qint64 position(const EditPlayerWorker& worker) {
+        return worker.position_us_;
+    }
     static bool audio(EditPlayerWorker& worker, int64_t sample, std::vector<float>& output, std::string& error) {
         auto* reader = worker.timelineAudioReader();
         if (!reader) {
@@ -60,11 +67,20 @@ class EditPlayerWorkerTestPeer {
 
 class EditPlayerAdapterTestPeer {
   public:
+    static bool desiredPlaying(const EditPlayerAdapter& adapter) {
+        return adapter.desired_playing_;
+    }
+    static void acknowledge(EditPlayerAdapter& adapter, bool playing) {
+        emit adapter.worker_->transportStateChanged(adapter.transport_command_, adapter.request_generation_, playing);
+    }
     static EditPlayerWorker* worker(EditPlayerAdapter& adapter) {
         return adapter.worker_;
     }
     static uint64_t generation(const EditPlayerAdapter& adapter) {
         return adapter.request_generation_;
+    }
+    static uint64_t command(const EditPlayerAdapter& adapter) {
+        return adapter.transport_command_;
     }
     static bool dispatchActive(const EditPlayerAdapter& adapter) {
         return adapter.seek_dispatch_active_;
@@ -249,6 +265,243 @@ class MediaPreviewDriver final : public QObject {
                 {"retainedTime", item.presentedTimeUs()},
                 {"clearRequested", superseded.clear}};
     }
+    Q_INVOKABLE QVariantMap transportIntentProbe(const QString& action) {
+        using exosnap::quick::EditPlayerAdapterTestPeer;
+        EditSessionAdapter session;
+        EditPlayerAdapter player;
+        player.setSession(&session);
+        session.setEditContext(FixtureContext());
+        player.setClipStateForTest(true, 100'000);
+        auto* worker = EditPlayerAdapterTestPeer::worker(player);
+        QSemaphore entered;
+        QSemaphore release;
+        QMetaObject::invokeMethod(
+            worker,
+            [&]() {
+                entered.release();
+                release.acquire();
+            },
+            Qt::QueuedConnection);
+        entered.acquire();
+        player.setPlaying(true);
+        const auto placeholder_before = player.placeholderText();
+        if (action == QStringLiteral("toggle")) {
+            player.togglePlay();
+        } else if (action == QStringLiteral("seek")) {
+            EditPlayerAdapterTestPeer::acknowledge(player, true);
+            session.requestSeekUs(20'000'000);
+        } else if (action == QStringLiteral("scrub")) {
+            player.beginScrub();
+            player.beginScrub();
+            player.endScrub();
+        } else if (action == QStringLiteral("pauseDuringScrub")) {
+            EditPlayerAdapterTestPeer::acknowledge(player, true);
+            player.beginScrub();
+            player.setPlaying(false);
+            player.endScrub();
+        } else if (action == QStringLiteral("frameStep")) {
+            session.requestFrameStep(1);
+        } else if (action == QStringLiteral("oldPosition")) {
+            session.requestSeekUs(20'000'000);
+            emit worker->positionAdvancedForCommand(EditPlayerAdapterTestPeer::command(player) - 1,
+                                                    EditPlayerAdapterTestPeer::generation(player), 1'000);
+        } else if (action == QStringLiteral("oldError")) {
+            session.requestSeekUs(20'000'000);
+            emit worker->monitoringRejectedForCommand(EditPlayerAdapterTestPeer::command(player),
+                                                      EditPlayerAdapterTestPeer::generation(player) - 1,
+                                                      QStringLiteral("An obsolete source error"));
+        } else if (action == QStringLiteral("oldOpenError")) {
+            emit worker->openFinishedForCommand(EditPlayerAdapterTestPeer::command(player) - 1,
+                                                EditPlayerAdapterTestPeer::generation(player), false,
+                                                QStringLiteral("An obsolete open error"));
+        } else if (action == QStringLiteral("oldAcknowledgement")) {
+            const auto command = EditPlayerAdapterTestPeer::command(player);
+            const auto generation = EditPlayerAdapterTestPeer::generation(player);
+            player.setPlaying(false);
+            EditPlayerAdapterTestPeer::acknowledge(player, false);
+            emit worker->transportStateChanged(command, generation, true);
+            emit worker->transportCompleted(command, generation, true);
+            emit worker->transportEnded(command, generation);
+        } else if (action == QStringLiteral("currentError")) {
+            emit worker->monitoringRejectedForCommand(EditPlayerAdapterTestPeer::command(player),
+                                                      EditPlayerAdapterTestPeer::generation(player),
+                                                      QStringLiteral("A current source error"));
+        } else if (action == QStringLiteral("runtimeFailure")) {
+            emit worker->openFinishedForCommand(EditPlayerAdapterTestPeer::command(player),
+                                                EditPlayerAdapterTestPeer::generation(player), false,
+                                                QStringLiteral("The audio output stopped unexpectedly."));
+        }
+        const bool desired = EditPlayerAdapterTestPeer::desiredPlaying(player);
+        release.release();
+        return {{"desiredPlaying", desired},
+                {"requested", player.requestedTimeUs()},
+                {"playhead", session.positionUs()},
+                {"acknowledgedPlaying", player.playing()},
+                {"placeholderUnchanged", player.placeholderText() == placeholder_before}};
+    }
+    Q_INVOKABLE QVariantMap blankTransportProbe() {
+        namespace edit = exosnap::edit;
+        edit::Workspace workspace;
+        const auto result =
+            workspace.apply(edit::SetTimelineEnd{{edit::TimelineEndMode::FixedEnd, 100'000'000}}, workspace.revision());
+        exosnap::quick::EditPlayerWorker worker(std::make_shared<exosnap::quick::EditPlayerFrameSink>());
+        bool playing = false;
+        connect(&worker, &exosnap::quick::EditPlayerWorker::playbackStateChanged, &worker,
+                [&](bool state) { playing = state; });
+        worker.setTimeline(std::move(workspace));
+        worker.requestTransport(1, 1, 10'000'000, false, true);
+        const bool started = playing;
+        worker.requestTransport(2, 2, 20'000'000, true, true);
+        const bool continued = playing;
+        worker.requestTransport(3, 3, 30'000'000, true, false);
+        return {{"authored", result.status == edit::CommandStatus::Applied},
+                {"started", started},
+                {"continued", continued},
+                {"paused", !playing}};
+    }
+    Q_INVOKABLE QVariantMap authoredAudioAdmissionProbe(bool composed, const QString& filename) {
+        EditSessionAdapter session;
+        EditPlayerAdapter player;
+        exosnap::quick::ExoEditPlayerItem item;
+        item.setPlayerAdapter(&player);
+        player.setVolume(0);
+        player.setSession(&session);
+        session.importMedia(QUrl::fromLocalFile(qEnvironmentVariable("EXOSNAP_EDIT_RENDER_FIXTURES") + "/" + filename),
+                            true, 0);
+        QElapsedTimer deadline;
+        deadline.start();
+        while (!session.open() && deadline.elapsed() < 5000)
+            QCoreApplication::processEvents(QEventLoop::AllEvents, 10);
+        if (!session.open())
+            return {{"imported", false}, {"error", session.workspaceError()}};
+        if (composed)
+            session.setClipFade(session.workspace().clips().front().id, true, 200);
+        session.selectClip(0);
+        player.setPlaying(true);
+        const bool intent_retained = player.desiredPlaying();
+        int frames = 0;
+        bool saw_video = false;
+        deadline.restart();
+        while ((session.positionUs() < 50'000 || frames < 2) && deadline.elapsed() < 5000) {
+            QCoreApplication::processEvents(QEventLoop::AllEvents, 10);
+            const auto frame = item.takePendingFrame();
+            if (frame.frame || frame.timeline)
+                ++frames;
+            saw_video = saw_video || frame.frame || (frame.timeline && !frame.timeline->layers.empty());
+        }
+        const bool advanced = session.positionUs() >= 50'000;
+        session.requestSeekUs(500'000);
+        const bool preserved_intent = player.desiredPlaying();
+        deadline.restart();
+        while (session.positionUs() < 550'000 && deadline.elapsed() < 5000)
+            QCoreApplication::processEvents(QEventLoop::AllEvents, 10);
+        const bool seek_continued = preserved_intent && player.playing() && session.positionUs() >= 550'000;
+        player.setPlaying(false);
+        session.requestSeekUs(750'000);
+        deadline.restart();
+        while ((player.transportPending() || player.playing()) && deadline.elapsed() < 5000)
+            QCoreApplication::processEvents(QEventLoop::AllEvents, 10);
+        const bool seek_paused = !player.desiredPlaying() && !player.playing() && session.positionUs() == 750'000;
+        session.requestSeekUs(session.workspace().duration());
+        player.setPlaying(true);
+        deadline.restart();
+        while ((!player.playing() || session.positionUs() >= 250'000) && deadline.elapsed() < 5000)
+            QCoreApplication::processEvents(QEventLoop::AllEvents, 10);
+        const bool restarted = player.playing() && session.positionUs() < 250'000;
+        player.setPlaying(false);
+        item.setPlayerAdapter(nullptr);
+        const auto& clips = session.workspace().clips();
+        const auto enabled_audio = std::count_if(clips.begin(), clips.end(), [](const auto& clip) {
+            return clip.enabled && clip.stream && clip.stream->kind == exosnap::engine::TimelineStreamKind::Audio;
+        });
+        return {{"imported", true},
+                {"intentRetained", intent_retained},
+                {"advanced", advanced},
+                {"selectionIndependent", session.workspace().selection() == 0},
+                {"playingSeekContinued", seek_continued},
+                {"pausedSeekStayedPaused", seek_paused},
+                {"restartedAtEnd", restarted},
+                {"frames", frames},
+                {"sawVideo", saw_video},
+                {"enabledAudio", static_cast<int>(enabled_audio)},
+                {"audioChoiceRequired", session.workspace().assets().front().mix_decision_required},
+                {"error", player.placeholderText()}};
+    }
+    Q_INVOKABLE bool fixtureAvailable(const QString& filename) const {
+        std::error_code error;
+        return std::filesystem::is_regular_file(
+            std::filesystem::path(
+                (qEnvironmentVariable("EXOSNAP_EDIT_RENDER_FIXTURES") + "/" + filename).toStdWString()),
+            error);
+    }
+    Q_INVOKABLE QVariantMap transportBurstProbe() {
+        using exosnap::quick::EditPlayerAdapterTestPeer;
+        EditPlayerAdapter player;
+        player.setClipStateForTest(true, 100'000);
+        auto* worker = EditPlayerAdapterTestPeer::worker(player);
+        QSemaphore entered;
+        QSemaphore release;
+        std::atomic<int> completed = 0;
+        connect(
+            worker, &exosnap::quick::EditPlayerWorker::transportCompleted, worker,
+            [&](qulonglong, qulonglong, bool) { ++completed; }, Qt::DirectConnection);
+        QMetaObject::invokeMethod(
+            worker,
+            [&]() {
+                entered.release();
+                release.acquire();
+            },
+            Qt::QueuedConnection);
+        entered.acquire();
+        for (int index = 0; index < 5000; ++index)
+            player.togglePlay();
+        release.release();
+        QMetaObject::invokeMethod(worker, []() {}, Qt::BlockingQueuedConnection);
+        return {{"completed", completed.load()}, {"desiredPlaying", player.desiredPlaying()}};
+    }
+    Q_INVOKABLE QVariantMap sessionReplacementProbe() {
+        EditSessionAdapter first;
+        auto second = std::make_unique<EditSessionAdapter>();
+        EditPlayerAdapter player;
+        auto* worker = exosnap::quick::EditPlayerAdapterTestPeer::worker(player);
+        player.setSession(&first);
+        first.setEditContext(FixtureContext());
+        QMetaObject::invokeMethod(worker, []() {}, Qt::BlockingQueuedConnection);
+        player.setSession(second.get());
+        auto context = FixtureContext();
+        context.duration_seconds = 5.0;
+        second->setEditContext(context);
+        qint64 duration = 0;
+        QMetaObject::invokeMethod(
+            worker, [&]() { duration = exosnap::quick::EditPlayerWorkerTestPeer::duration(*worker); },
+            Qt::BlockingQueuedConnection);
+        player.setClipStateForTest(true, 5000);
+        second.reset();
+        return {{"duration", duration}, {"closedAfterDestroy", !player.clipOpen()}};
+    }
+    Q_INVOKABLE QVariantMap pauseBeforePresentationProbe() {
+        EditSessionAdapter session;
+        EditPlayerAdapter player;
+        player.setSession(&session);
+        session.setFixedTimelineEnd(true, 100'000);
+        player.setPlaying(true);
+        QElapsedTimer deadline;
+        deadline.start();
+        while (session.positionUs() < 50'000 && deadline.elapsed() < 5000)
+            QCoreApplication::processEvents(QEventLoop::AllEvents, 10);
+        const auto pause_at = session.positionUs();
+        const bool presentation_pending = player.seekPending();
+        player.setPlaying(false);
+        auto* worker = exosnap::quick::EditPlayerAdapterTestPeer::worker(player);
+        qint64 worker_at = -1;
+        QMetaObject::invokeMethod(
+            worker, [&]() { worker_at = exosnap::quick::EditPlayerWorkerTestPeer::position(*worker); },
+            Qt::BlockingQueuedConnection);
+        return {{"started", pause_at >= 50'000},
+                {"presentationPending", presentation_pending},
+                {"pauseAt", pause_at},
+                {"workerAt", worker_at}};
+    }
     Q_INVOKABLE QVariantMap previewProjectionProbe() {
         EditSessionAdapter session;
         EditPlayerAdapter player;
@@ -270,11 +523,13 @@ class MediaPreviewDriver final : public QObject {
         player.setSession(&session);
         session.setEditContext(FixtureContext());
         auto* worker = EditPlayerAdapterTestPeer::worker(player);
-        emit worker->openFinishedForGeneration(EditPlayerAdapterTestPeer::generation(player) + 1, true,
-                                               QStringLiteral("Media unavailable"));
+        emit worker->openFinishedForCommand(EditPlayerAdapterTestPeer::command(player),
+                                            EditPlayerAdapterTestPeer::generation(player) + 1, true,
+                                            QStringLiteral("Media unavailable"));
         const bool stale_ignored = player.placeholderText() == QStringLiteral("Preview unavailable");
-        emit worker->openFinishedForGeneration(EditPlayerAdapterTestPeer::generation(player), true,
-                                               QStringLiteral("Media unavailable"));
+        emit worker->openFinishedForCommand(EditPlayerAdapterTestPeer::command(player),
+                                            EditPlayerAdapterTestPeer::generation(player), true,
+                                            QStringLiteral("Media unavailable"));
         return {{"staleIgnored", stale_ignored},
                 {"clipOpen", player.clipOpen()},
                 {"failed", player.previewState() == EditPlayerAdapter::Failed},
