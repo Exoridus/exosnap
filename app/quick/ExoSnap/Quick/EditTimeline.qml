@@ -60,8 +60,38 @@ FocusScope {
         const destination = root.trackLayout.dropTargetAtY(contentY - root.rulerHeight);
         root.session.updateClipDragUs(Math.round(delta), destination.trackId ?? 0, destination.newTrack ?? -1, root.insertDrag, Math.round(8 / root.pixelsPerUs));
     }
+    property bool visualWorkPending: false
+    property bool clipSyncPending: false
+    function scheduleVisualWork(): void {
+        visualWorkPending = true;
+        if (root.visible && root.Window.window)
+            root.Window.window.update();
+    }
+    function scheduleClipSync(): void {
+        clipSyncPending = true;
+        scheduleVisualWork();
+    }
     function refreshClips(): void {
+        clipSyncPending = false;
         clipModel.syncUs(root.session, viewport.startUs, viewport.endUs);
+    }
+    function flushVisualWork(): void {
+        visualWorkPending = false;
+        if (clipSyncPending)
+            refreshClips();
+        for (let i = 0; i < clipRepeater.count; ++i) {
+            const item = clipRepeater.itemAt(i);
+            if (item)
+                item.refreshMedia();
+        }
+    }
+    onVisibleChanged: {
+        if (root.visible && visualWorkPending)
+            scheduleVisualWork();
+    }
+    Connections {
+        target: root.visible && root.visualWorkPending ? root.Window.window : null
+        function onAfterAnimating(): void { root.flushVisualWork(); }
     }
     function visibleCandidates(rows: var): var {
         return rows.filter(value => value.startUs <= viewport.endUs && value.endUs >= viewport.startUs);
@@ -72,7 +102,7 @@ FocusScope {
         objectName: "editViewport"
         timelineEndUs: root.session.durationUs
         usableWidth: Math.max(1, scroll.width - root.labelWidth)
-        onViewChanged: root.refreshClips()
+        onViewChanged: root.scheduleClipSync()
     }
     EditInteractionController {
         id: interaction
@@ -84,6 +114,7 @@ FocusScope {
     }
     EditTimelineClipModel {
         id: clipModel
+        objectName: "editVisibleClips"
     }
     readonly property real pixelsPerMs: pixelsPerSecond / 1000
     readonly property real pixelsPerUs: pixelsPerSecond / 1000000
@@ -532,6 +563,7 @@ FocusScope {
             }
         }
         Repeater {
+            id: clipRepeater
             model: clipModel
             delegate: Rectangle {
                 id: clipItem
@@ -544,7 +576,8 @@ FocusScope {
                 readonly property real visibleSourceOut: Math.min(modelData.sourceOutUs, visibleSourceIn + visibleWidth / root.pixelsPerUs)
                 readonly property bool bodyVisible: trackBounds.height > root.trackLayout.minimumHeight
                 readonly property real bodyHeight: Math.max(0, Math.min(44, trackBounds.height - root.trackLayout.headerHeight - 2))
-                readonly property bool cachedVisual: bodyVisible && modelData.available && modelData.sourceIdentity.length > 0 && root.thumbnails !== null
+                readonly property bool previewVisible: bodyVisible && root.visible && y + root.trackLayout.headerHeight + 1 + bodyHeight > scroll.contentY + root.rulerHeight && y + root.trackLayout.headerHeight + 1 < scroll.contentY + scroll.height
+                readonly property bool cachedVisual: previewVisible && modelData.available && modelData.sourceIdentity.length > 0 && root.thumbnails !== null
                 property string waveformKey: ""
                 property string mediaRequest: ""
                 // A delegate outlives most publications, and modelData also changes for selection and
@@ -569,11 +602,28 @@ FocusScope {
                     }
                     waveformKey = audio ? root.thumbnails.waveformSource(modelData.sourceIdentity, modelData.path, modelData.containerIndex, modelData.streamIdentity, modelData.sourceEndUs) : "";
                 }
-                onModelDataChanged: refreshMedia()
-                onCachedVisualChanged: refreshMedia()
-                onVisibleSourceInChanged: refreshMedia()
-                onVisibleSourceOutChanged: refreshMedia()
-                Component.onCompleted: refreshMedia()
+                readonly property string mediaSource: [modelData.video, modelData.sourceIdentity, modelData.path, modelData.containerIndex, modelData.streamIdentity].join("|")
+                function retireMedia(): void {
+                    mediaRequest = "";
+                    tileModel.setRows([]);
+                    waveformKey = "";
+                }
+                function requestMediaRefresh(): void {
+                    if (!cachedVisual || visibleSourceOut <= visibleSourceIn)
+                        retireMedia();
+                    else
+                        root.scheduleVisualWork();
+                }
+                onMediaSourceChanged: {
+                    retireMedia();
+                    requestMediaRefresh();
+                }
+                onModelDataChanged: requestMediaRefresh()
+                onCachedVisualChanged: requestMediaRefresh()
+                onVisibleSourceInChanged: requestMediaRefresh()
+                onVisibleSourceOutChanged: requestMediaRefresh()
+                onVisibleWidthChanged: requestMediaRefresh()
+                Component.onCompleted: requestMediaRefresh()
                 x: root.visibleX(modelData.startUs)
                 y: root.rulerHeight + trackBounds.top
                 width: root.visibleSpan(modelData.startUs, modelData.endUs)
@@ -601,9 +651,9 @@ FocusScope {
                     y: root.trackLayout.headerHeight + 1
                     width: 64
                     height: clipItem.bodyHeight
-                    source: clipItem.bodyVisible && !clipItem.cachedVisual && clipItem.modelData.video && root.thumbnails && clipItem.modelData.path === root.thumbnails.sourcePath ? root.thumbnails.posterSource : ""
+                    source: clipItem.previewVisible && !clipItem.cachedVisual && clipItem.modelData.video && root.thumbnails && clipItem.modelData.path === root.thumbnails.sourcePath ? root.thumbnails.posterSource : ""
                     sourceSize: Qt.size(64, 44)
-                    visible: status === Image.Ready && clipItem.modelData.available && clipItem.bodyVisible
+                    visible: status === Image.Ready && clipItem.modelData.available && clipItem.previewVisible
                     fillMode: Image.PreserveAspectFit
                     Accessible.ignored: true
                 }
@@ -619,7 +669,7 @@ FocusScope {
                         sourceSize: Qt.size(width, 44)
                         asynchronous: true
                         cache: false
-                        visible: status === Image.Ready && clipItem.bodyVisible
+                        visible: status === Image.Ready && clipItem.previewVisible
                         fillMode: Image.PreserveAspectCrop
                         Accessible.ignored: true
                     }
@@ -630,7 +680,7 @@ FocusScope {
                     y: root.trackLayout.headerHeight + 1
                     width: clipItem.visibleWidth
                     height: clipItem.bodyHeight
-                    visible: clipItem.waveformKey.length > 0 && clipItem.bodyVisible
+                    visible: clipItem.waveformKey.length > 0 && clipItem.previewVisible
                     service: root.thumbnails ? root.thumbnails.waveformService : null
                     cacheKey: clipItem.waveformKey
                     sourceInUs: clipItem.visibleSourceIn

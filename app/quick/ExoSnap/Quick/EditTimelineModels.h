@@ -126,11 +126,15 @@ class EditTimelineClipModel : public QAbstractListModel {
     // A null session clears the model.
     Q_INVOKABLE void sync(EditSessionAdapter* session, qint64 fromMs, qint64 toMs);
     Q_INVOKABLE void syncUs(EditSessionAdapter* session, qint64 fromUs, qint64 toUs);
+    [[nodiscard]] quint64 syncCountForTest() const noexcept {
+        return sync_count_;
+    }
     // Same, from rows that each carry a unique "id". Rows whose id survives keep
     // their delegate; only changed rows are reported as changed.
     Q_INVOKABLE void setRows(const QVariantList& rows);
 
   private:
+    quint64 sync_count_ = 0;
     std::vector<std::pair<qulonglong, QVariantMap>> rows_;
 };
 

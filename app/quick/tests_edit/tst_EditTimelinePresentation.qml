@@ -31,6 +31,82 @@ TestCase {
             testSession.trackLayout.setTrackHeight(track.id, 64);
         testSession.requestSeek(0);
     }
+    function test_preview_queries_are_bounded_to_visible_tracks() {
+        verify(testPreviewWorkload.prepare(20));
+        const before = testPreviewWorkload.thumbnailQueries();
+        const strip = createTemporaryObject(timelineComponent, tests, {
+            session: testPreviewWorkload.session,
+            thumbnails: testPreviewWorkload.timeline,
+            height: 280
+        });
+        verify(!!strip);
+        waitForRendering(strip);
+        const queries = testPreviewWorkload.thumbnailQueries() - before;
+        verify(queries > 0 && queries <= 4, "Preview queries: " + queries);
+    }
+    function test_zoom_batch_publishes_the_latest_view_once_data() {
+        return [{tag: "restored-view", steps: 50, previews: 0},
+                {tag: "new-view", steps: 51, previews: 1}];
+    }
+    function test_zoom_batch_publishes_the_latest_view_once(data) {
+        verify(testPreviewWorkload.prepare(1));
+        const strip = createTemporaryObject(timelineComponent, tests, {
+            session: testPreviewWorkload.session,
+            thumbnails: testPreviewWorkload.timeline
+        });
+        strip.zoomTo(100);
+        strip.panTimeline(500);
+        waitForRendering(strip);
+        const model = findChild(strip, "editVisibleClips");
+        verify(!!model);
+        const rows = testPreviewWorkload.modelQueries(model);
+        const previews = testPreviewWorkload.thumbnailQueries();
+        const position = testPreviewWorkload.session.positionUs;
+        for (let i = 0; i < data.steps; ++i) {
+            const scale = i % 2 === 0 ? 200 : 100;
+            strip.zoomTo(scale);
+            compare(strip.pixelsPerSecond, scale);
+        }
+        waitForRendering(strip);
+        compare(testPreviewWorkload.modelQueries(model) - rows, 1);
+        compare(testPreviewWorkload.thumbnailQueries() - previews, data.previews);
+        compare(testPreviewWorkload.session.positionUs, position);
+    }
+    function test_hidden_view_defers_model_and_preview_work() {
+        verify(testPreviewWorkload.prepare(1));
+        const strip = createTemporaryObject(timelineComponent, tests, {
+            session: testPreviewWorkload.session,
+            thumbnails: testPreviewWorkload.timeline
+        });
+        waitForRendering(strip);
+        strip.visible = false;
+        const model = findChild(strip, "editVisibleClips");
+        const rows = testPreviewWorkload.modelQueries(model);
+        const previews = testPreviewWorkload.thumbnailQueries();
+        for (let i = 0; i < 51; ++i) strip.zoomTo(i % 2 === 0 ? 200 : 100);
+        wait(50);
+        compare(testPreviewWorkload.modelQueries(model), rows);
+        compare(testPreviewWorkload.thumbnailQueries(), previews);
+        strip.visible = true;
+        waitForRendering(strip);
+        compare(testPreviewWorkload.modelQueries(model) - rows, 1);
+        compare(testPreviewWorkload.thumbnailQueries() - previews, 1);
+    }
+    function test_vertical_scroll_loads_only_new_visible_previews() {
+        verify(testPreviewWorkload.prepare(20));
+        const strip = createTemporaryObject(timelineComponent, tests, {
+            session: testPreviewWorkload.session,
+            thumbnails: testPreviewWorkload.timeline,
+            height: 280
+        });
+        waitForRendering(strip);
+        const before = testPreviewWorkload.thumbnailQueries();
+        const scroll = findChild(strip, "editTimelineScroll");
+        scroll.contentY = 5 * 64;
+        waitForRendering(strip);
+        const queries = testPreviewWorkload.thumbnailQueries() - before;
+        verify(queries > 0 && queries <= 4, "Scrolled preview queries: " + queries);
+    }
     function test_asset_drop_preserves_fractional_milliseconds() {
         while (testSession.canUndo) testSession.undo();
         testSession.setFixedTimelineEnd(true, 1000);
@@ -290,6 +366,7 @@ TestCase {
         const strip = createTemporaryObject(timelineComponent, tests, {height: 480, width: 54 + testSession.durationUs * targetScale / 1000000});
         verify(!!strip, "Component exists");
         strip.zoomTo(targetScale);
+        waitForRendering(strip);
         return strip;
     }
     function clipGeometry() {
@@ -808,6 +885,7 @@ TestCase {
         const strip = createTemporaryObject(timelineComponent, tests);
         const scroll = findChild(strip, "editTimelineScroll");
         strip.fitTimeline();
+        waitForRendering(strip);
         const clips = testSession.visibleClips(0, 1000000);
         compare(clips.length, 4);
         const items = clips.map(clip => findChild(strip, "editClip" + clip.id));
@@ -837,6 +915,7 @@ TestCase {
         testSession.appendAsset(testSession.media[0].id);
         const strip = createTemporaryObject(timelineComponent, tests);
         strip.fitTimeline();
+        waitForRendering(strip);
         const clips = testSession.visibleClips(0, 1000000);
         const removed = clips.filter(clip => clip.startMs > 0);
         const kept = clips.filter(clip => clip.startMs === 0);

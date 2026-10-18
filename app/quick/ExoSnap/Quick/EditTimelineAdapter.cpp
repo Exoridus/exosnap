@@ -448,6 +448,7 @@ bool EditTimelineAdapter::registerThumbnailSource(const QString& identityHex, co
 
 QVariantList EditTimelineAdapter::thumbnailTiles(const QString& identityHex, qint64 sourceInUs, qint64 sourceOutUs,
                                                  qreal widthPx, int heightPx) {
+    ++thumbnail_queries_;
     QVariantList result;
     const QString identity = identityHex.toLower();
     const auto source = broker_->Source(identity.toStdString());

@@ -26,6 +26,7 @@
 #include <exosnap/engine/audio_media_manifest.h>
 #include <exosnap/engine/edit_player_engine.h>
 #include <filesystem>
+#include <set>
 #include <string>
 #include <utility>
 
@@ -1172,6 +1173,97 @@ class MediaPreviewDriver final : public QObject {
     bool ended_ = false;
 };
 
+class PreviewWorkload final : public QObject {
+    Q_OBJECT
+    Q_PROPERTY(exosnap::quick::EditSessionAdapter* session READ session CONSTANT)
+    Q_PROPERTY(exosnap::quick::EditTimelineAdapter* timeline READ timeline CONSTANT)
+
+  public:
+    explicit PreviewWorkload(QObject* parent) : QObject(parent) {
+        exosnap::ThumbnailRequestBroker::Config config;
+        config.disk_enabled = false;
+        timeline_.configureThumbnailCache(config);
+        timeline_.useSyntheticMediaForHarness(
+            [](const exosnap::ThumbnailSourceInfo& source, std::int64_t, int height) {
+                QImage image(std::max(1, height * 16 / 9), height, QImage::Format_ARGB32_Premultiplied);
+                image.fill(QColor(source.content_sha256[0], 80, 120));
+                return image;
+            },
+            {}, std::filesystem::path(cache_.path().toStdWString()));
+    }
+    exosnap::quick::EditSessionAdapter* session() {
+        return &session_;
+    }
+    exosnap::quick::EditTimelineAdapter* timeline() {
+        return &timeline_;
+    }
+    Q_INVOKABLE qulonglong thumbnailQueries() const {
+        return timeline_.thumbnailQueriesForTest();
+    }
+    Q_INVOKABLE qulonglong modelQueries(QObject* object) const {
+        const auto* model = qobject_cast<exosnap::quick::EditTimelineClipModel*>(object);
+        return model ? model->syncCountForTest() : 0;
+    }
+    Q_INVOKABLE bool prepare(int tracks) {
+        if (!cache_.isValid() || tracks < 1 || tracks > 2000)
+            return false;
+        session_.close();
+        timeline_.clearMediaCaches();
+        session_.snapping = false;
+        session_.autoCrossfade = false;
+        for (int index = 0; index < tracks; ++index) {
+            exosnap::engine::EditMediaMetadata metadata;
+            metadata.content_identity_valid = true;
+            metadata.has_audio = false;
+            metadata.content_sha256.fill(42);
+            metadata.content_sha256[0] = static_cast<std::uint8_t>(index & 255);
+            metadata.content_sha256[1] = static_cast<std::uint8_t>((index >> 8) & 255);
+            metadata.duration_us = 60'000'000;
+            metadata.width = 1280;
+            metadata.height = 720;
+            metadata.fps_num = 30;
+            metadata.fps_den = 1;
+            exosnap::engine::EditSourceStream stream;
+            stream.kind = exosnap::engine::TimelineStreamKind::Video;
+            stream.fps_num = 30;
+            stream.fps_den = 1;
+            metadata.streams.push_back(stream);
+            const auto asset = session_.addProbedMediaForHarness(
+                cache_.filePath(QStringLiteral("source-%1.mkv").arg(index)), metadata, true);
+            if (session_.workspace().clips().empty())
+                return false;
+            if (index > 0) {
+                const auto& clips = session_.workspace().clips();
+                const auto found = std::find_if(clips.begin(), clips.end(),
+                                                [asset](const auto& value) { return value.asset == asset; });
+                if (found == clips.end())
+                    return false;
+                const auto clip = *found;
+                session_.beginClipDrag(clip.id);
+                session_.updateClipDragUs(-clip.start, 0, 1, false, 0);
+                if (!session_.commitClipDrag())
+                    return false;
+            }
+            if (!session_.workspaceError().isEmpty())
+                return false;
+        }
+        const auto& clips = session_.workspace().clips();
+        if (clips.size() != static_cast<std::size_t>(tracks))
+            return false;
+        std::set<exosnap::edit::Id> occupied;
+        for (const auto& clip : clips) {
+            if (clip.start != 0)
+                return false;
+            occupied.insert(clip.track);
+        }
+        return occupied.size() == static_cast<std::size_t>(tracks);
+    }
+
+  private:
+    QTemporaryDir cache_;
+    exosnap::quick::EditSessionAdapter session_;
+    exosnap::quick::EditTimelineAdapter timeline_;
+};
 class Setup final : public QObject {
     Q_OBJECT
 
@@ -1244,6 +1336,10 @@ class Setup final : public QObject {
         engine->rootContext()->setContextProperty(QStringLiteral("testScale"),
                                                   qEnvironmentVariable("QT_SCALE_FACTOR", "1"));
         engine->rootContext()->setContextProperty(QStringLiteral("testMediaPreview"), new MediaPreviewDriver(this));
+        auto* previews = new PreviewWorkload(engine);
+        engine->addImageProvider(QString::fromLatin1(exosnap::quick::kEditThumbnailProviderId),
+                                 previews->timeline()->createThumbnailImageProvider());
+        engine->rootContext()->setContextProperty(QStringLiteral("testPreviewWorkload"), previews);
         session_ = new EditSessionAdapter(this);
         timeline_ = new EditTimelineAdapter(this);
         player_ = new EditPlayerAdapter(this);

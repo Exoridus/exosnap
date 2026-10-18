@@ -114,6 +114,7 @@ void EditTimelineClipModel::sync(EditSessionAdapter* session, qint64 fromMs, qin
 }
 
 void EditTimelineClipModel::syncUs(EditSessionAdapter* session, qint64 fromUs, qint64 toUs) {
+    ++sync_count_;
     setRows(session != nullptr ? session->visibleClipsUs(fromUs, toUs) : QVariantList{});
 }
 

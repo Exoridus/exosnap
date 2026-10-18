@@ -204,6 +204,9 @@ class EditTimelineAdapter : public QObject {
                                        const QString& streamIdentityHex, qint64 sourceEndUs);
     Q_INVOKABLE qint64 clearMediaCaches();
 
+    [[nodiscard]] std::uint64_t thumbnailQueriesForTest() const noexcept {
+        return thumbnail_queries_;
+    }
     [[nodiscard]] const std::shared_ptr<ThumbnailRequestBroker>& thumbnailBroker() const noexcept {
         return broker_;
     }
@@ -242,6 +245,7 @@ class EditTimelineAdapter : public QObject {
     std::shared_ptr<ThumbnailRequestBroker> broker_;
     std::unique_ptr<WaveformCacheService> waveforms_;
     bool foreground_busy_ = false;
+    std::uint64_t thumbnail_queries_ = 0;
     std::optional<TimelineThumbnailSource> source_;
 
     QTimer resize_debounce_;
