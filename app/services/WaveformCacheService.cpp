@@ -8,6 +8,7 @@
 
 #include <algorithm>
 #include <chrono>
+#include <cmath>
 #include <cstring>
 #include <limits>
 #include <utility>
@@ -58,6 +59,9 @@ class CountingDecoder final : public engine::WaveformAudioDecoder {
     std::uint64_t DecodedFrames() const override {
         return inner_->DecodedFrames();
     }
+    std::span<const engine::AudioSampleSpan> Coverage() const override {
+        return inner_->Coverage();
+    }
 
   private:
     std::unique_ptr<engine::WaveformAudioDecoder> inner_;
@@ -79,6 +83,7 @@ WaveformCacheService::WaveformCacheService(Config config, DecoderFactory decoder
     }
     store_ = std::make_unique<engine::MediaCacheStore>(StoreConfig(config_));
     worker_ = std::thread([this]() { workerLoop(); });
+    pcm_worker_ = std::thread([this]() { pcmWorkerLoop(); });
 }
 
 WaveformCacheService::~WaveformCacheService() {
@@ -86,10 +91,13 @@ WaveformCacheService::~WaveformCacheService() {
         std::lock_guard lock(mutex_);
         stop_ = true;
         cancel_running_ = true;
+        cancel_pcm_ = true;
     }
     cv_.notify_all();
     if (worker_.joinable())
         worker_.join();
+    if (pcm_worker_.joinable())
+        pcm_worker_.join();
 }
 
 QString WaveformCacheService::request(const engine::WaveformSourceKey& source, const QString& source_path,
@@ -127,6 +135,16 @@ void WaveformCacheService::cancel(const QString& qkey) {
         std::lock_guard lock(mutex_);
         requested_jobs_.erase(key);
         availability_checks_.erase(key);
+        if (running_pcm_ && running_pcm_->key == key)
+            cancel_pcm_ = true;
+        std::erase_if(pcm_interests_, [&key](const auto& interest) { return interest.second.id.key == key; });
+        std::erase_if(pcm_queue_, [&key](const auto& job) { return job.id.key == key; });
+        std::erase_if(pcm_entries_, [&key](const auto& entry) {
+            return entry.first.key == key && entry.second.state == DetailState::Pending;
+        });
+        for (auto& [id, entry] : pcm_entries_)
+            if (id.key == key)
+                entry.subscribers = 0;
         const auto removed = std::erase_if(queue_, [&key](const Job& job) { return job.key == key; });
         if (running_ && *running_ == key)
             cancel_running_ = true;
@@ -153,6 +171,11 @@ qint64 WaveformCacheService::clearCache() {
     {
         std::lock_guard lock(mutex_);
         ++generation_;
+        cancel_pcm_ = true;
+        pcm_queue_.clear();
+        pcm_interests_.clear();
+        pcm_entries_.clear();
+        pcm_lru_.clear();
         queue_.clear();
         availability_checks_.clear();
         requested_jobs_.clear();
@@ -250,6 +273,294 @@ WaveformCacheService::tryReadPublishedBlock(const QString& qkey, std::uint32_t l
 std::uint64_t WaveformCacheService::decoderOpensForTest() const {
     std::lock_guard lock(mutex_);
     return decoder_opens_;
+}
+
+std::uint64_t WaveformCacheService::requestPcmWindow(const QString& key, std::int64_t first_sample,
+                                                     std::uint32_t sample_count, std::uint64_t view_generation) {
+    const auto source_key = key.toStdString();
+    const auto bytes = sizeof(PcmWindow) + source_key.size() + 1 +
+                       static_cast<std::uint64_t>(sample_count) *
+                           (sizeof(float) * engine::kWaveformChannels + sizeof(engine::AudioSampleSpan));
+    if (first_sample < 0 || sample_count == 0 || bytes > kMaxPcmWindowBytes ||
+        first_sample > std::numeric_limits<std::int64_t>::max() - sample_count)
+        return 0;
+    std::uint64_t ticket = 0;
+    {
+        std::lock_guard lock(mutex_);
+        const auto source = requested_jobs_.find(source_key);
+        if (source == requested_jobs_.end() || pcm_interests_.size() >= 512 ||
+            next_pcm_ticket_ == std::numeric_limits<std::uint64_t>::max() ||
+            next_pcm_job_ == std::numeric_limits<std::uint64_t>::max())
+            return 0;
+        const PcmId id{source_key, first_sample, sample_count};
+        auto entry = pcm_entries_.find(id);
+        if (entry == pcm_entries_.end()) {
+            while (pcm_entries_.size() >= 256 && evictInactivePcmWindow()) {
+            }
+            if (pcm_entries_.size() >= 256 || pcm_queue_.size() >= 32)
+                return 0;
+            entry = pcm_entries_.emplace(id, PcmEntry{}).first;
+            entry->second.job_id = ++next_pcm_job_;
+            pcm_queue_.push_back(PcmJob{id, source->second, generation_, entry->second.job_id});
+        } else if (entry->second.state == DetailState::Unavailable || entry->second.state == DetailState::Failed) {
+            if (pcm_queue_.size() >= 32)
+                return 0;
+            const auto subscribers = entry->second.subscribers;
+            entry->second = PcmEntry{};
+            entry->second.subscribers = subscribers;
+            entry->second.job_id = ++next_pcm_job_;
+            pcm_queue_.push_back(PcmJob{id, source->second, generation_, entry->second.job_id});
+        }
+        ticket = ++next_pcm_ticket_;
+        pcm_interests_.emplace(ticket, PcmInterest{id, view_generation});
+        ++entry->second.subscribers;
+        if (entry->second.state == DetailState::Ready) {
+            pcm_lru_.remove(id);
+            pcm_lru_.push_back(id);
+        }
+    }
+    cv_.notify_all();
+    return ticket;
+}
+
+WaveformCacheService::PcmSnapshot WaveformCacheService::pcmWindow(std::uint64_t ticket) const {
+    std::lock_guard lock(mutex_);
+    const auto interest = pcm_interests_.find(ticket);
+    if (interest == pcm_interests_.end())
+        return {};
+    const auto entry = pcm_entries_.find(interest->second.id);
+    if (entry == pcm_entries_.end())
+        return {};
+    return {entry->second.state, entry->second.window, entry->second.reason};
+}
+
+void WaveformCacheService::cancelPcmWindow(std::uint64_t ticket) {
+    {
+        std::lock_guard lock(mutex_);
+        const auto interest = pcm_interests_.find(ticket);
+        if (interest == pcm_interests_.end())
+            return;
+        const auto id = interest->second.id;
+        pcm_interests_.erase(interest);
+        const auto entry = pcm_entries_.find(id);
+        if (entry != pcm_entries_.end() && entry->second.subscribers > 0)
+            --entry->second.subscribers;
+        if (!pcmInterested(id)) {
+            std::erase_if(pcm_queue_, [&id](const auto& job) { return job.id == id; });
+            if (entry != pcm_entries_.end() && entry->second.state != DetailState::Ready)
+                pcm_entries_.erase(entry);
+            if (running_pcm_ && *running_pcm_ == id)
+                cancel_pcm_ = true;
+        }
+    }
+    cv_.notify_all();
+}
+
+bool WaveformCacheService::pcmInterested(const PcmId& id) const {
+    const auto entry = pcm_entries_.find(id);
+    return entry != pcm_entries_.end() && entry->second.subscribers > 0;
+}
+
+bool WaveformCacheService::evictInactivePcmWindow() {
+    const auto oldest =
+        std::find_if(pcm_lru_.begin(), pcm_lru_.end(), [this](const auto& id) { return !pcmInterested(id); });
+    if (oldest == pcm_lru_.end())
+        return false;
+    pcm_entries_.erase(*oldest);
+    pcm_lru_.erase(oldest);
+    return true;
+}
+
+std::size_t WaveformCacheService::pcmMemoryBytesForTest() const {
+    return pcm_bytes_->load(std::memory_order_relaxed);
+}
+
+void WaveformCacheService::pcmWorkerLoop() {
+    SetThreadPriority(GetCurrentThread(), THREAD_MODE_BACKGROUND_BEGIN);
+    PcmCursor cursor;
+    for (;;) {
+        PcmJob job;
+        {
+            std::unique_lock lock(mutex_);
+            cv_.wait(lock, [this]() { return stop_ || (!busy_ && !pcm_queue_.empty()); });
+            if (stop_)
+                return;
+            job = std::move(pcm_queue_.front());
+            pcm_queue_.pop_front();
+            running_pcm_ = job.id;
+            cancel_pcm_ = false;
+        }
+        runPcmJob(job, cursor);
+        std::lock_guard lock(mutex_);
+        running_pcm_.reset();
+    }
+}
+
+WaveformCacheService::PcmAllocation WaveformCacheService::reservePcmWindow(const PcmJob& job) {
+    const auto payload_bytes = sizeof(PcmWindow) + job.id.key.size() + 1 +
+                               static_cast<std::size_t>(job.id.count) *
+                                   (sizeof(float) * engine::kWaveformChannels + sizeof(engine::AudioSampleSpan));
+    const auto scratch_bytes = static_cast<std::size_t>(std::min(job.id.count, engine::kWaveformAnalysisChunkFrames)) *
+                               sizeof(float) * engine::kWaveformChannels;
+    const auto bytes = payload_bytes + scratch_bytes;
+    std::lock_guard lock(mutex_);
+    if (job.generation != generation_ || stop_ || !pcmInterested(job.id))
+        return {};
+    const auto fits = [&]() {
+        return pcm_bytes_->load(std::memory_order_relaxed) + bytes <= kMaxPcmBytes &&
+               block_bytes_->load(std::memory_order_relaxed) + bytes <= config_.memory_budget_bytes;
+    };
+    while (!fits() && evictInactivePcmWindow()) {
+    }
+    while (!block_lru_.empty() && !fits()) {
+        blocks_.erase(block_lru_.front());
+        block_lru_.pop_front();
+    }
+    if (!fits())
+        return {};
+    // Allocate charge owners before admission so allocation failure cannot
+    // strand counters for either the immutable result or its decode scratch.
+    auto payload = std::make_shared<PcmBudget>();
+    auto scratch = std::make_shared<PcmBudget>();
+    std::shared_ptr<PcmWindow> window(new PcmWindow, [payload](PcmWindow* data) { delete data; });
+    window->source_key = job.id.key;
+    window->first_sample = job.id.first;
+    window->generation = job.generation;
+    payload->total = block_bytes_;
+    payload->pcm = pcm_bytes_;
+    payload->bytes = payload_bytes;
+    scratch->total = block_bytes_;
+    scratch->pcm = pcm_bytes_;
+    scratch->bytes = scratch_bytes;
+    block_bytes_->fetch_add(bytes, std::memory_order_relaxed);
+    pcm_bytes_->fetch_add(bytes, std::memory_order_relaxed);
+    return {std::move(window), std::move(scratch)};
+}
+
+void WaveformCacheService::runPcmJob(const PcmJob& job, PcmCursor& cursor) {
+    const auto proceed = [&]() {
+        std::unique_lock lock(mutex_);
+        cv_.wait(lock, [&]() {
+            return stop_ || cancel_pcm_ || job.generation != generation_ || !pcmInterested(job.id) || !busy_;
+        });
+        const auto entry = pcm_entries_.find(job.id);
+        return !stop_ && !cancel_pcm_ && job.generation == generation_ && pcmInterested(job.id) &&
+               entry != pcm_entries_.end() && entry->second.job_id == job.job_id;
+    };
+    if (!proceed()) {
+        finishPcmJob(job, {}, true);
+        return;
+    }
+    if (static_cast<std::uint64_t>(job.id.first) >= job.source.sample_count) {
+        finishPcmJob(job, {}, false);
+        return;
+    }
+    auto allocation = reservePcmWindow(job);
+    auto& data = allocation.window;
+    if (!data) {
+        finishPcmJob(job, {}, false);
+        return;
+    }
+    std::string error;
+    if (!cursor.decoder || cursor.key != job.id.key || cursor.path != job.source.path) {
+        cursor = {};
+        cursor.decoder = decoder_factory_(job.source.path, job.source.container_index, error, &cancel_pcm_,
+                                          job.source.expected_sha256);
+        if (!cursor.decoder) {
+            finishPcmJob(job, {DetailState::Failed, {}, QString::fromStdString(error)}, cancel_pcm_.load());
+            return;
+        }
+        cursor.key = job.id.key;
+        cursor.path = job.source.path;
+    }
+    data->samples.resize(static_cast<std::size_t>(job.id.count) * engine::kWaveformChannels);
+    data->coverage.reserve(job.id.count);
+    const auto available = static_cast<std::uint32_t>(
+        std::min<std::uint64_t>(job.id.count, job.source.sample_count - static_cast<std::uint64_t>(job.id.first)));
+    for (std::uint32_t offset = 0; offset < available;) {
+        if (!proceed()) {
+            finishPcmJob(job, {}, true);
+            return;
+        }
+        const auto count = std::min(engine::kWaveformAnalysisChunkFrames, available - offset);
+        const auto first = job.id.first + offset;
+        std::vector<float> chunk;
+        if (!cursor.decoder->Decode(first, count, chunk, error) ||
+            chunk.size() != static_cast<std::size_t>(count) * engine::kWaveformChannels) {
+            cursor = {};
+            finishPcmJob(job, {DetailState::Failed, {}, QString::fromStdString(error)}, cancel_pcm_.load());
+            return;
+        }
+        if (!std::all_of(chunk.begin(), chunk.end(), [](float sample) { return std::isfinite(sample); })) {
+            cursor = {};
+            finishPcmJob(job, {DetailState::Failed, {}, tr("Decoded audio contains nonfinite samples.")}, false);
+            return;
+        }
+        std::copy(chunk.begin(), chunk.end(), data->samples.begin() + static_cast<std::size_t>(offset) * 2);
+        std::int64_t previous_end = first;
+        for (const auto span : cursor.decoder->Coverage()) {
+            if (span.first < first || span.end > first + count || span.first >= span.end || span.first < previous_end) {
+                cursor = {};
+                finishPcmJob(job, {DetailState::Failed, {}, tr("Invalid decoded sample coverage.")}, false);
+                return;
+            }
+            previous_end = span.end;
+            if (!data->coverage.empty() && data->coverage.back().end == span.first)
+                data->coverage.back().end = span.end;
+            else
+                data->coverage.push_back(span);
+        }
+        offset += count;
+    }
+    if (!proceed()) {
+        finishPcmJob(job, {}, true);
+        return;
+    }
+    if (data->coverage.empty())
+        finishPcmJob(job, {}, false);
+    else
+        finishPcmJob(job, {DetailState::Ready, std::move(data), {}}, false);
+}
+
+void WaveformCacheService::finishPcmJob(const PcmJob& job, PcmSnapshot snapshot, bool cancelled) {
+    std::vector<std::pair<std::uint64_t, std::uint64_t>> listeners;
+    {
+        std::lock_guard lock(mutex_);
+        const auto entry = pcm_entries_.find(job.id);
+        if (job.generation != generation_ || entry == pcm_entries_.end() || entry->second.job_id != job.job_id)
+            return;
+        if (cancelled) {
+            if (!stop_ && pcmInterested(job.id))
+                pcm_queue_.push_back(job);
+            else
+                pcm_entries_.erase(entry);
+            cv_.notify_all();
+            return;
+        }
+        entry->second.state = snapshot.state;
+        entry->second.window = std::move(snapshot.window);
+        entry->second.reason = std::move(snapshot.reason);
+        if (entry->second.state == DetailState::Ready)
+            pcm_lru_.push_back(job.id);
+        for (const auto& [ticket, interest] : pcm_interests_)
+            if (interest.id == job.id)
+                listeners.emplace_back(ticket, interest.view_generation);
+    }
+    for (const auto [ticket, view_generation] : listeners) {
+        QMetaObject::invokeMethod(
+            this,
+            [this, ticket, view_generation, generation = job.generation]() {
+                {
+                    std::lock_guard lock(mutex_);
+                    const auto interest = pcm_interests_.find(ticket);
+                    if (generation != generation_ || interest == pcm_interests_.end() ||
+                        interest->second.view_generation != view_generation)
+                        return;
+                }
+                emit pcmWindowChanged(ticket, view_generation);
+            },
+            Qt::QueuedConnection);
+    }
 }
 
 std::uint64_t WaveformCacheService::decodeCallsForTest() const {

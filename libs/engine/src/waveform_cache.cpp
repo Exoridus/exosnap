@@ -59,6 +59,9 @@ class EngineWaveformDecoder final : public WaveformAudioDecoder {
     std::uint64_t DecodedFrames() const override {
         return engine_->AudioDecodedFrameCount();
     }
+    std::span<const AudioSampleSpan> Coverage() const override {
+        return engine_->AudioDecodedCoverage();
+    }
 
   private:
     std::unique_ptr<EditPlayerEngine> engine_;

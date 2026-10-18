@@ -526,6 +526,7 @@ struct EditPlayerEngine::Impl {
     std::filesystem::path source_path;
     uint64_t audio_seeks = 0;
     uint64_t audio_decoded_frames = 0;
+    std::vector<AudioSampleSpan> audio_decoded_coverage;
     struct AudioTail {
         int64_t at = 0;
         std::vector<float> samples;
@@ -894,6 +895,7 @@ bool EditPlayerEngine::DecodeAudioStreamRange(uint32_t container_index, int64_t 
 bool EditPlayerEngine::ReadAudioStreamSequential(uint32_t container_index, int64_t first_sample, uint32_t frame_count,
                                                  std::vector<float>& output, std::string& error) {
     if (!impl_->audio_only) {
+        impl_->audio_decoded_coverage.clear();
         error = "Continuous analysis requires an audio-only source.";
         return false;
     }
@@ -922,6 +924,9 @@ uint64_t EditPlayerEngine::AudioSeekCount() const noexcept {
 uint64_t EditPlayerEngine::AudioDecodedFrameCount() const noexcept {
     return impl_->audio_decoded_frames;
 }
+const std::vector<AudioSampleSpan>& EditPlayerEngine::AudioDecodedCoverage() const noexcept {
+    return impl_->audio_decoded_coverage;
+}
 void EditPlayerEngine::Close() {
     StopPlaybackDecode();
     // Safe only after the join above: the audio thread owns every track's
@@ -938,6 +943,7 @@ void EditPlayerEngine::Close() {
     impl_->audio_cursor_next_decoded.reset();
     impl_->audio_seeks = 0;
     impl_->audio_decoded_frames = 0;
+    impl_->audio_decoded_coverage.clear();
     impl_->source_path.clear();
     impl_->audio_tracks.clear();
     impl_->audio_track_descriptions.clear();
@@ -1553,6 +1559,7 @@ bool EditPlayerEngine::Impl::DecodeAudioRange(std::optional<uint32_t> stream, in
                                               uint32_t frame_count, std::vector<float>& output, std::string& error,
                                               bool continuous) {
     std::lock_guard lock(playback_mutex);
+    audio_decoded_coverage.clear();
     if (!IsOpen() || first_sample < 0 || frame_count > 48000 ||
         first_sample > (std::numeric_limits<int64_t>::max)() - frame_count) {
         error = "Invalid timeline audio range.";
@@ -1652,9 +1659,14 @@ bool EditPlayerEngine::Impl::DecodeAudioRange(std::optional<uint32_t> stream, in
     std::vector<std::optional<int64_t>> next_sample(selected_tracks.size());
     if (reuse)
         next_sample[0] = audio_cursor_next_decoded;
+    std::vector<AudioSampleSpan> coverage;
     const auto mix = [&](size_t index, int64_t at, std::span<const float> samples) {
         const auto frames = static_cast<int64_t>(samples.size() / 2);
-        for (int64_t sample = std::max(first_sample, at); sample < std::min(last_sample, at + frames); ++sample)
+        const auto first = std::max(first_sample, at);
+        const auto end = std::min(last_sample, at + frames);
+        if (first < end)
+            coverage.push_back({first, end});
+        for (int64_t sample = first; sample < end; ++sample)
             for (size_t channel = 0; channel < 2; ++channel)
                 output[static_cast<size_t>(sample - first_sample) * 2 + channel] +=
                     samples[static_cast<size_t>(sample - at) * 2 + channel] * selected_gains[index];
@@ -1784,6 +1796,16 @@ bool EditPlayerEngine::Impl::DecodeAudioRange(std::optional<uint32_t> stream, in
         audio_cursor_through = through[0];
         audio_cursor_next_decoded = next_sample[0];
     }
+    std::sort(coverage.begin(), coverage.end(), [](const auto& a, const auto& b) { return a.first < b.first; });
+    std::size_t merged = 0;
+    for (const auto span : coverage) {
+        if (merged > 0 && span.first <= coverage[merged - 1].end)
+            coverage[merged - 1].end = std::max(coverage[merged - 1].end, span.end);
+        else
+            coverage[merged++] = span;
+    }
+    coverage.resize(merged);
+    audio_decoded_coverage = std::move(coverage);
     return true;
 }
 

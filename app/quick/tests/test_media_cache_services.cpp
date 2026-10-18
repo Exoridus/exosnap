@@ -30,10 +30,13 @@
 #include <array>
 #include <atomic>
 #include <chrono>
+#include <cmath>
 #include <condition_variable>
 #include <filesystem>
 #include <fstream>
+#include <functional>
 #include <iostream>
+#include <limits>
 #include <memory>
 #include <mutex>
 #include <optional>
@@ -100,6 +103,10 @@ struct DecoderControl {
     std::condition_variable cv;
     bool gated = false;
     int permits = 0;
+    std::function<void(std::uint32_t)> before_decode;
+    std::atomic<bool> fail_decode{false};
+    std::atomic<bool> nonfinite{false};
+    std::atomic<bool> omit_coverage{false};
 
     void Release(int count = 1) {
         {
@@ -128,25 +135,40 @@ class SyntheticDecoder final : public engine::WaveformAudioDecoder {
     ~SyntheticDecoder() override {
         control_->closes.fetch_add(1);
     }
-    bool Decode(std::int64_t first, std::uint32_t frames, std::vector<float>& out, std::string&) override {
+    bool Decode(std::int64_t first, std::uint32_t frames, std::vector<float>& out, std::string& error) override {
         {
             std::unique_lock lock(control_->mutex);
             control_->cv.wait(lock, [this]() { return !control_->gated || control_->permits > 0; });
             if (control_->gated)
                 --control_->permits;
         }
+        if (control_->before_decode)
+            control_->before_decode(frames);
         control_->calls.fetch_add(1);
+        if (control_->fail_decode) {
+            error = "Synthetic decoder failure";
+            return false;
+        }
         out.resize(static_cast<std::size_t>(frames) * 2);
         for (std::uint32_t i = 0; i < frames; ++i) {
             const float amplitude = StepAmplitude(first + i);
             out[i * 2] = amplitude;
             out[i * 2 + 1] = -amplitude;
         }
+        coverage_ = {{first, first + frames}};
+        if (control_->omit_coverage)
+            coverage_.clear();
+        if (control_->nonfinite && !out.empty())
+            out[0] = std::numeric_limits<float>::quiet_NaN();
         return true;
+    }
+    std::span<const engine::AudioSampleSpan> Coverage() const override {
+        return coverage_;
     }
 
   private:
     std::shared_ptr<DecoderControl> control_;
+    std::vector<engine::AudioSampleSpan> coverage_;
 };
 
 WaveformCacheService::DecoderFactory Factory(const std::shared_ptr<DecoderControl>& control) {
@@ -516,6 +538,279 @@ TEST(WaveformCacheService, PinnedBlocksStayBudgetedAcrossClearAndServiceLifetime
     EXPECT_EQ(pinned->first_sample, 0u);
     EXPECT_EQ(pinned->end_sample, kWaveformBlockBuckets * engine::kWaveformBaseBucketSamples);
     EXPECT_EQ(pinned->peaks.size(), kWaveformBlockBuckets * engine::kWaveformChannels);
+}
+
+TEST(WaveformCacheService, PcmDetailUsesAnIndependentCursorAndReportsActualCoverage) {
+    WaveformFixture fixture;
+    fixture.control->gated = true;
+    auto detail = std::make_shared<DecoderControl>();
+    std::atomic<std::size_t> observed_bytes{0};
+    WaveformCacheService* observed_service = nullptr;
+    detail->before_decode = [&](std::uint32_t) { observed_bytes = observed_service->pcmMemoryBytesForTest(); };
+    std::atomic<int> opens{0};
+    WaveformCacheService::Config config;
+    config.root = fixture.root;
+    WaveformCacheService service(config, [&](const std::filesystem::path&, std::uint32_t, std::string&,
+                                             const std::atomic<bool>*, const std::array<std::uint8_t, 32>&) {
+        return std::make_unique<SyntheticDecoder>(opens.fetch_add(1) == 0 ? fixture.control : detail);
+    });
+    observed_service = &service;
+    struct UnblockDecoder {
+        std::shared_ptr<DecoderControl> control;
+        ~UnblockDecoder() {
+            control->Open();
+        }
+    } unblock{fixture.control};
+    const auto key = service.request(SourceKey(96), fixture.source_path, kThreeSecondsUs);
+    ASSERT_TRUE(WaitFor([&]() { return opens.load() == 1; }));
+    const auto ticket = service.requestPcmWindow(key, 137, 512, 12);
+    ASSERT_GT(ticket, 0u);
+    ASSERT_TRUE(WaitFor([&]() { return service.pcmWindow(ticket).state == WaveformCacheService::DetailState::Ready; }));
+    const auto snapshot = service.pcmWindow(ticket);
+    ASSERT_TRUE(snapshot.window);
+    EXPECT_EQ(opens.load(), 2);
+    EXPECT_EQ(fixture.control->calls.load(), 0);
+    EXPECT_EQ(snapshot.window->first_sample, 137);
+    ASSERT_EQ(snapshot.window->samples.size(), 1024u);
+    EXPECT_FLOAT_EQ(snapshot.window->samples[0], StepAmplitude(137));
+    const std::vector<engine::AudioSampleSpan> expected{{137, 649}};
+    EXPECT_EQ(snapshot.window->coverage, expected);
+    const auto reserved_window = sizeof(WaveformCacheService::PcmWindow) + 65 +
+                                 512 * (sizeof(float) * engine::kWaveformChannels + sizeof(engine::AudioSampleSpan));
+    EXPECT_GE(observed_bytes.load(), reserved_window + 512 * sizeof(float) * engine::kWaveformChannels);
+    service.cancelPcmWindow(ticket);
+    EXPECT_EQ(service.pcmWindow(ticket).state, WaveformCacheService::DetailState::Unavailable);
+    EXPECT_EQ(snapshot.window->coverage, expected);
+}
+
+TEST(WaveformCacheService, PcmContentCacheRetiresOldWindowsWithoutAnAdmissionDeadEnd) {
+    WaveformFixture fixture;
+    auto service = fixture.Service();
+    const auto key = service->request(SourceKey(97), fixture.source_path, kThreeSecondsUs);
+    ASSERT_TRUE(WaitFor([&]() { return service->state(key) == WaveformCacheService::State::Ready; }));
+    for (std::uint64_t i = 0; i < 300; ++i) {
+        const auto ticket = service->requestPcmWindow(key, static_cast<std::int64_t>(i), 1, i);
+        ASSERT_GT(ticket, 0u) << "view=" << i;
+        ASSERT_TRUE(
+            WaitFor([&]() { return service->pcmWindow(ticket).state == WaveformCacheService::DetailState::Ready; }));
+        service->cancelPcmWindow(ticket);
+    }
+    EXPECT_LE(service->memoryBytesForTest(), WaveformCacheService::kDefaultMemoryBudgetBytes);
+}
+
+TEST(WaveformCacheService, PcmWindowsShareContentButRetireViewSubscriptions) {
+    WaveformFixture fixture;
+    auto service = fixture.Service();
+    service->setForegroundBusy(true);
+    const auto key = service->request(SourceKey(98), fixture.source_path, kThreeSecondsUs);
+    QSignalSpy ready(service.get(), &WaveformCacheService::pcmWindowChanged);
+    const auto obsolete = service->requestPcmWindow(key, 137, 512, 1);
+    const auto current = service->requestPcmWindow(key, 137, 512, 2);
+    ASSERT_GT(obsolete, 0u);
+    ASSERT_GT(current, obsolete);
+    service->cancelPcmWindow(obsolete);
+    service->setForegroundBusy(false);
+    ASSERT_TRUE(
+        WaitFor([&]() { return service->pcmWindow(current).state == WaveformCacheService::DetailState::Ready; }));
+    ASSERT_TRUE(WaitFor([&]() { return ready.count() == 1; }));
+    EXPECT_EQ(ready[0][0].toULongLong(), current);
+    EXPECT_EQ(ready[0][1].toULongLong(), 2u);
+    ASSERT_TRUE(WaitFor([&]() { return service->state(key) == WaveformCacheService::State::Ready; }));
+    const auto calls = fixture.control->calls.load();
+    const auto warm = service->requestPcmWindow(key, 137, 512, 3);
+    EXPECT_EQ(service->pcmWindow(warm).window, service->pcmWindow(current).window);
+    EXPECT_EQ(fixture.control->calls.load(), calls);
+}
+
+TEST(WaveformCacheService, PinnedPcmReservationsHonorTheCombinedDataBudget) {
+    WaveformFixture fixture;
+    constexpr std::uint32_t count = 128;
+    const auto budget = sizeof(WaveformCacheService::PcmWindow) + 65 +
+                        count * (sizeof(float) * engine::kWaveformChannels + sizeof(engine::AudioSampleSpan)) +
+                        count * sizeof(float) * engine::kWaveformChannels;
+    auto service = fixture.Service(64ull << 20, budget);
+    const auto key = service->request(SourceKey(99), fixture.source_path, kThreeSecondsUs);
+    ASSERT_TRUE(WaitFor([&]() { return service->state(key) == WaveformCacheService::State::Ready; }));
+    const auto first = service->requestPcmWindow(key, 0, count, 1);
+    ASSERT_GT(first, 0u);
+    ASSERT_TRUE(WaitFor([&]() { return service->pcmWindow(first).state == WaveformCacheService::DetailState::Ready; }));
+    auto pinned = service->pcmWindow(first).window;
+    ASSERT_TRUE(pinned);
+    const auto second = service->requestPcmWindow(key, count, count, 2);
+    ASSERT_GT(second, 0u);
+    ASSERT_TRUE(
+        WaitFor([&]() { return service->pcmWindow(second).state != WaveformCacheService::DetailState::Pending; }));
+    EXPECT_EQ(service->pcmWindow(second).state, WaveformCacheService::DetailState::Unavailable);
+    EXPECT_LE(service->memoryBytesForTest(), budget);
+    EXPECT_LE(service->pcmMemoryBytesForTest(), WaveformCacheService::kMaxPcmBytes);
+    service->cancelPcmWindow(first);
+    service->cancelPcmWindow(second);
+    pinned.reset();
+    const auto retry = service->requestPcmWindow(key, count, count, 3);
+    ASSERT_GT(retry, 0u);
+    ASSERT_TRUE(WaitFor([&]() { return service->pcmWindow(retry).state == WaveformCacheService::DetailState::Ready; }));
+    auto retained = service->pcmWindow(retry).window;
+    service->clearCache();
+    EXPECT_EQ(service->pcmWindow(retry).state, WaveformCacheService::DetailState::Unavailable);
+    EXPECT_GT(service->memoryBytesForTest(), 0u);
+    EXPECT_LE(service->memoryBytesForTest(), budget);
+    EXPECT_EQ(retained->first_sample, count);
+}
+
+TEST(WaveformCacheService, ConsumerPinnedPcmCannotExceedItsGlobalSublimit) {
+    WaveformFixture fixture;
+    auto service = fixture.Service();
+    const auto key = service->request(SourceKey(100), fixture.source_path, kThreeSecondsUs);
+    ASSERT_TRUE(WaitFor([&]() { return service->state(key) == WaveformCacheService::State::Ready; }));
+    std::vector<std::shared_ptr<const WaveformCacheService::PcmWindow>> pinned;
+    for (std::int64_t first = 0; first < 5; ++first) {
+        const auto ticket = service->requestPcmWindow(key, first, 131072, 1);
+        ASSERT_GT(ticket, 0u);
+        ASSERT_TRUE(
+            WaitFor([&]() { return service->pcmWindow(ticket).state == WaveformCacheService::DetailState::Ready; }));
+        pinned.push_back(service->pcmWindow(ticket).window);
+        service->cancelPcmWindow(ticket);
+    }
+    const auto pressure = service->requestPcmWindow(key, 5, 131072, 2);
+    ASSERT_GT(pressure, 0u);
+    ASSERT_TRUE(
+        WaitFor([&]() { return service->pcmWindow(pressure).state != WaveformCacheService::DetailState::Pending; }));
+    EXPECT_EQ(service->pcmWindow(pressure).state, WaveformCacheService::DetailState::Unavailable);
+    EXPECT_LE(service->pcmMemoryBytesForTest(), WaveformCacheService::kMaxPcmBytes);
+    EXPECT_LE(service->memoryBytesForTest(), WaveformCacheService::kDefaultMemoryBudgetBytes);
+    EXPECT_EQ(service->requestPcmWindow(key, 0, UINT32_MAX, 3), 0u);
+}
+
+TEST(WaveformCacheService, ClearDropsAlreadyQueuedPcmNotificationsAndPreservesPinnedData) {
+    WaveformFixture fixture;
+    auto service = fixture.Service();
+    const auto key = service->request(SourceKey(101), fixture.source_path, kThreeSecondsUs);
+    ASSERT_TRUE(WaitFor([&]() { return service->state(key) == WaveformCacheService::State::Ready; }));
+    QSignalSpy ready(service.get(), &WaveformCacheService::pcmWindowChanged);
+    const auto ticket = service->requestPcmWindow(key, 0, 512, 9);
+    ASSERT_GT(ticket, 0u);
+    QElapsedTimer timer;
+    timer.start();
+    while (service->pcmWindow(ticket).state == WaveformCacheService::DetailState::Pending && timer.elapsed() < 5000)
+        QThread::msleep(1);
+    auto pinned = service->pcmWindow(ticket).window;
+    ASSERT_TRUE(pinned);
+    const auto generation = pinned->generation;
+    service->clearCache();
+    QCoreApplication::processEvents();
+    EXPECT_EQ(ready.count(), 0);
+    EXPECT_EQ(service->pcmWindow(ticket).state, WaveformCacheService::DetailState::Unavailable);
+    EXPECT_FLOAT_EQ(pinned->samples[0], StepAmplitude(0));
+    EXPECT_EQ(service->request(SourceKey(101), fixture.source_path, kThreeSecondsUs), key);
+    const auto replacement = service->requestPcmWindow(key, 0, 512, 10);
+    ASSERT_GT(replacement, 0u);
+    ASSERT_TRUE(
+        WaitFor([&]() { return service->pcmWindow(replacement).state == WaveformCacheService::DetailState::Ready; }));
+    EXPECT_GT(service->pcmWindow(replacement).window->generation, generation);
+}
+
+TEST(WaveformCacheService, ActivePcmTicketsPreserveTheirReadyResultUnderPressure) {
+    WaveformFixture fixture;
+    constexpr std::uint32_t count = 128;
+    const auto budget = sizeof(WaveformCacheService::PcmWindow) + 65 +
+                        count * (sizeof(float) * engine::kWaveformChannels + sizeof(engine::AudioSampleSpan)) +
+                        count * sizeof(float) * engine::kWaveformChannels;
+    auto service = fixture.Service(64ull << 20, budget);
+    const auto key = service->request(SourceKey(102), fixture.source_path, kThreeSecondsUs);
+    ASSERT_TRUE(WaitFor([&]() { return service->state(key) == WaveformCacheService::State::Ready; }));
+    const auto first = service->requestPcmWindow(key, 0, count, 1);
+    ASSERT_GT(first, 0u);
+    ASSERT_TRUE(WaitFor([&]() { return service->pcmWindow(first).state == WaveformCacheService::DetailState::Ready; }));
+    const auto second = service->requestPcmWindow(key, count, count, 2);
+    ASSERT_GT(second, 0u);
+    ASSERT_TRUE(
+        WaitFor([&]() { return service->pcmWindow(second).state != WaveformCacheService::DetailState::Pending; }));
+    EXPECT_EQ(service->pcmWindow(first).state, WaveformCacheService::DetailState::Ready);
+    EXPECT_EQ(service->pcmWindow(second).state, WaveformCacheService::DetailState::Unavailable);
+}
+
+TEST(WaveformCacheService, LastPcmInterestCancellationInterruptsCancellableSourceOpening) {
+    for (const bool cancel_source : {false, true}) {
+        SCOPED_TRACE(cancel_source);
+        WaveformFixture fixture;
+        std::atomic<int> opens{0};
+        std::atomic<bool> opening{false}, interrupted{false};
+        WaveformCacheService::Config config;
+        config.root = fixture.root;
+        WaveformCacheService service(
+            config,
+            [&](const std::filesystem::path&, std::uint32_t, std::string& error, const std::atomic<bool>* cancelled,
+                const std::array<std::uint8_t, 32>&) -> std::unique_ptr<engine::WaveformAudioDecoder> {
+                if (opens.fetch_add(1) == 0)
+                    return std::make_unique<SyntheticDecoder>(fixture.control);
+                opening = true;
+                QElapsedTimer timer;
+                timer.start();
+                while (!cancelled->load() && timer.elapsed() < 5000)
+                    QThread::msleep(1);
+                interrupted = cancelled->load();
+                error = "Cancelled source opening";
+                return {};
+            });
+        const auto key = service.request(SourceKey(103), fixture.source_path, kThreeSecondsUs);
+        ASSERT_TRUE(WaitFor([&]() { return service.state(key) == WaveformCacheService::State::Ready; }));
+        const auto ticket = service.requestPcmWindow(key, 0, 512, 1);
+        ASSERT_GT(ticket, 0u);
+        ASSERT_TRUE(WaitFor([&]() { return opening.load(); }));
+        if (cancel_source)
+            service.cancel(key);
+        else
+            service.cancelPcmWindow(ticket);
+        EXPECT_TRUE(WaitFor([&]() { return interrupted.load(); }, 250));
+        EXPECT_EQ(service.pcmWindow(ticket).state, WaveformCacheService::DetailState::Unavailable);
+    }
+}
+
+TEST(WaveformCacheService, PcmDetailRejectsNonfiniteSamplesAndAllowsRetry) {
+    WaveformFixture fixture;
+    auto service = fixture.Service();
+    const auto key = service->request(SourceKey(104), fixture.source_path, kThreeSecondsUs);
+    ASSERT_TRUE(WaitFor([&]() { return service->state(key) == WaveformCacheService::State::Ready; }));
+    fixture.control->nonfinite = true;
+    const auto ticket = service->requestPcmWindow(key, 0, 128, 1);
+    ASSERT_GT(ticket, 0u);
+    ASSERT_TRUE(
+        WaitFor([&]() { return service->pcmWindow(ticket).state != WaveformCacheService::DetailState::Pending; }));
+    EXPECT_EQ(service->pcmWindow(ticket).state, WaveformCacheService::DetailState::Failed);
+    EXPECT_FALSE(service->pcmWindow(ticket).window);
+    fixture.control->nonfinite = false;
+    const auto retry = service->requestPcmWindow(key, 0, 128, 2);
+    ASSERT_GT(retry, 0u);
+    ASSERT_TRUE(WaitFor([&]() { return service->pcmWindow(retry).state == WaveformCacheService::DetailState::Ready; }));
+    EXPECT_TRUE(std::isfinite(service->pcmWindow(retry).window->samples[0]));
+}
+
+TEST(WaveformCacheService, PcmWithoutActualCoverageIsUnavailableAndDecodeErrorsAreObservable) {
+    WaveformFixture fixture;
+    auto service = fixture.Service();
+    const auto key = service->request(SourceKey(105), fixture.source_path, kThreeSecondsUs);
+    ASSERT_TRUE(WaitFor([&]() { return service->state(key) == WaveformCacheService::State::Ready; }));
+    fixture.control->omit_coverage = true;
+    const auto unknown = service->requestPcmWindow(key, 0, 128, 1);
+    ASSERT_GT(unknown, 0u);
+    ASSERT_TRUE(
+        WaitFor([&]() { return service->pcmWindow(unknown).state != WaveformCacheService::DetailState::Pending; }));
+    EXPECT_EQ(service->pcmWindow(unknown).state, WaveformCacheService::DetailState::Unavailable);
+    EXPECT_FALSE(service->pcmWindow(unknown).window);
+    service->cancelPcmWindow(unknown);
+    fixture.control->omit_coverage = false;
+    fixture.control->fail_decode = true;
+    const auto failed = service->requestPcmWindow(key, 0, 128, 2);
+    ASSERT_GT(failed, 0u);
+    ASSERT_TRUE(
+        WaitFor([&]() { return service->pcmWindow(failed).state != WaveformCacheService::DetailState::Pending; }));
+    EXPECT_EQ(service->pcmWindow(failed).state, WaveformCacheService::DetailState::Failed);
+    EXPECT_EQ(service->pcmWindow(failed).reason, QStringLiteral("Synthetic decoder failure"));
+    EXPECT_FALSE(service->pcmWindow(failed).window);
+    fixture.control->fail_decode = false;
+    const auto retry = service->requestPcmWindow(key, 0, 128, 3);
+    ASSERT_GT(retry, 0u);
+    ASSERT_TRUE(WaitFor([&]() { return service->pcmWindow(retry).state == WaveformCacheService::DetailState::Ready; }));
 }
 
 TEST(WaveformCacheService, EvictedPublishedLayoutAutomaticallyReanalysesOnce) {

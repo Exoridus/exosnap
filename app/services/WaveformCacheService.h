@@ -3,8 +3,8 @@
 // Background waveform analysis and the persistent peak cache behind the Edit
 // timeline's audio rows.
 //
-// One worker thread owns at most one audio decoder at a time and analyses one
-// stream at a time in source-time chunks. Requests deduplicate by cache key and
+// The overview worker analyses one stream at a time in source-time chunks.
+// A separate detail worker owns an independent decoder/cursor. Requests deduplicate by cache key and
 // run in arrival order. While foreground work is busy (playback, export,
 // recording) analysis pauses between chunks. Display reads use only immutable
 // memory blocks; the worker loads missing disk blocks independently.
@@ -68,6 +68,7 @@ class WaveformCacheService : public QObject {
         std::uint32_t chunk_frames = engine::kWaveformAnalysisChunkFrames;
     };
 
+    // May be called concurrently for independent overview and detail cursors.
     using DecoderFactory = std::function<std::unique_ptr<engine::WaveformAudioDecoder>(
         const std::filesystem::path& path, std::uint32_t container_index, std::string& error,
         const std::atomic<bool>* cancelled, const std::array<std::uint8_t, 32>& expected_sha256)>;
@@ -81,6 +82,24 @@ class WaveformCacheService : public QObject {
         std::uint64_t end_sample = 0;
         std::uint64_t generation = 0;
     };
+
+    enum class DetailState { Pending, Ready, Unavailable, Failed };
+    // Interleaved normalized 48 kHz stereo. Only coverage spans establish
+    // actual source samples; zeros outside them are padding.
+    struct PcmWindow {
+        std::string source_key;
+        std::int64_t first_sample = 0;
+        std::vector<float> samples;
+        std::vector<engine::AudioSampleSpan> coverage;
+        std::uint64_t generation = 0;
+    };
+    struct PcmSnapshot {
+        DetailState state = DetailState::Unavailable;
+        std::shared_ptr<const PcmWindow> window;
+        QString reason;
+    };
+    static constexpr std::size_t kMaxPcmWindowBytes = 4u * 1024 * 1024;
+    static constexpr std::size_t kMaxPcmBytes = 16u * 1024 * 1024;
 
     explicit WaveformCacheService(QObject* parent = nullptr);
     WaveformCacheService(Config config, DecoderFactory decoder_factory, QObject* parent = nullptr);
@@ -133,10 +152,22 @@ class WaveformCacheService : public QObject {
     std::uint32_t readBlock(const QString& key, std::uint32_t level, std::uint64_t block,
                             std::vector<engine::WaveformPeak>& out);
 
+    // Subscribes to immutable normalized 48 kHz stereo samples. Content deduplicates
+    // independently of view_generation. A zero ticket means no interest was admitted.
+    // All source validation/decode runs on a cursor independent of peak analysis.
+    [[nodiscard]] std::uint64_t requestPcmWindow(const QString& key, std::int64_t first_sample,
+                                                 std::uint32_t sample_count, std::uint64_t view_generation);
+    // Memory-only snapshot. Read immediately after subscribing, including on a
+    // warm hit; later transitions emit pcmWindowChanged for the active ticket.
+    [[nodiscard]] PcmSnapshot pcmWindow(std::uint64_t ticket) const;
+    // Retires one view interest. Existing snapshots stay valid and budgeted.
+    void cancelPcmWindow(std::uint64_t ticket);
+
     // ---- Test observation ----
     [[nodiscard]] std::uint64_t decoderOpensForTest() const;
     [[nodiscard]] std::uint64_t decodeCallsForTest() const;
     [[nodiscard]] std::size_t memoryBytesForTest() const;
+    [[nodiscard]] std::size_t pcmMemoryBytesForTest() const;
     [[nodiscard]] std::size_t analysisMemoryBytesForTest() const;
     [[nodiscard]] std::uint64_t decoderSeeksForTest() const;
     [[nodiscard]] std::uint64_t decodedFramesForTest() const;
@@ -148,6 +179,7 @@ class WaveformCacheService : public QObject {
     void failed(const QString& key, const QString& reason);
     void blocksLoaded(const QString& key);
     void sourceAvailabilityChanged(const QString& key, bool available);
+    void pcmWindowChanged(quint64 ticket, quint64 viewGeneration);
 
   private:
     struct Job {
@@ -173,9 +205,58 @@ class WaveformCacheService : public QObject {
         std::shared_ptr<const PeakBlock> data;
         std::list<BlockId>::iterator lru{};
     };
+    struct PcmId {
+        std::string key;
+        std::int64_t first = 0;
+        std::uint32_t count = 0;
+        auto operator<=>(const PcmId&) const = default;
+    };
+    struct PcmEntry {
+        DetailState state = DetailState::Pending;
+        std::shared_ptr<const PcmWindow> window;
+        QString reason;
+        std::uint64_t job_id = 0;
+        std::size_t subscribers = 0;
+    };
+    struct PcmInterest {
+        PcmId id;
+        std::uint64_t view_generation = 0;
+    };
+    struct PcmJob {
+        PcmId id;
+        Job source;
+        std::uint64_t generation = 0;
+        std::uint64_t job_id = 0;
+    };
+    struct PcmCursor {
+        std::string key;
+        std::filesystem::path path;
+        std::unique_ptr<engine::WaveformAudioDecoder> decoder;
+    };
+    struct PcmBudget {
+        std::shared_ptr<std::atomic<std::size_t>> total;
+        std::shared_ptr<std::atomic<std::size_t>> pcm;
+        std::size_t bytes = 0;
+        ~PcmBudget() {
+            if (bytes > 0) {
+                total->fetch_sub(bytes, std::memory_order_relaxed);
+                pcm->fetch_sub(bytes, std::memory_order_relaxed);
+            }
+        }
+    };
+    struct PcmAllocation {
+        std::shared_ptr<PcmWindow> window;
+        std::shared_ptr<PcmBudget> scratch;
+    };
 
     void workerLoop();
     void checkAvailability(const Job& job, std::uint64_t generation);
+    void pcmWorkerLoop();
+    void runPcmJob(const PcmJob& job, PcmCursor& cursor);
+    bool pcmInterested(const PcmId& id) const;
+    PcmAllocation reservePcmWindow(const PcmJob& job);
+    bool evictInactivePcmWindow();
+    void finishPcmJob(const PcmJob& job, PcmSnapshot snapshot, bool cancelled);
     void runJob(const Job& job);
     void loadPendingBlocks();
     bool setStatus(const std::string& key, const Status& status, std::optional<std::uint64_t> generation = {});
@@ -211,6 +292,15 @@ class WaveformCacheService : public QObject {
     std::map<BlockId, CachedBlock> blocks_;
     std::list<BlockId> block_lru_;
     std::shared_ptr<std::atomic<std::size_t>> block_bytes_ = std::make_shared<std::atomic<std::size_t>>(0);
+    std::shared_ptr<std::atomic<std::size_t>> pcm_bytes_ = std::make_shared<std::atomic<std::size_t>>(0);
+    std::map<PcmId, PcmEntry> pcm_entries_;
+    std::map<std::uint64_t, PcmInterest> pcm_interests_;
+    std::deque<PcmJob> pcm_queue_;
+    std::optional<PcmId> running_pcm_;
+    std::list<PcmId> pcm_lru_;
+    std::uint64_t next_pcm_ticket_ = 0;
+    std::uint64_t next_pcm_job_ = 0;
+    std::atomic<bool> cancel_pcm_{false};
     // Bumped by clearCache(); work started under an older generation is discarded.
     std::uint64_t generation_ = 0;
     // Serializes publication with clearCache().
@@ -222,6 +312,7 @@ class WaveformCacheService : public QObject {
     std::atomic<std::uint64_t> decode_calls_{0};
 
     std::thread worker_;
+    std::thread pcm_worker_;
 };
 
 } // namespace exosnap

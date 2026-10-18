@@ -11,6 +11,13 @@ namespace exosnap::engine {
 
 enum class TimelineStreamKind { Video, Audio };
 
+// Half-open interval on the normalized 48 kHz output sample grid.
+struct AudioSampleSpan {
+    int64_t first = 0;
+    int64_t end = 0;
+    bool operator==(const AudioSampleSpan&) const = default;
+};
+
 struct TimelineStreamRef {
     uint64_t asset_id = 0;
     AudioTrackId stream_identity;

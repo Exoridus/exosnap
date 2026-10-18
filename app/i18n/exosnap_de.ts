@@ -3959,7 +3959,7 @@ Das Original kann danach nicht wiederhergestellt werden.</translation>
     <name>EditPlayerAdapter</name>
     <message>
         <location filename="../quick/ExoSnap/Quick/EditPlayerAdapter.cpp" line="+112"/>
-        <location line="+381"/>
+        <location line="+383"/>
         <source>Preview unavailable</source>
         <translation>Vorschau nicht verfügbar</translation>
     </message>
@@ -9948,6 +9948,19 @@ Kleiner Text auf dem Bildschirm verliert früher an Qualität als Videoinhalte. 
     </message>
 </context>
 <context>
+    <name>exosnap::WaveformCacheService</name>
+    <message>
+        <location filename="../services/WaveformCacheService.cpp" line="+496"/>
+        <source>Decoded audio contains nonfinite samples.</source>
+        <translation>Die decodierten Audiodaten enthalten ungültige Zahlenwerte.</translation>
+    </message>
+    <message>
+        <location line="+8"/>
+        <source>Invalid decoded sample coverage.</source>
+        <translation>Die decodierten Samples decken einen ungültigen Zeitbereich ab.</translation>
+    </message>
+</context>
+<context>
     <name>exosnap::quick::AboutViewModelAdapter</name>
     <message>
         <location filename="../quick/ExoSnap/Quick/AboutViewModelAdapter.cpp" line="+132"/>
@@ -10643,13 +10656,13 @@ Kleiner Text auf dem Bildschirm verliert früher an Qualität als Videoinhalte. 
     <name>exosnap::quick::EditPlayerWorker</name>
     <message>
         <location filename="../quick/ExoSnap/Quick/EditPlayerWorker.cpp" line="+160"/>
-        <location line="+468"/>
+        <location line="+476"/>
         <location line="+125"/>
         <source>The source time is outside the supported range.</source>
         <translation>Die Quellzeit liegt außerhalb des unterstützten Bereichs.</translation>
     </message>
     <message>
-        <location line="-516"/>
+        <location line="-522"/>
         <location line="+46"/>
         <source>The requested time is outside the supported range.</source>
         <translation>Die angeforderte Zeit liegt außerhalb des unterstützten Bereichs.</translation>
@@ -10660,7 +10673,7 @@ Kleiner Text auf dem Bildschirm verliert früher an Qualität als Videoinhalte. 
         <translation>Bestätige die Auswahl der Audioüberwachung vor der Wiedergabe.</translation>
     </message>
     <message>
-        <location line="+322"/>
+        <location line="+328"/>
         <source>The audio monitoring track identity is invalid.</source>
         <translation>Die Identität der Audioüberwachungsspur ist ungültig.</translation>
     </message>

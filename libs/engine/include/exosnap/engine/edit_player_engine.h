@@ -30,6 +30,7 @@
 
 #include <exosnap/engine/audio_media_manifest.h>
 #include <exosnap/engine/color_metadata.h>
+#include <exosnap/engine/edit_types.h>
 
 #include <array>
 #include <atomic>
@@ -247,6 +248,11 @@ class EditPlayerEngine {
     // and bounded frame tails. Discontinuous requests seek with normal preroll.
     bool ReadAudioStreamSequential(uint32_t container_index, int64_t first_sample, uint32_t frame_count,
                                    std::vector<float>& output, std::string& error);
+    // Sorted, disjoint half-open normalized 48 kHz spans copied from decoded
+    // samples by the last audio range read. Excludes gap/tail padding and is
+    // empty after a failed read.
+    // Single-owner observation; invalidated by the next audio read or Close().
+    [[nodiscard]] const std::vector<AudioSampleSpan>& AudioDecodedCoverage() const noexcept;
     // Every audio track the open file carries, in stream order. `name` comes
     // from the container's track name and is empty for recordings written
     // before names were muxed — callers fall back to a positional label rather

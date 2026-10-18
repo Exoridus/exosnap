@@ -20,6 +20,7 @@
 #include <array>
 #include <atomic>
 #include <cstdint>
+#include <exosnap/engine/edit_types.h>
 #include <exosnap/engine/media_cache_store.h>
 #include <filesystem>
 #include <functional>
@@ -189,6 +190,11 @@ class WaveformAudioDecoder {
     }
     [[nodiscard]] virtual std::uint64_t DecodedFrames() const {
         return 0;
+    }
+    // Actual normalized sample spans from the last successful Decode, excluding
+    // padding. Empty means coverage is unavailable, never evidence of silence.
+    [[nodiscard]] virtual std::span<const AudioSampleSpan> Coverage() const {
+        return {};
     }
     // Exactly frame_count stereo frames starting at media-local sample
     // `first_sample`; time the source does not cover is silence.

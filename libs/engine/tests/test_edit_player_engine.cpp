@@ -9,6 +9,7 @@
 #include "exosnap/engine/edit_player_engine.h"
 #include "exosnap/engine/edit_player_session.h"
 #include <exosnap/engine/audio_media_manifest.h>
+#include <exosnap/engine/edit_timeline_export.h>
 
 extern "C" {
 #include <libavcodec/codec_id.h>
@@ -96,7 +97,8 @@ class ScopedQuietAvLog {
 // One audio track per entry; an EMPTY name writes no container track name at
 // all, which is exactly what a recording made before names were muxed looks
 // like.
-bool WriteTestMkv(const std::filesystem::path& path, const std::vector<std::string>& audio_names) {
+bool WriteTestMkv(const std::filesystem::path& path, const std::vector<std::string>& audio_names,
+                  int audio_rate = kTestAudioRate, int64_t impulse_sample = -1, int64_t audio_offset_ms = 0) {
     AVFormatContext* fmt = nullptr;
     if (avformat_alloc_output_context2(&fmt, nullptr, "matroska", nullptr) < 0 || fmt == nullptr)
         return false;
@@ -128,7 +130,7 @@ bool WriteTestMkv(const std::filesystem::path& path, const std::vector<std::stri
         ast->codecpar->codec_type = AVMEDIA_TYPE_AUDIO;
         ast->codecpar->codec_id = AV_CODEC_ID_PCM_S16LE;
         ast->codecpar->format = AV_SAMPLE_FMT_S16;
-        ast->codecpar->sample_rate = kTestAudioRate;
+        ast->codecpar->sample_rate = audio_rate;
         ast->codecpar->bits_per_coded_sample = 16;
         av_channel_layout_default(&ast->codecpar->ch_layout, 2);
         ast->time_base = AVRational{1, 1000};
@@ -149,7 +151,7 @@ bool WriteTestMkv(const std::filesystem::path& path, const std::vector<std::stri
     // layout the container declares. The payload itself is filler.
     constexpr int kNalBytes = 32;
     const int video_bytes = 4 + kNalBytes;
-    const int audio_bytes = static_cast<int>(kTestAudioRate * kTestAudioBlockMs / 1000) * 2 * 2;
+    const int audio_bytes = static_cast<int>(audio_rate * kTestAudioBlockMs / 1000) * 2 * 2;
     const int blocks_per_frame = static_cast<int>(kTestVideoFrameMs / kTestAudioBlockMs);
 
     for (int i = 0; i < kTestVideoFrames && ok; ++i) {
@@ -175,8 +177,14 @@ bool WriteTestMkv(const std::filesystem::path& path, const std::vector<std::stri
                 if (!ok)
                     break;
                 std::memset(pkt->data, 0, static_cast<size_t>(audio_bytes));
+                const auto first = (frame_ms + block * kTestAudioBlockMs) * audio_rate / 1000;
+                if (impulse_sample >= first && impulse_sample < first + audio_bytes / 4) {
+                    const std::array<int16_t, 2> impulse{16384, 16384};
+                    std::memcpy(pkt->data + (impulse_sample - first) * 4, impulse.data(), sizeof(impulse));
+                }
                 pkt->stream_index = static_cast<int>(track) + 1;
-                pkt->pts = pkt->dts = frame_ms + block * kTestAudioBlockMs;
+                pkt->pts = pkt->dts =
+                    frame_ms + block * kTestAudioBlockMs + (track + 1 == audio_names.size() ? audio_offset_ms : 0);
                 pkt->duration = kTestAudioBlockMs;
                 pkt->flags |= AV_PKT_FLAG_KEY;
                 ok = av_interleaved_write_frame(fmt, pkt) >= 0;
@@ -234,6 +242,83 @@ TEST(EditPlayerSessionAdmission, ExternalVideoClockDoesNotAdmitUnconfirmedSource
     EXPECT_LT(session.ClockSnapshotUs(), 0);
     session.Play(100'000);
     EXPECT_LT(session.ClockSnapshotUs(), 0);
+}
+
+TEST(EditPlayerEngine, DecodedAudioCoverageDistinguishesSilenceFromTailPadding) {
+    ScopedTestMkv file("edit_player_audio_coverage.mkv");
+    ASSERT_TRUE(WriteTestMkv(file.path(), {""}));
+    EditPlayerEngine engine;
+    std::string error;
+    ASSERT_TRUE(engine.OpenAudioStream(file.path(), 1, error)) << error;
+    std::vector<float> samples;
+    ASSERT_TRUE(engine.ReadAudioStreamSequential(1, 23800, 600, samples, error)) << error;
+    ASSERT_EQ(samples.size(), 1200u);
+    EXPECT_TRUE(std::all_of(samples.begin(), samples.end(), [](float sample) { return sample == 0; }));
+    const std::vector<exosnap::engine::AudioSampleSpan> expected{{23800, 24000}};
+    EXPECT_EQ(engine.AudioDecodedCoverage(), expected);
+    ASSERT_TRUE(engine.ReadAudioStreamSequential(1, 24400, 100, samples, error)) << error;
+    EXPECT_TRUE(engine.AudioDecodedCoverage().empty());
+    engine.Close();
+    EXPECT_TRUE(engine.AudioDecodedCoverage().empty());
+}
+
+TEST(EditPlayerEngine, DecodedAudioCoverageExcludesALeadingSourceGap) {
+    ScopedTestMkv file("edit_player_audio_coverage_gap.mkv");
+    ASSERT_TRUE(WriteTestMkv(file.path(), {"anchor", "delayed"}, 48000, -1, 50));
+    const auto metadata = exosnap::engine::ProbeEditMedia(file.path());
+    ASSERT_TRUE(metadata.error.empty()) << metadata.error;
+    ASSERT_TRUE(metadata.timestamp_origin_us);
+    EXPECT_EQ(*metadata.timestamp_origin_us, 0);
+    EditPlayerEngine engine;
+    std::string error;
+    ASSERT_TRUE(engine.OpenAudioStream(file.path(), 2, error)) << error;
+    std::vector<float> samples;
+    ASSERT_TRUE(engine.ReadAudioStreamSequential(2, 0, 4800, samples, error)) << error;
+    ASSERT_EQ(samples.size(), 9600u);
+    EXPECT_TRUE(std::all_of(samples.begin(), samples.end(), [](float sample) { return sample == 0; }));
+    const std::vector<exosnap::engine::AudioSampleSpan> expected{{2400, 4800}};
+    EXPECT_EQ(engine.AudioDecodedCoverage(), expected);
+}
+
+TEST(EditPlayerEngine, DecodedAudioCoverageUsesTheCommonMediaOrigin) {
+    ScopedTestMkv file("edit_player_audio_shifted_origin.mkv");
+    ASSERT_TRUE(WriteTestMkv(file.path(), {"delayed"}, 48000, -1, 50));
+    const auto metadata = exosnap::engine::ProbeEditMedia(file.path());
+    ASSERT_TRUE(metadata.error.empty()) << metadata.error;
+    ASSERT_TRUE(metadata.timestamp_origin_us);
+    EXPECT_EQ(*metadata.timestamp_origin_us, 50000);
+    EditPlayerEngine engine;
+    std::string error;
+    ASSERT_TRUE(engine.OpenAudioStream(file.path(), 1, error)) << error;
+    std::vector<float> samples;
+    ASSERT_TRUE(engine.ReadAudioStreamSequential(1, 0, 4800, samples, error)) << error;
+    const std::vector<exosnap::engine::AudioSampleSpan> expected{{0, 4800}};
+    EXPECT_EQ(engine.AudioDecodedCoverage(), expected);
+}
+
+TEST(EditPlayerEngine, NormalizedDetailWindowKeepsImpulseAlignmentAcrossSourceRates) {
+    for (const auto rate : {44100, 48000, 96000}) {
+        SCOPED_TRACE(rate);
+        ScopedTestMkv file("edit_player_audio_detail_alignment.mkv");
+        ASSERT_TRUE(WriteTestMkv(file.path(), {""}, rate, rate / 4));
+        EditPlayerEngine reference;
+        EditPlayerEngine detail;
+        std::string error;
+        ASSERT_TRUE(reference.OpenAudioStream(file.path(), 1, error)) << error;
+        ASSERT_TRUE(detail.OpenAudioStream(file.path(), 1, error)) << error;
+        std::vector<float> canonical, window;
+        ASSERT_TRUE(reference.ReadAudioStreamSequential(1, 0, 24000, canonical, error)) << error;
+        ASSERT_TRUE(detail.ReadAudioStreamSequential(1, 11800, 600, window, error)) << error;
+        ASSERT_EQ(window.size(), 1200u);
+        const std::vector<exosnap::engine::AudioSampleSpan> expected{{11800, 12400}};
+        EXPECT_EQ(detail.AudioDecodedCoverage(), expected);
+        for (std::size_t i = 0; i < window.size(); ++i)
+            ASSERT_NEAR(window[i], canonical[23600 + i], 1e-6) << "sample=" << i / 2;
+        const auto peak = std::max_element(window.begin(), window.end());
+        ASSERT_NE(peak, window.end());
+        EXPECT_GT(*peak, 0.1f);
+        EXPECT_NEAR(static_cast<double>(std::distance(window.begin(), peak) / 2), 200, 1);
+    }
 }
 
 TEST(EditPlayerEngine, OpenNonexistentFileFails) {
