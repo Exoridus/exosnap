@@ -27,6 +27,8 @@ TestCase {
         testSession.linkedSelection = true;
         while (testSession.canUndo) testSession.undo();
         testSession.appendAsset(testSession.media[0].id);
+        for (const track of testSession.tracks)
+            testSession.trackLayout.setTrackHeight(track.id, 64);
         testSession.requestSeek(0);
     }
     function test_intervals_data() {
@@ -51,6 +53,50 @@ TestCase {
         testSession.requestSeekUs(21);
         const playhead = findChild(strip, "editPlayhead");
         fuzzyCompare(playhead.x, strip.positionAt(0.021), 0.01);
+    }
+    function test_variable_tracks_share_label_and_clip_geometry() {
+        const strip = createTemporaryObject(timelineComponent, tests, {height: 300});
+        const rows = testSession.visibleClipsUs(0, 1000000);
+        const video = rows.find(row => row.video);
+        const audio = rows.find(row => !row.video);
+        testSession.trackLayout.setTrackHeight(video.trackId, 28);
+        testSession.trackLayout.setTrackHeight(audio.trackId, 120);
+        const audioLabel = findChild(strip, "editTrackLabel1");
+        const videoClip = findChild(strip, "editClip" + video.id);
+        const audioClip = findChild(strip, "editClip" + audio.id);
+        tryCompare(audioLabel, "y", strip.rulerHeight + 28);
+        compare(videoClip.height, 28);
+        compare(audioClip.y, audioLabel.y);
+        compare(audioClip.height, 120);
+        const icon = findChild(videoClip, "editClipMediaIcon");
+        verify(icon.y >= 0 && icon.y + icon.height <= testSession.trackLayout.headerHeight);
+        const nameLabel = videoClip.children.find(child => child.text !== undefined && child.text === video.name);
+        verify(!!nameLabel);
+        verify(nameLabel.y >= 0 && nameLabel.y + nameLabel.height <= testSession.trackLayout.headerHeight);
+        const poster = findChild(videoClip, "editClipPoster" + video.id);
+        verify(poster.y >= testSession.trackLayout.headerHeight);
+        verify(poster.y + poster.height <= videoClip.height);
+        verify(!poster.visible);
+    }
+    function test_variable_height_drop_uses_base_boundary_through_preview() {
+        const strip = createTemporaryObject(timelineComponent, tests, {height: 380});
+        testSession.snapping = false;
+        const video = testSession.visibleClipsUs(0, 1000000).find(row => row.video);
+        const audio = testSession.visibleClipsUs(0, 1000000).find(row => !row.video);
+        testSession.trackLayout.setTrackHeight(video.trackId, 28);
+        testSession.trackLayout.setTrackHeight(audio.trackId, 120);
+        const item = findChild(strip, "editClip" + video.id);
+        const point = item.mapToItem(strip, 60, 25);
+        const boundary = 2 + strip.rulerHeight + 28;
+        mousePress(item, 40, 25);
+        mouseMove(strip, point.x, boundary, 20);
+        tryCompare(testSession, "dragValid", true);
+        compare(testSession.dragTracks.length, 4);
+        mouseMove(strip, point.x + 1, boundary, 20);
+        compare(testSession.dragTracks.length, 4);
+        keyClick(Qt.Key_Escape);
+        mouseRelease(strip, point.x + 1, boundary);
+        verify(!testSession.dragActive);
     }
     function test_intervals(data) {
         const ruler = createTemporaryObject(rulerComponent, tests, {pixelsPerMs: data.scale});
@@ -109,7 +155,7 @@ TestCase {
         verify(vertical.size < 1);
         scroll.contentY = scroll.contentHeight - scroll.height;
         compare(ruler.mapToItem(strip, 0, 0).y, 2);
-        compare(audioLabel.mapToItem(strip, 0, 0).y, 2 + strip.rulerHeight + strip.rowHeight - scroll.contentY);
+        compare(audioLabel.mapToItem(strip, 0, 0).y, 2 + strip.rulerHeight + testSession.trackLayout.geometry[String(testSession.tracks[1].id)].top - scroll.contentY);
         verify(audioLabel.mapToItem(strip, 0, 0).y < strip.height);
         strip.height = 220;
         tryCompare(vertical, "size", 1);
@@ -238,7 +284,7 @@ TestCase {
             verify(!!ghost, "Object exists");
             compare(ghost.modelData.startMs, row.startMs);
             compare(ghost.modelData.durationMs, row.durationMs);
-            compare(ghost.y, strip.rulerHeight + row.trackIndex * strip.rowHeight + 3);
+            compare(ghost.y, strip.rulerHeight + testSession.trackLayout.previewGeometry[String(row.trackId)].top);
             compare(ghost.x, Math.max(scroll.contentX + strip.labelWidth, strip.positionAt(row.startMs)));
             compare(ghost.width, Math.max(0, Math.min(scroll.contentX + scroll.width,
                 strip.positionAt(row.startMs + row.durationMs)) - ghost.x));

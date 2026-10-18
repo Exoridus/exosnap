@@ -21,6 +21,8 @@
 
 namespace exosnap::quick {
 
+class EditTrackLayoutModel;
+
 // Window a trim boundary is pulled onto a marker inside. Lifted from
 // EditExportPage::onTrimHandleReleased, where it was a bare 50000 µs literal.
 inline constexpr int64_t kMarkerSnapWindowUs = 50000;
@@ -38,6 +40,7 @@ class EditSessionAdapter : public QObject {
     Q_OBJECT
     QML_ELEMENT
     QML_UNCREATABLE("EditSessionAdapter is provided by the application")
+    Q_MOC_INCLUDE("EditTrackLayoutModel.h")
 
     Q_PROPERTY(bool open READ open NOTIFY openChanged FINAL)
     Q_PROPERTY(QUrl layoutSettingsLocation READ layoutSettingsLocation CONSTANT FINAL)
@@ -64,6 +67,7 @@ class EditSessionAdapter : public QObject {
     Q_PROPERTY(bool hasUnsavedEdits READ hasUnsavedEdits NOTIFY unsavedEditsChanged FINAL)
     Q_PROPERTY(QVariantList media READ media NOTIFY workspaceChanged FINAL)
     Q_PROPERTY(QVariantList tracks READ tracks NOTIFY workspaceChanged FINAL)
+    Q_PROPERTY(exosnap::quick::EditTrackLayoutModel* trackLayout READ trackLayout CONSTANT FINAL)
     Q_PROPERTY(bool canUndo READ canUndo NOTIFY workspaceChanged FINAL)
     Q_PROPERTY(bool canRedo READ canRedo NOTIFY workspaceChanged FINAL)
     Q_PROPERTY(qulonglong selectedClip READ selectedClip NOTIFY workspaceChanged FINAL)
@@ -163,6 +167,9 @@ class EditSessionAdapter : public QObject {
     explicit EditSessionAdapter(QObject* parent = nullptr);
     ~EditSessionAdapter() override;
     [[nodiscard]] QUrl layoutSettingsLocation() const;
+    [[nodiscard]] EditTrackLayoutModel* trackLayout() const {
+        return track_layout_;
+    }
 
     [[nodiscard]] const edit::Workspace& workspace() const {
         return workspace_;
@@ -369,6 +376,7 @@ class EditSessionAdapter : public QObject {
 
     EditContext context_;
     edit::Workspace workspace_;
+    EditTrackLayoutModel* track_layout_ = nullptr;
     QString workspace_error_;
     QVariantList facts_;
     QString report_drops_text_;

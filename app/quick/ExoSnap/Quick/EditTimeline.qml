@@ -16,7 +16,7 @@ FocusScope {
     property var trackToDelete: ({id: 0, name: ""})
     readonly property real labelWidth: 50
     readonly property real rulerHeight: 32
-    readonly property real rowHeight: 64
+    readonly property EditTrackLayoutModel trackLayout: session.trackLayout
     readonly property real minimumZoom: viewport.minimumZoom
     readonly property real maximumZoom: viewport.maximumZoom
     function timeAtUs(contentPosition: real): real {
@@ -37,6 +37,9 @@ FocusScope {
     function visibleSpan(fromUs: real, toUs: real): real {
         return Math.max(0, root.visibleX(toUs) - root.visibleX(fromUs));
     }
+    function trackGeometry(trackId: var, preview: bool): var {
+        return (preview ? root.trackLayout.previewGeometry : root.trackLayout.geometry)[String(trackId)] ?? {top: 0, height: 0};
+    }
     function zoomTo(value: real): void {
         root.zoomAt(value, -1);
     }
@@ -53,19 +56,8 @@ FocusScope {
     }
     function previewDrag(delta: real, contentY: real, modifiers: int): void {
         root.insertDrag = (modifiers & Qt.ControlModifier) !== 0;
-        let track = 0;
-        let newTrack = -1;
-        const row = Math.floor((contentY - root.rulerHeight) / root.rowHeight);
-        const firstAudio = root.session.tracks.findIndex(value => !value.video);
-        if (contentY < root.rulerHeight)
-            newTrack = 0;
-        else if (row >= root.session.tracks.length)
-            newTrack = 2;
-        else if (firstAudio >= 0 && Math.abs(contentY - root.rulerHeight - firstAudio * root.rowHeight) <= 8)
-            newTrack = 1;
-        else if (row >= 0)
-            track = root.session.tracks[row].id;
-        root.session.updateClipDragUs(Math.round(delta), track, newTrack, root.insertDrag, Math.round(8 / root.pixelsPerUs));
+        const destination = root.trackLayout.dropTargetAtY(contentY - root.rulerHeight);
+        root.session.updateClipDragUs(Math.round(delta), destination.trackId ?? 0, destination.newTrack ?? -1, root.insertDrag, Math.round(8 / root.pixelsPerUs));
     }
     function refreshClips(): void {
         clipModel.syncUs(root.session, viewport.startUs, viewport.endUs);
@@ -373,7 +365,7 @@ FocusScope {
         anchors.margins: 2
         contentWidth: width
         flickableDirection: Flickable.VerticalFlick
-        contentHeight: Math.max(height, root.rulerHeight + Math.max(root.session.tracks.length, root.session.dragTracks.length) * root.rowHeight + (root.session.dragActive ? 16 : 0))
+        contentHeight: Math.max(height, root.rulerHeight + root.trackLayout.totalHeight + (root.session.dragActive ? 16 : 0))
         clip: true
         boundsBehavior: Flickable.StopAtBounds
         ScrollBar.vertical: ExoScrollBar {
@@ -402,9 +394,9 @@ FocusScope {
             acceptedButtons: Qt.LeftButton | Qt.RightButton
             onPressed: mouse => {
                 root.forceActiveFocus();
-                const row = Math.floor((mouse.y - root.rulerHeight) / root.rowHeight);
-                if (row >= 0 && row < root.session.tracks.length)
-                    root.session.selectGapUs(root.session.tracks[row].id, root.timeAtUs(mouse.x));
+                const track = root.trackLayout.trackAtY(mouse.y - root.rulerHeight);
+                if (track)
+                    root.session.selectGapUs(track, root.timeAtUs(mouse.x));
                 if (mouse.button === Qt.RightButton) {
                     if (root.session.selectedGap.endMs !== undefined)
                         gapMenu.popup();
@@ -421,15 +413,15 @@ FocusScope {
             onCanceled: root.player.endScrub()
         }
         Repeater {
-            model: root.session.tracks
+            model: root.trackLayout.rows
             delegate: Rectangle {
                 required property var modelData
                 required property int index
                 objectName: "editTrackLabel" + index
                 x: scroll.contentX
-                y: root.rulerHeight + index * root.rowHeight
+                y: root.rulerHeight + modelData.top
                 width: root.labelWidth
-                height: root.rowHeight
+                height: modelData.height
                 z: 3
                 color: ExoTheme.surface
                 Label {
@@ -457,10 +449,11 @@ FocusScope {
         }
         Rectangle {
             visible: root.session.selectedGap.endMs !== undefined
+            readonly property var trackBounds: root.trackGeometry(root.session.selectedGap.trackId ?? 0, false)
             x: root.visibleX(root.session.selectedGap.startUs ?? 0)
-            y: root.rulerHeight + (root.session.selectedGap.trackIndex ?? 0) * root.rowHeight + 3
+            y: root.rulerHeight + trackBounds.top
             width: root.visibleSpan(root.session.selectedGap.startUs ?? 0, root.session.selectedGap.endUs ?? 0)
-            height: 56
+            height: trackBounds.height
             color: "transparent"
             border.color: ExoTheme.accent
             Accessible.ignored: true
@@ -469,12 +462,13 @@ FocusScope {
             model: root.session.spacers
             delegate: Rectangle {
                 id: spacerItem
+                readonly property var trackBounds: root.trackGeometry(modelData.trackId, false)
                 required property var modelData
                 objectName: "editSpacer" + modelData.id
                 x: root.visibleX(modelData.startUs)
-                y: root.rulerHeight + modelData.trackIndex * root.rowHeight + 3
+                y: root.rulerHeight + trackBounds.top
                 width: root.visibleSpan(modelData.startUs, modelData.endUs)
-                height: 56
+                height: trackBounds.height
                 color: ExoTheme.surface
                 border.color: root.session.selectedSpacer === modelData.id ? ExoTheme.accent : ExoTheme.line
                 Label { anchors.centerIn: parent; text: qsTr("Spacer"); color: ExoTheme.textMuted }
@@ -527,13 +521,16 @@ FocusScope {
             model: clipModel
             delegate: Rectangle {
                 id: clipItem
+                readonly property var trackBounds: root.trackGeometry(modelData.trackId, false)
                 required property var modelData
                 objectName: "editClip" + modelData.id
                 readonly property real visibleLeft: Math.min(6, width / 2)
                 readonly property real visibleWidth: Math.max(0, width - 2 * visibleLeft)
                 readonly property real visibleSourceIn: Math.min(modelData.sourceOutUs, modelData.sourceInUs + Math.max(0, viewport.startUs - modelData.startUs) + visibleLeft / root.pixelsPerUs)
                 readonly property real visibleSourceOut: Math.min(modelData.sourceOutUs, visibleSourceIn + visibleWidth / root.pixelsPerUs)
-                readonly property bool cachedVisual: modelData.available && modelData.sourceIdentity.length > 0 && root.thumbnails !== null
+                readonly property bool bodyVisible: trackBounds.height > root.trackLayout.minimumHeight
+                readonly property real bodyHeight: Math.max(0, Math.min(44, trackBounds.height - root.trackLayout.headerHeight - 2))
+                readonly property bool cachedVisual: bodyVisible && modelData.available && modelData.sourceIdentity.length > 0 && root.thumbnails !== null
                 property string waveformKey: ""
                 property string mediaRequest: ""
                 // A delegate outlives most publications, and modelData also changes for selection and
@@ -559,13 +556,14 @@ FocusScope {
                     waveformKey = audio ? root.thumbnails.waveformSource(modelData.sourceIdentity, modelData.path, modelData.containerIndex, modelData.streamIdentity, modelData.sourceEndUs) : "";
                 }
                 onModelDataChanged: refreshMedia()
+                onCachedVisualChanged: refreshMedia()
                 onVisibleSourceInChanged: refreshMedia()
                 onVisibleSourceOutChanged: refreshMedia()
                 Component.onCompleted: refreshMedia()
                 x: root.visibleX(modelData.startUs)
-                y: root.rulerHeight + modelData.trackIndex * root.rowHeight + 3
+                y: root.rulerHeight + trackBounds.top
                 width: root.visibleSpan(modelData.startUs, modelData.endUs)
-                height: 56
+                height: trackBounds.height
                 color: modelData.selected || (root.session.linkedSelection && root.hoveredGroup === modelData.group) ? ExoTheme.surfaceHover : ExoTheme.surfaceRaised
                 border.color: modelData.selected ? ExoTheme.accent : ExoTheme.line
                 border.width: 1
@@ -584,13 +582,14 @@ FocusScope {
                 Accessible.onPressAction: root.session.selectClip(modelData.id)
                 Image {
                     id: poster
+                    objectName: "editClipPoster" + clipItem.modelData.id
                     x: clipItem.visibleLeft
-                    y: 6
+                    y: root.trackLayout.headerHeight + 1
                     width: 64
-                    height: 44
-                    source: !clipItem.cachedVisual && clipItem.modelData.video && root.thumbnails && clipItem.modelData.path === root.thumbnails.sourcePath ? root.thumbnails.posterSource : ""
+                    height: clipItem.bodyHeight
+                    source: clipItem.bodyVisible && !clipItem.cachedVisual && clipItem.modelData.video && root.thumbnails && clipItem.modelData.path === root.thumbnails.sourcePath ? root.thumbnails.posterSource : ""
                     sourceSize: Qt.size(64, 44)
-                    visible: status === Image.Ready && clipItem.modelData.available
+                    visible: status === Image.Ready && clipItem.modelData.available && clipItem.bodyVisible
                     fillMode: Image.PreserveAspectFit
                     Accessible.ignored: true
                 }
@@ -599,24 +598,25 @@ FocusScope {
                     delegate: Image {
                         required property var modelData
                         x: clipItem.visibleLeft + modelData.x
-                        y: 6
+                        y: root.trackLayout.headerHeight + 1
                         width: modelData.width
-                        height: 44
+                        height: clipItem.bodyHeight
                         source: modelData.source
-                        sourceSize: Qt.size(width, height)
+                        sourceSize: Qt.size(width, 44)
                         asynchronous: true
                         cache: false
-                        visible: status === Image.Ready
+                        visible: status === Image.Ready && clipItem.bodyVisible
                         fillMode: Image.PreserveAspectCrop
                         Accessible.ignored: true
                     }
                 }
                 ExoWaveformItem {
+                    objectName: "editClipWaveform" + clipItem.modelData.id
                     x: clipItem.visibleLeft
-                    y: 6
+                    y: root.trackLayout.headerHeight + 1
                     width: clipItem.visibleWidth
-                    height: 44
-                    visible: clipItem.waveformKey.length > 0
+                    height: clipItem.bodyHeight
+                    visible: clipItem.waveformKey.length > 0 && clipItem.bodyVisible
                     service: root.thumbnails ? root.thumbnails.waveformService : null
                     cacheKey: clipItem.waveformKey
                     sourceInUs: clipItem.visibleSourceIn
@@ -629,17 +629,18 @@ FocusScope {
                     id: mediaIcon
                     objectName: "editClipMediaIcon"
                     x: clipItem.visibleLeft
-                    y: 19
+                    y: 1
                     width: 16
                     height: 16
                     kind: !clipItem.modelData.available ? ExoGlyph.Warning : clipItem.modelData.video ? ExoGlyph.AppWindow : ExoGlyph.Speaker
                     color: clipItem.modelData.available ? ExoTheme.textMuted : ExoTheme.warning
-                    visible: !poster.visible
                     Accessible.ignored: true
                 }
                 Label {
-                    x: clipItem.visibleLeft + (poster.visible ? 70 : 22)
-                    y: 19
+                    x: clipItem.visibleLeft + 22
+                    y: 0
+                    height: root.trackLayout.headerHeight
+                    verticalAlignment: Text.AlignVCenter
                     width: Math.max(0, clipItem.width - x - 10)
                     text: clipItem.modelData.name
                     color: clipItem.modelData.available ? ExoTheme.text : ExoTheme.textSecondary
@@ -768,12 +769,13 @@ FocusScope {
             model: root.session.dragActive ? root.visibleCandidates(root.session.dragClips) : []
             delegate: Rectangle {
                 id: clipGhost
+                readonly property var trackBounds: root.trackGeometry(modelData.trackId, true)
                 required property var modelData
                 objectName: "editDragGhost" + modelData.id
                 x: Math.max(scroll.contentX + root.labelWidth, root.visibleX(modelData.startUs))
-                y: root.rulerHeight + modelData.trackIndex * root.rowHeight + 3
+                y: root.rulerHeight + trackBounds.top
                 width: Math.max(0, Math.min(scroll.contentX + scroll.width, root.visibleX(modelData.endUs)) - x)
-                height: 56
+                height: trackBounds.height
                 z: 7
                 color: "transparent"
                 border.width: 2
@@ -793,10 +795,11 @@ FocusScope {
             delegate: Rectangle {
                 required property var modelData
                 objectName: "editSpacerGhost" + modelData.id
+                readonly property var trackBounds: root.trackGeometry(modelData.trackId, true)
                 x: Math.max(scroll.contentX + root.labelWidth, root.visibleX(modelData.startUs))
-                y: root.rulerHeight + modelData.trackIndex * root.rowHeight + 3
+                y: root.rulerHeight + trackBounds.top
                 width: Math.max(0, Math.min(scroll.contentX + scroll.width, root.visibleX(modelData.endUs)) - x)
-                height: 56
+                height: trackBounds.height
                 z: 7
                 color: "transparent"
                 border.width: 2
@@ -809,10 +812,11 @@ FocusScope {
             delegate: Rectangle {
                 required property var modelData
                 objectName: "editDragJunctionGhost"
+                readonly property var trackBounds: root.trackGeometry(modelData.trackId, true)
                 x: Math.max(scroll.contentX + root.labelWidth, root.visibleX(modelData.startUs))
-                y: root.rulerHeight + modelData.trackIndex * root.rowHeight + 20
+                y: root.rulerHeight + trackBounds.top + root.trackLayout.headerHeight
                 width: Math.max(0, Math.min(scroll.contentX + scroll.width, root.visibleX(modelData.endUs)) - x)
-                height: 24
+                height: Math.min(24, Math.max(0, trackBounds.height - root.trackLayout.headerHeight))
                 z: 8
                 color: "transparent"
                 border.color: root.session.dragValid ? ExoTheme.accent : ExoTheme.warning
@@ -823,10 +827,10 @@ FocusScope {
             model: root.session.dragActive ? [0, 1, 2] : []
             delegate: Rectangle {
                 required property int modelData
-                readonly property int audioIndex: root.session.tracks.findIndex(value => !value.video)
+                readonly property real audioTop: root.trackLayout.rows.find(value => !value.video)?.top ?? root.trackLayout.baseHeight
                 objectName: "editNewTrackDrop" + modelData
                 x: scroll.contentX + root.labelWidth
-                y: modelData === 0 ? root.rulerHeight - 8 : modelData === 1 ? root.rulerHeight + (audioIndex < 0 ? root.session.tracks.length : audioIndex) * root.rowHeight - 4 : root.rulerHeight + root.session.tracks.length * root.rowHeight
+                y: modelData === 0 ? root.rulerHeight - 8 : modelData === 1 ? root.rulerHeight + audioTop - 4 : root.rulerHeight + root.trackLayout.baseHeight
                 width: scroll.width - root.labelWidth
                 height: 8
                 z: 8
@@ -849,12 +853,13 @@ FocusScope {
             model: root.session.transitions
             delegate: Rectangle {
                 id: transitionOverlay
+                readonly property var trackBounds: root.trackGeometry(modelData.trackId, false)
                 required property var modelData
                 objectName: "editCrossfadeOverlay"
                 x: root.visibleX(modelData.startUs)
-                y: root.rulerHeight + modelData.trackIndex * root.rowHeight + 20
+                y: root.rulerHeight + trackBounds.top + root.trackLayout.headerHeight
                 width: root.visibleSpan(modelData.startUs, modelData.endUs)
-                height: 24
+                height: Math.min(24, Math.max(0, trackBounds.height - root.trackLayout.headerHeight))
                 clip: true
                 z: 3
                 radius: 3

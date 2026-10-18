@@ -204,6 +204,8 @@ qt_add_qml_module(exosnap
         EditTimelineModels.h
         EditViewportAdapter.cpp
         EditViewportAdapter.h
+        EditTrackLayoutModel.cpp
+        EditTrackLayoutModel.h
         ExoEditPlayerItem.cpp
         ExoEditPlayerItem.h
         ExoWaveformItem.cpp
@@ -1227,6 +1229,8 @@ qt_add_qml_module(edit_timeline_qml_tests
         EditTimelineModels.h
         EditViewportAdapter.cpp
         EditViewportAdapter.h
+        EditTrackLayoutModel.cpp
+        EditTrackLayoutModel.h
         # EditPlayerAdapter's frame sink hands decoded frames to the scene-graph
         # item, so the two link together. The item is never instantiated here —
         # EditTimeline.qml does not draw the picture — but the symbol has to
@@ -2095,6 +2099,8 @@ exosnap_add_gtest(
         EditTimelineModels.h
         EditViewportAdapter.cpp
         EditViewportAdapter.h
+        EditTrackLayoutModel.cpp
+        EditTrackLayoutModel.h
         ${PROJECT_SOURCE_DIR}/app/services/TimelineThumbnailSource.cpp
         ${PROJECT_SOURCE_DIR}/app/services/TimelineThumbnailSource.h
         ${PROJECT_SOURCE_DIR}/app/services/ThumbnailCache.cpp

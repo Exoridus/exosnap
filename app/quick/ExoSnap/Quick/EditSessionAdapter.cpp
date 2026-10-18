@@ -1,4 +1,5 @@
 #include "EditSessionAdapter.h"
+#include "EditTrackLayoutModel.h"
 #include <QCoreApplication>
 
 #include "diagnostics/AppLog.h"
@@ -56,6 +57,12 @@ int64_t SnapTrimBoundaryUs(int64_t requested_us, const std::vector<int64_t>& key
 }
 
 EditSessionAdapter::EditSessionAdapter(QObject* parent) : QObject(parent) {
+    track_layout_ = new EditTrackLayoutModel(this);
+    connect(this, &EditSessionAdapter::workspaceChanged, this, [this] { track_layout_->setTracks(tracks()); });
+    connect(this, &EditSessionAdapter::dragChanged, this, [this] {
+        track_layout_->setTracks(tracks());
+        track_layout_->setPreviewTracks(dragTracks());
+    });
     // One reader at a time: a second clip supersedes the first, and two parallel
     // container index reads on the same disk are slower than one.
     keyframe_pool_.setMaxThreadCount(1);
@@ -406,6 +413,7 @@ void EditSessionAdapter::close() {
     copied_blank_duration_ = 0;
     emit timeSelectionChanged();
     workspace_ = edit::Workspace{};
+    track_layout_->reset();
     emit workspaceChanged();
     keyframe_timestamps_.clear();
     trim_snap_ready_ = false;

@@ -228,6 +228,7 @@ QVariantList EditSessionAdapter::transitions() const {
             {QStringLiteral("trackIndex"), static_cast<int>(track - workspace_.tracks().begin())},
             {QStringLiteral("video"), track != workspace_.tracks().end() && track->type == edit::TrackType::Video},
             {QStringLiteral("startMs"), t.in_us / 1000},
+            {QStringLiteral("trackId"), QVariant::fromValue<qulonglong>(t.track)},
             {QStringLiteral("startUs"), t.in_us},
             {QStringLiteral("endUs"), t.out_us},
             {QStringLiteral("durationUs"), t.out_us - t.in_us},
@@ -765,6 +766,7 @@ QVariantList EditSessionAdapter::dragClips() const {
         rows.push_back(
             QVariantMap{{QStringLiteral("id"), QVariant::fromValue<qulonglong>(clip.id)},
                         {QStringLiteral("trackIndex"), static_cast<int>(track - drag_preview_.tracks.begin())},
+                        {QStringLiteral("trackId"), QVariant::fromValue<qulonglong>(clip.track)},
                         {QStringLiteral("startMs"), clip.start / 1000.0},
                         {QStringLiteral("startUs"), clip.start},
                         {QStringLiteral("endUs"), clip.end()},
@@ -785,6 +787,7 @@ QVariantList EditSessionAdapter::dragTransitions() const {
                                         [&junction](const auto& value) { return value.id == junction.track; });
         rows.push_back(
             QVariantMap{{QStringLiteral("startMs"), junction.in_us / 1000.0},
+                        {QStringLiteral("trackId"), QVariant::fromValue<qulonglong>(junction.track)},
                         {QStringLiteral("startUs"), junction.in_us},
                         {QStringLiteral("endUs"), junction.out_us},
                         {QStringLiteral("durationUs"), junction.out_us - junction.in_us},
@@ -892,6 +895,7 @@ QVariantList SpacerRows(const std::vector<edit::Spacer>& spacers, const std::vec
                                         [&spacer](const auto& value) { return value.id == spacer.track; });
         rows.push_back(QVariantMap{{QStringLiteral("id"), QVariant::fromValue<qulonglong>(spacer.id)},
                                    {QStringLiteral("trackIndex"), static_cast<int>(track - tracks.begin())},
+                                   {QStringLiteral("trackId"), QVariant::fromValue<qulonglong>(spacer.track)},
                                    {QStringLiteral("startMs"), spacer.start_us / 1000.0},
                                    {QStringLiteral("startUs"), spacer.start_us},
                                    {QStringLiteral("endUs"), spacer.end()},
@@ -929,6 +933,7 @@ QVariantMap EditSessionAdapter::selectedGap() const {
     const auto track = std::find_if(workspace_.tracks().begin(), workspace_.tracks().end(),
                                     [this](const auto& value) { return value.id == selected_gap_track_; });
     return {{QStringLiteral("startMs"), selected_gap_.in_us / 1000},
+            {QStringLiteral("trackId"), QVariant::fromValue<qulonglong>(selected_gap_track_)},
             {QStringLiteral("startUs"), selected_gap_.in_us},
             {QStringLiteral("endUs"), selected_gap_.out_us},
             {QStringLiteral("endMs"), selected_gap_.out_us / 1000},

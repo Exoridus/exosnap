@@ -3,6 +3,7 @@
 #include "EditSessionAdapter.h"
 #include "EditTimelineAdapter.h"
 #include "EditTimelineModels.h"
+#include "EditTrackLayoutModel.h"
 #include "EditViewportAdapter.h"
 
 #include "models/EditTimelineModel.h"
@@ -779,6 +780,64 @@ TEST(EditViewport, RejectsUnrepresentableDimensions) {
     EXPECT_EQ(view.usableWidth(), 600);
     view.setUsableWidth((std::numeric_limits<qreal>::denorm_min)());
     EXPECT_EQ(view.usableWidth(), 600);
+}
+
+TEST(EditTrackLayout, UnequalHeightsShareHitAndDropBoundaries) {
+    EditTrackLayoutModel layout;
+    const QVariantList tracks{QVariantMap{{"id", 10}, {"video", true}}, QVariantMap{{"id", 20}, {"video", false}},
+                              QVariantMap{{"id", 30}, {"video", false}}};
+    layout.setTracks(tracks);
+    layout.setTrackHeight(10, 28);
+    layout.setTrackHeight(20, 120);
+    EXPECT_EQ(layout.totalHeight(), 212);
+    EXPECT_EQ(layout.topForId(20), 28);
+    EXPECT_EQ(layout.topForId(30), 148);
+    EXPECT_EQ(layout.trackAtY(27.9), 10);
+    EXPECT_EQ(layout.trackAtY(28), 20);
+    EXPECT_EQ(layout.trackAtY(147.9), 20);
+    EXPECT_EQ(layout.trackAtY(148), 30);
+    EXPECT_EQ(layout.trackAtY(212), 0);
+    EXPECT_EQ(layout.trackAtY(-1), 0);
+    EXPECT_EQ(layout.dropTargetAtY(-1).value("newTrack").toInt(), 0);
+    EXPECT_EQ(layout.dropTargetAtY(21).value("newTrack").toInt(), 1);
+    EXPECT_EQ(layout.dropTargetAtY(37).value("trackId").toULongLong(), 20);
+    EXPECT_EQ(layout.dropTargetAtY(212).value("newTrack").toInt(), 2);
+    layout.setTrackHeight(10, 1);
+    EXPECT_EQ(layout.heightForId(10), 28);
+    layout.setTrackHeight(20, 300);
+    EXPECT_EQ(layout.heightForId(20), 240);
+}
+
+TEST(EditTrackLayout, PreviewInheritsSizesWithoutChangingBaseDropTargets) {
+    EditTrackLayoutModel layout;
+    const QVariantMap video{{"id", 10}, {"video", true}};
+    const QVariantMap audio{{"id", 20}, {"video", false}};
+    layout.setTracks({video, audio});
+    layout.setTrackHeight(10, 28);
+    layout.setTrackHeight(20, 120);
+    layout.setPreviewTracks({QVariantMap{{"id", 40}, {"video", true}}, video, audio});
+    EXPECT_EQ(layout.topForId(10), 0);
+    EXPECT_EQ(layout.topForId(10, true), 64);
+    EXPECT_EQ(layout.heightForId(10, true), 28);
+    EXPECT_EQ(layout.topForId(20, true), 92);
+    EXPECT_EQ(layout.totalHeight(), 212);
+    EXPECT_EQ(layout.dropTargetAtY(148).value("newTrack").toInt(), 2);
+    layout.setTracks({audio});
+    layout.setTracks({audio, video});
+    EXPECT_EQ(layout.topForId(10), 120);
+    EXPECT_EQ(layout.heightForId(10), 28);
+}
+
+TEST(EditTrackLayout, ClosingWorkspaceClearsResidentSizesBeforeIdsAreReused) {
+    EnsureApplication();
+    EditSessionAdapter session;
+    session.setEditContext(MakeContext(10));
+    const auto track = session.tracks().front().toMap().value("id").toULongLong();
+    session.trackLayout()->setTrackHeight(track, 28);
+    session.close();
+    session.setEditContext(MakeContext(10));
+    ASSERT_EQ(session.tracks().front().toMap().value("id").toULongLong(), track);
+    EXPECT_EQ(session.trackLayout()->heightForId(track), 64);
 }
 
 TEST(EditWorkspacePrecision, NudgeAndTrimDoNotRoundThroughMillisecondValues) {
