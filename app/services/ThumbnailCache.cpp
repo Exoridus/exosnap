@@ -247,7 +247,7 @@ ThumbnailRequestBroker::ResolveSource(const std::filesystem::path& path) const {
     }
     for (auto& candidate : candidates)
         if (config_.equivalent_files(candidate.info.path, path))
-            return std::move(candidate);
+            return std::optional<SourceRegistration>{std::move(candidate)};
     return std::nullopt;
 }
 

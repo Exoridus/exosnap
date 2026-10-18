@@ -19,7 +19,7 @@ class EditInteractionController : public QObject {
     explicit EditInteractionController(QObject* parent = nullptr);
     ~EditInteractionController() override;
     QQuickItem* scopeItem() const {
-        return scope_;
+        return scope_.data();
     }
     void setScopeItem(QQuickItem* item);
     bool blocked() const {
