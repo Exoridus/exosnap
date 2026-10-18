@@ -55,6 +55,20 @@ Interactive color conversion runs on the GPU using the caller's D3D11 device/con
 
 The presentation gate runs before upload/conversion. Converting every high-frame-rate source picture when the endpoint/display clock will discard most of them wastes GPU work and can itself cause audio/video contention.
 
+## Keyboard and pointer arbitration
+
+`EditInteractionController` owns one Space reservation independently of transport state.
+QML offers it only unhandled, unmodified key presses after control input handling.
+One event filter on the owning Quick window observes release, repeat, pointer consumption and cancellation.
+A genuine unconsumed release emits the same transport toggle as the Play button.
+Focus changes, window deactivation, hiding, Escape, other keys and an existing clip gesture suppress delayed toggles.
+
+QML owns the temporary canvas-only pointer grab and passes scene coordinates to the controller.
+Panning emits incremental horizontal deltas into the bounded viewport, advancing the pointer anchor even at a viewport limit.
+Space release or cancellation stops movement without surrendering a captured pointer before its release.
+This prevents a terminating pan from becoming a seek, selection or clip edit.
+The controller detaches scope/window subscriptions and its event filter before destruction.
+
 ## Hardware decode boundary
 
 Open attempts D3D11VA hardware decoding without a vendor-specific preference. Failed device creation or unsupported stream negotiation falls back to software at open. There is no arbitrary mid-stream hardware/software switch.

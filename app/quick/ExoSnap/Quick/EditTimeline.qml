@@ -8,6 +8,7 @@ FocusScope {
     required property EditSessionAdapter session
     required property EditPlayerAdapter player
     property EditTimelineAdapter thumbnails: null
+    property Item keyboardScope: root
     property alias pixelsPerSecond: viewport.pixelsPerSecond
     readonly property bool snapping: session.snapping
     property real hoveredGroup: 0
@@ -73,6 +74,14 @@ FocusScope {
         usableWidth: Math.max(1, scroll.width - root.labelWidth)
         onViewChanged: root.refreshClips()
     }
+    EditInteractionController {
+        id: interaction
+        objectName: "editInteraction"
+        scopeItem: root.keyboardScope
+        blocked: root.session.dragActive || !root.visible || !root.enabled
+        onTogglePlayRequested: root.player.togglePlay()
+        onPanRequested: pixels => root.panTimeline(pixels)
+    }
     EditTimelineClipModel {
         id: clipModel
     }
@@ -81,8 +90,12 @@ FocusScope {
     objectName: "editClipTimeline"
     activeFocusOnTab: true
     Accessible.role: Accessible.Pane
-    Accessible.name: qsTr("Edit timeline. Left and Right seek; Up and Down select clips. Alt+Left/Right moves; add Control to trim the start or Shift to trim the end. Control+B splits; Delete removes; Shift+Delete closes the gap. Control+wheel or Control+Plus/Minus zooms. Menu opens clip actions.")
+    Accessible.name: qsTr("Edit timeline. Release Space to play or pause; hold Space and drag to pan. Left and Right seek; Up and Down select clips. Alt+Left/Right moves; add Control to trim the start or Shift to trim the end. Control+B splits; Delete removes; Shift+Delete closes the gap. Control+wheel or Control+Plus/Minus zooms. Menu opens clip actions.")
+    Keys.priority: Keys.AfterItem
     Keys.onPressed: event => {
+        const focused = root.Window.window ? root.Window.window.activeFocusItem : null;
+        if (focused instanceof TextInput || focused instanceof TextEdit)
+            return;
         const control = (event.modifiers & Qt.ControlModifier) !== 0;
         const shift = (event.modifiers & Qt.ShiftModifier) !== 0;
         const alt = (event.modifiers & Qt.AltModifier) !== 0;
@@ -138,9 +151,10 @@ FocusScope {
                 root.session.removeTransition();
             else
                 root.session.deleteSelected(shift);
-        } else if (event.key === Qt.Key_Space)
-            root.player.togglePlay();
-        else if (event.key === Qt.Key_Left || event.key === Qt.Key_Right) {
+        } else if (event.key === Qt.Key_Space) {
+            event.accepted = interaction.armSpace(event.modifiers, event.isAutoRepeat);
+            return;
+        } else if (event.key === Qt.Key_Left || event.key === Qt.Key_Right) {
             if (shift)
                 root.session.requestSeekUs(root.session.positionUs + direction * 1000000);
             else
@@ -356,7 +370,7 @@ FocusScope {
     Rectangle {
         anchors.fill: parent
         color: ExoTheme.surface
-        border.color: root.activeFocus ? ExoTheme.text : ExoTheme.line
+        border.color: ExoTheme.line
     }
     Flickable {
         id: scroll
@@ -872,7 +886,6 @@ FocusScope {
                     root.openTransitionPopup(modelData);
                 }
                 Keys.onReturnPressed: adjust()
-                Keys.onSpacePressed: adjust()
                 Keys.onDeletePressed: {
                     root.session.selectTransition(modelData.outgoing);
                     root.session.removeTransition();
@@ -972,8 +985,8 @@ FocusScope {
             color: ExoTheme.accent
             Rectangle {
                 anchors.horizontalCenter: parent.horizontalCenter
-                width: 5
-                height: 4
+                width: root.activeFocus ? 9 : 5
+                height: root.activeFocus ? 6 : 4
                 radius: 1
                 color: ExoTheme.accent
             }
@@ -1001,6 +1014,29 @@ FocusScope {
                     root.session.importMediaBatch(drop.urls, true, at);
                 drop.acceptProposedAction();
             }
+        }
+    }
+    MouseArea {
+        id: panSurface
+        objectName: "editPanSurface"
+        anchors.fill: scroll
+        anchors.leftMargin: root.labelWidth
+        anchors.rightMargin: 14
+        anchors.bottomMargin: 14
+        z: 15
+        enabled: interaction.spaceHeld || interaction.pointerCaptured
+        acceptedButtons: Qt.LeftButton
+        preventStealing: true
+        cursorShape: pressed ? Qt.ClosedHandCursor : Qt.OpenHandCursor
+        onPressed: mouse => interaction.beginPan(mapToItem(null, mouse.x, mouse.y))
+        onPositionChanged: mouse => {
+            if (pressed)
+                interaction.updatePan(mapToItem(null, mouse.x, mouse.y));
+        }
+        onReleased: interaction.endPan()
+        onCanceled: {
+            interaction.cancel();
+            interaction.endPan();
         }
     }
     ExoScrollBar {

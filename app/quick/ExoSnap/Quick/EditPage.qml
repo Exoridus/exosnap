@@ -22,6 +22,7 @@ FocusScope {
     readonly property bool canPinMedia: stage.width - root.panelWidth - 8 - (root.detailsPinned ? root.panelWidth + 8 : 0) >= 480
     readonly property bool canPinDetails: stage.width - root.panelWidth - 8 - (root.mediaPinned ? root.panelWidth + 8 : 0) >= 480
     objectName: "quickEditPage"
+    Keys.priority: Keys.AfterItem
     Keys.forwardTo: [clips]
     Keys.onPressed: event => {
         const focused = root.Window.window ? root.Window.window.activeFocusItem : null;
@@ -644,6 +645,7 @@ FocusScope {
                 }
                 EditTimeline {
                     id: clips
+                    keyboardScope: root
                     session: root.session
                     player: root.player
                     thumbnails: root.timeline

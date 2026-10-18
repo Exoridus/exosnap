@@ -32,11 +32,13 @@
 #include <QCoreApplication>
 #include <QElapsedTimer>
 #include <QEventLoop>
+#include <QKeyEvent>
 #include <QMap>
 #include <QObject>
 #include <QQmlContext>
 #include <QQmlEngine>
 #include <QQuickStyle>
+#include <QQuickWindow>
 #include <QSemaphore>
 #include <QTemporaryDir>
 #include <QUrl>
@@ -1180,6 +1182,20 @@ class Setup final : public QObject {
                 {QStringLiteral("seekPending"), player.seekPending()},
                 {QStringLiteral("clipOpen"), player.clipOpen()},
                 {QStringLiteral("playing"), player.playing()}};
+    }
+    void repeatSpace(QQuickItem* item) {
+        QKeyEvent release(QEvent::KeyRelease, Qt::Key_Space, Qt::NoModifier, {}, true);
+        QKeyEvent press(QEvent::KeyPress, Qt::Key_Space, Qt::NoModifier, {}, true);
+        QCoreApplication::sendEvent(item->window(), &release);
+        QCoreApplication::sendEvent(item->window(), &press);
+    }
+    void deactivateWindow(QQuickItem* item) {
+        QEvent event(QEvent::WindowDeactivate);
+        QCoreApplication::sendEvent(item->window(), &event);
+    }
+    qulonglong transportCommand(QObject* object) const {
+        const auto* player = qobject_cast<EditPlayerAdapter*>(object);
+        return player ? exosnap::quick::EditPlayerAdapterTestPeer::command(*player) : 0;
     }
     QVariantMap timelineCheckpoint() const {
         return {{"revision", QVariant::fromValue<qulonglong>(session_->workspace().revision())},

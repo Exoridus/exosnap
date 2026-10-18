@@ -39,6 +39,28 @@ Item {
             return item;
         }
 
+        function test_toolbar_pointer_preserves_timeline_space_and_keyboard_button_activation() {
+            testTransportPlayer.setPlaying(false);
+            const page = make({session: testSession, timeline: testTimeline, player: testTransportPlayer});
+            const clips = child(page, "editClipTimeline");
+            const snapping = child(page, "editSnapping");
+            clips.forceActiveFocus();
+            const before = testEditHarness.transportCommand(testTransportPlayer);
+            mouseClick(snapping);
+            verify(clips.activeFocus);
+            keyPress(Qt.Key_Space);
+            compare(testEditHarness.transportCommand(testTransportPlayer), before);
+            keyRelease(Qt.Key_Space);
+            compare(testEditHarness.transportCommand(testTransportPlayer), before + 1);
+            snapping.forceActiveFocus(Qt.TabFocusReason);
+            const checked = snapping.checked;
+            const commands = testEditHarness.transportCommand(testTransportPlayer);
+            keyClick(Qt.Key_Space);
+            compare(snapping.checked, !checked);
+            compare(testEditHarness.transportCommand(testTransportPlayer), commands);
+            testSession.snapping = true;
+            testTransportPlayer.setPlaying(false);
+        }
         function test_synthetic_still_does_not_claim_native_presentation() {
             const still = testEditHarness.syntheticStillProbe();
             compare(still.source.toString(), "file:///synthetic-visual-frame.png");

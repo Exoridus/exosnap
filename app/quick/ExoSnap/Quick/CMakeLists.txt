@@ -204,6 +204,8 @@ qt_add_qml_module(exosnap
         EditTimelineModels.h
         EditViewportAdapter.cpp
         EditViewportAdapter.h
+        EditInteractionController.cpp
+        EditInteractionController.h
         EditTrackLayoutModel.cpp
         EditTrackLayoutModel.h
         ExoEditPlayerItem.cpp
@@ -1229,6 +1231,8 @@ qt_add_qml_module(edit_timeline_qml_tests
         EditTimelineModels.h
         EditViewportAdapter.cpp
         EditViewportAdapter.h
+        EditInteractionController.cpp
+        EditInteractionController.h
         EditTrackLayoutModel.cpp
         EditTrackLayoutModel.h
         # EditPlayerAdapter's frame sink hands decoded frames to the scene-graph
@@ -2099,6 +2103,8 @@ exosnap_add_gtest(
         EditTimelineModels.h
         EditViewportAdapter.cpp
         EditViewportAdapter.h
+        EditInteractionController.cpp
+        EditInteractionController.h
         EditTrackLayoutModel.cpp
         EditTrackLayoutModel.h
         ${PROJECT_SOURCE_DIR}/app/services/TimelineThumbnailSource.cpp

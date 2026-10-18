@@ -17,12 +17,13 @@ TestCase {
         id: timelineComponent
         EditTimeline {
             session: testSession
-            player: testPlayer
+            player: testTransportPlayer
             width: 600
             height: 200
         }
     }
     function init() {
+        testTransportPlayer.setPlaying(false);
         testSession.cancelClipDrag();
         testSession.snapping = true;
         testSession.ripple = false;
@@ -39,6 +40,126 @@ TestCase {
         verify(strip.activeFocus);
         return strip;
     }
+    function test_space_toggles_only_on_release() {
+        make();
+        const before = testEditHarness.transportCommand(testTransportPlayer);
+        keyPress(Qt.Key_Space);
+        compare(testEditHarness.transportCommand(testTransportPlayer), before);
+        keyRelease(Qt.Key_Space);
+        compare(testEditHarness.transportCommand(testTransportPlayer), before + 1);
+    }
+    function test_space_pan_never_toggles_or_seeks() {
+        const strip = make();
+        strip.zoomTo(100);
+        strip.panTimeline(500);
+        const viewport = findChild(strip, "editViewport");
+        const start = viewport.startUs;
+        const position = testSession.positionUs;
+        const before = testEditHarness.transportCommand(testTransportPlayer);
+        keyPress(Qt.Key_Space);
+        mousePress(strip, 350, 80, Qt.LeftButton);
+        mouseMove(strip, 250, 80, 20);
+        mouseRelease(strip, 250, 80, Qt.LeftButton);
+        keyRelease(Qt.Key_Space);
+        verify(viewport.startUs > start);
+        compare(testSession.positionUs, position);
+        compare(testSession.dragActive, false);
+        compare(testEditHarness.transportCommand(testTransportPlayer), before);
+    }
+    function test_space_repeat_and_modifiers() {
+        const strip = make();
+        const before = testEditHarness.transportCommand(testTransportPlayer);
+        keyClick(Qt.Key_Space, Qt.ControlModifier);
+        keyClick(Qt.Key_Space, Qt.AltModifier);
+        keyClick(Qt.Key_Space, Qt.ShiftModifier);
+        compare(testEditHarness.transportCommand(testTransportPlayer), before);
+        keyPress(Qt.Key_Space);
+        for (let i = 0; i < 10; ++i) testEditHarness.repeatSpace(strip);
+        compare(testEditHarness.transportCommand(testTransportPlayer), before);
+        keyRelease(Qt.Key_Space);
+        compare(testEditHarness.transportCommand(testTransportPlayer), before + 1);
+    }
+    function test_nested_text_input_keeps_space() {
+        const strip = make();
+        const input = createTemporaryObject(textInputComponent, strip);
+        input.forceActiveFocus();
+        input.cursorPosition = input.text.length;
+        const before = testEditHarness.transportCommand(testTransportPlayer);
+        keyClick(Qt.Key_Space);
+        compare(input.text, "Editable name ");
+        compare(testEditHarness.transportCommand(testTransportPlayer), before);
+    }
+    function test_cancel_space_data() {
+        return [{tag: "focus"}, {tag: "hidden"}, {tag: "deactivate"}, {tag: "escape"}, {tag: "menu"}];
+    }
+    function test_cancel_space(data) {
+        const strip = make();
+        const before = testEditHarness.transportCommand(testTransportPlayer);
+        keyPress(Qt.Key_Space);
+        if (data.tag === "focus") {
+            const input = createTemporaryObject(textInputComponent, strip);
+            input.forceActiveFocus();
+        } else if (data.tag === "hidden") strip.visible = false;
+        else if (data.tag === "deactivate") testEditHarness.deactivateWindow(strip);
+        else if (data.tag === "escape") keyClick(Qt.Key_Escape);
+        else keyClick(Qt.Key_Menu);
+        keyRelease(Qt.Key_Space);
+        compare(testEditHarness.transportCommand(testTransportPlayer), before);
+        compare(findChild(strip, "editInteraction").spaceHeld, false);
+    }
+    function test_pan_release_orders_data() {
+        return [{tag: "space-first"}, {tag: "pointer-first"}, {tag: "escape"}, {tag: "click-only"}];
+    }
+    function test_pan_release_orders(data) {
+        const strip = make();
+        strip.zoomTo(100);
+        strip.panTimeline(500);
+        const viewport = findChild(strip, "editViewport");
+        const before = testEditHarness.transportCommand(testTransportPlayer);
+        const position = testSession.positionUs;
+        const selected = testSession.selectedClip;
+        keyPress(Qt.Key_Space);
+        mousePress(strip, 350, 80, Qt.LeftButton);
+        if (data.tag !== "click-only") mouseMove(strip, 300, 80, 20);
+        if (data.tag === "escape") keyClick(Qt.Key_Escape);
+        if (data.tag === "space-first" || data.tag === "escape") keyRelease(Qt.Key_Space);
+        const start = viewport.startUs;
+        if (data.tag === "space-first" || data.tag === "escape") {
+            mouseMove(strip, 200, 80, 20);
+            compare(viewport.startUs, start);
+        }
+        mouseRelease(strip, 300, 80, Qt.LeftButton);
+        if (data.tag !== "space-first" && data.tag !== "escape") keyRelease(Qt.Key_Space);
+        compare(testEditHarness.transportCommand(testTransportPlayer), before);
+        compare(testSession.positionUs, position);
+        compare(testSession.selectedClip, selected);
+        compare(testSession.dragActive, false);
+        compare(findChild(strip, "editInteraction").pointerCaptured, false);
+    }
+    function test_space_during_existing_clip_drag_does_not_arm() {
+        const strip = make();
+        testSession.beginClipDrag(testSession.selectedClip);
+        verify(testSession.dragActive);
+        const before = testEditHarness.transportCommand(testTransportPlayer);
+        keyClick(Qt.Key_Space);
+        compare(findChild(strip, "editInteraction").spaceHeld, false);
+        compare(testEditHarness.transportCommand(testTransportPlayer), before);
+        verify(testSession.dragActive);
+        testSession.cancelClipDrag();
+    }
+    function test_pan_reverses_immediately_at_start() {
+        const strip = make();
+        strip.zoomTo(100);
+        keyPress(Qt.Key_Space);
+        mousePress(strip, 300, 80, Qt.LeftButton);
+        mouseMove(strip, 400, 80, 20);
+        const viewport = findChild(strip, "editViewport");
+        compare(viewport.startUs, 0);
+        mouseMove(strip, 380, 80, 20);
+        verify(viewport.startUs > 0);
+        mouseRelease(strip, 380, 80, Qt.LeftButton);
+        keyRelease(Qt.Key_Space);
+    }
     function test_focus_and_seek() {
         const strip = make();
         compare(strip.activeFocusOnTab, true);
@@ -53,9 +174,9 @@ TestCase {
         compare(testSession.positionMs, 0);
     }
     function test_text_input_keeps_edit_shortcuts() {
-        make();
+        const strip = make();
         testSession.requestSeek(50000);
-        const input = createTemporaryObject(textInputComponent, testCase);
+        const input = createTemporaryObject(textInputComponent, strip);
         input.forceActiveFocus();
         verify(input.activeFocus);
         keyClick(Qt.Key_B, Qt.ControlModifier);

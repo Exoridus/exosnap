@@ -8,6 +8,7 @@ ExoButton {
     property bool expanded: false
     property bool pinned: false
     compact: true
+    focusPolicy: Qt.TabFocus
     quiet: tone !== "primary"
     implicitWidth: 36
     implicitHeight: 32
