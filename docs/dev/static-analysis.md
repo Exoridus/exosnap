@@ -66,9 +66,12 @@ clang-tidy caches successful analysis output by the translation unit's complete 
 The key includes every compile-command variant, source/header content, analyzer configuration,
 tool version and cache schema. Ninja records must have valid status, exact dependency counts,
 all object variants and current object commands before they can support reuse.
-Missing input coverage causes fresh analysis. Header membership is part of the global identity,
+Missing input coverage causes fresh analysis. Header membership and content are part of the global identity,
 including repository vendor include directories, so a newly available conditional header cannot
-reuse a verdict from the previous include search. Dependency paths that ambiguously belong to
+reuse a verdict from the previous include search. Content hashing also covers optional or shadowing
+headers not yet represented in an older Ninja graph. This conservatively invalidates all unit keys
+when a repository header changes, rather than assuming the older graph proves include selection.
+Dependency paths that ambiguously belong to
 another checkout are rejected rather than remapped.
 Checkout ownership and header consumers compare physically proven Windows path aliases
 without changing recorded dependency paths.
@@ -79,13 +82,24 @@ fingerprint, rechecked before fresh results are cached. Use a matching Developer
 Without an explicit INCLUDE environment or readable supported toolchain inputs, verdicts are
 not reused. The CI job initializes that environment before building and analysing. Header scoping includes consumers with incomplete
 coverage rather than reporting an empty successful scope. CMake/preset changes select the full tree.
-Added, removed or renamed headers select the full tree without cached verdicts because include search
-and conditional inclusion can change outside the previous dependency graph.
+Added, removed or renamed headers select the full tree and reload current dependency records.
+The header-membership fingerprint invalidates earlier verdicts when include search changes,
+while later runs with the same verified inputs can reuse the new results.
+Scoping and cache-key construction share one initial ownership/header snapshot. Readable directory
+links are traversed with cycle detection, and physical link targets contribute to membership identity.
+Deleted registered worktrees are ignored; unreadable existing roots remain unavailable evidence.
+Build-directory aliases and UNC roots retain their filesystem meaning during target matching.
+The verification runner passes its imported MSVC environment to both analysis and identity hashing.
+A disabled cache prints the unavailable evidence category.
 
 Cached entries carry their schema, source, key, exit status and output digest.
 Before storing any fresh result, the runner rechecks compilation-database bytes,
 configuration, header membership, toolchain identity and the captured source/dependency keys.
-Changed or unreadable evidence aborts the run with an error before any fresh cache writes.
+Fresh work is checkpointed in batches of at least 16 units or four worker waves, whichever is larger.
+Changed or unreadable evidence aborts the current batch before its cache writes. Earlier validated
+batches remain reusable under their original keys; a changed input produces a different key.
+Full toolchain revalidation is retained, including selected cache hits, rather than trusting an old
+snapshot across analysis. This deliberately costs additional reads to detect persistent input drift.
 Schema 4 rejects entries from producers that did not perform this validation.
 Keep analysis inputs stable throughout the run. Build locks do not prevent editor changes.
 Before/after checks detect persistent drift but cannot detect an edit and restoration during
@@ -94,8 +108,9 @@ Old, malformed or damaged entries are misses. The digest detects corruption, not
 already able to write a trusted cache scope. GitHub cache ref isolation remains the trust boundary.
 CI restores and saves the verdict cache in separate steps. Validated diagnostics are saved
 also when they make the analysis fail, and replaying a blocking finding still fails the check.
-An interrupted analysis may not reach input revalidation or cache saving, so a timeout does
-not guarantee reusable fresh verdicts. Cache upload failures do not replace the analysis verdict.
+An interrupted analysis retains completed, validated checkpoints locally. Work in the unfinished
+batch must run again. CI reuse still depends on its separate cache upload finishing, which a hard
+job timeout does not guarantee. Cache upload failures do not replace the analysis verdict.
 cppcheck keeps its separate build-directory cache.
 
 Shared tool caches live under %LOCALAPPDATA%\ExoSnap\tool-cache, outside source/build trees.
@@ -110,6 +125,7 @@ cache counts, fresh-worker count and pipeline wall times.
 Each fresh translation unit records wall time and, on Windows when available, process CPU time
 and peak working-set bytes. Missing resource measurements are null.
 The verification runner also retains clang-tidy-profile.json beside its step logs.
+An optional profile failure emits a warning and preserves the analysis diagnostics and verdict.
 The Debug CI job uploads that profile on successful and failing runs when analysis produced it.
 It sets EXO_DEV_CLANG_TIDY_PROFILE=public: the uploaded profile omits tool, compilation-database
 and source paths, classifies scope without free-form details, and identifies fresh units by the

@@ -145,9 +145,15 @@ impl super::ClangTidyReport {
         use anyhow::Context as _;
         let public = std::env::var_os("EXO_DEV_CLANG_TIDY_PROFILE").as_deref()
             == Some(std::ffi::OsStr::new("public"));
-        let identity = self.profile_identity(head, dirty, public)?;
-        std::fs::write(path, serde_json::to_vec_pretty(&identity)?)
-            .with_context(|| format!("could not write {}", path.display()))
+        let written = (|| -> anyhow::Result<()> {
+            let identity = self.profile_identity(head, dirty, public)?;
+            std::fs::write(path, serde_json::to_vec_pretty(&identity)?)
+                .with_context(|| format!("could not write {}", path.display()))
+        })();
+        if let Err(error) = written {
+            eprintln!("warning: clang-tidy profile unavailable: {error:#}");
+        }
+        Ok(())
     }
 
     fn profile_identity(
@@ -213,6 +219,22 @@ impl super::ClangTidyReport {
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn optional_profile_failure_preserves_analysis_findings() {
+        let dir = tempfile::tempdir().unwrap();
+        let mut report = super::super::ClangTidyReport::skipped("test", dir.path());
+        report.violations.push("blocking diagnostic".into());
+        let parent = dir.path().join("not-a-directory");
+        std::fs::write(&parent, "file").unwrap();
+        assert!(
+            report
+                .write_profile(&parent.join("profile.json"), None, false)
+                .is_ok()
+        );
+        assert!(!report.ok());
+        assert_eq!(report.violations, ["blocking diagnostic"]);
+    }
+
     #[test]
     fn public_profile_omits_paths_without_changing_local_profile_or_resource_evidence() {
         let dir = tempfile::tempdir().unwrap();

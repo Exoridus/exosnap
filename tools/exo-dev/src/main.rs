@@ -2445,6 +2445,7 @@ fn lint_clang_tidy(
         require_version.as_deref(),
         list_checks,
         clang_tidy.as_deref(),
+        &[],
     )?;
     if list_checks {
         return Ok(ExitCode::SUCCESS);

@@ -2,7 +2,10 @@
 
 use std::path::{Path, PathBuf};
 
-pub(super) fn hash(build: &Path) -> Option<String> {
+pub(super) fn hash_with_overrides(
+    build: &Path,
+    overrides: &[(std::ffi::OsString, std::ffi::OsString)],
+) -> Option<String> {
     let mut environment = Vec::new();
     for name in [
         "INCLUDE",
@@ -16,16 +19,23 @@ pub(super) fn hash(build: &Path) -> Option<String> {
         "UniversalCRTSdkDir",
         "UCRTVersion",
     ] {
-        let value = match std::env::var(name) {
-            Ok(value) => Some(value),
-            Err(std::env::VarError::NotPresent) => None,
-            Err(_) => return None,
+        let supplied = overrides.iter().rev().find(|(key, _)| {
+            key.to_str()
+                .is_some_and(|key| key.eq_ignore_ascii_case(name))
+        });
+        let value = if let Some((_, value)) = supplied {
+            Some(value.to_str()?.to_string())
+        } else {
+            match std::env::var(name) {
+                Ok(value) => Some(value),
+                Err(std::env::VarError::NotPresent) => None,
+                Err(_) => return None,
+            }
         };
         environment.push((name, value));
     }
     hash_with_environment(build, &environment)
 }
-
 fn hash_with_environment(build: &Path, environment: &[(&str, Option<String>)]) -> Option<String> {
     // MSVC-mode Clang uses INCLUDE when supplied. Without that snapshot, SDK
     // registry discovery can diverge from CMake's cached resource-compiler path.
@@ -153,6 +163,20 @@ fn collect(root: &Path, inputs: &mut Vec<(String, String)>) -> Option<()> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn imported_compiler_environment_changes_the_toolchain_identity() {
+        let dir = fixture();
+        let include = dir.path().join("VC/Tools/MSVC/14.44/include");
+        let mut environment = vec![
+            ("INCLUDE".into(), include.into_os_string()),
+            ("CL".into(), "/DVALUE=1".into()),
+        ];
+        let first = hash_with_overrides(&dir.path().join("build"), &environment);
+        environment[1].1 = "/DVALUE=2".into();
+        let second = hash_with_overrides(&dir.path().join("build"), &environment);
+        assert!(first.is_some(), "the supplied INCLUDE must be used");
+        assert_ne!(first, second);
+    }
 
     fn fixture_hash(build: &Path) -> Option<String> {
         let include = build.parent()?.join("VC/Tools/MSVC/14.44/include");

@@ -142,8 +142,10 @@ impl ClangTidyReport {
 /// the complete command identities, `.clang-tidy`, [`CACHE_SCHEMA`], the check
 /// list and the tool version banner. Reuse requires complete, current Ninja
 /// records from the configured build. Unhashable inputs are cache misses.
-/// Keep inputs stable throughout analysis. Persistent drift aborts before
-/// fresh cache writes; before/after checks cannot detect edit-and-restore.
+/// Keep inputs stable throughout analysis. Each completed batch is revalidated
+/// before its results are cached. Drift aborts the current batch. Previously
+/// validated batches retain their original input keys. Before/after checks cannot
+/// detect edit-and-restore.
 #[allow(clippy::too_many_arguments)]
 pub fn run_blocking(
     repo_root: &Path,
@@ -154,6 +156,7 @@ pub fn run_blocking(
     require_version: Option<&str>,
     list_checks: bool,
     clang_tidy_path: Option<&Path>,
+    environment: &[(std::ffi::OsString, std::ffi::OsString)],
 ) -> anyhow::Result<ClangTidyReport> {
     if list_checks {
         for check in BLOCKING_CHECKS {
@@ -237,6 +240,7 @@ pub fn run_blocking(
     };
 
     let mut already_read_graph: Option<HashMap<String, Vec<String>>> = None;
+    let mut captured_identity = None;
     let (sources, scope_desc) = match base {
         None => (all_sources.clone(), "full tree".to_string()),
         Some(base) => {
@@ -261,7 +265,9 @@ pub fn run_blocking(
                     sources,
                     description,
                     dep_graph,
+                    identity,
                 } => {
+                    captured_identity = identity;
                     already_read_graph = dep_graph;
                     (sources, description)
                 }
@@ -284,15 +290,18 @@ pub fn run_blocking(
     let configuration_started = Instant::now();
     timing::progress_phase("configuration_identity", started);
     let commands = command_identities(&entries);
-    let foreign_roots = input_identity::foreign_roots(repo_root);
-    let inventory = input_identity::HeaderInventory::read(repo_root, build_dir);
+    let identity = captured_identity
+        .unwrap_or_else(|| Box::new(input_identity::Snapshot::read(repo_root, build_dir)));
+    let foreign_roots = &identity.foreign_roots;
+    let inventory = &identity.inventory;
 
     let configuration_hash = inventory
         .as_ref()
         .and_then(|inventory| inventory.configuration_hash(repo_root));
     let toolchain_started = Instant::now();
-    let toolchain_hash = toolchain_identity::hash(build_dir);
+    let toolchain_hash = toolchain_identity::hash_with_overrides(build_dir, environment);
     timing.toolchain_identity_seconds = toolchain_started.elapsed().as_secs_f64();
+    let toolchain_available = toolchain_hash.is_some();
     let configuration_hash = combine_configuration_identity(configuration_hash, toolchain_hash);
     let salt = compute_salt(&banner, &flags, configuration_hash.as_deref());
     timing.configuration_identity_seconds = configuration_started.elapsed().as_secs_f64();
@@ -330,6 +339,22 @@ pub fn run_blocking(
         }
     };
 
+    if !cache_enabled {
+        let reason = if !toolchain_available {
+            "compiler environment or toolchain inputs unavailable"
+        } else if inventory.is_none() {
+            "header inventory unavailable or cyclic"
+        } else if foreign_roots.is_none() {
+            "checkout ownership unavailable"
+        } else if salt.is_none() {
+            "analysis configuration unavailable"
+        } else if cache_dependencies.is_none() {
+            "current Ninja dependency evidence unavailable"
+        } else {
+            "no complete hashable translation-unit inputs"
+        };
+        eprintln!("clang-tidy cache disabled: {reason}");
+    }
     if cache_enabled {
         std::fs::create_dir_all(cache_dir)
             .with_context(|| format!("could not create {}", cache_dir.display()))?;
@@ -364,48 +389,82 @@ pub fn run_blocking(
     timing::progress(
         serde_json::json!({"event": "input-ready", "selected": sources.len(), "hits": replayed, "fresh": pending.len(), "jobs": jobs, "workers": timing.workers, "cache_available": cache_enabled, "cache_keyed": cache_keys.len(), "elapsed_seconds": started.elapsed().as_secs_f64(), "timing": timing}),
     );
-    let phase = Instant::now();
-    let fresh = analyze_pending(&tool, build_dir, &flags, &pending, jobs);
-    timing.analysis_wall_seconds = phase.elapsed().as_secs_f64();
-    if cache_enabled && !fresh.is_empty() {
-        timing::progress_phase("input_revalidation", started);
-        let phase = Instant::now();
-        let current_configuration = configuration_identity(repo_root, build_dir);
-        // Validate the complete batch before any write; an earlier clean
-        // result must not survive a later source's input drift.
-        revalidate_cache_inputs(
-            &compile_db_path,
-            &compile_db_text,
-            configuration_hash
-                .as_deref()
-                .context("missing captured cache configuration")?,
-            current_configuration.as_deref(),
-            &sources,
-            cache_dependencies
-                .as_ref()
-                .context("missing captured cache dependencies")?,
-            &commands,
-            salt.as_deref().context("missing captured cache salt")?,
-            &cache_keys,
-        )?;
-        timing.input_revalidation_seconds = phase.elapsed().as_secs_f64();
+    let mut analysis_seconds = 0.0;
+    let mut revalidation_seconds = 0.0;
+    let mut storage_seconds = 0.0;
+    // Four worker waves amortize full input validation while preserving progress
+    // on interrupted runs. A later batch cannot publish under changed inputs.
+    let batch_size = if cache_enabled {
+        jobs.saturating_mul(4).max(16)
+    } else {
+        pending.len().max(1)
+    };
+    let analysis_started = Instant::now();
+    let mut analysis_offset = 0;
+    let fresh = analyze_in_batches(
+        &pending,
+        batch_size,
+        |batch| {
+            let phase = Instant::now();
+            let fresh = analyze_pending(
+                &tool,
+                build_dir,
+                &flags,
+                batch,
+                jobs,
+                environment,
+                Some((analysis_offset, pending.len(), analysis_started)),
+            );
+            analysis_offset += fresh.len();
+            analysis_seconds += phase.elapsed().as_secs_f64();
+            fresh
+        },
+        |batch| {
+            for (source, output, code, _) in batch {
+                require_analysis(source, output, *code)?;
+            }
+            if !cache_enabled {
+                return Ok(());
+            }
+            timing::progress_phase("input_revalidation", started);
+            let phase = Instant::now();
+            let current_configuration = configuration_identity(repo_root, build_dir, environment);
+            revalidate_cache_inputs(
+                &compile_db_path,
+                &compile_db_text,
+                configuration_hash
+                    .as_deref()
+                    .context("missing captured cache configuration")?,
+                current_configuration.as_deref(),
+                &sources,
+                cache_dependencies
+                    .as_ref()
+                    .context("missing captured cache dependencies")?,
+                &commands,
+                salt.as_deref().context("missing captured cache salt")?,
+                &cache_keys,
+            )?;
+            revalidation_seconds += phase.elapsed().as_secs_f64();
+            let phase = Instant::now();
+            for (source, output, code, _) in batch {
+                if let Some(key) = cache_keys.get(source) {
+                    store_cache_entry(cache_dir, key, source, output, *code);
+                }
+            }
+            storage_seconds += phase.elapsed().as_secs_f64();
+            timing::progress(
+                serde_json::json!({"event": "cache-checkpoint", "completed": batch.len()}),
+            );
+            Ok(())
+        },
+    )?;
+    timing.analysis_wall_seconds = analysis_seconds;
+    timing.input_revalidation_seconds = revalidation_seconds;
+    timing.validation_and_storage_seconds = storage_seconds;
+    for (source, output, _, unit_timing) in fresh {
+        timing.units.push(unit_timing);
+        results.push((source, output));
     }
-    let phase = Instant::now();
-    timing::progress_phase("validation_storage", started);
-    for (src, output, code, unit_timing) in &fresh {
-        timing.units.push(unit_timing.clone());
-        require_analysis(src, output, *code)?;
-        results.push((src.clone(), output.clone()));
-        if !cache_enabled {
-            continue;
-        }
-        let Some(key) = cache_keys.get(src) else {
-            continue;
-        };
-        store_cache_entry(cache_dir, key, src, output, *code);
-    }
-
-    timing.validation_and_storage_seconds = phase.elapsed().as_secs_f64();
     timing::progress_phase("reporting", started);
     let phase = Instant::now();
     let violations = extract_violations(&results, &repo_root_norm, &build_dir_norm);
@@ -541,8 +600,11 @@ fn project_sources(
     build_dir_norm: &str,
 ) -> Vec<String> {
     let mut set: BTreeSet<String> = BTreeSet::new();
+    let physical_build = normalize_directory(Path::new(build_dir_norm));
     for entry in entries {
-        if is_project_source(&entry.file, repo_root_norm, build_dir_norm) {
+        if is_project_source(&entry.file, repo_root_norm, build_dir_norm)
+            && is_project_source(&entry.file, repo_root_norm, &physical_build)
+        {
             set.insert(entry.file.clone());
         }
     }
@@ -594,14 +656,31 @@ fn object_maps(
 ) -> (HashMap<String, String>, HashMap<String, Vec<String>>) {
     let mut obj_to_source = HashMap::new();
     let mut source_to_obj: HashMap<String, Vec<String>> = HashMap::new();
-    let prefix = format!("{}/", build_dir_norm.to_ascii_lowercase());
+    let lexical = format!(
+        "{}/",
+        normalize_segments(build_dir_norm).to_ascii_lowercase()
+    );
+    let physical = format!(
+        "{}/",
+        normalize_directory(Path::new(build_dir_norm)).to_ascii_lowercase()
+    );
     for entry in entries {
         let Some(out) = &entry.output else { continue };
-        let stripped = if out.to_ascii_lowercase().starts_with(&prefix) {
-            out[prefix.len()..].to_string()
-        } else {
-            out.clone()
-        };
+        let stripped = [&lexical, &physical]
+            .into_iter()
+            .find_map(|prefix| {
+                out.to_ascii_lowercase()
+                    .starts_with(prefix)
+                    .then(|| out[prefix.len()..].to_string())
+            })
+            .or_else(|| {
+                let resolved = normalize_root(&std::fs::canonicalize(out).ok()?);
+                resolved
+                    .to_ascii_lowercase()
+                    .strip_prefix(&physical)
+                    .map(|_| resolved[physical.len()..].to_string())
+            })
+            .unwrap_or_else(|| out.clone());
         obj_to_source.insert(stripped.clone(), entry.file.clone());
         source_to_obj
             .entry(entry.file.clone())
@@ -627,10 +706,17 @@ fn object_maps(
 // ---------------------------------------------------------------------------
 
 fn normalize_root(path: &Path) -> String {
-    path.to_string_lossy()
-        .replace('\\', "/")
-        .trim_end_matches('/')
-        .to_string()
+    let path = path.to_string_lossy().replace('\\', "/");
+    let path = if let Some(unc) = path.strip_prefix("//?/UNC/") {
+        format!("//{unc}")
+    } else {
+        path.strip_prefix("//?/").unwrap_or(&path).to_string()
+    };
+    normalize_segments(&path).trim_end_matches('/').to_string()
+}
+
+fn normalize_directory(path: &Path) -> String {
+    normalize_root(&std::fs::canonicalize(path).unwrap_or_else(|_| path.to_path_buf()))
 }
 
 fn is_rooted(path: &str) -> bool {
@@ -657,7 +743,9 @@ fn resolve_against_build_dir(path: &str, build_dir_norm: &str) -> String {
 }
 
 fn normalize_segments(path: &str) -> String {
-    let (prefix, rest) = if let Some(stripped) = path.strip_prefix('/') {
+    let (prefix, rest) = if let Some(stripped) = path.strip_prefix("//") {
+        ("//".to_string(), stripped)
+    } else if let Some(stripped) = path.strip_prefix('/') {
         ("/".to_string(), stripped)
     } else if path.len() >= 2 && path.as_bytes()[1] == b':' {
         (path[..2].to_string() + "/", path.get(3..).unwrap_or(""))
@@ -924,6 +1012,7 @@ enum BaseScope {
         /// The whole dependency graph, when this path already read it, so the
         /// cache-key step does not pay to read it again.
         dep_graph: Option<HashMap<String, Vec<String>>>,
+        identity: Option<Box<input_identity::Snapshot>>,
     },
 }
 
@@ -979,7 +1068,8 @@ fn scope_for_base(
         return Ok(BaseScope::Scoped {
             sources: all_sources.to_vec(),
             description: format!("full tree: header added or removed since {base}"),
-            dep_graph: Some(HashMap::new()),
+            dep_graph: None,
+            identity: None,
         });
     }
     if compile_configuration_changed {
@@ -987,6 +1077,7 @@ fn scope_for_base(
             sources: all_sources.to_vec(),
             description: format!("full tree: compile configuration changed since {base}"),
             dep_graph: None,
+            identity: None,
         });
     }
     let changed: Vec<String> = changed_all
@@ -1038,6 +1129,7 @@ fn scope_for_base(
 
     let changed_headers: Vec<&String> = changed.iter().filter(|f| is_header(f)).collect();
     let mut dep_graph_read: Option<HashMap<String, Vec<String>>> = None;
+    let mut identity = None;
     if !changed_headers.is_empty() {
         let expansion_started = Instant::now();
         // Fail closed. Without the dependency graph the consumers of a
@@ -1054,8 +1146,12 @@ fn scope_for_base(
             );
         };
         let mut graph = timed_parse_ninja_deps(ninja, &lines, obj_to_source, build_dir_norm);
-        let foreign_roots = input_identity::foreign_roots(repo_root);
-        let inventory = input_identity::HeaderInventory::read(repo_root, Path::new(build_dir_norm));
+        let captured = Box::new(input_identity::Snapshot::read(
+            repo_root,
+            Path::new(build_dir_norm),
+        ));
+        let foreign_roots = &captured.foreign_roots;
+        let inventory = &captured.inventory;
         input_identity::retain_dependencies(
             &mut graph,
             foreign_roots.as_deref(),
@@ -1099,6 +1195,7 @@ fn scope_for_base(
             }
         }
         dep_graph_read = Some(graph);
+        identity = Some(captured);
         timing.header_expansion_seconds = expansion_started.elapsed().as_secs_f64();
     }
 
@@ -1112,6 +1209,7 @@ fn scope_for_base(
         sources: affected.into_iter().collect(),
         description: format!("changed since {base}"),
         dep_graph: dep_graph_read,
+        identity,
     })
 }
 
@@ -1150,10 +1248,17 @@ fn combine_configuration_identity(
         })
 }
 
-fn configuration_identity(repo: &Path, build: &Path) -> Option<String> {
+fn configuration_identity(
+    repo: &Path,
+    build: &Path,
+    environment: &[(std::ffi::OsString, std::ffi::OsString)],
+) -> Option<String> {
     let configuration =
         input_identity::HeaderInventory::read(repo, build)?.configuration_hash(repo);
-    combine_configuration_identity(configuration, toolchain_identity::hash(build))
+    combine_configuration_identity(
+        configuration,
+        toolchain_identity::hash_with_overrides(build, environment),
+    )
 }
 
 fn build_cache_keys(
@@ -1400,28 +1505,52 @@ fn invoke_clang_tidy(
     build_dir: &Path,
     flags: &[String],
     source: &str,
+    environment: &[(std::ffi::OsString, std::ffi::OsString)],
 ) -> (String, i32, UnitTiming) {
     let mut command = crate::process::command(&tool.to_string_lossy());
     command.arg("-p").arg(build_dir);
     command.args(flags);
     command.arg(source);
+    command.envs(environment.iter().cloned());
     timing::invoke(&mut command, source)
 }
 
 /// Runs clang-tidy over `pending` with up to `jobs` processes in flight at
 /// once.
+type TidyUnitResult = (String, String, i32, UnitTiming);
+
+fn analyze_in_batches<A, C>(
+    pending: &[String],
+    batch_size: usize,
+    mut analyze: A,
+    mut checkpoint: C,
+) -> anyhow::Result<Vec<TidyUnitResult>>
+where
+    A: FnMut(&[String]) -> Vec<TidyUnitResult>,
+    C: FnMut(&[TidyUnitResult]) -> anyhow::Result<()>,
+{
+    let mut results = Vec::new();
+    for batch in pending.chunks(batch_size.max(1)) {
+        let fresh = analyze(batch);
+        checkpoint(&fresh)?;
+        results.extend(fresh);
+    }
+    Ok(results)
+}
 fn analyze_pending(
     tool: &Path,
     build_dir: &Path,
     flags: &[String],
     pending: &[String],
     jobs: usize,
+    environment: &[(std::ffi::OsString, std::ffi::OsString)],
+    progress: Option<(usize, usize, Instant)>,
 ) -> Vec<(String, String, i32, UnitTiming)> {
     if pending.is_empty() {
         return Vec::new();
     }
     let jobs = jobs.max(1).min(pending.len());
-    let started = Instant::now();
+    let (offset, total, started) = progress.unwrap_or((0, pending.len(), Instant::now()));
     let queue: Mutex<VecDeque<(usize, String)>> =
         Mutex::new(pending.iter().cloned().enumerate().collect());
     let results = Mutex::new(Vec::new());
@@ -1431,12 +1560,12 @@ fn analyze_pending(
                 loop {
                     let next = queue.lock().unwrap().pop_front();
                     let Some((index, src)) = next else { break };
-                    timing::progress(serde_json::json!({"event": "tu-start", "unit": index + 1, "total": pending.len(), "analysis_elapsed_seconds": started.elapsed().as_secs_f64()}));
+                    timing::progress(serde_json::json!({"event": "tu-start", "unit": offset + index + 1, "total": total, "analysis_elapsed_seconds": started.elapsed().as_secs_f64()}));
                     let (output, code, mut unit_timing) =
-                        invoke_clang_tidy(tool, build_dir, flags, &src);
-                    unit_timing.unit = Some(index + 1);
+                        invoke_clang_tidy(tool, build_dir, flags, &src, environment);
+                    unit_timing.unit = Some(offset + index + 1);
                     let mut results = results.lock().unwrap();
-                    timing::progress(serde_json::json!({"event": "tu-complete", "unit": index + 1, "completed": results.len() + 1, "total": pending.len(), "analysis_elapsed_seconds": started.elapsed().as_secs_f64(), "exit_code": code, "wall_seconds": unit_timing.wall_seconds, "cpu_seconds": unit_timing.cpu_seconds, "peak_working_set_bytes": unit_timing.peak_working_set_bytes}));
+                    timing::progress(serde_json::json!({"event": "tu-complete", "unit": offset + index + 1, "completed": offset + results.len() + 1, "total": total, "analysis_elapsed_seconds": started.elapsed().as_secs_f64(), "exit_code": code, "wall_seconds": unit_timing.wall_seconds, "cpu_seconds": unit_timing.cpu_seconds, "peak_working_set_bytes": unit_timing.peak_working_set_bytes}));
                     results.push((src, output, code, unit_timing));
                 }
             });
@@ -1475,13 +1604,16 @@ fn extract_violations(
 ) -> BTreeSet<String> {
     let mut violations = BTreeSet::new();
     let root_prefix = format!("{repo_root_norm}/");
+    let physical_build = normalize_directory(Path::new(build_dir_norm));
     for (_, output) in results {
         for line in output.lines() {
             let Some(caps) = diagnostic_regex().captures(line) else {
                 continue;
             };
             let where_ = resolve_against_build_dir(&caps[1], build_dir_norm);
-            if !is_in_repo(&where_, repo_root_norm, build_dir_norm) {
+            if !is_in_repo(&where_, repo_root_norm, build_dir_norm)
+                || !is_in_repo(&where_, repo_root_norm, &physical_build)
+            {
                 continue;
             }
             let row = &caps[2];
@@ -1542,6 +1674,180 @@ fn require_analysis(source: &str, output: &str, code: i32) -> anyhow::Result<()>
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[cfg(windows)]
+    #[test]
+    fn physical_build_paths_do_not_lose_the_configured_junction_spelling() {
+        let dir = tempfile::tempdir().unwrap();
+        let build = dir.path().join("physical-build");
+        let alias = dir.path().join("build-alias");
+        std::fs::create_dir(&build).unwrap();
+        std::fs::write(build.join("a.obj"), "object").unwrap();
+        crate::test_support::create_junction(&alias, &build);
+        let entry = entry(
+            "C:/repo/libs/a.cpp",
+            &normalize_root(&alias.join("a.obj")),
+            "cl /c a.cpp",
+        );
+        let build_dir_norm = normalize_directory(&alias);
+        let (objects, _) = object_maps(&[entry], &build_dir_norm);
+        assert!(objects.contains_key("a.obj"), "{objects:?}");
+    }
+
+    #[test]
+    fn scoping_retains_the_initial_header_snapshot_for_cache_identity() {
+        let dir = crate::test_support::fixture_repo_committed(&[
+            ("libs/a.h", "old\n"),
+            (".clang-tidy", "Checks: '-*'\n"),
+        ]);
+        crate::test_support::write_files(dir.path(), &[("libs/a.h", "changed\n")]);
+        let root = normalize_root(dir.path());
+        let source = format!("{root}/libs/a.cpp");
+        let objects = HashMap::from([("a.obj".into(), source.clone())]);
+        let ninja = FakeNinja {
+            whole: Some(vec![
+                "a.obj: #deps 1, deps mtime 1 (VALID)".into(),
+                format!("    {root}/libs/a.h"),
+            ]),
+            batched: None,
+        };
+        let scope = scope_for_base(
+            dir.path(),
+            &root,
+            &format!("{root}/build"),
+            "HEAD",
+            &[source],
+            &objects,
+            &ninja,
+            &mut TidyTiming::default(),
+        )
+        .unwrap();
+        let BaseScope::Scoped {
+            identity: Some(identity),
+            ..
+        } = scope
+        else {
+            panic!("scoping must retain its captured inventory");
+        };
+        let before = identity
+            .inventory
+            .as_ref()
+            .unwrap()
+            .configuration_hash(dir.path())
+            .unwrap();
+        std::fs::write(dir.path().join("libs/late.h"), "int late;\n").unwrap();
+        assert_eq!(
+            identity
+                .inventory
+                .as_ref()
+                .unwrap()
+                .configuration_hash(dir.path())
+                .unwrap(),
+            before
+        );
+        assert_ne!(
+            input_identity::HeaderInventory::read(dir.path(), &dir.path().join("build"))
+                .unwrap()
+                .configuration_hash(dir.path())
+                .unwrap(),
+            before
+        );
+    }
+
+    #[cfg(windows)]
+    #[test]
+    fn object_targets_accept_a_build_directory_junction() {
+        let dir = tempfile::tempdir().unwrap();
+        let build = dir.path().join("physical-build");
+        let alias = dir.path().join("build-alias");
+        std::fs::create_dir(&build).unwrap();
+        std::fs::write(build.join("a.obj"), "object").unwrap();
+        crate::test_support::create_junction(&alias, &build);
+        let entries = vec![entry(
+            "C:/repo/libs/a.cpp",
+            &normalize_root(&build.join("a.obj")),
+            "cl /c a.cpp",
+        )];
+        let (objects, _) = object_maps(&entries, &normalize_root(&alias));
+        assert!(objects.contains_key("a.obj"), "{objects:?}");
+    }
+
+    #[test]
+    fn validated_batches_survive_a_later_analysis_failure() {
+        let dir = tempfile::tempdir().unwrap();
+        let pending = vec!["a.cpp".to_string(), "b.cpp".to_string()];
+        let result = analyze_in_batches(
+            &pending,
+            1,
+            |batch| {
+                if batch[0] == "b.cpp" {
+                    assert!(
+                        read_cache_entry(&cache_entry_path(dir.path(), "a.cpp"), "a.cpp", "a.cpp")
+                            .is_some()
+                    );
+                }
+                batch
+                    .iter()
+                    .map(|source| {
+                        (
+                            source.clone(),
+                            String::new(),
+                            if source == "b.cpp" { 1 } else { 0 },
+                            UnitTiming {
+                                unit: None,
+                                source: source.clone(),
+                                wall_seconds: 0.0,
+                                cpu_seconds: None,
+                                peak_working_set_bytes: None,
+                            },
+                        )
+                    })
+                    .collect()
+            },
+            |fresh| {
+                for (source, output, code, _) in fresh {
+                    require_analysis(source, output, *code)?;
+                }
+                for (source, output, code, _) in fresh {
+                    store_cache_entry(dir.path(), source, source, output, *code);
+                }
+                Ok(())
+            },
+        );
+        assert!(result.is_err());
+        assert!(
+            read_cache_entry(&cache_entry_path(dir.path(), "a.cpp"), "a.cpp", "a.cpp").is_some()
+        );
+        assert!(
+            read_cache_entry(&cache_entry_path(dir.path(), "b.cpp"), "b.cpp", "b.cpp").is_none()
+        );
+    }
+
+    #[test]
+    fn unc_paths_keep_their_network_root() {
+        assert_eq!(
+            normalize_segments("//server/share/repo/build/../libs/a.cpp"),
+            "//server/share/repo/libs/a.cpp"
+        );
+        let database = r#"[{"directory":"//server/share/repo/build","file":"../libs/a.cpp","output":"a.obj","command":"cl /c ../libs/a.cpp"}]"#;
+        let entries = parse_compile_db(database).unwrap();
+        assert_eq!(
+            project_sources(&entries, "//server/share/repo", "//server/share/repo/build").len(),
+            1
+        );
+    }
+
+    #[test]
+    fn object_targets_accept_lexically_equivalent_build_directories() {
+        let entries = vec![entry(
+            "C:/repo/libs/a.cpp",
+            "C:/repo/build/a.obj",
+            "cl /c a.cpp",
+        )];
+        for build in ["C:/repo/./build", "C:/repo/build/../build"] {
+            let (objects, _) = object_maps(&entries, build);
+            assert!(objects.contains_key("a.obj"), "{build}: {objects:?}");
+        }
+    }
 
     #[test]
     fn unsupported_or_duplicate_compile_database_fields_are_rejected() {
@@ -1651,9 +1957,13 @@ mod tests {
             &mut TidyTiming::default(),
         )
         .unwrap();
-        assert!(
-            matches!(scope, BaseScope::Scoped { dep_graph: Some(graph), .. } if graph.is_empty())
-        );
+        assert!(matches!(
+            scope,
+            BaseScope::Scoped {
+                dep_graph: None,
+                ..
+            }
+        ));
     }
 
     #[test]
@@ -1767,7 +2077,7 @@ mod tests {
         )
         .unwrap();
         assert!(
-            matches!(scope, BaseScope::Scoped { sources: selected, dep_graph: Some(graph), .. } if selected == sources && graph.is_empty())
+            matches!(scope, BaseScope::Scoped { sources: selected, dep_graph: None, .. } if selected == sources)
         );
     }
 
@@ -2054,7 +2364,7 @@ mod tests {
         )
         .unwrap();
         let flags = invocation_flags(&format!("-*,{}", BLOCKING_CHECKS.join(",")), HEADER_FILTER);
-        let (output, code, _) = invoke_clang_tidy(&tool, dir.path(), &flags, &source);
+        let (output, code, _) = invoke_clang_tidy(&tool, dir.path(), &flags, &source, &[]);
         require_analysis(&source, &output, code).expect(&output);
         assert_eq!(code, 0, "{output}");
     }
@@ -2085,7 +2395,7 @@ mod tests {
         let salt = compute_salt(&banner, &flags, Some("stable-configuration")).unwrap();
         let keys = build_cache_keys(&sources, &dependencies, &commands, &salt);
         let key = &keys[&source];
-        let initial = analyze_pending(&tool, &build, &flags, &sources, 1);
+        let initial = analyze_pending(&tool, &build, &flags, &sources, 1, &[], None);
         require_analysis(&source, &initial[0].1, initial[0].2).unwrap();
         let findings = extract_violations(
             &[(source.clone(), initial[0].1.clone())],
@@ -2102,7 +2412,7 @@ mod tests {
         eprintln!("original source: {} blocking finding(s)", findings.len());
 
         std::fs::write(&source, "int value() { return 1; }\n").unwrap();
-        let fresh = analyze_pending(&tool, &build, &flags, &sources, 1);
+        let fresh = analyze_pending(&tool, &build, &flags, &sources, 1, &[], None);
         require_analysis(&source, &fresh[0].1, fresh[0].2).unwrap();
         assert!(
             extract_violations(
@@ -2159,7 +2469,7 @@ mod tests {
     }
 
     #[test]
-    fn header_appearance_changes_select_all_sources_without_cache_keys() {
+    fn header_appearance_changes_select_all_sources_and_refresh_cache_dependencies() {
         for added in [true, false] {
             let dir = crate::test_support::fixture_repo_committed(&[("libs/a.h", "old\n")]);
             if added {
@@ -2190,7 +2500,7 @@ mod tests {
             )
             .unwrap();
             assert!(
-                matches!(scope, BaseScope::Scoped { sources: selected, dep_graph: Some(graph), .. } if selected == sources && graph.is_empty())
+                matches!(scope, BaseScope::Scoped { sources: selected, dep_graph: None, .. } if selected == sources)
             );
         }
     }
@@ -2995,7 +3305,15 @@ mod tests {
         let build_dir = dir.path().join("build/windows-x64-ninja-debug");
         let cache_dir = dir.path().join("cache");
         let error = run_blocking(
-            repo_root, &build_dir, None, &cache_dir, 1, None, false, None,
+            repo_root,
+            &build_dir,
+            None,
+            &cache_dir,
+            1,
+            None,
+            false,
+            None,
+            &[],
         )
         .unwrap_err();
         assert!(error.to_string().contains("compile_commands.json"));
@@ -3007,8 +3325,18 @@ mod tests {
         let repo_root = dir.path();
         let build_dir = dir.path().join("build/does-not-exist");
         let cache_dir = dir.path().join("cache");
-        let report =
-            run_blocking(repo_root, &build_dir, None, &cache_dir, 1, None, true, None).unwrap();
+        let report = run_blocking(
+            repo_root,
+            &build_dir,
+            None,
+            &cache_dir,
+            1,
+            None,
+            true,
+            None,
+            &[],
+        )
+        .unwrap();
         assert_eq!(report.scope, "list-checks");
         assert!(report.ok());
     }
