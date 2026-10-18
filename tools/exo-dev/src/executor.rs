@@ -732,6 +732,7 @@ impl RealExecutor {
                         None,
                         false,
                         None,
+                        &ctx.runner.env,
                     )?;
                     if report.tool_path.as_os_str().is_empty() {
                         // Nothing analysed: base scoping found no affected

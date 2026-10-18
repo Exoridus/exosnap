@@ -3,6 +3,7 @@
 use std::collections::{BTreeSet, HashMap};
 use std::path::{Path, PathBuf};
 
+#[derive(Debug)]
 pub(super) struct CheckoutRoot {
     canonical: String,
     lexical: String,
@@ -97,6 +98,7 @@ fn short_root(path: &Path) -> Option<PathBuf> {
     Some(path.to_path_buf())
 }
 
+#[derive(Debug)]
 pub(super) struct HeaderInventory {
     root: CheckoutRoot,
     suffixes: HashMap<String, Vec<String>>,
@@ -109,34 +111,59 @@ impl HeaderInventory {
         for name in ["app", "apps", "libs", "tools", "tests", "third_party"] {
             let path = repo.join(name);
             match std::fs::metadata(&path) {
-                Ok(metadata) if metadata.is_dir() => pending.push(path),
+                Ok(metadata) if metadata.is_dir() => pending.push((path, Vec::<PathBuf>::new())),
                 Err(error) if error.kind() == std::io::ErrorKind::NotFound => {}
                 _ => return None,
             }
         }
         let mut names = BTreeSet::new();
-        while let Some(directory) = pending.pop() {
+        let mut contents = BTreeSet::new();
+        let mut links = BTreeSet::new();
+        while let Some((directory, mut ancestors)) = pending.pop() {
+            let canonical = std::fs::canonicalize(&directory).ok()?;
+            if ancestors.contains(&canonical) {
+                return None;
+            }
+            if std::fs::symlink_metadata(&directory)
+                .ok()?
+                .file_type()
+                .is_symlink()
+            {
+                links.insert((
+                    directory
+                        .strip_prefix(repo)
+                        .ok()?
+                        .to_str()?
+                        .replace('\\', "/"),
+                    super::normalize_root(&canonical),
+                ));
+            }
+            ancestors.push(canonical);
             for entry in std::fs::read_dir(directory).ok()? {
                 let entry = entry.ok()?;
                 let path = entry.path();
                 if path == build || path == repo.join("tools/target") {
                     continue;
                 }
-                let kind = entry.file_type().ok()?;
-                if kind.is_symlink() {
-                    return None;
-                }
+                let kind = std::fs::metadata(&path).ok()?;
                 if kind.is_dir() {
-                    pending.push(path);
+                    pending.push((path, ancestors.clone()));
                 } else if kind.is_file() {
                     let relative = path.strip_prefix(repo).ok()?.to_str()?.replace('\\', "/");
                     if super::is_header(&relative) {
+                        if entry.file_type().ok()?.is_symlink() {
+                            links.insert((
+                                relative.clone(),
+                                super::normalize_root(&std::fs::canonicalize(&path).ok()?),
+                            ));
+                        }
+                        contents.insert((relative.clone(), super::hash_file(path.to_str()?)?));
                         names.insert(relative);
                     }
                 }
             }
         }
-        let hash = super::sha256_hex(&serde_json::to_vec(&names).ok()?);
+        let hash = super::sha256_hex(&serde_json::to_vec(&(&contents, &links)).ok()?);
         let mut suffixes: HashMap<String, Vec<String>> = HashMap::new();
         for name in names {
             let relative = name.to_ascii_lowercase();
@@ -191,7 +218,13 @@ pub(super) fn foreign_roots(repo: &Path) -> Option<Vec<CheckoutRoot>> {
     let roots: Vec<CheckoutRoot> = output
         .lines()
         .filter_map(|line| line.strip_prefix("worktree "))
-        .map(|path| CheckoutRoot::read(Path::new(path)))
+        .filter_map(|path| {
+            let path = Path::new(path);
+            match std::fs::metadata(path) {
+                Err(error) if error.kind() == std::io::ErrorKind::NotFound => None,
+                _ => Some(CheckoutRoot::read(path)),
+            }
+        })
         .collect::<Option<_>>()?;
     if !roots.iter().any(|root| root.canonical == current) {
         return None;
@@ -204,6 +237,20 @@ pub(super) fn foreign_roots(repo: &Path) -> Option<Vec<CheckoutRoot>> {
     )
 }
 
+#[derive(Debug)]
+pub(super) struct Snapshot {
+    pub(super) foreign_roots: Option<Vec<CheckoutRoot>>,
+    pub(super) inventory: Option<HeaderInventory>,
+}
+
+impl Snapshot {
+    pub(super) fn read(repo: &Path, build: &Path) -> Self {
+        Self {
+            foreign_roots: foreign_roots(repo),
+            inventory: HeaderInventory::read(repo, build),
+        }
+    }
+}
 pub(super) fn retain_dependencies(
     graph: &mut HashMap<String, Vec<String>>,
     foreign: Option<&[CheckoutRoot]>,
@@ -237,6 +284,94 @@ pub(super) fn retain_dependencies(
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn unrecorded_conditional_header_edits_invalidate_cache_keys() {
+        let dir = tempfile::tempdir().unwrap();
+        std::fs::create_dir(dir.path().join("libs")).unwrap();
+        std::fs::write(dir.path().join(".clang-tidy"), "Checks: '-*'\n").unwrap();
+        let source = super::super::normalize_root(&dir.path().join("libs/a.cpp"));
+        std::fs::write(
+            &source,
+            "#if __has_include(\"optional.h\")\n#include \"optional.h\"\n#endif\n",
+        )
+        .unwrap();
+        let header = dir.path().join("libs/optional.h");
+        std::fs::write(&header, "int optional = 1;\n").unwrap();
+        let sources = vec![source.clone()];
+        let dependencies = HashMap::from([(source.clone(), Vec::new())]);
+        let commands = HashMap::from([(source, "compiler".to_string())]);
+        let identity = || configuration_hash(dir.path(), &dir.path().join("build")).unwrap();
+        let before =
+            super::super::build_cache_keys(&sources, &dependencies, &commands, &identity());
+        std::fs::write(&header, "int optional = 2;\n").unwrap();
+        assert_ne!(
+            before,
+            super::super::build_cache_keys(&sources, &dependencies, &commands, &identity())
+        );
+    }
+
+    #[cfg(windows)]
+    #[test]
+    fn retargeting_a_link_invalidates_identical_header_membership() {
+        let dir = tempfile::tempdir().unwrap();
+        std::fs::create_dir(dir.path().join("libs")).unwrap();
+        std::fs::write(dir.path().join(".clang-tidy"), "Checks: '-*'\n").unwrap();
+        for name in ["first", "second"] {
+            std::fs::create_dir(dir.path().join(name)).unwrap();
+            std::fs::write(dir.path().join(name).join("a.h"), "same bytes\n").unwrap();
+        }
+        let link = dir.path().join("libs/linked");
+        crate::test_support::create_junction(&link, &dir.path().join("first"));
+        let before = configuration_hash(dir.path(), &dir.path().join("build")).unwrap();
+        std::fs::remove_dir(&link).unwrap();
+        assert!(dir.path().join("first/a.h").exists());
+        crate::test_support::create_junction(&link, &dir.path().join("second"));
+        assert_ne!(
+            configuration_hash(dir.path(), &dir.path().join("build")).unwrap(),
+            before
+        );
+    }
+
+    #[cfg(windows)]
+    #[test]
+    fn linked_directories_preserve_header_inventory_and_membership_changes() {
+        let dir = tempfile::tempdir().unwrap();
+        std::fs::create_dir(dir.path().join("libs")).unwrap();
+        std::fs::create_dir(dir.path().join("linked-inputs")).unwrap();
+        std::fs::write(dir.path().join(".clang-tidy"), "Checks: '-*'\n").unwrap();
+        let link = dir.path().join("libs/cache");
+        crate::test_support::create_junction(&link, &dir.path().join("linked-inputs"));
+        let build = dir.path().join("build");
+        let before = configuration_hash(dir.path(), &build)
+            .expect("an unrelated linked directory must not disable caching");
+        std::fs::write(dir.path().join("linked-inputs/new.h"), "int added;\n").unwrap();
+        assert_ne!(configuration_hash(dir.path(), &build).unwrap(), before);
+        crate::test_support::create_junction(&dir.path().join("linked-inputs/cycle"), &link);
+        assert!(
+            HeaderInventory::read(dir.path(), &build).is_none(),
+            "cycles must not be followed indefinitely"
+        );
+    }
+
+    #[test]
+    fn deleted_registered_worktrees_do_not_disable_current_checkout_identity() {
+        let dir = crate::test_support::fixture_repo_committed(&[("libs/a.h", "int a;\n")]);
+        let other = dir.path().join("expired");
+        assert_eq!(
+            crate::git::Git::new(dir.path())
+                .run(&[
+                    "worktree",
+                    "add",
+                    "--detach",
+                    other.to_str().unwrap(),
+                    "HEAD"
+                ])
+                .0,
+            0
+        );
+        std::fs::remove_dir_all(&other).unwrap();
+        assert!(foreign_roots(dir.path()).is_some());
+    }
 
     #[test]
     fn full_runs_include_untracked_header_membership_in_the_global_identity() {

@@ -152,3 +152,14 @@ pub fn init_git_repo(dir: &Path) {
     run_git(dir, &["config", "core.autocrlf", "false"]);
     run_git(dir, &["config", "core.eol", "lf"]);
 }
+
+#[cfg(windows)]
+pub fn create_junction(link: &Path, target: &Path) {
+    let mut command = crate::process::command("cmd.exe");
+    command
+        .args(["/d", "/c", "mklink", "/J"])
+        .arg(link.to_string_lossy().replace('/', "\\"))
+        .arg(target.to_string_lossy().replace('/', "\\"));
+    let (code, output) = crate::process::query(command).expect("create fixture junction");
+    assert_eq!(code, 0, "{output}");
+}
