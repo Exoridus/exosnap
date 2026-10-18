@@ -9,6 +9,7 @@
 #include <algorithm>
 #include <chrono>
 #include <cstring>
+#include <limits>
 #include <utility>
 
 #define WIN32_LEAN_AND_MEAN
@@ -99,11 +100,6 @@ QString WaveformCacheService::request(const engine::WaveformSourceKey& source, c
         return qkey;
     const Job requested{key, std::filesystem::path(source_path.toStdWString()), source.container_index,
                         static_cast<std::uint64_t>(engine::AudioSampleIndex(source_end_us)), source.content_sha256};
-    std::error_code source_error;
-    const bool source_exists =
-        std::filesystem::is_regular_file(std::filesystem::path(source_path.toStdWString()), source_error);
-    bool already_ready = false;
-    bool availability_changed = false;
     {
         std::lock_guard lock(mutex_);
         if (!requested_jobs_.contains(key) && requested_jobs_.size() >= kMaxLayouts)
@@ -112,10 +108,8 @@ QString WaveformCacheService::request(const engine::WaveformSourceKey& source, c
         auto& status = status_[key];
         if (status.state == State::Queued || status.state == State::Analyzing)
             return qkey;
-        already_ready = status.state == State::Ready;
-        if (already_ready) {
-            availability_changed = status.source_available != source_exists;
-            status.source_available = source_exists;
+        if (status.state == State::Ready) {
+            availability_checks_[key] = requested;
         } else {
             status.state = State::Queued;
             status.total_samples = static_cast<std::uint64_t>(engine::AudioSampleIndex(source_end_us));
@@ -123,12 +117,6 @@ QString WaveformCacheService::request(const engine::WaveformSourceKey& source, c
             queue_.push_back(requested);
         }
     }
-    if (availability_changed)
-        QMetaObject::invokeMethod(
-            this, [this, qkey, source_exists]() { emit sourceAvailabilityChanged(qkey, source_exists); },
-            Qt::QueuedConnection);
-    if (already_ready)
-        return qkey;
     cv_.notify_all();
     return qkey;
 }
@@ -138,6 +126,7 @@ void WaveformCacheService::cancel(const QString& qkey) {
     {
         std::lock_guard lock(mutex_);
         requested_jobs_.erase(key);
+        availability_checks_.erase(key);
         const auto removed = std::erase_if(queue_, [&key](const Job& job) { return job.key == key; });
         if (running_ && *running_ == key)
             cancel_running_ = true;
@@ -165,6 +154,7 @@ qint64 WaveformCacheService::clearCache() {
         std::lock_guard lock(mutex_);
         ++generation_;
         queue_.clear();
+        availability_checks_.clear();
         requested_jobs_.clear();
         if (running_)
             cancel_running_ = true;
@@ -175,7 +165,6 @@ qint64 WaveformCacheService::clearCache() {
         pending_blocks_.clear();
         blocks_.clear();
         block_lru_.clear();
-        block_bytes_ = 0;
     }
     cv_.notify_all();
     // Serialized with publication: an analysis finishing concurrently either
@@ -211,8 +200,6 @@ qint64 WaveformCacheService::totalSamples(const QString& key) const {
 std::uint32_t WaveformCacheService::levelCount(const QString& qkey) const {
     const std::string key = qkey.toStdString();
     std::lock_guard lock(mutex_);
-    if (in_progress_ && in_progress_key_ == key)
-        return static_cast<std::uint32_t>(in_progress_->Layout().levels.size());
     const auto status = status_.find(key);
     if (status != status_.end() && status->second.state == State::Analyzing)
         return engine::WaveformLevelCount(status->second.total_samples);
@@ -222,39 +209,42 @@ std::uint32_t WaveformCacheService::levelCount(const QString& qkey) const {
 
 std::uint32_t WaveformCacheService::readBlock(const QString& qkey, std::uint32_t level, std::uint64_t block,
                                               std::vector<WaveformPeak>& out) {
-    if (qkey.isEmpty())
+    const auto data = tryReadPublishedBlock(qkey, level, block);
+    if (!data) {
+        out.clear();
         return 0;
+    }
+    out = data->peaks;
+    return static_cast<std::uint32_t>(out.size() / engine::kWaveformChannels);
+}
+
+std::shared_ptr<const WaveformCacheService::PeakBlock>
+WaveformCacheService::tryReadPublishedBlock(const QString& qkey, std::uint32_t level, std::uint64_t block) {
+    if (qkey.isEmpty() || level >= engine::kWaveformMaxLevels ||
+        block >
+            (std::numeric_limits<std::uint64_t>::max() / engine::WaveformBucketSamples(level)) / kWaveformBlockBuckets)
+        return {};
     BlockId id{qkey.toStdString(), level, block};
     bool schedule = false;
-    std::uint32_t count = 0;
-    std::uint64_t generation = 0;
     {
         std::lock_guard lock(mutex_);
         const auto found = blocks_.find(id);
         if (found != blocks_.end()) {
             block_lru_.splice(block_lru_.end(), block_lru_, found->second.lru);
-            out = found->second.peaks;
-            return static_cast<std::uint32_t>(out.size() / engine::kWaveformChannels);
-        }
-        if (in_progress_ && in_progress_key_ == id.key) {
-            generation = generation_;
-            count = in_progress_->ReadBlock(level, block * kWaveformBlockBuckets, kWaveformBlockBuckets, out);
+            return found->second.data;
         }
         const auto status = status_.find(id.key);
         const bool analysing = status != status_.end() &&
                                (status->second.state == State::Queued || status->second.state == State::Analyzing);
         const bool failed = status != status_.end() && status->second.state == State::Failed;
-        if (count == 0 && (!analysing || (in_progress_ && in_progress_key_ == id.key)) && !failed &&
-            !pending_blocks_.contains(id)) {
+        if ((!analysing || (in_progress_ && in_progress_key_ == id.key)) && !failed && !pending_blocks_.contains(id)) {
             pending_blocks_.insert(id);
             schedule = true;
         }
     }
-    if (count == kWaveformBlockBuckets)
-        insertBlock(id, out, generation);
     if (schedule)
         cv_.notify_all();
-    return count;
+    return {};
 }
 
 std::uint64_t WaveformCacheService::decoderOpensForTest() const {
@@ -267,8 +257,7 @@ std::uint64_t WaveformCacheService::decodeCallsForTest() const {
 }
 
 std::size_t WaveformCacheService::memoryBytesForTest() const {
-    std::lock_guard lock(mutex_);
-    return block_bytes_;
+    return block_bytes_->load(std::memory_order_relaxed);
 }
 
 std::size_t WaveformCacheService::analysisMemoryBytesForTest() const {
@@ -291,17 +280,32 @@ void WaveformCacheService::workerLoop() {
     SetThreadPriority(GetCurrentThread(), THREAD_MODE_BACKGROUND_BEGIN);
     for (;;) {
         std::optional<Job> job;
+        bool availability_only = false;
+        std::uint64_t generation = 0;
         {
             std::unique_lock lock(mutex_);
-            cv_.wait(lock, [this]() { return stop_ || !pending_blocks_.empty() || (!queue_.empty() && !busy_); });
+            cv_.wait(lock, [this]() {
+                return stop_ || !pending_blocks_.empty() || !availability_checks_.empty() ||
+                       (!queue_.empty() && !busy_);
+            });
             if (stop_)
                 return;
-            if (pending_blocks_.empty()) {
+            if (pending_blocks_.empty() && !availability_checks_.empty()) {
+                auto first = availability_checks_.begin();
+                job = std::move(first->second);
+                availability_checks_.erase(first);
+                availability_only = true;
+                generation = generation_;
+            } else if (pending_blocks_.empty()) {
                 job = std::move(queue_.front());
                 queue_.pop_front();
                 running_ = job->key;
                 cancel_running_ = false;
             }
+        }
+        if (availability_only) {
+            checkAvailability(*job, generation);
+            continue;
         }
         if (!job) {
             loadPendingBlocks();
@@ -311,6 +315,30 @@ void WaveformCacheService::workerLoop() {
         std::lock_guard lock(mutex_);
         running_.reset();
     }
+}
+
+void WaveformCacheService::checkAvailability(const Job& job, std::uint64_t generation) {
+    std::error_code error;
+    const bool available = std::filesystem::is_regular_file(job.path, error);
+    {
+        std::lock_guard lock(mutex_);
+        const auto status = status_.find(job.key);
+        if (generation != generation_ || status == status_.end() || status->second.state != State::Ready ||
+            status->second.source_available == available)
+            return;
+        status->second.source_available = available;
+    }
+    QMetaObject::invokeMethod(
+        this,
+        [this, key = QString::fromStdString(job.key), available, generation]() {
+            {
+                std::lock_guard lock(mutex_);
+                if (generation != generation_)
+                    return;
+            }
+            emit sourceAvailabilityChanged(key, available);
+        },
+        Qt::QueuedConnection);
 }
 
 std::optional<engine::WaveformFileLayout> WaveformCacheService::layoutFor(const std::string& key) {
@@ -342,7 +370,7 @@ std::optional<engine::WaveformFileLayout> WaveformCacheService::layoutFor(const 
 }
 
 void WaveformCacheService::loadPendingBlocks() {
-    std::set<std::string> loaded_keys;
+    std::map<std::string, std::uint64_t> loaded_keys;
     for (;;) {
         BlockId id;
         std::uint64_t generation = 0;
@@ -354,14 +382,15 @@ void WaveformCacheService::loadPendingBlocks() {
             generation = generation_;
         }
         std::vector<WaveformPeak> peaks;
-        bool from_staging = false;
+        std::shared_ptr<engine::WaveformStreamWriter> staging;
         {
             std::lock_guard lock(mutex_);
-            if (in_progress_ && in_progress_key_ == id.key && generation == generation_) {
-                from_staging = true;
-                in_progress_->ReadBlock(id.level, id.block * kWaveformBlockBuckets, kWaveformBlockBuckets, peaks);
-            }
+            if (in_progress_ && in_progress_key_ == id.key && generation == generation_)
+                staging = in_progress_;
         }
+        const bool from_staging = static_cast<bool>(staging);
+        if (staging)
+            staging->ReadBlock(id.level, id.block * kWaveformBlockBuckets, kWaveformBlockBuckets, peaks);
         const auto layout = from_staging ? std::optional<engine::WaveformFileLayout>{} : layoutFor(id.key);
         bool published_missing = !layout && !from_staging;
         if (layout && id.level < layout->levels.size()) {
@@ -378,9 +407,9 @@ void WaveformCacheService::loadPendingBlocks() {
         }
         {
             std::lock_guard lock(mutex_);
-            pending_blocks_.erase(id);
             if (generation != generation_)
                 continue;
+            pending_blocks_.erase(id);
             if (published_missing) {
                 layouts_.erase(id.key);
                 const auto status = status_.find(id.key);
@@ -399,36 +428,78 @@ void WaveformCacheService::loadPendingBlocks() {
             if (peaks.empty())
                 continue;
         }
-        insertBlock(id, std::move(peaks), generation, !from_staging);
-        loaded_keys.insert(id.key);
+        const auto valid_samples = staging ? staging->CompletedSamples() : layout->sample_count;
+        insertBlock(id, std::move(peaks), generation, valid_samples);
+        loaded_keys[id.key] = generation;
     }
-    for (const auto& key : loaded_keys) {
+    for (const auto& [key, generation] : loaded_keys) {
         const QString qkey = QString::fromStdString(key);
-        QMetaObject::invokeMethod(this, [this, qkey]() { emit blocksLoaded(qkey); }, Qt::QueuedConnection);
+        QMetaObject::invokeMethod(
+            this,
+            [this, qkey, generation]() {
+                {
+                    std::lock_guard lock(mutex_);
+                    if (generation != generation_)
+                        return;
+                }
+                emit blocksLoaded(qkey);
+            },
+            Qt::QueuedConnection);
     }
 }
 
 void WaveformCacheService::insertBlock(const BlockId& id, std::vector<WaveformPeak> peaks, std::uint64_t generation,
-                                       bool from_published_entry) {
+                                       std::uint64_t valid_samples) {
     std::lock_guard lock(mutex_);
-    // Staging tails can arrive after finalization. Their origin, rather than
-    // the current status, keeps them out of the immutable block cache.
-    if (!from_published_entry && peaks.size() != kWaveformBlockBuckets * engine::kWaveformChannels)
+    if (generation != generation_ || peaks.empty())
         return;
-    if (generation != generation_ || blocks_.contains(id))
+    const auto found = blocks_.find(id);
+    if (found != blocks_.end() && found->second.data->peaks.size() >= peaks.size())
         return;
-    const std::size_t bytes = peaks.size() * sizeof(WaveformPeak);
-    while (!block_lru_.empty() && block_bytes_ + bytes > config_.memory_budget_bytes) {
+    if (found != blocks_.end()) {
+        block_lru_.erase(found->second.lru);
+        blocks_.erase(found);
+    }
+    const std::size_t bytes = sizeof(PeakBlock) + peaks.capacity() * sizeof(WaveformPeak);
+    while (!block_lru_.empty() && block_bytes_->load(std::memory_order_relaxed) + bytes > config_.memory_budget_bytes) {
         const auto oldest = blocks_.find(block_lru_.front());
-        block_bytes_ -= oldest->second.peaks.size() * sizeof(WaveformPeak);
         blocks_.erase(oldest);
         block_lru_.pop_front();
     }
-    if (bytes > config_.memory_budget_bytes)
+    if (block_bytes_->load(std::memory_order_relaxed) + bytes > config_.memory_budget_bytes)
         return;
+    const auto bucket_samples = engine::WaveformBucketSamples(id.level);
+    const auto first = id.block * kWaveformBlockBuckets * bucket_samples;
+    const auto end = first + (peaks.size() / engine::kWaveformChannels) * bucket_samples;
+    auto data =
+        std::unique_ptr<PeakBlock>(new PeakBlock{std::move(peaks), first, std::min(end, valid_samples), generation});
+    block_bytes_->fetch_add(bytes, std::memory_order_relaxed);
+    std::shared_ptr<const PeakBlock> published(data.release(), [counter = block_bytes_, bytes](const PeakBlock* block) {
+        delete block;
+        counter->fetch_sub(bytes, std::memory_order_relaxed);
+    });
     block_lru_.push_back(id);
-    blocks_.emplace(id, CachedBlock{std::move(peaks), std::prev(block_lru_.end())});
-    block_bytes_ += bytes;
+    blocks_.emplace(id, CachedBlock{std::move(published), std::prev(block_lru_.end())});
+}
+
+void WaveformCacheService::publishProgressBlocks(const Job& job, engine::WaveformStreamWriter& builder,
+                                                 std::uint64_t previous, std::uint64_t completed,
+                                                 std::uint64_t generation, bool finished) {
+    for (std::uint32_t level = 0; level < builder.Layout().levels.size(); ++level) {
+        const auto samples = engine::WaveformBucketSamples(level);
+        const auto first_bucket = previous / samples;
+        const auto end_bucket = finished ? engine::WaveformBucketCount(completed, level) : completed / samples;
+        if (end_bucket <= first_bucket)
+            continue;
+        for (auto block = first_bucket / kWaveformBlockBuckets; block <= (end_bucket - 1) / kWaveformBlockBuckets;
+             ++block) {
+            if (cancel_running_)
+                return;
+            std::vector<WaveformPeak> peaks;
+            builder.ReadBlock(level, block * kWaveformBlockBuckets, kWaveformBlockBuckets, peaks);
+            insertBlock(BlockId{job.key, level, block}, std::move(peaks), generation, completed);
+        }
+    }
 }
 
 bool WaveformCacheService::setStatus(const std::string& key, const Status& status,
@@ -575,13 +646,19 @@ void WaveformCacheService::runJob(const Job& job) {
     engine::WaveformAnalysisControl control;
     control.chunk_frames = config_.chunk_frames;
     control.consume = [&](const float* samples, std::size_t frames) {
-        std::uint64_t completed = 0;
+        const auto previous = builder->CompletedSamples();
         {
             std::lock_guard lock(mutex_);
             if (generation != generation_ || cancel_running_)
                 return;
-            stream_ok = builder->Append(samples, frames);
-            completed = builder->CompletedSamples();
+        }
+        stream_ok = builder->Append(samples, frames);
+        const auto completed = builder->CompletedSamples();
+        publishProgressBlocks(job, *builder, previous, completed, generation);
+        {
+            std::lock_guard lock(mutex_);
+            if (generation != generation_ || cancel_running_)
+                return;
             status_[job.key].completed_samples = completed;
         }
         const auto now = std::chrono::steady_clock::now();
@@ -629,12 +706,12 @@ void WaveformCacheService::runJob(const Job& job) {
         fail(true, QString::fromStdString(error));
         return;
     }
-    bool finished = false;
+    const auto before_finish = builder->CompletedSamples();
+    const bool finished = builder->Finish();
+    if (finished)
+        publishProgressBlocks(job, *builder, before_finish, builder->CompletedSamples(), generation, true);
     {
         std::lock_guard lock(mutex_);
-        finished = builder->Finish();
-        // Detach before hashing: render reads must not hold the service lock
-        // while waiting for the store lock needed by cancellable publication.
         in_progress_.reset();
         in_progress_key_.clear();
     }

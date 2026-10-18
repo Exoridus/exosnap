@@ -6,12 +6,12 @@
 // One worker thread owns at most one audio decoder at a time and analyses one
 // stream at a time in source-time chunks. Requests deduplicate by cache key and
 // run in arrival order. While foreground work is busy (playback, export,
-// recording) analysis pauses between chunks; reading already cached peaks is
-// not paused, because a draw needs only a few kilobytes from disk.
+// recording) analysis pauses between chunks. Display reads use only immutable
+// memory blocks; the worker loads missing disk blocks independently.
 //
 // Completed analyses are published atomically into the disk store. Peaks of a
-// stream still being analysed are readable from staging as soon as each chunk
-// completes. Disk-backed peaks are read in fixed blocks through a bounded LRU,
+// stream still being analysed are published to memory after each chunk.
+// Disk-backed peaks are read by the worker through a bounded LRU,
 // so no waveform is ever loaded into memory as a whole.
 //
 // A missing source never makes the service claim media availability: a cached
@@ -48,7 +48,7 @@
 namespace exosnap {
 
 // Buckets per block of the in-memory LRU and of each disk read.
-inline constexpr std::uint32_t kWaveformBlockBuckets = 2048;
+inline constexpr std::uint32_t kWaveformBlockBuckets = 256;
 
 class WaveformCacheService : public QObject {
     Q_OBJECT
@@ -75,6 +75,13 @@ class WaveformCacheService : public QObject {
     enum class State { Unknown, Queued, Analyzing, Ready, Failed };
     Q_ENUM(State)
 
+    struct PeakBlock {
+        std::vector<engine::WaveformPeak> peaks;
+        std::uint64_t first_sample = 0;
+        std::uint64_t end_sample = 0;
+        std::uint64_t generation = 0;
+    };
+
     explicit WaveformCacheService(QObject* parent = nullptr);
     WaveformCacheService(Config config, DecoderFactory decoder_factory, QObject* parent = nullptr);
     ~WaveformCacheService() override;
@@ -85,8 +92,8 @@ class WaveformCacheService : public QObject {
     // Requests peaks for one stream and returns its cache key. `source_end_us`
     // is the media-local end of the stream (container start plus duration); it
     // fixes the analysed sample count. A cached waveform is served without
-    // opening the source. Repeating a request for a key that is queued,
-    // analysing or ready changes nothing.
+    // opening the source. Queued or analysing requests deduplicate. Repeating a
+    // ready request checks source availability in the background without decode.
     QString request(const engine::WaveformSourceKey& source, const QString& source_path, qint64 source_end_us);
 
     // Drops a queued request or abandons the running analysis of `key`.
@@ -112,6 +119,12 @@ class WaveformCacheService : public QObject {
 
     // Levels of the pyramid, or 0 while unknown.
     [[nodiscard]] std::uint32_t levelCount(const QString& key) const;
+
+    // Returns immutable memory only. A miss schedules worker interest without
+    // storage access. Retained blocks count against the budget even after
+    // eviction or clear; pressure leaves new data unavailable.
+    [[nodiscard]] std::shared_ptr<const PeakBlock> tryReadPublishedBlock(const QString& key, std::uint32_t level,
+                                                                         std::uint64_t block);
 
     // Copies the readable buckets of block `block` of `level` into `out`
     // (kWaveformChannels peaks per bucket) and returns how many leading buckets
@@ -157,17 +170,20 @@ class WaveformCacheService : public QObject {
         auto operator<=>(const BlockId&) const = default;
     };
     struct CachedBlock {
-        std::vector<engine::WaveformPeak> peaks;
+        std::shared_ptr<const PeakBlock> data;
         std::list<BlockId>::iterator lru{};
     };
 
     void workerLoop();
+    void checkAvailability(const Job& job, std::uint64_t generation);
     void runJob(const Job& job);
     void loadPendingBlocks();
     bool setStatus(const std::string& key, const Status& status, std::optional<std::uint64_t> generation = {});
     void postProgress(const std::string& key, std::uint64_t completed, std::uint64_t total, std::uint64_t generation);
     void insertBlock(const BlockId& id, std::vector<engine::WaveformPeak> peaks, std::uint64_t generation,
-                     bool from_published_entry = false);
+                     std::uint64_t valid_samples);
+    void publishProgressBlocks(const Job& job, engine::WaveformStreamWriter& builder, std::uint64_t previous,
+                               std::uint64_t completed, std::uint64_t generation, bool finished = false);
     std::optional<engine::WaveformFileLayout> layoutFor(const std::string& key);
 
     Config config_;
@@ -179,6 +195,7 @@ class WaveformCacheService : public QObject {
     bool stop_ = false;
     bool busy_ = false;
     std::deque<Job> queue_;
+    std::map<std::string, Job> availability_checks_;
     // Only explicitly requested sources may regenerate an evicted entry.
     // The recipes are bounded by the same limit as disk layouts.
     std::map<std::string, Job> requested_jobs_;
@@ -193,7 +210,7 @@ class WaveformCacheService : public QObject {
     std::set<BlockId> pending_blocks_;
     std::map<BlockId, CachedBlock> blocks_;
     std::list<BlockId> block_lru_;
-    std::size_t block_bytes_ = 0;
+    std::shared_ptr<std::atomic<std::size_t>> block_bytes_ = std::make_shared<std::atomic<std::size_t>>(0);
     // Bumped by clearCache(); work started under an older generation is discarded.
     std::uint64_t generation_ = 0;
     // Serializes publication with clearCache().

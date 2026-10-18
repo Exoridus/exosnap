@@ -177,6 +177,7 @@ int WaveformLevelForSamplesPerPixel(double samples_per_pixel, int level_count) {
 
 ExoWaveformItem::ExoWaveformItem(QQuickItem* parent) : QQuickItem(parent) {
     setFlag(ItemHasContents, true);
+    setFlag(ItemObservesViewport, true);
     // Bucket blocks extend past the visible source window.
     setClip(true);
 }
@@ -278,11 +279,18 @@ QSGNode* ExoWaveformItem::updatePaintNode(QSGNode* old_node, UpdatePaintNodeData
     if (!root)
         root = new WaveformRootNode;
 
+    QRectF visible = boundingRect().intersected(clipRect());
+    if (window())
+        visible = visible.intersected(mapRectFromScene(QRectF(0, 0, window()->width(), window()->height())));
+    if (visible.isEmpty()) {
+        root->Reset();
+        return root;
+    }
+
     const int level_count = static_cast<int>(service_->levelCount(cache_key_));
     if (level_count == 0) {
         // Primes the layout of a published waveform; blocksLoaded follows.
-        std::vector<WaveformPeak> ignored;
-        service_->readBlock(cache_key_, 0, 0, ignored);
+        (void)service_->tryReadPublishedBlock(cache_key_, 0, 0);
         root->Reset();
         last_level_.store(-1, std::memory_order_relaxed);
         return root;
@@ -305,8 +313,10 @@ QSGNode* ExoWaveformItem::updatePaintNode(QSGNode* old_node, UpdatePaintNodeData
 
     const auto bucket_samples = static_cast<double>(engine::WaveformBucketSamples(static_cast<std::uint32_t>(level)));
     const double block_samples = bucket_samples * kWaveformBlockBuckets;
-    const auto first_block = static_cast<std::uint64_t>(static_cast<double>(first_sample) / block_samples);
-    const auto last_block = static_cast<std::uint64_t>(static_cast<double>(end_sample - 1) / block_samples);
+    const double visible_first = first_sample + visible.left() * samples_per_pixel;
+    const double visible_end = first_sample + visible.right() * samples_per_pixel;
+    const auto first_block = static_cast<std::uint64_t>(visible_first / block_samples);
+    const auto last_block = static_cast<std::uint64_t>(std::max(visible_first, visible_end - 1) / block_samples);
 
     for (auto it = root->blocks.begin(); it != root->blocks.end();) {
         if (it->first + 1 < first_block || it->first > last_block + 1) {
@@ -330,16 +340,20 @@ QSGNode* ExoWaveformItem::updatePaintNode(QSGNode* old_node, UpdatePaintNodeData
         // The software adaptation skips custom geometry nodes. Rasterize the same
         // analyzed buckets into a supported image node instead.
         const qreal dpr = window()->effectiveDevicePixelRatio();
-        QImage image(QSize(qCeil(width * dpr), qCeil(height * dpr)), QImage::Format_ARGB32_Premultiplied);
+        QImage image(QSize(qCeil(visible.width() * dpr), qCeil(visible.height() * dpr)),
+                     QImage::Format_ARGB32_Premultiplied);
         image.setDevicePixelRatio(dpr);
         image.fill(Qt::transparent);
         QPainter painter(&image);
-        std::vector<WaveformPeak> peaks;
+        painter.translate(-visible.left(), -visible.top());
         for (std::uint64_t block = first_block; block <= last_block; ++block) {
-            const auto buckets = service_->readBlock(cache_key_, static_cast<std::uint32_t>(level), block, peaks);
+            const auto data = service_->tryReadPublishedBlock(cache_key_, static_cast<std::uint32_t>(level), block);
+            if (!data)
+                continue;
+            const auto buckets = static_cast<std::uint32_t>(data->peaks.size() / engine::kWaveformChannels);
             const double first_x = (static_cast<double>(block) * block_samples - first_sample) / samples_per_pixel;
             for (std::size_t lane = 0; lane < lanes.size(); ++lane)
-                PaintSoftwareLane(painter, peaks, buckets, channels, static_cast<int>(lane), lanes[lane], first_x,
+                PaintSoftwareLane(painter, data->peaks, buckets, channels, static_cast<int>(lane), lanes[lane], first_x,
                                   bucket_samples / samples_per_pixel, color_);
         }
         painter.end();
@@ -347,7 +361,7 @@ QSGNode* ExoWaveformItem::updatePaintNode(QSGNode* old_node, UpdatePaintNodeData
         root->image->setOwnsTexture(true);
         root->image->setTexture(window()->createTextureFromImage(image));
         root->image->setSourceRect(QRectF(0, 0, image.width(), image.height()));
-        root->image->setRect(QRectF(0, 0, width, height));
+        root->image->setRect(visible);
         // Adding to a live software scene graph immediately inspects the texture.
         root->appendChildNode(root->image);
         return root;
@@ -355,12 +369,12 @@ QSGNode* ExoWaveformItem::updatePaintNode(QSGNode* old_node, UpdatePaintNodeData
     QColor peak_color = color_;
     peak_color.setAlphaF(color_.alphaF() * kPeakAlpha);
 
-    std::vector<WaveformPeak> peaks;
     for (std::uint64_t block = first_block; block <= last_block; ++block) {
-        const std::uint32_t buckets = service_->readBlock(cache_key_, static_cast<std::uint32_t>(level), block, peaks);
+        const auto data = service_->tryReadPublishedBlock(cache_key_, static_cast<std::uint32_t>(level), block);
         auto found = root->blocks.find(block);
-        if (buckets == 0)
+        if (!data)
             continue;
+        const auto buckets = static_cast<std::uint32_t>(data->peaks.size() / engine::kWaveformChannels);
         if (found == root->blocks.end()) {
             auto* transform = new QSGTransformNode;
             for (std::size_t lane = 0; lane < lanes.size(); ++lane) {
@@ -375,7 +389,7 @@ QSGNode* ExoWaveformItem::updatePaintNode(QSGNode* old_node, UpdatePaintNodeData
             for (std::size_t lane = 0; lane < lanes.size(); ++lane) {
                 auto* peak_node = static_cast<QSGGeometryNode*>(child);
                 auto* rms_node = static_cast<QSGGeometryNode*>(child->nextSibling());
-                FillLane(peak_node, rms_node, peaks, buckets, channels, static_cast<int>(lane), lanes[lane],
+                FillLane(peak_node, rms_node, data->peaks, buckets, channels, static_cast<int>(lane), lanes[lane],
                          bucket_samples);
                 child = rms_node->nextSibling();
             }

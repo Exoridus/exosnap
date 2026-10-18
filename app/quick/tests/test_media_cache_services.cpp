@@ -14,7 +14,9 @@
 #include <QGuiApplication>
 #include <QQuickWindow>
 #include <QSGGeometryNode>
+#include <QSGImageNode>
 #include <QSGRendererInterface>
+#include <QSGTexture>
 #include <QSGTransformNode>
 #include <QSignalSpy>
 #include <QTemporaryDir>
@@ -223,7 +225,7 @@ TEST(WaveformCacheService, AnalysesOnceAndAWarmCacheNeverDecodes) {
 
     std::vector<WaveformPeak> peaks;
     const auto buckets = ReadBlockBlocking(*warm, key, 0, 0, peaks);
-    ASSERT_EQ(buckets, engine::WaveformBucketCount(144000, 0));
+    ASSERT_EQ(buckets, std::min<std::uint64_t>(kWaveformBlockBuckets, engine::WaveformBucketCount(144000, 0)));
     for (std::uint32_t bucket = 0; bucket < buckets; ++bucket) {
         const float amplitude = StepAmplitude(static_cast<std::int64_t>(bucket) * 128);
         ASSERT_NEAR(engine::WaveformPeakToFloat(peaks[bucket * 2].max), amplitude, 1e-4f);
@@ -345,6 +347,54 @@ TEST(ThumbnailBroker, ReplacingContentAtOnePathInvalidatesTheOldRegistration) {
     EXPECT_TRUE(completed);
 }
 
+TEST(WaveformCacheService, RenderReadDoesNotWaitForTheStagingStore) {
+    WaveformFixture fixture;
+    fixture.control->gated = true;
+    auto service = fixture.Service();
+    struct UnblockDecoder {
+        std::shared_ptr<DecoderControl> control;
+        ~UnblockDecoder() {
+            control->Open();
+        }
+    } unblock{fixture.control};
+    const auto key = service->request(SourceKey(91), fixture.source_path, kThreeSecondsUs);
+    fixture.control->Release();
+    ASSERT_TRUE(WaitFor([&]() { return service->completedSamples(key) >= 4736; }));
+
+    std::string error;
+    auto writer = service->storeForTest().BeginWrite(std::string(64, 'a'), 1, error);
+    ASSERT_TRUE(writer) << error;
+    const std::array<std::uint8_t, 1> payload{1};
+    ASSERT_TRUE(writer->Write(0, payload));
+    std::atomic<bool> storage_locked{false};
+    std::atomic<bool> release_storage{false};
+    std::jthread storage([&]() {
+        writer->Publish(error, [&]() {
+            storage_locked = true;
+            while (!release_storage.load())
+                QThread::msleep(1);
+            return true;
+        });
+    });
+    const bool held = WaitFor([&]() { return storage_locked.load(); });
+    std::atomic<bool> render_started{false};
+    std::atomic<bool> render_finished{false};
+    std::jthread render([&]() {
+        render_started = true;
+        std::vector<WaveformPeak> peaks;
+        service->readBlock(key, 0, 0, peaks);
+        render_finished = true;
+    });
+    const bool started = WaitFor([&]() { return render_started.load(); });
+    const bool independent = WaitFor([&]() { return render_finished.load(); }, 250);
+    release_storage = true;
+    storage.join();
+    render.join();
+    EXPECT_TRUE(held);
+    EXPECT_TRUE(started);
+    EXPECT_TRUE(independent) << "Render waited for staging I/O while the storage lock was held";
+}
+
 TEST(WaveformCacheService, PartialResultsAreReadableAndCancellationPublishesNothing) {
     WaveformFixture fixture;
     fixture.control->gated = true;
@@ -420,9 +470,13 @@ TEST(WaveformCacheService, ProgressivePartialBlocksStayFreshThroughOddTailPublic
     std::vector<WaveformPeak> peaks;
     ASSERT_EQ(service.readBlock(key, 1, 0, peaks), 32u);
     EXPECT_EQ(peaks[62].max, engine::QuantizeWaveformValue(0.875));
-    EXPECT_EQ(service.memoryBytesForTest(), 0u);
+    EXPECT_GT(service.memoryBytesForTest(), 0u);
     ASSERT_EQ(service.readBlock(key, 0, 0, peaks), 64u);
-    EXPECT_EQ(service.memoryBytesForTest(), 0u);
+    EXPECT_GT(service.memoryBytesForTest(), 0u);
+    const auto snapshot = service.tryReadPublishedBlock(key, 0, 0);
+    ASSERT_TRUE(snapshot);
+    EXPECT_EQ(snapshot->first_sample, 0u);
+    EXPECT_EQ(snapshot->end_sample, 8192u);
 
     fixture.control->Open();
     ASSERT_TRUE(WaitFor([&]() { return service.state(key) == WaveformCacheService::State::Ready; }));
@@ -434,12 +488,40 @@ TEST(WaveformCacheService, ProgressivePartialBlocksStayFreshThroughOddTailPublic
     EXPECT_EQ(service.readBlock(key, 1, 0, peaks), 33u);
     ASSERT_EQ(ReadBlockBlocking(service, key, 0, 0, peaks), 65u);
     EXPECT_EQ(peaks[128], (WaveformPeak{8192, 8192, 8192}));
+    EXPECT_EQ(snapshot->peaks.size(), 128u);
+    EXPECT_EQ(snapshot->end_sample, 8192u);
+    const auto final_snapshot = service.tryReadPublishedBlock(key, 0, 0);
+    ASSERT_TRUE(final_snapshot);
+    EXPECT_NE(final_snapshot, snapshot);
+    EXPECT_EQ(final_snapshot->end_sample, 8193u);
     EXPECT_EQ(fixture.control->calls.load(), 2);
+}
+
+TEST(WaveformCacheService, PinnedBlocksStayBudgetedAcrossClearAndServiceLifetime) {
+    WaveformFixture fixture;
+    const auto budget = sizeof(WaveformCacheService::PeakBlock) + kWaveformBlockBuckets * sizeof(WaveformPeak) * 2;
+    auto service = fixture.Service(64ull << 20, budget);
+    const auto key = service->request(SourceKey(92), fixture.source_path, kThreeSecondsUs);
+    ASSERT_TRUE(WaitFor([&]() { return service->state(key) == WaveformCacheService::State::Ready; }));
+    std::shared_ptr<const WaveformCacheService::PeakBlock> pinned;
+    ASSERT_TRUE(WaitFor([&]() { return static_cast<bool>(pinned = service->tryReadPublishedBlock(key, 0, 0)); }));
+    const auto bytes = service->memoryBytesForTest();
+    EXPECT_GT(bytes, 0u);
+    EXPECT_LE(bytes, budget);
+    service->clearCache();
+    EXPECT_EQ(service->memoryBytesForTest(), bytes);
+    EXPECT_EQ(pinned->peaks[0], (WaveformPeak{4096, 4096, 4096}));
+    EXPECT_FALSE(service->tryReadPublishedBlock(key, 0, 0));
+    service.reset();
+    EXPECT_EQ(pinned->first_sample, 0u);
+    EXPECT_EQ(pinned->end_sample, kWaveformBlockBuckets * engine::kWaveformBaseBucketSamples);
+    EXPECT_EQ(pinned->peaks.size(), kWaveformBlockBuckets * engine::kWaveformChannels);
 }
 
 TEST(WaveformCacheService, EvictedPublishedLayoutAutomaticallyReanalysesOnce) {
     WaveformFixture fixture;
-    auto service = fixture.Service(40 * 1024);
+    auto service = fixture.Service(40 * 1024, sizeof(WaveformCacheService::PeakBlock) +
+                                                  kWaveformBlockBuckets * sizeof(WaveformPeak) * 2);
     const auto source_a = SourceKey(46);
     const auto key_a = service->request(source_a, fixture.source_path, kThreeSecondsUs);
     ASSERT_TRUE(WaitFor([&]() { return service->state(key_a) == WaveformCacheService::State::Ready; }));
@@ -842,6 +924,36 @@ TEST(ExoWaveformItem, SoftwareRendererDrawsAnalyzedPeaksAndLeavesMissingDataBlan
     }));
 }
 
+TEST(ExoWaveformItem, SoftwareRasterIsBoundedByTheClippedViewport) {
+    WaveformFixture fixture;
+    auto service = fixture.Service();
+    const auto key = service->request(SourceKey(93), fixture.source_path, kThreeSecondsUs);
+    ASSERT_TRUE(WaitFor([&]() { return service->state(key) == WaveformCacheService::State::Ready; }));
+    QQuickWindow::setGraphicsApi(QSGRendererInterface::Software);
+    QQuickWindow window;
+    window.setGeometry(0, 0, 400, 140);
+    QQuickItem viewport(window.contentItem());
+    viewport.setPosition(QPointF(50, 60));
+    viewport.setSize(QSizeF(300, 48));
+    viewport.setClip(true);
+    TestableWaveformItem item;
+    item.setParentItem(&viewport);
+    item.setPosition(QPointF(-5000, 0));
+    item.setSize(QSizeF(10000, 40));
+    item.setService(service.get());
+    item.setCacheKey(key);
+    item.setSourceOutUs(kThreeSecondsUs);
+    window.show();
+    ASSERT_TRUE(WaitFor([&]() { return !window.grabWindow().isNull(); }));
+    std::unique_ptr<QSGNode> node(item.updatePaintNode(nullptr, nullptr));
+    ASSERT_TRUE(node);
+    auto* image = dynamic_cast<QSGImageNode*>(node->firstChild());
+    ASSERT_TRUE(image);
+    ASSERT_TRUE(image->texture());
+    EXPECT_LE(image->texture()->textureSize().width(), qCeil(300 * window.effectiveDevicePixelRatio()));
+    EXPECT_EQ(image->rect(), QRectF(5000, 0, 300, 40));
+}
+
 TEST(ExoWaveformItem, PanMovesBlocksWithoutShiftingBucketsOrRebuilding) {
     WaveformFixture fixture;
     auto service = fixture.Service();
@@ -1103,6 +1215,30 @@ TEST(ThumbnailBroker, CompletingAnInFlightRequestAfterResponseDestructionIsSafe)
     EXPECT_FALSE(broker->HasWork());
 }
 
+TEST(WaveformCacheService, RepeatedReadyRequestChecksAvailabilityOnTheWorker) {
+    WaveformFixture fixture;
+    auto service = fixture.Service();
+    const auto key = service->request(SourceKey(94), fixture.source_path, kThreeSecondsUs);
+    ASSERT_TRUE(WaitFor([&]() { return service->state(key) == WaveformCacheService::State::Ready; }));
+    {
+        std::lock_guard lock(fixture.control->mutex);
+        fixture.control->gated = true;
+    }
+    struct UnblockDecoder {
+        std::shared_ptr<DecoderControl> control;
+        ~UnblockDecoder() {
+            control->Open();
+        }
+    } unblock{fixture.control};
+    service->request(SourceKey(95), fixture.source_path, kThreeSecondsUs);
+    ASSERT_TRUE(WaitFor([&]() { return fixture.control->opens.load() == 2; }));
+    ASSERT_TRUE(std::filesystem::remove(std::filesystem::path(fixture.source_path.toStdWString())));
+    service->request(SourceKey(94), fixture.source_path, kThreeSecondsUs);
+    EXPECT_TRUE(service->sourceAvailable(key)) << "Availability was synchronously checked on the requesting thread";
+    fixture.control->Open();
+    ASSERT_TRUE(WaitFor([&]() { return !service->sourceAvailable(key); }));
+}
+
 TEST(WaveformCacheService, ReadyRequestRechecksMissingSourceWithoutDecoding) {
     WaveformFixture fixture;
     auto service = fixture.Service();
@@ -1112,7 +1248,7 @@ TEST(WaveformCacheService, ReadyRequestRechecksMissingSourceWithoutDecoding) {
     QSignalSpy availability(service.get(), &WaveformCacheService::sourceAvailabilityChanged);
     const auto calls = service->decodeCallsForTest();
     EXPECT_EQ(service->request(SourceKey(1), fixture.source_path, kThreeSecondsUs), key);
-    EXPECT_FALSE(service->sourceAvailable(key));
+    ASSERT_TRUE(WaitFor([&]() { return !service->sourceAvailable(key); }));
     EXPECT_EQ(service->decodeCallsForTest(), calls);
     ASSERT_TRUE(WaitFor([&]() { return availability.count() == 1; }));
 }
