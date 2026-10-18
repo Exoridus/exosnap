@@ -5,6 +5,8 @@
 #include <exosnap/engine/audio_media_manifest.h>
 #include <exosnap/engine/audio_routing_model.h>
 #include <exosnap/engine/edit_player_engine.h>
+#include <exosnap/engine/edit_timeline_export.h>
+#include <exosnap/engine/edit_types.h>
 #include <exosnap/engine/recording_media_types.h>
 
 #include <cstdint>
