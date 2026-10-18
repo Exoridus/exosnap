@@ -393,19 +393,39 @@ bool ThumbnailRequestBroker::ForegroundBusy() const {
     return busy_;
 }
 
+std::vector<ThumbnailCompletion> ThumbnailRequestBroker::RetireRequestsLocked() {
+    ++generation_;
+    std::vector<ThumbnailCompletion> retired;
+    for (auto& [key, pending] : pending_)
+        for (auto& [ticket, completion] : pending.waiters)
+            retired.push_back(std::move(completion));
+    pending_.clear();
+    visible_order_.clear();
+    prefetch_order_.clear();
+    decode_order_.clear();
+    tickets_.clear();
+    return retired;
+}
+
 std::uint64_t ThumbnailRequestBroker::Clear() {
-    std::lock_guard publication(publication_mutex_);
+    std::vector<ThumbnailCompletion> retired;
+    std::uint64_t released = 0;
     {
+        std::lock_guard publication(publication_mutex_);
+        {
+            std::lock_guard memory(memory_mutex_);
+            memory_.clear();
+            memory_lru_.clear();
+            memory_bytes_ = 0;
+        }
+        released = disk_ ? disk_->Clear() : 0;
+        // Requests arriving during storage clearing must retire with the old epoch.
         std::lock_guard lock(mutex_);
-        ++generation_;
+        retired = RetireRequestsLocked();
     }
-    {
-        std::lock_guard memory(memory_mutex_);
-        memory_.clear();
-        memory_lru_.clear();
-        memory_bytes_ = 0;
-    }
-    return disk_ ? disk_->Clear() : 0;
+    for (auto& completion : retired)
+        completion(QImage());
+    return released;
 }
 
 void ThumbnailRequestBroker::AttachWorker(std::function<void()> wake) {
@@ -425,16 +445,10 @@ void ThumbnailRequestBroker::DetachWorker() {
     }
     std::vector<ThumbnailCompletion> orphaned;
     {
+        std::lock_guard publication(publication_mutex_);
         std::lock_guard lock(mutex_);
         attached_ = false;
-        for (auto& [key, pending] : pending_)
-            for (auto& [ticket, completion] : pending.waiters)
-                orphaned.push_back(std::move(completion));
-        pending_.clear();
-        visible_order_.clear();
-        prefetch_order_.clear();
-        decode_order_.clear();
-        tickets_.clear();
+        orphaned = RetireRequestsLocked();
     }
     for (auto& completion : orphaned)
         completion(QImage());
@@ -482,7 +496,8 @@ void ThumbnailRequestBroker::DeferDecode(Job job) {
     {
         std::lock_guard lock(mutex_);
         const auto pending = pending_.find(job.key);
-        if (pending == pending_.end())
+        if (job.generation != generation_ || pending == pending_.end() ||
+            pending->second.job.generation != job.generation)
             return;
         job.disk_checked = true;
         pending->second.job = job;
@@ -503,7 +518,7 @@ void ThumbnailRequestBroker::Complete(const Job& job, const QImage& image) {
                 MemoryInsert(job.key, accepted);
         }
         const auto pending = pending_.find(job.key);
-        if (pending != pending_.end()) {
+        if (pending != pending_.end() && pending->second.job.generation == job.generation) {
             for (auto& [ticket, completion] : pending->second.waiters) {
                 tickets_.erase(ticket);
                 waiters.push_back(std::move(completion));

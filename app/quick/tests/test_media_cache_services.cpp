@@ -1798,6 +1798,116 @@ TEST(ThumbnailCache, DiskTierRejectsCorruptionAndHoldsItsBudget) {
     }
 }
 
+TEST(ThumbnailBroker, ClearingRetiresOldRequestsAndReadmitsTheSameContent) {
+    ThumbnailFixture fixture;
+    auto broker = fixture.Broker();
+    broker->AttachWorker([] {});
+    const auto identity = engine::ToHex(Identity(8));
+    broker->RegisterSource(identity, ThumbnailSourceInfo{"source.mkv", Identity(8), 0, 0, 0, 1});
+    auto old = std::make_shared<Result>();
+    const auto old_ticket = broker->Request(identity, 0, 48, Capture(old));
+    const auto retired = broker->TakeJob();
+    ASSERT_TRUE(retired);
+    broker->Clear();
+    EXPECT_TRUE(Done(old));
+    auto current = std::make_shared<Result>();
+    broker->Request(identity, 0, 48, Capture(current));
+    const auto fresh = broker->TakeJob();
+    ASSERT_TRUE(fresh);
+    EXPECT_EQ(fresh->generation, broker->Generation());
+    EXPECT_NE(fresh->generation, retired->generation);
+    broker->Cancel(old_ticket);
+    broker->Complete(*retired, SolidImage(85, 48, qRgb(200, 0, 0)));
+    EXPECT_FALSE(Done(current));
+    broker->Complete(*fresh, SolidImage(85, 48, qRgb(0, 200, 0)));
+    ASSERT_TRUE(Done(current));
+    EXPECT_EQ(current->completions, 1);
+    ASSERT_TRUE(current->image);
+    EXPECT_EQ(current->image->pixel(0, 0), qRgb(0, 200, 0));
+    EXPECT_EQ(old->completions, 1);
+}
+
+TEST(ThumbnailBroker, RetiredWorkerCannotCompleteReplacementRequestsOrPopulateMemory) {
+    ThumbnailFixture fixture;
+    auto broker = fixture.Broker();
+    broker->AttachWorker([] {});
+    const auto identity = engine::ToHex(Identity(9));
+    broker->RegisterSource(identity, ThumbnailSourceInfo{"source.mkv", Identity(9), 0, 0, 0, 1});
+    auto old = std::make_shared<Result>();
+    broker->Request(identity, 0, 48, Capture(old));
+    const auto retired = broker->TakeJob();
+    ASSERT_TRUE(retired);
+    broker->DetachWorker();
+    broker->AttachWorker([] {});
+    auto current = std::make_shared<Result>();
+    broker->Request(identity, 0, 48, Capture(current));
+    const auto fresh = broker->TakeJob();
+    ASSERT_TRUE(fresh);
+    broker->Complete(*retired, SolidImage(85, 48, qRgb(200, 0, 0)));
+    EXPECT_FALSE(Done(current));
+    EXPECT_FALSE(broker->MemoryLookup(retired->key));
+    broker->Complete(*fresh, SolidImage(85, 48, qRgb(0, 200, 0)));
+    ASSERT_TRUE(Done(current));
+    ASSERT_TRUE(current->image);
+    EXPECT_EQ(current->image->pixel(0, 0), qRgb(0, 200, 0));
+    EXPECT_EQ(current->completions, 1);
+    EXPECT_EQ(old->completions, 1);
+}
+
+TEST(ThumbnailBroker, RetiredDeferredWorkCannotRequeueOverCurrentWork) {
+    ThumbnailFixture fixture;
+    auto broker = fixture.Broker();
+    broker->AttachWorker([] {});
+    const auto identity = engine::ToHex(Identity(10));
+    broker->RegisterSource(identity, ThumbnailSourceInfo{"source.mkv", Identity(10), 0, 0, 0, 1});
+    broker->Request(identity, 0, 48, [](const QImage&) {});
+    const auto retired = broker->TakeJob();
+    ASSERT_TRUE(retired);
+    broker->DetachWorker();
+    broker->AttachWorker([] {});
+    auto current = std::make_shared<Result>();
+    broker->Request(identity, 0, 48, Capture(current));
+    const auto fresh = broker->TakeJob();
+    ASSERT_TRUE(fresh);
+    broker->DeferDecode(*retired);
+    EXPECT_FALSE(broker->HasWork());
+    broker->Complete(*fresh, SolidImage(85, 48, qRgb(0, 200, 0)));
+    ASSERT_TRUE(Done(current));
+    ASSERT_TRUE(current->image);
+    EXPECT_EQ(current->image->pixel(0, 0), qRgb(0, 200, 0));
+}
+
+TEST(ThumbnailBroker, ClearCallbacksCanSubscribeToFreshWork) {
+    ThumbnailFixture fixture;
+    auto broker = fixture.Broker();
+    broker->AttachWorker([] {});
+    const auto identity = engine::ToHex(Identity(11));
+    broker->RegisterSource(identity, ThumbnailSourceInfo{"source.mkv", Identity(11), 0, 0, 0, 1});
+    auto current = std::make_shared<Result>();
+    struct Retirement {
+        std::uint64_t ticket = 0;
+        int callbacks = 0;
+    };
+    auto state = std::make_shared<Retirement>();
+    const std::weak_ptr<ThumbnailRequestBroker> weak = broker;
+    broker->Request(identity, 0, 48, [weak, current, state, identity](const QImage& image) {
+        ++state->callbacks;
+        EXPECT_TRUE(image.isNull());
+        if (const auto owner = weak.lock())
+            state->ticket = owner->Request(identity, 0, 48, Capture(current));
+    });
+    broker->Clear();
+    EXPECT_EQ(state->callbacks, 1);
+    EXPECT_NE(state->ticket, 0u);
+    const auto fresh = broker->TakeJob();
+    ASSERT_TRUE(fresh);
+    broker->Complete(*fresh, SolidImage(85, 48, qRgb(0, 200, 0)));
+    ASSERT_TRUE(Done(current));
+    ASSERT_TRUE(current->image);
+    EXPECT_EQ(current->image->pixel(0, 0), qRgb(0, 200, 0));
+    EXPECT_EQ(state->callbacks, 1);
+}
+
 TEST(ThumbnailBroker, UnknownSourcesCancellationAndDetachAlwaysComplete) {
     ThumbnailFixture fixture;
     auto broker = fixture.Broker();

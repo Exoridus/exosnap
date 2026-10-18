@@ -164,8 +164,9 @@ class ThumbnailRequestBroker {
     void SetForegroundBusy(bool busy);
     [[nodiscard]] bool ForegroundBusy() const;
 
-    // Drops the memory tier and deletes every persisted thumbnail. Returns the
-    // number of disk bytes released.
+    // Drops both cache tiers and retires pending requests as unavailable.
+    // Sources stay registered. Callbacks run outside all broker locks.
+    // Returns the number of disk bytes released.
     std::uint64_t Clear();
 
     // Harness seam (--visual-test): every request is answered inline by
@@ -213,6 +214,8 @@ class ThumbnailRequestBroker {
         std::size_t bytes = 0;
     };
 
+    // Requires publication_mutex_ and mutex_ so retired work cannot consume a later epoch.
+    std::vector<ThumbnailCompletion> RetireRequestsLocked();
     void Wake();
     std::optional<Job> TakeFrom(std::deque<std::string>& order);
 
