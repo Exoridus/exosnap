@@ -210,6 +210,15 @@ struct EditExportAdapter::PreparedExport {
             if (!referenced.contains(source.id))
                 continue;
             source.metadata = engine::ProbeEditMedia(source.path, {}, {}, &cancelled);
+            const auto imported =
+                std::find_if(assets.begin(), assets.end(), [&](const auto& asset) { return asset.id == source.id; });
+            if (imported != assets.end() && imported->source_descriptor && source.metadata.content_identity_valid &&
+                source.metadata.content_sha256 != imported->source_descriptor->asset_identity_fingerprint) {
+                error = QCoreApplication::translate("EditExportAdapter",
+                                                    "A source changed after it was imported. Import it again.")
+                            .toStdString();
+                return false;
+            }
             if (cancelled.load()) {
                 error = "Export preparation cancelled.";
                 return false;

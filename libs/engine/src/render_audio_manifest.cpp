@@ -75,17 +75,26 @@ Outcome<AudioManifest1> BuildRenderAudioManifest(const std::vector<MonitorSelect
     return BuildMixManifest(media_ids, track_ids);
 }
 
-Outcome<RenderAudioPreflight> PrepareRenderAudioManifest(const TimelineRenderSnapshot& snapshot) {
+Outcome<RenderAudioPreflight> PrepareRenderAudioManifest(const TimelineRenderSnapshot& snapshot, int64_t span_in_us,
+                                                         int64_t span_out_us) {
     RenderAudioPreflight preflight;
     const auto& timeline = snapshot.timeline;
-    const bool any_audio =
-        std::any_of(timeline.clips.begin(), timeline.clips.end(), [](const auto& clip) { return clip.audio; });
+    if (span_out_us < 0)
+        span_out_us = timeline.duration_us;
+    const auto contributes = [&](const auto& clip) {
+        const auto track = std::find_if(timeline.tracks.begin(), timeline.tracks.end(),
+                                        [&](const auto& value) { return value.id == clip.track; });
+        return clip.enabled && (track == timeline.tracks.end() || track->enabled) && clip.start_us < span_out_us &&
+               clip.end_us() > span_in_us;
+    };
+    const bool any_audio = std::any_of(timeline.clips.begin(), timeline.clips.end(),
+                                       [&](const auto& clip) { return clip.audio && contributes(clip); });
     const bool any_selection = std::any_of(snapshot.sources.begin(), snapshot.sources.end(),
                                            [](const auto& source) { return source.monitor_selection.has_value(); });
     const bool explicit_streams =
         (any_audio || !any_selection) &&
-        std::all_of(timeline.clips.begin(), timeline.clips.end(), [](const auto& clip) {
-            return !clip.audio || (clip.stream && clip.stream->kind == TimelineStreamKind::Audio);
+        std::all_of(timeline.clips.begin(), timeline.clips.end(), [&](const auto& clip) {
+            return !contributes(clip) || !clip.audio || (clip.stream && clip.stream->kind == TimelineStreamKind::Audio);
         });
     if (explicit_streams) {
         // Clips name their source streams, so the mix lineage follows the edit
@@ -94,6 +103,8 @@ Outcome<RenderAudioPreflight> PrepareRenderAudioManifest(const TimelineRenderSna
         std::vector<AudioTrackId> track_ids;
         std::set<uint64_t> leased;
         for (const auto& clip : timeline.clips) {
+            if (!contributes(clip))
+                continue;
             const auto source = std::find_if(snapshot.sources.begin(), snapshot.sources.end(),
                                              [&clip](const auto& value) { return value.id == clip.asset; });
             if (source == snapshot.sources.end() ||
@@ -124,6 +135,8 @@ Outcome<RenderAudioPreflight> PrepareRenderAudioManifest(const TimelineRenderSna
     std::set<uint64_t> referenced;
     std::set<uint64_t> audio_assets;
     for (const auto& clip : snapshot.timeline.clips) {
+        if (!contributes(clip))
+            continue;
         referenced.insert(clip.asset);
         if (clip.audio)
             audio_assets.insert(clip.asset);
