@@ -4,202 +4,61 @@ import QtQuick
 import QtQuick.Controls.Basic
 import QtQuick.Layouts
 
-// Scene-graph video keeps playback controls composited over the decoded frame.
 Rectangle {
     id: root
-
     required property EditPlayerAdapter player
     required property EditSessionAdapter session
-
-    color: ExoTheme.surfaceRaised
+    signal openMedia()
+    objectName: "editViewer"
+    color: ExoTheme.overlaySurface
+    radius: ExoTheme.radiusMd
     border.width: 1
-    border.color: ExoTheme.line
-    radius: ExoTheme.radiusLg
+    border.color: ExoTheme.overlayLine
     clip: true
-    property bool monitoringEditorOpen: false
-    property var monitoringSelection: []
-    function openMonitoring(): void {
-        root.player.setPlaying(false);
-        overlapConfirmation.checked = false;
-        root.monitoringSelection = root.player.monitoringTracks.filter(track => track.selected).map(track => track.id);
-        root.monitoringEditorOpen = true;
-    }
-    ExoButton {
-        z: 4
-        anchors.top: parent.top
-        anchors.right: parent.right
-        anchors.margins: ExoTheme.spacingSm
-        text: root.player.monitoringConfirmationRequired ? qsTr("Confirm audio selection") : qsTr("Monitor tracks")
-        visible: root.player.monitoringTracks.length > 0
-        Accessible.name: qsTr("Review the editor audio monitoring selection")
-        onClicked: root.openMonitoring()
-    }
-    ExoCard {
-        z: 5
-        visible: root.monitoringEditorOpen
-        anchors.centerIn: parent
-        width: Math.min(parent.width - 24, 480)
-        title: qsTr("Monitor tracks")
-        subtitle: qsTr("Preview and render use this selection. Stream copy retains all recorded tracks.")
-        Repeater {
-            model: root.player.monitoringTracks
-            delegate: ExoCheckBox {
-                required property var modelData
-                text: modelData.name
-                Layout.fillWidth: true
-                checked: root.monitoringSelection.indexOf(modelData.id) >= 0
-                Accessible.name: qsTr("Monitor %1").arg(modelData.name)
-                onToggledByUser: value => {
-                    const selected = root.monitoringSelection.slice();
-                    const index = selected.indexOf(modelData.id);
-                    if (value && index < 0) selected.push(modelData.id);
-                    else if (!value && index >= 0) selected.splice(index, 1);
-                    root.monitoringSelection = selected;
-                }
-            }
-        }
-        ExoCheckBox {
-            id: overlapConfirmation
-            text: qsTr("I confirm any overlapping audio in this selection")
-            Layout.fillWidth: true
-        }
-        RowLayout {
-            ExoButton {
-                text: qsTr("Confirm selection")
-                onClicked: {
-                    root.player.confirmMonitoring(root.monitoringSelection, overlapConfirmation.checked);
-                    root.monitoringEditorOpen = false;
-                }
-            }
-            ExoButton {
-                text: qsTr("Cancel")
-                onClicked: root.monitoringEditorOpen = false
-            }
-        }
-    }
-
-    gradient: Gradient {
-        GradientStop {
-            position: 0.0
-            color: ExoTheme.surfaceRaised
-        }
-
-        GradientStop {
-            position: 1.0
-            color: ExoTheme.background
-        }
-    }
 
     ExoEditPlayerItem {
         id: surface
-
-        anchors {
-            fill: parent
-            margins: ExoTheme.spacingSm
-        }
+        objectName: "editViewerSurface"
+        anchors.fill: parent
         playerAdapter: root.player
         cornerRadius: ExoTheme.radiusMd
     }
-
+    ColumnLayout {
+        anchors.centerIn: parent
+        width: Math.min(440, root.width - 32)
+        spacing: ExoTheme.spacingSm
+        visible: root.session.durationMs === 0
+        Label {
+            objectName: "editEmptyViewerTitle"
+            Layout.fillWidth: true
+            text: qsTr("No media in the timeline yet")
+            color: ExoTheme.overlayInk
+            font.family: ExoTheme.sansFamily
+            font.pixelSize: ExoTheme.fontBody
+            horizontalAlignment: Text.AlignHCenter
+            wrapMode: Text.Wrap
+        }
+        Label {
+            Layout.fillWidth: true
+            text: qsTr("Add a recording or drag a file onto the timeline.")
+            color: ExoTheme.overlayInkSecondary
+            horizontalAlignment: Text.AlignHCenter
+            wrapMode: Text.Wrap
+        }
+        Button {
+            Layout.alignment: Qt.AlignHCenter
+            text: qsTr("Open media")
+            onClicked: root.openMedia()
+        }
+    }
     Label {
         anchors.centerIn: parent
-        text: surface.errorText !== "" ? surface.errorText : root.player.placeholderText
+        width: Math.min(440, root.width - 32)
+        visible: root.session.durationMs > 0 && !surface.hasFrame
+        text: surface.errorText.length > 0 ? qsTr("Preview unavailable. Export options are checked separately.") : root.player.placeholderText
         textFormat: Text.PlainText
         horizontalAlignment: Text.AlignHCenter
-        wrapMode: Text.WordWrap
-        visible: !surface.hasFrame && (surface.errorText !== "" || root.player.placeholderText !== "")
-        width: parent.width - 2 * ExoTheme.spacingXl
-        color: ExoTheme.textMuted
-        font {
-            family: ExoTheme.sansFamily
-            pixelSize: ExoTheme.fontBody
-        }
-    }
-
-    AbstractButton {
-        id: playToggle
-
-        objectName: "editPlayerToggle"
-        anchors.centerIn: parent
-        implicitWidth: 60
-        implicitHeight: 60
-        visible: root.player.clipOpen
-        // Keep the faded control focusable; keyboard focus restores its visible affordance.
-        opacity: root.player.scrubbing ? 0.0
-                 : (!root.player.playing || playToggle.hovered || playToggle.visualFocus
-                    || transportHold.running) ? 1.0 : 0.0
-        hoverEnabled: true
-        focusPolicy: Qt.StrongFocus
-        Accessible.role: Accessible.Button
-        Accessible.name: root.player.playing ? qsTr("Pause preview") : qsTr("Play preview")
-        ToolTip.text: root.player.playing ? qsTr("Pause preview (Space)") : qsTr("Play preview (Space)")
-        ToolTip.visible: hovered || visualFocus
-        onClicked: root.player.togglePlay()
-
-        Behavior on opacity {
-            NumberAnimation {
-                duration: ExoTheme.animMedium
-                easing.type: Easing.OutCubic
-            }
-        }
-
-        HoverHandler {
-            cursorShape: Qt.PointingHandCursor
-        }
-
-        // The confirmation half of the contract: pressing play swaps the glyph
-        // to pause, and that swap has to be seen before the toggle clears.
-        Timer {
-            id: transportHold
-
-            interval: 900
-        }
-
-        Connections {
-            target: root.player
-
-            function onPlayingChanged(): void {
-                // Not for the pause and resume a scrub performs on its own. The
-                // adapter clears `scrubbing` only after that resume, so this
-                // sees the drag still in progress and stays quiet — otherwise
-                // every scrub of a playing clip ended in a pause glyph fading
-                // out over the frame the user just went looking for.
-                if (!root.player.scrubbing)
-                    transportHold.restart();
-            }
-        }
-
-        background: Rectangle {
-            radius: 30
-            color: playToggle.hovered ? ExoTheme.surfaceHover : ExoTheme.surface
-            opacity: 0.85
-            // The focus ring is the same `text` hairline every other control
-            // uses; at rest the toggle keeps its own quiet boundary.
-            border.width: playToggle.visualFocus ? 2 : 1
-            border.color: playToggle.visualFocus ? ExoTheme.text : ExoTheme.lineStrong
-        }
-
-        contentItem: ExoGlyph {
-            kind: root.player.playing ? ExoGlyph.Pause : ExoGlyph.Run
-            color: ExoTheme.text
-            width: 24
-            height: 24
-            scale: 0.5
-        }
-    }
-
-    Label {
-        anchors {
-            right: parent.right
-            bottom: parent.bottom
-            margins: ExoTheme.spacingMd
-        }
-        text: root.session.playerMetaText
-        textFormat: Text.PlainText
-        color: ExoTheme.textDim
-        font {
-            family: ExoTheme.sansFamily
-            pixelSize: ExoTheme.fontCaption
-        }
+        wrapMode: Text.Wrap
+        color: ExoTheme.overlayInkMuted
     }
 }

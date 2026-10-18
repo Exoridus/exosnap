@@ -84,6 +84,10 @@ class EditExportAdapter : public QObject {
     Q_PROPERTY(QVariantMap reviewOutcome READ reviewOutcome NOTIFY reviewChanged FINAL)
     Q_PROPERTY(QVariantList profileOptions READ profileOptions CONSTANT FINAL)
     Q_PROPERTY(QString profileKey READ profileKey WRITE setProfileKey NOTIFY optionsChanged FINAL)
+    // "finishedStereo" (default) or the explicit "originalStreams" compatibility intent.
+    Q_PROPERTY(QString modeKey READ modeKey WRITE setModeKey NOTIFY optionsChanged FINAL)
+    // "result" exports the result range; "entire" the whole timeline without changing that range.
+    Q_PROPERTY(QString spanKey READ spanKey WRITE setSpanKey NOTIFY optionsChanged FINAL)
 
   public:
     enum State {
@@ -117,6 +121,14 @@ class EditExportAdapter : public QObject {
         return profile_key_;
     }
     void setProfileKey(const QString& key);
+    [[nodiscard]] const QString& modeKey() const noexcept {
+        return mode_key_;
+    }
+    void setModeKey(const QString& key);
+    [[nodiscard]] const QString& spanKey() const noexcept {
+        return span_key_;
+    }
+    void setSpanKey(const QString& key);
     Q_INVOKABLE void chooseDestination();
 
     [[nodiscard]] int stateValue() const noexcept;
@@ -186,6 +198,8 @@ class EditExportAdapter : public QObject {
     std::function<QString()> output_directory_;
     std::function<engine::RecorderConfig()> render_config_;
     QString profile_key_ = QStringLiteral("match");
+    QString mode_key_ = QStringLiteral("finishedStereo");
+    QString span_key_ = QStringLiteral("result");
     std::optional<std::filesystem::path> chosen_output_;
     bool overwrite_confirmed_ = false;
     QVariantMap review_outcome_;

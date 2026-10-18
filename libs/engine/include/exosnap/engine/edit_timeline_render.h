@@ -28,7 +28,27 @@ struct EditRenderPlan {
     FrameSize output;
     int fps_num = 0;
     int fps_den = 1;
+    // Rendered timeline interval; a negative out renders through the timeline end.
+    int64_t span_in_us = 0;
+    int64_t span_out_us = -1;
+    // AAC-LC instead of PCM24 for the result mix, for the MP4 delivery profile.
+    bool aac_audio = false;
 };
+
+struct TimelineVideoAdmission {
+    // Most enabled video clips visible at one instant of the assessed interval.
+    size_t peak_sources = 0;
+    // Most summed source pixels visible at one instant of the assessed interval.
+    uint64_t peak_pixels = 0;
+    // A source without probed geometry counts as unadmitted.
+    bool admitted = true;
+};
+
+// Peak decoder and composition demand of [in_us, out_us), evaluated before any
+// decoder opens. Unadmitted demand exceeds kMaxTimelineVideoSources or
+// kMaxTimelineVideoSourcePixels and must be refused while planning.
+[[nodiscard]] TimelineVideoAdmission AssessTimelineVideoAdmission(const TimelineRenderSnapshot& snapshot, int64_t in_us,
+                                                                  int64_t out_us);
 
 // Metadata and stream-copy eligibility are resolved before this pure policy.
 EditRenderPlan ClassifyEditExport(const TimelineRenderSnapshot& snapshot,
@@ -39,7 +59,14 @@ class EditTimelineReader {
     EditTimelineReader();
     ~EditTimelineReader();
     bool Open(TimelineRenderSnapshot snapshot, const EditRenderPlan& plan, std::string& error);
+    // Retains cursors whose source identity and clip-to-source mapping remain
+    // compatible. Presentation-only revisions do not reposition decoders.
+    bool UpdateSnapshot(TimelineRenderSnapshot snapshot, const EditRenderPlan& plan, std::string& error);
+    // Cumulative since Open, including retired video cursors. Single-owner read.
+    [[nodiscard]] VideoReadMeasurements VideoReadStats() const noexcept;
     bool VideoAt(int64_t time_us, TimelineVideoFrame& output, std::string& error);
+    bool VideoAt(int64_t time_us, TimelineVideoFrame& output, std::string& error, VideoReadMode mode,
+                 uint64_t generation = 0);
     bool AudioAt(int64_t first_sample, uint32_t count, std::vector<float>& output, std::string& error);
     void ResetAudio();
     [[nodiscard]] size_t PeakDecoders() const;
@@ -61,5 +88,13 @@ struct TimelineRenderMeasurements {
 RemuxResult RenderEditTimeline(const TimelineRenderSnapshot& snapshot, const EditRenderPlan& plan,
                                RecorderConfig config, const std::filesystem::path& output, bool to_mp4,
                                RemuxProgressCallback progress, TimelineRenderMeasurements* measurements = nullptr);
+
+// Copies the video packets of complete, compatible sources that cover the whole
+// timeline from zero and renders the result mix as 48 kHz stereo PCM beside
+// them. Matroska only. Fails rather than expanding or trimming copied video.
+RemuxResult ExportEditTimelineWithCopiedVideo(const TimelineRenderSnapshot& snapshot,
+                                              const std::vector<TimelineExportClip>& video_recipe,
+                                              const std::filesystem::path& output, bool render_audio, bool aac_audio,
+                                              RemuxProgressCallback progress);
 
 } // namespace exosnap::engine

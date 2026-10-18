@@ -36,6 +36,7 @@ class EditPlayerFrameSink {
     void attach(ExoEditPlayerItem* item);
     void detach(const ExoEditPlayerItem* item);
     void deliver(exosnap::engine::RawDecodedVideoFrame frame);
+    void deliver(exosnap::engine::RawDecodedVideoFrame frame, uint64_t generation, int64_t timeline_offset_us = 0);
     void deliverTimeline(exosnap::engine::TimelineVideoFrame frame, uint64_t generation);
     uint64_t invalidate();
     void publishClock(int64_t media_time_us);
@@ -61,6 +62,12 @@ class EditPlayerAdapter : public QObject {
     QML_UNCREATABLE("EditPlayerAdapter is provided by the application")
 
     Q_PROPERTY(bool playing READ playing NOTIFY playingChanged FINAL)
+    Q_PROPERTY(PreviewState previewState READ previewState NOTIFY previewChanged FINAL)
+    Q_PROPERTY(qint64 requestedTimeUs READ requestedTimeUs NOTIFY previewChanged FINAL)
+    Q_PROPERTY(QVariant presentedTimeUs READ presentedTimeUs NOTIFY previewChanged FINAL)
+    Q_PROPERTY(bool seekPending READ seekPending NOTIFY previewChanged FINAL)
+    Q_PROPERTY(bool buffering READ buffering NOTIFY previewChanged FINAL)
+    Q_PROPERTY(QVariant actuallyDroppedRecent READ actuallyDroppedRecent NOTIFY previewChanged FINAL)
     Q_PROPERTY(bool clipOpen READ clipOpen NOTIFY clipOpenChanged FINAL)
     // A scrub is in progress. Distinct from `playing`, which a scrub forces
     // false: the surface has to be able to tell "the user is dragging the
@@ -80,6 +87,24 @@ class EditPlayerAdapter : public QObject {
   public:
     explicit EditPlayerAdapter(QObject* parent = nullptr);
     ~EditPlayerAdapter() override;
+    enum PreviewState { Empty, Opening, Ready, SeekPending, Buffering, Degraded, Failed };
+    Q_ENUM(PreviewState)
+    PreviewState previewState() const {
+        return preview_state_;
+    }
+    qint64 requestedTimeUs() const {
+        return requested_time_us_;
+    }
+    QVariant presentedTimeUs() const;
+    bool seekPending() const {
+        return seek_pending_;
+    }
+    bool buffering() const {
+        return preview_state_ == Buffering;
+    }
+    QVariant actuallyDroppedRecent() const {
+        return {};
+    }
 
     void setSession(EditSessionAdapter* session);
 
@@ -126,6 +151,7 @@ class EditPlayerAdapter : public QObject {
     void setClipStateForTest(bool clip_open, qint64 duration_ms);
 
   signals:
+    void previewChanged();
     void playingChanged();
     void clipOpenChanged();
     void scrubbingChanged();
@@ -135,9 +161,12 @@ class EditPlayerAdapter : public QObject {
     void monitoringChanged();
 
   private:
+    friend class EditPlayerAdapterTestPeer;
     void openClip(const QString& master_path, qint64 duration_ms);
     void closeClip();
-    void seek(qint64 position_ms);
+    void seekUs(qint64 position_us);
+    void dispatchSeek();
+    void setPreviewState(PreviewState state);
     void setPlaceholderText(const QString& text);
     [[nodiscard]] double currentScreenRefreshHz() const;
 
@@ -149,6 +178,8 @@ class EditPlayerAdapter : public QObject {
     QString placeholder_text_ = QStringLiteral("Preview unavailable");
     qint64 duration_ms_ = 0;
     bool playing_ = false;
+    bool desired_playing_ = false;
+    bool transport_pending_ = false;
     bool clip_open_ = false;
     bool resume_after_scrub_ = false;
     bool scrubbing_ = false;
@@ -156,8 +187,19 @@ class EditPlayerAdapter : public QObject {
     // handed it on Record, which is the page the workspace is visible on.
     bool surface_visible_ = true;
     double volume_ = 1.0;
-    std::vector<edit::Clip> timeline_clips_;
+    std::optional<edit::Revision> timeline_revision_;
     uint64_t timeline_monitoring_revision_ = 0;
+    struct SeekRequest {
+        qint64 time_us = 0;
+        uint64_t generation = 0;
+    };
+    std::optional<SeekRequest> pending_seek_;
+    bool seek_dispatch_active_ = false;
+    uint64_t request_generation_ = 0;
+    PreviewState preview_state_ = Empty;
+    qint64 requested_time_us_ = 0;
+    std::optional<qint64> presented_time_us_;
+    bool seek_pending_ = false;
     QVariantList monitoring_tracks_;
     bool monitoring_confirmation_required_ = false;
 };

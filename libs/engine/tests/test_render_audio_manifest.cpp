@@ -5,6 +5,8 @@
 #include <exosnap/engine/audio_media_manifest.h>
 #include <exosnap/engine/audio_routing_model.h>
 #include <exosnap/engine/edit_player_engine.h>
+#include <exosnap/engine/edit_timeline_export.h>
+#include <exosnap/engine/edit_types.h>
 #include <exosnap/engine/recording_media_types.h>
 
 #include <cstdint>
@@ -156,6 +158,25 @@ TEST_F(RenderAudioPreflightTest, MissingExplicitSelectionIsRejectedBeforeRenderi
     const auto result = PrepareRenderAudioManifest(snapshot);
     ASSERT_FALSE(result.succeeded());
     EXPECT_NE(result.error()->context.find("selection"), std::string::npos);
+}
+
+TEST_F(RenderAudioPreflightTest, ResultRangeExcludesAudioAndItsLineageAtTheExactEndBoundary) {
+    ASSERT_NO_FATAL_FAILURE(WriteSource(true));
+    snapshot.sources[0].metadata = ProbeEditMedia(path);
+    ASSERT_TRUE(snapshot.sources[0].metadata.content_identity_valid);
+    const auto& metadata = snapshot.sources[0].metadata.audio_metadata;
+    ASSERT_EQ(metadata.actual_tracks.size(), 1u);
+    snapshot.timeline.clips[1].stream =
+        TimelineStreamRef{1, metadata.actual_tracks.front().track_id, 1, TimelineStreamKind::Audio};
+    snapshot.timeline.duration_us = 2'000'000;
+    snapshot.timeline.clips[0].source_out_us = 2'000'000;
+    const auto excluded = PrepareRenderAudioManifest(snapshot, 1'000'000, 2'000'000);
+    ASSERT_TRUE(excluded.succeeded()) << excluded.error()->context;
+    EXPECT_TRUE(excluded.value()->manifest.tracks.empty());
+    EXPECT_TRUE(excluded.value()->manifest.derived_from_media_ids.empty());
+    const auto included = PrepareRenderAudioManifest(snapshot, 999'999, 2'000'000);
+    ASSERT_TRUE(included.succeeded()) << included.error()->context;
+    EXPECT_EQ(included.value()->manifest.tracks.size(), 1u);
 }
 
 TEST_F(RenderAudioPreflightTest, BoundConfirmedLegacySelectionCanReopenAndKeepsSourceImmutable) {

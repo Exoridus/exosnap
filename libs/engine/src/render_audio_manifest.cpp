@@ -1,4 +1,5 @@
 #include "render_audio_manifest.h"
+#include <exosnap/engine/edit_types.h>
 
 #include "media_identity_sidecar.h"
 
@@ -33,9 +34,8 @@ template <typename Id> void AppendUnique(std::vector<Id>& ids, Id id) {
         ids.push_back(id);
 }
 
-} // namespace
-
-Outcome<AudioManifest1> BuildRenderAudioManifest(const std::vector<MonitorSelectionSnapshot>& validated_selections) {
+Outcome<AudioManifest1> BuildMixManifest(const std::vector<MediaId>& media_ids,
+                                         const std::vector<AudioTrackId>& track_ids) {
     AudioManifest1 manifest;
     manifest.media_id = NewId<MediaId>();
     manifest.recording_id = NewId<RecordingId>();
@@ -48,11 +48,10 @@ Outcome<AudioManifest1> BuildRenderAudioManifest(const std::vector<MonitorSelect
     mix.container.name = EXOSNAP_TRANSLATABLE("EditRender", "Rendered Mix");
     mix.container.role = "mix";
     mix.container.codec = {"A_PCM/INT/LIT", {}, 48000, 2, 24, 0, "stereo"};
-    for (const auto& selection : validated_selections) {
-        AppendUnique(manifest.derived_from_media_ids, selection.media_id);
-        for (const auto& track : selection.tracks)
-            AppendUnique(mix.derived_from_track_ids, track.track_id);
-    }
+    for (const auto id : media_ids)
+        AppendUnique(manifest.derived_from_media_ids, id);
+    for (const auto id : track_ids)
+        AppendUnique(mix.derived_from_track_ids, id);
     if (!mix.derived_from_track_ids.empty()) {
         manifest.default_monitor_track_ids = {mix.container.track_id};
         manifest.tracks.push_back(std::move(mix));
@@ -63,11 +62,81 @@ Outcome<AudioManifest1> BuildRenderAudioManifest(const std::vector<MonitorSelect
     return manifest;
 }
 
-Outcome<RenderAudioPreflight> PrepareRenderAudioManifest(const TimelineRenderSnapshot& snapshot) {
+} // namespace
+
+Outcome<AudioManifest1> BuildRenderAudioManifest(const std::vector<MonitorSelectionSnapshot>& validated_selections) {
+    std::vector<MediaId> media_ids;
+    std::vector<AudioTrackId> track_ids;
+    for (const auto& selection : validated_selections) {
+        media_ids.push_back(selection.media_id);
+        for (const auto& track : selection.tracks)
+            track_ids.push_back(track.track_id);
+    }
+    return BuildMixManifest(media_ids, track_ids);
+}
+
+Outcome<RenderAudioPreflight> PrepareRenderAudioManifest(const TimelineRenderSnapshot& snapshot, int64_t span_in_us,
+                                                         int64_t span_out_us) {
     RenderAudioPreflight preflight;
+    const auto& timeline = snapshot.timeline;
+    if (span_out_us < 0)
+        span_out_us = timeline.duration_us;
+    const auto contributes = [&](const auto& clip) {
+        const auto track = std::find_if(timeline.tracks.begin(), timeline.tracks.end(),
+                                        [&](const auto& value) { return value.id == clip.track; });
+        return clip.enabled && (track == timeline.tracks.end() || track->enabled) && clip.start_us < span_out_us &&
+               clip.end_us() > span_in_us;
+    };
+    const bool any_audio = std::any_of(timeline.clips.begin(), timeline.clips.end(),
+                                       [&](const auto& clip) { return clip.audio && contributes(clip); });
+    const bool any_selection = std::any_of(snapshot.sources.begin(), snapshot.sources.end(),
+                                           [](const auto& source) { return source.monitor_selection.has_value(); });
+    const bool explicit_streams =
+        (any_audio || !any_selection) &&
+        std::all_of(timeline.clips.begin(), timeline.clips.end(), [&](const auto& clip) {
+            return !contributes(clip) || !clip.audio || (clip.stream && clip.stream->kind == TimelineStreamKind::Audio);
+        });
+    if (explicit_streams) {
+        // Clips name their source streams, so the mix lineage follows the edit
+        // itself and no monitoring selection is consulted.
+        std::vector<MediaId> media_ids;
+        std::vector<AudioTrackId> track_ids;
+        std::set<uint64_t> leased;
+        for (const auto& clip : timeline.clips) {
+            if (!contributes(clip))
+                continue;
+            const auto source = std::find_if(snapshot.sources.begin(), snapshot.sources.end(),
+                                             [&clip](const auto& value) { return value.id == clip.asset; });
+            if (source == snapshot.sources.end() ||
+                std::count_if(snapshot.sources.begin(), snapshot.sources.end(),
+                              [&clip](const auto& value) { return value.id == clip.asset; }) != 1)
+                return RenderMetadataError(
+                    EXOSNAP_TRANSLATABLE("EditRender", "Render source asset is missing or ambiguous."));
+            if (leased.insert(clip.asset).second) {
+                auto lease = AcquireMediaReadLease(source->path);
+                if (!lease.succeeded())
+                    return *lease.error();
+                preflight.source_leases.push_back(std::move(*lease.value()));
+            }
+            const auto track = std::find_if(timeline.tracks.begin(), timeline.tracks.end(),
+                                            [&clip](const auto& value) { return value.id == clip.track; });
+            if (!clip.audio || !clip.enabled || (track != timeline.tracks.end() && !track->enabled))
+                continue;
+            const auto& audio = source->metadata.audio_metadata;
+            media_ids.push_back(audio.manifest ? audio.manifest->media_id : audio.selection_media_id);
+            track_ids.push_back(clip.stream->stream_identity);
+        }
+        auto manifest = BuildMixManifest(media_ids, track_ids);
+        if (!manifest.succeeded())
+            return *manifest.error();
+        preflight.manifest = std::move(*manifest.value());
+        return preflight;
+    }
     std::set<uint64_t> referenced;
     std::set<uint64_t> audio_assets;
     for (const auto& clip : snapshot.timeline.clips) {
+        if (!contributes(clip))
+            continue;
         referenced.insert(clip.asset);
         if (clip.audio)
             audio_assets.insert(clip.asset);

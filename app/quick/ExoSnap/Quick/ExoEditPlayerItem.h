@@ -5,6 +5,7 @@
 #include <QQuickItem>
 #include <QSize>
 #include <QString>
+#include <QVariant>
 #include <QtQmlIntegration/qqmlintegration.h>
 
 #include <exosnap/engine/edit_player_engine.h>
@@ -48,6 +49,7 @@ class ExoEditPlayerItem : public QQuickItem {
     Q_PROPERTY(bool hasFrame READ hasFrame NOTIFY hasFrameChanged FINAL)
     Q_PROPERTY(QSize sourceSize READ sourceSize NOTIFY sourceSizeChanged FINAL)
     Q_PROPERTY(QString errorText READ errorText NOTIFY errorTextChanged FINAL)
+    Q_PROPERTY(QVariant presentedTimeUs READ presentedTimeUs NOTIFY presentedTimeChanged FINAL)
 
   public:
     explicit ExoEditPlayerItem(QQuickItem* parent = nullptr);
@@ -61,18 +63,22 @@ class ExoEditPlayerItem : public QQuickItem {
     [[nodiscard]] bool hasFrame() const noexcept;
     [[nodiscard]] QSize sourceSize() const;
     [[nodiscard]] const QString& errorText() const noexcept;
+    [[nodiscard]] QVariant presentedTimeUs() const;
 
     // Called from the decoder's own worker thread. Newest-wins: an undrawn frame
     // is superseded rather than queued.
     void presentFrame(exosnap::engine::RawDecodedVideoFrame frame);
+    void presentFrame(exosnap::engine::RawDecodedVideoFrame frame, int64_t timeline_time_us);
     void presentTimelineFrame(exosnap::engine::TimelineVideoFrame frame);
     // Playback clock in absolute media time (µs), or negative for "no clock".
     // Safe from any thread; read by the present gate above.
     void setClockUs(int64_t media_time_us) noexcept;
     // Drops the mailbox and the shown picture (clip closed / replaced).
     void clearFrame();
+    void supersedePendingFrame();
 
-    void publishRenderStateFromRenderThread(quint64 generation, bool ready, QSize size, QString error);
+    void publishRenderStateFromRenderThread(quint64 generation, bool ready, QSize size, QString error,
+                                            std::optional<int64_t> timeline_time_us = {});
 
   signals:
     void playerAdapterChanged();
@@ -80,6 +86,8 @@ class ExoEditPlayerItem : public QQuickItem {
     void hasFrameChanged();
     void sourceSizeChanged();
     void errorTextChanged();
+    void presentedTimeChanged();
+    void framePresented(qint64 timeline_time_us);
 
   protected:
     QSGNode* updatePaintNode(QSGNode* old_node, UpdatePaintNodeData*) override;
@@ -91,6 +99,7 @@ class ExoEditPlayerItem : public QQuickItem {
     struct PendingFrame {
         std::optional<exosnap::engine::RawDecodedVideoFrame> frame;
         std::optional<exosnap::engine::TimelineVideoFrame> timeline;
+        std::optional<int64_t> timeline_time_us;
         quint64 generation = 0;
         bool clear = false;
     };
@@ -98,8 +107,10 @@ class ExoEditPlayerItem : public QQuickItem {
     [[nodiscard]] PendingFrame takePendingFrame();
 
   private:
-    void applyRenderState(bool ready, const QSize& size, const QString& error);
-    void postRenderState(quint64 generation, bool ready, QSize size, QString error);
+    void applyRenderState(bool ready, const QSize& size, const QString& error, std::optional<int64_t> timeline_time_us);
+    void postRenderState(quint64 generation, bool ready, QSize size, QString error,
+                         std::optional<int64_t> timeline_time_us = {});
+    void scheduleUpdate();
 
     QPointer<EditPlayerAdapter> player_adapter_;
     qreal corner_radius_ = 12.0;
@@ -109,6 +120,7 @@ class ExoEditPlayerItem : public QQuickItem {
     quint64 next_generation_ = 1;
     std::atomic<quint64> active_generation_{0};
     std::atomic<int64_t> clock_us_{-1};
+    std::atomic<bool> update_pending_{false};
 
     QPointer<QQuickWindow> connected_window_;
     QMetaObject::Connection scene_graph_invalidated_connection_;
@@ -117,6 +129,7 @@ class ExoEditPlayerItem : public QQuickItem {
     bool has_frame_ = false;
     QSize source_size_;
     QString error_text_;
+    std::optional<int64_t> presented_time_us_;
 };
 
 } // namespace exosnap::quick

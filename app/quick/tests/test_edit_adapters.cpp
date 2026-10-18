@@ -36,6 +36,7 @@
 #include <winioctl.h>
 
 #include <chrono>
+#include <limits>
 #include <string>
 #include <thread>
 #include <vector>
@@ -442,7 +443,7 @@ TEST(EditWorkspaceAdapter, OverlappingSegmentBatchChangesNoClipsAndAddsNoUndoCom
     split.segments = {{QStringLiteral("D:/Recordings/segment-0.mkv"), 2, true},
                       {QStringLiteral("D:/Recordings/segment-1.mkv"), 3, true}};
 
-    session.setEditContext(split, 9000);
+    session.setEditContext(split, 0);
 
     EXPECT_FALSE(session.workspaceError().isEmpty());
     EXPECT_EQ(session.workspace().clips(), original);
@@ -648,7 +649,7 @@ TEST(EditWorkspaceAdapter, UnknownSegmentDurationIsResolvedBeforeOrderedPosition
     split.segments = {{unknown, 0, true}, {known, 2, true}};
     QEventLoop loop;
     QObject::connect(&session, &EditSessionAdapter::workspaceChanged, &loop, [&]() {
-        if (session.workspace().clips().size() == 6)
+        if (session.workspace().clips().size() == 4)
             loop.quit();
     });
     QTimer::singleShot(5000, &loop, &QEventLoop::quit);
@@ -658,7 +659,8 @@ TEST(EditWorkspaceAdapter, UnknownSegmentDurationIsResolvedBeforeOrderedPosition
 
     ASSERT_TRUE(session.workspaceError().isEmpty()) << session.workspaceError().toStdString();
     ASSERT_EQ(session.workspace().assets().size(), 3U);
-    ASSERT_EQ(session.workspace().clips().size(), 6U);
+    // The fixture has no audio stream, so each probed segment adds one video clip.
+    ASSERT_EQ(session.workspace().clips().size(), 4U);
     const auto& resolved = session.workspace().assets()[1];
     ASSERT_GT(resolved.duration, 0);
     EXPECT_EQ(resolved.path, unknown.toStdWString());
@@ -975,6 +977,43 @@ TEST(EditExportAdapterRun, DestructionJoinsActiveRenderAndRemovesStagingWithoutE
     QCoreApplication::processEvents();
 }
 
+TEST(EditExportAdapterRun, ChangedBytesBeforePreparationRequireReimport) {
+    EnsureApplication();
+    QTemporaryDir directory;
+    ASSERT_TRUE(directory.isValid());
+    const auto fixture_template =
+        QFileInfo(QString::fromUtf8(__FILE__))
+            .dir()
+            .absoluteFilePath(QStringLiteral("../../../libs/engine/tests/fixtures/reordered_h264.mp4"));
+    const auto fixture = QDir(directory.path()).filePath(QStringLiteral("source.mp4"));
+    ASSERT_TRUE(QFile::copy(fixture_template, fixture));
+    EditSessionAdapter session;
+    QEventLoop imported;
+    QObject::connect(&session, &EditSessionAdapter::workspaceChanged, &imported, &QEventLoop::quit);
+    QTimer::singleShot(10000, &imported, &QEventLoop::quit);
+    session.importMedia(QUrl::fromLocalFile(fixture), true);
+    imported.exec();
+    ASSERT_EQ(session.workspace().clips().size(), 1u);
+    ASSERT_NE(session.workspace().assets().front().source_descriptor, nullptr);
+    QFile file(fixture);
+    ASSERT_TRUE(file.open(QIODevice::Append));
+    ASSERT_EQ(file.write("x", 1), 1);
+    file.close();
+    EditExportAdapter exporter;
+    exporter.setSession(&session);
+    exporter.setOutputDirectoryProvider([&] { return directory.path(); });
+    QEventLoop prepared;
+    QObject::connect(&exporter, &EditExportAdapter::stateChanged, &prepared, [&] {
+        if (exporter.state() == EditExportAdapter::Review || exporter.state() == EditExportAdapter::Failed)
+            prepared.quit();
+    });
+    QTimer::singleShot(10000, &prepared, &QEventLoop::quit);
+    exporter.startExport();
+    prepared.exec();
+    EXPECT_EQ(exporter.state(), EditExportAdapter::Failed);
+    EXPECT_TRUE(exporter.errorText().contains(QStringLiteral("Import it again")));
+}
+
 TEST(EditExportAdapterRun, DestructionReclaimsFinishedWorkerWithCompletionStillQueued) {
     EnsureApplication();
     QTemporaryDir directory;
@@ -1013,6 +1052,21 @@ TEST(EditExportAdapterRun, DestructionReclaimsFinishedWorkerWithCompletionStillQ
     EXPECT_FALSE(QFileInfo::exists(first_destination + QStringLiteral(".tmp")));
     session.trimClip(session.workspace().clips().front().id, 0, 2000);
     EXPECT_EQ(exporter->state(), EditExportAdapter::Options);
+    // A trimmed finished result is rendered exactly, never copied from a moved
+    // keyframe. This fixture cannot be rendered, so only the explicit
+    // original-stream intent can copy the cut.
+    exporter->startExport();
+    QEventLoop blocked;
+    QObject::connect(exporter.get(), &EditExportAdapter::stateChanged, &blocked, [&] {
+        if (exporter->state() == EditExportAdapter::Failed)
+            blocked.quit();
+    });
+    QTimer::singleShot(10000, &blocked, &QEventLoop::quit);
+    if (exporter->state() != EditExportAdapter::Failed)
+        blocked.exec();
+    ASSERT_EQ(exporter->state(), EditExportAdapter::Failed);
+    EXPECT_FALSE(exporter->errorText().isEmpty());
+    exporter->setModeKey(QStringLiteral("originalStreams"));
     exporter->startExport();
     QTimer::singleShot(10000, &review, &QEventLoop::quit);
     if (exporter->state() != EditExportAdapter::Review)
@@ -1044,6 +1098,7 @@ TEST(EditExportAdapterRun, DestructionReclaimsFinishedWorkerWithCompletionStillQ
     ASSERT_EQ(exporter->state(), EditExportAdapter::Review) << exporter->errorText().toStdString();
     EXPECT_TRUE(QDir(directory.path()).entryList(QDir::Files).isEmpty());
     QFile source_file(fixture);
+    const auto original_size = source_file.size();
     ASSERT_TRUE(source_file.open(QIODevice::Append));
     ASSERT_EQ(source_file.write("x", 1), 1);
     source_file.close();
@@ -1058,6 +1113,9 @@ TEST(EditExportAdapterRun, DestructionReclaimsFinishedWorkerWithCompletionStillQ
         changed_source.exec();
     ASSERT_EQ(exporter->state(), EditExportAdapter::Failed) << exporter->errorText().toStdString();
     EXPECT_TRUE(QDir(directory.path()).entryList(QDir::Files).isEmpty());
+    ASSERT_TRUE(source_file.open(QIODevice::ReadWrite));
+    ASSERT_TRUE(source_file.resize(original_size));
+    source_file.close();
     session.setAssetMonitorSelection(session.workspace().assets().front().id,
                                      {metadata.selection_media_id, {2}, {}, true, metadata.unverified_asset_binding});
     exporter->retry();
@@ -1725,6 +1783,63 @@ TEST(EditTimelinePreviewState, AnUnavailableStripLeavesTrimAndMarkersWorking) {
     EXPECT_EQ(session.trimEndMs(), 30'000);
     EXPECT_GT(session.durationMs(), 0);
     EXPECT_NE(timeline.markerModel(), nullptr);
+}
+
+TEST(EditSessionPreciseTime, SeekPreservesMicrosecondsAndNotifiesBothContractsOnce) {
+    EnsureApplication();
+    EditSessionAdapter session;
+    session.setEditContext(MakeContext());
+    qint64 precise = -1;
+    qint64 legacy = -1;
+    int precise_count = 0;
+    int legacy_count = 0;
+    QObject::connect(&session, &EditSessionAdapter::seekRequestedUs, &session, [&](qint64 value) {
+        precise = value;
+        ++precise_count;
+    });
+    QObject::connect(&session, &EditSessionAdapter::seekRequested, &session, [&](qint64 value) {
+        legacy = value;
+        ++legacy_count;
+    });
+    session.requestSeekUs(33'367);
+    EXPECT_EQ(session.positionUs(), 33'367);
+    EXPECT_EQ(session.workspace().playhead(), 33'367);
+    EXPECT_EQ(precise, 33'367);
+    EXPECT_EQ(legacy, 33);
+    EXPECT_EQ(precise_count, 1);
+    EXPECT_EQ(legacy_count, 1);
+}
+
+TEST(EditSessionPreciseTime, PlaybackPositionDoesNotIssueASeekAndKeepsSubMillisecondChanges) {
+    EnsureApplication();
+    EditSessionAdapter session;
+    session.setEditContext(MakeContext());
+    int seeks = 0;
+    int positions = 0;
+    QObject::connect(&session, &EditSessionAdapter::seekRequestedUs, &session, [&](qint64) { ++seeks; });
+    QObject::connect(&session, &EditSessionAdapter::positionChanged, &session, [&] { ++positions; });
+    session.setPositionUs(33'366);
+    session.setPositionUs(33'367);
+    EXPECT_EQ(session.positionUs(), 33'367);
+    EXPECT_EQ(session.workspace().playhead(), 33'367);
+    EXPECT_EQ(session.positionMs(), 33);
+    EXPECT_EQ(positions, 2);
+    EXPECT_EQ(seeks, 0);
+}
+
+TEST(EditSessionPreciseTime, LegacySeekStillPublishesThePreciseContract) {
+    EnsureApplication();
+    EditSessionAdapter session;
+    session.setEditContext(MakeContext());
+    qint64 precise = -1;
+    QObject::connect(&session, &EditSessionAdapter::seekRequestedUs, &session, [&](qint64 value) { precise = value; });
+    session.requestSeek(42);
+    EXPECT_EQ(session.positionUs(), 42'000);
+    EXPECT_EQ(precise, 42'000);
+    session.requestSeekUs(-1);
+    EXPECT_EQ(session.positionUs(), 0);
+    session.requestSeekUs((std::numeric_limits<qint64>::max)());
+    EXPECT_EQ(session.positionUs(), session.workspace().duration());
 }
 
 } // namespace

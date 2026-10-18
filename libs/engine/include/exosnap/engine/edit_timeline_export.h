@@ -2,6 +2,7 @@
 
 #include "exosnap/engine/audio_media_manifest.h"
 #include "exosnap/engine/mp4_remuxer.h"
+#include <exosnap/engine/edit_types.h>
 
 #include <array>
 #include <atomic>
@@ -9,6 +10,21 @@
 #include <string>
 
 namespace exosnap::engine {
+
+struct EditSourceStream {
+    uint32_t container_index = 0;
+    TimelineStreamKind kind = TimelineStreamKind::Video;
+    std::optional<AudioTrackId> stream_identity;
+    MediaCodecDescriptor codec;
+    int time_base_num = 0;
+    int time_base_den = 1;
+    std::optional<int64_t> start_us;
+    std::optional<int64_t> duration_us;
+    int width = 0;
+    int height = 0;
+    int fps_num = 0;
+    int fps_den = 1;
+};
 
 struct EditMediaMetadata {
     int64_t duration_us = 0;
@@ -26,6 +42,9 @@ struct EditMediaMetadata {
     uint64_t file_size = 0;
     std::array<uint8_t, 32> content_sha256{};
     bool content_identity_valid = false;
+    // Common container origin. Stream start_us values are relative to it.
+    std::optional<int64_t> timestamp_origin_us;
+    std::vector<EditSourceStream> streams;
     std::string error;
 };
 

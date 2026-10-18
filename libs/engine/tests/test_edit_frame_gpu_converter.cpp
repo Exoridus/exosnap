@@ -711,4 +711,157 @@ TEST(EditTimelineCompositor, LinearCrossfadeEndpointsMidpointAndBoundedResources
     EXPECT_TRUE(failed.Compose({}, error));
 }
 
+// Known-pixel fixture for layered composition: every source is a solid colour,
+// so each expectation is the source-over equation evaluated in linear light on
+// the single-layer reference codes.
+class TimelineLayerComposition : public ::testing::Test {
+  protected:
+    using Layer = exosnap::engine::TimelineVideoLayer;
+    static constexpr size_t kCenter = (8 * 16 + 8) * 4;
+
+    void SetUp() override {
+        warp_ = CreateWarpDevice();
+        red_ = Solid(63, 102, 240);
+        blue_ = Solid(32, 240, 118);
+        green_ = Solid(173, 42, 26);
+        gray_ = Solid(126, 128, 128);
+        std::string error;
+        ASSERT_TRUE(compositor_.Init(warp_.device.get(), warp_.context.get(), {16, 16}, error)) << error;
+    }
+    static Planes8 Solid(uint8_t y, uint8_t u, uint8_t v) {
+        auto planes = MakePlanes8(kChromaW, kChromaH);
+        std::fill(planes.y.begin(), planes.y.end(), y);
+        std::fill(planes.u.begin(), planes.u.end(), u);
+        std::fill(planes.v.begin(), planes.v.end(), v);
+        return planes;
+    }
+    static Layer Make(const Planes8& planes, double weight, double opacity, uint32_t layer) {
+        return {Frame420P8(planes, MatrixCoefficients::Bt709, ColorRange::Limited), weight, opacity, layer};
+    }
+    std::vector<uint8_t> Compose(std::vector<Layer> layers) {
+        std::string error;
+        EXPECT_TRUE(compositor_.Compose(layers, error)) << error;
+        return ReadBgra(warp_.device.get(), warp_.context.get(), compositor_.Result());
+    }
+    // Linear light of each BGR channel at the centre pixel.
+    std::array<float, 3> Linear(const std::vector<uint8_t>& pixels, size_t at = kCenter) {
+        return {exosnap::engine::Bt709ToLinear(pixels[at] / 255.0f),
+                exosnap::engine::Bt709ToLinear(pixels[at + 1] / 255.0f),
+                exosnap::engine::Bt709ToLinear(pixels[at + 2] / 255.0f)};
+    }
+    std::array<float, 3> Reference(const Planes8& planes) {
+        return Linear(Compose({Make(planes, 1, 1, 0)}));
+    }
+    static void ExpectLinear(const std::vector<uint8_t>& pixels, const std::array<float, 3>& linear,
+                             size_t at = kCenter) {
+        for (size_t channel = 0; channel < 3; ++channel)
+            EXPECT_NEAR(pixels[at + channel], exosnap::engine::LinearToBt709(linear[channel]) * 255, 2)
+                << "channel " << channel;
+    }
+    static std::array<float, 3> Over(const std::array<float, 3>& top, float alpha, const std::array<float, 3>& below) {
+        return {top[0] * alpha + below[0] * (1 - alpha), top[1] * alpha + below[1] * (1 - alpha),
+                top[2] * alpha + below[2] * (1 - alpha)};
+    }
+
+    D3DTestDevice warp_;
+    Planes8 red_, blue_, green_, gray_;
+    exosnap::engine::EditTimelineCompositor compositor_;
+};
+
+TEST_F(TimelineLayerComposition, OpaqueSingleSourceMatchesTheConverter) {
+    const auto composed = Compose({Make(red_, 1, 1, 0)});
+    const auto direct = ConvertOnGpu(warp_, Frame420P8(red_, MatrixCoefficients::Bt709, ColorRange::Limited));
+    for (size_t channel = 0; channel < 3; ++channel)
+        EXPECT_NEAR(composed[kCenter + channel], direct[kCenter + channel], 2);
+}
+
+TEST_F(TimelineLayerComposition, OpacityAndFadesComposeOverBlackAndOverALowerTrack) {
+    const auto red = Reference(red_);
+    const auto blue = Reference(blue_);
+    const std::array<float, 3> black{};
+    ExpectLinear(Compose({Make(red_, 1, 0.5, 0)}), Over(red, 0.5f, black));
+    ExpectLinear(Compose({Make(blue_, 1, 1, 0), Make(red_, 1, 0.5, 1)}), Over(red, 0.5f, blue));
+    // A fade-out is an opacity ramp: with no lower track it reaches black, over a
+    // lower track it reveals that track instead of adding to it.
+    ExpectLinear(Compose({Make(red_, 1, 0.25, 0)}), Over(red, 0.25f, black));
+    ExpectLinear(Compose({Make(blue_, 1, 1, 0), Make(red_, 1, 0.25, 1)}), Over(red, 0.25f, blue));
+    ExpectLinear(Compose({Make(blue_, 1, 1, 0), Make(red_, 1, 0, 1)}), blue);
+}
+
+TEST_F(TimelineLayerComposition, CrossfadeOfIdenticalImagesNeverDarkens) {
+    const auto gray = Reference(gray_);
+    const auto red = Reference(red_);
+    for (const double progress : {0.1, 0.25, 0.5, 0.75, 0.9}) {
+        ExpectLinear(Compose({Make(gray_, 1 - progress, 1, 0), Make(gray_, progress, 1, 0)}), gray);
+        ExpectLinear(Compose({Make(red_, 1 - progress, 1, 0), Make(red_, progress, 1, 0)}), red);
+    }
+}
+
+TEST_F(TimelineLayerComposition, CrossfadeUnderAnIndependentlyVisibleTrack) {
+    const auto red = Reference(red_);
+    const auto blue = Reference(blue_);
+    const auto green = Reference(green_);
+    const std::array<float, 3> crossfade{(red[0] + blue[0]) / 2, (red[1] + blue[1]) / 2, (red[2] + blue[2]) / 2};
+    ExpectLinear(Compose({Make(red_, 0.5, 1, 0), Make(blue_, 0.5, 1, 0), Make(green_, 1, 0.5, 1)}),
+                 Over(green, 0.5f, crossfade));
+}
+
+TEST_F(TimelineLayerComposition, ThreeTracksCompositeBackToFrontAndFollowReorder) {
+    const auto red = Reference(red_);
+    const auto blue = Reference(blue_);
+    const auto gray = Reference(gray_);
+    ExpectLinear(Compose({Make(gray_, 1, 0.5, 2), Make(red_, 1, 1, 0), Make(blue_, 1, 0.5, 1)}),
+                 Over(gray, 0.5f, Over(blue, 0.5f, red)));
+    // The same sources with blue moved to the front.
+    ExpectLinear(Compose({Make(gray_, 1, 0.5, 1), Make(red_, 1, 1, 0), Make(blue_, 1, 0.5, 2)}),
+                 Over(blue, 0.5f, Over(gray, 0.5f, red)));
+    // An opaque front track hides everything behind it.
+    ExpectLinear(Compose({Make(red_, 1, 1, 0), Make(gray_, 1, 1, 1), Make(blue_, 1, 1, 2)}), blue);
+}
+
+TEST_F(TimelineLayerComposition, LetterboxBandsOfAnUpperTrackRevealTheLowerTrack) {
+    const auto red = Reference(red_);
+    auto narrow = Make(blue_, 1, 1, 1);
+    narrow.frame.width = kWidth / 2;
+    const auto pixels = Compose({Make(red_, 1, 1, 0), narrow});
+    ExpectLinear(pixels, red, 0);
+    ExpectLinear(pixels, Reference(blue_));
+}
+
+TEST_F(TimelineLayerComposition, EmptyCompositionIsBlackAndInvalidLayeringIsRefused) {
+    const auto black = Compose({});
+    EXPECT_EQ(black[kCenter], 0);
+    EXPECT_EQ(black[kCenter + 1], 0);
+    EXPECT_EQ(black[kCenter + 2], 0);
+    EXPECT_EQ(black[kCenter + 3], 255);
+    std::string error;
+    const std::vector<Layer> three_in_one{Make(red_, 0.5, 1, 0), Make(blue_, 0.25, 1, 0), Make(gray_, 0.25, 1, 0)};
+    EXPECT_FALSE(compositor_.Compose(three_in_one, error));
+    const std::vector<Layer> not_complementary{Make(red_, 0.5, 1, 0), Make(blue_, 0.25, 1, 0)};
+    EXPECT_FALSE(compositor_.Compose(not_complementary, error));
+    const std::vector<Layer> bad_opacity{Make(red_, 1, 1.5, 0)};
+    EXPECT_FALSE(compositor_.Compose(bad_opacity, error));
+    std::vector<Layer> too_many;
+    for (uint32_t layer = 0; layer <= exosnap::engine::kMaxTimelineVideoSources; ++layer)
+        too_many.push_back(Make(red_, 1, 1, layer));
+    EXPECT_FALSE(compositor_.Compose(too_many, error));
+}
+
+TEST_F(TimelineLayerComposition, EightAdmittedLayersReuseBoundedSurfaces) {
+    std::vector<Layer> layers;
+    for (uint32_t layer = 0; layer < exosnap::engine::kMaxTimelineVideoSources; ++layer)
+        layers.push_back(Make(layer % 2 ? red_ : blue_, 1, 0.5, layer));
+    Compose(layers);
+    const auto creations = compositor_.TextureCreations();
+    const auto surfaces = exosnap::engine::ReadGpuSurfaceUsage(exosnap::engine::GpuSurfaceOwner::Editor);
+    for (int i = 0; i < 30; ++i)
+        Compose(layers);
+    EXPECT_EQ(compositor_.TextureCreations(), creations);
+    EXPECT_EQ(exosnap::engine::ReadGpuSurfaceUsage(exosnap::engine::GpuSurfaceOwner::Editor).surfaces,
+              surfaces.surfaces);
+    // Fewer layers on a later frame reuse the same surfaces instead of creating more.
+    Compose({Make(red_, 1, 1, 0)});
+    EXPECT_EQ(compositor_.TextureCreations(), creations);
+}
+
 } // namespace

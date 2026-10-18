@@ -61,31 +61,42 @@ void EditSessionAdapter::setEditContext(const EditContext& context, qint64 timel
     if (pending.segments.empty())
         pending.segments.push_back({context.mkv_master_path.isEmpty() ? context.output_path : context.mkv_master_path,
                                     context.duration_seconds, true});
-    const auto needs_probe = [](const auto& segment) {
-        return segment.succeeded && segment.duration_seconds <= 0 && QFileInfo::exists(segment.path);
-    };
+    // Existing media is probed once off the UI thread: the per-stream import
+    // needs the exact stream inventory and content identity of each segment.
+    const auto needs_probe = [](const auto& segment) { return segment.succeeded && QFileInfo::exists(segment.path); };
     if (std::any_of(pending.segments.begin(), pending.segments.end(), needs_probe)) {
         QPointer<EditSessionAdapter> self(this);
         keyframe_pool_.start([self, pending = std::move(pending), timeline_start_ms, needs_probe]() mutable {
-            for (auto& segment : pending.segments) {
+            std::vector<edit::SourceImport> imports(pending.segments.size());
+            for (size_t index = 0; index < pending.segments.size(); ++index) {
+                auto& segment = pending.segments[index];
                 if (!needs_probe(segment))
                     continue;
                 const auto metadata = engine::ProbeEditMedia(std::filesystem::path(segment.path.toStdWString()));
-                segment.duration_seconds = static_cast<double>(metadata.duration_us) / 1000000.0;
-                segment.succeeded = metadata.error.empty() && metadata.duration_us > 0;
+                if (segment.duration_seconds <= 0) {
+                    segment.duration_seconds = static_cast<double>(metadata.duration_us) / 1000000.0;
+                    segment.succeeded = metadata.error.empty() && metadata.duration_us > 0;
+                }
+                imports[index] = edit::DescribeSourceImport(
+                    metadata, static_cast<edit::Time>(std::llround(segment.duration_seconds * 1000000.0)));
             }
             if (self)
                 QMetaObject::invokeMethod(
                     self,
-                    [self, pending = std::move(pending), timeline_start_ms]() {
+                    [self, pending = std::move(pending), timeline_start_ms, imports = std::move(imports)]() mutable {
                         if (self)
-                            self->setEditContext(pending, timeline_start_ms);
+                            self->applyEditContext(pending, timeline_start_ms, std::move(imports));
                     },
                     Qt::QueuedConnection);
         });
         emit editPageRequested();
         return;
     }
+    applyEditContext(pending, timeline_start_ms, {});
+}
+
+void EditSessionAdapter::applyEditContext(const EditContext& context, qint64 timeline_start_ms,
+                                          std::vector<edit::SourceImport> imports) {
     context_ = context;
     const qint64 append_start = timeline_start_ms < 0 ? workspace_.duration() : timeline_start_ms * 1000;
     std::vector<edit::Id> assets;
@@ -94,8 +105,14 @@ void EditSessionAdapter::setEditContext(const EditContext& context, qint64 timel
         segments.push_back({context.mkv_master_path.isEmpty() ? context.output_path : context.mkv_master_path,
                             context.duration_seconds, true});
     uint64_t segment_start_ms = 0;
-    for (const auto& segment : segments) {
+    for (size_t index = 0; index < segments.size(); ++index) {
+        const auto& segment = segments[index];
         edit::Asset asset;
+        if (index < imports.size()) {
+            asset.source_descriptor = std::move(imports[index].descriptor);
+            asset.input_mix_selection = std::move(imports[index].input_mix);
+            asset.mix_decision_required = imports[index].mix_decision_required;
+        }
         asset.path = segment.path.toStdWString();
         asset.name = QFileInfo(segment.path).fileName().toStdString();
         asset.duration = static_cast<int64_t>(std::llround(segment.duration_seconds * 1000000.0));
@@ -311,26 +328,36 @@ void EditSessionAdapter::requestTrim(qint64 start_ms, qint64 end_ms) {
         shown_us = start_us;
     else if (end_moved)
         shown_us = end_us;
-    if (shown_us != exosnap::engine::TrimRange::kNoTimestamp)
+    if (shown_us != exosnap::engine::TrimRange::kNoTimestamp) {
+        emit seekRequestedUs(shown_us);
         emit seekRequested(shown_us / 1000);
+    }
 }
 
 void EditSessionAdapter::requestSeek(qint64 position_ms) {
     const qint64 clamped = ClampPlayheadMs(position_ms, duration_ms_);
-    workspace_.seek(clamped * 1000);
-    if (clamped != position_ms_) {
-        position_ms_ = clamped;
-        emit positionChanged();
-    }
-    emit seekRequested(clamped);
+    requestSeekUs(clamped * 1000);
+}
+
+void EditSessionAdapter::requestSeekUs(qint64 position_us) {
+    setPositionUs(position_us);
+    const auto clamped = workspace_.playhead();
+    emit seekRequestedUs(clamped);
+    emit seekRequested(clamped / 1000);
 }
 
 void EditSessionAdapter::setPositionMs(qint64 position_ms) {
     const qint64 clamped = ClampPlayheadMs(position_ms, duration_ms_);
-    workspace_.seek(clamped * 1000);
-    if (clamped == position_ms_)
+    setPositionUs(clamped * 1000);
+}
+
+void EditSessionAdapter::setPositionUs(qint64 position_us) {
+    const auto previous = workspace_.playhead();
+    workspace_.seek(position_us);
+    const auto clamped = workspace_.playhead();
+    if (clamped == previous)
         return;
-    position_ms_ = clamped;
+    position_ms_ = clamped / 1000;
     emit positionChanged();
 }
 
@@ -413,8 +440,40 @@ void EditSessionAdapter::setTrimUs(int64_t start_us, int64_t end_us) {
 }
 
 void EditSessionAdapter::setAssetMonitorSelection(edit::Id asset, engine::MonitorSelectionSnapshot selection) {
-    if (workspace_.setMonitorSelection(asset, std::move(selection)))
-        emit workspaceChanged();
+    // A source whose starting mix is still undecided takes the first confirmed
+    // monitoring choice as that decision. Unverified track identities are new on
+    // every open, so they are matched by their audio-stream order instead.
+    std::vector<engine::AudioTrackId> chosen;
+    size_t requested = 0;
+    const auto* source = workspace_.asset(asset);
+    const bool decide = source && source->mix_decision_required && source->source_descriptor;
+    if (decide) {
+        std::vector<engine::AudioTrackId> streams;
+        for (const auto& stream : source->source_descriptor->streams)
+            if (stream.ref.kind == engine::TimelineStreamKind::Audio)
+                streams.push_back(stream.ref.stream_identity);
+        for (const auto& track : selection.tracks) {
+            if (track.muted || track.gain_linear <= 0)
+                continue;
+            ++requested;
+            if (selection.unverified_asset_binding) {
+                const auto& actual = selection.unverified_asset_binding->actual_tracks;
+                const auto match = std::find_if(actual.begin(), actual.end(),
+                                                [&](const auto& value) { return value.track_id == track.track_id; });
+                if (match != actual.end() && match->stream_index.value < streams.size())
+                    chosen.push_back(streams[match->stream_index.value]);
+            } else if (std::find(streams.begin(), streams.end(), track.track_id) != streams.end()) {
+                chosen.push_back(track.track_id);
+            }
+        }
+    }
+    if (!workspace_.setMonitorSelection(asset, std::move(selection)))
+        return;
+    // A selection that names a stream this source does not have leaves the
+    // decision open instead of resolving it to fewer streams than were chosen.
+    if (decide && chosen.size() == requested)
+        workspace_.resolveInputMix(asset, chosen);
+    emit workspaceChanged();
 }
 
 void EditSessionAdapter::applyReport(const EditContext& context) {

@@ -947,9 +947,49 @@ void StepI_SeekAlignment(exosnap::engine::EditPlayerEngine& engine, int64_t star
     }
 }
 
+int ForwardCursorProbe(exosnap::engine::EditPlayerEngine& engine, int64_t start_us, int count) {
+    const double fps = engine.VideoFrameRate();
+    if (fps <= 0 || count <= 0 || count > 100'000) {
+        fprintf(stderr, "[forward] A known source frame rate and 1..100000 requests are required.\n");
+        return 1;
+    }
+    std::vector<double> latencies_ms;
+    latencies_ms.reserve(static_cast<size_t>(count));
+    int64_t last_pts = -1;
+    const auto started = std::chrono::steady_clock::now();
+    for (int index = 0; index < count; ++index) {
+        const auto target = start_us + static_cast<int64_t>(std::floor(index * 1'000'000.0 / fps));
+        const auto begin = std::chrono::steady_clock::now();
+        const auto frame = engine.ReadFrameAtRaw(target, exosnap::engine::VideoReadMode::Sequential);
+        latencies_ms.push_back(std::chrono::duration<double, std::milli>(std::chrono::steady_clock::now() - begin).count());
+        if (!frame || frame->pts_us > target || frame->pts_us < last_pts) {
+            fprintf(stderr, "[forward] Request %d failed or exceeded the fixture duration.\n", index);
+            return 1;
+        }
+        last_pts = frame->pts_us;
+    }
+    const auto elapsed_ms = std::chrono::duration<double, std::milli>(std::chrono::steady_clock::now() - started).count();
+    const auto first_ms = latencies_ms.front();
+    std::sort(latencies_ms.begin(), latencies_ms.end());
+    const auto percentile = [&](double fraction) {
+        const auto index = static_cast<size_t>(std::ceil(fraction * latencies_ms.size())) - 1;
+        return latencies_ms[index];
+    };
+    const auto counters = engine.VideoReadStats();
+    printf("[forward] requests=%d source_fps=%.6f elapsed_ms=%.3f first_read_ms=%.3f requests_per_second=%.3f\n",
+           count, fps, elapsed_ms, first_ms, count * 1000.0 / elapsed_ms);
+    printf("[forward] request_to_decoded_ms p50=%.3f p95=%.3f p99=%.3f\n",
+           percentile(0.50), percentile(0.95), percentile(0.99));
+    printf("[forward] seeks=%llu flushes=%llu decoded=%llu selected=%llu held=%llu\n",
+           static_cast<unsigned long long>(counters.seeks), static_cast<unsigned long long>(counters.flushes),
+           static_cast<unsigned long long>(counters.decoded), static_cast<unsigned long long>(counters.selected),
+           static_cast<unsigned long long>(counters.held));
+    printf("[forward] Headless source reads exclude presentation, audio, thumbnails and display synchronization.\n");
+    return 0;
+}
 int main(int argc, char** argv) {
     if (argc < 2) {
-        printf("usage: probe_edit_playback.exe <path-to-mkv> [start_us]\n");
+        printf("usage: probe_edit_playback.exe <path-to-mkv> [start_us] [--forward-cursor [count]]\n");
         printf("  start_us: playback start position for the timed steps, default 600000000 (600s).\n");
         printf("            Pass a position inside the clip when probing a short recording.\n");
         return 1;
@@ -973,6 +1013,9 @@ int main(int argc, char** argv) {
     if (!StepA_Open(engine, path)) {
         return 1;
     }
+
+    if (argc >= 4 && std::string(argv[3]) == "--forward-cursor")
+        return ForwardCursorProbe(engine, startUs, argc >= 5 ? std::atoi(argv[4]) : 90);
 
     StepB_PlaybackThroughput(engine, startUs, argc >= 4 && std::string(argv[3]) == "--decode-upload");
     if (argc >= 4 && (std::string(argv[3]) == "--decode-only" || std::string(argv[3]) == "--decode-upload")) {
