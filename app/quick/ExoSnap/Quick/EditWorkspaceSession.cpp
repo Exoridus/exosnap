@@ -121,6 +121,17 @@ QVariantList EditSessionAdapter::visibleClipsUs(qint64 from_us, qint64 to_us) co
         if (clip.stream && clip.stream->kind == engine::TimelineStreamKind::Audio && asset->source_descriptor &&
             !asset->source_descriptor->audio_identities_verified)
             cache_stream_identity = {};
+        uint32_t source_channels = 0;
+        if (clip.stream && clip.stream->kind == engine::TimelineStreamKind::Audio && asset->source_descriptor) {
+            const auto& streams = asset->source_descriptor->streams;
+            const auto source_stream = std::find_if(streams.begin(), streams.end(), [&](const auto& stream) {
+                return stream.ref.kind == clip.stream->kind &&
+                       stream.ref.container_index == clip.stream->container_index &&
+                       stream.ref.stream_identity == clip.stream->stream_identity;
+            });
+            if (source_stream != streams.end())
+                source_channels = source_stream->codec.channels;
+        }
         rows.push_back(QVariantMap{
             {QStringLiteral("id"), QVariant::fromValue<qulonglong>(clip.id)},
             {QStringLiteral("name"), QString::fromStdString(asset->name)},
@@ -148,6 +159,7 @@ QVariantList EditSessionAdapter::visibleClipsUs(qint64 from_us, qint64 to_us) co
             {QStringLiteral("sourceInUs"), QVariant::fromValue<qint64>(clip.source_in)},
             {QStringLiteral("sourceOutUs"), QVariant::fromValue<qint64>(clip.source_out)},
             {QStringLiteral("sourceEndUs"), QVariant::fromValue<qint64>(asset->duration)},
+            {QStringLiteral("sourceChannels"), source_channels},
             {QStringLiteral("width"), asset->width},
             {QStringLiteral("height"), asset->height},
             {QStringLiteral("fpsNum"), asset->fps_num},

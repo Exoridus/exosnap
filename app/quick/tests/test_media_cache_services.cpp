@@ -1182,6 +1182,36 @@ TEST(ExoWaveformItem, PcmWindowsJoinContiguousSamplesAndRetainGeometryAcrossPan)
     EXPECT_EQ(FirstPcmGeometry(node), geometry);
 }
 
+TEST(ExoWaveformItem, SinglePcmLaneRetainsOppositePolaritiesWithoutAveraging) {
+    WaveformFixture fixture;
+    fixture.control->sample_amplitude = [](std::int64_t) { return 0.5f; };
+    auto service = fixture.Service();
+    const auto key = service->request(SourceKey(122), fixture.source_path, kThreeSecondsUs);
+    ASSERT_TRUE(WaitFor([&] { return service->state(key) == WaveformCacheService::State::Ready; }));
+    TestableWaveformItem item;
+    item.setSize(QSizeF(256, 80));
+    item.setChannelCount(1);
+    item.setService(service.get());
+    item.setCacheKey(key);
+    item.setSourceOutUs(2666);
+    std::unique_ptr<QSGNode> owner;
+    ASSERT_TRUE(WaitFor([&] {
+        item.updatePolish();
+        owner.reset(item.updatePaintNode(owner.release(), nullptr));
+        return FirstPcmGeometry(owner.get());
+    }));
+    const auto* transform = owner->firstChild();
+    ASSERT_NE(transform, nullptr);
+    int channels = 0;
+    for (auto* node = transform->firstChild(); node; node = node->nextSibling()) {
+        const auto* geometry = dynamic_cast<const QSGGeometryNode*>(node);
+        ASSERT_NE(geometry, nullptr);
+        ASSERT_GT(geometry->geometry()->vertexCount(), 0);
+        EXPECT_NEAR(geometry->geometry()->vertexDataAsPoint2D()[0].y, channels == 0 ? 20.25f : 59.75f, 1e-4f);
+        ++channels;
+    }
+    EXPECT_EQ(channels, 2);
+}
 TEST(ExoWaveformItem, CacheClearReacquiresDetailForTheSameSourceWindow) {
     WaveformFixture fixture;
     std::atomic<float> amplitude{0.25f};

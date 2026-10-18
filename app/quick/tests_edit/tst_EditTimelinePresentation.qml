@@ -31,6 +31,16 @@ TestCase {
             testSession.trackLayout.setTrackHeight(track.id, 64);
         testSession.requestSeek(0);
     }
+    function test_mono_and_stereo_use_the_source_channel_layout() {
+        const strip = createTemporaryObject(timelineComponent, tests, {session: testChannelSession});
+        const rows = testChannelSession.visibleClipsUs(0, 2000000);
+        compare(rows.length, 2);
+        for (const row of rows) {
+            const waveform = findChild(strip, "editClipWaveform" + row.id);
+            verify(!!waveform);
+            compare(waveform.channelCount, row.containerIndex === 4 ? 1 : 2);
+        }
+    }
     function test_intervals_data() {
         return [
             {tag: "overview", scale: 0.01, interval: 10000},

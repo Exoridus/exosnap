@@ -1240,6 +1240,21 @@ class Setup final : public QObject {
         transport_player_ = new EditPlayerAdapter(this);
         transport_player_->setClipStateForTest(/*clip_open=*/true, /*duration_ms=*/100'000);
 
+        auto* channel_session = new EditSessionAdapter(this);
+        exosnap::engine::EditMediaMetadata channel_metadata;
+        channel_metadata.content_identity_valid = true;
+        channel_metadata.content_sha256.fill(37);
+        channel_metadata.duration_us = 2'000'000;
+        channel_metadata.has_audio = true;
+        for (const auto channels : {1u, 2u}) {
+            exosnap::engine::EditSourceStream stream;
+            stream.kind = exosnap::engine::TimelineStreamKind::Audio;
+            stream.container_index = channels == 1 ? 4 : 9;
+            stream.codec.channels = channels;
+            channel_metadata.streams.push_back(stream);
+        }
+        channel_session->addProbedMediaForHarness(QStringLiteral("source.mkv"), channel_metadata, true);
+        engine->rootContext()->setContextProperty(QStringLiteral("testChannelSession"), channel_session);
         engine->rootContext()->setContextProperty(QStringLiteral("testSession"), session_);
         engine->rootContext()->setContextProperty(QStringLiteral("testTimeline"), timeline_);
         engine->rootContext()->setContextProperty(QStringLiteral("testPlayer"), player_);

@@ -1141,6 +1141,37 @@ TEST(EditExportAdapterOptions, MatchSourceIsTheDefaultAndRenderProfilesCannotBeS
     }
 }
 
+TEST(EditWorkspaceAdapter, SourceChannelCountComesFromTheBoundAudioStream) {
+    EnsureApplication();
+    EditSessionAdapter session;
+    engine::EditMediaMetadata metadata;
+    metadata.content_identity_valid = true;
+    metadata.content_sha256.fill(37);
+    metadata.duration_us = 2'000'000;
+    metadata.has_audio = true;
+    for (const auto channels : {1u, 2u}) {
+        engine::EditSourceStream stream;
+        stream.kind = engine::TimelineStreamKind::Audio;
+        stream.container_index = channels == 1 ? 4 : 9;
+        stream.codec.channels = channels;
+        metadata.streams.push_back(stream);
+    }
+    session.addProbedMediaForHarness(QStringLiteral("source.mkv"), metadata, true);
+    const auto rows = session.visibleClipsUs(0, metadata.duration_us);
+    ASSERT_EQ(rows.size(), 2);
+    for (const auto& value : rows) {
+        const auto row = value.toMap();
+        EXPECT_FALSE(row.value(QStringLiteral("video")).toBool());
+        EXPECT_EQ(row.value(QStringLiteral("sourceChannels")).toUInt(),
+                  row.value(QStringLiteral("containerIndex")).toInt() == 4 ? 1u : 2u);
+    }
+    EditSessionAdapter legacy;
+    legacy.setEditContext(MakeContext());
+    for (const auto& value : legacy.visibleClipsUs(0, legacy.durationUs())) {
+        EXPECT_TRUE(value.toMap().contains(QStringLiteral("sourceChannels")));
+        EXPECT_EQ(value.toMap().value(QStringLiteral("sourceChannels")).toUInt(), 0u);
+    }
+}
 TEST(EditWorkspaceAdapter, SyntheticImportDescriptorRetainsVerifiedAudioIdentityAuthority) {
     engine::EditMediaMetadata metadata;
     metadata.content_identity_valid = true;

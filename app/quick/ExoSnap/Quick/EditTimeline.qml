@@ -635,7 +635,7 @@ FocusScope {
                     cacheKey: clipItem.waveformKey
                     sourceInUs: clipItem.visibleSourceIn
                     sourceOutUs: clipItem.visibleSourceOut
-                    channelCount: 2
+                    channelCount: clipItem.modelData.sourceChannels === 1 ? 1 : 2
                     color: ExoTheme.textMuted
                     Accessible.ignored: true
                 }
