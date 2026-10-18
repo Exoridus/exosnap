@@ -8,6 +8,7 @@
 #include <QtQmlIntegration/qqmlintegration.h>
 
 #include <atomic>
+#include <memory>
 
 namespace exosnap {
 class WaveformCacheService;
@@ -17,7 +18,8 @@ namespace exosnap::quick {
 
 // Scene-graph waveform of one audio clip's source window.
 //
-// Draws the cached peaks of the stream named by `cacheKey` between
+// Draws cached peaks and asynchronous normalized PCM detail of the stream
+// named by `cacheKey` between
 // `sourceInUs` and `sourceOutUs` (media-local source time) across the item's
 // width. The level of detail is chosen so every pixel column covers at least
 // one bucket. Geometry is built per fixed bucket block in absolute source
@@ -69,8 +71,8 @@ class ExoWaveformItem : public QQuickItem {
     }
     void setColor(const QColor& color);
 
-    // Level the item draws for its current geometry, or -1 when it draws
-    // nothing. Exposed for tests.
+    // Peak pyramid level used for the current geometry, or -1 for PCM detail
+    // or an empty drawing. Exposed for tests.
     [[nodiscard]] int levelForTest() const noexcept {
         return last_level_.load(std::memory_order_relaxed);
     }
@@ -85,9 +87,15 @@ class ExoWaveformItem : public QQuickItem {
   protected:
     QSGNode* updatePaintNode(QSGNode* old_node, UpdatePaintNodeData* data) override;
     void geometryChange(const QRectF& new_geometry, const QRectF& old_geometry) override;
+    void updatePolish() override;
 
   private:
     void onServiceKey(const QString& key);
+    void retirePcm();
+    void schedulePcmPolish();
+    struct PcmDetail;
+    std::unique_ptr<PcmDetail> pcm_;
+    std::atomic<bool> polish_queued_{false};
 
     QPointer<WaveformCacheService> service_;
     QString cache_key_;

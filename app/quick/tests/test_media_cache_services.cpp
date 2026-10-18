@@ -25,6 +25,9 @@
 #include <gtest/gtest.h>
 
 #include <windows.h>
+#if defined(_MSC_VER)
+#include <crtdbg.h>
+#endif
 
 #include <algorithm>
 #include <array>
@@ -32,6 +35,7 @@
 #include <chrono>
 #include <cmath>
 #include <condition_variable>
+#include <cstdlib>
 #include <filesystem>
 #include <fstream>
 #include <functional>
@@ -51,6 +55,17 @@ namespace {
 using engine::WaveformPeak;
 
 QGuiApplication* EnsureApplication() {
+    SetErrorMode(SEM_FAILCRITICALERRORS | SEM_NOGPFAULTERRORBOX | SEM_NOOPENFILEERRORBOX);
+#if defined(_MSC_VER)
+    _set_abort_behavior(0, _WRITE_ABORT_MSG | _CALL_REPORTFAULT);
+#if defined(_DEBUG)
+    // Route fatal test reports to stderr so offscreen failures cannot open CRT dialogs.
+    _CrtSetReportMode(_CRT_ERROR, _CRTDBG_MODE_FILE);
+    _CrtSetReportFile(_CRT_ERROR, _CRTDBG_FILE_STDERR);
+    _CrtSetReportMode(_CRT_ASSERT, _CRTDBG_MODE_FILE);
+    _CrtSetReportFile(_CRT_ASSERT, _CRTDBG_FILE_STDERR);
+#endif
+#endif
     if (auto* existing = qobject_cast<QGuiApplication*>(QCoreApplication::instance()))
         return existing;
     if (qEnvironmentVariableIsEmpty("QT_QPA_PLATFORM"))
@@ -104,6 +119,8 @@ struct DecoderControl {
     bool gated = false;
     int permits = 0;
     std::function<void(std::uint32_t)> before_decode;
+    std::function<float(std::int64_t)> sample_amplitude;
+    std::function<std::vector<engine::AudioSampleSpan>(std::int64_t, std::uint32_t)> sample_coverage;
     std::atomic<bool> fail_decode{false};
     std::atomic<bool> nonfinite{false};
     std::atomic<bool> omit_coverage{false};
@@ -151,11 +168,14 @@ class SyntheticDecoder final : public engine::WaveformAudioDecoder {
         }
         out.resize(static_cast<std::size_t>(frames) * 2);
         for (std::uint32_t i = 0; i < frames; ++i) {
-            const float amplitude = StepAmplitude(first + i);
+            const float amplitude =
+                control_->sample_amplitude ? control_->sample_amplitude(first + i) : StepAmplitude(first + i);
             out[i * 2] = amplitude;
             out[i * 2 + 1] = -amplitude;
         }
         coverage_ = {{first, first + frames}};
+        if (control_->sample_coverage)
+            coverage_ = control_->sample_coverage(first, frames);
         if (control_->omit_coverage)
             coverage_.clear();
         if (control_->nonfinite && !out.empty())
@@ -640,7 +660,7 @@ TEST(WaveformCacheService, PinnedPcmReservationsHonorTheCombinedDataBudget) {
     ASSERT_GT(second, 0u);
     ASSERT_TRUE(
         WaitFor([&]() { return service->pcmWindow(second).state != WaveformCacheService::DetailState::Pending; }));
-    EXPECT_EQ(service->pcmWindow(second).state, WaveformCacheService::DetailState::Unavailable);
+    EXPECT_EQ(service->pcmWindow(second).state, WaveformCacheService::DetailState::MemoryPressure);
     EXPECT_LE(service->memoryBytesForTest(), budget);
     EXPECT_LE(service->pcmMemoryBytesForTest(), WaveformCacheService::kMaxPcmBytes);
     service->cancelPcmWindow(first);
@@ -675,7 +695,7 @@ TEST(WaveformCacheService, ConsumerPinnedPcmCannotExceedItsGlobalSublimit) {
     ASSERT_GT(pressure, 0u);
     ASSERT_TRUE(
         WaitFor([&]() { return service->pcmWindow(pressure).state != WaveformCacheService::DetailState::Pending; }));
-    EXPECT_EQ(service->pcmWindow(pressure).state, WaveformCacheService::DetailState::Unavailable);
+    EXPECT_EQ(service->pcmWindow(pressure).state, WaveformCacheService::DetailState::MemoryPressure);
     EXPECT_LE(service->pcmMemoryBytesForTest(), WaveformCacheService::kMaxPcmBytes);
     EXPECT_LE(service->memoryBytesForTest(), WaveformCacheService::kDefaultMemoryBudgetBytes);
     EXPECT_EQ(service->requestPcmWindow(key, 0, UINT32_MAX, 3), 0u);
@@ -726,7 +746,7 @@ TEST(WaveformCacheService, ActivePcmTicketsPreserveTheirReadyResultUnderPressure
     ASSERT_TRUE(
         WaitFor([&]() { return service->pcmWindow(second).state != WaveformCacheService::DetailState::Pending; }));
     EXPECT_EQ(service->pcmWindow(first).state, WaveformCacheService::DetailState::Ready);
-    EXPECT_EQ(service->pcmWindow(second).state, WaveformCacheService::DetailState::Unavailable);
+    EXPECT_EQ(service->pcmWindow(second).state, WaveformCacheService::DetailState::MemoryPressure);
 }
 
 TEST(WaveformCacheService, LastPcmInterestCancellationInterruptsCancellableSourceOpening) {
@@ -795,7 +815,7 @@ TEST(WaveformCacheService, PcmWithoutActualCoverageIsUnavailableAndDecodeErrorsA
     ASSERT_GT(unknown, 0u);
     ASSERT_TRUE(
         WaitFor([&]() { return service->pcmWindow(unknown).state != WaveformCacheService::DetailState::Pending; }));
-    EXPECT_EQ(service->pcmWindow(unknown).state, WaveformCacheService::DetailState::Unavailable);
+    EXPECT_EQ(service->pcmWindow(unknown).state, WaveformCacheService::DetailState::NoCoverage);
     EXPECT_FALSE(service->pcmWindow(unknown).window);
     service->cancelPcmWindow(unknown);
     fixture.control->omit_coverage = false;
@@ -1122,7 +1142,202 @@ TEST(WaveformCacheService, RealQueuedReplacementCannotPublishUnderOriginalIdenti
 class TestableWaveformItem : public ExoWaveformItem {
   public:
     using ExoWaveformItem::updatePaintNode;
+    using ExoWaveformItem::updatePolish;
 };
+
+QSGGeometry* FirstPcmGeometry(QSGNode* node) {
+    auto* transform = node ? dynamic_cast<QSGTransformNode*>(node->firstChild()) : nullptr;
+    auto* geometry = transform ? dynamic_cast<QSGGeometryNode*>(transform->firstChild()) : nullptr;
+    return geometry && geometry->geometry()->drawingMode() == QSGGeometry::DrawLines ? geometry->geometry() : nullptr;
+}
+
+TEST(ExoWaveformItem, PcmWindowsJoinContiguousSamplesAndRetainGeometryAcrossPan) {
+    WaveformFixture fixture;
+    fixture.control->sample_amplitude = [](std::int64_t sample) { return sample == 4096 ? 0.8f : 0.0f; };
+    auto service = fixture.Service();
+    const auto key = service->request(SourceKey(115), fixture.source_path, kThreeSecondsUs);
+    ASSERT_TRUE(WaitFor([&] { return service->state(key) == WaveformCacheService::State::Ready; }));
+    TestableWaveformItem item;
+    item.setSize(QSizeF(64, 80));
+    item.setService(service.get());
+    item.setCacheKey(key);
+    item.setSourceInUs(85000);
+    item.setSourceOutUs(85666);
+    QSGNode* node = nullptr;
+    ASSERT_TRUE(WaitFor([&] {
+        item.updatePolish();
+        node = item.updatePaintNode(node, nullptr);
+        return FirstPcmGeometry(node) && node->childCount() == 2;
+    }));
+    std::unique_ptr<QSGNode> owner(node);
+    auto* geometry = FirstPcmGeometry(node);
+    ASSERT_EQ(geometry->vertexCount(), 8192);
+    const auto* vertices = geometry->vertexDataAsPoint2D();
+    EXPECT_FLOAT_EQ(vertices[8190].y, 20);
+    EXPECT_NEAR(vertices[8191].y, 4.8f, 1e-4f);
+    item.setSourceInUs(85020);
+    item.setSourceOutUs(85687);
+    node = item.updatePaintNode(owner.release(), nullptr);
+    owner.reset(node);
+    EXPECT_EQ(FirstPcmGeometry(node), geometry);
+}
+
+TEST(ExoWaveformItem, CacheClearReacquiresDetailForTheSameSourceWindow) {
+    WaveformFixture fixture;
+    std::atomic<float> amplitude{0.25f};
+    fixture.control->sample_amplitude = [&amplitude](std::int64_t) { return amplitude.load(); };
+    auto service = fixture.Service();
+    const auto source = SourceKey(116);
+    const auto key = service->request(source, fixture.source_path, kThreeSecondsUs);
+    ASSERT_TRUE(WaitFor([&] { return service->state(key) == WaveformCacheService::State::Ready; }));
+    TestableWaveformItem item;
+    item.setSize(QSizeF(256, 80));
+    item.setService(service.get());
+    item.setCacheKey(key);
+    item.setSourceOutUs(2666);
+    QSGNode* node = nullptr;
+    ASSERT_TRUE(WaitFor([&] {
+        item.updatePolish();
+        node = item.updatePaintNode(node, nullptr);
+        return FirstPcmGeometry(node);
+    }));
+    std::unique_ptr<QSGNode> owner(node);
+    EXPECT_NEAR(FirstPcmGeometry(node)->vertexDataAsPoint2D()[0].y, 15.25f, 1e-4f);
+    service->clearCache();
+    amplitude = 0.75f;
+    EXPECT_EQ(service->request(source, fixture.source_path, kThreeSecondsUs), key);
+    ASSERT_TRUE(WaitFor(
+        [&] {
+            item.updatePolish();
+            node = item.updatePaintNode(owner.release(), nullptr);
+            owner.reset(node);
+            auto* geometry = FirstPcmGeometry(node);
+            return geometry && std::abs(geometry->vertexDataAsPoint2D()[0].y - 5.75f) < 1e-4f;
+        },
+        5000));
+}
+
+TEST(ExoWaveformItem, PcmCoverageDrawsSilenceWithoutBridgingPadding) {
+    WaveformFixture fixture;
+    fixture.control->sample_amplitude = [](std::int64_t sample) {
+        return sample == 4096 || sample == 4097 ? 0.8f : 0.0f;
+    };
+    fixture.control->sample_coverage = [](std::int64_t first, std::uint32_t count) {
+        std::vector<engine::AudioSampleSpan> covered;
+        for (const auto span : {engine::AudioSampleSpan{4090, 4096}, engine::AudioSampleSpan{4097, 4100}}) {
+            const auto begin = std::max(first, span.first);
+            const auto end = std::min(first + count, span.end);
+            if (begin < end)
+                covered.push_back({begin, end});
+        }
+        return covered;
+    };
+    auto service = fixture.Service();
+    const auto key = service->request(SourceKey(118), fixture.source_path, kThreeSecondsUs);
+    ASSERT_TRUE(WaitFor([&] { return service->state(key) == WaveformCacheService::State::Ready; }));
+    TestableWaveformItem item;
+    item.setSize(QSizeF(64, 80));
+    item.setService(service.get());
+    item.setCacheKey(key);
+    item.setSourceInUs(85000);
+    item.setSourceOutUs(85666);
+    std::unique_ptr<QSGNode> owner;
+    ASSERT_TRUE(WaitFor([&] {
+        item.updatePolish();
+        owner.reset(item.updatePaintNode(owner.release(), nullptr));
+        return FirstPcmGeometry(owner.get()) && owner->childCount() == 2;
+    }));
+    const auto* silence = FirstPcmGeometry(owner.get());
+    ASSERT_EQ(silence->vertexCount(), 12);
+    EXPECT_FLOAT_EQ(silence->vertexDataAsPoint2D()[0].x, 4090);
+    EXPECT_FLOAT_EQ(silence->vertexDataAsPoint2D()[11].x, 4096);
+    EXPECT_FLOAT_EQ(silence->vertexDataAsPoint2D()[11].y, 20);
+    auto* transform = static_cast<QSGTransformNode*>(owner->firstChild()->nextSibling());
+    const auto* second = static_cast<QSGGeometryNode*>(transform->firstChild())->geometry();
+    ASSERT_EQ(second->vertexCount(), 6);
+    EXPECT_FLOAT_EQ(second->vertexDataAsPoint2D()[0].x, 1);
+    EXPECT_NEAR(second->vertexDataAsPoint2D()[0].y, 4.8f, 1e-4f);
+}
+
+TEST(ExoWaveformItem, PcmDetailRecoversAfterPinnedMemoryIsReleasedWithoutChangingTheView) {
+    WaveformFixture fixture;
+    constexpr std::uint32_t count = 4096;
+    constexpr auto budget = sizeof(WaveformCacheService::PcmWindow) + 65 +
+                            count * (sizeof(float) * engine::kWaveformChannels + sizeof(engine::AudioSampleSpan)) +
+                            count * sizeof(float) * engine::kWaveformChannels;
+    auto service = fixture.Service(64ull << 20, budget);
+    const auto key = service->request(SourceKey(119), fixture.source_path, kThreeSecondsUs);
+    ASSERT_TRUE(WaitFor([&] { return service->state(key) == WaveformCacheService::State::Ready; }));
+    const auto held = service->requestPcmWindow(key, 0, count, 1);
+    ASSERT_TRUE(WaitFor([&] { return service->pcmWindow(held).state == WaveformCacheService::DetailState::Ready; }));
+    auto pinned = service->pcmWindow(held).window;
+    service->cancelPcmWindow(held);
+    TestableWaveformItem item;
+    item.setSize(QSizeF(256, 80));
+    item.setService(service.get());
+    item.setCacheKey(key);
+    item.setSourceInUs(85333);
+    item.setSourceOutUs(87999);
+    item.updatePolish();
+    const auto pressure = service->requestPcmWindow(key, count, count, 2);
+    ASSERT_TRUE(
+        WaitFor([&] { return service->pcmWindow(pressure).state != WaveformCacheService::DetailState::Pending; }));
+    ASSERT_EQ(service->pcmWindow(pressure).state, WaveformCacheService::DetailState::MemoryPressure);
+    service->cancelPcmWindow(pressure);
+    pinned.reset();
+    std::unique_ptr<QSGNode> owner;
+    ASSERT_TRUE(WaitFor(
+        [&] {
+            item.updatePolish();
+            owner.reset(item.updatePaintNode(owner.release(), nullptr));
+            return FirstPcmGeometry(owner.get());
+        },
+        5000));
+}
+
+TEST(ExoWaveformItem, ResolvedMissingCoverageDoesNotFallBackToAPaddedSilenceLine) {
+    WaveformFixture fixture;
+    fixture.control->sample_amplitude = [](std::int64_t) { return 0.0f; };
+    fixture.control->omit_coverage = true;
+    auto service = fixture.Service();
+    const auto key = service->request(SourceKey(120), fixture.source_path, kThreeSecondsUs);
+    ASSERT_TRUE(WaitFor([&] { return service->state(key) == WaveformCacheService::State::Ready; }));
+    ASSERT_TRUE(WaitFor([&] { return !!service->tryReadPublishedBlock(key, 0, 0); }));
+    QQuickWindow::setGraphicsApi(QSGRendererInterface::Software);
+    QQuickWindow window;
+    window.setGeometry(0, 0, 400, 140);
+    window.setColor(Qt::black);
+    QQuickItem viewport(window.contentItem());
+    viewport.setPosition(QPointF(50, 60));
+    viewport.setSize(QSizeF(300, 48));
+    viewport.setClip(true);
+    ExoWaveformItem item(&viewport);
+    item.setSize(QSizeF(300, 40));
+    item.setService(service.get());
+    item.setCacheKey(key);
+    item.setColor(Qt::magenta);
+    item.setSourceOutUs(1'600'000);
+    window.show();
+    const auto coloredPixels = [&] {
+        const auto image = window.grabWindow();
+        if (image.isNull())
+            return -1;
+        int count = 0;
+        for (int y = 60; y < 100; ++y)
+            for (int x = 50; x < 350; ++x)
+                if (image.pixelColor(x * image.width() / window.width(), y * image.height() / window.height()).red() >
+                    20)
+                    ++count;
+        return count;
+    };
+    ASSERT_TRUE(WaitFor([&] { return coloredPixels() > 100 && item.levelForTest() == 1; }));
+    item.setSourceOutUs(3125);
+    const auto probe = service->requestPcmWindow(key, 0, 4096, 1);
+    ASSERT_TRUE(WaitFor([&] { return service->pcmWindow(probe).state != WaveformCacheService::DetailState::Pending; }));
+    EXPECT_EQ(service->pcmWindow(probe).state, WaveformCacheService::DetailState::NoCoverage);
+    ASSERT_TRUE(WaitFor([&] { return coloredPixels() == 0 && item.levelForTest() == -1; }, 5000));
+    service->cancelPcmWindow(probe);
+}
 
 struct DrawnBucket {
     double x = 0;
@@ -1247,6 +1462,128 @@ TEST(ExoWaveformItem, SoftwareRasterIsBoundedByTheClippedViewport) {
     ASSERT_TRUE(image->texture());
     EXPECT_LE(image->texture()->textureSize().width(), qCeil(300 * window.effectiveDevicePixelRatio()));
     EXPECT_EQ(image->rect(), QRectF(5000, 0, 300, 40));
+}
+
+TEST(ExoWaveformItem, SampleZoomDrawsIndividualPcmImpulseAndReusesWarmWindow) {
+    WaveformFixture fixture;
+    fixture.control->sample_amplitude = [](std::int64_t sample) { return sample == 17 ? 0.8f : 0.0f; };
+    auto service = fixture.Service();
+    const auto key = service->request(SourceKey(114), fixture.source_path, kThreeSecondsUs);
+    ASSERT_TRUE(WaitFor([&] { return service->state(key) == WaveformCacheService::State::Ready; }));
+    QQuickWindow::setGraphicsApi(QSGRendererInterface::Software);
+    QQuickWindow window;
+    window.setGeometry(0, 0, 400, 140);
+    window.setColor(Qt::black);
+    QQuickItem viewport(window.contentItem());
+    viewport.setPosition(QPointF(50, 60));
+    viewport.setSize(QSizeF(300, 48));
+    viewport.setClip(true);
+    ExoWaveformItem item(&viewport);
+    item.setSize(QSizeF(300, 40));
+    item.setService(service.get());
+    item.setCacheKey(key);
+    item.setColor(Qt::magenta);
+    item.setSourceOutUs(3125);
+    window.show();
+    const auto ink = [&window](const QImage& image, int x, int y) {
+        if (image.isNull())
+            return false;
+        const auto pixel =
+            image.pixelColor((x + 50) * image.width() / window.width(), (y + 60) * image.height() / window.height());
+        return pixel.red() > 20 && pixel.blue() > 20 && pixel.green() < 10;
+    };
+    ASSERT_TRUE(WaitFor(
+        [&] {
+            const auto image = window.grabWindow();
+            return ink(image, 34, 3) && ink(image, 100, 10) && !ink(image, 100, 5);
+        },
+        5000))
+        << "size=" << item.width() << "," << item.height() << " visible=" << item.isVisible()
+        << " level=" << item.levelForTest() << " pcm=" << service->pcmMemoryBytesForTest()
+        << " calls=" << fixture.control->calls.load();
+    const auto calls = fixture.control->calls.load();
+    const auto opens = fixture.control->opens.load();
+    item.setSourceInUs(1000);
+    item.setSourceOutUs(4125);
+    ASSERT_TRUE(WaitFor(
+        [&] {
+            const auto image = window.grabWindow();
+            return ink(image, 100, 10) && !ink(image, 34, 3);
+        },
+        5000))
+        << "size=" << item.width() << "," << item.height() << " visible=" << item.isVisible()
+        << " level=" << item.levelForTest() << " pcm=" << service->pcmMemoryBytesForTest()
+        << " calls=" << fixture.control->calls.load();
+    item.setSourceInUs(0);
+    item.setSourceOutUs(3125);
+    ASSERT_TRUE(WaitFor([&] { return ink(window.grabWindow(), 34, 3); }, 5000))
+        << "size=" << item.width() << "," << item.height() << " visible=" << item.isVisible()
+        << " level=" << item.levelForTest() << " pcm=" << service->pcmMemoryBytesForTest()
+        << " calls=" << fixture.control->calls.load();
+    EXPECT_EQ(fixture.control->calls.load(), calls);
+    EXPECT_EQ(fixture.control->opens.load(), opens);
+}
+
+TEST(ExoWaveformItem, AncestorClippingRetiresPcmInterests) {
+    WaveformFixture fixture;
+    auto service = fixture.Service();
+    const auto key = service->request(SourceKey(117), fixture.source_path, kThreeSecondsUs);
+    ASSERT_TRUE(WaitFor([&] { return service->state(key) == WaveformCacheService::State::Ready; }));
+    QQuickWindow::setGraphicsApi(QSGRendererInterface::Software);
+    QQuickWindow window;
+    window.setGeometry(0, 0, 400, 140);
+    QQuickItem viewport(window.contentItem());
+    viewport.setPosition(QPointF(50, 60));
+    viewport.setSize(QSizeF(300, 48));
+    viewport.setClip(true);
+    QQuickItem clip(&viewport);
+    clip.setSize(QSizeF(300, 40));
+    clip.setClip(true);
+    ExoWaveformItem item(&clip);
+    item.setSize(QSizeF(300, 40));
+    item.setService(service.get());
+    item.setCacheKey(key);
+    item.setSourceOutUs(3125);
+    window.show();
+    const auto availableTickets = [&] {
+        std::vector<std::uint64_t> tickets;
+        for (int i = 0; i < 512; ++i) {
+            const auto ticket = service->requestPcmWindow(key, 0, 4096, 1);
+            if (!ticket)
+                break;
+            tickets.push_back(ticket);
+        }
+        for (const auto ticket : tickets)
+            service->cancelPcmWindow(ticket);
+        return tickets.size();
+    };
+    ASSERT_TRUE(WaitFor([&] {
+        (void)window.grabWindow();
+        return service->pcmMemoryBytesForTest() > 0 && item.levelForTest() == -1 && availableTickets() == 511;
+    }));
+    QCoreApplication::processEvents(QEventLoop::AllEvents, 10);
+    ASSERT_EQ(availableTickets(), 511u);
+    viewport.setX(-1000);
+    ASSERT_TRUE(WaitFor(
+        [&] {
+            (void)window.grabWindow();
+            return availableTickets() == 512;
+        },
+        5000));
+    viewport.setX(50);
+    ASSERT_TRUE(WaitFor([&] {
+        (void)window.grabWindow();
+        return availableTickets() == 511;
+    }));
+    QCoreApplication::processEvents(QEventLoop::AllEvents, 10);
+    ASSERT_EQ(availableTickets(), 511u);
+    viewport.setHeight(0);
+    ASSERT_TRUE(WaitFor(
+        [&] {
+            (void)window.grabWindow();
+            return availableTickets() == 512;
+        },
+        5000));
 }
 
 TEST(ExoWaveformItem, PanMovesBlocksWithoutShiftingBucketsOrRebuilding) {

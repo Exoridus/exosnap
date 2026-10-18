@@ -83,7 +83,9 @@ class WaveformCacheService : public QObject {
         std::uint64_t generation = 0;
     };
 
-    enum class DetailState { Pending, Ready, Unavailable, Failed };
+    // NoCoverage has no verified samples. MemoryPressure permits a later retry.
+    // Unavailable denotes an absent or retired ticket.
+    enum class DetailState { Pending, Ready, NoCoverage, MemoryPressure, Unavailable, Failed };
     // Interleaved normalized 48 kHz stereo. Only coverage spans establish
     // actual source samples; zeros outside them are padding.
     struct PcmWindow {
@@ -180,6 +182,8 @@ class WaveformCacheService : public QObject {
     void blocksLoaded(const QString& key);
     void sourceAvailabilityChanged(const QString& key, bool available);
     void pcmWindowChanged(quint64 ticket, quint64 viewGeneration);
+    // Tickets for this source are retired. An empty key retires all sources.
+    void pcmInterestsInvalidated(const QString& key);
 
   private:
     struct Job {

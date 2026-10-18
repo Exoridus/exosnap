@@ -152,6 +152,7 @@ void WaveformCacheService::cancel(const QString& qkey) {
             status_.erase(key);
     }
     cv_.notify_all();
+    emit pcmInterestsInvalidated(qkey);
 }
 
 void WaveformCacheService::setForegroundBusy(bool busy) {
@@ -192,8 +193,13 @@ qint64 WaveformCacheService::clearCache() {
     cv_.notify_all();
     // Serialized with publication: an analysis finishing concurrently either
     // published before this clear or sees the new generation and discards.
-    std::lock_guard publish(publish_mutex_);
-    return static_cast<qint64>(store_->Clear());
+    qint64 released = 0;
+    {
+        std::lock_guard publish(publish_mutex_);
+        released = static_cast<qint64>(store_->Clear());
+    }
+    emit pcmInterestsInvalidated({});
+    return released;
 }
 
 WaveformCacheService::State WaveformCacheService::state(const QString& key) const {
@@ -302,7 +308,9 @@ std::uint64_t WaveformCacheService::requestPcmWindow(const QString& key, std::in
             entry = pcm_entries_.emplace(id, PcmEntry{}).first;
             entry->second.job_id = ++next_pcm_job_;
             pcm_queue_.push_back(PcmJob{id, source->second, generation_, entry->second.job_id});
-        } else if (entry->second.state == DetailState::Unavailable || entry->second.state == DetailState::Failed) {
+        } else if (entry->second.state == DetailState::Unavailable || entry->second.state == DetailState::Failed ||
+                   entry->second.state == DetailState::NoCoverage ||
+                   entry->second.state == DetailState::MemoryPressure) {
             if (pcm_queue_.size() >= 32)
                 return 0;
             const auto subscribers = entry->second.subscribers;
@@ -452,13 +460,13 @@ void WaveformCacheService::runPcmJob(const PcmJob& job, PcmCursor& cursor) {
         return;
     }
     if (static_cast<std::uint64_t>(job.id.first) >= job.source.sample_count) {
-        finishPcmJob(job, {}, false);
+        finishPcmJob(job, {DetailState::NoCoverage, {}, {}}, false);
         return;
     }
     auto allocation = reservePcmWindow(job);
     auto& data = allocation.window;
     if (!data) {
-        finishPcmJob(job, {}, false);
+        finishPcmJob(job, {DetailState::MemoryPressure, {}, {}}, false);
         return;
     }
     std::string error;
@@ -517,7 +525,7 @@ void WaveformCacheService::runPcmJob(const PcmJob& job, PcmCursor& cursor) {
         return;
     }
     if (data->coverage.empty())
-        finishPcmJob(job, {}, false);
+        finishPcmJob(job, {DetailState::NoCoverage, {}, {}}, false);
     else
         finishPcmJob(job, {DetailState::Ready, std::move(data), {}}, false);
 }
