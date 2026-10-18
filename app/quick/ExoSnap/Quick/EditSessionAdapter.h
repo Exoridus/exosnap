@@ -47,6 +47,7 @@ class EditSessionAdapter : public QObject {
     Q_PROPERTY(QString playerMetaText READ playerMetaText NOTIFY clipChanged FINAL)
     Q_PROPERTY(QVariantList facts READ facts NOTIFY clipChanged FINAL)
     Q_PROPERTY(qint64 durationMs READ durationMs NOTIFY durationChanged FINAL)
+    Q_PROPERTY(qint64 durationUs READ durationUs NOTIFY durationChanged FINAL)
 
     Q_PROPERTY(qint64 trimStartMs READ trimStartMs NOTIFY trimChanged FINAL)
     Q_PROPERTY(qint64 trimEndMs READ trimEndMs NOTIFY trimChanged FINAL)
@@ -130,6 +131,7 @@ class EditSessionAdapter : public QObject {
     Q_INVOKABLE void selectSpacer(qulonglong id);
     Q_INVOKABLE void beginSpacerDrag(qulonglong id, int edge = -1);
     Q_INVOKABLE void selectGap(qulonglong track, qint64 at_ms);
+    Q_INVOKABLE void selectGapUs(qulonglong track, qint64 at_us);
     Q_INVOKABLE void copyBlankDuration();
     Q_INVOKABLE void pasteSpacer();
     Q_INVOKABLE void previewCloseGap();
@@ -138,6 +140,8 @@ class EditSessionAdapter : public QObject {
     Q_INVOKABLE void beginJunctionDrag(qulonglong outgoing, int edge);
     Q_INVOKABLE void updateClipDrag(qint64 delta_ms, qulonglong track = 0, int new_track = -1, bool insert = false,
                                     qint64 tolerance_ms = 100);
+    Q_INVOKABLE void updateClipDragUs(qint64 delta_us, qulonglong track = 0, int new_track = -1, bool insert = false,
+                                      qint64 tolerance_us = 100000);
     Q_INVOKABLE bool commitClipDrag();
     Q_INVOKABLE void cancelClipDrag();
     Q_INVOKABLE void requestFrameStep(int direction);
@@ -199,6 +203,7 @@ class EditSessionAdapter : public QObject {
         return last_edit_accepted_;
     }
     Q_INVOKABLE QVariantList visibleClips(qint64 from_ms, qint64 to_ms) const;
+    Q_INVOKABLE QVariantList visibleClipsUs(qint64 from_us, qint64 to_us) const;
     QVariantList transitions() const;
     qulonglong selectedTransition() const {
         return selected_transition_;
@@ -214,13 +219,16 @@ class EditSessionAdapter : public QObject {
     Q_INVOKABLE void importMediaBatch(const QList<QUrl>& urls, bool append = false, qint64 at_ms = -1);
     Q_INVOKABLE void addHistory(const QString& path, qint64 at_ms = -1);
     Q_INVOKABLE void moveClip(qulonglong id, qint64 at_ms, bool snap = true);
+    Q_INVOKABLE void moveClipUs(qulonglong id, qint64 at_us, bool snap = true);
     Q_INVOKABLE void trimClip(qulonglong id, qint64 in_ms, qint64 out_ms);
+    Q_INVOKABLE void trimClipUs(qulonglong id, qint64 in_us, qint64 out_us);
     Q_INVOKABLE void splitSelected();
     Q_INVOKABLE void deleteSelected(bool ripple_delete = false);
     Q_INVOKABLE void undo();
     Q_INVOKABLE void redo();
     Q_INVOKABLE void selectAdjacentClip(int direction);
     Q_INVOKABLE void nudgeSelected(qint64 delta_ms, int edge = 0);
+    Q_INVOKABLE void nudgeSelectedUs(qint64 delta_us, int edge = 0);
 
     // Primary entry point. Resets trim, markers, report and position, and starts
     // the asynchronous keyframe index read.
@@ -237,6 +245,9 @@ class EditSessionAdapter : public QObject {
     [[nodiscard]] QString playerMetaText() const;
     [[nodiscard]] const QVariantList& facts() const noexcept;
     [[nodiscard]] qint64 durationMs() const noexcept;
+    [[nodiscard]] qint64 durationUs() const noexcept {
+        return workspace_.duration();
+    }
 
     [[nodiscard]] qint64 trimStartMs() const noexcept;
     [[nodiscard]] qint64 trimEndMs() const noexcept;

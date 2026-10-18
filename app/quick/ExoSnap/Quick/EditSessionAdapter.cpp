@@ -108,6 +108,7 @@ void EditSessionAdapter::setEditContext(const EditContext& context, qint64 timel
 void EditSessionAdapter::applyEditContext(const EditContext& context, qint64 timeline_start_ms,
                                           std::vector<edit::SourceImport> imports) {
     context_ = context;
+    const auto previous_duration_us = workspace_.duration();
     const qint64 append_start = timeline_start_ms < 0 ? workspace_.duration() : timeline_start_ms * 1000;
     std::vector<edit::Id> assets;
     auto segments = context.segments;
@@ -164,7 +165,7 @@ void EditSessionAdapter::applyEditContext(const EditContext& context, qint64 tim
     ++clip_generation_;
 
     const qint64 duration = workspace_.duration() / 1000;
-    const bool duration_changed = duration != duration_ms_;
+    const bool duration_changed = workspace_.duration() != previous_duration_us;
     duration_ms_ = duration;
 
     keyframe_timestamps_.clear();

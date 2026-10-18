@@ -100,10 +100,18 @@ QVariantList EditSessionAdapter::tracks() const {
 }
 
 QVariantList EditSessionAdapter::visibleClips(qint64 from_ms, qint64 to_ms) const {
+    if (!FitsMilliseconds(from_ms) || !FitsMilliseconds(to_ms))
+        return {};
+    return visibleClipsUs(from_ms * 1000, to_ms * 1000);
+}
+
+QVariantList EditSessionAdapter::visibleClipsUs(qint64 from_us, qint64 to_us) const {
     QVariantList rows;
+    if (from_us > to_us)
+        return rows;
     const auto* selected = workspace_.clip(workspace_.selection());
     for (const auto& clip : workspace_.clips()) {
-        if (clip.end() < from_ms * 1000 || clip.start > to_ms * 1000)
+        if (clip.end() < from_us || clip.start > to_us)
             continue;
         const auto* asset = workspace_.asset(clip.asset);
         const auto track = std::find_if(workspace_.tracks().begin(), workspace_.tracks().end(),
@@ -117,9 +125,17 @@ QVariantList EditSessionAdapter::visibleClips(qint64 from_ms, qint64 to_ms) cons
             {QStringLiteral("id"), QVariant::fromValue<qulonglong>(clip.id)},
             {QStringLiteral("name"), QString::fromStdString(asset->name)},
             {QStringLiteral("trackIndex"), static_cast<int>(track - workspace_.tracks().begin())},
+            {QStringLiteral("trackId"), QVariant::fromValue<qulonglong>(clip.track)},
             {QStringLiteral("video"), track->type == edit::TrackType::Video},
             {QStringLiteral("path"), QString::fromStdWString(asset->path)},
             {QStringLiteral("group"), QVariant::fromValue<qulonglong>(clip.group)},
+            {QStringLiteral("startUs"), QVariant::fromValue<qint64>(clip.start)},
+            {QStringLiteral("endUs"), QVariant::fromValue<qint64>(clip.end())},
+            {QStringLiteral("durationUs"), QVariant::fromValue<qint64>(clip.duration())},
+            {QStringLiteral("inUs"), QVariant::fromValue<qint64>(clip.source_in)},
+            {QStringLiteral("outUs"), QVariant::fromValue<qint64>(clip.source_out)},
+            {QStringLiteral("fadeInUs"), QVariant::fromValue<qint64>(clip.fade_in.duration_us)},
+            {QStringLiteral("fadeOutUs"), QVariant::fromValue<qint64>(clip.fade_out.duration_us)},
             {QStringLiteral("startMs"), QVariant::fromValue<qint64>(clip.start / 1000)},
             {QStringLiteral("durationMs"), QVariant::fromValue<qint64>(clip.duration() / 1000)},
             {QStringLiteral("inMs"), QVariant::fromValue<qint64>(clip.source_in / 1000)},
@@ -212,6 +228,10 @@ QVariantList EditSessionAdapter::transitions() const {
             {QStringLiteral("trackIndex"), static_cast<int>(track - workspace_.tracks().begin())},
             {QStringLiteral("video"), track != workspace_.tracks().end() && track->type == edit::TrackType::Video},
             {QStringLiteral("startMs"), t.in_us / 1000},
+            {QStringLiteral("startUs"), t.in_us},
+            {QStringLiteral("endUs"), t.out_us},
+            {QStringLiteral("durationUs"), t.out_us - t.in_us},
+            {QStringLiteral("cutUs"), t.cut_us},
             {QStringLiteral("endMs"), t.out_us / 1000},
             {QStringLiteral("cutMs"), t.cut_us / 1000},
             {QStringLiteral("curve"), static_cast<int>(t.curve.kind)},
@@ -367,7 +387,11 @@ void EditSessionAdapter::moveClip(qulonglong id, qint64 at_ms, bool snap) {
         publishWorkspace(false);
         return;
     }
-    edit::Time at = std::max<qint64>(0, at_ms) * 1000;
+    moveClipUs(id, at_ms * 1000, snap);
+}
+
+void EditSessionAdapter::moveClipUs(qulonglong id, qint64 at_us, bool snap) {
+    edit::Time at = std::max<qint64>(0, at_us);
     if (snap)
         at = workspace_.snap(at, id, 100000);
     const auto* clip = workspace_.clip(id);
@@ -385,20 +409,28 @@ void EditSessionAdapter::trimClip(qulonglong id, qint64 in_ms, qint64 out_ms) {
         publishWorkspace(false);
         return;
     }
+    trimClipUs(id, in_ms * 1000, out_ms * 1000);
+}
+
+void EditSessionAdapter::trimClipUs(qulonglong id, qint64 in_us, qint64 out_us) {
+    if (in_us < 0 || out_us < 0) {
+        publishWorkspace(false);
+        return;
+    }
     const auto* clip = workspace_.clip(id);
     if (!clip)
         return;
-    if (in_ms * 1000 != clip->source_in && out_ms * 1000 != clip->source_out) {
+    if (in_us != clip->source_in && out_us != clip->source_out) {
         if (ripple || !linkedSelection) {
             refuseEdit(tr("Adjust one trim edge at a time for ripple or independent edits."));
         } else {
-            publishWorkspace(workspace_.trim(id, in_ms * 1000, out_ms * 1000, autoCrossfade));
+            publishWorkspace(workspace_.trim(id, in_us, out_us, autoCrossfade));
         }
         return;
     }
-    const bool left = in_ms * 1000 != clip->source_in;
+    const bool left = in_us != clip->source_in;
     edit::Trim command{id, left ? edit::TrimEdge::Left : edit::TrimEdge::Right,
-                       left ? in_ms * 1000 - clip->source_in : out_ms * 1000 - clip->source_out};
+                       left ? in_us - clip->source_in : out_us - clip->source_out};
     command.mode = ripple ? edit::TrimMode::Ripple : edit::TrimMode::Fixed;
     command.expand_linked = linkedSelection;
     command.auto_crossfade = autoCrossfade;
@@ -461,14 +493,17 @@ void EditSessionAdapter::selectAdjacentClip(int direction) {
 }
 
 void EditSessionAdapter::nudgeSelected(qint64 delta_ms, int edge) {
-    const auto* clip = workspace_.clip(workspace_.selection());
-    if (!clip)
-        return;
     if (!FitsMilliseconds(delta_ms)) {
         publishWorkspace(false);
         return;
     }
-    const auto delta = delta_ms * 1000;
+    nudgeSelectedUs(delta_ms * 1000, edge);
+}
+
+void EditSessionAdapter::nudgeSelectedUs(qint64 delta, int edge) {
+    const auto* clip = workspace_.clip(workspace_.selection());
+    if (!clip)
+        return;
     const auto boundary = edge == 1 ? clip->source_in : edge == 2 ? clip->source_out : clip->start;
     const auto requested = AddTimelineTime(boundary, delta);
     if (!requested) {
@@ -476,11 +511,11 @@ void EditSessionAdapter::nudgeSelected(qint64 delta_ms, int edge) {
         return;
     }
     if (edge == 1)
-        trimClip(clip->id, *requested / 1000, clip->source_out / 1000);
+        trimClipUs(clip->id, *requested, clip->source_out);
     else if (edge == 2)
-        trimClip(clip->id, clip->source_in / 1000, *requested / 1000);
+        trimClipUs(clip->id, clip->source_in, *requested);
     else
-        moveClip(clip->id, *requested / 1000, false);
+        moveClipUs(clip->id, *requested, false);
 }
 
 bool EditSessionAdapter::applyCommand(const edit::EditCommand& command) {
@@ -534,6 +569,17 @@ void EditSessionAdapter::beginSpacerDrag(qulonglong id, int edge) {
 
 void EditSessionAdapter::updateClipDrag(qint64 delta_ms, qulonglong track, int new_track, bool insert,
                                         qint64 tolerance_ms) {
+    if (!FitsMilliseconds(delta_ms)) {
+        drag_command_.reset();
+        drag_preview_.valid = false;
+        emit dragChanged();
+        return;
+    }
+    updateClipDragUs(delta_ms * 1000, track, new_track, insert, std::clamp<qint64>(tolerance_ms, 0, 250) * 1000);
+}
+
+void EditSessionAdapter::updateClipDragUs(qint64 delta, qulonglong track, int new_track, bool insert,
+                                          qint64 tolerance_us) {
     if (!drag_snapshot_)
         return;
     const auto reject = [this]() {
@@ -541,17 +587,16 @@ void EditSessionAdapter::updateClipDrag(qint64 delta_ms, qulonglong track, int n
         drag_preview_.valid = false;
         emit dragChanged();
     };
-    if (!FitsMilliseconds(delta_ms)) {
+    if (delta == (std::numeric_limits<edit::Time>::min)()) {
         reject();
         return;
     }
-    auto delta = delta_ms * 1000;
     if (drag_spacer_) {
         if (drag_edge_ < 0)
-            drag_command_ = edit::MoveSpacer{drag_spacer_, delta_ms * 1000};
+            drag_command_ = edit::MoveSpacer{drag_spacer_, delta};
         else
-            drag_command_ = edit::TrimSpacer{
-                drag_spacer_, drag_edge_ == 0 ? edit::TrimEdge::Left : edit::TrimEdge::Right, delta_ms * 1000};
+            drag_command_ =
+                edit::TrimSpacer{drag_spacer_, drag_edge_ == 0 ? edit::TrimEdge::Left : edit::TrimEdge::Right, delta};
         drag_preview_ = edit::PreviewEdit(*drag_snapshot_, *drag_command_);
         emit dragChanged();
         return;
@@ -597,7 +642,7 @@ void EditSessionAdapter::updateClipDrag(qint64 delta_ms, qulonglong track, int n
             reject();
             return;
         }
-        auto best = static_cast<uint64_t>(std::clamp<qint64>(tolerance_ms, 0, 250) * 1000 + 1);
+        auto best = static_cast<uint64_t>(std::clamp<qint64>(tolerance_us, 0, 250000) + 1);
         auto snapped = delta;
         const auto consider = [&](edit::Time marker) {
             if (marker < 0)
@@ -721,6 +766,11 @@ QVariantList EditSessionAdapter::dragClips() const {
             QVariantMap{{QStringLiteral("id"), QVariant::fromValue<qulonglong>(clip.id)},
                         {QStringLiteral("trackIndex"), static_cast<int>(track - drag_preview_.tracks.begin())},
                         {QStringLiteral("startMs"), clip.start / 1000.0},
+                        {QStringLiteral("startUs"), clip.start},
+                        {QStringLiteral("endUs"), clip.end()},
+                        {QStringLiteral("durationUs"), clip.duration()},
+                        {QStringLiteral("fadeInUs"), clip.fade_in.duration_us},
+                        {QStringLiteral("fadeOutUs"), clip.fade_out.duration_us},
                         {QStringLiteral("durationMs"), clip.duration() / 1000.0},
                         {QStringLiteral("fadeInMs"), clip.fade_in.duration_us / 1000.0},
                         {QStringLiteral("fadeOutMs"), clip.fade_out.duration_us / 1000.0}});
@@ -735,6 +785,9 @@ QVariantList EditSessionAdapter::dragTransitions() const {
                                         [&junction](const auto& value) { return value.id == junction.track; });
         rows.push_back(
             QVariantMap{{QStringLiteral("startMs"), junction.in_us / 1000.0},
+                        {QStringLiteral("startUs"), junction.in_us},
+                        {QStringLiteral("endUs"), junction.out_us},
+                        {QStringLiteral("durationUs"), junction.out_us - junction.in_us},
                         {QStringLiteral("durationMs"), (junction.out_us - junction.in_us) / 1000.0},
                         {QStringLiteral("trackIndex"), static_cast<int>(track - drag_preview_.tracks.begin())}});
     }
@@ -803,7 +856,7 @@ void EditSessionAdapter::setClipFade(qulonglong id, bool incoming, qint64 durati
 }
 
 QVariantMap EditSessionAdapter::selectedClipDetails() const {
-    for (const auto& value : visibleClips(0, duration_ms_))
+    for (const auto& value : visibleClipsUs(0, workspace_.duration()))
         if (value.toMap().value(QStringLiteral("id")).toULongLong() == workspace_.selection())
             return value.toMap();
     return {};
@@ -840,6 +893,9 @@ QVariantList SpacerRows(const std::vector<edit::Spacer>& spacers, const std::vec
         rows.push_back(QVariantMap{{QStringLiteral("id"), QVariant::fromValue<qulonglong>(spacer.id)},
                                    {QStringLiteral("trackIndex"), static_cast<int>(track - tracks.begin())},
                                    {QStringLiteral("startMs"), spacer.start_us / 1000.0},
+                                   {QStringLiteral("startUs"), spacer.start_us},
+                                   {QStringLiteral("endUs"), spacer.end()},
+                                   {QStringLiteral("durationUs"), spacer.duration_us},
                                    {QStringLiteral("durationMs"), spacer.duration_us / 1000.0}});
     }
     return rows;
@@ -873,6 +929,8 @@ QVariantMap EditSessionAdapter::selectedGap() const {
     const auto track = std::find_if(workspace_.tracks().begin(), workspace_.tracks().end(),
                                     [this](const auto& value) { return value.id == selected_gap_track_; });
     return {{QStringLiteral("startMs"), selected_gap_.in_us / 1000},
+            {QStringLiteral("startUs"), selected_gap_.in_us},
+            {QStringLiteral("endUs"), selected_gap_.out_us},
             {QStringLiteral("endMs"), selected_gap_.out_us / 1000},
             {QStringLiteral("trackIndex"), static_cast<int>(track - workspace_.tracks().begin())}};
 }
@@ -880,10 +938,13 @@ QVariantMap EditSessionAdapter::selectedGap() const {
 void EditSessionAdapter::selectGap(qulonglong track, qint64 at_ms) {
     if (!FitsMilliseconds(at_ms))
         return;
+    selectGapUs(track, at_ms * 1000);
+}
+
+void EditSessionAdapter::selectGapUs(qulonglong track, qint64 at) {
     if (std::none_of(workspace_.tracks().begin(), workspace_.tracks().end(),
                      [track](const auto& value) { return value.id == track; }))
         return;
-    const auto at = at_ms * 1000;
     edit::Span span{0, workspace_.duration()};
     const auto inspect = [&](edit::Time start, edit::Time end) {
         if (start <= at && at < end)

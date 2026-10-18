@@ -113,6 +113,10 @@ void EditTimelineClipModel::sync(EditSessionAdapter* session, qint64 fromMs, qin
     setRows(session != nullptr ? session->visibleClips(fromMs, toMs) : QVariantList{});
 }
 
+void EditTimelineClipModel::syncUs(EditSessionAdapter* session, qint64 fromUs, qint64 toUs) {
+    setRows(session != nullptr ? session->visibleClipsUs(fromUs, toUs) : QVariantList{});
+}
+
 void EditTimelineClipModel::setRows(const QVariantList& rows) {
     std::vector<std::pair<qulonglong, QVariantMap>> target;
     target.reserve(static_cast<std::size_t>(rows.size()));

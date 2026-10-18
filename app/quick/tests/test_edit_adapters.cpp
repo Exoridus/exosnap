@@ -3,6 +3,7 @@
 #include "EditSessionAdapter.h"
 #include "EditTimelineAdapter.h"
 #include "EditTimelineModels.h"
+#include "EditViewportAdapter.h"
 
 #include "models/EditTimelineModel.h"
 #include "models/OutputSettingsModel.h"
@@ -676,6 +677,132 @@ TEST(EditWorkspaceAdapter, MissingAndFailedSegmentsRemainVisibleAtTheirOriginalD
         EXPECT_EQ(row.toMap().value(QStringLiteral("startMs")).toLongLong(), 2000);
         EXPECT_EQ(row.toMap().value(QStringLiteral("durationMs")).toLongLong(), 3000);
     }
+}
+
+TEST(EditWorkspacePrecision, DragAndVisibleRowsRetainMicrosecondsThroughUndo) {
+    EnsureApplication();
+    EditSessionAdapter session;
+    session.setEditContext(MakeContext(10));
+    session.snapping = false;
+    const auto original = session.workspace().clips();
+    const auto selected = session.selectedClip();
+    session.beginClipDrag(selected);
+    session.updateClipDragUs(21);
+    ASSERT_TRUE(session.dragValid());
+    ASSERT_TRUE(session.commitClipDrag());
+    ASSERT_EQ(session.workspace().clips().size(), original.size());
+    EXPECT_EQ(session.workspace().clips().front().start, 21);
+    EXPECT_EQ(session.durationUs(), 10000021);
+    const auto rows = session.visibleClipsUs(21, 22);
+    ASSERT_EQ(rows.size(), 2);
+    for (const auto& value : rows) {
+        const auto row = value.toMap();
+        EXPECT_EQ(row.value(QStringLiteral("startUs")).toLongLong(), 21);
+        EXPECT_EQ(row.value(QStringLiteral("durationUs")).toLongLong(), 10000000);
+    }
+    session.undo();
+    EXPECT_EQ(session.workspace().clips(), original);
+    session.redo();
+    EXPECT_EQ(session.workspace().clips().front().start, 21);
+}
+
+TEST(EditViewport, SampleScaleUsesLocalCoordinatesAtEightHourOrigin) {
+    EditViewportAdapter view;
+    view.setUsableWidth(1200);
+    view.setTimelineEndUs(36000000000LL);
+    view.setVisibleInterval(28800000000LL, 28800012500LL);
+    EXPECT_DOUBLE_EQ(view.pixelsPerSecond(), 96000);
+    EXPECT_EQ(view.timeAtX(2), 28800000021LL);
+    EXPECT_NEAR(view.xAtTime(28800000021LL), 2.016, 0.001);
+    EXPECT_EQ(view.endUs(), 28800012500LL);
+    const auto anchor = view.timeAtX(743);
+    view.zoomAt(48000, 743);
+    EXPECT_NEAR(view.xAtTime(anchor), 743, 1);
+    view.zoomAt(96000, 743);
+    EXPECT_NEAR(view.xAtTime(anchor), 743, 1);
+}
+
+TEST(EditViewport, FitStartsAtZeroAndSurvivesResizeAndRapidZoomReversal) {
+    EditViewportAdapter view;
+    view.setUsableWidth(1000);
+    view.setTimelineEndUs(7200000000LL);
+    view.fitTimeline();
+    EXPECT_EQ(view.startUs(), 0);
+    EXPECT_EQ(view.timeAtX(1000), view.timelineEndUs());
+    view.setUsableWidth(600);
+    EXPECT_EQ(view.timeAtX(600), view.timelineEndUs());
+    for (int i = 0; i < 200; ++i) {
+        view.zoomAt(96000, 300);
+        view.panPixels(1e9);
+        view.zoomAt(0.00001, 300);
+    }
+    EXPECT_EQ(view.startUs(), 0);
+    EXPECT_EQ(view.timeAtX(600), view.timelineEndUs());
+    view.fitSelection(1000000, 2000000);
+    EXPECT_EQ(view.startUs(), 1000000);
+    EXPECT_EQ(view.timeAtX(600), 2000000);
+    view.restorePreviousView();
+    EXPECT_EQ(view.startUs(), 0);
+    EXPECT_EQ(view.timeAtX(600), view.timelineEndUs());
+}
+
+TEST(EditViewport, EmptyInitializationDoesNotDependOnSetterOrder) {
+    EditViewportAdapter first;
+    first.setUsableWidth(1200);
+    first.setTimelineEndUs(10000000);
+    EditViewportAdapter second;
+    second.setTimelineEndUs(10000000);
+    second.setUsableWidth(1200);
+    EXPECT_EQ(first.pixelsPerSecond(), second.pixelsPerSecond());
+    EXPECT_LT(first.pixelsPerSecond(), 1000);
+}
+
+TEST(EditViewport, BoundaryNoOpsPreservePreviousView) {
+    EditViewportAdapter view;
+    view.setUsableWidth(600);
+    view.setTimelineEndUs(10000000);
+    view.fitSelection(1000000, 2000000);
+    view.zoomAt(0.001, 300);
+    view.zoomAt(0.001, 300);
+    view.panPixels(-1000);
+    view.fitTimeline();
+    view.restorePreviousView();
+    EXPECT_EQ(view.startUs(), 1000000);
+    EXPECT_EQ(view.endUs(), 2000000);
+}
+
+TEST(EditViewport, RejectsUnrepresentableDimensions) {
+    EditViewportAdapter view;
+    view.setTimelineEndUs(10000000);
+    view.setUsableWidth(600);
+    view.setUsableWidth((std::numeric_limits<qreal>::max)());
+    EXPECT_EQ(view.usableWidth(), 600);
+    view.setUsableWidth((std::numeric_limits<qreal>::denorm_min)());
+    EXPECT_EQ(view.usableWidth(), 600);
+}
+
+TEST(EditWorkspacePrecision, NudgeAndTrimDoNotRoundThroughMillisecondValues) {
+    EnsureApplication();
+    EditSessionAdapter session;
+    session.setEditContext(MakeContext(10));
+    session.nudgeSelectedUs(21);
+    EXPECT_EQ(session.workspace().clips().front().start, 21);
+    session.nudgeSelectedUs(42, 1);
+    EXPECT_EQ(session.workspace().clips().front().start, 63);
+    EXPECT_EQ(session.workspace().clips().front().source_in, 42);
+    EXPECT_EQ(session.workspace().clips().front().source_out, 10000000);
+}
+
+TEST(EditWorkspacePrecision, ContextDurationNotifiesWithinTheSameMillisecond) {
+    EnsureApplication();
+    EditSessionAdapter session;
+    session.setEditContext(MakeContext(10));
+    int notifications = 0;
+    QObject::connect(&session, &EditSessionAdapter::durationChanged, [&] { ++notifications; });
+    const auto before = session.durationUs();
+    session.setEditContext(MakeContext(0.000021));
+    ASSERT_NE(session.durationUs(), before);
+    EXPECT_GT(notifications, 0);
 }
 
 TEST(EditWorkspaceAdapter, ViewportFollowsLinkedTrimMoveAndUndoWithoutDuplicatingMedia) {

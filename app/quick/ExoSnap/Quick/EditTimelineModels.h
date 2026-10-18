@@ -125,6 +125,7 @@ class EditTimelineClipModel : public QAbstractListModel {
     // Replaces the rows with `session`'s clips intersecting [fromMs, toMs].
     // A null session clears the model.
     Q_INVOKABLE void sync(EditSessionAdapter* session, qint64 fromMs, qint64 toMs);
+    Q_INVOKABLE void syncUs(EditSessionAdapter* session, qint64 fromUs, qint64 toUs);
     // Same, from rows that each carry a unique "id". Rows whose id survives keep
     // their delegate; only changed rows are reported as changed.
     Q_INVOKABLE void setRows(const QVariantList& rows);

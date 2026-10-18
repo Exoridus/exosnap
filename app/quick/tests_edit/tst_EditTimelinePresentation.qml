@@ -37,6 +37,21 @@ TestCase {
             {tag: "minutes", scale: 0.001, interval: 120000}
         ];
     }
+    function test_sample_zoom_bounds_surfaces_and_preserves_exact_playhead() {
+        const strip = createTemporaryObject(timelineComponent, tests);
+        const scroll = findChild(strip, "editTimelineScroll");
+        strip.zoomTo(96000);
+        verify(scroll.contentWidth <= scroll.width + 1);
+        const rows = testSession.visibleClipsUs(0, 1000);
+        verify(rows.length > 0);
+        for (const row of rows) {
+            const clip = findChild(strip, "editClip" + row.id);
+            verify(clip.width <= scroll.width);
+        }
+        testSession.requestSeekUs(21);
+        const playhead = findChild(strip, "editPlayhead");
+        fuzzyCompare(playhead.x, strip.positionAt(0.021), 0.01);
+    }
     function test_intervals(data) {
         const ruler = createTemporaryObject(rulerComponent, tests, {pixelsPerMs: data.scale});
         compare(ruler.majorMs, data.interval);
@@ -50,8 +65,8 @@ TestCase {
         const scroll = findChild(strip, "editTimelineScroll");
         const ruler = findChild(strip, "editTimelineRuler");
         const playhead = findChild(strip, "editPlayhead");
-        verify(scroll.contentWidth > scroll.width);
-        scroll.contentX = 900;
+        compare(scroll.contentWidth, scroll.width);
+        strip.panTimeline(900);
         testSession.requestSeek(25000);
         compare(playhead.x, strip.positionAt(25000));
         compare(playhead.mapToItem(strip, 0, 0).x, 2 + strip.positionAt(25000) - scroll.contentX);
@@ -69,7 +84,7 @@ TestCase {
         verify(ruler.tickCount < 100);
         strip.forceActiveFocus();
         keyClick(Qt.Key_Right);
-        compare(playhead.x, strip.positionAt(testSession.positionMs));
+        compare(playhead.x, strip.positionAtUs(testSession.positionUs));
         testSession.requestSeek(0);
         verify(!playhead.visible);
     }
@@ -77,7 +92,7 @@ TestCase {
         const strip = createTemporaryObject(timelineComponent, tests);
         const scroll = findChild(strip, "editTimelineScroll");
         const playhead = findChild(strip, "editPlayhead");
-        scroll.contentX = 900;
+        strip.panTimeline(900);
         testSession.requestSeek(30000);
         const before = playhead.mapToItem(strip, 0, 0).x;
         strip.zoomTo(100);
@@ -103,7 +118,7 @@ TestCase {
         const strip = createTemporaryObject(timelineComponent, tests);
         const scroll = findChild(strip, "editTimelineScroll");
         const playhead = findChild(strip, "editPlayhead");
-        scroll.contentX = 900;
+        strip.panTimeline(900);
         testSession.requestSeek(30000);
         const before = strip.timeAt(scroll.contentX + 198);
         mouseWheel(strip, 200, 100, 0, 120, Qt.NoButton, Qt.ControlModifier);
@@ -121,7 +136,7 @@ TestCase {
     }
     function test_frame_scale_ruler_has_readable_subframe_ticks() {
         const strip = createTemporaryObject(timelineComponent, tests);
-        strip.pixelsPerSecond = 120000;
+        strip.zoomTo(96000);
         const ruler = findChild(strip, "editTimelineRuler");
         compare(ruler.majorMs, 1);
         verify(ruler.tickCount < 100);
@@ -201,8 +216,10 @@ TestCase {
         verify(findChild(strip, "editSpacer" + testSession.spacers[0].id));
     }
     function gestureTimeline(scale) {
-        const strip = createTemporaryObject(timelineComponent, tests, {height: 480, pixelsPerSecond: scale || 4});
+        const targetScale = scale || 4;
+        const strip = createTemporaryObject(timelineComponent, tests, {height: 480, width: 54 + testSession.durationUs * targetScale / 1000000});
         verify(!!strip, "Component exists");
+        strip.zoomTo(targetScale);
         return strip;
     }
     function clipGeometry() {
@@ -743,7 +760,7 @@ TestCase {
         testSession.undo();
         retained();
         compare(items[second].x, strip.positionAt(clips[second].startMs));
-        scroll.contentX = 4;
+        strip.panTimeline(4);
         retained();
     }
     function test_clip_delegates_follow_removal_and_insertion() {
