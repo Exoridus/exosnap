@@ -219,6 +219,7 @@ class EditTimelineAdapter : public QObject {
     void layoutChanged();
     void audioTracksChanged();
     void tileProgressChanged();
+    void mediaCachesCleared();
 
   private:
     void openClip(const QString& master_path, qint64 duration_ms);

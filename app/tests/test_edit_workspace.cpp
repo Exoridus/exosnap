@@ -29,6 +29,47 @@ TEST(EditWorkspace, DefaultTrimKeepsUnselectedSuffixAtItsCommittedTime) {
     EXPECT_EQ(w.clip(first)->end(), 9'000'000);
 }
 
+TEST(EditWorkspace, AudioTrimRetainsOneCanonicalSourceSample) {
+    struct SampleInterval {
+        uint32_t rate;
+        TrimEdge edge;
+        Time in_us;
+        Time out_us;
+    };
+    for (const auto sample :
+         {SampleInterval{48000, TrimEdge::Left, 63, 83}, SampleInterval{48000, TrimEdge::Right, 63, 83},
+          SampleInterval{44100, TrimEdge::Left, 23, 45}, SampleInterval{44100, TrimEdge::Right, 23, 45},
+          SampleInterval{96000, TrimEdge::Left, 31, 42}, SampleInterval{96000, TrimEdge::Right, 31, 42},
+          SampleInterval{48000, TrimEdge::Left, 63, 82}, SampleInterval{48000, TrimEdge::Right, 64, 83},
+          SampleInterval{0, TrimEdge::Left, 63, 83}, SampleInterval{0, TrimEdge::Right, 63, 83}}) {
+        const auto edge = sample.edge;
+        SCOPED_TRACE(::testing::Message() << "rate=" << sample.rate << " edge=" << static_cast<int>(edge)
+                                          << " source=" << sample.in_us << ".." << sample.out_us);
+        Workspace workspace;
+        Asset asset;
+        asset.path = L"audio.wav";
+        asset.duration = 1000;
+        auto descriptor = std::make_shared<ValidatedSourceDescriptor>();
+        SourceStreamDescriptor stream;
+        stream.ref = {0, exosnap::engine::AudioTrackId{{1}}, 0, exosnap::engine::TimelineStreamKind::Audio};
+        stream.source_span = edge == TrimEdge::Left ? Span{0, sample.out_us} : Span{sample.in_us, 1000};
+        stream.codec.sample_rate = sample.rate;
+        stream.codec.channels = 2;
+        descriptor->streams.push_back(stream);
+        asset.source_descriptor = std::move(descriptor);
+        ASSERT_TRUE(workspace.insert(workspace.addAsset(std::move(asset)), 0));
+        const auto id = workspace.selection();
+        const auto delta = edge == TrimEdge::Left ? sample.in_us : sample.out_us - 1000;
+        ASSERT_EQ(workspace.apply(Trim{id, edge, delta}, workspace.revision()).status, CommandStatus::Applied);
+        EXPECT_EQ(workspace.clip(id)->source_in, sample.in_us);
+        EXPECT_EQ(workspace.clip(id)->source_out, sample.out_us);
+        EXPECT_EQ(workspace.apply(Trim{id, edge, edge == TrimEdge::Left ? 1000 : -1000}, workspace.revision()).status,
+                  CommandStatus::NoOp);
+        EXPECT_EQ(workspace.clip(id)->source_in, sample.in_us);
+        EXPECT_EQ(workspace.clip(id)->source_out, sample.out_us);
+    }
+}
+
 TEST(EditWorkspace, FixedEndSurvivesDeletionAndUndoAndExtendsForLaterContent) {
     Workspace w;
     const auto asset = source(w);

@@ -93,6 +93,17 @@ FocusScope {
         target: root.visible && root.visualWorkPending ? root.Window.window : null
         function onAfterAnimating(): void { root.flushVisualWork(); }
     }
+    Connections {
+        target: root.thumbnails
+        function onMediaCachesCleared(): void {
+            for (let i = 0; i < clipRepeater.count; ++i) {
+                const item = clipRepeater.itemAt(i);
+                if (item)
+                    item.retireMedia();
+            }
+            root.scheduleVisualWork();
+        }
+    }
     function visibleCandidates(rows: var): var {
         return rows.filter(value => value.startUs <= viewport.endUs && value.endUs >= viewport.startUs);
     }
@@ -660,6 +671,7 @@ FocusScope {
                 Repeater {
                     model: tileModel
                     delegate: Image {
+                        objectName: "editClipThumbnail"
                         required property var modelData
                         x: clipItem.visibleLeft + modelData.x
                         y: root.trackLayout.headerHeight + 1

@@ -1204,7 +1204,17 @@ class PreviewWorkload final : public QObject {
         const auto* model = qobject_cast<exosnap::quick::EditTimelineClipModel*>(object);
         return model ? model->syncCountForTest() : 0;
     }
+    Q_INVOKABLE bool hasWaveformRequest(const QString& key) const {
+        const auto* service = qobject_cast<exosnap::WaveformCacheService*>(timeline_.waveformService());
+        return service && service->state(key) != exosnap::WaveformCacheService::State::Unknown;
+    }
     Q_INVOKABLE bool prepare(int tracks) {
+        return prepareSources(tracks, false);
+    }
+    Q_INVOKABLE bool prepareAudio() {
+        return prepareSources(1, true);
+    }
+    bool prepareSources(int tracks, bool audio) {
         if (!cache_.isValid() || tracks < 1 || tracks > 2000)
             return false;
         session_.close();
@@ -1214,17 +1224,20 @@ class PreviewWorkload final : public QObject {
         for (int index = 0; index < tracks; ++index) {
             exosnap::engine::EditMediaMetadata metadata;
             metadata.content_identity_valid = true;
-            metadata.has_audio = false;
+            metadata.has_audio = audio;
             metadata.content_sha256.fill(42);
             metadata.content_sha256[0] = static_cast<std::uint8_t>(index & 255);
             metadata.content_sha256[1] = static_cast<std::uint8_t>((index >> 8) & 255);
             metadata.duration_us = 60'000'000;
-            metadata.width = 1280;
-            metadata.height = 720;
+            metadata.width = audio ? 0 : 1280;
+            metadata.height = audio ? 0 : 720;
             metadata.fps_num = 30;
             metadata.fps_den = 1;
             exosnap::engine::EditSourceStream stream;
-            stream.kind = exosnap::engine::TimelineStreamKind::Video;
+            stream.kind =
+                audio ? exosnap::engine::TimelineStreamKind::Audio : exosnap::engine::TimelineStreamKind::Video;
+            stream.codec.channels = audio ? 2 : 0;
+            stream.codec.sample_rate = audio ? 48'000 : 0;
             stream.fps_num = 30;
             stream.fps_den = 1;
             metadata.streams.push_back(stream);

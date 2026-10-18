@@ -31,6 +31,44 @@ TestCase {
             testSession.trackLayout.setTrackHeight(track.id, 64);
         testSession.requestSeek(0);
     }
+    function test_clear_cache_refreshes_unchanged_visible_media_data() {
+        return [{tag: "video-combined", audio: false, combined: true},
+                {tag: "video-thumbnail", audio: false, combined: false},
+                {tag: "audio-combined", audio: true, combined: true}];
+    }
+    function test_clear_cache_refreshes_unchanged_visible_media(data) {
+        verify(data.audio ? testPreviewWorkload.prepareAudio() : testPreviewWorkload.prepare(1));
+        const strip = createTemporaryObject(timelineComponent, tests, {
+            session: testPreviewWorkload.session,
+            thumbnails: testPreviewWorkload.timeline
+        });
+        verify(!!strip);
+        waitForRendering(strip);
+        const clip = findChild(strip, "editClip" + strip.session.selectedClip);
+        verify(!!clip);
+        const recipe = clip.mediaRequest;
+        verify(recipe.length > 0);
+        const key = clip.waveformKey;
+        const before = testPreviewWorkload.thumbnailQueries();
+        if (data.audio) {
+            verify(key.length > 0);
+            verify(testPreviewWorkload.hasWaveformRequest(key));
+        }
+        if (data.combined) strip.thumbnails.clearMediaCaches();
+        else strip.thumbnails.clearThumbnailCache();
+        waitForRendering(strip);
+        compare(clip.mediaRequest, recipe);
+        if (data.audio) {
+            compare(clip.waveformKey, key);
+            verify(testPreviewWorkload.hasWaveformRequest(key), "Cleared waveform recipe was registered again");
+        } else {
+            compare(testPreviewWorkload.thumbnailQueries() - before, 1);
+            tryVerify(() => {
+                const image = findChild(clip, "editClipThumbnail");
+                return !!image && image.status === Image.Ready;
+            });
+        }
+    }
     function test_preview_queries_are_bounded_to_visible_tracks() {
         verify(testPreviewWorkload.prepare(20));
         const before = testPreviewWorkload.thumbnailQueries();

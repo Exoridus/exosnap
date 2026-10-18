@@ -489,7 +489,9 @@ void EditTimelineAdapter::setForegroundBusy(bool busy) {
 }
 
 qint64 EditTimelineAdapter::clearThumbnailCache() {
-    return static_cast<qint64>(broker_->Clear());
+    const auto released = static_cast<qint64>(broker_->Clear());
+    emit mediaCachesCleared();
+    return released;
 }
 
 EditThumbnailImageProvider* EditTimelineAdapter::createThumbnailImageProvider() {
@@ -519,7 +521,9 @@ QString EditTimelineAdapter::waveformSource(const QString& identityHex, const QS
 }
 
 qint64 EditTimelineAdapter::clearMediaCaches() {
-    return clearThumbnailCache() + waveforms_->clearCache();
+    const auto released = static_cast<qint64>(broker_->Clear()) + waveforms_->clearCache();
+    emit mediaCachesCleared();
+    return released;
 }
 
 } // namespace exosnap::quick

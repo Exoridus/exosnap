@@ -1353,6 +1353,23 @@ class Workspace {
             result_range_.out_us =
                 std::clamp(result_range_.out_us, command.span.in_us, command.span.out_us) - command.span.in_us;
     }
+    static std::optional<Time> audioTrimMinimum(Time fixed_edge_us, TrimEdge edge, uint32_t sample_rate) {
+        auto sample = scaleRatio(fixed_edge_us, sample_rate, 1'000'000);
+        if (!sample)
+            return std::nullopt;
+        const Time rounded_sample = (fixed_edge_us % 1'000'000) * sample_rate % 1'000'000 >= 500'000 ? 1 : 0;
+        const Time step = edge == TrimEdge::Left ? -1 : 1;
+        if (!addTime(*sample, rounded_sample + step, *sample) || *sample < 0)
+            return std::nullopt;
+        auto boundary = scaleRatio(*sample, 1'000'000, sample_rate);
+        if (!boundary)
+            return std::nullopt;
+        const Time rounded_boundary =
+            (*sample % sample_rate) * 1'000'000 % sample_rate >= (static_cast<Time>(sample_rate) + 1) / 2 ? 1 : 0;
+        if (!addTime(*boundary, rounded_boundary, *boundary))
+            return std::nullopt;
+        return std::max(Time{1}, edge == TrimEdge::Left ? fixed_edge_us - *boundary : *boundary - fixed_edge_us);
+    }
     void execute(const Trim& command) {
         auto_crossfade_ = command.auto_crossfade;
         auto requested = command.targets;
@@ -1372,11 +1389,14 @@ class Workspace {
             const auto* source = asset(clip->asset);
             Time source_begin = 0;
             Time source_end = source->duration;
+            uint32_t audio_sample_rate = 48000;
             if (clip->stream && source->source_descriptor)
                 for (const auto& stream : source->source_descriptor->streams)
                     if (stream.ref.stream_identity == clip->stream->stream_identity) {
                         source_begin = stream.source_span.in_us;
                         source_end = stream.source_span.out_us;
+                        if (stream.codec.sample_rate)
+                            audio_sample_rate = stream.codec.sample_rate;
                     }
             Time minimum = 1;
             const auto* track = mutableTrack(clip->track);
@@ -1385,7 +1405,15 @@ class Workspace {
                 if (next)
                     minimum = *next - clip->start;
             } else if (track->type == TrackType::Audio && clip->stream) {
-                minimum = 21;
+                // Rounded sample timestamps have unequal intervals. Keep the minimum anchored to the fixed source edge.
+                const auto sample_minimum =
+                    audioTrimMinimum(command.edge == TrimEdge::Left ? clip->source_out : clip->source_in, command.edge,
+                                     audio_sample_rate);
+                if (!sample_minimum) {
+                    fail(EditErrorCode::SourceBounds, {id});
+                    return;
+                }
+                minimum = *sample_minimum;
             }
             if (command.edge == TrimEdge::Left) {
                 lower = std::max(lower, source_begin - clip->source_in);

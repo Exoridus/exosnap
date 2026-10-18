@@ -71,6 +71,74 @@ Item {
             compare(still.playing, false);
         }
 
+        function test_pointer_panel_close_restores_timeline_transport_data() {
+            return [
+                { tag: "media-footer", panel: "Media", header: false, keyboardFocus: false },
+                { tag: "media-header", panel: "Media", header: true, keyboardFocus: false },
+                { tag: "details-footer", panel: "Details", header: false, keyboardFocus: false },
+                { tag: "details-header", panel: "Details", header: true, keyboardFocus: false },
+                { tag: "media-footer-after-keyboard", panel: "Media", header: false, keyboardFocus: true },
+                { tag: "media-header-after-keyboard", panel: "Media", header: true, keyboardFocus: true },
+                { tag: "details-footer-after-keyboard", panel: "Details", header: false, keyboardFocus: true },
+                { tag: "details-header-after-keyboard", panel: "Details", header: true, keyboardFocus: true }
+            ];
+        }
+
+        function test_pointer_panel_close_restores_timeline_transport(data) {
+            testTransportPlayer.setPlaying(false);
+            const page = make({ session: testSession, timeline: testTimeline, player: testTransportPlayer });
+            const clips = child(page, "editClipTimeline");
+            const access = child(page, "edit" + data.panel + "Access");
+            clips.forceActiveFocus();
+            mouseClick(access);
+            tryCompare(access, "expanded", true);
+            const close = data.header
+                ? child(page, "edit" + data.panel + "Pin").parent.children.find(control => control.text === (data.panel === "Media" ? qsTr("Close Media") : qsTr("Close Details")))
+                : access;
+            verify(!!close);
+            if (data.keyboardFocus)
+                close.forceActiveFocus(Qt.TabFocusReason);
+            mouseClick(close);
+            tryCompare(access, "expanded", false);
+            verify(clips.activeFocus);
+            const before = testEditHarness.transportCommand(testTransportPlayer);
+            keyPress(Qt.Key_Space);
+            compare(testEditHarness.transportCommand(testTransportPlayer), before);
+            keyRelease(Qt.Key_Space);
+            compare(testEditHarness.transportCommand(testTransportPlayer), before + 1);
+            compare(access.expanded, false);
+            testTransportPlayer.setPlaying(false);
+        }
+
+        function test_keyboard_panel_close_restores_invoker_data() {
+            return [
+                { tag: "media-footer", panel: "Media", close: "footer" },
+                { tag: "media-header", panel: "Media", close: "header" },
+                { tag: "media-escape", panel: "Media", close: "escape" },
+                { tag: "details-footer", panel: "Details", close: "footer" },
+                { tag: "details-header", panel: "Details", close: "header" },
+                { tag: "details-escape", panel: "Details", close: "escape" }
+            ];
+        }
+
+        function test_keyboard_panel_close_restores_invoker(data) {
+            const page = make();
+            const access = child(page, "edit" + data.panel + "Access");
+            access.forceActiveFocus(Qt.TabFocusReason);
+            keyClick(Qt.Key_Space);
+            tryCompare(access, "expanded", true);
+            if (data.close === "header") {
+                const close = child(page, "edit" + data.panel + "Pin").parent.children.find(control => control.text === (data.panel === "Media" ? qsTr("Close Media") : qsTr("Close Details")));
+                verify(!!close);
+                close.forceActiveFocus(Qt.TabFocusReason);
+            }
+            keyClick(data.close === "escape" ? Qt.Key_Escape : Qt.Key_Space);
+            tryCompare(access, "expanded", false);
+            verify(access.activeFocus);
+            keyClick(Qt.Key_Space);
+            tryCompare(access, "expanded", true);
+        }
+
         function test_harness_fit_completes_before_returning_on_settled_geometry() {
             while (testSession.canUndo) testSession.undo();
             testSession.appendAsset(testSession.media[0].id);

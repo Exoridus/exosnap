@@ -17,7 +17,7 @@ Rectangle {
     default property alias content: body.data
 
     signal pinToggled()
-    signal closeRequested()
+    signal closeRequested(bool keyboardActivation)
 
     color: ExoTheme.surface
     radius: ExoTheme.radiusMd
@@ -57,9 +57,19 @@ Rectangle {
                 }
             }
             EditActionButton {
+                id: closeAction
+                property bool keyboardActivation: false
                 text: root.closeText
                 glyph: ExoGlyph.Close
-                onClicked: root.closeRequested()
+                onClicked: root.closeRequested(closeAction.keyboardActivation)
+                Keys.onPressed: event => {
+                    if (event.key === Qt.Key_Space || event.key === Qt.Key_Return || event.key === Qt.Key_Enter)
+                        closeAction.keyboardActivation = true;
+                }
+                PointHandler {
+                    acceptedButtons: Qt.LeftButton
+                    onActiveChanged: if (active) closeAction.keyboardActivation = false
+                }
             }
         }
 

@@ -29,14 +29,14 @@ FocusScope {
         if (focused instanceof TextInput || focused instanceof TextEdit)
             return;
         if (event.key === Qt.Key_Escape && (root.detailsOpen || root.mediaOpen)) {
-            if (root.detailsOpen) root.toggleDetails();
-            else root.toggleMedia();
+            if (root.detailsOpen) root.toggleDetails(true);
+            else root.toggleMedia(true);
             event.accepted = true;
         } else if ((event.modifiers & Qt.ControlModifier) !== 0 && event.key === Qt.Key_M) {
-            root.toggleMedia();
+            root.toggleMedia(true);
             event.accepted = true;
         } else if ((event.modifiers & Qt.ControlModifier) !== 0 && event.key === Qt.Key_D) {
-            root.toggleDetails();
+            root.toggleDetails(true);
             event.accepted = true;
         } else if ((event.modifiers & Qt.ControlModifier) !== 0 && event.key === Qt.Key_E && root.session.durationMs > 0 && !root.exporter.running) {
             root.exporter.chooseDestination();
@@ -112,19 +112,25 @@ FocusScope {
             Accessible.role: Accessible.Heading
         }
     }
-    function toggleMedia(): void {
+    function toggleMedia(keyboardActivation: var): void {
         root.mediaOpen = !root.mediaOpen;
         if (!root.mediaOpen) {
             root.mediaPinned = false;
-            mediaAccess.forceActiveFocus(Qt.PopupFocusReason);
+            if (keyboardActivation === true)
+                mediaAccess.forceActiveFocus(Qt.TabFocusReason);
+            else
+                clips.forceActiveFocus(Qt.MouseFocusReason);
         }
         if (root.mediaOpen && root.width < 1200 && !root.detailsPinned) root.detailsOpen = false;
     }
-    function toggleDetails(): void {
+    function toggleDetails(keyboardActivation: var): void {
         root.detailsOpen = !root.detailsOpen;
         if (!root.detailsOpen) {
             root.detailsPinned = false;
-            detailsAccess.forceActiveFocus(Qt.PopupFocusReason);
+            if (keyboardActivation === true)
+                detailsAccess.forceActiveFocus(Qt.TabFocusReason);
+            else
+                clips.forceActiveFocus(Qt.MouseFocusReason);
         }
         if (root.detailsOpen && root.width < 1200 && !root.mediaPinned) root.mediaOpen = false;
     }
@@ -228,7 +234,7 @@ FocusScope {
                     pinObjectName: "editMediaPin"
                     closeText: qsTr("Close Media")
                     onPinToggled: root.mediaPinned = !root.mediaPinned
-                    onCloseRequested: root.toggleMedia()
+                    onCloseRequested: keyboardActivation => root.toggleMedia(keyboardActivation)
                     EditSourceBrowser {
                         anchors.fill: parent
                         session: root.session
@@ -254,7 +260,7 @@ FocusScope {
                     pinObjectName: "editDetailsPin"
                     closeText: qsTr("Close Details")
                     onPinToggled: root.detailsPinned = !root.detailsPinned
-                    onCloseRequested: root.toggleDetails()
+                    onCloseRequested: keyboardActivation => root.toggleDetails(keyboardActivation)
                     ExoScrollView {
                         id: detailsScroll
                         anchors.fill: parent
@@ -660,8 +666,46 @@ FocusScope {
                     Layout.leftMargin: 8
                     Layout.rightMargin: 8
                     spacing: 4
-                    EditActionButton { id: mediaAccess; objectName: "editMediaAccess"; text: qsTr("Media"); shortcutText: "Ctrl+M"; glyph: ExoGlyph.Folder; panelAccess: true; expanded: root.mediaOpen; pinned: root.mediaPinned; onClicked: root.toggleMedia() }
-                    EditActionButton { id: detailsAccess; objectName: "editDetailsAccess"; text: qsTr("Details"); shortcutText: "Ctrl+D"; glyph: ExoGlyph.Info; panelAccess: true; expanded: root.detailsOpen; pinned: root.detailsPinned; onClicked: root.toggleDetails() }
+                    EditActionButton {
+                        id: mediaAccess
+                        property bool keyboardActivation: false
+                        objectName: "editMediaAccess"
+                        text: qsTr("Media")
+                        shortcutText: "Ctrl+M"
+                        glyph: ExoGlyph.Folder
+                        panelAccess: true
+                        expanded: root.mediaOpen
+                        pinned: root.mediaPinned
+                        onClicked: root.toggleMedia(mediaAccess.keyboardActivation)
+                        Keys.onPressed: event => {
+                            if (event.key === Qt.Key_Space || event.key === Qt.Key_Return || event.key === Qt.Key_Enter)
+                                mediaAccess.keyboardActivation = true;
+                        }
+                        PointHandler {
+                            acceptedButtons: Qt.LeftButton
+                            onActiveChanged: if (active) mediaAccess.keyboardActivation = false
+                        }
+                    }
+                    EditActionButton {
+                        id: detailsAccess
+                        property bool keyboardActivation: false
+                        objectName: "editDetailsAccess"
+                        text: qsTr("Details")
+                        shortcutText: "Ctrl+D"
+                        glyph: ExoGlyph.Info
+                        panelAccess: true
+                        expanded: root.detailsOpen
+                        pinned: root.detailsPinned
+                        onClicked: root.toggleDetails(detailsAccess.keyboardActivation)
+                        Keys.onPressed: event => {
+                            if (event.key === Qt.Key_Space || event.key === Qt.Key_Return || event.key === Qt.Key_Enter)
+                                detailsAccess.keyboardActivation = true;
+                        }
+                        PointHandler {
+                            acceptedButtons: Qt.LeftButton
+                            onActiveChanged: if (active) detailsAccess.keyboardActivation = false
+                        }
+                    }
                     EditActionButton { objectName: "editSnapping"; text: qsTr("Snapping"); glyph: ExoGlyph.Magnet; checkable: true; checked: root.session.snapping; onClicked: root.session.snapping = checked }
                     EditActionButton { objectName: "editRipple"; text: qsTr("Ripple"); glyph: ExoGlyph.CloseGap; checkable: true; checked: root.session.ripple; onClicked: root.session.ripple = checked }
                     EditActionButton { objectName: "editAutoCrossfade"; text: qsTr("Auto Crossfade"); glyph: ExoGlyph.Layers; checkable: true; checked: root.session.autoCrossfade; onClicked: root.session.autoCrossfade = checked }
