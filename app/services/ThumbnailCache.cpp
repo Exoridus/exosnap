@@ -205,6 +205,11 @@ ThumbnailRequestBroker::ThumbnailRequestBroker() : ThumbnailRequestBroker(Config
 }
 
 ThumbnailRequestBroker::ThumbnailRequestBroker(Config config) : config_(std::move(config)) {
+    if (!config_.equivalent_files)
+        config_.equivalent_files = [](const auto& left, const auto& right) {
+            std::error_code error;
+            return std::filesystem::equivalent(left, right, error);
+        };
     if (config_.disk_enabled)
         disk_ = std::make_unique<ThumbnailDiskCache>(config_.disk_root, config_.disk_budget_bytes);
 }
@@ -228,16 +233,34 @@ std::optional<ThumbnailSourceInfo> ThumbnailRequestBroker::Source(const std::str
     return found->second;
 }
 
-std::optional<std::string> ThumbnailRequestBroker::IdentityForPath(const std::filesystem::path& path) const {
-    std::lock_guard lock(mutex_);
-    for (const auto& [identity, info] : sources_) {
-        std::error_code error;
-        if (info.path == path || std::filesystem::equivalent(info.path, path, error))
-            return identity;
+std::optional<ThumbnailRequestBroker::SourceRegistration>
+ThumbnailRequestBroker::ResolveSource(const std::filesystem::path& path) const {
+    std::vector<SourceRegistration> candidates;
+    {
+        std::lock_guard lock(mutex_);
+        for (const auto& [identity, info] : sources_)
+            if (info.path == path)
+                return SourceRegistration{identity, info};
+        candidates.reserve(sources_.size());
+        for (const auto& [identity, info] : sources_)
+            candidates.push_back(SourceRegistration{identity, info});
     }
+    for (auto& candidate : candidates)
+        if (config_.equivalent_files(candidate.info.path, path))
+            return std::move(candidate);
     return std::nullopt;
 }
 
+std::optional<std::string> ThumbnailRequestBroker::IdentityForPath(const std::filesystem::path& path) const {
+    if (auto source = ResolveSource(path))
+        return std::move(source->identity);
+    return std::nullopt;
+}
+std::optional<ThumbnailSourceInfo> ThumbnailRequestBroker::SourceForPath(const std::filesystem::path& path) const {
+    if (auto source = ResolveSource(path))
+        return std::move(source->info);
+    return std::nullopt;
+}
 std::uint64_t ThumbnailRequestBroker::Request(const std::string& identity_hex, std::int64_t time_us, int height,
                                               ThumbnailCompletion completion) {
     std::string key;
@@ -474,24 +497,23 @@ std::optional<ThumbnailRequestBroker::Job> ThumbnailRequestBroker::TakeJob() {
     std::lock_guard lock(mutex_);
     if (auto job = TakeFrom(visible_order_))
         return job;
+    if (!busy_) {
+        const auto waited = std::find_if(decode_order_.begin(), decode_order_.end(), [this](const std::string& key) {
+            const auto pending = pending_.find(key);
+            return pending != pending_.end() && !pending->second.waiters.empty();
+        });
+        if (waited != decode_order_.end()) {
+            const auto key = *waited;
+            decode_order_.erase(waited);
+            return pending_.find(key)->second.job;
+        }
+    }
     if (auto job = TakeFrom(prefetch_order_))
         return job;
-    if (busy_ || decode_order_.empty())
+    if (busy_)
         return std::nullopt;
-    // A request somebody waits for decodes before a prefetch.
-    const auto waited = std::find_if(decode_order_.begin(), decode_order_.end(), [this](const std::string& key) {
-        const auto pending = pending_.find(key);
-        return pending != pending_.end() && !pending->second.waiters.empty();
-    });
-    if (waited != decode_order_.end()) {
-        const auto key = *waited;
-        decode_order_.erase(waited);
-        const auto pending = pending_.find(key);
-        return pending->second.job;
-    }
     return TakeFrom(decode_order_);
 }
-
 void ThumbnailRequestBroker::DeferDecode(Job job) {
     {
         std::lock_guard lock(mutex_);

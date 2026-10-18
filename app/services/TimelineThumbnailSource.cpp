@@ -428,9 +428,8 @@ void TimelineThumbnailSource::workerLoop() {
             tile_cache.Clear();
             clip_content.reset();
             if (broker_) {
-                if (const auto identity = broker_->IdentityForPath(open_job->path))
-                    if (const auto source = broker_->Source(*identity))
-                        clip_content = source->content_sha256;
+                if (const auto source = broker_->SourceForPath(open_job->path))
+                    clip_content = source->content_sha256;
             }
             std::string error;
             open = engine->Open(open_job->path, error, &shutdown_cancelled_);

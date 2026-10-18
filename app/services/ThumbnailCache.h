@@ -129,6 +129,8 @@ class ThumbnailRequestBroker {
         std::filesystem::path disk_root; // empty: CacheLocation/thumbnails
         std::uint64_t disk_budget_bytes = ThumbnailDiskCache::kDefaultBudgetBytes;
         std::size_t memory_budget_bytes = kDefaultMemoryBudgetBytes;
+        // Empty uses filesystem equivalence. A supplied comparator must be thread-safe.
+        std::function<bool(const std::filesystem::path&, const std::filesystem::path&)> equivalent_files;
     };
 
     struct Job {
@@ -150,6 +152,9 @@ class ThumbnailRequestBroker {
     void RegisterSource(const std::string& identity_hex, ThumbnailSourceInfo info);
     [[nodiscard]] std::optional<ThumbnailSourceInfo> Source(const std::string& identity_hex) const;
     [[nodiscard]] std::optional<std::string> IdentityForPath(const std::filesystem::path& path) const;
+    // Returns one registration snapshot. Source bytes still require open-time validation.
+    // Alias probing runs outside broker locks.
+    [[nodiscard]] std::optional<ThumbnailSourceInfo> SourceForPath(const std::filesystem::path& path) const;
 
     // Thread-safe. A memory hit completes inline; anything else is queued for
     // the worker. Returns a ticket for Cancel (0 when already completed).
@@ -184,8 +189,8 @@ class ThumbnailRequestBroker {
     void AttachWorker(std::function<void()> wake);
     void DetachWorker();
     [[nodiscard]] bool HasWork() const;
-    // Next job: visible requests first, then prefetches, then jobs that only
-    // wait for a decode (withheld while foreground work is busy).
+    // Eligible visible requests precede prefetches. Foreground work withholds
+    // decoding while cache lookups remain available.
     [[nodiscard]] std::optional<Job> TakeJob();
     // Parks a job that missed both caches until decoding is admitted.
     void DeferDecode(Job job);
@@ -203,6 +208,11 @@ class ThumbnailRequestBroker {
     [[nodiscard]] ThumbnailBrokerStats Stats() const;
 
   private:
+    struct SourceRegistration {
+        std::string identity;
+        ThumbnailSourceInfo info;
+    };
+    std::optional<SourceRegistration> ResolveSource(const std::filesystem::path& path) const;
     struct Pending {
         Job job;
         std::vector<std::pair<std::uint64_t, ThumbnailCompletion>> waiters;

@@ -39,6 +39,7 @@
 #include <filesystem>
 #include <fstream>
 #include <functional>
+#include <future>
 #include <iostream>
 #include <limits>
 #include <memory>
@@ -1798,6 +1799,146 @@ TEST(ThumbnailCache, DiskTierRejectsCorruptionAndHoldsItsBudget) {
     }
 }
 
+TEST(ThumbnailBroker, ExactSourcePathsDoNotProbeUnrelatedFiles) {
+    ThumbnailRequestBroker::Config config;
+    config.disk_enabled = false;
+    int probes = 0;
+    config.equivalent_files = [&](const auto&, const auto&) {
+        ++probes;
+        return false;
+    };
+    ThumbnailRequestBroker broker(config);
+    for (int i = 0; i < 8; ++i) {
+        const auto hash = Identity(static_cast<std::uint8_t>(20 + i));
+        broker.RegisterSource(engine::ToHex(hash), ThumbnailSourceInfo{std::to_string(i) + ".mkv", hash, 0, 0, 0, 1});
+    }
+    for (int i = 0; i < 8; ++i) {
+        const auto found = broker.SourceForPath(std::to_string(i) + ".mkv");
+        ASSERT_TRUE(found);
+        EXPECT_EQ(found->content_sha256, Identity(static_cast<std::uint8_t>(20 + i)));
+    }
+    EXPECT_EQ(probes, 0);
+}
+
+TEST(ThumbnailBroker, AliasProbingDoesNotHoldTheMetadataLock) {
+    std::promise<void> entered;
+    auto started = entered.get_future();
+    std::promise<void> release;
+    const auto released = release.get_future().share();
+    ThumbnailRequestBroker::Config config;
+    config.disk_enabled = false;
+    config.equivalent_files = [&](const auto&, const auto&) {
+        entered.set_value();
+        released.wait();
+        return true;
+    };
+    ThumbnailRequestBroker broker(config);
+    const auto identity = engine::ToHex(Identity(29));
+    broker.RegisterSource(identity, ThumbnailSourceInfo{"source.mkv", Identity(29), 0, 0, 0, 1});
+    auto alias = std::async(std::launch::async, [&] { return broker.SourceForPath("alias.mkv"); });
+    const bool probing = started.wait_for(std::chrono::seconds(3)) == std::future_status::ready;
+    auto metadata = std::async(std::launch::async, [&] { return broker.Source(identity); });
+    const bool independent = metadata.wait_for(std::chrono::seconds(1)) == std::future_status::ready;
+    release.set_value();
+    const auto resolved = alias.get();
+    const auto source = metadata.get();
+    EXPECT_TRUE(probing);
+    EXPECT_TRUE(independent);
+    ASSERT_TRUE(resolved);
+    ASSERT_TRUE(source);
+    EXPECT_EQ(resolved->content_sha256, source->content_sha256);
+}
+TEST(ThumbnailBroker, PathResolutionRetainsTheBoundFingerprintAcrossRegistrationChanges) {
+    const auto old_hash = Identity(30);
+    const auto new_hash = Identity(31);
+    std::weak_ptr<ThumbnailRequestBroker> weak;
+    ThumbnailRequestBroker::Config config;
+    config.disk_enabled = false;
+    config.equivalent_files = [&](const auto&, const auto&) {
+        if (const auto owner = weak.lock())
+            owner->RegisterSource(engine::ToHex(new_hash), ThumbnailSourceInfo{"source.mkv", new_hash, 0, 0, 0, 1});
+        return true;
+    };
+    auto broker = std::make_shared<ThumbnailRequestBroker>(config);
+    weak = broker;
+    broker->RegisterSource(engine::ToHex(old_hash), ThumbnailSourceInfo{"source.mkv", old_hash, 0, 0, 0, 1});
+    const auto resolved = broker->SourceForPath("alias.mkv");
+    ASSERT_TRUE(resolved);
+    EXPECT_EQ(resolved->content_sha256, old_hash);
+    EXPECT_FALSE(broker->Source(engine::ToHex(old_hash)));
+    EXPECT_TRUE(broker->Source(engine::ToHex(new_hash)));
+}
+
+TEST(ThumbnailBroker, ConcurrentRegistrationCannotSkipLegacySourceValidation) {
+    EnsureApplication();
+    const auto path =
+        (std::filesystem::path(__FILE__).parent_path() / "../../../libs/engine/tests/fixtures/reordered_h264.mp4")
+            .lexically_normal();
+    engine::EditPlayerEngine baseline;
+    std::string error;
+    ASSERT_TRUE(baseline.Open(path, error)) << error;
+    ASSERT_GT(baseline.VideoWidth(), 0);
+    baseline.Close();
+    const auto old_hash = Identity(32);
+    const auto new_hash = Identity(33);
+    std::weak_ptr<ThumbnailRequestBroker> weak;
+    std::atomic<bool> replaced{false};
+    ThumbnailRequestBroker::Config config;
+    config.disk_enabled = false;
+    config.equivalent_files = [&](const auto&, const auto&) {
+        if (!replaced.exchange(true))
+            if (const auto owner = weak.lock())
+                owner->RegisterSource(engine::ToHex(new_hash),
+                                      ThumbnailSourceInfo{"registered.mp4", new_hash, 0, 0, 0, 1});
+        return true;
+    };
+    auto broker = std::make_shared<ThumbnailRequestBroker>(config);
+    weak = broker;
+    broker->RegisterSource(engine::ToHex(old_hash), ThumbnailSourceInfo{"registered.mp4", old_hash, 0, 0, 0, 1});
+    TimelineThumbnailSource source(broker);
+    QSignalSpy opened(&source, &TimelineThumbnailSource::clipOpened);
+    source.openClip(QString::fromStdWString(path.wstring()), {});
+    ASSERT_TRUE(WaitFor([&] { return opened.count() == 1; }));
+    EXPECT_TRUE(replaced.load());
+    EXPECT_EQ(source.videoWidth(), 0);
+    EXPECT_EQ(source.videoHeight(), 0);
+}
+TEST(ThumbnailBroker, QueuedVisibleDecodePrecedesSpeculativeCacheProbes) {
+    ThumbnailFixture fixture;
+    auto broker = fixture.Broker();
+    broker->AttachWorker([] {});
+    const auto visible_identity = engine::ToHex(Identity(34));
+    const auto speculative_identity = engine::ToHex(Identity(35));
+    broker->RegisterSource(visible_identity, ThumbnailSourceInfo{"visible.mkv", Identity(34), 0, 0, 0, 1});
+    broker->RegisterSource(speculative_identity, ThumbnailSourceInfo{"speculative.mkv", Identity(35), 0, 0, 0, 1});
+    broker->SetForegroundBusy(true);
+    auto visible = std::make_shared<Result>();
+    broker->Request(visible_identity, 0, 48, Capture(visible));
+    const auto parked = broker->TakeJob();
+    ASSERT_TRUE(parked);
+    broker->DeferDecode(*parked);
+    std::vector<std::int64_t> times;
+    for (int i = 0; i < 12; ++i)
+        times.push_back(i * 33333);
+    broker->Prefetch(speculative_identity, times, 48);
+    broker->SetForegroundBusy(false);
+    int speculative_before_visible = 0;
+    bool found_visible = false;
+    for (int i = 0; i < 13; ++i) {
+        const auto job = broker->TakeJob();
+        ASSERT_TRUE(job);
+        if (job->identity == visible_identity) {
+            found_visible = true;
+            broker->Complete(*job, SolidImage(85, 48, qRgb(0, 200, 0)));
+            break;
+        }
+        ++speculative_before_visible;
+        broker->Complete(*job, QImage());
+    }
+    EXPECT_TRUE(found_visible);
+    EXPECT_EQ(speculative_before_visible, 0);
+    EXPECT_TRUE(Done(visible));
+}
 TEST(ThumbnailBroker, ClearingRetiresOldRequestsAndReadmitsTheSameContent) {
     ThumbnailFixture fixture;
     auto broker = fixture.Broker();
