@@ -17,7 +17,14 @@ The blocking set includes use-after-move, dangling handles, misleading indentati
 
 Unused aliases, redundant declarations, unused using declarations and unused parameters are blocking after whole-scope triage and positive canaries. Required callback and virtual signatures retain their contracts; the unused-parameter check uses its conservative default configuration. Include-cleaner is blocking for `libs/engine/`, `libs/capability/` and `libs/update/` through the Rust rule metadata. Application and other layers remain advisory: Qt meta-object generation and public umbrella headers need contextual include review. The global `.clang-tidy` file leaves include-cleaner advisory because it cannot express this path-scoped verdict.
 
-MSVC `/W4 /WX` is supplemented by explicit unhandled-enumerator C4062 enablement. C4061 for switches with a `default` stays separate. Keep exhaustive policy switches genuinely exhaustive rather than adding a default that hides a new enum case.
+The first-party `exosnap::warnings` target applies `/W4 /WX /sdl /utf-8` in MSVC Debug and Release builds.
+`/sdl` adds security diagnostics and code-generation protections. `/utf-8` fixes source and execution
+character sets independently of the host code page. It does not replace UTF-8/UTF-16 conversions at
+Windows API boundaries. Dependencies keep their own target policies rather than inheriting global flags.
+
+Explicit unhandled-enumerator C4062 enablement supplements `/W4 /WX`. C4061 for switches with a
+`default` stays separate. Keep exhaustive policy switches genuinely exhaustive rather than adding
+a default that hides a new enum case.
 
 ## Add a blocking check only with two proofs
 
@@ -68,11 +75,124 @@ Cognitive complexity remains advisory. The report ranks up to 20 diagnosed funct
 
 Both CI analysis workflows provision cppcheck through `cargo exo-dev setup cppcheck`, pinned to the Chocolatey package version in `tools/exo-dev/src/setup.rs`. Provisioning validates the executable's version and fails if installation or discovery fails. `cargo exo-dev lint quality --only cppcheck-unused-function --report-path build/advisory/cppcheck.txt` measures unused-function candidates without turning findings into failures. Qt slots and registered callbacks require review before removal.
 
+## Windows compiler compatibility
+
+Windows analysis supplies `_CRT_USE_BUILTIN_OFFSETOF=1` to select the UCRT builtin
+`offsetof`, matching MSVC's predefined macro. Older Clang versions otherwise
+reject valid constant-expression layout assertions. Clang 21 and later define
+this macro themselves, as documented in the
+[LLVM release notes](https://releases.llvm.org/21.1.0/tools/clang/docs/ReleaseNotes.html).
+This argument contributes to the verdict identity and does not disable diagnostics
+or change native build flags.
+
 ## Missing tools and caches
 
 A requested but missing analysis tool yields exit 3 from the quality runner. `cargo exo-dev verify` reports `TOOL_MISSING`; `--full` fails, `--fast` can report the gap and continue. Install the missing tool rather than interpreting absence as success.
 
-clang-tidy caches by the translation unit's recorded input set. cppcheck uses its build-directory cache. Shared tool caches live under `%LOCALAPPDATA%\ExoSnap\tool-cache`, outside source/build trees. Delete that directory for a deliberate cold run. Full runs the whole tree; Fast scopes the pass to affected translation units where supported.
+clang-tidy caches successful analysis output by the translation unit's complete recorded input set.
+The key includes every compile-command variant, source/header content, analyzer configuration,
+tool version and cache schema. Ninja records must have valid status, exact dependency counts,
+all object variants and current object commands before they can support reuse.
+Missing input coverage causes fresh analysis. Header membership and content are part of the global identity,
+including repository vendor include directories, so a newly available conditional header cannot
+reuse a verdict from the previous include search. Content hashing also covers optional or shadowing
+headers not yet represented in an older Ninja graph. This conservatively invalidates all unit keys
+when a repository header changes, rather than assuming the older graph proves include selection.
+Dependency paths that ambiguously belong to
+another checkout are rejected rather than remapped.
+Checkout ownership and header consumers compare physically proven Windows path aliases
+without changing recorded dependency paths.
+
+Ninja omits installed MSVC/SDK headers from its MSVC dependency records.
+Their content trees, compiler identity and include environment therefore contribute one global
+fingerprint, rechecked before fresh results are cached. Use a matching Developer PowerShell for direct lint invocations.
+Without an explicit INCLUDE environment or readable supported toolchain inputs, verdicts are
+not reused. The CI job initializes that environment before building and analysing. Header scoping includes consumers with incomplete
+coverage rather than reporting an empty successful scope. CMake/preset changes select the full tree.
+Added, removed or renamed headers select the full tree and reload current dependency records.
+The header-membership fingerprint invalidates earlier verdicts when include search changes,
+while later runs with the same verified inputs can reuse the new results.
+Scoping and cache-key construction share one initial ownership/header snapshot. Readable directory
+links are traversed with cycle detection, and physical link targets contribute to membership identity.
+Deleted registered worktrees are ignored; unreadable existing roots remain unavailable evidence.
+Build-directory aliases and UNC roots retain their filesystem meaning during target matching.
+The verification runner passes its imported MSVC environment to both analysis and identity hashing.
+A disabled cache prints the unavailable evidence category.
+
+Cached entries carry their schema, source, key, exit status and output digest.
+Before storing any fresh result, the runner rechecks compilation-database bytes,
+configuration, header membership, toolchain identity and the captured source/dependency keys.
+Fresh work is checkpointed in batches of at least 16 units or four worker waves, whichever is larger.
+Changed or unreadable evidence aborts the current batch before its cache writes. Earlier validated
+batches remain reusable under their original keys; a changed input produces a different key.
+Full toolchain revalidation is retained, including selected cache hits, rather than trusting an old
+snapshot across analysis. This deliberately costs additional reads to detect persistent input drift.
+Schema 4 rejects entries from producers that did not perform this validation.
+Keep analysis inputs stable throughout the run. Build locks do not prevent editor changes.
+Before/after checks detect persistent drift but cannot detect an edit and restoration during
+analysis, or make sequential file reads immutable. Immutable input snapshots are not provided.
+Old, malformed or damaged entries are misses. The digest detects corruption, not forgery by someone
+already able to write a trusted cache scope. GitHub cache ref isolation remains the trust boundary.
+CI restores and saves the verdict cache in separate steps. Validated diagnostics are saved
+also when they make the analysis fail, and replaying a blocking finding still fails the check.
+An interrupted analysis retains completed, validated checkpoints locally. Work in the unfinished
+batch must run again. CI reuse still depends on its separate cache upload finishing, which a hard
+job timeout does not guarantee. Cache upload failures do not replace the analysis verdict.
+cppcheck keeps its separate build-directory cache.
+
+Shared tool caches live under %LOCALAPPDATA%\ExoSnap\tool-cache, outside source/build trees.
+Use a new --cache-dir for an isolated cold clang-tidy measurement.
+Full runs the whole tree. Fast scopes the pass to affected translation units where supported.
+
+### Measure blocking analysis costs
+
+The --profile-path option to cargo exo-dev lint clang-tidy writes a JSON profile
+with HEAD/dirty state, tool version, compilation-database SHA-256, selected-source count,
+cache counts, fresh-worker count and pipeline wall times.
+Each fresh translation unit records wall time and, on Windows when available, process CPU time
+and peak working-set bytes. Missing resource measurements are null.
+The verification runner also retains clang-tidy-profile.json beside its step logs.
+An optional profile failure emits a warning and preserves the analysis diagnostics and verdict.
+The Debug CI job uploads that profile on successful and failing runs when analysis produced it.
+It sets EXO_DEV_CLANG_TIDY_PROFILE=public: the uploaded profile omits tool, compilation-database
+and source paths, classifies scope without free-form details, and identifies fresh units by the
+same queue positions as progress records. Versions, digests, counts, timings and resources remain.
+Without that setting, local rich profiles retain their existing path fields.
+
+Set EXO_DEV_CLANG_TIDY_PROGRESS=1 for incremental parent-process progress on stderr.
+The Debug CI verification step enables it. Other invocations leave it off by default.
+Each EXO_DEV_CLANG_TIDY_PROGRESS line contains escaped JSON for a phase start,
+tool-version discovery, the input-ready counts/timings, or a translation-unit start/completion.
+Translation units use one-based positions in the fresh-work queue. Completions include
+completed/total counts and existing wall, CPU and working-set measurements.
+These records contain no source paths, compiler commands or defines, and survive in the
+GitHub Actions step log even when cancellation prevents a final profile. They do not constitute an analysis verdict.
+
+Discovery, version detection, database parsing, configuration/toolchain identity, git scope, header expansion, Ninja extraction/parsing,
+freshness checks, hashing, cache lookup, fresh subprocess execution, input revalidation, validation/storage and reporting
+are distinct measurements. Scope/dependency totals include their detailed subphases, so do not sum
+nested counters. Per-process CPU time is additive. Per-process memory peaks are not a simultaneous
+aggregate memory peak. GitHub restore/save durations come from workflow logs, outside this profile.
+
+Compare warm, source-change, header-change and cold-cache runs with the same toolchain and declared
+input set. Preserve all compilation variants when making a representative sample.
+Alternate worker counts and repeat measurements on an idle host before changing defaults.
+A high hit rate alone does not identify which phase consumes wall time.
+
+For a large selection of at least 1,000 current objects, dependency extraction reads the
+whole Ninja dependency log once. Smaller selections retain batches of at most 100 objects.
+The parser still admits only selected source/object variants with complete valid records.
+Large freshness selections share the default Ninja command plan, with targeted fallback for
+objects outside that plan. Counted dry-run frames must describe the entire scheduled plan.
+Debug Rust builds optimize the sha2 dependency while retaining the same SHA-256 algorithm.
+The threshold is conservative for the measured large workload, not a claim of universal optimality.
+
+The ignored compare_ninja_dependency_strategies Rust test compares both extraction strategies
+in seven alternating pairs and requires identical parsed dependency coverage.
+Set EXO_DEV_DEPENDENCY_BUILD_DIR to a configured Ninja tree and EXO_DEV_DEPENDENCY_REPORT
+to a JSON output path, then run cargo test --locked --manifest-path tools/Cargo.toml
+-p exo-dev --lib compare_ninja_dependency_strategies -- --ignored --nocapture.
+This measures extraction/parsing, not analysis correctness or reusable cache verdicts.
 
 Compiler caching is distinct. Use `sccache --show-stats` after a build to inspect the active server. Size its cache for the number of build configurations and worktrees in use; a fixed historical hit rate is not a guarantee. A changed absolute source path can change cache identity. Do not enable path rewriting merely for hits until crash symbolication against the resulting PDB has been verified.
 

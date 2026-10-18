@@ -14,6 +14,7 @@ add_library(soak_metrics STATIC
 )
 target_include_directories(soak_metrics PUBLIC ${CMAKE_CURRENT_SOURCE_DIR})
 target_link_libraries(soak_metrics PUBLIC nlohmann_json::nlohmann_json)
+target_link_libraries(soak_metrics PRIVATE exosnap::warnings)
 target_compile_features(soak_metrics PUBLIC cxx_std_20)
 
 # --- Pure clapper CLI/schedule validation (no WinAPI / engine) ---
@@ -21,6 +22,7 @@ add_library(clapper_schedule STATIC
     clapper_schedule.cpp
 )
 target_include_directories(clapper_schedule PUBLIC ${CMAKE_CURRENT_SOURCE_DIR})
+target_link_libraries(clapper_schedule PRIVATE exosnap::warnings)
 target_compile_features(clapper_schedule PUBLIC cxx_std_20)
 
 # --- Host run-loop: engine-callback latch + process sampler + timeline + abort ---

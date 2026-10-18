@@ -2140,6 +2140,43 @@ TEST(EditExportAdapterRun, DestructionJoinsActiveRenderAndRemovesStagingWithoutE
     QCoreApplication::processEvents();
 }
 
+TEST(EditExportAdapterRun, ChangedBytesBeforePreparationRequireReimport) {
+    EnsureApplication();
+    QTemporaryDir directory;
+    ASSERT_TRUE(directory.isValid());
+    const auto fixture_template =
+        QFileInfo(QString::fromUtf8(__FILE__))
+            .dir()
+            .absoluteFilePath(QStringLiteral("../../../libs/engine/tests/fixtures/reordered_h264.mp4"));
+    const auto fixture = QDir(directory.path()).filePath(QStringLiteral("source.mp4"));
+    ASSERT_TRUE(QFile::copy(fixture_template, fixture));
+    EditSessionAdapter session;
+    QEventLoop imported;
+    QObject::connect(&session, &EditSessionAdapter::workspaceChanged, &imported, &QEventLoop::quit);
+    QTimer::singleShot(10000, &imported, &QEventLoop::quit);
+    session.importMedia(QUrl::fromLocalFile(fixture), true);
+    imported.exec();
+    ASSERT_EQ(session.workspace().clips().size(), 1u);
+    ASSERT_NE(session.workspace().assets().front().source_descriptor, nullptr);
+    QFile file(fixture);
+    ASSERT_TRUE(file.open(QIODevice::Append));
+    ASSERT_EQ(file.write("x", 1), 1);
+    file.close();
+    EditExportAdapter exporter;
+    exporter.setSession(&session);
+    exporter.setOutputDirectoryProvider([&] { return directory.path(); });
+    QEventLoop prepared;
+    QObject::connect(&exporter, &EditExportAdapter::stateChanged, &prepared, [&] {
+        if (exporter.state() == EditExportAdapter::Review || exporter.state() == EditExportAdapter::Failed)
+            prepared.quit();
+    });
+    QTimer::singleShot(10000, &prepared, &QEventLoop::quit);
+    exporter.startExport();
+    prepared.exec();
+    EXPECT_EQ(exporter.state(), EditExportAdapter::Failed);
+    EXPECT_TRUE(exporter.errorText().contains(QStringLiteral("Import it again")));
+}
+
 TEST(EditExportAdapterRun, DestructionReclaimsFinishedWorkerWithCompletionStillQueued) {
     EnsureApplication();
     QTemporaryDir directory;

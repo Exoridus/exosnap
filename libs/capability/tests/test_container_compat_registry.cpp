@@ -3,8 +3,6 @@
 #include <capability/config_types.h>
 #include <capability/container_compat_registry.h>
 
-#include <string>
-
 // ---------------------------------------------------------------------------
 // Helpers
 // ---------------------------------------------------------------------------

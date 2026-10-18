@@ -190,3 +190,31 @@ effective language is passed to an app-launched updater as presentation data;
 manual updater launches use System. A missing translation resource falls back
 to English and never prevents an update. The offline WiX Setup is outside this
 localization surface.
+
+## MSVC STL hardening qualification
+
+The production default does not define _MSVC_STL_HARDENING.
+The macro is available starting with Visual Studio 2022 17.14, but compiler support alone
+is not qualification for adoption. Hardened preconditions can terminate the process
+with __fastfail, including an active recording. They are not recoverable C++ exceptions,
+AddressSanitizer, general heap corruption detection or Release iterator debugging.
+
+Qualification requires consistent settings for first-party translation units and the
+static-library/header boundaries that share STL inline or template implementations.
+The macro is independent of the STL ABI. Equal object sizes do not prove ODR consistency:
+linking different inline definitions can select an unhardened implementation for both callers.
+Prebuilt DLL implementation coverage is a separate question from that shared-definition risk.
+Do not infer that Qt must be rebuilt solely from enabling this macro.
+
+Run deliberate precondition violations in isolated child processes, with valid-operation
+controls and an unhardened negative control. Keep Debug iterator checking separate from
+proof that this macro is effective. Before adoption, validate Debug and Release, the pinned
+CI toolchain, and representative recording paths with repeated measurements on a quiet host.
+Microbenchmarks collected under competing compiler or browser load do not establish
+recording latency headroom or acceptable end-to-end overhead.
+
+The remaining adoption requirements are coherent shared-definition coverage, CI hardening
+probes and representative runtime qualification. Keep the production default unchanged
+until those requirements have evidence. Do not substitute _ITERATOR_DEBUG_LEVEL=1 in Release.
+See [Microsoft's STL hardening documentation](https://github.com/microsoft/STL/wiki/STL-Hardening)
+for the protected APIs and default settings.
