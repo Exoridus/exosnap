@@ -2855,15 +2855,19 @@ int main(int argc, char* argv[]) {
         // expansion, scroll or dialog, then the grab after their transitions.
         const bool scrolls = !visual_scroll.isEmpty() || settings_visual_bottom;
         const bool has_dialog = !visual_dialog.isEmpty();
-        const auto act_on_page = [&app, root_window, grab, scrolls, has_dialog, full_page, expand_all,
-                                  apply_visual_scroll, settings_visual_bottom, apply_settings_bottom,
+        const auto act_on_page = [&app, &quick_application, root_window, grab, scrolls, has_dialog, full_page,
+                                  expand_all, apply_visual_scroll, settings_visual_bottom, apply_settings_bottom,
                                   open_visual_dialog]() {
             if (!scrolls && !has_dialog && !full_page && !expand_all) {
-                grab();
+                QTimer::singleShot(kHarnessPageSettleMs, &app, [&app, &quick_application, grab]() {
+                    quick_application.applyEditVisualLayout();
+                    QTimer::singleShot(kHarnessTransitionMs, &app, grab);
+                });
                 return;
             }
-            const auto act = [&app, grab, apply_visual_scroll, settings_visual_bottom, apply_settings_bottom,
-                              open_visual_dialog]() {
+            const auto act = [&app, &quick_application, grab, apply_visual_scroll, settings_visual_bottom,
+                              apply_settings_bottom, open_visual_dialog]() {
+                quick_application.applyEditVisualLayout();
                 apply_visual_scroll();
                 if (settings_visual_bottom)
                     apply_settings_bottom();

@@ -556,6 +556,10 @@ target_sources(exosnap
         ${PROJECT_SOURCE_DIR}/app/visual_tests/CanonicalMachine.h
         ${PROJECT_SOURCE_DIR}/app/visual_tests/DiagnosticsLiveScenario.cpp
         ${PROJECT_SOURCE_DIR}/app/visual_tests/DiagnosticsLiveScenario.h
+        # The Edit fixtures' synthetic pictures and audio, seeded by the equally
+        # ungated QuickApplication::applyEditVisualScenario.
+        ${PROJECT_SOURCE_DIR}/app/visual_tests/EditVisualMedia.cpp
+        ${PROJECT_SOURCE_DIR}/app/visual_tests/EditVisualMedia.h
 )
 
 if(WIN32)
@@ -1229,6 +1233,11 @@ qt_add_qml_module(edit_timeline_qml_tests
         QuickPreviewRgbaConverter.h
         QuickThemeTokens.cpp
         QuickThemeTokens.h
+        # EditPage publishes its panel layout to the shell and takes panel
+        # requests from it.
+        ShellAdapter.cpp
+        ShellAdapter.h
+        ${PROJECT_SOURCE_DIR}/app/models/CloseGuardPolicy.cpp
         # ExoTheme.qml resolves wheelScrollLines through this singleton.
         QuickWheelMetrics.h
         # Lets EditTimeline.qml draw audio rows with the waveform item.
@@ -1249,8 +1258,12 @@ qt_add_qml_module(edit_timeline_qml_tests
         ExoButton.qml
         ExoCard.qml
         ExoCheckBox.qml
+        ExoConfirmDialog.qml
+        ExoMenu.qml
+        ExoMenuItem.qml
         ExoNavTab.qml
         ExoSelect.qml
+        ExoSlider.qml
         ExoChevron.qml
         EditPlayer.qml
         EditTimeline.qml

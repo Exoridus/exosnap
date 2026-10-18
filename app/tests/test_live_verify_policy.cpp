@@ -102,6 +102,32 @@ QVector<AutomationState> InterestingStates() {
     popups_open.notification_hub_open = true;
     states.append(popups_open);
 
+    // The editor in use: on its own page, with a selection, history, monitoring
+    // waiting for a decision and an export outcome up for review.
+    AutomationState editing = EditOpenOnRecord();
+    editing.page = QString::fromLatin1(page_name::kEdit);
+    editing.edit_media_count = 2;
+    editing.edit_clip_count = 4;
+    editing.edit_selected_clip = 3;
+    editing.edit_can_undo = true;
+    editing.edit_monitoring_track_count = 2;
+    editing.edit_monitoring_confirmation_required = true;
+    editing.edit_export_state = QStringLiteral("review");
+    editing.edit_details_panel = QStringLiteral("open");
+    states.append(editing);
+    AutomationState transition_selected = editing;
+    transition_selected.edit_selected_clip = 0;
+    transition_selected.edit_selected_transition = 3;
+    transition_selected.edit_can_redo = true;
+    transition_selected.edit_export_state = QStringLiteral("completed");
+    states.append(transition_selected);
+    // Everything deleted: no session, but the deletion itself can be undone.
+    AutomationState emptied = Ready();
+    emptied.page = QString::fromLatin1(page_name::kEdit);
+    emptied.edit_can_undo = true;
+    emptied.edit_media_count = 1;
+    states.append(emptied);
+
     return states;
 }
 
@@ -429,6 +455,111 @@ TEST(LiveVerifyPolicy, SetInDepthIsRefusedWhereverTheSwitchItselfIsDisabled) {
     AutomationState blocked = Ready();
     blocked.blocking_surface = QString::fromLatin1(blocking_surface_name::kRecovery);
     EXPECT_FALSE(Evaluate(*command, blocked).allowed());
+}
+
+TEST(LiveVerifyEditPolicy, TheTimelineOffersWhatItsSelectionAllows) {
+    AutomationState state = EditOpenOnRecord();
+    state.page = QString::fromLatin1(page_name::kEdit);
+    state.edit_media_count = 1;
+    const auto offered = [&state]() { return AvailableActions(state); };
+
+    // Nothing selected and no history: content edits that need a target are
+    // not offered, the ones that act at the playhead are.
+    QStringList actions = offered();
+    EXPECT_TRUE(actions.contains(QStringLiteral("edit.split")));
+    EXPECT_TRUE(actions.contains(QStringLiteral("edit.appendMedia")));
+    EXPECT_TRUE(actions.contains(QStringLiteral("edit.setPanel")));
+    EXPECT_FALSE(actions.contains(QStringLiteral("edit.delete")));
+    EXPECT_FALSE(actions.contains(QStringLiteral("edit.removeTransition")));
+    EXPECT_FALSE(actions.contains(QStringLiteral("edit.undo")));
+    EXPECT_FALSE(actions.contains(QStringLiteral("edit.closeGap")));
+
+    state.edit_selected_clip = 2;
+    state.edit_can_undo = true;
+    actions = offered();
+    EXPECT_TRUE(actions.contains(QStringLiteral("edit.delete")));
+    EXPECT_TRUE(actions.contains(QStringLiteral("edit.undo")));
+    EXPECT_FALSE(actions.contains(QStringLiteral("edit.redo")));
+
+    state.edit_selected_clip = 0;
+    state.edit_selected_transition = 2;
+    actions = offered();
+    EXPECT_TRUE(actions.contains(QStringLiteral("edit.removeTransition")));
+    EXPECT_TRUE(actions.contains(QStringLiteral("edit.setJunctionCurve")));
+    EXPECT_FALSE(actions.contains(QStringLiteral("edit.delete")));
+
+    state.edit_gap_selected = true;
+    actions = offered();
+    EXPECT_TRUE(actions.contains(QStringLiteral("edit.closeGap")));
+    EXPECT_TRUE(actions.contains(QStringLiteral("edit.delete")));
+}
+
+TEST(LiveVerifyEditPolicy, ABlockingSurfaceFreezesTheWholeEditor) {
+    AutomationState state = EditOpenOnRecord();
+    state.page = QString::fromLatin1(page_name::kEdit);
+    state.edit_selected_clip = 1;
+    state.edit_can_undo = true;
+    state.edit_media_count = 1;
+    state.blocking_surface = QString::fromLatin1(blocking_surface_name::kCrashReport);
+    for (const QString& action : AvailableActions(state)) {
+        EXPECT_FALSE(action.startsWith(QStringLiteral("edit.")) && action != QStringLiteral("edit.playPause") &&
+                     action != QStringLiteral("edit.seek") && action != QStringLiteral("edit.setTrimIn") &&
+                     action != QStringLiteral("edit.setTrimOut") && action != QStringLiteral("edit.timelineHome") &&
+                     action != QStringLiteral("edit.timelineEnd") && action != QStringLiteral("edit.close") &&
+                     action != QStringLiteral("edit.open"))
+            << action.toStdString();
+    }
+}
+
+TEST(LiveVerifyEditPolicy, PlaybackWaitsForMonitoringConfirmation) {
+    AutomationState state = EditOpenOnRecord();
+    state.edit_monitoring_confirmation_required = true;
+    const auto* play = FindCommand(QStringLiteral("edit.play"));
+    ASSERT_NE(play, nullptr);
+    const auto verdict = Evaluate(*play, state);
+    EXPECT_FALSE(verdict.allowed());
+    EXPECT_EQ(verdict.code, QString::fromLatin1(error_code::kBlocked));
+    EXPECT_FALSE(AvailableActions(state).contains(QStringLiteral("edit.play")));
+    EXPECT_TRUE(AvailableActions(state).contains(QStringLiteral("edit.pause")));
+    state.edit_monitoring_confirmation_required = false;
+    EXPECT_TRUE(Evaluate(*play, state).allowed());
+    state.edit_playback = QStringLiteral("none");
+    EXPECT_FALSE(Evaluate(*play, state).allowed());
+}
+
+TEST(LiveVerifyEditPolicy, HistoryCommandsDescribeTheirRevisionGuard) {
+    for (const char* name : {"edit.undo", "edit.redo"}) {
+        const auto* command = FindCommand(QString::fromLatin1(name));
+        ASSERT_NE(command, nullptr);
+        bool found = false;
+        for (const auto& parameter : command->parameters)
+            if (parameter.name == QStringLiteral("expectedRevision")) {
+                found = true;
+                EXPECT_EQ(parameter.type, QStringLiteral("int"));
+                EXPECT_FALSE(parameter.required);
+            }
+        EXPECT_TRUE(found) << name;
+    }
+}
+
+TEST(LiveVerifyEditPolicy, PanelsAreOfferedOnlyOnTheEditPage) {
+    AutomationState state = EditOpenOnRecord();
+    EXPECT_FALSE(AvailableActions(state).contains(QStringLiteral("edit.setPanel")));
+    state.page = QString::fromLatin1(page_name::kEdit);
+    EXPECT_TRUE(AvailableActions(state).contains(QStringLiteral("edit.setPanel")));
+    EXPECT_TRUE(AvailableActions(state).contains(QStringLiteral("edit.setSourceTab")));
+}
+
+TEST(LiveVerifyEditPolicy, TheExportReviewIsAnsweredOnlyWhileItIsUp) {
+    AutomationState state = EditOpenOnRecord();
+    for (const char* export_state : {"idle", "preparing", "exporting", "completed", "failed"}) {
+        state.edit_export_state = QString::fromLatin1(export_state);
+        EXPECT_FALSE(AvailableActions(state).contains(QStringLiteral("export.confirm"))) << export_state;
+        EXPECT_FALSE(AvailableActions(state).contains(QStringLiteral("export.discard"))) << export_state;
+    }
+    state.edit_export_state = QStringLiteral("review");
+    EXPECT_TRUE(AvailableActions(state).contains(QStringLiteral("export.confirm")));
+    EXPECT_TRUE(AvailableActions(state).contains(QStringLiteral("export.discard")));
 }
 
 TEST(LiveVerifyPolicy, NoCommandIsListedTwiceAndEveryOneIsFindable) {

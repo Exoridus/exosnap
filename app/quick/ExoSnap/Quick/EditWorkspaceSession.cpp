@@ -47,6 +47,25 @@ std::optional<edit::Time> AddTimelineTime(edit::Time value, edit::Time delta) {
         return std::nullopt;
     return value + delta;
 }
+
+// The workspace asset an import of `path` produces from its probe.
+edit::Asset AssetFromProbe(const QString& path, const engine::EditMediaMetadata& metadata) {
+    edit::Asset asset;
+    asset.path = path.toStdWString();
+    asset.name = QFileInfo(path).fileName().toStdString();
+    asset.duration = metadata.duration_us;
+    asset.width = metadata.width;
+    asset.height = metadata.height;
+    asset.fps = metadata.fps;
+    asset.fps_num = metadata.fps_num;
+    asset.fps_den = metadata.fps_den;
+    asset.audio = metadata.has_audio;
+    auto imported = edit::DescribeSourceImport(metadata);
+    asset.source_descriptor = std::move(imported.descriptor);
+    asset.input_mix_selection = std::move(imported.input_mix);
+    asset.mix_decision_required = imported.mix_decision_required;
+    return asset;
+}
 } // namespace
 
 QVariantList EditSessionAdapter::media() const {
@@ -134,7 +153,26 @@ QVariantList EditSessionAdapter::visibleClips(qint64 from_ms, qint64 to_ms) cons
     return rows;
 }
 
+void EditSessionAdapter::beginImport() {
+    if (pending_imports_++ == 0)
+        emit importPendingChanged();
+}
+
+void EditSessionAdapter::endImport() {
+    if (pending_imports_ > 0 && --pending_imports_ == 0)
+        emit importPendingChanged();
+}
+
+void EditSessionAdapter::refuseEdit(const QString& message) {
+    ++edit_outcome_sequence_;
+    last_edit_accepted_ = false;
+    workspace_error_ = message;
+    emit workspaceChanged();
+}
+
 void EditSessionAdapter::publishWorkspace(bool changed) {
+    ++edit_outcome_sequence_;
+    last_edit_accepted_ = changed;
     if (drag_snapshot_ && drag_snapshot_->revision != workspace_.revision())
         cancelClipDrag();
     if (changed)
@@ -235,8 +273,7 @@ bool EditSessionAdapter::dropCrossfade(qint64 at_ms, qint64 tolerance_ms) {
     for (const auto& clip : workspace_.clips())
         if (std::abs(clip.end() / 1000 - at_ms) <= tolerance_ms && canCrossfade(clip.id))
             return applyCrossfade(clip.id);
-    workspace_error_ = tr("Crossfade needs a valid cut between adjacent video clips.");
-    emit workspaceChanged();
+    refuseEdit(tr("Crossfade needs a valid cut between adjacent video clips."));
     return false;
 }
 
@@ -273,6 +310,7 @@ void EditSessionAdapter::importMediaBatch(const QList<QUrl>& urls, bool append, 
         return;
     }
     QPointer<EditSessionAdapter> self(this);
+    beginImport();
     keyframe_pool_.start([self, urls, append, at_ms]() {
         std::vector<edit::Asset> assets;
         QString error;
@@ -285,21 +323,7 @@ void EditSessionAdapter::importMediaBatch(const QList<QUrl>& urls, bool append, 
                 error = QString::fromStdString(metadata.error);
                 break;
             }
-            edit::Asset asset;
-            asset.path = path.toStdWString();
-            asset.name = QFileInfo(path).fileName().toStdString();
-            asset.duration = metadata.duration_us;
-            asset.width = metadata.width;
-            asset.height = metadata.height;
-            asset.fps = metadata.fps;
-            asset.fps_num = metadata.fps_num;
-            asset.fps_den = metadata.fps_den;
-            asset.audio = metadata.has_audio;
-            auto imported = edit::DescribeSourceImport(metadata);
-            asset.source_descriptor = std::move(imported.descriptor);
-            asset.input_mix_selection = std::move(imported.input_mix);
-            asset.mix_decision_required = imported.mix_decision_required;
-            assets.push_back(std::move(asset));
+            assets.push_back(AssetFromProbe(path, metadata));
         }
         if (!self)
             return;
@@ -309,8 +333,8 @@ void EditSessionAdapter::importMediaBatch(const QList<QUrl>& urls, bool append, 
                 if (!self)
                     return;
                 if (!error.isEmpty()) {
-                    self->workspace_error_ = EditSessionAdapter::tr("Cannot import media: %1").arg(error);
-                    emit self->workspaceChanged();
+                    self->refuseEdit(EditSessionAdapter::tr("Cannot import media: %1").arg(error));
+                    self->endImport();
                     return;
                 }
                 std::vector<edit::Id> ids;
@@ -322,10 +346,22 @@ void EditSessionAdapter::importMediaBatch(const QList<QUrl>& urls, bool append, 
                         self->workspace_.insertAssets(ids, at_ms < 0 ? -1 : at_ms * 1000, self->autoCrossfade));
                 else
                     emit self->workspaceChanged();
+                self->endImport();
             },
             Qt::QueuedConnection);
     });
 }
+edit::Id EditSessionAdapter::addProbedMediaForHarness(const QString& path, const engine::EditMediaMetadata& metadata,
+                                                      bool append) {
+    const auto id = workspace_.addAsset(AssetFromProbe(path, metadata));
+    workspace_error_.clear();
+    if (append)
+        publishWorkspace(workspace_.insertAssets({id}, -1, autoCrossfade));
+    else
+        emit workspaceChanged();
+    return id;
+}
+
 void EditSessionAdapter::moveClip(qulonglong id, qint64 at_ms, bool snap) {
     if (!FitsMilliseconds(at_ms)) {
         publishWorkspace(false);
@@ -354,8 +390,7 @@ void EditSessionAdapter::trimClip(qulonglong id, qint64 in_ms, qint64 out_ms) {
         return;
     if (in_ms * 1000 != clip->source_in && out_ms * 1000 != clip->source_out) {
         if (ripple || !linkedSelection) {
-            workspace_error_ = tr("Adjust one trim edge at a time for ripple or independent edits.");
-            emit workspaceChanged();
+            refuseEdit(tr("Adjust one trim edge at a time for ripple or independent edits."));
         } else {
             publishWorkspace(workspace_.trim(id, in_ms * 1000, out_ms * 1000, autoCrossfade));
         }
@@ -646,9 +681,8 @@ void EditSessionAdapter::updateClipDrag(qint64 delta_ms, qulonglong track, int n
 
 bool EditSessionAdapter::commitClipDrag() {
     if (!drag_snapshot_ || !drag_command_ || !dragValid()) {
-        workspace_error_ = tr("The drag is unavailable or the timeline changed. Try again.");
         cancelClipDrag();
-        emit workspaceChanged();
+        refuseEdit(tr("The drag is unavailable or the timeline changed. Try again."));
         return false;
     }
     const auto result = workspace_.apply(*drag_command_, drag_snapshot_->revision);

@@ -5,12 +5,19 @@
 #include <exosnap/engine/edit_timeline.h>
 #include <exosnap/engine/waveform_cache.h>
 
+#include <QImage>
 #include <QMatrix4x4>
+#include <QPainter>
+#include <QQuickWindow>
 #include <QSGFlatColorMaterial>
 #include <QSGGeometry>
 #include <QSGGeometryNode>
+#include <QSGImageNode>
 #include <QSGNode>
+#include <QSGRendererInterface>
+#include <QSGTexture>
 #include <QSGTransformNode>
+#include <QtMath>
 
 #include <algorithm>
 #include <cmath>
@@ -40,6 +47,7 @@ class WaveformRootNode final : public QSGNode {
     float height = 0;
     QColor color;
     std::map<std::uint64_t, BlockNode> blocks;
+    QSGImageNode* image = nullptr;
 
     void Reset() {
         for (auto& [index, block] : blocks) {
@@ -47,6 +55,11 @@ class WaveformRootNode final : public QSGNode {
             delete block.transform;
         }
         blocks.clear();
+        if (image) {
+            removeChildNode(image);
+            delete image;
+            image = nullptr;
+        }
     }
 };
 
@@ -121,6 +134,34 @@ void FillLane(QSGGeometryNode* peak_node, QSGGeometryNode* rms_node, const std::
     }
     peak_node->markDirty(QSGNode::DirtyGeometry);
     rms_node->markDirty(QSGNode::DirtyGeometry);
+}
+
+void PaintSoftwareLane(QPainter& painter, const std::vector<WaveformPeak>& peaks, std::uint32_t buckets, int channels,
+                       int lane_channel, const Lane& lane, double first_x, double bucket_width, const QColor& color) {
+    QColor peak_color = color;
+    peak_color.setAlphaF(color.alphaF() * kPeakAlpha);
+    for (std::uint32_t bucket = 0; bucket < buckets; ++bucket) {
+        const auto& a = peaks[bucket * engine::kWaveformChannels];
+        const auto& b = peaks[bucket * engine::kWaveformChannels + 1];
+        const auto& channel = lane_channel == 0 ? a : b;
+        const float lo = engine::WaveformPeakToFloat(channels == 1 ? std::min(a.min, b.min) : channel.min);
+        const float hi = engine::WaveformPeakToFloat(channels == 1 ? std::max(a.max, b.max) : channel.max);
+        const float ra = engine::WaveformPeakToFloat(a.rms);
+        const float rb = engine::WaveformPeakToFloat(b.rms);
+        const float rms = channels == 1 ? std::sqrt((ra * ra + rb * rb) / 2) : engine::WaveformPeakToFloat(channel.rms);
+        float top = lane.center - hi * lane.half;
+        float bottom = lane.center - lo * lane.half;
+        if (bottom - top < 1.0f) {
+            const float middle = (top + bottom) / 2;
+            top = middle - 0.5f;
+            bottom = middle + 0.5f;
+        }
+        const double x = first_x + bucket * bucket_width;
+        painter.fillRect(QRectF(x, top, bucket_width, bottom - top), peak_color);
+        const float rms_top = std::max(top, lane.center - rms * lane.half);
+        const float rms_bottom = std::max(rms_top, std::min(bottom, lane.center + rms * lane.half));
+        painter.fillRect(QRectF(x, rms_top, bucket_width, rms_bottom - rms_top), color);
+    }
 }
 
 } // namespace
@@ -226,6 +267,14 @@ QSGNode* ExoWaveformItem::updatePaintNode(QSGNode* old_node, UpdatePaintNodeData
         delete root;
         return nullptr;
     }
+    const bool software_renderer =
+        window() && window()->rendererInterface()->graphicsApi() == QSGRendererInterface::Software;
+    // Attach a complete software subtree so the renderer resolves inherited
+    // transforms and clipping instead of caching a newly added child's identity.
+    if (software_renderer) {
+        delete root;
+        root = nullptr;
+    }
     if (!root)
         root = new WaveformRootNode;
 
@@ -276,6 +325,32 @@ QSGNode* ExoWaveformItem::updatePaintNode(QSGNode* old_node, UpdatePaintNodeData
         lanes.push_back(Lane{3 * half_lane, std::max(0.0f, half_lane - kLaneGap)});
     } else {
         lanes.push_back(Lane{lane_height / 2, std::max(0.0f, lane_height / 2 - kLaneGap / 2)});
+    }
+    if (software_renderer) {
+        // The software adaptation skips custom geometry nodes. Rasterize the same
+        // analyzed buckets into a supported image node instead.
+        const qreal dpr = window()->effectiveDevicePixelRatio();
+        QImage image(QSize(qCeil(width * dpr), qCeil(height * dpr)), QImage::Format_ARGB32_Premultiplied);
+        image.setDevicePixelRatio(dpr);
+        image.fill(Qt::transparent);
+        QPainter painter(&image);
+        std::vector<WaveformPeak> peaks;
+        for (std::uint64_t block = first_block; block <= last_block; ++block) {
+            const auto buckets = service_->readBlock(cache_key_, static_cast<std::uint32_t>(level), block, peaks);
+            const double first_x = (static_cast<double>(block) * block_samples - first_sample) / samples_per_pixel;
+            for (std::size_t lane = 0; lane < lanes.size(); ++lane)
+                PaintSoftwareLane(painter, peaks, buckets, channels, static_cast<int>(lane), lanes[lane], first_x,
+                                  bucket_samples / samples_per_pixel, color_);
+        }
+        painter.end();
+        root->image = window()->createImageNode();
+        root->image->setOwnsTexture(true);
+        root->image->setTexture(window()->createTextureFromImage(image));
+        root->image->setSourceRect(QRectF(0, 0, image.width(), image.height()));
+        root->image->setRect(QRectF(0, 0, width, height));
+        // Adding to a live software scene graph immediately inspects the texture.
+        root->appendChildNode(root->image);
+        return root;
     }
     QColor peak_color = color_;
     peak_color.setAlphaF(color_.alphaF() * kPeakAlpha);

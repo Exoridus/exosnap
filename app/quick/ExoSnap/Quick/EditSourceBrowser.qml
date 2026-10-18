@@ -1,6 +1,8 @@
 pragma ComponentBehavior: Bound
 import QtQuick
 import QtQuick.Controls
+// The rows restyle ItemDelegate, which the native Windows style does not allow.
+import QtQuick.Controls.Basic as Basic
 import QtQuick.Layouts
 import QtQuick.Dialogs
 
@@ -104,11 +106,12 @@ Item {
             visible: root.currentTab === 1
             onClicked: picker.open()
         }
-        Button {
+        ExoButton {
             id: crossfade
             objectName: "editCrossfadeItem"
             visible: root.currentTab === 2
             Layout.fillWidth: true
+            leadingGlyph: ExoGlyph.Layers
             text: qsTr("Crossfade")
             Accessible.description: qsTr("Apply to the cut after the selected video clip, or drag onto a cut.")
             onClicked: root.session.applyCrossfade()
@@ -163,17 +166,45 @@ Item {
             clip: true
             reuseItems: true
             model: root.currentTab === 0 ? root.recordings.recentRecordingOptions : root.currentTab === 1 ? root.session.media : []
-            ScrollBar.vertical: ScrollBar {
+            ScrollBar.vertical: ExoScrollBar {
                 policy: ScrollBar.AsNeeded
             }
-            delegate: ItemDelegate {
+            delegate: Basic.ItemDelegate {
                 id: sourceItem
                 required property var modelData
+                readonly property string detail: modelData.available ? (modelData.metadata || "") + " " + root.session.formatClock(modelData.durationMs || 0) : qsTr("Media unavailable")
                 width: sourceItems.width
                 height: 66
                 leftPadding: thumbnail.visible ? 80 : 12
-                text: (modelData.name || modelData.label) + "\n" + (modelData.available ? (modelData.metadata || "") + " " + root.session.formatClock(modelData.durationMs || 0) : qsTr("Media unavailable"))
+                rightPadding: ExoTheme.spacingMd
+                text: (modelData.name || modelData.label) + "\n" + detail
                 Accessible.name: text
+                contentItem: Column {
+                    spacing: 2
+                    Label {
+                        width: parent.width
+                        text: sourceItem.modelData.name || sourceItem.modelData.label
+                        elide: Text.ElideMiddle
+                        color: ExoTheme.text
+                        font.family: ExoTheme.sansFamily
+                        font.pixelSize: ExoTheme.fontBody
+                    }
+                    Label {
+                        width: parent.width
+                        text: sourceItem.detail
+                        elide: Text.ElideRight
+                        color: sourceItem.modelData.available ? ExoTheme.textSecondary : ExoTheme.warning
+                        font.family: ExoTheme.sansFamily
+                        font.pixelSize: ExoTheme.fontCaption
+                    }
+                }
+                background: Rectangle {
+                    color: sourceItem.down ? ExoTheme.surfaceHover
+                         : sourceItem.hovered || sourceItem.visualFocus ? ExoTheme.hoverTint(ExoTheme.surfaceRaised) : "transparent"
+                    radius: ExoTheme.radiusSm
+                    border.width: sourceItem.visualFocus ? 1 : 0
+                    border.color: ExoTheme.accent
+                }
                 Image {
                     id: thumbnail
                     x: 4

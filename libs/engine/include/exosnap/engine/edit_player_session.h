@@ -93,6 +93,11 @@ class EditPlayerSession {
     // see that method's doc comment.
     void Play(int64_t start_us = 0, uint64_t generation = 0);
 
+    // Plays raw video without source audio against an absolute source-time
+    // clock. Samples the callback only from the owning thread when position is
+    // read. Its dependencies must remain alive until Pause or Close returns.
+    void PlayWithExternalClock(int64_t start_us, uint64_t generation, std::function<int64_t()> clock);
+
     // Pauses continuous playback. No-op if not open or not playing.
     void Pause();
     void SetVolume(float volume);
@@ -140,6 +145,7 @@ class EditPlayerSession {
     [[nodiscard]] uint64_t AudioShortfallFrames() const noexcept;
 
   private:
+    void StartPlayback(int64_t start_us, uint64_t generation, std::function<int64_t()> clock);
     struct Impl;
     std::unique_ptr<Impl> impl_;
 };

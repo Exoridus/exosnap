@@ -35,16 +35,19 @@
 #include "ui/theme/ExoSnapMetrics.h"
 #include "visual_tests/CanonicalMachine.h"
 #include "visual_tests/DiagnosticsLiveScenario.h"
+#include "visual_tests/EditVisualMedia.h"
 #include "visual_tests/RecordVisualStateNames.h"
 
 #include "ExoSnapBuildInfo.h"
 
 #include <QCoreApplication>
+#include <QCryptographicHash>
 #include <QDateTime>
 #include <QDesktopServices>
 #include <QDir>
 #include <QFile>
 #include <QFileInfo>
+#include <QFontDatabase>
 #include <QGuiApplication>
 #include <QIcon>
 #include <QMetaObject>
@@ -61,6 +64,7 @@
 // replacement is post-1.0 work with no product benefit.
 #include <QSystemTrayIcon>
 #include <QThread>
+#include <QTimer>
 #include <QVariant>
 #include <QVariantMap>
 
@@ -3805,94 +3809,312 @@ void QuickApplication::applyDiagnosticsVisualScenarios() {
     }
 }
 
-// Harness-only, env-configured. A real Edit surface needs a finished recording
+// Harness-only, env-configured. A real Edit surface needs finished recordings
 // on this machine; a --visual-test capture must not depend on one, and must
-// never start a real decode or a real export. The fixture context deliberately
-// leaves mkv_master_path empty: nothing is opened, nothing is remuxed, and the
-// timeline strip comes from the deterministic placeholder fixture.
+// never start a real decode or a real export. The workspace is built from
+// synthetic probe results through the same adapter path an import takes, the
+// timeline edits through the session's own commands, and the pictures and
+// waveforms come from deterministic sources through the thumbnail broker and
+// waveform service. A separate synthetic still supports software scene graphs
+// without implying that the native decoder or GPU presenter ran.
+namespace {
+
+struct EditVisualSource {
+    const char* file;
+    int width;
+    int height;
+    int fps;
+    qint64 duration_ms;
+    QStringList audio;
+};
+
+engine::EditMediaMetadata EditVisualProbe(const EditVisualSource& source) {
+    engine::EditMediaMetadata metadata;
+    metadata.duration_us = source.duration_ms * 1000;
+    metadata.width = source.width;
+    metadata.height = source.height;
+    metadata.fps = source.fps;
+    metadata.fps_num = source.fps;
+    metadata.fps_den = 1;
+    metadata.render_color_supported = true;
+    metadata.video_codec = "h264";
+    metadata.has_audio = !source.audio.isEmpty();
+    metadata.file_size = 1;
+    const QByteArray digest = QCryptographicHash::hash(QByteArray(source.file), QCryptographicHash::Sha256);
+    std::copy(digest.begin(), digest.end(), metadata.content_sha256.begin());
+    metadata.content_identity_valid = true;
+    engine::EditSourceStream video;
+    video.kind = engine::TimelineStreamKind::Video;
+    video.width = source.width;
+    video.height = source.height;
+    video.fps_num = source.fps;
+    video.fps_den = 1;
+    metadata.streams.push_back(video);
+    for (qsizetype index = 0; index < source.audio.size(); ++index) {
+        engine::AudioTrackId identity;
+        std::copy_n(digest.begin() + 8, identity.bytes.size(), identity.bytes.begin());
+        identity.bytes[0] = static_cast<std::uint8_t>(index + 1);
+        engine::EditSourceStream audio;
+        audio.kind = engine::TimelineStreamKind::Audio;
+        audio.container_index = static_cast<std::uint32_t>(index + 1);
+        audio.stream_identity = identity;
+        audio.codec.channels = 2;
+        audio.codec.sample_rate = 48000;
+        metadata.streams.push_back(audio);
+        engine::ContainerAudioTrack track;
+        track.track_id = identity;
+        track.stream_index.value = static_cast<std::uint32_t>(index);
+        track.name = source.audio.at(index).toStdString();
+        metadata.audio_metadata.actual_tracks.push_back(track);
+    }
+    return metadata;
+}
+
+// The clip of `track_index` (0 = first video track) that starts at or after
+// `from_ms`, by timeline order.
+qulonglong EditVisualClip(EditSessionAdapter& session, int track_index, qint64 from_ms) {
+    qulonglong best = 0;
+    qint64 best_start = std::numeric_limits<qint64>::max();
+    for (const QVariant& value : session.visibleClips(0, std::numeric_limits<qint64>::max() / 1000)) {
+        const QVariantMap row = value.toMap();
+        const qint64 start = row.value(QStringLiteral("startMs")).toLongLong();
+        if (row.value(QStringLiteral("trackIndex")).toInt() == track_index && start >= from_ms && start < best_start) {
+            best = row.value(QStringLiteral("id")).toULongLong();
+            best_start = start;
+        }
+    }
+    return best;
+}
+
+} // namespace
+
 void QuickApplication::applyEditVisualScenario() {
     const QByteArray raw = qgetenv("EXOSNAP_VISUAL_EDIT_SCENARIO");
-    if (raw.isEmpty())
+    if (raw.isEmpty() || !QCoreApplication::arguments().contains(QStringLiteral("--visual-test")))
         return;
     const QString scenario = QString::fromUtf8(raw).trimmed().toLower();
+    const QStringList supported = {QStringLiteral("edit-empty"),
+                                   QStringLiteral("edit-default"),
+                                   QStringLiteral("edit-multitrack"),
+                                   QStringLiteral("edit-missing-media"),
+                                   QStringLiteral("edit-selected-clip"),
+                                   QStringLiteral("edit-transition-selected"),
+                                   QStringLiteral("edit-gap"),
+                                   QStringLiteral("edit-media-panel"),
+                                   QStringLiteral("edit-transitions-panel"),
+                                   QStringLiteral("edit-panels-pinned"),
+                                   QStringLiteral("edit-monitoring"),
+                                   QStringLiteral("edit-crossfade-popup"),
+                                   QStringLiteral("edit-volume-popup"),
+                                   QStringLiteral("edit-export-review"),
+                                   QStringLiteral("edit-export-running"),
+                                   QStringLiteral("edit-export-done"),
+                                   QStringLiteral("edit-export-failed"),
+                                   QStringLiteral("edit-long-filename")};
+    if (!supported.contains(scenario))
+        qFatal("Unknown Edit visual scenario: %s", qPrintable(scenario));
 
-    // The fixture's directory is resolved at runtime, never written into the
-    // source. A hard-coded absolute path bakes one machine's disk layout into
-    // the repository and then shows it to every reviewer in a screenshot.
-    const QString fixture_directory =
-        QStandardPaths::writableLocation(QStandardPaths::TempLocation) + QStringLiteral("/exosnap-visual-fixtures");
+    edit_visual_directory_ = std::make_unique<QTemporaryDir>(QDir::tempPath() + QStringLiteral("/exosnap-edit-XXXXXX"));
+    if (!edit_visual_directory_->isValid())
+        qFatal("Cannot create the Edit visual fixture directory");
+    const QString fixture_directory = edit_visual_directory_->path();
 
-    EditContext context;
-    context.output_path = fixture_directory + QStringLiteral("/2026-08-10 21-14-08.mkv");
-    context.duration = QStringLiteral("2:34");
-    context.size = QStringLiteral("412 MB");
-    context.resolution = QStringLiteral("2560x1440");
-    context.fps = QStringLiteral("60 fps CFR");
-    context.video_codec = QStringLiteral("AV1 (NVENC)");
-    context.audio_codec = QStringLiteral("Opus");
-    context.container = QStringLiteral("MKV");
-    context.duration_seconds = 154.0;
-    context.av_drift_available = true;
-    context.peak_av_drift_ms = 3.0;
-    context.completed_snapshot.valid = true;
-    context.completed_snapshot.session_generation = 7;
-    context.completed_snapshot.capture.frames_emitted = 9240;
-    context.completed_snapshot.health = exosnap::engine::PipelineHealth::Good;
-    context.markers = {
-        RecordingMarker{18000, RecordingMarkerType::General, "Intro"},
-        RecordingMarker{47500, RecordingMarkerType::Highlight, "Highlight"},
-        RecordingMarker{96000, RecordingMarkerType::Cut, "Cut here"},
-        RecordingMarker{131000, RecordingMarkerType::General, "Outro"},
+    // Fixture edits must not queue decoder work against synthetic source files.
+    edit_player_adapter_.setSession(nullptr);
+    // The fixture is painted before QML's FontLoader registers the bundled fonts.
+    if (QFontDatabase::addApplicationFont(QStringLiteral(":/fonts/IBMPlexMono-Regular.ttf")) < 0)
+        qFatal("Cannot load the Edit visual fixture font");
+
+    // Synthetic pictures and sound, keyed by the same content identity the
+    // probe above gives each source.
+    edit_timeline_adapter_.useSyntheticMediaForHarness(
+        [](const ThumbnailSourceInfo& source, std::int64_t time_us, int height) {
+            const int width = source.video_height > 0 ? height * source.video_width / source.video_height : height;
+            return visual_tests::PaintEditSourceFrame(
+                visual_tests::EditSourceSeed(source.content_sha256.data(), source.content_sha256.size()), width, height,
+                time_us);
+        },
+        [](const std::filesystem::path&, std::uint32_t container_index, std::string&, const std::atomic<bool>*,
+           const std::array<std::uint8_t, 32>& expected_sha256) {
+            return visual_tests::MakeEditSourceAudio(
+                visual_tests::EditSourceSeed(expected_sha256.data(), expected_sha256.size()) + container_index);
+        },
+        std::filesystem::path(fixture_directory.toStdWString()) / L"waveforms");
+
+    if (scenario == QStringLiteral("edit-empty"))
+        return;
+
+    const auto file = [&fixture_directory](const char* name) {
+        return fixture_directory + QLatin1Char('/') + QString::fromUtf8(name);
     };
+    const auto available_file = [&file](const EditVisualSource& source) {
+        const QString path = file(source.file);
+        QFile marker(path);
+        // Availability is checked before the injected waveform decoder runs.
+        if (!marker.open(QIODevice::WriteOnly) || marker.write("x", 1) != 1)
+            qFatal("Cannot create an Edit visual source marker");
+        return path;
+    };
+    const bool long_name = scenario == QStringLiteral("edit-long-filename");
+    const EditVisualSource ridge{long_name ? "2026-08-10 21-14-08 - Ridge Run, full walkthrough with the diagnostics "
+                                             "overlay enabled (take 3).mkv"
+                                           : "2026-08-10 21-14-08 Ridge Run.mkv",
+                                 2560,
+                                 1440,
+                                 60,
+                                 96'000,
+                                 {QStringLiteral("Game")}};
+    const EditVisualSource boss{"2026-08-10 21-31-52 Boss fight.mkv", 2560, 1440, 60, 64'000, {QStringLiteral("Game")}};
+    const EditVisualSource intro{"Intro card.mp4", 1920, 1080, 30, 8'000, {QStringLiteral("Music")}};
+    const EditVisualSource commentary{"2026-08-11 19-02-40 Commentary.mkv",
+                                      2560,
+                                      1440,
+                                      60,
+                                      72'000,
+                                      {QStringLiteral("Master"), QStringLiteral("Game"), QStringLiteral("Microphone")}};
 
-    if (scenario == QStringLiteral("edit-report-warning")) {
-        context.completed_snapshot.health = exosnap::engine::PipelineHealth::Warning;
-        context.completed_snapshot.capture.frames_dropped_backpressure = 122;
-        context.peak_av_drift_ms = 41.0;
-    } else if (scenario == QStringLiteral("edit-long-filename")) {
-        // The header's width budget, exercised. Back on one end and the report
-        // status on the other are fixed; the clip name is the only element that
-        // may give, and at the 860 px minimum window there is very little to
-        // give. A name this long is not hypothetical — a window-capture
-        // recording is named after the window title.
-        context.output_path = fixture_directory + QStringLiteral("/2026-08-10 21-14-08 - Sprint demo, full "
-                                                                 "walkthrough with the diagnostics overlay "
-                                                                 "enabled (take 3).mkv");
+    auto& session = edit_session_adapter_;
+    const bool monitoring = scenario == QStringLiteral("edit-monitoring");
+    if (monitoring) {
+        // A source whose audio provenance is not verified: three streams, all
+        // waiting for the user's starting mix.
+        session.addProbedMediaForHarness(available_file(commentary), EditVisualProbe(commentary), true);
+    } else {
+        session.addProbedMediaForHarness(available_file(ridge), EditVisualProbe(ridge), true);
+        session.addProbedMediaForHarness(available_file(boss), EditVisualProbe(boss), true);
+        session.addProbedMediaForHarness(available_file(intro), EditVisualProbe(intro), false);
+        // A cut in the first recording, and a crossfade into the second.
+        session.requestSeek(38'000);
+        session.selectClip(EditVisualClip(session, 0, 0));
+        session.splitSelected();
+        session.applyCrossfade(EditVisualClip(session, 0, 38'000), 800);
+        session.setClipFade(EditVisualClip(session, 0, 0), true, 600);
+        session.setClipFade(EditVisualClip(session, 0, 90'000), false, 1'500);
     }
 
-    edit_session_adapter_.setEditContext(context);
-    // Keyframes every two seconds, so a trim snap in the harness lands where a
-    // real cue table would put it.
-    std::vector<int64_t> keyframes;
-    for (int64_t us = 0; us <= 154'000'000; us += 2'000'000)
-        keyframes.push_back(us);
-    edit_session_adapter_.setKeyframeTimestampsForTest(std::move(keyframes));
+    if (scenario == QStringLiteral("edit-missing-media")) {
+        // The same timeline after the second recording was moved away: what a
+        // workspace looks like whose source is gone.
+        session.addProbedMediaForHarness(
+            file("2026-08-09 22-47-10 Practice.mkv"),
+            EditVisualProbe({"2026-08-09 22-47-10 Practice.mkv", 2560, 1440, 60, 30'000, {QStringLiteral("Game")}}),
+            true);
+    }
+    if (scenario == QStringLiteral("edit-multitrack")) {
+        // The intro as a picture-in-picture on a second video track, dragged
+        // there the way a user drags it.
+        const qint64 end_ms = session.durationMs();
+        session.appendAsset(session.media().constLast().toMap().value(QStringLiteral("id")).toULongLong());
+        session.beginClipDrag(EditVisualClip(session, 0, end_ms));
+        session.updateClipDrag(4'000 - end_ms, 0, 0);
+        session.commitClipDrag();
+    }
+    if (scenario == QStringLiteral("edit-gap")) {
+        session.selectClip(EditVisualClip(session, 0, 38'000));
+        session.deleteSelected(false);
+        session.selectGap(session.tracks().constFirst().toMap().value(QStringLiteral("id")).toULongLong(), 50'000);
+        session.previewCloseGap();
+    }
 
-    const bool multitrack = scenario == QStringLiteral("edit-timeline-multitrack");
-    const QStringList audio_rows =
-        multitrack ? QStringList{QStringLiteral("Game"), QStringLiteral("System"), QStringLiteral("Microphone")}
-                   : QStringList{QStringLiteral("System")};
-    const bool unavailable_previews = scenario == QStringLiteral("edit-timeline-unavailable");
-    const int tile_count = scenario == QStringLiteral("edit-timeline-loading") ? 4 : unavailable_previews ? 0 : -1;
-    edit_timeline_adapter_.setFixture(audio_rows, tile_count);
-    // QCR-307: the terminal state, which no fixture can reach on its own — the
-    // fixture path never touches the decoder whose failure produces it.
-    if (unavailable_previews)
-        edit_timeline_adapter_.applyUnavailablePreviewsForHarness();
+    const qint64 playhead = monitoring ? 12'000 : 42'500;
+    session.requestSeek(playhead);
+    if (scenario == QStringLiteral("edit-selected-clip"))
+        session.selectClip(EditVisualClip(session, 0, 90'000));
+    else if (scenario == QStringLiteral("edit-transition-selected") ||
+             scenario == QStringLiteral("edit-crossfade-popup"))
+        session.selectTransition(EditVisualClip(session, 0, 38'000));
+    else if (scenario != QStringLiteral("edit-gap"))
+        session.selectClip(0);
 
-    if (scenario == QStringLiteral("edit-trimmed"))
-        edit_session_adapter_.requestTrim(22000, 118000);
+    const auto& first_source = monitoring ? commentary : ridge;
+    const auto probe = EditVisualProbe(first_source);
+    QImage still = visual_tests::PaintEditSourceFrame(
+        visual_tests::EditSourceSeed(probe.content_sha256.data(), probe.content_sha256.size()), 1280, 720,
+        playhead * 1000);
+    if (scenario == QStringLiteral("edit-gap"))
+        still.fill(Qt::black);
+    const QString still_path = fixture_directory + QStringLiteral("/viewer.png");
+    if (!still.save(still_path))
+        qFatal("Cannot save the Edit visual still");
+    edit_player_adapter_.showStillForHarness(QUrl::fromLocalFile(still_path), playhead * 1000, session.durationMs());
+    if (monitoring) {
+        QVariantList tracks;
+        for (const QString& name : commentary.audio)
+            tracks.append(QVariantMap{{QStringLiteral("id"), QStringLiteral("visual-%1").arg(name.toLower())},
+                                      {QStringLiteral("name"), name},
+                                      {QStringLiteral("selected"), name == QLatin1String("Master")},
+                                      {QStringLiteral("available"), true}});
+        edit_player_adapter_.setMonitoringState(tracks, true);
+    }
 
     if (scenario == QStringLiteral("edit-export-running")) {
         edit_export_adapter_.applyVisualState(EditExportAdapter::Running, 42, QString(), QString());
     } else if (scenario == QStringLiteral("edit-export-done")) {
         edit_export_adapter_.applyVisualState(EditExportAdapter::Done, 100,
-                                              fixture_directory + QStringLiteral("/2026-08-10 21-14-08_edit.mkv"),
+                                              fixture_directory + QStringLiteral("/2026-08-10 Ridge Run_edit.mkv"),
                                               QString());
     } else if (scenario == QStringLiteral("edit-export-failed")) {
         edit_export_adapter_.applyVisualState(EditExportAdapter::Failed, 63, QString(),
                                               QStringLiteral("Failed to save output file: disk full"));
+    } else if (scenario == QStringLiteral("edit-export-review")) {
+        edit_export_adapter_.applyVisualReview(
+            QVariantMap{{QStringLiteral("path"), QStringLiteral("Render")},
+                        {QStringLiteral("container"), QStringLiteral("MKV")},
+                        {QStringLiteral("videoCodec"), QStringLiteral("H.264")},
+                        {QStringLiteral("outputFile"), QStringLiteral("ExoSnap-20260810-221402.mkv")},
+                        {QStringLiteral("audioSummary"), QStringLiteral("Stereo")},
+                        {QStringLiteral("selectedTracks"),
+                         QVariantList{QVariantMap{{QStringLiteral("name"), QStringLiteral("Ridge Run, Game")}},
+                                      QVariantMap{{QStringLiteral("name"), QStringLiteral("Boss fight, Game")}}}},
+                        {QStringLiteral("excludedTracks"), QVariantList{}},
+                        {QStringLiteral("outputAudioTracks"),
+                         QVariantList{QVariantMap{{QStringLiteral("name"), QStringLiteral("Rendered mix")},
+                                                  {QStringLiteral("role"), QStringLiteral("mix")},
+                                                  {QStringLiteral("codec"), QStringLiteral("PCM24")}}}},
+                        {QStringLiteral("replaceExisting"), false},
+                        {QStringLiteral("videoOnly"), false}});
     }
+
+    // What the page shows around the workspace.
+    QVariantMap layout{{QStringLiteral("fit"), true}};
+    if (scenario == QStringLiteral("edit-media-panel"))
+        layout.insert({{QStringLiteral("media"), QStringLiteral("pinned")}, {QStringLiteral("sourceTab"), 1}});
+    else if (scenario == QStringLiteral("edit-transitions-panel"))
+        layout.insert({{QStringLiteral("media"), QStringLiteral("open")}, {QStringLiteral("sourceTab"), 2}});
+    else if (scenario == QStringLiteral("edit-panels-pinned"))
+        layout.insert({{QStringLiteral("media"), QStringLiteral("pinned")},
+                       {QStringLiteral("details"), QStringLiteral("pinned")},
+                       {QStringLiteral("sourceTab"), 1}});
+    else if (scenario == QStringLiteral("edit-selected-clip") ||
+             scenario == QStringLiteral("edit-transition-selected") || scenario == QStringLiteral("edit-monitoring") ||
+             scenario == QStringLiteral("edit-gap"))
+        layout.insert(QStringLiteral("details"), QStringLiteral("open"));
+    if (scenario == QStringLiteral("edit-crossfade-popup"))
+        layout.insert(QStringLiteral("popup"), QStringLiteral("crossfade"));
+    else if (scenario == QStringLiteral("edit-volume-popup"))
+        layout.insert(QStringLiteral("popup"), QStringLiteral("volume"));
+    edit_visual_layout_ = layout;
+}
+
+void QuickApplication::applyEditVisualLayout() {
+    if (edit_visual_layout_.isEmpty() || edit_visual_layout_applied_ || root_window_ == nullptr)
+        return;
+    QObject* page = root_window_->findChild<QObject*>(QStringLiteral("quickEditPage"));
+    if (page == nullptr)
+        return;
+    edit_visual_layout_applied_ = true;
+    // Panels through the shell's request edge, like the control channel's.
+    const auto panel = [this](const QString& key, ShellAdapter::EditPanel which) {
+        const QString wanted = edit_visual_layout_.value(key).toString();
+        if (!wanted.isEmpty())
+            emit shell_adapter_.editPanelRequested(which, true, wanted == QLatin1String("pinned"));
+    };
+    if (edit_visual_layout_.contains(QStringLiteral("sourceTab")))
+        emit shell_adapter_.editSourceTabRequested(
+            static_cast<ShellAdapter::EditSourceTab>(edit_visual_layout_.value(QStringLiteral("sourceTab")).toInt()));
+    panel(QStringLiteral("media"), ShellAdapter::EditMediaPanel);
+    panel(QStringLiteral("details"), ShellAdapter::EditDetailsPanel);
+    QMetaObject::invokeMethod(page, "applyHarnessView", Q_ARG(QVariant, QVariant(edit_visual_layout_)));
 }
 
 // The Edit surface is a leaf of the session adapter: the timeline, the player
@@ -3918,8 +4140,12 @@ void QuickApplication::initializeEditArea() {
     QObject::connect(&record_view_model_adapter_, &RecordViewModelAdapter::changed, &edit_timeline_adapter_,
                      update_cache_admission);
     update_cache_admission();
-    edit_export_adapter_.setOutputDirectoryProvider(
-        [this]() { return QString::fromStdWString(live_config_.output.output_folder.wstring()); });
+    // The folder recordings land in, including its isolation override: an
+    // export that read the configured folder directly would write into the
+    // user's real library from an isolated harness or verification run.
+    edit_export_adapter_.setOutputDirectoryProvider([this]() {
+        return QString::fromStdWString(RecordingCoordinator::EffectiveOutputFolderFor(live_config_.output).wstring());
+    });
     edit_export_adapter_.setRenderConfigProvider([this]() {
         const auto device =
             ResolveEditEncoderDevice(device_adapter_.adapterInfos(), device_adapter_.adapterCapabilities(),

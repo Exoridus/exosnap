@@ -168,6 +168,13 @@ class ThumbnailRequestBroker {
     // number of disk bytes released.
     std::uint64_t Clear();
 
+    // Harness seam (--visual-test): every request is answered inline by
+    // `images` instead of the worker, the disk tier and a decoder, and nothing
+    // is prefetched. Install before the first request; the function is then
+    // called from whichever thread asks.
+    using SyntheticImages = std::function<QImage(const ThumbnailSourceInfo& source, std::int64_t time_us, int height)>;
+    void UseSyntheticImagesForHarness(SyntheticImages images);
+
     // ---- Worker side ----
     // The worker installs a wake function; it is called with no broker lock
     // held whenever HasWork() may have become true. Detaching (empty function)
@@ -210,6 +217,7 @@ class ThumbnailRequestBroker {
     std::optional<Job> TakeFrom(std::deque<std::string>& order);
 
     Config config_;
+    SyntheticImages synthetic_images_;
     std::unique_ptr<ThumbnailDiskCache> disk_;
     // Guards wake_ and is held while it runs, so DetachWorker() returns only
     // after any wake in progress finished.

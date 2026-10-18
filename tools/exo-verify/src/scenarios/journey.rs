@@ -16,10 +16,10 @@ use crate::{infra_ensure, product_ensure};
 pub fn scenarios() -> Vec<Scenario> {
     vec![Scenario {
         id: "journey.record-edit-export-restart",
-        revision: 5,
+        revision: 6,
         title: "A recording can be edited, exported and reopened after restart",
         class: ScenarioClass::Contract,
-        contract: "the candidate records a changing window, accepts a marker and pause/resume, closes the open edit session without confirmation on navigation to any other page, exports an ordered trim to a decodable file after reopening the editor clean, quits through its own shutdown with a recorded clean exit, and starts again with the same candidate identity, the settings it was given and no blocking surface",
+        contract: "the candidate records a changing window, accepts a marker and pause/resume, keeps the edited workspace resident while every other page is visited and shows it unchanged on return, exports an ordered trim through the export review to a decodable file, quits through its own shutdown with a recorded clean exit, and starts again with the same candidate identity, the settings it was given and no blocking surface",
         lane: Lane::Gpu,
         also: &[],
         tier: Tier::Required,
@@ -142,7 +142,15 @@ fn journey(ctx: &mut Context) -> Step {
         result["markerCount"].as_u64().unwrap_or(0) >= 1,
         "the completed recording lost its marker"
     );
-    let editor = accepted(&mut app, "edit.open", json!({}))?;
+    // The recording's streams are probed before they reach the timeline, so
+    // the open is accepted first and settles when the session is open.
+    accepted(&mut app, "edit.open", json!({}))?;
+    app.client
+        .poll("ui.getState", json!({}), secs(30.0), |state| {
+            state["editSession"] == "open" && state["editor"]["importPending"] == false
+        })?
+        .ok_or_else(|| Stop::fail("the recording did not reach the edit timeline within 30 s"))?;
+    let editor = app.call("editor.snapshot", json!({}))?;
     let duration = editor["durationMs"].as_f64().unwrap_or(0.0);
     product_ensure!(duration >= 3000.0, "the editor opened a {duration} ms clip");
     let start = (duration / 4.0) as i64;
@@ -155,35 +163,41 @@ fn journey(ctx: &mut Context) -> Step {
     accepted(&mut app, "edit.setTrimIn", json!({ "positionMs": start }))?;
     let trimmed = accepted(&mut app, "edit.setTrimOut", json!({ "positionMs": end }))?;
     judge_edit(&trimmed)?;
+    let edited_revision =
+        app.call("ui.getState", json!({}))?["editor"]["workspaceRevision"].clone();
+    // product-spec.md: History and notification Edit actions add recordings to
+    // the resident workspace. Leaving Edit keeps it; nothing is discarded.
     let mut visits = Vec::new();
     for page in ["settings", "diagnostics", "logs", "about", "record"] {
         accepted(&mut app, "ui.navigate", json!({ "page": page }))?;
         let state = app.call("ui.getState", json!({}))?;
         visits.push(json!({ "page": page, "state": state.clone() }));
-        judge_edit_closes_on_navigation(page, &state)?;
+        judge_edit_stays_resident(page, &state, &edited_revision)?;
     }
+    accepted(&mut app, "ui.navigate", json!({ "page": "edit" }))?;
+    let returned = app.call("ui.getState", json!({}))?;
+    visits.push(json!({ "page": "edit", "state": returned.clone() }));
     ctx.evidence.put("editNavigation", json!(visits));
-    // product-spec.md: "Opening Edit again starts clean." The navigation above
-    // discarded the first trim, so the export below is redone from a fresh
-    // editor rather than reusing the session closed by the loop.
-    let editor = accepted(&mut app, "edit.open", json!({}))?;
-    let duration = editor["durationMs"].as_f64().unwrap_or(0.0);
     product_ensure!(
-        duration >= 3000.0,
-        "the reopened editor opened a {duration} ms clip"
+        returned["editVisible"] == true
+            && returned["editor"]["workspaceRevision"] == edited_revision,
+        "returning to Edit did not show the edited workspace: {}",
+        returned["editor"]
     );
-    let start = (duration / 4.0) as i64;
-    let end = (duration * 3.0 / 4.0) as i64;
-    accepted(
-        &mut app,
-        "edit.seek",
-        json!({ "positionMs": duration as i64 / 2 }),
-    )?;
-    accepted(&mut app, "edit.setTrimIn", json!({ "positionMs": start }))?;
-    let trimmed = accepted(&mut app, "edit.setTrimOut", json!({ "positionMs": end }))?;
-    judge_edit(&trimmed)?;
     let video_before_export = video_files(&app.output)?;
     accepted(&mut app, "export.start", json!({}))?;
+    let planned = app
+        .client
+        .poll("ui.getState", json!({}), secs(60.0), |state| {
+            state["exportState"] == "review" || state["exportState"] == "failed"
+        })?
+        .ok_or_else(|| Stop::infra("the export plan did not reach its review within 60 s"))?;
+    product_ensure!(
+        planned["exportState"] == "review",
+        "the export was refused before review: {}",
+        app.call("editor.snapshot", json!({}))?["export"]["errorText"]
+    );
+    accepted(&mut app, "export.confirm", json!({}))?;
     let terminal = app
         .client
         .poll("ui.getState", json!({}), secs(180.0), |state| {
@@ -259,11 +273,10 @@ fn persisted_settings() -> Vec<(&'static str, Value)> {
     ]
 }
 
-/// docs/product-spec.md: "Back, Escape, another clip or navigation closes it
-/// and discards the unexported recipe without a dirty badge, confirmation or
-/// draft. Returning to Record shows the normal Completed state." Edit is a
-/// workspace over Record, not a session that survives leaving it.
-fn judge_edit_closes_on_navigation(page: &str, state: &Value) -> Step {
+/// docs/product-spec.md: Edit is a navigation destination over one resident
+/// workspace. Visiting another page hides it and changes nothing in it; an
+/// export already started continues regardless.
+fn judge_edit_stays_resident(page: &str, state: &Value, edited_revision: &Value) -> Step {
     // The legacy "logs" request is an input alias for Diagnostics with the logs
     // subview; the canonical page is what the state reports.
     let expected = if page == "logs" { "diagnostics" } else { page };
@@ -273,14 +286,18 @@ fn judge_edit_closes_on_navigation(page: &str, state: &Value) -> Step {
         state["page"]
     );
     product_ensure!(
-        state["editSession"] == "closed",
-        "visiting {page} left the edit session {} instead of closing it",
-        state["editSession"]
+        state["editSession"] == "open",
+        "visiting {page} closed the resident edit workspace"
     );
     product_ensure!(
         state["editVisible"] == false,
-        "on the {page} page editVisible is {}, expected the closed overlay to be hidden",
+        "on the {page} page editVisible is {}, expected the workspace to be hidden",
         state["editVisible"]
+    );
+    product_ensure!(
+        &state["editor"]["workspaceRevision"] == edited_revision,
+        "visiting {page} changed the edited workspace from revision {edited_revision} to {}",
+        state["editor"]["workspaceRevision"]
     );
     Ok(())
 }
@@ -324,28 +341,38 @@ mod tests {
     }
 
     #[test]
-    fn navigation_must_close_the_edit_session() {
-        let closed = json!({"page": "settings", "editSession": "closed", "editVisible": false});
-        judge_edit_closes_on_navigation("settings", &closed).unwrap();
-        let closed_on_record =
-            json!({"page": "record", "editSession": "closed", "editVisible": false});
-        judge_edit_closes_on_navigation("record", &closed_on_record).unwrap();
+    fn navigation_keeps_the_edit_workspace_resident_and_unchanged() {
+        let revision = json!(9);
+        let kept = json!({"page": "settings", "editSession": "open", "editVisible": false,
+                          "editor": {"workspaceRevision": 9}});
+        judge_edit_stays_resident("settings", &kept, &revision).unwrap();
+        let logs = json!({"page": "diagnostics", "editSession": "open", "editVisible": false,
+                          "editor": {"workspaceRevision": 9}});
+        judge_edit_stays_resident("logs", &logs, &revision).unwrap();
         for (page, state) in [
             (
                 "settings",
-                json!({"page": "settings", "editSession": "open", "editVisible": false}),
+                json!({"page": "settings", "editSession": "closed", "editVisible": false,
+                       "editor": {"workspaceRevision": 9}}),
             ),
             (
                 "settings",
-                json!({"page": "settings", "editSession": "closed", "editVisible": true}),
+                json!({"page": "settings", "editSession": "open", "editVisible": true,
+                       "editor": {"workspaceRevision": 9}}),
             ),
             (
                 "record",
-                json!({"page": "diagnostics", "editSession": "closed", "editVisible": false}),
+                json!({"page": "diagnostics", "editSession": "open", "editVisible": false,
+                       "editor": {"workspaceRevision": 9}}),
+            ),
+            (
+                "about",
+                json!({"page": "about", "editSession": "open", "editVisible": false,
+                       "editor": {"workspaceRevision": 10}}),
             ),
         ] {
             assert!(matches!(
-                judge_edit_closes_on_navigation(page, &state),
+                judge_edit_stays_resident(page, &state, &revision),
                 Err(Stop::Fail(_))
             ));
         }

@@ -32,6 +32,8 @@ namespace exosnap::quick {
 // decode/seek thread hands them straight to EditPlayerFrameSink.
 class EditPlayerWorker : public QObject {
     Q_OBJECT
+    friend class EditPlayerWorkerTestPeer;
+
   public:
     explicit EditPlayerWorker(std::shared_ptr<EditPlayerFrameSink> sink);
     ~EditPlayerWorker() override;
@@ -77,7 +79,13 @@ class EditPlayerWorker : public QObject {
     // the gate and the picture stays frozen.
     void syncClock();
     void onTick();
-    void seekTimeline(qint64 position_us, bool resume);
+    void seekTimeline(qint64 position_us, bool resume, bool preserve_audio = false);
+    void closeSource();
+    void openSource(const QString& master_path, qint64 duration_ms, double screen_hz);
+    engine::EditTimelineReader* timelineAudioReader();
+    bool startTimelineAudio(qint64 position_us);
+    bool fillTimelineAudio();
+    qint64 timelinePositionUs() const;
     bool renderTimeline(qint64 position_us, engine::VideoReadMode mode = engine::VideoReadMode::Sequential);
     void presentBlank(qint64 position_us);
     void publishMonitoring();
@@ -102,6 +110,7 @@ class EditPlayerWorker : public QObject {
     uint64_t request_generation_ = 0;
     bool render_mode_ = false;
     std::unique_ptr<engine::EditTimelineReader> render_reader_;
+    std::unique_ptr<engine::EditTimelineReader> timeline_audio_reader_;
     std::unique_ptr<engine::WasapiAudioRenderer> render_audio_;
     engine::EditRenderPlan render_plan_;
     engine::TimelineRenderSnapshot render_snapshot_;

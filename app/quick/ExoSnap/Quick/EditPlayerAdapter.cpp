@@ -305,6 +305,18 @@ void EditPlayerAdapter::setClipStateForTest(bool clip_open, qint64 duration_ms) 
     emit clipOpenChanged();
 }
 
+void EditPlayerAdapter::showStillForHarness(const QUrl& source, qint64 time_us, qint64 duration_ms) {
+    setSession(nullptr);
+    harness_still_source_ = source;
+    requested_time_us_ = time_us;
+    presented_time_us_.reset();
+    seek_pending_ = false;
+    setPlaceholderText({});
+    setClipStateForTest(true, duration_ms);
+    emit harnessStillSourceChanged();
+    emit previewChanged();
+}
+
 void EditPlayerAdapter::setPlaceholderText(const QString& text) {
     if (placeholder_text_ == text)
         return;

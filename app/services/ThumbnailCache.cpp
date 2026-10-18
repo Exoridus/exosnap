@@ -241,11 +241,14 @@ std::optional<std::string> ThumbnailRequestBroker::IdentityForPath(const std::fi
 std::uint64_t ThumbnailRequestBroker::Request(const std::string& identity_hex, std::int64_t time_us, int height,
                                               ThumbnailCompletion completion) {
     std::string key;
+    ThumbnailSourceInfo info;
     {
         std::lock_guard lock(mutex_);
         const auto source = sources_.find(identity_hex);
-        if (attached_ && source != sources_.end() && height > 0 && height <= kMaxThumbnailHeight && time_us >= 0)
+        if (attached_ && source != sources_.end() && height > 0 && height <= kMaxThumbnailHeight && time_us >= 0) {
             key = ThumbnailCacheKey(source->second.content_sha256, time_us, height);
+            info = source->second;
+        }
     }
     if (key.empty()) {
         completion(QImage());
@@ -253,6 +256,13 @@ std::uint64_t ThumbnailRequestBroker::Request(const std::string& identity_hex, s
     }
     if (const auto hit = MemoryLookup(key)) {
         completion(*hit);
+        return 0;
+    }
+    if (synthetic_images_) {
+        const QImage image = synthetic_images_(info, time_us, height);
+        if (!image.isNull())
+            MemoryInsert(key, image);
+        completion(image);
         return 0;
     }
     std::uint64_t ticket = 0;
@@ -320,8 +330,14 @@ void ThumbnailRequestBroker::Cancel(std::uint64_t ticket) {
     completion(QImage());
 }
 
+void ThumbnailRequestBroker::UseSyntheticImagesForHarness(SyntheticImages images) {
+    synthetic_images_ = std::move(images);
+}
+
 void ThumbnailRequestBroker::Prefetch(const std::string& identity_hex, const std::vector<std::int64_t>& times_us,
                                       int height) {
+    if (synthetic_images_)
+        return;
     std::vector<std::string> keys;
     {
         std::lock_guard lock(mutex_);

@@ -92,7 +92,7 @@ pub struct ShotSpec {
     #[arg(long)]
     pub overlay_state: Option<String>,
     /// Edit workspace fixture (`EXOSNAP_VISUAL_EDIT_SCENARIO`), for example
-    /// `edit-trimmed`. Defaults to the Edit page.
+    /// `edit-selected-clip`. Defaults to the Edit page.
     #[arg(long)]
     pub edit: Option<String>,
     /// Diagnostics fixture (`EXOSNAP_VISUAL_DIAG_SCENARIO`), for example `issues`.

@@ -425,6 +425,15 @@ void EditTimelineAdapter::configureWaveformCache(const WaveformCacheService::Con
     waveforms_ = std::make_unique<WaveformCacheService>(config, WaveformCacheService::DecoderFactory{});
 }
 
+void EditTimelineAdapter::useSyntheticMediaForHarness(ThumbnailRequestBroker::SyntheticImages images,
+                                                      WaveformCacheService::DecoderFactory decoders,
+                                                      const std::filesystem::path& waveform_root) {
+    broker_->UseSyntheticImagesForHarness(std::move(images));
+    WaveformCacheService::Config config;
+    config.root = waveform_root;
+    waveforms_ = std::make_unique<WaveformCacheService>(config, std::move(decoders));
+}
+
 bool EditTimelineAdapter::registerThumbnailSource(const QString& identityHex, const QString& path, int videoWidth,
                                                   int videoHeight, int fpsNum, int fpsDen) {
     const auto identity = ParseContentIdentity(identityHex);

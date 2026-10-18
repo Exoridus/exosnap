@@ -139,7 +139,7 @@ Item {
                 editLoader.setSource(Qt.resolvedUrl("EditPage.qml"), {
                     session: root.editSession, timeline: root.editTimeline,
                     player: root.editPlayer, exporter: root.editExport,
-                    recordings: root.recordViewModel
+                    recordings: root.recordViewModel, shell: root.shell
                 });
             break;
         case ShellAdapter.SettingsPage:

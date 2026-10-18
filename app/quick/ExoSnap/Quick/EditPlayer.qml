@@ -20,8 +20,19 @@ Rectangle {
         id: surface
         objectName: "editViewerSurface"
         anchors.fill: parent
-        playerAdapter: root.player
+        visible: root.player.harnessStillSource.toString().length === 0
+        playerAdapter: visible ? root.player : null
         cornerRadius: ExoTheme.radiusMd
+    }
+    Image {
+        id: harnessStill
+        objectName: "editHarnessStill"
+        anchors.fill: parent
+        source: root.player.harnessStillSource
+        sourceSize: Qt.size(width, height)
+        fillMode: Image.PreserveAspectFit
+        visible: source.toString().length > 0
+        Accessible.ignored: true
     }
     ColumnLayout {
         anchors.centerIn: parent
@@ -45,8 +56,10 @@ Rectangle {
             horizontalAlignment: Text.AlignHCenter
             wrapMode: Text.Wrap
         }
-        Button {
+        ExoButton {
+            objectName: "editOpenMedia"
             Layout.alignment: Qt.AlignHCenter
+            leadingGlyph: ExoGlyph.Folder
             text: qsTr("Open media")
             onClicked: root.openMedia()
         }
@@ -54,7 +67,7 @@ Rectangle {
     Label {
         anchors.centerIn: parent
         width: Math.min(440, root.width - 32)
-        visible: root.session.durationMs > 0 && !surface.hasFrame
+        visible: root.session.durationMs > 0 && !surface.hasFrame && !harnessStill.visible
         text: surface.errorText.length > 0 ? qsTr("Preview unavailable. Export options are checked separately.") : root.player.placeholderText
         textFormat: Text.PlainText
         horizontalAlignment: Text.AlignHCenter

@@ -82,6 +82,10 @@ capture the operator's other display locally.
 
 ## Application surfaces
 
+Timeline mutation commands accept an optional `expectedRevision` from `editor.snapshot`. A mismatch is refused before dispatch. Their response includes an `edit` object with `attempted`, `changed`, `revisionBefore` and `revisionAfter`, beside the resulting editor snapshot. A successful no-op is distinguishable from a revision change. Use the command schema from `system.capabilities` for the exact parameters this binary accepts.
+
+The `edit.timeline-semantic` preflight scenario launches the product offscreen, generates real media with FFmpeg, exercises edits and revision refusal through this endpoint, then confirms and independently decodes the export. It requires D3D11 and NVENC. It establishes semantic and media-output behavior, not native pointer, focus, physical display or audible synchronization acceptance.
+
 | Surface | Use |
 |---|---|
 | `system.hello`, `system.capabilities`, `system.snapshot` | Process identity, exact surface and display/environment facts |
@@ -94,6 +98,13 @@ capture the operator's other display locally.
 | `audio.routing.snapshot`, `audio.routing.addTrack`, `audio.routing.assignSource`, `audio.routing.setTrackRecordEnabled` | The existing audio routing adapter exposes observed track IDs, recording flags and revision. Writes require the observed revision and use the same persistence path as the profile inspector. Assignment mode 0 moves a source and mode 1 adds its route to another track. Disable recording tracks here for silent fixtures; legacy source-row flags do not configure an Audio1 graph |
 | `ui.navigate`, `ui.reveal`, `ui.scrollHome`, `ui.scrollEnd` | Guarded navigation and actual visibility/scroll postconditions |
 | `edit.open`, `edit.playPause/seek/setTrimIn/setTrimOut/timelineHome/timelineEnd/close` | Existing edit session operations; only open creates a session |
+| `editor.snapshot` | Workspace revision, media, tracks, clips, junctions, selection, options, preview readiness, playback, monitoring, panels and export state |
+| `edit.importMedia`, `edit.appendRecording`, `edit.appendMedia` | Probe/import or append through the editor adapters. Import completion is asynchronous and observable through `importPending` and the media/workspace state |
+| `edit.selectClip/selectTransition/selectGap`, `edit.moveClip/trimClip/split/delete/closeGap/deleteTrack`, `edit.undo/redo` | Selection and transactional timeline commands. Ripple deletion of a selected gap or Spacer commits its close-gap preview |
+| `edit.applyCrossfade/removeTransition/setJunctionWindow/setJunctionCurve/setJunctionAudioLaw/setJunctionCut/setClipFade` | Shared junction and fade controls, including the same overlap admission rules as the editor |
+| `edit.setOption/setFixedTimelineEnd/setSelectionBoundary` | Editor options, fixed timeline end and export selection boundaries |
+| `edit.play/pause/frameStep/setVolume/confirmMonitoring`, `edit.setPanel/setSourceTab` | Explicit transport, monitoring and page controls. Playback waits for monitoring confirmation. Panel snapshots report the page's actual overlay/pin decision |
+| `export.setOptions/start/confirm/discard/reset/cancel` | Export options and the review lifecycle. `export.start` prepares the review; `export.confirm` accepts it and starts the worker |
 | `sourcePicker.open/close`, `notificationHub.open/close`, `notification.clearAll` | Application popups and hub state |
 | `diagnostics.snapshot`, `diagnostics.setInDepth` | Measured diagnostic state and the session-scoped in-depth switch |
 | `settings.*`, `pipeline.*`, `notifications.*`, other discovered surfaces | Use the schema/allowlist returned by this build; fixture paths must match emitted data |

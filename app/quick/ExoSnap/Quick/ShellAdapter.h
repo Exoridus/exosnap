@@ -4,6 +4,7 @@
 
 #include <QObject>
 #include <QString>
+#include <QVariantMap>
 #include <QtQmlIntegration/qqmlintegration.h>
 
 #include <functional>
@@ -43,6 +44,11 @@ class ShellAdapter : public QObject {
     enum DiagnosticsSection { DiagnosticsOverview = 0, DiagnosticsLogs = 1 };
     Q_ENUM(DiagnosticsSection)
 
+    enum EditPanel { EditMediaPanel = 0, EditDetailsPanel = 1 };
+    Q_ENUM(EditPanel)
+    enum EditSourceTab { EditHistoryTab = 0, EditMediaTab = 1, EditTransitionsTab = 2 };
+    Q_ENUM(EditSourceTab)
+
   private:
     // ── What is on screen, published by the frontend ──────────────────────────
     //
@@ -69,6 +75,11 @@ class ShellAdapter : public QObject {
                    editSurfaceVisibleChanged FINAL)
     Q_PROPERTY(
         bool sourcePickerOpen READ sourcePickerOpen WRITE setSourcePickerOpen NOTIFY sourcePickerOpenChanged FINAL)
+    // The Edit page's side panels as the page laid them out: mediaOpen,
+    // mediaPinned, mediaCanPin, detailsOpen, detailsPinned, detailsCanPin (bool)
+    // and sourceTab (EditSourceTab). Published by EditPage, which owns the
+    // overlay/pin rules; writing it changes nothing on screen.
+    Q_PROPERTY(QVariantMap editPanels READ editPanels WRITE setEditPanels NOTIFY editPanelsChanged FINAL)
 
     Q_PROPERTY(bool closeGuardActive READ closeGuardActive NOTIFY closeGuardChanged FINAL)
     Q_PROPERTY(QString closeGuardTitle READ closeGuardTitle NOTIFY closeGuardChanged FINAL)
@@ -92,6 +103,8 @@ class ShellAdapter : public QObject {
     void setEditSurfaceVisible(bool visible);
     [[nodiscard]] bool sourcePickerOpen() const noexcept;
     void setSourcePickerOpen(bool open);
+    [[nodiscard]] const QVariantMap& editPanels() const noexcept;
+    void setEditPanels(const QVariantMap& panels);
 
     [[nodiscard]] bool closeGuardActive() const noexcept;
     [[nodiscard]] const QString& closeGuardTitle() const noexcept;
@@ -129,11 +142,17 @@ class ShellAdapter : public QObject {
     // Popup and the resident-after-first-open contract belong to RecordPage, and
     // a second opener would be a second policy.
     void sourcePickerRequested(bool open);
+    // The Edit side panels and the Media panel's tab, asked for from outside the
+    // page. EditPage applies them through its own toggles, so the narrow-window
+    // rule (one overlay at a time) and the pin width limit still decide.
+    void editPanelRequested(ShellAdapter::EditPanel panel, bool open, bool pinned);
+    void editSourceTabRequested(ShellAdapter::EditSourceTab tab);
 
     void currentPageChanged();
     void diagnosticsSectionChanged();
     void editSurfaceVisibleChanged();
     void sourcePickerOpenChanged();
+    void editPanelsChanged();
 
     void closeGuardChanged();
     // Every guard has cleared; the frontend may close the window now.
@@ -172,6 +191,7 @@ class ShellAdapter : public QObject {
     int diagnostics_section_ = DiagnosticsOverview;
     bool edit_surface_visible_ = false;
     bool source_picker_open_ = false;
+    QVariantMap edit_panels_;
 };
 
 } // namespace exosnap::quick

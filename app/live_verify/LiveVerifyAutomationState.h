@@ -104,6 +104,44 @@ struct AutomationState {
     QString edit_export_state = QStringLiteral("idle");
     bool can_export = false;
 
+    // --- Edit workspace -------------------------------------------------------
+    // The timeline model's own revision. It advances on every accepted edit,
+    // import, undo and redo, and on nothing else; a timeline command's
+    // `expectedRevision` is compared against it.
+    quint64 edit_workspace_revision = 0;
+    int edit_media_count = 0;
+    int edit_clip_count = 0;
+    int edit_track_count = 0;
+    // Selection is not part of the model revision, so it is carried here to
+    // move the state revision on its own. 0 means nothing of that kind is
+    // selected; a transition is named by its outgoing clip, as the surface does.
+    quint64 edit_selected_clip = 0;
+    quint64 edit_selected_transition = 0;
+    quint64 edit_selected_spacer = 0;
+    bool edit_gap_selected = false;
+    bool edit_can_undo = false;
+    bool edit_can_redo = false;
+    bool edit_import_pending = false;
+    // The refusal text the timeline header shows, verbatim. Empty when the last
+    // edit was accepted.
+    QString edit_workspace_error;
+    bool edit_snapping = true;
+    bool edit_ripple = false;
+    bool edit_auto_crossfade = true;
+    bool edit_linked_selection = true;
+    // Monitoring: how many source audio tracks Details offers, and whether
+    // playback waits for the user to confirm a selection.
+    int edit_monitoring_track_count = 0;
+    bool edit_monitoring_confirmation_required = false;
+    // The side panels, as the page laid them out: "closed" | "open" |
+    // "pinned". canPin is the page's own width rule.
+    QString edit_media_panel = QStringLiteral("closed");
+    QString edit_details_panel = QStringLiteral("closed");
+    bool edit_media_panel_can_pin = false;
+    bool edit_details_panel_can_pin = false;
+    // "history" | "media" | "transitions".
+    QString edit_source_tab = QStringLiteral("history");
+
     // --- Shell surfaces ------------------------------------------------------
     bool notification_hub_open = false;
     // How many entries the hub holds and how many are unread. Product state, not

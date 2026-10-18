@@ -440,6 +440,77 @@ pub fn encode_fixture(
     Ok(())
 }
 
+/// Writes an editor source: `frames` frames of the verification pattern whose
+/// barcode counts up from `first_id`, and a stereo tone of `tone_hz` for the
+/// same duration. Tagged as BT.709 limited-range 4:2:0 SDR, the one colour
+/// path the editor renders, with a keyframe every half second so cuts land
+/// between keyframes as they do in real recordings.
+pub fn encode_edit_source(
+    first_id: u32,
+    frames: u32,
+    fps: u32,
+    tone_hz: u32,
+    out: &Path,
+) -> Result<()> {
+    const WIDTH: u32 = 640;
+    const HEIGHT: u32 = 360;
+    let layout = pattern::Layout::new(WIDTH, HEIGHT);
+    let duration = f64::from(frames) / f64::from(fps);
+    let mut child = Command::new(tools::require("ffmpeg")?)
+        .args([
+            "-v", "error", "-y", "-f", "rawvideo", "-pix_fmt", "bgra", "-s",
+        ])
+        .arg(format!("{WIDTH}x{HEIGHT}"))
+        .args(["-r", &fps.to_string(), "-i", "-", "-f", "lavfi", "-i"])
+        .arg(format!(
+            "sine=frequency={tone_hz}:sample_rate=48000:duration={duration}"
+        ))
+        .args([
+            "-map",
+            "0:v",
+            "-map",
+            "1:a",
+            "-vf",
+            "scale=out_color_matrix=bt709:out_range=tv",
+            "-c:v",
+            "libx264",
+            "-preset",
+            "veryfast",
+            "-crf",
+            "12",
+            "-pix_fmt",
+            "yuv420p",
+            "-x264-params",
+        ])
+        .arg(format!(
+            "colorprim=bt709:transfer=bt709:colormatrix=bt709:fullrange=off:keyint={}",
+            (fps / 2).max(1)
+        ))
+        .args(["-c:a", "pcm_s16le", "-ac", "2", "-shortest"])
+        .arg(out)
+        .stdin(Stdio::piped())
+        .stdout(Stdio::null())
+        .stderr(Stdio::piped())
+        .spawn()
+        .context("start ffmpeg")?;
+    {
+        let mut stdin = child.stdin.take().context("ffmpeg stdin")?;
+        for frame_id in first_id..first_id + frames {
+            let pixels = pattern::render(
+                &layout,
+                &pattern::FrameState {
+                    frame_id,
+                    ..Default::default()
+                },
+            );
+            std::io::Write::write_all(&mut stdin, &pixels)?;
+        }
+    }
+    let status = tools::wait(&mut child, Duration::from_secs(300))?;
+    ensure!(status.success(), "ffmpeg could not write {}", out.display());
+    Ok(())
+}
+
 #[cfg(test)]
 pub mod tests {
     use super::*;

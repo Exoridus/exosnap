@@ -68,6 +68,34 @@ TEST(EditPlayerSession, VideoOnlyClockAdvances) {
     EXPECT_LT(session.ClockSnapshotUs(), 0);
 }
 
+TEST(EditPlayerSession, ExternalClockControlsVideoAndIsSampledOnlyByTheOwner) {
+    const auto fixture = std::filesystem::path(__FILE__).parent_path() / "fixtures" / "reordered_h264.mp4";
+    EditPlayerSession session;
+    std::string error;
+    ASSERT_TRUE(session.Open(fixture, error)) << error;
+    int64_t clock = 500'000;
+    const auto owner = std::this_thread::get_id();
+    bool sampled_by_owner = true;
+    session.PlayWithExternalClock(500'000, 17, [&]() {
+        sampled_by_owner = sampled_by_owner && std::this_thread::get_id() == owner;
+        return clock;
+    });
+    std::this_thread::sleep_for(std::chrono::milliseconds(30));
+    EXPECT_EQ(session.CurrentPositionUs(), clock);
+    clock = 900'123;
+    EXPECT_EQ(session.CurrentPositionUs(), clock);
+    EXPECT_EQ(session.ClockSnapshotUs(), clock);
+    session.Pause();
+    clock = 1'500'000;
+    EXPECT_EQ(session.CurrentPositionUs(), 900'123);
+    EXPECT_LT(session.ClockSnapshotUs(), 0);
+    EXPECT_TRUE(sampled_by_owner);
+    session.Play(500'000);
+    std::this_thread::sleep_for(std::chrono::milliseconds(30));
+    EXPECT_GT(session.CurrentPositionUs(), 500'000);
+    session.Close();
+}
+
 TEST(EditPlayerSession, CloseWakesVideoPresentationWait) {
     const auto fixture = std::filesystem::path(__FILE__).parent_path() / "fixtures" / "reordered_h264.mp4";
     EditPlayerSession session;

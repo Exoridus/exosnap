@@ -52,12 +52,14 @@
 #include <QRect>
 #include <QScreen>
 #include <QSet>
+#include <QUrl>
 #include <QVariant>
 #include <QtGui/qscreen_platform.h>
 
 #include "RecordingClipAdapter.h"
 
 #include <algorithm>
+#include <limits>
 #include <optional>
 #include <utility>
 
@@ -165,6 +167,74 @@ QString ExportStateName(EditExportAdapter::State state) {
     return QStringLiteral("idle");
 }
 
+QString PanelStateName(bool open, bool pinned) {
+    return !open ? QStringLiteral("closed") : pinned ? QStringLiteral("pinned") : QStringLiteral("open");
+}
+
+QString SourceTabName(int tab) {
+    switch (tab) {
+    case ShellAdapter::EditMediaTab:
+        return QStringLiteral("media");
+    case ShellAdapter::EditTransitionsTab:
+        return QStringLiteral("transitions");
+    default:
+        return QStringLiteral("history");
+    }
+}
+
+QString PreviewStateName(EditPlayerAdapter::PreviewState state) {
+    switch (state) {
+    case EditPlayerAdapter::Empty:
+        return QStringLiteral("empty");
+    case EditPlayerAdapter::Opening:
+        return QStringLiteral("opening");
+    case EditPlayerAdapter::Ready:
+        return QStringLiteral("ready");
+    case EditPlayerAdapter::SeekPending:
+        return QStringLiteral("seekPending");
+    case EditPlayerAdapter::Buffering:
+        return QStringLiteral("buffering");
+    case EditPlayerAdapter::Degraded:
+        return QStringLiteral("degraded");
+    case EditPlayerAdapter::Failed:
+        return QStringLiteral("failed");
+    }
+    return QStringLiteral("empty");
+}
+
+// The curve and law spellings of the wire, in the engine enumerators' order --
+// the same order the Details combo boxes list them in.
+const QStringList& CurveNames() {
+    static const QStringList names = {QStringLiteral("linear"), QStringLiteral("smooth"), QStringLiteral("bias")};
+    return names;
+}
+
+const QStringList& AudioLawNames() {
+    static const QStringList names = {QStringLiteral("equalGain"), QStringLiteral("equalPower")};
+    return names;
+}
+
+QJsonValue NameOrNull(const QStringList& names, int index) {
+    return index >= 0 && index < names.size() ? QJsonValue(names.at(index)) : QJsonValue(QJsonValue::Null);
+}
+
+// A presentation row the QML surface reads, as JSON. The rows are already
+// product vocabulary (ids, milliseconds, names); only the enumerations are
+// renamed so the wire does not depend on their order.
+QJsonArray RowsJson(const QVariantList& rows) {
+    QJsonArray array;
+    for (const QVariant& row : rows)
+        array.append(QJsonObject::fromVariantMap(row.toMap()));
+    return array;
+}
+
+QJsonObject TransitionJson(const QVariantMap& row) {
+    QJsonObject json = QJsonObject::fromVariantMap(row);
+    json.insert(QStringLiteral("curve"), NameOrNull(CurveNames(), row.value(QStringLiteral("curve")).toInt()));
+    json.insert(QStringLiteral("audioLaw"), NameOrNull(AudioLawNames(), row.value(QStringLiteral("audioLaw")).toInt()));
+    return json;
+}
+
 QString BlockingSurfaceName(BlockingSurfaceArbiter::Surface surface) {
     switch (surface) {
     case BlockingSurfaceArbiter::Surface::Recovery:
@@ -264,15 +334,20 @@ QuickLiveVerifySource::QuickLiveVerifySource(QuickApplication& application, QQui
         connect(session, &EditSessionAdapter::openChanged, this, refresh);
         connect(session, &EditSessionAdapter::clipChanged, this, refresh);
         connect(session, &EditSessionAdapter::exportRunningChanged, this, refresh);
+        connect(session, &EditSessionAdapter::workspaceChanged, this, refresh);
+        connect(session, &EditSessionAdapter::interactionSettingsChanged, this, refresh);
+        connect(session, &EditSessionAdapter::importPendingChanged, this, refresh);
     }
     if (auto* player = application_.editPlayerAdapter()) {
         connect(player, &EditPlayerAdapter::playingChanged, this, refresh);
         connect(player, &EditPlayerAdapter::clipOpenChanged, this, refresh);
+        connect(player, &EditPlayerAdapter::monitoringChanged, this, refresh);
     }
     if (auto* shell = application_.shellAdapter()) {
         connect(shell, &ShellAdapter::currentPageChanged, this, refresh);
         connect(shell, &ShellAdapter::editSurfaceVisibleChanged, this, refresh);
         connect(shell, &ShellAdapter::sourcePickerOpenChanged, this, refresh);
+        connect(shell, &ShellAdapter::editPanelsChanged, this, refresh);
     }
     if (auto* notifications = application_.notificationsAdapter()) {
         connect(notifications, &NotificationsAdapter::hubOpenChanged, this, refresh);
@@ -361,11 +436,40 @@ live_verify::AutomationState QuickLiveVerifySource::State() const {
     if (const auto* session = application_.editSessionAdapter()) {
         state.edit_session_open = session->open();
         state.edit_export_running = session->exportRunning();
+        const auto& workspace = session->workspace();
+        state.edit_workspace_revision = workspace.revision();
+        state.edit_media_count = static_cast<int>(workspace.assets().size());
+        state.edit_clip_count = static_cast<int>(workspace.clips().size());
+        state.edit_track_count = static_cast<int>(workspace.tracks().size());
+        state.edit_selected_clip = session->selectedClip();
+        state.edit_selected_transition = session->selectedTransition();
+        state.edit_selected_spacer = session->selectedSpacer();
+        state.edit_gap_selected = !session->selectedGap().isEmpty();
+        state.edit_can_undo = session->canUndo();
+        state.edit_can_redo = session->canRedo();
+        state.edit_import_pending = session->importPending();
+        state.edit_workspace_error = session->workspaceError();
+        state.edit_snapping = session->snapping;
+        state.edit_ripple = session->ripple;
+        state.edit_auto_crossfade = session->autoCrossfade;
+        state.edit_linked_selection = session->linkedSelection;
     }
     if (const auto* player = application_.editPlayerAdapter()) {
         state.edit_playback = !player->clipOpen() ? QStringLiteral("none")
                               : player->playing() ? QStringLiteral("playing")
                                                   : QStringLiteral("paused");
+        state.edit_monitoring_track_count = static_cast<int>(player->monitoringTracks().size());
+        state.edit_monitoring_confirmation_required = player->monitoringConfirmationRequired();
+    }
+    if (const auto* shell = application_.shellAdapter()) {
+        const QVariantMap& panels = shell->editPanels();
+        state.edit_media_panel = PanelStateName(panels.value(QStringLiteral("mediaOpen")).toBool(),
+                                                panels.value(QStringLiteral("mediaPinned")).toBool());
+        state.edit_details_panel = PanelStateName(panels.value(QStringLiteral("detailsOpen")).toBool(),
+                                                  panels.value(QStringLiteral("detailsPinned")).toBool());
+        state.edit_media_panel_can_pin = panels.value(QStringLiteral("mediaCanPin")).toBool();
+        state.edit_details_panel_can_pin = panels.value(QStringLiteral("detailsCanPin")).toBool();
+        state.edit_source_tab = SourceTabName(panels.value(QStringLiteral("sourceTab")).toInt());
     }
     state.can_open_edit = application_.canOpenEditor();
 
@@ -712,6 +816,121 @@ QJsonObject QuickLiveVerifySource::EditorSnapshot() const {
         json.insert(QStringLiteral("playing"), player->playing());
         json.insert(QStringLiteral("clipOpen"), player->clipOpen());
         json.insert(QStringLiteral("placeholderText"), player->placeholderText());
+    }
+
+    // The workspace, as the timeline, the Media panel and Details present it.
+    const auto& workspace = session->workspace();
+    json.insert(QStringLiteral("workspaceRevision"), static_cast<double>(workspace.revision()));
+    json.insert(QStringLiteral("canUndo"), session->canUndo());
+    json.insert(QStringLiteral("canRedo"), session->canRedo());
+    json.insert(QStringLiteral("importPending"), session->importPending());
+    json.insert(QStringLiteral("workspaceError"), session->workspaceError().isEmpty()
+                                                      ? QJsonValue(QJsonValue::Null)
+                                                      : QJsonValue(session->workspaceError()));
+    json.insert(QStringLiteral("fixedTimelineEnd"), session->fixedTimelineEnd());
+    json.insert(QStringLiteral("deliveryPending"), session->deliveryPending());
+    json.insert(QStringLiteral("media"), RowsJson(session->media()));
+    if (const auto* record = application_.recordViewModelAdapter())
+        json.insert(QStringLiteral("history"), RowsJson(record->recentRecordingOptions()));
+    json.insert(QStringLiteral("tracks"), RowsJson(session->tracks()));
+    json.insert(QStringLiteral("clips"),
+                RowsJson(session->visibleClips(0, (std::numeric_limits<qint64>::max)() / 1000)));
+    QJsonArray transitions;
+    for (const QVariant& row : session->transitions())
+        transitions.append(TransitionJson(row.toMap()));
+    json.insert(QStringLiteral("transitions"), transitions);
+    json.insert(QStringLiteral("spacers"), RowsJson(session->spacers()));
+
+    QJsonObject selection;
+    selection.insert(QStringLiteral("clipId"), static_cast<double>(session->selectedClip()));
+    selection.insert(QStringLiteral("transitionClipId"), static_cast<double>(session->selectedTransition()));
+    selection.insert(QStringLiteral("spacerId"), static_cast<double>(session->selectedSpacer()));
+    const QVariantMap gap = session->selectedGap();
+    selection.insert(QStringLiteral("gap"),
+                     gap.isEmpty() ? QJsonValue(QJsonValue::Null) : QJsonValue(QJsonObject::fromVariantMap(gap)));
+    const QVariantMap clip_details = session->selectedClipDetails();
+    selection.insert(QStringLiteral("clip"), clip_details.isEmpty()
+                                                 ? QJsonValue(QJsonValue::Null)
+                                                 : QJsonValue(QJsonObject::fromVariantMap(clip_details)));
+    const QVariantMap junction_details = session->selectedJunctionDetails();
+    selection.insert(QStringLiteral("transition"), junction_details.isEmpty()
+                                                       ? QJsonValue(QJsonValue::Null)
+                                                       : QJsonValue(TransitionJson(junction_details)));
+    selection.insert(QStringLiteral("canCrossfade"), session->canCrossfade());
+    json.insert(QStringLiteral("selection"), selection);
+
+    QJsonObject time_selection;
+    time_selection.insert(QStringLiteral("inMs"), session->timeSelectionInMs() < 0
+                                                      ? QJsonValue(QJsonValue::Null)
+                                                      : QJsonValue(static_cast<double>(session->timeSelectionInMs())));
+    time_selection.insert(QStringLiteral("outMs"),
+                          session->timeSelectionOutMs() < 0
+                              ? QJsonValue(QJsonValue::Null)
+                              : QJsonValue(static_cast<double>(session->timeSelectionOutMs())));
+    json.insert(QStringLiteral("timeSelection"), time_selection);
+
+    QJsonObject options;
+    options.insert(QStringLiteral("snapping"), session->snapping);
+    options.insert(QStringLiteral("ripple"), session->ripple);
+    options.insert(QStringLiteral("autoCrossfade"), session->autoCrossfade);
+    options.insert(QStringLiteral("linkedSelection"), session->linkedSelection);
+    json.insert(QStringLiteral("options"), options);
+
+    if (player != nullptr) {
+        QJsonObject playback;
+        playback.insert(QStringLiteral("state"), State().edit_playback);
+        playback.insert(QStringLiteral("previewState"), PreviewStateName(player->previewState()));
+        playback.insert(QStringLiteral("requestedTimeUs"), static_cast<double>(player->requestedTimeUs()));
+        const QVariant presented = player->presentedTimeUs();
+        playback.insert(QStringLiteral("presentedTimeUs"), presented.isValid()
+                                                               ? QJsonValue(static_cast<double>(presented.toLongLong()))
+                                                               : QJsonValue(QJsonValue::Null));
+        playback.insert(QStringLiteral("seekPending"), player->seekPending());
+        playback.insert(QStringLiteral("scrubbing"), player->scrubbing());
+        playback.insert(QStringLiteral("surfaceVisible"), player->surfaceVisible());
+        playback.insert(QStringLiteral("volume"), player->volume());
+        json.insert(QStringLiteral("playback"), playback);
+
+        QJsonObject monitoring;
+        monitoring.insert(QStringLiteral("tracks"), RowsJson(player->monitoringTracks()));
+        monitoring.insert(QStringLiteral("confirmationRequired"), player->monitoringConfirmationRequired());
+        json.insert(QStringLiteral("monitoring"), monitoring);
+    }
+
+    if (const auto* timeline = application_.editTimelineAdapter()) {
+        QJsonObject previews;
+        previews.insert(QStringLiteral("state"), timeline->previewState());
+        previews.insert(QStringLiteral("tilesExpected"), timeline->tilesExpected());
+        previews.insert(QStringLiteral("tilesReady"), timeline->tilesReady());
+        json.insert(QStringLiteral("previews"), previews);
+    }
+
+    const AutomationState state = State();
+    QJsonObject panels;
+    panels.insert(QStringLiteral("media"), state.edit_media_panel);
+    panels.insert(QStringLiteral("details"), state.edit_details_panel);
+    panels.insert(QStringLiteral("mediaCanPin"), state.edit_media_panel_can_pin);
+    panels.insert(QStringLiteral("detailsCanPin"), state.edit_details_panel_can_pin);
+    panels.insert(QStringLiteral("sourceTab"), state.edit_source_tab);
+    json.insert(QStringLiteral("panels"), panels);
+
+    if (const auto* exporter = application_.editExportAdapter()) {
+        QJsonObject exported;
+        exported.insert(QStringLiteral("state"), state.edit_export_state);
+        exported.insert(QStringLiteral("running"), exporter->running());
+        exported.insert(QStringLiteral("canExport"), exporter->canExport());
+        exported.insert(QStringLiteral("progressPercent"), exporter->progressPercent());
+        exported.insert(QStringLiteral("profile"), exporter->profileKey());
+        exported.insert(QStringLiteral("mode"), exporter->modeKey());
+        exported.insert(QStringLiteral("span"), exporter->spanKey());
+        exported.insert(QStringLiteral("container"), exporter->containerKey());
+        exported.insert(QStringLiteral("outputPath"), exporter->outputPath());
+        exported.insert(QStringLiteral("errorText"), exporter->errorText());
+        exported.insert(QStringLiteral("destinationFailure"), exporter->destinationFailure());
+        const QVariantMap review = exporter->reviewOutcome();
+        exported.insert(QStringLiteral("review"), review.isEmpty() ? QJsonValue(QJsonValue::Null)
+                                                                   : QJsonValue(QJsonObject::fromVariantMap(review)));
+        json.insert(QStringLiteral("export"), exported);
     }
     return json;
 }
@@ -1987,6 +2206,446 @@ bool QuickLiveVerifySource::ExportCancel(QString* error) {
     }
     exporter->cancel();
     return true;
+}
+
+bool QuickLiveVerifySource::ExportSetOptions(const QJsonObject& options, QString* error) {
+    auto* exporter = application_.editExportAdapter();
+    auto* session = application_.editSessionAdapter();
+    if (exporter == nullptr || session == nullptr) {
+        *error = QStringLiteral("The export panel is not available");
+        return false;
+    }
+    // The same property writes the Details export controls make, in their
+    // order: a span that reads the I/O range is handed that range first.
+    if (options.contains(QStringLiteral("profile")))
+        exporter->setProfileKey(options.value(QStringLiteral("profile")).toString());
+    if (options.contains(QStringLiteral("mode")))
+        exporter->setModeKey(options.value(QStringLiteral("mode")).toString());
+    if (options.contains(QStringLiteral("span"))) {
+        exporter->setTimeSelectionUs(session->timeSelectionInUs(), session->timeSelectionOutUs());
+        exporter->setSpanKey(options.value(QStringLiteral("span")).toString());
+    }
+    if (options.contains(QStringLiteral("container")))
+        exporter->setContainerKey(options.value(QStringLiteral("container")).toString());
+    return true;
+}
+
+bool QuickLiveVerifySource::ExportConfirm(QString* error) {
+    auto* exporter = application_.editExportAdapter();
+    if (exporter == nullptr) {
+        *error = QStringLiteral("The export panel is not available");
+        return false;
+    }
+    exporter->confirmPreparedExport();
+    return true;
+}
+
+bool QuickLiveVerifySource::ExportDiscard(QString* error) {
+    auto* exporter = application_.editExportAdapter();
+    if (exporter == nullptr) {
+        *error = QStringLiteral("The export panel is not available");
+        return false;
+    }
+    exporter->discardPreparedExport();
+    return true;
+}
+
+bool QuickLiveVerifySource::ExportReset(QString* error) {
+    auto* exporter = application_.editExportAdapter();
+    if (exporter == nullptr) {
+        *error = QStringLiteral("The export panel is not available");
+        return false;
+    }
+    exporter->reset();
+    return true;
+}
+
+// --- Edit workspace ----------------------------------------------------------
+//
+// Every intent below is one Q_INVOKABLE the Edit surface calls -- the timeline's
+// keys and handles, the Media and Transitions tabs, Details, the transport. The
+// interaction options are read by the session itself, so an edit made here
+// snaps, ripples and crossfades exactly as the user's would. What an intent
+// checks for itself is only that its target exists: a clip id that names
+// nothing would otherwise reach the model as an edit of nothing and come back
+// as a misleading refusal.
+
+namespace {
+
+using EditIntent = live_verify::LiveVerifySource::EditIntent;
+
+EditIntent Unavailable(QString* error, const char* what) {
+    *error = QStringLiteral("The %1 is not available").arg(QLatin1String(what));
+    return EditIntent::Failed;
+}
+
+EditIntent NoSuch(QString* error, const QString& message) {
+    *error = message;
+    return EditIntent::InvalidTarget;
+}
+
+bool HasTransitionFrom(const EditSessionAdapter& session, quint64 outgoing) {
+    const auto& transitions = session.workspace().transitions();
+    return std::any_of(transitions.begin(), transitions.end(),
+                       [outgoing](const auto& transition) { return transition.outgoing == outgoing; });
+}
+
+bool HasTrack(const EditSessionAdapter& session, quint64 track) {
+    const auto& tracks = session.workspace().tracks();
+    return std::any_of(tracks.begin(), tracks.end(), [track](const auto& value) { return value.id == track; });
+}
+
+} // namespace
+
+live_verify::LiveVerifySource::EditOutcome QuickLiveVerifySource::LastEditOutcome() const {
+    EditOutcome outcome;
+    if (const auto* session = application_.editSessionAdapter()) {
+        outcome.sequence = session->editOutcomeSequence();
+        outcome.accepted = session->lastEditAccepted();
+        outcome.error = session->workspaceError();
+    }
+    return outcome;
+}
+
+QuickLiveVerifySource::EditIntent QuickLiveVerifySource::EditImportMedia(const QString& path, bool append, qint64 at_ms,
+                                                                         QString* error) {
+    auto* session = application_.editSessionAdapter();
+    if (session == nullptr)
+        return Unavailable(error, "edit session");
+    // The file dialog's answer: one existing local file. Anything else would be
+    // a path the dialog can never produce.
+    const QFileInfo file(path);
+    if (!file.isAbsolute() || !file.isFile())
+        return NoSuch(error, QStringLiteral("\"%1\" is not an existing local file").arg(path));
+    session->importMediaBatch({QUrl::fromLocalFile(file.absoluteFilePath())}, append, at_ms);
+    return EditIntent::Delivered;
+}
+
+QuickLiveVerifySource::EditIntent QuickLiveVerifySource::EditAppendRecording(const QString& path, qint64 at_ms,
+                                                                             QString* error) {
+    auto* session = application_.editSessionAdapter();
+    auto* record = application_.recordViewModelAdapter();
+    if (session == nullptr || record == nullptr)
+        return Unavailable(error, "edit session");
+    const QVariantList& history = record->recentRecordingOptions();
+    const bool known = std::any_of(history.begin(), history.end(), [&path](const QVariant& row) {
+        return row.toMap().value(QStringLiteral("path")).toString() == path;
+    });
+    if (!known)
+        return NoSuch(error, QStringLiteral("\"%1\" is not a recording in History").arg(path));
+    session->addHistory(path, at_ms);
+    return EditIntent::Delivered;
+}
+
+QuickLiveVerifySource::EditIntent QuickLiveVerifySource::EditAppendMedia(quint64 media_id, qint64 at_ms,
+                                                                         QString* error) {
+    auto* session = application_.editSessionAdapter();
+    if (session == nullptr)
+        return Unavailable(error, "edit session");
+    if (session->workspace().asset(media_id) == nullptr)
+        return NoSuch(error, QStringLiteral("No media %1 in the Media panel").arg(media_id));
+    session->appendAsset(media_id, at_ms);
+    return EditIntent::Delivered;
+}
+
+QuickLiveVerifySource::EditIntent QuickLiveVerifySource::EditSelectClip(quint64 clip_id, QString* error) {
+    auto* session = application_.editSessionAdapter();
+    if (session == nullptr)
+        return Unavailable(error, "edit session");
+    if (clip_id != 0 && session->workspace().clip(clip_id) == nullptr)
+        return NoSuch(error, QStringLiteral("No clip %1 on the timeline").arg(clip_id));
+    session->selectClip(clip_id);
+    return EditIntent::Delivered;
+}
+
+QuickLiveVerifySource::EditIntent QuickLiveVerifySource::EditSelectTransition(quint64 outgoing_clip_id,
+                                                                              QString* error) {
+    auto* session = application_.editSessionAdapter();
+    if (session == nullptr)
+        return Unavailable(error, "edit session");
+    if (outgoing_clip_id != 0 && !HasTransitionFrom(*session, outgoing_clip_id))
+        return NoSuch(error, QStringLiteral("No transition follows clip %1").arg(outgoing_clip_id));
+    session->selectTransition(outgoing_clip_id);
+    return EditIntent::Delivered;
+}
+
+QuickLiveVerifySource::EditIntent QuickLiveVerifySource::EditSelectGap(quint64 track_id, qint64 at_ms, QString* error) {
+    auto* session = application_.editSessionAdapter();
+    if (session == nullptr)
+        return Unavailable(error, "edit session");
+    if (!HasTrack(*session, track_id))
+        return NoSuch(error, QStringLiteral("No track %1 on the timeline").arg(track_id));
+    session->selectGap(track_id, at_ms);
+    if (session->selectedGap().isEmpty())
+        return NoSuch(error, QStringLiteral("Track %1 has no gap at %2 ms").arg(track_id).arg(at_ms));
+    return EditIntent::Delivered;
+}
+
+QuickLiveVerifySource::EditIntent QuickLiveVerifySource::EditMoveClip(quint64 clip_id, qint64 at_ms, bool snap,
+                                                                      QString* error) {
+    auto* session = application_.editSessionAdapter();
+    if (session == nullptr)
+        return Unavailable(error, "edit session");
+    if (session->workspace().clip(clip_id) == nullptr)
+        return NoSuch(error, QStringLiteral("No clip %1 on the timeline").arg(clip_id));
+    session->moveClip(clip_id, at_ms, snap && session->snapping);
+    return EditIntent::Delivered;
+}
+
+QuickLiveVerifySource::EditIntent QuickLiveVerifySource::EditTrimClip(quint64 clip_id, qint64 in_ms, qint64 out_ms,
+                                                                      QString* error) {
+    auto* session = application_.editSessionAdapter();
+    if (session == nullptr)
+        return Unavailable(error, "edit session");
+    if (session->workspace().clip(clip_id) == nullptr)
+        return NoSuch(error, QStringLiteral("No clip %1 on the timeline").arg(clip_id));
+    session->trimClip(clip_id, in_ms, out_ms);
+    return EditIntent::Delivered;
+}
+
+QuickLiveVerifySource::EditIntent QuickLiveVerifySource::EditSplit(QString* error) {
+    auto* session = application_.editSessionAdapter();
+    if (session == nullptr)
+        return Unavailable(error, "edit session");
+    session->splitSelected();
+    return EditIntent::Delivered;
+}
+
+QuickLiveVerifySource::EditIntent QuickLiveVerifySource::EditDelete(bool ripple, QString* error) {
+    auto* session = application_.editSessionAdapter();
+    if (session == nullptr)
+        return Unavailable(error, "edit session");
+    const bool closes_gap = ripple && (session->selectedSpacer() != 0 || !session->selectedGap().isEmpty());
+    if (closes_gap)
+        session->cancelClipDrag();
+    session->deleteSelected(ripple);
+    if (closes_gap) {
+        if (!session->dragActive())
+            return NoSuch(error, QStringLiteral("The selected blank time is no longer available"));
+        session->commitClipDrag();
+    }
+    return EditIntent::Delivered;
+}
+
+QuickLiveVerifySource::EditIntent QuickLiveVerifySource::EditCloseGap(QString* error) {
+    auto* session = application_.editSessionAdapter();
+    if (session == nullptr)
+        return Unavailable(error, "edit session");
+    session->previewCloseGap();
+    if (!session->dragActive())
+        return NoSuch(error, QStringLiteral("No gap is selected"));
+    // The preview's Apply. An invalid preview is the model's refusal and is
+    // reported through the edit outcome like any other.
+    session->commitClipDrag();
+    return EditIntent::Delivered;
+}
+
+QuickLiveVerifySource::EditIntent QuickLiveVerifySource::EditDeleteTrack(quint64 track_id, bool confirmed,
+                                                                         QString* error) {
+    auto* session = application_.editSessionAdapter();
+    if (session == nullptr)
+        return Unavailable(error, "edit session");
+    if (!HasTrack(*session, track_id))
+        return NoSuch(error, QStringLiteral("No track %1 on the timeline").arg(track_id));
+    // The track header's Delete, then -- only when the model asks for it -- the
+    // confirmation dialog's OK.
+    if (session->deleteTrack(track_id) || !confirmed)
+        return EditIntent::Delivered;
+    session->deleteTrack(track_id, true);
+    return EditIntent::Delivered;
+}
+
+QuickLiveVerifySource::EditIntent QuickLiveVerifySource::EditUndo(QString* error) {
+    auto* session = application_.editSessionAdapter();
+    if (session == nullptr)
+        return Unavailable(error, "edit session");
+    session->undo();
+    return EditIntent::Delivered;
+}
+
+QuickLiveVerifySource::EditIntent QuickLiveVerifySource::EditRedo(QString* error) {
+    auto* session = application_.editSessionAdapter();
+    if (session == nullptr)
+        return Unavailable(error, "edit session");
+    session->redo();
+    return EditIntent::Delivered;
+}
+
+QuickLiveVerifySource::EditIntent QuickLiveVerifySource::EditApplyCrossfade(quint64 clip_id, qint64 duration_ms,
+                                                                            QString* error) {
+    auto* session = application_.editSessionAdapter();
+    if (session == nullptr)
+        return Unavailable(error, "edit session");
+    if (clip_id != 0 && session->workspace().clip(clip_id) == nullptr)
+        return NoSuch(error, QStringLiteral("No clip %1 on the timeline").arg(clip_id));
+    if (clip_id == 0 && session->selectedClip() == 0)
+        return NoSuch(error, QStringLiteral("Select a clip, or name one with \"clipId\""));
+    // The Transitions panel's button applies its 500 ms default.
+    session->applyCrossfade(clip_id, duration_ms > 0 ? duration_ms : 500);
+    return EditIntent::Delivered;
+}
+
+QuickLiveVerifySource::EditIntent QuickLiveVerifySource::EditRemoveTransition(QString* error) {
+    auto* session = application_.editSessionAdapter();
+    if (session == nullptr)
+        return Unavailable(error, "edit session");
+    session->removeTransition();
+    return EditIntent::Delivered;
+}
+
+QuickLiveVerifySource::EditIntent QuickLiveVerifySource::EditSetJunctionWindow(qint64 start_ms, qint64 end_ms,
+                                                                               QString* error) {
+    auto* session = application_.editSessionAdapter();
+    if (session == nullptr)
+        return Unavailable(error, "edit session");
+    session->setJunctionWindow(start_ms, end_ms);
+    return EditIntent::Delivered;
+}
+
+QuickLiveVerifySource::EditIntent QuickLiveVerifySource::EditSetJunctionCurve(const QString& curve, double bias,
+                                                                              QString* error) {
+    auto* session = application_.editSessionAdapter();
+    if (session == nullptr)
+        return Unavailable(error, "edit session");
+    const qsizetype kind = CurveNames().indexOf(curve);
+    if (kind < 0)
+        return NoSuch(error, QStringLiteral("Unknown curve \"%1\"").arg(curve));
+    session->setJunctionCurve(static_cast<int>(kind), bias);
+    return EditIntent::Delivered;
+}
+
+QuickLiveVerifySource::EditIntent QuickLiveVerifySource::EditSetJunctionAudioLaw(const QString& law, QString* error) {
+    auto* session = application_.editSessionAdapter();
+    if (session == nullptr)
+        return Unavailable(error, "edit session");
+    const qsizetype value = AudioLawNames().indexOf(law);
+    if (value < 0)
+        return NoSuch(error, QStringLiteral("Unknown audio law \"%1\"").arg(law));
+    session->setJunctionAudioLaw(static_cast<int>(value));
+    return EditIntent::Delivered;
+}
+
+QuickLiveVerifySource::EditIntent QuickLiveVerifySource::EditSetJunctionCut(qint64 at_ms, QString* error) {
+    auto* session = application_.editSessionAdapter();
+    if (session == nullptr)
+        return Unavailable(error, "edit session");
+    session->setJunctionCut(at_ms);
+    return EditIntent::Delivered;
+}
+
+QuickLiveVerifySource::EditIntent QuickLiveVerifySource::EditSetClipFade(quint64 clip_id, bool incoming,
+                                                                         qint64 duration_ms, QString* error) {
+    auto* session = application_.editSessionAdapter();
+    if (session == nullptr)
+        return Unavailable(error, "edit session");
+    if (session->workspace().clip(clip_id) == nullptr)
+        return NoSuch(error, QStringLiteral("No clip %1 on the timeline").arg(clip_id));
+    session->setClipFade(clip_id, incoming, duration_ms);
+    return EditIntent::Delivered;
+}
+
+QuickLiveVerifySource::EditIntent QuickLiveVerifySource::EditSetFixedTimelineEnd(bool fixed, qint64 end_ms,
+                                                                                 QString* error) {
+    auto* session = application_.editSessionAdapter();
+    if (session == nullptr)
+        return Unavailable(error, "edit session");
+    session->setFixedTimelineEnd(fixed, end_ms);
+    return EditIntent::Delivered;
+}
+
+QuickLiveVerifySource::EditIntent QuickLiveVerifySource::EditSetOption(const QString& option, bool enabled,
+                                                                       QString* error) {
+    auto* session = application_.editSessionAdapter();
+    if (session == nullptr)
+        return Unavailable(error, "edit session");
+    // The footer toggles write the session's properties; the property system
+    // emits the same change notification for this write as for theirs.
+    const char* property = option == QLatin1String("snapping")          ? "snapping"
+                           : option == QLatin1String("ripple")          ? "ripple"
+                           : option == QLatin1String("autoCrossfade")   ? "autoCrossfade"
+                           : option == QLatin1String("linkedSelection") ? "linkedSelection"
+                                                                        : nullptr;
+    if (property == nullptr)
+        return NoSuch(error, QStringLiteral("Unknown timeline option \"%1\"").arg(option));
+    session->setProperty(property, enabled);
+    return EditIntent::Delivered;
+}
+
+QuickLiveVerifySource::EditIntent QuickLiveVerifySource::EditSetSelectionBoundary(bool out, QString* error) {
+    auto* session = application_.editSessionAdapter();
+    if (session == nullptr)
+        return Unavailable(error, "edit session");
+    session->setSelectionBoundary(out);
+    return EditIntent::Delivered;
+}
+
+QuickLiveVerifySource::EditIntent QuickLiveVerifySource::EditSetPlaying(bool playing, QString* error) {
+    auto* player = application_.editPlayerAdapter();
+    if (player == nullptr)
+        return Unavailable(error, "edit player");
+    player->setPlaying(playing);
+    return EditIntent::Delivered;
+}
+
+QuickLiveVerifySource::EditIntent QuickLiveVerifySource::EditFrameStep(int direction, QString* error) {
+    auto* session = application_.editSessionAdapter();
+    if (session == nullptr)
+        return Unavailable(error, "edit session");
+    session->requestFrameStep(direction);
+    return EditIntent::Delivered;
+}
+
+QuickLiveVerifySource::EditIntent QuickLiveVerifySource::EditSetVolume(double volume, QString* error) {
+    auto* player = application_.editPlayerAdapter();
+    if (player == nullptr)
+        return Unavailable(error, "edit player");
+    player->setVolume(volume);
+    return EditIntent::Delivered;
+}
+
+QuickLiveVerifySource::EditIntent QuickLiveVerifySource::EditConfirmMonitoring(const QStringList& track_ids,
+                                                                               bool overlap_confirmed, QString* error) {
+    auto* player = application_.editPlayerAdapter();
+    if (player == nullptr)
+        return Unavailable(error, "edit player");
+    const QVariantList tracks = player->monitoringTracks();
+    for (const QString& id : track_ids) {
+        const bool offered = std::any_of(tracks.begin(), tracks.end(), [&id](const QVariant& track) {
+            return track.toMap().value(QStringLiteral("id")).toString() == id;
+        });
+        if (!offered)
+            return NoSuch(error, QStringLiteral("Monitoring offers no track \"%1\"").arg(id));
+    }
+    // Details' Confirm selection: playback stops first, and a single track is
+    // its own overlap confirmation.
+    player->setPlaying(false);
+    player->confirmMonitoring(track_ids, overlap_confirmed || track_ids.size() <= 1);
+    return EditIntent::Delivered;
+}
+
+QuickLiveVerifySource::EditIntent QuickLiveVerifySource::EditSetPanel(const QString& panel, bool open, bool pinned,
+                                                                      QString* error) {
+    auto* shell = application_.shellAdapter();
+    if (shell == nullptr)
+        return Unavailable(error, "shell");
+    if (panel != QLatin1String("media") && panel != QLatin1String("details"))
+        return NoSuch(error, QStringLiteral("Unknown panel \"%1\"").arg(panel));
+    emit shell->editPanelRequested(
+        panel == QLatin1String("media") ? ShellAdapter::EditMediaPanel : ShellAdapter::EditDetailsPanel, open, pinned);
+    return EditIntent::Delivered;
+}
+
+QuickLiveVerifySource::EditIntent QuickLiveVerifySource::EditSetSourceTab(const QString& tab, QString* error) {
+    auto* shell = application_.shellAdapter();
+    if (shell == nullptr)
+        return Unavailable(error, "shell");
+    const ShellAdapter::EditSourceTab value = tab == QLatin1String("media")         ? ShellAdapter::EditMediaTab
+                                              : tab == QLatin1String("transitions") ? ShellAdapter::EditTransitionsTab
+                                                                                    : ShellAdapter::EditHistoryTab;
+    if (value == ShellAdapter::EditHistoryTab && tab != QLatin1String("history"))
+        return NoSuch(error, QStringLiteral("Unknown tab \"%1\"").arg(tab));
+    emit shell->editSourceTabRequested(value);
+    return EditIntent::Delivered;
 }
 
 // ---------------------------------------------------------------------------

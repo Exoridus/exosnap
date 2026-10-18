@@ -65,6 +65,7 @@
 #include <QPointer>
 #include <QQmlApplicationEngine>
 #include <QStringList>
+#include <QTemporaryDir>
 #include <QThreadPool>
 #include <QTimer>
 
@@ -93,6 +94,8 @@ class QuickApplication {
     QuickApplication& operator=(const QuickApplication&) = delete;
 
     [[nodiscard]] bool load(bool no_activate = false);
+    // Applies a visual fixture after the deferred Edit page is ready.
+    void applyEditVisualLayout();
     [[nodiscard]] AboutViewModelAdapter* aboutViewModel() noexcept;
     [[nodiscard]] RecordPreviewAdapter* recordPreviewAdapter() noexcept;
     [[nodiscard]] RecordViewModelAdapter* recordViewModelAdapter() noexcept;
@@ -553,6 +556,9 @@ class QuickApplication {
     // there being a real recording on this machine. Never creates or drives a
     // window, and never starts a real export.
     void applyEditVisualScenario();
+    std::unique_ptr<QTemporaryDir> edit_visual_directory_;
+    QVariantMap edit_visual_layout_;
+    bool edit_visual_layout_applied_ = false;
     void wireSettingsCommands();
     // Mirrors a Settings edit into the live config, the recording side, and disk.
     void applySettingsConfigEdit();

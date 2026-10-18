@@ -118,6 +118,72 @@ EditContext MakeContext(double duration_seconds = 100.0) {
     return context;
 }
 
+// ── Edit outcomes ───────────────────────────────────────────────────────────
+
+TEST(EditWorkspaceOutcome, EveryEditAttemptIsCountedWithItsAnswer) {
+    EnsureApplication();
+    EditSessionAdapter session;
+    session.setEditContext(MakeContext());
+    const auto video = session.visibleClips(0, 100000)[0].toMap().value(QStringLiteral("id")).toULongLong();
+    const auto start = session.editOutcomeSequence();
+
+    // Selection and seeking are not edits.
+    session.selectClip(video);
+    session.requestSeek(50000);
+    EXPECT_EQ(session.editOutcomeSequence(), start);
+
+    const auto revision = session.workspace().revision();
+    session.splitSelected();
+    EXPECT_EQ(session.editOutcomeSequence(), start + 1);
+    EXPECT_TRUE(session.lastEditAccepted());
+    EXPECT_GT(session.workspace().revision(), revision);
+
+    // A refusal is an attempt too, answered with the header's text.
+    EXPECT_FALSE(session.applyCrossfade(video, 0));
+    EXPECT_EQ(session.editOutcomeSequence(), start + 2);
+    EXPECT_FALSE(session.lastEditAccepted());
+    EXPECT_FALSE(session.workspaceError().isEmpty());
+
+    session.undo();
+    EXPECT_EQ(session.editOutcomeSequence(), start + 3);
+    EXPECT_TRUE(session.lastEditAccepted());
+    EXPECT_TRUE(session.workspaceError().isEmpty());
+}
+
+TEST(EditWorkspaceOutcome, ImportPendingSpansTheProbeAndARefusedImportIsCounted) {
+    EnsureApplication();
+    QTemporaryDir directory;
+    ASSERT_TRUE(directory.isValid());
+    const QString path = directory.filePath(QStringLiteral("not-media.mkv"));
+    QFile file(path);
+    ASSERT_TRUE(file.open(QIODevice::WriteOnly));
+    file.write(QByteArray(4096, 'x'));
+    file.close();
+
+    EditSessionAdapter session;
+    int pending_changes = 0;
+    QObject::connect(&session, &EditSessionAdapter::importPendingChanged, &session, [&] { ++pending_changes; });
+    const auto start = session.editOutcomeSequence();
+    session.importMediaBatch({QUrl::fromLocalFile(path)}, true);
+    EXPECT_TRUE(session.importPending());
+    EXPECT_EQ(pending_changes, 1);
+
+    QEventLoop loop;
+    QTimer deadline;
+    deadline.setSingleShot(true);
+    QObject::connect(&deadline, &QTimer::timeout, &loop, &QEventLoop::quit);
+    QObject::connect(&session, &EditSessionAdapter::importPendingChanged, &loop, &QEventLoop::quit);
+    deadline.start(10000);
+    if (session.importPending())
+        loop.exec();
+    ASSERT_FALSE(session.importPending()) << "the probe did not finish";
+    EXPECT_EQ(pending_changes, 2);
+    EXPECT_EQ(session.editOutcomeSequence(), start + 1);
+    EXPECT_FALSE(session.lastEditAccepted());
+    EXPECT_FALSE(session.workspaceError().isEmpty());
+    EXPECT_TRUE(session.workspace().assets().empty());
+}
+
 // ── Trim snapping (pure) ────────────────────────────────────────────────────
 
 TEST(EditWorkspacePresentation, SelectingEitherLinkedRowHighlightsTheWholeGroup) {

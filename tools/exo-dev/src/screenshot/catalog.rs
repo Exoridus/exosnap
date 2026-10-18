@@ -60,6 +60,14 @@ impl ProductValues {
                 );
             }
         }
+        if let Some(scenario) = &spec.edit
+            && !EDIT_SCENARIOS.contains(&scenario.as_str())
+        {
+            bail!(
+                "unknown edit fixture '{scenario}'. Known: {}",
+                EDIT_SCENARIOS.join(", ")
+            );
+        }
         Ok(())
     }
 }
@@ -101,18 +109,25 @@ pub const SET_NAMES: &[&str] = &[
     "all",
 ];
 
-/// Edit workspace fixtures. `edit-default` matches no branch in the app and
-/// therefore renders the default fixture.
+/// Deterministic workspace, panel, selection and export fixtures.
 const EDIT_SCENARIOS: &[&str] = &[
+    "edit-empty",
     "edit-default",
-    "edit-trimmed",
-    "edit-timeline-multitrack",
-    "edit-timeline-loading",
-    "edit-timeline-unavailable",
+    "edit-multitrack",
+    "edit-missing-media",
+    "edit-selected-clip",
+    "edit-transition-selected",
+    "edit-gap",
+    "edit-media-panel",
+    "edit-transitions-panel",
+    "edit-panels-pinned",
+    "edit-monitoring",
+    "edit-crossfade-popup",
+    "edit-volume-popup",
+    "edit-export-review",
     "edit-export-running",
     "edit-export-done",
     "edit-export-failed",
-    "edit-report-warning",
     "edit-long-filename",
 ];
 
@@ -404,6 +419,30 @@ mod tests {
                 .check(&ShotSpec::default(), &["violet".to_string()])
                 .is_ok()
         );
+    }
+
+    #[test]
+    fn edit_fixtures_cover_the_workspace_and_reject_unknown_states() {
+        let shots = set("edit", &values()).unwrap();
+        for scenario in [
+            "edit-empty",
+            "edit-multitrack",
+            "edit-monitoring",
+            "edit-panels-pinned",
+            "edit-export-review",
+        ] {
+            assert!(
+                shots
+                    .iter()
+                    .any(|(_, shot)| shot.edit.as_deref() == Some(scenario)),
+                "{scenario}"
+            );
+        }
+        let spec = ShotSpec {
+            edit: Some("edit-misspelled".into()),
+            ..ShotSpec::default()
+        };
+        assert!(values().check(&spec, &[]).is_err());
     }
 
     #[test]

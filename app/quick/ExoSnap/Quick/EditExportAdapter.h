@@ -172,6 +172,9 @@ class EditExportAdapter : public QObject {
     // touches the export thread or the cancel flag, so a visual capture of
     // "Running" cannot leave a real remux behind.
     void applyVisualState(State state, int percent, const QString& output_path, const QString& error);
+    // Harness/test-only: shows `outcome` in the review dialog as a planned
+    // export would. Nothing is prepared, so confirming it starts nothing.
+    void applyVisualReview(const QVariantMap& outcome);
 
   signals:
     void stateChanged();

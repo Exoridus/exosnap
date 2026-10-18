@@ -18,6 +18,7 @@ Item {
             player: testPagePlayer
             exporter: testPageExporter
             recordings: testPageRecordings
+            shell: testPageShell
             Rectangle { anchors.fill: parent; z: -1; color: ExoTheme.background }
         }
     }
@@ -36,6 +37,34 @@ Item {
             const item = findChild(page, name);
             verify(!!item, "Object exists");
             return item;
+        }
+
+        function test_synthetic_still_does_not_claim_native_presentation() {
+            const still = testEditHarness.syntheticStillProbe();
+            compare(still.source.toString(), "file:///synthetic-visual-frame.png");
+            compare(still.requestedTimeUs, 42500000);
+            compare(still.hasPresentedTime, false);
+            compare(still.seekPending, false);
+            compare(still.clipOpen, true);
+            compare(still.playing, false);
+        }
+
+        function test_harness_fit_completes_before_returning_on_settled_geometry() {
+            while (testSession.canUndo) testSession.undo();
+            testSession.appendAsset(testSession.media[0].id);
+            const page = make({ session: testSession, timeline: testTimeline, player: testPlayer });
+            const timeline = child(page, "editClipTimeline");
+            const scroll = child(page, "editTimelineScroll");
+            page.width = 1600;
+            tryVerify(() => scroll.width > 1200);
+            wait(0);
+            timeline.zoomTo(timeline.minimumZoom * 2);
+            verify(timeline.pixelsPerSecond > timeline.minimumZoom);
+            page.applyHarnessView({ fit: true });
+            verify(Math.abs(timeline.pixelsPerSecond - timeline.minimumZoom) < 0.001);
+            compare(scroll.contentX, 0);
+            verify(timeline.positionAt(testSession.durationMs) <= scroll.width);
+            while (testSession.canUndo) testSession.undo();
         }
 
         function test_EmptyViewerStable() {
@@ -168,6 +197,38 @@ Item {
             compare(page.mediaOpen, false);
             page.width = 1600;
             compare(page.mediaOpen, false);
+        }
+
+        function test_panel_layout_is_published_and_requests_use_the_page_rules() {
+            const page = make({ width: 1100, height: 800 });
+            tryVerify(() => testPageShell.editPanels.mediaOpen === false);
+            compare(testPageShell.editPanels.detailsOpen, false);
+            compare(testPageShell.editPanels.sourceTab, 0);
+
+            testEditHarness.requestEditPanel(ShellAdapter.EditDetailsPanel, true, false);
+            compare(page.detailsOpen, true);
+            tryVerify(() => testPageShell.editPanels.detailsOpen === true);
+            // Below 1200 px one overlay at a time, exactly as the footer button does.
+            testEditHarness.requestEditPanel(ShellAdapter.EditMediaPanel, true, false);
+            compare(page.mediaOpen, true);
+            compare(page.detailsOpen, false);
+            tryVerify(() => testPageShell.editPanels.detailsOpen === false);
+
+            testEditHarness.requestEditPanel(ShellAdapter.EditMediaPanel, true, true);
+            compare(page.mediaPinned, page.canPinMedia);
+            tryVerify(() => testPageShell.editPanels.mediaPinned === page.canPinMedia);
+            compare(testPageShell.editPanels.mediaCanPin, page.canPinMedia);
+
+            testEditHarness.requestEditSourceTab(ShellAdapter.EditTransitionsTab);
+            compare(page.sourceTab, 2);
+            tryVerify(() => child(page, "editCrossfadeItem").visible);
+            compare(testPageShell.editPanels.sourceTab, 2);
+
+            testEditHarness.requestEditPanel(ShellAdapter.EditMediaPanel, false, false);
+            compare(page.mediaOpen, false);
+            compare(page.mediaPinned, false);
+            tryVerify(() => testPageShell.editPanels.mediaOpen === false);
+            testEditHarness.requestEditSourceTab(ShellAdapter.EditHistoryTab);
         }
 
         function test_vertical_split_restore_clamp_and_keyboard() {

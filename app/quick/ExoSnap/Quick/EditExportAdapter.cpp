@@ -1216,6 +1216,13 @@ void EditExportAdapter::applyVisualState(State state, int percent, const QString
     setState(state);
 }
 
+void EditExportAdapter::applyVisualReview(const QVariantMap& outcome) {
+    prepared_.reset();
+    review_outcome_ = outcome;
+    emit reviewChanged();
+    setState(State::Review);
+}
+
 // The panel offers one folder action, and this is it: "explorer /select,<path>"
 // opens the containing folder AND highlights the file, so it strictly contains
 // what the separate "Open folder" action did.

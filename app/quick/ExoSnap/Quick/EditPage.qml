@@ -11,6 +11,7 @@ FocusScope {
     required property EditPlayerAdapter player
     required property EditExportAdapter exporter
     required property RecordViewModelAdapter recordings
+    required property ShellAdapter shell
     property bool mediaOpen: false
     property bool detailsOpen: false
     property bool mediaPinned: false
@@ -45,6 +46,41 @@ FocusScope {
         target: root.timeline
         property: "trackWidth"
         value: clips.width
+    }
+    // The panel layout as this page decided it, for the control channel. The
+    // page keeps the overlay and pin rules; requests below go through the same
+    // toggles as the footer buttons and shortcuts.
+    Binding {
+        target: root.shell
+        property: "editPanels"
+        value: ({
+                mediaOpen: root.mediaOpen,
+                mediaPinned: root.mediaPinned,
+                mediaCanPin: root.canPinMedia,
+                detailsOpen: root.detailsOpen,
+                detailsPinned: root.detailsPinned,
+                detailsCanPin: root.canPinDetails,
+                sourceTab: root.sourceTab
+            })
+    }
+    Connections {
+        target: root.shell
+        function onEditPanelRequested(panel: int, open: bool, pinned: bool): void {
+            const media = panel === ShellAdapter.EditMediaPanel;
+            if ((media ? root.mediaOpen : root.detailsOpen) !== open) {
+                if (media) root.toggleMedia();
+                else root.toggleDetails();
+            }
+            if (!open)
+                return;
+            if (media && root.mediaPinned !== pinned && (!pinned || root.canPinMedia))
+                root.mediaPinned = pinned;
+            else if (!media && root.detailsPinned !== pinned && (!pinned || root.canPinDetails))
+                root.detailsPinned = pinned;
+        }
+        function onEditSourceTabRequested(tab: int): void {
+            root.sourceTab = tab;
+        }
     }
     Connections {
         target: root.session
@@ -97,6 +133,20 @@ FocusScope {
     }
     function fraction(value: real, fallback: real): real {
         return Number.isFinite(value) && value > 0 && value < 1 ? value : fallback;
+    }
+    // Harness-only (--visual-test): fits the timeline to the window and opens
+    // the one popup a capture asks for. The caller waits for settled geometry
+    // before invoking this synchronous action. Panels arrive through the shell.
+    function applyHarnessView(layout: var): void {
+        if (layout.fit)
+            clips.fitTimeline();
+        if (layout.popup === "volume") {
+            volumePopup.open();
+        } else if (layout.popup === "crossfade") {
+            const selected = root.session.selectedJunctionDetails;
+            if (selected.outgoing !== undefined)
+                clips.openTransitionPopup(selected);
+        }
     }
     Settings {
         id: layoutPreferences
@@ -539,15 +589,20 @@ FocusScope {
                                 objectName: "editVolumePopup"
                                 y: -height - 4
                                 x: volumeButton.width - width
-                                width: 160
-                                padding: 12
+                                width: 180
+                                padding: ExoTheme.spacingMd
                                 focus: true
+                                background: Rectangle {
+                                    color: ExoTheme.surfaceRaised
+                                    border.width: 1
+                                    border.color: ExoTheme.lineStrong
+                                    radius: ExoTheme.radiusMd
+                                }
                                 onOpened: volumeSlider.forceActiveFocus(Qt.PopupFocusReason)
                                 onClosed: volumeButton.forceActiveFocus(Qt.PopupFocusReason)
-                                Slider {
+                                contentItem: ExoSlider {
                                     id: volumeSlider
                                     objectName: "editVolumeSlider"
-                                    width: parent.width
                                     from: 0
                                     to: 1
                                     stepSize: 0.1
@@ -621,7 +676,7 @@ FocusScope {
                     EditActionButton { objectName: "editLinkedSelection"; text: qsTr("Linked Selection"); glyph: ExoGlyph.SplitTrack; checkable: true; checked: root.session.linkedSelection; onClicked: root.session.linkedSelection = checked }
                     Item { Layout.fillWidth: true }
                     EditActionButton { objectName: "editZoomOut"; text: qsTr("Zoom out"); glyph: ExoGlyph.Minus; onClicked: clips.zoomTo(clips.pixelsPerSecond / 1.25) }
-                    Slider {
+                    ExoSlider {
                         objectName: "editZoomSlider"
                         Layout.preferredWidth: root.width < 1000 ? 80 : 110
                         from: Math.log(clips.minimumZoom)
@@ -637,14 +692,44 @@ FocusScope {
         }
     }
 
+    component ReviewLine: Label {
+        Layout.fillWidth: true
+        wrapMode: Text.Wrap
+        color: ExoTheme.textSecondary
+        font.family: ExoTheme.sansFamily
+        font.pixelSize: ExoTheme.fontSecondary
+    }
     Dialog {
         id: exportReview
         objectName: "editExportReview"
         title: qsTr("Review export")
         modal: true
+        focus: true
         width: Math.min(root.width - 32, 520)
-        anchors.centerIn: parent
+        anchors.centerIn: Overlay.overlay
+        padding: ExoTheme.spacingLg
         closePolicy: Popup.CloseOnEscape
+        // See ExoConfirmDialog: the style's own veil lightens the dark shell.
+        Overlay.modal: Rectangle {
+            color: ExoTheme.overlayScrim
+        }
+        background: Rectangle {
+            color: ExoTheme.surfaceRaised
+            border.width: 1
+            border.color: ExoTheme.lineStrong
+            radius: ExoTheme.radiusLg
+        }
+        header: Label {
+            text: exportReview.title
+            textFormat: Text.PlainText
+            color: ExoTheme.text
+            leftPadding: ExoTheme.spacingLg
+            rightPadding: ExoTheme.spacingLg
+            topPadding: ExoTheme.spacingLg
+            font.family: ExoTheme.sansFamily
+            font.pixelSize: ExoTheme.fontSectionTitle
+            font.weight: Font.DemiBold
+        }
         onClosed: if (root.exporter.state === EditExportAdapter.Review)
             root.exporter.discardPreparedExport()
         Connections {
@@ -656,13 +741,17 @@ FocusScope {
                     exportReview.close()
             }
         }
+        // The page is created on its first visit; an outcome already waiting
+        // for review then has to be shown, not missed.
+        Component.onCompleted: if (root.exporter.state === EditExportAdapter.Review)
+            exportReview.open()
         contentItem: ColumnLayout {
             id: reviewContent
             readonly property bool planned: root.exporter.reviewOutcome.audioSummary !== undefined
             readonly property bool mixed: (root.exporter.reviewOutcome.outputAudioTracks || []).some(track => track.role === "mix")
             spacing: ExoTheme.spacingSm
-            Label {
-                Layout.fillWidth: true
+            ReviewLine {
+                color: ExoTheme.text
                 text: qsTr("%1 to %2 · %3 video · %4")
                     .arg(root.exporter.reviewOutcome.path === "Copy" ? qsTr("Copy") : qsTr("Render"))
                     .arg(root.exporter.reviewOutcome.container || "")
@@ -670,23 +759,18 @@ FocusScope {
                     .arg(root.exporter.reviewOutcome.outputFile || "")
                 wrapMode: Text.Wrap
             }
-            Label {
+            ReviewLine {
                 objectName: "editExportAudioSummary"
-                Layout.fillWidth: true
                 visible: reviewContent.planned
                 text: qsTr("Audio: %1").arg(root.exporter.reviewOutcome.audioSummary || "")
-                wrapMode: Text.Wrap
             }
-            Label {
-                Layout.fillWidth: true
+            ReviewLine {
                 visible: root.exporter.reviewOutcome.path === "Copy" && !reviewContent.planned
                 text: qsTr("All %1 source audio tracks will be copied: %2")
                     .arg((root.exporter.reviewOutcome.outputAudioTracks || []).length)
                     .arg((root.exporter.reviewOutcome.outputAudioTracks || []).map(track => track.name).join(", ") || qsTr("none"))
-                wrapMode: Text.Wrap
             }
-            Label {
-                Layout.fillWidth: true
+            ReviewLine {
                 visible: reviewContent.planned ? reviewContent.mixed : root.exporter.reviewOutcome.path === "Render"
                 text: root.exporter.reviewOutcome.videoOnly
                     ? qsTr("Video-only render. No audio tracks will be included.")
@@ -698,40 +782,47 @@ FocusScope {
                         : qsTr("Selected tracks (%1) will be mixed into one 48 kHz stereo PCM24 track: %2")
                             .arg((root.exporter.reviewOutcome.selectedTracks || []).length)
                             .arg((root.exporter.reviewOutcome.selectedTracks || []).map(track => track.name).join(", "))
-                wrapMode: Text.Wrap
             }
-            Label {
-                Layout.fillWidth: true
+            ReviewLine {
                 visible: reviewContent.planned ? reviewContent.mixed : root.exporter.reviewOutcome.path === "Render"
                 text: qsTr("Other tracks will not be included: %1")
                     .arg((root.exporter.reviewOutcome.excludedTracks || []).map(track => track.name).join(", ") || qsTr("none"))
-                wrapMode: Text.Wrap
             }
-            Label {
-                Layout.fillWidth: true
+            ReviewLine {
                 visible: reviewContent.planned || root.exporter.reviewOutcome.path === "Render"
                 text: qsTr("Original source recordings remain unchanged.")
-                wrapMode: Text.Wrap
             }
-            Label {
-                Layout.fillWidth: true
+            ReviewLine {
                 visible: root.exporter.reviewOutcome.replaceExisting === true
                 text: qsTr("The existing destination file will be replaced.")
-                wrapMode: Text.Wrap
             }
         }
-        footer: RowLayout {
-            Button {
-                text: qsTr("Cancel")
-                onClicked: exportReview.close()
-            }
-            Item { Layout.fillWidth: true }
-            Button {
-                text: reviewContent.planned ? qsTr("Export")
-                    : root.exporter.reviewOutcome.path === "Render" ? qsTr("Render with selected tracks") : qsTr("Start copy")
-                onClicked: {
-                    root.exporter.confirmPreparedExport()
-                    exportReview.close()
+        footer: Item {
+            implicitWidth: reviewButtons.implicitWidth + 2 * ExoTheme.spacingLg
+            implicitHeight: reviewButtons.implicitHeight + ExoTheme.spacingLg
+            RowLayout {
+                id: reviewButtons
+                anchors.fill: parent
+                anchors.leftMargin: ExoTheme.spacingLg
+                anchors.rightMargin: ExoTheme.spacingLg
+                anchors.bottomMargin: ExoTheme.spacingLg
+                spacing: ExoTheme.spacingSm
+                Item { Layout.fillWidth: true }
+                ExoButton {
+                    objectName: "editExportReviewCancel"
+                    text: qsTr("Cancel")
+                    quiet: true
+                    onClicked: exportReview.close()
+                }
+                ExoButton {
+                    objectName: "editExportReviewConfirm"
+                    tone: "primary"
+                    text: reviewContent.planned ? qsTr("Export")
+                        : root.exporter.reviewOutcome.path === "Render" ? qsTr("Render with selected tracks") : qsTr("Start copy")
+                    onClicked: {
+                        root.exporter.confirmPreparedExport()
+                        exportReview.close()
+                    }
                 }
             }
         }

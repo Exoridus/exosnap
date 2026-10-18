@@ -23,6 +23,20 @@ TestCase {
         compare(probe.retainedTime, 1033367);
     }
 
+    function test_single_video_preview_reads_edited_timeline_audio() {
+        if (!testMediaPreview.available)
+            skip("Set EXOSNAP_EDIT_RENDER_FIXTURES for real media.");
+        const probe = testMediaPreview.timelineAudioEditsProbe();
+        compare(probe.readOk, true, probe.error);
+        verify(probe.original > 0.001);
+        verify(Math.abs(probe.quieter / probe.original - 0.5) < 0.01);
+        compare(probe.muted, 0);
+        compare(probe.deleted, 0);
+        compare(probe.beforeMovedAudio, 0);
+        verify(Math.abs(probe.moved / probe.original - 1) < 0.01);
+        compare(probe.usesVideoComposition, false);
+    }
+
     function test_requested_time_is_precise_and_unmeasured_values_are_unavailable() {
         const probe = testMediaPreview.previewProjectionProbe();
         compare(probe.initiallyEmpty, true);

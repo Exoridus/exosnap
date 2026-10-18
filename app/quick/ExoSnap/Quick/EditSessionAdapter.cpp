@@ -73,6 +73,7 @@ void EditSessionAdapter::setEditContext(const EditContext& context, qint64 timel
     const auto needs_probe = [](const auto& segment) { return segment.succeeded && QFileInfo::exists(segment.path); };
     if (std::any_of(pending.segments.begin(), pending.segments.end(), needs_probe)) {
         QPointer<EditSessionAdapter> self(this);
+        beginImport();
         keyframe_pool_.start([self, pending = std::move(pending), timeline_start_ms, needs_probe]() mutable {
             std::vector<edit::SourceImport> imports(pending.segments.size());
             for (size_t index = 0; index < pending.segments.size(); ++index) {
@@ -91,8 +92,10 @@ void EditSessionAdapter::setEditContext(const EditContext& context, qint64 timel
                 QMetaObject::invokeMethod(
                     self,
                     [self, pending = std::move(pending), timeline_start_ms, imports = std::move(imports)]() mutable {
-                        if (self)
-                            self->applyEditContext(pending, timeline_start_ms, std::move(imports));
+                        if (!self)
+                            return;
+                        self->applyEditContext(pending, timeline_start_ms, std::move(imports));
+                        self->endImport();
                     },
                     Qt::QueuedConnection);
         });

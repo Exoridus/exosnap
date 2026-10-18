@@ -567,6 +567,16 @@ fn take(context: &RunContext, index: usize, job: &Job) -> ShotResult {
     result
 }
 
+fn configure_render_platform(command: &mut Command, args: &[String]) {
+    if !args
+        .iter()
+        .any(|arg| arg == "--visual-live-preview" || arg == "--desktop-pattern")
+    {
+        command.env("QT_QPA_PLATFORM", "offscreen");
+        command.env("QT_QUICK_BACKEND", "software");
+    }
+}
+
 /// Runs one app process. `Ok(None)` is a timeout.
 fn spawn_and_wait(
     context: &RunContext,
@@ -589,6 +599,7 @@ fn spawn_and_wait(
         }
     }
     context.child_env.apply(&mut command);
+    configure_render_platform(&mut command, args);
     // Fresh per shot: a crash report or recovery entry left by an earlier
     // shot would otherwise cover every later one.
     command.env("EXOSNAP_CONFIG_DIR", &config_dir);
@@ -670,6 +681,23 @@ fn overlay_files(out_dir: &Path, stem: &str) -> Vec<String> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn synthetic_shots_are_offscreen_and_live_preview_keeps_native_rendering() {
+        let mut synthetic = Command::new("exosnap");
+        configure_render_platform(&mut synthetic, &[]);
+        assert!(
+            synthetic
+                .get_envs()
+                .any(|(key, value)| key == "QT_QPA_PLATFORM"
+                    && value == Some(std::ffi::OsStr::new("offscreen")))
+        );
+        for flag in ["--visual-live-preview", "--desktop-pattern"] {
+            let mut live = Command::new("exosnap");
+            configure_render_platform(&mut live, &[flag.into()]);
+            assert_eq!(live.get_envs().count(), 0);
+        }
+    }
 
     #[test]
     fn the_user_theme_comes_from_the_settings_file() {

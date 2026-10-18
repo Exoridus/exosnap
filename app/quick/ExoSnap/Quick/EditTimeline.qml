@@ -1,6 +1,7 @@
 pragma ComponentBehavior: Bound
 import QtQuick
 import QtQuick.Controls
+import QtQuick.Layouts
 
 FocusScope {
     id: root
@@ -142,33 +143,42 @@ FocusScope {
             return;
         event.accepted = true;
     }
-    Menu {
+    // Opens the junction popup for one transition row, as Enter on its overlay
+    // does.
+    function openTransitionPopup(row: var): void {
+        root.session.selectTransition(row.outgoing);
+        durationInput.value = row.durationMs;
+        windowStart.value = row.startMs;
+        biasInput.value = row.bias * 100;
+        lawRow.visible = !row.video;
+        cutInput.value = row.cutMs;
+        transitionDuration.open();
+    }
+    ExoMenu {
         id: gapMenu
         objectName: "editGapMenu"
-        MenuItem { text: qsTr("Copy blank duration"); onTriggered: root.session.copyBlankDuration() }
-        MenuItem { text: qsTr("Paste Spacer"); onTriggered: root.session.pasteSpacer() }
-        MenuItem { text: qsTr("Close Gap (preview)"); onTriggered: root.session.previewCloseGap() }
+        ExoMenuItem { text: qsTr("Copy blank duration"); onTriggered: root.session.copyBlankDuration() }
+        ExoMenuItem { text: qsTr("Paste Spacer"); onTriggered: root.session.pasteSpacer() }
+        ExoMenuItem { text: qsTr("Close Gap (preview)"); onTriggered: root.session.previewCloseGap() }
     }
-    Dialog {
+    ExoConfirmDialog {
         id: trackDeleteConfirmation
         objectName: "editTrackDeleteConfirmation"
-        anchors.centerIn: parent
         title: qsTr("Delete track %1?").arg(root.trackToDelete.name)
-        modal: true
-        standardButtons: Dialog.Ok | Dialog.Cancel
-        Label { text: qsTr("Remove this track and all of its timeline content? Source files are kept."); wrapMode: Text.Wrap; width: 280 }
+        bodyText: qsTr("Remove this track and all of its timeline content? Source files are kept.")
+        proceedText: qsTr("Delete track")
         onAccepted: root.session.deleteTrack(root.trackToDelete.id, true)
     }
-    Menu {
+    ExoMenu {
         id: clipMenu
         objectName: "editClipMenu"
-        MenuItem {
+        ExoMenuItem {
             objectName: "editRippleDelete"
             text: qsTr("Ripple delete (Shift+Delete)")
             enabled: root.session.selectedClip !== 0
             onTriggered: root.session.deleteSelected(true)
         }
-        MenuItem {
+        ExoMenuItem {
             text: qsTr("Add Crossfade after clip")
             enabled: root.session.selectedClip !== 0 && root.session.canCrossfade()
             onTriggered: root.session.applyCrossfade()
@@ -177,31 +187,130 @@ FocusScope {
     Popup {
         id: transitionDuration
         objectName: "editCrossfadeDurationPopup"
-        anchors.centerIn: parent
+        // The window's centre, not the timeline's: the timeline card is often
+        // shorter than the popup.
+        anchors.centerIn: Overlay.overlay
         modal: true
         focus: true
-        padding: 12
-        Column {
-            spacing: 8
+        padding: ExoTheme.spacingLg
+        width: 300
+        // See ExoConfirmDialog: the style's own veil lightens the dark shell.
+        Overlay.modal: Rectangle {
+            color: ExoTheme.overlayScrim
+        }
+        background: Rectangle {
+            color: ExoTheme.surfaceRaised
+            border.width: 1
+            border.color: ExoTheme.lineStrong
+            radius: ExoTheme.radiusLg
+        }
+        contentItem: Column {
+            spacing: ExoTheme.spacingSm
             Label {
-                text: qsTr("Junction window (ms)")
+                text: qsTr("Crossfade")
                 color: ExoTheme.text
+                font.family: ExoTheme.sansFamily
+                font.pixelSize: ExoTheme.fontSectionTitle
+                font.weight: Font.DemiBold
             }
-            SpinBox {
-                id: durationInput
-                objectName: "editCrossfadeDuration"
-                from: 1
-                to: 600000
-                editable: true
-                Accessible.name: qsTr("Crossfade duration in milliseconds")
-                onValueModified: root.session.setJunctionWindow(windowStart.value, windowStart.value + value)
+            ExoSettingRow {
+                width: parent.width
+                label: qsTr("Duration")
+                stacked: true
+                ExoNumberField {
+                    id: durationInput
+                    objectName: "editCrossfadeDuration"
+                    Layout.fillWidth: true
+                    from: 1
+                    to: 600000
+                    suffix: qsTr("ms")
+                    Accessible.name: qsTr("Crossfade duration in milliseconds")
+                    onValueModified: root.session.setJunctionWindow(windowStart.value, windowStart.value + value)
+                }
             }
-            SpinBox { id: windowStart; objectName: "editJunctionStart"; from: 0; to: 2147483647; editable: true; Accessible.name: qsTr("Junction start in milliseconds"); onValueModified: root.session.setJunctionWindow(value, value + durationInput.value) }
-            ComboBox { id: curveInput; objectName: "editJunctionCurve"; model: [qsTr("Linear"), qsTr("Smooth"), qsTr("Bias")]; Accessible.name: qsTr("Junction curve"); onActivated: root.session.setJunctionCurve(currentIndex, biasInput.value / 100) }
-            SpinBox { id: biasInput; objectName: "editJunctionBias"; from: -100; to: 100; editable: true; Accessible.name: qsTr("Curve bias"); onValueModified: root.session.setJunctionCurve(curveInput.currentIndex, value / 100) }
-            ComboBox { id: lawInput; objectName: "editJunctionAudioLaw"; model: [qsTr("Equal Gain"), qsTr("Equal Power")]; Accessible.name: qsTr("Audio gain law"); onActivated: root.session.setJunctionAudioLaw(currentIndex) }
-            SpinBox { id: cutInput; objectName: "editJunctionCut"; from: 0; to: 2147483647; editable: true; Accessible.name: qsTr("Cut position in milliseconds"); onValueModified: root.session.setJunctionCut(value) }
-            Button {
+            ExoSettingRow {
+                width: parent.width
+                label: qsTr("Start")
+                stacked: true
+                ExoNumberField {
+                    id: windowStart
+                    objectName: "editJunctionStart"
+                    Layout.fillWidth: true
+                    from: 0
+                    to: 2147483647
+                    suffix: qsTr("ms")
+                    Accessible.name: qsTr("Junction start in milliseconds")
+                    onValueModified: root.session.setJunctionWindow(value, value + durationInput.value)
+                }
+            }
+            ExoSettingRow {
+                width: parent.width
+                label: qsTr("Curve")
+                stacked: true
+                ExoSelect {
+                    id: curveInput
+                    objectName: "editJunctionCurve"
+                    Layout.fillWidth: true
+                    options: [
+                        { value: 0, label: qsTr("Linear") },
+                        { value: 1, label: qsTr("Smooth") },
+                        { value: 2, label: qsTr("Bias") }
+                    ]
+                    value: root.session.selectedJunctionDetails.curve ?? 0
+                    Accessible.name: qsTr("Junction curve")
+                    onValueActivated: value => root.session.setJunctionCurve(value, biasInput.value / 100)
+                }
+            }
+            ExoSettingRow {
+                width: parent.width
+                label: qsTr("Curve bias")
+                stacked: true
+                ExoNumberField {
+                    id: biasInput
+                    objectName: "editJunctionBias"
+                    Layout.fillWidth: true
+                    from: -100
+                    to: 100
+                    Accessible.name: qsTr("Curve bias")
+                    onValueModified: root.session.setJunctionCurve(curveInput.value, value / 100)
+                }
+            }
+            ExoSettingRow {
+                id: lawRow
+                width: parent.width
+                label: qsTr("Audio gain law")
+                stacked: true
+                ExoSelect {
+                    id: lawInput
+                    objectName: "editJunctionAudioLaw"
+                    Layout.fillWidth: true
+                    options: [
+                        { value: 0, label: qsTr("Equal Gain") },
+                        { value: 1, label: qsTr("Equal Power") }
+                    ]
+                    value: root.session.selectedJunctionDetails.audioLaw ?? 0
+                    Accessible.name: qsTr("Audio gain law")
+                    onValueActivated: value => root.session.setJunctionAudioLaw(value)
+                }
+            }
+            ExoSettingRow {
+                width: parent.width
+                label: qsTr("Cut position")
+                stacked: true
+                ExoNumberField {
+                    id: cutInput
+                    objectName: "editJunctionCut"
+                    Layout.fillWidth: true
+                    from: 0
+                    to: 2147483647
+                    suffix: qsTr("ms")
+                    Accessible.name: qsTr("Cut position in milliseconds")
+                    onValueModified: root.session.setJunctionCut(value)
+                }
+            }
+            ExoButton {
+                objectName: "editRemoveCrossfade"
+                width: parent.width
                 text: qsTr("Remove Crossfade")
                 onClicked: {
                     root.session.removeTransition();
@@ -222,11 +331,14 @@ FocusScope {
         }
         function onInteractionSettingsChanged(): void { root.refreshClips(); }
     }
-    Button {
+    ExoButton {
         objectName: "editApplyGapPreview"
         anchors.right: parent.right
         anchors.top: parent.top
+        anchors.margins: ExoTheme.spacingSm
         z: 20
+        tone: "primary"
+        compact: true
         visible: root.session.dragActive && root.session.selectedGap.endMs !== undefined
         enabled: root.session.dragValid
         text: root.session.dragValid ? qsTr("Apply gap closure (Enter)") : qsTr("Gap closure unavailable")
@@ -250,11 +362,11 @@ FocusScope {
         contentHeight: Math.max(height, root.rulerHeight + Math.max(root.session.tracks.length, root.session.dragTracks.length) * root.rowHeight + (root.session.dragActive ? 16 : 0))
         clip: true
         boundsBehavior: Flickable.StopAtBounds
-        ScrollBar.horizontal: ScrollBar {
+        ScrollBar.horizontal: ExoScrollBar {
             objectName: "editHorizontalScrollBar"
             policy: ScrollBar.AsNeeded
         }
-        ScrollBar.vertical: ScrollBar {
+        ScrollBar.vertical: ExoScrollBar {
             objectName: "editVerticalScrollBar"
             policy: ScrollBar.AsNeeded
         }
@@ -316,9 +428,9 @@ FocusScope {
                         root.trackToDelete = {id: parent.modelData.id, name: parent.modelData.name};
                         trackMenu.popup();
                     }
-                    Menu {
+                    ExoMenu {
                         id: trackMenu
-                        MenuItem {
+                        ExoMenuItem {
                             text: qsTr("Delete track")
                             onTriggered: if (!root.session.deleteTrack(root.trackToDelete.id)) trackDeleteConfirmation.open()
                         }
@@ -730,15 +842,7 @@ FocusScope {
                 Accessible.role: Accessible.Button
                 Accessible.name: qsTr("Crossfade, %1 ms. Enter to adjust duration.").arg(modelData.durationMs)
                 function adjust(): void {
-                    root.session.selectTransition(modelData.outgoing);
-                    durationInput.value = modelData.durationMs;
-                    windowStart.value = modelData.startMs;
-                    curveInput.currentIndex = modelData.curve;
-                    biasInput.value = modelData.bias * 100;
-                    lawInput.currentIndex = modelData.audioLaw;
-                    lawInput.visible = !modelData.video;
-                    cutInput.value = modelData.cutMs;
-                    transitionDuration.open();
+                    root.openTransitionPopup(modelData);
                 }
                 Keys.onReturnPressed: adjust()
                 Keys.onSpacePressed: adjust()

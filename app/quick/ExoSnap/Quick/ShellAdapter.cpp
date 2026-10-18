@@ -76,6 +76,17 @@ void ShellAdapter::setSourcePickerOpen(bool open) {
     emit sourcePickerOpenChanged();
 }
 
+const QVariantMap& ShellAdapter::editPanels() const noexcept {
+    return edit_panels_;
+}
+
+void ShellAdapter::setEditPanels(const QVariantMap& panels) {
+    if (edit_panels_ == panels)
+        return;
+    edit_panels_ = panels;
+    emit editPanelsChanged();
+}
+
 bool ShellAdapter::closeGuardActive() const noexcept {
     return active_;
 }

@@ -1441,8 +1441,17 @@ std::optional<RawDecodedVideoFrame> EditPlayerEngine::ReadFrameAtRaw(int64_t tar
         impl_->cursor_generation = generation;
     }
     impl_->cursor_target_us = target_us;
-    if (impl_->cursor_frame && (impl_->cursor_frame->pts_us == target_us ||
-                                (impl_->cursor_lookahead && impl_->cursor_lookahead->pts_us > target_us))) {
+    // A stored timestamp stands for any instant within half a tick of it.
+    // Matroska commonly rounds to whole milliseconds, so the frame due at
+    // 66.667 ms is stamped 67 ms; selecting strictly at or before the request
+    // would show the previous frame instead and drop this one, every third
+    // frame of a 30 fps source.
+    // A request is itself rounded to whole microseconds, hence at least one.
+    const int64_t half_tick_us = std::max<int64_t>(
+        av_rescale_q(1, format->streams[impl_->video_stream_idx]->time_base, AVRational{1, AV_TIME_BASE}) / 2, 1);
+    const int64_t select_us = target_us + half_tick_us;
+    if (impl_->cursor_frame && (impl_->cursor_frame->pts_us == select_us ||
+                                (impl_->cursor_lookahead && impl_->cursor_lookahead->pts_us > select_us))) {
         ++impl_->video_read_measurements.held;
         ++impl_->video_read_measurements.selected;
         return impl_->cursor_frame;
@@ -1450,12 +1459,12 @@ std::optional<RawDecodedVideoFrame> EditPlayerEngine::ReadFrameAtRaw(int64_t tar
     if (impl_->cursor_lookahead) {
         impl_->cursor_frame = std::move(impl_->cursor_lookahead);
         impl_->cursor_lookahead.reset();
-        if (impl_->cursor_frame->pts_us == target_us) {
+        if (impl_->cursor_frame->pts_us == select_us) {
             ++impl_->video_read_measurements.selected;
             return impl_->cursor_frame;
         }
     }
-    auto frame = ReadForwardToTargetRaw(format, codec, impl_->video_stream_idx, target_us, impl_->matrix, impl_->range,
+    auto frame = ReadForwardToTargetRaw(format, codec, impl_->video_stream_idx, select_us, impl_->matrix, impl_->range,
                                         impl_->pq_converter.get(), impl_->cursor_draining, impl_->cursor_frame,
                                         impl_->cursor_lookahead, impl_->video_read_measurements);
     if (frame)

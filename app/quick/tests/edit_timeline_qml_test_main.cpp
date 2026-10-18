@@ -15,10 +15,12 @@
 #include "EditTimelineAdapter.h"
 #include "ExoEditPlayerItem.h"
 #include "RecordViewModelAdapter.h"
+#include "ShellAdapter.h"
 
 #include "viewmodels/RecordViewModel.h"
 
 #include <algorithm>
+#include <cmath>
 #include <cstdlib>
 #include <exosnap/engine/audio_media_manifest.h>
 #include <exosnap/engine/edit_player_engine.h>
@@ -40,6 +42,22 @@
 #include <QtQuickTest>
 
 namespace exosnap::quick {
+class EditPlayerWorkerTestPeer {
+  public:
+    static bool audio(EditPlayerWorker& worker, int64_t sample, std::vector<float>& output, std::string& error) {
+        auto* reader = worker.timelineAudioReader();
+        if (!reader) {
+            error = "The timeline audio reader is unavailable.";
+            return false;
+        }
+        reader->ResetAudio();
+        return reader->AudioAt(sample, 4800, output, error);
+    }
+    static bool composed(const EditPlayerWorker& worker) {
+        return worker.render_mode_;
+    }
+};
+
 class EditPlayerAdapterTestPeer {
   public:
     static EditPlayerWorker* worker(EditPlayerAdapter& adapter) {
@@ -374,6 +392,66 @@ class MediaPreviewDriver final : public QObject {
         return {
             {"revisions", QVariant::fromValue(session.workspace().revision() - revision)},
             {"updates", after.value("timelineUpdates").toULongLong() - before.value("timelineUpdates").toULongLong()}};
+    }
+    Q_INVOKABLE QVariantMap timelineAudioEditsProbe() {
+        namespace edit = exosnap::edit;
+        edit::Workspace baseline;
+        edit::Asset asset;
+        asset.path = (qEnvironmentVariable("EXOSNAP_EDIT_RENDER_FIXTURES") + "/red.mkv").toStdWString();
+        asset.duration = 2'000'000;
+        const auto metadata = exosnap::engine::ProbeEditMedia(asset.path);
+        if (!metadata.error.empty() || metadata.audio_metadata.actual_tracks.empty())
+            return {{"error", QString::fromStdString(metadata.error)}};
+        const auto& audio = metadata.audio_metadata;
+        const auto track = audio.actual_tracks.front().track_id;
+        asset.monitor_selection = exosnap::engine::MonitorSelectionSnapshot{
+            audio.selection_media_id, {1}, {{track, 1.0f, false}}, true, audio.unverified_asset_binding};
+        baseline.insert(baseline.addAsset(std::move(asset)));
+        const auto audio_clip = std::find_if(baseline.clips().begin(), baseline.clips().end(), [&](const auto& clip) {
+            return std::any_of(baseline.tracks().begin(), baseline.tracks().end(), [&](const auto& value) {
+                return value.id == clip.track && value.type == edit::TrackType::Audio;
+            });
+        });
+        if (audio_clip == baseline.clips().end())
+            return {{"error", QStringLiteral("The fixture has no audio clip.")}};
+        const auto id = audio_clip->id;
+        exosnap::quick::EditPlayerWorker worker(std::make_shared<exosnap::quick::EditPlayerFrameSink>());
+        std::string error;
+        bool read_ok = true;
+        const auto energy = [&](edit::Workspace workspace, int64_t sample) {
+            worker.setTimeline(std::move(workspace));
+            std::vector<float> samples;
+            read_ok = exosnap::quick::EditPlayerWorkerTestPeer::audio(worker, sample, samples, error) && read_ok;
+            double sum = 0;
+            for (const auto value : samples)
+                sum += value * value;
+            return samples.empty() ? 0.0 : std::sqrt(sum / samples.size());
+        };
+        const double original = energy(baseline, 4800);
+        auto edited = baseline;
+        edited.apply(edit::SetGain{edit::GainTarget::Clip, id, -6.020599913}, edited.revision());
+        const double quieter = energy(edited, 4800);
+        edited = baseline;
+        edited.apply(edit::SetClipEnabled{id, false}, edited.revision());
+        const double muted = energy(edited, 4800);
+        edited = baseline;
+        edited.apply(edit::LiftClips{{id}, false}, edited.revision());
+        const double deleted = energy(edited, 4800);
+        edited = baseline;
+        edit::Move move{{id}, 500'000};
+        move.expand_linked = false;
+        edited.apply(move, edited.revision());
+        const double before_audio = energy(edited, 4800);
+        const double moved = energy(edited, 28800);
+        return {{"readOk", read_ok},
+                {"error", QString::fromStdString(error)},
+                {"original", original},
+                {"quieter", quieter},
+                {"muted", muted},
+                {"deleted", deleted},
+                {"beforeMovedAudio", before_audio},
+                {"moved", moved},
+                {"usesVideoComposition", exosnap::quick::EditPlayerWorkerTestPeer::composed(worker)}};
     }
     Q_INVOKABLE QVariantMap splitSourceReuseProbe() {
         using exosnap::quick::EditPlayerAdapterTestPeer;
@@ -837,6 +915,17 @@ class Setup final : public QObject {
     Q_OBJECT
 
   public slots:
+    QVariantMap syntheticStillProbe() const {
+        EditPlayerAdapter player;
+        const QUrl image(QStringLiteral("file:///synthetic-visual-frame.png"));
+        player.showStillForHarness(image, 42'500'000, 160'000);
+        return {{QStringLiteral("source"), player.harnessStillSource()},
+                {QStringLiteral("requestedTimeUs"), player.requestedTimeUs()},
+                {QStringLiteral("hasPresentedTime"), player.presentedTimeUs().isValid()},
+                {QStringLiteral("seekPending"), player.seekPending()},
+                {QStringLiteral("clipOpen"), player.clipOpen()},
+                {QStringLiteral("playing"), player.playing()}};
+    }
     QVariantMap timelineCheckpoint() const {
         return {{"revision", QVariant::fromValue<qulonglong>(session_->workspace().revision())},
                 {"historyBytes", QVariant::fromValue<qulonglong>(session_->workspace().historyBytes())}};
@@ -847,6 +936,13 @@ class Setup final : public QObject {
     // What the player worker publishes after opening a source with audio.
     void pageMonitoring(const QVariantList& tracks, bool confirmation_required) {
         page_player_->setMonitoringState(tracks, confirmation_required);
+    }
+    // The request the control channel raises for a panel, through the shell.
+    void requestEditPanel(int panel, bool open, bool pinned) {
+        emit page_shell_->editPanelRequested(static_cast<exosnap::quick::ShellAdapter::EditPanel>(panel), open, pinned);
+    }
+    void requestEditSourceTab(int tab) {
+        emit page_shell_->editSourceTabRequested(static_cast<exosnap::quick::ShellAdapter::EditSourceTab>(tab));
     }
     void applicationAvailable() {
         QCoreApplication::setApplicationName(QStringLiteral("edit-timeline-qml-tests"));
@@ -892,6 +988,8 @@ class Setup final : public QObject {
         engine->rootContext()->setContextProperty(QStringLiteral("testPagePlayer"), page_player);
         engine->rootContext()->setContextProperty(QStringLiteral("testPageExporter"), page_exporter);
         engine->rootContext()->setContextProperty(QStringLiteral("testPageRecordings"), page_recordings);
+        page_shell_ = new exosnap::quick::ShellAdapter(this);
+        engine->rootContext()->setContextProperty(QStringLiteral("testPageShell"), page_shell_);
     }
 
   private:
@@ -902,6 +1000,7 @@ class Setup final : public QObject {
     EditPlayerAdapter* transport_player_ = nullptr;
     EditPlayerAdapter* page_player_ = nullptr;
     exosnap::quick::EditExportAdapter* page_exporter_ = nullptr;
+    exosnap::quick::ShellAdapter* page_shell_ = nullptr;
 };
 
 QUICK_TEST_MAIN_WITH_SETUP(edit_timeline, Setup)

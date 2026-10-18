@@ -177,6 +177,19 @@ impl Context {
     /// Starts the product with its control endpoint armed and isolated
     /// configuration and output directories, and completes the handshake.
     pub fn launch(&mut self, extra_args: &[&str]) -> Step<App> {
+        self.launch_with(extra_args, false)
+    }
+
+    /// [`Context::launch`] on Qt's offscreen platform: the window is never
+    /// shown, so nothing on the desktop changes and no focus is taken. Only
+    /// for scenarios that judge product state and written files. The Edit
+    /// preview cannot present without the Direct3D 11 scene graph, so
+    /// playback and anything drawn stay out of reach here.
+    pub fn launch_offscreen(&mut self, extra_args: &[&str]) -> Step<App> {
+        self.launch_with(extra_args, true)
+    }
+
+    fn launch_with(&mut self, extra_args: &[&str], offscreen: bool) -> Step<App> {
         let product = self.product()?;
         let run_id = control::new_run_id("exov");
         let config = self.scenario_dir.join("config");
@@ -191,6 +204,9 @@ impl Context {
             .current_dir(&product.root)
             .env("EXOSNAP_CONFIG_DIR", &config)
             .env("EXOSNAP_OUTPUT_DIR", &output);
+        if offscreen {
+            command.env("QT_QPA_PLATFORM", "offscreen");
+        }
         let mut child = self.spawn(&mut command)?;
         let client = match Client::connect("LiveVerify", &run_id, Duration::from_secs(60)) {
             Ok(c) => c,

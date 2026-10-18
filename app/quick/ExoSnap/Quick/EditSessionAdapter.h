@@ -182,6 +182,22 @@ class EditSessionAdapter : public QObject {
     [[nodiscard]] const QString& workspaceError() const {
         return workspace_error_;
     }
+    // A media import or recording append is still probing its sources off the
+    // GUI thread. Its result lands as a workspace change or a workspace error.
+    [[nodiscard]] bool importPending() const noexcept {
+        return pending_imports_ > 0;
+    }
+    // Advances once per timeline edit attempt that reached the model or was
+    // refused by it, whether or not anything changed. Compared before and after
+    // an intent, it separates "the edit was refused" from "nothing was
+    // attempted", which the workspace error text alone cannot: that text
+    // outlives the attempt that set it.
+    [[nodiscard]] quint64 editOutcomeSequence() const noexcept {
+        return edit_outcome_sequence_;
+    }
+    [[nodiscard]] bool lastEditAccepted() const noexcept {
+        return last_edit_accepted_;
+    }
     Q_INVOKABLE QVariantList visibleClips(qint64 from_ms, qint64 to_ms) const;
     QVariantList transitions() const;
     qulonglong selectedTransition() const {
@@ -269,12 +285,17 @@ class EditSessionAdapter : public QObject {
 
     // Test/harness seam: injects a keyframe table without touching a container.
     void setKeyframeTimestampsForTest(std::vector<int64_t> keyframes_us);
+    // Harness seam (--visual-test): adds the media an import of `path` would
+    // add had its probe returned `metadata`, without reading the file. The
+    // source is available; `append` also places it at the timeline end.
+    edit::Id addProbedMediaForHarness(const QString& path, const engine::EditMediaMetadata& metadata, bool append);
 
   signals:
     void interactionSettingsChanged();
     void dragChanged();
     void timeSelectionChanged();
     void workspaceChanged();
+    void importPendingChanged();
     void historyRequested(const QString& path, qint64 at_ms);
     void editPageRequested();
     void openChanged();
@@ -316,6 +337,13 @@ class EditSessionAdapter : public QObject {
     int drag_edge_ = -1;
     qint64 time_selection_in_us_ = -1;
     qint64 time_selection_out_us_ = -1;
+    int pending_imports_ = 0;
+    quint64 edit_outcome_sequence_ = 0;
+    bool last_edit_accepted_ = true;
+    void beginImport();
+    void endImport();
+    // Every refusal that does not go through publishWorkspace(false).
+    void refuseEdit(const QString& message);
     bool applyCommand(const edit::EditCommand& command);
     void applyEditContext(const EditContext& context, qint64 timeline_start_ms,
                           std::vector<edit::SourceImport> imports);

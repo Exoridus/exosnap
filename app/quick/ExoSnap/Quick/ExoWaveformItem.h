@@ -22,7 +22,9 @@ namespace exosnap::quick {
 // width. The level of detail is chosen so every pixel column covers at least
 // one bucket. Geometry is built per fixed bucket block in absolute source
 // sample units and only positioned per frame, so panning never shifts bucket
-// boundaries and a block that gains analysed buckets is rebuilt alone.
+// boundaries and a block that gains analysed buckets is rebuilt alone. The
+// software renderer rasterizes the visible cached buckets at the window's
+// device pixel ratio.
 //
 // Ranges without data draw nothing. The item always draws the waveform at full
 // strength: muted or disabled presentation, gain and fade envelopes belong to

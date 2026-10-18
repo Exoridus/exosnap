@@ -163,6 +163,13 @@ class EditTimelineAdapter : public QObject {
     void configureThumbnailCache(const ThumbnailRequestBroker::Config& config);
     // Configure before loading QML or requesting waveforms; existing service pointers become invalid.
     void configureWaveformCache(const WaveformCacheService::Config& config);
+    // Harness seam (--visual-test): thumbnail tiles are drawn by `images` and
+    // waveforms analysed from `decoders` into `waveform_root`, through the same
+    // broker, service and image provider the editor uses. Same timing rule as
+    // configureWaveformCache.
+    void useSyntheticMediaForHarness(ThumbnailRequestBroker::SyntheticImages images,
+                                     WaveformCacheService::DecoderFactory decoders,
+                                     const std::filesystem::path& waveform_root);
 
     // Makes a source drawable. `identityHex` is the 64-character content SHA-256.
     // Frame size and rate shape the tile grid; 0 means unknown. Returns false

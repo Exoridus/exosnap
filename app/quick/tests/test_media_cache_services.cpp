@@ -12,7 +12,9 @@
 #include <QCoreApplication>
 #include <QElapsedTimer>
 #include <QGuiApplication>
+#include <QQuickWindow>
 #include <QSGGeometryNode>
+#include <QSGRendererInterface>
 #include <QSGTransformNode>
 #include <QSignalSpy>
 #include <QTemporaryDir>
@@ -775,6 +777,69 @@ TEST(ExoWaveformItem, LevelOfDetailKeepsAtLeastOneBucketPerColumn) {
     EXPECT_EQ(WaveformLevelForSamplesPerPixel(256, 8), 1);
     EXPECT_EQ(WaveformLevelForSamplesPerPixel(1e9, 8), 7);
     EXPECT_EQ(WaveformLevelForSamplesPerPixel(1000, 0), -1);
+}
+
+TEST(ExoWaveformItem, SoftwareRendererDrawsAnalyzedPeaksAndLeavesMissingDataBlank) {
+    WaveformFixture fixture;
+    auto service = fixture.Service();
+    const QString key = service->request(SourceKey(22), fixture.source_path, kThreeSecondsUs);
+    ASSERT_TRUE(WaitFor([&]() { return service->state(key) == WaveformCacheService::State::Ready; }));
+
+    QQuickWindow::setGraphicsApi(QSGRendererInterface::Software);
+    QQuickWindow window;
+    window.setGeometry(0, 0, 400, 140);
+    window.setColor(Qt::black);
+    QQuickItem viewport(window.contentItem());
+    viewport.setPosition(QPointF(50, 60));
+    viewport.setSize(QSizeF(300, 48));
+    viewport.setClip(true);
+    ExoWaveformItem item(&viewport);
+    item.setSize(QSizeF(300, 40));
+    item.setService(service.get());
+    item.setCacheKey(key);
+    item.setColor(Qt::magenta);
+    item.setSourceOutUs(1'600'000);
+    window.show();
+
+    const auto coloredPixels = [&item](const QImage& window_image, bool upper_lane) {
+        const QImage image = window_image.copy(QRect(50, 60, 300, static_cast<int>(item.height())));
+        int count = 0;
+        const int first_y = upper_lane ? 0 : image.height() / 2;
+        const int last_y = upper_lane ? image.height() / 2 : image.height();
+        for (int y = first_y; y < last_y; ++y)
+            for (int x = 0; x < image.width(); ++x) {
+                const QColor pixel = image.pixelColor(x, y);
+                if (pixel.red() > 20 && pixel.blue() > 20 && pixel.green() < 10)
+                    ++count;
+            }
+        return count;
+    };
+    QImage rendered;
+    ASSERT_TRUE(WaitFor(
+        [&]() {
+            rendered = window.grabWindow();
+            return coloredPixels(rendered, true) > 100 && coloredPixels(rendered, false) > 100;
+        },
+        5000));
+    EXPECT_EQ(window.rendererInterface()->graphicsApi(), QSGRendererInterface::Software);
+    EXPECT_EQ(item.levelForTest(), 1);
+
+    item.setHeight(48);
+    item.setSourceOutUs(800'000);
+    ASSERT_TRUE(WaitFor([&]() {
+        rendered = window.grabWindow();
+        return item.levelForTest() == 0 && coloredPixels(rendered, true) > 100 && coloredPixels(rendered, false) > 100;
+    }));
+    for (int y = 0; y < 60; ++y)
+        for (int x = 0; x < rendered.width(); ++x)
+            EXPECT_EQ(rendered.pixelColor(x, y), QColor(Qt::black));
+
+    item.setSourceInUs(4'000'000);
+    item.setSourceOutUs(5'600'000);
+    ASSERT_TRUE(WaitFor([&]() {
+        rendered = window.grabWindow();
+        return !rendered.isNull() && coloredPixels(rendered, true) == 0 && coloredPixels(rendered, false) == 0;
+    }));
 }
 
 TEST(ExoWaveformItem, PanMovesBlocksWithoutShiftingBucketsOrRebuilding) {

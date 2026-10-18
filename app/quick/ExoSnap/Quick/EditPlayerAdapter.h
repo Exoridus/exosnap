@@ -7,6 +7,7 @@
 #include <QStringList>
 #include <QThread>
 #include <QTimer>
+#include <QUrl>
 #include <QVariantList>
 #include <QtQmlIntegration/qqmlintegration.h>
 
@@ -62,6 +63,7 @@ class EditPlayerAdapter : public QObject {
     QML_ELEMENT
     QML_UNCREATABLE("EditPlayerAdapter is provided by the application")
 
+    Q_PROPERTY(QUrl harnessStillSource READ harnessStillSource NOTIFY harnessStillSourceChanged FINAL)
     Q_PROPERTY(bool playing READ playing NOTIFY playingChanged FINAL)
     Q_PROPERTY(PreviewState previewState READ previewState NOTIFY previewChanged FINAL)
     Q_PROPERTY(qint64 requestedTimeUs READ requestedTimeUs NOTIFY previewChanged FINAL)
@@ -155,7 +157,15 @@ class EditPlayerAdapter : public QObject {
     // Named like EditSessionAdapter::setKeyframeTimestampsForTest.
     void setClipStateForTest(bool clip_open, qint64 duration_ms);
 
+    // Synthetic composition for --visual-test, independent of the native
+    // decoder and renderer. Does not publish a native presentation timestamp.
+    void showStillForHarness(const QUrl& source, qint64 time_us, qint64 duration_ms);
+    const QUrl& harnessStillSource() const {
+        return harness_still_source_;
+    }
+
   signals:
+    void harnessStillSourceChanged();
     void previewChanged();
     void playingChanged();
     void clipOpenChanged();
@@ -209,6 +219,7 @@ class EditPlayerAdapter : public QObject {
     bool seek_pending_ = false;
     QVariantList monitoring_tracks_;
     bool monitoring_confirmation_required_ = false;
+    QUrl harness_still_source_;
 };
 
 } // namespace exosnap::quick

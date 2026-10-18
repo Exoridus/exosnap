@@ -11,6 +11,7 @@
 
 extern "C" {
 #include <libavcodec/codec_id.h>
+#include <libavcodec/codec_par.h>
 #include <libavcodec/defs.h>
 #include <libavcodec/packet.h>
 #include <libavformat/avformat.h>
@@ -26,6 +27,7 @@ extern "C" {
 #include <atomic>
 #include <chrono>
 #include <condition_variable>
+#include <cstdlib>
 #include <cstring>
 #include <filesystem>
 #include <fstream>
@@ -748,6 +750,10 @@ TEST(EditPlayerEngine, DecodeFrameAtRawDetectsNativeHdr10Source) {
     EXPECT_GT(frame->height, 0u);
 }
 
+// The fixture's 1/15360 s time base: a stored timestamp stands for any instant
+// within half a tick of it.
+constexpr int64_t kFixtureHalfTickUs = 32;
+
 TEST(EditPlayerEngine, ForwardPlaybackDoesNotReseekEachFrame) {
     const auto fixture = std::filesystem::path(__FILE__).parent_path() / "fixtures" / "reordered_h264.mp4";
     EditPlayerEngine engine;
@@ -757,7 +763,7 @@ TEST(EditPlayerEngine, ForwardPlaybackDoesNotReseekEachFrame) {
         const auto target = index * 1'000'000 / 30;
         const auto frame = engine.ReadFrameAtRaw(target, exosnap::engine::VideoReadMode::Sequential, 1);
         ASSERT_TRUE(frame) << index;
-        EXPECT_LE(frame->pts_us, target);
+        EXPECT_LE(frame->pts_us, target + kFixtureHalfTickUs);
         EXPECT_LT(target - frame->pts_us, 34'000);
     }
     const auto measurements = engine.VideoReadStats();
@@ -809,7 +815,7 @@ TEST(EditPlayerEngine, ForwardCursorNeverSelectsPastRequestedSourceTime) {
         const auto first = engine.ReadFrameAtRaw(source_in, mode, 7);
         ASSERT_TRUE(first);
         ASSERT_EQ(first->pts_us, source_in);
-        const auto before_next = engine.ReadFrameAtRaw(source_in + 33'332, mode, 7);
+        const auto before_next = engine.ReadFrameAtRaw(source_in + 33'333 - kFixtureHalfTickUs - 1, mode, 7);
         ASSERT_TRUE(before_next);
         EXPECT_EQ(before_next->pts_us, source_in);
         const auto after_next = engine.ReadFrameAtRaw(source_in + 33'334, mode, 7);
@@ -820,6 +826,74 @@ TEST(EditPlayerEngine, ForwardCursorNeverSelectsPastRequestedSourceTime) {
         ASSERT_TRUE(backward);
         EXPECT_EQ(backward->pts_us, source_in);
         EXPECT_EQ(first->y_plane[0], backward->y_plane[0]);
+    }
+}
+
+// Stream-copies `source` into Matroska with its default millisecond time base,
+// the way most third-party Matroska files store a 30 fps stream: every third
+// frame's instant (66.667 ms, 166.667 ms, ...) is stamped rounded UP.
+bool RemuxToMillisecondMatroska(const std::filesystem::path& source, const std::filesystem::path& destination) {
+    AVFormatContext* input = nullptr;
+    if (avformat_open_input(&input, source.string().c_str(), nullptr, nullptr) < 0)
+        return false;
+    bool ok = avformat_find_stream_info(input, nullptr) >= 0;
+    AVFormatContext* output = nullptr;
+    ok = ok && avformat_alloc_output_context2(&output, nullptr, "matroska", nullptr) >= 0 && output != nullptr;
+    int video = -1;
+    for (unsigned index = 0; ok && index < input->nb_streams; ++index) {
+        if (input->streams[index]->codecpar->codec_type != AVMEDIA_TYPE_VIDEO || video >= 0)
+            continue;
+        AVStream* stream = avformat_new_stream(output, nullptr);
+        ok = stream != nullptr && avcodec_parameters_copy(stream->codecpar, input->streams[index]->codecpar) >= 0;
+        if (ok) {
+            stream->codecpar->codec_tag = 0;
+            stream->time_base = AVRational{1, 1000};
+            video = static_cast<int>(index);
+        }
+    }
+    ok = ok && video >= 0 && avio_open(&output->pb, destination.string().c_str(), AVIO_FLAG_WRITE) >= 0;
+    ok = ok && avformat_write_header(output, nullptr) >= 0;
+    AVPacket* packet = av_packet_alloc();
+    while (ok && packet != nullptr && av_read_frame(input, packet) >= 0) {
+        if (packet->stream_index == video) {
+            av_packet_rescale_ts(packet, input->streams[video]->time_base, output->streams[0]->time_base);
+            packet->stream_index = 0;
+            packet->pos = -1;
+            ok = av_interleaved_write_frame(output, packet) >= 0;
+        }
+        av_packet_unref(packet);
+    }
+    av_packet_free(&packet);
+    if (ok)
+        ok = av_write_trailer(output) >= 0;
+    if (output != nullptr) {
+        if (output->pb != nullptr)
+            avio_closep(&output->pb);
+        avformat_free_context(output);
+    }
+    avformat_close_input(&input);
+    return ok;
+}
+
+TEST(EditPlayerEngine, MillisecondStampsStillYieldEveryFrameOfTheSourceGrid) {
+    const auto fixture = std::filesystem::path(__FILE__).parent_path() / "fixtures" / "reordered_h264.mp4";
+    ScopedTestMkv remuxed("exosnap-ms-stamped-30fps.mkv");
+    ASSERT_TRUE(RemuxToMillisecondMatroska(fixture, remuxed.path()));
+    EditPlayerEngine engine;
+    std::string error;
+    ASSERT_TRUE(engine.Open(remuxed.path(), error)) << error;
+    // The frame grid of a 30 fps output, rounded to whole microseconds the way
+    // a timeline position is. Strictly at-or-before selection held the
+    // previous frame wherever the stamp was rounded up, showing one frame
+    // twice and the next one never.
+    int64_t previous = -1;
+    for (int64_t index = 0; index < 30; ++index) {
+        const auto target = (index * 1'000'000 + 15) / 30;
+        const auto frame = engine.ReadFrameAtRaw(target, exosnap::engine::VideoReadMode::Sequential, 1);
+        ASSERT_TRUE(frame) << index;
+        EXPECT_GT(frame->pts_us, previous) << "frame " << index << " repeated its predecessor";
+        EXPECT_LE(std::abs(frame->pts_us - target), 500) << index;
+        previous = frame->pts_us;
     }
 }
 

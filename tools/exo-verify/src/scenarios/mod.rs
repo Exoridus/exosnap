@@ -11,6 +11,7 @@ mod command_names;
 pub mod common;
 pub mod display;
 pub mod dist;
+pub mod edit;
 pub mod env;
 pub mod fse;
 pub mod handoff;
@@ -88,6 +89,7 @@ pub fn registry() -> Vec<Scenario> {
     all.extend(audio::scenarios());
     all.extend(capture::scenarios());
     all.extend(display::scenarios());
+    all.extend(edit::scenarios());
     all.extend(install::scenarios());
     all.extend(journey::scenarios());
     all.extend(overlay::scenarios());

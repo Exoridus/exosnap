@@ -26,6 +26,7 @@ struct EditPlayerSession::Impl {
     WasapiAudioRenderer audio;
     bool has_audio = false;
     bool playing = false;
+    std::function<int64_t()> external_clock;
     std::atomic<float> volume{1.0f};
 
     // WasapiAudioRenderer::FramesPlayed() (and therefore AudioClockMs())
@@ -234,23 +235,33 @@ bool EditPlayerSession::MonitoringConfirmationRequired() const {
 }
 
 void EditPlayerSession::Play(int64_t start_us, uint64_t generation) {
+    StartPlayback(start_us, generation, {});
+}
+
+void EditPlayerSession::PlayWithExternalClock(int64_t start_us, uint64_t generation, std::function<int64_t()> clock) {
+    if (clock)
+        StartPlayback(start_us, generation, std::move(clock));
+}
+
+void EditPlayerSession::StartPlayback(int64_t start_us, uint64_t generation, std::function<int64_t()> clock) {
     if (impl_->playing || !impl_->engine.HasVideoStream() || MonitoringConfirmationRequired())
         return;
 
     impl_->StopSeek();
 
+    impl_->external_clock = std::move(clock);
     impl_->playing = true;
     impl_->playback_start_us = start_us;
     impl_->paused_position_us = start_us;
     impl_->playback_started = std::chrono::steady_clock::now();
-    impl_->independent_clock.store(!impl_->has_audio);
+    impl_->independent_clock.store(!impl_->has_audio && !impl_->external_clock);
     impl_->presentation_stopped.store(false);
     // Seed the clock the decode thread reads before it can produce anything:
     // the frames between the preceding keyframe and start_us are already in
     // the past and must not be paid a colour conversion for.
     impl_->PublishClock(start_us);
 
-    if (impl_->has_audio)
+    if (impl_->has_audio && !impl_->external_clock)
         impl_->audio.Start();
 
     // GPU render path (see SetOnFrameReady's doc comment): delivered straight
@@ -263,7 +274,7 @@ void EditPlayerSession::Play(int64_t start_us, uint64_t generation) {
         [this, generation](RawDecodedVideoFrame frame) {
             // The engine publishes this before spawning workers. The owner
             // thread may not yet have observed audio setup failure.
-            if (!impl_->engine.PlaybackDeliversAudio()) {
+            if (!impl_->external_clock && !impl_->engine.PlaybackDeliversAudio()) {
                 const auto deadline =
                     impl_->playback_started + std::chrono::microseconds(frame.pts_us - impl_->playback_start_us);
                 std::unique_lock lock(impl_->presentation_mutex);
@@ -276,7 +287,7 @@ void EditPlayerSession::Play(int64_t start_us, uint64_t generation) {
                 impl_->DeliverFrame(std::move(frame), generation);
         },
         [this](DecodedAudioBlock block) {
-            if (impl_->has_audio && block.interleaved_stereo) {
+            if (!impl_->external_clock && impl_->has_audio && block.interleaved_stereo) {
                 const float volume = impl_->volume.load();
                 if (volume == 1.0f) {
                     impl_->audio.PushSamples(block.interleaved_stereo->data(), block.frame_count);
@@ -301,7 +312,7 @@ void EditPlayerSession::Play(int64_t start_us, uint64_t generation) {
     // PlaybackDeliversAudio() answers "at least one track", which is exactly
     // the question this needs: one surviving track advances the clock just as
     // well as three, and the blocks arriving here are their mix either way.
-    if (impl_->has_audio && !impl_->engine.PlaybackDeliversAudio()) {
+    if (!impl_->external_clock && impl_->has_audio && !impl_->engine.PlaybackDeliversAudio()) {
         impl_->has_audio = false;
         impl_->audio.Stop();
         impl_->independent_clock.store(true);
@@ -328,6 +339,7 @@ void EditPlayerSession::Pause() {
     if (impl_->has_audio)
         impl_->audio.Stop();
     impl_->engine.StopPlaybackDecode();
+    impl_->external_clock = {};
     impl_->media_clock_us.store(-1);
 }
 
@@ -391,7 +403,8 @@ int64_t EditPlayerSession::CurrentPositionUs() const noexcept {
     if (!impl_->playing)
         return impl_->paused_position_us;
     const int64_t position_us =
-        impl_->independent_clock.load()
+        impl_->external_clock ? impl_->external_clock()
+        : impl_->independent_clock.load()
             ? impl_->playback_start_us + std::chrono::duration_cast<std::chrono::microseconds>(
                                              std::chrono::steady_clock::now() - impl_->playback_started)
                                              .count()
