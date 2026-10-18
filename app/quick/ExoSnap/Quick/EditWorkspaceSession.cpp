@@ -36,11 +36,6 @@
 namespace exosnap::quick {
 
 namespace {
-bool FitsMilliseconds(qint64 value) {
-    return value >= (std::numeric_limits<edit::Time>::min)() / 1000 &&
-           value <= (std::numeric_limits<edit::Time>::max)() / 1000;
-}
-
 std::optional<edit::Time> AddTimelineTime(edit::Time value, edit::Time delta) {
     if ((delta > 0 && value > (std::numeric_limits<edit::Time>::max)() - delta) ||
         (delta < 0 && value < (std::numeric_limits<edit::Time>::min)() - delta))
@@ -67,6 +62,11 @@ edit::Asset AssetFromProbe(const QString& path, const engine::EditMediaMetadata&
     return asset;
 }
 } // namespace
+
+bool EditSessionAdapter::FitsMilliseconds(qint64 value) {
+    return value >= (std::numeric_limits<edit::Time>::min)() / 1000 &&
+           value <= (std::numeric_limits<edit::Time>::max)() / 1000;
+}
 
 QVariantList EditSessionAdapter::media() const {
     QVariantList rows;
@@ -303,8 +303,14 @@ bool EditSessionAdapter::applyCrossfade(qulonglong outgoing, qint64 duration_ms)
 bool EditSessionAdapter::dropCrossfade(qint64 at_ms, qint64 tolerance_ms) {
     if (at_ms < 0 || !FitsMilliseconds(at_ms) || tolerance_ms < 0 || tolerance_ms > 250)
         return false;
+    return dropCrossfadeUs(at_ms * 1000, tolerance_ms * 1000);
+}
+
+bool EditSessionAdapter::dropCrossfadeUs(qint64 at_us, qint64 tolerance_us) {
+    if (at_us < 0 || tolerance_us < 0 || tolerance_us > 250'000)
+        return false;
     for (const auto& clip : workspace_.clips())
-        if (std::abs(clip.end() / 1000 - at_ms) <= tolerance_ms && canCrossfade(clip.id))
+        if (std::abs(clip.end() - at_us) <= tolerance_us && canCrossfade(clip.id))
             return applyCrossfade(clip.id);
     refuseEdit(tr("Crossfade needs a valid cut between adjacent video clips."));
     return false;
@@ -322,7 +328,11 @@ void EditSessionAdapter::appendAsset(qulonglong id, qint64 at_ms) {
         publishWorkspace(false);
         return;
     }
-    edit::AddAssetGroup command{id, at_ms < 0 ? workspace_.duration() : at_ms * 1000};
+    appendAssetUs(id, at_ms < 0 ? -1 : at_ms * 1000);
+}
+
+void EditSessionAdapter::appendAssetUs(qulonglong id, qint64 at_us) {
+    edit::AddAssetGroup command{id, at_us < 0 ? workspace_.duration() : at_us};
     if (const auto* source = workspace_.asset(id))
         command.input_mix_selection = source->input_mix_selection;
     command.auto_crossfade = autoCrossfade;
@@ -330,7 +340,15 @@ void EditSessionAdapter::appendAsset(qulonglong id, qint64 at_ms) {
 }
 
 void EditSessionAdapter::addHistory(const QString& path, qint64 at_ms) {
-    emit historyRequested(path, at_ms);
+    if (at_ms >= 0 && !FitsMilliseconds(at_ms)) {
+        refuseEdit(tr("The timeline position is out of range."));
+        return;
+    }
+    addHistoryUs(path, at_ms < 0 ? -1 : at_ms * 1000);
+}
+
+void EditSessionAdapter::addHistoryUs(const QString& path, qint64 at_us) {
+    emit historyRequestedUs(path, at_us < 0 ? -1 : at_us);
 }
 
 void EditSessionAdapter::importMedia(const QUrl& url, bool append, qint64 at_ms) {
@@ -342,9 +360,13 @@ void EditSessionAdapter::importMediaBatch(const QList<QUrl>& urls, bool append, 
         publishWorkspace(false);
         return;
     }
+    importMediaBatchUs(urls, append, at_ms < 0 ? -1 : at_ms * 1000);
+}
+
+void EditSessionAdapter::importMediaBatchUs(const QList<QUrl>& urls, bool append, qint64 at_us) {
     QPointer<EditSessionAdapter> self(this);
     beginImport();
-    keyframe_pool_.start([self, urls, append, at_ms]() {
+    keyframe_pool_.start([self, urls, append, at_us]() {
         std::vector<edit::Asset> assets;
         QString error;
         for (const auto& url : urls) {
@@ -362,7 +384,7 @@ void EditSessionAdapter::importMediaBatch(const QList<QUrl>& urls, bool append, 
             return;
         QMetaObject::invokeMethod(
             self,
-            [self, assets = std::move(assets), error, append, at_ms]() mutable {
+            [self, assets = std::move(assets), error, append, at_us]() mutable {
                 if (!self)
                     return;
                 if (!error.isEmpty()) {
@@ -376,7 +398,7 @@ void EditSessionAdapter::importMediaBatch(const QList<QUrl>& urls, bool append, 
                 self->workspace_error_.clear();
                 if (append)
                     self->publishWorkspace(
-                        self->workspace_.insertAssets(ids, at_ms < 0 ? -1 : at_ms * 1000, self->autoCrossfade));
+                        self->workspace_.insertAssets(ids, at_us < 0 ? -1 : at_us, self->autoCrossfade));
                 else
                     emit self->workspaceChanged();
                 self->endImport();

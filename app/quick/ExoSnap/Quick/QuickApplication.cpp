@@ -4152,13 +4152,13 @@ void QuickApplication::initializeEditArea() {
                                      live_config_.output.video_codec, live_config_.video.encoder_device);
         return BuildEditRenderConfig(live_config_.output, live_config_.video, encoderCapabilitiesFor(device), device);
     });
-    QObject::connect(&edit_session_adapter_, &EditSessionAdapter::historyRequested, &edit_session_adapter_,
-                     [this](const QString& path, qint64 at_ms) {
+    QObject::connect(&edit_session_adapter_, &EditSessionAdapter::historyRequestedUs, &edit_session_adapter_,
+                     [this](const QString& path, qint64 at_us) {
                          const auto* recording = FindRecordingByPath(
                              path, record_view_model_.current_completed_recording, record_view_model_.last_succeeded,
                              record_view_model_.recent_recordings);
                          if (recording) {
-                             edit_session_adapter_.setEditContext(MakeEditContext(*recording), at_ms);
+                             edit_session_adapter_.setEditContextUs(MakeEditContext(*recording), at_us);
                          }
                      });
 }

@@ -918,6 +918,118 @@ TEST(EditWorkspaceAdapter, SplitAndRippleDeleteRestoreBothLinkedTracksWithUndo) 
     EXPECT_EQ(session.workspace().clips(), original);
 }
 
+TEST(EditWorkspaceAdapter, AssetAndRecordingPlacementPreserveFractionalMilliseconds) {
+    EnsureApplication();
+    for (const bool recording : {false, true}) {
+        SCOPED_TRACE(recording ? "recording" : "asset");
+        EditSessionAdapter session;
+        session.setEditContext(MakeContext(1));
+        const auto asset = session.workspace().assets().front().id;
+        session.undo();
+        if (recording)
+            session.setEditContextUs(MakeContext(1), 21);
+        else
+            session.appendAssetUs(asset, 21);
+        ASSERT_EQ(session.workspace().clips().size(), 2u);
+        for (const auto& clip : session.workspace().clips())
+            EXPECT_EQ(clip.start, 21);
+        EXPECT_EQ(session.durationUs(), 1'000'021);
+        session.undo();
+        EXPECT_TRUE(session.workspace().clips().empty());
+        session.redo();
+        for (const auto& clip : session.workspace().clips())
+            EXPECT_EQ(clip.start, 21);
+    }
+}
+
+TEST(EditWorkspaceAdapter, HistoryPlacementEmitsExactMicroseconds) {
+    EnsureApplication();
+    EditSessionAdapter session;
+    qint64 requested = -2;
+    QObject::connect(&session, &EditSessionAdapter::historyRequestedUs, &session,
+                     [&](const QString&, qint64 at_us) { requested = at_us; });
+    session.addHistoryUs(QStringLiteral("recording.mkv"), 21);
+    EXPECT_EQ(requested, 21);
+    session.addHistory(QStringLiteral("recording.mkv"), 2);
+    EXPECT_EQ(requested, 2000);
+}
+
+TEST(EditWorkspaceAdapter, CrossfadeDropDoesNotRoundACutIntoTheTolerance) {
+    EnsureApplication();
+    EditSessionAdapter session;
+    session.setEditContext(MakeContext(10));
+    const auto first = session.workspace().clips().front().id;
+    session.moveClipUs(first, 21, false);
+    const auto cut = session.durationUs();
+    session.appendAsset(session.workspace().assets().front().id);
+    ASSERT_TRUE(session.canCrossfade(first));
+    const auto revision = session.workspace().revision();
+    EXPECT_FALSE(session.dropCrossfadeUs(cut - 1, 0));
+    EXPECT_EQ(session.workspace().revision(), revision);
+    EXPECT_TRUE(session.dropCrossfadeUs(cut, 0));
+}
+
+TEST(EditWorkspaceAdapter, AsyncMediaAndRecordingPreserveFractionalPlacement) {
+    EnsureApplication();
+    QTemporaryDir directory;
+    ASSERT_TRUE(directory.isValid());
+    const auto fixture =
+        QFileInfo(QString::fromUtf8(__FILE__))
+            .dir()
+            .absoluteFilePath(QStringLiteral("../../../libs/engine/tests/fixtures/reordered_h264.mp4"));
+    const auto path = directory.filePath(QStringLiteral("source.mp4"));
+    ASSERT_TRUE(QFile::copy(fixture, path));
+    for (const bool recording : {false, true}) {
+        SCOPED_TRACE(recording ? "recording" : "media");
+        EditSessionAdapter session;
+        QEventLoop loop;
+        QObject::connect(&session, &EditSessionAdapter::workspaceChanged, &loop, &QEventLoop::quit);
+        QTimer::singleShot(5000, &loop, &QEventLoop::quit);
+        if (recording) {
+            auto context = MakeContext(0);
+            context.output_path = path;
+            context.mkv_master_path = path;
+            session.setEditContextUs(context, 21);
+        } else {
+            session.importMediaBatchUs({QUrl::fromLocalFile(path)}, true, 21);
+        }
+        loop.exec();
+        ASSERT_TRUE(session.workspaceError().isEmpty()) << session.workspaceError().toStdString();
+        ASSERT_EQ(session.workspace().clips().size(), 1u);
+        EXPECT_EQ(session.workspace().clips().front().start, 21);
+        session.undo();
+        EXPECT_TRUE(session.workspace().clips().empty());
+        session.redo();
+        EXPECT_EQ(session.workspace().clips().front().start, 21);
+    }
+}
+
+TEST(EditWorkspaceAdapter, MillisecondPlacementRejectsOverflowBeforeImportOrContextChange) {
+    EnsureApplication();
+    EditSessionAdapter session;
+    session.setEditContext(MakeContext(1));
+    const auto clips = session.workspace().clips();
+    const auto revision = session.workspace().revision();
+    const auto path = session.editContext().output_path;
+    auto incoming = MakeContext(1);
+    incoming.output_path = QStringLiteral("another-recording.mkv");
+    const auto maximum = (std::numeric_limits<qint64>::max)();
+    session.setEditContext(incoming, maximum);
+    EXPECT_EQ(session.editContext().output_path, path);
+    EXPECT_EQ(session.workspace().clips(), clips);
+    EXPECT_EQ(session.workspace().revision(), revision);
+    EXPECT_FALSE(session.workspaceError().isEmpty());
+    int requested = 0;
+    QObject::connect(&session, &EditSessionAdapter::historyRequestedUs, &session,
+                     [&](const QString&, qint64) { ++requested; });
+    session.addHistory(QStringLiteral("recording.mkv"), maximum);
+    EXPECT_EQ(requested, 0);
+    session.appendAsset(session.workspace().assets().front().id, maximum);
+    session.importMediaBatch({}, true, maximum);
+    EXPECT_FALSE(session.importPending());
+    EXPECT_EQ(session.workspace().clips(), clips);
+    EXPECT_EQ(session.workspace().revision(), revision);
+}
 TEST(EditWorkspaceAdapter, LocalMediaBatchPreservesInputOrderAndUndoesAsOneOperation) {
     EnsureApplication();
     QTemporaryDir directory;

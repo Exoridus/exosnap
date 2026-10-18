@@ -31,6 +31,20 @@ TestCase {
             testSession.trackLayout.setTrackHeight(track.id, 64);
         testSession.requestSeek(0);
     }
+    function test_asset_drop_preserves_fractional_milliseconds() {
+        while (testSession.canUndo) testSession.undo();
+        testSession.setFixedTimelineEnd(true, 1000);
+        const strip = createTemporaryObject(timelineComponent, tests);
+        strip.zoomTo(strip.maximumZoom);
+        const scroll = findChild(strip, "editTimelineScroll");
+        const point = scroll.mapFromItem(strip, 120, 80);
+        const expected = strip.timeAtUs(point.x);
+        verify(expected > 0 && expected % 1000 !== 0);
+        verify(testEditHarness.dropAsset(strip, testSession.media[0].id, 120, 80));
+        const rows = testSession.visibleClipsUs(0, testSession.durationUs);
+        compare(rows.length, 2);
+        for (const row of rows) compare(row.startUs, expected);
+    }
     function test_mono_and_stereo_use_the_source_channel_layout() {
         const strip = createTemporaryObject(timelineComponent, tests, {session: testChannelSession});
         const rows = testChannelSession.visibleClipsUs(0, 2000000);

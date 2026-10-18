@@ -219,12 +219,19 @@ class EditSessionAdapter : public QObject {
     Q_INVOKABLE bool applyCrossfade(qulonglong outgoing = 0, qint64 duration_ms = 500);
     Q_INVOKABLE bool canCrossfade(qulonglong outgoing = 0) const;
     Q_INVOKABLE bool dropCrossfade(qint64 at_ms, qint64 tolerance_ms);
+    // Tolerance is limited to 250 ms.
+    Q_INVOKABLE bool dropCrossfadeUs(qint64 at_us, qint64 tolerance_us);
     Q_INVOKABLE void removeTransition();
     Q_INVOKABLE void selectClip(qulonglong id);
     Q_INVOKABLE void appendAsset(qulonglong id, qint64 at_ms = -1);
+    // Negative placement appends at the current content end.
+    Q_INVOKABLE void appendAssetUs(qulonglong id, qint64 at_us = -1);
     Q_INVOKABLE void importMedia(const QUrl& url, bool append = false, qint64 at_ms = -1);
     Q_INVOKABLE void importMediaBatch(const QList<QUrl>& urls, bool append = false, qint64 at_ms = -1);
+    // When appending, negative placement resolves against content end after probing.
+    Q_INVOKABLE void importMediaBatchUs(const QList<QUrl>& urls, bool append = false, qint64 at_us = -1);
     Q_INVOKABLE void addHistory(const QString& path, qint64 at_ms = -1);
+    Q_INVOKABLE void addHistoryUs(const QString& path, qint64 at_us = -1);
     Q_INVOKABLE void moveClip(qulonglong id, qint64 at_ms, bool snap = true);
     Q_INVOKABLE void moveClipUs(qulonglong id, qint64 at_us, bool snap = true);
     Q_INVOKABLE void trimClip(qulonglong id, qint64 in_ms, qint64 out_ms);
@@ -237,9 +244,10 @@ class EditSessionAdapter : public QObject {
     Q_INVOKABLE void nudgeSelected(qint64 delta_ms, int edge = 0);
     Q_INVOKABLE void nudgeSelectedUs(qint64 delta_us, int edge = 0);
 
-    // Primary entry point. Resets trim, markers, report and position, and starts
-    // the asynchronous keyframe index read.
+    // Adds recording segments to the resident workspace and refreshes the source context.
+    // Negative placement resolves against content end after probing.
     void setEditContext(const EditContext& context, qint64 timeline_start_ms = -1);
+    void setEditContextUs(const EditContext& context, qint64 timeline_start_us = -1);
     [[nodiscard]] bool deliveryPending() const noexcept {
         return context_.delivery_pending;
     }
@@ -314,7 +322,7 @@ class EditSessionAdapter : public QObject {
     void timeSelectionChanged();
     void workspaceChanged();
     void importPendingChanged();
-    void historyRequested(const QString& path, qint64 at_ms);
+    void historyRequestedUs(const QString& path, qint64 at_us);
     void editPageRequested();
     void openChanged();
     void clipChanged();
@@ -359,13 +367,14 @@ class EditSessionAdapter : public QObject {
     int pending_imports_ = 0;
     quint64 edit_outcome_sequence_ = 0;
     bool last_edit_accepted_ = true;
+    static bool FitsMilliseconds(qint64 value);
     void beginImport();
     void endImport();
     // Every refusal that does not go through publishWorkspace(false).
     void refuseEdit(const QString& message);
     bool applyCommand(const edit::EditCommand& command);
-    void applyEditContext(const EditContext& context, qint64 timeline_start_ms,
-                          std::vector<edit::SourceImport> imports);
+    void applyEditContextUs(const EditContext& context, qint64 timeline_start_us,
+                            std::vector<edit::SourceImport> imports);
     edit::Id selected_transition_ = 0;
     void publishWorkspace(bool changed);
     void applyReport(const EditContext& context);

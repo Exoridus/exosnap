@@ -71,6 +71,14 @@ EditSessionAdapter::EditSessionAdapter(QObject* parent) : QObject(parent) {
 EditSessionAdapter::~EditSessionAdapter() = default;
 
 void EditSessionAdapter::setEditContext(const EditContext& context, qint64 timeline_start_ms) {
+    if (timeline_start_ms >= 0 && !FitsMilliseconds(timeline_start_ms)) {
+        refuseEdit(tr("The timeline position is out of range."));
+        return;
+    }
+    setEditContextUs(context, timeline_start_ms < 0 ? -1 : timeline_start_ms * 1000);
+}
+
+void EditSessionAdapter::setEditContextUs(const EditContext& context, qint64 timeline_start_us) {
     auto pending = context;
     if (pending.segments.empty())
         pending.segments.push_back({context.mkv_master_path.isEmpty() ? context.output_path : context.mkv_master_path,
@@ -81,7 +89,7 @@ void EditSessionAdapter::setEditContext(const EditContext& context, qint64 timel
     if (std::any_of(pending.segments.begin(), pending.segments.end(), needs_probe)) {
         QPointer<EditSessionAdapter> self(this);
         beginImport();
-        keyframe_pool_.start([self, pending = std::move(pending), timeline_start_ms, needs_probe]() mutable {
+        keyframe_pool_.start([self, pending = std::move(pending), timeline_start_us, needs_probe]() mutable {
             std::vector<edit::SourceImport> imports(pending.segments.size());
             for (size_t index = 0; index < pending.segments.size(); ++index) {
                 auto& segment = pending.segments[index];
@@ -98,10 +106,10 @@ void EditSessionAdapter::setEditContext(const EditContext& context, qint64 timel
             if (self)
                 QMetaObject::invokeMethod(
                     self,
-                    [self, pending = std::move(pending), timeline_start_ms, imports = std::move(imports)]() mutable {
+                    [self, pending = std::move(pending), timeline_start_us, imports = std::move(imports)]() mutable {
                         if (!self)
                             return;
-                        self->applyEditContext(pending, timeline_start_ms, std::move(imports));
+                        self->applyEditContextUs(pending, timeline_start_us, std::move(imports));
                         self->endImport();
                     },
                     Qt::QueuedConnection);
@@ -109,14 +117,14 @@ void EditSessionAdapter::setEditContext(const EditContext& context, qint64 timel
         emit editPageRequested();
         return;
     }
-    applyEditContext(pending, timeline_start_ms, {});
+    applyEditContextUs(pending, timeline_start_us, {});
 }
 
-void EditSessionAdapter::applyEditContext(const EditContext& context, qint64 timeline_start_ms,
-                                          std::vector<edit::SourceImport> imports) {
+void EditSessionAdapter::applyEditContextUs(const EditContext& context, qint64 timeline_start_us,
+                                            std::vector<edit::SourceImport> imports) {
     context_ = context;
     const auto previous_duration_us = workspace_.duration();
-    const qint64 append_start = timeline_start_ms < 0 ? workspace_.duration() : timeline_start_ms * 1000;
+    const qint64 append_start = timeline_start_us < 0 ? workspace_.duration() : timeline_start_us;
     std::vector<edit::Id> assets;
     auto segments = context.segments;
     if (segments.empty())

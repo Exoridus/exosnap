@@ -30,10 +30,14 @@
 #include <utility>
 
 #include <QCoreApplication>
+#include <QDragEnterEvent>
+#include <QDragMoveEvent>
+#include <QDropEvent>
 #include <QElapsedTimer>
 #include <QEventLoop>
 #include <QKeyEvent>
 #include <QMap>
+#include <QMimeData>
 #include <QObject>
 #include <QQmlContext>
 #include <QQmlEngine>
@@ -1182,6 +1186,18 @@ class Setup final : public QObject {
                 {QStringLiteral("seekPending"), player.seekPending()},
                 {QStringLiteral("clipOpen"), player.clipOpen()},
                 {QStringLiteral("playing"), player.playing()}};
+    }
+    bool dropAsset(QQuickItem* item, qulonglong asset, qreal x, qreal y) {
+        QMimeData mime;
+        mime.setData(QStringLiteral("application/x-exosnap-asset"), QByteArray::number(asset));
+        const auto position = item->mapToScene(QPointF(x, y));
+        QDragEnterEvent enter(position, Qt::CopyAction, &mime, Qt::LeftButton, Qt::NoModifier);
+        QDragMoveEvent move(position, Qt::CopyAction, &mime, Qt::LeftButton, Qt::NoModifier);
+        QDropEvent drop(position, Qt::CopyAction, &mime, Qt::LeftButton, Qt::NoModifier);
+        QCoreApplication::sendEvent(item->window(), &enter);
+        QCoreApplication::sendEvent(item->window(), &move);
+        QCoreApplication::sendEvent(item->window(), &drop);
+        return drop.isAccepted();
     }
     void repeatSpace(QQuickItem* item) {
         QKeyEvent release(QEvent::KeyRelease, Qt::Key_Space, Qt::NoModifier, {}, true);

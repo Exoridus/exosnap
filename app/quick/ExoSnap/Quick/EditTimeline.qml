@@ -1000,18 +1000,18 @@ FocusScope {
             onExited: root.draggingCrossfade = false
             onDropped: drop => {
                 root.draggingCrossfade = false;
-                const at = root.timeAt(drop.x);
+                const at = root.timeAtUs(drop.x);
                 if (drop.formats.indexOf("application/x-exosnap-crossfade") >= 0) {
-                    if (root.session.dropCrossfade(at, 10 / root.pixelsPerMs))
+                    if (root.session.dropCrossfadeUs(at, Math.min(250000, Math.round(10 / root.pixelsPerUs))))
                         drop.acceptProposedAction();
                     return;
                 }
                 if (drop.formats.indexOf("application/x-exosnap-history") >= 0)
-                    root.session.addHistory(drop.getDataAsString("application/x-exosnap-history"), at);
+                    root.session.addHistoryUs(drop.getDataAsString("application/x-exosnap-history"), at);
                 else if (drop.formats.indexOf("application/x-exosnap-asset") >= 0)
-                    root.session.appendAsset(Number(drop.getDataAsString("application/x-exosnap-asset")), at);
+                    root.session.appendAssetUs(Number(drop.getDataAsString("application/x-exosnap-asset")), at);
                 else if (drop.hasUrls)
-                    root.session.importMediaBatch(drop.urls, true, at);
+                    root.session.importMediaBatchUs(drop.urls, true, at);
                 drop.acceptProposedAction();
             }
         }
