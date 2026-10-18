@@ -9,7 +9,7 @@ add_library(exosnap::warnings ALIAS exosnap_warnings)
 # that do carry a default label, stays off: a default label is the deliberate
 # way to say "the rest are handled".
 target_compile_options(exosnap_warnings INTERFACE
-  $<$<CXX_COMPILER_ID:MSVC>:/W4;/WX;/w44062;/permissive-;/Zc:__cplusplus;/EHsc>
+  $<$<CXX_COMPILER_ID:MSVC>:/W4;/WX;/sdl;/utf-8;/w44062;/permissive-;/Zc:__cplusplus;/EHsc>
   $<$<CXX_COMPILER_ID:Clang>:-Wall;-Wextra;-Wpedantic;-Werror>
   $<$<CXX_COMPILER_ID:GNU>:-Wall;-Wextra;-Wpedantic;-Werror>
 )
