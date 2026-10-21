@@ -19,6 +19,12 @@ namespace exosnap::quick {
 
 class EditPlayerAdapter;
 
+struct EditFramePresentation {
+    quint64 request_generation = 0;
+    quint64 revision = 0;
+    bool operator==(const EditFramePresentation&) const = default;
+};
+
 // Scene-graph video surface for the Edit player.
 //
 // Sibling of ExoPreviewItem, built on the same skeleton -- QSGImageNode under a
@@ -50,6 +56,7 @@ class ExoEditPlayerItem : public QQuickItem {
     Q_PROPERTY(QSize sourceSize READ sourceSize NOTIFY sourceSizeChanged FINAL)
     Q_PROPERTY(QString errorText READ errorText NOTIFY errorTextChanged FINAL)
     Q_PROPERTY(QVariant presentedTimeUs READ presentedTimeUs NOTIFY presentedTimeChanged FINAL)
+    Q_PROPERTY(QVariant sceneGraphConsumedRevision READ sceneGraphConsumedRevision NOTIFY presentedTimeChanged FINAL)
 
   public:
     explicit ExoEditPlayerItem(QQuickItem* parent = nullptr);
@@ -64,12 +71,15 @@ class ExoEditPlayerItem : public QQuickItem {
     [[nodiscard]] QSize sourceSize() const;
     [[nodiscard]] const QString& errorText() const noexcept;
     [[nodiscard]] QVariant presentedTimeUs() const;
+    [[nodiscard]] QVariant sceneGraphConsumedRevision() const;
 
     // Called from the decoder's own worker thread. Newest-wins: an undrawn frame
     // is superseded rather than queued.
     void presentFrame(exosnap::engine::RawDecodedVideoFrame frame);
-    void presentFrame(exosnap::engine::RawDecodedVideoFrame frame, int64_t timeline_time_us);
-    void presentTimelineFrame(exosnap::engine::TimelineVideoFrame frame);
+    void presentFrame(exosnap::engine::RawDecodedVideoFrame frame, int64_t timeline_time_us,
+                      std::optional<EditFramePresentation> presentation = {});
+    void presentTimelineFrame(exosnap::engine::TimelineVideoFrame frame,
+                              std::optional<EditFramePresentation> presentation = {});
     // Playback clock in absolute media time (µs), or negative for "no clock".
     // Safe from any thread; read by the present gate above.
     void setClockUs(int64_t media_time_us) noexcept;
@@ -78,7 +88,8 @@ class ExoEditPlayerItem : public QQuickItem {
     void supersedePendingFrame();
 
     void publishRenderStateFromRenderThread(quint64 generation, bool ready, QSize size, QString error,
-                                            std::optional<int64_t> timeline_time_us = {});
+                                            std::optional<int64_t> timeline_time_us = {},
+                                            std::optional<EditFramePresentation> presentation = {});
 
   signals:
     void playerAdapterChanged();
@@ -88,6 +99,7 @@ class ExoEditPlayerItem : public QQuickItem {
     void errorTextChanged();
     void presentedTimeChanged();
     void framePresented(qint64 timeline_time_us);
+    void frameConsumedWithRevision(qint64 timeline_time_us, quint64 request_generation, quint64 revision);
 
   protected:
     QSGNode* updatePaintNode(QSGNode* old_node, UpdatePaintNodeData*) override;
@@ -100,6 +112,7 @@ class ExoEditPlayerItem : public QQuickItem {
         std::optional<exosnap::engine::RawDecodedVideoFrame> frame;
         std::optional<exosnap::engine::TimelineVideoFrame> timeline;
         std::optional<int64_t> timeline_time_us;
+        std::optional<EditFramePresentation> presentation;
         quint64 generation = 0;
         bool clear = false;
     };
@@ -107,9 +120,11 @@ class ExoEditPlayerItem : public QQuickItem {
     [[nodiscard]] PendingFrame takePendingFrame();
 
   private:
-    void applyRenderState(bool ready, const QSize& size, const QString& error, std::optional<int64_t> timeline_time_us);
+    void applyRenderState(bool ready, const QSize& size, const QString& error, std::optional<int64_t> timeline_time_us,
+                          std::optional<EditFramePresentation> presentation);
     void postRenderState(quint64 generation, bool ready, QSize size, QString error,
-                         std::optional<int64_t> timeline_time_us = {});
+                         std::optional<int64_t> timeline_time_us = {},
+                         std::optional<EditFramePresentation> presentation = {});
     void scheduleUpdate();
 
     QPointer<EditPlayerAdapter> player_adapter_;
@@ -130,6 +145,7 @@ class ExoEditPlayerItem : public QQuickItem {
     QSize source_size_;
     QString error_text_;
     std::optional<int64_t> presented_time_us_;
+    std::optional<EditFramePresentation> presented_presentation_;
 };
 
 } // namespace exosnap::quick

@@ -79,6 +79,11 @@ class RecordPickerTestDriver final : public QObject {
         adapter_.setShowHiddenWindows(false);
         ++seed_generation_;
     }
+    Q_INVOKABLE void prepareRegionSelection() {
+        source_.state = exosnap::UiRecordingState::RegionSelecting;
+        adapter_.setSource(&source_);
+        adapter_.setRegionState(QRectF(0, 0, 1, 1), true);
+    }
     void updateWindowIdentities(const QVariantList& rows = {}) {
         QHash<quintptr, QString> identities;
         QHash<quintptr, QString> applications;
@@ -125,6 +130,11 @@ class RecordPickerTestDriver final : public QObject {
     // insert or a reorder instead of the index it happened to have.
     Q_INVOKABLE void setRecordingContext(bool active) {
         settings_.setControlsLocked(active);
+    }
+
+    Q_INVOKABLE void seedLegacyAudio() {
+        routing_.setActivePlan(std::nullopt);
+        routing_.refresh(exosnap::engine::LegacyRows25Intent{});
     }
 
     Q_INVOKABLE void seedAudioSources(int count, const QString& prefix) {

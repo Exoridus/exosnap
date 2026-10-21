@@ -28,7 +28,7 @@ Item {
         when: windowShown
 
         function make(properties) {
-            const page = createTemporaryObject(pageComponent, root, properties || {});
+            const page = createTemporaryObject(pageComponent, root, Object.assign({mediaPinPreferred: false, detailsPinPreferred: false}, properties || {}));
             verify(!!page, "Component exists");
             return page;
         }
@@ -41,7 +41,7 @@ Item {
 
         function test_toolbar_pointer_preserves_timeline_space_and_keyboard_button_activation() {
             testTransportPlayer.setPlaying(false);
-            const page = make({session: testSession, timeline: testTimeline, player: testTransportPlayer});
+            const page = make({session: testSession, timeline: testTimeline, player: testTransportPlayer, width: 1280});
             const clips = child(page, "editClipTimeline");
             const snapping = child(page, "editSnapping");
             clips.forceActiveFocus();
@@ -199,6 +199,8 @@ Item {
             if (data.width >= 1000) compare(Math.round(transport.x + transport.width / 2), Math.round(header.width / 2));
             for (const name of ["editUndo", "editRedo", "editSplit", "editDelete", "editTransportPlay", "editVolume", "editExport", "editMediaAccess", "editDetailsAccess", "editSnapping", "editRipple", "editAutoCrossfade", "editLinkedSelection", "editZoomOut", "editZoomIn", "editZoomFit"]) {
                 const control = child(page, name);
+                if (!control.visible)
+                    continue;
                 const p = control.mapToItem(page, 0, 0);
                 verify(control.width >= 34 && control.height >= 32, name);
                 verify(p.x >= 0 && p.x + control.width <= page.width, name);
@@ -232,7 +234,7 @@ Item {
             compare(page.detailsOpen, true);
         }
         function test_FourIndependentBehaviorControls() {
-            const page = make();
+            const page = make({width: 1280});
             const session = page.session;
             session.snapping = true;
             session.ripple = false;
@@ -269,20 +271,19 @@ Item {
             tryCompare(page, "mediaPinned", true);
             verify(viewer.width < fullWidth);
             verify(viewer.width >= 480);
-            const outerMargins = page.width - child(page, "editViewerStage").width;
-            page.width = 480 + page.panelWidth + 8 + outerMargins;
-            tryCompare(viewer, "width", 480);
+            page.width = 1000;
+            tryVerify(() => viewer.width >= 480);
             compare(page.mediaPinned, true);
             page.width -= 1;
             tryCompare(page, "mediaPinned", false);
             compare(page.canPinMedia, false);
             page.width += 1;
             tryCompare(page, "canPinMedia", true);
-            compare(page.mediaPinned, false);
+            compare(page.mediaPinned, true);
             page.width = 760;
             tryCompare(page, "mediaPinned", false);
             page.width = 1280;
-            compare(page.mediaPinned, false);
+            compare(page.mediaPinned, true);
             page.toggleMedia();
             compare(page.mediaOpen, false);
             page.width = 1600;
@@ -311,7 +312,7 @@ Item {
 
             testEditHarness.requestEditSourceTab(ShellAdapter.EditTransitionsTab);
             compare(page.sourceTab, 2);
-            tryVerify(() => child(page, "editCrossfadeItem").visible);
+            tryVerify(() => child(page, "editHistoryTab").checked);
             compare(testPageShell.editPanels.sourceTab, 2);
 
             testEditHarness.requestEditPanel(ShellAdapter.EditMediaPanel, false, false);
@@ -319,6 +320,124 @@ Item {
             compare(page.mediaPinned, false);
             tryVerify(() => testPageShell.editPanels.mediaOpen === false);
             testEditHarness.requestEditSourceTab(ShellAdapter.EditHistoryTab);
+        }
+
+        function test_dock_pin_preference_restores_after_temporary_overlay() {
+            const page = make({width: 1600, height: 800});
+            mouseClick(child(page, "editMediaAccess"));
+            mouseClick(child(page, "editMediaPin"));
+            tryCompare(page, "mediaPinned", true);
+            page.width = 860;
+            tryCompare(page, "mediaPinned", false);
+            page.width = 1600;
+            tryCompare(page, "mediaPinned", true);
+        }
+
+        function test_dock_width_keyboard_resize_and_reset() {
+            const page = make({width: 1600, height: 800});
+            mouseClick(child(page, "editMediaAccess"));
+            const divider = child(page, "editMediaResize");
+            const panel = child(page, "editMediaPanelLoader");
+            divider.forceActiveFocus(Qt.TabFocusReason);
+            keyClick(Qt.Key_Home);
+            tryCompare(panel, "width", 300);
+            keyClick(Qt.Key_Right);
+            tryCompare(panel, "width", 308);
+            keyClick(Qt.Key_Left, Qt.ShiftModifier);
+            tryCompare(panel, "width", 276);
+            keyClick(Qt.Key_Home);
+            tryCompare(panel, "width", 300);
+        }
+
+        function test_inspector_follows_clip_and_range_context_without_export_or_storage() {
+            while (testSession.canUndo) testSession.undo();
+            testSession.appendAsset(testSession.media[0].id);
+            const page = make({session: testSession, width: 1280, height: 800});
+            const clips = testSession.visibleClipsUs(0, testSession.durationUs);
+            verify(clips.length > 0);
+            const linked = testSession.linkedSelection;
+            testSession.linkedSelection = false;
+            testSession.clearSelection();
+            testSession.selectClipWithModifiers(clips[0].id);
+            compare(testSession.selectedClipIds.length, 1);
+            page.toggleDetails();
+            const start = child(page, "editDetailsClipStart");
+            verify(start.visible);
+            const inspector = child(page, "editInspector");
+            verify(!findChild(inspector, "editExportProfiles"));
+            verify(!findChild(inspector, "editClearMediaCache"));
+            verify(testSession.setEditRangeUs(1000000, 2000000, [testSession.tracks[0].id]));
+            tryVerify(() => !start.visible);
+            verify(child(page, "editDetailsRangeStart").visible);
+            testSession.clearSelection();
+            testSession.linkedSelection = linked;
+            while (testSession.canUndo) testSession.undo();
+        }
+
+        function test_narrow_editing_controls_remain_reachable_through_overflow() {
+            const page = make({width: 860});
+            const linked = child(page, "editLinkedSelection");
+            verify(!linked.visible);
+            const before = testPageSession.linkedSelection;
+            mouseClick(child(page, "editToolbarOverflow"));
+            const action = child(page, "editOverflowLinkedSelection");
+            tryVerify(() => action.visible);
+            mouseClick(action);
+            compare(testPageSession.linkedSelection, !before);
+            testPageSession.linkedSelection = before;
+        }
+
+        function test_status_reports_the_active_range_without_transport_changes() {
+            testSession.appendAsset(testSession.media[0].id);
+            const page = make({session: testSession, width: 1280, height: 800});
+            const position = testSession.positionUs;
+            verify(testSession.setEditRangeUs(1000000, 2000000, [testSession.tracks[0].id]));
+            const status = child(page, "editSelectionStatus");
+            verify(status.visible);
+            verify(status.text.length > 0);
+            verify(status.text.indexOf("undefined") < 0);
+            compare(status.Accessible.name, status.text);
+            compare(testSession.positionUs, position);
+            testSession.clearSelection();
+            while (testSession.canUndo) testSession.undo();
+        }
+
+        function test_inspector_multi_audio_gain_applies_one_undoable_compatible_target_set() {
+            const session = testClipboardSession;
+            while (session.canUndo) session.undo();
+            session.appendAsset(session.media[0].id);
+            session.appendAsset(session.media[0].id);
+            const audio = session.visibleClipsUs(0, session.durationUs).filter(clip => !clip.video);
+            compare(audio.length, 2);
+            verify(session.setClipGain(audio[0].id, -2));
+            const linked = session.linkedSelection;
+            session.linkedSelection = false;
+            session.clearSelection();
+            session.selectClipWithModifiers(audio[0].id);
+            session.selectClipWithModifiers(audio[1].id, true);
+            const page = make({session: session});
+            page.toggleDetails();
+            const field = child(page, "editDetailsMultiGain");
+            verify(field.visible && field.enabled);
+            verify(field.mixed);
+            compare(field.targetIds.length, 2);
+            const inspector = child(page, "editInspector");
+            verify(inspector.revealItem(field));
+            verify(waitForPolish(root.Window.window));
+            mouseClick(field);
+            tryCompare(field, "activeFocus", true);
+            field.selectAll();
+            const text = "1.3";
+            for (let index = 0; index < text.length; ++index)
+                keyClick(text[index]);
+            keyClick(Qt.Key_Return);
+            compare(session.selectedClipSummary.gainMixed, false);
+            compare(session.selectedClipSummary.gainDb, 1.3);
+            session.undo();
+            compare(session.selectedClipSummary.gainMixed, true);
+            session.clearSelection();
+            session.linkedSelection = linked;
+            while (session.canUndo) session.undo();
         }
 
         function test_vertical_split_restore_clamp_and_keyboard() {
@@ -347,20 +466,36 @@ Item {
         function test_splitters_persist_across_processes() {
             if (testPersistenceStage.length === 0)
                 skip("Set EXOSNAP_EDIT_PERSISTENCE_STAGE for explicit write/read processes.");
-            const page = make();
+            const page = createTemporaryObject(pageComponent, root, {width: 1600, height: 1000});
+            verify(!!page);
             const preferences = child(page, "editLayoutPreferences");
             compare(preferences.location, testPageSession.layoutSettingsLocation);
             if (testPersistenceStage === "write") {
                 preferences.sourceFraction = 0.41;
                 preferences.timelineFraction = 0.53;
+                preferences.mediaWidth = 344;
+                preferences.detailsWidth = 376;
+                preferences.trackHeaderWidth = 208;
+                preferences.mediaPinned = true;
+                preferences.detailsPinned = true;
                 preferences.sync();
                 compare(preferences.sourceFraction, 0.41);
                 compare(preferences.timelineFraction, 0.53);
             } else {
                 compare(preferences.sourceFraction, 0.41);
                 compare(preferences.timelineFraction, 0.53);
+                compare(preferences.mediaWidth, 344);
+                compare(preferences.detailsWidth, 376);
+                compare(preferences.trackHeaderWidth, 208);
+                verify(page.mediaPinPreferred && page.detailsPinPreferred);
                 compare(page.mediaOpen, false);
                 compare(page.detailsOpen, false);
+                page.toggleMedia();
+                page.toggleDetails();
+                verify(page.mediaPinned && page.detailsPinned);
+                compare(page.mediaWidth, 344);
+                compare(page.detailsWidth, 376);
+                compare(child(page, "editClipTimeline").userHeaderWidth, 208);
                 page.height = 1000;
                 tryVerify(() => child(page, "editTimelineZone").height > 450);
             }
@@ -426,7 +561,7 @@ Item {
             const page = make({ session: testSession, timeline: testTimeline, player: testPlayer });
             const strip = child(page, "editClipTimeline");
             strip.zoomTo(200);
-            child(page, "editTimelineScroll").contentX = strip.positionAt(98500);
+            strip.view.setVisibleInterval(98500000, 101000000);
             const overlay = child(page, "editCrossfadeOverlay");
             overlay.forceActiveFocus(Qt.TabFocusReason);
             keyClick(Qt.Key_Return);
@@ -435,8 +570,14 @@ Item {
             const duration = child(page, "editCrossfadeDuration");
             duration.forceActiveFocus(Qt.TabFocusReason);
             const positions = testSession.visibleClips(0, 200000).map(clip => clip.startMs);
-            keyClick(Qt.Key_Down);
-            compare(testSession.transitions[0].durationMs, 499);
+            compare(duration.valueUs, 500000);
+            duration.selectAll();
+            const typedDuration = "0.4s";
+            for (let index = 0; index < typedDuration.length; ++index)
+                keyClick(typedDuration[index]);
+            keyClick(Qt.Key_Return);
+            compare(testSession.transitions[0].durationUs, 400000);
+            compare(duration.valueUs, 400000);
             compare(testSession.visibleClips(0, 200000).map(clip => clip.startMs), positions);
             keyClick(Qt.Key_Escape);
             tryCompare(popup, "visible", false);
@@ -514,45 +655,46 @@ Item {
         function test_empty_sources_and_keyboard_tabs() {
             const page = make();
             page.toggleMedia();
-            const history = child(page, "editHistoryTab");
-            const media = child(page, "editMediaTab");
-            const transitions = child(page, "editTransitionsTab");
+            const project = child(page, "editMediaTab");
+            const folders = child(page, "editFoldersTab");
+            const recordings = child(page, "editHistoryTab");
             const title = child(page, "editSourceEmptyTitle");
             const help = child(page, "editSourceEmptyHelp");
             const add = child(page, "editAddMedia");
-            compare(title.text, qsTr("No recordings yet"));
-            compare(help.text, qsTr("Recent recordings appear here automatically."));
+            compare(project.text, qsTr("Project"));
+            compare(folders.text, qsTr("Folders"));
+            compare(recordings.text, qsTr("Recordings"));
+            compare(title.text, qsTr("Drop media here"));
+            compare(help.text, qsTr("Add files or a folder with +."));
             verify(title.visible);
-            compare(add.visible, false);
-
-            history.forceActiveFocus(Qt.TabFocusReason);
-            verify(history.visualFocus);
-            keyClick(Qt.Key_Tab);
-            tryCompare(media, "activeFocus", true);
-            keyClick(Qt.Key_Space);
-            tryCompare(title, "text", qsTr("Drop media here"));
-            compare(add.visible, true);
-            verify(add.Accessible.name.length > 0);
-            verify(add.glyph !== ExoGlyph.Invalid);
-            keyClick(Qt.Key_Tab);
-            tryCompare(transitions, "activeFocus", true);
-            keyClick(Qt.Key_Space);
-            tryCompare(title, "text", qsTr("Transitions will appear here when available."));
-            verify(!title.visible);
-            verify(child(page, "editCrossfadeItem").visible);
-            compare(add.visible, false);
-            compare(child(page, "editSourceItems").count, 0);
+            verify(add.visible);
+            project.forceActiveFocus(Qt.TabFocusReason);
             keyClick(Qt.Key_Right);
-            tryCompare(history, "activeFocus", true);
-            compare(history.visualFocus, true);
+            tryCompare(folders, "activeFocus", true);
+            compare(title.text, qsTr("No folders added"));
+            keyClick(Qt.Key_Right);
+            tryCompare(recordings, "activeFocus", true);
             compare(title.text, qsTr("No recordings yet"));
-            keyClick(Qt.Key_Left);
-            tryCompare(transitions, "activeFocus", true);
-            compare(transitions.visualFocus, true);
-            compare(transitions.Accessible.role, Accessible.PageTab);
-            compare(title.text, qsTr("Transitions will appear here when available."));
+            keyClick(Qt.Key_Right);
+            tryCompare(project, "activeFocus", true);
+            compare(title.text, qsTr("Drop media here"));
+            verify(project.visualFocus);
+            compare(findChild(page, "editTransitionsTab"), null);
         }
 
+        function test_browser_add_menu_exposes_files_and_folders_and_closes_with_escape() {
+            const page = make();
+            page.toggleMedia();
+            const add = child(page, "editAddMedia");
+            const menu = child(page, "editSourceAddMenu");
+            add.forceActiveFocus(Qt.TabFocusReason);
+            keyClick(Qt.Key_Space);
+            tryCompare(menu, "opened", true);
+            compare(child(page, "editSourceAddFiles").text, qsTr("Add files"));
+            compare(child(page, "editSourceAddFolder").text, qsTr("Add folder"));
+            keyClick(Qt.Key_Escape);
+            tryCompare(menu, "visible", false);
+        }
         function test_snapping_keyboard_toggle() {
             const page = make();
             const snap = child(page, "editSnapping");
@@ -605,16 +747,16 @@ Item {
         }
 
         function test_export_profile_selector_contains_only_supported_profiles() {
-            const page = make();
-            page.toggleDetails();
+            const page = make({session: testSession});
+            page.openExport();
             const profiles = child(page, "editExportProfiles");
             verify(profiles.Accessible.name.length > 0);
             compare(profiles.count, testPageExporter.profileOptions.filter(option => option.selectable).length);
             compare(profiles.currentValue, testPageExporter.profileKey);
         }
         function test_export_intent_and_range_are_explicit_choices() {
-            const page = make();
-            page.toggleDetails();
+            const page = make({session: testSession});
+            page.openExport();
             const original = child(page, "editExportOriginalStreams");
             const span = child(page, "editExportSpan");
             compare(testPageExporter.modeKey, "finishedStereo");
@@ -624,51 +766,28 @@ Item {
             compare(testPageExporter.modeKey, "originalStreams");
             original.toggledByUser(false);
             compare(testPageExporter.modeKey, "finishedStereo");
-            span.currentIndex = 1;
             span.activated(1);
             compare(testPageExporter.spanKey, "occupied");
-            span.currentIndex = 2;
             span.activated(2);
             compare(testPageExporter.spanKey, "result");
-            const selection = child(page, "editExportSelectionSpan");
-            verify(selection.visible);
-            compare(selection.currentValue, "result");
-            selection.currentIndex = 1;
-            selection.activated(1);
+            span.activated(3);
             compare(testPageExporter.spanKey, "time");
             testPageExporter.spanKey = "result";
-            const fresh = make();
-            fresh.toggleDetails();
-            compare(child(fresh, "editExportSpan").currentValue, "selection");
-            compare(child(fresh, "editExportSelectionSpan").currentValue, "result");
+            child(page, "editExportOptions").close();
+            page.openExport();
+            tryCompare(child(page, "editExportSpan"), "currentValue", "result");
             testPageExporter.spanKey = "entire";
         }
-        function test_clear_media_cache_is_available_in_details() {
+        function test_clear_media_cache_is_not_part_of_contextual_inspector() {
             const page = make();
             page.toggleDetails();
-            const clear = child(page, "editClearMediaCache");
-            verify(clear.enabled);
-            verify(clear.Accessible.name.length > 0);
-            verify(clear.ToolTip.text.length > 0);
+            verify(!findChild(child(page, "editInspector"), "editClearMediaCache"));
         }
-        function test_monitoring_confirmation_is_stated_and_single_track_needs_no_overlap_acknowledgement() {
+        function test_inspector_omits_monitoring_admission_form() {
             const page = make({ width: 1280, height: 800 });
-            testEditHarness.pageMonitoring([{ id: "a", name: "Positive", selected: true }], true);
-            const hint = child(page, "editAudioChoice");
-            tryVerify(() => hint.visible);
-            compare(page.monitoringSelection, ["a"]);
             page.toggleDetails();
-            tryVerify(() => findChild(page, "editMonitorConfirm") !== null);
-            const overlap = child(page, "editMonitorOverlapConfirmation");
-            verify(child(page, "editMonitorConfirm").visible);
-            verify(!overlap.visible);
-            testEditHarness.pageMonitoring([{ id: "b", name: "System", selected: false },
-                                            { id: "c", name: "Microphone", selected: true }], true);
-            tryVerify(() => overlap.visible);
-            // Track identities are per open; the old choice must not linger.
-            compare(page.monitoringSelection, ["c"]);
-            testEditHarness.pageMonitoring([], false);
-            tryVerify(() => !hint.visible);
+            verify(!findChild(page, "editMonitorConfirm"));
+            verify(!findChild(page, "editMonitorOverlapConfirmation"));
             page.toggleDetails();
         }
         function test_source_tabs_scroll_without_truncating_labels() {
@@ -676,19 +795,19 @@ Item {
             page.toggleMedia();
             const browser = child(page, "editSourceBrowser");
             const scroll = child(page, "editSourceTabs");
-            const history = child(page, "editHistoryTab");
-            const transitions = child(page, "editTransitionsTab");
-            transitions.text = "Transitions mit langem Namen";
+            const project = child(page, "editMediaTab");
+            const recordings = child(page, "editHistoryTab");
+            recordings.text = "Aufnahmen mit langem Namen";
             tryVerify(() => scroll.contentWidth > scroll.width);
             browser.focusTab(2);
-            tryVerify(() => transitions.x >= scroll.contentX
-                && transitions.x + transitions.width <= scroll.contentX + scroll.width + 1);
-            compare(transitions.contentItem.truncated, false);
-            verify(transitions.visualFocus);
+            tryVerify(() => recordings.x >= scroll.contentX
+                && recordings.x + Math.min(recordings.width, scroll.width) <= scroll.contentX + scroll.width + 1);
+            compare(recordings.contentItem.truncated, false);
+            verify(recordings.visualFocus);
             browser.focusTab(0);
             tryCompare(scroll, "contentX", 0);
-            verify(history.visualFocus);
-            compare(history.contentItem.truncated, false);
+            verify(project.visualFocus);
+            compare(project.contentItem.truncated, false);
         }
         function test_transport_and_undo_actions() {
             while (testSession.canUndo)

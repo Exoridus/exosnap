@@ -9,6 +9,7 @@
 #include "edit_mix_encoder.h"
 #include "matroska_packet_timestamps.h"
 #include "matroska_stream_writer.h"
+#include "media_identity_sidecar.h"
 #include "render_audio_manifest.h"
 
 #include <algorithm>
@@ -47,21 +48,35 @@ std::string Utf8Path(const std::filesystem::path& path) {
 struct InputFile {
     AVFormatContext* context = nullptr;
     std::shared_ptr<void> lease;
+    std::unique_ptr<LeasedMediaAvio> leased_input;
     ~InputFile() {
         avformat_close_input(&context);
     }
     const std::atomic<bool>* cancelled = nullptr;
-    bool Open(const std::filesystem::path& path, const std::atomic<bool>* cancellation = nullptr) {
+    bool Open(const TimelineExportClip& clip, const std::atomic<bool>* cancellation = nullptr) {
         cancelled = cancellation;
         if (cancelled && cancelled->load(std::memory_order_relaxed))
             return false;
-        auto acquired = AcquireMediaReadLease(path);
-        if (!acquired.succeeded())
-            return false;
-        lease = std::move(*acquired.value());
+        if (clip.access || clip.identity_proof) {
+            if (!clip.access || !clip.identity_proof || clip.identity_proof->Source() != clip.access ||
+                clip.source != clip.access->Path())
+                return false;
+            leased_input = LeasedMediaAvio::Open(clip.access, {}, {}, cancelled);
+            if (!leased_input)
+                return false;
+        } else {
+            auto acquired = AcquireMediaReadLease(clip.source);
+            if (!acquired.succeeded())
+                return false;
+            lease = std::move(*acquired.value());
+        }
         context = avformat_alloc_context();
         if (!context)
             return false;
+        if (leased_input) {
+            context->pb = leased_input->context();
+            context->flags |= AVFMT_FLAG_CUSTOM_IO;
+        }
         context->interrupt_callback = {[](void* opaque) {
                                            const auto* input = static_cast<const InputFile*>(opaque);
                                            return input->cancelled && input->cancelled->load(std::memory_order_relaxed)
@@ -69,7 +84,8 @@ struct InputFile {
                                                       : 0;
                                        },
                                        this};
-        return avformat_open_input(&context, Utf8Path(path).c_str(), nullptr, nullptr) >= 0 &&
+        return avformat_open_input(&context, leased_input ? nullptr : Utf8Path(clip.source).c_str(), nullptr,
+                                   nullptr) >= 0 &&
                avformat_find_stream_info(context, nullptr) >= 0;
     }
     [[nodiscard]] int VideoStream() const {
@@ -121,7 +137,7 @@ bool HasUsableCopiedVideoTimestamps(const std::vector<TimelineExportClip>& recip
     int64_t last_dts = minimum;
     for (const auto& clip : recipe) {
         InputFile source;
-        if (!source.Open(clip.source, cancelled))
+        if (!source.Open(clip, cancelled))
             return false;
         const int video = source.VideoStream();
         if (video < 0)
@@ -175,7 +191,7 @@ RemuxResult ExportEditTimelineWithCopiedVideo(const TimelineRenderSnapshot& snap
         }
         int64_t covered = 0;
         for (const auto& clip : video_recipe) {
-            const auto metadata = ProbeEditMedia(clip.source);
+            const auto metadata = clip.access ? ProbeEditMedia(clip.access) : ProbeEditMedia(clip.source);
             if (clip.timeline_start_us != covered || clip.source_in_us != 0 ||
                 std::abs(clip.source_out_us - metadata.duration_us) > 1000) {
                 error = "Copied video must use complete sources that cover the timeline from its start.";
@@ -198,7 +214,7 @@ RemuxResult ExportEditTimelineWithCopiedVideo(const TimelineRenderSnapshot& snap
         }
         const bool audio = preflight && !preflight->manifest.tracks.empty();
         InputFile first;
-        if (!first.Open(video_recipe.front().source) || first.VideoStream() < 0) {
+        if (!first.Open(video_recipe.front()) || first.VideoStream() < 0) {
             error = "Cannot open the copied video source.";
             return false;
         }
@@ -264,7 +280,7 @@ RemuxResult ExportEditTimelineWithCopiedVideo(const TimelineRenderSnapshot& snap
         int64_t last_dts = (std::numeric_limits<int64_t>::min)();
         for (const auto& clip : video_recipe) {
             InputFile source;
-            if (!source.Open(clip.source)) {
+            if (!source.Open(clip)) {
                 error = "Cannot open a copied video source.";
                 return false;
             }

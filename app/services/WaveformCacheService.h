@@ -3,10 +3,10 @@
 // Background waveform analysis and the persistent peak cache behind the Edit
 // timeline's audio rows.
 //
-// The overview worker analyses one stream at a time in source-time chunks.
-// A separate detail worker owns an independent decoder/cursor. Requests deduplicate by cache key and
-// run in arrival order. While foreground work is busy (playback, export,
-// recording) analysis pauses between chunks. Display reads use only immutable
+// The overview worker rotates between source-time chunks from visible streams.
+// A separate detail worker owns an independent decoder/cursor. Requests deduplicate by cache key.
+// During playback, visible overviews receive at most one chunk per 50 ms.
+// Recording and export suspend optional analysis. Display reads use only immutable
 // memory blocks; the worker loads missing disk blocks independently.
 //
 // Completed analyses are published atomically into the disk store. Peaks of a
@@ -22,6 +22,7 @@
 // queries) are thread-safe so a scene-graph item may call them from the render
 // thread while the GUI thread is blocked.
 
+#include <exosnap/engine/audio_media_manifest.h>
 #include <exosnap/engine/media_cache_store.h>
 #include <exosnap/engine/waveform_cache.h>
 
@@ -30,6 +31,7 @@
 #include <QtGlobal>
 
 #include <atomic>
+#include <chrono>
 #include <condition_variable>
 #include <cstdint>
 #include <deque>
@@ -116,6 +118,15 @@ class WaveformCacheService : public QObject {
     // opening the source. Queued or analysing requests deduplicate. Repeating a
     // ready request checks source availability in the background without decode.
     QString request(const engine::WaveformSourceKey& source, const QString& source_path, qint64 source_end_us);
+    // Associates a source or lease-scoped preview identity with its held file.
+    // Only a matching proof permits persistent waveform publication.
+    void registerSource(const std::array<std::uint8_t, 32>& identity,
+                        std::shared_ptr<const engine::MediaReadCapability> access,
+                        std::shared_ptr<const engine::VerifiedMediaIdentity> proof = {});
+    void releaseSources();
+    void unregisterSource(const std::array<std::uint8_t, 32>& identity);
+    void setVisibleInterest(std::uint64_t clip, const QString& key, qint64 distance_us = 0);
+    void removeVisibleInterest(std::uint64_t clip);
 
     // Drops a queued request or abandons the running analysis of `key`.
     // Nothing partial is ever published.
@@ -123,6 +134,7 @@ class WaveformCacheService : public QObject {
 
     // While true, analysis pauses between chunks.
     Q_INVOKABLE void setForegroundBusy(bool busy);
+    void setAnalysisPressure(bool playback, bool exclusive);
     [[nodiscard]] bool foregroundBusy() const;
 
     // Cancels all work, deletes every persisted waveform and drops the memory
@@ -192,6 +204,9 @@ class WaveformCacheService : public QObject {
         std::uint32_t container_index = 0;
         std::uint64_t sample_count = 0;
         std::array<std::uint8_t, 32> expected_sha256{};
+        std::shared_ptr<const engine::MediaReadCapability> access;
+        std::shared_ptr<const engine::VerifiedMediaIdentity> proof;
+        bool persistent = true;
     };
     struct Status {
         State state = State::Unknown;
@@ -262,6 +277,11 @@ class WaveformCacheService : public QObject {
     bool evictInactivePcmWindow();
     void finishPcmJob(const PcmJob& job, PcmSnapshot snapshot, bool cancelled);
     void runJob(const Job& job);
+    void discardOverview(const std::string& key);
+    void purgeOverviews();
+    void removeVisibleInterestLocked(std::uint64_t clip);
+    std::unique_ptr<engine::WaveformAudioDecoder> openDecoder(const Job& job, std::string& error,
+                                                              const std::atomic<bool>* cancelled);
     void loadPendingBlocks();
     bool setStatus(const std::string& key, const Status& status, std::optional<std::uint64_t> generation = {});
     void postProgress(const std::string& key, std::uint64_t completed, std::uint64_t total, std::uint64_t generation);
@@ -273,17 +293,42 @@ class WaveformCacheService : public QObject {
 
     Config config_;
     DecoderFactory decoder_factory_;
+    bool custom_decoder_factory_ = false;
     std::unique_ptr<engine::MediaCacheStore> store_;
 
     mutable std::mutex mutex_;
     std::condition_variable cv_;
     bool stop_ = false;
     bool busy_ = false;
+    bool playback_ = false;
+    bool exclusive_ = false;
+    std::chrono::steady_clock::time_point next_overview_;
     std::deque<Job> queue_;
     std::map<std::string, Job> availability_checks_;
     // Only explicitly requested sources may regenerate an evicted entry.
     // The recipes are bounded by the same limit as disk layouts.
     std::map<std::string, Job> requested_jobs_;
+    struct SourceAccess {
+        std::shared_ptr<const engine::MediaReadCapability> access;
+        std::shared_ptr<const engine::VerifiedMediaIdentity> proof;
+    };
+    std::map<std::array<std::uint8_t, 32>, SourceAccess> source_access_;
+    std::map<std::string, std::shared_ptr<engine::WaveformStreamWriter>> provisional_writers_;
+    std::size_t provisional_working_bytes_ = 0;
+    std::deque<std::shared_ptr<engine::WaveformStreamWriter>> retired_writers_;
+    bool release_pcm_cursor_ = false;
+    struct OverviewCursor;
+    std::map<std::string, std::unique_ptr<OverviewCursor>> overview_cursors_;
+    std::map<std::string, std::chrono::steady_clock::time_point> deferred_overviews_;
+    std::size_t overview_working_bytes_ = 0;
+    std::uint64_t overview_sequence_ = 0;
+    bool cleanup_overviews_ = false;
+    struct VisibleInterest {
+        std::string key;
+        qint64 distance_us = 0;
+    };
+    std::map<std::uint64_t, VisibleInterest> visible_interests_;
+    std::map<std::string, std::set<std::pair<qint64, std::uint64_t>>> interest_distances_;
     std::optional<std::string> running_;
     std::atomic<bool> cancel_running_{false};
     std::unordered_map<std::string, Status> status_;
@@ -307,8 +352,6 @@ class WaveformCacheService : public QObject {
     std::atomic<bool> cancel_pcm_{false};
     // Bumped by clearCache(); work started under an older generation is discarded.
     std::uint64_t generation_ = 0;
-    // Serializes publication with clearCache().
-    std::mutex publish_mutex_;
     std::size_t analysis_peak_bytes_ = 0;
     std::uint64_t decoder_seeks_ = 0;
     std::uint64_t decoded_frames_ = 0;

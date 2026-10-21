@@ -67,6 +67,13 @@ qt_add_qml_module(exosnap
         EditSidePanel.qml
         EditPlayer.qml
         EditTimeline.qml
+        EditTimeField.qml
+        EditDraftField.qml
+        EditGainField.qml
+        EditInspector.qml
+        EditOverview.qml
+        EditSourceChoice.qml
+        EditSourceReplacement.qml
         ExoBadge.qml
         ExoBrandMark.qml
         ExoBrandWordmark.qml
@@ -150,6 +157,7 @@ qt_add_qml_module(exosnap
         SettingsMicrophoneSection.qml
         SettingsChromaSlider.qml
         SettingsDeveloperSection.qml
+        SettingsStorageSection.qml
         SettingsFormatSection.qml
         SettingsHotkeysSection.qml
         SettingsGroupToggle.qml
@@ -664,6 +672,7 @@ target_link_libraries(exosnap
         exosnap_observability
         exosnap_miniz
         exosnap_engine
+        FFmpeg::mux
         tomlplusplus::tomlplusplus
         d3d11
         d3dcompiler
@@ -1279,6 +1288,13 @@ qt_add_qml_module(edit_timeline_qml_tests
         ExoChevron.qml
         EditPlayer.qml
         EditTimeline.qml
+        EditTimeField.qml
+        EditDraftField.qml
+        EditGainField.qml
+        EditInspector.qml
+        EditOverview.qml
+        EditSourceChoice.qml
+        EditSourceReplacement.qml
         ExoFieldErrorMark.qml
         ExoGlyph.qml
         ExoInfoButton.qml
@@ -1358,6 +1374,8 @@ qt_add_qml_module(record_source_picker_qml_tests
         # its base type and stops publishing the Kind enum.
         QtQuick.Shapes
     SOURCES
+        CaptureExclusion.cpp
+        CaptureExclusion.h
         ExoWebcamPreviewItem.cpp
         ExoWebcamPreviewItem.h
         WebcamPreviewFeed.cpp
@@ -1427,6 +1445,7 @@ qt_add_qml_module(record_source_picker_qml_tests
         RecordingWorkspaceSurface.qml
         RecordingClipPanel.qml
         RegionSelectionOverlay.qml
+        RegionSelectionWindow.qml
 )
 
 target_compile_definitions(record_source_picker_qml_tests
@@ -1454,6 +1473,7 @@ target_link_libraries(record_source_picker_qml_tests
         Qt6::QuickControls2
         Qt6::QuickTest
         exosnap_record_viewmodel_test_support
+        exosnap_app_log_test_support
         exosnap_output_model_test_support
         exosnap::update
         exosnap::capability
@@ -1978,6 +1998,9 @@ exosnap_add_gtest(
     TEST_PREFIX quick_window_presence.
     SOURCES
         ${EXOSNAP_QUICK_TESTS_DIR}/test_window_presence.cpp
+        ${EXOSNAP_QUICK_TESTS_DIR}/test_capture_exclusion.cpp
+        CaptureExclusion.cpp
+        CaptureExclusion.h
         MainWindowAffinity.cpp
         MainWindowAffinity.h
         # The chrome is here for one reason: both minimize routes -- the title
@@ -2090,6 +2113,9 @@ exosnap_add_gtest(
     TEST_PREFIX quick_edit_adapter.
     SOURCES
         ${EXOSNAP_QUICK_TESTS_DIR}/test_edit_adapters.cpp
+        ${EXOSNAP_QUICK_TESTS_DIR}/test_edit_visual_seeds.cpp
+        ${PROJECT_SOURCE_DIR}/app/visual_tests/EditVisualMedia.cpp
+        ${PROJECT_SOURCE_DIR}/app/visual_tests/EditVisualMedia.h
         EditThumbnailImageProvider.cpp
         EditThumbnailImageProvider.h
         EditExportAdapter.cpp
@@ -2129,6 +2155,7 @@ exosnap_add_gtest(
         exosnap_app_log_test_support
         exosnap_capability
         exosnap_engine
+        FFmpeg::mux
 )
 
 target_include_directories(edit_qml_adapter_tests
@@ -2138,6 +2165,7 @@ target_include_directories(edit_qml_adapter_tests
 )
 
 target_compile_definitions(edit_qml_adapter_tests PRIVATE NOMINMAX)
+target_compile_options(edit_qml_adapter_tests PRIVATE $<$<CXX_COMPILER_ID:MSVC>:/bigobj>)
 
 # Persistent waveform and thumbnail caches behind the Edit timeline: the
 # waveform service and its scene-graph item, the thumbnail broker, its image

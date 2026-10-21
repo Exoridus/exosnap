@@ -95,6 +95,12 @@ pub struct ShotSpec {
     /// `edit-selected-clip`. Defaults to the Edit page.
     #[arg(long)]
     pub edit: Option<String>,
+    /// Recording-profile section (`EXOSNAP_VISUAL_PROFILE_SECTION`).
+    #[arg(long)]
+    pub profile: Option<String>,
+    /// Recording workspace panel (`EXOSNAP_VISUAL_RECORD_PANEL`).
+    #[arg(long, conflicts_with = "profile")]
+    pub record_panel: Option<String>,
     /// Diagnostics fixture (`EXOSNAP_VISUAL_DIAG_SCENARIO`), for example `issues`.
     #[arg(long)]
     pub diag: Option<String>,
@@ -119,10 +125,10 @@ pub struct ShotSpec {
     #[arg(long, value_enum)]
     pub popup: Option<Popup>,
     /// Named modal dialog: `close-guard`, `preset-delete`, `preset-rename`,
-    /// `preset-save-as`. Preset dialogs need `--page settings`.
+    /// `preset-save-as`. Preset dialogs use `--page record`.
     #[arg(long)]
     pub dialog: Option<String>,
-    /// Expert arrangement of Settings and Diagnostics.
+    /// Expert recording-profile controls.
     #[arg(long)]
     pub expert: bool,
     /// Scroll position as a fraction of the page's scrollable range (0 to 1).
@@ -141,6 +147,9 @@ pub struct ShotSpec {
     /// Opens every collapsed element on the page before the capture.
     #[arg(long)]
     pub expand_all: bool,
+    /// Closes every collapsible element on the page before the capture.
+    #[arg(long, conflicts_with = "expand_all")]
+    pub collapse_all: bool,
     /// Deterministic moving content on the desktop. Implies the live preview.
     #[arg(long)]
     pub desktop_pattern: bool,
@@ -300,6 +309,8 @@ impl ShotSpec {
         push("", &self.record_state);
         push("", &self.overlay_state);
         push("", &self.edit);
+        push("profile-", &self.profile);
+        push("panel-", &self.record_panel);
         push("", &self.diag);
         push("live-", &self.diag_live);
         push("", &self.log);
@@ -332,6 +343,9 @@ impl ShotSpec {
         }
         if self.expand_all {
             parts.push("expanded".to_string());
+        }
+        if self.collapse_all {
+            parts.push("collapsed".to_string());
         }
         let state = if parts.is_empty() {
             "default".to_string()
@@ -393,6 +407,7 @@ impl ShotSpec {
         flag(self.live_preview, "--visual-live-preview");
         flag(self.full_page, "--visual-full-page");
         flag(self.expand_all, "--visual-expand-all");
+        flag(self.collapse_all, "--visual-collapse-all");
 
         let mut env = Vec::new();
         let mut seed = |name: &str, value: &Option<String>| {
@@ -401,6 +416,8 @@ impl ShotSpec {
             }
         };
         seed("EXOSNAP_VISUAL_EDIT_SCENARIO", &self.edit);
+        seed("EXOSNAP_VISUAL_PROFILE_SECTION", &self.profile);
+        seed("EXOSNAP_VISUAL_RECORD_PANEL", &self.record_panel);
         seed("EXOSNAP_VISUAL_DIAG_SCENARIO", &self.diag);
         seed("EXOSNAP_VISUAL_DIAG_LIVE", &self.diag_live);
         seed("EXOSNAP_VISUAL_LOG_SCENARIO", &self.log);

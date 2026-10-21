@@ -28,9 +28,9 @@ namespace exosnap::quick {
 // software renderer rasterizes the visible cached buckets at the window's
 // device pixel ratio.
 //
-// Ranges without data draw nothing. The item always draws the waveform at full
-// strength: muted or disabled presentation, gain and fade envelopes belong to
-// the surrounding QML.
+// Ranges without data draw nothing. Gain scales amplitudes around each channel
+// center without changing source data. Muted/disabled presentation and fade
+// envelopes belong to the surrounding QML.
 class ExoWaveformItem : public QQuickItem {
     Q_OBJECT
     QML_ELEMENT
@@ -43,6 +43,7 @@ class ExoWaveformItem : public QQuickItem {
     // 2 draws each channel in its own lane; 1 draws one combined lane.
     Q_PROPERTY(int channelCount READ channelCount WRITE setChannelCount NOTIFY channelCountChanged FINAL)
     Q_PROPERTY(QColor color READ color WRITE setColor NOTIFY colorChanged FINAL)
+    Q_PROPERTY(qreal gainDb READ gainDb WRITE setGainDb NOTIFY gainDbChanged FINAL)
 
   public:
     explicit ExoWaveformItem(QQuickItem* parent = nullptr);
@@ -70,6 +71,10 @@ class ExoWaveformItem : public QQuickItem {
         return color_;
     }
     void setColor(const QColor& color);
+    [[nodiscard]] qreal gainDb() const noexcept {
+        return gain_db_;
+    }
+    void setGainDb(qreal value);
 
     // Peak pyramid level used for the current geometry, or -1 for PCM detail
     // or an empty drawing. Exposed for tests.
@@ -83,6 +88,7 @@ class ExoWaveformItem : public QQuickItem {
     void sourceWindowChanged();
     void channelCountChanged();
     void colorChanged();
+    void gainDbChanged();
 
   protected:
     QSGNode* updatePaintNode(QSGNode* old_node, UpdatePaintNodeData* data) override;
@@ -103,6 +109,7 @@ class ExoWaveformItem : public QQuickItem {
     qint64 source_out_us_ = 0;
     int channel_count_ = 2;
     QColor color_{Qt::white};
+    qreal gain_db_ = 0;
     std::atomic<int> last_level_{-1};
 };
 

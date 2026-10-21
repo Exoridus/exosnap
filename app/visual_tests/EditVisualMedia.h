@@ -9,7 +9,9 @@
 #include <QImage>
 
 #include <cstdint>
+#include <filesystem>
 #include <memory>
+#include <string>
 
 namespace exosnap::visual_tests {
 
@@ -20,6 +22,9 @@ namespace exosnap::visual_tests {
 // A stereo programme with speech-like bursts and pauses, for the waveform
 // analysis of one source stream.
 [[nodiscard]] std::unique_ptr<engine::WaveformAudioDecoder> MakeEditSourceAudio(std::uint32_t seed);
+
+[[nodiscard]] bool WriteEditVisualAudioFixture(const std::filesystem::path& path, std::uint32_t seed,
+                                               std::string& error);
 
 // A stable seed for a source, from the first bytes of its content identity.
 [[nodiscard]] std::uint32_t EditSourceSeed(const std::uint8_t* identity, std::size_t size);

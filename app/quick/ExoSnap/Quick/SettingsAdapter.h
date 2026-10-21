@@ -871,6 +871,8 @@ class SettingsAdapter : public QObject {
     Q_INVOKABLE void renamePreset(const QString& name);
     Q_INVOKABLE void deletePreset();
     Q_INVOKABLE void resetChanges();
+    Q_INVOKABLE void clearMediaCaches();
+    void completeMediaCacheClear();
     // Paths arrive as file: URLs from QtQuick.Dialogs' native dialogs. The URL
     // -> path conversion stays in C++ so QML never assembles a filesystem path,
     // and the shipping Quick frontend never links Qt Widgets for a file dialog.
@@ -896,6 +898,8 @@ class SettingsAdapter : public QObject {
     Q_INVOKABLE bool presetNameRejected(const QString& name, const QString& exclude_id) const;
 
   signals:
+    void clearMediaCachesRequested();
+    void mediaCachesCleared();
     void recordingContextChanged();
     void configChanged();
     void optionsChanged();

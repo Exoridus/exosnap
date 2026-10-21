@@ -1,4 +1,5 @@
 import QtQuick
+import QtQuick.Controls
 import QtTest
 import ExoSnap.Quick.EditTestControls
 
@@ -66,6 +67,27 @@ TestCase {
         compare(testSession.dragActive, false);
         compare(testEditHarness.transportCommand(testTransportPlayer), before);
     }
+    function test_overview_pan_capture_reserves_space_without_lane_pan() {
+        const strip = make();
+        strip.zoomTo(100);
+        strip.panTimeline(500);
+        const controller = findChild(strip, "editInteraction");
+        const viewport = findChild(strip, "editViewport");
+        const start = viewport.startUs;
+        const before = testEditHarness.transportCommand(testTransportPlayer);
+        keyPress(Qt.Key_Space);
+        controller.beginPan(Qt.point(200, 80), false);
+        verify(controller.pointerCaptured);
+        verify(!controller.panActive);
+        controller.updatePan(Qt.point(100 - Qt.styleHints.startDragDistance, 80));
+        verify(controller.panActive);
+        compare(viewport.startUs, start);
+        controller.endPan();
+        keyRelease(Qt.Key_Space);
+        verify(!controller.panActive);
+        verify(!controller.pointerCaptured);
+        compare(testEditHarness.transportCommand(testTransportPlayer), before);
+    }
     function test_space_repeat_and_modifiers() {
         const strip = make();
         const before = testEditHarness.transportCommand(testTransportPlayer);
@@ -87,6 +109,22 @@ TestCase {
         const before = testEditHarness.transportCommand(testTransportPlayer);
         keyClick(Qt.Key_Space);
         compare(input.text, "Editable name ");
+        compare(testEditHarness.transportCommand(testTransportPlayer), before);
+    }
+    Component { id: localSlider; Slider { width: 150; height: 30 } }
+    Component { id: localCombo; ComboBox { width: 150; model: ["One", "Two"] } }
+    function test_local_control_keeps_space_data() {
+        return [{tag: "slider", component: localSlider}, {tag: "combo", component: localCombo}];
+    }
+    function test_local_control_keeps_space(data) {
+        const strip = make();
+        const control = createTemporaryObject(data.component, strip);
+        verify(!!control);
+        control.forceActiveFocus();
+        verify(control.activeFocus);
+        const before = testEditHarness.transportCommand(testTransportPlayer);
+        keyClick(Qt.Key_Space);
+        compare(findChild(strip, "editInteraction").spaceHeld, false);
         compare(testEditHarness.transportCommand(testTransportPlayer), before);
     }
     function test_cancel_space_data() {
@@ -209,14 +247,87 @@ TestCase {
     }
     function test_keyboard_trim_move_and_delete() {
         make();
-        keyClick(Qt.Key_Right, Qt.AltModifier | Qt.ControlModifier);
-        compare(testSession.visibleClips(0, 100000)[0].inMs, 100);
-        keyClick(Qt.Key_Right, Qt.AltModifier);
-        compare(testSession.visibleClips(0, 100000)[0].startMs, 200);
+        keyClick(Qt.Key_Comma, Qt.ControlModifier);
+        compare(testSession.visibleClips(0, 100000)[0].inUs, 16666);
+        keyClick(Qt.Key_Period);
+        compare(testSession.visibleClips(0, 100000)[0].startUs, 33333);
         keyClick(Qt.Key_Delete);
         compare(testSession.visibleClips(0, 100000).length, 0);
         keyClick(Qt.Key_Z, Qt.ControlModifier);
         compare(testSession.visibleClips(0, 100000).length, 2);
+    }
+    function test_alt_sample_step_does_not_move_linked_video_selection() {
+        make();
+        const rows = testSession.visibleClipsUs(0, 100000000);
+        keyClick(Qt.Key_Right, Qt.AltModifier);
+        compare(testSession.positionUs, 0);
+        compare(testSession.visibleClipsUs(0, 100000000).map(row => row.startUs), rows.map(row => row.startUs));
+    }
+    function test_clip_clipboard_keys_paste_complete_linked_group() {
+        const strip = createTemporaryObject(timelineComponent, testCase, {session: testClipboardSession});
+        verify(!!strip);
+        strip.forceActiveFocus();
+        const session = strip.session;
+        session.selectAllClips();
+        compare(session.selectedClipIds.length, 2);
+        keyClick(Qt.Key_C, Qt.ControlModifier);
+        verify(session.hasClipClipboard);
+        keyClick(Qt.Key_End);
+        compare(session.positionUs, session.durationUs);
+        keyClick(Qt.Key_V, Qt.ControlModifier);
+        compare(session.workspaceError, "");
+        verify(session.dragActive && session.dragValid);
+        keyClick(Qt.Key_Return);
+        compare(session.visibleClipsUs(0, 200000000).length, 4);
+        compare(session.selectedClipIds.length, 2);
+        keyClick(Qt.Key_Z, Qt.ControlModifier);
+        compare(session.visibleClipsUs(0, 200000000).length, 2);
+    }
+    function test_clip_paste_is_visible_candidate_until_enter_and_escape_restores_selection() {
+        const strip = createTemporaryObject(timelineComponent, testCase, {session: testClipboardSession});
+        strip.forceActiveFocus();
+        const session = strip.session;
+        session.cancelClipDrag();
+        session.selectAllClips();
+        const before = session.visibleClipsUs(0, 200000000).length;
+        const selected = session.selectedClipIds.slice();
+        keyClick(Qt.Key_C, Qt.ControlModifier);
+        keyClick(Qt.Key_End);
+        try {
+            keyClick(Qt.Key_V, Qt.ControlModifier);
+            compare(session.visibleClipsUs(0, 200000000).length, before);
+            verify(session.dragActive && session.dragValid);
+            compare(session.dragClips.length, 2);
+            waitForRendering(strip);
+            const ghost = findChild(strip, "editDragGhost" + session.dragClips[0].id);
+            verify(!!ghost && ghost.width > 0);
+            verify(strip.view.endUs >= session.dragClips[0].endUs);
+            keyClick(Qt.Key_Escape);
+            compare(session.selectedClipIds, selected);
+            compare(session.visibleClipsUs(0, 200000000).length, before);
+            keyClick(Qt.Key_V, Qt.ControlModifier);
+            verify(session.dragActive);
+            keyClick(Qt.Key_Return);
+            compare(session.visibleClipsUs(0, 200000000).length, before + 2);
+        } finally {
+            session.cancelClipDrag();
+            if (session.visibleClipsUs(0, 200000000).length > before)
+                session.undo();
+        }
+    }
+    function test_boundary_navigation_and_escape_clear_one_selection_owner() {
+        make();
+        testSession.requestSeekUs(50000000);
+        testSession.splitSelected();
+        testSession.requestSeekUs(25000000);
+        keyClick(Qt.Key_Down);
+        compare(testSession.positionUs, 50000000);
+        keyClick(Qt.Key_I);
+        keyClick(Qt.Key_Right, Qt.ShiftModifier);
+        keyClick(Qt.Key_O);
+        compare(testSession.selectionMode, EditSessionAdapter.RangeSelection);
+        keyClick(Qt.Key_Escape);
+        compare(testSession.selectionMode, EditSessionAdapter.NoSelection);
     }
     function test_keyboard_ripple_closes_gap() {
         make();

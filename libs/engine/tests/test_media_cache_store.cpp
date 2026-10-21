@@ -6,11 +6,13 @@
 
 #include <algorithm>
 #include <array>
+#include <atomic>
 #include <chrono>
 #include <cstdint>
 #include <cstdio>
 #include <filesystem>
 #include <fstream>
+#include <future>
 #include <ios>
 #include <string>
 #include <system_error>
@@ -67,6 +69,77 @@ std::vector<std::filesystem::path> FilesUnder(const std::filesystem::path& root,
 }
 
 } // namespace
+
+TEST(MediaCacheStore, RetireDoesNotWaitForOldPublicationAndReapsAfterItFinishes) {
+    TempDir dir;
+    std::promise<void> entered;
+    auto started = entered.get_future();
+    std::promise<void> release;
+    const auto released = release.get_future().share();
+    auto config = Config(dir.path);
+    std::atomic<bool> hold{true};
+    config.before_rename = [&](const auto&) {
+        if (hold.exchange(false)) {
+            entered.set_value();
+            released.wait();
+        }
+        return true;
+    };
+    MediaCacheStore store(config);
+    const auto payload = Payload(1000, 4);
+    auto old = std::async(std::launch::async, [&] {
+        std::string error;
+        return store.Publish(Key(1), payload, error);
+    });
+    ASSERT_EQ(started.wait_for(std::chrono::seconds(3)), std::future_status::ready);
+    auto clear = std::async(std::launch::async, [&] { store.Retire(); });
+    const bool prompt = clear.wait_for(std::chrono::milliseconds(100)) == std::future_status::ready;
+    if (prompt) {
+        std::string error;
+        EXPECT_TRUE(store.Publish(Key(2), payload, error)) << error;
+    }
+    release.set_value();
+    old.get();
+    clear.get();
+    EXPECT_TRUE(prompt);
+    store.WaitForRetired();
+    EXPECT_FALSE(store.Read(Key(1)));
+    EXPECT_EQ(store.Read(Key(2)), payload);
+    EXPECT_EQ(FilesUnder(dir.path, ".test").size(), 1u);
+    MediaCacheStore reopened(config);
+    EXPECT_EQ(reopened.Read(Key(2)), payload);
+}
+
+TEST(MediaCacheStore, AnotherRetirementDoesNotWaitForNamespacePersistence) {
+    TempDir dir;
+    std::promise<void> entered;
+    auto started = entered.get_future();
+    std::promise<void> release;
+    const auto released = release.get_future().share();
+    std::atomic<bool> hold{true};
+    auto config = Config(dir.path);
+    config.before_rename = [&](const auto& path) {
+        if (path.filename().string().starts_with("active-epoch") && hold.exchange(false)) {
+            entered.set_value();
+            released.wait();
+        }
+        return true;
+    };
+    MediaCacheStore store(config);
+    store.Retire();
+    const bool persisting = started.wait_for(std::chrono::seconds(3)) == std::future_status::ready;
+    auto clear = std::async(std::launch::async, [&] { store.Retire(); });
+    const bool prompt = clear.wait_for(std::chrono::milliseconds(100)) == std::future_status::ready;
+    release.set_value();
+    clear.get();
+    store.WaitForRetired();
+    EXPECT_TRUE(persisting);
+    EXPECT_TRUE(prompt);
+    std::string error;
+    EXPECT_TRUE(store.Publish(Key(3), Payload(128, 9), error)) << error;
+    MediaCacheStore reopened(config);
+    EXPECT_EQ(reopened.Read(Key(3)), Payload(128, 9));
+}
 
 TEST(MediaCacheStore, PublishesAndReadsAcrossInstances) {
     TempDir dir;
@@ -295,6 +368,23 @@ TEST(MediaCacheStore, StreamingAbortAndClearInvalidateWritersWithoutPublication)
     EXPECT_EQ(store.EntryCount(), 0u);
     EXPECT_TRUE(FilesUnder(dir.path, ".tmp").empty());
     EXPECT_NE(store.BeginWrite(Key(3), 200000, error), nullptr);
+}
+
+TEST(MediaCacheStore, StreamingReservationDistinguishesTransientPressureFromAnOversizeEntry) {
+    TempDir dir;
+    MediaCacheStore store(Config(dir.path, 4096));
+    std::string error;
+    MediaCacheWriteFailure failure = MediaCacheWriteFailure::Io;
+    auto first = store.BeginWrite(Key(1), 2500, error, &failure);
+    ASSERT_NE(first, nullptr);
+    EXPECT_EQ(failure, MediaCacheWriteFailure::None);
+    EXPECT_EQ(store.BeginWrite(Key(2), 2500, error, &failure), nullptr);
+    EXPECT_EQ(failure, MediaCacheWriteFailure::Busy);
+    EXPECT_EQ(store.BeginWrite(Key(3), 4096, error, &failure), nullptr);
+    EXPECT_EQ(failure, MediaCacheWriteFailure::InvalidEntry);
+    first.reset();
+    EXPECT_NE(store.BeginWrite(Key(2), 2500, error, &failure), nullptr);
+    EXPECT_EQ(failure, MediaCacheWriteFailure::None);
 }
 
 TEST(MediaCacheStore, StreamingHashCancellationKeepsThePublishedEntryAndRemovesStaging) {

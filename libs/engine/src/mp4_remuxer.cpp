@@ -328,7 +328,11 @@ namespace {
 // tr is optional: TrimRange{} (both kNoTimestamp) means no trim.
 static RemuxResult RemuxStreamCopy(const std::filesystem::path& input_path, const std::filesystem::path& output_path,
                                    RemuxProgressCallback progress_cb, const RemuxOptions& opts, TrimRange tr,
-                                   const RemuxIoFaults* faults, const RemuxIoControl* io) {
+                                   const RemuxIoFaults* faults, const RemuxIoControl* io,
+                                   const std::shared_ptr<const MediaReadCapability>& access = {},
+                                   const std::shared_ptr<const VerifiedMediaIdentity>& proof = {}) {
+    if ((access || proof) && (!access || !proof || proof->Source() != access || access->Path() != input_path))
+        return RemuxResult::Fail(AVERROR(EINVAL), "The source proof does not belong to the admitted media");
     MediaIdentityReferenceCopyGuard reference_copies;
     const auto remux_start = std::chrono::steady_clock::now();
     double write_ms = 0.0, peak_write_ms = 0.0;
@@ -354,13 +358,28 @@ static RemuxResult RemuxStreamCopy(const std::filesystem::path& input_path, cons
     // -----------------------------------------------------------------------
     // 1. Open input
     // -----------------------------------------------------------------------
-    auto input_lease = AcquireMediaReadLease(input_path);
-    if (!input_lease.succeeded())
-        return RemuxResult::Fail(AVERROR(EACCES), "Cannot retain the source media read identity");
+    std::shared_ptr<void> input_lease;
+    if (!access) {
+        auto acquired = AcquireMediaReadLease(input_path);
+        if (!acquired.succeeded())
+            return RemuxResult::Fail(AVERROR(EACCES), "Cannot retain the source media read identity");
+        input_lease = std::move(*acquired.value());
+    }
     std::unique_ptr<BudgetedMediaAvio> input_avio;
+    std::unique_ptr<LeasedMediaAvio> leased_avio;
     InputCtxGuard in_guard;
     {
-        if (io) {
+        if (access) {
+            leased_avio = LeasedMediaAvio::Open(access, {}, io ? io->before_io : BackgroundIoAdmission{},
+                                                io ? io->cancelled : nullptr);
+            if (!leased_avio)
+                return RemuxResult::Fail(AVERROR(EIO), "Cannot open admitted source media");
+            in_guard.ctx = avformat_alloc_context();
+            if (!in_guard.ctx)
+                return RemuxResult::Fail(AVERROR(ENOMEM), "Cannot allocate input context");
+            in_guard.ctx->pb = leased_avio->context();
+            in_guard.ctx->flags |= AVFMT_FLAG_CUSTOM_IO;
+        } else if (io) {
             input_avio = BudgetedMediaAvio::Open(input_path, false, &io->before_io, io->cancelled, &admission_denied);
             if (!input_avio)
                 return RemuxResult::Fail(AVERROR(EIO), "Cannot open budgeted source media");
@@ -370,7 +389,7 @@ static RemuxResult RemuxStreamCopy(const std::filesystem::path& input_path, cons
             in_guard.ctx->pb = input_avio->context();
             in_guard.ctx->flags |= AVFMT_FLAG_CUSTOM_IO;
         }
-        int ret = avformat_open_input(&in_guard.ctx, io ? nullptr : in_str.c_str(), nullptr, nullptr);
+        int ret = avformat_open_input(&in_guard.ctx, (io || access) ? nullptr : in_str.c_str(), nullptr, nullptr);
         if (ret < 0) {
             std::string msg = std::string("avformat_open_input failed: ") + av_err2str(ret);
             LogError(msg.c_str());
@@ -394,7 +413,7 @@ static RemuxResult RemuxStreamCopy(const std::filesystem::path& input_path, cons
     AVFormatContext* const in_ctx = in_guard.ctx;
     const auto source_metadata = ReadAudioMediaMetadata(
         input_path, in_ctx, io ? std::function<bool()>{[&] { return !io_cancelled(); }} : std::function<bool()>{},
-        io ? metered_io : BackgroundIoAdmission{}, io ? io->cancelled : nullptr);
+        io ? metered_io : BackgroundIoAdmission{}, io ? io->cancelled : nullptr, access);
     if (io_cancelled() || admission_denied)
         return RemuxResult::Fail(AVERROR_EXIT, "Remux cancelled during source metadata verification");
     std::optional<AudioManifest1> output_manifest;
@@ -1086,6 +1105,32 @@ static RemuxResult RemuxStreamCopy(const std::filesystem::path& input_path, cons
 
 } // namespace
 
+RemuxResult RemuxToProgressiveMp4(const std::shared_ptr<const MediaReadCapability>& input,
+                                  const std::shared_ptr<const VerifiedMediaIdentity>& proof,
+                                  const std::filesystem::path& output_path, RemuxProgressCallback progress_cb,
+                                  TrimRange tr) {
+    if (!input)
+        return RemuxResult::Fail(AVERROR(EINVAL), "No admitted source media");
+    static const char* const options[] = {"movflags", "+faststart", nullptr};
+    RemuxOptions opts;
+    opts.format_name = "mp4";
+    opts.extra_opts = options;
+    return RemuxStreamCopy(input->Path(), output_path, std::move(progress_cb), opts, tr, nullptr, nullptr, input,
+                           proof);
+}
+
+RemuxResult RemuxToMkv(const std::shared_ptr<const MediaReadCapability>& input,
+                       const std::shared_ptr<const VerifiedMediaIdentity>& proof,
+                       const std::filesystem::path& output_path, RemuxProgressCallback progress_cb, TrimRange tr) {
+    if (!input)
+        return RemuxResult::Fail(AVERROR(EINVAL), "No admitted source media");
+    RemuxOptions opts;
+    opts.format_name = "matroska";
+    opts.extra_opts = nullptr;
+    return RemuxStreamCopy(input->Path(), output_path, std::move(progress_cb), opts, tr, nullptr, nullptr, input,
+                           proof);
+}
+
 RemuxResult RemuxToProgressiveMp4(const std::filesystem::path& input_path, const std::filesystem::path& output_path,
                                   RemuxProgressCallback progress_cb) {
     return RemuxToProgressiveMp4(input_path, output_path, std::move(progress_cb), TrimRange{});
@@ -1118,72 +1163,68 @@ RemuxResult RemuxToMkv(const std::filesystem::path& input_path, const std::files
     return RemuxStreamCopy(input_path, output_path, std::move(progress_cb), opts, tr, faults, io);
 }
 
-std::vector<int64_t> ExtractKeyframeTimestamps(const std::filesystem::path& input_path) {
-    // Strategy: open the file, call avformat_find_stream_info (which reads the Matroska
-    // Cues track and populates the per-stream index), then read index entries for the
-    // video stream that are flagged AVINDEX_KEYFRAME.
-    //
-    // We use index entries (from Cues) rather than per-packet AV_PKT_FLAG_KEY because
-    // the H.264 / AV1 bitstream parsers can override the packet keyframe flag based on
-    // payload content.  Index entries come from the Cues track written by
-    // MatroskaStreamWriter and are reliable regardless of payload content.
-    //
-    // Log noise from codec probing of test fixtures (e.g. "Invalid NAL unit size") is
-    // suppressed during avformat_find_stream_info.
-
-    const std::string in_str = input_path.string();
-
-    AVFormatContext* ctx = nullptr;
-    if (avformat_open_input(&ctx, in_str.c_str(), nullptr, nullptr) < 0)
+std::vector<int64_t> ExtractKeyframeTimestamps(const std::shared_ptr<const MediaReadCapability>& source,
+                                               const BackgroundIoAdmission& before_io,
+                                               const std::atomic<bool>* cancelled) {
+    if (!source || (cancelled && cancelled->load(std::memory_order_relaxed)))
         return {};
-    struct CtxGuard {
-        AVFormatContext* c;
-        ~CtxGuard() {
-            if (c)
-                avformat_close_input(&c);
+    auto input = LeasedMediaAvio::Open(source, {}, before_io, cancelled);
+    if (!input)
+        return {};
+    AVFormatContext* context = avformat_alloc_context();
+    if (!context)
+        return {};
+    context->pb = input->context();
+    context->flags |= AVFMT_FLAG_CUSTOM_IO;
+    context->probesize = 1024 * 1024;
+    context->max_analyze_duration = AV_TIME_BASE;
+    context->interrupt_callback = {[](void* token) {
+                                       const auto* stopped = static_cast<const std::atomic<bool>*>(token);
+                                       return stopped && stopped->load(std::memory_order_relaxed) ? 1 : 0;
+                                   },
+                                   const_cast<std::atomic<bool>*>(cancelled)};
+    if (avformat_open_input(&context, nullptr, nullptr, nullptr) < 0)
+        return {};
+    struct CloseInput {
+        AVFormatContext*& context;
+        ~CloseInput() {
+            avformat_close_input(&context);
         }
-    } g{ctx};
-
-    // Suppress codec-probe noise (fake H.264/AV1 stubs generate "Invalid NAL" etc.)
-    const int saved_log = av_log_get_level();
-    av_log_set_level(AV_LOG_QUIET);
-    avformat_find_stream_info(ctx, nullptr); // initialises codec params
-
-    // FFmpeg's Matroska demuxer loads Cues lazily on the first seek.  Trigger that
-    // load now so avformat_index_get_entries_count returns the full keyframe list.
-    avformat_seek_file(ctx, -1, INT64_MIN, 0, INT64_MAX, 0);
-    av_log_set_level(saved_log);
-
-    // Find the first video stream.
-    int vs_idx = -1;
-    for (unsigned i = 0; i < ctx->nb_streams; ++i) {
-        if (ctx->streams[i]->codecpar->codec_type == AVMEDIA_TYPE_VIDEO) {
-            vs_idx = static_cast<int>(i);
+    } close{context};
+    if (avformat_find_stream_info(context, nullptr) < 0)
+        return {};
+    // Matroska Cues populate the index lazily on seek. Container index flags avoid
+    // packet parsers changing keyframe flags based on codec payload contents.
+    avformat_seek_file(context, -1, INT64_MIN, 0, INT64_MAX, 0);
+    if ((cancelled && cancelled->load(std::memory_order_relaxed)) || context->pb->error == AVERROR_EXIT)
+        return {};
+    AVStream* video = nullptr;
+    for (unsigned i = 0; i < context->nb_streams; ++i)
+        if (context->streams[i]->codecpar->codec_type == AVMEDIA_TYPE_VIDEO) {
+            video = context->streams[i];
             break;
         }
-    }
-    if (vs_idx < 0)
+    if (!video)
         return {};
-
-    AVStream* const vs = ctx->streams[vs_idx];
-    const AVRational vs_tb = vs->time_base;
-    const int n_idx = avformat_index_get_entries_count(vs);
-
+    const int count = avformat_index_get_entries_count(video);
     std::vector<int64_t> keyframes;
-    keyframes.reserve(static_cast<size_t>(n_idx));
-
-    for (int i = 0; i < n_idx; ++i) {
-        const AVIndexEntry* ie = avformat_index_get_entry(vs, i);
-        if (!ie)
+    keyframes.reserve(static_cast<size_t>(count));
+    for (int i = 0; i < count; ++i) {
+        if (cancelled && cancelled->load(std::memory_order_relaxed))
+            return {};
+        const auto* entry = avformat_index_get_entry(video, i);
+        if (!entry)
             break;
-        if (ie->flags & AVINDEX_KEYFRAME) {
-            const int64_t ts_us = av_rescale_q(ie->timestamp, vs_tb, {1, AV_TIME_BASE});
-            keyframes.push_back(ts_us);
-        }
+        if (entry->flags & AVINDEX_KEYFRAME)
+            keyframes.push_back(av_rescale_q(entry->timestamp, video->time_base, {1, AV_TIME_BASE}));
     }
-
     std::sort(keyframes.begin(), keyframes.end());
     return keyframes;
+}
+
+std::vector<int64_t> ExtractKeyframeTimestamps(const std::filesystem::path& input_path) {
+    const auto admitted = AcquireMediaReadCapability(input_path);
+    return admitted.succeeded() ? ExtractKeyframeTimestamps(*admitted.value()) : std::vector<int64_t>{};
 }
 
 } // namespace exosnap::engine

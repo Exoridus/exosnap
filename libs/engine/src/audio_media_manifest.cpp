@@ -605,14 +605,17 @@ HeaderElement Element(std::span<const uint8_t> bytes, size_t at) {
     return result;
 }
 std::vector<HeaderTrack> ReadHeaderTracks(const std::filesystem::path& path, const AVFormatContext* input,
-                                          const BackgroundIoAdmission& before_io, const std::atomic<bool>* cancelled) {
+                                          const BackgroundIoAdmission& before_io, const std::atomic<bool>* cancelled,
+                                          const std::shared_ptr<const MediaReadCapability>& source = {}) {
     constexpr uint64_t kHeaderBytes = 16 * 1024 * 1024;
     constexpr uint64_t kTracksBytes = 2 * 1024 * 1024;
     bool denied = false;
     std::unique_ptr<BudgetedMediaAvio> budgeted;
     std::ifstream file;
     int64_t end = -1;
-    if (before_io || cancelled) {
+    if (source) {
+        end = static_cast<int64_t>(source->Identity().file_size);
+    } else if (before_io || cancelled) {
         budgeted = BudgetedMediaAvio::Open(path, false, &before_io, cancelled, &denied);
         if (budgeted)
             end = avio_size(budgeted->context());
@@ -626,6 +629,13 @@ std::vector<HeaderTrack> ReadHeaderTracks(const std::filesystem::path& path, con
         throw std::invalid_argument("Cannot read Matroska header identity");
     const auto length = static_cast<uint64_t>(end);
     const auto read_at = [&](uint64_t offset, uint8_t* bytes, size_t count) {
+        if (source) {
+            if ((cancelled && cancelled->load(std::memory_order_relaxed)) ||
+                (before_io && !before_io(count, cancelled)))
+                return size_t{0};
+            const auto result = source->ReadAt(offset, {bytes, count});
+            return result.succeeded() ? *result.value() : size_t{0};
+        }
         if (budgeted) {
             if (avio_seek(budgeted->context(), static_cast<int64_t>(offset), SEEK_SET) < 0)
                 return size_t{0};
@@ -928,17 +938,23 @@ Outcome<std::monostate> WriteAudioManifestMetadata(AVFormatContext* output, cons
     }
     return std::monostate{};
 }
-AudioMetadataReadResult ReadAudioMediaMetadata(const std::filesystem::path& path, const AVFormatContext* input,
-                                               const std::function<bool()>& continue_io,
-                                               const BackgroundIoAdmission& before_io,
-                                               const std::atomic<bool>* cancelled) {
+static AudioMetadataReadResult
+ReadAudioMediaMetadataUncached(const std::filesystem::path& path, const AVFormatContext* input,
+                               const std::function<bool()>& continue_io, const BackgroundIoAdmission& before_io,
+                               const std::atomic<bool>* cancelled,
+                               const std::shared_ptr<const MediaReadCapability>& source, bool verify_content) {
     AudioMetadataReadResult result;
-    const auto lease = AcquireMediaReadLease(path);
+    const auto lease = source ? Outcome<std::shared_ptr<void>>{std::shared_ptr<void>{}} : AcquireMediaReadLease(path);
     PopulateActual(result, input);
     const auto unverified = [&]() {
         result.monitoring_confirmation_required = !AudioStreams(input).empty();
-        if (lease.succeeded()) {
-            const auto identity = HashFinalMedia(path, continue_io, before_io, cancelled);
+        if (lease.succeeded() && verify_content) {
+            const auto identity = source ? [&]() -> Outcome<MediaIdentitySnapshot> {
+                const auto proof = VerifyMediaIdentity(source, {}, continue_io, before_io, cancelled);
+                return proof.succeeded() ? Outcome<MediaIdentitySnapshot>{(*proof.value())->Identity()}
+                                         : Outcome<MediaIdentitySnapshot>{*proof.error()};
+            }()
+                : HashFinalMedia(path, continue_io, before_io, cancelled, MediaHashCause::AudioMetadata);
             if (identity.succeeded()) {
                 auto binding = std::make_shared<UnverifiedAudioAssetBinding>();
                 binding->file_identity = identity.value()->file_identity;
@@ -949,7 +965,13 @@ AudioMetadataReadResult ReadAudioMediaMetadata(const std::filesystem::path& path
             } else {
                 result.warnings.push_back(identity.error()->context);
             }
-        } else {
+        } else if (source && !verify_content) {
+            auto binding = std::make_shared<UnverifiedAudioAssetBinding>();
+            binding->file_identity = source->Identity().file_identity;
+            binding->file_size = source->Identity().file_size;
+            binding->actual_tracks = result.actual_tracks;
+            result.unverified_asset_binding = std::move(binding);
+        } else if (!lease.succeeded()) {
             result.warnings.push_back(lease.error()->context);
         }
         return result;
@@ -961,7 +983,7 @@ AudioMetadataReadResult ReadAudioMediaMetadata(const std::filesystem::path& path
     std::vector<HeaderTrack> header;
     if (Matroska(input)) {
         try {
-            header = ReadHeaderTracks(path, input, before_io, cancelled);
+            header = ReadHeaderTracks(path, input, before_io, cancelled, source);
             size_t audio = 0;
             for (const auto& track : header)
                 if (track.type == 2 && audio < result.actual_tracks.size())
@@ -991,22 +1013,24 @@ AudioMetadataReadResult ReadAudioMediaMetadata(const std::filesystem::path& path
             result.actual_tracks.push_back(track.container);
         std::error_code error;
         if (std::filesystem::exists(MediaIdentitySidecarPath(path), error)) {
-            const auto sidecar = ReadMediaIdentitySidecar(path, continue_io, before_io, cancelled);
+            const auto sidecar =
+                ReadMediaIdentitySidecar(path, continue_io, before_io, cancelled, source, verify_content);
             const auto canonical = SerializeAudioManifest1(*result.manifest);
             const auto external = sidecar.manifest ? SerializeAudioManifest1(*sidecar.manifest)
                                                    : Outcome<std::string>{MetadataError("Missing sidecar authority")};
-            if (sidecar.status != AudioMetadataStatus::Verified || !external.succeeded() || !canonical.succeeded() ||
-                *external.value() != *canonical.value())
+            if ((sidecar.status != AudioMetadataStatus::Verified && sidecar.status != AudioMetadataStatus::Pending) ||
+                !external.succeeded() || !canonical.succeeded() || *external.value() != *canonical.value())
                 result.warnings.push_back(
                     "External sidecar is stale; valid Matroska container metadata remains authoritative");
             else
                 result.references = sidecar.references;
         }
     } else {
-        auto sidecar = ReadMediaIdentitySidecar(path, continue_io, before_io, cancelled);
+        auto sidecar = ReadMediaIdentitySidecar(path, continue_io, before_io, cancelled, source, verify_content);
         const auto valid = sidecar.manifest ? ValidateAudioManifestStreams(*sidecar.manifest, input)
                                             : Outcome<std::monostate>{MetadataError("Missing sidecar")};
-        if (sidecar.status == AudioMetadataStatus::Verified && sidecar.manifest && valid.succeeded() &&
+        if ((sidecar.status == AudioMetadataStatus::Verified || sidecar.status == AudioMetadataStatus::Pending) &&
+            sidecar.manifest && valid.succeeded() &&
             (!Matroska(input) || MatchHeaderTracks(*sidecar.manifest, header))) {
             result = std::move(sidecar);
         } else {
@@ -1022,9 +1046,85 @@ AudioMetadataReadResult ReadAudioMediaMetadata(const std::filesystem::path& path
         }
     }
     result.monitoring_confirmation_required =
-        result.manifest->monitor_selection_origin == MonitorSelectionOrigin::Default &&
-        HasOverlap(DefaultSelection(*result.manifest), *result.manifest);
+        result.status == AudioMetadataStatus::Pending ||
+        (result.manifest->monitor_selection_origin == MonitorSelectionOrigin::Default &&
+         HasOverlap(DefaultSelection(*result.manifest), *result.manifest));
     return result;
 }
 
+AudioMetadataReadResult ReadAudioMediaMetadata(const std::filesystem::path& path, const AVFormatContext* input,
+                                               const std::function<bool()>& continue_io,
+                                               const BackgroundIoAdmission& before_io,
+                                               const std::atomic<bool>* cancelled,
+                                               const std::shared_ptr<const MediaReadCapability>& source,
+                                               bool verify_content) {
+    if (!verify_content)
+        if (const auto verified = CachedMediaAudioMetadata(source, true))
+            return *verified;
+    if (const auto cached = CachedMediaAudioMetadata(source, verify_content))
+        return *cached;
+    auto pending = CachedMediaAudioMetadata(source, false);
+    if (source && verify_content && !pending) {
+        (void)ReadAudioMediaMetadata(path, input, continue_io, before_io, cancelled, source, false);
+        pending = CachedMediaAudioMetadata(source, false);
+    }
+    if (source && verify_content && pending) {
+        auto result = *pending;
+        const auto proof =
+            VerifyMediaIdentity(source, result.expected_content_sha256, continue_io, before_io, cancelled);
+        if (!proof.succeeded()) {
+            result.status = AudioMetadataStatus::Stale;
+            result.manifest.reset();
+            result.monitoring_confirmation_required = !result.actual_tracks.empty();
+            result.warnings.push_back(proof.error()->context);
+            return result;
+        }
+        if (result.status == AudioMetadataStatus::Pending) {
+            result.status = AudioMetadataStatus::Verified;
+            result.monitoring_confirmation_required =
+                result.manifest && result.manifest->monitor_selection_origin == MonitorSelectionOrigin::Default &&
+                HasOverlap(DefaultSelection(*result.manifest), *result.manifest);
+        }
+        if (!result.manifest) {
+            auto binding = std::make_shared<UnverifiedAudioAssetBinding>();
+            binding->file_identity = (*proof.value())->Identity().file_identity;
+            binding->file_size = (*proof.value())->Identity().file_size;
+            binding->sha256 = (*proof.value())->Identity().sha256;
+            binding->actual_tracks = result.actual_tracks;
+            result.unverified_asset_binding = std::move(binding);
+        }
+        RetainMediaAudioMetadata(source, std::make_shared<const AudioMetadataReadResult>(result), true);
+        return *CachedMediaAudioMetadata(source, true);
+    }
+    auto result =
+        ReadAudioMediaMetadataUncached(path, input, continue_io, before_io, cancelled, source, verify_content);
+    if (!cancelled || !cancelled->load(std::memory_order_relaxed))
+        RetainMediaAudioMetadata(source, std::make_shared<const AudioMetadataReadResult>(result), verify_content);
+    if (const auto published = CachedMediaAudioMetadata(source, verify_content))
+        return *published;
+    return result;
+}
+
+AudioMetadataReadResult
+ReadAudioMediaMetadataForAdoption(const std::filesystem::path& path, const AVFormatContext* input,
+                                  const std::shared_ptr<const MediaReadCapability>& source,
+                                  const std::shared_ptr<const VerifiedMediaIdentity>& observed_proof,
+                                  const std::function<bool()>& continue_io, const BackgroundIoAdmission& before_io,
+                                  const std::atomic<bool>* cancelled) {
+    if (!source || !observed_proof || observed_proof->Source() != source || !input ||
+        (cancelled && cancelled->load(std::memory_order_relaxed))) {
+        AudioMetadataReadResult invalid;
+        invalid.status = AudioMetadataStatus::Invalid;
+        return invalid;
+    }
+    if (const auto canonical = CachedAdoptedMediaAudioMetadata(source))
+        return *canonical;
+    auto result = ReadAudioMediaMetadataUncached(path, input, continue_io, before_io, cancelled, source, true);
+    if ((!cancelled || !cancelled->load(std::memory_order_relaxed)) &&
+        (result.manifest || result.unverified_asset_binding))
+        RetainAdoptedMediaAudioMetadata(source, std::make_shared<const AudioMetadataReadResult>(result));
+    if (const auto canonical = CachedAdoptedMediaAudioMetadata(source))
+        return *canonical;
+    return result;
+}
 } // namespace exosnap::engine

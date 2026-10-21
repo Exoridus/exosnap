@@ -48,15 +48,30 @@ struct EditMediaMetadata {
     std::string error;
 };
 
+// Provisional metadata has no content-addressed cache or export authority.
+EditMediaMetadata ProbeEditMedia(const std::shared_ptr<const MediaReadCapability>& source,
+                                 const std::function<bool()>& continue_io = {},
+                                 const BackgroundIoAdmission& before_io = {},
+                                 const std::atomic<bool>* cancelled = nullptr, bool verify_content = true);
+
 EditMediaMetadata ProbeEditMedia(const std::filesystem::path& source, const std::function<bool()>& continue_io = {},
                                  const BackgroundIoAdmission& before_io = {},
                                  const std::atomic<bool>* cancelled = nullptr);
 
+// Explicitly adopts independently verified bytes as a new source identity. Stale
+// external metadata loses authority. Existing expected-identity probes stay unchanged.
+EditMediaMetadata ProbeEditMediaForAdoption(const std::shared_ptr<const MediaReadCapability>& source,
+                                            const std::shared_ptr<const VerifiedMediaIdentity>& observed_proof,
+                                            const std::function<bool()>& continue_io = {},
+                                            const BackgroundIoAdmission& before_io = {},
+                                            const std::atomic<bool>* cancelled = nullptr);
 struct TimelineExportClip {
     std::filesystem::path source;
     int64_t source_in_us = 0;
     int64_t source_out_us = 0;
     int64_t timeline_start_us = 0;
+    std::shared_ptr<const MediaReadCapability> access;
+    std::shared_ptr<const VerifiedMediaIdentity> identity_proof;
 };
 
 enum class TimelineExportEligibility { StreamCopy, RenderRequired, Invalid };

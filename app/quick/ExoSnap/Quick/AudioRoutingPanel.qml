@@ -14,6 +14,16 @@ ExoCard {
     property var selectedTrackBySource: ({})
     property var microphoneDeviceOptions: []
 
+    signal harnessDetailsExpansionRequested(bool expanded)
+
+    function harnessExpand(): void {
+        root.harnessDetailsExpansionRequested(true);
+    }
+
+    function harnessCollapse(): void {
+        root.harnessDetailsExpansionRequested(false);
+    }
+
     function trackNames(ids) {
         const names = [];
         for (const track of root.routing.tracks) {
@@ -172,6 +182,14 @@ ExoCard {
             required property var modelData
             readonly property var sourceMeter: root.routing.sourceMeters[modelData.id] || {available: false}
             property bool detailsOpen: false
+
+            Connections {
+                target: root
+                function onHarnessDetailsExpansionRequested(expanded: bool): void {
+                    if (sourceCard.visible)
+                        sourceCard.detailsOpen = expanded;
+                }
+            }
 
             function patch(key, value) {
                 const details = {};

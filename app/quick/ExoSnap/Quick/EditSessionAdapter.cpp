@@ -1,16 +1,19 @@
 #include "EditSessionAdapter.h"
+#include "EditTimelineModels.h"
 #include "EditTrackLayoutModel.h"
 #include <QCoreApplication>
 
 #include "diagnostics/AppLog.h"
 #include "models/EditTimelineModel.h"
 #include "models/MarkerSidecar.h"
+#include "services/BackgroundStorageBudget.h"
 #include "settings/ConfigPaths.h"
 #include <exosnap/engine/edit_timeline_export.h>
 
 #include <QDir>
 #include <QFileInfo>
 #include <QPointer>
+#include <QThread>
 #include <QVariantMap>
 
 #include <algorithm>
@@ -58,7 +61,26 @@ int64_t SnapTrimBoundaryUs(int64_t requested_us, const std::vector<int64_t>& key
 
 EditSessionAdapter::EditSessionAdapter(QObject* parent) : QObject(parent) {
     track_layout_ = new EditTrackLayoutModel(this);
+    media_model_ = new EditTimelineClipModel(this);
+    folder_model_ = new EditFolderModel(layoutSettingsLocation().toLocalFile(), this);
+    optional_io_budget_ = std::make_shared<BackgroundStorageBudget>();
     connect(this, &EditSessionAdapter::workspaceChanged, this, [this] { track_layout_->setTracks(tracks()); });
+    connect(this, &EditSessionAdapter::workspaceChanged, this, [this] { syncMedia(); });
+    connect(this, &EditSessionAdapter::workspaceChanged, this, [this] { syncOverview(); });
+    connect(this, &EditSessionAdapter::workspaceChanged, this, &EditSessionAdapter::sourceAudioChoiceChanged);
+    connect(this, &EditSessionAdapter::workspaceChanged, this, &EditSessionAdapter::sourceReplacementChanged);
+    connect(this, &EditSessionAdapter::selectionChanged, this, &EditSessionAdapter::sourceReplacementChanged);
+    connect(this, &EditSessionAdapter::selectionChanged, this, &EditSessionAdapter::sourceAudioChoiceChanged);
+    connect(this, &EditSessionAdapter::rangeGestureChanged, this, &EditSessionAdapter::sourceReplacementChanged);
+    connect(this, &EditSessionAdapter::rangeGestureChanged, this, &EditSessionAdapter::sourceAudioChoiceChanged);
+    connect(this, &EditSessionAdapter::sourceVerificationChanged, this, [this] { emit sourceAudioChoiceChanged(); });
+    connect(this, &EditSessionAdapter::workspaceChanged, this, &EditSessionAdapter::selectedClipSummaryChanged);
+    connect(this, &EditSessionAdapter::selectionChanged, this, &EditSessionAdapter::selectedClipSummaryChanged);
+    connect(this, &EditSessionAdapter::sourceVerificationChanged, this, [this] { emit selectedClipSummaryChanged(); });
+    connect(this, &EditSessionAdapter::sourceVerificationChanged, this, [this] {
+        if (dragActive())
+            emit dragChanged();
+    });
     connect(this, &EditSessionAdapter::dragChanged, this, [this] {
         track_layout_->setTracks(tracks());
         track_layout_->setPreviewTracks(dragTracks());
@@ -66,9 +88,64 @@ EditSessionAdapter::EditSessionAdapter(QObject* parent) : QObject(parent) {
     // One reader at a time: a second clip supersedes the first, and two parallel
     // container index reads on the same disk are slower than one.
     keyframe_pool_.setMaxThreadCount(1);
+    metadata_pool_.setMaxThreadCount(1);
+    verification_pool_.setMaxThreadCount(1);
+    keyframe_pool_.setThreadPriority(QThread::LowestPriority);
+    verification_pool_.setThreadPriority(QThread::LowestPriority);
 }
 
-EditSessionAdapter::~EditSessionAdapter() = default;
+EditSessionAdapter::~EditSessionAdapter() {
+    source_replacement_cancelled_->store(true, std::memory_order_relaxed);
+    source_audio_cancelled_->store(true, std::memory_order_relaxed);
+    source_cancelled_->store(true, std::memory_order_relaxed);
+    source_verification_cancelled_->store(true, std::memory_order_relaxed);
+    import_cancelled_->store(true, std::memory_order_relaxed);
+    keyframe_cancelled_->store(true, std::memory_order_relaxed);
+    optional_io_budget_->Close();
+    keyframe_pool_.clear();
+    metadata_pool_.clear();
+    verification_pool_.clear();
+}
+
+void EditSessionAdapter::scheduleSourceVerification(std::function<void()> task) {
+    verification_pool_.start(std::move(task));
+}
+
+engine::BackgroundIoAdmission EditSessionAdapter::optionalIoAdmission() const {
+    return [budget = optional_io_budget_, shared = background_io_](uint64_t bytes, const std::atomic<bool>* cancelled) {
+        return budget->Acquire(bytes, cancelled) && (!shared || shared(bytes, cancelled));
+    };
+}
+
+void EditSessionAdapter::setBackgroundAnalysisSuspended(bool suspended) {
+    if (optional_io_budget_->Paused() == suspended)
+        return;
+    // A required verifier can share this source. Release an optional leader's
+    // slot before pausing admission, rather than making the required job wait
+    // for the pressure that it created to disappear.
+    if (suspended)
+        source_verification_cancelled_->store(true, std::memory_order_relaxed);
+    else
+        source_verification_cancelled_ = std::make_shared<std::atomic<bool>>(false);
+    optional_io_budget_->SetPaused(suspended);
+    std::vector<edit::Id> retry;
+    std::vector<edit::Id> changed;
+    for (auto& [id, publication] : source_publications_) {
+        if (publication.verifying) {
+            publication.verifying = false;
+            changed.push_back(id);
+        }
+        if (!suspended && publication.access && !publication.proof && !publication.failed && workspace_.asset(id))
+            retry.push_back(id);
+    }
+    if (!changed.empty()) {
+        syncMedia(true);
+        for (const auto id : changed)
+            emit sourceVerificationChanged(id);
+    }
+    for (const auto id : retry)
+        retrySourceVerification(id);
+}
 
 void EditSessionAdapter::setEditContext(const EditContext& context, qint64 timeline_start_ms) {
     if (timeline_start_ms >= 0 && !FitsMilliseconds(timeline_start_ms)) {
@@ -88,28 +165,50 @@ void EditSessionAdapter::setEditContextUs(const EditContext& context, qint64 tim
     const auto needs_probe = [](const auto& segment) { return segment.succeeded && QFileInfo::exists(segment.path); };
     if (std::any_of(pending.segments.begin(), pending.segments.end(), needs_probe)) {
         QPointer<EditSessionAdapter> self(this);
+        const auto cancelled = import_cancelled_;
+        const auto session = import_session_;
         beginImport();
-        keyframe_pool_.start([self, pending = std::move(pending), timeline_start_us, needs_probe]() mutable {
+        const auto admission = background_io_;
+        metadata_pool_.start([self, pending = std::move(pending), timeline_start_us, needs_probe, cancelled, session,
+                              admission]() mutable {
             std::vector<edit::SourceImport> imports(pending.segments.size());
+            std::vector<SourcePublication> publications(pending.segments.size());
             for (size_t index = 0; index < pending.segments.size(); ++index) {
+                if (cancelled->load(std::memory_order_relaxed))
+                    break;
                 auto& segment = pending.segments[index];
                 if (!needs_probe(segment))
                     continue;
-                const auto metadata = engine::ProbeEditMedia(std::filesystem::path(segment.path.toStdWString()));
+                const auto admitted =
+                    engine::AcquireMediaReadCapability(std::filesystem::path(segment.path.toStdWString()));
+                if (!admitted.succeeded()) {
+                    segment.succeeded = false;
+                    continue;
+                }
+                auto access = *admitted.value();
+                auto metadata = engine::ProbeEditMedia(access, {}, admission, cancelled.get(), false);
                 if (segment.duration_seconds <= 0) {
                     segment.duration_seconds = static_cast<double>(metadata.duration_us) / 1000000.0;
                     segment.succeeded = metadata.error.empty() && metadata.duration_us > 0;
                 }
                 imports[index] = edit::DescribeSourceImport(
-                    metadata, static_cast<edit::Time>(std::llround(segment.duration_seconds * 1000000.0)));
+                    metadata, static_cast<edit::Time>(std::llround(segment.duration_seconds * 1000000.0)), access);
+                publications[index] = {std::move(access),
+                                       {},
+                                       std::make_shared<const engine::EditMediaMetadata>(std::move(metadata)),
+                                       {},
+                                       false};
             }
             if (self)
                 QMetaObject::invokeMethod(
                     self,
-                    [self, pending = std::move(pending), timeline_start_us, imports = std::move(imports)]() mutable {
+                    [self, pending = std::move(pending), timeline_start_us, imports = std::move(imports),
+                     publications = std::move(publications), cancelled, session]() mutable {
                         if (!self)
                             return;
-                        self->applyEditContextUs(pending, timeline_start_us, std::move(imports));
+                        if (!cancelled->load(std::memory_order_relaxed) && session == self->import_session_)
+                            self->applyEditContextUs(pending, timeline_start_us, std::move(imports),
+                                                     std::move(publications));
                         self->endImport();
                     },
                     Qt::QueuedConnection);
@@ -121,7 +220,8 @@ void EditSessionAdapter::setEditContextUs(const EditContext& context, qint64 tim
 }
 
 void EditSessionAdapter::applyEditContextUs(const EditContext& context, qint64 timeline_start_us,
-                                            std::vector<edit::SourceImport> imports) {
+                                            std::vector<edit::SourceImport> imports,
+                                            std::vector<SourcePublication> publications) {
     context_ = context;
     const auto previous_duration_us = workspace_.duration();
     const qint64 append_start = timeline_start_us < 0 ? workspace_.duration() : timeline_start_us;
@@ -164,6 +264,13 @@ void EditSessionAdapter::applyEditContextUs(const EditContext& context, qint64 t
             PartitionSegmentMarkers(context.markers, segment_start_ms, static_cast<uint64_t>(asset.duration / 1000));
         segment_start_ms += static_cast<uint64_t>(asset.duration / 1000);
         const auto id = workspace_.addAsset(std::move(asset));
+        if (index < publications.size() && publications[index].access) {
+            auto prior = source_publications_.find(id);
+            if (prior == source_publications_.end() || prior->second.access != publications[index].access ||
+                !prior->second.proof)
+                source_publications_[id] = std::move(publications[index]);
+            source_publications_[id].version = workspace_.asset(id)->source_version;
+        }
         if (segment.duration_seconds > 0)
             assets.push_back(id);
     }
@@ -212,7 +319,11 @@ void EditSessionAdapter::applyEditContextUs(const EditContext& context, qint64 t
     } else {
         emit clipClosed();
     }
+    syncSelection();
     emit workspaceChanged();
+    for (const auto id : assets)
+        if (sourceAccess(id) && !sourceProof(id))
+            retrySourceVerification(id);
     emit editPageRequested();
 }
 
@@ -401,9 +512,28 @@ void EditSessionAdapter::setPositionUs(qint64 position_us) {
 
 // Explicitly clear the workspace and release decoder resources. Navigation never calls this.
 void EditSessionAdapter::close() {
+    cancelSourceReplacement();
+    cancelSourceAudioChoice();
+    source_cancelled_->store(true, std::memory_order_relaxed);
+    source_verification_cancelled_->store(true, std::memory_order_relaxed);
+    source_cancelled_ = std::make_shared<std::atomic<bool>>(false);
+    source_verification_cancelled_ = std::make_shared<std::atomic<bool>>(optional_io_budget_->Paused());
+    pointer_selection_.reset();
+    cancelPendingDraft(tr("The editor was closed."));
+    revokePendingImports();
+    keyframe_cancelled_->store(true, std::memory_order_relaxed);
+    pending_media_drop_ = {};
+    source_publications_.clear();
+    source_versions_.clear();
+    if (!pending_placement_assets_.empty()) {
+        pending_placement_assets_.clear();
+        emit pendingPlacementChanged();
+    }
+    media_revision_ = (std::numeric_limits<edit::Revision>::max)();
     // A fixture context carries a duration but no master path, and must close
     // just as completely as a real clip -- hence not `open_` alone.
-    const bool had_clip = open_ || duration_ms_ > 0 || !context_.output_path.isEmpty();
+    const bool had_clip = open_ || duration_ms_ > 0 || !context_.output_path.isEmpty() ||
+                          !workspace_.assets().empty() || !workspace_.clips().empty();
     if (!had_clip) {
         emit closeRequested();
         return;
@@ -415,12 +545,19 @@ void EditSessionAdapter::close() {
     ++clip_generation_;
     context_ = EditContext{};
     cancelClipDrag();
+    cancelRangeGesture();
+    if (!solo_tracks_.empty()) {
+        solo_tracks_.clear();
+        emit auditionChanged();
+    }
+    selection_.clear();
     time_selection_in_us_ = time_selection_out_us_ = -1;
     selected_gap_ = {};
     selected_gap_track_ = selected_spacer_ = selected_transition_ = 0;
     copied_blank_duration_ = 0;
     emit timeSelectionChanged();
     workspace_ = edit::Workspace{};
+    syncSelection();
     track_layout_->reset();
     emit workspaceChanged();
     keyframe_timestamps_.clear();
@@ -492,6 +629,10 @@ void EditSessionAdapter::setAssetMonitorSelection(edit::Id asset, engine::Monito
     size_t requested = 0;
     const auto* source = workspace_.asset(asset);
     const bool decide = source && source->mix_decision_required && source->source_descriptor;
+    if (decide && rangeScopeReviewActive()) {
+        refuseEdit(tr("Apply or cancel the track scope review before continuing."));
+        return;
+    }
     if (decide) {
         std::vector<engine::AudioTrackId> streams;
         for (const auto& stream : source->source_descriptor->streams)
@@ -626,21 +767,39 @@ void EditSessionAdapter::loadMarkers() {
 // and the Widgets surface did it inline in setEditContext -- a long recording
 // froze the GUI thread on open. Off-thread here; a trim released before it lands
 // still snaps to markers, and re-snaps as soon as the table arrives.
-void EditSessionAdapter::startKeyframeScan() {
-    const quint64 generation = clip_generation_;
-    const std::filesystem::path master(context_.mkv_master_path.toStdWString());
-    QPointer<EditSessionAdapter> guard(this);
-    keyframe_pool_.start([this, guard, generation, master]() {
-        std::vector<int64_t> keyframes = exosnap::engine::ExtractKeyframeTimestamps(master);
+void EditSessionAdapter::startKeyframeScan(std::shared_ptr<const engine::MediaReadCapability> source) {
+    keyframe_cancelled_->store(true, std::memory_order_relaxed);
+    keyframe_cancelled_ = std::make_shared<std::atomic<bool>>(false);
+    const auto cancelled = keyframe_cancelled_;
+    const auto admission = optionalIoAdmission();
+    const auto generation = clip_generation_;
+    const auto master = QDir::fromNativeSeparators(context_.mkv_master_path);
+    auto access = std::move(source);
+    for (const auto& [id, publication] : source_publications_)
+        if (!access && publication.access &&
+            QDir::fromNativeSeparators(QString::fromStdWString(publication.access->Path().wstring()))
+                    .compare(master, Qt::CaseInsensitive) == 0) {
+            access = publication.access;
+            break;
+        }
+    QPointer<EditSessionAdapter> self(this);
+    keyframe_pool_.start([self, generation, master, cancelled, admission, access = std::move(access)]() mutable {
+        if (!access && !cancelled->load(std::memory_order_relaxed)) {
+            const auto acquired = engine::AcquireMediaReadCapability(std::filesystem::path(master.toStdWString()));
+            if (acquired.succeeded())
+                access = *acquired.value();
+        }
+        auto keyframes = engine::ExtractKeyframeTimestamps(access, admission, cancelled.get());
+        if (!self || cancelled->load(std::memory_order_relaxed))
+            return;
         QMetaObject::invokeMethod(
-            this,
-            [this, guard, generation, keyframes = std::move(keyframes)]() mutable {
-                if (guard.isNull() || generation != clip_generation_)
+            self,
+            [self, generation, cancelled, keyframes = std::move(keyframes)]() mutable {
+                if (!self || cancelled->load(std::memory_order_relaxed) || generation != self->clip_generation_)
                     return;
-                keyframe_timestamps_ = std::move(keyframes);
-                std::sort(keyframe_timestamps_.begin(), keyframe_timestamps_.end());
-                trim_snap_ready_ = true;
-                emit trimSnapReadyChanged();
+                self->keyframe_timestamps_ = std::move(keyframes);
+                self->trim_snap_ready_ = true;
+                emit self->trimSnapReadyChanged();
             },
             Qt::QueuedConnection);
     });

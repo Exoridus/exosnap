@@ -3,6 +3,7 @@ import QtQuick.Controls.Basic
 
 Button {
     id: root
+    Accessible.name: root.text
 
     // Action weight, not colour: the caller names what the button MEANS and the
     // theme decides how that reads. Three rungs, which is exactly what the

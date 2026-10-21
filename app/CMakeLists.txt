@@ -948,7 +948,7 @@ target_include_directories(test_edit_context PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}
 exosnap_add_gtest(
     NAME edit_timeline_model_tests
     TEST_PREFIX edit_timeline_model.
-    SOURCES tests/test_edit_timeline_model.cpp tests/test_edit_workspace.cpp
+    SOURCES tests/test_edit_timeline_model.cpp tests/test_edit_workspace.cpp tests/test_edit_pointer_geometry.cpp tests/test_edit_qualification.cpp
     LIBRARIES Qt6::Core
 )
 target_include_directories(edit_timeline_model_tests PRIVATE ${CMAKE_CURRENT_SOURCE_DIR} ${PROJECT_SOURCE_DIR}/libs/engine/include)

@@ -21,10 +21,14 @@
 #include <filesystem>
 #include <functional>
 #include <limits>
+#include <memory>
 #include <string>
 #include <vector>
 
 namespace exosnap::engine {
+
+class MediaReadCapability;
+class VerifiedMediaIdentity;
 
 // Result of a remux operation.
 //
@@ -108,6 +112,16 @@ struct TrimRange {
     }
 };
 
+// Reads only the held source object. The proof must belong to that exact capability.
+RemuxResult RemuxToProgressiveMp4(const std::shared_ptr<const MediaReadCapability>& input,
+                                  const std::shared_ptr<const VerifiedMediaIdentity>& proof,
+                                  const std::filesystem::path& output_path,
+                                  RemuxProgressCallback progress_cb = RemuxNoopCallback(), TrimRange tr = {});
+RemuxResult RemuxToMkv(const std::shared_ptr<const MediaReadCapability>& input,
+                       const std::shared_ptr<const VerifiedMediaIdentity>& proof,
+                       const std::filesystem::path& output_path,
+                       RemuxProgressCallback progress_cb = RemuxNoopCallback(), TrimRange tr = {});
+
 // Trimmed overloads: re-remux only the segment [tr.start_us, tr.end_us).
 // When tr.HasStart() and tr.HasEnd() are both false, behaviour is identical
 // to the no-TrimRange overloads below.
@@ -119,11 +133,14 @@ RemuxResult RemuxToMkv(const std::filesystem::path& input_path, const std::files
                        RemuxProgressCallback progress_cb, TrimRange tr, const RemuxIoFaults* faults = nullptr,
                        const RemuxIoControl* io = nullptr);
 
-// Scan `input_path` for all video keyframe PTS values and return them sorted
-// in ascending order (microseconds at AV_TIME_BASE). The file is read without
-// decoding (av_read_frame + key-frame flag only). Returns an empty vector on
-// open failure or when the file has no video stream.
+// Returns sorted video keyframe PTS values in microseconds from the container
+// index without decoding. Empty means no index, open failure or cancellation.
 std::vector<int64_t> ExtractKeyframeTimestamps(const std::filesystem::path& input_path);
+// Reads the admitted object with an independent cursor. Never hashes or reopens
+// the path. Admission and cancellation apply before each underlying read.
+std::vector<int64_t> ExtractKeyframeTimestamps(const std::shared_ptr<const MediaReadCapability>& source,
+                                               const BackgroundIoAdmission& before_io = {},
+                                               const std::atomic<bool>* cancelled = nullptr);
 
 // Remux `input_path` (any container readable by libavformat, e.g. MKV) to
 // `output_path` as a progressive MP4 with moov before mdat (+faststart).

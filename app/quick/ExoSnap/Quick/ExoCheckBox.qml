@@ -3,6 +3,7 @@ import QtQuick.Controls.Basic
 
 CheckBox {
     id: root
+    Accessible.name: root.text
 
     signal toggledByUser(bool value)
 

@@ -206,7 +206,7 @@
         <translation>Audio-Routing</translation>
     </message>
     <message>
-        <location line="+11"/>
+        <location line="+21"/>
         <source>No assigned tracks</source>
         <translation>Keine zugewiesenen Spuren</translation>
     </message>
@@ -327,7 +327,7 @@
         <translation>Neue Quellen sind zunächst keiner Spur zugewiesen. Verschiebe sie auf eine Spur oder füge sie dort hinzu. Das Anwendungs-Audio wird mit der aktuell ausgewählten Aufnahme-Anwendung verknüpft.</translation>
     </message>
     <message>
-        <location line="+21"/>
+        <location line="+29"/>
         <source>%1 - assigned to: %2</source>
         <translation>%1 – zugewiesen zu: %2</translation>
     </message>
@@ -3335,9 +3335,57 @@ Wahrscheinliche Ursache: </translation>
     </message>
 </context>
 <context>
+    <name>Edit</name>
+    <message>
+        <location filename="../quick/ExoSnap/Quick/EditRenderText.h" line="+15"/>
+        <source>A track affected by this edit is locked.</source>
+        <translation>Eine von dieser Bearbeitung betroffene Spur ist gesperrt.</translation>
+    </message>
+    <message>
+        <location line="+2"/>
+        <source>Include the linked tracks before editing this range.</source>
+        <translation>Beziehen Sie die verknüpften Spuren ein, bevor Sie diesen Bereich bearbeiten.</translation>
+    </message>
+    <message>
+        <location line="+2"/>
+        <source>The timeline changed. Start the edit again.</source>
+        <translation>Die Zeitleiste wurde geändert. Beginnen Sie die Bearbeitung erneut.</translation>
+    </message>
+    <message>
+        <location line="+2"/>
+        <source>The source does not contain enough media for this edit.</source>
+        <translation>Die Quelle enthält nicht genügend Material für diese Bearbeitung.</translation>
+    </message>
+    <message>
+        <location line="+2"/>
+        <source>The edit would cross a fade or transition boundary.</source>
+        <translation>Die Bearbeitung würde eine Blenden- oder Übergangsgrenze überschreiten.</translation>
+    </message>
+    <message>
+        <location line="+2"/>
+        <source>The source changed. Relink it before editing.</source>
+        <translation>Die Quelle wurde geändert. Verknüpfen Sie sie vor der Bearbeitung neu.</translation>
+    </message>
+    <message>
+        <location line="+2"/>
+        <source>The source is unavailable.</source>
+        <translation>Die Quelle ist nicht verfügbar.</translation>
+    </message>
+    <message>
+        <location line="+2"/>
+        <source>The time is outside the valid editing range.</source>
+        <translation>Die Zeit liegt außerhalb des gültigen Bearbeitungsbereichs.</translation>
+    </message>
+    <message>
+        <location line="+2"/>
+        <source>This edit is not valid at the selected position.</source>
+        <translation>Diese Bearbeitung ist an der ausgewählten Position nicht möglich.</translation>
+    </message>
+</context>
+<context>
     <name>EditActionButton</name>
     <message>
-        <location filename="../quick/ExoSnap/Quick/EditActionButton.qml" line="+19"/>
+        <location filename="../quick/ExoSnap/Quick/EditActionButton.qml" line="+22"/>
         <source>Pinned panel</source>
         <translation>Angehefteter Bereich</translation>
     </message>
@@ -3355,6 +3403,25 @@ Wahrscheinliche Ursache: </translation>
         <location line="+1"/>
         <source>%1 (%2)</source>
         <translation>%1 (%2)</translation>
+    </message>
+</context>
+<context>
+    <name>EditDraftField</name>
+    <message>
+        <location filename="../quick/ExoSnap/Quick/EditDraftField.qml" line="+77"/>
+        <source>This value is not valid for the selected item.</source>
+        <translation>Dieser Wert ist für das ausgewählte Element ungültig.</translation>
+    </message>
+    <message>
+        <location line="+23"/>
+        <location line="+8"/>
+        <source>The edited item is no longer available.</source>
+        <translation>Das bearbeitete Element ist nicht mehr verfügbar.</translation>
+    </message>
+    <message>
+        <location line="-4"/>
+        <source>The edited item is no longer editable.</source>
+        <translation>Das Element kann nicht mehr bearbeitet werden.</translation>
     </message>
 </context>
 <context>
@@ -3386,12 +3453,11 @@ Wahrscheinliche Ursache: </translation>
     </message>
     <message>
         <location line="+2"/>
-        <location line="+113"/>
         <source>A source changed after it was imported. Import it again.</source>
         <translation>Eine Quelle hat sich nach dem Import geändert. Importieren Sie sie erneut.</translation>
     </message>
     <message>
-        <location line="-110"/>
+        <location line="+3"/>
         <source>Choose which audio streams of the recording form the mix before exporting.</source>
         <translation>Wählen Sie vor dem Export, welche Audiospuren der Aufnahme den Mix bilden.</translation>
     </message>
@@ -3441,7 +3507,7 @@ Wahrscheinliche Ursache: </translation>
         <translation>Das Video der Zeitleiste kann mit dieser Ausgabe nicht exportiert werden.</translation>
     </message>
     <message>
-        <location line="+145"/>
+        <location line="+185"/>
         <source>%1, stream %2</source>
         <translation>%1, Stream %2</translation>
     </message>
@@ -3452,12 +3518,12 @@ Wahrscheinliche Ursache: </translation>
     </message>
     <message>
         <location line="+11"/>
-        <location line="+139"/>
+        <location line="+137"/>
         <source>Rendered Mix</source>
         <translation>Gerenderter Mix</translation>
     </message>
     <message>
-        <location line="-134"/>
+        <location line="-132"/>
         <source>Stereo</source>
         <translation>Stereo</translation>
     </message>
@@ -3480,7 +3546,7 @@ Wahrscheinliche Ursache: </translation>
         <translation>Importieren Sie diese Quelle erneut, um den belegten oder einen ausgewählten Bereich zu exportieren.</translation>
     </message>
     <message>
-        <location line="+453"/>
+        <location line="+450"/>
         <source>New file</source>
         <translation>Neue Datei</translation>
     </message>
@@ -3516,15 +3582,419 @@ Das Original kann danach nicht wiederhergestellt werden.</translation>
         <translation>Keine Edit-Master-Datei für den Export verfügbar.</translation>
     </message>
     <message>
-        <location line="+284"/>
+        <location line="+287"/>
         <source>Unknown error</source>
         <translation>Unbekannter Fehler</translation>
     </message>
 </context>
 <context>
+    <name>EditGainField</name>
+    <message>
+        <location filename="../quick/ExoSnap/Quick/EditGainField.qml" line="+11"/>
+        <source>Mixed</source>
+        <translation>Gemischt</translation>
+    </message>
+</context>
+<context>
+    <name>EditInspector</name>
+    <message>
+        <location filename="../quick/ExoSnap/Quick/EditInspector.qml" line="+113"/>
+        <location line="+33"/>
+        <source>This track is locked.</source>
+        <translation>Diese Spur ist gesperrt.</translation>
+    </message>
+    <message>
+        <location line="-33"/>
+        <source>Apply or cancel the track scope review before changing boundaries.</source>
+        <translation>Übernehmen oder verwerfen Sie die Spurauswahl, bevor Sie Grenzen ändern.</translation>
+    </message>
+    <message>
+        <location line="+0"/>
+        <source>%1. %2</source>
+        <translation>%1. %2</translation>
+    </message>
+    <message>
+        <location line="+0"/>
+        <source>48 kHz sample precision</source>
+        <translation>Samplegenauigkeit bei 48 kHz</translation>
+    </message>
+    <message>
+        <location line="+0"/>
+        <source>Project frame precision</source>
+        <translation>Bildgenauigkeit des Projekts</translation>
+    </message>
+    <message>
+        <location line="+10"/>
+        <source>Curve bias from -100% to 100%</source>
+        <translation>Kurvenform von -100 % bis 100 %</translation>
+    </message>
+    <message>
+        <location line="+9"/>
+        <source>Video fade in curve</source>
+        <translation>Kurve für die Videoeinblendung</translation>
+    </message>
+    <message>
+        <location line="+0"/>
+        <source>Video fade out curve</source>
+        <translation>Kurve für die Videoausblendung</translation>
+    </message>
+    <message>
+        <location line="+1"/>
+        <source>Audio fade in curve</source>
+        <translation>Kurve für die Audioeinblendung</translation>
+    </message>
+    <message>
+        <location line="+0"/>
+        <source>Audio fade out curve</source>
+        <translation>Kurve für die Audioausblendung</translation>
+    </message>
+    <message>
+        <location line="+13"/>
+        <source>The junction owns this fade.</source>
+        <translation>Diese Blende wird vom Übergang gesteuert.</translation>
+    </message>
+    <message>
+        <location line="+16"/>
+        <source>%1 bias</source>
+        <translation>%1: Kurvenform</translation>
+    </message>
+    <message>
+        <location line="+9"/>
+        <source>Transition</source>
+        <translation>Übergang</translation>
+    </message>
+    <message>
+        <location line="+3"/>
+        <location line="+21"/>
+        <source>Crossfade duration</source>
+        <translation>Überblendungsdauer</translation>
+    </message>
+    <message>
+        <location line="+12"/>
+        <source>Crossfade to next clip</source>
+        <translation>Zum nächsten Clip überblenden</translation>
+    </message>
+    <message>
+        <location line="+5"/>
+        <source>Clip</source>
+        <translation>Clip</translation>
+    </message>
+    <message>
+        <location line="+8"/>
+        <source>Timeline start</source>
+        <translation>Anfang der Zeitleiste</translation>
+    </message>
+    <message>
+        <location line="+1"/>
+        <source>Source in</source>
+        <translation>Quellanfang</translation>
+    </message>
+    <message>
+        <location line="+1"/>
+        <source>Source out</source>
+        <translation>Quellende</translation>
+    </message>
+    <message>
+        <location line="+1"/>
+        <location line="+84"/>
+        <location line="+107"/>
+        <source>Duration</source>
+        <translation>Dauer</translation>
+    </message>
+    <message>
+        <location line="-189"/>
+        <source>Video fade in</source>
+        <translation>Video einblenden</translation>
+    </message>
+    <message>
+        <location line="+0"/>
+        <source>Audio fade in</source>
+        <translation>Audio einblenden</translation>
+    </message>
+    <message>
+        <location line="+3"/>
+        <source>The incoming junction owns this fade.</source>
+        <translation>Diese Blende wird vom eingehenden Übergang gesteuert.</translation>
+    </message>
+    <message>
+        <location line="+4"/>
+        <source>Video fade out</source>
+        <translation>Video ausblenden</translation>
+    </message>
+    <message>
+        <location line="+0"/>
+        <source>Audio fade out</source>
+        <translation>Audio ausblenden</translation>
+    </message>
+    <message>
+        <location line="+3"/>
+        <source>The outgoing junction owns this fade.</source>
+        <translation>Diese Blende wird vom ausgehenden Übergang gesteuert.</translation>
+    </message>
+    <message>
+        <location line="+4"/>
+        <source>Clip gain</source>
+        <translation>Clipverstärkung</translation>
+    </message>
+    <message>
+        <location line="+10"/>
+        <source>Clip gain in decibels</source>
+        <translation>Clipverstärkung in Dezibel</translation>
+    </message>
+    <message>
+        <location line="+6"/>
+        <source>Clips</source>
+        <translation>Clips</translation>
+    </message>
+    <message>
+        <location line="+4"/>
+        <source>%1 selected clips</source>
+        <translation>%1 ausgewählte Clips</translation>
+    </message>
+    <message>
+        <location line="+6"/>
+        <source>%1 audio, %2 video; %3 editable timing targets</source>
+        <translation>%1 Audio, %2 Video; %3 Ziele mit bearbeitbarer Zeit</translation>
+    </message>
+    <message>
+        <location line="+6"/>
+        <source>Timing: mixed values</source>
+        <translation>Zeit: gemischte Werte</translation>
+    </message>
+    <message>
+        <location line="+0"/>
+        <source>Duration: %1</source>
+        <translation>Dauer: %1</translation>
+    </message>
+    <message>
+        <location line="+7"/>
+        <source>Gain: mixed values</source>
+        <translation>Verstärkung: gemischte Werte</translation>
+    </message>
+    <message>
+        <location line="+0"/>
+        <source>Gain: %1 dB</source>
+        <translation>Verstärkung: %1 dB</translation>
+    </message>
+    <message>
+        <location line="+0"/>
+        <source> (%1 compatible targets)</source>
+        <translation> (%1 kompatible Ziele)</translation>
+    </message>
+    <message>
+        <location line="+5"/>
+        <source>Audio gain (%1 clips)</source>
+        <translation>Audioverstärkung (%1 Clips)</translation>
+    </message>
+    <message>
+        <location line="+13"/>
+        <source>Selected audio clip gain in decibels</source>
+        <translation>Verstärkung der ausgewählten Audioclips in Dezibel</translation>
+    </message>
+    <message>
+        <location line="+1"/>
+        <source>Applies only to the named audio clips.</source>
+        <translation>Gilt nur für die benannten Audioclips.</translation>
+    </message>
+    <message>
+        <location line="+0"/>
+        <source>A selected audio track is locked.</source>
+        <translation>Eine ausgewählte Audiospur ist gesperrt.</translation>
+    </message>
+    <message>
+        <location line="+6"/>
+        <source>Junction</source>
+        <translation>Übergang</translation>
+    </message>
+    <message>
+        <location line="+2"/>
+        <location line="+107"/>
+        <source>Start</source>
+        <translation>Anfang</translation>
+    </message>
+    <message>
+        <location line="-106"/>
+        <location line="+107"/>
+        <source>End</source>
+        <translation>Ende</translation>
+    </message>
+    <message>
+        <location line="-105"/>
+        <source>Cut</source>
+        <translation>Schnitt</translation>
+    </message>
+    <message>
+        <location line="+2"/>
+        <source>Curve</source>
+        <translation>Kurve</translation>
+    </message>
+    <message>
+        <location line="-168"/>
+        <location line="+172"/>
+        <source>Linear</source>
+        <translation>Linear</translation>
+    </message>
+    <message>
+        <location line="-172"/>
+        <location line="+172"/>
+        <source>Smooth</source>
+        <translation>Weich</translation>
+    </message>
+    <message>
+        <location line="-172"/>
+        <location line="+172"/>
+        <source>Bias</source>
+        <translation>Form</translation>
+    </message>
+    <message>
+        <location line="+3"/>
+        <source>Junction curve</source>
+        <translation>Übergangskurve</translation>
+    </message>
+    <message>
+        <location line="-166"/>
+        <location line="+171"/>
+        <source>Curve bias</source>
+        <translation>Kurvenform</translation>
+    </message>
+    <message>
+        <location line="+9"/>
+        <source>Junction curve bias</source>
+        <translation>Kurvenform des Übergangs</translation>
+    </message>
+    <message>
+        <location line="+5"/>
+        <source>Audio gain law</source>
+        <translation>Audiokennlinie</translation>
+    </message>
+    <message>
+        <location line="+4"/>
+        <source>Equal Gain</source>
+        <translation>Konstante Verstärkung</translation>
+    </message>
+    <message>
+        <location line="+0"/>
+        <source>Equal Power</source>
+        <translation>Konstante Leistung</translation>
+    </message>
+    <message>
+        <location line="+3"/>
+        <source>Junction audio gain law</source>
+        <translation>Audiokennlinie des Übergangs</translation>
+    </message>
+    <message>
+        <location line="+6"/>
+        <source>Range</source>
+        <translation>Bereich</translation>
+    </message>
+    <message>
+        <location line="+4"/>
+        <source>%1 scoped tracks</source>
+        <translation>%1 einbezogene Spuren</translation>
+    </message>
+    <message>
+        <location line="+23"/>
+        <source>Include linked tracks</source>
+        <translation>Verknüpfte Spuren einbeziehen</translation>
+    </message>
+    <message>
+        <location line="+7"/>
+        <source>Nearest boundaries: %1 s to %2 s</source>
+        <translation>Nächstgelegene Grenzen: %1 s bis %2 s</translation>
+    </message>
+    <message>
+        <location line="+14"/>
+        <source>Apply scope</source>
+        <translation>Spurauswahl übernehmen</translation>
+    </message>
+    <message>
+        <location line="+8"/>
+        <source>Cancel</source>
+        <translation>Abbrechen</translation>
+    </message>
+    <message>
+        <location line="+11"/>
+        <source>Range gain change</source>
+        <translation>Verstärkungsänderung im Bereich</translation>
+    </message>
+    <message>
+        <location line="+10"/>
+        <source>Audio gain change in the selected range, in decibels</source>
+        <translation>Änderung der Audioverstärkung im ausgewählten Bereich in Dezibel</translation>
+    </message>
+    <message>
+        <location line="+1"/>
+        <source>Adds this gain to every scoped audio clip in the range. The entire change is refused if any affected clip cannot be edited.</source>
+        <translation>Addiert diese Verstärkung zu jedem Audioclip auf den betroffenen Spuren im Bereich. Die gesamte Änderung wird abgelehnt, wenn ein betroffener Clip nicht bearbeitet werden kann.</translation>
+    </message>
+    <message>
+        <location line="+7"/>
+        <source>Remove time on all tracks</source>
+        <translation>Zeit auf allen Spuren entfernen</translation>
+    </message>
+    <message>
+        <location line="+6"/>
+        <source>Track</source>
+        <translation>Spur</translation>
+    </message>
+    <message>
+        <location line="+5"/>
+        <source>Enabled</source>
+        <translation>Aktiviert</translation>
+    </message>
+    <message>
+        <location line="+7"/>
+        <source>Locked</source>
+        <translation>Gesperrt</translation>
+    </message>
+    <message>
+        <location line="+5"/>
+        <source>Track gain</source>
+        <translation>Spurverstärkung</translation>
+    </message>
+    <message>
+        <location line="+11"/>
+        <source>Track gain in decibels</source>
+        <translation>Spurverstärkung in Dezibel</translation>
+    </message>
+    <message>
+        <location line="+6"/>
+        <source>Timeline</source>
+        <translation>Zeitleiste</translation>
+    </message>
+    <message>
+        <location line="+5"/>
+        <source>Fixed timeline end</source>
+        <translation>Festes Zeitleistenende</translation>
+    </message>
+    <message>
+        <location line="+7"/>
+        <source>Timeline end</source>
+        <translation>Ende der Zeitleiste</translation>
+    </message>
+    <message>
+        <location line="+5"/>
+        <source>Close Gap</source>
+        <translation>Lücke schließen</translation>
+    </message>
+</context>
+<context>
+    <name>EditOverview</name>
+    <message>
+        <location filename="../quick/ExoSnap/Quick/EditOverview.qml" line="+17"/>
+        <source>Timeline overview</source>
+        <translation>Zeitleistenübersicht</translation>
+    </message>
+    <message>
+        <location line="+1"/>
+        <source>Drag the window to pan or its edges to zoom. Double-click fits the timeline.</source>
+        <translation>Ziehen Sie das Ansichtsfenster zum Verschieben oder seine Ränder zum Zoomen. Ein Doppelklick passt die Zeitleiste ein.</translation>
+    </message>
+</context>
+<context>
     <name>EditPage</name>
     <message>
-        <location filename="../quick/ExoSnap/Quick/EditPage.qml" line="+554"/>
+        <location filename="../quick/ExoSnap/Quick/EditPage.qml" line="+469"/>
         <source>Pause</source>
         <translation>Pause</translation>
     </message>
@@ -3534,7 +4004,7 @@ Das Original kann danach nicht wiederhergestellt werden.</translation>
         <translation>Wiedergabe</translation>
     </message>
     <message>
-        <location line="+20"/>
+        <location line="+45"/>
         <source>Playback position</source>
         <translation>Wiedergabeposition</translation>
     </message>
@@ -3550,12 +4020,12 @@ Das Original kann danach nicht wiederhergestellt werden.</translation>
         <translation>Vorschaulautstärke (stumm)</translation>
     </message>
     <message>
-        <location line="-47"/>
+        <location line="-74"/>
         <source>Undo</source>
         <translation>Rückgängig</translation>
     </message>
     <message>
-        <location line="-58"/>
+        <location line="+426"/>
         <source>I/O time range</source>
         <translation>I/O-Zeitbereich</translation>
     </message>
@@ -3565,12 +4035,7 @@ Das Original kann danach nicht wiederhergestellt werden.</translation>
         <translation>Ausgewählte Clips</translation>
     </message>
     <message>
-        <location line="+3"/>
-        <source>Selection source</source>
-        <translation>Auswahlgrundlage</translation>
-    </message>
-    <message>
-        <location line="+55"/>
+        <location line="-426"/>
         <source>Redo</source>
         <translation>Wiederholen</translation>
     </message>
@@ -3585,12 +4050,12 @@ Das Original kann danach nicht wiederhergestellt werden.</translation>
         <translation>Löschen</translation>
     </message>
     <message>
-        <location line="+19"/>
+        <location line="+24"/>
         <source>Choose audio tracks</source>
         <translation>Audiospuren auswählen</translation>
     </message>
     <message>
-        <location line="+59"/>
+        <location line="+82"/>
         <source>Preparing export…</source>
         <translation>Export wird vorbereitet…</translation>
     </message>
@@ -3600,218 +4065,91 @@ Das Original kann danach nicht wiederhergestellt werden.</translation>
         <translation>Wird abgebrochen…</translation>
     </message>
     <message>
-        <location line="+5"/>
+        <location line="+6"/>
         <source>Cancel export</source>
         <translation>Export abbrechen</translation>
     </message>
     <message>
-        <location line="-402"/>
-        <location line="+437"/>
+        <location line="-210"/>
+        <location line="+262"/>
         <source>Media</source>
         <translation>Medien</translation>
     </message>
     <message>
-        <location line="-433"/>
+        <location line="-257"/>
         <source>Close Media</source>
         <translation>Medien schließen</translation>
     </message>
     <message>
-        <location line="+22"/>
-        <location line="+412"/>
+        <location line="+37"/>
+        <location line="+240"/>
         <source>Details</source>
         <translation>Details</translation>
     </message>
     <message>
-        <location line="-408"/>
+        <location line="-235"/>
         <source>Close Details</source>
         <translation>Details schließen</translation>
     </message>
     <message>
-        <location line="+33"/>
-        <source>%1: %2</source>
-        <translation>%1: %2</translation>
-    </message>
-    <message>
-        <location line="+23"/>
-        <source>Fade in duration in milliseconds</source>
-        <translation>Einblenddauer in Millisekunden</translation>
-    </message>
-    <message>
-        <location line="+15"/>
-        <source>Fade out duration in milliseconds</source>
-        <translation>Ausblenddauer in Millisekunden</translation>
-    </message>
-    <message>
-        <location line="+15"/>
-        <source>Junction start in milliseconds</source>
-        <translation>Übergangsbeginn in Millisekunden</translation>
-    </message>
-    <message>
-        <location line="+15"/>
-        <source>Junction end in milliseconds</source>
-        <translation>Übergangsende in Millisekunden</translation>
-    </message>
-    <message>
-        <location line="+11"/>
-        <source>Fixed timeline end</source>
-        <translation>Festes Zeitleistenende</translation>
-    </message>
-    <message>
-        <location line="+11"/>
-        <source>Timeline end in milliseconds</source>
-        <translation>Zeitleistenende in Millisekunden</translation>
-    </message>
-    <message>
-        <location line="+7"/>
-        <source>Close Gap (preview)</source>
-        <translation>Lücke schließen (Vorschau)</translation>
-    </message>
-    <message>
+        <location line="+455"/>
         <location line="+6"/>
-        <location line="+1"/>
-        <source>Clear media cache</source>
-        <translation>Mediencache leeren</translation>
-    </message>
-    <message>
-        <location line="+2"/>
-        <source>Remove cached thumbnails and waveforms. Source recordings are kept.</source>
-        <translation>Zwischengespeicherte Vorschaubilder und Wellenformen entfernen. Die Quellaufnahmen bleiben erhalten.</translation>
-    </message>
-    <message>
-        <location line="+7"/>
-        <source>Monitor tracks</source>
-        <translation>Spuren abhören</translation>
-    </message>
-    <message>
-        <location line="+25"/>
-        <source>I confirm any overlapping audio in this selection</source>
-        <translation>Ich bestätige, dass sich Audio in dieser Auswahl überlagern kann</translation>
-    </message>
-    <message>
-        <location line="+6"/>
-        <source>Confirm selection</source>
-        <translation>Auswahl bestätigen</translation>
-    </message>
-    <message>
-        <location line="+14"/>
-        <location line="+8"/>
         <source>Export profile</source>
         <translation>Exportprofil</translation>
     </message>
     <message>
         <location line="+5"/>
-        <location line="+15"/>
+        <location line="+12"/>
         <source>Export range</source>
         <translation>Exportbereich</translation>
     </message>
     <message>
         <location line="-5"/>
-        <source>Entire Timeline</source>
-        <translation>Gesamte Zeitleiste</translation>
-    </message>
-    <message>
-        <location line="+1"/>
-        <source>Occupied Content</source>
-        <translation>Belegter Bereich</translation>
-    </message>
-    <message>
-        <location line="+1"/>
-        <source>Selection</source>
-        <translation>Auswahl</translation>
-    </message>
-    <message>
-        <location line="+11"/>
         <source>Result range</source>
         <translation>Ergebnisbereich</translation>
     </message>
     <message>
-        <location line="+16"/>
+        <location line="+15"/>
         <source>Keep original streams</source>
         <translation>Originalspuren übernehmen</translation>
     </message>
     <message>
-        <location line="+14"/>
-        <source>Panel unpinned to keep the preview usable.</source>
-        <translation>Bereich gelöst, damit die Vorschau nutzbar bleibt.</translation>
-    </message>
-    <message>
-        <location line="+33"/>
+        <location line="-436"/>
+        <location line="+215"/>
         <source>Ripple delete</source>
         <translation>Mit Lückenschluss löschen</translation>
     </message>
     <message>
-        <location line="-101"/>
-        <location line="+184"/>
-        <location line="+183"/>
+        <location line="-103"/>
+        <location line="+464"/>
         <source>Export</source>
         <translation>Exportieren</translation>
     </message>
     <message>
-        <location line="-513"/>
-        <source>Clip</source>
-        <translation>Clip</translation>
-    </message>
-    <message>
-        <location line="+3"/>
-        <source>Fade in</source>
-        <translation>Einblenden</translation>
-    </message>
-    <message>
-        <location line="+8"/>
-        <location line="+15"/>
-        <location line="+15"/>
-        <location line="+15"/>
-        <location line="+21"/>
-        <source>ms</source>
-        <translation>ms</translation>
-    </message>
-    <message>
-        <location line="-59"/>
-        <source>Fade out</source>
-        <translation>Ausblenden</translation>
-    </message>
-    <message>
-        <location line="+15"/>
-        <source>Junction start</source>
-        <translation>Übergangsbeginn</translation>
-    </message>
-    <message>
-        <location line="+15"/>
-        <source>Junction end</source>
-        <translation>Übergangsende</translation>
-    </message>
-    <message>
-        <location line="+17"/>
-        <source>Timeline</source>
-        <translation>Zeitleiste</translation>
-    </message>
-    <message>
-        <location line="+47"/>
-        <source>Track %1</source>
-        <translation>Spur %1</translation>
-    </message>
-    <message>
-        <location line="+224"/>
+        <location line="-458"/>
         <source>MP4 delivery in progress. The finalized edit master is ready.</source>
         <translation>Die MP4-Datei wird noch erstellt. Die fertige MKV-Datei ist bereits zum Bearbeiten verfügbar.</translation>
     </message>
     <message>
-        <location line="+31"/>
+        <location line="+82"/>
+        <location line="+12"/>
         <source>Ripple</source>
         <translation>Ripple</translation>
     </message>
     <message>
-        <location line="+1"/>
+        <location line="-11"/>
+        <location line="+12"/>
         <source>Auto Crossfade</source>
         <translation>Automatische Überblendung</translation>
     </message>
     <message>
-        <location line="+1"/>
+        <location line="-11"/>
+        <location line="+12"/>
         <source>Linked Selection</source>
         <translation>Verknüpfte Auswahl</translation>
     </message>
     <message>
-        <location line="+2"/>
+        <location line="+16"/>
         <source>Zoom out</source>
         <translation>Herauszoomen</translation>
     </message>
@@ -3821,22 +4159,266 @@ Das Original kann danach nicht wiederhergestellt werden.</translation>
         <translation>Zeitleisten-Zoom</translation>
     </message>
     <message>
-        <location line="+3"/>
+        <location line="+7"/>
         <source>Zoom in</source>
         <translation>Hineinzoomen</translation>
     </message>
     <message>
-        <location line="+1"/>
+        <location line="-28"/>
+        <location line="+29"/>
         <source>Fit timeline</source>
         <translation>Zeitleiste einpassen</translation>
     </message>
     <message>
+        <location line="-507"/>
+        <source>Resize Media. Use Left and Right.</source>
+        <translation>Medienbereich vergrößern oder verkleinern. Verwenden Sie die Pfeiltasten nach links und rechts.</translation>
+    </message>
+    <message>
+        <location line="+0"/>
+        <source>Resize Details. Use Left and Right.</source>
+        <translation>Detailbereich vergrößern oder verkleinern. Verwenden Sie die Pfeiltasten nach links und rechts.</translation>
+    </message>
+    <message>
+        <location line="+258"/>
+        <source>There is no edit to undo.</source>
+        <translation>Es gibt keine Bearbeitung zum Rückgängigmachen.</translation>
+    </message>
+    <message>
+        <location line="+1"/>
+        <source>There is no edit to redo.</source>
+        <translation>Es gibt keine Bearbeitung zum Wiederholen.</translation>
+    </message>
+    <message>
+        <location line="+1"/>
+        <location line="+10"/>
+        <location line="+1"/>
+        <location line="+7"/>
+        <location line="+3"/>
+        <location line="+1"/>
         <location line="+16"/>
+        <location line="+76"/>
+        <source>The timeline is empty.</source>
+        <translation>Die Zeitleiste ist leer.</translation>
+    </message>
+    <message>
+        <location line="-113"/>
+        <source>Select clips, a range, a junction or a spacer to delete.</source>
+        <translation>Wählen Sie Clips, einen Bereich, einen Übergang oder einen Spacer zum Löschen aus.</translation>
+    </message>
+    <message>
+        <location line="+1"/>
+        <source>Select clips, a range, a junction, a spacer or a gap to remove.</source>
+        <translation>Wählen Sie Clips, einen Bereich, einen Übergang, einen Spacer oder eine Lücke zum Entfernen aus.</translation>
+    </message>
+    <message>
+        <location line="+8"/>
+        <source>Timeline start</source>
+        <translation>Anfang der Zeitleiste</translation>
+    </message>
+    <message>
+        <location line="+1"/>
+        <source>Previous frame</source>
+        <translation>Vorheriges Bild</translation>
+    </message>
+    <message>
+        <location line="+10"/>
+        <source>Next frame</source>
+        <translation>Nächstes Bild</translation>
+    </message>
+    <message>
+        <location line="+1"/>
+        <source>Timeline end</source>
+        <translation>Ende der Zeitleiste</translation>
+    </message>
+    <message>
+        <location line="+10"/>
+        <source>Loop</source>
+        <translation>Schleife</translation>
+    </message>
+    <message>
+        <location line="+11"/>
+        <source>Play range once</source>
+        <translation>Bereich einmal abspielen</translation>
+    </message>
+    <message>
+        <location line="+4"/>
+        <source>Select a range to play once.</source>
+        <translation>Wählen Sie einen Bereich zum einmaligen Abspielen aus.</translation>
+    </message>
+    <message>
+        <location line="+66"/>
+        <source>Export cancellation is already in progress.</source>
+        <translation>Der Export wird bereits abgebrochen.</translation>
+    </message>
+    <message>
+        <location line="+0"/>
+        <source>Export is preparing.</source>
+        <translation>Der Export wird vorbereitet.</translation>
+    </message>
+    <message>
+        <location line="+1"/>
+        <source>An export is already in progress.</source>
+        <translation>Ein Export läuft bereits.</translation>
+    </message>
+    <message>
+        <location line="+93"/>
+        <source>More editing actions</source>
+        <translation>Weitere Bearbeitungsaktionen</translation>
+    </message>
+    <message>
+        <location line="+12"/>
+        <source>Fit selection</source>
+        <translation>Auswahl einpassen</translation>
+    </message>
+    <message>
+        <location line="+3"/>
+        <source>Fit clips</source>
+        <translation>Clips einpassen</translation>
+    </message>
+    <message>
+        <location line="+48"/>
+        <source>Importing media…</source>
+        <translation>Medien werden importiert…</translation>
+    </message>
+    <message>
+        <location line="+2"/>
+        <source>Editing selection</source>
+        <translation>Bearbeitungsauswahl</translation>
+    </message>
+    <message>
+        <location line="+3"/>
+        <source>Range %1 to %2 · %3 tracks</source>
+        <translation>Bereich %1 bis %2 · %3 Spuren</translation>
+    </message>
+    <message>
+        <location line="+5"/>
+        <source>Selected clips: %1</source>
+        <translation>Ausgewählte Clips: %1</translation>
+    </message>
+    <message>
+        <location line="+1"/>
+        <source>Junction selected</source>
+        <translation>Übergang ausgewählt</translation>
+    </message>
+    <message>
+        <location line="+1"/>
+        <source>Gap selected</source>
+        <translation>Lücke ausgewählt</translation>
+    </message>
+    <message>
+        <location line="+1"/>
+        <source>Spacer selected</source>
+        <translation>Spacer ausgewählt</translation>
+    </message>
+    <message>
+        <location line="+18"/>
+        <source>Editor shortcuts</source>
+        <translation>Tastenkürzel im Editor</translation>
+    </message>
+    <message>
+        <location line="+10"/>
+        <source>Space: Play or pause on release</source>
+        <translation>Leertaste: Beim Loslassen abspielen oder pausieren</translation>
+    </message>
+    <message>
+        <location line="+1"/>
+        <source>Space + drag / wheel: Pan without changing playback</source>
+        <translation>Leertaste + Ziehen / Mausrad: Ansicht verschieben, Wiedergabe beibehalten</translation>
+    </message>
+    <message>
+        <location line="+1"/>
+        <source>Shift+Space: Play the active range once</source>
+        <translation>Umschalt+Leertaste: Aktiven Bereich einmal abspielen</translation>
+    </message>
+    <message>
+        <location line="+1"/>
+        <source>Ctrl+L: Toggle Loop</source>
+        <translation>Strg+L: Schleife ein- oder ausschalten</translation>
+    </message>
+    <message>
+        <location line="+1"/>
+        <source>Left / Right: Step one frame; Alt: one sample; Shift: one second</source>
+        <translation>Links / Rechts: Ein Bild weiter; Alt: ein Sample; Umschalt: eine Sekunde</translation>
+    </message>
+    <message>
+        <location line="+1"/>
+        <source>Up / Down: Previous or next boundary</source>
+        <translation>Auf / Ab: Vorherige oder nächste Grenze</translation>
+    </message>
+    <message>
+        <location line="+1"/>
+        <source>I / O: Set range in or out; Alt+X: Clear range</source>
+        <translation>I / O: Bereichsanfang oder -ende setzen; Alt+X: Bereich aufheben</translation>
+    </message>
+    <message>
+        <location line="+1"/>
+        <source>Ctrl+B: Split; Delete: Lift; Shift+Delete: Ripple delete</source>
+        <translation>Strg+B: Teilen; Entf: Ohne Lückenschluss löschen; Umschalt+Entf: Mit Lückenschluss löschen</translation>
+    </message>
+    <message>
+        <location line="+1"/>
+        <source>Ctrl+C / X / V: Copy, cut or paste clips; Ctrl+Shift+V: Insert paste</source>
+        <translation>Strg+C / X / V: Clips kopieren, ausschneiden oder einfügen; Strg+Umschalt+V: Mit Nachrücken einfügen</translation>
+    </message>
+    <message>
+        <location line="+1"/>
+        <source>Ctrl+Z / Ctrl+Y: Undo or redo</source>
+        <translation>Strg+Z / Strg+Y: Rückgängig machen oder wiederholen</translation>
+    </message>
+    <message>
+        <location line="+1"/>
+        <source>Z: Fit selection; Shift+Z: Fit timeline; Backspace: Previous view</source>
+        <translation>Z: Auswahl einpassen; Umschalt+Z: Zeitleiste einpassen; Rücktaste: Vorherige Ansicht</translation>
+    </message>
+    <message>
+        <location line="+1"/>
+        <source>Ctrl+M / Ctrl+D / Ctrl+E: Media, Inspector or export</source>
+        <translation>Strg+M / Strg+D / Strg+E: Medien, Details oder Export</translation>
+    </message>
+    <message>
+        <location line="+19"/>
+        <source>Add folders</source>
+        <translation>Ordner hinzufügen</translation>
+    </message>
+    <message>
+        <location line="+21"/>
+        <source>%1 folders contain %2 supported files directly inside them. Subfolders and linked directories are excluded.</source>
+        <translation>%1 Ordner enthalten direkt %2 unterstützte Dateien. Unterordner und verknüpfte Verzeichnisse sind ausgeschlossen.</translation>
+    </message>
+    <message>
+        <location line="+14"/>
+        <source>Add browsing roots</source>
+        <translation>Ordner zur Medienübersicht hinzufügen</translation>
+    </message>
+    <message>
+        <location line="+6"/>
+        <source>Insert %1 files</source>
+        <translation>%1 Dateien einfügen</translation>
+    </message>
+    <message>
+        <location line="+15"/>
+        <location line="+66"/>
         <source>Review export</source>
         <translation>Export prüfen</translation>
     </message>
     <message>
-        <location line="+50"/>
+        <location line="-42"/>
+        <source>Entire timeline</source>
+        <translation>Gesamte Zeitleiste</translation>
+    </message>
+    <message>
+        <location line="+1"/>
+        <source>Occupied content</source>
+        <translation>Belegter Inhalt</translation>
+    </message>
+    <message>
+        <location line="+22"/>
+        <source>Choose destination</source>
+        <translation>Ziel auswählen</translation>
+    </message>
+    <message>
+        <location line="+69"/>
         <source>%1 to %2 · %3 video · %4</source>
         <translation>%1 nach %2 · %3-Video · %4</translation>
     </message>
@@ -3897,7 +4479,8 @@ Das Original kann danach nicht wiederhergestellt werden.</translation>
         <translation>Die vorhandene Zieldatei wird ersetzt.</translation>
     </message>
     <message>
-        <location line="+16"/>
+        <location line="-167"/>
+        <location line="+183"/>
         <source>Cancel</source>
         <translation>Abbrechen</translation>
     </message>
@@ -3912,22 +4495,23 @@ Das Original kann danach nicht wiederhergestellt werden.</translation>
         <translation>Kopieren starten</translation>
     </message>
     <message>
-        <location line="-187"/>
+        <location line="-468"/>
         <source>Exporting %1%</source>
         <translation>Export läuft: %1 %</translation>
     </message>
     <message>
-        <location line="-449"/>
+        <location line="-250"/>
         <source>Resize preview and timeline. Use Up and Down.</source>
         <translation>Größe von Vorschau und Zeitleiste ändern. Pfeiltasten nach oben und unten verwenden.</translation>
     </message>
     <message>
-        <location line="+488"/>
+        <location line="+340"/>
+        <location line="+12"/>
         <source>Snapping</source>
         <translation>Einrasten</translation>
     </message>
     <message>
-        <location line="-42"/>
+        <location line="-106"/>
         <source>%1%</source>
         <translation>%1 %</translation>
     </message>
@@ -3935,7 +4519,7 @@ Das Original kann danach nicht wiederhergestellt werden.</translation>
 <context>
     <name>EditPlayer</name>
     <message>
-        <location filename="../quick/ExoSnap/Quick/EditPlayer.qml" line="+45"/>
+        <location filename="../quick/ExoSnap/Quick/EditPlayer.qml" line="+46"/>
         <source>No media in the timeline yet</source>
         <translation>Noch keine Medien in der Zeitleiste</translation>
     </message>
@@ -3950,21 +4534,39 @@ Das Original kann danach nicht wiederhergestellt werden.</translation>
         <translation>Medien öffnen</translation>
     </message>
     <message>
-        <location line="+8"/>
+        <location line="+9"/>
         <source>Preview unavailable. Export options are checked separately.</source>
         <translation>Vorschau nicht verfügbar. Exportoptionen werden separat geprüft.</translation>
+    </message>
+    <message>
+        <location line="+21"/>
+        <location filename="../quick/ExoSnap/Quick/EditPlayerAdapter.cpp" line="+626"/>
+        <source>Preview pending</source>
+        <translation>Vorschau ausstehend</translation>
+    </message>
+    <message>
+        <location line="+13"/>
+        <source>Choose source audio</source>
+        <translation>Quellaudio auswählen</translation>
     </message>
 </context>
 <context>
     <name>EditPlayerAdapter</name>
     <message>
-        <location filename="../quick/ExoSnap/Quick/EditPlayerAdapter.cpp" line="+112"/>
-        <location line="+383"/>
+        <location filename="../quick/ExoSnap/Quick/EditPlayerAdapter.cpp" line="-491"/>
+        <location line="+31"/>
+        <location line="+462"/>
+        <location line="+175"/>
         <source>Preview unavailable</source>
         <translation>Vorschau nicht verfügbar</translation>
     </message>
     <message>
-        <location line="-117"/>
+        <location line="-396"/>
+        <source>Select a nonempty time range first.</source>
+        <translation>Wählen Sie zuerst einen nicht leeren Zeitbereich aus.</translation>
+    </message>
+    <message>
+        <location line="+253"/>
         <source>The timeline is empty.</source>
         <translation>Die Zeitleiste ist leer.</translation>
     </message>
@@ -3974,7 +4576,8 @@ Das Original kann danach nicht wiederhergestellt werden.</translation>
         <translation>Bestätige die Audioauswahl vor der Wiedergabe.</translation>
     </message>
     <message>
-        <location line="+80"/>
+        <location line="-40"/>
+        <location line="+132"/>
         <source>Opening clip…</source>
         <translation>Clip wird geöffnet…</translation>
     </message>
@@ -4013,9 +4616,81 @@ Das Original kann danach nicht wiederhergestellt werden.</translation>
         <translation>Zu viele Videoebenen sind gleichzeitig sichtbar. Deaktivieren oder kürzen Sie überlappende Clips.</translation>
     </message>
     <message>
-        <location filename="../../libs/engine/src/edit_timeline_export.cpp" line="+396"/>
+        <location line="+68"/>
+        <source>Timeline identity proof does not match the admitted source.</source>
+        <translation>Der Identitätsnachweis der Zeitleiste stimmt nicht mit der geöffneten Quelle überein.</translation>
+    </message>
+    <message>
+        <location line="+52"/>
+        <source>The selected timeline stream is not video for this source.</source>
+        <translation>Der ausgewählte Zeitleistenstream ist kein Videostream dieser Quelle.</translation>
+    </message>
+    <message>
+        <location line="+10"/>
+        <source>The selected video stream is absent from the source layout.</source>
+        <translation>Der ausgewählte Videostream fehlt in der Streamanordnung der Quelle.</translation>
+    </message>
+    <message>
+        <location line="+34"/>
+        <source>Video source opening cancelled.</source>
+        <translation>Öffnen der Videoquelle abgebrochen.</translation>
+    </message>
+    <message>
+        <location line="+126"/>
+        <location line="+369"/>
+        <source>Too many simultaneous timeline audio sources.</source>
+        <translation>Zu viele gleichzeitige Audioquellen in der Zeitleiste.</translation>
+    </message>
+    <message>
+        <location line="-116"/>
+        <source>Audio selection cancelled.</source>
+        <translation>Audioauswahl abgebrochen.</translation>
+    </message>
+    <message>
+        <location line="+11"/>
+        <source>The monitoring source is no longer visible.</source>
+        <translation>Die Quelle der Audiovorschau ist nicht mehr sichtbar.</translation>
+    </message>
+    <message>
+        <location line="+75"/>
+        <source>Invalid source audio block.</source>
+        <translation>Ungültiger Audioquellblock.</translation>
+    </message>
+    <message>
+        <location line="+18"/>
+        <source>Source audio preparation cancelled.</source>
+        <translation>Vorbereitung des Quellaudios abgebrochen.</translation>
+    </message>
+    <message>
+        <location line="+25"/>
+        <source>Invalid source audio position.</source>
+        <translation>Ungültige Audioquellposition.</translation>
+    </message>
+    <message>
+        <location line="+20"/>
+        <source>Invalid audio lookahead interval.</source>
+        <translation>Ungültiges Intervall für die Audiovorausberechnung.</translation>
+    </message>
+    <message>
+        <location line="+55"/>
+        <source>Invalid future audio source position.</source>
+        <translation>Ungültige vorausberechnete Audioquellposition.</translation>
+    </message>
+    <message>
+        <location filename="../../libs/engine/src/edit_timeline_export.cpp" line="+424"/>
         <source>Render export requires explicitly tagged 8-bit BT.709 4:2:0 SDR with known range. HDR and unsupported color paths remain lossless-only.</source>
         <translation>Renderexport benötigt ausdrücklich gekennzeichnetes SDR-Video mit 8 Bit, BT.709, 4:2:0 und bekanntem Wertebereich. HDR und nicht unterstützte Farbformate bleiben auf verlustlosen Export beschränkt.</translation>
+    </message>
+    <message>
+        <location line="+78"/>
+        <source>Source adoption requires proof for the admitted file.</source>
+        <translation>Zum Übernehmen der Quelle ist ein Identitätsnachweis für die geöffnete Datei erforderlich.</translation>
+    </message>
+    <message>
+        <location line="+7"/>
+        <location line="+5"/>
+        <source>Source adoption cancelled.</source>
+        <translation>Übernahme der Quelle abgebrochen.</translation>
     </message>
     <message>
         <location filename="../../libs/engine/src/render_audio_manifest.cpp" line="+46"/>
@@ -4054,15 +4729,65 @@ Das Original kann danach nicht wiederhergestellt werden.</translation>
         <translation>Für das Rendern ohne Audio muss eine leere, festgelegte Abhörauswahl vorliegen.</translation>
     </message>
     <message>
-        <location filename="../../libs/engine/src/edit_export_plan.cpp" line="+614"/>
+        <location filename="../quick/ExoSnap/Quick/EditPlayerWorker.cpp" line="+232"/>
+        <source>The video source snapshot is unavailable.</source>
+        <translation>Der Zustand der Videoquelle ist nicht verfügbar.</translation>
+    </message>
+    <message>
+        <location line="+64"/>
+        <source>The source cannot be placed in the preview timeline.</source>
+        <translation>Die Quelle lässt sich nicht in der Vorschauzeitleiste platzieren.</translation>
+    </message>
+    <message>
+        <location line="+104"/>
+        <source>The timeline video request failed.</source>
+        <translation>Die Videoanfrage für die Zeitleiste ist fehlgeschlagen.</translation>
+    </message>
+    <message>
+        <location line="+10"/>
+        <source>The timeline video request did not complete.</source>
+        <translation>Die Videoanfrage für die Zeitleiste wurde nicht abgeschlossen.</translation>
+    </message>
+    <message>
+        <location filename="../../libs/engine/src/edit_export_plan.cpp" line="+626"/>
         <source>The timeline has no established output format.</source>
-        <translation>Für die Zeitleiste ist kein Ausgabeformat festgelegt.</translation>
+        <translation>Für die Zeitleiste wurde kein Ausgabeformat festgelegt.</translation>
+    </message>
+    <message>
+        <location filename="../quick/ExoSnap/Quick/EditRenderText.h" line="+9"/>
+        <source>Audio preparation failed.</source>
+        <translation>Audiovorbereitung fehlgeschlagen.</translation>
+    </message>
+    <message>
+        <location line="+1"/>
+        <source>Invalid audio interval boundary.</source>
+        <translation>Ungültige Grenze des Audiointervalls.</translation>
+    </message>
+    <message>
+        <location line="+1"/>
+        <source>Invalid audio monitor gain.</source>
+        <translation>Ungültige Verstärkung der Audiovorschau.</translation>
+    </message>
+    <message>
+        <location line="+1"/>
+        <source>Invalid audio playback region.</source>
+        <translation>Ungültiger Audiowiedergabebereich.</translation>
+    </message>
+    <message>
+        <location line="+1"/>
+        <source>Invalid audio preparation request.</source>
+        <translation>Ungültige Anfrage zur Audiovorbereitung.</translation>
+    </message>
+    <message>
+        <location line="+1"/>
+        <source>The selected container stream is not video.</source>
+        <translation>Der ausgewählte Containerstream ist kein Videostream.</translation>
     </message>
 </context>
 <context>
     <name>EditSessionAdapter</name>
     <message>
-        <location filename="../quick/ExoSnap/Quick/EditSessionAdapter.cpp" line="+519"/>
+        <location filename="../quick/ExoSnap/Quick/EditSessionAdapter.cpp" line="+648"/>
         <source>Frame drops: %1%</source>
         <translation>Verworfene Frames: %1%</translation>
     </message>
@@ -4156,12 +4881,12 @@ Das Original kann danach nicht wiederhergestellt werden.</translation>
 <context>
     <name>EditSidePanel</name>
     <message>
-        <location filename="../quick/ExoSnap/Quick/EditSidePanel.qml" line="+16"/>
+        <location filename="../quick/ExoSnap/Quick/EditSidePanel.qml" line="+18"/>
         <source>Close</source>
         <translation>Schließen</translation>
     </message>
     <message>
-        <location line="+31"/>
+        <location line="+33"/>
         <source>Unpin</source>
         <translation>Lösen</translation>
     </message>
@@ -4174,53 +4899,79 @@ Das Original kann danach nicht wiederhergestellt werden.</translation>
 <context>
     <name>EditSourceBrowser</name>
     <message>
-        <location filename="../quick/ExoSnap/Quick/EditSourceBrowser.qml" line="+55"/>
-        <source>History</source>
-        <translation>Verlauf</translation>
+        <location filename="../quick/ExoSnap/Quick/EditSourceBrowser.qml" line="+65"/>
+        <source>Project</source>
+        <translation>Projekt</translation>
+    </message>
+    <message>
+        <location line="+14"/>
+        <source>Folders</source>
+        <translation>Ordner</translation>
+    </message>
+    <message>
+        <location line="+14"/>
+        <source>Recordings</source>
+        <translation>Aufnahmen</translation>
     </message>
     <message>
         <location line="+16"/>
-        <source>Media</source>
-        <translation>Medien</translation>
+        <source>Add media</source>
+        <translation>Medien hinzufügen</translation>
     </message>
     <message>
-        <location line="+16"/>
-        <source>Transitions</source>
-        <translation>Übergänge</translation>
+        <location line="+10"/>
+        <location line="+228"/>
+        <source>Add files</source>
+        <translation>Dateien hinzufügen</translation>
     </message>
     <message>
-        <location line="+17"/>
-        <location line="+142"/>
-        <source>Import media</source>
-        <translation>Medien importieren</translation>
+        <location line="-223"/>
+        <location line="+241"/>
+        <source>Add folder</source>
+        <translation>Ordner hinzufügen</translation>
     </message>
     <message>
-        <location line="-131"/>
-        <source>Crossfade</source>
-        <translation>Überblendung</translation>
+        <location line="-234"/>
+        <source>Pinned when space is available</source>
+        <translation>Wird angeheftet, sobald genügend Platz vorhanden ist</translation>
     </message>
     <message>
-        <location line="+1"/>
-        <source>Apply to the cut after the selected video clip, or drag onto a cut.</source>
-        <translation>Am Schnitt nach dem ausgewählten Videoclip anwenden oder auf einen Schnitt ziehen.</translation>
-    </message>
-    <message>
-        <location line="+13"/>
-        <source>Apply after selected clip (500 ms)</source>
-        <translation>Nach ausgewähltem Clip anwenden (500 ms)</translation>
+        <location line="+2"/>
+        <source>Unpin</source>
+        <translation>Lösen</translation>
     </message>
     <message>
         <location line="+0"/>
-        <source>Select a video clip with an adjacent cut, or drag onto a cut.</source>
-        <translation>Einen Videoclip mit angrenzendem Schnitt auswählen oder auf einen Schnitt ziehen.</translation>
+        <source>Pin</source>
+        <translation>Anheften</translation>
     </message>
     <message>
-        <location line="+4"/>
-        <source>Overlaps linked video and audio. Render export: SDR BT.709, MKV with PCM audio.</source>
-        <translation>Überblendet verknüpftes Video und Audio. Renderexport: SDR BT.709, MKV mit PCM-Audio.</translation>
+        <location line="+15"/>
+        <source>Close Media</source>
+        <translation>Medien schließen</translation>
     </message>
     <message>
-        <location line="+8"/>
+        <location line="+17"/>
+        <source>Place imported media</source>
+        <translation>Importierte Medien platzieren</translation>
+    </message>
+    <message>
+        <location line="+7"/>
+        <source>Cancel import</source>
+        <translation>Import abbrechen</translation>
+    </message>
+    <message>
+        <location line="+9"/>
+        <source>Refresh</source>
+        <translation>Aktualisieren</translation>
+    </message>
+    <message>
+        <location line="+7"/>
+        <source>Remove root</source>
+        <translation>Ordner aus der Medienübersicht entfernen</translation>
+    </message>
+    <message>
+        <location line="+10"/>
         <source>No recordings yet</source>
         <translation>Noch keine Aufnahmen</translation>
     </message>
@@ -4231,18 +4982,53 @@ Das Original kann danach nicht wiederhergestellt werden.</translation>
     </message>
     <message>
         <location line="+0"/>
-        <source>Transitions will appear here when available.</source>
-        <translation>Übergänge erscheinen hier, sobald sie verfügbar sind.</translation>
+        <source>No folders added</source>
+        <translation>Keine Ordner hinzugefügt</translation>
     </message>
     <message>
         <location line="+11"/>
-        <source>Recent recordings appear here automatically.</source>
-        <translation>Letzte Aufnahmen erscheinen hier automatisch.</translation>
+        <source>Add files or a folder with +.</source>
+        <translation>Fügen Sie über + Dateien oder einen Ordner hinzu.</translation>
+    </message>
+    <message>
+        <location line="+22"/>
+        <source>Reading folder...</source>
+        <translation>Ordner wird gelesen...</translation>
+    </message>
+    <message>
+        <location line="+1"/>
+        <source>Verifying media...</source>
+        <translation>Medien werden überprüft...</translation>
     </message>
     <message>
         <location line="+0"/>
-        <source>Or use the Add Media button.</source>
-        <translation>Oder Medien über die Plus-Schaltfläche hinzufügen.</translation>
+        <source>Choose an audio stream</source>
+        <translation>Audiostream auswählen</translation>
+    </message>
+    <message>
+        <location line="+68"/>
+        <source>Actions for %1</source>
+        <translation>Aktionen für %1</translation>
+    </message>
+    <message>
+        <location line="+7"/>
+        <source>Relink source…</source>
+        <translation>Quelle neu verknüpfen…</translation>
+    </message>
+    <message>
+        <location line="+42"/>
+        <source>Media files (*.mkv *.mp4 *.mov *.webm *.avi *.wav *.mp3 *.flac *.m4a *.aac *.ogg *.opus)</source>
+        <translation>Mediendateien (*.mkv *.mp4 *.mov *.webm *.avi *.wav *.mp3 *.flac *.m4a *.aac *.ogg *.opus)</translation>
+    </message>
+    <message>
+        <location line="+5"/>
+        <source>Choose replacement source</source>
+        <translation>Ersatzquelle auswählen</translation>
+    </message>
+    <message>
+        <location line="-145"/>
+        <source>Recent recordings appear here automatically.</source>
+        <translation>Letzte Aufnahmen erscheinen hier automatisch.</translation>
     </message>
     <message>
         <location line="+23"/>
@@ -4250,30 +5036,215 @@ Das Original kann danach nicht wiederhergestellt werden.</translation>
         <translation>Medium nicht verfügbar</translation>
     </message>
     <message>
-        <location line="+65"/>
-        <source>Double-click or press Enter to add</source>
-        <translation>Zum Hinzufügen doppelklicken oder Eingabetaste drücken</translation>
-    </message>
-    <message>
-        <location line="+8"/>
-        <source>Video files (*.mkv *.mp4 *.mov *.webm *.avi)</source>
-        <translation>Videodateien (*.mkv *.mp4 *.mov *.webm *.avi)</translation>
-    </message>
-    <message>
-        <location line="+0"/>
+        <location line="+117"/>
         <source>All files (*)</source>
         <translation>Alle Dateien (*)</translation>
     </message>
 </context>
 <context>
-    <name>EditTimeline</name>
+    <name>EditSourceChoice</name>
     <message>
-        <location filename="../quick/ExoSnap/Quick/EditTimeline.qml" line="+77"/>
-        <source>Edit timeline. Left and Right seek; Up and Down select clips. Alt+Left/Right moves; add Control to trim the start or Shift to trim the end. Control+B splits; Delete removes; Shift+Delete closes the gap. Control+wheel or Control+Plus/Minus zooms. Menu opens clip actions.</source>
-        <translation>Zeitleiste bearbeiten. Links und Rechts ändern die Position; Auf und Ab wählen Clips. Alt+Links/Rechts verschiebt; zusätzlich Strg kürzt den Anfang, Umschalt das Ende. Strg+B teilt; Entf löscht; Umschalt+Entf schließt die Lücke. Strg+Mausrad oder Strg+Plus/Minus zoomt. Die Menütaste öffnet Clip-Aktionen.</translation>
+        <location filename="../quick/ExoSnap/Quick/EditSourceChoice.qml" line="+11"/>
+        <source>Audio: %1</source>
+        <translation>Audio: %1</translation>
     </message>
     <message>
-        <location line="+83"/>
+        <location line="+0"/>
+        <source>Choose source audio</source>
+        <translation>Quellaudio auswählen</translation>
+    </message>
+    <message>
+        <location line="+73"/>
+        <source>%1 · %2 · %3 channels</source>
+        <translation>%1 · %2 · %3 Kanäle</translation>
+    </message>
+    <message>
+        <location line="+0"/>
+        <source>Audio</source>
+        <translation>Audio</translation>
+    </message>
+    <message>
+        <location line="+12"/>
+        <source>Include the named streams together despite overlapping content</source>
+        <translation>Die benannten Streams trotz überlappender Inhalte gemeinsam einbeziehen</translation>
+    </message>
+    <message>
+        <location line="+17"/>
+        <source>Checking source audio</source>
+        <translation>Quellaudio wird überprüft</translation>
+    </message>
+    <message>
+        <location line="+6"/>
+        <source>Cancel</source>
+        <translation>Abbrechen</translation>
+    </message>
+    <message>
+        <location line="+7"/>
+        <source>Apply</source>
+        <translation>Übernehmen</translation>
+    </message>
+</context>
+<context>
+    <name>EditSourceReplacement</name>
+    <message>
+        <location filename="../quick/ExoSnap/Quick/EditSourceReplacement.qml" line="+11"/>
+        <source>Relink source: %1</source>
+        <translation>Quelle neu verknüpfen: %1</translation>
+    </message>
+    <message>
+        <location line="+59"/>
+        <source>Every clip using this source will change together. Clip positions, groups and edits are preserved.</source>
+        <translation>Alle Clips mit dieser Quelle werden gemeinsam geändert. Clippositionen, Gruppen und Bearbeitungen bleiben erhalten.</translation>
+    </message>
+    <message>
+        <location line="+7"/>
+        <source>Current: %1
+Replacement: %2</source>
+        <translation>Aktuell: %1
+Ersatz: %2</translation>
+    </message>
+    <message>
+        <location line="+8"/>
+        <source>Expected SHA-256: %1
+Observed SHA-256: %2</source>
+        <translation>Erwartete SHA-256: %1
+Ermittelte SHA-256: %2</translation>
+    </message>
+    <message>
+        <location line="-43"/>
+        <location line="+2"/>
+        <location line="+42"/>
+        <source>Unavailable</source>
+        <translation>Nicht verfügbar</translation>
+    </message>
+    <message>
+        <location line="-42"/>
+        <source>%1 s</source>
+        <translation>%1 s</translation>
+    </message>
+    <message>
+        <location line="+43"/>
+        <source>Awaiting verification</source>
+        <translation>Überprüfung ausstehend</translation>
+    </message>
+    <message>
+        <location line="+9"/>
+        <source>Replacement duration: %1 · Required source end: %2</source>
+        <translation>Dauer der Ersatzquelle: %1 · Benötigtes Quellende: %2</translation>
+    </message>
+    <message>
+        <location line="+10"/>
+        <source>Adopt changed content and establish its new identity</source>
+        <translation>Geänderten Inhalt übernehmen und neue Identität festlegen</translation>
+    </message>
+    <message>
+        <location line="+8"/>
+        <source>Affected clips: %1</source>
+        <translation>Betroffene Clips: %1</translation>
+    </message>
+    <message>
+        <location line="+15"/>
+        <source>Clip %1 · %2 · %3–%4</source>
+        <translation>Clip %1 · %2 · %3–%4</translation>
+    </message>
+    <message>
+        <location line="+11"/>
+        <source>Choose the replacement audio streams</source>
+        <translation>Audiostreams der Ersatzquelle auswählen</translation>
+    </message>
+    <message>
+        <location line="+10"/>
+        <source>%1 · %2 · %3 channels</source>
+        <translation>%1 · %2 · %3 Kanäle</translation>
+    </message>
+    <message>
+        <location line="+0"/>
+        <source>Audio</source>
+        <translation>Audio</translation>
+    </message>
+    <message>
+        <location line="+12"/>
+        <source>Include the named streams together despite overlapping content</source>
+        <translation>Die benannten Streams trotz überlappender Inhalte gemeinsam einbeziehen</translation>
+    </message>
+    <message>
+        <location line="+21"/>
+        <source>Checking replacement source</source>
+        <translation>Ersatzquelle wird überprüft</translation>
+    </message>
+    <message>
+        <location line="+6"/>
+        <source>Cancel</source>
+        <translation>Abbrechen</translation>
+    </message>
+    <message>
+        <location line="+7"/>
+        <source>Review again</source>
+        <translation>Erneut überprüfen</translation>
+    </message>
+    <message>
+        <location line="+8"/>
+        <source>Apply</source>
+        <translation>Übernehmen</translation>
+    </message>
+</context>
+<context>
+    <name>EditTimeField</name>
+    <message>
+        <location filename="../quick/ExoSnap/Quick/EditTimeField.qml" line="+11"/>
+        <source>Non-drop-frame timecode</source>
+        <translation>Zeitcode ohne Drop-Frame</translation>
+    </message>
+    <message>
+        <location line="+0"/>
+        <source>Seconds, up to six decimal places</source>
+        <translation>Sekunden, bis zu sechs Nachkommastellen</translation>
+    </message>
+    <message>
+        <location line="+0"/>
+        <source>48 kHz sample count</source>
+        <translation>Sampleanzahl bei 48 kHz</translation>
+    </message>
+    <message>
+        <location line="+33"/>
+        <source>Timecode (non-drop-frame)</source>
+        <translation>Zeitcode (ohne Drop-Frame)</translation>
+    </message>
+    <message>
+        <location line="+1"/>
+        <source>Seconds</source>
+        <translation>Sekunden</translation>
+    </message>
+    <message>
+        <location line="+1"/>
+        <source>Samples (48 kHz)</source>
+        <translation>Samples (48 kHz)</translation>
+    </message>
+    <message>
+        <location line="+1"/>
+        <source>Cut</source>
+        <translation>Ausschneiden</translation>
+    </message>
+    <message>
+        <location line="+1"/>
+        <source>Copy</source>
+        <translation>Kopieren</translation>
+    </message>
+    <message>
+        <location line="+1"/>
+        <source>Paste</source>
+        <translation>Einfügen</translation>
+    </message>
+    <message>
+        <location line="+1"/>
+        <source>Select all</source>
+        <translation>Alles auswählen</translation>
+    </message>
+</context>
+<context>
+    <name>EditTimeline</name>
+    <message>
+        <location filename="../quick/ExoSnap/Quick/EditTimeline.qml" line="+348"/>
         <source>Copy blank duration</source>
         <translation>Leere Zeitspanne kopieren</translation>
     </message>
@@ -4303,22 +5274,7 @@ Das Original kann danach nicht wiederhergestellt werden.</translation>
         <translation>Mit Lückenschluss löschen (Umschalt+Entf)</translation>
     </message>
     <message>
-        <location line="+5"/>
-        <source>Add Crossfade after clip</source>
-        <translation>Überblendung nach Clip hinzufügen</translation>
-    </message>
-    <message>
-        <location line="+45"/>
-        <source>Crossfade duration in milliseconds</source>
-        <translation>Dauer der Überblendung in Millisekunden</translation>
-    </message>
-    <message>
-        <location line="+15"/>
-        <source>Junction start in milliseconds</source>
-        <translation>Übergangsbeginn in Millisekunden</translation>
-    </message>
-    <message>
-        <location line="+13"/>
+        <location line="+160"/>
         <source>Linear</source>
         <translation>Linear</translation>
     </message>
@@ -4338,13 +5294,13 @@ Das Original kann danach nicht wiederhergestellt werden.</translation>
         <translation>Übergangskurve</translation>
     </message>
     <message>
-        <location line="+6"/>
-        <location line="+8"/>
+        <location line="+7"/>
+        <location line="+14"/>
         <source>Curve bias</source>
         <translation>Kurvengewichtung</translation>
     </message>
     <message>
-        <location line="+14"/>
+        <location line="+15"/>
         <source>Equal Gain</source>
         <translation>Equal Gain</translation>
     </message>
@@ -4360,75 +5316,231 @@ Das Original kann danach nicht wiederhergestellt werden.</translation>
         <translation>Audio-Überblendgesetz</translation>
     </message>
     <message>
-        <location line="+15"/>
-        <source>Cut position in milliseconds</source>
-        <translation>Schnittposition in Millisekunden</translation>
-    </message>
-    <message>
-        <location line="+7"/>
-        <source>Remove Crossfade</source>
-        <translation>Überblendung entfernen</translation>
-    </message>
-    <message>
-        <location line="+10"/>
-        <source>Ctrl+wheel to zoom. Ctrl+drag previews insertion. I/O marks a time range. Menu or Shift+F10 opens clip actions.</source>
-        <translation>Strg+Mausrad zum Zoomen. Strg+Ziehen zeigt eine Einfügevorschau. I und O markieren einen Zeitbereich. Die Menütaste oder Umschalt+F10 öffnet Clip-Aktionen.</translation>
-    </message>
-    <message>
-        <location line="+20"/>
-        <source>Apply gap closure (Enter)</source>
-        <translation>Lückenschluss anwenden (Eingabetaste)</translation>
-    </message>
-    <message>
-        <location line="+0"/>
-        <source>Gap closure unavailable</source>
-        <translation>Lückenschluss nicht verfügbar</translation>
-    </message>
-    <message>
-        <location line="+2"/>
+        <location line="+168"/>
         <source>Review all outlined clips. Enter applies; Escape cancels.</source>
         <translation>Prüfen Sie alle umrandeten Clips. Die Eingabetaste wendet die Änderung an, Esc bricht ab.</translation>
     </message>
     <message>
-        <location line="-177"/>
-        <location line="+265"/>
+        <location line="-381"/>
+        <location line="+754"/>
         <source>Delete track</source>
         <translation>Spur löschen</translation>
     </message>
     <message>
-        <location line="-224"/>
+        <location line="-847"/>
+        <source>Edit timeline</source>
+        <translation>Zeitleiste bearbeiten</translation>
+    </message>
+    <message>
+        <location line="+107"/>
+        <source>Crossfade to next clip</source>
+        <translation>Zum nächsten Clip überblenden</translation>
+    </message>
+    <message>
+        <location line="+9"/>
+        <source>Junction before clip</source>
+        <translation>Übergang vor Clip</translation>
+    </message>
+    <message>
+        <location line="+11"/>
+        <source>Junction after clip</source>
+        <translation>Übergang nach Clip</translation>
+    </message>
+    <message>
+        <location line="+64"/>
         <source>Crossfade</source>
         <translation>Überblendung</translation>
     </message>
     <message>
-        <location line="+8"/>
+        <location line="+0"/>
+        <location line="+1484"/>
+        <source>Hard cut</source>
+        <translation>Harter Schnitt</translation>
+    </message>
+    <message>
+        <location line="-1475"/>
         <source>Duration</source>
         <translation>Dauer</translation>
     </message>
     <message>
-        <location line="+8"/>
-        <location line="+15"/>
-        <location line="+65"/>
-        <source>ms</source>
-        <translation>ms</translation>
+        <location line="+12"/>
+        <source>Crossfade duration</source>
+        <translation>Überblendungsdauer</translation>
     </message>
     <message>
-        <location line="-73"/>
+        <location line="+6"/>
         <source>Start</source>
         <translation>Beginn</translation>
     </message>
     <message>
-        <location line="+15"/>
+        <location line="+12"/>
+        <source>Junction start</source>
+        <translation>Übergangsbeginn</translation>
+    </message>
+    <message>
+        <location line="+6"/>
+        <source>End</source>
+        <translation>Ende</translation>
+    </message>
+    <message>
+        <location line="+12"/>
+        <source>Junction end</source>
+        <translation>Übergangsende</translation>
+    </message>
+    <message>
+        <location line="+6"/>
         <source>Curve</source>
         <translation>Kurve</translation>
     </message>
     <message>
-        <location line="+50"/>
+        <location line="+34"/>
+        <source>Curve bias from -100% to 100%</source>
+        <translation>Kurvenform von -100 % bis 100 %</translation>
+    </message>
+    <message>
+        <location line="+25"/>
+        <location line="+12"/>
         <source>Cut position</source>
         <translation>Schnittposition</translation>
     </message>
     <message>
-        <location line="+165"/>
+        <location line="+7"/>
+        <source>Convert to hard cut</source>
+        <translation>In harten Schnitt umwandeln</translation>
+    </message>
+    <message>
+        <location line="+9"/>
+        <source>Remove overlap (preview)</source>
+        <translation>Überlappung entfernen (Vorschau)</translation>
+    </message>
+    <message>
+        <location line="+40"/>
+        <location line="+441"/>
+        <source>Track settings</source>
+        <translation>Spureinstellungen</translation>
+    </message>
+    <message>
+        <location line="-440"/>
+        <source>Name</source>
+        <translation>Name</translation>
+    </message>
+    <message>
+        <location line="+10"/>
+        <source>Enter a track name.</source>
+        <translation>Geben Sie einen Spurnamen ein.</translation>
+    </message>
+    <message>
+        <location line="+2"/>
+        <source>Track name</source>
+        <translation>Spurname</translation>
+    </message>
+    <message>
+        <location line="+2"/>
+        <source>Track gain (dB)</source>
+        <translation>Spurverstärkung (dB)</translation>
+    </message>
+    <message>
+        <location line="+13"/>
+        <source>Track gain in decibels</source>
+        <translation>Spurverstärkung in Dezibel</translation>
+    </message>
+    <message>
+        <location line="+2"/>
+        <source>Height</source>
+        <translation>Höhe</translation>
+    </message>
+    <message>
+        <location line="+9"/>
+        <source>Track height %1 pixels</source>
+        <translation>Spurhöhe %1 Pixel</translation>
+    </message>
+    <message>
+        <location line="+4"/>
+        <source>Color</source>
+        <translation>Farbe</translation>
+    </message>
+    <message>
+        <location line="+11"/>
+        <source>Track color %1</source>
+        <translation>Spurfarbe %1</translation>
+    </message>
+    <message>
+        <location line="+0"/>
+        <source>Default track color</source>
+        <translation>Standardspurfarbe</translation>
+    </message>
+    <message>
+        <location line="+37"/>
+        <source>Apply preview (Enter)</source>
+        <translation>Vorschau übernehmen (Eingabe)</translation>
+    </message>
+    <message>
+        <location line="+0"/>
+        <source>Preview unavailable</source>
+        <translation>Vorschau nicht verfügbar</translation>
+    </message>
+    <message>
+        <location line="+13"/>
+        <source>Cancel</source>
+        <translation>Abbrechen</translation>
+    </message>
+    <message>
+        <location line="+231"/>
+        <source>Track actions</source>
+        <translation>Spuraktionen</translation>
+    </message>
+    <message>
+        <location line="+18"/>
+        <source>Video visibility</source>
+        <translation>Videosichtbarkeit</translation>
+    </message>
+    <message>
+        <location line="+0"/>
+        <source>Track mute</source>
+        <translation>Spur stummschalten</translation>
+    </message>
+    <message>
+        <location line="+13"/>
+        <source>Track solo</source>
+        <translation>Spur solo schalten</translation>
+    </message>
+    <message>
+        <location line="+13"/>
+        <source>Track lock</source>
+        <translation>Spur sperren</translation>
+    </message>
+    <message>
+        <location line="+69"/>
+        <source>Toggle visibility</source>
+        <translation>Sichtbarkeit umschalten</translation>
+    </message>
+    <message>
+        <location line="+0"/>
+        <source>Toggle mute</source>
+        <translation>Stummschaltung umschalten</translation>
+    </message>
+    <message>
+        <location line="+5"/>
+        <source>Toggle solo</source>
+        <translation>Solo umschalten</translation>
+    </message>
+    <message>
+        <location line="+5"/>
+        <source>Toggle lock</source>
+        <translation>Sperre umschalten</translation>
+    </message>
+    <message>
+        <location line="+4"/>
+        <source>Expand track</source>
+        <translation>Spur aufklappen</translation>
+    </message>
+    <message>
+        <location line="+0"/>
+        <source>Collapse track</source>
+        <translation>Spur einklappen</translation>
+    </message>
+    <message>
+        <location line="+39"/>
         <source>Spacer</source>
         <translation>Spacer</translation>
     </message>
@@ -4438,27 +5550,37 @@ Das Original kann danach nicht wiederhergestellt werden.</translation>
         <translation>Spacer, %1 ms</translation>
     </message>
     <message>
-        <location line="+100"/>
+        <location line="+230"/>
         <source>Media unavailable</source>
         <translation>Medium nicht verfügbar</translation>
     </message>
     <message>
-        <location line="+175"/>
-        <source>Fade in</source>
-        <translation>Einblenden</translation>
-    </message>
-    <message>
         <location line="+0"/>
-        <source>Fade out</source>
-        <translation>Ausblenden</translation>
+        <source>Disabled</source>
+        <translation>Deaktiviert</translation>
     </message>
     <message>
-        <location line="+23"/>
+        <location line="+465"/>
+        <source>Hard cut. Enter to adjust.</source>
+        <translation>Harter Schnitt. Zum Anpassen Eingabe drücken.</translation>
+    </message>
+    <message>
+        <location line="+96"/>
+        <source>%1 ms</source>
+        <translation>%1 ms</translation>
+    </message>
+    <message>
+        <location line="+303"/>
+        <source>Track header width</source>
+        <translation>Spurkopfbreite</translation>
+    </message>
+    <message>
+        <location line="-501"/>
         <source>Unavailable</source>
         <translation>Nicht verfügbar</translation>
     </message>
     <message>
-        <location line="+51"/>
+        <location line="+68"/>
         <source>New front video layer</source>
         <translation>Neue vordere Videoebene</translation>
     </message>
@@ -4473,7 +5595,7 @@ Das Original kann danach nicht wiederhergestellt werden.</translation>
         <translation>Neue Audiospur</translation>
     </message>
     <message>
-        <location line="+29"/>
+        <location line="+34"/>
         <source>Crossfade, %1 ms. Enter to adjust duration.</source>
         <translation>Überblendung, %1 ms. Eingabetaste zum Ändern der Dauer.</translation>
     </message>
@@ -4481,7 +5603,7 @@ Das Original kann danach nicht wiederhergestellt werden.</translation>
 <context>
     <name>EditTimelineAdapter</name>
     <message>
-        <location filename="../quick/ExoSnap/Quick/EditTimelineAdapter.cpp" line="+267"/>
+        <location filename="../quick/ExoSnap/Quick/EditTimelineAdapter.cpp" line="+366"/>
         <source>Audio %1</source>
         <translation>Audio %1</translation>
     </message>
@@ -4887,7 +6009,7 @@ Das Original kann danach nicht wiederhergestellt werden.</translation>
         <translation>Win</translation>
     </message>
     <message>
-        <location filename="../quick/ExoSnap/Quick/QuickApplication.cpp" line="+3427"/>
+        <location filename="../quick/ExoSnap/Quick/QuickApplication.cpp" line="+3429"/>
         <location filename="../services/GlobalHotkeyService.cpp" line="+52"/>
         <source>This shortcut is already used by Windows or another application.</source>
         <translation>Dieser Hotkey wird bereits von Windows oder einer anderen Anwendung verwendet.</translation>
@@ -5765,12 +6887,12 @@ Das Original kann danach nicht wiederhergestellt werden.</translation>
     </message>
     <message>
         <location line="+4"/>
-        <location line="+1492"/>
+        <location line="+1744"/>
         <source>Window capture appears to have stalled</source>
         <translation>Die Fensteraufnahme scheint stillzustehen</translation>
     </message>
     <message>
-        <location line="-1491"/>
+        <location line="-1743"/>
         <source>No new frame has arrived from the captured window for 12 seconds. The recording is still running, but the captured window may be frozen.</source>
         <translation>Seit 12 Sekunden ist kein neuer Frame vom aufgenommenen Fenster angekommen. Die Aufnahme läuft weiter, das Fenster könnte jedoch eingefroren sein.</translation>
     </message>
@@ -5790,7 +6912,7 @@ Das Original kann danach nicht wiederhergestellt werden.</translation>
         <translation>2026-08-10 21-14-08.mkv - 2:34, 412 MB</translation>
     </message>
     <message>
-        <location line="+742"/>
+        <location line="+994"/>
         <source>Update checks are paused while a recording is in progress.</source>
         <translation>Während einer Aufnahme wird nicht nach Updates gesucht.</translation>
     </message>
@@ -5841,8 +6963,8 @@ Das Original kann danach nicht wiederhergestellt werden.</translation>
         <translation>Letzte Session wiederherstellen?</translation>
     </message>
     <message>
-        <location line="-1219"/>
-        <location line="+1364"/>
+        <location line="-1471"/>
+        <location line="+1616"/>
         <location line="+466"/>
         <source>Recording saved</source>
         <translation>Aufnahme gespeichert</translation>
@@ -5853,14 +6975,14 @@ Das Original kann danach nicht wiederhergestellt werden.</translation>
         <translation>2026-08-10_22-31-22_Desktop_Display 1.mkv · 1.4 GB</translation>
     </message>
     <message>
-        <location line="-1408"/>
-        <location line="+1413"/>
+        <location line="-1660"/>
+        <location line="+1665"/>
         <source>Frames were dropped</source>
         <translation>Frames wurden verworfen</translation>
     </message>
     <message>
-        <location line="-1412"/>
-        <location line="+1413"/>
+        <location line="-1664"/>
+        <location line="+1665"/>
         <source>122 frames did not reach the encoder during the last recording.</source>
         <translation>122 Frames haben den Encoder während der letzten Aufnahme nicht erreicht.</translation>
     </message>
@@ -5881,18 +7003,18 @@ Das Original kann danach nicht wiederhergestellt werden.</translation>
         <translation>ExoSnap 0.9.1 ist zur Installation bereit.</translation>
     </message>
     <message>
-        <location line="-1402"/>
-        <location line="+1871"/>
+        <location line="-1654"/>
+        <location line="+2123"/>
         <source>Storage running low</source>
         <translation>Speicherplatz wird knapp</translation>
     </message>
     <message>
-        <location line="-4730"/>
+        <location line="-4982"/>
         <source>Recording is blocked by the current system configuration.</source>
         <translation>Die aktuelle Systemkonfiguration verhindert eine Aufnahme.</translation>
     </message>
     <message numerus="yes">
-        <location line="+4098"/>
+        <location line="+4350"/>
         <source>Unfinalized recordings from the last session: %n</source>
         <translation>
             <numerusform>Nicht abgeschlossene Aufnahmen der letzten Sitzung: %n</numerusform>
@@ -5920,7 +7042,7 @@ Das Original kann danach nicht wiederhergestellt werden.</translation>
         <translation>Export fehlgeschlagen</translation>
     </message>
     <message>
-        <location line="+387"/>
+        <location line="+390"/>
         <source>Hotkey unavailable</source>
         <translation>Tastenkürzel nicht verfügbar</translation>
     </message>
@@ -7204,7 +8326,7 @@ Das Original kann danach nicht wiederhergestellt werden.</translation>
     <name>RecordingProfileInspector</name>
     <message>
         <location filename="../quick/ExoSnap/Quick/RecordingProfileInspector.qml" line="+16"/>
-        <location line="+55"/>
+        <location line="+81"/>
         <source>Recording profile</source>
         <translation>Aufnahmeprofil</translation>
     </message>
@@ -8844,6 +9966,34 @@ Kleiner Text auf dem Bildschirm verliert früher an Qualität als Videoinhalte. 
     </message>
 </context>
 <context>
+    <name>SettingsStorageSection</name>
+    <message>
+        <location filename="../quick/ExoSnap/Quick/SettingsStorageSection.qml" line="+10"/>
+        <source>Storage</source>
+        <translation>Speicher</translation>
+    </message>
+    <message>
+        <location line="+2"/>
+        <source>Editor previews</source>
+        <translation>Editorvorschauen</translation>
+    </message>
+    <message>
+        <location line="+1"/>
+        <source>Preview cache cleared. Visible previews regenerate as needed.</source>
+        <translation>Vorschaucache geleert. Sichtbare Vorschauen werden bei Bedarf neu erstellt.</translation>
+    </message>
+    <message>
+        <location line="+0"/>
+        <source>Cached thumbnails and waveforms. Source recordings are kept.</source>
+        <translation>Zwischengespeicherte Vorschaubilder und Wellenformen. Quellaufnahmen bleiben erhalten.</translation>
+    </message>
+    <message>
+        <location line="+5"/>
+        <source>Clear preview cache</source>
+        <translation>Vorschaucache leeren</translation>
+    </message>
+</context>
+<context>
     <name>SettingsUpdatesSection</name>
     <message>
         <location filename="../quick/ExoSnap/Quick/SettingsUpdatesSection.qml" line="+10"/>
@@ -9950,14 +11100,14 @@ Kleiner Text auf dem Bildschirm verliert früher an Qualität als Videoinhalte. 
 <context>
     <name>exosnap::WaveformCacheService</name>
     <message>
-        <location filename="../services/WaveformCacheService.cpp" line="+496"/>
+        <location filename="../services/WaveformCacheService.cpp" line="+635"/>
         <source>Decoded audio contains nonfinite samples.</source>
-        <translation>Die decodierten Audiodaten enthalten ungültige Zahlenwerte.</translation>
+        <translation>Das dekodierte Audio enthält nicht endliche Samplewerte.</translation>
     </message>
     <message>
         <location line="+8"/>
         <source>Invalid decoded sample coverage.</source>
-        <translation>Die decodierten Samples decken einen ungültigen Zeitbereich ab.</translation>
+        <translation>Ungültige Abdeckung der dekodierten Samples.</translation>
     </message>
 </context>
 <context>
@@ -10552,7 +11702,7 @@ Kleiner Text auf dem Bildschirm verliert früher an Qualität als Videoinhalte. 
 <context>
     <name>exosnap::quick::EditExportAdapter</name>
     <message>
-        <location filename="../quick/ExoSnap/Quick/EditExportAdapter.cpp" line="-678"/>
+        <location filename="../quick/ExoSnap/Quick/EditExportAdapter.cpp" line="-681"/>
         <source>No probed encoder adapter supports this render format.</source>
         <translation>Kein geprüfter Encoder-Adapter unterstützt dieses Renderformat.</translation>
     </message>
@@ -10642,7 +11792,7 @@ Kleiner Text auf dem Bildschirm verliert früher an Qualität als Videoinhalte. 
         <translation>Verlustfreie Stream-Kopie. Dateinamen und Ordner wählen (%1).</translation>
     </message>
     <message>
-        <location line="+157"/>
+        <location line="+158"/>
         <source>Choose a destination and confirm before replacing an existing file.</source>
         <translation>Ziel wählen und das Ersetzen einer vorhandenen Datei bestätigen.</translation>
     </message>
@@ -10653,42 +11803,73 @@ Kleiner Text auf dem Bildschirm verliert früher an Qualität als Videoinhalte. 
     </message>
 </context>
 <context>
-    <name>exosnap::quick::EditPlayerWorker</name>
+    <name>exosnap::quick::EditFolderModel</name>
     <message>
-        <location filename="../quick/ExoSnap/Quick/EditPlayerWorker.cpp" line="+160"/>
-        <location line="+476"/>
-        <location line="+125"/>
-        <source>The source time is outside the supported range.</source>
-        <translation>Die Quellzeit liegt außerhalb des unterstützten Bereichs.</translation>
+        <location filename="../quick/ExoSnap/Quick/EditTimelineModels.cpp" line="+138"/>
+        <source>Linked directories are not expanded.</source>
+        <translation>Verknüpfte Verzeichnisse werden nicht aufgeklappt.</translation>
     </message>
     <message>
-        <location line="-522"/>
-        <location line="+46"/>
+        <location line="+8"/>
+        <source>This directory exceeds the browsing limit of %1 entries.</source>
+        <translation>Dieses Verzeichnis überschreitet die Anzeigegrenze von %1 Einträgen.</translation>
+    </message>
+    <message>
+        <location line="+11"/>
+        <source>The directory could not be read: %1</source>
+        <translation>Das Verzeichnis konnte nicht gelesen werden: %1</translation>
+    </message>
+    <message>
+        <location line="+141"/>
+        <source>The folder browser has reached its entry limit. Remove unused roots and refresh.</source>
+        <translation>Die Ordnerübersicht hat ihre Eintragsgrenze erreicht. Entfernen Sie nicht benötigte Ordner und aktualisieren Sie die Ansicht.</translation>
+    </message>
+    <message>
+        <location line="+12"/>
+        <location line="+14"/>
+        <source>Linked entries are not followed.</source>
+        <translation>Verknüpften Einträgen wird nicht gefolgt.</translation>
+    </message>
+    <message>
+        <location line="+161"/>
+        <location line="+23"/>
+        <source>Only local directories are supported.</source>
+        <translation>Es werden nur lokale Verzeichnisse unterstützt.</translation>
+    </message>
+</context>
+<context>
+    <name>exosnap::quick::EditInteractionController</name>
+    <message>
+        <location filename="../quick/ExoSnap/Quick/EditInteractionController.cpp" line="+66"/>
+        <source>This modifier combination is not available for this gesture.</source>
+        <translation>Diese Tastenkombination ist für diese Geste nicht verfügbar.</translation>
+    </message>
+</context>
+<context>
+    <name>exosnap::quick::EditPlayerWorker</name>
+    <message>
+        <location filename="../quick/ExoSnap/Quick/EditPlayerWorker.cpp" line="+231"/>
+        <location line="+47"/>
         <source>The requested time is outside the supported range.</source>
         <translation>Die angeforderte Zeit liegt außerhalb des unterstützten Bereichs.</translation>
     </message>
     <message>
-        <location line="-30"/>
-        <source>Confirm the audio monitoring selection before playback.</source>
-        <translation>Bestätige die Auswahl der Audioüberwachung vor der Wiedergabe.</translation>
-    </message>
-    <message>
-        <location line="+328"/>
+        <location line="+537"/>
         <source>The audio monitoring track identity is invalid.</source>
         <translation>Die Identität der Audioüberwachungsspur ist ungültig.</translation>
     </message>
     <message>
-        <location line="+288"/>
+        <location line="+132"/>
+        <source>Audio controls are waiting for an earlier output block to finish.</source>
+        <translation>Audioänderungen warten auf das Ende eines vorherigen Ausgabeblocks.</translation>
+    </message>
+    <message>
+        <location line="+106"/>
         <source>The audio output could not start.</source>
         <translation>Die Audioausgabe konnte nicht gestartet werden.</translation>
     </message>
     <message>
-        <location line="-121"/>
-        <source>Media unavailable</source>
-        <translation>Medium nicht verfügbar</translation>
-    </message>
-    <message>
-        <location line="+134"/>
+        <location line="-13"/>
         <source>The audio output stopped unexpectedly.</source>
         <translation>Die Audioausgabe wurde unerwartet beendet.</translation>
     </message>
@@ -10696,32 +11877,374 @@ Kleiner Text auf dem Bildschirm verliert früher an Qualität als Videoinhalte. 
 <context>
     <name>exosnap::quick::EditSessionAdapter</name>
     <message>
-        <location filename="../quick/ExoSnap/Quick/EditWorkspaceSession.cpp" line="+180"/>
+        <location filename="../quick/ExoSnap/Quick/EditWorkspaceSession.cpp" line="+1720"/>
         <source>The edit would overlap another clip or exceed the source.</source>
         <translation>Die Bearbeitung würde einen anderen Clip überlappen oder die Quelle überschreiten.</translation>
     </message>
     <message>
-        <location line="+96"/>
-        <source>Crossfade needs a valid cut between adjacent video clips.</source>
-        <translation>Eine Überblendung benötigt einen gültigen Schnitt zwischen benachbarten Videoclips.</translation>
+        <location line="-1531"/>
+        <source>Choose a valid time format.</source>
+        <translation>Wählen Sie ein gültiges Zeitformat aus.</translation>
     </message>
     <message>
-        <location line="+60"/>
+        <location line="+13"/>
+        <source>The output frame rate is unavailable.</source>
+        <translation>Die Ausgabebildrate ist nicht verfügbar.</translation>
+    </message>
+    <message>
+        <location line="+3"/>
+        <source>The frame number is outside the output timecode rate.</source>
+        <translation>Die Bildnummer liegt außerhalb des gültigen Bereichs für die Ausgabezeitcode-Bildrate.</translation>
+    </message>
+    <message>
+        <location line="+3"/>
+        <location line="+140"/>
+        <source>Time cannot be negative.</source>
+        <translation>Die Zeit darf nicht negativ sein.</translation>
+    </message>
+    <message>
+        <location line="-137"/>
+        <source>The time is too large.</source>
+        <translation>Die Zeit ist zu groß.</translation>
+    </message>
+    <message>
+        <location line="+3"/>
+        <source>This time cannot be represented in whole microseconds.</source>
+        <translation>Diese Zeit lässt sich nicht in ganzen Mikrosekunden darstellen.</translation>
+    </message>
+    <message>
+        <location line="+3"/>
+        <source>Enter a valid time, for example 1.25s, 120ms or 10f.</source>
+        <translation>Geben Sie eine gültige Zeit ein, zum Beispiel 1.25s, 120ms oder 10f.</translation>
+    </message>
+    <message>
+        <location line="+3"/>
+        <source>48 kHz samples</source>
+        <translation>48-kHz-Samples</translation>
+    </message>
+    <message>
+        <location line="+1"/>
+        <source>Frames (rate unavailable)</source>
+        <translation>Bilder (Bildrate nicht verfügbar)</translation>
+    </message>
+    <message>
+        <location line="+1"/>
+        <location line="+1238"/>
+        <source>%1 fps</source>
+        <translation>%1 fps</translation>
+    </message>
+    <message>
+        <location line="-1237"/>
+        <source>%1/%2 fps</source>
+        <translation>%1/%2 fps</translation>
+    </message>
+    <message>
+        <location line="+29"/>
+        <source>Enter a gain from -60.0 to +12.0 dB in 0.1 dB steps.</source>
+        <translation>Geben Sie eine Verstärkung von -60,0 bis +12,0 dB in Schritten von 0,1 dB ein.</translation>
+    </message>
+    <message>
+        <location line="+1"/>
+        <source>Enter a gain from -60.0 to +24.0 dB in 0.1 dB steps.</source>
+        <translation>Geben Sie eine Verstärkung von -60,0 bis +24,0 dB in Schritten von 0,1 dB ein.</translation>
+    </message>
+    <message>
+        <location line="+34"/>
+        <location line="+3029"/>
+        <location line="+457"/>
+        <location filename="../quick/ExoSnap/Quick/EditSessionAdapter.cpp" line="-122"/>
+        <source>Apply or cancel the track scope review before continuing.</source>
+        <translation>Übernehmen oder verwerfen Sie die Spurauswahl, bevor Sie fortfahren.</translation>
+    </message>
+    <message>
+        <location line="-3470"/>
+        <source>Correct or cancel the pending value before continuing.</source>
+        <translation>Korrigieren oder verwerfen Sie den ausstehenden Wert, bevor Sie fortfahren.</translation>
+    </message>
+    <message>
+        <location line="+48"/>
+        <source>The playhead must be within the timeline.</source>
+        <translation>Die Abspielposition muss innerhalb der Zeitleiste liegen.</translation>
+    </message>
+    <message>
+        <location line="+8"/>
+        <source>Select a range before editing its time.</source>
+        <translation>Wählen Sie einen Bereich aus, bevor Sie seine Zeit ändern.</translation>
+    </message>
+    <message>
+        <location line="+14"/>
+        <source>The range time is outside the valid editing range.</source>
+        <translation>Die Bereichszeit liegt außerhalb des gültigen Bearbeitungsbereichs.</translation>
+    </message>
+    <message>
+        <location line="+6"/>
+        <source>The edited transition is no longer available.</source>
+        <translation>Der bearbeitete Übergang ist nicht mehr verfügbar.</translation>
+    </message>
+    <message>
+        <location line="+11"/>
+        <source>The transition duration is too large.</source>
+        <translation>Die Übergangsdauer ist zu groß.</translation>
+    </message>
+    <message>
+        <location line="+3"/>
+        <source>The transition time is outside the valid editing range.</source>
+        <translation>Die Übergangszeit liegt außerhalb des gültigen Bearbeitungsbereichs.</translation>
+    </message>
+    <message>
+        <location line="+6"/>
+        <source>The edited clip is no longer available.</source>
+        <translation>Der bearbeitete Clip ist nicht mehr verfügbar.</translation>
+    </message>
+    <message>
+        <location line="+11"/>
+        <source>The fade cannot exceed the available clip duration.</source>
+        <translation>Die Blende darf nicht länger als die verfügbare Clipdauer sein.</translation>
+    </message>
+    <message>
+        <location line="+13"/>
+        <source>The source start must be before the source end.</source>
+        <translation>Der Quellanfang muss vor dem Quellende liegen.</translation>
+    </message>
+    <message>
+        <location line="+5"/>
+        <source>The source end must be after the source start.</source>
+        <translation>Das Quellende muss nach dem Quellanfang liegen.</translation>
+    </message>
+    <message>
+        <location line="+6"/>
+        <source>The clip duration is too large.</source>
+        <translation>Die Clipdauer ist zu groß.</translation>
+    </message>
+    <message>
+        <location line="+4"/>
+        <source>The clip time is outside the valid editing range.</source>
+        <translation>Die Clipzeit liegt außerhalb des gültigen Bearbeitungsbereichs.</translation>
+    </message>
+    <message>
+        <location line="+54"/>
+        <source>Select clips to copy/cut.</source>
+        <translation>Wählen Sie Clips zum Kopieren oder Ausschneiden aus.</translation>
+    </message>
+    <message>
+        <location line="+5"/>
+        <source>The selected clips are unavailable for copying.</source>
+        <translation>Die ausgewählten Clips können nicht kopiert werden.</translation>
+    </message>
+    <message>
+        <location line="+22"/>
+        <source>Copy clips before pasting.</source>
+        <translation>Kopieren Sie Clips, bevor Sie sie einfügen.</translation>
+    </message>
+    <message>
+        <location line="+5"/>
+        <source>The clipboard source is unavailable or changed. Relink it before pasting.</source>
+        <translation>Die Quelle der Zwischenablage ist nicht verfügbar oder wurde geändert. Verknüpfen Sie sie vor dem Einfügen neu.</translation>
+    </message>
+    <message>
+        <location line="+89"/>
+        <location line="+168"/>
+        <location line="+514"/>
+        <source>Choose existing tracks for the range.</source>
+        <translation>Wählen Sie vorhandene Spuren für den Bereich aus.</translation>
+    </message>
+    <message>
+        <location line="-521"/>
+        <source>The range needs distinct valid boundaries and existing tracks.</source>
+        <translation>Der Bereich benötigt unterschiedliche gültige Grenzen und vorhandene Spuren.</translation>
+    </message>
+    <message>
+        <location line="+5"/>
+        <source>Choose at least one track for the range.</source>
+        <translation>Wählen Sie mindestens eine Spur für den Bereich aus.</translation>
+    </message>
+    <message>
+        <location line="+4"/>
+        <source>The range boundaries must remain inside the timeline.</source>
+        <translation>Die Bereichsgrenzen müssen innerhalb der Zeitleiste bleiben.</translation>
+    </message>
+    <message>
+        <location line="+2"/>
+        <source>Both boundaries fall on the same grid position. Choose a longer range or a different track scope.</source>
+        <translation>Beide Grenzen liegen auf derselben Rasterposition. Wählen Sie einen längeren Bereich oder andere Spuren aus.</translation>
+    </message>
+    <message>
+        <location line="+66"/>
+        <source>The edited item is no longer available.</source>
+        <translation>Das bearbeitete Element ist nicht mehr verfügbar.</translation>
+    </message>
+    <message>
+        <location line="+451"/>
+        <source>The range needs distinct valid boundaries and at least one existing track.</source>
+        <translation>Der Bereich benötigt unterschiedliche gültige Grenzen und mindestens eine vorhandene Spur.</translation>
+    </message>
+    <message>
+        <location line="+39"/>
+        <source>Enter a curve bias from -100% to +100%.</source>
+        <translation>Gib eine Kurvenform von -100 % bis +100 % ein.</translation>
+    </message>
+    <message>
+        <location line="+117"/>
+        <source>Audio</source>
+        <translation>Audio</translation>
+    </message>
+    <message>
+        <location line="+414"/>
+        <source>Choose a clip followed by an adjacent clip at the cut.</source>
+        <translation>Wählen Sie einen Clip mit einem direkt anschließenden Clip an der Schnittstelle aus.</translation>
+    </message>
+    <message>
+        <location line="+112"/>
+        <source>Choose an adjacent cut with enough source handles for a crossfade.</source>
+        <translation>Wählen Sie eine Schnittstelle zwischen angrenzenden Clips mit genügend Quellreserve für eine Überblendung aus.</translation>
+    </message>
+    <message>
+        <location line="+31"/>
+        <location filename="../quick/ExoSnap/Quick/EditSessionAdapter.cpp" line="-479"/>
+        <source>The timeline position is out of range.</source>
+        <translation>Die Zeitleistenposition liegt außerhalb des gültigen Bereichs.</translation>
+    </message>
+    <message>
+        <location line="+48"/>
+        <source>%1: only local media files are supported.</source>
+        <translation>%1: Es werden nur lokale Mediendateien unterstützt.</translation>
+    </message>
+    <message>
+        <location line="+6"/>
+        <location line="+7"/>
+        <location line="+126"/>
+        <source>%1: %2</source>
+        <translation>%1: %2</translation>
+    </message>
+    <message>
+        <location line="-124"/>
+        <source>No supported timed media stream.</source>
+        <translation>Kein unterstützter Medienstream mit Zeitangaben.</translation>
+    </message>
+    <message>
+        <location line="+51"/>
+        <source>The timeline changed during import. Media was kept in Project. Choose Place imported media to place it using the current timeline.</source>
+        <translation>Die Zeitleiste wurde während des Imports geändert. Die Medien bleiben im Projekt. Wählen Sie „Importierte Medien platzieren“, um sie in der aktuellen Zeitleiste zu platzieren.</translation>
+    </message>
+    <message>
+        <location line="+9"/>
         <source>Cannot import media: %1</source>
         <translation>Medium kann nicht importiert werden: %1</translation>
     </message>
     <message>
-        <location line="+57"/>
+        <location line="+3"/>
+        <source>Imported %1 file(s). Some files could not be imported:
+%2</source>
+        <translation>%1 Datei(en) importiert. Einige Dateien konnten nicht importiert werden:
+%2</translation>
+    </message>
+    <message>
+        <location line="+19"/>
+        <location line="+15"/>
+        <source>The placement time is invalid.</source>
+        <translation>Die Platzierungszeit ist ungültig.</translation>
+    </message>
+    <message>
+        <location line="+149"/>
+        <source>The source identity differs from the expected media.</source>
+        <translation>Die Quellidentität stimmt nicht mit den erwarteten Medien überein.</translation>
+    </message>
+    <message>
+        <location line="+115"/>
         <source>Adjust one trim edge at a time for ripple or independent edits.</source>
         <translation>Passen Sie bei Ripple- oder unabhängigen Bearbeitungen jeweils nur eine Trimmkante an.</translation>
     </message>
     <message>
-        <location line="+292"/>
+        <location line="+159"/>
+        <source>Apply or cancel the range scope preview first.</source>
+        <translation>Übernehmen oder verwerfen Sie zuerst die Vorschau der Bereichsspuren.</translation>
+    </message>
+    <message>
+        <location line="+302"/>
         <source>The drag is unavailable or the timeline changed. Try again.</source>
         <translation>Das Ziehen ist nicht möglich oder die Zeitleiste wurde geändert. Versuchen Sie es erneut.</translation>
     </message>
     <message>
-        <location filename="../quick/ExoSnap/Quick/EditSessionAdapter.cpp" line="-441"/>
+        <location line="+54"/>
+        <source>The source could not be verified.</source>
+        <translation>Die Quelle konnte nicht überprüft werden.</translation>
+    </message>
+    <message>
+        <location line="+351"/>
+        <source>The source is unavailable.</source>
+        <translation>Die Quelle ist nicht verfügbar.</translation>
+    </message>
+    <message>
+        <location line="+8"/>
+        <source>Unlock the source&apos;s audio tracks before choosing its input mix.</source>
+        <translation>Entsperren Sie die Audiospuren der Quelle, bevor Sie deren Eingangsmischung auswählen.</translation>
+    </message>
+    <message>
+        <location line="+22"/>
+        <location line="+458"/>
+        <source>Audio stream %1</source>
+        <translation>Audiostream %1</translation>
+    </message>
+    <message>
+        <location line="-350"/>
+        <source>The source or timeline changed. Review the choice and apply again.</source>
+        <translation>Die Quelle oder Zeitleiste wurde geändert. Überprüfen Sie die Auswahl und übernehmen Sie sie erneut.</translation>
+    </message>
+    <message>
+        <location line="+10"/>
+        <source>The input mix could not be applied.</source>
+        <translation>Die Eingangsmischung konnte nicht übernommen werden.</translation>
+    </message>
+    <message>
+        <location line="+309"/>
+        <location line="+330"/>
+        <source>The source or timeline changed. Review the replacement again.</source>
+        <translation>Die Quelle oder Zeitleiste wurde geändert. Überprüfen Sie die Ersatzquelle erneut.</translation>
+    </message>
+    <message>
+        <location line="-323"/>
+        <source>Unlock every affected track before replacing its source.</source>
+        <translation>Entsperren Sie alle betroffenen Spuren, bevor Sie deren Quelle ersetzen.</translation>
+    </message>
+    <message>
+        <location line="+11"/>
+        <location line="+322"/>
+        <source>The replacement is incompatible with the affected clips.</source>
+        <translation>Die Ersatzquelle ist mit den betroffenen Clips nicht kompatibel.</translation>
+    </message>
+    <message>
+        <location line="-317"/>
+        <source>Confirm overlapping audio streams before applying the replacement.</source>
+        <translation>Bestätigen Sie überlappende Audiostreams, bevor Sie die Ersatzquelle übernehmen.</translation>
+    </message>
+    <message>
+        <location line="+96"/>
+        <source>This source has no established identity. Explicitly adopt the replacement content to continue.</source>
+        <translation>Diese Quelle hat keine bestätigte Identität. Übernehmen Sie den Ersatzinhalt ausdrücklich, um fortzufahren.</translation>
+    </message>
+    <message>
+        <location line="+40"/>
+        <source>The replacement does not contain every required source interval.</source>
+        <translation>Die Ersatzquelle enthält nicht alle erforderlichen Quellintervalle.</translation>
+    </message>
+    <message>
+        <location line="+3"/>
+        <location line="+16"/>
+        <source>The replacement stream layout does not match the source.</source>
+        <translation>Die Streamanordnung der Ersatzquelle stimmt nicht mit der Quelle überein.</translation>
+    </message>
+    <message>
+        <location line="+50"/>
+        <source>The replacement cannot be represented by this timeline.</source>
+        <translation>Die Ersatzquelle lässt sich in dieser Zeitleiste nicht darstellen.</translation>
+    </message>
+    <message>
+        <location line="+131"/>
+        <source>The replacement could not be applied.</source>
+        <translation>Die Ersatzquelle konnte nicht übernommen werden.</translation>
+    </message>
+    <message>
+        <location filename="../quick/ExoSnap/Quick/EditSessionAdapter.cpp" line="+127"/>
         <source>The recording overlaps existing clips.</source>
         <translation>Die Aufnahme überlappt vorhandene Clips.</translation>
     </message>
@@ -10729,6 +12252,11 @@ Kleiner Text auf dem Bildschirm verliert früher an Qualität als Videoinhalte. 
         <location line="+6"/>
         <source>Some segments have unknown duration. They remain in Media and cannot be placed yet.</source>
         <translation>Die Dauer einiger Segmente ist unbekannt. Sie bleiben unter Medien und können noch nicht platziert werden.</translation>
+    </message>
+    <message>
+        <location line="+235"/>
+        <source>The editor was closed.</source>
+        <translation>Der Editor wurde geschlossen.</translation>
     </message>
 </context>
 <context>
@@ -11023,7 +12551,7 @@ Kleiner Text auf dem Bildschirm verliert früher an Qualität als Videoinhalte. 
 <context>
     <name>exosnap::quick::SettingsAdapter</name>
     <message>
-        <location filename="../quick/ExoSnap/Quick/SettingsAdapter.cpp" line="+1625"/>
+        <location filename="../quick/ExoSnap/Quick/SettingsAdapter.cpp" line="+1633"/>
         <source>On</source>
         <translation>Ein</translation>
     </message>

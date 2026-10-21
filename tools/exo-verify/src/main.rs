@@ -10,6 +10,7 @@ mod control;
 mod control_cli;
 mod disposable;
 mod docs;
+mod edit_reference;
 mod feed;
 #[cfg(windows)]
 mod holders;
@@ -130,6 +131,8 @@ enum Command {
     /// Deterministic sample regressions against committed or generated media.
     #[command(subcommand)]
     Samples(samples::SamplesCommand),
+    /// Check explicit compact media references through real editor exports.
+    EditReference(edit_reference::Args),
     /// Disposable Windows backends (Windows Sandbox, Hyper-V).
     #[command(subcommand)]
     Disposable(DisposableCommand),
@@ -865,6 +868,7 @@ fn real_main() -> Result<ExitCode> {
             }
         }
         Command::Samples(command) => return samples::run(command),
+        Command::EditReference(args) => return edit_reference::run(args),
         Command::Disposable(DisposableCommand::Probe) => {
             let caps = capability::probe(&[]);
             for kind in disposable::BackendKind::ALL {

@@ -135,6 +135,11 @@ class RecordingCoordinator {
 
     RecordingCoordinator();
     ~RecordingCoordinator();
+    engine::BackgroundIoAdmission backgroundIoAdmission() const {
+        return [storage = background_storage_](uint64_t bytes, const std::atomic<bool>* cancelled) {
+            return storage->Acquire(bytes, cancelled);
+        };
+    }
 
     RecordingCoordinator(const RecordingCoordinator&) = delete;
     RecordingCoordinator& operator=(const RecordingCoordinator&) = delete;

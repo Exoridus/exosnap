@@ -11,6 +11,7 @@
 #include <cmath>
 #include <cstring>
 #include <limits>
+#include <tuple>
 #include <utility>
 
 #define WIN32_LEAN_AND_MEAN
@@ -70,11 +71,22 @@ class CountingDecoder final : public engine::WaveformAudioDecoder {
 
 } // namespace
 
+struct WaveformCacheService::OverviewCursor {
+    std::shared_ptr<engine::WaveformStreamWriter> builder;
+    std::unique_ptr<CountingDecoder> decoder;
+    std::uint64_t generation = 0;
+    std::uint64_t last_used = 0;
+    std::uint64_t consumed_samples = 0;
+    std::size_t working_bytes = 0;
+    std::chrono::steady_clock::time_point last_progress;
+};
+
 WaveformCacheService::WaveformCacheService(QObject* parent) : WaveformCacheService(Config{}, {}, parent) {
 }
 
 WaveformCacheService::WaveformCacheService(Config config, DecoderFactory decoder_factory, QObject* parent)
     : QObject(parent), config_(std::move(config)), decoder_factory_(std::move(decoder_factory)) {
+    custom_decoder_factory_ = bool(decoder_factory_);
     if (!decoder_factory_) {
         decoder_factory_ = [](const std::filesystem::path& path, std::uint32_t index, std::string& error,
                               const std::atomic<bool>* cancelled, const std::array<std::uint8_t, 32>& expected_sha256) {
@@ -100,16 +112,118 @@ WaveformCacheService::~WaveformCacheService() {
         pcm_worker_.join();
 }
 
+void WaveformCacheService::registerSource(const std::array<std::uint8_t, 32>& identity,
+                                          std::shared_ptr<const engine::MediaReadCapability> access,
+                                          std::shared_ptr<const engine::VerifiedMediaIdentity> proof) {
+    if (!access || (proof && (proof->Source() != access || proof->Identity().sha256 != identity)))
+        return;
+    std::vector<QString> retired_keys;
+    {
+        std::lock_guard lock(mutex_);
+        std::erase_if(source_access_,
+                      [&](const auto& entry) { return entry.first != identity && entry.second.access == access; });
+        for (const auto& [key, job] : requested_jobs_)
+            if (job.access == access && job.expected_sha256 != identity)
+                retired_keys.push_back(QString::fromStdString(key));
+        source_access_[identity] = {std::move(access), std::move(proof)};
+    }
+    for (const auto& key : retired_keys)
+        cancel(key);
+}
+
+std::unique_ptr<engine::WaveformAudioDecoder> WaveformCacheService::openDecoder(const Job& job, std::string& error,
+                                                                                const std::atomic<bool>* cancelled) {
+    if (!custom_decoder_factory_ && job.access)
+        return engine::OpenEditWaveformDecoder(job.access, job.container_index, error, cancelled,
+                                               job.proof ? &job.expected_sha256 : nullptr);
+    return decoder_factory_(job.path, job.container_index, error, cancelled, job.expected_sha256);
+}
+
+void WaveformCacheService::releaseSources() {
+    {
+        std::lock_guard lock(mutex_);
+        cancel_running_ = true;
+        cancel_pcm_ = true;
+        release_pcm_cursor_ = true;
+        cleanup_overviews_ = true;
+        visible_interests_.clear();
+        interest_distances_.clear();
+        source_access_.clear();
+        requested_jobs_.clear();
+        queue_.clear();
+        pcm_queue_.clear();
+        availability_checks_.clear();
+        for (auto& [key, writer] : provisional_writers_)
+            retired_writers_.push_back(std::move(writer));
+        provisional_writers_.clear();
+        provisional_working_bytes_ = 0;
+    }
+    cv_.notify_all();
+}
+
+void WaveformCacheService::setVisibleInterest(std::uint64_t clip, const QString& key, qint64 distance_us) {
+    if (!clip)
+        return;
+    {
+        std::lock_guard lock(mutex_);
+        const bool admitted = visible_interests_.contains(clip) || visible_interests_.size() < 8192;
+        removeVisibleInterestLocked(clip);
+        if (!key.isEmpty() && admitted) {
+            visible_interests_[clip] = {key.toStdString(), std::max<qint64>(0, distance_us)};
+            interest_distances_[key.toStdString()].emplace(std::max<qint64>(0, distance_us), clip);
+        }
+    }
+    cv_.notify_all();
+}
+
+void WaveformCacheService::removeVisibleInterest(std::uint64_t clip) {
+    std::lock_guard lock(mutex_);
+    removeVisibleInterestLocked(clip);
+}
+
+void WaveformCacheService::removeVisibleInterestLocked(std::uint64_t clip) {
+    const auto old = visible_interests_.find(clip);
+    if (old == visible_interests_.end())
+        return;
+    auto distances = interest_distances_.find(old->second.key);
+    if (distances != interest_distances_.end()) {
+        distances->second.erase({old->second.distance_us, clip});
+        if (distances->second.empty())
+            interest_distances_.erase(distances);
+    }
+    visible_interests_.erase(old);
+}
+
+void WaveformCacheService::unregisterSource(const std::array<std::uint8_t, 32>& identity) {
+    std::vector<QString> retired_keys;
+    {
+        std::lock_guard lock(mutex_);
+        source_access_.erase(identity);
+        for (const auto& [key, job] : requested_jobs_)
+            if (job.expected_sha256 == identity)
+                retired_keys.push_back(QString::fromStdString(key));
+        release_pcm_cursor_ = true;
+    }
+    for (const auto& key : retired_keys)
+        cancel(key);
+    cv_.notify_all();
+}
+
 QString WaveformCacheService::request(const engine::WaveformSourceKey& source, const QString& source_path,
                                       qint64 source_end_us) {
     const std::string key = engine::WaveformCacheKey(source);
     const QString qkey = QString::fromStdString(key);
     if (source_end_us <= 0)
         return qkey;
-    const Job requested{key, std::filesystem::path(source_path.toStdWString()), source.container_index,
-                        static_cast<std::uint64_t>(engine::AudioSampleIndex(source_end_us)), source.content_sha256};
+    Job requested{key, std::filesystem::path(source_path.toStdWString()), source.container_index,
+                  static_cast<std::uint64_t>(engine::AudioSampleIndex(source_end_us)), source.content_sha256};
     {
         std::lock_guard lock(mutex_);
+        if (const auto access = source_access_.find(source.content_sha256); access != source_access_.end()) {
+            requested.access = access->second.access;
+            requested.proof = access->second.proof;
+            requested.persistent = bool(requested.proof);
+        }
         if (!requested_jobs_.contains(key) && requested_jobs_.size() >= kMaxLayouts)
             requested_jobs_.erase(requested_jobs_.begin());
         requested_jobs_[key] = requested;
@@ -134,11 +248,17 @@ void WaveformCacheService::cancel(const QString& qkey) {
     {
         std::lock_guard lock(mutex_);
         requested_jobs_.erase(key);
+        cleanup_overviews_ = true;
         availability_checks_.erase(key);
         if (running_pcm_ && running_pcm_->key == key)
             cancel_pcm_ = true;
         std::erase_if(pcm_interests_, [&key](const auto& interest) { return interest.second.id.key == key; });
         std::erase_if(pcm_queue_, [&key](const auto& job) { return job.id.key == key; });
+        if (const auto writer = provisional_writers_.find(key); writer != provisional_writers_.end()) {
+            provisional_working_bytes_ -= writer->second->MemoryBytes();
+            retired_writers_.push_back(std::move(writer->second));
+            provisional_writers_.erase(writer);
+        }
         std::erase_if(pcm_entries_, [&key](const auto& entry) {
             return entry.first.key == key && entry.second.state == DetailState::Pending;
         });
@@ -148,7 +268,7 @@ void WaveformCacheService::cancel(const QString& qkey) {
         const auto removed = std::erase_if(queue_, [&key](const Job& job) { return job.key == key; });
         if (running_ && *running_ == key)
             cancel_running_ = true;
-        else if (removed > 0)
+        if (removed > 0 || !running_ || *running_ != key)
             status_.erase(key);
     }
     cv_.notify_all();
@@ -156,9 +276,15 @@ void WaveformCacheService::cancel(const QString& qkey) {
 }
 
 void WaveformCacheService::setForegroundBusy(bool busy) {
+    setAnalysisPressure(false, busy);
+}
+
+void WaveformCacheService::setAnalysisPressure(bool playback, bool exclusive) {
     {
         std::lock_guard lock(mutex_);
-        busy_ = busy;
+        busy_ = playback || exclusive;
+        playback_ = playback;
+        exclusive_ = exclusive;
     }
     cv_.notify_all();
 }
@@ -169,9 +295,12 @@ bool WaveformCacheService::foregroundBusy() const {
 }
 
 qint64 WaveformCacheService::clearCache() {
+    qint64 released = 0;
     {
         std::lock_guard lock(mutex_);
+        released = static_cast<qint64>(store_->Retire());
         ++generation_;
+        cleanup_overviews_ = true;
         cancel_pcm_ = true;
         pcm_queue_.clear();
         pcm_interests_.clear();
@@ -186,18 +315,15 @@ qint64 WaveformCacheService::clearCache() {
         in_progress_.reset();
         in_progress_key_.clear();
         layouts_.clear();
+        for (auto& [key, writer] : provisional_writers_)
+            retired_writers_.push_back(std::move(writer));
+        provisional_writers_.clear();
+        provisional_working_bytes_ = 0;
         pending_blocks_.clear();
         blocks_.clear();
         block_lru_.clear();
     }
     cv_.notify_all();
-    // Serialized with publication: an analysis finishing concurrently either
-    // published before this clear or sees the new generation and discards.
-    qint64 released = 0;
-    {
-        std::lock_guard publish(publish_mutex_);
-        released = static_cast<qint64>(store_->Clear());
-    }
     emit pcmInterestsInvalidated({});
     return released;
 }
@@ -266,7 +392,7 @@ WaveformCacheService::tryReadPublishedBlock(const QString& qkey, std::uint32_t l
         const bool analysing = status != status_.end() &&
                                (status->second.state == State::Queued || status->second.state == State::Analyzing);
         const bool failed = status != status_.end() && status->second.state == State::Failed;
-        if ((!analysing || (in_progress_ && in_progress_key_ == id.key)) && !failed && !pending_blocks_.contains(id)) {
+        if ((!analysing || status->second.state == State::Analyzing) && !failed && !pending_blocks_.contains(id)) {
             pending_blocks_.insert(id);
             schedule = true;
         }
@@ -390,9 +516,15 @@ void WaveformCacheService::pcmWorkerLoop() {
         PcmJob job;
         {
             std::unique_lock lock(mutex_);
-            cv_.wait(lock, [this]() { return stop_ || (!busy_ && !pcm_queue_.empty()); });
+            cv_.wait(lock, [this]() { return stop_ || release_pcm_cursor_ || (!busy_ && !pcm_queue_.empty()); });
             if (stop_)
                 return;
+            if (release_pcm_cursor_) {
+                release_pcm_cursor_ = false;
+                lock.unlock();
+                cursor = {};
+                continue;
+            }
             job = std::move(pcm_queue_.front());
             pcm_queue_.pop_front();
             running_pcm_ = job.id;
@@ -472,8 +604,7 @@ void WaveformCacheService::runPcmJob(const PcmJob& job, PcmCursor& cursor) {
     std::string error;
     if (!cursor.decoder || cursor.key != job.id.key || cursor.path != job.source.path) {
         cursor = {};
-        cursor.decoder = decoder_factory_(job.source.path, job.source.container_index, error, &cancel_pcm_,
-                                          job.source.expected_sha256);
+        cursor.decoder = openDecoder(job.source, error, &cancel_pcm_);
         if (!cursor.decoder) {
             finishPcmJob(job, {DetailState::Failed, {}, QString::fromStdString(error)}, cancel_pcm_.load());
             return;
@@ -599,29 +730,86 @@ void WaveformCacheService::workerLoop() {
     SetThreadPriority(GetCurrentThread(), THREAD_MODE_BACKGROUND_BEGIN);
     for (;;) {
         std::optional<Job> job;
+        std::deque<std::shared_ptr<engine::WaveformStreamWriter>> retired;
         bool availability_only = false;
+        bool cleanup = false;
+        bool stopping = false;
         std::uint64_t generation = 0;
         {
             std::unique_lock lock(mutex_);
-            cv_.wait(lock, [this]() {
-                return stop_ || !pending_blocks_.empty() || !availability_checks_.empty() ||
-                       (!queue_.empty() && !busy_);
-            });
-            if (stop_)
-                return;
-            if (pending_blocks_.empty() && !availability_checks_.empty()) {
+            std::erase_if(deferred_overviews_,
+                          [this](const auto& entry) { return !requested_jobs_.contains(entry.first); });
+            const auto eligible = [this](const Job& candidate) {
+                const auto deferred = deferred_overviews_.find(candidate.key);
+                return !exclusive_ && (!playback_ || interest_distances_.contains(candidate.key)) &&
+                       (deferred == deferred_overviews_.end() || deferred->second <= std::chrono::steady_clock::now());
+            };
+            const auto work_ready = [this, &eligible]() {
+                return stop_ || cleanup_overviews_ || !retired_writers_.empty() || !pending_blocks_.empty() ||
+                       !availability_checks_.empty() || std::any_of(queue_.begin(), queue_.end(), eligible);
+            };
+            if (deferred_overviews_.empty())
+                cv_.wait(lock, work_ready);
+            else
+                cv_.wait_for(lock, std::chrono::milliseconds(50), work_ready);
+            stopping = stop_;
+            if (stopping) {
+                for (auto& [key, writer] : provisional_writers_)
+                    retired_writers_.push_back(std::move(writer));
+                provisional_writers_.clear();
+                provisional_working_bytes_ = 0;
+            }
+            cleanup = std::exchange(cleanup_overviews_, false);
+            if (!retired_writers_.empty()) {
+                retired.swap(retired_writers_);
+            }
+            if (!stopping && !cleanup && retired.empty() && pending_blocks_.empty() && !availability_checks_.empty()) {
                 auto first = availability_checks_.begin();
                 job = std::move(first->second);
                 availability_checks_.erase(first);
                 availability_only = true;
                 generation = generation_;
-            } else if (pending_blocks_.empty()) {
-                job = std::move(queue_.front());
-                queue_.pop_front();
+            } else if (!stopping && !cleanup && retired.empty() && pending_blocks_.empty()) {
+                if (playback_ && std::chrono::steady_clock::now() < next_overview_) {
+                    cv_.wait_until(lock, next_overview_);
+                    continue;
+                }
+                const auto priority = [this](const Job& candidate) {
+                    const auto interest = interest_distances_.find(candidate.key);
+                    const bool visible = interest != interest_distances_.end();
+                    const auto cursor = overview_cursors_.find(candidate.key);
+                    const auto completed = cursor == overview_cursors_.end() ? 0 : cursor->second->consumed_samples;
+                    const auto rounds = completed / std::max<std::uint32_t>(1, config_.chunk_frames);
+                    const auto distance = visible ? interest->second.begin()->first : 0;
+                    return std::tuple{!visible, rounds, distance};
+                };
+                const auto next =
+                    std::min_element(queue_.begin(), queue_.end(), [&](const Job& left, const Job& right) {
+                        if (eligible(left) != eligible(right))
+                            return eligible(left);
+                        return priority(left) < priority(right);
+                    });
+                if (next == queue_.end() || !eligible(*next))
+                    continue;
+                job = std::move(*next);
+                queue_.erase(next);
                 running_ = job->key;
                 cancel_running_ = false;
+                if (playback_)
+                    next_overview_ = std::chrono::steady_clock::now() + std::chrono::milliseconds(50);
             }
         }
+        if (stopping) {
+            while (!overview_cursors_.empty())
+                discardOverview(overview_cursors_.begin()->first);
+            return;
+        }
+        if (cleanup) {
+            purgeOverviews();
+            continue;
+        }
+        if (!retired.empty())
+            continue;
         if (availability_only) {
             checkAvailability(*job, generation);
             continue;
@@ -631,14 +819,25 @@ void WaveformCacheService::workerLoop() {
             continue;
         }
         runJob(*job);
-        std::lock_guard lock(mutex_);
-        running_.reset();
+        bool retired_job = false;
+        {
+            std::lock_guard lock(mutex_);
+            retired_job = !requested_jobs_.contains(job->key);
+        }
+        if (retired_job)
+            discardOverview(job->key);
+        {
+            std::lock_guard lock(mutex_);
+            if (retired_job && !requested_jobs_.contains(job->key))
+                status_.erase(job->key);
+            running_.reset();
+        }
     }
 }
 
 void WaveformCacheService::checkAvailability(const Job& job, std::uint64_t generation) {
     std::error_code error;
-    const bool available = std::filesystem::is_regular_file(job.path, error);
+    const bool available = job.access || std::filesystem::is_regular_file(job.path, error);
     {
         std::lock_guard lock(mutex_);
         const auto status = status_.find(job.key);
@@ -706,6 +905,14 @@ void WaveformCacheService::loadPendingBlocks() {
             std::lock_guard lock(mutex_);
             if (in_progress_ && in_progress_key_ == id.key && generation == generation_)
                 staging = in_progress_;
+            else if (const auto provisional = provisional_writers_.find(id.key);
+                     provisional != provisional_writers_.end())
+                staging = provisional->second;
+        }
+        if (!staging) {
+            const auto cursor = overview_cursors_.find(id.key);
+            if (cursor != overview_cursors_.end() && cursor->second->generation == generation)
+                staging = cursor->second->builder;
         }
         const bool from_staging = static_cast<bool>(staging);
         if (staging)
@@ -857,39 +1064,51 @@ void WaveformCacheService::postProgress(const std::string& key, std::uint64_t co
         Qt::QueuedConnection);
 }
 
+void WaveformCacheService::discardOverview(const std::string& key) {
+    deferred_overviews_.erase(key);
+    const auto found = overview_cursors_.find(key);
+    if (found == overview_cursors_.end())
+        return;
+    {
+        std::lock_guard lock(mutex_);
+        if (in_progress_key_ == key) {
+            in_progress_.reset();
+            in_progress_key_.clear();
+        }
+    }
+    overview_working_bytes_ -= found->second->working_bytes;
+    overview_cursors_.erase(found);
+    deferred_overviews_.clear();
+}
+
+void WaveformCacheService::purgeOverviews() {
+    std::vector<std::string> retired;
+    {
+        std::lock_guard lock(mutex_);
+        for (const auto& [key, cursor] : overview_cursors_)
+            if (cursor->generation != generation_ || !requested_jobs_.contains(key))
+                retired.push_back(key);
+    }
+    for (const auto& key : retired)
+        discardOverview(key);
+}
+
 void WaveformCacheService::runJob(const Job& job) {
     const QString qkey = QString::fromStdString(job.key);
-    std::error_code fs_error;
-    const bool source_exists = std::filesystem::is_regular_file(job.path, fs_error);
     std::uint64_t generation = 0;
     {
         std::lock_guard lock(mutex_);
         generation = generation_;
-    }
-
-    if (const auto layout = layoutFor(job.key)) {
-        if (!setStatus(job.key, Status{State::Ready, source_exists, layout->sample_count, layout->sample_count},
-                       generation))
+        if (cancel_running_ || !requested_jobs_.contains(job.key))
             return;
-        QMetaObject::invokeMethod(
-            this,
-            [this, qkey, generation]() {
-                {
-                    std::lock_guard lock(mutex_);
-                    if (generation != generation_)
-                        return;
-                }
-                emit ready(qkey);
-            },
-            Qt::QueuedConnection);
-        return;
     }
-    const auto fail = [&](bool available, const QString& reason) {
+    const auto fail = [&](const QString& reason, bool available = true) {
+        discardOverview(job.key);
         if (!setStatus(job.key, Status{State::Failed, available, job.sample_count, 0}, generation))
             return;
         QMetaObject::invokeMethod(
             this,
-            [this, qkey, reason, generation]() {
+            [this, qkey, reason, generation] {
                 {
                     std::lock_guard lock(mutex_);
                     if (generation != generation_)
@@ -899,176 +1118,209 @@ void WaveformCacheService::runJob(const Job& job) {
             },
             Qt::QueuedConnection);
     };
-    if (!source_exists) {
-        fail(false, QStringLiteral("The audio source is unavailable."));
-        return;
+    const auto defer = [&] {
+        std::lock_guard lock(mutex_);
+        if (generation != generation_ || cancel_running_ || !requested_jobs_.contains(job.key))
+            return;
+        deferred_overviews_[job.key] = std::chrono::steady_clock::now() + std::chrono::milliseconds(50);
+        queue_.push_back(job);
+        if (!provisional_writers_.empty()) {
+            const auto retired = provisional_writers_.begin();
+            provisional_working_bytes_ -= retired->second->MemoryBytes();
+            retired_writers_.push_back(std::move(retired->second));
+            provisional_writers_.erase(retired);
+        }
+    };
+    auto found = overview_cursors_.find(job.key);
+    if (found != overview_cursors_.end() && found->second->generation != generation) {
+        discardOverview(job.key);
+        found = overview_cursors_.end();
     }
-
     std::string error;
-    std::shared_ptr<engine::WaveformStreamWriter> builder;
-    {
-        std::lock_guard publish(publish_mutex_);
+    if (found == overview_cursors_.end()) {
+        if (job.persistent) {
+            if (const auto layout = layoutFor(job.key)) {
+                std::error_code availability_error;
+                const bool available = job.access || std::filesystem::is_regular_file(job.path, availability_error);
+                setStatus(job.key, Status{State::Ready, available, layout->sample_count, layout->sample_count},
+                          generation);
+                postProgress(job.key, layout->sample_count, layout->sample_count, generation);
+                QMetaObject::invokeMethod(
+                    this,
+                    [this, qkey, generation] {
+                        {
+                            std::lock_guard lock(mutex_);
+                            if (generation != generation_)
+                                return;
+                        }
+                        emit ready(qkey);
+                    },
+                    Qt::QueuedConnection);
+                return;
+            }
+        }
+        std::error_code fs_error;
+        if (!job.access && !std::filesystem::is_regular_file(job.path, fs_error)) {
+            fail(QStringLiteral("The audio source is unavailable."), false);
+            return;
+        }
+        auto cursor = std::make_unique<OverviewCursor>();
+        cursor->generation = generation;
+        engine::MediaCacheWriteFailure failure = engine::MediaCacheWriteFailure::None;
+        cursor->builder = engine::WaveformStreamWriter::Open(*store_, job.key, job.sample_count, error, &failure);
+        if (!cursor->builder) {
+            if (failure == engine::MediaCacheWriteFailure::Busy) {
+                defer();
+                return;
+            }
+            fail(QString::fromStdString(error));
+            return;
+        }
+        cursor->working_bytes = cursor->builder->MemoryBytes() +
+                                static_cast<std::size_t>(std::clamp<std::uint32_t>(
+                                    config_.chunk_frames, 1, engine::kWaveformAnalysisChunkFrames)) *
+                                    sizeof(float) * engine::kWaveformChannels +
+                                64 * 1024;
+        std::size_t retained_bytes = 0;
         {
             std::lock_guard lock(mutex_);
-            if (generation != generation_ || cancel_running_)
-                return;
+            retained_bytes = provisional_working_bytes_;
         }
-        builder = engine::WaveformStreamWriter::Open(*store_, job.key, job.sample_count, error);
+        if (cursor->working_bytes > config_.analysis_budget_bytes) {
+            fail(QStringLiteral("The background analysis working set exceeds its memory budget."));
+            return;
+        }
+        if (overview_working_bytes_ + retained_bytes > config_.analysis_budget_bytes - cursor->working_bytes) {
+            defer();
+            return;
+        }
+        deferred_overviews_.erase(job.key);
+        overview_working_bytes_ += cursor->working_bytes;
+        {
+            std::lock_guard lock(mutex_);
+            analysis_peak_bytes_ = std::max(analysis_peak_bytes_, overview_working_bytes_ + provisional_working_bytes_);
+        }
+        overview_cursors_.emplace(job.key, std::move(cursor));
+        if (!setStatus(job.key, Status{State::Analyzing, true, job.sample_count, 0}, generation)) {
+            discardOverview(job.key);
+            return;
+        }
     }
-    if (!builder) {
-        fail(true, QString::fromStdString(error));
-        return;
+    auto& cursor = *overview_cursors_.at(job.key);
+    cursor.last_used = ++overview_sequence_;
+    if (!cursor.decoder) {
+        std::size_t active_decoders = 0;
+        auto oldest = overview_cursors_.end();
+        for (auto candidate = overview_cursors_.begin(); candidate != overview_cursors_.end(); ++candidate) {
+            if (!candidate->second->decoder)
+                continue;
+            ++active_decoders;
+            if (oldest == overview_cursors_.end() || candidate->second->last_used < oldest->second->last_used)
+                oldest = candidate;
+        }
+        if (active_decoders >= 2 && oldest != overview_cursors_.end())
+            oldest->second->decoder.reset();
+        auto decoder = openDecoder(job, error, &cancel_running_);
+        {
+            std::lock_guard lock(mutex_);
+            ++decoder_opens_;
+        }
+        if (!decoder) {
+            if (cancel_running_) {
+                discardOverview(job.key);
+                return;
+            }
+            fail(QString::fromStdString(error));
+            return;
+        }
+        cursor.decoder = std::make_unique<CountingDecoder>(std::move(decoder), decode_calls_);
     }
-    const auto working_bytes = builder->MemoryBytes() +
-                               static_cast<std::size_t>(std::clamp<std::uint32_t>(
-                                   config_.chunk_frames, 1, engine::kWaveformAnalysisChunkFrames)) *
-                                   sizeof(float) * engine::kWaveformChannels +
-                               64 * 1024;
-    if (working_bytes > config_.analysis_budget_bytes) {
-        fail(true, QStringLiteral("The background analysis working set exceeds its memory budget."));
-        return;
-    }
-    {
-        std::lock_guard lock(mutex_);
-        analysis_peak_bytes_ = std::max(analysis_peak_bytes_, working_bytes);
-    }
-    std::unique_ptr<engine::WaveformAudioDecoder> opened =
-        decoder_factory_(job.path, job.container_index, error, &cancel_running_, job.expected_sha256);
-    {
-        std::lock_guard lock(mutex_);
-        ++decoder_opens_;
-    }
-    if (cancel_running_) {
-        std::lock_guard lock(mutex_);
-        if (generation == generation_)
-            status_.erase(job.key);
-        return;
-    }
-    if (!opened) {
-        fail(true, QString::fromStdString(error));
-        return;
-    }
-    CountingDecoder decoder(std::move(opened), decode_calls_);
-
-    bool stream_ok = true;
     {
         std::lock_guard lock(mutex_);
         if (generation != generation_ || cancel_running_)
             return;
-        in_progress_ = builder;
+        in_progress_ = cursor.builder;
         in_progress_key_ = job.key;
     }
-    if (!setStatus(job.key, Status{State::Analyzing, true, job.sample_count, 0}, generation))
-        return;
-
-    auto last_progress = std::chrono::steady_clock::time_point{};
-    engine::WaveformAnalysisControl control;
-    control.chunk_frames = config_.chunk_frames;
-    control.consume = [&](const float* samples, std::size_t frames) {
-        const auto previous = builder->CompletedSamples();
-        {
-            std::lock_guard lock(mutex_);
-            if (generation != generation_ || cancel_running_)
-                return;
-        }
-        stream_ok = builder->Append(samples, frames);
-        const auto completed = builder->CompletedSamples();
-        publishProgressBlocks(job, *builder, previous, completed, generation);
-        {
-            std::lock_guard lock(mutex_);
-            if (generation != generation_ || cancel_running_)
-                return;
-            status_[job.key].completed_samples = completed;
-        }
-        const auto now = std::chrono::steady_clock::now();
-        if (now - last_progress >= kProgressInterval) {
-            last_progress = now;
-            postProgress(job.key, completed, job.sample_count, generation);
-        }
-    };
-    control.proceed = [&]() {
-        for (;;) {
-            {
-                std::unique_lock lock(mutex_);
-                cv_.wait(lock, [this]() { return stop_ || cancel_running_ || !busy_ || !pending_blocks_.empty(); });
-                if (stop_ || cancel_running_ || !stream_ok)
-                    return false;
-                if (pending_blocks_.empty())
-                    return true;
-            }
-            // Display reads stay served while analysis waits for admission.
-            loadPendingBlocks();
-        }
-    };
-
-    auto outcome = engine::AnalyzeWaveform(decoder, job.sample_count, control, error);
+    const auto previous = cursor.builder->CompletedSamples();
+    const auto chunk = std::clamp<std::uint32_t>(config_.chunk_frames, 1, engine::kWaveformAnalysisChunkFrames);
+    const auto frames =
+        static_cast<std::uint32_t>(std::min<std::uint64_t>(chunk, job.sample_count - cursor.consumed_samples));
+    std::vector<float> samples;
+    const auto before_seeks = cursor.decoder->Seeks();
+    const auto before_frames = cursor.decoder->DecodedFrames();
+    const bool decoded =
+        cursor.consumed_samples <= static_cast<std::uint64_t>((std::numeric_limits<std::int64_t>::max)()) &&
+        cursor.decoder->Decode(static_cast<std::int64_t>(cursor.consumed_samples), frames, samples, error);
     {
         std::lock_guard lock(mutex_);
-        decoder_seeks_ += decoder.Seeks();
-        decoded_frames_ += decoder.DecodedFrames();
+        decoder_seeks_ += cursor.decoder->Seeks() - before_seeks;
+        decoded_frames_ += cursor.decoder->DecodedFrames() - before_frames;
+        if (generation != generation_ || cancel_running_)
+            return;
     }
-    if (!stream_ok) {
-        outcome = engine::WaveformAnalysisOutcome::Failed;
-        error = "Cannot write waveform analysis blocks.";
-    }
-    if (outcome != engine::WaveformAnalysisOutcome::Completed) {
-        {
-            std::lock_guard lock(mutex_);
-            in_progress_.reset();
-            in_progress_key_.clear();
-            if (outcome == engine::WaveformAnalysisOutcome::Cancelled) {
-                if (generation == generation_)
-                    status_.erase(job.key);
-                return;
-            }
-        }
-        fail(true, QString::fromStdString(error));
+    if (!decoded || samples.size() < static_cast<std::size_t>(frames) * engine::kWaveformChannels ||
+        !cursor.builder->Append(samples.data(), frames)) {
+        fail(QString::fromStdString(error.empty() ? "Cannot decode waveform analysis samples." : error));
         return;
     }
-    const auto before_finish = builder->CompletedSamples();
+    cursor.consumed_samples += frames;
+    const auto completed = cursor.builder->CompletedSamples();
+    publishProgressBlocks(job, *cursor.builder, previous, completed, generation);
+    {
+        std::lock_guard lock(mutex_);
+        if (generation != generation_ || cancel_running_)
+            return;
+        status_[job.key].completed_samples = completed;
+    }
+    const auto now = std::chrono::steady_clock::now();
+    if (now - cursor.last_progress >= kProgressInterval) {
+        cursor.last_progress = now;
+        postProgress(job.key, completed, job.sample_count, generation);
+    }
+    if (cursor.consumed_samples < job.sample_count) {
+        std::lock_guard lock(mutex_);
+        if (generation == generation_ && !cancel_running_ && requested_jobs_.contains(job.key))
+            queue_.push_back(job);
+        return;
+    }
+    auto builder = cursor.builder;
     const bool finished = builder->Finish();
     if (finished)
-        publishProgressBlocks(job, *builder, before_finish, builder->CompletedSamples(), generation, true);
-    {
-        std::lock_guard lock(mutex_);
-        in_progress_.reset();
-        in_progress_key_.clear();
-    }
-    bool published = false;
-    {
-        std::lock_guard publish(publish_mutex_);
-        bool current = false;
-        {
-            std::lock_guard lock(mutex_);
-            current = generation == generation_ && !cancel_running_;
-        }
-        if (current && finished)
-            published = builder->Publish(error, [this]() { return !cancel_running_.load(std::memory_order_relaxed); });
-    }
-    const auto layout = builder->Layout();
-    {
-        std::lock_guard lock(mutex_);
-        if (published && generation == generation_)
-            layouts_[job.key] = layout;
-        in_progress_.reset();
-        in_progress_key_.clear();
-        if (generation != generation_)
-            return;
-        if (cancel_running_) {
-            status_.erase(job.key);
-            return;
-        }
-    }
+        publishProgressBlocks(job, *builder, completed, builder->CompletedSamples(), generation, true);
+    const bool published = finished && (!job.persistent || builder->Publish(error, [this] {
+                               return !cancel_running_.load(std::memory_order_relaxed);
+                           }));
     if (!published) {
-        fail(true, QString::fromStdString(error.empty() ? "The waveform could not be persisted." : error));
+        if (cancel_running_) {
+            discardOverview(job.key);
+            return;
+        }
+        fail(QString::fromStdString(error.empty() ? "The waveform could not be persisted." : error));
         return;
     }
+    {
+        std::lock_guard lock(mutex_);
+        if (generation != generation_ || cancel_running_)
+            return;
+        layouts_[job.key] = builder->Layout();
+        if (!job.persistent) {
+            if (provisional_writers_.size() >= 8) {
+                provisional_working_bytes_ -= provisional_writers_.begin()->second->MemoryBytes();
+                retired_writers_.push_back(std::move(provisional_writers_.begin()->second));
+                provisional_writers_.erase(provisional_writers_.begin());
+            }
+            provisional_writers_[job.key] = builder;
+            provisional_working_bytes_ += builder->MemoryBytes();
+        }
+    }
+    discardOverview(job.key);
     if (!setStatus(job.key, Status{State::Ready, true, job.sample_count, job.sample_count}, generation))
         return;
     postProgress(job.key, job.sample_count, job.sample_count, generation);
     QMetaObject::invokeMethod(
         this,
-        [this, qkey, generation]() {
+        [this, qkey, generation] {
             {
                 std::lock_guard lock(mutex_);
                 if (generation != generation_)

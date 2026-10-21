@@ -14,7 +14,15 @@ struct MatroskaStreamConfig;
 AudioMetadataReadResult ReadAudioMediaMetadata(const std::filesystem::path& path, const AVFormatContext* input,
                                                const std::function<bool()>& continue_io = {},
                                                const BackgroundIoAdmission& before_io = {},
-                                               const std::atomic<bool>* cancelled = nullptr);
+                                               const std::atomic<bool>* cancelled = nullptr,
+                                               const std::shared_ptr<const MediaReadCapability>& source = {},
+                                               bool verify_content = true);
+AudioMetadataReadResult
+ReadAudioMediaMetadataForAdoption(const std::filesystem::path& path, const AVFormatContext* input,
+                                  const std::shared_ptr<const MediaReadCapability>& source,
+                                  const std::shared_ptr<const VerifiedMediaIdentity>& observed_proof,
+                                  const std::function<bool()>& continue_io, const BackgroundIoAdmission& before_io,
+                                  const std::atomic<bool>* cancelled);
 Outcome<std::monostate> ValidateAudioManifestStreams(const AudioManifest1& manifest, const AVFormatContext* input);
 Outcome<std::monostate> WriteAudioManifestMetadata(AVFormatContext* output, const AudioManifest1& manifest);
 Outcome<std::string> SerializeAudioTrackProvenance(const AudioManifest1& manifest, const AudioTrackId& track_id);

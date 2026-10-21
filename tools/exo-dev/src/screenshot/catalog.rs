@@ -12,12 +12,14 @@ use anyhow::{Context, bail};
 use super::invocation::{Page, Popup, ShotSpec};
 
 const RECORD_STATES_SOURCE: &str = "app/visual_tests/RecordVisualStateNames.h";
+const EDIT_STATES_SOURCE: &str = "app/visual_tests/EditVisualStateNames.h";
 const ACCENTS_SOURCE: &str = "app/ui/theme/ExoSnapThemes.h";
 
 /// The values the current source tree accepts.
 #[derive(Clone, Debug)]
 pub struct ProductValues {
     pub record_states: Vec<String>,
+    pub edit_states: Vec<String>,
     pub accents: Vec<String>,
 }
 
@@ -28,6 +30,10 @@ impl ProductValues {
                 .with_context(|| format!("could not read {relative}"))
         };
         let record_states = record_states_from(&read(RECORD_STATES_SOURCE)?);
+        let edit_states = record_states_from(&read(EDIT_STATES_SOURCE)?);
+        if edit_states.is_empty() {
+            bail!("no editor states found in {EDIT_STATES_SOURCE}");
+        }
         let accents = accents_from(&read(ACCENTS_SOURCE)?);
         if record_states.len() < 3 || accents.is_empty() {
             bail!(
@@ -39,6 +45,7 @@ impl ProductValues {
         }
         Ok(ProductValues {
             record_states,
+            edit_states,
             accents,
         })
     }
@@ -61,11 +68,11 @@ impl ProductValues {
             }
         }
         if let Some(scenario) = &spec.edit
-            && !EDIT_SCENARIOS.contains(&scenario.as_str())
+            && !self.edit_states.contains(scenario)
         {
             bail!(
                 "unknown edit fixture '{scenario}'. Known: {}",
-                EDIT_SCENARIOS.join(", ")
+                self.edit_states.join(", ")
             );
         }
         Ok(())
@@ -97,6 +104,8 @@ fn accents_from(text: &str) -> Vec<String> {
 pub const SET_NAMES: &[&str] = &[
     "pages",
     "settings",
+    "profile",
+    "workspace",
     "record",
     "picker",
     "edit",
@@ -107,28 +116,6 @@ pub const SET_NAMES: &[&str] = &[
     "overlays",
     "hud",
     "all",
-];
-
-/// Deterministic workspace, panel, selection and export fixtures.
-const EDIT_SCENARIOS: &[&str] = &[
-    "edit-empty",
-    "edit-default",
-    "edit-multitrack",
-    "edit-missing-media",
-    "edit-selected-clip",
-    "edit-transition-selected",
-    "edit-gap",
-    "edit-media-panel",
-    "edit-transitions-panel",
-    "edit-panels-pinned",
-    "edit-monitoring",
-    "edit-crossfade-popup",
-    "edit-volume-popup",
-    "edit-export-review",
-    "edit-export-running",
-    "edit-export-done",
-    "edit-export-failed",
-    "edit-long-filename",
 ];
 
 const DIAGNOSTICS_LIVE: &[&str] = &[
@@ -143,6 +130,8 @@ const DIAGNOSTICS_LIVE: &[&str] = &[
 
 /// In-window surfaces raised over the page.
 const OVERLAY_STATES: &[&str] = &[
+    "whats-new",
+    "whats-new-post-update",
     "recovery",
     "recovery-multi",
     "recording-error",
@@ -159,6 +148,8 @@ const OVERLAY_STATES: &[&str] = &[
 /// per advisory status and the notification hub. Their overlay grabs make up
 /// the composed overlay sheet.
 pub const HUD_STATES: &[&str] = &[
+    "region-selection-empty",
+    "region-selection-drawn",
     "hud-recording",
     "hud-paused",
     "hud-warning",
@@ -173,24 +164,6 @@ pub const HUD_STATES: &[&str] = &[
     "toast-info",
     "notifications",
 ];
-
-/// Simple and Expert, each as the window, as the whole page and as the whole
-/// page with every collapsed element open.
-fn arrangements(page: Page) -> Vec<ShotSpec> {
-    let mut specs = Vec::new();
-    for expert in [false, true] {
-        for (full_page, expand_all) in [(false, false), (true, false), (true, true)] {
-            specs.push(ShotSpec {
-                page: Some(page),
-                expert,
-                full_page,
-                expand_all,
-                ..ShotSpec::default()
-            });
-        }
-    }
-    specs
-}
 
 /// The shots of one named set, each with its file-name stem.
 pub fn set(name: &str, values: &ProductValues) -> anyhow::Result<Vec<(String, ShotSpec)>> {
@@ -212,10 +185,87 @@ pub fn set(name: &str, values: &ProductValues) -> anyhow::Result<Vec<(String, Sh
         .into_iter()
         .map(|p| named(page(p)))
         .collect(),
-        "settings" => arrangements(Page::Settings)
+        "settings" => [false, true]
             .into_iter()
-            .map(named)
+            .map(|full_page| {
+                named(ShotSpec {
+                    full_page,
+                    ..page(Page::Settings)
+                })
+            })
             .collect(),
+        "profile" => {
+            let mut shots = Vec::new();
+            for section in [
+                "preset",
+                "format",
+                "quality",
+                "audio",
+                "microphone",
+                "audio-encoding",
+                "output",
+                "webcam",
+            ] {
+                for expert in [false, true] {
+                    let arrangement = ShotSpec {
+                        profile: Some(section.to_string()),
+                        expert,
+                        collapse_all: true,
+                        ..page(Page::Record)
+                    };
+                    let full_pages: &[bool] =
+                        if ["preset", "microphone", "audio"].contains(&section) {
+                            &[false, true]
+                        } else {
+                            &[false]
+                        };
+                    for &full_page in full_pages {
+                        let shot = ShotSpec {
+                            full_page,
+                            ..arrangement.clone()
+                        };
+                        shots.push(named(shot.clone()));
+                        if ["microphone", "webcam", "audio"].contains(&section) {
+                            shots.push(named(ShotSpec {
+                                expand_all: true,
+                                collapse_all: false,
+                                ..shot
+                            }));
+                        }
+                    }
+                }
+            }
+            shots
+        }
+        "workspace" => {
+            let mut shots: Vec<_> = [
+                "sources",
+                "sources-pinned",
+                "profile-pinned",
+                "panels-pinned",
+            ]
+            .into_iter()
+            .map(|panel| {
+                named(ShotSpec {
+                    record_panel: Some(panel.to_string()),
+                    record_state: Some("ready".to_string()),
+                    ..page(Page::Record)
+                })
+            })
+            .collect();
+            for (state, panel) in [
+                ("recording", "sources"),
+                ("paused", "sources"),
+                ("recording", "profile-pinned"),
+            ] {
+                shots.push(named(ShotSpec {
+                    record_panel: Some(panel.to_string()),
+                    record_state: Some(state.to_string()),
+                    ..page(Page::Record)
+                }));
+            }
+            shots
+        }
         "record" => {
             let mut shots: Vec<_> = values
                 .record_states
@@ -254,7 +304,8 @@ pub fn set(name: &str, values: &ProductValues) -> anyhow::Result<Vec<(String, Sh
             })
         })
         .collect(),
-        "edit" => EDIT_SCENARIOS
+        "edit" => values
+            .edit_states
             .iter()
             .map(|scenario| {
                 named(ShotSpec {
@@ -264,20 +315,30 @@ pub fn set(name: &str, values: &ProductValues) -> anyhow::Result<Vec<(String, Sh
             })
             .collect(),
         "diagnostics" => {
-            let mut shots: Vec<_> = arrangements(Page::Diagnostics)
-                .into_iter()
-                .map(named)
-                .collect();
-            shots.push(named(ShotSpec {
-                diag: Some("issues".to_string()),
-                ..page(Page::Diagnostics)
-            }));
-            shots.extend(DIAGNOSTICS_LIVE.iter().map(|kind| {
-                named(ShotSpec {
-                    diag_live: Some(kind.to_string()),
+            let mut shots = Vec::new();
+            for expanded in [false, true] {
+                let arrangement = ShotSpec {
+                    expand_all: expanded,
+                    collapse_all: !expanded,
                     ..page(Page::Diagnostics)
-                })
-            }));
+                };
+                for full_page in [false, true] {
+                    shots.push(named(ShotSpec {
+                        full_page,
+                        ..arrangement.clone()
+                    }));
+                }
+                shots.push(named(ShotSpec {
+                    diag: Some("issues".to_string()),
+                    ..arrangement.clone()
+                }));
+                shots.extend(DIAGNOSTICS_LIVE.iter().map(|kind| {
+                    named(ShotSpec {
+                        diag_live: Some(kind.to_string()),
+                        ..arrangement.clone()
+                    })
+                }));
+            }
             shots
         }
         "logs" => {
@@ -302,7 +363,7 @@ pub fn set(name: &str, values: &ProductValues) -> anyhow::Result<Vec<(String, Sh
                     .map(|dialog| {
                         named(ShotSpec {
                             dialog: Some(dialog.to_string()),
-                            ..page(Page::Settings)
+                            ..page(Page::Record)
                         })
                     }),
             );
@@ -312,6 +373,10 @@ pub fn set(name: &str, values: &ProductValues) -> anyhow::Result<Vec<(String, Sh
             named(ShotSpec {
                 popup: Some(Popup::SourcePicker),
                 sources: Some("many-windows".to_string()),
+                ..page(Page::Record)
+            }),
+            named(ShotSpec {
+                popup: Some(Popup::NotificationHub),
                 ..page(Page::Record)
             }),
             named(ShotSpec {
@@ -362,6 +427,9 @@ mod tests {
                 "recording".to_string(),
                 "paused".to_string(),
             ],
+            edit_states: record_states_from(include_str!(
+                "../../../../app/visual_tests/EditVisualStateNames.h"
+            )),
             accents: vec!["aqua".to_string(), "violet".to_string()],
         }
     }
@@ -456,6 +524,65 @@ mod tests {
         for (name, spec) in set("edit", &values()).unwrap() {
             assert_eq!(spec.page, Some(Page::Edit));
             assert!(name.starts_with("edit_"));
+        }
+    }
+
+    #[test]
+    fn review_sets_cover_current_surfaces_without_obsolete_routes() {
+        let values = values();
+        let edits = set("edit", &values).unwrap();
+        assert!(
+            !edits
+                .iter()
+                .any(|(_, shot)| shot.edit.as_deref() == Some("edit-transitions-panel"))
+        );
+        assert!(
+            edits
+                .iter()
+                .any(|(_, shot)| shot.edit.as_deref() == Some("edit-folders-empty"))
+        );
+        for (_, shot) in set("dialogs", &values).unwrap() {
+            if shot
+                .dialog
+                .as_deref()
+                .is_some_and(|dialog| dialog.starts_with("preset-"))
+            {
+                assert_eq!(shot.page, Some(Page::Record));
+            }
+        }
+        let diagnostics = set("diagnostics", &values).unwrap();
+        assert!(diagnostics.iter().all(|(_, shot)| !shot.expert));
+        for live in DIAGNOSTICS_LIVE {
+            for expanded in [false, true] {
+                assert!(diagnostics.iter().any(|(_, shot)| {
+                    shot.diag_live.as_deref() == Some(live) && shot.expand_all == expanded
+                }));
+            }
+        }
+    }
+    #[test]
+    fn overlays_include_both_release_note_modes() {
+        let shots = set("overlays", &values()).unwrap();
+        for state in ["whats-new", "whats-new-post-update"] {
+            assert!(
+                shots
+                    .iter()
+                    .any(|(_, shot)| shot.overlay_state.as_deref() == Some(state)),
+                "{state}"
+            );
+        }
+    }
+
+    #[test]
+    fn desktop_overlays_include_both_region_drafts() {
+        let shots = set("hud", &values()).unwrap();
+        for state in ["region-selection-empty", "region-selection-drawn"] {
+            assert!(
+                shots
+                    .iter()
+                    .any(|(_, shot)| shot.overlay_state.as_deref() == Some(state)),
+                "{state}"
+            );
         }
     }
 

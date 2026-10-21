@@ -337,7 +337,10 @@ WaveformStreamWriter::WaveformStreamWriter(std::unique_ptr<Impl> impl) : impl_(s
 WaveformStreamWriter::~WaveformStreamWriter() = default;
 
 std::shared_ptr<WaveformStreamWriter> WaveformStreamWriter::Open(MediaCacheStore& store, std::string_view key,
-                                                                 std::uint64_t sample_count, std::string& error) {
+                                                                 std::uint64_t sample_count, std::string& error,
+                                                                 MediaCacheWriteFailure* failure) {
+    if (failure)
+        *failure = MediaCacheWriteFailure::None;
     auto impl = std::make_unique<Impl>();
     impl->layout.sample_count = sample_count;
     const auto count = WaveformLevelCount(sample_count);
@@ -352,6 +355,8 @@ std::shared_ptr<WaveformStreamWriter> WaveformStreamWriter::Open(MediaCacheStore
         const auto buckets = WaveformBucketCount(sample_count, level);
         if (offset > store.BudgetBytes() || buckets > (store.BudgetBytes() - offset) / kWaveformBucketBytes) {
             error = "The waveform exceeds the disk cache budget.";
+            if (failure)
+                *failure = MediaCacheWriteFailure::InvalidEntry;
             return {};
         }
         impl->layout.levels.push_back({buckets, offset});
@@ -359,9 +364,15 @@ std::shared_ptr<WaveformStreamWriter> WaveformStreamWriter::Open(MediaCacheStore
         PutU64(header, offset);
         offset += buckets * kWaveformBucketBytes;
     }
-    impl->writer = store.BeginWrite(key, offset, error);
-    if (!impl->writer || !impl->writer->Write(0, header))
+    impl->writer = store.BeginWrite(key, offset, error, failure);
+    if (!impl->writer)
         return {};
+    if (!impl->writer->Write(0, header)) {
+        error = "Cannot initialize waveform staging.";
+        if (failure)
+            *failure = MediaCacheWriteFailure::Io;
+        return {};
+    }
     impl->levels.resize(count);
     for (auto& level : impl->levels)
         level.bytes.reserve(2048 * kWaveformBucketBytes);
@@ -501,6 +512,23 @@ std::unique_ptr<WaveformAudioDecoder> OpenEditWaveformDecoder(const std::filesys
     if (!engine->OpenAudioStream(path, container_index, error, cancelled))
         return nullptr;
     if (expected_sha256 && !engine->ValidateContentIdentity(*expected_sha256, error, cancelled))
+        return nullptr;
+    return std::make_unique<EngineWaveformDecoder>(std::move(engine), container_index);
+}
+
+std::unique_ptr<WaveformAudioDecoder> OpenEditWaveformDecoder(const std::shared_ptr<const MediaReadCapability>& source,
+                                                              std::uint32_t container_index, std::string& error,
+                                                              const std::atomic<bool>* cancelled,
+                                                              const std::array<std::uint8_t, 32>* expected_sha256) {
+    if (expected_sha256) {
+        const auto proof = VerifyMediaIdentity(source, *expected_sha256, {}, {}, cancelled);
+        if (!proof.succeeded()) {
+            error = proof.error()->context;
+            return nullptr;
+        }
+    }
+    auto engine = std::make_unique<EditPlayerEngine>();
+    if (!engine->OpenAudioStream(source, container_index, error, cancelled))
         return nullptr;
     return std::make_unique<EngineWaveformDecoder>(std::move(engine), container_index);
 }

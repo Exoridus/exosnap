@@ -16,6 +16,7 @@
 #include <QtQmlIntegration/qqmlintegration.h>
 
 #include <cstdint>
+#include <map>
 #include <optional>
 #include <vector>
 
@@ -49,14 +50,7 @@ inline constexpr int kTimelineAudioStackBudget = 3 * kTimelineAudioRowHeight + 2
 [[nodiscard]] bool TimelineTileRunAllowed(bool has_source, const QString& clip_path, const QString& source_clip_path,
                                           int tile_count);
 
-// Feeds the timeline: the thumbnail strip, the audio row labels and the marker
-// verticals.
-//
-// The strip has no cache anywhere in the stack -- TimelineThumbnailSource
-// re-decodes every run -- so a run is started once per (clip, track width) and
-// its tiles are published through an image provider keyed by run id. The
-// "Generating previews…" state was derived inside the Widgets paintEvent, which
-// QML cannot do; it is `tilesExpected` / `tilesReady` here.
+// Publishes source-keyed thumbnail interests, measured visible coverage and markers.
 class EditTimelineAdapter : public QObject {
     Q_OBJECT
     QML_ELEMENT
@@ -70,6 +64,7 @@ class EditTimelineAdapter : public QObject {
     Q_PROPERTY(QString sourcePath READ sourcePath NOTIFY tileProgressChanged FINAL)
     Q_PROPERTY(QString posterSource READ posterSource NOTIFY tileProgressChanged FINAL)
     Q_PROPERTY(QObject* waveformService READ waveformService CONSTANT FINAL)
+    Q_PROPERTY(qulonglong sourceRevision READ sourceRevision NOTIFY sourcesChanged FINAL)
 
     Q_PROPERTY(int trackWidth READ trackWidth WRITE setTrackWidth NOTIFY trackWidthChanged FINAL)
     Q_PROPERTY(int tileWidth READ tileWidth NOTIFY layoutChanged FINAL)
@@ -81,20 +76,7 @@ class EditTimelineAdapter : public QObject {
     Q_PROPERTY(int tilesExpected READ tilesExpected NOTIFY tileProgressChanged FINAL)
     Q_PROPERTY(int tilesReady READ tilesReady NOTIFY tileProgressChanged FINAL)
     Q_PROPERTY(bool generatingPreviews READ generatingPreviews NOTIFY tileProgressChanged FINAL)
-    // QCR-307. The strip's lifecycle as a state rather than as an inference from
-    // two counters:
-    //
-    //   "idle"        — no clip, or nothing to lay out yet.
-    //   "generating"  — tiles are expected and still arriving.
-    //   "ready"       — every expected tile is on the strip.
-    //   "unavailable" — this clip carries nothing decodable, and no tile will
-    //                   ever arrive. TERMINAL, and reached only from a run that
-    //                   ran to the end, never from a cancel or a clip switch.
-    //
-    // The two counters alone could not express the last one: an undecodable clip
-    // sits at tilesExpected > 0 / tilesReady == 0 exactly like a clip that is
-    // mid-decode, so "Generating previews…" stayed on screen for the rest of the
-    // session for something that was never going to finish.
+    // Current visible broker coverage: idle, generating, ready or terminal unavailable.
     Q_PROPERTY(QString previewState READ previewState NOTIFY tileProgressChanged FINAL)
     Q_PROPERTY(bool previewsUnavailable READ previewsUnavailable NOTIFY tileProgressChanged FINAL)
 
@@ -106,6 +88,9 @@ class EditTimelineAdapter : public QObject {
     // Only ever dereferenced on the GUI thread, from queued tile deliveries.
     void setTileProvider(EditTimelineTileProvider* provider);
     void setSession(EditSessionAdapter* session);
+    [[nodiscard]] qulonglong sourceRevision() const {
+        return source_registration_revision_;
+    }
 
     [[nodiscard]] QAbstractItemModel* tileModel() noexcept;
     [[nodiscard]] const QString& sourcePath() const {
@@ -122,11 +107,11 @@ class EditTimelineAdapter : public QObject {
     [[nodiscard]] int audioStackHeight() const noexcept;
     [[nodiscard]] const QStringList& audioTrackLabels() const noexcept;
 
-    [[nodiscard]] int tilesExpected() const noexcept;
-    [[nodiscard]] int tilesReady() const noexcept;
-    [[nodiscard]] bool generatingPreviews() const noexcept;
+    [[nodiscard]] int tilesExpected() const;
+    [[nodiscard]] int tilesReady() const;
+    [[nodiscard]] bool generatingPreviews() const;
     [[nodiscard]] QString previewState() const;
-    [[nodiscard]] bool previewsUnavailable() const noexcept;
+    [[nodiscard]] bool previewsUnavailable() const;
 
     // Harness / test seam: replaces the strip with `tile_count` deterministic
     // placeholder tiles (-1 = as many as the row holds) and the given audio rows.
@@ -186,10 +171,18 @@ class EditTimelineAdapter : public QObject {
     // unregistered source.
     Q_INVOKABLE QVariantList thumbnailTiles(const QString& identityHex, qint64 sourceInUs, qint64 sourceOutUs,
                                             qreal widthPx, int heightPx);
+    Q_INVOKABLE QVariantList thumbnailTilesForClip(qulonglong clipInterestId, const QString& identityHex,
+                                                   qint64 sourceInUs, qint64 sourceOutUs, qreal widthPx, int heightPx,
+                                                   qreal devicePixelRatio = 1, qint64 playheadSourceUs = -1,
+                                                   qint64 trimSourceUs = -1);
+    Q_INVOKABLE void retireThumbnailInterest(qulonglong clipInterestId);
+    Q_INVOKABLE void updateThumbnailRelevance(qulonglong clipInterestId, qint64 playheadSourceUs, qint64 trimSourceUs);
+    Q_INVOKABLE QString posterForIdentity(const QString& identityHex, int heightPx = 48) const;
 
     // Pauses thumbnail decoding (strip and per-clip) between frames while
     // playback, export or recording is active. Cached tiles are still served.
     Q_INVOKABLE void setForegroundBusy(bool busy);
+    Q_INVOKABLE void setAnalysisPressure(bool playback, bool exclusive);
 
     // Deletes every persisted thumbnail and the memory tier. Returns released
     // disk bytes.
@@ -201,7 +194,8 @@ class EditTimelineAdapter : public QObject {
     [[nodiscard]] EditThumbnailImageProvider* createThumbnailImageProvider();
     [[nodiscard]] QObject* waveformService() const;
     Q_INVOKABLE QString waveformSource(const QString& identityHex, const QString& path, int containerIndex,
-                                       const QString& streamIdentityHex, qint64 sourceEndUs);
+                                       const QString& streamIdentityHex, qint64 sourceEndUs,
+                                       qulonglong clipInterestId = 0, qint64 distanceUs = 0);
     Q_INVOKABLE qint64 clearMediaCaches();
 
     [[nodiscard]] std::uint64_t thumbnailQueriesForTest() const noexcept {
@@ -220,6 +214,7 @@ class EditTimelineAdapter : public QObject {
     void audioTracksChanged();
     void tileProgressChanged();
     void mediaCachesCleared();
+    void sourcesChanged();
 
   private:
     void openClip(const QString& master_path, qint64 duration_ms);
@@ -233,27 +228,38 @@ class EditTimelineAdapter : public QObject {
     void refreshMarkers();
     void scheduleTileRun();
     void startTileRun();
-    // Creates and wires the decoding thumbnail source on first use. Idempotent,
-    // and deliberately not re-connected per clip — see the definition.
+    // Creates the shared broker worker once, independently of keyframe scanning.
     void ensureThumbnailSource();
     void setAudioTrackLabels(const QStringList& labels);
+    void syncSourceRegistrations();
+    void registerSessionSource(qulonglong asset);
+    void refreshClipMetadata();
+    struct ClipThumbnailInterest {
+        std::string identity;
+        qint64 from_us = 0;
+        qint64 to_us = 0;
+        std::vector<ThumbnailRequestBroker::InterestTile> tiles;
+    };
+    std::map<qulonglong, ClipThumbnailInterest> clip_thumbnail_interests_;
 
     EditSessionAdapter* session_ = nullptr;
+    std::optional<std::uint64_t> source_revision_;
+    std::uint64_t view_generation_ = 0;
+    std::uint64_t source_registration_revision_ = 0;
+    std::map<qulonglong, QString> registered_sources_;
     EditTimelineTileProvider* provider_ = nullptr;
     EditTimelineTileModel tile_model_;
     EditMarkerModel marker_model_;
     // Declared before source_ so the worker detaches from it before it goes.
     std::shared_ptr<ThumbnailRequestBroker> broker_;
     std::unique_ptr<WaveformCacheService> waveforms_;
-    bool foreground_busy_ = false;
+    bool playback_pressure_ = false;
+    bool exclusive_pressure_ = false;
     std::uint64_t thumbnail_queries_ = 0;
     std::optional<TimelineThumbnailSource> source_;
 
     QTimer resize_debounce_;
     QString clip_path_;
-    // The clip the decoder source was last asked to open. Empty means the source
-    // holds nothing this adapter may decode from.
-    QString source_clip_path_;
     QStringList audio_track_labels_;
     qint64 duration_ms_ = 0;
     int track_width_ = 0;

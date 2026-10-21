@@ -192,20 +192,6 @@ QJsonObject cacheSample(EditTimelineAdapter* timeline) {
     return sample;
 }
 
-QJsonObject percentiles(std::vector<double> samples) {
-    std::sort(samples.begin(), samples.end());
-    QJsonObject result{{QStringLiteral("samples"), static_cast<int>(samples.size())},
-                       {QStringLiteral("unit"), QStringLiteral("ms")},
-                       {QStringLiteral("method"), QStringLiteral("nearest-rank")}};
-    if (!samples.empty()) {
-        for (const auto p : {50, 95, 99}) {
-            const auto rank = static_cast<size_t>(std::ceil(p * samples.size() / 100.0));
-            result.insert(QStringLiteral("p%1").arg(p), samples.at(rank - 1));
-        }
-    }
-    return result;
-}
-
 // A detached productive surface observes the generation-filtered decoded mailbox.
 // Consuming it cannot prove upload, composition, swap completion or physical display.
 int runIsolatedQualification(QuickApplication& application, const AutoEditOptions& options) {
@@ -587,8 +573,8 @@ int runIsolatedQualification(QuickApplication& application, const AutoEditOption
                   QStringLiteral("Worker-thread cumulative counters; decoder read time includes demux, decode and "
                                  "conversion. Worker-slot drain does not drain an asynchronous decoder or prove "
                                  "Qt rendering or physical presentation."));
-    report.insert(QStringLiteral("requestToDecodedMailboxObserved"), percentiles(seek_latencies));
-    report.insert(QStringLiteral("synchronousAdapterCommit"), percentiles(commit_latencies));
+    report.insert(QStringLiteral("requestToDecodedMailboxObserved"), AutoEditLatencySummary(seek_latencies));
+    report.insert(QStringLiteral("synchronousAdapterCommit"), AutoEditLatencySummary(commit_latencies));
     QJsonArray unavailable;
     for (const auto* name : {"QtTextureHandoff", "pointerInputToVisualCommit", "physicalPresentationLatency",
                              "physicalFrameDrops", "audioVideoDrift", "audioUnderruns", "gpuUtilization", "vramUsage"})

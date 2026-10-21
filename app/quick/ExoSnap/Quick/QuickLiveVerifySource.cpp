@@ -812,7 +812,14 @@ QJsonObject QuickLiveVerifySource::EditorSnapshot() const {
     json.insert(QStringLiteral("trimmed"), session->trimmed());
     json.insert(QStringLiteral("exportRunning"), session->exportRunning());
     json.insert(QStringLiteral("hasUnsavedEdits"), session->hasUnsavedEdits());
+    json.insert(QStringLiteral("commandPerformance"), QJsonObject::fromVariantMap(session->commandPerformance()));
     if (player != nullptr) {
+        json.insert(QStringLiteral("measurements"), QJsonObject::fromVariantMap(player->measurementSnapshot()));
+        const auto consumed_revision = player->sceneGraphConsumedRevision();
+        json.insert(QStringLiteral("sceneGraphConsumedRevision"), consumed_revision.isValid()
+                                                                      ? QJsonValue::fromVariant(consumed_revision)
+                                                                      : QJsonValue(QJsonValue::Null));
+        json.insert(QStringLiteral("sceneGraphConsumptionSource"), QStringLiteral("successful_render_state_postback"));
         json.insert(QStringLiteral("playing"), player->playing());
         json.insert(QStringLiteral("clipOpen"), player->clipOpen());
         json.insert(QStringLiteral("placeholderText"), player->placeholderText());

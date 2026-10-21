@@ -121,6 +121,7 @@ Item {
                 SettingsOverlaysSection { id: overlaysSection; settings: root.settings; stacked: root.stackedRows; Layout.fillWidth: true }
                 SettingsHotkeysSection { id: hotkeysSection; settings: root.settings; stacked: root.stackedRows; Layout.fillWidth: true }
                 SettingsAppearanceSection { id: appearanceSection; settings: root.settings; stacked: root.stackedRows; Layout.fillWidth: true }
+                SettingsStorageSection { settings: root.settings; stacked: root.stackedRows; Layout.fillWidth: true }
                 SettingsUpdatesSection { id: updatesSection; settings: root.settings; stacked: root.stackedRows; Layout.fillWidth: true }
                 SettingsDeveloperSection { id: developerSection; settings: root.settings; stacked: root.stackedRows; Layout.fillWidth: true }
             }

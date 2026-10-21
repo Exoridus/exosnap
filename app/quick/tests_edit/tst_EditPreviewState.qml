@@ -13,6 +13,8 @@ TestCase {
             {tag: "nested-scrub-pending-play", action: "scrub", desired: true},
             {tag: "explicit-pause-during-scrub", action: "pauseDuringScrub", desired: false},
             {tag: "frame-step-pauses", action: "frameStep", desired: false},
+            {tag: "authored-edit-preserves-play", action: "authoredEdit", desired: true},
+            {tag: "edit-during-scrub-preserves-play", action: "editDuringScrub", desired: true},
             {tag: "stale-position", action: "oldPosition", desired: true},
             {tag: "stale-error", action: "oldError", desired: true},
             {tag: "stale-open-error-same-generation", action: "oldOpenError", desired: true},
@@ -25,6 +27,8 @@ TestCase {
     function test_transport_intent(data) {
         const probe = testMediaPreview.transportIntentProbe(data.action);
         compare(probe.desiredPlaying, data.desired);
+        if (data.action === "authoredEdit" || data.action === "editDuringScrub")
+            compare(probe.workspaceCopyNs, 0);
         if (data.action === "seek")
             compare(probe.requested, 20000000);
         if (data.action === "oldPosition")
@@ -112,7 +116,7 @@ TestCase {
         const probe = testMediaPreview.timelineAudioEditsProbe();
         compare(probe.readOk, true, probe.error);
         verify(probe.original > 0.001);
-        verify(Math.abs(probe.quieter / probe.original - 0.5) < 0.01);
+        verify(Math.abs(probe.quieter / probe.original - Math.pow(10, -6 / 20)) < 0.01);
         compare(probe.muted, 0);
         compare(probe.deleted, 0);
         compare(probe.beforeMovedAudio, 0);
@@ -161,6 +165,23 @@ TestCase {
         const probe = testMediaPreview.timelineBurstProbe();
         compare(probe.revisions, 12);
         compare(probe.updates, 1);
+    }
+    function test_paused_compatible_audio_edit_keeps_the_actual_ready_picture_state() {
+        if (!testMediaPreview.available)
+            skip("Set EXOSNAP_EDIT_RENDER_FIXTURES for real media.");
+        const probe = testMediaPreview.retainedPausedPictureProbe();
+        console.log(JSON.stringify(probe));
+        compare(probe.initialReady, true, probe.error);
+        compare(probe.editApplied, true);
+        compare(probe.pausedReadyRetained, true);
+        compare(probe.generationRetained, true);
+        compare(probe.shownTimeRetained, true);
+        compare(probe.seekPending, false);
+        compare(probe.paused, true);
+        compare(probe.initialDegraded, true);
+        compare(probe.secondEditApplied, true);
+        compare(probe.degradedStateRetained, true);
+        compare(probe.degradedReasonRetained, true);
     }
     function test_split_segments_reuse_source_and_remap_decoded_timestamps() {
         if (!testMediaPreview.available)
@@ -218,6 +239,83 @@ TestCase {
         verify(probe.playbackFrames >= 3);
         compare(probe.volume, 0);
         compare(probe.hasPresentedTime, false);
+    }
+    function test_measurement_reads_are_cached_bounded_and_session_bound() {
+        const probe = testMediaPreview.measurementBridgeProbe();
+        console.log(JSON.stringify(probe));
+        compare(probe.gated, true);
+        compare(probe.nonblocking, true);
+        compare(probe.pending, true);
+        compare(probe.coalesced, true);
+        compare(probe.captured, true);
+        compare(probe.byCause, true);
+        compare(probe.cadence, true);
+        compare(probe.stale, true);
+        compare(probe.oldSessionRejected, true);
+        compare(probe.refreshed, true);
+    }
+
+    function test_actual_presented_revision_comes_from_frame_payload_after_render_acceptance() {
+        const probe = testMediaPreview.presentationStampProbe();
+        console.log(JSON.stringify(probe));
+        compare(probe.submittedBeforePaint, true);
+        compare(probe.unavailableBeforePaint, true);
+        compare(probe.firstPaintStamped, true);
+        compare(probe.stalePaintRejected, true);
+        compare(probe.payloadNotRequestedRevision, true);
+        compare(probe.retainedOldPictureRevision, true);
+        compare(probe.clearMakesUnavailable, true);
+    }
+    function test_structural_preparation_keeps_valid_old_audio_and_mapping_until_adoption() {
+        if (!testMediaPreview.available)
+            skip("Set EXOSNAP_EDIT_RENDER_FIXTURES for real media.");
+        const probe = testMediaPreview.stagedRevisionProbe();
+        console.log(JSON.stringify(probe));
+        compare(probe.imported, true);
+        compare(probe.originalReady, true);
+        compare(probe.editApplied, true);
+        compare(probe.replacementGated, true);
+        compare(probe.oldMappingRetained, true);
+        compare(probe.oldAudioContinues, true);
+        compare(probe.authoredGainWhilePending, true);
+        compare(probe.oldAudioMappingRevisionRetained, true);
+        compare(probe.muteWhilePending, true);
+        compare(probe.pauseCancelledReplacement, true);
+    }
+    function test_staged_revision_adopts_current_clock_and_latest_seek_cancels_it() {
+        if (!testMediaPreview.available)
+            skip("Set EXOSNAP_EDIT_RENDER_FIXTURES for real media.");
+        const probe = testMediaPreview.stagedRevisionCommitProbe();
+        console.log(JSON.stringify(probe));
+        const facts = ["imported", "originalReady", "editsApplied", "firstReplacementGated",
+            "supersededReplacementCancelled", "newestRevisionAdopted", "adoptedAtCurrentClock",
+            "newestAudioApplied", "unavailableOutputPreserved", "boundedProducers", "oneMappingHandoff", "seekReplacementGated",
+            "latestSeekCancelledPreparation", "latestSeekRetainsAuthoredRevision", "latestSeekPosition", "latestSeekPaused"];
+        for (const fact of facts)
+            compare(probe[fact], true, fact);
+    }
+    function test_video_open_stall_keeps_late_controls_pcm_and_pause_independent() {
+        if (!testMediaPreview.available)
+            skip("Set EXOSNAP_EDIT_RENDER_FIXTURES for real media.");
+        const probe = testMediaPreview.videoOpenStallProbe();
+        console.log(JSON.stringify(probe));
+        for (const fact of ["imported", "originalReady", "editApplied", "openGated", "commandWhileOpenStalled",
+            "audibleWhileOpenStalled", "mutedWhileOpenStalled", "pauseCancelledOpen"])
+            compare(probe[fact], true, fact);
+    }
+    function test_video_stall_keeps_command_owner_and_source_pcm_controls_live() {
+        if (!testMediaPreview.available)
+            skip("Set EXOSNAP_EDIT_RENDER_FIXTURES for real media.");
+        const probe = testMediaPreview.videoStallProbe();
+        console.log(JSON.stringify(probe));
+        compare(probe.imported, true);
+        compare(probe.gated, true);
+        compare(probe.commandWhileVideoStalled, true);
+        compare(probe.sourceReady, true);
+        compare(probe.audibleBeforeMute, true);
+        compare(probe.mutedWhileVideoStalled, true);
+        compare(probe.controlApplied, true);
+        compare(probe.seekCancelledVideo, true);
     }
     function test_imported_thumbnail_source_keys_survive_edits_and_disk_reopen() {
         if (!testMediaPreview.available)

@@ -1,5 +1,8 @@
+#include "models/EditClipboard.h"
 #include "models/EditExportProfile.h"
+#include "models/EditSelection.h"
 #include "models/EditSourceImport.h"
+#include "models/EditTime.h"
 #include "models/EditWorkspace.h"
 #include <algorithm>
 #include <array>
@@ -29,19 +32,21 @@ TEST(EditWorkspace, DefaultTrimKeepsUnselectedSuffixAtItsCommittedTime) {
     EXPECT_EQ(w.clip(first)->end(), 9'000'000);
 }
 
-TEST(EditWorkspace, AudioTrimRetainsOneCanonicalSourceSample) {
+TEST(EditWorkspaceGrid, AudioTrimUsesOutputSamplesAndKeepsTheUneditedLegacyEdge) {
     struct SampleInterval {
-        uint32_t rate;
-        TrimEdge edge;
-        Time in_us;
-        Time out_us;
+        uint32_t rate = 0;
+        TrimEdge edge = TrimEdge::Left;
+        Time in_us = 0;
+        Time out_us = 0;
+        Time expected_in = 0;
+        Time expected_out = 0;
     };
     for (const auto sample :
-         {SampleInterval{48000, TrimEdge::Left, 63, 83}, SampleInterval{48000, TrimEdge::Right, 63, 83},
-          SampleInterval{44100, TrimEdge::Left, 23, 45}, SampleInterval{44100, TrimEdge::Right, 23, 45},
-          SampleInterval{96000, TrimEdge::Left, 31, 42}, SampleInterval{96000, TrimEdge::Right, 31, 42},
-          SampleInterval{48000, TrimEdge::Left, 63, 82}, SampleInterval{48000, TrimEdge::Right, 64, 83},
-          SampleInterval{0, TrimEdge::Left, 63, 83}, SampleInterval{0, TrimEdge::Right, 63, 83}}) {
+         {SampleInterval{48000, TrimEdge::Left, 63, 83, 63, 83}, SampleInterval{48000, TrimEdge::Right, 63, 83, 63, 84},
+          SampleInterval{44100, TrimEdge::Left, 23, 45, 21, 45}, SampleInterval{44100, TrimEdge::Right, 23, 45, 23, 44},
+          SampleInterval{96000, TrimEdge::Left, 31, 42, 21, 42}, SampleInterval{96000, TrimEdge::Right, 31, 42, 31, 52},
+          SampleInterval{48000, TrimEdge::Left, 63, 82, 42, 82}, SampleInterval{48000, TrimEdge::Right, 64, 83, 64, 85},
+          SampleInterval{0, TrimEdge::Left, 63, 83, 63, 83}, SampleInterval{0, TrimEdge::Right, 63, 83, 63, 84}}) {
         const auto edge = sample.edge;
         SCOPED_TRACE(::testing::Message() << "rate=" << sample.rate << " edge=" << static_cast<int>(edge)
                                           << " source=" << sample.in_us << ".." << sample.out_us);
@@ -61,12 +66,12 @@ TEST(EditWorkspace, AudioTrimRetainsOneCanonicalSourceSample) {
         const auto id = workspace.selection();
         const auto delta = edge == TrimEdge::Left ? sample.in_us : sample.out_us - 1000;
         ASSERT_EQ(workspace.apply(Trim{id, edge, delta}, workspace.revision()).status, CommandStatus::Applied);
-        EXPECT_EQ(workspace.clip(id)->source_in, sample.in_us);
-        EXPECT_EQ(workspace.clip(id)->source_out, sample.out_us);
+        EXPECT_EQ(workspace.clip(id)->source_in, sample.expected_in);
+        EXPECT_EQ(workspace.clip(id)->source_out, sample.expected_out);
         EXPECT_EQ(workspace.apply(Trim{id, edge, edge == TrimEdge::Left ? 1000 : -1000}, workspace.revision()).status,
                   CommandStatus::NoOp);
-        EXPECT_EQ(workspace.clip(id)->source_in, sample.in_us);
-        EXPECT_EQ(workspace.clip(id)->source_out, sample.out_us);
+        EXPECT_EQ(workspace.clip(id)->source_in, sample.expected_in);
+        EXPECT_EQ(workspace.clip(id)->source_out, sample.expected_out);
     }
 }
 
@@ -805,6 +810,734 @@ TEST(EditWorkspaceContracts, RationalStep) {
     EXPECT_FALSE(fps.frameTime((std::numeric_limits<int64_t>::max)()));
 }
 
+TEST(EditRenderSnapshot, ProjectionPreservesAuthoredStateAndRetainsItsRevision) {
+    Workspace workspace;
+    ASSERT_TRUE(workspace.insert(ContractSource(workspace)));
+    const auto first = workspace.selection();
+    ASSERT_TRUE(workspace.insert(ContractSource(workspace, L"second.mkv")));
+    const auto second = workspace.selection();
+    ASSERT_TRUE(workspace.crossfade(first, second, Second));
+    ASSERT_EQ(workspace.apply(SetTimelineEnd{{TimelineEndMode::FixedEnd, 25 * Second}}, workspace.revision()).status,
+              CommandStatus::Applied);
+    const auto snapshot = workspace.snapshot();
+    const auto expected = workspace.timeline();
+    const auto rendered = RenderTimeline(*snapshot);
+    EXPECT_EQ(rendered.clips, expected.clips);
+    EXPECT_EQ(rendered.tracks, expected.tracks);
+    EXPECT_EQ(rendered.junctions, expected.junctions);
+    EXPECT_EQ(rendered.crossfades.size(), expected.crossfades.size());
+    ASSERT_FALSE(rendered.crossfades.empty());
+    EXPECT_EQ(rendered.crossfades.front().outgoing, first);
+    EXPECT_EQ(rendered.crossfades.front().incoming, second);
+    EXPECT_EQ(rendered.duration_us, 25 * Second);
+    EXPECT_EQ(rendered.result_out_us, 25 * Second);
+    EXPECT_EQ(rendered.output_fps_num, 30u);
+    ASSERT_TRUE(workspace.remove(first, false));
+    EXPECT_NE(workspace.revision(), rendered.revision);
+    EXPECT_EQ(RenderTimeline(*snapshot).clips, expected.clips);
+    EXPECT_EQ(SnapshotDuration(*snapshot), 25 * Second);
+}
+
+TEST(EditWorkspaceGrid, MoveQuantizesTheAnchorAndPreservesALegacySourceWindow) {
+    Workspace workspace;
+    Asset asset;
+    asset.path = L"legacy-ntsc.mkv";
+    asset.duration = 100'001;
+    asset.fps_num = 30000;
+    asset.fps_den = 1001;
+    ASSERT_TRUE(workspace.insert(workspace.addAsset(asset), 123));
+    const auto id = workspace.selection();
+    const auto before = workspace.snapshot();
+    const Move command{{id}, 40'000};
+    const auto preview = PreviewEdit(*before, command);
+    ASSERT_TRUE(preview.valid);
+    ASSERT_EQ(workspace.apply(command, before->revision).status, CommandStatus::Applied);
+    EXPECT_EQ(workspace.clip(id)->start, 33'366);
+    EXPECT_EQ(workspace.clip(id)->source_in, 0);
+    EXPECT_EQ(workspace.clip(id)->source_out, 100'001);
+    EXPECT_EQ(preview.clips, workspace.clips());
+    ASSERT_TRUE(workspace.undo());
+    EXPECT_EQ(workspace.clips(), before->clips);
+}
+
+TEST(EditWorkspaceGrid, TrimSplitAndFadeUseCanonicalOutputFrames) {
+    Workspace workspace;
+    Asset asset;
+    asset.path = L"ntsc.mkv";
+    asset.duration = 1'001'000;
+    asset.fps_num = 30000;
+    asset.fps_den = 1001;
+    ASSERT_TRUE(workspace.insert(workspace.addAsset(asset)));
+    const auto id = workspace.selection();
+    ASSERT_EQ(workspace.apply(Trim{id, TrimEdge::Right, -960'000}, workspace.revision()).status,
+              CommandStatus::Applied);
+    EXPECT_EQ(workspace.clip(id)->end(), 33'366);
+    ASSERT_TRUE(workspace.undo());
+    ASSERT_EQ(workspace.apply(SetFade{id, FadeEdge::In, {40'000}}, workspace.revision()).status,
+              CommandStatus::Applied);
+    EXPECT_EQ(workspace.clip(id)->fade_in.duration_us, 33'366);
+    ASSERT_TRUE(workspace.undo());
+    ASSERT_EQ(workspace.apply(Split{{id}, 40'000, true}, workspace.revision()).status, CommandStatus::Applied);
+    EXPECT_EQ(workspace.clip(id)->end(), 33'366);
+    EXPECT_TRUE(std::any_of(workspace.clips().begin(), workspace.clips().end(),
+                            [](const auto& clip) { return clip.start == 33'366; }));
+}
+
+TEST(EditWorkspaceGrid, AlignedMovePreservesFrameSpanAcrossUnequalNtscIntervals) {
+    Workspace workspace;
+    Asset asset;
+    asset.path = L"ntsc-span.mkv";
+    asset.duration = 1'001'000;
+    asset.fps_num = 30000;
+    asset.fps_den = 1001;
+    ASSERT_TRUE(workspace.insert(workspace.addAsset(asset)));
+    const auto id = workspace.selection();
+    ASSERT_TRUE(workspace.trim(id, 0, 33'366));
+    ASSERT_EQ(workspace.apply(Move{{id}, 33'366}, workspace.revision()).status, CommandStatus::Applied);
+    EXPECT_EQ(workspace.clip(id)->start, 33'366);
+    EXPECT_EQ(workspace.clip(id)->end(), 66'733);
+    ASSERT_TRUE(workspace.undo());
+    EXPECT_EQ(workspace.clip(id)->start, 0);
+    EXPECT_EQ(workspace.clip(id)->source_out, 33'366);
+}
+
+TEST(EditWorkspaceGrid, FadeClampKeepsTheEditedEndpointOnGridAtALegacyEdge) {
+    Workspace workspace;
+    Asset asset;
+    asset.path = L"legacy-fade.mkv";
+    asset.duration = 100'001;
+    asset.fps_num = 30000;
+    asset.fps_den = 1001;
+    ASSERT_TRUE(workspace.insert(workspace.addAsset(asset)));
+    const auto id = workspace.selection();
+    const auto before = workspace.snapshot();
+    const SetFade command{id, FadeEdge::In, {99'999}};
+    const auto candidate = PreviewEdit(*before, command);
+    ASSERT_TRUE(candidate.valid);
+    ASSERT_EQ(workspace.apply(command, workspace.revision()).status, CommandStatus::Applied);
+    EXPECT_EQ(workspace.clip(id)->fade_in.duration_us, 66'733);
+    EXPECT_EQ(workspace.clip(id)->source_out, 100'001);
+    EXPECT_EQ(candidate.clips, workspace.clips());
+    ASSERT_TRUE(workspace.undo());
+    EXPECT_EQ(workspace.clips(), before->clips);
+}
+
+TEST(EditWorkspaceGrid, AudioOnlyEditsUseOutputSamplesForEverySourceRate) {
+    for (const uint32_t source_rate : {44100u, 48000u, 96000u}) {
+        SCOPED_TRACE(source_rate);
+        Workspace workspace;
+        Asset asset;
+        asset.path = L"source-rate.wav";
+        asset.duration = 1'000'000;
+        auto descriptor = std::make_shared<ValidatedSourceDescriptor>();
+        SourceStreamDescriptor stream;
+        stream.ref = {0, exosnap::engine::AudioTrackId{{1}}, 0, exosnap::engine::TimelineStreamKind::Audio};
+        stream.source_span = {0, asset.duration};
+        stream.codec.sample_rate = source_rate;
+        stream.codec.channels = 2;
+        descriptor->streams.push_back(stream);
+        asset.source_descriptor = descriptor;
+        ASSERT_TRUE(workspace.insert(workspace.addAsset(asset)));
+        const auto id = workspace.selection();
+        ASSERT_EQ(workspace.apply(Move{{id}, 41}, workspace.revision()).status, CommandStatus::Applied);
+        EXPECT_EQ(workspace.clip(id)->start, 42);
+        ASSERT_TRUE(workspace.undo());
+        ASSERT_EQ(workspace.apply(Trim{id, TrimEdge::Right, -999'959}, workspace.revision()).status,
+                  CommandStatus::Applied);
+        EXPECT_EQ(workspace.clip(id)->end(), 42);
+        ASSERT_TRUE(workspace.undo());
+        ASSERT_EQ(workspace.apply(SetFade{id, FadeEdge::In, {41}}, workspace.revision()).status,
+                  CommandStatus::Applied);
+        EXPECT_EQ(workspace.clip(id)->fade_in.duration_us, 42);
+        ASSERT_TRUE(workspace.undo());
+        ASSERT_EQ(workspace.apply(Split{{id}, 41, false}, workspace.revision()).status, CommandStatus::Applied);
+        EXPECT_EQ(workspace.clip(id)->end(), 42);
+    }
+}
+
+TEST(EditTimeGrid, CanonicalNtscInverseNearestAndOverflow) {
+    const RationalFps ntsc{30000, 1001};
+    EXPECT_EQ(ntsc.frameTime(1), 33'366);
+    EXPECT_EQ(ntsc.frameTime(2), 66'733);
+    EXPECT_EQ(ntsc.frameIndex(33'366), 1);
+    EXPECT_EQ(ntsc.frameIndex(66'732), 1);
+    EXPECT_EQ(ntsc.nearestFrame(16'683), 0);
+    EXPECT_EQ(ntsc.nearestFrame(16'684), 33'366);
+    EXPECT_EQ(ntsc.step(33'366, 1), 66'733);
+    EXPECT_EQ(ntsc.step(66'733, -1), 33'366);
+    EXPECT_FALSE(ntsc.step(0, -1));
+    EXPECT_FALSE(ntsc.step(0, (std::numeric_limits<int64_t>::min)()));
+    EXPECT_FALSE(ntsc.step(33'366, (std::numeric_limits<int64_t>::max)()));
+    EXPECT_FALSE(ntsc.frameIndex(-1));
+    EXPECT_FALSE((RationalFps{0, 1}).nearestFrame(0));
+    EXPECT_FALSE((RationalFps{30, 0}).frameIndex(0));
+    for (const auto fps : {RationalFps{24, 1}, RationalFps{60, 1}, RationalFps{24000, 1001}, RationalFps{30000, 1001},
+                           RationalFps{60000, 1001}})
+        for (const int64_t index : {0LL, 1LL, 2LL, 100LL, 1'000'000LL, 864'000'001LL}) {
+            const auto boundary = fps.frameTime(index);
+            ASSERT_TRUE(boundary);
+            EXPECT_EQ(fps.frameIndex(*boundary), index);
+            EXPECT_EQ(fps.nearestFrame(*boundary), boundary);
+        }
+}
+
+TEST(EditTimeGrid, CanonicalOutputSampleBoundariesRoundTripAndTieEarlier) {
+    EXPECT_EQ(AudioSampleGrid::sampleTime(1), 21);
+    EXPECT_EQ(AudioSampleGrid::sampleTime(2), 42);
+    EXPECT_EQ(AudioSampleGrid::sampleTime(3), 63);
+    EXPECT_EQ(AudioSampleGrid::sampleTime(4), 83);
+    EXPECT_EQ(AudioSampleGrid::sampleIndex(62), 2);
+    EXPECT_EQ(AudioSampleGrid::sampleIndex(63), 3);
+    EXPECT_EQ(AudioSampleGrid::nearestSample(73), 63);
+    EXPECT_EQ(AudioSampleGrid::nearestSample(74), 83);
+    EXPECT_EQ(AudioSampleGrid::step(63, 1), 83);
+    EXPECT_EQ(AudioSampleGrid::step(83, -1), 63);
+    EXPECT_FALSE(AudioSampleGrid::sampleTime(-1));
+    EXPECT_FALSE(AudioSampleGrid::sampleTime((std::numeric_limits<int64_t>::max)()));
+    EXPECT_FALSE(AudioSampleGrid::step(0, -1));
+    EXPECT_FALSE(AudioSampleGrid::step(21, (std::numeric_limits<int64_t>::max)()));
+    for (const int64_t index : {0LL, 1LL, 2LL, 3LL, 4LL, 47'999LL, 48'000LL, 691'200'001LL}) {
+        const auto boundary = AudioSampleGrid::sampleTime(index);
+        ASSERT_TRUE(boundary);
+        EXPECT_EQ(AudioSampleGrid::sampleIndex(*boundary), index);
+        EXPECT_EQ(AudioSampleGrid::nearestSample(*boundary), boundary);
+    }
+}
+
+TEST(EditTimeParser, ExactUnitsLocaleRelativeAndNondropTimecode) {
+    const TimeFieldContext context{{30000, 1001}, 33'366, TimeFieldFormat::Seconds};
+    for (const auto& [text, expected] : std::vector<std::pair<std::string, Time>>{{"0.000001s", 1},
+                                                                                  {"1,234567s", 1'234'567},
+                                                                                  {"1.234567", 1'234'567},
+                                                                                  {"120ms", 120'000},
+                                                                                  {"1.125ms", 1'125},
+                                                                                  {"2f", 66'733},
+                                                                                  {"3smp", 63},
+                                                                                  {"+1f", 66'733},
+                                                                                  {"-1f", 0},
+                                                                                  {"+480smp", 43'375},
+                                                                                  {"-20ms", 13'366},
+                                                                                  {"00:00:01:00", 1'001'000},
+                                                                                  {"00:00:00:01", 33'366}}) {
+        SCOPED_TRACE(text);
+        const auto parsed = ParseTime(text, context);
+        ASSERT_TRUE(parsed);
+        EXPECT_EQ(parsed.value_us, expected);
+    }
+    EXPECT_EQ(FormatTime(1'234'567, context.fps, TimeFieldFormat::Seconds), "1.234567");
+    EXPECT_EQ(FormatTime(1'000'000, context.fps, TimeFieldFormat::Seconds), "1");
+    EXPECT_EQ(FormatTime(1'001'000, context.fps, TimeFieldFormat::Timecode), "00:00:01:00");
+    EXPECT_EQ(FormatTime(63, context.fps, TimeFieldFormat::Samples), "3");
+    EXPECT_EQ(ParseTime("3", {context.fps, 0, TimeFieldFormat::Samples}).value_us, 63);
+    const auto last = FormatTime((std::numeric_limits<Time>::max)(), context.fps, TimeFieldFormat::Seconds);
+    ASSERT_TRUE(last);
+    const auto parsed_last = ParseTime(*last, context);
+    ASSERT_TRUE(parsed_last);
+    EXPECT_EQ(parsed_last.value_us, (std::numeric_limits<Time>::max)());
+}
+
+TEST(EditTimeParser, RejectsInvalidFramesSyntaxPrecisionAndOverflow) {
+    const TimeFieldContext context{{30000, 1001}, 0, TimeFieldFormat::Seconds};
+    for (const auto text : {"", "00:00:00:30", "00:00:60:00", "00:00:00;01", "1,2.3s", "1e3s", "1.5f", "0.0000001s",
+                            "-1s", "9223372036854775808s", "1 000s"}) {
+        SCOPED_TRACE(text);
+        EXPECT_FALSE(ParseTime(text, context));
+    }
+    EXPECT_FALSE(ParseTime("1f", {{0, 1}, 0, TimeFieldFormat::Seconds}));
+    EXPECT_FALSE(ParseTime("+1s", {context.fps, (std::numeric_limits<Time>::max)(), TimeFieldFormat::Seconds}));
+    EXPECT_FALSE(FormatTime(-1, context.fps, TimeFieldFormat::Seconds));
+    EXPECT_FALSE(FormatTime(0, {0, 1}, TimeFieldFormat::Timecode));
+}
+
+TEST(EditSelectionContracts, StableShiftSelectionIncludesOffscreenClipsAndLinkedGroups) {
+    Workspace workspace;
+    const auto source = ContractSource(workspace);
+    ASSERT_TRUE(workspace.insert(source));
+    const auto first = workspace.selection();
+    ASSERT_TRUE(workspace.insert(source));
+    const auto second = workspace.selection();
+    auto snapshot = *workspace.snapshot();
+    std::reverse(snapshot.clips.begin(), snapshot.clips.end());
+    EditSelection selection;
+    ASSERT_TRUE(selection.selectClip(snapshot, first, false, false, false));
+    ASSERT_TRUE(selection.selectClip(snapshot, second, false, true, false));
+    EXPECT_EQ(selection.clip_ids, (std::vector<Id>{first, second}));
+    ASSERT_TRUE(selection.selectClip(snapshot, first, true, false, true));
+    EXPECT_EQ(selection.clip_ids.size(), 3u);
+    ASSERT_TRUE(selection.selectClip(snapshot, first, true, false, true));
+    EXPECT_EQ(selection.clip_ids, (std::vector<Id>{second}));
+}
+
+TEST(EditSelectionContracts, HeaderSelectionKeepsAMultiSelectionAndClearsOnlyTheEditRange) {
+    Workspace workspace;
+    ASSERT_TRUE(workspace.insert(ContractSource(workspace)));
+    const auto first = workspace.selection();
+    ASSERT_TRUE(workspace.insert(ContractSource(workspace, L"other.mkv")));
+    const auto second = workspace.selection();
+    EditSelection selection;
+    selection.active_track = workspace.tracks().front().id;
+    ASSERT_TRUE(selection.selectClip(*workspace.snapshot(), first, false, false, false));
+    ASSERT_TRUE(selection.selectClip(*workspace.snapshot(), second, true, false, false));
+    ASSERT_TRUE(selection.selectClip(*workspace.snapshot(), first, false, false, false));
+    EXPECT_EQ(selection.clip_ids, (std::vector<Id>{first, second}));
+    selection.setRange({Second, 2 * Second, {workspace.tracks().front().id}, Second});
+    ASSERT_TRUE(selection.range);
+    ASSERT_TRUE(selection.selectClip(*workspace.snapshot(), first, false, false, false));
+    EXPECT_EQ(selection.mode, SelectionMode::Clips);
+    EXPECT_FALSE(selection.range);
+    EXPECT_EQ(selection.active_track, workspace.tracks().front().id);
+}
+
+TEST(EditWorkspaceLocks, LinkedAndAuthoredTrackEditsRefuseTheWholeTransaction) {
+    Workspace workspace;
+    ASSERT_TRUE(workspace.insert(ContractSource(workspace)));
+    const auto selected = workspace.selection();
+    const auto audio_track = workspace.tracks().back().id;
+    const auto revision = workspace.revision();
+    const auto history = workspace.historyBytes();
+    ASSERT_TRUE(workspace.setTrackLocked(audio_track, true));
+    EXPECT_EQ(workspace.revision(), revision);
+    EXPECT_EQ(workspace.historyBytes(), history);
+    const auto before = workspace.snapshot();
+    const Move command{{selected}, Second};
+    EXPECT_FALSE(PreviewEdit(*before, command).valid);
+    const auto result = workspace.apply(command, revision);
+    ASSERT_EQ(result.status, CommandStatus::Rejected);
+    ASSERT_TRUE(result.error);
+    EXPECT_EQ(result.error->code, EditErrorCode::TrackLocked);
+    EXPECT_EQ(workspace.clips(), before->clips);
+    EXPECT_EQ(workspace.apply(SetTrackEnabled{audio_track, false}, revision).status, CommandStatus::Rejected);
+    EXPECT_EQ(workspace.historyBytes(), history);
+    ASSERT_TRUE(workspace.setTrackLocked(audio_track, false));
+    ASSERT_EQ(workspace.apply(command, revision).status, CommandStatus::Applied);
+    ASSERT_TRUE(workspace.setTrackLocked(audio_track, true));
+    ASSERT_TRUE(workspace.undo());
+    EXPECT_EQ(workspace.clips(), before->clips);
+}
+
+TEST(EditWorkspaceLinks, IndependentStructuralEditDetachesOnlyItsAffectedMembershipAndUndoRestoresIt) {
+    Workspace workspace;
+    ASSERT_TRUE(workspace.insert(ContractSource(workspace)));
+    const auto selected = workspace.selection();
+    const auto before = workspace.snapshot();
+    Move command{{selected}, Second};
+    command.expand_linked = false;
+    ASSERT_EQ(workspace.apply(command, workspace.revision()).status, CommandStatus::Applied);
+    EXPECT_EQ(workspace.clip(selected)->group, 0);
+    const auto other = std::find_if(workspace.clips().begin(), workspace.clips().end(),
+                                    [&](const auto& clip) { return clip.id != selected; });
+    ASSERT_NE(other, workspace.clips().end());
+    EXPECT_EQ(other->start, 0);
+    ASSERT_TRUE(workspace.undo());
+    EXPECT_EQ(workspace.clips(), before->clips);
+}
+
+TEST(EditWorkspaceRange, ScopeRefusesImplicitLinkExpansion) {
+    Workspace workspace;
+    ASSERT_TRUE(workspace.insert(ContractSource(workspace)));
+    const auto before = workspace.snapshot();
+    const auto video = workspace.tracks().front().id;
+    const auto refused = workspace.apply(LiftRange{{Second, 2 * Second}, {video}}, workspace.revision());
+    ASSERT_EQ(refused.status, CommandStatus::Rejected);
+    ASSERT_TRUE(refused.error);
+    EXPECT_EQ(refused.error->code, EditErrorCode::LinkedScopeRequired);
+    EXPECT_EQ(workspace.clips(), before->clips);
+}
+
+TEST(EditWorkspaceRange, SplitUsesBothBoundsAndIsOneUndoTransaction) {
+    Workspace workspace;
+    ASSERT_TRUE(workspace.insert(ContractSource(workspace)));
+    const auto before = workspace.snapshot();
+    const auto video = workspace.tracks().front().id;
+    const auto audio = workspace.tracks().back().id;
+    ASSERT_EQ(workspace.apply(SplitRange{{2 * Second, 4 * Second}, {video, audio}}, workspace.revision()).status,
+              CommandStatus::Applied);
+    EXPECT_EQ(workspace.clips().size(), 6u);
+    for (const auto& clip : workspace.clips())
+        if (clip.start == 2 * Second)
+            EXPECT_EQ(clip.end(), 4 * Second);
+    ASSERT_TRUE(workspace.undo());
+    EXPECT_EQ(workspace.clips(), before->clips);
+}
+
+TEST(EditWorkspaceGrid, JunctionWindowsUseTheirTrackGridAndCutsStayOnGridAtLegacyEdges) {
+    Workspace workspace;
+    ASSERT_TRUE(workspace.insert(ContractSource(workspace)));
+    const auto first = workspace.selection();
+    ASSERT_TRUE(workspace.insert(ContractSource(workspace, L"second.mkv")));
+    const auto second = workspace.selection();
+    ASSERT_TRUE(workspace.crossfade(first, second, Second));
+    const auto junctions = workspace.transitions();
+    ASSERT_EQ(junctions.size(), 2u);
+    for (const auto& junction : junctions) {
+        const bool audio = std::find_if(workspace.tracks().begin(), workspace.tracks().end(), [&](const auto& track) {
+                               return track.id == junction.track;
+                           })->type == TrackType::Audio;
+        ASSERT_EQ(workspace.apply(SetJunctionWindow{junction.id, {9'234'567, 9'765'432}}, workspace.revision()).status,
+                  CommandStatus::Applied);
+        const auto found = std::find_if(workspace.transitions().begin(), workspace.transitions().end(),
+                                        [&](const auto& value) { return value.id == junction.id; });
+        ASSERT_NE(found, workspace.transitions().end());
+        EXPECT_EQ(found->in_us, audio ? 9'234'563 : 9'233'333);
+        EXPECT_EQ(found->out_us, audio ? 9'765'438 : 9'766'666);
+    }
+    auto legacy = *workspace.snapshot();
+    const auto video = std::find_if(legacy.junctions.begin(), legacy.junctions.end(),
+                                    [&](const auto& value) { return value.track == legacy.tracks.front().id; });
+    ASSERT_NE(video, legacy.junctions.end());
+    for (auto& clip : legacy.clips)
+        if (clip.id == video->incoming)
+            clip.start = 9'000'001;
+    const auto preview = PreviewEdit(legacy, SetHardCut{video->id, 9'000'001});
+    ASSERT_TRUE(preview.valid);
+    const auto cut = std::find_if(preview.junctions.begin(), preview.junctions.end(),
+                                  [&](const auto& value) { return value.id == video->id; });
+    ASSERT_NE(cut, preview.junctions.end());
+    EXPECT_EQ(cut->cut_us, 9'033'333);
+}
+
+TEST(EditTrackPolicy, ReorderCannotCrossMediaKindsAndNewVideoRowsStayInTheirGroup) {
+    Workspace workspace;
+    ASSERT_TRUE(workspace.insert(ContractSource(workspace)));
+    const auto video = workspace.tracks().front().id;
+    const auto audio = workspace.tracks().back().id;
+    const auto revision = workspace.revision();
+    EXPECT_EQ(workspace.apply(ReorderTrack{video, 1}, revision).status, CommandStatus::Rejected);
+    EXPECT_EQ(workspace.revision(), revision);
+    Move move{{workspace.clips().front().id}, 0};
+    const auto temporary = workspace.snapshot()->id_high_watermark + 1;
+    move.new_tracks = {{temporary, TrackType::Video}};
+    move.target_tracks = {{move.targets.front(), temporary}};
+    move.expand_linked = false;
+    ASSERT_EQ(workspace.apply(move, workspace.revision()).status, CommandStatus::Applied);
+    ASSERT_EQ(workspace.tracks().size(), 3u);
+    EXPECT_EQ(workspace.tracks()[0].type, TrackType::Video);
+    EXPECT_EQ(workspace.tracks()[1].type, TrackType::Video);
+    EXPECT_EQ(workspace.tracks()[2].id, audio);
+    EXPECT_EQ(workspace.apply(ReorderTrack{video, 1}, workspace.revision()).status, CommandStatus::Applied);
+}
+
+TEST(EditWorkspaceGrid, StrictNumericTrimRejectsARequestOutsideTheRepresentableMinimum) {
+    Workspace workspace;
+    ASSERT_TRUE(workspace.insert(ContractSource(workspace)));
+    const auto selected = workspace.selection();
+    const auto original = workspace.snapshot();
+    Trim trim{selected, TrimEdge::Right, -10 * Second + 1};
+    trim.clamp_to_bounds = false;
+    EXPECT_EQ(workspace.apply(trim, workspace.revision()).status, CommandStatus::Rejected);
+    EXPECT_EQ(workspace.clips(), original->clips);
+    EXPECT_EQ(workspace.revision(), original->revision);
+    trim = Trim{selected, TrimEdge::Left, -Second};
+    trim.clamp_to_bounds = false;
+    EXPECT_EQ(workspace.apply(trim, workspace.revision()).status, CommandStatus::Rejected);
+    EXPECT_EQ(workspace.clips(), original->clips);
+}
+
+TEST(EditClipboard, CopyRetainsInternalJunctionsAndOnlyCopiedLinkMembership) {
+    Workspace workspace;
+    ASSERT_TRUE(workspace.insert(ContractSource(workspace)));
+    const auto first = workspace.selection();
+    ASSERT_TRUE(workspace.insert(ContractSource(workspace, L"second.mkv")));
+    const auto second = workspace.selection();
+    ASSERT_TRUE(workspace.crossfade(first, second, Second));
+    std::vector<Id> all;
+    for (const auto& clip : workspace.clips())
+        all.push_back(clip.id);
+    const auto copied = CopyClips(*workspace.snapshot(), all);
+    ASSERT_TRUE(copied);
+    EXPECT_EQ(copied->clips.size(), 4u);
+    EXPECT_EQ(copied->junctions.size(), workspace.transitions().size());
+    EXPECT_EQ(copied->assets.size(), 2u);
+    EXPECT_EQ(copied->clips.front().start, 0);
+    EXPECT_EQ(copied->duration_us, workspace.duration());
+    const auto partial = CopyClips(*workspace.snapshot(), {first});
+    ASSERT_TRUE(partial);
+    ASSERT_EQ(partial->clips.size(), 1u);
+    EXPECT_EQ(partial->clips.front().group, 0);
+    EXPECT_TRUE(partial->junctions.empty());
+    EXPECT_FALSE(CopyClips(*workspace.snapshot(), {}));
+    EXPECT_FALSE(CopyClips(*workspace.snapshot(), {999'999}));
+}
+
+TEST(EditClipboard, PasteAllocatesFreshInternalIdsAndRestoresExactlyInOneUndo) {
+    Workspace workspace;
+    ASSERT_TRUE(workspace.insert(ContractSource(workspace)));
+    const auto first = workspace.selection();
+    ASSERT_TRUE(workspace.insert(ContractSource(workspace, L"second.mkv")));
+    const auto second = workspace.selection();
+    ASSERT_TRUE(workspace.crossfade(first, second, Second));
+    const auto original = workspace.snapshot();
+    std::vector<Id> ids;
+    for (const auto& clip : original->clips)
+        ids.push_back(clip.id);
+    const auto copied = CopyClips(*original, ids);
+    ASSERT_TRUE(copied);
+    const auto at = 30 * Second;
+    const PasteClips command{copied, at, workspace.tracks().front().id};
+    const auto preview = PreviewEdit(*original, command);
+    ASSERT_TRUE(preview.valid);
+    ASSERT_EQ(workspace.apply(command, workspace.revision()).status, CommandStatus::Applied);
+    EXPECT_EQ(workspace.revision(), original->revision + 1);
+    EXPECT_EQ(workspace.clips().size(), original->clips.size() * 2);
+    EXPECT_EQ(workspace.transitions().size(), original->junctions.size() * 2);
+    for (const auto& clip : workspace.clips())
+        if (clip.start >= at) {
+            EXPECT_GT(clip.id, original->id_high_watermark);
+            EXPECT_GT(clip.group, original->id_high_watermark);
+            EXPECT_EQ(clip.source_in, 0);
+            EXPECT_EQ(clip.source_out, 10 * Second);
+        }
+    EXPECT_EQ(preview.clips, workspace.clips());
+    EXPECT_EQ(preview.junctions, workspace.transitions());
+    ASSERT_TRUE(workspace.undo());
+    EXPECT_EQ(workspace.clips(), original->clips);
+    EXPECT_EQ(workspace.transitions(), original->junctions);
+    ASSERT_TRUE(workspace.redo());
+    EXPECT_EQ(workspace.clips(), preview.clips);
+}
+
+TEST(EditClipboard, PasteRefusesLockedDestinationsAndChangedSourcesAtomically) {
+    Workspace workspace;
+    ASSERT_TRUE(workspace.insert(ContractSource(workspace)));
+    std::vector<Id> ids;
+    for (const auto& clip : workspace.clips())
+        ids.push_back(clip.id);
+    const auto copied = CopyClips(*workspace.snapshot(), ids);
+    ASSERT_TRUE(copied);
+    const auto before = workspace.snapshot();
+    ASSERT_TRUE(workspace.setTrackLocked(workspace.tracks().back().id, true));
+    const auto refused =
+        workspace.apply(PasteClips{copied, 20 * Second, workspace.tracks().front().id}, workspace.revision());
+    ASSERT_EQ(refused.status, CommandStatus::Rejected);
+    ASSERT_TRUE(refused.error);
+    EXPECT_EQ(refused.error->code, EditErrorCode::TrackLocked);
+    EXPECT_EQ(workspace.clips(), before->clips);
+    ASSERT_TRUE(workspace.setTrackLocked(workspace.tracks().back().id, false));
+    auto changed = std::make_shared<ClipClipboard>(*copied);
+    auto asset = std::make_shared<Asset>(*changed->assets.front());
+    asset->path = L"different-source.mkv";
+    changed->assets.front() = asset;
+    EXPECT_EQ(
+        workspace.apply(PasteClips{changed, 20 * Second, workspace.tracks().front().id}, workspace.revision()).status,
+        CommandStatus::Rejected);
+    EXPECT_EQ(workspace.clips(), before->clips);
+    EXPECT_EQ(workspace.revision(), before->revision);
+}
+
+TEST(EditWorkspaceLocks, IndependentTrackInsertionDoesNotReorderALockedExistingTrack) {
+    Workspace workspace;
+    ASSERT_TRUE(workspace.insert(ContractSource(workspace)));
+    const auto locked = workspace.tracks().back().id;
+    ASSERT_TRUE(workspace.setTrackLocked(locked, true));
+    ASSERT_EQ(workspace.apply(CreateTrack{TrackType::Video, 0}, workspace.revision()).status, CommandStatus::Applied);
+    const auto revision = workspace.revision();
+    EXPECT_EQ(workspace.apply(ReorderTrack{locked, 0}, revision).status, CommandStatus::Rejected);
+    EXPECT_EQ(workspace.revision(), revision);
+}
+
+TEST(EditClipboardInsert, SampleLengthInsertionRefusesOffFrameVideoSuffixAtomically) {
+    Workspace workspace;
+    ASSERT_TRUE(workspace.insert(ContractSource(workspace)));
+    const auto audio = workspace.clips().back().id;
+    Trim short_audio{audio, TrimEdge::Right, 21 - workspace.clip(audio)->duration()};
+    short_audio.expand_linked = false;
+    ASSERT_EQ(workspace.apply(short_audio, workspace.revision()).status, CommandStatus::Applied);
+    ASSERT_EQ(workspace.clip(audio)->duration(), 21);
+    const auto copied = CopyClips(*workspace.snapshot(), {audio});
+    ASSERT_TRUE(copied);
+    const auto before = workspace.snapshot();
+    const PasteClips command{copied, 0, workspace.clips().back().track, true};
+    EXPECT_FALSE(PreviewEdit(*before, command).valid);
+    EXPECT_EQ(workspace.apply(command, before->revision).status, CommandStatus::Rejected);
+    EXPECT_EQ(workspace.revision(), before->revision);
+    EXPECT_EQ(workspace.clips(), before->clips);
+    EXPECT_EQ(workspace.snapshot()->id_high_watermark, before->id_high_watermark);
+}
+
+TEST(EditClipboardInsert, InsertionCannotShiftOnlyOneMemberOfAnOffsetLinkedGroup) {
+    Workspace workspace;
+    ASSERT_TRUE(workspace.insert(ContractSource(workspace)));
+    const auto video = workspace.clips().front().id;
+    const auto audio = workspace.clips().back().id;
+    ASSERT_EQ(workspace.apply(Trim{video, TrimEdge::Right, -9 * Second}, workspace.revision()).status,
+              CommandStatus::Applied);
+    Move separate{{audio}, 2 * Second};
+    separate.expand_linked = false;
+    ASSERT_EQ(workspace.apply(separate, workspace.revision()).status, CommandStatus::Applied);
+    ASSERT_EQ(workspace.apply(Relink{{video, audio}}, workspace.revision()).status, CommandStatus::Applied);
+    ASSERT_NE(workspace.clip(video)->group, 0);
+    ASSERT_EQ(workspace.clip(video)->group, workspace.clip(audio)->group);
+    const auto copied = CopyClips(*workspace.snapshot(), {video});
+    ASSERT_TRUE(copied);
+    const auto before = workspace.snapshot();
+    const PasteClips command{copied, 1'500'000, workspace.clips().front().track, true};
+    EXPECT_FALSE(PreviewEdit(*before, command).valid);
+    EXPECT_EQ(workspace.apply(command, before->revision).status, CommandStatus::Rejected);
+    EXPECT_EQ(workspace.revision(), before->revision);
+    EXPECT_EQ(workspace.clips(), before->clips);
+}
+
+TEST(EditClipboardInsert, InsertingAtResultStartIncludesNewClipsAndRestoresInOneUndo) {
+    Workspace workspace;
+    ASSERT_TRUE(workspace.insert(ContractSource(workspace)));
+    std::vector<Id> ids;
+    for (const auto& clip : workspace.clips())
+        ids.push_back(clip.id);
+    const auto copied = CopyClips(*workspace.snapshot(), ids);
+    ASSERT_TRUE(copied);
+    const auto before = workspace.snapshot();
+    ASSERT_EQ(workspace.apply(PasteClips{copied, 0, workspace.tracks().front().id, true}, before->revision).status,
+              CommandStatus::Applied);
+    EXPECT_EQ(workspace.snapshot()->result_range.in_us, 0);
+    EXPECT_EQ(workspace.duration(), 20 * Second);
+    EXPECT_EQ(workspace.clips().size(), 4u);
+    ASSERT_TRUE(workspace.undo());
+    EXPECT_EQ(workspace.clips(), before->clips);
+    EXPECT_EQ(workspace.snapshot()->result_range, before->result_range);
+}
+
+TEST(EditWorkspaceGain, RejectsValuesOutsideTheAuthoredTargetBoundsAtomically) {
+    Workspace workspace;
+    ASSERT_TRUE(workspace.insert(ContractSource(workspace)));
+    const auto audio_track = workspace.tracks().back().id;
+    const auto audio = std::find_if(workspace.clips().begin(), workspace.clips().end(),
+                                    [audio_track](const auto& clip) { return clip.track == audio_track; });
+    ASSERT_NE(audio, workspace.clips().end());
+    const auto audio_id = audio->id;
+    for (const auto& command :
+         {SetGain{GainTarget::Clip, audio_id, 24.1}, SetGain{GainTarget::Clip, audio_id, -60.1},
+          SetGain{GainTarget::Track, audio_track, 12.1}, SetGain{GainTarget::Track, audio_track, -60.1}}) {
+        const auto before = workspace.snapshot();
+        const auto history = workspace.historyBytes();
+        EXPECT_EQ(workspace.apply(command, workspace.revision()).status, CommandStatus::Rejected);
+        EXPECT_EQ(workspace.revision(), before->revision);
+        EXPECT_EQ(workspace.clips(), before->clips);
+        EXPECT_EQ(workspace.tracks(), before->tracks);
+        EXPECT_EQ(workspace.historyBytes(), history);
+    }
+    ASSERT_EQ(workspace.apply(SetGain{GainTarget::Clip, audio_id, 24}, workspace.revision()).status,
+              CommandStatus::Applied);
+    ASSERT_EQ(workspace.apply(SetGain{GainTarget::Track, audio_track, -60}, workspace.revision()).status,
+              CommandStatus::Applied);
+}
+
+TEST(EditWorkspaceGain, ExplicitMultiGainChangesOnlyNamedAudioAndUndoesOnce) {
+    Workspace workspace;
+    const auto asset = ContractSource(workspace);
+    ASSERT_TRUE(workspace.insert(asset));
+    ASSERT_TRUE(workspace.insert(asset));
+    std::vector<Id> audio;
+    for (const auto& clip : workspace.clips())
+        if (clip.track == workspace.tracks().back().id)
+            audio.push_back(clip.id);
+    ASSERT_EQ(audio.size(), 2u);
+    const auto before = workspace.snapshot();
+    ASSERT_EQ(workspace.apply(SetGain{GainTarget::Clip, 0, -12.3, audio}, workspace.revision()).status,
+              CommandStatus::Applied);
+    for (const auto& clip : workspace.clips())
+        EXPECT_DOUBLE_EQ(clip.gain_db, std::find(audio.begin(), audio.end(), clip.id) != audio.end() ? -12.3 : 0);
+    ASSERT_TRUE(workspace.undo());
+    EXPECT_EQ(workspace.clips(), before->clips);
+    ASSERT_TRUE(workspace.setTrackLocked(workspace.tracks().back().id, true));
+    const auto revision = workspace.revision();
+    EXPECT_EQ(workspace.apply(SetGain{GainTarget::Clip, 0, -6, audio}, revision).status, CommandStatus::Rejected);
+    EXPECT_EQ(workspace.clips(), before->clips);
+    EXPECT_EQ(workspace.revision(), revision);
+    ASSERT_TRUE(workspace.setTrackLocked(workspace.tracks().back().id, false));
+    audio.push_back(workspace.clips().front().id);
+    EXPECT_EQ(workspace.apply(SetGain{GainTarget::Clip, 0, -6, audio}, revision).status, CommandStatus::Rejected);
+    EXPECT_EQ(workspace.clips(), before->clips);
+}
+
+TEST(EditWorkspaceGain, AuthoredGainAndRangeDeltaRejectFinerThanTenthsWithoutMutation) {
+    Workspace workspace;
+    ASSERT_TRUE(workspace.insert(ContractSource(workspace)));
+    const auto audio = workspace.clips().back().id;
+    const auto track = workspace.clips().back().track;
+    ASSERT_EQ(workspace.apply(Unlink{{audio}}, workspace.revision()).status, CommandStatus::Applied);
+    const auto before = workspace.snapshot();
+    for (const EditCommand& command :
+         {EditCommand{SetGain{GainTarget::Clip, audio, 1.23}}, EditCommand{SetGain{GainTarget::Track, track, -2.01}},
+          EditCommand{AdjustRangeGain{{2 * Second, 4 * Second}, {track}, 0.05}}}) {
+        EXPECT_EQ(workspace.apply(command, workspace.revision()).status, CommandStatus::Rejected);
+        EXPECT_EQ(workspace.revision(), before->revision);
+        EXPECT_EQ(workspace.clips(), before->clips);
+        EXPECT_EQ(workspace.tracks(), before->tracks);
+    }
+}
+
+TEST(EditWorkspaceRange, ScopedAudioGainSplitsAndCommitsAsOneAtomicCommand) {
+    Workspace workspace;
+    ASSERT_TRUE(workspace.insert(ContractSource(workspace)));
+    const auto audio_track = workspace.tracks().back().id;
+    const auto audio = std::find_if(workspace.clips().begin(), workspace.clips().end(),
+                                    [&](const auto& clip) { return clip.track == audio_track; });
+    ASSERT_NE(audio, workspace.clips().end());
+    ASSERT_EQ(workspace.apply(Unlink{{audio->id}}, workspace.revision()).status, CommandStatus::Applied);
+    const auto before = workspace.snapshot();
+    ASSERT_EQ(workspace.apply(AdjustRangeGain{{2 * Second, 4 * Second}, {audio_track}, 6}, workspace.revision()).status,
+              CommandStatus::Applied);
+    EXPECT_EQ(workspace.clips().size(), 4u);
+    for (const auto& clip : workspace.clips()) {
+        if (clip.track == audio_track && clip.start == 2 * Second) {
+            EXPECT_EQ(clip.end(), 4 * Second);
+            EXPECT_DOUBLE_EQ(clip.gain_db, 6);
+        } else {
+            EXPECT_DOUBLE_EQ(clip.gain_db, 0);
+        }
+    }
+    ASSERT_TRUE(workspace.undo());
+    EXPECT_EQ(workspace.clips(), before->clips);
+}
+
+TEST(EditWorkspaceRange, TailLiftRetainsDurationAndUndoRestoresTheFollowingEndMode) {
+    Workspace workspace;
+    ASSERT_TRUE(workspace.insert(ContractSource(workspace)));
+    const auto before = workspace.snapshot();
+    const auto video = workspace.tracks().front().id;
+    const auto audio = workspace.tracks().back().id;
+    ASSERT_EQ(workspace.apply(LiftRange{{8 * Second, 10 * Second}, {video, audio}}, workspace.revision()).status,
+              CommandStatus::Applied);
+    EXPECT_EQ(workspace.duration(), 10 * Second);
+    EXPECT_EQ(workspace.snapshot()->timeline_end.mode, TimelineEndMode::FixedEnd);
+    for (const auto& clip : workspace.clips())
+        EXPECT_EQ(clip.end(), 8 * Second);
+    ASSERT_TRUE(workspace.undo());
+    EXPECT_EQ(workspace.clips(), before->clips);
+    EXPECT_EQ(workspace.snapshot()->timeline_end, before->timeline_end);
+    ASSERT_TRUE(workspace.redo());
+    EXPECT_EQ(workspace.duration(), 10 * Second);
+}
+
+TEST(EditWorkspaceRange, RippleRefusesToShiftUnscopedIndependentContent) {
+    Workspace workspace;
+    ASSERT_TRUE(workspace.insert(ContractSource(workspace)));
+    const auto audio = workspace.clips().back().id;
+    ASSERT_EQ(workspace.apply(Unlink{{audio}}, workspace.revision()).status, CommandStatus::Applied);
+    const auto before = workspace.snapshot();
+    const auto result =
+        workspace.apply(RippleRemoveRange{{Second, 2 * Second}, {workspace.tracks().front().id}}, workspace.revision());
+    ASSERT_EQ(result.status, CommandStatus::Rejected);
+    ASSERT_TRUE(result.error);
+    EXPECT_EQ(result.error->code, EditErrorCode::RippleConflict);
+    EXPECT_EQ(workspace.clips(), before->clips);
+}
+
+TEST(EditSelectionContracts, AddingVideoRefusesACollapsedSampleRangeWithoutChangingTheOriginal) {
+    Workspace workspace;
+    ASSERT_TRUE(workspace.insert(ContractSource(workspace)));
+    const auto snapshot = workspace.snapshot();
+    const auto audio = workspace.tracks().back().id;
+    const auto video = workspace.tracks().front().id;
+    const auto range = MakeEditRange(*snapshot, 21, 42, {audio}, 21);
+    ASSERT_TRUE(range);
+    EXPECT_EQ(range->start_us, 21);
+    EXPECT_EQ(range->end_us, 42);
+    EXPECT_FALSE(MakeEditRange(*snapshot, range->start_us, range->end_us, {video, audio}, range->anchor_us));
+    EXPECT_EQ(range->start_us, 21);
+    EXPECT_EQ(range->end_us, 42);
+}
+
 TEST(EditWorkspaceContracts, InvalidSplitInJunction) {
     Workspace workspace;
     const auto source = ContractSource(workspace);
@@ -1325,4 +2058,541 @@ TEST(EditSourceImport, UnboundBytesOrUnknownLayoutsKeepTheLinkedImport) {
     unbound.content_identity_valid = false;
     EXPECT_FALSE(DescribeSourceImport(unbound).descriptor);
     EXPECT_FALSE(DescribeSourceImport(ProbedSource({6})).descriptor);
+}
+
+namespace {
+std::pair<Id, Id> AdjacentCutWithHandles(Workspace& workspace, RationalFps fps = {60, 1}) {
+    Asset asset;
+    asset.path = L"handles.mkv";
+    asset.duration = *fps.frameTime(600);
+    asset.fps_num = fps.num;
+    asset.fps_den = fps.den;
+    const auto id = workspace.addAsset(asset);
+    if (!workspace.insert(id))
+        return {};
+    const auto outgoing = workspace.selection();
+    const auto track = workspace.clip(outgoing)->track;
+    const auto cut = *fps.frameTime(300);
+    if (!workspace.split(outgoing, cut))
+        return {};
+    for (const auto& clip : workspace.clips())
+        if (clip.track == track && clip.start == cut)
+            return {outgoing, clip.id};
+    return {};
+}
+} // namespace
+
+TEST(EditCrossfadeAtCut, ExtendsLinkedSourceHandlesAroundCutWithoutMovingOuterContentAndUndoesOnce) {
+    Workspace workspace;
+    const auto [outgoing, incoming] = AdjacentCutWithHandles(workspace);
+    ASSERT_NE(outgoing, 0);
+    ASSERT_NE(incoming, 0);
+    ASSERT_TRUE(workspace.insert(workspace.clip(outgoing)->asset, 10'000'000));
+    const auto before = workspace.snapshot();
+    const auto duration = workspace.duration();
+    const CrossfadeAtCut command{outgoing, incoming};
+    const auto preview = PreviewEdit(*before, command);
+    ASSERT_TRUE(preview.valid);
+    EXPECT_EQ(workspace.clips(), before->clips);
+    ASSERT_EQ(workspace.apply(command, before->revision).status, CommandStatus::Applied);
+    EXPECT_EQ(workspace.clips(), preview.clips);
+    EXPECT_EQ(workspace.transitions(), preview.junctions);
+    EXPECT_EQ(workspace.duration(), duration);
+    ASSERT_EQ(workspace.transitions().size(), 2U);
+    for (const auto& old_clip : before->clips) {
+        const auto* actual = workspace.clip(old_clip.id);
+        ASSERT_NE(actual, nullptr);
+        if (old_clip.end() == 5'000'000) {
+            EXPECT_EQ(actual->start, old_clip.start);
+            EXPECT_EQ(actual->source_in, old_clip.source_in);
+            EXPECT_EQ(actual->source_out, 5'250'000);
+            EXPECT_EQ(actual->end(), 5'250'000);
+        } else if (old_clip.start == 5'000'000) {
+            EXPECT_EQ(actual->start, 4'750'000);
+            EXPECT_EQ(actual->source_in, 4'750'000);
+            EXPECT_EQ(actual->source_out, old_clip.source_out);
+            EXPECT_EQ(actual->end(), old_clip.end());
+        } else {
+            EXPECT_EQ(*actual, old_clip);
+        }
+    }
+    for (const auto& junction : workspace.transitions()) {
+        EXPECT_EQ(junction.in_us, 4'750'000);
+        EXPECT_EQ(junction.out_us, 5'250'000);
+        EXPECT_EQ(junction.cut_us, 5'000'000);
+        EXPECT_EQ(junction.kind, TransitionKind::Crossfade);
+    }
+    ASSERT_TRUE(workspace.undo());
+    EXPECT_EQ(workspace.clips(), before->clips);
+    EXPECT_EQ(workspace.transitions(), before->junctions);
+    EXPECT_EQ(workspace.snapshot()->result_range, before->result_range);
+    EXPECT_GE(workspace.snapshot()->id_high_watermark, before->id_high_watermark);
+}
+
+TEST(EditCrossfadeAtCut, OddNtscDurationUsesEarlierFloorAndLaterRemainderOnCommonFrameGrid) {
+    Workspace workspace;
+    const RationalFps fps{30000, 1001};
+    const auto [outgoing, incoming] = AdjacentCutWithHandles(workspace, fps);
+    ASSERT_NE(incoming, 0);
+    const auto before = workspace.snapshot();
+    const auto incoming_end = workspace.clip(incoming)->end();
+    const auto cut = *fps.frameTime(300);
+    const auto start = *fps.frameTime(293);
+    const auto end = *fps.frameTime(308);
+    const CrossfadeAtCut command{outgoing, incoming, *fps.frameTime(15)};
+    ASSERT_EQ(workspace.apply(command, before->revision).status, CommandStatus::Applied);
+    for (const auto& junction : workspace.transitions()) {
+        EXPECT_EQ(junction.in_us, start);
+        EXPECT_EQ(junction.out_us, end);
+        EXPECT_EQ(junction.cut_us, cut);
+    }
+    EXPECT_EQ(workspace.duration(), *fps.frameTime(600));
+    EXPECT_EQ(workspace.clip(incoming)->end(), incoming_end);
+}
+
+TEST(EditCrossfadeAtCut, MissingHandlesRefuseInsteadOfClampingOrMovingTheSuffix) {
+    Workspace workspace;
+    Asset asset;
+    asset.path = L"full-source.mkv";
+    asset.duration = 10'000'000;
+    asset.fps_num = 60;
+    const auto source_id = workspace.addAsset(asset);
+    ASSERT_TRUE(workspace.insert(source_id));
+    const auto outgoing = workspace.selection();
+    ASSERT_TRUE(workspace.insert(source_id));
+    const auto incoming = workspace.selection();
+    const auto before = workspace.snapshot();
+    const CrossfadeAtCut command{outgoing, incoming};
+    const auto preview = PreviewEdit(*before, command);
+    EXPECT_FALSE(preview.valid);
+    ASSERT_TRUE(preview.error);
+    EXPECT_EQ(preview.error->code, EditErrorCode::SourceBounds);
+    const auto result = workspace.apply(command, before->revision);
+    EXPECT_EQ(result.status, CommandStatus::Rejected);
+    EXPECT_EQ(workspace.clips(), before->clips);
+    EXPECT_EQ(workspace.revision(), before->revision);
+    EXPECT_EQ(workspace.snapshot()->id_high_watermark, before->id_high_watermark);
+}
+
+TEST(EditCrossfadeAtCut, LinkedLocksAndFacingFadesRefuseTheWholeCandidate) {
+    Workspace workspace;
+    const auto [outgoing, incoming] = AdjacentCutWithHandles(workspace);
+    ASSERT_NE(incoming, 0);
+    const auto audio_track = workspace.tracks().back().id;
+    ASSERT_TRUE(workspace.setTrackLocked(audio_track, true));
+    auto before = workspace.snapshot();
+    auto preview = PreviewEdit(*before, CrossfadeAtCut{outgoing, incoming});
+    ASSERT_TRUE(preview.error);
+    EXPECT_EQ(preview.error->code, EditErrorCode::TrackLocked);
+    EXPECT_EQ(workspace.apply(CrossfadeAtCut{outgoing, incoming}, before->revision).status, CommandStatus::Rejected);
+    EXPECT_EQ(workspace.clips(), before->clips);
+    ASSERT_TRUE(workspace.setTrackLocked(audio_track, false));
+    ASSERT_EQ(workspace.apply(SetFade{outgoing, FadeEdge::Out, {500'000}}, workspace.revision()).status,
+              CommandStatus::Applied);
+    before = workspace.snapshot();
+    preview = PreviewEdit(*before, CrossfadeAtCut{outgoing, incoming});
+    ASSERT_TRUE(preview.error);
+    EXPECT_EQ(preview.error->code, EditErrorCode::TransitionBoundaryConflict);
+    EXPECT_EQ(workspace.apply(CrossfadeAtCut{outgoing, incoming}, before->revision).status, CommandStatus::Rejected);
+    EXPECT_EQ(workspace.clips(), before->clips);
+}
+
+TEST(EditCrossfadeAtCut, ImmutableStreamBoundsAreStricterThanContainerDuration) {
+    Workspace workspace;
+    Asset asset;
+    asset.path = L"bounded-source.mkv";
+    asset.duration = 10'000'000;
+    asset.fps_num = 60;
+    asset.audio = false;
+    auto descriptor = std::make_shared<ValidatedSourceDescriptor>();
+    SourceStreamDescriptor stream;
+    stream.ref = {0, exosnap::engine::AudioTrackId{{1}}, 0, exosnap::engine::TimelineStreamKind::Video};
+    stream.source_span = {3'000'000, 7'000'000};
+    stream.fps = {60, 1};
+    descriptor->streams.push_back(stream);
+    asset.source_descriptor = descriptor;
+    const auto source_id = workspace.addAsset(asset);
+    ASSERT_TRUE(workspace.insert(source_id));
+    const auto outgoing = workspace.selection();
+    ASSERT_TRUE(workspace.insert(source_id));
+    const auto incoming = workspace.selection();
+    ASSERT_EQ(workspace.clip(outgoing)->source_out, 7'000'000);
+    ASSERT_EQ(workspace.clip(incoming)->source_in, 3'000'000);
+    const auto before = workspace.snapshot();
+    const auto preview = PreviewEdit(*before, CrossfadeAtCut{outgoing, incoming});
+    ASSERT_TRUE(preview.error);
+    EXPECT_EQ(preview.error->code, EditErrorCode::SourceBounds);
+    EXPECT_EQ(workspace.apply(CrossfadeAtCut{outgoing, incoming}, before->revision).status, CommandStatus::Rejected);
+    EXPECT_EQ(workspace.clips(), before->clips);
+}
+
+TEST(EditClipboard, CapturedSourceVersionCannotPasteAfterAdoptingAnotherVersionWithIdenticalMetadata) {
+    Workspace workspace;
+    Asset asset;
+    asset.path = L"versioned-source.mkv";
+    asset.duration = 10'000'000;
+    asset.fps_num = 60;
+    asset.state = AssetState::Available;
+    ASSERT_TRUE(workspace.insert(workspace.addAsset(asset)));
+    const auto before = workspace.snapshot();
+    const auto copied = CopyClips(*before, {workspace.clips().front().id});
+    ASSERT_NE(copied, nullptr);
+    auto adopted = *before;
+    auto source = std::make_shared<Asset>(*adopted.assets.front());
+    ++source->source_version;
+    adopted.assets.front() = std::move(source);
+    const auto preview = PreviewEdit(adopted, PasteClips{copied, 10'000'000});
+    EXPECT_FALSE(preview.valid);
+    ASSERT_TRUE(preview.error);
+    EXPECT_EQ(preview.error->code, EditErrorCode::SourceChanged);
+    EXPECT_EQ(workspace.clips(), before->clips);
+}
+
+TEST(EditRemoveOverlap, CompleteLinkedCandidateRestoresTheCutWithoutMovingOuterContentAndUndoesOnce) {
+    Workspace workspace;
+    const auto [outgoing, incoming] = AdjacentCutWithHandles(workspace);
+    ASSERT_NE(incoming, 0);
+    ASSERT_TRUE(workspace.insert(workspace.clip(outgoing)->asset, 10'000'000));
+    const auto adjacent = workspace.snapshot();
+    ASSERT_EQ(workspace.apply(CrossfadeAtCut{outgoing, incoming}, workspace.revision()).status, CommandStatus::Applied);
+    const auto before = workspace.snapshot();
+    ASSERT_EQ(before->junctions.size(), 2U);
+    const RemoveOverlap command{before->junctions.front().id};
+    const auto preview = PreviewEdit(*before, command);
+    ASSERT_TRUE(preview.valid);
+    EXPECT_EQ(workspace.clips(), before->clips);
+    EXPECT_EQ(workspace.transitions(), before->junctions);
+    ASSERT_EQ(workspace.apply(command, before->revision).status, CommandStatus::Applied);
+    EXPECT_EQ(workspace.clips(), preview.clips);
+    EXPECT_EQ(workspace.clips(), adjacent->clips);
+    EXPECT_TRUE(workspace.transitions().empty());
+    EXPECT_EQ(workspace.duration(), 20'000'000);
+    EXPECT_EQ(workspace.snapshot()->timeline_end, before->timeline_end);
+    ASSERT_TRUE(workspace.undo());
+    EXPECT_EQ(workspace.clips(), before->clips);
+    EXPECT_EQ(workspace.transitions(), before->junctions);
+    ASSERT_TRUE(workspace.redo());
+    EXPECT_EQ(workspace.clips(), adjacent->clips);
+}
+
+TEST(EditRemoveOverlap, ExplicitHardCutTrimsBothSourceMappingsAndKeepsOuterEndpoints) {
+    Workspace workspace;
+    const auto [outgoing, incoming] = AdjacentCutWithHandles(workspace);
+    ASSERT_NE(incoming, 0);
+    ASSERT_EQ(workspace.apply(CrossfadeAtCut{outgoing, incoming}, workspace.revision()).status, CommandStatus::Applied);
+    const auto junction_id = workspace.transitions().front().id;
+    constexpr Time cut = 4'900'000;
+    ASSERT_EQ(workspace.apply(SetHardCut{junction_id, cut}, workspace.revision()).status, CommandStatus::Applied);
+    const auto before = workspace.snapshot();
+    ASSERT_EQ(workspace.apply(RemoveOverlap{junction_id}, before->revision).status, CommandStatus::Applied);
+    ASSERT_TRUE(workspace.transitions().empty());
+    for (const auto& old : before->clips) {
+        const auto* actual = workspace.clip(old.id);
+        ASSERT_NE(actual, nullptr);
+        if (old.start == 0) {
+            EXPECT_EQ(actual->start, old.start);
+            EXPECT_EQ(actual->source_in, old.source_in);
+            EXPECT_EQ(actual->end(), cut);
+            EXPECT_EQ(actual->source_out, old.source_in + cut - old.start);
+        } else {
+            EXPECT_EQ(actual->start, cut);
+            EXPECT_EQ(actual->end(), old.end());
+            EXPECT_EQ(actual->source_in, old.source_in + cut - old.start);
+            EXPECT_EQ(actual->source_out, old.source_out);
+        }
+    }
+    EXPECT_EQ(workspace.duration(), 10'000'000);
+}
+
+TEST(EditRemoveOverlap, LockedLinkedCounterpartAndInvalidRemainingFadeRefuseTheWholeCandidate) {
+    Workspace workspace;
+    const auto [outgoing, incoming] = AdjacentCutWithHandles(workspace);
+    ASSERT_NE(incoming, 0);
+    ASSERT_EQ(workspace.apply(CrossfadeAtCut{outgoing, incoming}, workspace.revision()).status, CommandStatus::Applied);
+    const auto junction_id = workspace.transitions().front().id;
+    ASSERT_TRUE(workspace.setTrackLocked(workspace.tracks().back().id, true));
+    auto before = workspace.snapshot();
+    auto preview = PreviewEdit(*before, RemoveOverlap{junction_id});
+    ASSERT_TRUE(preview.error);
+    EXPECT_EQ(preview.error->code, EditErrorCode::TrackLocked);
+    EXPECT_EQ(workspace.apply(RemoveOverlap{junction_id}, before->revision).status, CommandStatus::Rejected);
+    EXPECT_EQ(workspace.clips(), before->clips);
+    ASSERT_TRUE(workspace.setTrackLocked(workspace.tracks().back().id, false));
+    ASSERT_EQ(workspace.apply(SetFade{outgoing, FadeEdge::In, {5'100'000}}, workspace.revision()).status,
+              CommandStatus::Applied);
+    before = workspace.snapshot();
+    preview = PreviewEdit(*before, RemoveOverlap{junction_id});
+    EXPECT_FALSE(preview.valid);
+    ASSERT_TRUE(preview.error);
+    EXPECT_EQ(preview.error->code, EditErrorCode::TransitionBoundaryConflict);
+    EXPECT_EQ(workspace.apply(RemoveOverlap{junction_id}, before->revision).status, CommandStatus::Rejected);
+    EXPECT_EQ(workspace.clips(), before->clips);
+    EXPECT_EQ(workspace.transitions(), before->junctions);
+    EXPECT_EQ(workspace.revision(), before->revision);
+}
+
+TEST(EditRemoveOverlap, AStoredCrossfadeWithoutAnExplicitCutUsesItsWindowMidpoint) {
+    Workspace workspace;
+    const auto [outgoing, incoming] = AdjacentCutWithHandles(workspace);
+    ASSERT_NE(incoming, 0);
+    ASSERT_TRUE(workspace.crossfade(outgoing, incoming, 500'000));
+    const auto junction = std::find_if(workspace.transitions().begin(), workspace.transitions().end(),
+                                       [outgoing](const auto& value) { return value.outgoing == outgoing; });
+    ASSERT_NE(junction, workspace.transitions().end());
+    ASSERT_LT(junction->cut_us, junction->in_us);
+    const auto midpoint = junction->in_us + (junction->out_us - junction->in_us) / 2;
+    const auto preview = PreviewEdit(*workspace.snapshot(), RemoveOverlap{junction->id});
+    ASSERT_TRUE(preview.valid);
+    for (const auto& clip : preview.clips) {
+        if (clip.start == 0)
+            EXPECT_EQ(clip.end(), midpoint);
+        else
+            EXPECT_EQ(clip.start, midpoint);
+    }
+}
+
+TEST(EditWorkspaceGrid, ChangingOnlyFadeCurvePreservesAnUnchangedLegacyEndpoint) {
+    Workspace workspace;
+    ASSERT_TRUE(workspace.insert(source(workspace)));
+    auto snapshot = *workspace.snapshot();
+    snapshot.output_fps = {60, 1};
+    ASSERT_TRUE(snapshot.output_fps.valid());
+    const auto id = snapshot.clips.front().id;
+    snapshot.clips.front().fade_in.duration_us = 10'001;
+    const auto original = snapshot.clips;
+    const auto preview =
+        PreviewEdit(snapshot, SetFade{id, FadeEdge::In, {10'001, {exosnap::engine::CurveKind::Bias, .5}}});
+    ASSERT_TRUE(preview.valid);
+    ASSERT_EQ(preview.clips.size(), original.size());
+    EXPECT_EQ(preview.clips.front().fade_in.duration_us, 10'001);
+    EXPECT_EQ(preview.clips.front().fade_in.curve, (CurveSpec{exosnap::engine::CurveKind::Bias, .5}));
+    auto expected = original;
+    expected.front().fade_in.curve = {exosnap::engine::CurveKind::Bias, .5};
+    EXPECT_EQ(preview.clips, expected);
+}
+namespace {
+void ExpectAuthoredGridState(const EditSnapshot& actual, const EditSnapshot& expected) {
+    // Publication revisions and allocated-ID high watermarks remain monotone across history.
+    EXPECT_EQ(actual.tracks, expected.tracks);
+    EXPECT_EQ(actual.clips, expected.clips);
+    EXPECT_EQ(actual.junctions, expected.junctions);
+    EXPECT_EQ(actual.spacers, expected.spacers);
+    EXPECT_EQ(actual.result_range, expected.result_range);
+    EXPECT_EQ(actual.timeline_end, expected.timeline_end);
+    EXPECT_EQ(actual.output_fps, expected.output_fps);
+    EXPECT_EQ(actual.output_width, expected.output_width);
+    EXPECT_EQ(actual.output_height, expected.output_height);
+    EXPECT_EQ(actual.locked_track_ids, expected.locked_track_ids);
+    ASSERT_EQ(actual.assets.size(), expected.assets.size());
+    for (size_t index = 0; index < actual.assets.size(); ++index) {
+        ASSERT_TRUE(actual.assets[index]);
+        ASSERT_TRUE(expected.assets[index]);
+        EXPECT_EQ(actual.assets[index]->id, expected.assets[index]->id);
+        EXPECT_EQ(actual.assets[index]->path, expected.assets[index]->path);
+        EXPECT_EQ(actual.assets[index]->duration, expected.assets[index]->duration);
+        EXPECT_EQ(actual.assets[index]->source_version, expected.assets[index]->source_version);
+        EXPECT_EQ(actual.assets[index]->source_descriptor, expected.assets[index]->source_descriptor);
+    }
+}
+
+void PopulateLegacyGridHistory(Workspace& workspace, Id& target, Id& neighbor) {
+    Asset asset;
+    asset.path = L"legacy-grid-history.mkv";
+    asset.duration = 2'002'003;
+    asset.width = 1920;
+    asset.height = 1080;
+    asset.fps_num = 30000;
+    asset.fps_den = 1001;
+    asset.audio = false;
+    const auto asset_id = workspace.addAsset(asset);
+    ASSERT_TRUE(workspace.insert(asset_id, 0));
+    const auto first = workspace.selection();
+    ASSERT_TRUE(workspace.insert(asset_id, 3'003'000));
+    const auto second = workspace.selection();
+    const auto copied = CopyClips(*workspace.snapshot(), {first, second});
+    ASSERT_TRUE(copied);
+    auto legacy = std::make_shared<ClipClipboard>(*copied);
+    ASSERT_EQ(legacy->clips.size(), 2u);
+    auto& edited = legacy->clips[0];
+    edited.start = 137;
+    edited.source_in = 123;
+    edited.source_out = 1'001'001;
+    edited.fade_in = {10'001, {exosnap::engine::CurveKind::Bias, .2}};
+    edited.fade_out = {20'003, {exosnap::engine::CurveKind::Bias, -.3}};
+    auto& other = legacy->clips[1];
+    other.start = 3'003'017;
+    other.source_in = 321;
+    other.source_out = 900'013;
+    other.fade_in = {7'001, {exosnap::engine::CurveKind::Bias, -.4}};
+    other.fade_out = {9'001, {exosnap::engine::CurveKind::Bias, .6}};
+    legacy->duration_us = other.end();
+    constexpr Time at = 6'006'000;
+    ASSERT_EQ(workspace.apply(PasteClips{legacy, at, 0, false, false}, workspace.revision()).status,
+              CommandStatus::Applied);
+    for (const auto& clip : workspace.clips()) {
+        if (clip.start == at + 137)
+            target = clip.id;
+        if (clip.start == at + 3'003'017)
+            neighbor = clip.id;
+    }
+    ASSERT_NE(target, 0u);
+    ASSERT_NE(neighbor, 0u);
+}
+} // namespace
+
+TEST(EditTimeAcceptance, ChainedAuthoredNtscMovesPreserveIndexSpansAtLongStartsAndReturnExactly) {
+    for (const int numerator : {30000, 60000})
+        for (const int64_t initial_index : {0LL, 1LL, 864'000'001LL}) {
+            SCOPED_TRACE(::testing::Message() << numerator << "/1001 at " << initial_index);
+            const auto golden = [numerator](int64_t index) -> Time { return index * 1'000'000LL * 1001 / numerator; };
+            Workspace workspace;
+            Asset asset;
+            asset.path = L"chained-grid.mkv";
+            asset.duration = 5'005'000;
+            asset.fps_num = numerator;
+            asset.fps_den = 1001;
+            asset.audio = false;
+            asset.width = 1920;
+            asset.height = 1080;
+            ASSERT_TRUE(workspace.insert(workspace.addAsset(asset), golden(initial_index)));
+            const auto id = workspace.selection();
+            constexpr int64_t span = 11;
+            const auto duration = golden(initial_index + span) - golden(initial_index);
+            ASSERT_EQ(
+                workspace.apply(Trim{id, TrimEdge::Right, duration - asset.duration}, workspace.revision()).status,
+                CommandStatus::Applied);
+            const auto original = workspace.snapshot();
+            int64_t index = initial_index;
+            for (const int direction : {1, -1})
+                for (int step = 0; step < 128; ++step) {
+                    const auto next = index + direction;
+                    const Move command{{id}, golden(next) - golden(index), {}, {}, false, false};
+                    const auto before = workspace.snapshot();
+                    const auto preview = PreviewEdit(*before, command);
+                    ASSERT_TRUE(preview.valid);
+                    ASSERT_EQ(workspace.apply(command, before->revision).status, CommandStatus::Applied);
+                    ASSERT_TRUE(workspace.clip(id));
+                    EXPECT_EQ(workspace.clip(id)->start, golden(next));
+                    EXPECT_EQ(workspace.clip(id)->end(), golden(next + span));
+                    EXPECT_EQ(workspace.clip(id)->source_in, 0);
+                    EXPECT_EQ(workspace.clip(id)->source_out, golden(next + span) - golden(next));
+                    EXPECT_EQ(workspace.clips(), preview.clips);
+                    index = next;
+                }
+            EXPECT_EQ(index, initial_index);
+            ExpectAuthoredGridState(*workspace.snapshot(), *original);
+        }
+}
+
+TEST(EditTimeAcceptance, NtscProjectEndAndOverflowPreserveExactAuthoredStateAndHistory) {
+    Workspace workspace;
+    Asset asset;
+    asset.path = L"project-end-grid.mkv";
+    asset.duration = 1'001'000;
+    asset.fps_num = 30000;
+    asset.fps_den = 1001;
+    asset.audio = false;
+    ASSERT_TRUE(workspace.insert(workspace.addAsset(asset)));
+    const auto id = workspace.selection();
+    const RationalFps fps{30000, 1001};
+    const auto end = fps.frameTime(40).value();
+    ASSERT_EQ(workspace.apply(SetTimelineEnd{{TimelineEndMode::FixedEnd, end}}, workspace.revision()).status,
+              CommandStatus::Applied);
+    ASSERT_EQ(workspace.apply(Move{{id}, fps.frameTime(10).value()}, workspace.revision()).status,
+              CommandStatus::Applied);
+    EXPECT_EQ(workspace.clip(id)->end(), end);
+    EXPECT_EQ(workspace.duration(), end);
+    workspace.seek(end + 1);
+    EXPECT_EQ(workspace.playhead(), end);
+    EXPECT_EQ(fps.previousFrame(workspace.playhead()), fps.frameTime(39));
+    EXPECT_EQ(fps.nearestFrame(workspace.playhead()), end);
+    const auto before = workspace.snapshot();
+    const auto bytes = workspace.historyBytes();
+    const auto undo = workspace.canUndo();
+    const auto redo = workspace.canRedo();
+    for (const auto delta : {(std::numeric_limits<Time>::min)(), (std::numeric_limits<Time>::max)()}) {
+        const Move command{{id}, delta, {}, {}, false, false};
+        EXPECT_FALSE(PreviewEdit(*before, command).valid);
+        EXPECT_EQ(workspace.apply(command, before->revision).status, CommandStatus::Rejected);
+        ExpectAuthoredGridState(*workspace.snapshot(), *before);
+        EXPECT_EQ(workspace.revision(), before->revision);
+        EXPECT_EQ(workspace.historyBytes(), bytes);
+        EXPECT_EQ(workspace.canUndo(), undo);
+        EXPECT_EQ(workspace.canRedo(), redo);
+    }
+}
+
+TEST(EditLegacyAcceptance, MoveTrimSplitAndFadeKeepUnrelatedLegacyValuesThroughPreviewUndoAndRedo) {
+    for (int operation = 0; operation < 4; ++operation) {
+        SCOPED_TRACE(operation);
+        Workspace workspace;
+        Id target = 0;
+        Id neighbor = 0;
+        PopulateLegacyGridHistory(workspace, target, neighbor);
+        ASSERT_NE(target, 0u);
+        ASSERT_NE(neighbor, 0u);
+        const auto before = workspace.snapshot();
+        const auto old = *workspace.clip(target);
+        const auto unrelated = *workspace.clip(neighbor);
+        EXPECT_EQ(old.fade_in.duration_us, 10'001);
+        EXPECT_EQ(unrelated.fade_out.duration_us, 9'001);
+        EXPECT_NE(before->output_fps.nearestFrame(old.start), old.start);
+        const EditCommand command = operation == 0   ? EditCommand{Move{{target}, 40'000, {}, {}, false, false}}
+                                    : operation == 1 ? EditCommand{Trim{target, TrimEdge::Right, -100'000}}
+                                    : operation == 2
+                                        ? EditCommand{Split{{target}, old.start + 400'000, false}}
+                                        : EditCommand{SetFade{target, FadeEdge::In, {40'000, old.fade_in.curve}}};
+        const auto candidate = PreviewEdit(*before, command);
+        ASSERT_TRUE(candidate.valid);
+        ExpectAuthoredGridState(*workspace.snapshot(), *before);
+        ASSERT_EQ(workspace.apply(command, before->revision).status, CommandStatus::Applied);
+        const auto committed = workspace.snapshot();
+        EXPECT_EQ(committed->clips, candidate.clips);
+        EXPECT_EQ(committed->tracks, candidate.tracks);
+        EXPECT_EQ(committed->junctions, candidate.junctions);
+        EXPECT_EQ(committed->spacers, candidate.spacers);
+        EXPECT_EQ(*workspace.clip(neighbor), unrelated);
+        const auto edited = *workspace.clip(target);
+        const auto fps = before->output_fps;
+        if (operation == 0) {
+            EXPECT_EQ(edited.start, fps.nearestFrame(old.start + 40'000));
+            EXPECT_EQ(edited.duration(), old.duration());
+            EXPECT_EQ(edited.source_in, old.source_in);
+            EXPECT_EQ(edited.source_out, old.source_out);
+            EXPECT_EQ(edited.fade_in, old.fade_in);
+            EXPECT_EQ(edited.fade_out, old.fade_out);
+        } else if (operation == 1) {
+            EXPECT_EQ(edited.start, old.start);
+            EXPECT_EQ(edited.end(), fps.nearestFrame(old.end() - 100'000));
+            EXPECT_EQ(edited.source_in, old.source_in);
+            EXPECT_EQ(edited.fade_in, old.fade_in);
+            EXPECT_EQ(edited.fade_out, old.fade_out);
+        } else if (operation == 2) {
+            const auto cut = fps.nearestFrame(old.start + 400'000).value();
+            EXPECT_EQ(edited.start, old.start);
+            EXPECT_EQ(edited.end(), cut);
+            EXPECT_EQ(edited.source_in, old.source_in);
+            EXPECT_EQ(edited.fade_in, old.fade_in);
+            EXPECT_EQ(edited.fade_out.duration_us, 0);
+            const auto right =
+                std::find_if(committed->clips.begin(), committed->clips.end(),
+                             [cut, &old](const auto& clip) { return clip.start == cut && clip.asset == old.asset; });
+            ASSERT_NE(right, committed->clips.end());
+            EXPECT_EQ(right->end(), old.end());
+            EXPECT_EQ(right->source_in, edited.source_out);
+            EXPECT_EQ(right->source_out, old.source_out);
+            EXPECT_EQ(right->fade_in.duration_us, 0);
+            EXPECT_EQ(right->fade_out, old.fade_out);
+        } else {
+            EXPECT_EQ(edited.start, old.start);
+            EXPECT_EQ(edited.source_in, old.source_in);
+            EXPECT_EQ(edited.source_out, old.source_out);
+            EXPECT_EQ(edited.start + edited.fade_in.duration_us, fps.nearestFrame(old.start + 40'000));
+            EXPECT_EQ(edited.fade_out, old.fade_out);
+        }
+        ASSERT_TRUE(workspace.undo());
+        ExpectAuthoredGridState(*workspace.snapshot(), *before);
+        ASSERT_TRUE(workspace.redo());
+        ExpectAuthoredGridState(*workspace.snapshot(), *committed);
+    }
 }

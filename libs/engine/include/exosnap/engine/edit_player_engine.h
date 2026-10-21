@@ -159,11 +159,20 @@ class EditPlayerEngine {
     // (missing file, unreadable container, no decodable video stream).
     // Cancellation applies to opening. Playback is stopped separately.
     bool Open(const std::filesystem::path& path, std::string& out_error, const std::atomic<bool>* cancelled = nullptr);
+    bool Open(const std::shared_ptr<const MediaReadCapability>& source, std::string& out_error,
+              const std::atomic<bool>* cancelled = nullptr);
 
+    // Opens the exact global container video stream. Refuses an absent/non-video index.
+    bool OpenVideoStream(const std::filesystem::path& path, uint32_t container_index, std::string& out_error,
+                         const std::atomic<bool>* cancelled = nullptr);
+    bool OpenVideoStream(const std::shared_ptr<const MediaReadCapability>& source, uint32_t container_index,
+                         std::string& out_error, const std::atomic<bool>* cancelled = nullptr);
     // Opens one global container audio stream without a video decoder.
     // The selected stream is independent of transient monitoring selection.
     bool OpenAudioStream(const std::filesystem::path& path, uint32_t container_index, std::string& out_error,
                          const std::atomic<bool>* cancelled = nullptr);
+    bool OpenAudioStream(const std::shared_ptr<const MediaReadCapability>& source, uint32_t container_index,
+                         std::string& out_error, const std::atomic<bool>* cancelled = nullptr);
 
     // Validates the bytes retained by the open source's immutable read lease.
     bool ValidateContentIdentity(const std::array<uint8_t, 32>& expected, std::string& error,
@@ -231,13 +240,15 @@ class EditPlayerEngine {
     // nothing for a GPU hop to save there.
     [[nodiscard]] std::optional<RawDecodedVideoFrame> DecodeFrameAtRaw(int64_t target_us);
     [[nodiscard]] std::optional<RawDecodedVideoFrame> ReadFrameAtRaw(int64_t target_us, VideoReadMode mode,
-                                                                     uint64_t generation = 0);
+                                                                     uint64_t generation = 0,
+                                                                     const std::atomic<bool>* cancelled = nullptr);
     [[nodiscard]] const VideoReadMeasurements& VideoReadStats() const noexcept;
 
     // Synchronous, single-owner range decode for timeline rendering. The output
     // is exactly frame_count stereo Float32 frames at 48 kHz, with source gaps
     // filled by silence. Fails if any declared audio track cannot be decoded.
-    bool DecodeAudioRange(int64_t first_sample, uint32_t frame_count, std::vector<float>& output, std::string& error);
+    bool DecodeAudioRange(int64_t first_sample, uint32_t frame_count, std::vector<float>& output, std::string& error,
+                          const std::atomic<bool>* cancelled = nullptr);
 
     // Reads one global container audio stream at unity gain, independent of
     // monitor controls. first_sample is absolute media-local 48 kHz time.
@@ -247,7 +258,8 @@ class EditPlayerEngine {
     // Audio-only analysis cursor. Adjacent calls retain decoder/resampler state
     // and bounded frame tails. Discontinuous requests seek with normal preroll.
     bool ReadAudioStreamSequential(uint32_t container_index, int64_t first_sample, uint32_t frame_count,
-                                   std::vector<float>& output, std::string& error);
+                                   std::vector<float>& output, std::string& error,
+                                   const std::atomic<bool>* cancelled = nullptr);
     // Sorted, disjoint half-open normalized 48 kHz spans copied from decoded
     // samples by the last audio range read. Excludes gap/tail padding and is
     // empty after a failed read.
@@ -273,7 +285,9 @@ class EditPlayerEngine {
     [[nodiscard]] AudioMetadataReadResult AudioMetadata() const;
     // Selection changes require a stopped decode run. The same snapshot is used
     // by continuous playback and range decoding for export.
-    bool SetMonitorSelection(MonitorSelectionSnapshot selection, std::string& error);
+    // Reusing an external legacy binding on a provisional lease can verify source bytes.
+    bool SetMonitorSelection(MonitorSelectionSnapshot selection, std::string& error,
+                             const std::atomic<bool>* cancelled = nullptr);
 
     // ---- Continuous playback decode ----
 
@@ -328,7 +342,8 @@ class EditPlayerEngine {
 
   private:
     bool OpenSource(const std::filesystem::path& path, std::string& out_error, const std::atomic<bool>* cancelled,
-                    std::optional<uint32_t> audio_stream);
+                    std::optional<uint32_t> audio_stream, const std::shared_ptr<const MediaReadCapability>& source = {},
+                    std::optional<uint32_t> video_stream = {});
     struct Impl;
     std::unique_ptr<Impl> impl_;
 };

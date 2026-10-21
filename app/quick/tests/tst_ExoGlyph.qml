@@ -69,7 +69,9 @@ Item {
         "Braces": ExoGlyph.Braces,
         "Hash": ExoGlyph.Hash,
         "Swatch": ExoGlyph.Swatch,
-        "Pin": ExoGlyph.Pin
+        "Pin": ExoGlyph.Pin,
+        "Repeat": ExoGlyph.Repeat,
+        "PlayRange": ExoGlyph.PlayRange
     })
 
     Component {

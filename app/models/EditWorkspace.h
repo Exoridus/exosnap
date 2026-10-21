@@ -1,5 +1,6 @@
 #pragma once
 #include "EditCommandTypes.h"
+#include "EditRenderSnapshot.h"
 #include <exosnap/engine/audio_media_manifest.h>
 #include <exosnap/engine/edit_timeline.h>
 
@@ -12,10 +13,31 @@
 #include <set>
 #include <string>
 #include <type_traits>
+#include <unordered_map>
+#include <unordered_set>
 #include <utility>
 #include <vector>
 
 namespace exosnap::edit {
+
+namespace detail {
+template <typename T, typename Key>
+std::vector<T> EntityDifference(const std::vector<T>& left, const std::vector<T>& right, Key key) {
+    // Validated entities have unique stable keys. Full value equality still
+    // determines the delta, including changes that preserve the identity.
+    std::unordered_map<Id, const T*> indexed;
+    indexed.reserve(right.size());
+    for (const auto& value : right)
+        indexed.emplace(key(value), &value);
+    std::vector<T> result;
+    for (const auto& value : left) {
+        const auto found = indexed.find(key(value));
+        if (found == indexed.end() || !(value == *found->second))
+            result.push_back(value);
+    }
+    return result;
+}
+} // namespace detail
 
 // Values use microseconds. Assets reference immutable source descriptors; history stores metadata deltas.
 class Workspace {
@@ -31,6 +53,31 @@ class Workspace {
     [[nodiscard]] size_t historyBytes() const {
         return history_bytes_;
     }
+    [[nodiscard]] std::set<std::pair<Id, uint64_t>> retainedSourceVersions() const {
+        std::set<std::pair<Id, uint64_t>> versions;
+        for (const auto& source : assets_)
+            versions.emplace(source.id, source.source_version);
+        for (const auto& command : history_) {
+            for (const auto& source : command.sources_before)
+                versions.emplace(source->id, source->source_version);
+            for (const auto& source : command.sources_after)
+                versions.emplace(source->id, source->source_version);
+        }
+        return versions;
+    }
+    [[nodiscard]] bool trackLocked(Id id) const {
+        return locked_tracks_.contains(id);
+    }
+    bool setTrackLocked(Id id, bool locked) {
+        if (!mutableTrack(id))
+            return false;
+        if (locked)
+            locked_tracks_.insert(id);
+        else
+            locked_tracks_.erase(id);
+        snapshot_cache_.reset();
+        return true;
+    }
     [[nodiscard]] std::shared_ptr<const EditSnapshot> snapshot() const {
         if (snapshot_cache_ && snapshot_cache_->revision == revision_)
             return snapshot_cache_;
@@ -45,7 +92,9 @@ class Workspace {
         value->output_height = output_height_;
         value->id_high_watermark = next_id_;
         value->spacers = spacers_;
+        value->locked_track_ids.assign(locked_tracks_.begin(), locked_tracks_.end());
         value->timeline_end = timeline_end_;
+        value->source_version_high_watermark = source_version_high_watermark_;
         for (const auto& source : assets_) {
             auto asset = std::make_shared<Asset>(source);
             asset->monitor_selection.reset();
@@ -63,10 +112,11 @@ class Workspace {
         candidate.validate();
         if (candidate.last_error_)
             return {CommandStatus::Rejected, revision_, candidate.last_error_, {}, {}};
-        if (candidate.clips_ == clips_ && candidate.tracks_ == tracks_ && candidate.transitions_ == transitions_ &&
-            candidate.result_range_ == result_range_ && candidate.spacers_ == spacers_ &&
-            candidate.timeline_end_ == timeline_end_ && candidate.output_fps_ == output_fps_ &&
-            candidate.output_width_ == output_width_ && candidate.output_height_ == output_height_)
+        if (candidate.source_binding_changes_.empty() && candidate.clips_ == clips_ && candidate.tracks_ == tracks_ &&
+            candidate.transitions_ == transitions_ && candidate.result_range_ == result_range_ &&
+            candidate.spacers_ == spacers_ && candidate.timeline_end_ == timeline_end_ &&
+            candidate.output_fps_ == output_fps_ && candidate.output_width_ == output_width_ &&
+            candidate.output_height_ == output_height_)
             return {CommandStatus::NoOp, revision_, {}, {}, {}};
         const auto old_ids = clips_;
         const auto old_tracks = tracks_;
@@ -77,11 +127,15 @@ class Workspace {
                     {},
                     {}};
         CommandResult result{CommandStatus::Applied, revision_, {}, {}, "edit.command"};
+        result.changed_ids = candidate.source_binding_changes_;
+        std::unordered_set<Id> current_ids;
+        current_ids.reserve(clips_.size());
         for (const auto& clip : clips_)
-            if (std::find(old_ids.begin(), old_ids.end(), clip) == old_ids.end())
-                result.changed_ids.push_back(clip.id);
+            current_ids.insert(clip.id);
+        for (const auto& clip : difference(clips_, old_ids))
+            result.changed_ids.push_back(clip.id);
         for (const auto& clip : old_ids)
-            if (!this->clip(clip.id))
+            if (!current_ids.contains(clip.id))
                 result.changed_ids.push_back(clip.id);
         for (const auto& track : tracks_)
             if (std::find(old_tracks.begin(), old_tracks.end(), track) == old_tracks.end())
@@ -105,6 +159,160 @@ class Workspace {
     }
     [[nodiscard]] uint64_t monitoringRevision() const {
         return monitoring_revision_;
+    }
+    // Establishes the first observed digest of a provisional source. A known
+    // expected digest is immutable and a mismatch leaves every reference intact.
+    bool establishAssetIdentity(Id id, const std::array<uint8_t, 32>& observed) {
+        const auto found =
+            std::find_if(assets_.begin(), assets_.end(), [id](const auto& asset) { return asset.id == id; });
+        if (found == assets_.end() || !found->source_descriptor)
+            return false;
+        const auto expected = found->source_descriptor->asset_identity_fingerprint;
+        const bool known = std::any_of(expected.begin(), expected.end(), [](auto byte) { return byte != 0; });
+        if (known)
+            return expected == observed;
+        auto descriptor = std::make_shared<ValidatedSourceDescriptor>(*found->source_descriptor);
+        descriptor->asset_identity_fingerprint = observed;
+        found->source_descriptor = std::move(descriptor);
+        if (found->input_mix_selection)
+            found->input_mix_selection->asset_identity_fingerprint = observed;
+        for (auto& command : history_) {
+            const auto rebind = [&](auto& mixes) {
+                for (auto& mix : mixes)
+                    if (mix.asset == id && mix.source_version == found->source_version && mix.selection &&
+                        std::none_of(mix.selection->asset_identity_fingerprint.begin(),
+                                     mix.selection->asset_identity_fingerprint.end(),
+                                     [](auto byte) { return byte != 0; }))
+                        mix.selection->asset_identity_fingerprint = observed;
+            };
+            rebind(command.mixes_before);
+            rebind(command.mixes_after);
+            const auto bind_source = [&](auto& sources) {
+                for (auto& source : sources) {
+                    if (source->id != id || source->source_version != found->source_version ||
+                        !source->source_descriptor)
+                        continue;
+                    const auto& fingerprint = source->source_descriptor->asset_identity_fingerprint;
+                    if (std::any_of(fingerprint.begin(), fingerprint.end(), [](auto byte) { return byte != 0; }))
+                        continue;
+                    auto rebound = std::make_shared<Asset>(*source);
+                    auto rebound_descriptor = std::make_shared<ValidatedSourceDescriptor>(*source->source_descriptor);
+                    rebound_descriptor->asset_identity_fingerprint = observed;
+                    rebound->source_descriptor = std::move(rebound_descriptor);
+                    if (rebound->input_mix_selection)
+                        rebound->input_mix_selection->asset_identity_fingerprint = observed;
+                    source = std::move(rebound);
+                }
+            };
+            bind_source(command.sources_before);
+            bind_source(command.sources_after);
+        }
+        snapshot_cache_.reset();
+        return true;
+    }
+
+    // Finalizes trusted import facts without creating an authored undo step.
+    // Resolved user choices and records for other source versions stay intact.
+    bool establishRecordedDefault(Id id, uint64_t version, const InputMixSelection& mix,
+                                  std::shared_ptr<const ValidatedSourceDescriptor> verified_descriptor) {
+        const auto found =
+            std::find_if(assets_.begin(), assets_.end(), [id](const auto& source) { return source.id == id; });
+        if (found == assets_.end() || found->source_version != version || !found->source_descriptor ||
+            mix.authority != InputMixAuthority::VerifiedRecordedDefault ||
+            found->source_descriptor->asset_identity_fingerprint != mix.asset_identity_fingerprint ||
+            std::none_of(mix.asset_identity_fingerprint.begin(), mix.asset_identity_fingerprint.end(),
+                         [](auto byte) { return byte != 0; }))
+            return false;
+        std::set<engine::AudioTrackId> selected;
+        for (const auto identity : mix.selected_stream_identities)
+            if (!selected.insert(identity).second ||
+                std::none_of(found->source_descriptor->streams.begin(), found->source_descriptor->streams.end(),
+                             [&](const auto& stream) {
+                                 return stream.ref.kind == engine::TimelineStreamKind::Audio &&
+                                        stream.ref.stream_identity == identity;
+                             }))
+                return false;
+        if (!verified_descriptor || !verified_descriptor->audio_identities_verified ||
+            verified_descriptor->file_identity != found->source_descriptor->file_identity ||
+            verified_descriptor->asset_identity_fingerprint != mix.asset_identity_fingerprint ||
+            verified_descriptor->streams.size() != found->source_descriptor->streams.size())
+            return false;
+        for (size_t index = 0; index < verified_descriptor->streams.size(); ++index)
+            if (verified_descriptor->streams[index].ref != found->source_descriptor->streams[index].ref)
+                return false;
+        const bool metadata_changed = !found->source_descriptor->audio_identities_verified;
+        if (metadata_changed)
+            found->source_descriptor = verified_descriptor;
+        const auto promote = [&](Asset& source) {
+            if (source.id != id || source.source_version != version || !source.mix_decision_required)
+                return false;
+            source.input_mix_selection = mix;
+            source.mix_decision_required = false;
+            return true;
+        };
+        const bool current_changed = promote(*found);
+        if (current_changed) {
+            RebaseImportedAudioDefaults(clips_, id, mix);
+            ++monitoring_revision_;
+        }
+        bool changed = current_changed || metadata_changed;
+        const auto key = std::pair{id, version};
+        for (auto& command : history_) {
+            const auto rebase_pending = [&](auto& pending, auto& clips) {
+                if (std::find(pending.begin(), pending.end(), key) == pending.end())
+                    return;
+                RebaseImportedAudioDefaults(clips, id, mix);
+                std::erase(pending, key);
+                changed = true;
+            };
+            rebase_pending(command.pending_sources_before, command.before);
+            rebase_pending(command.pending_sources_after, command.after);
+            const auto promote_mixes = [&](auto& states) {
+                for (auto& state : states)
+                    if (state.asset == id && state.source_version == version && state.decision_required) {
+                        state.selection = mix;
+                        state.decision_required = false;
+                        changed = true;
+                    }
+            };
+            promote_mixes(command.mixes_before);
+            promote_mixes(command.mixes_after);
+            const auto promote_sources = [&](auto& sources) {
+                for (auto& source : sources)
+                    if (source->id == id && source->source_version == version && source->source_descriptor &&
+                        (source->mix_decision_required || !source->source_descriptor->audio_identities_verified)) {
+                        auto finalized = std::make_shared<Asset>(*source);
+                        finalized->source_descriptor = verified_descriptor;
+                        promote(*finalized);
+                        source = std::move(finalized);
+                        changed = true;
+                    }
+            };
+            promote_sources(command.sources_before);
+            promote_sources(command.sources_after);
+        }
+        if (!changed)
+            return false;
+        history_bytes_ = 0;
+        for (auto& command : history_) {
+            command.bytes = commandBytes(command);
+            history_bytes_ += command.bytes;
+        }
+        while (history_bytes_ > kHistoryBudget && cursor_ > 0) {
+            history_bytes_ -= history_.front().bytes;
+            history_.erase(history_.begin());
+            --cursor_;
+        }
+        while (history_bytes_ > kHistoryBudget && !history_.empty()) {
+            history_bytes_ -= history_.back().bytes;
+            history_.pop_back();
+        }
+        snapshot_cache_.reset();
+        return true;
+    }
+    [[nodiscard]] bool canCrossfade(Id outgoing, Id incoming, Time requested = 500'000) const {
+        auto candidate = workingCopy();
+        return candidate.crossfade(outgoing, incoming, requested);
     }
     bool setMonitorSelection(Id id, engine::MonitorSelectionSnapshot selection) {
         const auto found =
@@ -168,40 +376,7 @@ class Workspace {
         return transitions_;
     }
     [[nodiscard]] engine::TimelineSnapshot timeline() const {
-        engine::TimelineSnapshot result;
-        result.duration_us = duration();
-        result.revision = revision_;
-        result.result_in_us = result_range_.in_us;
-        result.result_out_us =
-            result_range_.out_mode == ResultOutMode::FollowTimelineEnd ? result.duration_us : result_range_.out_us;
-        result.output_fps_num = static_cast<int>(output_fps_.num);
-        result.output_fps_den = static_cast<int>(output_fps_.den);
-        result.output_width = output_width_;
-        result.output_height = output_height_;
-        for (const auto& track : tracks_)
-            result.tracks.push_back({track.id, track.type == TrackType::Audio, track.edit_enabled, track.gain_db});
-        for (const auto& c : clips_) {
-            const auto t =
-                std::find_if(tracks_.begin(), tracks_.end(), [&c](const auto& track) { return track.id == c.track; });
-            engine::TimelineClip projected{c.id,    c.asset,     c.group,     t->type == TrackType::Audio,
-                                           c.start, c.source_in, c.source_out};
-            projected.track = c.track;
-            projected.stream = c.stream;
-            projected.enabled = c.enabled;
-            projected.gain_db = c.gain_db;
-            projected.opacity = c.opacity;
-            projected.fade_in = c.fade_in;
-            projected.fade_out = c.fade_out;
-            projected.original_enabled = c.original_enabled;
-            result.clips.push_back(std::move(projected));
-        }
-        for (const auto& t : transitions_) {
-            if (t.kind == TransitionKind::Crossfade)
-                result.crossfades.push_back({t.outgoing, t.incoming, t.duration});
-            result.junctions.push_back({t.id, t.track, t.outgoing, t.incoming, t.kind, t.in_us, t.out_us, t.cut_us,
-                                        t.curve, t.audio_law, t.anchor});
-        }
-        return result;
+        return RenderTimeline(*snapshot());
     }
     bool crossfade(Id outgoing, Id incoming, Time requested = 500'000) {
         const auto* a = clip(outgoing);
@@ -408,8 +583,10 @@ class Workspace {
         if (!canUndo() || revision_ == (std::numeric_limits<Revision>::max)())
             return false;
         const auto& command = history_[--cursor_];
+        restoreSourceBindings(command.sources_before);
         restoreInputMixes(command.mixes_before);
         apply(command.after, command.before);
+        restoreImportedDefaults(command.sources_before, command.mixes_before);
         patchEntities(transitions_, command.transitions_after, command.transitions_before);
         order(transitions_);
         patchTracks(command.tracks_after, command.tracks_before, command.order_before);
@@ -430,8 +607,10 @@ class Workspace {
         if (!canRedo() || revision_ == (std::numeric_limits<Revision>::max)())
             return false;
         const auto& command = history_[cursor_++];
+        restoreSourceBindings(command.sources_after);
         restoreInputMixes(command.mixes_after);
         apply(command.before, command.after);
+        restoreImportedDefaults(command.sources_after, command.mixes_after);
         patchEntities(transitions_, command.transitions_before, command.transitions_after);
         order(transitions_);
         patchTracks(command.tracks_before, command.tracks_after, command.order_after);
@@ -478,28 +657,83 @@ class Workspace {
         value.result_range_ = result_range_;
         value.spacers_ = spacers_;
         value.timeline_end_ = timeline_end_;
+        value.locked_tracks_ = locked_tracks_;
         value.output_fps_ = output_fps_;
         value.output_width_ = output_width_;
         value.output_height_ = output_height_;
+        value.source_version_high_watermark_ = source_version_high_watermark_;
         value.candidate_mode_ = true;
         return value;
     }
     [[nodiscard]] std::vector<Id> targets(const std::vector<Id>& requested, bool expand) {
-        std::set<Id> result;
         for (const auto id : requested) {
             const auto* selected = clip(id);
             if (!selected) {
                 fail(EditErrorCode::InvalidTarget, {id});
                 return {};
             }
-            for (const auto& candidate : clips_)
-                if (candidate.id == id || (expand && linked(candidate, *selected)))
-                    result.insert(candidate.id);
         }
-        return {result.begin(), result.end()};
+        return ExpandClipTargetIds(clips_, requested, expand);
     }
     static bool contains(const std::vector<Id>& ids, Id id) {
         return std::find(ids.begin(), ids.end(), id) != ids.end();
+    }
+    void detachPartialGroups(const std::vector<Id>& ids) {
+        std::set<Id> partial;
+        for (const auto& selected : clips_)
+            if (contains(ids, selected.id) && selected.group &&
+                std::any_of(clips_.begin(), clips_.end(), [&](const auto& other) {
+                    return other.group == selected.group && !contains(ids, other.id);
+                }))
+                partial.insert(selected.group);
+        for (auto& selected : clips_)
+            if (contains(ids, selected.id) && partial.contains(selected.group))
+                selected.group = 0;
+    }
+    bool checkLocks(const EditSnapshot& before) {
+        std::vector<Id> affected;
+        for (const auto locked : before.locked_track_ids) {
+            const auto previous = std::find_if(before.tracks.begin(), before.tracks.end(),
+                                               [locked](const auto& track) { return track.id == locked; });
+            const auto current = std::find_if(tracks_.begin(), tracks_.end(),
+                                              [locked](const auto& track) { return track.id == locked; });
+            bool changed = previous == before.tracks.end() || current == tracks_.end();
+            if (previous == before.tracks.end() && current == tracks_.end())
+                continue;
+            if (!changed) {
+                changed = *previous != *current;
+                for (auto other = before.tracks.begin(); other != before.tracks.end() && !changed; ++other) {
+                    if (other == previous)
+                        continue;
+                    const auto retained = std::find_if(tracks_.begin(), tracks_.end(),
+                                                       [&](const auto& track) { return track.id == other->id; });
+                    if (retained != tracks_.end() && (other < previous) != (retained < current))
+                        changed = true;
+                }
+            }
+            const auto same = [locked](const auto& left, const auto& right) {
+                for (const auto& value : left)
+                    if (value.track == locked) {
+                        const auto found = std::find_if(right.begin(), right.end(),
+                                                        [&](const auto& other) { return other.id == value.id; });
+                        if (found == right.end() || *found != value)
+                            return false;
+                    }
+                for (const auto& value : right)
+                    if (value.track == locked && std::none_of(left.begin(), left.end(), [&](const auto& other) {
+                            return other.id == value.id && other.track == locked;
+                        }))
+                        return false;
+                return true;
+            };
+            if (changed || !same(before.clips, clips_) || !same(before.spacers, spacers_) ||
+                !same(before.junctions, transitions_))
+                affected.push_back(locked);
+        }
+        if (affected.empty())
+            return true;
+        fail(EditErrorCode::TrackLocked, std::move(affected));
+        return false;
     }
     Track* mutableTrack(Id id) {
         const auto found = std::find_if(tracks_.begin(), tracks_.end(), [id](const auto& t) { return t.id == id; });
@@ -546,17 +780,20 @@ class Workspace {
         return found == transitions_.end() ? nullptr : &*found;
     }
     Time quantizeBoundary(Time requested, bool audio) const {
-        const auto grid = audio ? RationalFps{48000, 1} : output_fps_;
-        if (!grid.valid())
-            return requested;
-        const auto before = requested == (std::numeric_limits<Time>::max)() ? grid.previousFrame(requested)
-                                                                            : grid.previousFrame(requested + 1);
-        const auto after = requested == 0 ? std::optional<Time>{0} : grid.nextFrame(requested - 1);
-        if (!before)
-            return after.value_or(requested);
-        if (!after)
-            return *before;
-        return requested - *before < *after - requested ? *before : *after;
+        return (audio ? AudioSampleGrid::nearestSample(requested) : output_fps_.nearestFrame(requested))
+            .value_or(requested);
+    }
+    bool audioOperation(const std::vector<Id>& ids) const {
+        return ClipTargetsUseSamples(clips_, tracks_, ids);
+    }
+    std::optional<Time> gridBoundary(Time index, bool audio) const {
+        return audio ? AudioSampleGrid::sampleTime(index) : output_fps_.frameTime(index);
+    }
+    std::optional<Time> gridIndex(Time time, bool audio) const {
+        return audio ? AudioSampleGrid::sampleIndex(time) : output_fps_.frameIndex(time);
+    }
+    std::optional<Time> boundedBoundary(Time requested, Time lower, Time upper, bool audio) const {
+        return BoundedGridTime(requested, lower, upper, output_fps_, audio);
     }
     void execute(const SetJunctionWindow& command) {
         auto* junction = mutableJunction(command.junction_id);
@@ -571,10 +808,19 @@ class Workspace {
             fail(EditErrorCode::InvalidTime, {command.junction_id});
             return;
         }
+        const auto* track = mutableTrack(a->track);
+        const auto from =
+            boundedBoundary(command.span.in_us, b->start, a->end(), track && track->type == TrackType::Audio);
+        const auto to =
+            boundedBoundary(command.span.out_us, b->start, a->end(), track && track->type == TrackType::Audio);
+        if (!track || !from || !to || *from >= *to) {
+            fail(EditErrorCode::InvalidTime, {command.junction_id});
+            return;
+        }
         junction->kind = TransitionKind::Crossfade;
         junction->anchor = command.anchor;
-        junction->in_us = command.anchor == JunctionAnchor::FullOverlap ? b->start : command.span.in_us;
-        junction->out_us = command.anchor == JunctionAnchor::FullOverlap ? a->end() : command.span.out_us;
+        junction->in_us = command.anchor == JunctionAnchor::FullOverlap ? b->start : *from;
+        junction->out_us = command.anchor == JunctionAnchor::FullOverlap ? a->end() : *to;
         junction->incoming_anchor_us = b->start;
     }
     void execute(const SetJunctionCurve& command) {
@@ -596,6 +842,194 @@ class Workspace {
         else
             junction->audio_law = command.law;
     }
+    void execute(const CrossfadeAtCut& command) {
+        const auto* outgoing = clip(command.outgoing);
+        const auto* incoming = clip(command.incoming);
+        if (!outgoing || !incoming || outgoing->id == incoming->id || outgoing->track != incoming->track ||
+            outgoing->end() != incoming->start) {
+            fail(EditErrorCode::InvalidTarget, {command.outgoing, command.incoming});
+            return;
+        }
+        const auto left = targets({command.outgoing}, command.expand_linked);
+        const auto right = targets({command.incoming}, command.expand_linked);
+        if (last_error_)
+            return;
+        auto ids = left;
+        ids.insert(ids.end(), right.begin(), right.end());
+        for (const auto id : ids)
+            if (trackLocked(clip(id)->track)) {
+                fail(EditErrorCode::TrackLocked, {clip(id)->track});
+                return;
+            }
+        const bool audio = audioOperation(ids);
+        const auto units = audio ? AudioSampleGrid::nearestSampleIndex(command.duration_us)
+                                 : output_fps_.nearestFrameIndex(command.duration_us);
+        const auto cut = incoming->start;
+        if (!units || *units <= 0 || quantizeBoundary(cut, audio) != cut) {
+            fail(EditErrorCode::InvalidTime, ids);
+            return;
+        }
+        const auto before = audio ? AudioSampleGrid::step(cut, -(*units / 2)) : output_fps_.step(cut, -(*units / 2));
+        const auto after =
+            audio ? AudioSampleGrid::step(cut, *units - *units / 2) : output_fps_.step(cut, *units - *units / 2);
+        if (!before || !after || *before > cut || *after <= cut) {
+            fail(EditErrorCode::InvalidTime, ids);
+            return;
+        }
+        const auto earlier = cut - *before;
+        const auto later = *after - cut;
+        std::vector<std::pair<Id, Id>> pairs;
+        std::set<Id> matched;
+        for (const auto id : left) {
+            const auto* a = clip(id);
+            const Clip* b = nullptr;
+            for (const auto other : right)
+                if (clip(other)->track == a->track) {
+                    if (b) {
+                        fail(EditErrorCode::LinkedScopeRequired, ids);
+                        return;
+                    }
+                    b = clip(other);
+                }
+            if (!b || a->id == b->id || a->end() != cut || b->start != cut || !matched.insert(b->id).second) {
+                fail(EditErrorCode::LinkedScopeRequired, ids);
+                return;
+            }
+            if (a->fade_out.duration_us || b->fade_in.duration_us) {
+                fail(EditErrorCode::TransitionBoundaryConflict, {a->id, b->id});
+                return;
+            }
+            const auto bounds = [this](const Clip& item) {
+                const auto* source = asset(item.asset);
+                Span span{0, source->duration};
+                if (item.stream && source->source_descriptor)
+                    for (const auto& stream : source->source_descriptor->streams)
+                        if (stream.ref.stream_identity == item.stream->stream_identity &&
+                            stream.ref.container_index == item.stream->container_index &&
+                            stream.ref.kind == item.stream->kind)
+                            span = stream.source_span;
+                return span;
+            };
+            Time source_out = 0;
+            const auto a_bounds = bounds(*a);
+            const auto b_bounds = bounds(*b);
+            if (!addTime(a->source_out, later, source_out) || source_out > a_bounds.out_us ||
+                earlier > b->source_in - b_bounds.in_us) {
+                fail(EditErrorCode::SourceBounds, {a->id, b->id});
+                return;
+            }
+            if (*before <= a->start || *after >= b->end()) {
+                fail(EditErrorCode::UnsupportedOverlap, {a->id, b->id});
+                return;
+            }
+            pairs.emplace_back(a->id, b->id);
+        }
+        if (matched.size() != right.size()) {
+            fail(EditErrorCode::LinkedScopeRequired, ids);
+            return;
+        }
+        if (!command.expand_linked)
+            detachPartialGroups(ids);
+        for (const auto [left_id, right_id] : pairs) {
+            auto* a = mutableClip(left_id);
+            auto* b = mutableClip(right_id);
+            a->source_out += later;
+            b->source_in -= earlier;
+            b->start = *before;
+            Transition junction{a->id, b->id, TransitionKind::Crossfade, *after - *before};
+            junction.track = a->track;
+            junction.in_us = *before;
+            junction.out_us = *after;
+            junction.cut_us = cut;
+            junction.incoming_anchor_us = *before;
+            transitions_.push_back(std::move(junction));
+        }
+    }
+    void execute(const RemoveOverlap& command) {
+        const auto* selected = mutableJunction(command.junction_id);
+        if (!selected) {
+            fail(EditErrorCode::InvalidTarget, {command.junction_id});
+            return;
+        }
+        auto cut = selected->cut_us;
+        const auto left = targets({selected->outgoing}, command.expand_linked);
+        const auto right = targets({selected->incoming}, command.expand_linked);
+        if (last_error_)
+            return;
+        auto ids = left;
+        ids.insert(ids.end(), right.begin(), right.end());
+        for (const auto id : ids)
+            if (trackLocked(clip(id)->track)) {
+                fail(EditErrorCode::TrackLocked, {clip(id)->track});
+                return;
+            }
+        const bool audio = audioOperation(ids);
+        const auto* lead_outgoing = clip(selected->outgoing);
+        const auto* lead_incoming = clip(selected->incoming);
+        if (selected->kind == TransitionKind::Crossfade && (cut < lead_incoming->start || cut > lead_outgoing->end())) {
+            const auto midpoint = selected->in_us + (selected->out_us - selected->in_us) / 2;
+            const auto boundary = boundedBoundary(midpoint, lead_incoming->start, lead_outgoing->end(), audio);
+            if (!boundary) {
+                fail(EditErrorCode::InvalidTime, ids);
+                return;
+            }
+            cut = *boundary;
+        }
+        if (quantizeBoundary(cut, audio) != cut) {
+            fail(EditErrorCode::InvalidTime, ids);
+            return;
+        }
+        std::vector<std::pair<Id, Id>> pairs;
+        std::set<Id> matched;
+        std::set<Id> removed;
+        for (const auto id : left) {
+            const auto* a = clip(id);
+            const Clip* b = nullptr;
+            for (const auto other : right)
+                if (clip(other)->track == a->track) {
+                    if (b) {
+                        fail(EditErrorCode::LinkedScopeRequired, ids);
+                        return;
+                    }
+                    b = clip(other);
+                }
+            const auto junction = std::find_if(transitions_.begin(), transitions_.end(), [&](const auto& value) {
+                return b && value.outgoing == a->id && value.incoming == b->id;
+            });
+            if (!b || a->id == b->id || !matched.insert(b->id).second || junction == transitions_.end()) {
+                fail(EditErrorCode::LinkedScopeRequired, ids);
+                return;
+            }
+            if (cut < b->start || cut > a->end() || cut <= a->start || cut >= b->end()) {
+                fail(EditErrorCode::InvalidTime, {a->id, b->id});
+                return;
+            }
+            const auto fadeFits = [](const Clip& item, Time duration) {
+                return item.fade_in.duration_us <= duration &&
+                       item.fade_out.duration_us <= duration - item.fade_in.duration_us;
+            };
+            if (!fadeFits(*a, cut - a->start) || !fadeFits(*b, b->end() - cut)) {
+                fail(EditErrorCode::TransitionBoundaryConflict, {a->id, b->id});
+                return;
+            }
+            pairs.emplace_back(a->id, b->id);
+            removed.insert(junction->id);
+        }
+        if (matched.size() != right.size()) {
+            fail(EditErrorCode::LinkedScopeRequired, ids);
+            return;
+        }
+        if (!command.expand_linked)
+            detachPartialGroups(ids);
+        for (const auto [left_id, right_id] : pairs) {
+            auto* a = mutableClip(left_id);
+            auto* b = mutableClip(right_id);
+            a->source_out = a->source_in + (cut - a->start);
+            b->source_in += cut - b->start;
+            b->start = cut;
+        }
+        std::erase_if(transitions_, [&](const auto& junction) { return removed.contains(junction.id); });
+    }
     void execute(const SetHardCut& command) {
         auto* junction = mutableJunction(command.junction_id);
         if (!junction) {
@@ -613,9 +1047,13 @@ class Workspace {
             fail(EditErrorCode::InvalidTarget, {command.junction_id});
             return;
         }
+        const auto cut = boundedBoundary(command.cut_us, b->start, a->end(), track->type == TrackType::Audio);
+        if (!cut) {
+            fail(EditErrorCode::InvalidTime, {command.junction_id});
+            return;
+        }
         junction->kind = TransitionKind::HardCut;
-        junction->cut_us =
-            std::clamp(quantizeBoundary(command.cut_us, track->type == TrackType::Audio), b->start, a->end());
+        junction->cut_us = *cut;
         junction->anchor = JunctionAnchor::Custom;
         junction->incoming_anchor_us = b->start;
     }
@@ -861,7 +1299,11 @@ class Workspace {
     void execute(const RippleRemoveClips& command) {
         removeTargets(command.targets, command.expand_linked, true);
     }
-    void execute(const Split& command) {
+    void execute(const Split& input) {
+        splitAt(input);
+    }
+    void splitAt(const Split& input, std::optional<bool> operation_audio = {}) {
+        auto command = input;
         auto requested = command.targets;
         if (requested.empty())
             for (const auto& clip : clips_)
@@ -870,6 +1312,7 @@ class Workspace {
         const auto ids = targets(requested, command.expand_linked);
         if (last_error_)
             return;
+        command.at_us = quantizeBoundary(command.at_us, operation_audio.value_or(audioOperation(ids)));
         for (const auto& junction : transitions_) {
             const auto* incoming = clip(junction.incoming);
             const auto* outgoing = clip(junction.outgoing);
@@ -887,6 +1330,13 @@ class Workspace {
                 fail(EditErrorCode::TransitionBoundaryConflict, {clip.id});
                 return;
             }
+        }
+        if (!command.expand_linked) {
+            std::vector<Id> splitting;
+            for (const auto& clip : clips_)
+                if (contains(ids, clip.id) && clip.start < command.at_us && command.at_us < clip.end())
+                    splitting.push_back(clip.id);
+            detachPartialGroups(splitting);
         }
         std::vector<Clip> tails;
         std::map<Id, Id> groups;
@@ -915,11 +1365,32 @@ class Workspace {
                 junction.outgoing = tail_ids.at(junction.outgoing);
         clips_.insert(clips_.end(), tails.begin(), tails.end());
     }
-    void execute(const Move& command) {
+    void execute(const Move& input) {
+        auto command = input;
         auto_crossfade_ = command.auto_crossfade;
         const auto ids = targets(command.targets, command.expand_linked);
         if (last_error_ || ids.empty())
             return;
+        if (command.delta_us == 0 && command.target_tracks.empty() && command.new_tracks.empty())
+            return;
+        const auto* lead = clip(command.targets.front());
+        Time requested_start = 0;
+        if (!lead || !addTime(lead->start, command.delta_us, requested_start) || requested_start < 0) {
+            fail(EditErrorCode::InvalidTime, ids);
+            return;
+        }
+        const bool audio = audioOperation(ids);
+        const auto start_index =
+            audio ? AudioSampleGrid::nearestSampleIndex(lead->start) : output_fps_.nearestFrameIndex(lead->start);
+        const auto target_start = quantizeBoundary(requested_start, audio);
+        const auto target_index =
+            audio ? AudioSampleGrid::nearestSampleIndex(target_start) : output_fps_.nearestFrameIndex(target_start);
+        const auto index_delta = start_index && target_index ? *target_index - *start_index : 0;
+        command.delta_us = target_start - lead->start;
+        if (command.delta_us == 0 && command.target_tracks.empty() && command.new_tracks.empty())
+            return;
+        if (!command.expand_linked)
+            detachPartialGroups(ids);
         std::map<Id, Id> new_tracks;
         for (auto track : command.new_tracks) {
             const auto temporary = track.id;
@@ -929,6 +1400,10 @@ class Workspace {
             new_tracks[temporary] = track.id;
             if (command.new_video_front && track.type == TrackType::Video)
                 tracks_.insert(tracks_.begin(), std::move(track));
+            else if (track.type == TrackType::Video)
+                tracks_.insert(std::find_if(tracks_.begin(), tracks_.end(),
+                                            [](const auto& value) { return value.type == TrackType::Audio; }),
+                               std::move(track));
             else
                 tracks_.push_back(std::move(track));
         }
@@ -961,6 +1436,24 @@ class Workspace {
             if (!addTime(clip.start, command.delta_us, start) || start < 0) {
                 fail(EditErrorCode::InvalidTime, {clip.id});
                 return;
+            }
+            const auto old_end = clip.end();
+            // Canonical intervals can differ by a microsecond. Preserve index spans;
+            // legacy off-grid intervals instead retain their original source window.
+            if (start_index && target_index && quantizeBoundary(clip.start, audio) == clip.start &&
+                quantizeBoundary(old_end, audio) == old_end) {
+                const auto grid_start =
+                    audio ? AudioSampleGrid::step(clip.start, index_delta) : output_fps_.step(clip.start, index_delta);
+                const auto grid_end =
+                    audio ? AudioSampleGrid::step(old_end, index_delta) : output_fps_.step(old_end, index_delta);
+                Time source_out = 0;
+                if (!grid_start || !grid_end || *grid_end <= *grid_start ||
+                    !addTime(clip.source_in, *grid_end - *grid_start, source_out)) {
+                    fail(EditErrorCode::InvalidTime, {clip.id});
+                    return;
+                }
+                start = *grid_start;
+                clip.source_out = source_out;
             }
             clip.start = start;
             if (!selected)
@@ -1300,11 +1793,144 @@ class Workspace {
             mapRange({span});
         }
     }
+    std::optional<std::vector<Id>> scopedRange(Span& span, const std::vector<Id>& requested) {
+        std::vector<Id> scope = requested;
+        if (scope.empty())
+            for (const auto& track : tracks_)
+                scope.push_back(track.id);
+        std::set<Id> unique;
+        bool audio = true;
+        for (const auto id : scope) {
+            const auto* track = mutableTrack(id);
+            if (!track || !unique.insert(id).second) {
+                fail(EditErrorCode::InvalidTarget, {id});
+                return std::nullopt;
+            }
+            audio = audio && track->type == TrackType::Audio;
+        }
+        if (span.in_us < 0 || span.out_us <= span.in_us || span.out_us > duration()) {
+            fail(EditErrorCode::InvalidTime);
+            return std::nullopt;
+        }
+        const auto start = boundedBoundary(span.in_us, 0, duration(), audio);
+        const auto end = boundedBoundary(span.out_us, 0, duration(), audio);
+        if (!start || !end || *start >= *end) {
+            fail(EditErrorCode::InvalidTime);
+            return std::nullopt;
+        }
+        span = {*start, *end};
+        for (const auto& clip : clips_)
+            if (contains(scope, clip.track) && clip.start < span.out_us && clip.end() > span.in_us && clip.group)
+                for (const auto& member : clips_)
+                    if (member.group == clip.group && !contains(scope, member.track)) {
+                        fail(EditErrorCode::LinkedScopeRequired, {clip.id, member.id});
+                        return std::nullopt;
+                    }
+        return scope;
+    }
+    void splitScopedRange(Span span, const std::vector<Id>& scope) {
+        const bool audio = std::none_of(tracks_.begin(), tracks_.end(), [&](const auto& track) {
+            return contains(scope, track.id) && track.type == TrackType::Video;
+        });
+        for (const auto boundary : {span.in_us, span.out_us}) {
+            std::vector<Id> ids;
+            for (const auto& clip : clips_)
+                if (contains(scope, clip.track) && clip.start < boundary && boundary < clip.end())
+                    ids.push_back(clip.id);
+            if (!ids.empty())
+                splitAt({ids, boundary, true}, audio);
+            if (last_error_)
+                return;
+        }
+    }
+    void execute(const SplitRange& command) {
+        auto span = command.span;
+        const auto scope = scopedRange(span, command.track_ids);
+        if (scope)
+            splitScopedRange(span, *scope);
+    }
     void execute(const LiftRange& command) {
-        eraseRange(command.span, false);
+        if (command.track_ids.empty()) {
+            eraseRange(command.span, false);
+            return;
+        }
+        auto span = command.span;
+        const auto scope = scopedRange(span, command.track_ids);
+        if (!scope)
+            return;
+        const auto old_duration = duration();
+        splitScopedRange(span, *scope);
+        if (last_error_)
+            return;
+        std::vector<Id> inside;
+        for (const auto& clip : clips_)
+            if (contains(*scope, clip.track) && clip.start >= span.in_us && clip.end() <= span.out_us)
+                inside.push_back(clip.id);
+        if (inside.empty())
+            return;
+        removeTargets(inside, false, false);
+        if (duration() < old_duration)
+            timeline_end_ = {TimelineEndMode::FixedEnd, old_duration};
     }
     void execute(const RippleRemoveRange& command) {
-        eraseRange(command.span, true);
+        if (command.track_ids.empty()) {
+            eraseRange(command.span, true);
+            return;
+        }
+        auto span = command.span;
+        const auto scope = scopedRange(span, command.track_ids);
+        if (!scope)
+            return;
+        for (const auto& clip : clips_)
+            if (!contains(*scope, clip.track) && clip.end() > span.in_us) {
+                fail(EditErrorCode::RippleConflict, {clip.id});
+                return;
+            }
+        for (const auto& spacer : spacers_)
+            if (!contains(*scope, spacer.track) && spacer.end() > span.in_us) {
+                fail(EditErrorCode::RippleConflict, {spacer.id});
+                return;
+            }
+        splitScopedRange(span, *scope);
+        if (!last_error_) {
+            eraseRange(span, true);
+            if (!last_error_ && timeline_end_.mode == TimelineEndMode::FixedEnd)
+                timeline_end_.end_us = mapRemoval(timeline_end_.end_us, {span});
+        }
+    }
+    void execute(const AdjustRangeGain& command) {
+        auto span = command.span;
+        const auto scope = scopedRange(span, command.track_ids);
+        if (!scope)
+            return;
+        if (!std::isfinite(command.delta_db) || !std::isfinite(command.delta_db * 10) ||
+            std::abs(command.delta_db * 10 - std::round(command.delta_db * 10)) > 0.0000001) {
+            fail(EditErrorCode::NonfiniteValue);
+            return;
+        }
+        bool has_audio = false;
+        for (const auto& clip : clips_)
+            if (contains(*scope, clip.track) && clip.start < span.out_us && clip.end() > span.in_us) {
+                const auto* track = mutableTrack(clip.track);
+                if (track && track->type == TrackType::Audio) {
+                    has_audio = true;
+                    if (clip.gain_db + command.delta_db < -60 || clip.gain_db + command.delta_db > 24) {
+                        fail(EditErrorCode::NonfiniteValue, {clip.id});
+                        return;
+                    }
+                }
+            }
+        if (!has_audio || command.delta_db == 0)
+            return;
+        splitScopedRange(span, *scope);
+        if (last_error_)
+            return;
+        for (auto& clip : clips_)
+            if (contains(*scope, clip.track) && clip.start >= span.in_us && clip.end() <= span.out_us) {
+                const auto* track = mutableTrack(clip.track);
+                if (track && track->type == TrackType::Audio)
+                    clip.gain_db += command.delta_db;
+            }
     }
     void execute(const KeepRange& command) {
         if (!checkRange(command.span))
@@ -1353,24 +1979,8 @@ class Workspace {
             result_range_.out_us =
                 std::clamp(result_range_.out_us, command.span.in_us, command.span.out_us) - command.span.in_us;
     }
-    static std::optional<Time> audioTrimMinimum(Time fixed_edge_us, TrimEdge edge, uint32_t sample_rate) {
-        auto sample = scaleRatio(fixed_edge_us, sample_rate, 1'000'000);
-        if (!sample)
-            return std::nullopt;
-        const Time rounded_sample = (fixed_edge_us % 1'000'000) * sample_rate % 1'000'000 >= 500'000 ? 1 : 0;
-        const Time step = edge == TrimEdge::Left ? -1 : 1;
-        if (!addTime(*sample, rounded_sample + step, *sample) || *sample < 0)
-            return std::nullopt;
-        auto boundary = scaleRatio(*sample, 1'000'000, sample_rate);
-        if (!boundary)
-            return std::nullopt;
-        const Time rounded_boundary =
-            (*sample % sample_rate) * 1'000'000 % sample_rate >= (static_cast<Time>(sample_rate) + 1) / 2 ? 1 : 0;
-        if (!addTime(*boundary, rounded_boundary, *boundary))
-            return std::nullopt;
-        return std::max(Time{1}, edge == TrimEdge::Left ? fixed_edge_us - *boundary : *boundary - fixed_edge_us);
-    }
-    void execute(const Trim& command) {
+    void execute(const Trim& input) {
+        auto command = input;
         auto_crossfade_ = command.auto_crossfade;
         auto requested = command.targets;
         if (requested.empty())
@@ -1381,6 +1991,17 @@ class Workspace {
             fail(EditErrorCode::InvalidTarget, {command.lead_id});
             return;
         }
+        if (command.delta_us == 0)
+            return;
+        const auto edge = command.edge == TrimEdge::Left ? lead->start : lead->end();
+        Time requested_edge = 0;
+        if (!addTime(edge, command.delta_us, requested_edge)) {
+            fail(EditErrorCode::InvalidTime, ids);
+            return;
+        }
+        if (requested_edge >= 0)
+            command.delta_us = quantizeBoundary(requested_edge, audioOperation(ids)) - edge;
+        const bool audio = audioOperation(ids);
         Time lower = (std::numeric_limits<Time>::min)();
         Time upper = (std::numeric_limits<Time>::max)();
         Time suffix = 0;
@@ -1389,31 +2010,25 @@ class Workspace {
             const auto* source = asset(clip->asset);
             Time source_begin = 0;
             Time source_end = source->duration;
-            uint32_t audio_sample_rate = 48000;
             if (clip->stream && source->source_descriptor)
                 for (const auto& stream : source->source_descriptor->streams)
                     if (stream.ref.stream_identity == clip->stream->stream_identity) {
                         source_begin = stream.source_span.in_us;
                         source_end = stream.source_span.out_us;
-                        if (stream.codec.sample_rate)
-                            audio_sample_rate = stream.codec.sample_rate;
                     }
             Time minimum = 1;
-            const auto* track = mutableTrack(clip->track);
-            if (track->type == TrackType::Video && output_fps_.valid()) {
-                const auto next = output_fps_.nextFrame(clip->start);
-                if (next)
-                    minimum = *next - clip->start;
-            } else if (track->type == TrackType::Audio && clip->stream) {
-                // Rounded sample timestamps have unequal intervals. Keep the minimum anchored to the fixed source edge.
-                const auto sample_minimum =
-                    audioTrimMinimum(command.edge == TrimEdge::Left ? clip->source_out : clip->source_in, command.edge,
-                                     audio_sample_rate);
-                if (!sample_minimum) {
-                    fail(EditErrorCode::SourceBounds, {id});
+            const auto fixed = command.edge == TrimEdge::Left ? clip->end() : clip->start;
+            const auto index = gridIndex(fixed, audio);
+            if (index) {
+                const auto interval = command.edge == TrimEdge::Left && *index > 0 ? *index - 1 : *index;
+                const auto from = gridBoundary(interval, audio);
+                const auto to =
+                    interval == (std::numeric_limits<Time>::max)() ? std::nullopt : gridBoundary(interval + 1, audio);
+                if (!from || !to) {
+                    fail(EditErrorCode::InvalidTime, {id});
                     return;
                 }
-                minimum = *sample_minimum;
+                minimum = *to - *from;
             }
             if (command.edge == TrimEdge::Left) {
                 lower = std::max(lower, source_begin - clip->source_in);
@@ -1430,9 +2045,31 @@ class Workspace {
             fail(EditErrorCode::SourceBounds, ids);
             return;
         }
-        const Time delta = std::clamp(command.delta_us, lower, upper);
+        if (!command.clamp_to_bounds && (command.delta_us < lower || command.delta_us > upper)) {
+            fail(EditErrorCode::SourceBounds, ids);
+            return;
+        }
+        Time delta = std::clamp(command.delta_us, lower, upper);
+        if (audio || output_fps_.valid()) {
+            Time minimum_edge = 0;
+            Time maximum_edge = 0;
+            Time desired_edge = 0;
+            if (!addTime(edge, lower, minimum_edge) || !addTime(edge, upper, maximum_edge) ||
+                !addTime(edge, delta, desired_edge)) {
+                fail(EditErrorCode::InvalidTime, ids);
+                return;
+            }
+            const auto boundary = boundedBoundary(desired_edge, std::max(Time{0}, minimum_edge), maximum_edge, audio);
+            if (!boundary) {
+                fail(EditErrorCode::SourceBounds, ids);
+                return;
+            }
+            delta = *boundary - edge;
+        }
         if (delta == 0)
             return;
+        if (!command.expand_linked)
+            detachPartialGroups(ids);
         const Time shift = command.edge == TrimEdge::Left ? -delta : delta;
         if (command.mode == TrimMode::Ripple)
             for (auto& spacer : spacers_) {
@@ -1488,23 +2125,269 @@ class Workspace {
         else
             fail(EditErrorCode::InvalidTarget, {command.id});
     }
+    void execute(const PasteClips& command) {
+        if (!command.clipboard || command.clipboard->clips.empty() || command.at_us < 0) {
+            fail(EditErrorCode::InvalidTarget);
+            return;
+        }
+        const auto& copied = *command.clipboard;
+        for (const auto& expected : copied.assets) {
+            const auto* current = expected ? asset(expected->id) : nullptr;
+            if (!current || current->state != AssetState::Available) {
+                fail(EditErrorCode::MissingSource, expected ? std::vector<Id>{expected->id} : std::vector<Id>{});
+                return;
+            }
+            if (current->source_version != expected->source_version || current->path != expected->path ||
+                current->duration != expected->duration ||
+                bool(current->source_descriptor) != bool(expected->source_descriptor)) {
+                fail(EditErrorCode::SourceChanged, {expected->id});
+                return;
+            }
+            if (expected->source_descriptor) {
+                const auto& identity = expected->source_descriptor->asset_identity_fingerprint;
+                const bool known = std::any_of(identity.begin(), identity.end(), [](auto byte) { return byte != 0; });
+                if (current->source_descriptor->file_identity != expected->source_descriptor->file_identity ||
+                    (known && current->source_descriptor->asset_identity_fingerprint != identity)) {
+                    fail(EditErrorCode::SourceChanged, {expected->id});
+                    return;
+                }
+            }
+        }
+        const auto copied_track = [&](Id id) -> const Track* {
+            const auto found = std::find_if(copied.tracks.begin(), copied.tracks.end(),
+                                            [id](const auto& track) { return track.id == id; });
+            return found == copied.tracks.end() ? nullptr : &*found;
+        };
+        bool audio = true;
+        std::set<Id> used_tracks;
+        for (const auto& clip : copied.clips) {
+            const auto* track = copied_track(clip.track);
+            if (!track || std::none_of(copied.assets.begin(), copied.assets.end(),
+                                       [&](const auto& source) { return source && source->id == clip.asset; })) {
+                fail(EditErrorCode::InvalidTarget, {clip.id});
+                return;
+            }
+            audio = audio && track->type == TrackType::Audio;
+            used_tracks.insert(clip.track);
+        }
+        const auto at = quantizeBoundary(command.at_us, audio);
+        const auto* leading_track = copied_track(copied.clips.front().track);
+        const auto* active = command.active_track ? mutableTrack(command.active_track) : nullptr;
+        if (command.active_track &&
+            (!active || std::none_of(copied.clips.begin(), copied.clips.end(), [&](const auto& clip) {
+                const auto* track = copied_track(clip.track);
+                return clip.start == 0 && track && track->type == active->type;
+            }))) {
+            fail(EditErrorCode::WrongTrackKind, {command.active_track});
+            return;
+        }
+        const auto active_id = active ? active->id : Id{0};
+        const auto active_kind = active ? active->type : leading_track->type;
+        std::map<Id, Id> destination_tracks;
+        for (const auto kind : {TrackType::Video, TrackType::Audio}) {
+            std::vector<Id> original;
+            std::vector<Id> destination;
+            for (const auto& track : copied.tracks)
+                if (track.type == kind)
+                    original.push_back(track.id);
+            for (const auto& track : tracks_)
+                if (track.type == kind)
+                    destination.push_back(track.id);
+            const auto first =
+                std::find_if(original.begin(), original.end(), [&](Id id) { return used_tracks.contains(id); });
+            if (first == original.end())
+                continue;
+            const auto anchor = active_id && active_kind == kind ? active_id
+                                : (!command.active_track && leading_track->type == kind && !destination.empty())
+                                    ? destination.front()
+                                    : Id{0};
+            const auto destination_anchor =
+                anchor ? std::find(destination.begin(), destination.end(), anchor) : destination.begin();
+            const auto base = static_cast<size_t>(destination_anchor - destination.begin());
+            for (auto source = first; source != original.end(); ++source) {
+                if (!used_tracks.contains(*source))
+                    continue;
+                const auto index = base + static_cast<size_t>(source - first);
+                while (destination.size() <= index) {
+                    Track created{nextId(), kind};
+                    if (!created.id)
+                        return;
+                    destination.push_back(created.id);
+                    const auto row =
+                        kind == TrackType::Video
+                            ? std::find_if(tracks_.begin(), tracks_.end(),
+                                           [](const auto& track) { return track.type == TrackType::Audio; })
+                            : tracks_.end();
+                    tracks_.insert(row, std::move(created));
+                }
+                destination_tracks[*source] = destination[index];
+            }
+        }
+        if (command.insert) {
+            if (copied.duration_us <= 0) {
+                fail(EditErrorCode::InvalidTime);
+                return;
+            }
+            std::map<Id, bool> shifted_groups;
+            for (const auto& clip : clips_) {
+                const bool shifted = clip.start >= at;
+                if (clip.group) {
+                    const auto [position, added] = shifted_groups.emplace(clip.group, shifted);
+                    if (!added && position->second != shifted) {
+                        fail(EditErrorCode::LinkedScopeRequired, {clip.id});
+                        return;
+                    }
+                }
+                if (shifted) {
+                    const auto* track = mutableTrack(clip.track);
+                    Time shifted_start = 0, shifted_end = 0;
+                    if (!track || !addTime(clip.start, copied.duration_us, shifted_start) ||
+                        !addTime(clip.end(), copied.duration_us, shifted_end) ||
+                        quantizeBoundary(shifted_start, track->type == TrackType::Audio) != shifted_start ||
+                        quantizeBoundary(shifted_end, track->type == TrackType::Audio) != shifted_end) {
+                        fail(EditErrorCode::InvalidTime, {clip.id});
+                        return;
+                    }
+                }
+            }
+            for (auto& clip : clips_) {
+                if (clip.start < at && clip.end() > at) {
+                    fail(EditErrorCode::RippleConflict, {clip.id});
+                    return;
+                }
+                if (clip.start >= at && !addTime(clip.start, copied.duration_us, clip.start)) {
+                    fail(EditErrorCode::InvalidTime, {clip.id});
+                    return;
+                }
+            }
+            for (auto& spacer : spacers_) {
+                if (spacer.start_us < at && spacer.end() > at) {
+                    fail(EditErrorCode::RippleConflict, {spacer.id});
+                    return;
+                }
+                if (spacer.start_us >= at && !addTime(spacer.start_us, copied.duration_us, spacer.start_us)) {
+                    fail(EditErrorCode::InvalidTime, {spacer.id});
+                    return;
+                }
+            }
+            for (auto& junction : transitions_)
+                for (auto* time : {&junction.in_us, &junction.out_us, &junction.cut_us, &junction.incoming_anchor_us})
+                    if (*time >= at && !addTime(*time, copied.duration_us, *time)) {
+                        fail(EditErrorCode::InvalidTime, {junction.id});
+                        return;
+                    }
+            if (result_range_.in_us > at && !addTime(result_range_.in_us, copied.duration_us, result_range_.in_us)) {
+                fail(EditErrorCode::InvalidTime);
+                return;
+            }
+            if (result_range_.out_mode == ResultOutMode::Fixed && result_range_.out_us >= at &&
+                !addTime(result_range_.out_us, copied.duration_us, result_range_.out_us)) {
+                fail(EditErrorCode::InvalidTime);
+                return;
+            }
+            if (timeline_end_.mode == TimelineEndMode::FixedEnd && timeline_end_.end_us >= at &&
+                !addTime(timeline_end_.end_us, copied.duration_us, timeline_end_.end_us)) {
+                fail(EditErrorCode::InvalidTime);
+                return;
+            }
+        }
+        auto_crossfade_ = command.auto_crossfade;
+        std::map<Id, Id> clips;
+        std::map<Id, Id> groups;
+        for (auto clip : copied.clips) {
+            const auto original = clip.id;
+            if (clips.contains(original) || !addTime(at, clip.start, clip.start) || clip.start < 0) {
+                fail(EditErrorCode::InvalidTime, {original});
+                return;
+            }
+            clip.id = nextId();
+            if (!clip.id)
+                return;
+            clips[original] = clip.id;
+            if (clip.group) {
+                auto& group = groups[clip.group];
+                if (!group)
+                    group = nextId();
+                if (!group)
+                    return;
+                clip.group = group;
+            }
+            clip.track = destination_tracks.at(clip.track);
+            selection_ = clip.id;
+            clips_.push_back(std::move(clip));
+        }
+        for (auto junction : copied.junctions) {
+            if (!clips.contains(junction.outgoing) || !clips.contains(junction.incoming)) {
+                fail(EditErrorCode::InvalidTarget, {junction.id});
+                return;
+            }
+            junction.outgoing = clips.at(junction.outgoing);
+            junction.incoming = clips.at(junction.incoming);
+            junction.track = destination_tracks.at(junction.track);
+            junction.id = nextId();
+            if (!junction.id)
+                return;
+            for (auto* time : {&junction.in_us, &junction.out_us, &junction.cut_us, &junction.incoming_anchor_us})
+                if (!addTime(*time, at, *time)) {
+                    fail(EditErrorCode::InvalidTime, {junction.id});
+                    return;
+                }
+            transitions_.push_back(std::move(junction));
+        }
+    }
+    void execute(const RenameTrack& command) {
+        auto* track = mutableTrack(command.id);
+        if (!track || command.name.empty())
+            fail(EditErrorCode::InvalidTarget, {command.id});
+        else
+            track->name = command.name;
+    }
     void execute(const SetGain& command) {
-        if (!std::isfinite(command.gain_db)) {
+        if (!std::isfinite(command.gain_db) || command.gain_db < -60 ||
+            command.gain_db > (command.target == GainTarget::Track ? 12 : 24) ||
+            std::abs(command.gain_db * 10 - std::round(command.gain_db * 10)) > 0.0000001) {
             fail(EditErrorCode::NonfiniteValue, {command.id});
             return;
         }
         if (command.target == GainTarget::Track) {
+            if (!command.targets.empty()) {
+                fail(EditErrorCode::InvalidTarget, command.targets);
+                return;
+            }
             auto* track = mutableTrack(command.id);
             if (!track || track->type != TrackType::Audio)
                 fail(EditErrorCode::WrongTrackKind, {command.id});
+            else if (trackLocked(track->id))
+                fail(EditErrorCode::TrackLocked, {track->id});
             else
                 track->gain_db = command.gain_db;
         } else {
-            auto* clip = mutableClip(command.id);
-            const auto* track = clip ? mutableTrack(clip->track) : nullptr;
-            if (!clip || !track || track->type != TrackType::Audio)
-                fail(EditErrorCode::WrongTrackKind, {command.id});
-            else
+            if (!command.targets.empty() && command.id) {
+                fail(EditErrorCode::InvalidTarget, command.targets);
+                return;
+            }
+            const auto requested = command.targets.empty() ? std::vector<Id>{command.id} : command.targets;
+            std::set<Id> seen;
+            std::vector<Clip*> clips;
+            clips.reserve(requested.size());
+            for (const auto id : requested) {
+                auto* clip = mutableClip(id);
+                const auto* track = clip ? mutableTrack(clip->track) : nullptr;
+                if (!id || !seen.insert(id).second || !clip) {
+                    fail(EditErrorCode::InvalidTarget, {id});
+                    return;
+                }
+                if (!track || track->type != TrackType::Audio) {
+                    fail(EditErrorCode::WrongTrackKind, {id});
+                    return;
+                }
+                if (trackLocked(track->id)) {
+                    fail(EditErrorCode::TrackLocked, {track->id});
+                    return;
+                }
+                clips.push_back(clip);
+            }
+            for (auto* clip : clips)
                 clip->gain_db = command.gain_db;
         }
     }
@@ -1528,6 +2411,13 @@ class Workspace {
             fail(EditErrorCode::InvalidTarget, {command.track_id});
             return;
         }
+        const auto previous = static_cast<size_t>(track - tracks_.data());
+        const auto target = std::min(command.index, tracks_.size() - 1);
+        for (size_t index = std::min(previous, target); index <= std::max(previous, target); ++index)
+            if (tracks_[index].type != track->type) {
+                fail(EditErrorCode::WrongTrackKind, {command.track_id});
+                return;
+            }
         auto copy = *track;
         std::erase_if(tracks_, [&](const auto& item) { return item.id == command.track_id; });
         tracks_.insert(tracks_.begin() + std::min(command.index, tracks_.size()), std::move(copy));
@@ -1570,7 +2460,176 @@ class Workspace {
             if (contains(ids, clip.id))
                 clip.group = group;
     }
-    void execute(const SetFade& command) {
+    void execute(const ReplaceAssetSource& command) {
+        const auto found = std::find_if(assets_.begin(), assets_.end(),
+                                        [&](const auto& value) { return value.id == command.asset_id; });
+        if (found == assets_.end() || found->source_version != command.expected_source_version ||
+            command.replacement.id != command.asset_id || command.replacement.path.empty() ||
+            command.replacement.duration <= 0 || command.replacement.state != AssetState::Available ||
+            !command.replacement.source_descriptor || !command.replacement.source_version ||
+            command.replacement.source_version <= source_version_high_watermark_) {
+            fail(EditErrorCode::SourceChanged, {command.asset_id});
+            return;
+        }
+        const Asset previous = *found;
+        auto replacement = command.replacement;
+        const auto& streams = replacement.source_descriptor->streams;
+        const auto& fingerprint = replacement.source_descriptor->asset_identity_fingerprint;
+        if (std::none_of(fingerprint.begin(), fingerprint.end(), [](auto byte) { return byte != 0; }) ||
+            (!command.adopt_changed_bytes &&
+             (!previous.source_descriptor || previous.source_descriptor->asset_identity_fingerprint != fingerprint))) {
+            fail(EditErrorCode::SourceChanged, {command.asset_id});
+            return;
+        }
+        std::set<uint32_t> indices;
+        std::set<engine::AudioTrackId> identities;
+        for (const auto& stream : streams) {
+            if (!indices.insert(stream.ref.container_index).second ||
+                stream.ref.stream_identity == engine::AudioTrackId{} ||
+                !identities.insert(stream.ref.stream_identity).second || stream.source_span.in_us < 0 ||
+                stream.source_span.out_us <= stream.source_span.in_us ||
+                stream.source_span.out_us > replacement.duration ||
+                (stream.ref.kind == engine::TimelineStreamKind::Audio &&
+                 (stream.codec.channels == 0 || stream.codec.channels > 2 || stream.codec.sample_rate == 0))) {
+                fail(EditErrorCode::SourceChanged, {command.asset_id});
+                return;
+            }
+        }
+        const auto by_position = [&](const StreamRef& reference) -> const SourceStreamDescriptor* {
+            const auto stream = std::find_if(streams.begin(), streams.end(), [&](const auto& item) {
+                return item.ref.kind == reference.kind && item.ref.container_index == reference.container_index;
+            });
+            return stream == streams.end() ? nullptr : &*stream;
+        };
+        if (previous.source_descriptor) {
+            if (previous.source_descriptor->streams.size() != streams.size()) {
+                fail(EditErrorCode::SourceChanged, {command.asset_id});
+                return;
+            }
+            for (const auto& old : previous.source_descriptor->streams) {
+                const auto* next = by_position(old.ref);
+                if (!next || next->timeline_offset_us != old.timeline_offset_us ||
+                    (old.ref.kind == engine::TimelineStreamKind::Audio &&
+                     (next->codec.channels != old.codec.channels ||
+                      next->codec.channel_layout != old.codec.channel_layout)) ||
+                    (old.ref.kind == engine::TimelineStreamKind::Video && next->fps != old.fps)) {
+                    fail(EditErrorCode::SourceChanged, {command.asset_id});
+                    return;
+                }
+            }
+        }
+        for (auto& clip : clips_) {
+            if (clip.asset != command.asset_id)
+                continue;
+            if (trackLocked(clip.track)) {
+                fail(EditErrorCode::TrackLocked, {clip.track});
+                return;
+            }
+            const SourceStreamDescriptor* next = clip.stream ? by_position(*clip.stream) : nullptr;
+            if (!clip.stream) {
+                const auto* track = mutableTrack(clip.track);
+                const auto kind = track && track->type == TrackType::Audio ? engine::TimelineStreamKind::Audio
+                                                                           : engine::TimelineStreamKind::Video;
+                for (const auto& stream : streams)
+                    if (stream.ref.kind == kind) {
+                        if (next) {
+                            fail(EditErrorCode::SourceChanged, {clip.id});
+                            return;
+                        }
+                        next = &stream;
+                    }
+            }
+            if (!next || clip.source_in < next->source_span.in_us || clip.source_out > next->source_span.out_us ||
+                clip.source_out > replacement.duration) {
+                fail(EditErrorCode::SourceBounds, {clip.id});
+                return;
+            }
+            clip.stream = next->ref;
+            clip.stream->asset_id = command.asset_id;
+        }
+        const auto remap_identity = [&](engine::AudioTrackId identity) -> std::optional<engine::AudioTrackId> {
+            if (!previous.source_descriptor)
+                return std::nullopt;
+            for (const auto& old : previous.source_descriptor->streams)
+                if (old.ref.kind == engine::TimelineStreamKind::Audio && old.ref.stream_identity == identity)
+                    if (const auto* next = by_position(old.ref))
+                        return next->ref.stream_identity;
+            return std::nullopt;
+        };
+        if (!command.adopt_changed_bytes && previous.input_mix_selection) {
+            replacement.input_mix_selection = previous.input_mix_selection;
+            replacement.input_mix_selection->asset_identity_fingerprint = fingerprint;
+            for (auto& identity : replacement.input_mix_selection->selected_stream_identities) {
+                const auto mapped = remap_identity(identity);
+                if (!mapped) {
+                    fail(EditErrorCode::SourceChanged, {command.asset_id});
+                    return;
+                }
+                identity = *mapped;
+            }
+
+            replacement.mix_decision_required = previous.mix_decision_required;
+        }
+        if (command.adopt_changed_bytes && replacement.mix_decision_required) {
+            fail(EditErrorCode::MixSelectionRequired, {command.asset_id});
+            return;
+        }
+        if (replacement.input_mix_selection) {
+            if (replacement.input_mix_selection->asset_identity_fingerprint != fingerprint) {
+                fail(EditErrorCode::SourceChanged, {command.asset_id});
+                return;
+            }
+            std::set<engine::AudioTrackId> selected;
+            for (const auto identity : replacement.input_mix_selection->selected_stream_identities)
+                if (!selected.insert(identity).second ||
+                    std::none_of(streams.begin(), streams.end(), [&](const auto& stream) {
+                        return stream.ref.kind == engine::TimelineStreamKind::Audio &&
+                               stream.ref.stream_identity == identity;
+                    })) {
+                    fail(EditErrorCode::SourceChanged, {command.asset_id});
+                    return;
+                }
+            if (command.adopt_changed_bytes) {
+                replacement.input_mix_selection->authority = InputMixAuthority::UserConfirmed;
+                replacement.input_mix_selection->provenance_fingerprint = {};
+                for (auto& clip : clips_)
+                    if (clip.asset == command.asset_id && clip.stream &&
+                        clip.stream->kind == engine::TimelineStreamKind::Audio) {
+                        const bool audible = selected.contains(clip.stream->stream_identity);
+                        if (clip.enabled == clip.original_enabled)
+                            clip.enabled = audible;
+                        clip.original_enabled = audible;
+                    }
+            }
+        } else if (command.adopt_changed_bytes && std::any_of(streams.begin(), streams.end(), [](const auto& stream) {
+                       return stream.ref.kind == engine::TimelineStreamKind::Audio;
+                   })) {
+            fail(EditErrorCode::MixSelectionRequired, {command.asset_id});
+            return;
+        }
+        replacement.original_recipe = previous.original_recipe;
+        if (replacement.original_recipe) {
+            if (replacement.original_recipe->source_span.out_us > replacement.duration) {
+                fail(EditErrorCode::SourceBounds, {command.asset_id});
+                return;
+            }
+            for (auto& reference : replacement.original_recipe->streams) {
+                const auto* next = by_position(reference);
+                if (!next) {
+                    fail(EditErrorCode::SourceChanged, {command.asset_id});
+                    return;
+                }
+                reference = next->ref;
+                reference.asset_id = command.asset_id;
+            }
+        }
+        replacement.markers = previous.markers;
+        *found = std::move(replacement);
+        source_binding_changes_.push_back(command.asset_id);
+        source_version_high_watermark_ = found->source_version;
+    }
+    void execute(const SetFade& input) {
+        auto command = input;
         auto* clip = mutableClip(command.clip_id);
         if (!clip) {
             fail(EditErrorCode::InvalidTarget, {command.clip_id});
@@ -1579,6 +2638,25 @@ class Workspace {
         if (command.fade.duration_us < 0 || !engine::EvaluateCurve(command.fade.curve, 0)) {
             fail(EditErrorCode::InvalidCurve, {command.clip_id});
             return;
+        }
+        const auto& previous = command.edge == FadeEdge::In ? clip->fade_in : clip->fade_out;
+        if (command.fade.duration_us != 0 && command.fade.duration_us != previous.duration_us) {
+            const auto edge = command.edge == FadeEdge::In ? clip->start : clip->end();
+            Time endpoint = 0;
+            const auto delta = command.edge == FadeEdge::In ? command.fade.duration_us : -command.fade.duration_us;
+            if (!addTime(edge, delta, endpoint)) {
+                fail(EditErrorCode::InvalidTime, {command.clip_id});
+                return;
+            }
+            const auto& opposite = command.edge == FadeEdge::In ? clip->fade_out : clip->fade_in;
+            const auto lower = command.edge == FadeEdge::In ? clip->start : clip->start + opposite.duration_us;
+            const auto upper = command.edge == FadeEdge::In ? clip->end() - opposite.duration_us : clip->end();
+            const auto quantized = boundedBoundary(endpoint, lower, upper, audioOperation({command.clip_id}));
+            if (!quantized) {
+                fail(EditErrorCode::SourceBounds, {command.clip_id});
+                return;
+            }
+            command.fade.duration_us = command.edge == FadeEdge::In ? *quantized - edge : edge - *quantized;
         }
         if (command.fade.duration_us > 0 &&
             std::any_of(transitions_.begin(), transitions_.end(), [&](const auto& junction) {
@@ -1599,21 +2677,46 @@ class Workspace {
         Id asset = 0;
         std::optional<InputMixSelection> selection;
         bool decision_required = false;
+        uint64_t source_version = 0;
         bool operator==(const InputMixState&) const = default;
     };
     void restoreInputMixes(const std::vector<InputMixState>& states) {
         for (const auto& state : states) {
             const auto found = std::find_if(assets_.begin(), assets_.end(),
                                             [&](const auto& source) { return source.id == state.asset; });
-            if (found != assets_.end()) {
+            if (found != assets_.end() && found->source_version == state.source_version) {
                 found->input_mix_selection = state.selection;
                 found->mix_decision_required = state.decision_required;
             }
         }
     }
+    void restoreSourceBindings(const std::vector<std::shared_ptr<const Asset>>& sources) {
+        for (const auto& source : sources) {
+            const auto found =
+                std::find_if(assets_.begin(), assets_.end(), [&](const auto& value) { return value.id == source->id; });
+            if (found != assets_.end())
+                *found = *source;
+        }
+    }
+    void restoreImportedDefaults(const std::vector<std::shared_ptr<const Asset>>& sources,
+                                 const std::vector<InputMixState>& mixes) {
+        std::set<Id> ids;
+        for (const auto& source : sources)
+            ids.insert(source->id);
+        for (const auto& mix : mixes)
+            ids.insert(mix.asset);
+        // A finalized default also affects stream rows absent from an older clip delta.
+        for (const auto id : ids)
+            if (const auto* source = asset(id); source && !source->mix_decision_required && source->input_mix_selection)
+                RebaseImportedAudioDefaults(clips_, id, *source->input_mix_selection);
+    }
     struct Command {
+        std::vector<std::shared_ptr<const Asset>> sources_before;
+        std::vector<std::shared_ptr<const Asset>> sources_after;
         std::vector<InputMixState> mixes_before;
         std::vector<InputMixState> mixes_after;
+        std::vector<std::pair<Id, uint64_t>> pending_sources_before;
+        std::vector<std::pair<Id, uint64_t>> pending_sources_after;
         std::vector<Clip> before;
         std::vector<Clip> after;
         std::vector<Transition> transitions_before;
@@ -1644,11 +2747,12 @@ class Workspace {
         return ++next_id_;
     }
     template <typename T> static std::vector<T> difference(const std::vector<T>& left, const std::vector<T>& right) {
-        std::vector<T> result;
-        for (const auto& value : left)
-            if (std::find(right.begin(), right.end(), value) == right.end())
-                result.push_back(value);
-        return result;
+        return detail::EntityDifference(left, right, [](const T& value) {
+            if constexpr (requires { value.id; })
+                return value.id;
+            else
+                return value.asset;
+        });
     }
     template <typename T>
     static void patchEntities(std::vector<T>& values, const std::vector<T>& removed, const std::vector<T>& inserted) {
@@ -1750,6 +2854,27 @@ class Workspace {
                                    : std::clamp(result_range_.out_us, result_range_.in_us, total);
         return !last_error_;
     }
+    static size_t sourceBindingBytes(const Asset& source) {
+        size_t bytes = sizeof(Asset) + source.path.capacity() * sizeof(wchar_t) + source.name.capacity();
+        bytes += source.markers.capacity() * sizeof(RecordingMarker);
+        for (const auto& marker : source.markers)
+            bytes += marker.label.capacity();
+        if (source.input_mix_selection)
+            bytes += source.input_mix_selection->selected_stream_identities.capacity() * sizeof(engine::AudioTrackId);
+        if (source.monitor_selection)
+            bytes += source.monitor_selection->tracks.capacity() * sizeof(engine::MonitorTrackSelection);
+        if (source.original_recipe)
+            bytes += source.original_recipe->streams.capacity() * sizeof(StreamRef);
+        if (source.source_descriptor) {
+            bytes += sizeof(ValidatedSourceDescriptor);
+            bytes += source.source_descriptor->streams.capacity() * sizeof(SourceStreamDescriptor);
+            for (const auto& stream : source.source_descriptor->streams)
+                bytes += stream.name.capacity() + stream.role.capacity() + stream.codec.codec_id.capacity() +
+                         stream.codec.codec_private.capacity() + stream.codec.channel_layout.capacity() +
+                         stream.source_ids.capacity() * sizeof(engine::AudioSourceId);
+        }
+        return bytes;
+    }
     static size_t commandBytes(const Command& command) {
         size_t bytes =
             sizeof(Command) + (command.before.capacity() + command.after.capacity()) * sizeof(Clip) +
@@ -1757,7 +2882,15 @@ class Workspace {
             (command.tracks_before.capacity() + command.tracks_after.capacity()) * sizeof(Track) +
             (command.spacers_before.capacity() + command.spacers_after.capacity()) * sizeof(Spacer) +
             (command.order_before.capacity() + command.order_after.capacity()) * sizeof(Id);
+        bytes += (command.sources_before.capacity() + command.sources_after.capacity()) *
+                 sizeof(std::shared_ptr<const Asset>);
+        for (const auto& source : command.sources_before)
+            bytes += sourceBindingBytes(*source);
+        for (const auto& source : command.sources_after)
+            bytes += sourceBindingBytes(*source);
         bytes += (command.mixes_before.capacity() + command.mixes_after.capacity()) * sizeof(InputMixState);
+        bytes += (command.pending_sources_before.capacity() + command.pending_sources_after.capacity()) *
+                 sizeof(std::pair<Id, uint64_t>);
         for (const auto& state : command.mixes_before)
             if (state.selection)
                 bytes += state.selection->selected_stream_identities.capacity() * sizeof(engine::AudioTrackId);
@@ -1771,9 +2904,19 @@ class Workspace {
         return bytes;
     }
     bool publish(Workspace& candidate, Id mix_asset = 0) {
-        if (!candidate.validate()) {
+        if (!candidate.validate() || !candidate.checkLocks(*snapshot())) {
             last_error_ = candidate.last_error_;
             return false;
+        }
+        std::vector<std::shared_ptr<const Asset>> before_sources;
+        std::vector<std::shared_ptr<const Asset>> after_sources;
+        for (const auto id : candidate.source_binding_changes_) {
+            const auto* before = asset(id);
+            const auto* after = candidate.asset(id);
+            if (!before || !after)
+                return false;
+            before_sources.push_back(std::make_shared<const Asset>(*before));
+            after_sources.push_back(std::make_shared<const Asset>(*after));
         }
         std::vector<InputMixState> before_mixes;
         std::vector<InputMixState> after_mixes;
@@ -1782,14 +2925,16 @@ class Workspace {
             const auto* after = candidate.asset(mix_asset);
             if (!before || !after)
                 return false;
-            before_mixes.push_back({mix_asset, before->input_mix_selection, before->mix_decision_required});
-            after_mixes.push_back({mix_asset, after->input_mix_selection, after->mix_decision_required});
+            before_mixes.push_back(
+                {mix_asset, before->input_mix_selection, before->mix_decision_required, before->source_version});
+            after_mixes.push_back(
+                {mix_asset, after->input_mix_selection, after->mix_decision_required, after->source_version});
         }
-        if (before_mixes == after_mixes && candidate.clips_ == clips_ && candidate.transitions_ == transitions_ &&
-            candidate.tracks_ == tracks_ && candidate.result_range_ == result_range_ &&
-            candidate.spacers_ == spacers_ && candidate.timeline_end_ == timeline_end_ &&
-            candidate.output_fps_ == output_fps_ && candidate.output_width_ == output_width_ &&
-            candidate.output_height_ == output_height_)
+        if (before_sources.empty() && before_mixes == after_mixes && candidate.clips_ == clips_ &&
+            candidate.transitions_ == transitions_ && candidate.tracks_ == tracks_ &&
+            candidate.result_range_ == result_range_ && candidate.spacers_ == spacers_ &&
+            candidate.timeline_end_ == timeline_end_ && candidate.output_fps_ == output_fps_ &&
+            candidate.output_width_ == output_width_ && candidate.output_height_ == output_height_)
             return false;
         if (!candidate_mode_) {
             if (revision_ == (std::numeric_limits<Revision>::max)()) {
@@ -1797,10 +2942,25 @@ class Workspace {
                 return false;
             }
             Command command;
+            command.sources_before = before_sources;
+            command.sources_after = after_sources;
             command.mixes_before = difference(before_mixes, after_mixes);
             command.mixes_after = difference(after_mixes, before_mixes);
             command.before = difference(clips_, candidate.clips_);
             command.after = difference(candidate.clips_, clips_);
+            const auto pending_sources = [](const auto& assets, const auto& clips) {
+                std::unordered_map<Id, uint64_t> pending;
+                for (const auto& source : assets)
+                    if (source.mix_decision_required)
+                        pending.emplace(source.id, source.source_version);
+                std::set<std::pair<Id, uint64_t>> contexts;
+                for (const auto& clip : clips)
+                    if (const auto source = pending.find(clip.asset); source != pending.end())
+                        contexts.emplace(clip.asset, source->second);
+                return std::vector<std::pair<Id, uint64_t>>(contexts.begin(), contexts.end());
+            };
+            command.pending_sources_before = pending_sources(assets_, command.before);
+            command.pending_sources_after = pending_sources(candidate.assets_, command.after);
             command.transitions_before = difference(transitions_, candidate.transitions_);
             command.transitions_after = difference(candidate.transitions_, transitions_);
             command.tracks_before = difference(tracks_, candidate.tracks_);
@@ -1840,6 +3000,7 @@ class Workspace {
             ++cursor_;
             ++revision_;
         }
+        restoreSourceBindings(after_sources);
         restoreInputMixes(after_mixes);
         clips_ = std::move(candidate.clips_);
         tracks_ = std::move(candidate.tracks_);
@@ -1851,6 +3012,7 @@ class Workspace {
         output_width_ = candidate.output_width_;
         output_height_ = candidate.output_height_;
         next_id_ = candidate.next_id_;
+        source_version_high_watermark_ = candidate.source_version_high_watermark_;
         selection_ = candidate.selection_;
         seek(playhead_);
         snapshot_cache_.reset();
@@ -1907,7 +3069,10 @@ class Workspace {
     Id selection_ = 0;
     Time playhead_ = 0;
     std::vector<Asset> assets_;
+    std::vector<Id> source_binding_changes_;
+    uint64_t source_version_high_watermark_ = 0;
     std::vector<Track> tracks_;
+    std::set<Id> locked_tracks_;
     std::vector<Clip> clips_;
     std::vector<Transition> transitions_;
     std::vector<Command> history_;
@@ -1922,16 +3087,22 @@ inline EditPreview PreviewEdit(const EditSnapshot& snapshot, const EditCommand& 
     candidate.transitions_ = snapshot.junctions;
     candidate.result_range_ = snapshot.result_range;
     candidate.spacers_ = snapshot.spacers;
+    candidate.locked_tracks_.insert(snapshot.locked_track_ids.begin(), snapshot.locked_track_ids.end());
     candidate.timeline_end_ = snapshot.timeline_end;
     candidate.output_fps_ = snapshot.output_fps;
     candidate.output_width_ = snapshot.output_width;
     candidate.output_height_ = snapshot.output_height;
     candidate.revision_ = snapshot.revision;
+    candidate.source_version_high_watermark_ = snapshot.source_version_high_watermark;
     candidate.candidate_mode_ = true;
     for (const auto& asset : snapshot.assets)
         candidate.assets_.push_back(*asset);
     std::visit([&](const auto& value) { candidate.execute(value); }, command);
-    const auto valid = !candidate.last_error_ && candidate.validate();
+    const auto valid = !candidate.last_error_ && candidate.validate() && candidate.checkLocks(snapshot);
+    std::vector<std::shared_ptr<const Asset>> source_bindings;
+    if (valid)
+        for (const auto id : candidate.source_binding_changes_)
+            source_bindings.push_back(std::make_shared<const Asset>(*candidate.asset(id)));
     return {snapshot.revision,
             valid,
             candidate.last_error_,
@@ -1940,7 +3111,8 @@ inline EditPreview PreviewEdit(const EditSnapshot& snapshot, const EditCommand& 
             std::move(candidate.transitions_),
             0,
             std::move(candidate.spacers_),
-            candidate.timeline_end_};
+            candidate.timeline_end_,
+            std::move(source_bindings)};
 }
 
 } // namespace exosnap::edit

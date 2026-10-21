@@ -95,7 +95,10 @@ class QuickApplication {
 
     [[nodiscard]] bool load(bool no_activate = false);
     // Applies a visual fixture after the deferred Edit page is ready.
-    void applyEditVisualLayout();
+    bool applyEditVisualLayout();
+    [[nodiscard]] const QString& editVisualScenarioError() const noexcept {
+        return edit_visual_error_;
+    }
     [[nodiscard]] AboutViewModelAdapter* aboutViewModel() noexcept;
     [[nodiscard]] RecordPreviewAdapter* recordPreviewAdapter() noexcept;
     [[nodiscard]] RecordViewModelAdapter* recordViewModelAdapter() noexcept;
@@ -559,6 +562,10 @@ class QuickApplication {
     std::unique_ptr<QTemporaryDir> edit_visual_directory_;
     QVariantMap edit_visual_layout_;
     bool edit_visual_layout_applied_ = false;
+    QString edit_visual_scenario_;
+    QString edit_visual_error_;
+    QString edit_visual_replacement_;
+    bool edit_visual_source_started_ = false;
     void wireSettingsCommands();
     // Mirrors a Settings edit into the live config, the recording side, and disk.
     void applySettingsConfigEdit();

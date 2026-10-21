@@ -57,12 +57,16 @@ class EditPlayerSession {
     // == false, matching "no audio stream" behavior, per the design's stance
     // that a broken audio device should degrade to silent video, not break
     // the whole preview).
-    bool Open(const std::filesystem::path& path, std::string& out_error);
+    bool Open(const std::filesystem::path& path, std::string& out_error, const std::atomic<bool>* cancelled = nullptr);
+    bool Open(const std::shared_ptr<const MediaReadCapability>& source, std::string& out_error,
+              const std::atomic<bool>* cancelled = nullptr);
     void Close();
 
     [[nodiscard]] bool HasAudioStream() const noexcept;
     [[nodiscard]] AudioMetadataReadResult AudioMetadata() const;
-    bool SetMonitorSelection(MonitorSelectionSnapshot selection, std::string& error);
+    // External legacy bindings can require cancellable verification on the current lease.
+    bool SetMonitorSelection(MonitorSelectionSnapshot selection, std::string& error,
+                             const std::atomic<bool>* cancelled = nullptr);
     [[nodiscard]] bool MonitoringConfirmationRequired() const;
 
     // The opened clip's own frame rate in fps, or 0.0 when unknown -- the

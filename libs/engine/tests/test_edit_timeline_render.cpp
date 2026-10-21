@@ -1,6 +1,7 @@
 #include <exosnap/engine/audio_media_manifest.h>
 #include <exosnap/engine/backend_tuning.h>
 #include <exosnap/engine/codec_types.h>
+#include <exosnap/engine/edit_export_plan.h>
 #include <exosnap/engine/edit_player_engine.h>
 #include <exosnap/engine/edit_timeline.h>
 #include <exosnap/engine/edit_timeline_compositor.h>
@@ -26,6 +27,7 @@
 #include <cstring>
 #include <filesystem>
 #include <iostream>
+#include <memory>
 #include <ratio>
 #include <system_error>
 #include <vector>
@@ -533,4 +535,237 @@ TEST(EditTimelineReader, MappingChangeRetiresCursorWithoutLosingMeasurements) {
     EXPECT_EQ(reader.VideoReadStats().seeks, 2u);
     ASSERT_TRUE(reader.Open(snapshot, plan, error)) << error;
     EXPECT_EQ(reader.VideoReadStats().seeks, 0u);
+}
+TEST(EditTimelineReader, LiveCapabilityVerificationUpgradeRetainsVideoDecoder) {
+    const auto path = std::filesystem::path(__FILE__).parent_path() / "fixtures" / "reordered_h264.mp4";
+    const auto access = AcquireMediaReadCapability(path);
+    ASSERT_TRUE(access.succeeded());
+    const auto provisional = ProbeEditMedia(*access.value(), {}, {}, nullptr, false);
+    ASSERT_TRUE(provisional.error.empty()) << provisional.error;
+    ASSERT_FALSE(provisional.content_identity_valid);
+    TimelineRenderSnapshot snapshot;
+    snapshot.sources = {{1, path, provisional, {}, *access.value()}};
+    snapshot.timeline = {{{1, 1, 1, false, 0, 0, provisional.duration_us}}, {}, provisional.duration_us};
+    const EditRenderPlan plan{EditExportPath::Render, {}, {64, 64}, 30, 1};
+    EditTimelineReader reader;
+    std::string error;
+    ASSERT_TRUE(reader.Open(snapshot, plan, error)) << error;
+    TimelineVideoFrame first;
+    ASSERT_TRUE(reader.VideoAt(0, first, error)) << error;
+    ASSERT_EQ(reader.VideoDecoderOpens(), 1u);
+    const auto verified = ProbeEditMedia(*access.value());
+    ASSERT_TRUE(verified.error.empty()) << verified.error;
+    ASSERT_TRUE(verified.content_identity_valid);
+    const auto proof = VerifyMediaIdentity(*access.value(), verified.content_sha256);
+    ASSERT_TRUE(proof.succeeded());
+    snapshot.sources.front().metadata = verified;
+    snapshot.sources.front().identity_proof = *proof.value();
+    ASSERT_TRUE(reader.UpdateSnapshot(snapshot, plan, error)) << error;
+    TimelineVideoFrame updated;
+    ASSERT_TRUE(reader.VideoAt(0, updated, error)) << error;
+    EXPECT_EQ(reader.VideoDecoderOpens(), 1u);
+    EXPECT_EQ(first.layers.front().frame.backing_frame, updated.layers.front().frame.backing_frame);
+    snapshot.sources.front().metadata.content_sha256.front() ^= 1;
+    snapshot.sources.front().identity_proof.reset();
+    const bool installed = reader.UpdateSnapshot(snapshot, plan, error);
+    EXPECT_FALSE(installed && reader.VideoAt(0, updated, error));
+    EXPECT_FALSE(error.empty());
+}
+
+TEST(EditTimelineReader, AdjacentVideoSplitsReuseOneLiveSourceCursor) {
+    const auto path = std::filesystem::path(__FILE__).parent_path() / "fixtures" / "reordered_h264.mp4";
+    const auto access = AcquireMediaReadCapability(path);
+    ASSERT_TRUE(access.succeeded());
+    const auto metadata = ProbeEditMedia(*access.value());
+    ASSERT_TRUE(metadata.error.empty()) << metadata.error;
+    const auto split = metadata.duration_us / 2;
+    ASSERT_GT(split, 0);
+    TimelineRenderSnapshot snapshot;
+    snapshot.sources = {{1, path, metadata, {}, *access.value()}};
+    snapshot.timeline = {{{1, 1, 1, false, 0, 0, split}, {2, 1, 1, false, split, split, metadata.duration_us}},
+                         {},
+                         metadata.duration_us};
+    const EditRenderPlan plan{EditExportPath::Render, {}, {64, 64}, 30, 1};
+    EditTimelineReader reader;
+    std::string error;
+    ASSERT_TRUE(reader.Open(snapshot, plan, error)) << error;
+    TimelineVideoFrame frame;
+    ASSERT_TRUE(reader.VideoAt(0, frame, error)) << error;
+    ASSERT_TRUE(reader.VideoAt(split, frame, error)) << error;
+    EXPECT_EQ(reader.VideoDecoderOpens(), 1u);
+    EXPECT_LE(frame.layers.front().frame.pts_us, split);
+    EXPECT_GT(frame.layers.front().frame.pts_us, 0);
+}
+TEST(EditTimelineReader, LiveVideoSplitAndMoveRetainTheAdmittedSourceDecoder) {
+    const auto path = std::filesystem::path(__FILE__).parent_path() / "fixtures" / "reordered_h264.mp4";
+    const auto access = AcquireMediaReadCapability(path);
+    ASSERT_TRUE(access.succeeded());
+    const auto metadata = ProbeEditMedia(*access.value());
+    ASSERT_TRUE(metadata.error.empty()) << metadata.error;
+    TimelineRenderSnapshot snapshot;
+    snapshot.sources = {{1, path, metadata, {}, *access.value()}};
+    snapshot.timeline = {{{1, 1, 1, false, 0, 0, metadata.duration_us}}, {}, metadata.duration_us};
+    const EditRenderPlan plan{EditExportPath::Render, {}, {64, 64}, 30, 1};
+    EditTimelineReader reader;
+    std::string error;
+    ASSERT_TRUE(reader.Open(snapshot, plan, error)) << error;
+    TimelineVideoFrame frame;
+    ASSERT_TRUE(reader.VideoAt(0, frame, error)) << error;
+    const auto split = metadata.duration_us / 2;
+    snapshot.timeline.clips.front().source_out_us = split;
+    snapshot.timeline.clips.push_back({2, 1, 1, false, split, split, metadata.duration_us});
+    ASSERT_TRUE(reader.UpdateSnapshot(snapshot, plan, error)) << error;
+    ASSERT_TRUE(reader.VideoAt(0, frame, error)) << error;
+    ASSERT_TRUE(reader.VideoAt(split, frame, error)) << error;
+    EXPECT_EQ(reader.VideoDecoderOpens(), 1u);
+    snapshot.timeline.clips.back().start_us += 100000;
+    snapshot.timeline.duration_us += 100000;
+    ASSERT_TRUE(reader.UpdateSnapshot(snapshot, plan, error)) << error;
+    ASSERT_TRUE(reader.VideoAt(split + 100000, frame, error)) << error;
+    EXPECT_EQ(reader.VideoDecoderOpens(), 1u);
+    EXPECT_LE(frame.layers.front().frame.pts_us, split);
+    EXPECT_GT(frame.layers.front().frame.pts_us, 0);
+}
+TEST(EditTimelineReader, ExplicitVideoStreamSelectsActualContainerTrackAndRejectsWrongKind) {
+    wchar_t* configured = nullptr;
+    size_t length = 0;
+    ASSERT_EQ(_wdupenv_s(&configured, &length, L"EXOSNAP_EDIT_MULTIVIDEO_FIXTURE"), 0);
+    const std::unique_ptr<wchar_t, decltype(&std::free)> fixture(configured, &std::free);
+    if (!fixture)
+        GTEST_SKIP() << "No explicit multi-video fixture configured.";
+    const std::filesystem::path path(fixture.get());
+    const auto access = AcquireMediaReadCapability(path);
+    ASSERT_TRUE(access.succeeded());
+    const auto metadata = ProbeEditMedia(*access.value());
+    ASSERT_TRUE(metadata.error.empty()) << metadata.error;
+    std::vector<EditSourceStream> videos;
+    for (const auto& stream : metadata.streams)
+        if (stream.kind == TimelineStreamKind::Video)
+            videos.push_back(stream);
+    ASSERT_EQ(videos.size(), 2u);
+    ASSERT_NE(videos.front().width, videos.back().width);
+    EditPlayerEngine selected;
+    std::string error;
+    ASSERT_TRUE(selected.OpenVideoStream(*access.value(), videos.back().container_index, error)) << error;
+    EXPECT_EQ(selected.VideoWidth(), videos.back().width);
+    const auto decoded = selected.DecodeFrameAt(0);
+    ASSERT_TRUE(decoded);
+    EXPECT_EQ(decoded->width, videos.back().width);
+    EXPECT_GT(decoded->bgra[0], decoded->bgra[2]);
+    TimelineRenderSnapshot snapshot;
+    snapshot.sources = {{1, path, metadata, {}, *access.value()}};
+    snapshot.timeline = {{{1, 1, 1, false, 0, 0, metadata.duration_us}}, {}, metadata.duration_us};
+    snapshot.timeline.clips.front().stream =
+        TimelineStreamRef{1, {}, videos.back().container_index, TimelineStreamKind::Video};
+    const EditRenderPlan plan{EditExportPath::Render, {}, {64, 64}, 30, 1};
+    EditTimelineReader reader;
+    ASSERT_TRUE(reader.Open(snapshot, plan, error)) << error;
+    TimelineVideoFrame frame;
+    ASSERT_TRUE(reader.VideoAt(0, frame, error)) << error;
+    ASSERT_EQ(frame.layers.size(), 1u);
+    EXPECT_EQ(frame.layers.front().frame.width, static_cast<uint32_t>(videos.back().width));
+    snapshot.timeline.clips.front().stream->container_index = videos.front().container_index;
+    ASSERT_TRUE(reader.UpdateSnapshot(snapshot, plan, error)) << error;
+    ASSERT_TRUE(reader.VideoAt(0, frame, error)) << error;
+    EXPECT_EQ(frame.layers.front().frame.width, static_cast<uint32_t>(videos.front().width));
+    snapshot.timeline.clips.front().stream->kind = TimelineStreamKind::Audio;
+    ASSERT_TRUE(reader.UpdateSnapshot(snapshot, plan, error)) << error;
+    EXPECT_FALSE(reader.VideoAt(0, frame, error));
+    EXPECT_FALSE(error.empty());
+    EXPECT_FALSE(selected.OpenVideoStream(*access.value(), 999, error));
+    EXPECT_FALSE(selected.HasVideoStream());
+}
+TEST(EditTimelineReader, ChangedClipAssetCannotRetainAnotherAssetsDecoder) {
+    wchar_t* configured = nullptr;
+    size_t length = 0;
+    ASSERT_EQ(_wdupenv_s(&configured, &length, L"EXOSNAP_EDIT_MULTIVIDEO_FIXTURE"), 0);
+    const std::unique_ptr<wchar_t, decltype(&std::free)> fixture(configured, &std::free);
+    if (!fixture)
+        GTEST_SKIP() << "No explicit multi-video fixture configured.";
+    const std::filesystem::path first_path(fixture.get());
+    const auto second_path = first_path.parent_path() / "single-video-source.mkv";
+    const auto first_access = AcquireMediaReadCapability(first_path);
+    const auto second_access = AcquireMediaReadCapability(second_path);
+    ASSERT_TRUE(first_access.succeeded());
+    ASSERT_TRUE(second_access.succeeded());
+    const auto first = ProbeEditMedia(*first_access.value());
+    const auto second = ProbeEditMedia(*second_access.value());
+    ASSERT_TRUE(first.error.empty()) << first.error;
+    ASSERT_TRUE(second.error.empty()) << second.error;
+    ASSERT_NE(first.width, second.width);
+    TimelineRenderSnapshot snapshot;
+    snapshot.sources = {{1, first_path, first, {}, *first_access.value()},
+                        {2, second_path, second, {}, *second_access.value()}};
+    snapshot.timeline = {{{1, 1, 1, false, 0, 0, first.duration_us}, {2, 1, 2, false, 1000000, 0, first.duration_us}},
+                         {},
+                         1000000 + first.duration_us};
+    const EditRenderPlan plan{EditExportPath::Render, {}, {64, 64}, 30, 1};
+    EditTimelineReader reader;
+    std::string error;
+    ASSERT_TRUE(reader.Open(snapshot, plan, error)) << error;
+    TimelineVideoFrame frame;
+    ASSERT_TRUE(reader.VideoAt(0, frame, error)) << error;
+    ASSERT_EQ(frame.layers.front().frame.width, static_cast<uint32_t>(first.width));
+    snapshot.timeline.clips.front().asset = 2;
+    snapshot.timeline.clips.front().source_out_us = second.duration_us;
+    ASSERT_TRUE(reader.UpdateSnapshot(snapshot, plan, error)) << error;
+    ASSERT_TRUE(reader.VideoAt(0, frame, error)) << error;
+    EXPECT_EQ(frame.layers.front().frame.width, static_cast<uint32_t>(second.width));
+    EXPECT_EQ(reader.VideoDecoderOpens(), 2u);
+}
+TEST(EditTimelineReader, MultiVideoCopyCannotChooseAnotherStreamThanTheAuthoredClip) {
+    wchar_t* configured = nullptr;
+    size_t length = 0;
+    ASSERT_EQ(_wdupenv_s(&configured, &length, L"EXOSNAP_EDIT_MULTIVIDEO_FIXTURE"), 0);
+    const std::unique_ptr<wchar_t, decltype(&std::free)> fixture(configured, &std::free);
+    if (!fixture)
+        GTEST_SKIP() << "No explicit multi-video fixture configured.";
+    const auto path = std::filesystem::path(fixture.get()).parent_path() / "multi-video-copy-streams.mkv";
+    const auto access = AcquireMediaReadCapability(path);
+    ASSERT_TRUE(access.succeeded());
+    const auto metadata = ProbeEditMedia(*access.value());
+    ASSERT_TRUE(metadata.error.empty()) << metadata.error;
+    ASSERT_TRUE(metadata.render_color_supported) << metadata.render_color_reason;
+    std::vector<EditSourceStream> videos;
+    for (const auto& stream : metadata.streams)
+        if (stream.kind == TimelineStreamKind::Video)
+            videos.push_back(stream);
+    ASSERT_EQ(videos.size(), 2u);
+    TimelineRenderSnapshot snapshot;
+    const auto proof = VerifyMediaIdentity(*access.value(), metadata.content_sha256);
+    ASSERT_TRUE(proof.succeeded());
+    snapshot.sources = {{1, path, metadata, {}, *access.value(), *proof.value()}};
+    snapshot.timeline = {{{1, 1, 1, false, 0, 0, metadata.duration_us}}, {}, metadata.duration_us};
+    snapshot.timeline.clips.front().track = 1;
+    snapshot.timeline.tracks = {{1, false}};
+    EditExportIntent intent;
+    intent.span = EditExportSpan::EntireTimeline;
+    intent.destination = exosnap_test::UniqueTempPath("video-stream-output.mkv");
+    for (const auto& video : videos) {
+        snapshot.timeline.clips.front().stream =
+            TimelineStreamRef{1, {}, video.container_index, TimelineStreamKind::Video};
+        const auto facts = AssessEditExportFacts(snapshot, intent, true);
+        ASSERT_EQ(facts.copy_recipe.size(), 1u);
+        const auto copy = AssessTimelineExport(facts.copy_recipe, false);
+        ASSERT_EQ(copy.eligibility, TimelineExportEligibility::StreamCopy) << copy.reason;
+        ASSERT_TRUE(HasUsableCopiedVideoTimestamps(facts.copy_recipe));
+        EXPECT_FALSE(facts.video_copy_qualified) << "selected container stream " << video.container_index;
+        EXPECT_TRUE(facts.video_render_available);
+        const auto plan = PrepareEditExport(snapshot, intent, facts);
+        EXPECT_EQ(plan->video_path, EditVideoPath::Render);
+    }
+    const auto single_path = path.parent_path() / "single-video-source.mkv";
+    const auto single_access = AcquireMediaReadCapability(single_path);
+    ASSERT_TRUE(single_access.succeeded());
+    const auto single_metadata = ProbeEditMedia(*single_access.value());
+    ASSERT_TRUE(single_metadata.error.empty()) << single_metadata.error;
+    const auto single_proof = VerifyMediaIdentity(*single_access.value(), single_metadata.content_sha256);
+    ASSERT_TRUE(single_proof.succeeded());
+    snapshot.sources = {{1, single_path, single_metadata, {}, *single_access.value(), *single_proof.value()}};
+    snapshot.timeline.clips.front().source_out_us = single_metadata.duration_us;
+    snapshot.timeline.duration_us = single_metadata.duration_us;
+    snapshot.timeline.clips.front().stream = TimelineStreamRef{1, {}, 0, TimelineStreamKind::Video};
+    const auto single_facts = AssessEditExportFacts(snapshot, intent, true);
+    EXPECT_TRUE(single_facts.video_copy_qualified);
+    EXPECT_EQ(PrepareEditExport(snapshot, intent, single_facts)->video_path, EditVideoPath::Copy);
 }

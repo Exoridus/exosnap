@@ -13,6 +13,7 @@
 // decode on the single thumbnail worker (TimelineThumbnailSource). The broker
 // owns the first two tiers and the request queue; the worker drains it.
 
+#include <exosnap/engine/audio_media_manifest.h>
 #include <exosnap/engine/media_cache_store.h>
 
 #include <QImage>
@@ -88,8 +89,10 @@ class ThumbnailDiskCache {
     explicit ThumbnailDiskCache(std::filesystem::path root = {}, std::uint64_t budget_bytes = kDefaultBudgetBytes);
 
     [[nodiscard]] std::optional<QImage> Load(const std::string& key);
-    bool Store(const std::string& key, const QImage& image, std::int64_t decoded_pts_us);
+    bool Store(const std::string& key, const QImage& image, std::int64_t decoded_pts_us,
+               std::optional<std::uint64_t> expected_epoch = {});
     std::uint64_t Clear();
+    std::uint64_t Retire();
     [[nodiscard]] engine::MediaCacheStore& store() noexcept {
         return store_;
     }
@@ -107,6 +110,10 @@ struct ThumbnailSourceInfo {
     int video_height = 0;
     int fps_num = 0;
     int fps_den = 1;
+    std::shared_ptr<const engine::MediaReadCapability> access;
+    std::shared_ptr<const engine::VerifiedMediaIdentity> proof;
+    // A lease-scoped identity may serve provisional pixels from memory only.
+    bool persistent = true;
 };
 
 // Called exactly once per request. A null image means unavailable (unknown
@@ -117,11 +124,15 @@ struct ThumbnailBrokerStats {
     std::uint64_t memory_hits = 0;
     std::uint64_t disk_hits = 0;
     std::uint64_t decodes = 0;
+    std::size_t resident_bytes = 0;
+    std::size_t resident_peak_bytes = 0;
+    std::size_t pending_jobs = 0;
+    std::size_t clip_interests = 0;
 };
 
 class ThumbnailRequestBroker {
   public:
-    static constexpr std::size_t kDefaultMemoryBudgetBytes = 16u * 1024 * 1024;
+    static constexpr std::size_t kDefaultMemoryBudgetBytes = 32u * 1024 * 1024;
     static constexpr std::size_t kMaxPrefetchJobs = 128;
 
     struct Config {
@@ -140,6 +151,7 @@ class ThumbnailRequestBroker {
         int height = 0;
         bool disk_checked = false;
         std::uint64_t generation = 0;
+        int priority = 3;
     };
 
     ThumbnailRequestBroker();
@@ -150,6 +162,8 @@ class ThumbnailRequestBroker {
     ThumbnailRequestBroker& operator=(const ThumbnailRequestBroker&) = delete;
 
     void RegisterSource(const std::string& identity_hex, ThumbnailSourceInfo info);
+    void ReleaseSources();
+    void RemoveSource(const std::string& identity);
     [[nodiscard]] std::optional<ThumbnailSourceInfo> Source(const std::string& identity_hex) const;
     [[nodiscard]] std::optional<std::string> IdentityForPath(const std::filesystem::path& path) const;
     // Returns one registration snapshot. Source bytes still require open-time validation.
@@ -166,7 +180,27 @@ class ThumbnailRequestBroker {
     // prefetches of the same source; bounded by kMaxPrefetchJobs.
     void Prefetch(const std::string& identity_hex, const std::vector<std::int64_t>& times_us, int height);
 
+    struct InterestTile {
+        std::int64_t time_us = 0;
+        int height = 48;
+        int priority = 3;
+        std::int64_t center_distance_us = 0;
+    };
+    // Replaces one visible clip's interest without withdrawing split siblings.
+    // Priorities are 1 (boundaries/playhead) through 5 (idle backfill).
+    void ReplaceInterest(std::uint64_t clip_interest_id, const std::string& identity_hex,
+                         const std::vector<InterestTile>& tiles, std::uint64_t view_generation);
+    void RemoveInterest(std::uint64_t clip_interest_id);
+    struct VisibleCoverage {
+        int expected = 0;
+        int ready = 0;
+        int unavailable = 0;
+    };
+    // Counts unique current visible keys. Lookahead and retired sources are excluded.
+    [[nodiscard]] VisibleCoverage Coverage() const;
+
     void SetForegroundBusy(bool busy);
+    void SetAnalysisPressure(bool playback, bool exclusive);
     [[nodiscard]] bool ForegroundBusy() const;
 
     // Drops both cache tiers and retires pending requests as unavailable.
@@ -186,9 +220,10 @@ class ThumbnailRequestBroker {
     // held whenever HasWork() may have become true. Detaching (empty function)
     // completes every outstanding request with a null image and refuses new
     // ones, so no QML image response can wait forever.
-    void AttachWorker(std::function<void()> wake);
+    void AttachWorker(std::function<void()> wake, std::function<void()> memory_released = {});
     void DetachWorker();
     [[nodiscard]] bool HasWork() const;
+    [[nodiscard]] bool HasMemoryPressure() const;
     // Eligible visible requests precede prefetches. Foreground work withholds
     // decoding while cache lookups remain available.
     [[nodiscard]] std::optional<Job> TakeJob();
@@ -199,7 +234,8 @@ class ThumbnailRequestBroker {
     [[nodiscard]] std::uint64_t Generation() const;
 
     [[nodiscard]] std::optional<QImage> MemoryLookup(const std::string& key);
-    void MemoryInsert(const std::string& key, const QImage& image);
+    QImage MemoryInsert(const std::string& key, const QImage& image);
+    [[nodiscard]] std::size_t ResidentBytes() const;
     [[nodiscard]] ThumbnailDiskCache* Disk() noexcept {
         return disk_.get();
     }
@@ -217,6 +253,18 @@ class ThumbnailRequestBroker {
         Job job;
         std::vector<std::pair<std::uint64_t, ThumbnailCompletion>> waiters;
         bool prefetch = false;
+        bool in_flight = false;
+        std::uint64_t sequence = 0;
+        std::map<std::uint64_t, std::pair<int, std::int64_t>> interests;
+        std::size_t required_bytes = 0;
+    };
+    enum class VisibleResult { Pending, Ready, Unavailable };
+    struct Interest {
+        std::string identity;
+        std::uint64_t view_generation = 0;
+        std::vector<std::string> keys;
+        // Completed results survive relevance-only updates while the interest remains alive.
+        std::map<std::string, VisibleResult> visible_results;
     };
     struct MemoryEntry {
         QImage image;
@@ -228,6 +276,10 @@ class ThumbnailRequestBroker {
     std::vector<ThumbnailCompletion> RetireRequestsLocked();
     void Wake();
     std::optional<Job> TakeFrom(std::deque<std::string>& order);
+    void RemoveInterestLocked(std::uint64_t clip_interest_id);
+    [[nodiscard]] int Priority(const Pending& pending) const;
+    [[nodiscard]] std::int64_t CenterDistance(const Pending& pending) const;
+    [[nodiscard]] bool CanFitAfterEviction(std::size_t bytes) const;
 
     Config config_;
     SyntheticImages synthetic_images_;
@@ -239,9 +291,14 @@ class ThumbnailRequestBroker {
     mutable std::mutex mutex_;
     bool attached_ = false;
     bool busy_ = false;
+    bool exclusive_ = false;
     std::uint64_t generation_ = 0;
     std::mutex publication_mutex_;
     std::uint64_t next_ticket_ = 0;
+    std::uint64_t next_sequence_ = 0;
+    std::map<std::uint64_t, Interest> interests_;
+    std::map<std::pair<int, std::string>, std::uint64_t> fairness_;
+    std::map<std::string, std::int64_t> last_source_time_;
     std::unordered_map<std::string, ThumbnailSourceInfo> sources_;
     std::map<std::string, Pending> pending_;
     std::deque<std::string> visible_order_;
@@ -249,7 +306,9 @@ class ThumbnailRequestBroker {
     std::deque<std::string> decode_order_;
     std::unordered_map<std::uint64_t, std::string> tickets_;
 
-    std::mutex memory_mutex_;
+    mutable std::mutex memory_mutex_;
+    struct ResidentBudget;
+    std::shared_ptr<ResidentBudget> resident_;
     std::unordered_map<std::string, MemoryEntry> memory_;
     std::list<std::string> memory_lru_;
     std::size_t memory_bytes_ = 0;

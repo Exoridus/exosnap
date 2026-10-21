@@ -11,6 +11,7 @@
 #include <algorithm>
 #include <cmath>
 #include <cstring>
+#include <limits>
 #include <utility>
 
 namespace exosnap {
@@ -181,7 +182,8 @@ std::optional<QImage> ThumbnailDiskCache::Load(const std::string& key) {
     return image;
 }
 
-bool ThumbnailDiskCache::Store(const std::string& key, const QImage& image, std::int64_t decoded_pts_us) {
+bool ThumbnailDiskCache::Store(const std::string& key, const QImage& image, std::int64_t decoded_pts_us,
+                               std::optional<std::uint64_t> expected_epoch) {
     if (image.isNull() || image.height() > kMaxThumbnailHeight || image.width() > kMaxThumbnailWidth)
         return false;
     QByteArray png;
@@ -194,17 +196,41 @@ bool ThumbnailDiskCache::Store(const std::string& key, const QImage& image, std:
     PutU64(payload, static_cast<std::uint64_t>(decoded_pts_us));
     payload.insert(payload.end(), png.begin(), png.end());
     std::string error;
-    return store_.Publish(key, payload, error);
+    return store_.Publish(key, payload, error, expected_epoch);
 }
 
 std::uint64_t ThumbnailDiskCache::Clear() {
     return store_.Clear();
 }
 
+std::uint64_t ThumbnailDiskCache::Retire() {
+    return store_.Retire();
+}
+
+struct ThumbnailRequestBroker::ResidentBudget {
+    std::atomic<std::size_t> bytes{0};
+    std::atomic<std::size_t> peak{0};
+    std::mutex notify_mutex;
+    std::function<void()> notify;
+
+    struct ImageOwner {
+        std::shared_ptr<ResidentBudget> budget;
+        std::unique_ptr<std::uint8_t[]> pixels;
+        std::size_t bytes = 0;
+        ~ImageOwner() {
+            budget->bytes.fetch_sub(bytes, std::memory_order_relaxed);
+            std::lock_guard lock(budget->notify_mutex);
+            if (budget->notify)
+                budget->notify();
+        }
+    };
+};
+
 ThumbnailRequestBroker::ThumbnailRequestBroker() : ThumbnailRequestBroker(Config{}) {
 }
 
-ThumbnailRequestBroker::ThumbnailRequestBroker(Config config) : config_(std::move(config)) {
+ThumbnailRequestBroker::ThumbnailRequestBroker(Config config)
+    : config_(std::move(config)), resident_(std::make_shared<ResidentBudget>()) {
     if (!config_.equivalent_files)
         config_.equivalent_files = [](const auto& left, const auto& right) {
             std::error_code error;
@@ -219,10 +245,59 @@ ThumbnailRequestBroker::~ThumbnailRequestBroker() {
 }
 
 void ThumbnailRequestBroker::RegisterSource(const std::string& identity_hex, ThumbnailSourceInfo info) {
+    if (info.access) {
+        const bool valid_proof =
+            info.proof && info.proof->Source() == info.access && info.proof->Identity().sha256 == info.content_sha256;
+        if (info.proof && !valid_proof)
+            return;
+        info.persistent = valid_proof;
+    }
     std::lock_guard lock(mutex_);
     std::erase_if(sources_,
                   [&](const auto& entry) { return entry.first != identity_hex && entry.second.path == info.path; });
     sources_[identity_hex] = std::move(info);
+}
+
+void ThumbnailRequestBroker::ReleaseSources() {
+    std::vector<ThumbnailCompletion> retired;
+    {
+        std::lock_guard publication(publication_mutex_);
+        std::lock_guard lock(mutex_);
+        retired = RetireRequestsLocked();
+        sources_.clear();
+        fairness_.clear();
+        last_source_time_.clear();
+    }
+    for (auto& completion : retired)
+        completion({});
+}
+
+void ThumbnailRequestBroker::RemoveSource(const std::string& identity) {
+    std::vector<ThumbnailCompletion> retired;
+    {
+        std::lock_guard publication(publication_mutex_);
+        std::lock_guard lock(mutex_);
+        sources_.erase(identity);
+        std::erase_if(fairness_, [&](const auto& entry) { return entry.first.second == identity; });
+        last_source_time_.erase(identity);
+        for (auto it = pending_.begin(); it != pending_.end();) {
+            if (it->second.job.identity != identity) {
+                ++it;
+                continue;
+            }
+            for (auto& [ticket, completion] : it->second.waiters) {
+                tickets_.erase(ticket);
+                retired.push_back(std::move(completion));
+            }
+            std::erase(visible_order_, it->first);
+            std::erase(prefetch_order_, it->first);
+            std::erase(decode_order_, it->first);
+            it = pending_.erase(it);
+        }
+        std::erase_if(interests_, [&](const auto& entry) { return entry.second.identity == identity; });
+    }
+    for (auto& completion : retired)
+        completion({});
 }
 
 std::optional<ThumbnailSourceInfo> ThumbnailRequestBroker::Source(const std::string& identity_hex) const {
@@ -283,9 +358,7 @@ std::uint64_t ThumbnailRequestBroker::Request(const std::string& identity_hex, s
     }
     if (synthetic_images_) {
         const QImage image = synthetic_images_(info, time_us, height);
-        if (!image.isNull())
-            MemoryInsert(key, image);
-        completion(image);
+        completion(image.isNull() ? image : MemoryInsert(key, image));
         return 0;
     }
     std::uint64_t ticket = 0;
@@ -303,6 +376,7 @@ std::uint64_t ThumbnailRequestBroker::Request(const std::string& identity_hex, s
             pending.waiters.emplace_back(ticket, std::move(completion));
             if (inserted) {
                 pending.job = Job{key, identity_hex, time_us, height, false, generation_};
+                pending.sequence = ++next_sequence_;
                 visible_order_.push_back(key);
             } else if (pending.prefetch) {
                 pending.prefetch = false;
@@ -337,7 +411,7 @@ void ThumbnailRequestBroker::Cancel(std::uint64_t ticket) {
             return;
         completion = std::move(waiter->second);
         waiters.erase(waiter);
-        if (waiters.empty() && !pending->second.prefetch) {
+        if (waiters.empty() && !pending->second.prefetch && pending->second.interests.empty()) {
             const auto remove = [&key](std::deque<std::string>& order) {
                 const auto queued = std::find(order.begin(), order.end(), key);
                 if (queued == order.end())
@@ -383,7 +457,7 @@ void ThumbnailRequestBroker::Prefetch(const std::string& identity_hex, const std
         for (auto it = prefetch_order_.begin(); it != prefetch_order_.end();) {
             const auto pending = pending_.find(*it);
             if (pending != pending_.end() && pending->second.job.identity == identity_hex &&
-                pending->second.waiters.empty()) {
+                pending->second.waiters.empty() && pending->second.interests.empty()) {
                 pending_.erase(pending);
                 it = prefetch_order_.erase(it);
             } else {
@@ -396,6 +470,7 @@ void ThumbnailRequestBroker::Prefetch(const std::string& identity_hex, const std
             Pending pending;
             pending.job = Job{keys[i], identity_hex, times_us[i], height, false, generation_};
             pending.prefetch = true;
+            pending.sequence = ++next_sequence_;
             pending_.emplace(keys[i], std::move(pending));
             prefetch_order_.push_back(keys[i]);
         }
@@ -403,10 +478,127 @@ void ThumbnailRequestBroker::Prefetch(const std::string& identity_hex, const std
     Wake();
 }
 
-void ThumbnailRequestBroker::SetForegroundBusy(bool busy) {
+void ThumbnailRequestBroker::RemoveInterestLocked(std::uint64_t id) {
+    const auto old = interests_.find(id);
+    if (old == interests_.end())
+        return;
+    for (const auto& key : old->second.keys) {
+        const auto pending = pending_.find(key);
+        if (pending == pending_.end())
+            continue;
+        pending->second.interests.erase(id);
+        if (pending->second.interests.empty() && pending->second.waiters.empty() && !pending->second.prefetch &&
+            !pending->second.in_flight) {
+            std::erase(visible_order_, key);
+            std::erase(prefetch_order_, key);
+            std::erase(decode_order_, key);
+            pending_.erase(pending);
+        }
+    }
+    interests_.erase(old);
+}
+
+void ThumbnailRequestBroker::RemoveInterest(std::uint64_t id) {
+    std::lock_guard lock(mutex_);
+    RemoveInterestLocked(id);
+}
+
+void ThumbnailRequestBroker::ReplaceInterest(std::uint64_t id, const std::string& identity,
+                                             const std::vector<InterestTile>& tiles, std::uint64_t generation) {
+    if (!id)
+        return;
     {
         std::lock_guard lock(mutex_);
-        busy_ = busy;
+        const auto source = sources_.find(identity);
+        if (source == sources_.end() || !attached_ || (!interests_.contains(id) && interests_.size() >= 8192))
+            return;
+        std::map<std::string, VisibleResult> previous;
+        if (const auto old = interests_.find(id); old != interests_.end() && old->second.identity == identity)
+            previous = old->second.visible_results;
+        RemoveInterestLocked(id);
+        Interest interest{identity, generation, {}};
+        for (const auto& tile : tiles) {
+            if (interest.keys.size() >= kMaxTilesPerWindow || tile.time_us < 0 || tile.height <= 0 ||
+                tile.height > kMaxThumbnailHeight || tile.priority < 1 || tile.priority > 5)
+                continue;
+            const auto key = ThumbnailCacheKey(source->second.content_sha256, tile.time_us, tile.height);
+            interest.keys.push_back(key);
+            auto result = previous.contains(key) ? previous.at(key) : VisibleResult::Pending;
+            {
+                std::lock_guard memory_lock(memory_mutex_);
+                if (memory_.contains(key))
+                    result = VisibleResult::Ready;
+            }
+            if (tile.priority <= 3)
+                interest.visible_results[key] = result;
+            if (result != VisibleResult::Pending || synthetic_images_)
+                continue;
+            auto [found, inserted] = pending_.try_emplace(key);
+            auto& pending = found->second;
+            if (inserted) {
+                pending.job = Job{key, identity, tile.time_us, tile.height, false, generation_};
+                pending.sequence = ++next_sequence_;
+                visible_order_.push_back(key);
+            }
+            const auto relevance = std::pair{tile.priority, tile.center_distance_us};
+            const auto current = pending.interests.find(id);
+            if (current == pending.interests.end() || relevance < current->second)
+                pending.interests[id] = relevance;
+        }
+        interests_[id] = std::move(interest);
+    }
+    Wake();
+}
+
+ThumbnailRequestBroker::VisibleCoverage ThumbnailRequestBroker::Coverage() const {
+    std::lock_guard lock(mutex_);
+    std::map<std::string, VisibleResult> keys;
+    for (const auto& [id, interest] : interests_) {
+        if (!sources_.contains(interest.identity))
+            continue;
+        for (const auto& [key, state] : interest.visible_results) {
+            const auto found = keys.find(key);
+            if (found == keys.end() || state == VisibleResult::Ready ||
+                (state == VisibleResult::Pending && found->second == VisibleResult::Unavailable))
+                keys[key] = state;
+        }
+    }
+    VisibleCoverage coverage;
+    std::lock_guard memory_lock(memory_mutex_);
+    for (const auto& [key, state] : keys) {
+        ++coverage.expected;
+        if (state == VisibleResult::Ready || memory_.contains(key))
+            ++coverage.ready;
+        else if (state == VisibleResult::Unavailable)
+            ++coverage.unavailable;
+    }
+    return coverage;
+}
+
+int ThumbnailRequestBroker::Priority(const Pending& pending) const {
+    int priority = pending.waiters.empty() ? (pending.prefetch ? 4 : 5) : 3;
+    for (const auto& [id, value] : pending.interests)
+        priority = std::min(priority, value.first);
+    return priority;
+}
+
+std::int64_t ThumbnailRequestBroker::CenterDistance(const Pending& pending) const {
+    auto distance = (std::numeric_limits<std::int64_t>::max)();
+    for (const auto& [id, relevance] : pending.interests)
+        if (relevance.first == 2)
+            distance = std::min(distance, relevance.second);
+    return distance;
+}
+
+void ThumbnailRequestBroker::SetForegroundBusy(bool busy) {
+    SetAnalysisPressure(false, busy);
+}
+
+void ThumbnailRequestBroker::SetAnalysisPressure(bool playback, bool exclusive) {
+    {
+        std::lock_guard lock(mutex_);
+        busy_ = playback || exclusive;
+        exclusive_ = exclusive;
     }
     Wake();
 }
@@ -427,6 +619,7 @@ std::vector<ThumbnailCompletion> ThumbnailRequestBroker::RetireRequestsLocked() 
     prefetch_order_.clear();
     decode_order_.clear();
     tickets_.clear();
+    interests_.clear();
     return retired;
 }
 
@@ -441,7 +634,7 @@ std::uint64_t ThumbnailRequestBroker::Clear() {
             memory_lru_.clear();
             memory_bytes_ = 0;
         }
-        released = disk_ ? disk_->Clear() : 0;
+        released = disk_ ? disk_->Retire() : 0;
         // Requests arriving during storage clearing must retire with the old epoch.
         std::lock_guard lock(mutex_);
         retired = RetireRequestsLocked();
@@ -451,7 +644,11 @@ std::uint64_t ThumbnailRequestBroker::Clear() {
     return released;
 }
 
-void ThumbnailRequestBroker::AttachWorker(std::function<void()> wake) {
+void ThumbnailRequestBroker::AttachWorker(std::function<void()> wake, std::function<void()> memory_released) {
+    {
+        std::lock_guard notify_lock(resident_->notify_mutex);
+        resident_->notify = std::move(memory_released);
+    }
     {
         std::lock_guard wake_lock(wake_mutex_);
         wake_ = std::move(wake);
@@ -461,6 +658,10 @@ void ThumbnailRequestBroker::AttachWorker(std::function<void()> wake) {
 }
 
 void ThumbnailRequestBroker::DetachWorker() {
+    {
+        std::lock_guard notify_lock(resident_->notify_mutex);
+        resident_->notify = {};
+    }
     {
         // Waits for a wake in progress, so the worker may be destroyed after.
         std::lock_guard wake_lock(wake_mutex_);
@@ -479,7 +680,25 @@ void ThumbnailRequestBroker::DetachWorker() {
 
 bool ThumbnailRequestBroker::HasWork() const {
     std::lock_guard lock(mutex_);
-    return !visible_order_.empty() || !prefetch_order_.empty() || (!busy_ && !decode_order_.empty());
+    return std::any_of(pending_.begin(), pending_.end(), [this](const auto& entry) {
+        const auto& pending = entry.second;
+        return !pending.in_flight && CanFitAfterEviction(pending.required_bytes) &&
+               (!busy_ || !pending.job.disk_checked || (!exclusive_ && Priority(pending) <= 2));
+    });
+}
+
+bool ThumbnailRequestBroker::HasMemoryPressure() const {
+    std::lock_guard lock(mutex_);
+    return std::any_of(pending_.begin(), pending_.end(),
+                       [](const auto& entry) { return entry.second.required_bytes > 0; });
+}
+
+bool ThumbnailRequestBroker::CanFitAfterEviction(std::size_t bytes) const {
+    if (!bytes)
+        return true;
+    std::lock_guard memory_lock(memory_mutex_);
+    const auto pinned = resident_->bytes.load(std::memory_order_relaxed) - memory_bytes_;
+    return bytes <= config_.memory_budget_bytes && pinned <= config_.memory_budget_bytes - bytes;
 }
 
 std::optional<ThumbnailRequestBroker::Job> ThumbnailRequestBroker::TakeFrom(std::deque<std::string>& order) {
@@ -495,24 +714,44 @@ std::optional<ThumbnailRequestBroker::Job> ThumbnailRequestBroker::TakeFrom(std:
 
 std::optional<ThumbnailRequestBroker::Job> ThumbnailRequestBroker::TakeJob() {
     std::lock_guard lock(mutex_);
-    if (auto job = TakeFrom(visible_order_))
-        return job;
-    if (!busy_) {
-        const auto waited = std::find_if(decode_order_.begin(), decode_order_.end(), [this](const std::string& key) {
-            const auto pending = pending_.find(key);
-            return pending != pending_.end() && !pending->second.waiters.empty();
-        });
-        if (waited != decode_order_.end()) {
-            const auto key = *waited;
-            decode_order_.erase(waited);
-            return pending_.find(key)->second.job;
+    auto selected = pending_.end();
+    for (auto it = pending_.begin(); it != pending_.end(); ++it) {
+        const auto& pending = it->second;
+        const int priority = Priority(pending);
+        if (pending.in_flight || !CanFitAfterEviction(pending.required_bytes) ||
+            (busy_ && pending.job.disk_checked && (exclusive_ || priority > 2)))
+            continue;
+        if (selected == pending_.end()) {
+            selected = it;
+            continue;
         }
+        const auto& other = selected->second;
+        const int other_priority = Priority(other);
+        const auto debt = fairness_[{priority, pending.job.identity}];
+        const auto other_debt = fairness_[{other_priority, other.job.identity}];
+        const auto distance = priority == 2 ? CenterDistance(pending)
+                                            : std::abs(pending.job.time_us - last_source_time_[pending.job.identity]);
+        const auto other_distance = other_priority == 2
+                                        ? CenterDistance(other)
+                                        : std::abs(other.job.time_us - last_source_time_[other.job.identity]);
+        if (priority < other_priority ||
+            (priority == other_priority &&
+             (debt < other_debt || (debt == other_debt &&
+                                    (pending.job.identity == other.job.identity ? distance < other_distance
+                                                                                : pending.sequence < other.sequence)))))
+            selected = it;
     }
-    if (auto job = TakeFrom(prefetch_order_))
-        return job;
-    if (busy_)
+    if (selected == pending_.end())
         return std::nullopt;
-    return TakeFrom(decode_order_);
+    auto& pending = selected->second;
+    pending.in_flight = true;
+    pending.job.priority = Priority(pending);
+    ++fairness_[{pending.job.priority, pending.job.identity}];
+    last_source_time_[pending.job.identity] = pending.job.time_us;
+    std::erase(visible_order_, selected->first);
+    std::erase(prefetch_order_, selected->first);
+    std::erase(decode_order_, selected->first);
+    return pending.job;
 }
 void ThumbnailRequestBroker::DeferDecode(Job job) {
     {
@@ -523,6 +762,7 @@ void ThumbnailRequestBroker::DeferDecode(Job job) {
             return;
         job.disk_checked = true;
         pending->second.job = job;
+        pending->second.in_flight = false;
         decode_order_.push_back(job.key);
     }
     Wake();
@@ -537,14 +777,29 @@ void ThumbnailRequestBroker::Complete(const Job& job, const QImage& image) {
         if (job.generation == generation_) {
             accepted = image;
             if (!accepted.isNull())
-                MemoryInsert(job.key, accepted);
+                accepted = MemoryInsert(job.key, accepted);
         }
         const auto pending = pending_.find(job.key);
         if (pending != pending_.end() && pending->second.job.generation == job.generation) {
+            const auto bytes = static_cast<std::size_t>(image.width()) * static_cast<std::size_t>(image.height()) * 4;
+            if (job.generation == generation_ && accepted.isNull() && !image.isNull() &&
+                bytes <= config_.memory_budget_bytes &&
+                (!pending->second.waiters.empty() || !pending->second.interests.empty() || pending->second.prefetch)) {
+                pending->second.in_flight = false;
+                pending->second.required_bytes = bytes;
+                pending->second.job.disk_checked = false;
+                decode_order_.push_back(job.key);
+                return;
+            }
             for (auto& [ticket, completion] : pending->second.waiters) {
                 tickets_.erase(ticket);
                 waiters.push_back(std::move(completion));
             }
+            if (job.generation == generation_)
+                for (auto& [id, interest] : interests_)
+                    if (const auto result = interest.visible_results.find(job.key);
+                        result != interest.visible_results.end())
+                        result->second = accepted.isNull() ? VisibleResult::Unavailable : VisibleResult::Ready;
             pending_.erase(pending);
         }
     }
@@ -553,13 +808,17 @@ void ThumbnailRequestBroker::Complete(const Job& job, const QImage& image) {
 }
 
 bool ThumbnailRequestBroker::Publish(const Job& job, const QImage& image, std::int64_t decoded_pts_us) {
-    std::lock_guard publication(publication_mutex_);
+    std::uint64_t epoch = 0;
     {
+        std::lock_guard publication(publication_mutex_);
         std::lock_guard lock(mutex_);
-        if (job.generation != generation_)
+        const auto source = sources_.find(job.identity);
+        if (job.generation != generation_ || !disk_ || (!job.identity.empty() && source == sources_.end()) ||
+            (source != sources_.end() && !source->second.persistent))
             return false;
+        epoch = disk_->store().Epoch();
     }
-    return disk_ && disk_->Store(job.key, image, decoded_pts_us);
+    return disk_->Store(job.key, image, decoded_pts_us, epoch);
 }
 
 std::uint64_t ThumbnailRequestBroker::Generation() const {
@@ -577,26 +836,47 @@ std::optional<QImage> ThumbnailRequestBroker::MemoryLookup(const std::string& ke
     return found->second.image;
 }
 
-void ThumbnailRequestBroker::MemoryInsert(const std::string& key, const QImage& image) {
-    const auto bytes = static_cast<std::size_t>(std::max<qsizetype>(0, image.sizeInBytes()));
-    if (bytes == 0 || bytes > config_.memory_budget_bytes)
-        return;
+QImage ThumbnailRequestBroker::MemoryInsert(const std::string& key, const QImage& image) {
     std::lock_guard lock(memory_mutex_);
     if (const auto existing = memory_.find(key); existing != memory_.end()) {
-        memory_bytes_ -= existing->second.bytes;
-        memory_lru_.erase(existing->second.lru);
-        memory_.erase(existing);
+        memory_lru_.splice(memory_lru_.end(), memory_lru_, existing->second.lru);
+        return existing->second.image;
     }
-    while (!memory_lru_.empty() && memory_bytes_ + bytes > config_.memory_budget_bytes) {
+    const auto converted = image.convertToFormat(QImage::Format_ARGB32);
+    const auto bytes = static_cast<std::size_t>(std::max<qsizetype>(0, converted.sizeInBytes()));
+    if (bytes == 0 || bytes > config_.memory_budget_bytes)
+        return {};
+    while (!memory_lru_.empty() &&
+           resident_->bytes.load(std::memory_order_relaxed) > config_.memory_budget_bytes - bytes) {
         const auto oldest = memory_.find(memory_lru_.front());
         memory_bytes_ -= oldest->second.bytes;
         memory_.erase(oldest);
         memory_lru_.pop_front();
     }
+    if (resident_->bytes.load(std::memory_order_relaxed) > config_.memory_budget_bytes - bytes)
+        return {};
+    auto owner = std::make_unique<ResidentBudget::ImageOwner>();
+    owner->budget = resident_;
+    owner->pixels = std::make_unique<std::uint8_t[]>(bytes);
+    std::memcpy(owner->pixels.get(), converted.constBits(), bytes);
+    const auto current_bytes = resident_->bytes.fetch_add(bytes, std::memory_order_relaxed) + bytes;
+    resident_->peak.store(std::max(resident_->peak.load(std::memory_order_relaxed), current_bytes),
+                          std::memory_order_relaxed);
+    owner->bytes = bytes;
+    QImage retained(
+        owner->pixels.get(), converted.width(), converted.height(), converted.bytesPerLine(), converted.format(),
+        [](void* allocation) { delete static_cast<ResidentBudget::ImageOwner*>(allocation); }, owner.get());
+    if (retained.isNull())
+        return {};
+    owner.release();
     memory_lru_.push_back(key);
-    // Deep copy: a decoded tile may borrow the decoder's frame buffer.
-    memory_.emplace(key, MemoryEntry{image.copy(), std::prev(memory_lru_.end()), bytes});
+    memory_.emplace(key, MemoryEntry{retained, std::prev(memory_lru_.end()), bytes});
     memory_bytes_ += bytes;
+    return retained;
+}
+
+std::size_t ThumbnailRequestBroker::ResidentBytes() const {
+    return resident_->bytes.load(std::memory_order_relaxed);
 }
 
 void ThumbnailRequestBroker::CountDiskHit() {
@@ -608,7 +888,9 @@ void ThumbnailRequestBroker::CountDecode() {
 }
 
 ThumbnailBrokerStats ThumbnailRequestBroker::Stats() const {
-    return ThumbnailBrokerStats{memory_hits_.load(), disk_hits_.load(), decodes_.load()};
+    std::lock_guard lock(mutex_);
+    return ThumbnailBrokerStats{memory_hits_.load(),    disk_hits_.load(), decodes_.load(),  resident_->bytes.load(),
+                                resident_->peak.load(), pending_.size(),   interests_.size()};
 }
 
 void ThumbnailRequestBroker::Wake() {

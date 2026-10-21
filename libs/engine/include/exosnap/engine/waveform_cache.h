@@ -33,6 +33,8 @@
 
 namespace exosnap::engine {
 
+class MediaReadCapability;
+
 inline constexpr std::uint32_t kWaveformSchemaVersion = 1;
 inline constexpr std::uint32_t kWaveformSampleRate = 48000;
 inline constexpr std::uint32_t kWaveformChannels = 2;
@@ -153,7 +155,8 @@ inline constexpr std::size_t kWaveformBucketBytes = kWaveformChannels * 3 * size
 class WaveformStreamWriter {
   public:
     static std::shared_ptr<WaveformStreamWriter> Open(MediaCacheStore& store, std::string_view key,
-                                                      std::uint64_t sample_count, std::string& error);
+                                                      std::uint64_t sample_count, std::string& error,
+                                                      MediaCacheWriteFailure* failure = nullptr);
     ~WaveformStreamWriter();
     bool Append(const float* samples, std::size_t frames);
     bool Finish();
@@ -207,6 +210,10 @@ class WaveformAudioDecoder {
 [[nodiscard]] std::unique_ptr<WaveformAudioDecoder>
 OpenEditWaveformDecoder(const std::filesystem::path& path, std::uint32_t container_index, std::string& error,
                         const std::atomic<bool>* cancelled = nullptr,
+                        const std::array<std::uint8_t, 32>* expected_sha256 = nullptr);
+[[nodiscard]] std::unique_ptr<WaveformAudioDecoder>
+OpenEditWaveformDecoder(const std::shared_ptr<const MediaReadCapability>& source, std::uint32_t container_index,
+                        std::string& error, const std::atomic<bool>* cancelled = nullptr,
                         const std::array<std::uint8_t, 32>* expected_sha256 = nullptr);
 
 // Upper bound EditPlayerEngine accepts per range call.

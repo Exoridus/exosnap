@@ -441,6 +441,46 @@ Item {
         root.pendingProfileTarget = -1;
     }
 
+    function prepareRecordingPanelVisual(name: string): bool {
+        if (["sources", "sources-pinned", "profile-pinned", "panels-pinned"].indexOf(name) < 0)
+            return false;
+        const sources = name !== "profile-pinned";
+        const profile = name === "profile-pinned" || name === "panels-pinned";
+        if (!sources)
+            root.workspaceState.closeSources();
+        if (!profile)
+            root.workspaceState.closeProfile();
+        if (sources) {
+            root.workspaceState.openSources();
+            if (name === "sources" && root.workspaceState.sourceState === "Pinned")
+                root.workspaceState.toggleSourcePin();
+            else if (name !== "sources" && root.workspaceState.sourceState !== "Pinned"
+                     && root.workspaceState.canPinSources)
+                root.workspaceState.pinSources();
+        }
+        if (profile) {
+            root.workspaceState.openProfile();
+            if (root.workspaceState.profileState !== "Pinned" && root.workspaceState.canPinProfile)
+                root.workspaceState.pinProfile();
+        }
+        const sourceItem = sourcePanelLoader.item as Item;
+        const profileItem = profilePanelLoader.item as Item;
+        return (!sources || (root.workspaceState.sourceState !== "Closed" && sourcePanelLoader.status === Loader.Ready
+                            && sourceItem && sourceItem.visible && sourceItem.width > 0 && sourceItem.height > 0))
+                && (!profile || (root.workspaceState.profileState !== "Closed" && profilePanelLoader.status === Loader.Ready
+                                 && profileItem && profileItem.visible && profileItem.width > 0 && profileItem.height > 0));
+    }
+
+    function prepareProfileVisual(expanded: bool): bool {
+        root.workspaceState.openProfile();
+        const profile = profilePanelLoader.status === Loader.Ready
+                        ? profilePanelLoader.item as RecordingProfileInspector : null;
+        if (!profile || !profile.visible || profile.width <= 0 || profile.height <= 0)
+            return false;
+        profile.setAutomationDetailsExpanded(expanded);
+        return true;
+    }
+
     function revealProfileTarget(name: string): int {
         root.workspaceState.openProfile();
         const profile = profilePanelLoader.status === Loader.Ready

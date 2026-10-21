@@ -4,7 +4,12 @@
 // physical display/audio acceptance require separate tests.
 // Available only in harness-enabled builds.
 
+#include <QJsonObject>
 #include <QString>
+
+#include <algorithm>
+#include <cmath>
+#include <vector>
 
 class QCoreApplication;
 class QQuickWindow;
@@ -12,6 +17,27 @@ class QQuickWindow;
 namespace exosnap::quick {
 
 class QuickApplication;
+
+// Samples are finite millisecond durations. The p99 requires at least 1,000 observations.
+[[nodiscard]] inline QJsonObject AutoEditLatencySummary(std::vector<double> samples) {
+    std::sort(samples.begin(), samples.end());
+    QJsonObject result{{QStringLiteral("samples"), static_cast<int>(samples.size())},
+                       {QStringLiteral("unit"), QStringLiteral("ms")},
+                       {QStringLiteral("method"), QStringLiteral("nearest-rank")},
+                       {QStringLiteral("minimumP99Samples"), 1000},
+                       {QStringLiteral("p99Status"),
+                        samples.size() >= 1000 ? QStringLiteral("available") : QStringLiteral("insufficient_samples")}};
+    if (!samples.empty()) {
+        result.insert(QStringLiteral("maximum"), samples.back());
+        for (const auto p : {50, 95, 99}) {
+            if (p == 99 && samples.size() < 1000)
+                continue;
+            const auto rank = static_cast<size_t>(std::ceil(p * samples.size() / 100.0));
+            result.insert(QStringLiteral("p%1").arg(p), samples.at(rank - 1));
+        }
+    }
+    return result;
+}
 
 struct AutoEditOptions {
     bool isolated_qualification = false;

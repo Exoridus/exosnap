@@ -1,5 +1,6 @@
 #include "exosnap/engine/edit_player_engine.h"
 #include <array>
+#include <capability/translatable.h>
 #include <cerrno>
 #include <cstdint>
 #include <cstdlib>
@@ -84,9 +85,14 @@ void LogWarn(const char* msg) {
     logging::log(logging::LogLevel::Warn, kLogComponent, msg);
 }
 
-bool SameUnverifiedAsset(const UnverifiedAudioAssetBinding& frozen, const UnverifiedAudioAssetBinding& current) {
+bool SameUnverifiedAsset(const UnverifiedAudioAssetBinding& frozen, const UnverifiedAudioAssetBinding& current,
+                         bool canonical_live_lease = false) {
+    const std::array<uint8_t, 32> pending{};
+    const bool provisional = frozen.sha256 == pending || current.sha256 == pending;
     if (frozen.file_identity != current.file_identity || frozen.file_size != current.file_size ||
-        frozen.sha256 != current.sha256 || frozen.actual_tracks.size() != current.actual_tracks.size())
+        (provisional && !canonical_live_lease) ||
+        (frozen.sha256 != current.sha256 && !(provisional && canonical_live_lease)) ||
+        frozen.actual_tracks.size() != current.actual_tracks.size())
         return false;
     std::set<AudioTrackId> ids;
     for (size_t index = 0; index < frozen.actual_tracks.size(); ++index) {
@@ -115,6 +121,17 @@ struct InputCtxGuard {
     InputCtxGuard() = default;
     InputCtxGuard(const InputCtxGuard&) = delete;
     InputCtxGuard& operator=(const InputCtxGuard&) = delete;
+};
+
+struct ScopedMediaCancellation {
+    std::atomic<const std::atomic<bool>*>& destination;
+    explicit ScopedMediaCancellation(std::atomic<const std::atomic<bool>*>& target, const std::atomic<bool>* token)
+        : destination(target) {
+        destination.store(token, std::memory_order_relaxed);
+    }
+    ~ScopedMediaCancellation() {
+        destination.store(nullptr, std::memory_order_relaxed);
+    }
 };
 
 // RAII wrapper for one AVCodecContext*.
@@ -547,8 +564,10 @@ struct EditPlayerEngine::Impl {
     uint64_t cursor_generation = 0;
     bool cursor_valid = false;
     bool cursor_draining = false;
-    std::atomic<const std::atomic<bool>*> opening_cancelled{nullptr};
+    std::atomic<const std::atomic<bool>*> io_cancelled{nullptr};
     std::shared_ptr<void> media_read_lease;
+    std::shared_ptr<const MediaReadCapability> source_access;
+    std::unique_ptr<LeasedMediaAvio> leased_input;
     InputCtxGuard fmt;
     CodecCtxGuard video_codec;
     std::vector<std::unique_ptr<AudioTrack>> audio_tracks;
@@ -673,26 +692,31 @@ bool EditPlayerEngine::Open(const std::filesystem::path& path, std::string& out_
 }
 
 bool EditPlayerEngine::OpenSource(const std::filesystem::path& path, std::string& out_error,
-                                  const std::atomic<bool>* cancelled, std::optional<uint32_t> audio_stream) {
+                                  const std::atomic<bool>* cancelled, std::optional<uint32_t> audio_stream,
+                                  const std::shared_ptr<const MediaReadCapability>& source,
+                                  std::optional<uint32_t> video_stream) {
     Close();
     struct ResetOpeningCancellation {
         std::atomic<const std::atomic<bool>*>& token;
         ~ResetOpeningCancellation() {
             token.store(nullptr, std::memory_order_relaxed);
         }
-    } reset{impl_->opening_cancelled};
-    impl_->opening_cancelled.store(cancelled, std::memory_order_relaxed);
+    } reset{impl_->io_cancelled};
+    impl_->io_cancelled.store(cancelled, std::memory_order_relaxed);
     if (cancelled && cancelled->load(std::memory_order_relaxed)) {
         out_error = "Media opening cancelled.";
         return false;
     }
 
-    auto lease = AcquireMediaReadLease(path);
-    if (!lease.succeeded()) {
-        out_error = "Cannot retain an immutable media read identity.";
-        return false;
+    if (!source) {
+        auto lease = AcquireMediaReadLease(path);
+        if (!lease.succeeded()) {
+            out_error = "Cannot retain an immutable media read identity.";
+            return false;
+        }
+        impl_->media_read_lease = std::move(*lease.value());
     }
-    impl_->media_read_lease = std::move(*lease.value());
+    impl_->source_access = source;
     impl_->source_path = path;
     impl_->audio_only = audio_stream.has_value();
 
@@ -705,14 +729,28 @@ bool EditPlayerEngine::OpenSource(const std::filesystem::path& path, std::string
         return false;
     }
     // Protocol I/O retains a copy of this callback after Open returns.
-    // The owned indirection is cleared before the borrowed opening token expires.
+    // The owned indirection is cleared before each borrowed operation token expires.
     fmt_ctx->interrupt_callback = {[](void* opaque) {
-                                       const auto* token = static_cast<Impl*>(opaque)->opening_cancelled.load(
-                                           std::memory_order_relaxed);
+                                       const auto* token =
+                                           static_cast<Impl*>(opaque)->io_cancelled.load(std::memory_order_relaxed);
                                        return token && token->load(std::memory_order_relaxed) ? 1 : 0;
                                    },
                                    impl_.get()};
-    int ret = avformat_open_input(&fmt_ctx, path_str.c_str(), nullptr, nullptr);
+    if (source) {
+        impl_->leased_input = LeasedMediaAvio::Open(source, [impl = impl_.get()] {
+            const auto* token = impl->io_cancelled.load(std::memory_order_relaxed);
+            return !token || !token->load(std::memory_order_relaxed);
+        });
+        if (!impl_->leased_input) {
+            avformat_free_context(fmt_ctx);
+            out_error = "Cannot open admitted media input.";
+            Close();
+            return false;
+        }
+        fmt_ctx->pb = impl_->leased_input->context();
+        fmt_ctx->flags |= AVFMT_FLAG_CUSTOM_IO;
+    }
+    int ret = avformat_open_input(&fmt_ctx, source ? nullptr : path_str.c_str(), nullptr, nullptr);
     if (ret < 0) {
         out_error = std::string("avformat_open_input failed: ") + av_err2str(ret);
         Close();
@@ -733,12 +771,19 @@ bool EditPlayerEngine::OpenSource(const std::filesystem::path& path, std::string
         Close();
         return false;
     }
+    if (video_stream && (*video_stream >= fmt_ctx->nb_streams ||
+                         fmt_ctx->streams[*video_stream]->codecpar->codec_type != AVMEDIA_TYPE_VIDEO)) {
+        out_error = EXOSNAP_TRANSLATABLE("EditRender", "The selected container stream is not video.");
+        Close();
+        return false;
+    }
     if (!audio_stream) {
         // The best video stream (av_find_best_stream picks the most likely primary
         // stream of a type -- correct for our own single-video-track recordings).
         // Audio descriptions enumerate actual streams even when provenance is
         // unavailable. Monitoring is selected separately after identity validation.
-        const int video_idx = av_find_best_stream(fmt_ctx, AVMEDIA_TYPE_VIDEO, -1, -1, nullptr, 0);
+        const int video_idx = video_stream ? static_cast<int>(*video_stream)
+                                           : av_find_best_stream(fmt_ctx, AVMEDIA_TYPE_VIDEO, -1, -1, nullptr, 0);
 
         if (video_idx < 0) {
             out_error = "no decodable video stream found";
@@ -815,14 +860,15 @@ bool EditPlayerEngine::OpenSource(const std::filesystem::path& path, std::string
                                   : nullptr;
     }
 
-    impl_->audio_metadata = ReadAudioMediaMetadata(path, fmt_ctx, {}, {}, cancelled);
+    impl_->audio_metadata = ReadAudioMediaMetadata(path, fmt_ctx, {}, {}, cancelled, source, !source);
     if (cancelled && cancelled->load(std::memory_order_relaxed)) {
         out_error = "Media opening cancelled.";
         Close();
         return false;
     }
     impl_->monitor_selection.media_id = impl_->audio_metadata.selection_media_id;
-    if (impl_->audio_metadata.manifest && !impl_->audio_metadata.monitoring_confirmation_required)
+    if (impl_->audio_metadata.status == AudioMetadataStatus::Verified && impl_->audio_metadata.manifest &&
+        !impl_->audio_metadata.monitoring_confirmation_required)
         for (const auto& id : impl_->audio_metadata.manifest->default_monitor_track_ids)
             impl_->monitor_selection.tracks.push_back({id, 1.0f, false});
     size_t audio_ordinal = 0;
@@ -882,9 +928,42 @@ bool EditPlayerEngine::OpenSource(const std::filesystem::path& path, std::string
     return true;
 }
 
+bool EditPlayerEngine::OpenVideoStream(const std::filesystem::path& path, uint32_t container_index,
+                                       std::string& out_error, const std::atomic<bool>* cancelled) {
+    return OpenSource(path, out_error, cancelled, {}, {}, container_index);
+}
+
+bool EditPlayerEngine::OpenVideoStream(const std::shared_ptr<const MediaReadCapability>& source,
+                                       uint32_t container_index, std::string& out_error,
+                                       const std::atomic<bool>* cancelled) {
+    if (!source) {
+        Close();
+        out_error = "No admitted media source.";
+        return false;
+    }
+    return OpenSource(source->Path(), out_error, cancelled, {}, source, container_index);
+}
 bool EditPlayerEngine::OpenAudioStream(const std::filesystem::path& path, uint32_t container_index,
                                        std::string& out_error, const std::atomic<bool>* cancelled) {
     return OpenSource(path, out_error, cancelled, container_index);
+}
+
+bool EditPlayerEngine::Open(const std::shared_ptr<const MediaReadCapability>& source, std::string& out_error,
+                            const std::atomic<bool>* cancelled) {
+    if (!source) {
+        out_error = "No admitted media source.";
+        return false;
+    }
+    return OpenSource(source->Path(), out_error, cancelled, std::nullopt, source);
+}
+bool EditPlayerEngine::OpenAudioStream(const std::shared_ptr<const MediaReadCapability>& source,
+                                       uint32_t container_index, std::string& out_error,
+                                       const std::atomic<bool>* cancelled) {
+    if (!source) {
+        out_error = "No admitted media source.";
+        return false;
+    }
+    return OpenSource(source->Path(), out_error, cancelled, container_index, source);
 }
 
 bool EditPlayerEngine::DecodeAudioStreamRange(uint32_t container_index, int64_t first_sample, uint32_t frame_count,
@@ -893,7 +972,13 @@ bool EditPlayerEngine::DecodeAudioStreamRange(uint32_t container_index, int64_t 
 }
 
 bool EditPlayerEngine::ReadAudioStreamSequential(uint32_t container_index, int64_t first_sample, uint32_t frame_count,
-                                                 std::vector<float>& output, std::string& error) {
+                                                 std::vector<float>& output, std::string& error,
+                                                 const std::atomic<bool>* cancelled) {
+    ScopedMediaCancellation cancellation(impl_->io_cancelled, cancelled);
+    if (cancelled && cancelled->load(std::memory_order_relaxed)) {
+        error = "Source audio read cancelled.";
+        return false;
+    }
     if (!impl_->audio_only) {
         impl_->audio_decoded_coverage.clear();
         error = "Continuous analysis requires an audio-only source.";
@@ -903,11 +988,16 @@ bool EditPlayerEngine::ReadAudioStreamSequential(uint32_t container_index, int64
 }
 bool EditPlayerEngine::ValidateContentIdentity(const std::array<uint8_t, 32>& expected, std::string& error,
                                                const std::atomic<bool>* cancelled) const {
-    if (!impl_->IsOpen() || !impl_->media_read_lease) {
+    if (!impl_->IsOpen() || (!impl_->media_read_lease && !impl_->source_access)) {
         error = "The media source is not open.";
         return false;
     }
-    const auto identity = HashFinalMedia(impl_->source_path, {}, {}, cancelled);
+    const auto identity = impl_->source_access ? [&]() -> Outcome<MediaIdentitySnapshot> {
+        const auto proof = VerifyMediaIdentity(impl_->source_access, expected, {}, {}, cancelled);
+        return proof.succeeded() ? Outcome<MediaIdentitySnapshot>{(*proof.value())->Identity()}
+                                 : Outcome<MediaIdentitySnapshot>{*proof.error()};
+    }()
+        : HashFinalMedia(impl_->source_path, {}, {}, cancelled, MediaHashCause::DecoderValidation);
     if (!identity.succeeded()) {
         error = identity.error()->context;
         return false;
@@ -951,6 +1041,8 @@ void EditPlayerEngine::Close() {
         avcodec_free_context(&impl_->video_codec.ctx);
     if (impl_->fmt.ctx)
         avformat_close_input(&impl_->fmt.ctx);
+    impl_->leased_input.reset();
+    impl_->source_access.reset();
     impl_->media_read_lease.reset();
     impl_->audio_metadata = {};
     impl_->monitor_selection = {};
@@ -1257,13 +1349,15 @@ std::optional<RawDecodedVideoFrame>
 ReadForwardToTargetRaw(AVFormatContext* fmt_ctx, AVCodecContext* vctx, int video_stream_idx, int64_t target_us,
                        MatrixCoefficients matrix, ColorRange range, const P010PqMonitorConverter* pq, bool& draining,
                        std::optional<RawDecodedVideoFrame>& selected, std::optional<RawDecodedVideoFrame>& lookahead,
-                       VideoReadMeasurements& measurements) {
+                       VideoReadMeasurements& measurements, const std::atomic<bool>* cancelled) {
     PacketGuard pkt(av_packet_alloc());
     FrameGuard frame(av_frame_alloc());
     if (!pkt.pkt || !frame.frame)
         return std::nullopt;
     const AVRational tb = fmt_ctx->streams[video_stream_idx]->time_base;
     for (;;) {
+        if (cancelled && cancelled->load(std::memory_order_relaxed))
+            return std::nullopt;
         const int received = avcodec_receive_frame(vctx, frame.frame);
         if (received >= 0) {
             ++measurements.decoded;
@@ -1424,7 +1518,11 @@ std::optional<RawDecodedVideoFrame> EditPlayerEngine::DecodeFrameAtRaw(int64_t t
 }
 
 std::optional<RawDecodedVideoFrame> EditPlayerEngine::ReadFrameAtRaw(int64_t target_us, VideoReadMode mode,
-                                                                     uint64_t generation) {
+                                                                     uint64_t generation,
+                                                                     const std::atomic<bool>* cancelled) {
+    ScopedMediaCancellation cancellation(impl_->io_cancelled, cancelled);
+    if (cancelled && cancelled->load(std::memory_order_relaxed))
+        return std::nullopt;
     if (!impl_->IsOpen() || impl_->video_stream_idx < 0)
         return std::nullopt;
     target_us = std::max<int64_t>(target_us, 0);
@@ -1472,7 +1570,7 @@ std::optional<RawDecodedVideoFrame> EditPlayerEngine::ReadFrameAtRaw(int64_t tar
     }
     auto frame = ReadForwardToTargetRaw(format, codec, impl_->video_stream_idx, select_us, impl_->matrix, impl_->range,
                                         impl_->pq_converter.get(), impl_->cursor_draining, impl_->cursor_frame,
-                                        impl_->cursor_lookahead, impl_->video_read_measurements);
+                                        impl_->cursor_lookahead, impl_->video_read_measurements, cancelled);
     if (frame)
         ++impl_->video_read_measurements.selected;
     else
@@ -1491,8 +1589,42 @@ AudioMetadataReadResult EditPlayerEngine::AudioMetadata() const {
     std::lock_guard lock(impl_->playback_mutex);
     return impl_->audio_metadata;
 }
-bool EditPlayerEngine::SetMonitorSelection(MonitorSelectionSnapshot selection, std::string& error) {
+bool EditPlayerEngine::SetMonitorSelection(MonitorSelectionSnapshot selection, std::string& error,
+                                           const std::atomic<bool>* cancelled) {
     std::lock_guard lock(impl_->playback_mutex);
+    if (cancelled && cancelled->load(std::memory_order_relaxed)) {
+        error = "Audio selection cancelled.";
+        return false;
+    }
+    const auto provisional = CachedMediaAudioMetadata(impl_->source_access, false);
+    auto verified = CachedMediaAudioMetadata(impl_->source_access, true);
+    if (const auto current = verified ? verified : provisional)
+        impl_->audio_metadata = *current;
+    const auto adopted = CachedAdoptedMediaAudioMetadata(impl_->source_access);
+    const bool uses_adoption = adopted && ((selection.unverified_asset_binding &&
+                                            adopted->unverified_asset_binding == selection.unverified_asset_binding) ||
+                                           (adopted->manifest && selection.media_id == adopted->selection_media_id &&
+                                            ValidateMonitorSelection(selection, *adopted->manifest).succeeded()));
+    if (uses_adoption)
+        impl_->audio_metadata = *adopted;
+    if (!impl_->audio_metadata.manifest && selection.unverified_asset_binding && impl_->source_access) {
+        const auto& frozen = *selection.unverified_asset_binding;
+        const auto& current = impl_->audio_metadata.unverified_asset_binding;
+        const std::array<uint8_t, 32> pending{};
+        if (current && current->sha256 == pending && frozen.sha256 != pending &&
+            SameUnverifiedAsset(frozen, *current, true)) {
+            // An external confirmed binding carries an expected digest, not proof
+            // that a newly admitted lease has those bytes.
+            const auto proof = VerifyMediaIdentity(impl_->source_access, frozen.sha256, {}, {}, cancelled);
+            if (!proof.succeeded()) {
+                error = proof.error()->context;
+                return false;
+            }
+            impl_->audio_metadata = ReadAudioMediaMetadata(impl_->source_path, impl_->fmt.ctx, {}, {}, cancelled,
+                                                           impl_->source_access, true);
+            verified = CachedMediaAudioMetadata(impl_->source_access, true);
+        }
+    }
     if (!impl_->audio_metadata.manifest && selection.unverified_asset_binding) {
         const auto& current = impl_->audio_metadata.unverified_asset_binding;
         const auto& frozen = *selection.unverified_asset_binding;
@@ -1500,7 +1632,15 @@ bool EditPlayerEngine::SetMonitorSelection(MonitorSelectionSnapshot selection, s
             error = "Legacy audio tracks require explicit monitoring confirmation.";
             return false;
         }
-        if (!current || !SameUnverifiedAsset(frozen, *current)) {
+        const auto canonical = [&](const auto& binding) {
+            return binding && ((provisional && provisional->unverified_asset_binding == binding) ||
+                               (verified && verified->unverified_asset_binding == binding) ||
+                               (adopted && adopted->unverified_asset_binding == binding));
+        };
+        // Pending digests carry authority only through registry-owned bindings on this live lease.
+        const bool same_live_lease =
+            impl_->source_access && canonical(selection.unverified_asset_binding) && canonical(current);
+        if (!current || !SameUnverifiedAsset(frozen, *current, same_live_lease)) {
             error = "Confirmed legacy selection does not match the current media bytes and track layout.";
             return false;
         }
@@ -1516,6 +1656,19 @@ bool EditPlayerEngine::SetMonitorSelection(MonitorSelectionSnapshot selection, s
         }
         selection.media_id = impl_->audio_metadata.selection_media_id;
         selection.unverified_asset_binding = current;
+    }
+    const auto& applied = impl_->monitor_selection;
+    const bool identical =
+        selection.media_id == applied.media_id && selection.revision == applied.revision &&
+        selection.overlap_confirmed == applied.overlap_confirmed && selection.tracks.size() == applied.tracks.size() &&
+        std::equal(selection.tracks.begin(), selection.tracks.end(), applied.tracks.begin(),
+                   [](const auto& a, const auto& b) {
+                       return a.track_id == b.track_id && a.gain_linear == b.gain_linear && a.muted == b.muted;
+                   });
+    if (impl_->IsOpen() && !impl_->playback_running.load() && selection.revision.value != 0 && identical) {
+        impl_->audio_metadata.monitoring_confirmation_required = false;
+        error.clear();
+        return true;
     }
     if (!impl_->IsOpen() || impl_->playback_running.load() ||
         selection.media_id != impl_->audio_metadata.selection_media_id || selection.revision.value == 0 ||
@@ -1544,6 +1697,16 @@ bool EditPlayerEngine::SetMonitorSelection(MonitorSelectionSnapshot selection, s
             return false;
         }
     }
+    if (uses_adoption) {
+        for (size_t index = 0; index < impl_->audio_track_descriptions.size() && index < adopted->actual_tracks.size();
+             ++index) {
+            auto& description = impl_->audio_track_descriptions[index];
+            const auto& actual = adopted->actual_tracks[index];
+            description.track_id = actual.track_id;
+            description.role = actual.role;
+            description.name = actual.name;
+        }
+    }
     impl_->monitor_selection = std::move(selection);
     impl_->audio_metadata.monitoring_confirmation_required = false;
     error.clear();
@@ -1551,7 +1714,12 @@ bool EditPlayerEngine::SetMonitorSelection(MonitorSelectionSnapshot selection, s
 }
 
 bool EditPlayerEngine::DecodeAudioRange(int64_t first_sample, uint32_t frame_count, std::vector<float>& output,
-                                        std::string& error) {
+                                        std::string& error, const std::atomic<bool>* cancelled) {
+    ScopedMediaCancellation cancellation(impl_->io_cancelled, cancelled);
+    if (cancelled && cancelled->load(std::memory_order_relaxed)) {
+        error = "Source audio read cancelled.";
+        return false;
+    }
     return impl_->DecodeAudioRange(std::nullopt, first_sample, frame_count, output, error);
 }
 

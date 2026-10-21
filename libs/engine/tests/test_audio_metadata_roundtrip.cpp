@@ -13,8 +13,12 @@
 #include <exosnap/engine/mp4_remuxer.h>
 #include <exosnap/engine/packet_types.h>
 #include <exosnap/engine/recording_media_types.h>
+#include <exosnap/engine/waveform_cache.h>
+#include <windows.h>
 
 #include <algorithm>
+#include <atomic>
+#include <barrier>
 #include <cerrno>
 #include <cmath>
 #include <cstdint>
@@ -28,8 +32,10 @@
 #include <nlohmann/json.hpp>
 #include <nlohmann/json_fwd.hpp>
 #include <optional>
+#include <stdexcept>
 #include <string>
 #include <system_error>
+#include <thread>
 #include <utility>
 #include <vector>
 
@@ -864,5 +870,600 @@ TEST_F(AudioMetadataRoundtrip, LegacyAssetBindingSafelyReusesConfirmedSelectionA
     EXPECT_FALSE(player.SetMonitorSelection(selection, error));
 }
 
+TEST_F(AudioMetadataRoundtrip, LiveCapabilitiesShareOneVerificationAcrossConcurrentConsumers) {
+    WriteFixture(false);
+    const auto first = AcquireMediaReadCapability(path);
+    const auto second = AcquireMediaReadCapability(path);
+    ASSERT_TRUE(first.succeeded());
+    ASSERT_TRUE(second.succeeded());
+    EXPECT_EQ(*first.value(), *second.value());
+    std::vector<std::thread> consumers;
+    std::atomic<int> successes{0};
+    for (int index = 0; index < 8; ++index)
+        consumers.emplace_back([&] {
+            if (VerifyMediaIdentity(*first.value()).succeeded())
+                ++successes;
+        });
+    for (auto& consumer : consumers)
+        consumer.join();
+    EXPECT_EQ(successes.load(), 8);
+    const auto measurements = (*first.value())->Measurements();
+    EXPECT_EQ(measurements.hash_completions, 1);
+    EXPECT_EQ(measurements.hash_bytes, std::filesystem::file_size(path));
+}
+
+TEST_F(AudioMetadataRoundtrip, VerifiedCapabilityRejectsIndependentExpectedDigestMismatch) {
+    WriteFixture(false);
+    const auto access = AcquireMediaReadCapability(path);
+    ASSERT_TRUE(access.succeeded());
+    const auto observed = VerifyMediaIdentity(*access.value());
+    ASSERT_TRUE(observed.succeeded());
+    auto expected = (*observed.value())->Identity().sha256;
+    expected[0] ^= 1;
+    EXPECT_FALSE(VerifyMediaIdentity(*access.value(), expected).succeeded());
+    EXPECT_TRUE(VerifyMediaIdentity(*access.value(), (*observed.value())->Identity().sha256).succeeded());
+    EXPECT_EQ((*access.value())->Measurements().hash_completions, 1);
+}
+
+TEST_F(AudioMetadataRoundtrip, ExplicitOffsetReadersNeverShareASeekPosition) {
+    WriteFixture(false);
+    const auto access = AcquireMediaReadCapability(path);
+    ASSERT_TRUE(access.succeeded());
+    std::ifstream input(path, std::ios::binary);
+    const std::vector<uint8_t> expected((std::istreambuf_iterator<char>(input)), {});
+    ASSERT_GT(expected.size(), 64);
+    std::atomic<int> mismatches{0};
+    std::vector<std::thread> readers;
+    for (int index = 0; index < 4; ++index)
+        readers.emplace_back([&, index] {
+            std::array<uint8_t, 32> bytes{};
+            for (int read = 0; read < 32; ++read) {
+                const auto offset = (static_cast<size_t>(read) * 113 + index * 31) % (expected.size() - bytes.size());
+                const auto result = (*access.value())->ReadAt(offset, bytes);
+                if (!result.succeeded() || *result.value() != bytes.size() ||
+                    !std::equal(bytes.begin(), bytes.end(), expected.begin() + static_cast<ptrdiff_t>(offset)))
+                    ++mismatches;
+            }
+        });
+    for (auto& reader : readers)
+        reader.join();
+    EXPECT_EQ(mismatches.load(), 0);
+}
+
+TEST_F(AudioMetadataRoundtrip, CancelledVerificationKeepsCapabilityReadableAndRetryable) {
+    WriteFixture(false);
+    const auto access = AcquireMediaReadCapability(path);
+    ASSERT_TRUE(access.succeeded());
+    std::atomic<bool> cancelled{true};
+    EXPECT_FALSE(VerifyMediaIdentity(*access.value(), std::nullopt, {}, {}, &cancelled).succeeded());
+    std::array<uint8_t, 4> bytes{};
+    EXPECT_TRUE((*access.value())->ReadAt(0, bytes).succeeded());
+    cancelled.store(false);
+    EXPECT_TRUE(VerifyMediaIdentity(*access.value(), std::nullopt, {}, {}, &cancelled).succeeded());
+    EXPECT_EQ((*access.value())->Measurements().hash_completions, 1);
+}
+
+TEST_F(AudioMetadataRoundtrip, ThrowingAdmissionReleasesTheSharedVerificationJobForRetry) {
+    WriteFixture(false);
+    const auto maximum_checks = 1 + (std::filesystem::file_size(path) + 65535) / 65536;
+    const auto access = AcquireMediaReadCapability(path);
+    ASSERT_TRUE(access.succeeded());
+    const BackgroundIoAdmission admission = [](uint64_t, const std::atomic<bool>*) -> bool {
+        throw std::runtime_error("injected admission failure");
+    };
+    EXPECT_THROW((void)VerifyMediaIdentity(*access.value(), std::nullopt, {}, admission), std::runtime_error);
+    EXPECT_EQ((*access.value())->Measurements().hash_completions, 0);
+    std::array<uint8_t, 4> header{};
+    EXPECT_TRUE((*access.value())->ReadAt(0, header).succeeded());
+    size_t continuation_checks = 0;
+    const auto retried =
+        VerifyMediaIdentity(*access.value(), std::nullopt, [&] { return ++continuation_checks <= maximum_checks; });
+    EXPECT_TRUE(retried.succeeded());
+    const auto measurements = (*access.value())->Measurements();
+    EXPECT_EQ(measurements.hash_starts, 2);
+    EXPECT_EQ(measurements.hash_completions, 1);
+    EXPECT_EQ(measurements.hash_bytes, std::filesystem::file_size(path));
+}
+
+TEST_F(AudioMetadataRoundtrip, PathConfirmedLegacySelectionVerifiesAFreshProvisionalCapabilityBeforeReuse) {
+    WriteFixture(false);
+    EditPlayerEngine conservative;
+    std::string error;
+    ASSERT_TRUE(conservative.Open(path, error)) << error;
+    const auto metadata = conservative.AudioMetadata();
+    ASSERT_TRUE(metadata.unverified_asset_binding);
+    ASSERT_NE(metadata.unverified_asset_binding->sha256, (std::array<uint8_t, 32>{}));
+    MonitorSelectionSnapshot selection{metadata.selection_media_id,
+                                       {1},
+                                       {{metadata.actual_tracks[0].track_id, 0.5f, false}},
+                                       true,
+                                       metadata.unverified_asset_binding};
+    conservative.Close();
+    const auto access = AcquireMediaReadCapability(path);
+    ASSERT_TRUE(access.succeeded());
+    const auto provisional = ProbeEditMedia(*access.value(), {}, {}, nullptr, false);
+    ASSERT_TRUE(provisional.audio_metadata.unverified_asset_binding);
+    ASSERT_EQ(provisional.audio_metadata.unverified_asset_binding->sha256, (std::array<uint8_t, 32>{}));
+    EditPlayerEngine leased;
+    ASSERT_TRUE(leased.Open(*access.value(), error)) << error;
+    EXPECT_EQ((*access.value())->Measurements().hash_starts, 0);
+    std::atomic<bool> cancelled{true};
+    EXPECT_FALSE(leased.SetMonitorSelection(selection, error, &cancelled));
+    EXPECT_EQ((*access.value())->Measurements().hash_starts, 0);
+    ASSERT_TRUE(leased.SetMonitorSelection(selection, error)) << error;
+    EXPECT_EQ((*access.value())->Measurements().hash_completions, 1);
+    std::vector<float> samples;
+    ASSERT_TRUE(leased.DecodeAudioRange(4800, 480, samples, error)) << error;
+    for (const auto sample : samples)
+        EXPECT_NEAR(sample, 0.0625f, 1e-6f);
+    EXPECT_TRUE(leased.SetMonitorSelection(selection, error)) << error;
+    EXPECT_EQ((*access.value())->Measurements().hash_completions, 1);
+}
+
+TEST_F(AudioMetadataRoundtrip, ReleasedLeaseDoesNotTrustRestoredSizeAndWriteTime) {
+    WriteFixture(false);
+    const auto original_time = std::filesystem::last_write_time(path);
+    std::array<uint8_t, 32> expected{};
+    uint64_t generation = 0;
+    {
+        const auto access = AcquireMediaReadCapability(path);
+        ASSERT_TRUE(access.succeeded());
+        generation = (*access.value())->Generation();
+        const auto identity = VerifyMediaIdentity(*access.value());
+        ASSERT_TRUE(identity.succeeded());
+        expected = (*identity.value())->Identity().sha256;
+    }
+    {
+        std::fstream file(path, std::ios::binary | std::ios::in | std::ios::out);
+        ASSERT_TRUE(file.is_open());
+        file.seekg(-1, std::ios::end);
+        char byte = 0;
+        file.read(&byte, 1);
+        file.seekp(-1, std::ios::end);
+        byte ^= 1;
+        file.write(&byte, 1);
+    }
+    std::filesystem::last_write_time(path, original_time);
+    const auto reopened = AcquireMediaReadCapability(path);
+    ASSERT_TRUE(reopened.succeeded());
+    EXPECT_NE((*reopened.value())->Generation(), generation);
+    EXPECT_FALSE(VerifyMediaIdentity(*reopened.value(), expected).succeeded());
+    EXPECT_EQ((*reopened.value())->Measurements().hash_completions, 1);
+}
+
+TEST_F(AudioMetadataRoundtrip, LiveCapabilityRejectsWritersAndReplacement) {
+    WriteFixture(false);
+    const auto access = AcquireMediaReadCapability(path);
+    ASSERT_TRUE(access.succeeded());
+    std::fstream writer(path, std::ios::binary | std::ios::in | std::ios::out);
+    EXPECT_FALSE(writer.is_open());
+    std::error_code error;
+    std::filesystem::rename(path, rewrite, error);
+    EXPECT_TRUE(error);
+    error.clear();
+    EXPECT_FALSE(std::filesystem::remove(path, error));
+    EXPECT_TRUE(error);
+}
+
+TEST_F(AudioMetadataRoundtrip, ProvisionalProbeDoesNotHashOrPublishContentIdentity) {
+    WriteFixture(false);
+    const auto access = AcquireMediaReadCapability(path);
+    ASSERT_TRUE(access.succeeded());
+    const auto provisional = ProbeEditMedia(*access.value(), {}, {}, nullptr, false);
+    EXPECT_TRUE(provisional.error.empty()) << provisional.error;
+    EXPECT_FALSE(provisional.content_identity_valid);
+    EXPECT_EQ((*access.value())->Measurements().hash_starts, 0);
+    const auto verified = ProbeEditMedia(*access.value());
+    EXPECT_TRUE(verified.error.empty()) << verified.error;
+    EXPECT_TRUE(verified.content_identity_valid);
+    EXPECT_EQ((*access.value())->Measurements().hash_completions, 1);
+}
+
+TEST_F(AudioMetadataRoundtrip, ConcurrentProbesPublishOneFrozenAudioMetadataSnapshot) {
+    WriteFixture(false);
+    const auto access = AcquireMediaReadCapability(path);
+    ASSERT_TRUE(access.succeeded());
+    constexpr size_t count = 8;
+    std::barrier header_gate(static_cast<ptrdiff_t>(count));
+    std::array<EditMediaMetadata, count> results;
+    std::vector<std::thread> workers;
+    for (size_t index = 0; index < count; ++index)
+        workers.emplace_back([&, index] {
+            bool joined = false;
+            results[index] = ProbeEditMedia(
+                *access.value(), {},
+                [&](uint64_t bytes, const std::atomic<bool>*) {
+                    if (bytes == 12 && !joined) {
+                        joined = true;
+                        header_gate.arrive_and_wait();
+                    }
+                    return true;
+                },
+                nullptr, false);
+        });
+    for (auto& worker : workers)
+        worker.join();
+    ASSERT_EQ(results[0].audio_metadata.actual_tracks.size(), 2);
+    for (const auto& result : results) {
+        ASSERT_TRUE(result.error.empty()) << result.error;
+        ASSERT_EQ(result.audio_metadata.actual_tracks.size(), 2);
+        EXPECT_EQ(result.audio_metadata.actual_tracks[0].track_id, results[0].audio_metadata.actual_tracks[0].track_id);
+        EXPECT_EQ(result.audio_metadata.actual_tracks[1].track_id, results[0].audio_metadata.actual_tracks[1].track_id);
+    }
+}
+
+TEST_F(AudioMetadataRoundtrip, HardlinkAliasesKeepTheirOwnSidecarMetadataSnapshot) {
+    WriteFixture(false);
+    std::filesystem::create_hard_link(path, rewrite);
+    ASSERT_TRUE(WriteMediaIdentitySidecar(path, manifest).succeeded());
+    const auto original = AcquireMediaReadCapability(path);
+    const auto alias = AcquireMediaReadCapability(rewrite);
+    ASSERT_TRUE(original.succeeded());
+    ASSERT_TRUE(alias.succeeded());
+    const auto original_metadata = ProbeEditMedia(*original.value(), {}, {}, nullptr, false);
+    const auto alias_metadata = ProbeEditMedia(*alias.value(), {}, {}, nullptr, false);
+    ASSERT_TRUE(original_metadata.error.empty()) << original_metadata.error;
+    ASSERT_TRUE(alias_metadata.error.empty()) << alias_metadata.error;
+    EXPECT_TRUE(original_metadata.audio_metadata.manifest.has_value());
+    EXPECT_FALSE(alias_metadata.audio_metadata.manifest.has_value());
+    EXPECT_EQ((*alias.value())->Path(), rewrite);
+}
+
+TEST_F(AudioMetadataRoundtrip, WritableMappingPreventsImmutableCapabilityAdmission) {
+    WriteFixture(false);
+    HANDLE file =
+        CreateFileW(path.c_str(), GENERIC_READ | GENERIC_WRITE, FILE_SHARE_READ | FILE_SHARE_WRITE | FILE_SHARE_DELETE,
+                    nullptr, OPEN_EXISTING, FILE_ATTRIBUTE_NORMAL, nullptr);
+    ASSERT_NE(file, INVALID_HANDLE_VALUE);
+    std::unique_ptr<void, decltype(&CloseHandle)> writer(file, CloseHandle);
+    HANDLE mapping = CreateFileMappingW(file, nullptr, PAGE_READWRITE, 0, 0, nullptr);
+    ASSERT_NE(mapping, nullptr);
+    std::unique_ptr<void, decltype(&CloseHandle)> section(mapping, CloseHandle);
+    void* view = MapViewOfFile(mapping, FILE_MAP_WRITE, 0, 0, 0);
+    ASSERT_NE(view, nullptr);
+    std::unique_ptr<void, decltype(&UnmapViewOfFile)> mapped(view, UnmapViewOfFile);
+    writer.reset();
+    EXPECT_FALSE(AcquireMediaReadCapability(path).succeeded());
+    mapped.reset();
+    section.reset();
+    EXPECT_TRUE(AcquireMediaReadCapability(path).succeeded());
+}
+
+TEST_F(AudioMetadataRoundtrip, VerificationUsesTheFrozenSidecarSnapshot) {
+    WriteFixture(false);
+    ASSERT_TRUE(WriteMediaIdentitySidecar(path, manifest).succeeded());
+    const auto access = AcquireMediaReadCapability(path);
+    ASSERT_TRUE(access.succeeded());
+    const auto provisional = ProbeEditMedia(*access.value(), {}, {}, nullptr, false);
+    ASSERT_TRUE(provisional.audio_metadata.manifest.has_value());
+    auto replacement = manifest;
+    replacement.media_id = NewId<MediaId>();
+    ASSERT_TRUE(WriteMediaIdentitySidecar(path, replacement, {}, MediaIdentitySidecarReferences{}).succeeded());
+    const auto verified = ProbeEditMedia(*access.value());
+    ASSERT_TRUE(verified.error.empty()) << verified.error;
+    ASSERT_TRUE(verified.audio_metadata.manifest.has_value());
+    EXPECT_EQ(verified.audio_metadata.manifest->media_id, manifest.media_id);
+    EXPECT_NE(verified.audio_metadata.manifest->media_id, replacement.media_id);
+}
+
+TEST_F(AudioMetadataRoundtrip, PlaybackAndWaveformReuseTheAdmittedVerification) {
+    WriteFixture(false);
+    const auto access = AcquireMediaReadCapability(path);
+    ASSERT_TRUE(access.succeeded());
+    const auto metadata = ProbeEditMedia(*access.value());
+    ASSERT_TRUE(metadata.error.empty()) << metadata.error;
+    EditPlayerEngine player;
+    std::string error;
+    ASSERT_TRUE(player.Open(*access.value(), error)) << error;
+    ASSERT_TRUE(player.ValidateContentIdentity(metadata.content_sha256, error)) << error;
+    const auto stream = std::find_if(metadata.streams.begin(), metadata.streams.end(),
+                                     [](const auto& value) { return value.kind == TimelineStreamKind::Audio; });
+    ASSERT_NE(stream, metadata.streams.end());
+    auto waveform =
+        OpenEditWaveformDecoder(*access.value(), stream->container_index, error, nullptr, &metadata.content_sha256);
+    ASSERT_NE(waveform, nullptr) << error;
+    std::vector<float> samples;
+    EXPECT_TRUE(waveform->Decode(0, 480, samples, error)) << error;
+    EXPECT_EQ((*access.value())->Measurements().hash_completions, 1);
+    EXPECT_EQ((*access.value())->Measurements().hash_bytes, std::filesystem::file_size(path));
+}
+
+TEST_F(AudioMetadataRoundtrip, CanonicalProvisionalMonitoringChoiceSurvivesSameLeaseVerification) {
+    WriteFixture(false);
+    const auto access = AcquireMediaReadCapability(path);
+    ASSERT_TRUE(access.succeeded());
+    const auto provisional = ProbeEditMedia(*access.value(), {}, {}, nullptr, false);
+    ASSERT_TRUE(provisional.error.empty()) << provisional.error;
+    ASSERT_NE(provisional.audio_metadata.unverified_asset_binding, nullptr);
+    EditPlayerEngine player;
+    std::string error;
+    ASSERT_TRUE(player.Open(*access.value(), error)) << error;
+    MonitorSelectionSnapshot selection{provisional.audio_metadata.selection_media_id,
+                                       {1},
+                                       {{provisional.audio_metadata.actual_tracks[0].track_id, 1, false}},
+                                       true,
+                                       provisional.audio_metadata.unverified_asset_binding};
+    ASSERT_TRUE(player.SetMonitorSelection(selection, error)) << error;
+    const auto verified = ProbeEditMedia(*access.value());
+    ASSERT_TRUE(verified.error.empty()) << verified.error;
+    player.Close();
+    ASSERT_TRUE(player.Open(*access.value(), error)) << error;
+    ASSERT_TRUE(player.SetMonitorSelection(selection, error)) << error;
+    std::vector<float> samples;
+    ASSERT_TRUE(player.DecodeAudioRange(4800, 480, samples, error)) << error;
+    for (float sample : samples)
+        EXPECT_FLOAT_EQ(sample, 0.125f);
+    EXPECT_EQ((*access.value())->Measurements().hash_completions, 1);
+}
+
+TEST_F(AudioMetadataRoundtrip, StampOnlyProvisionalMonitoringBindingCannotImpersonateCanonicalSource) {
+    WriteFixture(false);
+    const auto access = AcquireMediaReadCapability(path);
+    ASSERT_TRUE(access.succeeded());
+    const auto metadata = ProbeEditMedia(*access.value(), {}, {}, nullptr, false);
+    ASSERT_NE(metadata.audio_metadata.unverified_asset_binding, nullptr);
+    auto forged = std::make_shared<UnverifiedAudioAssetBinding>(*metadata.audio_metadata.unverified_asset_binding);
+    MonitorSelectionSnapshot selection{metadata.audio_metadata.selection_media_id,
+                                       {1},
+                                       {{metadata.audio_metadata.actual_tracks[0].track_id, 1, false}},
+                                       true,
+                                       forged};
+    EditPlayerEngine player;
+    std::string error;
+    ASSERT_TRUE(player.Open(*access.value(), error)) << error;
+    EXPECT_FALSE(player.SetMonitorSelection(selection, error));
+}
+
+TEST_F(AudioMetadataRoundtrip, GlobalHashMeasurementsIncludeConservativeAndCoalescedLeaseWork) {
+    WriteFixture(false);
+    const auto before = GlobalMediaHashMeasurements();
+    const auto conservative = HashFinalMedia(path);
+    ASSERT_TRUE(conservative.succeeded());
+    const auto access = AcquireMediaReadCapability(path);
+    ASSERT_TRUE(access.succeeded());
+    ASSERT_TRUE(VerifyMediaIdentity(*access.value()).succeeded());
+    ASSERT_TRUE(VerifyMediaIdentity(*access.value()).succeeded());
+    const auto after = GlobalMediaHashMeasurements();
+    EXPECT_EQ(after.total.starts - before.total.starts, 2);
+    EXPECT_EQ(after.total.completions - before.total.completions, 2);
+    EXPECT_EQ(after.total.bytes - before.total.bytes, 2 * std::filesystem::file_size(path));
+    const auto legacy = static_cast<size_t>(MediaHashCause::Unspecified);
+    const auto live = static_cast<size_t>(MediaHashCause::LiveLease);
+    EXPECT_EQ(after.by_cause[legacy].completions - before.by_cause[legacy].completions, 1);
+    EXPECT_EQ(after.by_cause[live].completions - before.by_cause[live].completions, 1);
+}
+
+TEST_F(AudioMetadataRoundtrip, GlobalHashMeasurementsRetainPartialCancelledReadWork) {
+    WriteFixture(false);
+    const auto before = GlobalMediaHashMeasurements();
+    int reads = 0;
+    const auto cancelled = HashFinalMedia(path, {}, [&](uint64_t, const std::atomic<bool>*) { return ++reads < 2; });
+    ASSERT_FALSE(cancelled.succeeded());
+    EXPECT_EQ(cancelled.error()->code, EngineErrorCode::Cancelled);
+    const auto after = GlobalMediaHashMeasurements();
+    EXPECT_EQ(after.total.starts - before.total.starts, 1);
+    EXPECT_EQ(after.total.completions - before.total.completions, 0);
+    EXPECT_EQ(after.total.cancellations - before.total.cancellations, 1);
+    EXPECT_EQ(after.total.bytes - before.total.bytes, 64 * 1024);
+}
+
+TEST_F(AudioMetadataRoundtrip, ReapplyingIdenticalLiveMonitoringSelectionIsIdempotent) {
+    WriteFixture(false);
+    const auto access = AcquireMediaReadCapability(path);
+    ASSERT_TRUE(access.succeeded());
+    const auto metadata = ProbeEditMedia(*access.value(), {}, {}, nullptr, false);
+    ASSERT_NE(metadata.audio_metadata.unverified_asset_binding, nullptr);
+    MonitorSelectionSnapshot selection{metadata.audio_metadata.selection_media_id,
+                                       {1},
+                                       {{metadata.audio_metadata.actual_tracks[0].track_id, 1, false}},
+                                       true,
+                                       metadata.audio_metadata.unverified_asset_binding};
+    EditPlayerEngine player;
+    std::string error;
+    ASSERT_TRUE(player.Open(*access.value(), error)) << error;
+    ASSERT_TRUE(player.SetMonitorSelection(selection, error)) << error;
+    ASSERT_TRUE(ProbeEditMedia(*access.value()).error.empty());
+    EXPECT_TRUE(player.SetMonitorSelection(selection, error)) << error;
+    auto conflict = selection;
+    conflict.tracks[0].gain_linear = 0.5f;
+    EXPECT_FALSE(player.SetMonitorSelection(conflict, error));
+    auto stale = selection;
+    stale.revision = {0};
+    EXPECT_FALSE(player.SetMonitorSelection(stale, error));
+}
+
+TEST_F(AudioMetadataRoundtrip, ExportAssessmentAndExecutionReuseTheExactAdmittedCapability) {
+    WriteFixture(false);
+    const auto acquired = AcquireMediaReadCapability(path);
+    ASSERT_TRUE(acquired.succeeded());
+    const auto access = *acquired.value();
+    const auto metadata = ProbeEditMedia(access);
+    ASSERT_TRUE(metadata.error.empty()) << metadata.error;
+    const auto proof = VerifyMediaIdentity(access, metadata.content_sha256);
+    ASSERT_TRUE(proof.succeeded());
+    TimelineExportClip clip{path, 0, metadata.duration_us, 0};
+    clip.access = access;
+    clip.identity_proof = *proof.value();
+    const auto before = GlobalMediaHashMeasurements();
+    const auto assessment = AssessTimelineExport({clip}, false);
+    ASSERT_EQ(assessment.eligibility, TimelineExportEligibility::StreamCopy) << assessment.reason;
+    const auto result = ExportTimelineStreamCopy({clip}, rewrite, false);
+    ASSERT_TRUE(result.success) << result.message;
+    const auto after = GlobalMediaHashMeasurements();
+    for (size_t cause = 0; cause < after.by_cause.size(); ++cause)
+        if (cause != static_cast<size_t>(MediaHashCause::RecordingFinalization))
+            EXPECT_EQ(after.by_cause[cause].starts, before.by_cause[cause].starts) << "Hash cause " << cause;
+    EXPECT_EQ(access->Measurements().hash_completions, 1);
+}
+
+TEST_F(AudioMetadataRoundtrip, ExportRejectsProofFromAnotherCapabilityBeforeWriting) {
+    WriteFixture();
+    WriteFixture(true, false, roundtrip);
+    const auto source = AcquireMediaReadCapability(path);
+    const auto other = AcquireMediaReadCapability(roundtrip);
+    ASSERT_TRUE(source.succeeded());
+    ASSERT_TRUE(other.succeeded());
+    const auto metadata = ProbeEditMedia(*source.value());
+    const auto proof = VerifyMediaIdentity(*other.value());
+    ASSERT_TRUE(proof.succeeded());
+    TimelineExportClip clip{path, 0, metadata.duration_us, 0};
+    clip.access = *source.value();
+    clip.identity_proof = *proof.value();
+    EXPECT_EQ(AssessTimelineExport({clip}, false).eligibility, TimelineExportEligibility::Invalid);
+    EXPECT_FALSE(ExportTimelineStreamCopy({clip}, rewrite, false).success);
+    EXPECT_FALSE(std::filesystem::exists(rewrite));
+}
+
 } // namespace
+TEST_F(AudioMetadataRoundtrip, ExplicitAdoptionKeepsStaleExpectedAuthoritySeparateFromObservedBytes) {
+    ASSERT_NO_FATAL_FAILURE(WriteFixture(false));
+    ASSERT_TRUE(WriteMediaIdentitySidecar(path, manifest).succeeded());
+    nlohmann::json sidecar;
+    {
+        std::ifstream input(MediaIdentitySidecarPath(path));
+        input >> sidecar;
+    }
+    sidecar["sha256"] = std::string(64, '0');
+    {
+        std::ofstream output(MediaIdentitySidecarPath(path));
+        output << sidecar;
+    }
+    const auto admitted = AcquireMediaReadCapability(path);
+    ASSERT_TRUE(admitted.succeeded());
+    const auto source = *admitted.value();
+    const auto pending = ProbeEditMedia(source, {}, {}, nullptr, false);
+    ASSERT_TRUE(pending.error.empty()) << pending.error;
+    ASSERT_TRUE(pending.audio_metadata.expected_content_sha256);
+    const auto expected = pending.audio_metadata.expected_content_sha256;
+    const auto observed = VerifyMediaIdentity(source);
+    ASSERT_TRUE(observed.succeeded());
+    const auto adopted = ProbeEditMediaForAdoption(source, *observed.value());
+    ASSERT_TRUE(adopted.error.empty()) << adopted.error;
+    EXPECT_TRUE(adopted.content_identity_valid);
+    EXPECT_EQ(adopted.content_sha256, (*observed.value())->Identity().sha256);
+    EXPECT_EQ(adopted.audio_metadata.status, AudioMetadataStatus::Stale);
+    EXPECT_FALSE(adopted.audio_metadata.manifest);
+    EXPECT_TRUE(adopted.audio_metadata.monitoring_confirmation_required);
+    ASSERT_TRUE(adopted.audio_metadata.unverified_asset_binding);
+    EXPECT_EQ(adopted.audio_metadata.unverified_asset_binding->sha256, adopted.content_sha256);
+    EXPECT_FALSE(ProbeEditMedia(source).error.empty());
+    EXPECT_EQ(CachedMediaAudioMetadata(source, false)->expected_content_sha256, expected);
+    EXPECT_EQ(source->Measurements().hash_starts, 1);
+    EditPlayerEngine player;
+    std::string error;
+    ASSERT_TRUE(player.Open(source, error)) << error;
+    const auto& audio = adopted.audio_metadata;
+    ASSERT_EQ(audio.actual_tracks.size(), 2);
+    MonitorSelectionSnapshot choice{audio.selection_media_id,
+                                    {1},
+                                    {{audio.actual_tracks[0].track_id, 0.5f, false}},
+                                    true,
+                                    audio.unverified_asset_binding};
+    ASSERT_TRUE(player.SetMonitorSelection(choice, error)) << error;
+    ASSERT_TRUE(player.SetMonitorSelection(choice, error)) << error;
+    std::vector<float> samples;
+    ASSERT_TRUE(player.DecodeAudioRange(4800, 480, samples, error)) << error;
+    for (float sample : samples)
+        EXPECT_FLOAT_EQ(sample, 0.0625f);
+    EXPECT_FALSE(ProbeEditMedia(source).error.empty());
+    EXPECT_EQ(source->Measurements().hash_starts, 1);
+}
+
+TEST_F(AudioMetadataRoundtrip, ExplicitAdoptionRejectsOtherCapabilityProofAndHonorsCancellation) {
+    ASSERT_NO_FATAL_FAILURE(WriteFixture(false));
+    ASSERT_NO_FATAL_FAILURE(WriteFixture(false, false, rewrite));
+    const auto first = AcquireMediaReadCapability(path);
+    const auto second = AcquireMediaReadCapability(rewrite);
+    ASSERT_TRUE(first.succeeded());
+    ASSERT_TRUE(second.succeeded());
+    const auto proof = VerifyMediaIdentity(*first.value());
+    ASSERT_TRUE(proof.succeeded());
+    EXPECT_FALSE(ProbeEditMediaForAdoption(*second.value(), *proof.value()).error.empty());
+    EXPECT_EQ((*second.value())->Measurements().hash_starts, 0);
+    std::atomic<bool> cancelled{true};
+    EXPECT_FALSE(ProbeEditMediaForAdoption(*first.value(), *proof.value(), {}, {}, &cancelled).error.empty());
+    EXPECT_EQ((*first.value())->Measurements().hash_starts, 1);
+}
+TEST_F(AudioMetadataRoundtrip, ExplicitAdoptionUsesCurrentVerifiedSidecarWithoutReplacingFrozenAuthority) {
+    ASSERT_NO_FATAL_FAILURE(WriteFixture(false));
+    ASSERT_TRUE(WriteMediaIdentitySidecar(path, manifest).succeeded());
+    const auto admitted = AcquireMediaReadCapability(path);
+    ASSERT_TRUE(admitted.succeeded());
+    const auto source = *admitted.value();
+    const auto frozen = ProbeEditMedia(source, {}, {}, nullptr, false);
+    ASSERT_TRUE(frozen.error.empty()) << frozen.error;
+    ASSERT_TRUE(frozen.audio_metadata.manifest);
+    auto replacement = manifest;
+    replacement.media_id = NewId<MediaId>();
+    ASSERT_TRUE(WriteMediaIdentitySidecar(path, replacement, {}, MediaIdentitySidecarReferences{}).succeeded());
+    const auto proof = VerifyMediaIdentity(source);
+    ASSERT_TRUE(proof.succeeded());
+    const auto adopted = ProbeEditMediaForAdoption(source, *proof.value());
+    ASSERT_TRUE(adopted.error.empty()) << adopted.error;
+    ASSERT_TRUE(adopted.audio_metadata.manifest);
+    EXPECT_EQ(adopted.audio_metadata.selection_media_id, replacement.media_id);
+    EXPECT_EQ(ProbeEditMedia(source).audio_metadata.selection_media_id, manifest.media_id);
+    EditPlayerEngine player;
+    std::string error;
+    ASSERT_TRUE(player.Open(source, error)) << error;
+    MonitorSelectionSnapshot choice{
+        replacement.media_id, {1}, {{replacement.tracks[0].container.track_id, 0.5f, false}}, true};
+    ASSERT_TRUE(player.SetMonitorSelection(choice, error)) << error;
+    std::vector<float> samples;
+    ASSERT_TRUE(player.DecodeAudioRange(4800, 480, samples, error)) << error;
+    for (float sample : samples)
+        EXPECT_FLOAT_EQ(sample, 0.0625f);
+    EXPECT_EQ(ProbeEditMedia(source).audio_metadata.selection_media_id, manifest.media_id);
+}
+} // namespace exosnap::engine
+
+namespace exosnap::engine {
+TEST_F(AudioMetadataRoundtrip, ProvisionalSidecarCannotInstallAnUnverifiedDefaultMonitorMix) {
+    ASSERT_NO_FATAL_FAILURE(WriteFixture(false));
+    ASSERT_TRUE(WriteMediaIdentitySidecar(path, manifest).succeeded());
+    nlohmann::json sidecar;
+    {
+        std::ifstream input(MediaIdentitySidecarPath(path));
+        input >> sidecar;
+    }
+    sidecar["sha256"] = std::string(64, '0');
+    {
+        std::ofstream output(MediaIdentitySidecarPath(path));
+        output << sidecar;
+    }
+    const auto admitted = AcquireMediaReadCapability(path);
+    ASSERT_TRUE(admitted.succeeded());
+    const auto source = *admitted.value();
+    const auto pending = ProbeEditMedia(source, {}, {}, nullptr, false);
+    ASSERT_TRUE(pending.error.empty()) << pending.error;
+    ASSERT_EQ(pending.audio_metadata.status, AudioMetadataStatus::Pending);
+    EXPECT_TRUE(pending.audio_metadata.monitoring_confirmation_required);
+    EditPlayerEngine player;
+    std::string error;
+    ASSERT_TRUE(player.Open(source, error)) << error;
+    EXPECT_TRUE(player.AudioMetadata().monitoring_confirmation_required);
+    std::vector<float> samples;
+    EXPECT_FALSE(player.DecodeAudioRange(0, 480, samples, error));
+    EXPECT_EQ(source->Measurements().hash_starts, 0);
+    EXPECT_FALSE(ProbeEditMedia(source).error.empty());
+}
+TEST_F(AudioMetadataRoundtrip, VerifiedSidecarRestoresItsAdmittedDefaultMonitorMix) {
+    ASSERT_NO_FATAL_FAILURE(WriteFixture(false));
+    ASSERT_TRUE(WriteMediaIdentitySidecar(path, manifest).succeeded());
+    const auto admitted = AcquireMediaReadCapability(path);
+    ASSERT_TRUE(admitted.succeeded());
+    const auto source = *admitted.value();
+    EXPECT_TRUE(ProbeEditMedia(source, {}, {}, nullptr, false).audio_metadata.monitoring_confirmation_required);
+    const auto verified = ProbeEditMedia(source);
+    ASSERT_TRUE(verified.error.empty()) << verified.error;
+    EXPECT_EQ(verified.audio_metadata.status, AudioMetadataStatus::Verified);
+    EXPECT_FALSE(verified.audio_metadata.monitoring_confirmation_required);
+    EditPlayerEngine player;
+    std::string error;
+    ASSERT_TRUE(player.Open(source, error)) << error;
+    std::vector<float> samples;
+    ASSERT_TRUE(player.DecodeAudioRange(0, 480, samples, error)) << error;
+    EXPECT_TRUE(std::any_of(samples.begin(), samples.end(), [](float sample) { return sample != 0; }));
+    EXPECT_EQ(source->Measurements().hash_starts, 1);
+}
 } // namespace exosnap::engine

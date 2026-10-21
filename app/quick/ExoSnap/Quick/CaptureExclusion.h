@@ -5,6 +5,7 @@
 #include <QPointer>
 #include <QQuickWindow>
 #include <QRectF>
+#include <QStringList>
 #include <QtQmlIntegration/qqmlintegration.h>
 
 #include <functional>
@@ -16,7 +17,7 @@ namespace exosnap::quick {
 // The five capture-excluded overlays are on screen while ExoSnap records that
 // same screen. Their whole reason to exist is that the recording must not show
 // them. That makes exclusion a correctness property, not a nicety: when the
-// platform call fails there is no degraded mode — the window stays hidden for
+// platform call fails there is no degraded mode. The native window stays hidden for
 // the rest of the session, without a retry. A retry that succeeded on the
 // second attempt would still leave the first attempt's frames unaccounted for,
 // and nothing downstream can prove the overlay never made it into the file.
@@ -30,9 +31,10 @@ namespace exosnap::quick {
 //     }
 //
 // `granted` starts false, so every ordering of property assignment and binding
-// evaluation resolves to "hidden" first and can only open up after a proven
-// successful call. That is what makes the fail-closed property independent of
-// QML's creation order.
+// evaluation resolves to "hidden" first and a native window can only open after
+// a proven successful call. An explicit screenshot request on Qt's offscreen
+// platform may compose the same QML without native exclusion. That separate
+// renderOnlyPreview permission never changes granted or resolved.
 class CaptureExclusion : public QObject {
     Q_OBJECT
     QML_ELEMENT
@@ -40,6 +42,7 @@ class CaptureExclusion : public QObject {
     Q_PROPERTY(QQuickWindow* target READ target WRITE setTarget NOTIFY targetChanged FINAL)
     Q_PROPERTY(bool granted READ granted NOTIFY grantedChanged FINAL)
     Q_PROPERTY(bool resolved READ resolved NOTIFY resolvedChanged FINAL)
+    Q_PROPERTY(bool renderOnlyPreview READ renderOnlyPreview CONSTANT FINAL)
 
   public:
     // Platform-neutral signature for the test seam: `hwnd` is the native window
@@ -51,8 +54,8 @@ class CaptureExclusion : public QObject {
 
     [[nodiscard]] QQuickWindow* target() const noexcept;
 
-    // Forces the platform window into existence and applies the exclusion
-    // immediately — see the .cpp for why this cannot wait for a later round.
+    // Forces the platform window into existence and applies native exclusion
+    // immediately. A render-only offscreen preview makes no platform attempt.
     void setTarget(QQuickWindow* window);
 
     // True only after a platform call actually reported success. Monotone
@@ -63,6 +66,13 @@ class CaptureExclusion : public QObject {
     // True once an attempt has been made, whatever its outcome. Lets QML and
     // tests distinguish "not tried yet" from "tried and refused".
     [[nodiscard]] bool resolved() const noexcept;
+
+    // Permits headless composition for an explicit screenshot request. This
+    // does not indicate that platform capture exclusion was granted.
+    [[nodiscard]] bool renderOnlyPreview() const noexcept {
+        return render_only_preview_;
+    }
+    [[nodiscard]] static bool RenderOnlyPreviewAllowed(const QString& platform, const QStringList& arguments);
 
     // Restricts the window's input region to the union of `rects` (window
     // coordinates), so clicks in the transparent gaps fall through to whatever
@@ -99,6 +109,7 @@ class CaptureExclusion : public QObject {
     QPointer<QQuickWindow> target_;
     bool granted_ = false;
     bool resolved_ = false;
+    bool render_only_preview_ = false;
     // The WS_EX_LAYERED correction runs on every show (for the interactive
     // overlays only -- see dropLayeredAttribute in the .cpp); the log line
     // for it runs once, so a session with twenty recordings does not carry

@@ -177,7 +177,7 @@ impl Context {
     /// Starts the product with its control endpoint armed and isolated
     /// configuration and output directories, and completes the handshake.
     pub fn launch(&mut self, extra_args: &[&str]) -> Step<App> {
-        self.launch_with(extra_args, false)
+        self.launch_with(extra_args, false, None)
     }
 
     /// [`Context::launch`] on Qt's offscreen platform: the window is never
@@ -186,10 +186,20 @@ impl Context {
     /// preview cannot present without the Direct3D 11 scene graph, so
     /// playback and anything drawn stay out of reach here.
     pub fn launch_offscreen(&mut self, extra_args: &[&str]) -> Step<App> {
-        self.launch_with(extra_args, true)
+        self.launch_with(extra_args, true, None)
     }
 
-    fn launch_with(&mut self, extra_args: &[&str], offscreen: bool) -> Step<App> {
+    /// Keeps product stdout and stderr in a new file instead of the caller's console.
+    pub fn launch_offscreen_logged(&mut self, extra_args: &[&str], log: &Path) -> Step<App> {
+        self.launch_with(extra_args, true, Some(log))
+    }
+
+    fn launch_with(
+        &mut self,
+        extra_args: &[&str],
+        offscreen: bool,
+        log: Option<&Path>,
+    ) -> Step<App> {
         let product = self.product()?;
         let run_id = control::new_run_id("exov");
         let config = self.scenario_dir.join("config");
@@ -206,6 +216,9 @@ impl Context {
             .env("EXOSNAP_OUTPUT_DIR", &output);
         if offscreen {
             command.env("QT_QPA_PLATFORM", "offscreen");
+        }
+        if let Some(log) = log {
+            redirect_process_log(&mut command, log)?;
         }
         let mut child = self.spawn(&mut command)?;
         let client = match Client::connect("LiveVerify", &run_id, Duration::from_secs(60)) {
@@ -258,6 +271,18 @@ impl Context {
     pub fn announce(&self, text: &str) {
         println!("  [{}] {text}", self.lane.name());
     }
+}
+
+fn redirect_process_log(command: &mut Command, path: &Path) -> Result<()> {
+    let log = std::fs::OpenOptions::new()
+        .write(true)
+        .create_new(true)
+        .open(path)
+        .with_context(|| format!("create process log {}", path.display()))?;
+    command
+        .stdout(std::process::Stdio::from(log.try_clone()?))
+        .stderr(std::process::Stdio::from(log));
+    Ok(())
 }
 
 /// A running product instance driven over its control endpoint.
@@ -438,6 +463,46 @@ pub fn empty() -> Value {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn process_log_fixture() {
+        if std::env::var_os("EXO_VERIFY_LOG_FIXTURE").is_some() {
+            println!("fixture stdout marker");
+            eprintln!("fixture stderr marker");
+        }
+    }
+
+    #[test]
+    fn redirected_product_log_preserves_both_streams_without_overwriting() {
+        let directory = tempfile::tempdir().unwrap();
+        let log = directory.path().join("product.log");
+        let mut command = Command::new(std::env::current_exe().unwrap());
+        command
+            .args([
+                "--exact",
+                "context::tests::process_log_fixture",
+                "--nocapture",
+            ])
+            .env("EXO_VERIFY_LOG_FIXTURE", "1")
+            .stdout(std::process::Stdio::null())
+            .stderr(std::process::Stdio::null());
+        #[cfg(windows)]
+        {
+            use std::os::windows::process::CommandExt;
+            command.creation_flags(0x08000000);
+        }
+        redirect_process_log(&mut command, &log).unwrap();
+        let mut child = command.spawn().unwrap();
+        assert!(
+            crate::tools::wait(&mut child, Duration::from_secs(10))
+                .unwrap()
+                .success()
+        );
+        let text = std::fs::read_to_string(&log).unwrap();
+        assert!(text.contains("fixture stdout marker") && text.contains("fixture stderr marker"));
+        assert!(redirect_process_log(&mut command, &log).is_err());
+        assert_eq!(std::fs::read_to_string(log).unwrap(), text);
+    }
 
     /// A product that runs until asked to quit and then behaves as configured.
     struct FakeProduct {

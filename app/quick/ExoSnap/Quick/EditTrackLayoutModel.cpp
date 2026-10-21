@@ -1,8 +1,10 @@
 #include "EditTrackLayoutModel.h"
 
+#include <QColor>
 #include <QSet>
 #include <algorithm>
 #include <cmath>
+#include <optional>
 
 namespace exosnap::quick {
 
@@ -39,6 +41,8 @@ void EditTrackLayoutModel::reset() {
     tracks_.clear();
     preview_tracks_.clear();
     heights_.clear();
+    expanded_heights_.clear();
+    colors_.clear();
     rebuild();
 }
 
@@ -48,12 +52,15 @@ QVariantList EditTrackLayoutModel::layoutRows(const QVariantList& tracks) const 
     for (const auto& value : tracks) {
         auto row = value.toMap();
         const auto id = row.value(QStringLiteral("id")).toULongLong();
-        const auto height = heights_.value(id, 64);
+        const auto height = heights_.value(id, row.value(QStringLiteral("video")).toBool() ? 64 : 44);
+        const auto header = height < 44 ? height : height < 64 ? 16 : 18;
         row.insert(QStringLiteral("top"), top);
         row.insert(QStringLiteral("height"), height);
-        row.insert(QStringLiteral("headerHeight"), headerHeight());
-        row.insert(QStringLiteral("contentTop"), top + headerHeight());
-        row.insert(QStringLiteral("contentHeight"), height - headerHeight());
+        row.insert(QStringLiteral("headerHeight"), header);
+        row.insert(QStringLiteral("contentTop"), top + header);
+        row.insert(QStringLiteral("contentHeight"), height - header);
+        row.insert(QStringLiteral("collapsed"), height < 44);
+        row.insert(QStringLiteral("color"), colors_.value(id));
         result.push_back(row);
         top += height;
     }
@@ -90,9 +97,40 @@ void EditTrackLayoutModel::setTrackHeight(qulonglong id, qreal height) {
     if (!std::isfinite(height) || (!geometry_.contains(key) && !preview_geometry_.contains(key)))
         return;
     height = std::clamp(height, minimumHeight(), maximumHeight());
-    if (heights_.value(id, 64) == height)
+    if (heights_.value(id, defaultHeight(id)) == height)
         return;
     heights_.insert(id, height);
+    if (height >= 44)
+        expanded_heights_.insert(id, height);
+    rebuild();
+}
+
+qreal EditTrackLayoutModel::defaultHeight(qulonglong id) const {
+    const auto find = [id](const QVariantList& rows) -> std::optional<qreal> {
+        for (const auto& value : rows) {
+            const auto row = value.toMap();
+            if (row.value(QStringLiteral("id")).toULongLong() == id)
+                return row.value(QStringLiteral("video")).toBool() ? 64 : 44;
+        }
+        return {};
+    };
+    return find(tracks_).value_or(find(preview_tracks_).value_or(64));
+}
+
+void EditTrackLayoutModel::toggleCollapsed(qulonglong id) {
+    const auto key = QString::number(id);
+    if (!geometry_.contains(key))
+        return;
+    const auto height = heightForId(id);
+    setTrackHeight(id, height < 44 ? expanded_heights_.value(id, defaultHeight(id)) : 22);
+}
+
+void EditTrackLayoutModel::setTrackColor(qulonglong id, const QString& color) {
+    if (!geometry_.contains(QString::number(id)) || (!color.isEmpty() && !QColor::isValidColorName(color)))
+        return;
+    if (colors_.value(id) == color)
+        return;
+    colors_.insert(id, color);
     rebuild();
 }
 
@@ -116,6 +154,20 @@ qulonglong EditTrackLayoutModel::trackAtY(qreal y) const {
             return row.value(QStringLiteral("id")).toULongLong();
     }
     return 0;
+}
+
+QVariantList EditTrackLayoutModel::trackIdsIntersecting(qreal from_y, qreal to_y) const {
+    QVariantList ids;
+    if (!std::isfinite(from_y) || !std::isfinite(to_y) || from_y >= to_y)
+        return ids;
+    for (const auto& value : rows_) {
+        const auto row = value.toMap();
+        const auto top = row.value(QStringLiteral("top")).toReal();
+        const auto bottom = top + row.value(QStringLiteral("height")).toReal();
+        if (top < to_y && bottom > from_y)
+            ids.push_back(row.value(QStringLiteral("id")));
+    }
+    return ids;
 }
 
 QVariantMap EditTrackLayoutModel::dropTargetAtY(qreal y) const {

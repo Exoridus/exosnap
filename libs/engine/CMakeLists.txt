@@ -424,6 +424,7 @@ add_library(exosnap_engine STATIC
     src/edit_frame_gpu_converter.cpp
     src/edit_timeline_compositor.cpp
     src/edit_timeline_reader.cpp
+    src/edit_timeline_audio.cpp
     src/edit_export_plan.cpp
     src/edit_timeline_render.cpp
     src/edit_hybrid_export.cpp
@@ -1526,6 +1527,15 @@ exosnap_add_gtest(
             src/brickwall_limiter.cpp
 )
 target_include_directories(test_edit_audio_mix PRIVATE src)
+
+exosnap_add_gtest(
+    NAME test_edit_timeline_audio
+    TEST_PREFIX engine.
+    SOURCES tests/test_edit_timeline_audio.cpp
+    LIBRARIES exosnap_engine FFmpeg::mux
+)
+target_include_directories(test_edit_timeline_audio PRIVATE src include)
+target_compile_definitions(test_edit_timeline_audio PRIVATE NOMINMAX)
 
 # EditPlayerSession: the top-level orchestrator's lifecycle safety (no real
 # file/device touched -- real playback is user-live-verified, see the plan's

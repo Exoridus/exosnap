@@ -185,6 +185,7 @@ class TimelineThumbnailSource : public QObject {
     // between frames. Cached tiles are still served. Driven by playback, export
     // and recording so thumbnail decoding never competes with them.
     void setForegroundBusy(bool busy);
+    void setAnalysisPressure(bool playback, bool exclusive);
 
     [[nodiscard]] const std::shared_ptr<ThumbnailRequestBroker>& broker() const noexcept {
         return broker_;
@@ -211,6 +212,7 @@ class TimelineThumbnailSource : public QObject {
     }
 
   signals:
+    void brokerProgressChanged();
     // The worker finished opening a clip. 0x0 means it could not be opened or
     // carries no video -- the strip then simply stays empty.
     //
@@ -275,6 +277,7 @@ class TimelineThumbnailSource : public QObject {
     std::optional<TileJob> pending_tiles_;
     std::atomic<bool> cancelled_{false};
     bool busy_ = false;
+    bool exclusive_ = false;
     std::shared_ptr<ThumbnailRequestBroker> broker_;
     std::atomic<std::uint64_t> decodes_{0};
     quint64 next_run_id_ = 0;

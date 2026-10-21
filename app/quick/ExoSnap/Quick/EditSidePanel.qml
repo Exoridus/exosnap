@@ -9,9 +9,11 @@ Rectangle {
 
     required property string title
     required property bool pinned
+    property bool pinPreferred: pinned
     // Pinning narrows the preview; the page disables it when the preview would
     // drop below its usable width.
     property bool canPin: true
+    property bool showHeader: true
     property string pinObjectName: ""
     property string closeText: qsTr("Close")
     default property alias content: body.data
@@ -29,7 +31,9 @@ Rectangle {
         spacing: ExoTheme.spacingMd
 
         RowLayout {
+            visible: root.showHeader
             Layout.fillWidth: true
+            Layout.preferredHeight: 32
             spacing: ExoTheme.spacingXs
 
             Label {
@@ -43,17 +47,16 @@ Rectangle {
                 Accessible.role: Accessible.Heading
             }
             EditActionButton {
-                objectName: root.pinObjectName
-                text: root.pinned ? qsTr("Unpin") : qsTr("Pin")
+                objectName: root.showHeader ? root.pinObjectName : ""
+                text: root.pinPreferred ? qsTr("Unpin") : qsTr("Pin")
                 glyph: ExoGlyph.Pin
-                enabled: root.pinned || root.canPin
+                enabled: root.pinPreferred || root.canPin
                 checkable: true
-                checked: root.pinned
+                checked: root.pinPreferred
                 onClicked: {
                     root.pinToggled();
-                    // A click toggles `checked` itself; the page may also unpin on
-                    // its own, so the state must keep following `pinned`.
-                    checked = Qt.binding(() => root.pinned);
+                    // Button toggling must not detach the stored preference binding.
+                    checked = Qt.binding(() => root.pinPreferred);
                 }
             }
             EditActionButton {

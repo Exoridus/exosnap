@@ -483,6 +483,7 @@ EditExportFacts AssessEditExportFacts(const TimelineRenderSnapshot& input_snapsh
                                            IsEncoderAlignedSize({static_cast<uint32_t>(timeline.output_width),
                                                                  static_cast<uint32_t>(timeline.output_height)}));
     bool complete = !video.empty() && video_tracks.size() == 1 && whole;
+    bool exact_video_copy = true;
     int64_t covered = 0;
     for (const auto* clip : video) {
         const auto* source = SourceOf(snapshot, clip->asset);
@@ -491,8 +492,19 @@ EditExportFacts AssessEditExportFacts(const TimelineRenderSnapshot& input_snapsh
             complete = false;
             continue;
         }
-        facts.copy_recipe.push_back({source->path, clip->source_in_us, clip->source_out_us, clip->start_us});
+        facts.copy_recipe.push_back({source->path, clip->source_in_us, clip->source_out_us, clip->start_us,
+                                     source->access, source->identity_proof});
         const auto& metadata = source->metadata;
+        const auto video_count =
+            std::count_if(metadata.streams.begin(), metadata.streams.end(),
+                          [](const auto& stream) { return stream.kind == TimelineStreamKind::Video; });
+        const auto only_video = std::find_if(metadata.streams.begin(), metadata.streams.end(), [](const auto& stream) {
+            return stream.kind == TimelineStreamKind::Video;
+        });
+        exact_video_copy = exact_video_copy && video_count == 1 &&
+                           (!clip->stream || (clip->stream->kind == TimelineStreamKind::Video &&
+                                              (!clip->stream->asset_id || clip->stream->asset_id == clip->asset) &&
+                                              clip->stream->container_index == only_video->container_index));
         if (!metadata.render_color_supported || metadata.fps_num <= 0 || metadata.fps_den <= 0 || metadata.width <= 0 ||
             metadata.height <= 0 ||
             !IsEncoderAlignedSize({static_cast<uint32_t>(metadata.width), static_cast<uint32_t>(metadata.height)}))
@@ -505,7 +517,7 @@ EditExportFacts AssessEditExportFacts(const TimelineRenderSnapshot& input_snapsh
     if (!facts.copy_recipe.empty() && video_tracks.size() == 1 && whole) {
         facts.original_copy_qualified = AssessTimelineExport(facts.copy_recipe, mp4, cancelled).eligibility ==
                                         TimelineExportEligibility::StreamCopy;
-        facts.video_copy_qualified = complete && facts.original_copy_qualified &&
+        facts.video_copy_qualified = complete && exact_video_copy && facts.original_copy_qualified &&
                                      std::abs(covered - timeline.duration_us) <= 1000 &&
                                      HasUsableCopiedVideoTimestamps(facts.copy_recipe, cancelled);
     }

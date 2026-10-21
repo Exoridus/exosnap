@@ -7,11 +7,16 @@
 #include <algorithm>
 #include <array>
 #include <atomic>
+#include <chrono>
+#include <condition_variable>
 #include <cstddef>
 #include <cstdint>
+#include <cwctype>
 #include <filesystem>
 #include <functional>
+#include <map>
 #include <memory>
+#include <mutex>
 #include <nlohmann/json.hpp>
 #include <optional>
 #include <set>
@@ -34,6 +39,31 @@ namespace exosnap::engine {
 namespace {
 using Json = MetadataJson;
 constexpr size_t kSidecarBytes = 2 * 1024 * 1024;
+std::mutex hash_measurements_mutex;
+MediaHashMeasurementSnapshot hash_measurements;
+struct HashMeasurement {
+    MediaHashCause cause;
+    std::chrono::steady_clock::time_point started = std::chrono::steady_clock::now();
+    uint64_t bytes = 0;
+    bool completed = false;
+    bool cancelled = false;
+    explicit HashMeasurement(MediaHashCause value) : cause(value) {
+        std::lock_guard lock(hash_measurements_mutex);
+        ++hash_measurements.total.starts;
+        ++hash_measurements.by_cause[static_cast<size_t>(cause)].starts;
+    }
+    ~HashMeasurement() {
+        const auto elapsed =
+            std::chrono::duration_cast<std::chrono::nanoseconds>(std::chrono::steady_clock::now() - started).count();
+        std::lock_guard lock(hash_measurements_mutex);
+        for (auto* value : {&hash_measurements.total, &hash_measurements.by_cause[static_cast<size_t>(cause)]}) {
+            value->bytes += bytes;
+            value->completions += completed ? 1 : 0;
+            value->cancellations += cancelled ? 1 : 0;
+            value->elapsed_ns += elapsed;
+        }
+    }
+};
 bool ValidMarkerReference(const std::string& name) {
     if (name.empty() || name.size() > 4096 || name == "." || name == ".." ||
         name.find_first_of("/\\:<>\"|?*") != std::string::npos ||
@@ -77,9 +107,11 @@ EngineError IdentityError(const char* context, EngineErrorCode code = EngineErro
 }
 struct FileLease {
     HANDLE handle = INVALID_HANDLE_VALUE;
-    explicit FileLease(const std::filesystem::path& path)
+    explicit FileLease(const std::filesystem::path& path, bool explicit_offsets = false)
         : handle(CreateFileW(path.c_str(), GENERIC_READ, FILE_SHARE_READ, nullptr, OPEN_EXISTING,
-                             FILE_ATTRIBUTE_NORMAL | FILE_FLAG_SEQUENTIAL_SCAN, nullptr)) {
+                             FILE_ATTRIBUTE_NORMAL | FILE_FLAG_SEQUENTIAL_SCAN |
+                                 (explicit_offsets ? FILE_FLAG_OVERLAPPED : 0),
+                             nullptr)) {
     }
     ~FileLease() {
         if (handle != INVALID_HANDLE_VALUE)
@@ -101,6 +133,25 @@ bool Snapshot(HANDLE handle, MediaIdentitySnapshot& snapshot) {
     snapshot.file_size = static_cast<uint64_t>(length.QuadPart);
     snapshot.last_write_time = static_cast<uint64_t>(basic.LastWriteTime.QuadPart);
     return true;
+}
+bool SupportedLocalCapability(HANDLE handle) {
+    FILE_REMOTE_PROTOCOL_INFO protocol{};
+    if (GetFileInformationByHandleEx(handle, FileRemoteProtocolInfo, &protocol, sizeof(protocol)) &&
+        protocol.Protocol != 0)
+        return false;
+    const auto length = GetFinalPathNameByHandleW(handle, nullptr, 0, FILE_NAME_NORMALIZED | VOLUME_NAME_DOS);
+    if (length == 0 || length > 32768)
+        return false;
+    std::vector<wchar_t> path(static_cast<size_t>(length) + 1);
+    const auto written = GetFinalPathNameByHandleW(handle, path.data(), static_cast<DWORD>(path.size()),
+                                                   FILE_NAME_NORMALIZED | VOLUME_NAME_DOS);
+    if (written == 0 || written >= path.size())
+        return false;
+    std::vector<wchar_t> volume(32768);
+    if (!GetVolumePathNameW(path.data(), volume.data(), static_cast<DWORD>(volume.size())))
+        return false;
+    const auto kind = GetDriveTypeW(volume.data());
+    return kind == DRIVE_FIXED || kind == DRIVE_REMOVABLE || kind == DRIVE_RAMDISK;
 }
 std::string Hex(std::span<const uint8_t> bytes) {
     constexpr char digits[] = "0123456789abcdef";
@@ -125,6 +176,254 @@ uint64_t Length(const Json& value) {
 }
 } // namespace
 
+MediaHashMeasurementSnapshot GlobalMediaHashMeasurements() {
+    std::lock_guard lock(hash_measurements_mutex);
+    return hash_measurements;
+}
+
+struct MediaReadCapability::Impl {
+    std::filesystem::path path;
+    std::shared_ptr<FileLease> lease;
+    MediaIdentitySnapshot identity;
+    uint64_t generation = 0;
+    mutable std::mutex mutex;
+    std::condition_variable changed;
+    bool hashing = false;
+    std::optional<MediaIdentitySnapshot> observed;
+    MediaVerificationMeasurements measurements;
+    std::shared_ptr<const AudioMetadataReadResult> provisional_audio;
+    std::shared_ptr<const AudioMetadataReadResult> verified_audio;
+    std::shared_ptr<const AudioMetadataReadResult> adopted_audio;
+    std::shared_ptr<const EditMediaMetadata> metadata;
+};
+
+MediaReadCapability::MediaReadCapability(std::shared_ptr<Impl> impl) : impl_(std::move(impl)) {
+}
+MediaReadCapability::~MediaReadCapability() = default;
+const std::filesystem::path& MediaReadCapability::Path() const {
+    return impl_->path;
+}
+const MediaIdentitySnapshot& MediaReadCapability::Identity() const {
+    return impl_->identity;
+}
+uint64_t MediaReadCapability::Generation() const {
+    return impl_->generation;
+}
+MediaVerificationMeasurements MediaReadCapability::Measurements() const {
+    std::lock_guard lock(impl_->mutex);
+    return impl_->measurements;
+}
+Outcome<size_t> MediaReadCapability::ReadAt(uint64_t offset, std::span<uint8_t> bytes) const {
+    if (offset >= impl_->identity.file_size || bytes.empty())
+        return size_t{0};
+    const auto count = static_cast<DWORD>(
+        (std::min)({uint64_t{bytes.size()}, impl_->identity.file_size - offset, uint64_t{4 * 1024 * 1024}}));
+    OVERLAPPED operation{};
+    operation.Offset = static_cast<DWORD>(offset);
+    operation.OffsetHigh = static_cast<DWORD>(offset >> 32);
+    operation.hEvent = CreateEventW(nullptr, TRUE, FALSE, nullptr);
+    if (!operation.hEvent)
+        return IdentityError("Cannot allocate media read event", EngineErrorCode::ResourceBudgetExceeded);
+    std::unique_ptr<void, decltype(&CloseHandle)> event(operation.hEvent, CloseHandle);
+    DWORD read = 0;
+    if (!ReadFile(impl_->lease->handle, bytes.data(), count, &read, &operation)) {
+        if (GetLastError() != ERROR_IO_PENDING || !GetOverlappedResult(impl_->lease->handle, &operation, &read, TRUE))
+            return IdentityError("Admitted media read failed", EngineErrorCode::SourceIntegrityFailure);
+    }
+    return static_cast<size_t>(read);
+}
+
+Outcome<std::shared_ptr<const MediaReadCapability>> AcquireMediaReadCapability(const std::filesystem::path& path) {
+    auto lease = std::make_shared<FileLease>(path, true);
+    MediaIdentitySnapshot identity;
+    if (lease->handle == INVALID_HANDLE_VALUE || !Snapshot(lease->handle, identity)) {
+        auto error = IdentityError("Source busy or unavailable", EngineErrorCode::UnavailableSource);
+        error.win32_code = GetLastError();
+        error.retryability = Retryability::AfterUserAction;
+        return error;
+    }
+    if (!SupportedLocalCapability(lease->handle)) {
+        auto error = IdentityError("Typed source access requires a characterized local filesystem",
+                                   EngineErrorCode::UnsupportedPlatform);
+        error.retryability = Retryability::AfterUserAction;
+        return error;
+    }
+    static std::mutex registry_mutex;
+    using SourceKey = std::pair<FileIdentity, std::wstring>;
+    static std::map<SourceKey, std::weak_ptr<const MediaReadCapability>> registry;
+    static uint64_t next_generation = 0;
+    std::error_code path_error;
+    auto absolute_path = std::filesystem::absolute(path, path_error);
+    auto path_key = (path_error ? path : absolute_path).lexically_normal().wstring();
+    std::transform(path_key.begin(), path_key.end(), path_key.begin(),
+                   [](wchar_t value) { return static_cast<wchar_t>(std::towlower(value)); });
+    const SourceKey key{identity.file_identity, std::move(path_key)};
+    std::lock_guard lock(registry_mutex);
+    std::erase_if(registry, [](const auto& entry) { return entry.second.expired(); });
+    if (const auto found = registry.find(key); found != registry.end())
+        if (auto current = found->second.lock())
+            return current;
+    auto impl = std::make_shared<MediaReadCapability::Impl>();
+    impl->path = path;
+    impl->lease = std::move(lease);
+    impl->identity = identity;
+    impl->generation = ++next_generation;
+    std::shared_ptr<const MediaReadCapability> source(new MediaReadCapability(std::move(impl)));
+    registry[key] = source;
+    return source;
+}
+
+VerifiedMediaIdentity::VerifiedMediaIdentity(std::shared_ptr<const MediaReadCapability> source,
+                                             MediaIdentitySnapshot identity)
+    : source_(std::move(source)), identity_(std::move(identity)) {
+}
+const MediaIdentitySnapshot& VerifiedMediaIdentity::Identity() const {
+    return identity_;
+}
+const std::shared_ptr<const MediaReadCapability>& VerifiedMediaIdentity::Source() const {
+    return source_;
+}
+
+Outcome<std::shared_ptr<const VerifiedMediaIdentity>>
+VerifyMediaIdentity(const std::shared_ptr<const MediaReadCapability>& source,
+                    std::optional<std::array<uint8_t, 32>> expected, const std::function<bool()>& continue_io,
+                    const BackgroundIoAdmission& before_io, const std::atomic<bool>* cancelled) {
+    if (!source)
+        return IdentityError("No admitted media source", EngineErrorCode::UnavailableSource);
+    const auto stopped = [&] {
+        return (cancelled && cancelled->load(std::memory_order_relaxed)) || (continue_io && !continue_io());
+    };
+    auto& state = *source->impl_;
+    std::unique_lock lock(state.mutex);
+    while (state.hashing) {
+        if (stopped())
+            return IdentityError("Media identity verification cancelled", EngineErrorCode::Cancelled);
+        state.changed.wait_for(lock, std::chrono::milliseconds(10));
+    }
+    if (stopped())
+        return IdentityError("Media identity verification cancelled", EngineErrorCode::Cancelled);
+    if (!state.observed) {
+        state.hashing = true;
+        ++state.measurements.hash_starts;
+        lock.unlock();
+        const auto started = std::chrono::steady_clock::now();
+        HashMeasurement measurement(MediaHashCause::LiveLease);
+        uint64_t total = 0;
+        auto observed = state.identity;
+        const auto release_failed_job = [&] {
+            if (lock.owns_lock())
+                return;
+            lock.lock();
+            measurement.bytes = total;
+            state.measurements.hash_bytes += total;
+            state.measurements.hash_ns +=
+                std::chrono::duration_cast<std::chrono::nanoseconds>(std::chrono::steady_clock::now() - started)
+                    .count();
+            state.hashing = false;
+            state.changed.notify_all();
+        };
+        // A callback may throw while the job owns the shared verification slot.
+        // Release that slot before unwinding so another consumer can retry.
+        struct FailedJobCleanup {
+            const decltype(release_failed_job)& release;
+            ~FailedJobCleanup() {
+                release();
+            }
+        } cleanup{release_failed_job};
+        auto hash = [&]() -> Outcome<MediaIdentitySnapshot> {
+            std::unique_ptr<AVSHA, decltype(&av_free)> sha(av_sha_alloc(), av_free);
+            if (!sha || av_sha_init(sha.get(), 256) < 0)
+                return IdentityError("Cannot initialize media hash", EngineErrorCode::ResourceBudgetExceeded);
+            std::array<uint8_t, 64 * 1024> bytes{};
+            while (total < observed.file_size) {
+                const auto count = (std::min)(observed.file_size - total, uint64_t{bytes.size()});
+                if (stopped() || (before_io && !before_io(count, cancelled)))
+                    return IdentityError("Media identity verification cancelled", EngineErrorCode::Cancelled);
+                const auto read = source->ReadAt(total, std::span(bytes).first(static_cast<size_t>(count)));
+                if (!read.succeeded())
+                    return *read.error();
+                if (*read.value() == 0)
+                    return IdentityError("Admitted media ended during hash", EngineErrorCode::SourceIntegrityFailure);
+                av_sha_update(sha.get(), bytes.data(), *read.value());
+                total += *read.value();
+            }
+            MediaIdentitySnapshot after;
+            if (!Snapshot(state.lease->handle, after) || after.file_identity != observed.file_identity ||
+                after.file_size != observed.file_size || after.last_write_time != observed.last_write_time)
+                return IdentityError("Admitted media changed during hash", EngineErrorCode::SourceIntegrityFailure);
+            av_sha_final(sha.get(), observed.sha256.data());
+            return observed;
+        }();
+        lock.lock();
+        measurement.bytes = total;
+        measurement.completed = hash.succeeded();
+        measurement.cancelled = !hash.succeeded() && hash.error()->code == EngineErrorCode::Cancelled;
+        state.measurements.hash_bytes += total;
+        state.measurements.hash_ns +=
+            std::chrono::duration_cast<std::chrono::nanoseconds>(std::chrono::steady_clock::now() - started).count();
+        state.hashing = false;
+        if (hash.succeeded()) {
+            state.observed = *hash.value();
+            ++state.measurements.hash_completions;
+        } else if (hash.error()->code == EngineErrorCode::Cancelled) {
+            ++state.measurements.hash_cancellations;
+        }
+        state.changed.notify_all();
+        if (!hash.succeeded())
+            return *hash.error();
+    }
+    if (expected && *expected != state.observed->sha256)
+        return IdentityError("Media content differs from expected identity", EngineErrorCode::SourceIntegrityFailure);
+    return std::shared_ptr<const VerifiedMediaIdentity>(new VerifiedMediaIdentity(source, *state.observed));
+}
+
+std::shared_ptr<const AudioMetadataReadResult>
+CachedMediaAudioMetadata(const std::shared_ptr<const MediaReadCapability>& source, bool verified) {
+    if (!source)
+        return {};
+    std::lock_guard lock(source->impl_->mutex);
+    return verified ? source->impl_->verified_audio : source->impl_->provisional_audio;
+}
+void RetainMediaAudioMetadata(const std::shared_ptr<const MediaReadCapability>& source,
+                              std::shared_ptr<const AudioMetadataReadResult> metadata, bool verified) {
+    if (!source)
+        return;
+    std::lock_guard lock(source->impl_->mutex);
+    auto& slot = verified ? source->impl_->verified_audio : source->impl_->provisional_audio;
+    if (!slot)
+        slot = std::move(metadata);
+}
+std::shared_ptr<const AudioMetadataReadResult>
+CachedAdoptedMediaAudioMetadata(const std::shared_ptr<const MediaReadCapability>& source) {
+    if (!source)
+        return {};
+    std::lock_guard lock(source->impl_->mutex);
+    return source->impl_->adopted_audio;
+}
+void RetainAdoptedMediaAudioMetadata(const std::shared_ptr<const MediaReadCapability>& source,
+                                     std::shared_ptr<const AudioMetadataReadResult> metadata) {
+    if (!source)
+        return;
+    std::lock_guard lock(source->impl_->mutex);
+    if (!source->impl_->adopted_audio)
+        source->impl_->adopted_audio = std::move(metadata);
+}
+std::shared_ptr<const EditMediaMetadata>
+CachedEditMediaMetadata(const std::shared_ptr<const MediaReadCapability>& source) {
+    if (!source)
+        return {};
+    std::lock_guard lock(source->impl_->mutex);
+    return source->impl_->metadata;
+}
+void RetainEditMediaMetadata(const std::shared_ptr<const MediaReadCapability>& source,
+                             std::shared_ptr<const EditMediaMetadata> metadata) {
+    if (!source)
+        return;
+    std::lock_guard lock(source->impl_->mutex);
+    if (!source->impl_->metadata)
+        source->impl_->metadata = std::move(metadata);
+}
+
 std::filesystem::path MediaIdentitySidecarPath(const std::filesystem::path& media) {
     auto sidecar = media;
     sidecar += L".exosnap.json";
@@ -140,7 +439,8 @@ Outcome<std::shared_ptr<void>> AcquireMediaReadLease(const std::filesystem::path
 Outcome<MediaIdentitySnapshot> HashFinalMedia(const std::filesystem::path& media,
                                               const std::function<bool()>& continue_io,
                                               const BackgroundIoAdmission& before_io,
-                                              const std::atomic<bool>* cancelled) {
+                                              const std::atomic<bool>* cancelled, MediaHashCause cause) {
+    HashMeasurement measurement(cause);
     FileLease file(media);
     MediaIdentitySnapshot before, after;
     if (file.handle == INVALID_HANDLE_VALUE || !Snapshot(file.handle, before))
@@ -150,13 +450,17 @@ Outcome<MediaIdentitySnapshot> HashFinalMedia(const std::filesystem::path& media
         return IdentityError("Cannot initialize final media hash");
     std::array<uint8_t, 64 * 1024> bytes{};
     uint64_t total = 0;
-    if ((continue_io && !continue_io()) || (cancelled && cancelled->load(std::memory_order_relaxed)))
+    if ((continue_io && !continue_io()) || (cancelled && cancelled->load(std::memory_order_relaxed))) {
+        measurement.cancelled = true;
         return IdentityError("Media identity verification cancelled", EngineErrorCode::Cancelled);
+    }
     while (total < before.file_size) {
         const auto chunk = static_cast<DWORD>((std::min)(before.file_size - total, uint64_t{bytes.size()}));
         if ((continue_io && !continue_io()) || (cancelled && cancelled->load(std::memory_order_relaxed)) ||
-            (before_io && !before_io(chunk, cancelled)))
+            (before_io && !before_io(chunk, cancelled))) {
+            measurement.cancelled = true;
             return IdentityError("Media identity verification cancelled", EngineErrorCode::Cancelled);
+        }
         DWORD read = 0;
         if (!ReadFile(file.handle, bytes.data(), chunk, &read, nullptr))
             return IdentityError("Final media hash read failed", EngineErrorCode::SourceIntegrityFailure);
@@ -164,12 +468,14 @@ Outcome<MediaIdentitySnapshot> HashFinalMedia(const std::filesystem::path& media
             return IdentityError("Media changed during final hash", EngineErrorCode::SourceIntegrityFailure);
         av_sha_update(sha.get(), bytes.data(), read);
         total += read;
+        measurement.bytes += read;
     }
     if (!Snapshot(file.handle, after) || before.file_identity != after.file_identity ||
         before.file_size != after.file_size || before.last_write_time != after.last_write_time ||
         total != before.file_size)
         return IdentityError("Media identity changed during final hash", EngineErrorCode::SourceIntegrityFailure);
     av_sha_final(sha.get(), before.sha256.data());
+    measurement.completed = true;
     return before;
 }
 Outcome<std::monostate> WriteMediaIdentitySidecar(const std::filesystem::path& media, const AudioManifest1& manifest,
@@ -183,7 +489,7 @@ Outcome<std::monostate> WriteMediaIdentitySidecar(const std::filesystem::path& m
     const auto lease = AcquireMediaReadLease(media);
     if (!lease.succeeded())
         return *lease.error();
-    auto hash = HashFinalMedia(media, continue_io, before_io, cancelled);
+    auto hash = HashFinalMedia(media, continue_io, before_io, cancelled, MediaHashCause::RecordingFinalization);
     if (!hash.succeeded())
         return *hash.error();
     const auto final_path = MediaIdentitySidecarPath(media);
@@ -267,10 +573,10 @@ Outcome<std::monostate> WriteMediaIdentitySidecar(const std::filesystem::path& m
         return IdentityError("Cannot serialize identity sidecar");
     }
 }
-AudioMetadataReadResult ReadMediaIdentitySidecar(const std::filesystem::path& media,
-                                                 const std::function<bool()>& continue_io,
-                                                 const BackgroundIoAdmission& before_io,
-                                                 const std::atomic<bool>* cancelled) {
+AudioMetadataReadResult
+ReadMediaIdentitySidecar(const std::filesystem::path& media, const std::function<bool()>& continue_io,
+                         const BackgroundIoAdmission& before_io, const std::atomic<bool>* cancelled,
+                         const std::shared_ptr<const MediaReadCapability>& source, bool verify_content) {
     const auto path = MediaIdentitySidecarPath(media);
     std::error_code error;
     const auto size = std::filesystem::file_size(path, error);
@@ -282,8 +588,8 @@ AudioMetadataReadResult ReadMediaIdentitySidecar(const std::filesystem::path& me
         return Status(AudioMetadataStatus::Invalid, "Audio identity sidecar exceeds byte budget");
     try {
         MetadataJsonQuotaScope json_quota;
-        HANDLE handle = CreateFileW(path.c_str(), GENERIC_READ, FILE_SHARE_READ | FILE_SHARE_WRITE | FILE_SHARE_DELETE,
-                                    nullptr, OPEN_EXISTING, FILE_ATTRIBUTE_NORMAL, nullptr);
+        HANDLE handle = CreateFileW(path.c_str(), GENERIC_READ, FILE_SHARE_READ, nullptr, OPEN_EXISTING,
+                                    FILE_ATTRIBUTE_NORMAL, nullptr);
         if (handle == INVALID_HANDLE_VALUE)
             return Status(AudioMetadataStatus::Invalid, "Audio identity sidecar is unavailable");
         std::unique_ptr<void, decltype(&CloseHandle)> input(handle, CloseHandle);
@@ -321,11 +627,28 @@ AudioMetadataReadResult ReadMediaIdentitySidecar(const std::filesystem::path& me
         const std::string expected_hash(hash_text.data(), hash_text.size());
         if (expected_hash.size() != 64 || expected_hash.find_first_not_of("0123456789abcdef") != std::string::npos)
             return Status(AudioMetadataStatus::Invalid, "Identity sidecar hash is invalid");
-        const auto hash = HashFinalMedia(media, continue_io, before_io, cancelled);
-        if (!hash.succeeded() || Length(json.at("file_size")) != hash.value()->file_size ||
-            expected_hash != Hex(hash.value()->sha256))
-            return Status(AudioMetadataStatus::Stale, "Audio identity sidecar does not match final media bytes");
         AudioMetadataReadResult result;
+        std::array<uint8_t, 32> expected{};
+        const auto nibble = [](char value) {
+            return static_cast<uint8_t>(value <= '9' ? value - '0' : value - 'a' + 10);
+        };
+        for (size_t index = 0; index < expected.size(); ++index)
+            expected[index] =
+                static_cast<uint8_t>((nibble(expected_hash[index * 2]) << 4) | nibble(expected_hash[index * 2 + 1]));
+        result.expected_content_sha256 = expected;
+        if (verify_content) {
+            const auto hash = source ? [&]() -> Outcome<MediaIdentitySnapshot> {
+                auto proof = VerifyMediaIdentity(source, expected, continue_io, before_io, cancelled);
+                return proof.succeeded() ? Outcome<MediaIdentitySnapshot>{(*proof.value())->Identity()}
+                                         : Outcome<MediaIdentitySnapshot>{*proof.error()};
+            }()
+                : HashFinalMedia(media, continue_io, before_io, cancelled, MediaHashCause::Sidecar);
+            if (!hash.succeeded() || Length(json.at("file_size")) != hash.value()->file_size ||
+                expected_hash != Hex(hash.value()->sha256))
+                return Status(AudioMetadataStatus::Stale, "Audio identity sidecar does not match final media bytes");
+        } else if (!source || Length(json.at("file_size")) != source->Identity().file_size) {
+            return Status(AudioMetadataStatus::Stale, "Audio identity sidecar does not match admitted media size");
+        }
         for (const auto& marker : json.at("marker_refs")) {
             const auto& name = marker.get_ref<const Json::string_t&>();
             result.references.marker_refs.emplace_back(name.data(), name.size());
@@ -333,7 +656,7 @@ AudioMetadataReadResult ReadMediaIdentitySidecar(const std::filesystem::path& me
         const auto serialized_ranges = json.at("source_ranges").dump();
         result.references.source_ranges_json.assign(serialized_ranges.data(), serialized_ranges.size());
         (void)ReferenceRanges(result.references);
-        result.status = AudioMetadataStatus::Verified;
+        result.status = verify_content ? AudioMetadataStatus::Verified : AudioMetadataStatus::Pending;
         result.selection_media_id = manifest.value()->media_id;
         result.manifest = std::move(*manifest.value());
         for (const auto& track : result.manifest->tracks)

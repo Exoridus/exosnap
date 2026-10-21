@@ -2,6 +2,7 @@
 
 #include "services/WaveformCacheService.h"
 
+#include <exosnap/engine/audio_track_model.h>
 #include <exosnap/engine/edit_timeline.h>
 #include <exosnap/engine/waveform_cache.h>
 
@@ -65,6 +66,7 @@ class WaveformRootNode final : public QSGNode {
     int level = -1;
     int channels = 0;
     float height = 0;
+    float gain = 1;
     QColor color;
     std::map<std::uint64_t, BlockNode> blocks;
     std::map<std::int64_t, PcmNode> pcm;
@@ -108,7 +110,8 @@ struct Lane {
 };
 
 std::vector<QLineF> PcmLines(const WaveformCacheService::PcmWindow& data,
-                             const WaveformCacheService::PcmWindow* successor, int channel, const Lane& lane) {
+                             const WaveformCacheService::PcmWindow* successor, int channel, const Lane& lane,
+                             float gain) {
     std::vector<QLineF> lines;
     const auto end = data.first_sample + static_cast<std::int64_t>(data.samples.size() / 2);
     for (const auto& span : data.coverage) {
@@ -121,8 +124,10 @@ std::vector<QLineF> PcmLines(const WaveformCacheService::PcmWindow& data,
                 std::any_of(successor->coverage.begin(), successor->coverage.end(),
                             [end](const auto& covered) { return covered.first <= end && covered.end > end; }))
                 next = successor->samples[channel];
-            lines.emplace_back(static_cast<double>(at), lane.center - data.samples[at * 2 + channel] * lane.half,
-                               static_cast<double>(at + 1), lane.center - next * lane.half);
+            lines.emplace_back(static_cast<double>(at),
+                               lane.center - std::clamp(data.samples[at * 2 + channel] * gain, -1.0f, 1.0f) * lane.half,
+                               static_cast<double>(at + 1),
+                               lane.center - std::clamp(next * gain, -1.0f, 1.0f) * lane.half);
         }
     }
     return lines;
@@ -132,7 +137,8 @@ std::vector<QLineF> PcmLines(const WaveformCacheService::PcmWindow& data,
 // at the bucket's start and end. Consecutive buckets meet in zero-width
 // triangles, so each bucket is a flat-topped column.
 void FillLane(QSGGeometryNode* peak_node, QSGGeometryNode* rms_node, const std::vector<WaveformPeak>& peaks,
-              std::uint32_t buckets, int channels, int lane_channel, const Lane& lane, double bucket_samples) {
+              std::uint32_t buckets, int channels, int lane_channel, const Lane& lane, double bucket_samples,
+              float gain) {
     auto* peak = peak_node->geometry();
     auto* rms = rms_node->geometry();
     peak->allocate(static_cast<int>(buckets * 4));
@@ -157,8 +163,9 @@ void FillLane(QSGGeometryNode* peak_node, QSGGeometryNode* rms_node, const std::
             hi = engine::WaveformPeakToFloat(p.max);
             level = engine::WaveformPeakToFloat(p.rms);
         }
-        float top = lane.center - hi * lane.half;
-        float bottom = lane.center - lo * lane.half;
+        float top = lane.center - std::clamp(hi * gain, -1.0f, 1.0f) * lane.half;
+        float bottom = lane.center - std::clamp(lo * gain, -1.0f, 1.0f) * lane.half;
+        level = std::clamp(level * gain, 0.0f, 1.0f);
         // Silence and DC still read as a one-pixel line where data exists.
         if (bottom - top < 1.0f) {
             const float middle = (top + bottom) / 2;
@@ -184,7 +191,8 @@ void FillLane(QSGGeometryNode* peak_node, QSGGeometryNode* rms_node, const std::
 }
 
 void PaintSoftwareLane(QPainter& painter, const std::vector<WaveformPeak>& peaks, std::uint32_t buckets, int channels,
-                       int lane_channel, const Lane& lane, double first_x, double bucket_width, const QColor& color) {
+                       int lane_channel, const Lane& lane, double first_x, double bucket_width, const QColor& color,
+                       float gain) {
     QColor peak_color = color;
     peak_color.setAlphaF(color.alphaF() * kPeakAlpha);
     for (std::uint32_t bucket = 0; bucket < buckets; ++bucket) {
@@ -195,9 +203,11 @@ void PaintSoftwareLane(QPainter& painter, const std::vector<WaveformPeak>& peaks
         const float hi = engine::WaveformPeakToFloat(channels == 1 ? std::max(a.max, b.max) : channel.max);
         const float ra = engine::WaveformPeakToFloat(a.rms);
         const float rb = engine::WaveformPeakToFloat(b.rms);
-        const float rms = channels == 1 ? std::sqrt((ra * ra + rb * rb) / 2) : engine::WaveformPeakToFloat(channel.rms);
-        float top = lane.center - hi * lane.half;
-        float bottom = lane.center - lo * lane.half;
+        const float rms = std::clamp(
+            (channels == 1 ? std::sqrt((ra * ra + rb * rb) / 2) : engine::WaveformPeakToFloat(channel.rms)) * gain,
+            0.0f, 1.0f);
+        float top = lane.center - std::clamp(hi * gain, -1.0f, 1.0f) * lane.half;
+        float bottom = lane.center - std::clamp(lo * gain, -1.0f, 1.0f) * lane.half;
         if (bottom - top < 1.0f) {
             const float middle = (top + bottom) / 2;
             top = middle - 0.5f;
@@ -466,6 +476,17 @@ void ExoWaveformItem::setSourceOutUs(qint64 value) {
     update();
 }
 
+void ExoWaveformItem::setGainDb(qreal value) {
+    if (!std::isfinite(value))
+        return;
+    const auto bounded = std::clamp(value, qreal{engine::kMinGainDb}, qreal{engine::kMaxGainDb});
+    if (bounded == gain_db_)
+        return;
+    gain_db_ = bounded;
+    emit gainDbChanged();
+    update();
+}
+
 void ExoWaveformItem::setChannelCount(int count) {
     const int bounded = std::clamp(count, 1, 2);
     if (bounded == channel_count_)
@@ -491,6 +512,7 @@ void ExoWaveformItem::geometryChange(const QRectF& new_geometry, const QRectF& o
 }
 
 QSGNode* ExoWaveformItem::updatePaintNode(QSGNode* old_node, UpdatePaintNodeData*) {
+    const float gain = engine::GainDbToLinear(static_cast<float>(gain_db_), false);
     auto* root = static_cast<WaveformRootNode*>(old_node);
     const double width = this->width();
     const double height = this->height();
@@ -525,13 +547,14 @@ QSGNode* ExoWaveformItem::updatePaintNode(QSGNode* old_node, UpdatePaintNodeData
         last_level_.store(-1, std::memory_order_relaxed);
         const auto h = static_cast<float>(height);
         if (root->key != cache_key_ || root->level != -2 || root->channels != channel_count_ || root->height != h ||
-            root->color != color_) {
+            root->color != color_ || root->gain != gain) {
             root->Reset();
             root->key = cache_key_;
             root->level = -2;
             root->channels = channel_count_;
             root->height = h;
             root->color = color_;
+            root->gain = gain;
         }
         const std::vector<Lane> lanes = channel_count_ == 2
                                             ? std::vector<Lane>{{h / 4, std::max(0.0f, h / 4 - kLaneGap)},
@@ -574,7 +597,7 @@ QSGNode* ExoWaveformItem::updatePaintNode(QSGNode* old_node, UpdatePaintNodeData
             if (software_renderer || found == root->pcm.end()) {
                 for (int channel = 0; channel < 2; ++channel) {
                     const auto lines =
-                        PcmLines(*data, successor.get(), channel, lanes[channel_count_ == 1 ? 0 : channel]);
+                        PcmLines(*data, successor.get(), channel, lanes[channel_count_ == 1 ? 0 : channel], gain);
                     if (software_renderer) {
                         for (const auto& line : lines)
                             painter.drawLine(
@@ -627,13 +650,14 @@ QSGNode* ExoWaveformItem::updatePaintNode(QSGNode* old_node, UpdatePaintNodeData
     const int channels = channel_count_;
     const auto lane_height = static_cast<float>(height);
     if (root->key != cache_key_ || root->level != level || root->channels != channels || root->height != lane_height ||
-        root->color != color_) {
+        root->color != color_ || root->gain != gain) {
         root->Reset();
         root->key = cache_key_;
         root->level = level;
         root->channels = channels;
         root->height = lane_height;
         root->color = color_;
+        root->gain = gain;
     }
 
     const auto bucket_samples = static_cast<double>(engine::WaveformBucketSamples(static_cast<std::uint32_t>(level)));
@@ -679,7 +703,7 @@ QSGNode* ExoWaveformItem::updatePaintNode(QSGNode* old_node, UpdatePaintNodeData
             const double first_x = (static_cast<double>(block) * block_samples - first_sample) / samples_per_pixel;
             for (std::size_t lane = 0; lane < lanes.size(); ++lane)
                 PaintSoftwareLane(painter, data->peaks, buckets, channels, static_cast<int>(lane), lanes[lane], first_x,
-                                  bucket_samples / samples_per_pixel, color_);
+                                  bucket_samples / samples_per_pixel, color_, gain);
         }
         painter.end();
         root->image = window()->createImageNode();
@@ -715,7 +739,7 @@ QSGNode* ExoWaveformItem::updatePaintNode(QSGNode* old_node, UpdatePaintNodeData
                 auto* peak_node = static_cast<QSGGeometryNode*>(child);
                 auto* rms_node = static_cast<QSGGeometryNode*>(child->nextSibling());
                 FillLane(peak_node, rms_node, data->peaks, buckets, channels, static_cast<int>(lane), lanes[lane],
-                         bucket_samples);
+                         bucket_samples, gain);
                 child = rms_node->nextSibling();
             }
             found->second.built_buckets = buckets;

@@ -193,7 +193,15 @@ struct EditExportAdapter::PreparedExport {
                            [](const auto& clip) { return clip.stream.has_value(); });
     }
 
-    bool SameWorkspace(const edit::Workspace& workspace) const {
+    bool SameWorkspace(const EditSessionAdapter& session) const {
+        const auto& workspace = session.workspace();
+        if (intent.span == engine::EditExportSpan::SelectedClips) {
+            std::set<uint64_t> selected;
+            for (const auto& id : session.selectedClipIds())
+                selected.insert(id.toULongLong());
+            if (selected != std::set<uint64_t>(intent.selected_clip_ids.begin(), intent.selected_clip_ids.end()))
+                return false;
+        }
         if (workspace.revision() != workspace_revision || workspace.clips() != clips ||
             workspace.transitions() != transitions || workspace.monitoringRevision() != monitoring_revision ||
             workspace.assets().size() != assets.size())
@@ -206,6 +214,54 @@ struct EditExportAdapter::PreparedExport {
                 return false;
         }
         return true;
+    }
+
+    bool VerifySource(engine::TimelineMediaSource& source, std::string& error,
+                      const std::atomic<bool>& cancelled) const {
+        if (source.identity_proof && (!source.access || source.identity_proof->Source() != source.access)) {
+            error = "The export identity proof does not match its admitted source.";
+            return false;
+        }
+        if (!source.access) {
+            auto acquired = engine::AcquireMediaReadCapability(source.path);
+            if (!acquired.succeeded()) {
+                error = acquired.error()->context;
+                return false;
+            }
+            source.access = *acquired.value();
+        }
+        std::optional<std::array<uint8_t, 32>> expected;
+        const auto imported =
+            std::find_if(assets.begin(), assets.end(), [&](const auto& asset) { return asset.id == source.id; });
+        if (imported != assets.end() && imported->source_descriptor) {
+            const auto& fingerprint = imported->source_descriptor->asset_identity_fingerprint;
+            if (std::any_of(fingerprint.begin(), fingerprint.end(), [](uint8_t byte) { return byte != 0; }))
+                expected = fingerprint;
+        }
+        auto verified = engine::VerifyMediaIdentity(source.access, expected, {}, {}, &cancelled);
+        if (!verified.succeeded()) {
+            error = verified.error()->context;
+            return false;
+        }
+        source.identity_proof = *verified.value();
+        source.metadata = engine::ProbeEditMedia(source.access, {}, {}, &cancelled);
+        if (!source.metadata.error.empty() || !source.metadata.content_identity_valid ||
+            source.metadata.content_sha256 != source.identity_proof->Identity().sha256) {
+            error = source.metadata.error.empty() ? "Cannot verify the export source identity." : source.metadata.error;
+            return false;
+        }
+        return !cancelled.load();
+    }
+
+    void BindRecipeSources() {
+        for (auto& clip : recipe) {
+            const auto source = std::find_if(snapshot.sources.begin(), snapshot.sources.end(),
+                                             [&](const auto& value) { return value.path == clip.source; });
+            if (source != snapshot.sources.end()) {
+                clip.access = source->access;
+                clip.identity_proof = source->identity_proof;
+            }
+        }
     }
 
     bool PreparePlanned(std::string& error, const std::atomic<bool>& cancelled) {
@@ -223,16 +279,8 @@ struct EditExportAdapter::PreparedExport {
         for (auto& source : snapshot.sources) {
             if (!referenced.contains(source.id))
                 continue;
-            source.metadata = engine::ProbeEditMedia(source.path, {}, {}, &cancelled);
-            const auto imported =
-                std::find_if(assets.begin(), assets.end(), [&](const auto& asset) { return asset.id == source.id; });
-            if (imported != assets.end() && imported->source_descriptor && source.metadata.content_identity_valid &&
-                source.metadata.content_sha256 != imported->source_descriptor->asset_identity_fingerprint) {
-                error = QCoreApplication::translate("EditExportAdapter",
-                                                    "A source changed after it was imported. Import it again.")
-                            .toStdString();
+            if (!VerifySource(source, error, cancelled))
                 return false;
-            }
             if (cancelled.load()) {
                 error = "Export preparation cancelled.";
                 return false;
@@ -353,7 +401,6 @@ struct EditExportAdapter::PreparedExport {
                         .toStdString();
             return false;
         }
-        copy_assessment = engine::AssessTimelineExport(recipe, to_mp4, &cancelled);
         std::set<uint64_t> referenced;
         std::set<uint64_t> audio_assets;
         for (const auto& clip : snapshot.timeline.clips) {
@@ -364,17 +411,16 @@ struct EditExportAdapter::PreparedExport {
         for (auto& source : snapshot.sources) {
             if (!referenced.contains(source.id))
                 continue;
-            source.metadata = engine::ProbeEditMedia(source.path, {}, {}, &cancelled);
-            if (!source.metadata.error.empty()) {
-                error = source.metadata.error;
+            if (!VerifySource(source, error, cancelled))
                 return false;
-            }
             const auto& identity = source.metadata.audio_metadata;
             if (!identity.unverified_asset_binding && !identity.manifest) {
                 error = "Cannot establish source identity for export review.";
                 return false;
             }
         }
+        BindRecipeSources();
+        copy_assessment = engine::AssessTimelineExport(recipe, to_mp4, &cancelled);
         plan = engine::ClassifyEditExport(snapshot, copy_assessment, to_mp4);
         if (plan.path == engine::EditExportPath::Unsupported) {
             error = plan.reason;
@@ -418,7 +464,7 @@ struct EditExportAdapter::PreparedExport {
                     return false;
                 }
                 engine::EditPlayerEngine player;
-                if (!player.Open(source.path, error, &cancelled) ||
+                if (!player.Open(source.access, error, &cancelled) ||
                     !player.SetMonitorSelection(*source.monitor_selection, error))
                     return false;
                 if (!audio_assets.contains(source.id) && !source.monitor_selection->tracks.empty()) {
@@ -467,31 +513,30 @@ struct EditExportAdapter::PreparedExport {
         return true;
     }
 
-    bool RetainUnchangedSources(std::vector<std::shared_ptr<void>>& leases, std::string& error,
+    bool RetainUnchangedSources(std::vector<std::shared_ptr<const void>>& leases, std::string& error,
                                 const std::atomic<bool>& cancelled,
                                 const std::function<void(uint64_t)>& source_verified) const {
         const auto& reviewed_sources = edit_plan ? edit_plan->snapshot.sources : snapshot.sources;
         const auto changed_error = "A source changed after export review. Review the export outcome again.";
-        // Lock every contributing source before hashing any of them, so a
-        // checked source cannot change while another source is being checked.
         for (const auto& source : reviewed_sources) {
             if (cancelled.load())
                 return false;
             if (source.metadata.duration_us == 0)
                 continue;
-            auto acquired = engine::AcquireMediaReadLease(source.path);
-            if (!acquired.succeeded()) {
+            if (!source.access || !source.identity_proof || source.identity_proof->Source() != source.access ||
+                !source.metadata.content_identity_valid ||
+                source.identity_proof->Identity().sha256 != source.metadata.content_sha256) {
                 error = changed_error;
                 return false;
             }
-            leases.push_back(std::move(*acquired.value()));
+            leases.push_back(source.access);
         }
         for (const auto& source : reviewed_sources) {
             if (cancelled.load())
                 return false;
             if (source.metadata.duration_us == 0)
                 continue;
-            if (!SameMediaIdentity(source.metadata, engine::ProbeEditMedia(source.path, {}, {}, &cancelled))) {
+            if (!SameMediaIdentity(source.metadata, engine::ProbeEditMedia(source.access, {}, {}, &cancelled))) {
                 error = changed_error;
                 return false;
             }
@@ -724,7 +769,7 @@ void EditExportAdapter::setSession(EditSessionAdapter* session) {
                 emit optionsChanged();
             }
         }
-        if (state_ == State::Review)
+        if (state_ == State::Review && (!prepared_ || !prepared_->SameWorkspace(*session_)))
             discardPreparedExport();
     });
     connect(this, &EditExportAdapter::stateChanged, session_, [this]() { session_->setExportRunning(running()); });
@@ -926,8 +971,12 @@ void EditExportAdapter::startExport() {
     std::vector<engine::TimelineExportClip> recipe;
     engine::TimelineRenderSnapshot render_snapshot;
     render_snapshot.timeline = session_->workspace().timeline();
-    for (const auto& asset : session_->workspace().assets())
-        render_snapshot.sources.push_back({asset.id, std::filesystem::path(asset.path), {}, asset.monitor_selection});
+    for (const auto& asset : session_->workspace().assets()) {
+        const auto metadata = session_->sourceMetadata(asset.id);
+        render_snapshot.sources.push_back({asset.id, std::filesystem::path(asset.path),
+                                           metadata ? *metadata : engine::EditMediaMetadata{}, asset.monitor_selection,
+                                           session_->sourceAccess(asset.id), session_->sourceProof(asset.id)});
+    }
     engine::EditExportIntent export_intent;
     export_intent.mode = mode_key_ == QStringLiteral("originalStreams") ? engine::EditExportMode::OriginalStreams
                                                                         : engine::EditExportMode::FinishedStereo;
@@ -939,11 +988,8 @@ void EditExportAdapter::startExport() {
     export_intent.selection_in_us = selection_in_us_;
     export_intent.selection_out_us = selection_out_us_;
     if (export_intent.span == engine::EditExportSpan::SelectedClips) {
-        const auto* lead = session_->workspace().clip(session_->workspace().selection());
-        for (const auto& clip : session_->workspace().clips())
-            if (lead &&
-                (clip.id == lead->id || (session_->linkedSelection && lead->group && clip.group == lead->group)))
-                export_intent.selected_clip_ids.push_back(clip.id);
+        for (const auto& id : session_->selectedClipIds())
+            export_intent.selected_clip_ids.push_back(id.toULongLong());
     }
     const auto scope_snapshot = engine::SelectEditExportSnapshot(render_snapshot, export_intent);
     const auto scope_bounds = engine::EditExportBounds(scope_snapshot.timeline, export_intent);
@@ -1035,7 +1081,7 @@ void EditExportAdapter::startExport() {
                       QString::fromStdWString(run->prepared->output.wstring()), false);
             return;
         }
-        if (!session_ || !run->prepared->SameWorkspace(session_->workspace())) {
+        if (!session_ || !run->prepared->SameWorkspace(*session_)) {
             finishRun(false, tr("The timeline or monitoring selection changed during export preparation."),
                       QString::fromStdWString(run->prepared->output.wstring()), false);
             return;
@@ -1051,8 +1097,7 @@ void EditExportAdapter::startExport() {
 void EditExportAdapter::confirmPreparedExport() {
     if (state_ != State::Review || !prepared_ || !session_)
         return;
-    if (!prepared_->SameWorkspace(session_->workspace()) ||
-        prepared_->to_mp4 != (container_key_ == QStringLiteral("mp4")) ||
+    if (!prepared_->SameWorkspace(*session_) || prepared_->to_mp4 != (container_key_ == QStringLiteral("mp4")) ||
         (render_config_ &&
          engine::RuntimeConfigContentKey(prepared_->config) != engine::RuntimeConfigContentKey(render_config_()))) {
         retry_output_path_ = prepared_->output;
@@ -1078,7 +1123,7 @@ void EditExportAdapter::beginPreparedExport() {
         const bool to_mp4 = prepared->to_mp4;
         const bool replace_existing = prepared->replace_existing;
         const auto& marker_plan = prepared->marker_plan;
-        std::vector<std::shared_ptr<void>> source_leases;
+        std::vector<std::shared_ptr<const void>> source_leases;
         if (!prepared->RetainUnchangedSources(source_leases, run->error, run->cancel, source_verified))
             return;
         if (!prepared->edit_plan) {
@@ -1118,6 +1163,8 @@ void EditExportAdapter::beginPreparedExport() {
         MetadataCompanionPublicationGuard companion_guard(std::move(result.created_metadata_companions));
         bool ok = result.success;
         std::string error = result.message;
+        if (ok && !prepared->RetainUnchangedSources(source_leases, error, run->cancel, {}))
+            ok = false;
 
         if (ok && !StageMarkerSidecarForPublication(temp_output, output, marker_plan.markers, error, std::nullopt,
                                                     [&] { return !run->cancel.load(); }))

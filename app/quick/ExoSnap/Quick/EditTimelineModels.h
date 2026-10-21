@@ -9,9 +9,13 @@
 #include <QMutex>
 #include <QQuickImageProvider>
 #include <QString>
+#include <QUrl>
 #include <QVariant>
 #include <QtQmlIntegration/qqmlintegration.h>
 
+#include <QList>
+#include <atomic>
+#include <memory>
 #include <utility>
 #include <vector>
 
@@ -126,6 +130,9 @@ class EditTimelineClipModel : public QAbstractListModel {
     // A null session clears the model.
     Q_INVOKABLE void sync(EditSessionAdapter* session, qint64 fromMs, qint64 toMs);
     Q_INVOKABLE void syncUs(EditSessionAdapter* session, qint64 fromUs, qint64 toUs);
+    // Explicit capture IDs remain resident when navigation moves them outside either axis.
+    Q_INVOKABLE void syncViewportUs(EditSessionAdapter* session, qint64 fromUs, qint64 toUs,
+                                    const QVariantList& visibleTrackIds, const QVariantList& retainedClipIds = {});
     [[nodiscard]] quint64 syncCountForTest() const noexcept {
         return sync_count_;
     }
@@ -136,6 +143,33 @@ class EditTimelineClipModel : public QAbstractListModel {
   private:
     quint64 sync_count_ = 0;
     std::vector<std::pair<qulonglong, QVariantMap>> rows_;
+};
+
+class EditFolderModel final : public QAbstractListModel {
+    Q_OBJECT
+    QML_ELEMENT
+    QML_UNCREATABLE("EditFolderModel is provided by EditSessionAdapter")
+
+  public:
+    explicit EditFolderModel(QString settings_path = {}, QObject* parent = nullptr);
+    ~EditFolderModel() override;
+    int rowCount(const QModelIndex& parent = {}) const override;
+    QVariant data(const QModelIndex& index, int role) const override;
+    QHash<int, QByteArray> roleNames() const override;
+    Q_INVOKABLE void addRoot(const QUrl& directory);
+    Q_INVOKABLE void toggle(qulonglong entry_id);
+    Q_INVOKABLE void refresh(qulonglong entry_id);
+    Q_INVOKABLE void removeRoot(qulonglong entry_id);
+    Q_INVOKABLE void inspectDirectory(const QUrl& directory);
+    static QList<QUrl> DirectoryCandidates(const QUrl& directory, const std::shared_ptr<std::atomic<bool>>& cancelled,
+                                           QString& reason);
+
+  signals:
+    void candidatesReady(const QUrl& directory, const QVariantList& files, const QString& reason);
+
+  private:
+    struct Impl;
+    std::unique_ptr<Impl> impl_;
 };
 
 // Hands out decoded tiles by "<run id>/<index>". Thread-safe: Qt resolves image

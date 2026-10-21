@@ -242,6 +242,28 @@ std::uint32_t ReadBlockBlocking(WaveformCacheService& service, const QString& ke
 
 } // namespace
 
+TEST(WaveformCacheService, TemporaryStagingReservationsDeferAnotherSourceInsteadOfFailingIt) {
+    WaveformFixture fixture;
+    fixture.control->gated = true;
+    auto service = fixture.Service(48 * 1024);
+    struct UnblockDecoder {
+        std::shared_ptr<DecoderControl> control;
+        ~UnblockDecoder() {
+            control->Open();
+        }
+    } unblock{fixture.control};
+    const auto first = service->request(SourceKey(125), fixture.source_path, kThreeSecondsUs);
+    ASSERT_TRUE(WaitFor([&] { return fixture.control->opens.load() == 1; }));
+    const auto second = service->request(SourceKey(126), fixture.source_path, kThreeSecondsUs);
+    fixture.control->Release(2);
+    ASSERT_TRUE(WaitFor([&] { return fixture.control->calls.load() >= 2; }));
+    EXPECT_NE(service->state(second), WaveformCacheService::State::Failed);
+    fixture.control->Open();
+    ASSERT_TRUE(WaitFor([&] { return service->state(first) == WaveformCacheService::State::Ready; }));
+    ASSERT_TRUE(WaitFor([&] { return service->state(second) == WaveformCacheService::State::Ready; }));
+    EXPECT_LE(service->storeForTest().TotalBytes(), 48u * 1024u);
+}
+
 TEST(WaveformCacheService, AnalysesOnceAndAWarmCacheNeverDecodes) {
     WaveformFixture fixture;
     QString key;
@@ -275,6 +297,68 @@ TEST(WaveformCacheService, AnalysesOnceAndAWarmCacheNeverDecodes) {
         ASSERT_NEAR(engine::WaveformPeakToFloat(peaks[bucket * 2 + 1].min), -amplitude, 1e-4f);
     }
     EXPECT_EQ(warm->levelCount(key), engine::WaveformLevelCount(144000));
+}
+
+TEST(WaveformCacheService, ProvisionalOverviewAndPcmNeverPublishPersistentContent) {
+    WaveformFixture fixture;
+    const auto acquired = engine::AcquireMediaReadCapability(std::filesystem::path(fixture.source_path.toStdWString()));
+    ASSERT_TRUE(acquired.succeeded());
+    const auto access = *acquired.value();
+    auto service = fixture.Service();
+    const auto provisional = SourceKey(119);
+    service->registerSource(provisional.content_sha256, access);
+    const auto key = service->request(provisional, fixture.source_path, kThreeSecondsUs);
+    ASSERT_TRUE(WaitFor([&] { return service->state(key) == WaveformCacheService::State::Ready; }));
+    std::vector<engine::WaveformPeak> peaks;
+    EXPECT_GT(ReadBlockBlocking(*service, key, 0, 0, peaks), 0u);
+    EXPECT_EQ(FilesWithSuffix(fixture.root, ".wave"), 0u);
+    const auto ticket = service->requestPcmWindow(key, 0, 256, 1);
+    ASSERT_NE(ticket, 0u);
+    ASSERT_TRUE(WaitFor([&] { return service->pcmWindow(ticket).state == WaveformCacheService::DetailState::Ready; }));
+    EXPECT_EQ(access->Measurements().hash_starts, 0u);
+    const auto verified = engine::VerifyMediaIdentity(access);
+    ASSERT_TRUE(verified.succeeded());
+    const auto proof = *verified.value();
+    service->registerSource(proof->Identity().sha256, access, proof);
+    auto content = provisional;
+    content.content_sha256 = proof->Identity().sha256;
+    const auto content_key = service->request(content, fixture.source_path, kThreeSecondsUs);
+    ASSERT_TRUE(WaitFor([&] { return service->state(content_key) == WaveformCacheService::State::Ready; }));
+    EXPECT_EQ(access->Measurements().hash_starts, 1u);
+    EXPECT_EQ(FilesWithSuffix(fixture.root, ".wave"), 1u);
+}
+
+TEST(WaveformCacheService, AnotherVisibleSourceReceivesAnOverviewBeforeTheFirstFinishes) {
+    WaveformFixture fixture;
+    auto first_control = std::make_shared<DecoderControl>();
+    auto second_control = std::make_shared<DecoderControl>();
+    first_control->gated = true;
+    WaveformCacheService::Config config;
+    config.root = fixture.root;
+    config.chunk_frames = 4800;
+    WaveformCacheService service(config, [first_control, second_control](const auto&, std::uint32_t stream,
+                                                                         std::string&, const std::atomic<bool>*,
+                                                                         const auto&) {
+        return std::make_unique<SyntheticDecoder>(stream == 1 ? first_control : second_control);
+    });
+    const auto first = service.request(SourceKey(121), fixture.source_path, 10'000'000);
+    const bool first_opened = WaitFor([&] {
+        return first_control->opens.load() > 0 || service.state(first) == WaveformCacheService::State::Analyzing;
+    });
+    auto second_source = SourceKey(122);
+    second_source.container_index = 2;
+    const auto second = service.request(second_source, fixture.source_path, kThreeSecondsUs);
+    first_control->Release();
+    const bool second_progress = WaitFor([&] { return second_control->calls.load() > 0; }, 300);
+    const auto first_completed = service.completedSamples(first);
+    first_control->Open();
+    EXPECT_TRUE(first_opened);
+    EXPECT_TRUE(second_progress);
+    EXPECT_LT(first_completed, service.totalSamples(first));
+    EXPECT_TRUE(WaitFor([&] {
+        return service.state(first) == WaveformCacheService::State::Ready &&
+               service.state(second) == WaveformCacheService::State::Ready;
+    }));
 }
 
 TEST(WaveformCacheService, LongSourceUsesBoundedAnalysisWorkingSet) {
@@ -874,6 +958,24 @@ TEST(WaveformCacheService, ForegroundBusyPausesAnalysis) {
     EXPECT_GT(fixture.control->calls.load(), 0);
 }
 
+TEST(WaveformCacheService, PlaybackServesVisibleChunksButRecordingDefersThem) {
+    WaveformFixture fixture;
+    auto service = fixture.Service();
+    service->setAnalysisPressure(true, false);
+    const auto key = service->request(SourceKey(127), fixture.source_path, kThreeSecondsUs);
+    QThread::msleep(80);
+    EXPECT_EQ(fixture.control->calls.load(), 0);
+    service->setVisibleInterest(17, key, 0);
+    EXPECT_TRUE(WaitFor([&] { return fixture.control->calls.load() > 0; }, 500));
+    service->setAnalysisPressure(false, true);
+    QThread::msleep(20);
+    const auto paused_calls = fixture.control->calls.load();
+    QThread::msleep(80);
+    EXPECT_EQ(fixture.control->calls.load(), paused_calls);
+    service->setAnalysisPressure(false, false);
+    EXPECT_TRUE(WaitFor([&] { return service->state(key) == WaveformCacheService::State::Ready; }));
+}
+
 TEST(WaveformCacheService, MissingSourceKeepsCachedPeaksButReportsUnavailable) {
     WaveformFixture fixture;
     const QString missing = fixture.temp.filePath(QStringLiteral("moved-away.mkv"));
@@ -919,6 +1021,7 @@ TEST(WaveformCacheService, DiskAndMemoryBudgetsHold) {
         EXPECT_LE(service->memoryBytesForTest(), memory_budget);
     }
     EXPECT_GT(service->clearCache(), 0);
+    service->storeForTest().WaitForRetired();
     EXPECT_EQ(FilesWithSuffix(fixture.root, ".wave"), 0u);
     EXPECT_EQ(service->state(survivor), WaveformCacheService::State::Unknown);
 }
@@ -1393,6 +1496,131 @@ std::vector<DrawnBucket> DrawnBuckets(QSGNode* root) {
     return out;
 }
 
+TEST(ExoWaveformItem, RenderGainScalesEachLaneAroundItsOwnCenterWithoutNewDecode) {
+    WaveformFixture fixture;
+    fixture.control->sample_amplitude = [](std::int64_t) { return 0.125f; };
+    auto service = fixture.Service();
+    const auto key = service->request(SourceKey(124), fixture.source_path, kThreeSecondsUs);
+    ASSERT_TRUE(WaitFor([&] { return service->state(key) == WaveformCacheService::State::Ready; }));
+    TestableWaveformItem item;
+    item.setSize(QSizeF(300, 40));
+    item.setService(service.get());
+    item.setCacheKey(key);
+    item.setSourceOutUs(1'600'000);
+    std::unique_ptr<QSGNode> node;
+    ASSERT_TRUE(WaitFor([&] {
+        node.reset(item.updatePaintNode(node.release(), nullptr));
+        return node && node->childCount() > 0;
+    }));
+    const auto lane_middle = [&](int channel) {
+        auto* band = node->firstChild()->firstChild();
+        for (int index = 0; index < channel * 2; ++index)
+            band = band->nextSibling();
+        const auto* vertices = static_cast<QSGGeometryNode*>(band)->geometry()->vertexDataAsPoint2D();
+        return (vertices[0].y + vertices[1].y) / 2;
+    };
+    const auto upper = lane_middle(0);
+    const auto lower = lane_middle(1);
+    const auto calls = service->decodeCallsForTest();
+    const auto opens = service->decoderOpensForTest();
+    item.setGainDb(20 * std::log10(2.0));
+    node.reset(item.updatePaintNode(node.release(), nullptr));
+    EXPECT_NEAR(10 - lane_middle(0), (10 - upper) * 2, 1e-4);
+    EXPECT_NEAR(lane_middle(1) - 30, (lower - 30) * 2, 1e-4);
+    EXPECT_EQ(item.cacheKey(), key);
+    EXPECT_EQ(service->decodeCallsForTest(), calls);
+    EXPECT_EQ(service->decoderOpensForTest(), opens);
+    item.setGainDb(24);
+    node.reset(item.updatePaintNode(node.release(), nullptr));
+    EXPECT_GE(lane_middle(0), 0);
+    EXPECT_LE(lane_middle(0), 20);
+    EXPECT_GE(lane_middle(1), 20);
+    EXPECT_LE(lane_middle(1), 40);
+    item.setGainDb(0);
+    item.setSourceOutUs(3125);
+    ASSERT_TRUE(WaitFor([&] {
+        item.updatePolish();
+        node.reset(item.updatePaintNode(node.release(), nullptr));
+        return FirstPcmGeometry(node.get());
+    }));
+    const auto pcm_before = FirstPcmGeometry(node.get())->vertexDataAsPoint2D()[0].y;
+    const auto pcm_calls = service->decodeCallsForTest();
+    item.setGainDb(20 * std::log10(2.0));
+    node.reset(item.updatePaintNode(node.release(), nullptr));
+    EXPECT_NEAR(10 - FirstPcmGeometry(node.get())->vertexDataAsPoint2D()[0].y, (10 - pcm_before) * 2, 1e-4);
+    EXPECT_EQ(service->decodeCallsForTest(), pcm_calls);
+}
+
+TEST(ExoWaveformItem, SoftwareRenderGainClipsInsideEachStereoLaneAndReusesSourceData) {
+    WaveformFixture fixture;
+    fixture.control->sample_amplitude = [](std::int64_t) { return 0.125f; };
+    auto service = fixture.Service();
+    const auto key = service->request(SourceKey(123), fixture.source_path, kThreeSecondsUs);
+    ASSERT_TRUE(WaitFor([&] { return service->state(key) == WaveformCacheService::State::Ready; }));
+    QQuickWindow::setGraphicsApi(QSGRendererInterface::Software);
+    QQuickWindow window;
+    window.setGeometry(0, 0, 400, 140);
+    window.setColor(Qt::black);
+    QQuickItem viewport(window.contentItem());
+    viewport.setPosition(QPointF(50, 60));
+    viewport.setSize(QSizeF(300, 48));
+    viewport.setClip(true);
+    TestableWaveformItem item;
+    item.setParentItem(&viewport);
+    item.setSize(QSizeF(300, 40));
+    item.setColor(Qt::magenta);
+    item.setService(service.get());
+    item.setCacheKey(key);
+    item.setSourceOutUs(1'600'000);
+    window.show();
+    QImage observed_image;
+    const auto lane_center = [&](int channel) {
+        const auto image = window.grabWindow();
+        observed_image = image;
+        if (image.isNull())
+            return -1.0;
+        double y_sum = 0;
+        int count = 0;
+        for (int y = channel * 20; y < (channel + 1) * 20; ++y)
+            for (int x = 80; x < 100; ++x) {
+                const auto pixel =
+                    image.pixelColor(x * image.width() / window.width(), (60 + y) * image.height() / window.height());
+                if (pixel.red() > 20 && pixel.blue() > 20 && pixel.green() < 10) {
+                    y_sum += y;
+                    ++count;
+                }
+            }
+        return count ? y_sum / count : -1.0;
+    };
+    const bool initially_drawn = WaitFor([&] { return lane_center(0) >= 0 && lane_center(1) >= 20; });
+    int min_x = observed_image.width(), min_y = observed_image.height(), max_x = -1, max_y = -1;
+    for (int y = 0; y < observed_image.height(); ++y)
+        for (int x = 0; x < observed_image.width(); ++x) {
+            const auto pixel = observed_image.pixelColor(x, y);
+            if (pixel.red() > 20 && pixel.blue() > 20 && pixel.green() < 10) {
+                min_x = std::min(min_x, x);
+                min_y = std::min(min_y, y);
+                max_x = std::max(max_x, x);
+                max_y = std::max(max_y, y);
+            }
+        }
+    ASSERT_TRUE(initially_drawn) << "image=" << observed_image.width() << "x" << observed_image.height()
+                                 << " renderer=" << static_cast<int>(window.rendererInterface()->graphicsApi())
+                                 << " level=" << item.levelForTest() << " clip=" << item.clipRect().x() << ","
+                                 << item.clipRect().y() << "," << item.clipRect().width() << ","
+                                 << item.clipRect().height() << " upper=" << lane_center(0)
+                                 << " lower=" << lane_center(1) << " colorBounds=" << min_x << "," << min_y << ".."
+                                 << max_x << "," << max_y;
+    const auto upper = lane_center(0);
+    const auto lower = lane_center(1);
+    const auto calls = service->decodeCallsForTest();
+    item.setGainDb(24);
+    ASSERT_TRUE(WaitFor([&] { return lane_center(0) < upper - 5 && lane_center(1) > lower + 5; }));
+    EXPECT_GE(lane_center(0), 0);
+    EXPECT_LE(lane_center(1), 39);
+    EXPECT_EQ(service->decodeCallsForTest(), calls);
+}
+
 TEST(ExoWaveformItem, LevelOfDetailKeepsAtLeastOneBucketPerColumn) {
     EXPECT_EQ(WaveformLevelForSamplesPerPixel(10, 8), 0);
     EXPECT_EQ(WaveformLevelForSamplesPerPixel(128, 8), 0);
@@ -1797,6 +2025,144 @@ TEST(ThumbnailCache, DiskTierRejectsCorruptionAndHoldsItsBudget) {
         bounded.Store(ThumbnailCacheKey(Identity(4), i * 1000, 48), noisy, i * 1000);
         EXPECT_LE(bounded.store().TotalBytes(), budget);
     }
+}
+
+TEST(ThumbnailBroker, WaitingSourcesReceiveCoverageBeforeOneSourceMonopolizesTheQueue) {
+    ThumbnailRequestBroker::Config config;
+    config.disk_enabled = false;
+    ThumbnailRequestBroker broker(config);
+    broker.AttachWorker([] {});
+    const auto first = engine::ToHex(Identity(101));
+    const auto second = engine::ToHex(Identity(102));
+    broker.RegisterSource(first, ThumbnailSourceInfo{"first.mkv", Identity(101)});
+    broker.RegisterSource(second, ThumbnailSourceInfo{"second.mkv", Identity(102)});
+    for (int i = 0; i < 8; ++i)
+        broker.Request(first, i * 1000, 48, [](const QImage&) {});
+    broker.Request(second, 0, 48, [](const QImage&) {});
+    bool second_served = false;
+    for (int i = 0; i < 4; ++i) {
+        const auto job = broker.TakeJob();
+        ASSERT_TRUE(job);
+        second_served |= job->identity == second;
+        broker.Complete(*job, {});
+    }
+    EXPECT_TRUE(second_served);
+}
+
+TEST(ThumbnailBroker, AQueuedWarmHitReusesItsPinnedImageWithinAOneImageBudget) {
+    const auto image = SolidImage(20, 20, qRgb(12, 34, 56));
+    ThumbnailRequestBroker::Config config;
+    config.disk_enabled = false;
+    config.memory_budget_bytes = static_cast<std::size_t>(image.sizeInBytes());
+    ThumbnailRequestBroker broker(config);
+    broker.AttachWorker([] {});
+    const auto identity = engine::ToHex(Identity(123));
+    broker.RegisterSource(identity, ThumbnailSourceInfo{"source.mkv", Identity(123)});
+    auto result = std::make_shared<Result>();
+    broker.Request(identity, 0, 20, Capture(result));
+    const auto job = broker.TakeJob();
+    ASSERT_TRUE(job);
+    const auto populated = broker.MemoryInsert(job->key, image);
+    ASSERT_FALSE(populated.isNull());
+    const auto hit = broker.MemoryLookup(job->key);
+    ASSERT_TRUE(hit);
+    broker.Complete(*job, *hit);
+    EXPECT_TRUE(Done(result));
+    ASSERT_TRUE(result->image);
+    EXPECT_EQ(result->image->cacheKey(), populated.cacheKey());
+    EXPECT_EQ(broker.ResidentBytes(), config.memory_budget_bytes);
+    EXPECT_FALSE(broker.HasWork());
+}
+
+TEST(ThumbnailBroker, PinnedImagesRemainBudgetedAcrossClearAndPendingTilesRetryAfterRelease) {
+    const auto image = SolidImage(20, 20, qRgb(12, 34, 56));
+    ThumbnailRequestBroker::Config config;
+    config.disk_enabled = false;
+    config.memory_budget_bytes = static_cast<std::size_t>(image.sizeInBytes());
+    ThumbnailRequestBroker broker(config);
+    broker.AttachWorker([] {});
+    const auto identity = engine::ToHex(Identity(120));
+    broker.RegisterSource(identity, ThumbnailSourceInfo{"source.mkv", Identity(120)});
+    auto first = std::make_shared<Result>();
+    broker.Request(identity, 0, 20, Capture(first));
+    const auto first_job = broker.TakeJob();
+    ASSERT_TRUE(first_job);
+    broker.Complete(*first_job, image);
+    ASSERT_TRUE(Done(first));
+    broker.Clear();
+    auto second = std::make_shared<Result>();
+    broker.Request(identity, 1000, 20, Capture(second));
+    const auto second_job = broker.TakeJob();
+    ASSERT_TRUE(second_job);
+    broker.Complete(*second_job, image);
+    EXPECT_FALSE(Done(second));
+    first.reset();
+    const auto retry = broker.TakeJob();
+    ASSERT_TRUE(retry);
+    broker.Complete(*retry, image);
+    EXPECT_TRUE(Done(second));
+    ASSERT_TRUE(second->image);
+    EXPECT_EQ(second->image->pixel(0, 0), image.pixel(0, 0));
+}
+
+TEST(ThumbnailBroker, InterestReplacementRetainsOtherSplitSiblingCoverage) {
+    ThumbnailRequestBroker::Config config;
+    config.disk_enabled = false;
+    ThumbnailRequestBroker broker(config);
+    broker.AttachWorker([] {});
+    const auto identity = engine::ToHex(Identity(103));
+    broker.RegisterSource(identity, ThumbnailSourceInfo{"source.mkv", Identity(103)});
+    broker.ReplaceInterest(11, identity, {{1000, 48, 1}, {2000, 48, 4}}, 1);
+    broker.ReplaceInterest(12, identity, {{3000, 48, 1}, {4000, 48, 4}}, 1);
+    broker.ReplaceInterest(11, identity, {{5000, 48, 1}}, 2);
+    std::vector<std::int64_t> times;
+    while (const auto job = broker.TakeJob()) {
+        times.push_back(job->time_us);
+        broker.Complete(*job, {});
+    }
+    EXPECT_EQ(times, (std::vector<std::int64_t>{3000, 5000, 4000}));
+    broker.RemoveInterest(12);
+    broker.RemoveInterest(11);
+}
+
+TEST(ThumbnailBroker, CapabilityFramesStayMemoryOnlyUntilTheirHeldLeaseIsVerified) {
+    EnsureApplication();
+    ThumbnailFixture fixture;
+    const auto original =
+        (std::filesystem::path(__FILE__).parent_path() / "../../../libs/engine/tests/fixtures/reordered_h264.mp4")
+            .lexically_normal();
+    const auto path = std::filesystem::path(fixture.temp.filePath(QStringLiteral("source.mp4")).toStdWString());
+    ASSERT_TRUE(std::filesystem::copy_file(original, path));
+    const auto acquired = engine::AcquireMediaReadCapability(path);
+    ASSERT_TRUE(acquired.succeeded());
+    const auto access = *acquired.value();
+    const auto metadata = engine::ProbeEditMedia(access, {}, {}, nullptr, false);
+    ASSERT_TRUE(metadata.error.empty()) << metadata.error;
+    auto broker = fixture.Broker();
+    TimelineThumbnailSource worker(broker);
+    const auto provisional = Identity(118);
+    broker->RegisterSource(
+        engine::ToHex(provisional),
+        ThumbnailSourceInfo{
+            path, provisional, metadata.width, metadata.height, metadata.fps_num, metadata.fps_den, access, {}, false});
+    const auto first = std::make_shared<Result>();
+    broker->Request(engine::ToHex(provisional), 0, 48, Capture(first));
+    ASSERT_TRUE(WaitFor([&] { return Done(first); }));
+    ASSERT_TRUE(first->image && !first->image->isNull());
+    EXPECT_EQ(access->Measurements().hash_starts, 0u);
+    EXPECT_EQ(broker->Disk()->store().EntryCount(), 0u);
+    const auto verified = engine::VerifyMediaIdentity(access);
+    ASSERT_TRUE(verified.succeeded());
+    const auto proof = *verified.value();
+    broker->RegisterSource(engine::ToHex(proof->Identity().sha256),
+                           ThumbnailSourceInfo{path, proof->Identity().sha256, metadata.width, metadata.height,
+                                               metadata.fps_num, metadata.fps_den, access, proof, true});
+    const auto second = std::make_shared<Result>();
+    broker->Request(engine::ToHex(proof->Identity().sha256), 0, 48, Capture(second));
+    ASSERT_TRUE(WaitFor([&] { return Done(second); }));
+    ASSERT_TRUE(second->image && !second->image->isNull());
+    EXPECT_EQ(access->Measurements().hash_starts, 1u);
+    EXPECT_GT(broker->Disk()->store().EntryCount(), 0u);
 }
 
 TEST(ThumbnailBroker, ExactSourcePathsDoNotProbeUnrelatedFiles) {

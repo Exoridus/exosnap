@@ -20,7 +20,7 @@ pub mod report;
 pub mod sheet;
 
 use std::fs::File;
-use std::io::{BufRead, BufReader};
+use std::io::{BufRead, BufReader, Write};
 use std::path::{Path, PathBuf};
 use std::process::{Command, ExitCode, Stdio};
 use std::sync::Mutex;
@@ -278,7 +278,12 @@ pub fn run(repo_root: &Path, args: ScreenshotArgs) -> anyhow::Result<ExitCode> {
     };
     let results = run_jobs(&context, &jobs, options.jobs.max(1));
     let sheets = overlay_sheets(&out_dir, &jobs, &results)?;
-    let _ = std::fs::remove_dir_all(&scratch);
+    if let Err(error) = cleanup_scratch(&scratch) {
+        eprintln!(
+            "Screenshot scratch retained at {}: {error}",
+            scratch.display()
+        );
+    }
 
     let created_at_utc = utc_now();
     let info = RunInfo {
@@ -322,6 +327,7 @@ fn list(values: &ProductValues) -> anyhow::Result<()> {
         }
     }
     println!("\nrecord states: {}", values.record_states.join(", "));
+    println!("\nedit states: {}", values.edit_states.join(", "));
     println!("accents: {}", values.accents.join(", "));
     Ok(())
 }
@@ -555,6 +561,17 @@ fn take(context: &RunContext, index: usize, job: &Job) -> ShotResult {
     }
     result.warnings.extend(log_warnings(&log_path));
     result.overlays = overlay_files(&context.out_dir, &job.stem);
+    if job
+        .spec
+        .overlay_state
+        .as_deref()
+        .is_some_and(|state| catalog::HUD_STATES.contains(&state))
+        && result.overlays.is_empty()
+    {
+        result
+            .warnings
+            .push("requested desktop overlay produced no overlay image".to_string());
+    }
 
     let saved = std::fs::metadata(&png).is_ok_and(|m| m.len() > 0);
     if result.exit_code == Some(0) && saved {
@@ -586,8 +603,7 @@ fn spawn_and_wait(
     log_path: &Path,
 ) -> anyhow::Result<Option<i32>> {
     let config_dir = context.scratch.join(format!("config-{index}"));
-    std::fs::create_dir_all(&config_dir)?;
-    let log = File::create(log_path)?;
+    let mut log = File::create(log_path)?;
 
     let mut command = Command::new(&context.exe);
     // A seed or scale left in the caller's environment would silently apply
@@ -602,10 +618,32 @@ fn spawn_and_wait(
     configure_render_platform(&mut command, args);
     // Fresh per shot: a crash report or recovery entry left by an earlier
     // shot would otherwise cover every later one.
-    command.env("EXOSNAP_CONFIG_DIR", &config_dir);
+    configure_shot_isolation(&mut command, &config_dir)?;
     for (name, value) in env {
         command.env(name, value);
     }
+    for (name, value) in command.get_envs() {
+        if [
+            "QT_QPA_PLATFORM",
+            "QSG_RHI_BACKEND",
+            "QT_QUICK_BACKEND",
+            "QT_SCALE_FACTOR",
+            "QML_DISK_CACHE_PATH",
+            "EXOSNAP_CONFIG_DIR",
+            "EXOSNAP_OUTPUT_DIR",
+        ]
+        .iter()
+        .any(|allowed| name == *allowed)
+        {
+            writeln!(
+                log,
+                "screenshot-env: {}={}",
+                name.to_string_lossy(),
+                value.map_or_else(|| "<unset>".into(), |value| value.to_string_lossy())
+            )?;
+        }
+    }
+    log.flush()?;
     command
         .args(args)
         .current_dir(&context.out_dir)
@@ -628,8 +666,60 @@ fn spawn_and_wait(
         }
         std::thread::sleep(Duration::from_millis(50));
     };
+    append_application_log(&config_dir, log_path).with_context(|| {
+        format!(
+            "could not preserve the application log; configuration retained at {}",
+            config_dir.display()
+        )
+    })?;
     let _ = std::fs::remove_dir_all(&config_dir);
     Ok(code)
+}
+
+fn configure_shot_isolation(command: &mut Command, config_dir: &Path) -> std::io::Result<()> {
+    let output_dir = config_dir.join("output");
+    std::fs::create_dir_all(&output_dir)?;
+    command.env("EXOSNAP_CONFIG_DIR", config_dir);
+    command.env("EXOSNAP_OUTPUT_DIR", output_dir);
+    Ok(())
+}
+
+fn cleanup_scratch(scratch: &Path) -> std::io::Result<()> {
+    let scratch = match scratch.canonicalize() {
+        Ok(path) => path,
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(()),
+        Err(error) => return Err(error),
+    };
+    let qml_cache = scratch.join("qmlcache");
+    match qml_cache.canonicalize() {
+        Ok(resolved) => {
+            if resolved.parent() != Some(scratch.as_path()) {
+                return Err(std::io::Error::new(
+                    std::io::ErrorKind::InvalidInput,
+                    "QML cache resolves outside the screenshot scratch directory",
+                ));
+            }
+            std::fs::remove_dir_all(&qml_cache)?;
+        }
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => {}
+        Err(error) => return Err(error),
+    }
+    // Per-shot configurations remain until their application log is archived.
+    std::fs::remove_dir(&scratch)
+}
+
+fn append_application_log(config_dir: &Path, log_path: &Path) -> std::io::Result<()> {
+    use std::io::Write;
+
+    let mut application = match File::open(config_dir.join("logs/exosnap.log")) {
+        Ok(file) => file,
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(()),
+        Err(error) => return Err(error),
+    };
+    let mut output = std::fs::OpenOptions::new().append(true).open(log_path)?;
+    writeln!(output, "\nApplication log:")?;
+    std::io::copy(&mut application, &mut output)?;
+    Ok(())
 }
 
 /// App log lines that say part of the request did not apply: a harness option
@@ -680,7 +770,87 @@ fn overlay_files(out_dir: &Path, stem: &str) -> Vec<String> {
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn per_shot_output_is_real_and_isolated() {
+        let directory = tempfile::tempdir().unwrap();
+        let config = directory.path().join("shot-config");
+        let mut command = std::process::Command::new("exosnap");
+        super::configure_shot_isolation(&mut command, &config).unwrap();
+        let output = config.join("output");
+        assert!(output.is_dir());
+        for (name, expected) in [
+            ("EXOSNAP_CONFIG_DIR", &config),
+            ("EXOSNAP_OUTPUT_DIR", &output),
+        ] {
+            assert_eq!(
+                command
+                    .get_envs()
+                    .find(|(key, _)| *key == name)
+                    .and_then(|(_, value)| value),
+                Some(expected.as_os_str())
+            );
+        }
+        std::fs::write(output.join("writable-check"), "isolated fixture").unwrap();
+    }
     use super::*;
+
+    #[test]
+    fn unpreserved_application_log_survives_final_scratch_cleanup() {
+        let directory = tempfile::tempdir().unwrap();
+        let scratch = directory.path().join("scratch");
+        let config = scratch.join("config-0");
+        let application_log = config.join("logs/exosnap.log");
+        let unavailable_output = directory.path().join("shot.log");
+        std::fs::create_dir_all(config.join("logs")).unwrap();
+        std::fs::create_dir_all(scratch.join("qmlcache")).unwrap();
+        std::fs::create_dir(&unavailable_output).unwrap();
+        std::fs::write(&application_log, "original diagnostic evidence\n").unwrap();
+
+        assert!(append_application_log(&config, &unavailable_output).is_err());
+        assert!(cleanup_scratch(&scratch).is_err());
+
+        assert_eq!(
+            std::fs::read_to_string(&application_log).unwrap(),
+            "original diagnostic evidence\n"
+        );
+        assert!(!scratch.join("qmlcache").exists());
+    }
+
+    #[test]
+    fn successful_scratch_cleanup_removes_shared_cache_and_root() {
+        let directory = tempfile::tempdir().unwrap();
+        let scratch = directory.path().join("scratch");
+        std::fs::create_dir_all(scratch.join("qmlcache")).unwrap();
+        std::fs::write(scratch.join("qmlcache/cached.qmlc"), "cache").unwrap();
+
+        cleanup_scratch(&scratch).unwrap();
+
+        assert!(!scratch.exists());
+    }
+
+    #[test]
+    fn application_warnings_survive_isolated_configuration_cleanup() {
+        let directory = tempfile::tempdir().unwrap();
+        let config = directory.path().join("config");
+        let output = directory.path().join("shot.log");
+        std::fs::create_dir_all(config.join("logs")).unwrap();
+        std::fs::write(&output, "process started\n").unwrap();
+        std::fs::write(
+            config.join("logs/exosnap.log"),
+            "Warning: Editor.qml:42: ReferenceError: missing is not defined\n",
+        )
+        .unwrap();
+        append_application_log(&config, &output).unwrap();
+        std::fs::remove_dir_all(&config).unwrap();
+        let warnings = log_warnings(&output);
+        assert_eq!(warnings.len(), 1);
+        assert!(warnings[0].contains("ReferenceError"));
+        assert!(
+            std::fs::read_to_string(&output)
+                .unwrap()
+                .starts_with("process started\n")
+        );
+    }
 
     #[test]
     fn synthetic_shots_are_offscreen_and_live_preview_keeps_native_rendering() {

@@ -169,10 +169,11 @@ void EditPlayerSession::SetVolume(float volume) {
     impl_->volume.store(std::clamp(volume, 0.0f, 1.0f));
 }
 
-bool EditPlayerSession::Open(const std::filesystem::path& path, std::string& out_error) {
+bool EditPlayerSession::Open(const std::filesystem::path& path, std::string& out_error,
+                             const std::atomic<bool>* cancelled) {
     Close();
 
-    if (!impl_->engine.Open(path, out_error))
+    if (!impl_->engine.Open(path, out_error, cancelled))
         return false;
 
     impl_->has_audio = impl_->engine.HasAudioStream();
@@ -183,6 +184,20 @@ bool EditPlayerSession::Open(const std::filesystem::path& path, std::string& out
             // stream" fallback contract rather than failing the whole open.
             impl_->has_audio = false;
         }
+    }
+    return true;
+}
+
+bool EditPlayerSession::Open(const std::shared_ptr<const MediaReadCapability>& source, std::string& out_error,
+                             const std::atomic<bool>* cancelled) {
+    Close();
+    if (!impl_->engine.Open(source, out_error, cancelled))
+        return false;
+    impl_->has_audio = impl_->engine.HasAudioStream();
+    if (impl_->has_audio) {
+        std::string audio_error;
+        if (!impl_->audio.Init(audio_error))
+            impl_->has_audio = false;
     }
     return true;
 }
@@ -222,12 +237,13 @@ AudioMetadataReadResult EditPlayerSession::AudioMetadata() const {
     return impl_->engine.AudioMetadata();
 }
 
-bool EditPlayerSession::SetMonitorSelection(MonitorSelectionSnapshot selection, std::string& error) {
+bool EditPlayerSession::SetMonitorSelection(MonitorSelectionSnapshot selection, std::string& error,
+                                            const std::atomic<bool>* cancelled) {
     if (impl_->playing) {
         error = "Pause playback before changing the monitoring selection.";
         return false;
     }
-    return impl_->engine.SetMonitorSelection(std::move(selection), error);
+    return impl_->engine.SetMonitorSelection(std::move(selection), error, cancelled);
 }
 
 bool EditPlayerSession::MonitoringConfirmationRequired() const {

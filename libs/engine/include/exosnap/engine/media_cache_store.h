@@ -29,6 +29,7 @@
 #include <filesystem>
 #include <functional>
 #include <memory>
+#include <mutex>
 #include <optional>
 #include <span>
 #include <string>
@@ -65,6 +66,8 @@ struct MediaCacheStoreStats {
     std::uint64_t temp_cleaned = 0;
 };
 
+enum class MediaCacheWriteFailure { None, InvalidEntry, Busy, Retired, Io };
+
 class MediaCacheStore {
   public:
     class Writer {
@@ -97,13 +100,15 @@ class MediaCacheStore {
     // Publishes `payload` under `key`, replacing an existing entry, then evicts
     // least recently used entries until the budget holds again. An entry larger
     // than the whole budget is refused.
-    bool Publish(std::string_view key, std::span<const std::uint8_t> payload, std::string& error);
+    bool Publish(std::string_view key, std::span<const std::uint8_t> payload, std::string& error,
+                 std::optional<std::uint64_t> expected_epoch = {});
 
     // Creates a bounded-size, private random-access payload. Destruction aborts
     // unpublished work. Clear invalidates active writers and deletes staging.
     // Publish hashes the completed payload in bounded chunks before rename.
+    // Busy means other active writers temporarily reserve the staging budget.
     [[nodiscard]] std::unique_ptr<Writer> BeginWrite(std::string_view key, std::uint64_t payload_size,
-                                                     std::string& error);
+                                                     std::string& error, MediaCacheWriteFailure* failure = nullptr);
 
     // The verified payload, or nullopt for a miss. Counts as a use.
     [[nodiscard]] std::optional<std::vector<std::uint8_t>> Read(std::string_view key);
@@ -125,6 +130,15 @@ class MediaCacheStore {
     // the number of entry bytes released.
     std::uint64_t Clear();
 
+    // Revokes current writers and switches to an empty physical generation.
+    // Filesystem work and the final deletion of retired data run on the
+    // maintenance worker. The returned value counts already indexed bytes.
+    std::uint64_t Retire();
+    // Waits for retired writers and physical cleanup. Intended for teardown
+    // and verification, never for an interactive clear action.
+    void WaitForRetired();
+    [[nodiscard]] std::uint64_t Epoch() const;
+
     [[nodiscard]] std::uint64_t TotalBytes();
     [[nodiscard]] std::size_t EntryCount();
     [[nodiscard]] std::uint64_t BudgetBytes() const noexcept;
@@ -133,7 +147,12 @@ class MediaCacheStore {
 
   private:
     struct Impl;
+    struct Maintenance;
+    [[nodiscard]] std::shared_ptr<Impl> current() const;
+    mutable std::mutex current_mutex_;
+    MediaCacheStoreConfig config_;
     std::shared_ptr<Impl> impl_;
+    std::unique_ptr<Maintenance> maintenance_;
 };
 
 // Lowercase hexadecimal spelling of `bytes`.

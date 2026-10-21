@@ -14,7 +14,87 @@
 #include <string>
 #include <vector>
 
+extern "C" {
+#include <libavformat/avformat.h>
+#include <libavutil/channel_layout.h>
+#include <libavutil/samplefmt.h>
+}
+
 namespace exosnap::visual_tests {
+
+bool WriteEditVisualAudioFixture(const std::filesystem::path& path, std::uint32_t seed, std::string& error) {
+    error.clear();
+    const auto utf8 = path.u8string();
+    const std::string filename(reinterpret_cast<const char*>(utf8.data()), utf8.size());
+    AVFormatContext* context = nullptr;
+    if (avformat_alloc_output_context2(&context, nullptr, "matroska", filename.c_str()) < 0 || !context) {
+        error = "Cannot allocate the visual audio container.";
+        return false;
+    }
+    const auto close = [](AVFormatContext* value) {
+        avio_closep(&value->pb);
+        avformat_free_context(value);
+    };
+    const std::unique_ptr<AVFormatContext, decltype(close)> output(context, close);
+    context->flags |= AVFMT_FLAG_BITEXACT;
+    for (const char* name : {"Game", "Microphone"}) {
+        auto* stream = avformat_new_stream(context, nullptr);
+        if (!stream) {
+            error = "Cannot allocate the visual audio stream.";
+            return false;
+        }
+        stream->time_base = {1, 48000};
+        stream->codecpar->codec_type = AVMEDIA_TYPE_AUDIO;
+        stream->codecpar->codec_id = AV_CODEC_ID_PCM_S16LE;
+        stream->codecpar->sample_rate = 48000;
+        stream->codecpar->bits_per_coded_sample = 16;
+        stream->codecpar->format = AV_SAMPLE_FMT_S16;
+        av_channel_layout_default(&stream->codecpar->ch_layout, 2);
+        av_dict_set(&stream->metadata, "title", name, 0);
+    }
+    if (avio_open(&context->pb, filename.c_str(), AVIO_FLAG_WRITE) < 0 || avformat_write_header(context, nullptr) < 0) {
+        error = "Cannot write the visual audio container header.";
+        return false;
+    }
+    const auto free_packet = [](AVPacket* value) { av_packet_free(&value); };
+    const std::unique_ptr<AVPacket, decltype(free_packet)> packet(av_packet_alloc(), free_packet);
+    if (!packet) {
+        error = "Cannot allocate the visual audio packet.";
+        return false;
+    }
+    for (std::uint32_t first = 0; first < 96000; first += 480)
+        for (unsigned stream_index = 0; stream_index < context->nb_streams; ++stream_index) {
+            if (av_new_packet(packet.get(), 480 * 4) < 0) {
+                error = "Cannot allocate the visual audio samples.";
+                return false;
+            }
+            for (std::uint32_t frame = 0; frame < 480; ++frame) {
+                const double phase = (first + frame) * (180.0 + seed * 3.0 + stream_index * 110.0) / 48000.0;
+                const auto sample = static_cast<std::int16_t>(std::sin(phase * 2 * std::numbers::pi) * 8192);
+                const auto value = static_cast<std::uint16_t>(sample);
+                for (unsigned channel = 0; channel < 2; ++channel) {
+                    packet->data[frame * 4 + channel * 2] = static_cast<std::uint8_t>(value);
+                    packet->data[frame * 4 + channel * 2 + 1] = static_cast<std::uint8_t>(value >> 8);
+                }
+            }
+            const auto stream = context->streams[stream_index];
+            packet->stream_index = static_cast<int>(stream_index);
+            packet->pts = packet->dts = av_rescale_q(first, AVRational{1, 48000}, stream->time_base);
+            packet->duration = av_rescale_q(480, AVRational{1, 48000}, stream->time_base);
+            packet->flags |= AV_PKT_FLAG_KEY;
+            if (av_interleaved_write_frame(context, packet.get()) < 0) {
+                error = "Cannot write the visual audio samples.";
+                return false;
+            }
+            av_packet_unref(packet.get());
+        }
+    if (av_write_trailer(context) < 0) {
+        error = "Cannot finalize the visual audio container.";
+        return false;
+    }
+    return true;
+}
+
 namespace {
 
 // A small integer hash, so a scene's details vary with the seed and the

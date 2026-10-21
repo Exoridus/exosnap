@@ -49,7 +49,7 @@ class EditTrackLayoutModel : public QObject {
         return 18;
     }
     qreal minimumHeight() const {
-        return 28;
+        return 22;
     }
     qreal maximumHeight() const {
         return 240;
@@ -58,9 +58,12 @@ class EditTrackLayoutModel : public QObject {
     void setPreviewTracks(const QVariantList& tracks);
     void reset();
     Q_INVOKABLE void setTrackHeight(qulonglong id, qreal height);
+    Q_INVOKABLE void toggleCollapsed(qulonglong id);
+    Q_INVOKABLE void setTrackColor(qulonglong id, const QString& color);
     Q_INVOKABLE qreal topForId(qulonglong id, bool preview = false) const;
     Q_INVOKABLE qreal heightForId(qulonglong id, bool preview = false) const;
     Q_INVOKABLE qulonglong trackAtY(qreal y) const;
+    Q_INVOKABLE QVariantList trackIdsIntersecting(qreal from_y, qreal to_y) const;
     Q_INVOKABLE QVariantMap dropTargetAtY(qreal y) const;
 
   signals:
@@ -73,12 +76,15 @@ class EditTrackLayoutModel : public QObject {
     QVariantMap geometry_;
     QVariantMap preview_geometry_;
     QHash<qulonglong, qreal> heights_;
+    QHash<qulonglong, qreal> expanded_heights_;
+    QHash<qulonglong, QString> colors_;
     qreal base_height_ = 0;
     qreal total_height_ = 0;
     void rebuild();
     QVariantList layoutRows(const QVariantList& tracks) const;
     static QVariantMap geometryFor(const QVariantList& rows);
     static bool validTracks(const QVariantList& tracks);
+    qreal defaultHeight(qulonglong id) const;
 };
 
 } // namespace exosnap::quick

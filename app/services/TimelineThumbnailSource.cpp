@@ -149,12 +149,14 @@ TimelineThumbnailSource::TimelineThumbnailSource(QObject* parent) : TimelineThum
 TimelineThumbnailSource::TimelineThumbnailSource(std::shared_ptr<ThumbnailRequestBroker> broker, QObject* parent)
     : QObject(parent), broker_(std::move(broker)) {
     if (broker_) {
-        broker_->AttachWorker([this]() {
-            {
-                const std::lock_guard<std::mutex> lock(mutex_);
-            }
-            cv_.notify_all();
-        });
+        broker_->AttachWorker(
+            [this]() {
+                {
+                    const std::lock_guard<std::mutex> lock(mutex_);
+                }
+                cv_.notify_all();
+            },
+            [this] { cv_.notify_all(); });
     }
     worker_ = std::thread([this]() { workerLoop(); });
 }
@@ -277,13 +279,18 @@ void TimelineThumbnailSource::cancel() {
 }
 
 void TimelineThumbnailSource::setForegroundBusy(bool busy) {
+    setAnalysisPressure(false, busy);
+}
+
+void TimelineThumbnailSource::setAnalysisPressure(bool playback, bool exclusive) {
     {
         const std::lock_guard<std::mutex> lock(mutex_);
-        busy_ = busy;
+        busy_ = playback || exclusive;
+        exclusive_ = exclusive;
     }
     // Outside mutex_: the broker's wake takes it.
     if (broker_)
-        broker_->SetForegroundBusy(busy);
+        broker_->SetAnalysisPressure(playback, exclusive);
     cv_.notify_all();
 }
 
@@ -300,7 +307,12 @@ void TimelineThumbnailSource::serveBrokerJob(const ThumbnailRequestBroker::Job& 
         broker_->Complete(job, *hit);
         return;
     }
-    if (!job.disk_checked && broker_->Disk() != nullptr) {
+    const auto source = broker_->Source(job.identity);
+    if (!source) {
+        broker_->Complete(job, QImage());
+        return;
+    }
+    if (!job.disk_checked && source->persistent && broker_->Disk() != nullptr) {
         if (const auto stored = broker_->Disk()->Load(job.key)) {
             broker_->CountDiskHit();
             broker_->Complete(job, *stored);
@@ -312,7 +324,7 @@ void TimelineThumbnailSource::serveBrokerJob(const ThumbnailRequestBroker::Job& 
         const std::lock_guard<std::mutex> lock(mutex_);
         if (stop_)
             return;
-        park = busy_;
+        park = exclusive_ || (busy_ && job.priority > 2);
     }
     if (park) {
         // Parked, not dropped: it decodes once foreground work is idle.
@@ -321,17 +333,16 @@ void TimelineThumbnailSource::serveBrokerJob(const ThumbnailRequestBroker::Job& 
         broker_->DeferDecode(parked);
         return;
     }
-    const auto source = broker_->Source(job.identity);
-    if (!source) {
-        broker_->Complete(job, QImage());
-        return;
-    }
     if (engine_path != source->path || engine_identity != job.identity) {
         engine.Close();
         engine_path.clear();
         std::string error;
-        if (!engine.Open(source->path, error, &shutdown_cancelled_) ||
-            !engine.ValidateContentIdentity(source->content_sha256, error, &shutdown_cancelled_)) {
+        const bool proof_matches = !source->proof || (source->proof->Source() == source->access &&
+                                                      source->proof->Identity().sha256 == source->content_sha256);
+        const bool opened = source->access ? engine.Open(source->access, error, &shutdown_cancelled_)
+                                           : engine.Open(source->path, error, &shutdown_cancelled_);
+        if (!proof_matches || !opened ||
+            (!source->access && !engine.ValidateContentIdentity(source->content_sha256, error, &shutdown_cancelled_))) {
             engine.Close();
             engine_identity.clear();
             broker_->Complete(job, QImage());
@@ -361,9 +372,9 @@ void TimelineThumbnailSource::serveBrokerJob(const ThumbnailRequestBroker::Job& 
 
 void TimelineThumbnailSource::workerLoop() {
     SetThreadPriority(GetCurrentThread(), THREAD_MODE_BACKGROUND_BEGIN);
-    // Constructed on the worker so the engine (and everything FFmpeg allocates
-    // behind it) lives and dies on exactly one thread.
-    auto engine = std::make_unique<exosnap::engine::EditPlayerEngine>();
+    // Explicit strip compatibility calls allocate their decoder lazily. Editor
+    // interests use only the broker decoder, whose lifetime stays on this thread.
+    std::unique_ptr<exosnap::engine::EditPlayerEngine> engine;
     bool open = false;
     // Worker-owned: every read and write happens on this thread, so the cache
     // needs no lock of its own.
@@ -371,8 +382,7 @@ void TimelineThumbnailSource::workerLoop() {
     // Content identity of the open clip when the broker knows its path; enables
     // the strip's disk tier.
     std::optional<std::array<std::uint8_t, 32>> clip_content;
-    // Broker requests decode on their own engine, so serving a tile of another
-    // source never closes the strip's clip.
+    // An explicit compatibility strip must not replace a broker decoder's source.
     auto request_engine = std::make_unique<exosnap::engine::EditPlayerEngine>();
     std::filesystem::path request_path;
     std::string request_identity;
@@ -383,10 +393,16 @@ void TimelineThumbnailSource::workerLoop() {
         bool close_job = false;
         {
             std::unique_lock<std::mutex> lock(mutex_);
-            cv_.wait(lock, [this]() {
+            const auto ready = [this]() {
                 return stop_ || pending_close_ || pending_open_.has_value() || pending_tiles_.has_value() ||
                        (broker_ && broker_->HasWork());
-            });
+            };
+            while (!ready()) {
+                if (broker_ && broker_->HasMemoryPressure())
+                    cv_.wait_for(lock, std::chrono::milliseconds(50));
+                else
+                    cv_.wait(lock);
+            }
             if (stop_)
                 break;
             // Closing first, then opening: a tile job queued alongside either
@@ -407,14 +423,20 @@ void TimelineThumbnailSource::workerLoop() {
 
         if (!close_job && !open_job && !tile_job) {
             if (broker_) {
-                if (const auto job = broker_->TakeJob())
+                if (const auto job = broker_->TakeJob()) {
                     serveBrokerJob(*job, *request_engine, request_path, request_identity);
+                    QMetaObject::invokeMethod(this, [this] { emit brokerProgressChanged(); }, Qt::QueuedConnection);
+                }
             }
             continue;
         }
 
         if (close_job) {
-            engine->Close();
+            if (engine)
+                engine->Close();
+            request_engine->Close();
+            request_path.clear();
+            request_identity.clear();
             tile_cache.Clear();
             clip_content.reset();
             open = false;
@@ -422,18 +444,22 @@ void TimelineThumbnailSource::workerLoop() {
         }
 
         if (open_job) {
+            if (!engine)
+                engine = std::make_unique<exosnap::engine::EditPlayerEngine>();
             engine->Close();
             // The key carries no clip identity, so the tiles of the clip being
             // replaced have to go before the new one decodes anything.
             tile_cache.Clear();
             clip_content.reset();
             if (broker_) {
-                if (const auto source = broker_->SourceForPath(open_job->path))
+                if (const auto source = broker_->SourceForPath(open_job->path); source && source->persistent)
                     clip_content = source->content_sha256;
             }
             std::string error;
-            open = engine->Open(open_job->path, error, &shutdown_cancelled_);
-            if (open && clip_content)
+            const auto registered = broker_ ? broker_->SourceForPath(open_job->path) : std::nullopt;
+            open = registered && registered->access ? engine->Open(registered->access, error, &shutdown_cancelled_)
+                                                    : engine->Open(open_job->path, error, &shutdown_cancelled_);
+            if (open && clip_content && (!registered || !registered->access))
                 open = engine->ValidateContentIdentity(*clip_content, error, &shutdown_cancelled_);
             if (!open) {
                 engine->Close();
