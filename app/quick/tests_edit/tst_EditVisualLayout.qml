@@ -121,14 +121,14 @@ TestCase {
         verify(!!page);
         page.applyHarnessView({fit: true});
         waitForRendering(page);
-        for (const name of ["editViewerStage", "editTimelineZone", "editTimelineHeader", "editTimelineFooter", "editSelectionStatus"]) {
+        for (const name of ["editViewerStage", "editTimelineZone", "editTimelineHeader", "editNavigator", "editLeftRail", "editRightRail"]) {
             const item = child(page, name);
             const point = item.mapToItem(page, 0, 0);
             verify(point.x >= -1 && point.x + item.width <= page.width + 1, name + " horizontal bounds");
             verify(point.y >= -1 && point.y + item.height <= page.height + 1, name + " vertical bounds: " + point.y + " + " + item.height + " / " + page.height);
         }
         verify(child(page, "editViewerStage").height >= 160);
-        for (const name of ["editTransportPlay", "editMediaAccess", "editDetailsAccess", "editExport", "editZoomIn", "editZoomOut"]) {
+        for (const name of ["editTransportPlay", "editMediaAccess", "editDetailsAccess", "editMixAccess", "editExport", "editZoomIn", "editZoomOut"]) {
             const control = child(page, name);
             verify(control.Accessible.name.length > 0, name + " accessible name");
             if (!control.visible) continue;

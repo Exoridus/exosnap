@@ -150,6 +150,39 @@ class EditSelection {
         active_track = target->track;
         return true;
     }
+    // Marquee: every clip on `tracks` that overlaps [start, end), added to
+    // `base`. Link groups widen only the hit set, so an exact (Alt) marquee
+    // passes linked = false and never changes the stored relation.
+    void selectArea(const EditSnapshot& snapshot, Time start, Time end, const std::vector<Id>& tracks,
+                    const std::vector<Id>& base, bool linked) {
+        std::set<Id> hit;
+        for (const auto& clip : snapshot.clips)
+            if (std::find(tracks.begin(), tracks.end(), clip.track) != tracks.end() && clip.start < end &&
+                clip.end() > start)
+                hit.insert(clip.id);
+        if (linked) {
+            std::set<Id> groups;
+            for (const auto& clip : snapshot.clips)
+                if (hit.contains(clip.id) && clip.group)
+                    groups.insert(clip.group);
+            for (const auto& clip : snapshot.clips)
+                if (clip.group && groups.contains(clip.group))
+                    hit.insert(clip.id);
+        }
+        std::set<Id> selected(base.begin(), base.end());
+        selected.insert(hit.begin(), hit.end());
+        const auto keep_track = active_track;
+        clear();
+        active_track = keep_track;
+        for (const auto value : OrderedClipIds(snapshot))
+            if (selected.contains(value))
+                clip_ids.push_back(value);
+        if (clip_ids.empty())
+            return;
+        mode = SelectionMode::Clips;
+        const auto first_hit = std::find_if(clip_ids.begin(), clip_ids.end(), [&](Id id) { return hit.contains(id); });
+        primary_clip = anchor_clip = first_hit != clip_ids.end() ? *first_hit : clip_ids.front();
+    }
     void selectAll(const EditSnapshot& snapshot) {
         clear();
         clip_ids = OrderedClipIds(snapshot);

@@ -224,17 +224,26 @@ Item {
             reuseItems: true
             model: root.currentTab === 0 ? root.session.mediaModel : root.currentTab === 1 ? root.session.folderModel : root.recordings.recentRecordingOptions
             ScrollBar.vertical: ExoScrollBar { policy: ScrollBar.AsNeeded }
+            // The library owns its keys: Delete must not reach the timeline and
+            // remove a clip selection the user can no longer see.
+            Keys.onDeletePressed: event => event.accepted = true
+            Keys.onPressed: event => {
+                if (event.key === Qt.Key_Backspace)
+                    event.accepted = true;
+            }
             delegate: Basic.ItemDelegate {
                 id: sourceItem
                 required property var modelData
+                required property int index
                 readonly property bool folderEntry: root.currentTab === 1
                 readonly property string detail: folderEntry ? (modelData.error || (modelData.loading ? qsTr("Reading folder...") : ""))
                     : modelData.verificationReason || modelData.reason || (modelData.verifying ? qsTr("Verifying media...") : modelData.audioChoiceRequired ? qsTr("Choose an audio stream") : modelData.available === false ? qsTr("Media unavailable") : (modelData.metadata || ""))
                 width: sourceItems.width
                 height: folderEntry ? detail.length > 0 ? 60 : 38 : 66
                 leftPadding: folderEntry ? 36 + Math.min(12, modelData.depth || 0) * 12 : thumbnail.visible ? 80 : 12
-                rightPadding: root.currentTab === 0 ? 38 : ExoTheme.spacingMd
-                highlighted: folderEntry && root.selectedFolder.entryId === modelData.entryId
+                readonly property bool insertable: !folderEntry || modelData.mediaCandidate === true
+                rightPadding: (root.currentTab === 0 ? 38 : ExoTheme.spacingMd) + (insertable ? 30 : 0)
+                highlighted: folderEntry ? root.selectedFolder.entryId === modelData.entryId : ListView.isCurrentItem
                 text: modelData.name || modelData.label
                 Accessible.name: text
                 Accessible.description: detail
@@ -290,6 +299,17 @@ Item {
                     Accessible.ignored: true
                 }
                 EditActionButton {
+                    objectName: "editSourceInsert-" + sourceItem.index
+                    anchors.right: parent.right
+                    anchors.rightMargin: root.currentTab === 0 ? 34 : 4
+                    anchors.verticalCenter: parent.verticalCenter
+                    width: 28
+                    visible: sourceItem.insertable
+                    glyph: ExoGlyph.Plus
+                    text: qsTr("Insert %1 at the playhead").arg(sourceItem.text)
+                    onClicked: sourceItem.insert()
+                }
+                EditActionButton {
                     objectName: "editSourceActions-" + sourceItem.modelData.id
                     anchors.right: parent.right
                     anchors.rightMargin: 4
@@ -312,22 +332,34 @@ Item {
                         }
                     }
                 }
-                onClicked: if (folderEntry) root.selectedFolder = modelData
-                onDoubleClicked: add()
-                Keys.onReturnPressed: add()
+                // Click and double click only choose; the document changes only
+                // through Enter, the insert button or a drop.
+                onClicked: {
+                    sourceItems.currentIndex = index;
+                    if (folderEntry) root.selectedFolder = modelData;
+                }
+                onDoubleClicked: {
+                    sourceItems.currentIndex = index;
+                    if (folderEntry && modelData.directory)
+                        root.session.folderModel.toggle(modelData.entryId);
+                }
+                Keys.onReturnPressed: insert()
+                Keys.onEnterPressed: insert()
                 Keys.onRightPressed: if (folderEntry && modelData.directory && !modelData.expanded) root.session.folderModel.toggle(modelData.entryId)
                 Keys.onLeftPressed: if (folderEntry && modelData.directory && modelData.expanded) root.session.folderModel.toggle(modelData.entryId)
-                function add(): void {
+                function insert(): void {
+                    sourceItems.currentIndex = index;
+                    const at = root.session.positionUs;
                     if (folderEntry) {
                         root.selectedFolder = modelData;
                         if (modelData.directory)
                             root.session.folderModel.toggle(modelData.entryId);
                         else if (modelData.mediaCandidate)
-                            root.session.routeMediaDrop([modelData.url], true);
+                            root.session.routeMediaDrop([modelData.url], true, at);
                     } else if (root.currentTab === 2) {
-                        root.session.addHistory(modelData.path);
+                        root.session.addHistory(modelData.path, Math.floor(at / 1000));
                     } else {
-                        root.session.appendAsset(modelData.id);
+                        root.session.appendAssetUs(modelData.id, at);
                     }
                 }
                 Drag.active: drag.active

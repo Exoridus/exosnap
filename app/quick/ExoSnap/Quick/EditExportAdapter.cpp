@@ -771,6 +771,8 @@ void EditExportAdapter::setSession(EditSessionAdapter* session) {
         }
         if (state_ == State::Review && (!prepared_ || !prepared_->SameWorkspace(*session_)))
             discardPreparedExport();
+        if (state_ == State::Done)
+            emit resultChanged();
     });
     connect(this, &EditExportAdapter::stateChanged, session_, [this]() { session_->setExportRunning(running()); });
 }
@@ -911,9 +913,21 @@ void EditExportAdapter::reset() {
     progress_percent_ = 0;
     error_text_.clear();
     destination_failure_ = false;
+    result_unseen_ = false;
     emit progressChanged();
     emit resultChanged();
     setState(State::Options);
+}
+
+bool EditExportAdapter::resultOutdated() const {
+    return state_ == State::Done && session_ != nullptr && session_->workspace().revision() != result_revision_;
+}
+
+void EditExportAdapter::markResultSeen() {
+    if (!result_unseen_)
+        return;
+    result_unseen_ = false;
+    emit resultChanged();
 }
 
 void EditExportAdapter::publishProgress(int percent) {
@@ -949,6 +963,7 @@ void EditExportAdapter::startExport() {
 
     error_text_.clear();
     destination_failure_ = false;
+    result_unseen_ = false;
     progress_percent_ = 0;
     emit progressChanged();
     emit resultChanged();
@@ -1111,6 +1126,7 @@ void EditExportAdapter::confirmPreparedExport() {
 
 void EditExportAdapter::beginPreparedExport() {
     auto prepared = std::exchange(prepared_, std::shared_ptr<PreparedExport>{});
+    result_revision_ = prepared->workspace_revision;
     review_outcome_.clear();
     emit reviewChanged();
     run_ = std::make_shared<RunState>();
@@ -1229,6 +1245,7 @@ void EditExportAdapter::finishRun(bool ok, const QString& error, const QString& 
         return;
     }
 
+    result_unseen_ = true;
     if (ok) {
         error_text_.clear();
         progress_percent_ = 100;
@@ -1258,6 +1275,7 @@ void EditExportAdapter::applyVisualState(State state, int percent, const QString
     output_path_ = std::filesystem::path(output_path.toStdWString());
     error_text_ = error;
     destination_failure_ = state == State::Failed;
+    result_unseen_ = state == State::Done || state == State::Failed;
     emit progressChanged();
     emit resultChanged();
     setState(state);

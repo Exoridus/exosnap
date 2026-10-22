@@ -8,6 +8,8 @@ ExoButton {
     property bool panelAccess: false
     property bool expanded: false
     property bool pinned: false
+    // Overrides the glyph's state colour, e.g. a warning glyph in error text.
+    property string glyphColor: ""
     compact: true
     focusPolicy: Qt.TabFocus
     quiet: tone !== "primary"
@@ -35,7 +37,7 @@ ExoButton {
             width: 18; height: 18
             kind: root.glyph
             visible: root.glyph !== ExoGlyph.Invalid
-            color: !root.enabled ? ExoTheme.textDim : root.tone === "primary" ? ExoTheme.accentInk : root.activeState ? ExoTheme.accent : ExoTheme.textSecondary
+            color: !root.enabled ? ExoTheme.textDim : root.glyphColor.length > 0 ? root.glyphColor : root.tone === "primary" ? ExoTheme.accentInk : root.activeState ? ExoTheme.accent : ExoTheme.textSecondary
         }
         Label {
             anchors.fill: parent

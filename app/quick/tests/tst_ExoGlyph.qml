@@ -71,7 +71,11 @@ Item {
         "Swatch": ExoGlyph.Swatch,
         "Pin": ExoGlyph.Pin,
         "Repeat": ExoGlyph.Repeat,
-        "PlayRange": ExoGlyph.PlayRange
+        "PlayRange": ExoGlyph.PlayRange,
+        "Pointer": ExoGlyph.Pointer,
+        "RangeTool": ExoGlyph.RangeTool,
+        "Grip": ExoGlyph.Grip,
+        "Mixer": ExoGlyph.Mixer
     })
 
     Component {

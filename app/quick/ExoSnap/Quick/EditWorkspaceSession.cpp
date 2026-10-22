@@ -957,6 +957,31 @@ bool EditSessionAdapter::beginLanePointerSelection(qulonglong track, qint64 at) 
     return true;
 }
 
+bool EditSessionAdapter::linkSelectedClips() {
+    return selection_.clip_ids.size() >= 2 && applyCommand(edit::Relink{selection_.clip_ids});
+}
+
+bool EditSessionAdapter::unlinkSelectedClips() {
+    return !selection_.clip_ids.empty() && applyCommand(edit::Unlink{selection_.clip_ids});
+}
+
+void EditSessionAdapter::selectClipArea(qint64 start, qint64 end, const QVariantList& track_ids,
+                                        const QVariantList& base_ids, bool exact) {
+    if (!preflightPendingDraft())
+        return;
+    cancelRangeGesture();
+    const auto ids = [](const QVariantList& values) {
+        std::vector<edit::Id> result;
+        for (const auto& value : values)
+            result.push_back(value.toULongLong());
+        return result;
+    };
+    selection_.selectArea(*workspace_.snapshot(), std::min(start, end), std::max(start, end), ids(track_ids),
+                          ids(base_ids), linkedSelection && !exact);
+    workspace_.select(selection_.primary_clip);
+    publishSelection();
+}
+
 void EditSessionAdapter::setLoopSnapBounds(qint64 start, qint64 end) {
     if (start >= 0 && end > start)
         loop_snap_bounds_ = edit::Span{start, end};

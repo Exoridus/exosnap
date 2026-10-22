@@ -127,7 +127,8 @@ TestCase {
         waitForRendering(page);
         mouseClick(option, option.width / 2, option.height / 2);
         compare(testPageExporter.spanKey, "result");
-        findChild(page, "editExportOptions").close();
+        page.openExport();
+        compare(page.detailsOpen, false);
     }
     function controlNamed(item, name) {
         if (item.Accessible.name === name)

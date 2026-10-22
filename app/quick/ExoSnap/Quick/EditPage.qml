@@ -13,7 +13,14 @@ FocusScope {
     required property RecordViewModelAdapter recordings
     required property ShellAdapter shell
     property bool mediaOpen: false
+    // The right host is open; rightContext says which of its three contexts
+    // (details, mix, export) it shows. Pin and width belong to the host.
     property bool detailsOpen: false
+    property string rightContext: "details"
+    readonly property real railWidth: 44
+    readonly property real stageWidth: stage.width - 2 * railWidth
+    readonly property bool exportVisible: detailsOpen && rightContext === "export"
+    readonly property bool canOpenExport: session.durationUs > 0 || exporter.state !== EditExportAdapter.Options
     property bool mediaPinPreferred: layoutPreferences.mediaPinned
     property bool detailsPinPreferred: layoutPreferences.detailsPinned
     property bool mediaPinnedLast: layoutPreferences.mediaPinnedLast
@@ -25,15 +32,23 @@ FocusScope {
     readonly property real detailsWidth: Math.max(240, Math.min(maximumPanelWidth, layoutPreferences.detailsWidth))
     readonly property real panelWidth: mediaWidth
     readonly property bool docksAllowed: width >= 1000
-    readonly property bool bothDocksFit: stage.width - mediaWidth - detailsWidth - 16 >= 480
+    readonly property bool bothDocksFit: stageWidth - mediaWidth - detailsWidth - 16 >= 480
     readonly property bool mediaPinned: mediaOpen && mediaPinPreferred && docksAllowed
-        && stage.width - mediaWidth - 8 >= 480
+        && stageWidth - mediaWidth - 8 >= 480
         && (bothDocksFit || !detailsOpen || !detailsPinPreferred || !mediaPinnedLast)
     readonly property bool detailsPinned: detailsOpen && detailsPinPreferred && docksAllowed
-        && stage.width - detailsWidth - 8 >= 480
+        && stageWidth - detailsWidth - 8 >= 480
         && (bothDocksFit || !mediaOpen || !mediaPinPreferred || mediaPinnedLast)
-    readonly property bool canPinMedia: docksAllowed && stage.width - mediaWidth - 8 - (detailsPinned ? detailsWidth + 8 : 0) >= 480
-    readonly property bool canPinDetails: docksAllowed && stage.width - detailsWidth - 8 - (mediaPinned ? mediaWidth + 8 : 0) >= 480
+    readonly property bool canPinMedia: docksAllowed && stageWidth - mediaWidth - 8 - (detailsPinned ? detailsWidth + 8 : 0) >= 480
+    readonly property bool canPinDetails: docksAllowed && stageWidth - detailsWidth - 8 - (mediaPinned ? mediaWidth + 8 : 0) >= 480
+    onExportVisibleChanged: if (exportVisible) exporter.markResultSeen()
+    Connections {
+        target: root.exporter
+        function onResultChanged(): void {
+            if (root.exportVisible && root.exporter.resultUnseen)
+                root.exporter.markResultSeen();
+        }
+    }
     onMediaPinPreferredChanged: layoutPreferences.mediaPinned = mediaPinPreferred
     onDetailsPinPreferredChanged: layoutPreferences.detailsPinned = detailsPinPreferred
     onMediaPinnedLastChanged: layoutPreferences.mediaPinnedLast = mediaPinnedLast
@@ -54,7 +69,7 @@ FocusScope {
         } else if (!event.isAutoRepeat && event.modifiers === Qt.ControlModifier && event.key === Qt.Key_D) {
             root.toggleDetails(true);
             event.accepted = true;
-        } else if (!event.isAutoRepeat && event.modifiers === Qt.ControlModifier && event.key === Qt.Key_E && root.session.durationMs > 0 && !root.exporter.running) {
+        } else if (!event.isAutoRepeat && event.modifiers === Qt.ControlModifier && event.key === Qt.Key_E) {
             root.openExport();
             event.accepted = true;
         }
@@ -75,6 +90,7 @@ FocusScope {
                 mediaPinned: root.mediaPinned,
                 mediaCanPin: root.canPinMedia,
                 detailsOpen: root.detailsOpen,
+                rightContext: root.rightContext,
                 detailsPinned: root.detailsPinned,
                 detailsCanPin: root.canPinDetails,
                 sourceTab: root.sourceTab
@@ -84,10 +100,10 @@ FocusScope {
         target: root.shell
         function onEditPanelRequested(panel: int, open: bool, pinned: bool): void {
             const media = panel === ShellAdapter.EditMediaPanel;
-            if ((media ? root.mediaOpen : root.detailsOpen) !== open) {
-                if (media) root.toggleMedia();
-                else root.toggleDetails();
-            }
+            if (media && root.mediaOpen !== open)
+                root.toggleMedia();
+            else if (!media && (root.detailsOpen !== open || (open && root.rightContext !== "details")))
+                root.toggleDetails();
             if (!open)
                 return;
             if (media && root.mediaPinned !== pinned && (!pinned || root.canPinMedia))
@@ -128,6 +144,24 @@ FocusScope {
         }
         if (root.mediaOpen && root.width < 1200 && !root.detailsPinned) root.detailsOpen = false;
     }
+    // A panel context switch in a rail. Remembers whether it was activated from
+    // the keyboard so closing can hand focus back to where it came from.
+    component RailButton: EditActionButton {
+        id: rail
+        property bool keyboardActivation: false
+        signal activated(bool keyboard)
+        implicitWidth: 32
+        panelAccess: true
+        onClicked: rail.activated(rail.keyboardActivation)
+        Keys.onPressed: event => {
+            if (event.key === Qt.Key_Space || event.key === Qt.Key_Return || event.key === Qt.Key_Enter)
+                rail.keyboardActivation = true;
+        }
+        PointHandler {
+            acceptedButtons: Qt.LeftButton
+            onActiveChanged: if (active) rail.keyboardActivation = false
+        }
+    }
     component EditingToggle: ExoMenuItem {
         id: toggle
         checkable: true
@@ -142,23 +176,36 @@ FocusScope {
         }
     }
     function toggleDetails(keyboardActivation: var): void {
+        root.toggleRight("details", keyboardActivation);
+    }
+    // A rail button or shortcut for the context already shown closes the host;
+    // any other context replaces it in place, keeping pin and width.
+    function toggleRight(context: string, keyboardActivation: var): void {
         if (!root.session.preflightPendingDraft())
             return;
+        if (context === "export" && !root.canOpenExport)
+            return;
+        const closing = root.detailsOpen && root.rightContext === context;
         if (!root.detailsOpen)
             root.detailsInvoker = root.Window.window ? root.Window.window.activeFocusItem : clips;
-        root.detailsOpen = !root.detailsOpen;
-        if (!root.detailsOpen) {
+        if (!closing)
+            root.rightContext = context;
+        root.detailsOpen = !closing;
+        if (closing) {
             if (keyboardActivation === true)
                 (root.detailsInvoker || clips).forceActiveFocus(Qt.TabFocusReason);
             else
                 clips.forceActiveFocus(Qt.MouseFocusReason);
+        } else if (keyboardActivation === true && context !== "details") {
+            Qt.callLater(() => root.rightContextFocusRequested());
         }
         if (root.detailsOpen && root.width < 1200 && !root.mediaPinned) root.mediaOpen = false;
     }
+    signal rightContextFocusRequested()
     function openInspector(field: string): void {
         if (!root.session.preflightPendingDraft())
             return;
-        if (!root.detailsOpen)
+        if (!root.detailsOpen || root.rightContext !== "details")
             root.toggleDetails();
         if (root.detailsOpen && field.length > 0)
             Qt.callLater(() => root.inspectorFieldRequested(field));
@@ -177,8 +224,7 @@ FocusScope {
         else layoutPreferences.detailsWidth = bounded;
     }
     function openExport(): void {
-        if (root.session.preflightPendingDraft() && root.session.durationUs > 0 && !root.exporter.running)
-            exportOptions.open();
+        root.toggleRight("export", true);
     }
     function openSourceChoice(): void {
         if (root.session.preflightPendingDraft())
@@ -335,8 +381,8 @@ FocusScope {
             }
             EditPlayer {
                 anchors.fill: parent
-                anchors.leftMargin: root.mediaPinned ? root.mediaWidth + 8 : 0
-                anchors.rightMargin: root.detailsPinned ? root.detailsWidth + 8 : 0
+                anchors.leftMargin: root.railWidth + (root.mediaPinned ? root.mediaWidth + 8 : 0)
+                anchors.rightMargin: root.railWidth + (root.detailsPinned ? root.detailsWidth + 8 : 0)
                 session: root.session
                 player: root.player
                 onChooseAudioRequested: root.openSourceChoice()
@@ -353,6 +399,7 @@ FocusScope {
                 anchors.top: parent.top
                 anchors.bottom: parent.bottom
                 anchors.left: parent.left
+                anchors.leftMargin: root.railWidth
                 sourceComponent: EditSidePanel {
                     objectName: "editMediaPanel"
                     title: qsTr("Media")
@@ -385,7 +432,7 @@ FocusScope {
                 visible: root.mediaOpen
                 anchors.top: parent.top
                 anchors.bottom: parent.bottom
-                x: root.mediaWidth - width / 2
+                x: root.railWidth + root.mediaWidth - width / 2
                 z: 2
             }
             Loader {
@@ -395,24 +442,53 @@ FocusScope {
                 anchors.top: parent.top
                 anchors.bottom: parent.bottom
                 anchors.right: parent.right
+                anchors.rightMargin: root.railWidth
                 sourceComponent: EditSidePanel {
                     objectName: "editDetailsPanel"
-                    title: qsTr("Details")
+                    readonly property bool mix: root.rightContext === "mix"
+                    readonly property bool exporting: root.rightContext === "export"
+                    title: mix ? qsTr("Audio mix") : exporting ? qsTr("Export") : qsTr("Details")
+                    glyph: mix ? ExoGlyph.Mixer : exporting ? ExoGlyph.Send : ExoGlyph.Info
+                    subtitle: exporting ? exportPanel.stateText() : ""
                     pinned: root.detailsPinned
                     pinPreferred: root.detailsPinPreferred
                     canPin: root.canPinDetails
                     pinObjectName: "editDetailsPin"
-                    closeText: qsTr("Close Details")
+                    closeText: mix ? qsTr("Close Audio mix") : exporting ? qsTr("Close Export") : qsTr("Close Details")
+                    Accessible.role: Accessible.Pane
+                    Accessible.name: title
                     onPinToggled: root.setPanelPinned(false, !root.detailsPinPreferred)
-                    onCloseRequested: keyboardActivation => root.toggleDetails(keyboardActivation)
+                    onCloseRequested: keyboardActivation => root.toggleRight(root.rightContext, keyboardActivation)
                     EditInspector {
                         id: inspector
                         anchors.fill: parent
+                        visible: root.rightContext === "details"
                         session: root.session
                         canvasFocusItem: clips
                         Connections {
                             target: root
                             function onInspectorFieldRequested(fieldName: string): void { inspector.focusField(fieldName); }
+                        }
+                    }
+                    EditMixPanel {
+                        id: mixPanel
+                        anchors.fill: parent
+                        visible: root.rightContext === "mix"
+                        session: root.session
+                        canvasFocusItem: clips
+                    }
+                    EditExportPanel {
+                        id: exportPanel
+                        anchors.fill: parent
+                        visible: root.rightContext === "export"
+                        session: root.session
+                        exporter: root.exporter
+                    }
+                    Connections {
+                        target: root
+                        function onRightContextFocusRequested(): void {
+                            if (root.rightContext === "mix") mixPanel.focusFirst();
+                            else if (root.rightContext === "export") exportPanel.focusFirst();
                         }
                     }
                 }
@@ -423,8 +499,84 @@ FocusScope {
                 visible: root.detailsOpen
                 anchors.top: parent.top
                 anchors.bottom: parent.bottom
-                x: parent.width - root.detailsWidth - width / 2
+                x: parent.width - root.railWidth - root.detailsWidth - width / 2
                 z: 2
+            }
+            Column {
+                objectName: "editLeftRail"
+                x: 6
+                y: 6
+                spacing: 4
+                RailButton {
+                    objectName: "editMediaAccess"
+                    text: qsTr("Media")
+                    shortcutText: "Ctrl+M"
+                    glyph: ExoGlyph.Folder
+                    expanded: root.mediaOpen
+                    pinned: root.mediaPinned
+                    onActivated: keyboard => root.toggleMedia(keyboard)
+                }
+            }
+            Column {
+                objectName: "editRightRail"
+                anchors.right: parent.right
+                anchors.rightMargin: 6
+                y: 6
+                spacing: 4
+                RailButton {
+                    objectName: "editDetailsAccess"
+                    text: qsTr("Details")
+                    shortcutText: "Ctrl+D"
+                    glyph: ExoGlyph.Info
+                    expanded: root.detailsOpen && root.rightContext === "details"
+                    pinned: expanded && root.detailsPinned
+                    onActivated: keyboard => root.toggleRight("details", keyboard)
+                }
+                RailButton {
+                    objectName: "editMixAccess"
+                    text: qsTr("Audio mix")
+                    glyph: ExoGlyph.Mixer
+                    expanded: root.detailsOpen && root.rightContext === "mix"
+                    pinned: expanded && root.detailsPinned
+                    onActivated: keyboard => root.toggleRight("mix", keyboard)
+                }
+                RailButton {
+                    id: exportButton
+                    readonly property bool failed: root.exporter.state === EditExportAdapter.Failed
+                    objectName: "editExport"
+                    text: root.exporter.running ? qsTr("Export %1%").arg(root.exporter.progressPercent)
+                        : failed ? qsTr("Export failed")
+                        : root.exporter.state === EditExportAdapter.Done && root.exporter.resultUnseen ? qsTr("Export complete")
+                        : qsTr("Export")
+                    shortcutText: "Ctrl+E"
+                    glyph: failed ? ExoGlyph.Warning : ExoGlyph.Send
+                    glyphColor: failed ? ExoTheme.errorText : ""
+                    expanded: root.exportVisible
+                    pinned: expanded && root.detailsPinned
+                    enabled: root.canOpenExport
+                    disabledReason: qsTr("The timeline is empty.")
+                    onActivated: keyboard => root.toggleRight("export", keyboard)
+                    Rectangle {
+                        objectName: "editExportRailProgress"
+                        x: 4
+                        y: parent.height - 3
+                        height: 2
+                        radius: 1
+                        width: (parent.width - 8) * root.exporter.progressPercent / 100
+                        visible: root.exporter.running
+                        color: ExoTheme.accent
+                    }
+                    Rectangle {
+                        objectName: "editExportRailDot"
+                        x: parent.width - 9
+                        y: 3
+                        width: 6
+                        height: 6
+                        radius: 3
+                        visible: root.exporter.resultUnseen
+                        color: exportButton.failed ? ExoTheme.errorText : ExoTheme.accent
+                    }
+                }
             }
         }
         Rectangle {
@@ -450,6 +602,8 @@ FocusScope {
                         anchors.leftMargin: 8
                         anchors.verticalCenter: parent.verticalCenter
                         spacing: 2
+                        EditActionButton { objectName: "editSelectTool"; text: qsTr("Selection tool"); shortcutText: "V"; glyph: ExoGlyph.Pointer; visible: root.width >= 1000; checkable: true; checked: clips.tool === "select"; onClicked: { clips.tool = "select"; checked = Qt.binding(() => clips.tool === "select"); } }
+                        EditActionButton { objectName: "editRangeTool"; text: qsTr("Range tool"); shortcutText: "R"; glyph: ExoGlyph.RangeTool; visible: root.width >= 1000; checkable: true; checked: clips.tool === "range"; onClicked: { clips.tool = "range"; checked = Qt.binding(() => clips.tool === "range"); } }
                         EditActionButton { objectName: "editUndo"; text: qsTr("Undo"); shortcutText: "Ctrl+Z"; glyph: ExoGlyph.Undo; enabled: root.session.canUndo; disabledReason: qsTr("There is no edit to undo."); onClicked: root.session.undo() }
                         EditActionButton { objectName: "editRedo"; text: qsTr("Redo"); shortcutText: "Ctrl+Y"; glyph: ExoGlyph.Redo; enabled: root.session.canRedo; disabledReason: qsTr("There is no edit to redo."); onClicked: root.session.redo() }
                         EditActionButton { objectName: "editSplit"; text: qsTr("Split"); shortcutText: "Ctrl+B"; glyph: ExoGlyph.Scissors; enabled: root.session.durationUs > 0; disabledReason: qsTr("The timeline is empty."); onClicked: root.session.splitSelected() }
@@ -520,7 +674,38 @@ FocusScope {
                         anchors.right: parent.right
                         anchors.rightMargin: 8
                         anchors.verticalCenter: parent.verticalCenter
-                        spacing: 4
+                        spacing: 2
+                        EditActionButton { objectName: "editSnapping"; text: qsTr("Snapping"); glyph: ExoGlyph.Magnet; visible: root.width >= 1100; checkable: true; checked: root.session.snapping; onClicked: root.session.snapping = checked }
+                        EditActionButton { objectName: "editRipple"; text: qsTr("Ripple"); glyph: ExoGlyph.CloseGap; visible: root.width >= 1100; checkable: true; checked: root.session.ripple; onClicked: root.session.ripple = checked }
+                        EditActionButton { objectName: "editAutoCrossfade"; text: qsTr("Auto Crossfade"); glyph: ExoGlyph.Layers; visible: root.width >= 1100; checkable: true; checked: root.session.autoCrossfade; onClicked: root.session.autoCrossfade = checked }
+                        EditActionButton { objectName: "editLinkedSelection"; text: qsTr("Linked Selection"); glyph: ExoGlyph.SplitTrack; visible: root.width >= 1100; checkable: true; checked: root.session.linkedSelection; onClicked: root.session.linkedSelection = checked }
+                        EditActionButton {
+                            objectName: "editToolbarOverflow"
+                            text: qsTr("More editing actions")
+                            glyph: ExoGlyph.Overflow
+                            onClicked: editOverflow.popup()
+                            ExoMenu {
+                                id: editOverflow
+                                EditingToggle { objectName: "editOverflowSelectTool"; text: qsTr("Selection tool"); visible: root.width < 1000; checked: clips.tool === "select"; onTriggered: clips.tool = "select" }
+                                EditingToggle { objectName: "editOverflowRangeTool"; text: qsTr("Range tool"); visible: root.width < 1000; checked: clips.tool === "range"; onTriggered: clips.tool = "range" }
+                                EditingToggle { text: qsTr("Snapping"); visible: root.width < 1100; checked: root.session.snapping; onTriggered: root.session.snapping = !root.session.snapping }
+                                EditingToggle { text: qsTr("Ripple"); visible: root.width < 1100; checked: root.session.ripple; onTriggered: root.session.ripple = !root.session.ripple }
+                                EditingToggle { text: qsTr("Auto Crossfade"); visible: root.width < 1100; checked: root.session.autoCrossfade; onTriggered: root.session.autoCrossfade = !root.session.autoCrossfade }
+                                EditingToggle { objectName: "editOverflowLinkedSelection"; text: qsTr("Linked Selection"); visible: root.width < 1100; checked: root.session.linkedSelection; onTriggered: root.session.linkedSelection = !root.session.linkedSelection }
+                                ExoMenuItem { text: qsTr("Ripple delete"); visible: root.width < 1000; enabled: root.session.selectionMode !== EditSessionAdapter.NoSelection; onTriggered: root.session.deleteSelected(true) }
+                                ExoMenuItem { text: qsTr("Fit selection"); onTriggered: clips.fitSelection() }
+                                ExoMenuItem {
+                                    objectName: "editFitClips"
+                                    text: qsTr("Fit clips")
+                                    onTriggered: {
+                                        const bounds = root.session.occupiedBounds();
+                                        if (bounds.valid) clips.view.fitOccupied(bounds.startUs, bounds.endUs);
+                                        else clips.fitTimeline();
+                                    }
+                                }
+                                ExoMenuItem { text: qsTr("Editor shortcuts"); onTriggered: shortcutHelp.open() }
+                            }
+                        }
                         EditActionButton {
                             id: volumeButton
                             objectName: "editVolume"
@@ -555,18 +740,6 @@ FocusScope {
                                 }
                             }
                         }
-                        Label {
-                            id: exportProgress
-                            objectName: "editExportProgress"
-                            anchors.verticalCenter: parent.verticalCenter
-                            text: root.exporter.state === EditExportAdapter.Preparing ? qsTr("Preparing export…") : root.exporter.state === EditExportAdapter.Cancelling ? qsTr("Cancelling…") : qsTr("%1%").arg(root.exporter.progressPercent)
-                            visible: root.exporter.running && implicitWidth + volumeButton.width + cancelExport.width + exportButton.width + 12
-                                <= (header.width - transportGroup.implicitWidth) / 2 - 16
-                            color: ExoTheme.textSecondary
-                            Accessible.name: qsTr("Exporting %1%").arg(root.exporter.progressPercent)
-                        }
-                        EditActionButton { id: cancelExport; objectName: "editCancelExport"; text: qsTr("Cancel export"); glyph: ExoGlyph.Close; visible: root.exporter.running; enabled: root.exporter.state === EditExportAdapter.Running; disabledReason: root.exporter.state === EditExportAdapter.Cancelling ? qsTr("Export cancellation is already in progress.") : qsTr("Export is preparing."); onClicked: root.exporter.cancel() }
-                        EditActionButton { id: exportButton; objectName: "editExport"; text: qsTr("Export"); shortcutText: "Ctrl+E"; glyph: ExoGlyph.Send; tone: "primary"; enabled: root.session.durationUs > 0 && !root.exporter.running; disabledReason: root.exporter.running ? qsTr("An export is already in progress.") : qsTr("The timeline is empty."); onClicked: root.openExport() }
                     }
                 }
                 Label {
@@ -577,17 +750,52 @@ FocusScope {
                     color: ExoTheme.textSecondary
                     wrapMode: Text.Wrap
                 }
-                EditOverview {
-                    objectName: "editOverview"
+                RowLayout {
+                    objectName: "editNavigator"
                     Layout.fillWidth: true
-                    Layout.preferredHeight: 12
-                    Layout.leftMargin: clips.labelWidth
-                    Layout.rightMargin: Math.max(0, clips.width - clips.labelWidth - clips.laneViewportRect.width)
-                    session: root.session
-                    player: root.player
-                    view: clips.view
-                    interaction: clips.interaction
-                    canvasFocusItem: clips
+                    Layout.preferredHeight: 28
+                    Layout.leftMargin: 8
+                    Layout.rightMargin: 8
+                    spacing: 2
+                    Label {
+                        objectName: "editRangeReadout"
+                        Layout.preferredWidth: clips.labelWidth - 8
+                        readonly property var range: root.session.editRange
+                        text: root.session.selectionMode === EditSessionAdapter.RangeSelection || range.endUs > range.startUs
+                            ? qsTr("%1 – %2").arg(root.session.formatTimeValue(range.startUs, 0)).arg(root.session.formatTimeValue(range.endUs, 0))
+                            : ""
+                        elide: Text.ElideRight
+                        color: root.session.selectionMode === EditSessionAdapter.RangeSelection ? ExoTheme.text : ExoTheme.textSecondary
+                        font.family: ExoTheme.monoFamily
+                        font.pixelSize: ExoTheme.fontCaption
+                        Accessible.name: text.length > 0 ? qsTr("Range %1").arg(text) : ""
+                    }
+                    EditOverview {
+                        objectName: "editOverview"
+                        Layout.fillWidth: true
+                        Layout.preferredHeight: 12
+                        session: root.session
+                        player: root.player
+                        view: clips.view
+                        interaction: clips.interaction
+                        canvasFocusItem: clips
+                    }
+                    EditActionButton { objectName: "editZoomOut"; implicitWidth: 26; implicitHeight: 26; text: qsTr("Zoom out"); glyph: ExoGlyph.Minus; onClicked: clips.zoomTo(clips.pixelsPerSecond / 1.25) }
+                    ExoSlider {
+                        objectName: "editZoomSlider"
+                        Layout.preferredWidth: root.width < 1000 ? 72 : 100
+                        from: Math.log(clips.minimumZoom)
+                        to: Math.log(clips.maximumZoom)
+                        value: Math.log(clips.pixelsPerSecond)
+                        Accessible.name: qsTr("Timeline zoom")
+                        onMoved: clips.zoomTo(Math.exp(value))
+                        onPressedChanged: {
+                            if (pressed) clips.view.beginViewOperation();
+                            else clips.view.endViewOperation();
+                        }
+                    }
+                    EditActionButton { objectName: "editZoomIn"; implicitWidth: 26; implicitHeight: 26; text: qsTr("Zoom in"); glyph: ExoGlyph.Plus; onClicked: clips.zoomTo(clips.pixelsPerSecond * 1.25) }
+                    EditActionButton { objectName: "editZoomFit"; implicitWidth: 26; implicitHeight: 26; text: qsTr("Fit timeline"); glyph: ExoGlyph.AppWindow; onClicked: clips.fitTimeline() }
                 }
                 EditTimeline {
                     id: clips
@@ -606,107 +814,15 @@ FocusScope {
                     Layout.fillHeight: true
                     Layout.minimumHeight: 96
                 }
-                RowLayout {
-                    objectName: "editTimelineFooter"
-                    Layout.fillWidth: true
-                    Layout.preferredHeight: 42
-                    Layout.leftMargin: 8
-                    Layout.rightMargin: 8
-                    spacing: 4
-                    EditActionButton {
-                        id: mediaAccess
-                        property bool keyboardActivation: false
-                        objectName: "editMediaAccess"
-                        text: qsTr("Media")
-                        shortcutText: "Ctrl+M"
-                        glyph: ExoGlyph.Folder
-                        panelAccess: true
-                        expanded: root.mediaOpen
-                        pinned: root.mediaPinned
-                        onClicked: root.toggleMedia(mediaAccess.keyboardActivation)
-                        Keys.onPressed: event => {
-                            if (event.key === Qt.Key_Space || event.key === Qt.Key_Return || event.key === Qt.Key_Enter)
-                                mediaAccess.keyboardActivation = true;
-                        }
-                        PointHandler {
-                            acceptedButtons: Qt.LeftButton
-                            onActiveChanged: if (active) mediaAccess.keyboardActivation = false
-                        }
-                    }
-                    EditActionButton {
-                        id: detailsAccess
-                        property bool keyboardActivation: false
-                        objectName: "editDetailsAccess"
-                        text: qsTr("Details")
-                        shortcutText: "Ctrl+D"
-                        glyph: ExoGlyph.Info
-                        panelAccess: true
-                        expanded: root.detailsOpen
-                        pinned: root.detailsPinned
-                        onClicked: root.toggleDetails(detailsAccess.keyboardActivation)
-                        Keys.onPressed: event => {
-                            if (event.key === Qt.Key_Space || event.key === Qt.Key_Return || event.key === Qt.Key_Enter)
-                                detailsAccess.keyboardActivation = true;
-                        }
-                        PointHandler {
-                            acceptedButtons: Qt.LeftButton
-                            onActiveChanged: if (active) detailsAccess.keyboardActivation = false
-                        }
-                    }
-                    EditActionButton { objectName: "editSnapping"; text: qsTr("Snapping"); glyph: ExoGlyph.Magnet; visible: root.width >= 1100; checkable: true; checked: root.session.snapping; onClicked: root.session.snapping = checked }
-                    EditActionButton { objectName: "editRipple"; text: qsTr("Ripple"); glyph: ExoGlyph.CloseGap; visible: root.width >= 1100; checkable: true; checked: root.session.ripple; onClicked: root.session.ripple = checked }
-                    EditActionButton { objectName: "editAutoCrossfade"; text: qsTr("Auto Crossfade"); glyph: ExoGlyph.Layers; visible: root.width >= 1100; checkable: true; checked: root.session.autoCrossfade; onClicked: root.session.autoCrossfade = checked }
-                    EditActionButton { objectName: "editLinkedSelection"; text: qsTr("Linked Selection"); glyph: ExoGlyph.SplitTrack; visible: root.width >= 1100; checkable: true; checked: root.session.linkedSelection; onClicked: root.session.linkedSelection = checked }
-                    EditActionButton {
-                        objectName: "editToolbarOverflow"
-                        text: qsTr("More editing actions")
-                        glyph: ExoGlyph.Overflow
-                        visible: root.width < 1100
-                        onClicked: editOverflow.popup()
-                        ExoMenu {
-                            id: editOverflow
-                            EditingToggle { text: qsTr("Snapping"); checked: root.session.snapping; onTriggered: root.session.snapping = !root.session.snapping }
-                            EditingToggle { text: qsTr("Ripple"); checked: root.session.ripple; onTriggered: root.session.ripple = !root.session.ripple }
-                            EditingToggle { text: qsTr("Auto Crossfade"); checked: root.session.autoCrossfade; onTriggered: root.session.autoCrossfade = !root.session.autoCrossfade }
-                            EditingToggle { objectName: "editOverflowLinkedSelection"; text: qsTr("Linked Selection"); checked: root.session.linkedSelection; onTriggered: root.session.linkedSelection = !root.session.linkedSelection }
-                            ExoMenuItem { text: qsTr("Ripple delete"); visible: root.width < 1000; enabled: root.session.selectionMode !== EditSessionAdapter.NoSelection; onTriggered: root.session.deleteSelected(true) }
-                            ExoMenuItem { text: qsTr("Fit timeline"); visible: root.width < 900; onTriggered: clips.fitTimeline() }
-                            ExoMenuItem { text: qsTr("Fit selection"); onTriggered: clips.fitSelection() }
-                            ExoMenuItem {
-                                objectName: "editFitClips"
-                                text: qsTr("Fit clips")
-                                onTriggered: {
-                                    const bounds = root.session.occupiedBounds();
-                                    if (bounds.valid) clips.view.fitOccupied(bounds.startUs, bounds.endUs);
-                                    else clips.fitTimeline();
-                                }
-                            }
-                        }
-                    }
-                    Item { Layout.fillWidth: true }
-                    EditActionButton { objectName: "editZoomOut"; text: qsTr("Zoom out"); glyph: ExoGlyph.Minus; onClicked: clips.zoomTo(clips.pixelsPerSecond / 1.25) }
-                    ExoSlider {
-                        objectName: "editZoomSlider"
-                        Layout.preferredWidth: root.width < 1000 ? 80 : 110
-                        from: Math.log(clips.minimumZoom)
-                        to: Math.log(clips.maximumZoom)
-                        value: Math.log(clips.pixelsPerSecond)
-                        Accessible.name: qsTr("Timeline zoom")
-                        onMoved: clips.zoomTo(Math.exp(value))
-                        onPressedChanged: {
-                            if (pressed) clips.view.beginViewOperation();
-                            else clips.view.endViewOperation();
-                        }
-                    }
-                    EditActionButton { objectName: "editZoomIn"; text: qsTr("Zoom in"); glyph: ExoGlyph.Plus; onClicked: clips.zoomTo(clips.pixelsPerSecond * 1.25) }
-                    EditActionButton { objectName: "editZoomFit"; text: qsTr("Fit timeline"); glyph: ExoGlyph.AppWindow; visible: root.width >= 900; onClicked: clips.fitTimeline() }
-                }
                 Label {
                     id: selectionStatus
                     objectName: "editSelectionStatus"
                     readonly property string failureText: root.session.rangeGestureActive && !root.session.rangeGestureValid
                         ? root.session.rangeGestureReason : root.session.dragActive && !root.session.dragValid
-                            ? root.session.dragReason : root.session.workspaceError || root.exporter.errorText
+                            ? root.session.dragReason : root.session.workspaceError
+                    // A transient line for refusals and imports, not a permanent
+                    // status bar: it takes no room while there is nothing to say.
+                    visible: text.length > 0
                     Layout.fillWidth: true
                     Layout.preferredHeight: 24
                     Layout.leftMargin: 8
@@ -719,27 +835,9 @@ FocusScope {
                     text: {
                         if (failureText.length > 0)
                             return failureText;
-                        if (root.exporter.running && !exportProgress.visible)
-                            return exportProgress.text;
                         if (root.session.importPending)
                             return qsTr("Importing media…");
-                        if (root.session.rangeGestureActive || root.session.dragActive)
-                            return qsTr("Editing selection");
-                        switch (root.session.selectionMode) {
-                        case EditSessionAdapter.RangeSelection:
-                            return qsTr("Range %1 to %2 · %3 tracks")
-                                .arg(root.session.formatTimeValue(root.session.editRange.startUs, 0))
-                                .arg(root.session.formatTimeValue(root.session.editRange.endUs, 0))
-                                .arg((root.session.editRange.trackIds || []).length);
-                        case EditSessionAdapter.ClipSelection:
-                            return qsTr("Selected clips: %1").arg(root.session.selectedClipIds.length);
-                        case EditSessionAdapter.JunctionSelection: return qsTr("Junction selected");
-                        case EditSessionAdapter.GapSelection: return qsTr("Gap selected");
-                        case EditSessionAdapter.SpacerSelection: return qsTr("Spacer selected");
-                        case EditSessionAdapter.TrackSelection:
-                            return (root.session.tracks.find(track => track.id === root.session.activeTrack) || {}).name || "";
-                        default: return "";
-                        }
+                        return "";
                     }
                     Accessible.name: text
                     HoverHandler { id: statusHover }
@@ -843,200 +941,6 @@ FocusScope {
                 text: qsTr("Cancel")
                 quiet: true
                 onClicked: directoryChoice.close()
-            }
-        }
-    }
-    Dialog {
-        id: exportOptions
-        objectName: "editExportOptions"
-        title: qsTr("Review export")
-        modal: true
-        focus: true
-        anchors.centerIn: parent
-        width: Math.min(root.width - 32, 480)
-        contentItem: ColumnLayout {
-            spacing: ExoTheme.spacingMd
-            ExoSettingRow {
-                label: qsTr("Export profile"); stacked: true; Layout.fillWidth: true
-                ExoSelect {
-                    objectName: "editExportProfiles"
-                    Layout.fillWidth: true
-                    options: root.exporter.profileOptions.filter(option => option.selectable)
-                    value: root.exporter.profileKey
-                    Accessible.name: qsTr("Export profile")
-                    onValueActivated: value => root.exporter.profileKey = value
-                }
-            }
-            ExoSettingRow {
-                label: qsTr("Export range"); stacked: true; Layout.fillWidth: true
-                ExoSelect {
-                    objectName: "editExportSpan"
-                    Layout.fillWidth: true
-                    options: [
-                        {value: "entire", label: qsTr("Entire timeline"), selectable: true},
-                        {value: "occupied", label: qsTr("Occupied content"), selectable: true},
-                        {value: "result", label: qsTr("Result range"), selectable: true},
-                        {value: "time", label: qsTr("I/O time range"), selectable: true},
-                        {value: "selected", label: qsTr("Selected clips"), selectable: true}
-                    ]
-                    value: root.exporter.spanKey
-                    Accessible.name: qsTr("Export range")
-                    onValueActivated: value => {
-                        root.exporter.setTimeSelectionUs(root.session.timeSelectionInUs, root.session.timeSelectionOutUs);
-                        root.exporter.spanKey = value;
-                    }
-                }
-            }
-            ExoCheckBox {
-                objectName: "editExportOriginalStreams"
-                Layout.fillWidth: true
-                text: qsTr("Keep original streams")
-                checked: root.exporter.modeKey === "originalStreams"
-                onToggledByUser: value => root.exporter.modeKey = value ? "originalStreams" : "finishedStereo"
-            }
-            ExoButton {
-                Layout.fillWidth: true
-                text: qsTr("Choose destination")
-                tone: "primary"
-                onClicked: {
-                    exportOptions.close();
-                    root.exporter.chooseDestination();
-                }
-            }
-        }
-    }
-    component ReviewLine: Label {
-        Layout.fillWidth: true
-        wrapMode: Text.Wrap
-        color: ExoTheme.textSecondary
-        font.family: ExoTheme.sansFamily
-        font.pixelSize: ExoTheme.fontSecondary
-    }
-    Dialog {
-        id: exportReview
-        objectName: "editExportReview"
-        title: qsTr("Review export")
-        modal: true
-        focus: true
-        width: Math.min(root.width - 32, 520)
-        anchors.centerIn: Overlay.overlay
-        padding: ExoTheme.spacingLg
-        closePolicy: Popup.CloseOnEscape
-        // See ExoConfirmDialog: the style's own veil lightens the dark shell.
-        Overlay.modal: Rectangle {
-            color: ExoTheme.overlayScrim
-        }
-        background: Rectangle {
-            color: ExoTheme.surfaceRaised
-            border.width: 1
-            border.color: ExoTheme.lineStrong
-            radius: ExoTheme.radiusLg
-        }
-        header: Label {
-            text: exportReview.title
-            textFormat: Text.PlainText
-            color: ExoTheme.text
-            leftPadding: ExoTheme.spacingLg
-            rightPadding: ExoTheme.spacingLg
-            topPadding: ExoTheme.spacingLg
-            font.family: ExoTheme.sansFamily
-            font.pixelSize: ExoTheme.fontSectionTitle
-            font.weight: Font.DemiBold
-        }
-        onClosed: if (root.exporter.state === EditExportAdapter.Review)
-            root.exporter.discardPreparedExport()
-        Connections {
-            target: root.exporter
-            function onStateChanged() {
-                if (root.exporter.state === EditExportAdapter.Review)
-                    exportReview.open()
-                else if (exportReview.opened)
-                    exportReview.close()
-            }
-        }
-        // The page is created on its first visit; an outcome already waiting
-        // for review then has to be shown, not missed.
-        Component.onCompleted: if (root.exporter.state === EditExportAdapter.Review)
-            exportReview.open()
-        contentItem: ColumnLayout {
-            id: reviewContent
-            readonly property bool planned: root.exporter.reviewOutcome.audioSummary !== undefined
-            readonly property bool mixed: (root.exporter.reviewOutcome.outputAudioTracks || []).some(track => track.role === "mix")
-            spacing: ExoTheme.spacingSm
-            ReviewLine {
-                color: ExoTheme.text
-                text: qsTr("%1 to %2 · %3 video · %4")
-                    .arg(root.exporter.reviewOutcome.path === "Copy" ? qsTr("Copy") : qsTr("Render"))
-                    .arg(root.exporter.reviewOutcome.container || "")
-                    .arg(root.exporter.reviewOutcome.videoCodec || "")
-                    .arg(root.exporter.reviewOutcome.outputFile || "")
-                wrapMode: Text.Wrap
-            }
-            ReviewLine {
-                objectName: "editExportAudioSummary"
-                visible: reviewContent.planned
-                text: qsTr("Audio: %1").arg(root.exporter.reviewOutcome.audioSummary || "")
-            }
-            ReviewLine {
-                visible: root.exporter.reviewOutcome.path === "Copy" && !reviewContent.planned
-                text: qsTr("All %1 source audio tracks will be copied: %2")
-                    .arg((root.exporter.reviewOutcome.outputAudioTracks || []).length)
-                    .arg((root.exporter.reviewOutcome.outputAudioTracks || []).map(track => track.name).join(", ") || qsTr("none"))
-            }
-            ReviewLine {
-                visible: reviewContent.planned ? reviewContent.mixed : root.exporter.reviewOutcome.path === "Render"
-                text: root.exporter.reviewOutcome.videoOnly
-                    ? qsTr("Video-only render. No audio tracks will be included.")
-                    : reviewContent.planned
-                        ? qsTr("Enabled audio (%1) is mixed into one 48 kHz stereo %3 track: %2")
-                            .arg((root.exporter.reviewOutcome.selectedTracks || []).length)
-                            .arg((root.exporter.reviewOutcome.selectedTracks || []).map(track => track.name).join(", "))
-                            .arg(((root.exporter.reviewOutcome.outputAudioTracks || [])[0] || {}).codec || "")
-                        : qsTr("Selected tracks (%1) will be mixed into one 48 kHz stereo PCM24 track: %2")
-                            .arg((root.exporter.reviewOutcome.selectedTracks || []).length)
-                            .arg((root.exporter.reviewOutcome.selectedTracks || []).map(track => track.name).join(", "))
-            }
-            ReviewLine {
-                visible: reviewContent.planned ? reviewContent.mixed : root.exporter.reviewOutcome.path === "Render"
-                text: qsTr("Other tracks will not be included: %1")
-                    .arg((root.exporter.reviewOutcome.excludedTracks || []).map(track => track.name).join(", ") || qsTr("none"))
-            }
-            ReviewLine {
-                visible: reviewContent.planned || root.exporter.reviewOutcome.path === "Render"
-                text: qsTr("Original source recordings remain unchanged.")
-            }
-            ReviewLine {
-                visible: root.exporter.reviewOutcome.replaceExisting === true
-                text: qsTr("The existing destination file will be replaced.")
-            }
-        }
-        footer: Item {
-            implicitWidth: reviewButtons.implicitWidth + 2 * ExoTheme.spacingLg
-            implicitHeight: reviewButtons.implicitHeight + ExoTheme.spacingLg
-            RowLayout {
-                id: reviewButtons
-                anchors.fill: parent
-                anchors.leftMargin: ExoTheme.spacingLg
-                anchors.rightMargin: ExoTheme.spacingLg
-                anchors.bottomMargin: ExoTheme.spacingLg
-                spacing: ExoTheme.spacingSm
-                Item { Layout.fillWidth: true }
-                ExoButton {
-                    objectName: "editExportReviewCancel"
-                    text: qsTr("Cancel")
-                    quiet: true
-                    onClicked: exportReview.close()
-                }
-                ExoButton {
-                    objectName: "editExportReviewConfirm"
-                    tone: "primary"
-                    text: reviewContent.planned ? qsTr("Export")
-                        : root.exporter.reviewOutcome.path === "Render" ? qsTr("Render with selected tracks") : qsTr("Start copy")
-                    onClicked: {
-                        root.exporter.confirmPreparedExport()
-                        exportReview.close()
-                    }
-                }
             }
         }
     }

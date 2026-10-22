@@ -1068,6 +1068,31 @@ TEST(EditSelectionContracts, StableShiftSelectionIncludesOffscreenClipsAndLinked
     EXPECT_EQ(selection.clip_ids, (std::vector<Id>{second}));
 }
 
+TEST(EditSelectionContracts, MarqueeSelectsTouchedClipsAddsToBaseAndWidensLinksOnlyWhenAsked) {
+    Workspace workspace;
+    const auto source = ContractSource(workspace);
+    ASSERT_TRUE(workspace.insert(source));
+    const auto first = workspace.selection();
+    ASSERT_TRUE(workspace.insert(source));
+    const auto second = workspace.selection();
+    const auto snapshot = *workspace.snapshot();
+    const auto* first_clip = workspace.clip(first);
+    const auto* second_clip = workspace.clip(second);
+    ASSERT_TRUE(first_clip && second_clip);
+    EditSelection selection;
+    selection.selectArea(snapshot, first_clip->start, first_clip->end(), {first_clip->track}, {}, false);
+    EXPECT_EQ(selection.clip_ids, (std::vector<Id>{first}));
+    EXPECT_EQ(selection.primary_clip, first);
+    selection.selectArea(snapshot, first_clip->start, first_clip->end(), {first_clip->track}, {}, true);
+    EXPECT_EQ(selection.clip_ids.size(), 2u);
+    selection.selectArea(snapshot, second_clip->start, second_clip->end(), {second_clip->track}, {first}, false);
+    EXPECT_EQ(selection.clip_ids, (std::vector<Id>{first, second}));
+    EXPECT_EQ(selection.primary_clip, second);
+    selection.selectArea(snapshot, 0, 0, {first_clip->track}, {}, false);
+    EXPECT_EQ(selection.mode, SelectionMode::None);
+    EXPECT_TRUE(selection.clip_ids.empty());
+}
+
 TEST(EditSelectionContracts, HeaderSelectionKeepsAMultiSelectionAndClearsOnlyTheEditRange) {
     Workspace workspace;
     ASSERT_TRUE(workspace.insert(ContractSource(workspace)));

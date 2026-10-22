@@ -456,23 +456,49 @@ TestCase {
         mouseDoubleClickSequence(label, 50, 8);
         compare(testSession.trackLayout.heightForId(row.id), 64);
     }
-    function test_track_header_body_reorders_same_kind_after_midpoint() {
+    function test_track_grip_reorders_with_marker_escape_and_keyboard() {
         testSession.beginClipDrag(testSession.visibleClipsUs(0, 10000000).find(row => row.video).id, -1, true);
         testSession.updateClipDragUs(0, 0, 0);
         verify(testSession.commitClipDrag());
         const strip = createTemporaryObject(timelineComponent, tests, {height: 300});
         waitForRendering(strip);
         const trackId = testSession.tracks[0].id;
-        const label = findChild(strip, "editTrackLabel0");
+        const grip = findChild(strip, "editTrackGrip" + trackId);
+        const marker = findChild(strip, "editTrackReorderMarker");
         const next = findChild(strip, "editTrackLabel1");
         const destination = next.mapToItem(strip, 50, next.height / 2 + 5);
-        mousePress(label, 50, 8);
+        // The name no longer reorders: only the grip does.
+        mousePress(findChild(strip, "editTrackLabel0"), 50, 8);
+        mouseMove(strip, destination.x, destination.y, 20);
+        mouseRelease(strip, destination.x, destination.y);
+        compare(testSession.tracks[0].id, trackId);
+        // Escape during the drag writes nothing.
+        mousePress(grip, 6, 11);
+        mouseMove(strip, destination.x, destination.y, 20);
+        verify(marker.visible);
+        keyClick(Qt.Key_Escape);
+        verify(!marker.visible);
+        mouseRelease(strip, destination.x, destination.y);
+        compare(testSession.tracks[0].id, trackId);
+        // Release writes one undoable reorder.
+        mousePress(grip, 6, 11);
         mouseMove(strip, destination.x, destination.y, 20);
         mouseRelease(strip, destination.x, destination.y);
         compare(testSession.tracks[1].id, trackId);
+        testSession.undo();
+        compare(testSession.tracks[0].id, trackId);
+        // The focused grip moves its track with Up and Down.
+        findChild(strip, "editTrackGrip" + trackId).forceActiveFocus(Qt.TabFocusReason);
+        keyClick(Qt.Key_Down);
+        compare(testSession.tracks[1].id, trackId);
+        tryVerify(() => findChild(strip, "editTrackGrip" + trackId).activeFocus);
+        keyClick(Qt.Key_Up);
+        compare(testSession.tracks[0].id, trackId);
+        testSession.undo();
+        testSession.undo();
     }
     function test_content_drag_creates_range_without_authored_move() {
-        const strip = createTemporaryObject(timelineComponent, tests);
+        const strip = createTemporaryObject(timelineComponent, tests, {tool: "range"});
         verify(!!strip);
         strip.view.setVisibleInterval(0, 10000000);
         waitForRendering(strip);
@@ -515,7 +541,7 @@ TestCase {
     }
     function test_empty_lane_drag_creates_range_and_keeps_initial_seek() {
         verify(testSession.applyTimeValue(0, "timelineEnd", 300000000));
-        const strip = createTemporaryObject(timelineComponent, tests);
+        const strip = createTemporaryObject(timelineComponent, tests, {tool: "range"});
         verify(!!strip);
         strip.view.setVisibleInterval(0, 300000000);
         waitForRendering(strip);
@@ -534,6 +560,39 @@ TestCase {
             mouseRelease(scroll, x + 60, y, Qt.LeftButton);
         }
         compare(testSession.selectionMode, EditSessionAdapter.RangeSelection);
+    }
+    function test_select_tool_marquee_selects_touched_clips_without_history() {
+        verify(testSession.applyTimeValue(0, "timelineEnd", 300000000));
+        const strip = createTemporaryObject(timelineComponent, tests);
+        verify(!!strip);
+        compare(strip.tool, "select");
+        strip.view.setVisibleInterval(0, 300000000);
+        waitForRendering(strip);
+        const scroll = findChild(strip, "editTimelineScroll");
+        const marquee = findChild(strip, "editMarquee");
+        const x = strip.labelWidth + 300;
+        const y = strip.rulerHeight + 40;
+        testSession.clearSelection();
+        const undoable = testSession.canUndo;
+        const position = testSession.positionUs;
+        mousePress(scroll, x, y, Qt.LeftButton);
+        mouseMove(scroll, strip.labelWidth + 4, y, 20);
+        verify(marquee.visible);
+        verify(!testSession.rangeGestureActive);
+        verify(testSession.selectedClipIds.length > 0);
+        compare(testSession.positionUs, position);
+        keyClick(Qt.Key_Escape);
+        verify(!marquee.visible);
+        compare(testSession.selectedClipIds.length, 0);
+        mouseRelease(scroll, strip.labelWidth + 4, y, Qt.LeftButton);
+        mousePress(scroll, x, y, Qt.LeftButton);
+        mouseMove(scroll, strip.labelWidth + 4, y, 20);
+        mouseRelease(scroll, strip.labelWidth + 4, y, Qt.LeftButton);
+        verify(!marquee.visible);
+        verify(testSession.selectedClipIds.length > 0);
+        compare(testSession.selectionMode, EditSessionAdapter.ClipSelection);
+        compare(testSession.canUndo, undoable);
+        testSession.clearSelection();
     }
     function test_clear_cache_refreshes_unchanged_visible_media_data() {
         return [{tag: "video-combined", audio: false, combined: true},

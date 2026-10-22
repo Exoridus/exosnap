@@ -167,6 +167,9 @@ TEST(EditClipPointer, ModifiersHaveOneCapturedPolicyAndConflictingStructuralChor
 
 TEST(EditTimelineKeys, RangeClipboardAndViewBindingsAreCentralAndRejectUnlistedChords) {
     EXPECT_EQ(ResolveTimelineKey(Qt::Key_L, Qt::ControlModifier, false), QStringLiteral("loop"));
+    EXPECT_EQ(ResolveTimelineKey(Qt::Key_V, Qt::NoModifier, false), QStringLiteral("tool-select"));
+    EXPECT_EQ(ResolveTimelineKey(Qt::Key_R, Qt::NoModifier, false), QStringLiteral("tool-range"));
+    EXPECT_EQ(ResolveTimelineKey(Qt::Key_V, Qt::ControlModifier, false), QStringLiteral("paste"));
     EXPECT_EQ(ResolveTimelineKey(Qt::Key_X, Qt::AltModifier, false), QStringLiteral("clear-range"));
     EXPECT_EQ(ResolveTimelineKey(Qt::Key_C, Qt::ControlModifier, false), QStringLiteral("copy"));
     EXPECT_EQ(ResolveTimelineKey(Qt::Key_X, Qt::ControlModifier, false), QStringLiteral("cut"));

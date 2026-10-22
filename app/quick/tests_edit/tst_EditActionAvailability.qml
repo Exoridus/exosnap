@@ -60,13 +60,15 @@ TestCase {
         const output = findChild(page, "editVolume").parent;
         const left = output.mapToItem(transport.parent, 0, 0).x;
         verify(transport.x + transport.width + 4 <= left,
-               "Export controls and status remain outside the transport group at 860 px: "
+               "Output controls remain outside the transport group at 860 px: "
                + JSON.stringify({transportX: transport.x, transportWidth: transport.width,
-                                 outputX: left, outputWidth: output.width,
-                                 progressVisible: findChild(page, "editExportProgress").visible}));
-        const progress = findChild(page, "editExportProgress");
-        if (!progress.visible)
-            compare(findChild(page, "editSelectionStatus").text, progress.text);
+                                 outputX: left, outputWidth: output.width}));
+        // Export state lives on its rail button, not in the timeline toolbar.
+        verify(!findChild(findChild(page, "editTimelineHeader"), "editExportProgress"));
+        const rail = findChild(page, "editExport");
+        if (testPageExporter.running)
+            verify(findChild(page, "editExportRailProgress").visible);
+        verify(rail.Accessible.name.length > 0);
     }
     function test_empty_timeline_disabled_actions_explain_their_condition() {
         compare(testPageSession.durationUs, 0);

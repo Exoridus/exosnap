@@ -38,6 +38,27 @@ FocusScope {
     property alias pixelsPerSecond: viewport.pixelsPerSecond
     readonly property bool snapping: session.snapping
     property real hoveredGroup: 0
+    // Pointer tool for empty lane space: "select" draws a marquee, "range"
+    // draws a time range. Session state, not part of the document.
+    property string tool: "select"
+    // Track reorder in progress: the dragged track and its prospective row.
+    property var reorderTrackId: 0
+    property int reorderIndex: -1
+    function focusTrackGrip(id: var): void {
+        for (let i = 0; i < trackLabels.count; ++i) {
+            const grip = trackLabels.itemAt(i) ? findGrip(trackLabels.itemAt(i), "editTrackGrip" + id) : null;
+            if (grip) {
+                grip.forceActiveFocus(Qt.TabFocusReason);
+                return;
+            }
+        }
+    }
+    function findGrip(item: Item, name: string): Item {
+        for (const childItem of item.children)
+            if (childItem.objectName === name)
+                return childItem;
+        return null;
+    }
     property bool draggingCrossfade: false
     property bool insertDrag: false
     property var dragTrack: 0
@@ -60,7 +81,7 @@ FocusScope {
     FrameAnimation {
         running: root.visible && root.pointerScrolling && root.pointerUpdater !== null
         onTriggered: {
-            if (!root.session.dragActive && !root.session.rangeGestureActive) {
+            if (!root.session.dragActive && !root.session.rangeGestureActive && !laneMouse.marquee && !root.reorderTrackId) {
                 root.stopPointerScroll();
                 return;
             }
@@ -267,6 +288,17 @@ FocusScope {
         const focused = root.Window.window ? root.Window.window.activeFocusItem : null;
         if (focused instanceof TextInput || focused instanceof TextEdit)
             return;
+        if (event.key === Qt.Key_Escape && laneMouse.marquee) {
+            laneMouse.cancelMarquee();
+            event.accepted = true;
+            return;
+        }
+        if (event.key === Qt.Key_Escape && root.reorderTrackId) {
+            root.stopPointerScroll();
+            root.reorderTrackId = 0;
+            event.accepted = true;
+            return;
+        }
         if (event.key === Qt.Key_Escape && (root.session.dragActive || root.session.rangeGestureActive || root.session.hasPointerSelection() || root.capturedSpacerId)) {
             root.stopPointerScroll();
             root.capturedClipId = 0;
@@ -310,6 +342,8 @@ FocusScope {
         case "inspector-dock": root.inspectorToggleRequested(); break;
         case "export": root.exportRequested(); break;
         case "shortcuts": root.shortcutsRequested(); break;
+        case "tool-select": root.tool = "select"; break;
+        case "tool-range": root.tool = "range"; break;
         case "context-menu":
             if (root.session.selectedClip !== 0)
                 clipMenu.popup();
@@ -365,6 +399,18 @@ FocusScope {
             text: qsTr("Ripple delete (Shift+Delete)")
             enabled: root.session.selectedClip !== 0
             onTriggered: root.session.deleteSelected(true)
+        }
+        ExoMenuItem {
+            objectName: "editLinkSelection"
+            text: qsTr("Link selection")
+            enabled: root.session.selectedClipIds.length >= 2
+            onTriggered: root.session.linkSelectedClips()
+        }
+        ExoMenuItem {
+            objectName: "editUnlinkSelection"
+            text: qsTr("Unlink")
+            enabled: root.session.selectedClipIds.length > 0
+            onTriggered: root.session.unlinkSelectedClips()
         }
         ExoMenuItem {
             objectName: "editCrossfadeAtCut"
@@ -805,8 +851,37 @@ FocusScope {
             property var pressTrack: 0
             property var pressPolicy: ({valid: false})
             property bool started: false
+            // Marquee state. The selection before the press is kept so Escape
+            // can restore it; the playhead too, because a plain press seeks.
+            property bool marquee: false
+            property bool marqueeArmed: false
+            property var marqueeOriginal: []
+            property real marqueeStartX: 0
+            property real marqueeStartY: 0
+            property real marqueeEndX: 0
+            property real marqueeEndY: 0
+            property real pressPlayheadUs: 0
+            function cancelMarquee(): void {
+                marquee = false;
+                marqueeArmed = false;
+                root.stopPointerScroll();
+                root.session.selectClipArea(0, 0, [], marqueeOriginal, true);
+            }
+            function updateMarquee(local: point): void {
+                marqueeEndX = local.x;
+                marqueeEndY = local.y;
+                const rows = root.trackLayout.rows;
+                const from = rows.findIndex(row => row.id === pressTrack);
+                const current = root.trackLayout.trackAtY(Math.max(0, local.y - root.rulerHeight));
+                const to = current ? rows.findIndex(row => row.id === current) : local.y < marqueeStartY ? 0 : rows.length - 1;
+                const tracks = rows.slice(Math.min(from, to), Math.max(from, to) + 1).map(row => row.id);
+                root.session.selectClipArea(pressTimeUs, root.timeAtUs(local.x), tracks,
+                    pressPolicy.additive ? marqueeOriginal : [], pressPolicy.exact === true);
+            }
             onPressed: mouse => {
                 pressPolicy = {valid: false};
+                marquee = false;
+                marqueeArmed = false;
                 if (!root.session.preflightPendingDraft())
                     return;
                 pressTrack = root.trackLayout.trackAtY(mouse.y - root.rulerHeight);
@@ -829,14 +904,28 @@ FocusScope {
                 }
                 const hasRange = root.session.selectionMode === EditSessionAdapter.RangeSelection;
                 pressPolicy = root.interaction.clipPointerPolicy(EditInteractionController.PointerContent, mouse.modifiers, hasRange);
+                // The selection tool turns a drag from empty space into a marquee:
+                // Ctrl adds to the selection, Alt ignores link groups. The range
+                // tool keeps the time-range gestures, plain drag included.
+                if (root.tool === "select" && (mouse.modifiers === Qt.ControlModifier || mouse.modifiers === Qt.AltModifier))
+                    pressPolicy = {valid: true, range: false, seek: false, additive: mouse.modifiers === Qt.ControlModifier,
+                        exact: mouse.modifiers === Qt.AltModifier, error: ""};
+                else if (root.tool === "range" && mouse.modifiers === Qt.NoModifier)
+                    pressPolicy = {valid: true, range: true, seek: false, extend: false, anchorAtPlayhead: false,
+                        preserveBounds: false, error: ""};
                 root.inputHint = pressPolicy.error;
                 if (!pressPolicy.valid)
                     return;
+                marqueeArmed = !pressPolicy.range;
+                marqueeOriginal = root.session.selectedClipIds;
+                marqueeStartX = marqueeEndX = mouse.x;
+                marqueeStartY = marqueeEndY = mouse.y;
+                pressPlayheadUs = root.session.positionUs;
                 if (pressPolicy.range) {
                     const anchor = pressPolicy.anchorAtPlayhead ? root.session.positionUs : pressTimeUs;
                     root.session.beginRangeGestureUs(anchor, [pressTrack], pressPolicy.extend, pressPolicy.preserveBounds);
                     root.session.updateRangeGestureToTrackUs(pressTimeUs, pressTrack);
-                } else {
+                } else if (pressPolicy.seek) {
                     root.session.beginLanePointerSelection(pressTrack, pressTimeUs);
                 }
                 root.pointerPosition = pressPoint;
@@ -846,16 +935,25 @@ FocusScope {
             }
             function updatePointer(point: point): void {
                 if (!pressed || !(pressedButtons & Qt.LeftButton) || !pressPolicy.valid ||
-                        (!root.session.hasPointerSelection() && !root.session.rangeGestureActive))
+                        (!marqueeArmed && !root.session.hasPointerSelection() && !root.session.rangeGestureActive))
                     return;
                 const local = scroll.contentItem.mapFromItem(root, point.x, point.y);
                 if (!started && root.interaction.clipPointerThreshold(EditInteractionController.PointerContent,
                         point.x - pressPoint.x, point.y - pressPoint.y, Qt.styleHints.startDragDistance)) {
                     started = true;
-                    if (!pressPolicy.range)
-                        root.session.beginRangeGestureUs(pressTimeUs, [pressTrack]);
+                    if (marqueeArmed) {
+                        // The press already seeked and picked a gap; a drag means
+                        // neither, so both are undone before the marquee begins.
+                        root.session.finishPointerSelection(true);
+                        if (root.session.positionUs !== pressPlayheadUs)
+                            root.session.requestSeekUs(pressPlayheadUs);
+                        marquee = true;
+                    }
                 }
-                if (started) {
+                if (started && marquee) {
+                    root.pointerScrolling = true;
+                    updateMarquee(local);
+                } else if (started) {
                     root.pointerScrolling = true;
                     const track = root.trackLayout.trackAtY(local.y - root.rulerHeight);
                     root.session.updateRangeGestureToTrackUs(root.timeAtUs(local.x), track || pressTrack);
@@ -876,13 +974,32 @@ FocusScope {
                         root.session.cancelRangeGesture();
                 }
                 root.session.finishPointerSelection(false, started);
-                if (pressPolicy.seek)
+                if (pressPolicy.seek && !marquee)
                     root.session.finishPointerSeek();
+                marquee = false;
+                marqueeArmed = false;
             }
             onCanceled: {
                 root.stopPointerScroll();
+                if (marquee)
+                    cancelMarquee();
                 root.session.cancelRangeGesture();
                 root.session.finishPointerSelection(true);
+            }
+            Rectangle {
+                objectName: "editMarquee"
+                // Above the clips, which are later siblings of the lane pointer.
+                parent: scroll.contentItem
+                visible: laneMouse.marquee
+                x: laneMouse.x + Math.min(laneMouse.marqueeStartX, laneMouse.marqueeEndX)
+                y: laneMouse.y + Math.min(laneMouse.marqueeStartY, laneMouse.marqueeEndY)
+                width: Math.abs(laneMouse.marqueeEndX - laneMouse.marqueeStartX)
+                height: Math.abs(laneMouse.marqueeEndY - laneMouse.marqueeStartY)
+                z: 10
+                color: Qt.rgba(ExoTheme.accent.r, ExoTheme.accent.g, ExoTheme.accent.b, 0.08)
+                border.width: 1
+                border.color: ExoTheme.accent
+                Accessible.ignored: true
             }
             onDoubleClicked: {
                 const gap = root.session.selectedGap;
@@ -891,6 +1008,7 @@ FocusScope {
             }
         }
         Repeater {
+            id: trackLabels
             model: trackLabelModel
             delegate: Rectangle {
                 id: trackLabel
@@ -926,37 +1044,10 @@ FocusScope {
                     height: 18
                     acceptedButtons: Qt.LeftButton | Qt.RightButton
                     preventStealing: true
-                    property point pressPoint: Qt.point(0, 0)
-                    property var destinationTrack: 0
-                    property bool reordered: false
                     onPressed: mouse => {
-                        if (!root.session.preflightPendingDraft()) { mouse.accepted = false; return; }
-                        pressPoint = mapToItem(root, mouse.x, mouse.y);
-                        destinationTrack = trackLabel.modelData.id;
-                        reordered = false;
-                    }
-                    onPositionChanged: mouse => {
-                        if (!pressed || !(pressedButtons & Qt.LeftButton))
-                            return;
-                        const point = mapToItem(root, mouse.x, mouse.y);
-                        if (!reordered && !root.interaction.clipPointerThreshold(EditInteractionController.PointerHeader,
-                                point.x - pressPoint.x, point.y - pressPoint.y, Qt.styleHints.startDragDistance))
-                            return;
-                        reordered = true;
-                        const local = mapToItem(scroll.contentItem, mouse.x, mouse.y);
-                        const resolved = root.interaction.dragTrackId(root.trackLayout.rows, destinationTrack, local.y - root.rulerHeight);
-                        if (resolved)
-                            destinationTrack = resolved;
-                    }
-                    onReleased: {
-                        if (reordered && destinationTrack !== trackLabel.modelData.id) {
-                            const destination = root.trackLayout.rows.findIndex(row => row.id === destinationTrack);
-                            root.session.reorderTrack(trackLabel.modelData.id, destination);
-                        }
+                        if (!root.session.preflightPendingDraft()) mouse.accepted = false;
                     }
                     onClicked: mouse => {
-                        if (reordered)
-                            return;
                         if (!root.session.preflightPendingDraft())
                             return;
                         root.session.setActiveTrack(trackLabel.modelData.id);
@@ -1038,28 +1129,99 @@ FocusScope {
                     text: (trackLabel.modelData.enabled ? "" : "M ") + (trackLabel.modelData.solo ? "S " : "") + (trackLabel.modelData.locked ? "L" : "")
                     Accessible.ignored: true
                 }
-                MouseArea {
-                    x: 0
-                    width: 16
-                    height: parent.height - 4
-                    cursorShape: Qt.SizeVerCursor
-                    preventStealing: true
-                    property real pressY: 0
-                    property int destination: -1
-                    onPressed: mouse => {
-                        if (!root.session.preflightPendingDraft()) { mouse.accepted = false; return; }
-                        pressY = mapToItem(root, mouse.x, mouse.y).y;
-                        destination = trackLabel.index;
+                // The grip is the only reorder handle: the name selects the track
+                // and the controls keep their meaning. A drag moves only the
+                // insertion marker; release writes the order, Escape writes nothing.
+                Item {
+                    id: grip
+                    objectName: "editTrackGrip" + trackLabel.modelData.id
+                    x: 2
+                    y: 2
+                    width: 12
+                    height: 22
+                    enabled: !trackLabel.modelData.locked
+                    activeFocusOnTab: true
+                    Accessible.role: Accessible.Button
+                    Accessible.name: qsTr("Reorder %1. Use Up and Down.").arg(trackLabel.modelData.name)
+                    Accessible.description: enabled ? "" : qsTr("The track is locked.")
+                    function move(step: int): void {
+                        const destination = trackLabel.index + step;
+                        const id = trackLabel.modelData.id;
+                        if (destination >= 0 && destination < root.trackLayout.rows.length
+                                && root.session.preflightPendingDraft() && root.session.reorderTrack(id, destination))
+                            Qt.callLater(() => root.focusTrackGrip(id));
                     }
-                    onPositionChanged: mouse => {
-                        if (!pressed || Math.abs(mapToItem(root, mouse.x, mouse.y).y - pressY) < Qt.styleHints.startDragDistance)
-                            return;
-                        const point = mapToItem(scroll.contentItem, mouse.x, mouse.y);
-                        const track = root.trackLayout.trackAtY(point.y - root.rulerHeight);
-                        destination = root.trackLayout.rows.findIndex(row => row.id === track);
+                    Keys.onUpPressed: event => { grip.move(-1); event.accepted = true; }
+                    Keys.onDownPressed: event => { grip.move(1); event.accepted = true; }
+                    Rectangle {
+                        anchors.fill: parent
+                        radius: 3
+                        color: gripMouse.containsMouse || gripMouse.pressed ? ExoTheme.surfaceRaised : "transparent"
+                        border.width: grip.activeFocus ? 1 : 0
+                        border.color: ExoTheme.text
                     }
-                    onReleased: if (destination >= 0 && destination !== trackLabel.index) root.session.reorderTrack(trackLabel.modelData.id, destination)
-                    onDoubleClicked: root.trackLayout.toggleCollapsed(trackLabel.modelData.id)
+                    ExoGlyph {
+                        anchors.centerIn: parent
+                        width: 12
+                        height: 18
+                        kind: ExoGlyph.Grip
+                        strokeWidth: 2
+                        color: !grip.enabled ? ExoTheme.textDim : grip.activeFocus || gripMouse.pressed ? ExoTheme.accent : ExoTheme.textSecondary
+                        Accessible.ignored: true
+                    }
+                    MouseArea {
+                        id: gripMouse
+                        anchors.fill: parent
+                        hoverEnabled: true
+                        cursorShape: grip.enabled ? Qt.SizeVerCursor : Qt.ArrowCursor
+                        preventStealing: true
+                        property real pressY: 0
+                        property bool started: false
+                        function update(point: point): void {
+                            const local = scroll.contentItem.mapFromItem(root, point.x, point.y);
+                            const rows = root.trackLayout.rows;
+                            const track = root.trackLayout.trackAtY(Math.max(0, local.y - root.rulerHeight));
+                            root.reorderIndex = track ? rows.findIndex(row => row.id === track)
+                                : local.y - root.rulerHeight < 0 ? 0 : rows.length - 1;
+                        }
+                        onPressed: mouse => {
+                            if (!root.session.preflightPendingDraft()) { mouse.accepted = false; return; }
+                            grip.forceActiveFocus(Qt.MouseFocusReason);
+                            pressY = mapToItem(root, mouse.x, mouse.y).y;
+                            started = false;
+                            root.reorderTrackId = trackLabel.modelData.id;
+                            root.reorderIndex = trackLabel.index;
+                            root.pointerScrollVertical = true;
+                            root.pointerPosition = mapToItem(root, mouse.x, mouse.y);
+                            root.pointerUpdater = physical => gripMouse.update(physical);
+                        }
+                        onPositionChanged: mouse => {
+                            if (!pressed || root.reorderTrackId !== trackLabel.modelData.id)
+                                return;
+                            const point = mapToItem(root, mouse.x, mouse.y);
+                            if (!started && Math.abs(point.y - pressY) < Qt.styleHints.startDragDistance)
+                                return;
+                            started = true;
+                            root.pointerPosition = point;
+                            root.pointerScrolling = true;
+                            update(point);
+                        }
+                        onReleased: {
+                            root.stopPointerScroll();
+                            const id = trackLabel.modelData.id;
+                            const destination = root.reorderIndex;
+                            const active = root.reorderTrackId === id;
+                            root.reorderTrackId = 0;
+                            if (active && started && destination >= 0 && destination !== trackLabel.index
+                                    && root.session.reorderTrack(id, destination))
+                                Qt.callLater(() => root.focusTrackGrip(id));
+                        }
+                        onCanceled: {
+                            root.stopPointerScroll();
+                            root.reorderTrackId = 0;
+                        }
+                        onDoubleClicked: root.trackLayout.toggleCollapsed(trackLabel.modelData.id)
+                    }
                 }
                 MouseArea {
                     objectName: "editTrackResize" + trackLabel.modelData.id
@@ -1470,6 +1632,7 @@ FocusScope {
                     property var pressPolicy: ({valid: false})
                     property bool started: false
                     property bool rangeIntent: false
+                    property bool clickSeek: false
                     readonly property real authoredWidth: (clipItem.modelData.endUs - clipItem.modelData.startUs) * root.pixelsPerUs
                     onEntered: root.hoveredGroup = clipItem.modelData.group
                     onExited: if (root.hoveredGroup === clipItem.modelData.group) root.hoveredGroup = 0
@@ -1491,7 +1654,9 @@ FocusScope {
                             return;
                         }
                         if (mouse.button === Qt.RightButton) {
-                            root.session.selectClip(pressClipId);
+                            // Keep a multi-selection the menu is about to act on.
+                            if (!root.session.selectedClipIds.some(id => id === pressClipId))
+                                root.session.selectClip(pressClipId);
                             root.forceActiveFocus();
                             clipMenu.popup();
                             return;
@@ -1503,6 +1668,14 @@ FocusScope {
                             root.interaction.clipPointerTarget(clipItem.modelData, authoredWidth,
                                 clipItem.height, clipItem.trackBounds.headerHeight, authoredX, mouse.y, pressJunction !== 0);
                         const hasRange = root.session.selectionMode === EditSessionAdapter.RangeSelection;
+                        // With the selection tool the whole clip body behaves like
+                        // its header: click selects, drag moves the selection. A
+                        // plain click still positions the playhead, on release, so
+                        // a move never drags the playhead along.
+                        clickSeek = root.tool === "select" && pressTarget === EditInteractionController.PointerContent
+                            && mouse.modifiers === Qt.NoModifier;
+                        if (root.tool === "select" && pressTarget === EditInteractionController.PointerContent)
+                            pressTarget = EditInteractionController.PointerHeader;
                         pressPolicy = root.interaction.clipPointerPolicy(pressTarget, mouse.modifiers, hasRange);
                         root.inputHint = pressPolicy.error;
                         if (!pressPolicy.valid) {
@@ -1594,6 +1767,8 @@ FocusScope {
                         root.session.finishPointerSelection(false, started);
                         if (pressPolicy.seek)
                             root.session.finishPointerSeek();
+                        else if (clickSeek && !started)
+                            root.session.requestSeekUs(pressTimeUs);
                     }
                     onCanceled: {
                         root.stopPointerScroll();
@@ -2161,6 +2336,21 @@ FocusScope {
                 }
             }
         }
+        Rectangle {
+            objectName: "editTrackReorderMarker"
+            readonly property int from: root.trackLayout.rows.findIndex(row => row.id === root.reorderTrackId)
+            readonly property var target: root.trackLayout.rows[root.reorderIndex] ?? ({top: 0, height: 0})
+            visible: root.reorderTrackId !== 0 && root.reorderIndex >= 0 && root.reorderIndex !== from
+            x: scroll.contentX
+            y: root.rulerHeight + target.top + (root.reorderIndex > from ? target.height : 0) - 1
+            width: scroll.width
+            height: 2
+            z: 6
+            color: ExoTheme.accent
+            Accessible.ignored: true
+        }
+        // A range marks its target tracks with a light wash and a thin bottom
+        // edge, so it never competes with the clip selection's tinted headers.
         Repeater {
             model: root.displayedRange.trackIds ?? []
             delegate: Rectangle {
@@ -2172,10 +2362,15 @@ FocusScope {
                 width: root.visibleSpan(root.displayedRange.startUs ?? 0, root.displayedRange.endUs ?? 0)
                 height: bounds.height
                 z: 2
-                color: ExoTheme.accent
-                opacity: 0.12
-                border.color: ExoTheme.accent
+                color: Qt.rgba(ExoTheme.accent.r, ExoTheme.accent.g, ExoTheme.accent.b, 0.07)
                 Accessible.ignored: true
+                Rectangle {
+                    anchors.left: parent.left
+                    anchors.right: parent.right
+                    anchors.bottom: parent.bottom
+                    height: 2
+                    color: ExoTheme.accent
+                }
             }
         }
         Rectangle {

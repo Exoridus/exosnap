@@ -65,6 +65,8 @@ qt_add_qml_module(exosnap
         EditTimelineRuler.qml
         EditSourceBrowser.qml
         EditSidePanel.qml
+        EditMixPanel.qml
+        EditExportPanel.qml
         EditPlayer.qml
         EditTimeline.qml
         EditTimeField.qml
@@ -1274,6 +1276,9 @@ qt_add_qml_module(edit_timeline_qml_tests
         EditPage.qml
         EditSourceBrowser.qml
         EditSidePanel.qml
+        EditMixPanel.qml
+        EditExportPanel.qml
+        ExoProgressBar.qml
         EditActionButton.qml
         EditTimelineRuler.qml
         ExoButton.qml

@@ -83,7 +83,11 @@ Item {
         Swatch,
         Pin,
         Repeat,
-        PlayRange
+        PlayRange,
+        Pointer,
+        RangeTool,
+        Grip,
+        Mixer
     }
 
     // An ExoGlyph.Kind value. Declared `int` because a QML-declared enum is not
@@ -243,7 +247,15 @@ Item {
         // Repeat -- two opposing arrows around the repeated interval.
         "M3.5 8V6.5A2 2 0 0 1 5.5 4.5H14.5 M11.5 1.5L14.5 4.5L11.5 7.5 M14.5 10V11.5A2 2 0 0 1 12.5 13.5H3.5 M6.5 10.5L3.5 13.5L6.5 16.5",
         // PlayRange -- a play triangle between explicit interval bounds.
-        "M4 3H2.5V15H4 M14 3H15.5V15H14 M6.5 5.5L12 9L6.5 12.5Z"
+        "M4 3H2.5V15H4 M14 3H15.5V15H14 M6.5 5.5L12 9L6.5 12.5Z",
+        // Pointer -- the selection tool's arrow.
+        "M4 2L14 10L9 10L7 15Z",
+        // RangeTool -- interval brackets around a span, without the play mark.
+        "M4 3H2V15H4 M14 3H16V15H14 M6 9H12",
+        // Grip -- six round-capped stubs that render as dots: a drag handle.
+        "M6 4H6.2 M11 4H11.2 M6 9H6.2 M11 9H11.2 M6 14H6.2 M11 14H11.2",
+        // Mixer -- three faders at different positions.
+        "M4 2V16 M9 2V16 M14 2V16 M2 6H6 M7 12H11 M12 5H16"
     ]
 
     // Kinds drawn as a filled silhouette instead of a stroked outline.

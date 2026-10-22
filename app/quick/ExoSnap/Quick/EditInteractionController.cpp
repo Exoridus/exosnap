@@ -101,6 +101,8 @@ QString ResolveTimelineKey(int key, int modifiers, bool auto_repeat) {
         {Qt::Key_Z, Qt::ControlModifier | Qt::ShiftModifier, "redo"},
         {Qt::Key_C, Qt::ControlModifier, "copy"},
         {Qt::Key_X, Qt::ControlModifier, "cut"},
+        {Qt::Key_V, Qt::NoModifier, "tool-select"},
+        {Qt::Key_R, Qt::NoModifier, "tool-range"},
         {Qt::Key_V, Qt::ControlModifier, "paste"},
         {Qt::Key_V, Qt::ControlModifier | Qt::ShiftModifier, "insert-paste"},
         {Qt::Key_Comma, Qt::NoModifier, "nudge-previous", true},

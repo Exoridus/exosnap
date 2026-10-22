@@ -16,6 +16,10 @@ Rectangle {
     property bool showHeader: true
     property string pinObjectName: ""
     property string closeText: qsTr("Close")
+    property int glyph: ExoGlyph.Invalid
+    // A short state line under the title, e.g. the export job's progress.
+    property string subtitle: ""
+    property alias closeButton: closeAction
     default property alias content: body.data
 
     signal pinToggled()
@@ -36,15 +40,38 @@ Rectangle {
             Layout.preferredHeight: 32
             spacing: ExoTheme.spacingXs
 
-            Label {
+            ExoGlyph {
+                Layout.preferredWidth: 18
+                Layout.preferredHeight: 18
+                Layout.rightMargin: ExoTheme.spacingXs
+                visible: root.glyph !== ExoGlyph.Invalid
+                kind: root.glyph
+                color: ExoTheme.textSecondary
+                Accessible.ignored: true
+            }
+            ColumnLayout {
                 Layout.fillWidth: true
-                text: root.title
-                elide: Text.ElideRight
-                color: ExoTheme.text
-                font.family: ExoTheme.sansFamily
-                font.pixelSize: ExoTheme.fontSectionTitle
-                font.weight: Font.DemiBold
-                Accessible.role: Accessible.Heading
+                spacing: 0
+                Label {
+                    Layout.fillWidth: true
+                    text: root.title
+                    elide: Text.ElideRight
+                    color: ExoTheme.text
+                    font.family: ExoTheme.sansFamily
+                    font.pixelSize: root.subtitle.length > 0 ? ExoTheme.fontBody : ExoTheme.fontSectionTitle
+                    font.weight: Font.DemiBold
+                    Accessible.role: Accessible.Heading
+                }
+                Label {
+                    objectName: "editSidePanelSubtitle"
+                    Layout.fillWidth: true
+                    visible: root.subtitle.length > 0
+                    text: root.subtitle
+                    elide: Text.ElideRight
+                    color: ExoTheme.textSecondary
+                    font.family: ExoTheme.sansFamily
+                    font.pixelSize: ExoTheme.fontCaption
+                }
             }
             EditActionButton {
                 objectName: root.showHeader ? root.pinObjectName : ""

@@ -72,6 +72,12 @@ class EditExportAdapter : public QObject {
     Q_PROPERTY(QString outputFolder READ outputFolder NOTIFY resultChanged FINAL)
     Q_PROPERTY(QString errorText READ errorText NOTIFY resultChanged FINAL)
     Q_PROPERTY(bool destinationFailure READ destinationFailure NOTIFY resultChanged FINAL)
+    // A finished or failed run nobody has looked at yet. Session state only:
+    // cleared by markResultSeen() or reset(), never stored with the project.
+    Q_PROPERTY(bool resultUnseen READ resultUnseen NOTIFY resultChanged FINAL)
+    // The finished file no longer matches the timeline: it was edited after the
+    // run's snapshot was taken.
+    Q_PROPERTY(bool resultOutdated READ resultOutdated NOTIFY resultChanged FINAL)
 
     Q_PROPERTY(QString containerKey READ containerKey WRITE setContainerKey NOTIFY optionsChanged FINAL)
     Q_PROPERTY(QString saveModeKey READ saveModeKey WRITE setSaveModeKey NOTIFY optionsChanged FINAL)
@@ -144,6 +150,11 @@ class EditExportAdapter : public QObject {
     [[nodiscard]] QString outputFolder() const;
     [[nodiscard]] const QString& errorText() const noexcept;
     [[nodiscard]] bool destinationFailure() const noexcept;
+    [[nodiscard]] bool resultUnseen() const noexcept {
+        return result_unseen_;
+    }
+    Q_INVOKABLE void markResultSeen();
+    [[nodiscard]] bool resultOutdated() const;
 
     [[nodiscard]] const QString& containerKey() const noexcept;
     void setContainerKey(const QString& key);
@@ -200,6 +211,8 @@ class EditExportAdapter : public QObject {
     QString save_mode_key_ = QStringLiteral("new");
     QString error_text_;
     bool destination_failure_ = false;
+    bool result_unseen_ = false;
+    quint64 result_revision_ = 0;
     std::filesystem::path output_path_;
     std::optional<std::filesystem::path> retry_output_path_;
     std::function<QString()> output_directory_;

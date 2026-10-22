@@ -188,21 +188,23 @@ Item {
         function test_ToolbarAtFourSizes(data) {
             const page = make({ width: data.width, height: data.height });
             const header = child(page, "editTimelineHeader");
-            const footer = child(page, "editTimelineFooter");
             const actions = child(page, "editActionGroup");
             const transport = child(page, "editTransportGroup");
             const output = child(page, "editOutputGroup");
+            verify(!findChild(page, "editTimelineFooter"));
             tryVerify(() => actions.x + actions.width <= transport.x);
             verify(transport.x + transport.width <= output.x);
             verify(output.x + output.width <= header.width);
-            verify(header.height >= 46 && footer.height >= 42);
+            verify(header.height >= 46);
             if (data.width >= 1000) compare(Math.round(transport.x + transport.width / 2), Math.round(header.width / 2));
-            for (const name of ["editUndo", "editRedo", "editSplit", "editDelete", "editTransportPlay", "editVolume", "editExport", "editMediaAccess", "editDetailsAccess", "editSnapping", "editRipple", "editAutoCrossfade", "editLinkedSelection", "editZoomOut", "editZoomIn", "editZoomFit"]) {
+            const minimum = {editExport: 32, editMediaAccess: 32, editDetailsAccess: 32, editMixAccess: 32, editZoomOut: 26, editZoomIn: 26, editZoomFit: 26};
+            for (const name of ["editUndo", "editRedo", "editSplit", "editDelete", "editTransportPlay", "editVolume", "editExport", "editMediaAccess", "editDetailsAccess", "editMixAccess", "editSnapping", "editRipple", "editAutoCrossfade", "editLinkedSelection", "editZoomOut", "editZoomIn", "editZoomFit"]) {
                 const control = child(page, name);
                 if (!control.visible)
                     continue;
                 const p = control.mapToItem(page, 0, 0);
-                verify(control.width >= 34 && control.height >= 32, name);
+                const size = minimum[name] ?? 34;
+                verify(control.width >= size && control.height >= Math.min(size, 32), name);
                 verify(p.x >= 0 && p.x + control.width <= page.width, name);
                 verify(p.y >= 0 && p.y + control.height <= page.height, name);
             }
@@ -392,11 +394,10 @@ Item {
             const page = make({session: testSession, width: 1280, height: 800});
             const position = testSession.positionUs;
             verify(testSession.setEditRangeUs(1000000, 2000000, [testSession.tracks[0].id]));
-            const status = child(page, "editSelectionStatus");
-            verify(status.visible);
-            verify(status.text.length > 0);
-            verify(status.text.indexOf("undefined") < 0);
-            compare(status.Accessible.name, status.text);
+            const readout = child(page, "editRangeReadout");
+            tryVerify(() => readout.text.length > 0);
+            verify(readout.text.indexOf("undefined") < 0);
+            verify(!child(page, "editSelectionStatus").visible);
             compare(testSession.positionUs, position);
             testSession.clearSelection();
             while (testSession.canUndo) testSession.undo();
@@ -609,6 +610,7 @@ Item {
         function test_export_cancel_is_accessible_and_navigation_independent() {
             const page = make();
             testEditHarness.exportVisualState(EditExportAdapter.Running);
+            page.openExport();
             const cancel = child(page, "editCancelExport");
             verify(cancel.visible && cancel.enabled);
             compare(cancel.Accessible.name, qsTr("Cancel export"));
@@ -624,6 +626,59 @@ Item {
             testEditHarness.exportVisualState(EditExportAdapter.Options);
         }
 
+        function test_export_is_a_right_panel_context_that_keeps_its_job() {
+            const empty = make();
+            verify(!child(empty, "editExport").enabled);
+            empty.openExport();
+            compare(empty.detailsOpen, false);
+            testSession.appendAsset(testSession.media[0].id);
+            const page = make({session: testSession, width: 1280, height: 800});
+            const rail = child(page, "editExport");
+            verify(rail.enabled);
+            child(page, "editClipTimeline").forceActiveFocus(Qt.TabFocusReason);
+            keyClick(Qt.Key_E, Qt.ControlModifier);
+            tryCompare(page, "exportVisible", true);
+            tryVerify(() => child(page, "editExportFormat").activeFocus);
+            mouseClick(child(page, "editMixAccess"));
+            compare(page.detailsOpen, true);
+            compare(page.rightContext, "mix");
+            verify(child(page, "editMixPanel").visible);
+            testEditHarness.exportVisualState(EditExportAdapter.Done);
+            verify(testPageExporter.resultUnseen);
+            verify(child(page, "editExportRailDot").visible);
+            compare(rail.Accessible.name, qsTr("Export complete"));
+            mouseClick(rail);
+            compare(page.rightContext, "export");
+            tryCompare(testPageExporter, "resultUnseen", false);
+            verify(!child(page, "editExportRailDot").visible);
+            compare(child(page, "editExportPrimary").text, qsTr("Show in folder"));
+            mouseClick(child(page, "editDetailsAccess"));
+            compare(page.rightContext, "details");
+            compare(testPageExporter.state, EditExportAdapter.Done);
+            testEditHarness.exportVisualState(EditExportAdapter.Options);
+            while (testSession.canUndo) testSession.undo();
+        }
+
+        function test_mix_rows_edit_the_same_track_values_as_details() {
+            testSession.appendAsset(testSession.media[0].id);
+            const page = make({session: testSession, width: 1280, height: 800});
+            const audio = testSession.tracks.find(track => !track.video);
+            verify(audio !== undefined);
+            mouseClick(child(page, "editMixAccess"));
+            const mute = child(page, "editMixMute" + audio.id);
+            mute.clicked();
+            compare(testSession.tracks.find(track => track.id === audio.id).enabled, false);
+            testSession.undo();
+            compare(testSession.tracks.find(track => track.id === audio.id).enabled, true);
+            const solo = child(page, "editMixSolo" + audio.id);
+            const undoable = testSession.canUndo;
+            solo.clicked();
+            verify(testSession.tracks.find(track => track.id === audio.id).solo);
+            compare(testSession.canUndo, undoable);
+            solo.clicked();
+            while (testSession.canUndo) testSession.undo();
+        }
+
         function test_icon_actions_data() {
             return [
                 { tag: "play", objectName: "editTransportPlay", label: qsTr("Play"), shortcut: "Space", enabled: false },
@@ -633,7 +688,7 @@ Item {
                 { tag: "delete", objectName: "editDelete", label: qsTr("Delete"), shortcut: "Delete", enabled: false },
                 { tag: "volume", objectName: "editVolume", label: qsTr("Preview volume"), shortcut: "", enabled: true },
                 { tag: "snap", objectName: "editSnapping", label: qsTr("Snapping"), shortcut: "", enabled: true },
-                { tag: "export", objectName: "editExport", label: qsTr("Export"), shortcut: "", enabled: false }
+                { tag: "export", objectName: "editExport", label: qsTr("Export"), shortcut: "Ctrl+E", enabled: false, rail: true }
             ];
         }
 
@@ -643,7 +698,7 @@ Item {
             compare(action.Accessible.name, data.label);
             compare(action.enabled, data.enabled);
             verify(action.glyph !== ExoGlyph.Invalid);
-            verify(action.width >= 34 && action.height >= 32);
+            verify(action.width >= (data.rail ? 32 : 34) && action.height >= 32);
             verify(action.ToolTip.text.indexOf(data.label) >= 0);
             if (data.shortcut.length > 0)
                 verify(action.ToolTip.text.indexOf(data.shortcut) >= 0);
@@ -746,26 +801,33 @@ Item {
             tryCompare(button, "activeFocus", true);
         }
 
-        function test_export_profile_selector_contains_only_supported_profiles() {
+        function test_export_profile_selector_marks_unsupported_profiles() {
+            testSession.appendAsset(testSession.media[0].id);
             const page = make({session: testSession});
             page.openExport();
             const profiles = child(page, "editExportProfiles");
             verify(profiles.Accessible.name.length > 0);
-            compare(profiles.count, testPageExporter.profileOptions.filter(option => option.selectable).length);
+            compare(profiles.count, testPageExporter.profileOptions.length);
             compare(profiles.currentValue, testPageExporter.profileKey);
+            while (testSession.canUndo) testSession.undo();
         }
         function test_export_intent_and_range_are_explicit_choices() {
+            testSession.appendAsset(testSession.media[0].id);
             const page = make({session: testSession});
             page.openExport();
             const original = child(page, "editExportOriginalStreams");
+            const finished = child(page, "editExportFinishedStereo");
             const span = child(page, "editExportSpan");
             compare(testPageExporter.modeKey, "finishedStereo");
             compare(original.checked, false);
+            compare(finished.checked, true);
             compare(span.currentValue, "entire");
-            original.toggledByUser(true);
+            original.clicked();
             compare(testPageExporter.modeKey, "originalStreams");
-            original.toggledByUser(false);
+            compare(finished.checked, false);
+            finished.clicked();
             compare(testPageExporter.modeKey, "finishedStereo");
+            compare(original.checked, false);
             span.activated(1);
             compare(testPageExporter.spanKey, "occupied");
             span.activated(2);
@@ -773,10 +835,12 @@ Item {
             span.activated(3);
             compare(testPageExporter.spanKey, "time");
             testPageExporter.spanKey = "result";
-            child(page, "editExportOptions").close();
+            page.openExport();
+            compare(page.detailsOpen, false);
             page.openExport();
             tryCompare(child(page, "editExportSpan"), "currentValue", "result");
             testPageExporter.spanKey = "entire";
+            while (testSession.canUndo) testSession.undo();
         }
         function test_clear_media_cache_is_not_part_of_contextual_inspector() {
             const page = make();
