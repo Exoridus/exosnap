@@ -659,6 +659,47 @@ Item {
             while (testSession.canUndo) testSession.undo();
         }
 
+        function test_keyboard_close_returns_focus_without_activating_a_rail() {
+            testSession.appendAsset(testSession.media[0].id);
+            const page = make({session: testSession, width: 1280, height: 800});
+            const timeline = child(page, "editClipTimeline");
+            // Ctrl+D and Ctrl+E from the timeline hand focus back to it, so a
+            // following Space reaches the transport instead of a rail button.
+            for (const key of [Qt.Key_D, Qt.Key_E]) {
+                timeline.forceActiveFocus(Qt.TabFocusReason);
+                keyClick(key, Qt.ControlModifier);
+                tryCompare(page, "detailsOpen", true);
+                keyClick(key, Qt.ControlModifier);
+                compare(page.detailsOpen, false);
+                tryVerify(() => timeline.activeFocus);
+                keyClick(Qt.Key_Space);
+                compare(page.detailsOpen, false);
+                verify(timeline.activeFocus);
+            }
+            // Escape closes the context that is shown instead of switching to
+            // Details, and a rail opened from the keyboard gets focus back.
+            const mixRail = child(page, "editMixAccess");
+            mixRail.forceActiveFocus(Qt.TabFocusReason);
+            keyClick(Qt.Key_Space);
+            tryCompare(page, "detailsOpen", true);
+            compare(page.rightContext, "mix");
+            keyClick(Qt.Key_Escape);
+            compare(page.detailsOpen, false);
+            tryVerify(() => mixRail.activeFocus);
+            // An invoker hidden since opening cannot take focus; the rail does.
+            page.toggleMedia();
+            const browser = child(page, "editSourceBrowser");
+            browser.forceActiveFocus(Qt.TabFocusReason);
+            keyClick(Qt.Key_D, Qt.ControlModifier);
+            tryCompare(page, "detailsOpen", true);
+            page.toggleMedia();
+            verify(!browser.visible);
+            page.toggleDetails(true);
+            compare(page.detailsOpen, false);
+            tryVerify(() => child(page, "editDetailsAccess").activeFocus);
+            while (testSession.canUndo) testSession.undo();
+        }
+
         function test_mix_rows_edit_the_same_track_values_as_details() {
             testSession.appendAsset(testSession.media[0].id);
             const page = make({session: testSession, width: 1280, height: 800});

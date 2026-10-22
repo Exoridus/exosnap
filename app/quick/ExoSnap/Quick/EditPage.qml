@@ -60,7 +60,7 @@ FocusScope {
         if (focused instanceof TextInput || focused instanceof TextEdit)
             return;
         if (event.key === Qt.Key_Escape && (root.detailsOpen || root.mediaOpen)) {
-            if (root.detailsOpen) root.toggleDetails(true);
+            if (root.detailsOpen) root.toggleRight(root.rightContext, true);
             else root.toggleMedia(true);
             event.accepted = true;
         } else if (!event.isAutoRepeat && event.modifiers === Qt.ControlModifier && event.key === Qt.Key_M) {
@@ -188,12 +188,16 @@ FocusScope {
         const closing = root.detailsOpen && root.rightContext === context;
         if (!root.detailsOpen)
             root.detailsInvoker = root.Window.window ? root.Window.window.activeFocusItem : clips;
+        // Resolved before the host unloads: an invoker inside the closing panel
+        // is about to be destroyed, and one that has been hidden since cannot
+        // take focus, so keyboard focus would otherwise land nowhere.
+        const returnTo = closing && keyboardActivation === true ? root.keyboardCloseTarget(context) : null;
         if (!closing)
             root.rightContext = context;
         root.detailsOpen = !closing;
         if (closing) {
-            if (keyboardActivation === true)
-                (root.detailsInvoker || clips).forceActiveFocus(Qt.TabFocusReason);
+            if (returnTo)
+                returnTo.forceActiveFocus(Qt.TabFocusReason);
             else
                 clips.forceActiveFocus(Qt.MouseFocusReason);
         } else if (keyboardActivation === true && context !== "details") {
@@ -202,6 +206,19 @@ FocusScope {
         if (root.detailsOpen && root.width < 1200 && !root.mediaPinned) root.mediaOpen = false;
     }
     signal rightContextFocusRequested()
+    // Keyboard close returns to whatever opened the panel, so Space keeps
+    // driving the transport after Ctrl+D or Ctrl+E from the timeline. Without a
+    // usable invoker the context's rail button takes focus.
+    function keyboardCloseTarget(context: string): Item {
+        let invoker = root.detailsInvoker;
+        for (let item = invoker; item; item = item.parent)
+            if (item === rightPanelHost)
+                invoker = null;
+        if (invoker && invoker.visible && invoker.enabled && invoker.Window.window === root.Window.window)
+            return invoker;
+        const rail = context === "mix" ? mixRail : context === "export" ? exportButton : detailsRail;
+        return rail.enabled ? rail : clips;
+    }
     function openInspector(field: string): void {
         if (!root.session.preflightPendingDraft())
             return;
@@ -436,6 +453,7 @@ FocusScope {
                 z: 2
             }
             Loader {
+                id: rightPanelHost
                 objectName: "editDetailsPanelLoader"
                 active: root.detailsOpen
                 width: root.detailsWidth
@@ -524,6 +542,7 @@ FocusScope {
                 y: 6
                 spacing: 4
                 RailButton {
+                    id: detailsRail
                     objectName: "editDetailsAccess"
                     text: qsTr("Details")
                     shortcutText: "Ctrl+D"
@@ -533,6 +552,7 @@ FocusScope {
                     onActivated: keyboard => root.toggleRight("details", keyboard)
                 }
                 RailButton {
+                    id: mixRail
                     objectName: "editMixAccess"
                     text: qsTr("Audio mix")
                     glyph: ExoGlyph.Mixer

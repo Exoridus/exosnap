@@ -116,7 +116,9 @@ TextField {
             if (commitPendingDraft())
                 focusCanvas();
             event.accepted = true;
-        } else if (event.key === Qt.Key_Escape) {
+        } else if (event.key === Qt.Key_Escape && editing) {
+            // Without a draft to discard, Escape belongs to the surface above
+            // (a popup or panel), not to the field.
             cancelPendingDraft("");
             focusCanvas();
             event.accepted = true;
