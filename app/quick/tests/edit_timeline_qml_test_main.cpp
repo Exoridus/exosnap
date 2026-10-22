@@ -13,6 +13,7 @@
 #include "EditPlayerWorker.h"
 #include "EditSessionAdapter.h"
 #include "EditTimelineAdapter.h"
+#include "EditTransportFixture.h"
 #include "ExoEditPlayerItem.h"
 #include "QuickThemeTokens.h"
 #include "RecordViewModelAdapter.h"
@@ -446,8 +447,7 @@ class MediaPreviewDriver final : public QObject {
         item.setPlayerAdapter(&player);
         player.setVolume(0);
         player.setSession(&session);
-        session.importMedia(QUrl::fromLocalFile(qEnvironmentVariable("EXOSNAP_EDIT_RENDER_FIXTURES") + "/" + filename),
-                            true, 0);
+        session.importMedia(QUrl::fromLocalFile(fixturePath(filename)), true, 0);
         QElapsedTimer deadline;
         deadline.start();
         while (!session.open() && deadline.elapsed() < 5000)
@@ -507,12 +507,16 @@ class MediaPreviewDriver final : public QObject {
                 {"audioChoiceRequired", session.workspace().assets().front().mix_decision_required},
                 {"error", player.placeholderText()}};
     }
+    // The ambiguous-transport source is generated in-process; every other file
+    // comes from the externally provided render fixtures.
+    static QString fixturePath(const QString& filename) {
+        if (filename == QStringLiteral("transport-ambiguous.mkv"))
+            return exosnap::quick::test::TransportAmbiguousFixture();
+        return qEnvironmentVariable("EXOSNAP_EDIT_RENDER_FIXTURES") + "/" + filename;
+    }
     Q_INVOKABLE bool fixtureAvailable(const QString& filename) const {
         std::error_code error;
-        return std::filesystem::is_regular_file(
-            std::filesystem::path(
-                (qEnvironmentVariable("EXOSNAP_EDIT_RENDER_FIXTURES") + "/" + filename).toStdWString()),
-            error);
+        return std::filesystem::is_regular_file(std::filesystem::path(fixturePath(filename).toStdWString()), error);
     }
     Q_INVOKABLE QVariantMap transportBurstProbe() {
         using exosnap::quick::EditPlayerAdapterTestPeer;
@@ -2022,11 +2026,12 @@ class Setup final : public QObject {
 
   public slots:
     QVariantMap prepareSourceAudioChoice() {
-        const auto fixtures = qEnvironmentVariable("EXOSNAP_EDIT_RENDER_FIXTURES");
-        if (!page_session_ || fixtures.isEmpty())
-            return {{"ready", false}, {"reason", QStringLiteral("Real media fixtures are unavailable.")}};
+        const auto fixture = exosnap::quick::test::TransportAmbiguousFixture();
+        if (!page_session_ || fixture.isEmpty())
+            return {{"ready", false},
+                    {"reason", QStringLiteral("The ambiguous-transport fixture could not be generated.")}};
         page_session_->close();
-        page_session_->importMedia(QUrl::fromLocalFile(fixtures + "/transport-ambiguous.mkv"), true);
+        page_session_->importMedia(QUrl::fromLocalFile(fixture), true);
         QElapsedTimer deadline;
         deadline.start();
         while (page_session_->importPending() && deadline.elapsed() < 5000) {

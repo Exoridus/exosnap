@@ -6,6 +6,7 @@
 #include "EditTimelineAdapter.h"
 #include "EditTimelineModels.h"
 #include "EditTrackLayoutModel.h"
+#include "EditTransportFixture.h"
 #include "EditViewportAdapter.h"
 #include "models/EditTransportBounds.h"
 
@@ -2565,14 +2566,17 @@ TEST(EditWorkspaceAdapter, CrossfadeDropDoesNotRoundACutIntoTheTolerance) {
     EditSessionAdapter session;
     session.setEditContext(MakeContext(10));
     const auto first = session.workspace().clips().front().id;
-    session.moveClipUs(first, 21, false);
-    const auto cut = session.durationUs();
-    session.appendAsset(session.workspace().assets().front().id);
-    ASSERT_TRUE(session.canCrossfade(first));
+    // A split keeps source handles on both sides of the cut, which a crossfade
+    // needs. One microsecond before the frame-aligned cut must not round onto it.
+    session.selectClip(first);
+    session.setPositionUs(5'000'000);
+    session.splitSelected();
+    const auto cut = session.workspace().clip(first)->end();
+    ASSERT_TRUE(session.canCrossfadeAtCut(first));
     const auto revision = session.workspace().revision();
     EXPECT_FALSE(session.dropCrossfadeUs(cut - 1, 0));
     EXPECT_EQ(session.workspace().revision(), revision);
-    EXPECT_TRUE(session.dropCrossfadeUs(cut, 0));
+    EXPECT_TRUE(session.dropCrossfadeUs(cut, 0)) << session.workspaceError().toStdString();
 }
 
 TEST(EditWorkspaceAdapter, AsyncMediaAndRecordingPreserveFractionalPlacement) {
@@ -3943,25 +3947,11 @@ TEST(EditExportAdapterRun, DestructionReclaimsFinishedWorkerWithCompletionStillQ
     review.exec();
     ASSERT_EQ(exporter->state(), EditExportAdapter::Review) << exporter->errorText().toStdString();
     EXPECT_TRUE(QDir(directory.path()).entryList(QDir::Files).isEmpty());
+    // The imported source is held by a read lease that admits no writer, so its
+    // bytes cannot change between review and confirmation. Changed bytes of an
+    // unleased source are covered by ChangedBytesBeforePreparationRequireReimport.
     QFile source_file(fixture);
-    const auto original_size = source_file.size();
-    ASSERT_TRUE(source_file.open(QIODevice::Append));
-    ASSERT_EQ(source_file.write("x", 1), 1);
-    source_file.close();
-    exporter->confirmPreparedExport();
-    QEventLoop changed_source;
-    QObject::connect(exporter.get(), &EditExportAdapter::stateChanged, &changed_source, [&] {
-        if (exporter->state() == EditExportAdapter::Failed)
-            changed_source.quit();
-    });
-    QTimer::singleShot(10000, &changed_source, &QEventLoop::quit);
-    if (exporter->state() != EditExportAdapter::Failed)
-        changed_source.exec();
-    ASSERT_EQ(exporter->state(), EditExportAdapter::Failed) << exporter->errorText().toStdString();
-    EXPECT_TRUE(QDir(directory.path()).entryList(QDir::Files).isEmpty());
-    ASSERT_TRUE(source_file.open(QIODevice::ReadWrite));
-    ASSERT_TRUE(source_file.resize(original_size));
-    source_file.close();
+    EXPECT_FALSE(source_file.open(QIODevice::Append));
     session.setAssetMonitorSelection(session.workspace().assets().front().id,
                                      {metadata.selection_media_id, {2}, {}, true, metadata.unverified_asset_binding});
     exporter->retry();
@@ -5087,11 +5077,8 @@ TEST(EditSelectionSummary, ReportsActualMixedValuesAndEligibleClipCounts) {
 
 TEST(EditSourceAudioChoice, DraftRemainsUnappliedUntilRealSourceAdmissionAndDoesNotRehash) {
     EnsureApplication();
-    const auto fixtures = qEnvironmentVariable("EXOSNAP_EDIT_RENDER_FIXTURES");
-    if (fixtures.isEmpty())
-        GTEST_SKIP() << "Set EXOSNAP_EDIT_RENDER_FIXTURES to generated transport media.";
-    const auto path = QDir(fixtures).filePath(QStringLiteral("transport-ambiguous.mkv"));
-    ASSERT_TRUE(QFileInfo::exists(path));
+    const auto path = test::TransportAmbiguousFixture();
+    ASSERT_FALSE(path.isEmpty());
     EditSessionAdapter session;
     session.importMedia(QUrl::fromLocalFile(path), true);
     const auto wait_until = [&](const auto& done) {
@@ -5143,13 +5130,10 @@ TEST(EditSourceAudioChoice, DraftRemainsUnappliedUntilRealSourceAdmissionAndDoes
 
 TEST(EditMediaLifecycle, CloseReleasesAPausedVerificationLeaseWithoutWaitingForAdmission) {
     EnsureApplication();
-    const auto fixtures = qEnvironmentVariable("EXOSNAP_EDIT_RENDER_FIXTURES");
-    if (fixtures.isEmpty())
-        GTEST_SKIP() << "Set EXOSNAP_EDIT_RENDER_FIXTURES to generated transport media.";
     QTemporaryDir directory;
     ASSERT_TRUE(directory.isValid());
     const auto path = directory.filePath(QStringLiteral("close-pending.mkv"));
-    ASSERT_TRUE(QFile::copy(QDir(fixtures).filePath(QStringLiteral("transport-ambiguous.mkv")), path));
+    ASSERT_TRUE(QFile::copy(test::TransportAmbiguousFixture(), path));
     EditSessionAdapter session;
     session.setBackgroundAnalysisSuspended(true);
     session.importMedia(QUrl::fromLocalFile(path), true);
@@ -5165,7 +5149,10 @@ TEST(EditMediaLifecycle, CloseReleasesAPausedVerificationLeaseWithoutWaitingForA
     ASSERT_TRUE(wait_until([&] { return !session.importPending(); }, 5000));
     ASSERT_EQ(session.media().size(), 1);
     const auto asset = session.media().front().toMap().value(QStringLiteral("id")).toULongLong();
-    ASSERT_TRUE(wait_until([&] { return session.sourceAccess(asset)->Measurements().hash_starts == 1; }, 5000));
+    // Suspension defers optional verification before it starts (see
+    // EditRecordedDefault), so the publication holds the lease without hashing.
+    ASSERT_NE(session.sourceAccess(asset), nullptr);
+    EXPECT_FALSE(wait_until([&] { return session.sourceAccess(asset)->Measurements().hash_starts != 0; }, 200));
     EXPECT_EQ(session.sourceAccess(asset)->Measurements().hash_completions, 0u);
     const std::weak_ptr<const engine::MediaReadCapability> lease = session.sourceAccess(asset);
     QElapsedTimer close_time;
@@ -6042,13 +6029,10 @@ std::optional<engine::AudioManifest1> WriteRecordedDefaultFixture(const QString&
 
 TEST(EditRecordedDefault, VerifiedStartingDefaultFinalizesWithoutAnAuthoredStepAndSurvivesMoveUndoRedo) {
     EnsureApplication();
-    const auto fixtures = qEnvironmentVariable("EXOSNAP_EDIT_RENDER_FIXTURES");
-    if (fixtures.isEmpty())
-        GTEST_SKIP() << "Set EXOSNAP_EDIT_RENDER_FIXTURES to generated transport media.";
     QTemporaryDir directory;
     ASSERT_TRUE(directory.isValid());
     const auto path = directory.filePath(QStringLiteral("recorded-default.mkv"));
-    ASSERT_TRUE(QFile::copy(QDir(fixtures).filePath(QStringLiteral("transport-ambiguous.mkv")), path));
+    ASSERT_TRUE(QFile::copy(test::TransportAmbiguousFixture(), path));
     const auto manifest = WriteRecordedDefaultFixture(path);
     ASSERT_TRUE(manifest);
     EditSessionAdapter session;
@@ -6111,13 +6095,10 @@ TEST(EditRecordedDefault, VerifiedStartingDefaultFinalizesWithoutAnAuthoredStepA
 
 TEST(EditRecordedDefault, ExplicitChoiceBeforeProofStaysCurrentAndUndoReturnsTheVerifiedRecordedDefault) {
     EnsureApplication();
-    const auto fixtures = qEnvironmentVariable("EXOSNAP_EDIT_RENDER_FIXTURES");
-    if (fixtures.isEmpty())
-        GTEST_SKIP() << "Set EXOSNAP_EDIT_RENDER_FIXTURES to generated transport media.";
     QTemporaryDir directory;
     ASSERT_TRUE(directory.isValid());
     const auto path = directory.filePath(QStringLiteral("recorded-explicit-choice.mkv"));
-    ASSERT_TRUE(QFile::copy(QDir(fixtures).filePath(QStringLiteral("transport-ambiguous.mkv")), path));
+    ASSERT_TRUE(QFile::copy(test::TransportAmbiguousFixture(), path));
     const auto manifest = WriteRecordedDefaultFixture(path);
     ASSERT_TRUE(manifest);
     EditSessionAdapter session;
@@ -6157,15 +6138,12 @@ TEST(EditRecordedDefault, ExplicitChoiceBeforeProofStaysCurrentAndUndoReturnsThe
 }
 TEST(EditRecordedDefault, ActiveMoveRangeAndCapturedPasteKeepTheirExactCandidateThroughProofFinalization) {
     EnsureApplication();
-    const auto fixtures = qEnvironmentVariable("EXOSNAP_EDIT_RENDER_FIXTURES");
-    if (fixtures.isEmpty())
-        GTEST_SKIP() << "Set EXOSNAP_EDIT_RENDER_FIXTURES to generated transport media.";
     QTemporaryDir directory;
     ASSERT_TRUE(directory.isValid());
     for (int mode = 0; mode < 3; ++mode) {
         SCOPED_TRACE(mode);
         const auto path = directory.filePath(QStringLiteral("captured-default-%1.mkv").arg(mode));
-        ASSERT_TRUE(QFile::copy(QDir(fixtures).filePath(QStringLiteral("transport-ambiguous.mkv")), path));
+        ASSERT_TRUE(QFile::copy(test::TransportAmbiguousFixture(), path));
         const auto manifest = WriteRecordedDefaultFixture(path);
         ASSERT_TRUE(manifest);
         EditSessionAdapter session;

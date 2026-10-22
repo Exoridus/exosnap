@@ -943,6 +943,7 @@ TestCase {
         verify(testSession.dragActive);
         verify(testSession.dragValid);
         compare(item.x, originalX);
+        settleFrame(strip);
         const ghost = findChild(strip, "editDragGhost" + clip.id);
         verify(ghost);
         const scroll = findChild(strip, "editTimelineScroll");
@@ -1006,6 +1007,11 @@ TestCase {
         waitForRendering(strip);
         return strip;
     }
+    // Candidate ghosts are republished on the window's next afterAnimating, not
+    // synchronously with the pointer event that changed the drag.
+    function settleFrame(strip) {
+        tryCompare(strip, "visualWorkPending", false);
+    }
     function clipGeometry() {
         return testSession.visibleClips(0, 1000000).map(row => ({
             id: row.id, startMs: row.startMs, durationMs: row.durationMs,
@@ -1015,6 +1021,7 @@ TestCase {
     function projectedClips(strip) {
         const rows = JSON.parse(JSON.stringify(testSession.dragClips));
         verify(rows.length > 0);
+        settleFrame(strip);
         const scroll = findChild(strip, "editTimelineScroll");
         verify(!!scroll, "Object exists");
         for (const row of rows) {
@@ -1452,6 +1459,7 @@ TestCase {
         compare(testSession.spacers[0], trimmed);
         let candidate = JSON.parse(JSON.stringify(testSession.dragSpacers[0]));
         compare(candidate.startMs, 5000);
+        settleFrame(strip);
         let ghost = findChild(strip, "editSpacerGhost" + spacer.id);
         verify(!!ghost, "Object exists");
         compare(ghost.x, strip.positionAt(candidate.startMs));
@@ -1469,6 +1477,7 @@ TestCase {
         candidate = JSON.parse(JSON.stringify(testSession.dragSpacers[0]));
         compare(candidate.startMs, 5000);
         compare(candidate.durationMs, 15000);
+        settleFrame(strip);
         ghost = findChild(strip, "editSpacerGhost" + spacer.id);
         verify(!!ghost, "Object exists");
         compare(ghost.width, candidate.durationMs * strip.pixelsPerMs);

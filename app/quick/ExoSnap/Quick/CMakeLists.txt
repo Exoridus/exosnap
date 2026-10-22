@@ -1344,6 +1344,8 @@ target_link_libraries(edit_timeline_qml_tests
         exosnap_capability
         exosnap_engine
         exosnap::warnings
+        # EditTransportFixture.h muxes the generated ambiguous-transport source.
+        FFmpeg::mux
 )
 
 target_sources(edit_timeline_qml_tests PRIVATE ${PROJECT_SOURCE_DIR}/app/services/AtomicFileOps.cpp)
