@@ -2948,10 +2948,17 @@ TEST(EditWorkspaceAdapter, RealReimportReusesWaveformCacheWithoutChangingSemanti
         ASSERT_TRUE(wait_for(
             [&]() { return session.workspace().assets().size() == 1 || !session.workspaceError().isEmpty(); }));
         ASSERT_TRUE(session.workspaceError().isEmpty()) << session.workspaceError().toStdString();
+        // Until verification proves the content, sourceIdentity is a per-lease
+        // placeholder; cache reuse across imports is keyed by the proven digest.
+        const auto asset_id = session.workspace().assets().front().id;
+        ASSERT_TRUE(wait_for([&]() { return bool(session.sourceProof(asset_id)); }));
         EditTimelineAdapter timeline;
         timeline.configureWaveformCache(config);
         auto* waveforms = qobject_cast<WaveformCacheService*>(timeline.waveformService());
         ASSERT_NE(waveforms, nullptr);
+        QString failure;
+        QObject::connect(waveforms, &WaveformCacheService::failed,
+                         [&](const QString&, const QString& reason) { failure = reason; });
         QVariantMap audio;
         for (const auto& row : session.visibleClips(0, session.durationMs()))
             if (!row.toMap().value(QStringLiteral("video")).toBool()) {
@@ -2969,7 +2976,8 @@ TEST(EditWorkspaceAdapter, RealReimportReusesWaveformCacheWithoutChangingSemanti
                                                  audio.value(QStringLiteral("streamIdentity")).toString(),
                                                  audio.value(QStringLiteral("sourceEndUs")).toLongLong());
         ASSERT_FALSE(key.isEmpty());
-        ASSERT_TRUE(wait_for([&]() { return waveforms->state(key) == WaveformCacheService::State::Ready; }));
+        ASSERT_TRUE(wait_for([&]() { return waveforms->state(key) == WaveformCacheService::State::Ready; }))
+            << failure.toStdString();
         std::vector<engine::WaveformPeak> peaks;
         ASSERT_TRUE(wait_for([&]() { return waveforms->readBlock(key, 0, 0, peaks) > 0; }));
         EXPECT_EQ(clip->stream->stream_identity, semantic_identity);
@@ -3077,9 +3085,15 @@ TEST(EditWorkspaceAdapter, ExportReviewListsEachSourceStreamOnceWithAName) {
     const auto video =
         std::find_if(imported.begin(), imported.end(), [&](const auto& clip) { return !is_audio(clip); });
     ASSERT_NE(video, imported.end());
-    const auto video_id = video->id;
+    // A split keeps the selected id on its left part, so each later cut selects
+    // the video piece that contains it.
     for (const qint64 at : {500, 1000, 1500}) {
-        session.selectClip(video_id);
+        const auto current = session.workspace().clips();
+        const auto piece = std::find_if(current.begin(), current.end(), [&](const auto& clip) {
+            return !is_audio(clip) && clip.start < at * 1000 && at * 1000 < clip.end();
+        });
+        ASSERT_NE(piece, current.end()) << at;
+        session.selectClip(piece->id);
         session.requestSeek(at);
         session.splitSelected();
     }
@@ -3272,6 +3286,10 @@ TEST(EditWorkspaceAdapter, RealEditingHistoryAndBlankTimeReachScopedExportsWitho
     ASSERT_NE(blue, session.workspace().clips().end());
     const auto blue_id = blue->id;
     exporter.setModeKey(QStringLiteral("finishedStereo"));
+    // Waveform keys use the proven content digest, not the per-lease placeholder
+    // a row carries while verification is still running.
+    for (const auto& asset : session.workspace().assets())
+        ASSERT_TRUE(wait_for([&]() { return bool(session.sourceProof(asset.id)); }));
     WaveformCacheService::Config waveform_config;
     waveform_config.root = std::filesystem::path(output.filePath(QStringLiteral("waveforms")).toStdWString());
     auto waveforms = std::make_unique<WaveformCacheService>(waveform_config, WaveformCacheService::DecoderFactory{});
@@ -3378,12 +3396,9 @@ TEST(EditWorkspaceAdapter, RealEditingHistoryAndBlankTimeReachScopedExportsWitho
             EXPECT_EQ(evaluation.video.front().source_us, source_us);
         }
     }
+    // A time selection replaces the clip selection, so the selected-clips scope
+    // is exported before the in/out boundaries are set.
     session.selectClip(blue_id);
-    session.requestSeekUs(750'000);
-    session.setSelectionBoundary(false);
-    session.requestSeekUs(3'000'000);
-    session.setSelectionBoundary(true);
-    exporter.setTimeSelectionUs(session.timeSelectionInUs(), session.timeSelectionOutUs());
     const QJsonArray full{window(0, 1'000'000, "black"), window(1'000'000, 1'500'000, "red"),
                           window(1'500'000, 2'500'000, "black"), window(2'500'000, 4'500'000, "blue"),
                           window(4'500'000, 6'000'000, "black")};
@@ -3396,6 +3411,11 @@ TEST(EditWorkspaceAdapter, RealEditingHistoryAndBlankTimeReachScopedExportsWitho
     export_scope(QStringLiteral("selected"), QStringLiteral("mp4"), 2'500'000, 4'500'000,
                  {window(0, 2'000'000, "blue")});
     ASSERT_FALSE(HasFatalFailure());
+    session.requestSeekUs(750'000);
+    session.setSelectionBoundary(false);
+    session.requestSeekUs(3'000'000);
+    session.setSelectionBoundary(true);
+    exporter.setTimeSelectionUs(session.timeSelectionInUs(), session.timeSelectionOutUs());
     export_scope(QStringLiteral("time"), QStringLiteral("mkv"), 750'000, 3'000'000,
                  {window(0, 250'000, "black"), window(250'000, 750'000, "red"), window(750'000, 1'750'000, "black"),
                   window(1'750'000, 2'250'000, "blue")});
@@ -5578,11 +5598,12 @@ TEST(EditMediaLifecycle, CancelingANewBatchKeepsThePlacedSourceVerificationAlive
     ASSERT_TRUE(wait_until([&] { return !session.importPending(); }));
     ASSERT_EQ(session.media().size(), 1);
     const auto asset = session.media().front().toMap().value(QStringLiteral("id")).toULongLong();
-    ASSERT_TRUE(wait_until([&] { return session.sourceAccess(asset)->Measurements().hash_starts == 1; }));
+    // Suspension defers the placed source's verification before it hashes.
+    EXPECT_EQ(session.sourceAccess(asset)->Measurements().hash_starts, 0u);
     const auto revision = session.workspace().revision();
     session.importMedia(QUrl::fromLocalFile(second_path), true);
     session.cancelPendingImports();
-    EXPECT_TRUE(session.media().front().toMap().value(QStringLiteral("verifying")).toBool());
+    EXPECT_FALSE(session.sourceVerificationFailed(asset));
     EXPECT_TRUE(session.sourceVerificationReason(asset).isEmpty());
     session.setBackgroundAnalysisSuspended(false);
     ASSERT_TRUE(wait_until([&] { return bool(session.sourceProof(asset)); }));

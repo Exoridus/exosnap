@@ -54,6 +54,11 @@ inline bool WriteTransportAmbiguousFixture(const std::filesystem::path& source, 
     if (ok) {
         output->flags |= AVFMT_FLAG_BITEXACT;
         video->codecpar->codec_tag = 0;
+        // Tagged like a recording, so composed preview and render export accept it.
+        video->codecpar->color_range = AVCOL_RANGE_MPEG;
+        video->codecpar->color_primaries = AVCOL_PRI_BT709;
+        video->codecpar->color_trc = AVCOL_TRC_BT709;
+        video->codecpar->color_space = AVCOL_SPC_BT709;
         video->time_base = input->streams[video_index]->time_base;
         for (auto*& stream : audio) {
             stream = avformat_new_stream(output, nullptr);
