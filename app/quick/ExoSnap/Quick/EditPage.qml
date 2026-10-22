@@ -60,9 +60,13 @@ FocusScope {
         if (focused instanceof TextInput || focused instanceof TextEdit)
             return;
         if (event.key === Qt.Key_Escape && (root.detailsOpen || root.mediaOpen)) {
-            if (root.detailsOpen) root.toggleRight(root.rightContext, true);
-            else root.toggleMedia(true);
-            event.accepted = true;
+            if (root.detailsOpen) {
+                root.toggleRight(root.rightContext, true);
+                event.accepted = !root.detailsOpen;
+            } else {
+                root.toggleMedia(true);
+                event.accepted = !root.mediaOpen;
+            }
         } else if (!event.isAutoRepeat && event.modifiers === Qt.ControlModifier && event.key === Qt.Key_M) {
             root.toggleMedia(true);
             event.accepted = true;
@@ -183,9 +187,9 @@ FocusScope {
     function toggleRight(context: string, keyboardActivation: var): void {
         if (!root.session.preflightPendingDraft())
             return;
-        if (context === "export" && !root.canOpenExport)
-            return;
         const closing = root.detailsOpen && root.rightContext === context;
+        if (!closing && context === "export" && !root.canOpenExport)
+            return;
         if (!root.detailsOpen)
             root.detailsInvoker = root.Window.window ? root.Window.window.activeFocusItem : clips;
         // Resolved before the host unloads: an invoker inside the closing panel
@@ -573,7 +577,7 @@ FocusScope {
                     glyphColor: failed ? ExoTheme.errorText : ""
                     expanded: root.exportVisible
                     pinned: expanded && root.detailsPinned
-                    enabled: root.canOpenExport
+                    enabled: root.exportVisible || root.canOpenExport
                     disabledReason: qsTr("The timeline is empty.")
                     onActivated: keyboard => root.toggleRight("export", keyboard)
                     Rectangle {

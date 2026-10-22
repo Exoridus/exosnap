@@ -659,6 +659,56 @@ Item {
             while (testSession.canUndo) testSession.undo();
         }
 
+        function test_empty_timeline_keeps_export_panel_closable_data() {
+            return [{tag: "escape"}, {tag: "close"}, {tag: "rail"}, {tag: "shortcut"}];
+        }
+
+        function test_empty_timeline_keeps_export_panel_closable(data) {
+            while (testSession.canUndo) testSession.undo();
+            testEditHarness.exportVisualState(EditExportAdapter.Options);
+            testSession.appendAsset(testSession.media[0].id);
+            const page = make({session: testSession, width: 1280, height: 800});
+            const timeline = child(page, "editClipTimeline");
+            const rail = child(page, "editExport");
+            try {
+                verify(page.canOpenExport);
+                timeline.forceActiveFocus(Qt.TabFocusReason);
+                keyClick(Qt.Key_E, Qt.ControlModifier);
+                tryCompare(page, "exportVisible", true);
+                testSession.selectAllClips();
+                testSession.deleteSelected(false);
+                compare(testSession.durationUs, 0);
+                compare(page.canOpenExport, false);
+                const close = child(page, "editDetailsPanel").closeButton;
+                close.forceActiveFocus(Qt.TabFocusReason);
+                verify(close.activeFocus);
+                if (data.tag === "escape")
+                    keyClick(Qt.Key_Escape);
+                else if (data.tag === "close")
+                    mouseClick(close);
+                else if (data.tag === "rail") {
+                    verify(rail.enabled);
+                    mouseClick(rail);
+                } else
+                    keyClick(Qt.Key_E, Qt.ControlModifier);
+                tryCompare(page, "detailsOpen", false);
+                tryVerify(() => timeline.activeFocus);
+                verify(!rail.enabled);
+                page.openExport();
+                compare(page.detailsOpen, false);
+                keyClick(Qt.Key_E, Qt.ControlModifier);
+                compare(page.detailsOpen, false);
+                page.toggleRight("mix", true);
+                compare(page.rightContext, "mix");
+                verify(page.detailsOpen);
+                page.openExport();
+                compare(page.rightContext, "mix");
+                verify(page.detailsOpen);
+            } finally {
+                while (testSession.canUndo) testSession.undo();
+            }
+        }
+
         function test_keyboard_close_returns_focus_without_activating_a_rail() {
             testSession.appendAsset(testSession.media[0].id);
             const page = make({session: testSession, width: 1280, height: 800});
