@@ -743,6 +743,39 @@ TestCase {
         compare(rows.length, 2);
         for (const row of rows) compare(row.startUs, expected);
     }
+    function test_library_drag_auto_scrolls_tracks_and_stops_on_leave_and_drop() {
+        while (testSession.canUndo) testSession.undo();
+        const strip = createTemporaryObject(timelineComponent, tests, {height: 110});
+        waitForRendering(strip);
+        const scroll = findChild(strip, "editTimelineScroll");
+        verify(scroll.contentHeight > scroll.height, "The fixture needs more tracks than fit: " + scroll.contentHeight);
+        scroll.contentY = 0;
+        const lanes = strip.laneViewportRect;
+        const x = lanes.x + lanes.width / 2;
+        const edge = lanes.y + lanes.height - 2;
+        const asset = testSession.media[0].id;
+        testEditHarness.hoverAsset(strip, asset, x, edge);
+        tryVerify(() => scroll.contentY > 0, 2000, "A held library drag at the lower edge scrolls the tracks");
+        testEditHarness.leaveHeldDrag(strip);
+        verify(!strip.pointerScrolling);
+        let settled = scroll.contentY;
+        wait(100);
+        compare(scroll.contentY, settled);
+        scroll.contentY = 0;
+        testEditHarness.hoverAsset(strip, asset, x, edge);
+        tryVerify(() => scroll.contentY > 0);
+        const before = testSession.visibleClipsUs(0, testSession.durationUs).length;
+        const expected = strip.timeAtUs(scroll.mapFromItem(strip, x, edge).x);
+        verify(testEditHarness.dropHeldDrag(strip, x, edge));
+        verify(!strip.pointerScrolling);
+        settled = scroll.contentY;
+        wait(100);
+        compare(scroll.contentY, settled);
+        const rows = testSession.visibleClipsUs(0, testSession.durationUs);
+        verify(rows.length > before);
+        verify(rows.some(row => row.startUs === expected), "The drop lands at the pointer time after scrolling");
+        testSession.undo();
+    }
     function test_mono_and_stereo_use_the_source_channel_layout() {
         const strip = createTemporaryObject(timelineComponent, tests, {session: testChannelSession});
         const rows = testChannelSession.visibleClipsUs(0, 2000000);

@@ -81,7 +81,8 @@ FocusScope {
     FrameAnimation {
         running: root.visible && root.pointerScrolling && root.pointerUpdater !== null
         onTriggered: {
-            if (!root.session.dragActive && !root.session.rangeGestureActive && !laneMouse.marquee && !root.reorderTrackId) {
+            if (!root.session.dragActive && !root.session.rangeGestureActive && !laneMouse.marquee && !root.reorderTrackId &&
+                    !mediaDropArea.containsDrag) {
                 root.stopPointerScroll();
                 return;
             }
@@ -2399,14 +2400,30 @@ FocusScope {
             }
         }
         DropArea {
+            id: mediaDropArea
+            objectName: "editMediaDropArea"
             width: scroll.contentWidth
             height: scroll.contentHeight
+            function track(drag: var): void {
+                root.pointerPosition = mapToItem(root, drag.x, drag.y);
+                root.pointerScrollVertical = true;
+                // The drop position is read when the drag ends, so a scroll step
+                // has nothing to re-project.
+                root.pointerUpdater = () => {};
+                root.pointerScrolling = true;
+            }
             onEntered: drag => {
                 root.draggingCrossfade = drag.formats.indexOf("application/x-exosnap-crossfade") >= 0;
+                track(drag);
             }
-            onExited: root.draggingCrossfade = false
+            onPositionChanged: drag => track(drag)
+            onExited: {
+                root.draggingCrossfade = false;
+                root.stopPointerScroll();
+            }
             onDropped: drop => {
                 root.draggingCrossfade = false;
+                root.stopPointerScroll();
                 const at = root.timeAtUs(drop.x);
                 if (drop.formats.indexOf("application/x-exosnap-crossfade") >= 0) {
                     if (root.session.dropCrossfadeUs(at, Math.min(250000, Math.round(10 / root.pixelsPerUs))))

@@ -2128,6 +2128,30 @@ class Setup final : public QObject {
         QCoreApplication::sendEvent(item->window(), &drop);
         return drop.isAccepted();
     }
+    // A held library drag: enter (once) and move without dropping, so frame-driven
+    // behaviour such as edge auto-scroll can run between the calls.
+    void hoverAsset(QQuickItem* item, qulonglong asset, qreal x, qreal y) {
+        const auto position = item->mapToScene(QPointF(x, y));
+        if (!held_drag_) {
+            held_mime_.setData(QStringLiteral("application/x-exosnap-asset"), QByteArray::number(asset));
+            QDragEnterEvent enter(position, Qt::CopyAction, &held_mime_, Qt::LeftButton, Qt::NoModifier);
+            QCoreApplication::sendEvent(item->window(), &enter);
+            held_drag_ = true;
+        }
+        QDragMoveEvent move(position, Qt::CopyAction, &held_mime_, Qt::LeftButton, Qt::NoModifier);
+        QCoreApplication::sendEvent(item->window(), &move);
+    }
+    void leaveHeldDrag(QQuickItem* item) {
+        QDragLeaveEvent leave;
+        QCoreApplication::sendEvent(item->window(), &leave);
+        held_drag_ = false;
+    }
+    bool dropHeldDrag(QQuickItem* item, qreal x, qreal y) {
+        QDropEvent drop(item->mapToScene(QPointF(x, y)), Qt::CopyAction, &held_mime_, Qt::LeftButton, Qt::NoModifier);
+        QCoreApplication::sendEvent(item->window(), &drop);
+        held_drag_ = false;
+        return drop.isAccepted();
+    }
     void repeatSpace(QQuickItem* item) {
         QKeyEvent release(QEvent::KeyRelease, Qt::Key_Space, Qt::NoModifier, {}, true);
         QKeyEvent press(QEvent::KeyPress, Qt::Key_Space, Qt::NoModifier, {}, true);
@@ -2296,6 +2320,8 @@ class Setup final : public QObject {
     EditSessionAdapter* page_session_ = nullptr;
     exosnap::quick::EditExportAdapter* page_exporter_ = nullptr;
     exosnap::quick::ShellAdapter* page_shell_ = nullptr;
+    QMimeData held_mime_;
+    bool held_drag_ = false;
 };
 
 QUICK_TEST_MAIN_WITH_SETUP(edit_timeline, Setup)
