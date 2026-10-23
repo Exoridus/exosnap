@@ -566,6 +566,7 @@ TEST(WaveformCacheService, ClearDropsQueuedProgressAndPrivateStaging) {
     service->clearCache();
     fixture.control->Open();
     ASSERT_TRUE(WaitFor([&]() { return fixture.control->closes.load() > 0; }));
+    service->storeForTest().WaitForRetired();
     QCoreApplication::processEvents();
     EXPECT_EQ(service->state(key), WaveformCacheService::State::Unknown);
     EXPECT_EQ(progress.count(), 0);
