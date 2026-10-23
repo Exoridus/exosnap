@@ -53,7 +53,33 @@ Rectangle {
                             "microphone": microphoneSection, "audio-encoding": audioEncodingSection,
                             "output": outputSection, "webcam": webcamSection });
         const section = sections[name];
-        return section ? (scroll.revealItem(section) ? 1 : 0) : -1;
+        if (!section)
+            return -1;
+        return section.visible && section.width > 0 && section.height > 0 && scroll.revealItem(section) ? 1 : 0;
+    }
+
+    function setAutomationDetailsExpanded(expanded: bool): void {
+        root.setAutomationGroupExpanded(root, expanded);
+    }
+
+    function setAutomationGroupExpanded(item: Item, expanded: bool): void {
+        if (!item.visible)
+            return;
+        const group = item as SettingsGroupToggle;
+        if (group) {
+            group.open = expanded;
+            return;
+        }
+        const audio = item as AudioRoutingPanel;
+        if (audio) {
+            if (expanded)
+                audio.harnessExpand();
+            else
+                audio.harnessCollapse();
+            return;
+        }
+        for (const child of item.children)
+            root.setAutomationGroupExpanded(child, expanded);
     }
 
     function openHarnessDialog(name: string): bool {
@@ -115,6 +141,7 @@ Rectangle {
 
         ExoScrollView {
             id: scroll
+            objectName: "recordingProfileScroll"
             Layout.fillWidth: true
             Layout.fillHeight: true
             reserveScrollBarGutters: true

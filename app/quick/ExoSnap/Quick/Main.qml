@@ -299,6 +299,7 @@ ApplicationWindow {
     RegionSelectionWindow {
         recordViewModel: root.recordViewModel
         monitorGeometry: root.overlays.recordedMonitorGeometry
+        previewSize: Qt.size(root.width, root.height)
     }
 
     Loader {

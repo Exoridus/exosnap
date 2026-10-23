@@ -19,6 +19,7 @@
 #include <exosnap/engine/gpu_surface_inventory.h>
 #include <gtest/gtest.h>
 #include <iostream>
+#include <utility>
 
 #include "exosnap/engine/color_metadata.h"
 #include "exosnap/engine/edit_player_engine.h"
@@ -26,7 +27,9 @@
 #include "yuv_to_bgra.h"
 
 #include <exosnap/engine/edit_frame_gpu_converter.h>
+#include <exosnap/engine/edit_timeline.h>
 #include <exosnap/engine/edit_timeline_compositor.h>
+#include <exosnap/engine/edit_types.h>
 #include <exosnap/engine/sdr_transfer.h>
 
 #include <d3d11.h>
@@ -786,6 +789,44 @@ TEST_F(TimelineLayerComposition, OpacityAndFadesComposeOverBlackAndOverALowerTra
     ExpectLinear(Compose({Make(red_, 1, 0.25, 0)}), Over(red, 0.25f, black));
     ExpectLinear(Compose({Make(blue_, 1, 1, 0), Make(red_, 1, 0.25, 1)}), Over(red, 0.25f, blue));
     ExpectLinear(Compose({Make(blue_, 1, 1, 0), Make(red_, 1, 0, 1)}), blue);
+}
+
+TEST_F(TimelineLayerComposition, DisabledJunctionEndpointRetainsCoverageOverBlackAndALowerTrack) {
+    using namespace exosnap::engine;
+    const auto red = Reference(red_);
+    const auto blue = Reference(blue_);
+    const auto green = Reference(green_);
+    for (const bool disable_incoming : {false, true}) {
+        for (const bool lower_visible : {false, true}) {
+            TimelineSnapshot snapshot;
+            snapshot.duration_us = 3'000'000;
+            snapshot.tracks = {{1, false}, {2, false}};
+            snapshot.clips = {{1, 1, 0, false, 0, 0, 2'000'000},
+                              {2, 2, 0, false, 1'000'000, 0, 2'000'000},
+                              {3, 3, 0, false, 0, 0, 3'000'000}};
+            snapshot.clips[0].track = snapshot.clips[1].track = 1;
+            snapshot.clips[2].track = 2;
+            snapshot.clips[disable_incoming ? 1 : 0].enabled = false;
+            snapshot.clips[2].enabled = lower_visible;
+            snapshot.junctions = {{1, 1, 1, 2, JunctionKind::Crossfade, 1'000'000, 2'000'000}};
+            const auto evaluation = EvaluateTimeline(snapshot, 1'500'000);
+            ASSERT_TRUE(evaluation.error.empty()) << evaluation.error;
+            ASSERT_EQ(evaluation.video_layers.size(), lower_visible ? 2u : 1u);
+            ASSERT_EQ(evaluation.video_layers.back().contributions.size(), 1u);
+            EXPECT_DOUBLE_EQ(evaluation.video_layers.back().contributions.front().weight, 0.5);
+            std::vector<Layer> layers;
+            for (size_t index = 0; index < evaluation.video_layers.size(); ++index) {
+                for (const auto& contribution : evaluation.video_layers[index].contributions) {
+                    const auto& planes = contribution.asset == 1 ? red_ : contribution.asset == 2 ? blue_ : green_;
+                    layers.push_back(
+                        Make(planes, contribution.weight, contribution.opacity, static_cast<uint32_t>(index)));
+                }
+            }
+            const std::array<float, 3> black{};
+            ExpectLinear(Compose(std::move(layers)),
+                         Over(disable_incoming ? red : blue, 0.5f, lower_visible ? green : black));
+        }
+    }
 }
 
 TEST_F(TimelineLayerComposition, CrossfadeOfIdenticalImagesNeverDarkens) {

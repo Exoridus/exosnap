@@ -6,6 +6,7 @@
 #include <QJsonArray>
 #include <QJsonValue>
 
+#include <cmath>
 #include <optional>
 #include <utility>
 
@@ -188,6 +189,383 @@ Outcome PostconditionMissed(const QString& command, const QString& expectation) 
                   QStringLiteral("%1 was accepted but %2 did not hold").arg(command, expectation));
 }
 
+Outcome Mismatch(const char* code, const QString& message, const QString& key, const QJsonValue& required,
+                 const QJsonValue& observed) {
+    QJsonObject requirements;
+    QJsonObject actual;
+    requirements.insert(key, required);
+    actual.insert(key, observed);
+    return Failed(Text(code), message, requirements, actual);
+}
+
+// An integral parameter, or `fallback` when it is absent. The shared validator
+// only knows "a number"; an id or a millisecond position that is not a whole
+// number would otherwise be truncated into a different value without a word.
+std::optional<qint64> IntegralParam(const QJsonObject& params, const char* name, qint64 fallback, qint64 minimum,
+                                    QString* error) {
+    const QJsonValue value = params.value(Text(name));
+    if (value.isUndefined() || value.isNull())
+        return fallback;
+    const double number = value.toDouble();
+    if (!value.isDouble() || !std::isfinite(number) || std::trunc(number) != number ||
+        std::abs(number) > 9007199254740992.0) {
+        *error = QStringLiteral("\"%1\" must be a whole number").arg(Text(name));
+        return std::nullopt;
+    }
+    if (number < static_cast<double>(minimum)) {
+        *error = QStringLiteral("\"%1\" must be at least %2").arg(Text(name)).arg(minimum);
+        return std::nullopt;
+    }
+    return static_cast<qint64>(number);
+}
+
+// The intent's own answer, before anything about the model's.
+std::optional<Outcome> IntentFailure(LiveVerifySource::EditIntent intent, const CommandDescriptor& command,
+                                     const LiveVerifySource& source, const QString& error) {
+    switch (intent) {
+    case LiveVerifySource::EditIntent::Delivered:
+        return std::nullopt;
+    case LiveVerifySource::EditIntent::InvalidTarget:
+        return Failed(error_code::kInvalidParams, error);
+    case LiveVerifySource::EditIntent::Failed:
+        break;
+    }
+    return IntentRefused(command, source, error);
+}
+
+// The optimistic-concurrency check every timeline mutation offers. Refused
+// before the edit runs: applying an edit to a timeline the caller has not seen
+// is exactly the race the revision exists to rule out.
+std::optional<Outcome> RefuseStaleRevision(const QJsonObject& params, const LiveVerifySource& source) {
+    QString error;
+    const std::optional<qint64> expected = IntegralParam(params, "expectedRevision", -1, -1, &error);
+    if (!expected.has_value())
+        return Failed(error_code::kInvalidParams, error);
+    if (*expected < 0)
+        return std::nullopt;
+    const quint64 current = source.State().edit_workspace_revision;
+    if (static_cast<quint64>(*expected) == current)
+        return std::nullopt;
+    return Mismatch(error_code::kInvalidState,
+                    QStringLiteral("The timeline is at revision %1, not %2").arg(current).arg(*expected),
+                    QStringLiteral("workspaceRevision"), static_cast<double>(*expected), static_cast<double>(current));
+}
+
+// Runs one timeline mutation and reports what the model did with it. The
+// editor snapshot is the postcondition; `edit` says whether the model accepted
+// the attempt and whether its revision moved. A model refusal is `blocked`:
+// the workspace is in an ordinary state and its rules said no, in the words the
+// timeline header shows.
+template <class Intent>
+Outcome TimelineEdit(const CommandDescriptor& command, const QJsonObject& params, LiveVerifySource& source,
+                     Intent&& intent) {
+    if (const std::optional<Outcome> stale = RefuseStaleRevision(params, source))
+        return *stale;
+    QString error;
+    const quint64 revision_before = source.State().edit_workspace_revision;
+    const quint64 attempts_before = source.LastEditOutcome().sequence;
+    if (const std::optional<Outcome> failed = IntentFailure(intent(&error), command, source, error))
+        return *failed;
+    const LiveVerifySource::EditOutcome outcome = source.LastEditOutcome();
+    const quint64 revision_after = source.State().edit_workspace_revision;
+    const bool attempted = outcome.sequence != attempts_before;
+    if (attempted && !outcome.accepted) {
+        return Mismatch(error_code::kBlocked,
+                        outcome.error.isEmpty() ? QStringLiteral("The timeline refused the edit") : outcome.error,
+                        QStringLiteral("edit"), QStringLiteral("accepted"), QStringLiteral("refused"));
+    }
+    QJsonObject result = source.EditorSnapshot();
+    QJsonObject edit;
+    edit.insert(QStringLiteral("attempted"), attempted);
+    edit.insert(QStringLiteral("changed"), revision_after != revision_before);
+    edit.insert(QStringLiteral("revisionBefore"), static_cast<double>(revision_before));
+    edit.insert(QStringLiteral("revisionAfter"), static_cast<double>(revision_after));
+    result.insert(QStringLiteral("edit"), edit);
+    return Succeeded(result);
+}
+
+QString PanelStateName(bool open, bool pinned) {
+    return !open ? QStringLiteral("closed") : pinned ? QStringLiteral("pinned") : QStringLiteral("open");
+}
+
+// The editor commands, or nullopt when `command` is not one of them.
+std::optional<Outcome> ExecuteEditWorkspace(const CommandDescriptor& command, const QJsonObject& params,
+                                            LiveVerifySource& source) {
+    const QString& name = command.name;
+    QString error;
+    const auto integral = [&](const char* key, qint64 fallback, qint64 minimum) {
+        return IntegralParam(params, key, fallback, minimum, &error);
+    };
+    const auto invalid = [&]() { return Failed(error_code::kInvalidParams, error); };
+    const auto snapshot = [&]() { return Succeeded(source.EditorSnapshot()); };
+
+    // --- Workspace contents ---------------------------------------------------
+
+    if (name == QLatin1String("edit.importMedia") || name == QLatin1String("edit.appendRecording")) {
+        const auto at = integral("atMs", -1, -1);
+        if (!at)
+            return invalid();
+        const QString path = ParamString(params, "path");
+        const LiveVerifySource::EditIntent intent =
+            name == QLatin1String("edit.importMedia")
+                ? source.EditImportMedia(path, ParamBool(params, "append"), *at, &error)
+                : source.EditAppendRecording(path, *at, &error);
+        if (const std::optional<Outcome> failed = IntentFailure(intent, command, source, error))
+            return *failed;
+        // The probe runs off this thread; importPending going false again, with
+        // the media list or the workspace error changed, is the completion.
+        return Succeeded(source.EditorSnapshot(), /*settled=*/false);
+    }
+    if (name == QLatin1String("edit.appendMedia")) {
+        const auto media = integral("mediaId", 0, 1);
+        const auto at = integral("atMs", -1, -1);
+        if (!media || !at)
+            return invalid();
+        return TimelineEdit(command, params, source,
+                            [&](QString* e) { return source.EditAppendMedia(*media, *at, e); });
+    }
+
+    // --- Selection ---------------------------------------------------------------
+    // Selection is not an edit, so it has no model outcome; the state that
+    // reports it is the postcondition.
+
+    if (name == QLatin1String("edit.selectClip") || name == QLatin1String("edit.selectTransition")) {
+        const auto id = integral("clipId", 0, 0);
+        if (!id)
+            return invalid();
+        const bool clip = name == QLatin1String("edit.selectClip");
+        const LiveVerifySource::EditIntent intent =
+            clip ? source.EditSelectClip(*id, &error) : source.EditSelectTransition(*id, &error);
+        if (const std::optional<Outcome> failed = IntentFailure(intent, command, source, error))
+            return *failed;
+        const AutomationState after = source.State();
+        const quint64 selected = clip ? after.edit_selected_clip : after.edit_selected_transition;
+        if (selected != static_cast<quint64>(*id))
+            return PostconditionMissed(name, QStringLiteral("the selection becoming %1").arg(*id));
+        return snapshot();
+    }
+    if (name == QLatin1String("edit.selectGap")) {
+        const auto track = integral("trackId", 0, 1);
+        const auto at = integral("atMs", 0, 0);
+        if (!track || !at)
+            return invalid();
+        if (const std::optional<Outcome> failed =
+                IntentFailure(source.EditSelectGap(*track, *at, &error), command, source, error))
+            return *failed;
+        if (!source.State().edit_gap_selected)
+            return PostconditionMissed(name, QStringLiteral("a selected gap"));
+        return snapshot();
+    }
+
+    // --- Timeline edits ----------------------------------------------------------
+
+    if (name == QLatin1String("edit.moveClip")) {
+        const auto clip = integral("clipId", 0, 1);
+        const auto at = integral("atMs", 0, 0);
+        if (!clip || !at)
+            return invalid();
+        const bool snap = params.contains(QStringLiteral("snap")) ? ParamBool(params, "snap") : true;
+        return TimelineEdit(command, params, source,
+                            [&](QString* e) { return source.EditMoveClip(*clip, *at, snap, e); });
+    }
+    if (name == QLatin1String("edit.trimClip")) {
+        const auto clip = integral("clipId", 0, 1);
+        const auto in = integral("inMs", 0, 0);
+        const auto out = integral("outMs", 0, 0);
+        if (!clip || !in || !out)
+            return invalid();
+        return TimelineEdit(command, params, source,
+                            [&](QString* e) { return source.EditTrimClip(*clip, *in, *out, e); });
+    }
+    if (name == QLatin1String("edit.split"))
+        return TimelineEdit(command, params, source, [&](QString* e) { return source.EditSplit(e); });
+    if (name == QLatin1String("edit.delete")) {
+        const bool ripple = ParamBool(params, "ripple");
+        return TimelineEdit(command, params, source, [&](QString* e) { return source.EditDelete(ripple, e); });
+    }
+    if (name == QLatin1String("edit.closeGap"))
+        return TimelineEdit(command, params, source, [&](QString* e) { return source.EditCloseGap(e); });
+    if (name == QLatin1String("edit.deleteTrack")) {
+        const auto track = integral("trackId", 0, 1);
+        if (!track)
+            return invalid();
+        const bool confirmed = ParamBool(params, "confirmed");
+        return TimelineEdit(command, params, source,
+                            [&](QString* e) { return source.EditDeleteTrack(*track, confirmed, e); });
+    }
+    if (name == QLatin1String("edit.undo"))
+        return TimelineEdit(command, params, source, [&](QString* e) { return source.EditUndo(e); });
+    if (name == QLatin1String("edit.redo"))
+        return TimelineEdit(command, params, source, [&](QString* e) { return source.EditRedo(e); });
+    if (name == QLatin1String("edit.applyCrossfade")) {
+        const auto clip = integral("clipId", 0, 0);
+        const auto duration = integral("durationMs", 0, 1);
+        if (!clip || !duration)
+            return invalid();
+        return TimelineEdit(command, params, source,
+                            [&](QString* e) { return source.EditApplyCrossfade(*clip, *duration, e); });
+    }
+    if (name == QLatin1String("edit.removeTransition"))
+        return TimelineEdit(command, params, source, [&](QString* e) { return source.EditRemoveTransition(e); });
+    if (name == QLatin1String("edit.setJunctionWindow")) {
+        const auto start = integral("startMs", 0, 0);
+        const auto end = integral("endMs", 0, 0);
+        if (!start || !end)
+            return invalid();
+        return TimelineEdit(command, params, source,
+                            [&](QString* e) { return source.EditSetJunctionWindow(*start, *end, e); });
+    }
+    if (name == QLatin1String("edit.setJunctionCurve")) {
+        const QJsonValue bias = params.value(QStringLiteral("bias"));
+        if (!bias.isUndefined() && !bias.isNull() &&
+            (!bias.isDouble() || !std::isfinite(bias.toDouble()) || std::abs(bias.toDouble()) > 1.0))
+            return Failed(error_code::kInvalidParams, QStringLiteral("\"bias\" must be a number in [-1, 1]"));
+        const QString curve = ParamString(params, "curve");
+        return TimelineEdit(command, params, source,
+                            [&](QString* e) { return source.EditSetJunctionCurve(curve, bias.toDouble(0.0), e); });
+    }
+    if (name == QLatin1String("edit.setJunctionAudioLaw")) {
+        const QString law = ParamString(params, "law");
+        return TimelineEdit(command, params, source,
+                            [&](QString* e) { return source.EditSetJunctionAudioLaw(law, e); });
+    }
+    if (name == QLatin1String("edit.setJunctionCut")) {
+        const auto at = integral("atMs", 0, 0);
+        if (!at)
+            return invalid();
+        return TimelineEdit(command, params, source, [&](QString* e) { return source.EditSetJunctionCut(*at, e); });
+    }
+    if (name == QLatin1String("edit.setClipFade")) {
+        const auto clip = integral("clipId", 0, 1);
+        const auto duration = integral("durationMs", 0, 0);
+        if (!clip || !duration)
+            return invalid();
+        const bool incoming = ParamString(params, "edge") == QLatin1String("in");
+        return TimelineEdit(command, params, source,
+                            [&](QString* e) { return source.EditSetClipFade(*clip, incoming, *duration, e); });
+    }
+    if (name == QLatin1String("edit.setFixedTimelineEnd")) {
+        const bool fixed = ParamBool(params, "fixed");
+        const auto end = integral("endMs", 0, 0);
+        if (!end)
+            return invalid();
+        if (fixed && !params.contains(QStringLiteral("endMs")))
+            return Failed(error_code::kInvalidParams, QStringLiteral("A fixed timeline end needs \"endMs\""));
+        return TimelineEdit(command, params, source,
+                            [&](QString* e) { return source.EditSetFixedTimelineEnd(fixed, *end, e); });
+    }
+
+    // --- Interaction options and the time selection ------------------------------
+
+    if (name == QLatin1String("edit.setOption")) {
+        const QString option = ParamString(params, "option");
+        const bool enabled = ParamBool(params, "enabled");
+        if (const std::optional<Outcome> failed =
+                IntentFailure(source.EditSetOption(option, enabled, &error), command, source, error))
+            return *failed;
+        const AutomationState after = source.State();
+        const bool now = option == QLatin1String("snapping")        ? after.edit_snapping
+                         : option == QLatin1String("ripple")        ? after.edit_ripple
+                         : option == QLatin1String("autoCrossfade") ? after.edit_auto_crossfade
+                                                                    : after.edit_linked_selection;
+        if (now != enabled)
+            return PostconditionMissed(
+                name,
+                QStringLiteral("%1 becoming %2").arg(option, enabled ? QStringLiteral("on") : QStringLiteral("off")));
+        return snapshot();
+    }
+    if (name == QLatin1String("edit.setSelectionBoundary")) {
+        const bool out = ParamString(params, "boundary") == QLatin1String("out");
+        if (const std::optional<Outcome> failed =
+                IntentFailure(source.EditSetSelectionBoundary(out, &error), command, source, error))
+            return *failed;
+        return snapshot();
+    }
+
+    // --- Playback and monitoring -------------------------------------------------
+
+    if (name == QLatin1String("edit.play") || name == QLatin1String("edit.pause")) {
+        const bool play = name == QLatin1String("edit.play");
+        if (const std::optional<Outcome> failed =
+                IntentFailure(source.EditSetPlaying(play, &error), command, source, error))
+            return *failed;
+        // The worker confirms the transport; editPlayback is the completion.
+        const bool reached =
+            source.State().edit_playback == (play ? QLatin1String("playing") : QLatin1String("paused"));
+        return Succeeded(source.EditorSnapshot(), reached);
+    }
+    if (name == QLatin1String("edit.frameStep")) {
+        const int direction = ParamString(params, "direction") == QLatin1String("previous") ? -1 : 1;
+        if (const std::optional<Outcome> failed =
+                IntentFailure(source.EditFrameStep(direction, &error), command, source, error))
+            return *failed;
+        return snapshot();
+    }
+    if (name == QLatin1String("edit.setVolume")) {
+        const QJsonValue value = params.value(QStringLiteral("volume"));
+        if (!value.isDouble() || !std::isfinite(value.toDouble()) || value.toDouble() < 0.0 || value.toDouble() > 1.0)
+            return Failed(error_code::kInvalidParams, QStringLiteral("\"volume\" must be a number in [0, 1]"));
+        if (const std::optional<Outcome> failed =
+                IntentFailure(source.EditSetVolume(value.toDouble(), &error), command, source, error))
+            return *failed;
+        return snapshot();
+    }
+    if (name == QLatin1String("edit.confirmMonitoring")) {
+        const QJsonValue ids = params.value(QStringLiteral("trackIds"));
+        if (!ids.isArray())
+            return Failed(error_code::kInvalidParams, QStringLiteral("\"trackIds\" must be an array of strings"));
+        QStringList track_ids;
+        for (const QJsonValue& id : ids.toArray()) {
+            if (!id.isString() || id.toString().isEmpty())
+                return Failed(error_code::kInvalidParams, QStringLiteral("\"trackIds\" must be an array of strings"));
+            track_ids.append(id.toString());
+        }
+        if (const std::optional<Outcome> failed =
+                IntentFailure(source.EditConfirmMonitoring(track_ids, ParamBool(params, "overlapConfirmed"), &error),
+                              command, source, error))
+            return *failed;
+        // The player rebuilds its audio graph on its worker; the confirmation
+        // requirement clearing is the completion.
+        return Succeeded(source.EditorSnapshot(), !source.State().edit_monitoring_confirmation_required);
+    }
+
+    // --- Panels ------------------------------------------------------------------
+
+    if (name == QLatin1String("edit.setPanel")) {
+        const QString panel = ParamString(params, "panel");
+        const bool open = ParamBool(params, "open");
+        const bool pinned = open && ParamBool(params, "pinned");
+        const bool media = panel == QLatin1String("media");
+        const AutomationState before = source.State();
+        if (pinned && !(media ? before.edit_media_panel_can_pin : before.edit_details_panel_can_pin)) {
+            // The page's own rule: a pinned panel has to leave the viewer at
+            // least its minimum width.
+            return Mismatch(error_code::kBlocked,
+                            QStringLiteral("The viewer is too narrow to pin the %1 panel").arg(panel),
+                            QStringLiteral("canPin"), true, false);
+        }
+        if (const std::optional<Outcome> failed =
+                IntentFailure(source.EditSetPanel(panel, open, pinned, &error), command, source, error))
+            return *failed;
+        const QString expected = PanelStateName(open, pinned);
+        const QString reached = media ? source.State().edit_media_panel : source.State().edit_details_panel;
+        if (reached != expected)
+            return PostconditionMissed(name, QStringLiteral("the %1 panel becoming %2").arg(panel, expected));
+        return snapshot();
+    }
+    if (name == QLatin1String("edit.setSourceTab")) {
+        const QString tab = ParamString(params, "tab");
+        if (const std::optional<Outcome> failed =
+                IntentFailure(source.EditSetSourceTab(tab, &error), command, source, error))
+            return *failed;
+        if (source.State().edit_source_tab != tab)
+            return PostconditionMissed(name, QStringLiteral("the %1 tab showing").arg(tab));
+        return snapshot();
+    }
+
+    return std::nullopt;
+}
+
 Outcome ExecuteMutating(const CommandDescriptor& command, const ParsedRequest& request, LiveVerifySource& source) {
     QString error;
     const QJsonObject& params = request.params;
@@ -321,9 +699,12 @@ Outcome ExecuteMutating(const CommandDescriptor& command, const ParsedRequest& r
     if (command.name == QLatin1String("edit.open")) {
         if (!source.EditOpen(&error))
             return IntentRefused(command, source, error);
-        if (!source.State().edit_session_open)
+        // Settled once the recording is on the timeline. A recording whose file
+        // is present is probed first, and the session opens when that lands.
+        const AutomationState after = source.State();
+        if (!after.edit_session_open && !after.edit_import_pending)
             return PostconditionMissed(command.name, QStringLiteral("an open edit session"));
-        return Succeeded(source.EditorSnapshot());
+        return Succeeded(source.EditorSnapshot(), after.edit_session_open && !after.edit_import_pending);
     }
 
     if (command.name == QLatin1String("edit.close")) {
@@ -360,6 +741,9 @@ Outcome ExecuteMutating(const CommandDescriptor& command, const ParsedRequest& r
         return edit_position(&LiveVerifySource::EditSetTrimIn);
     if (command.name == QLatin1String("edit.setTrimOut"))
         return edit_position(&LiveVerifySource::EditSetTrimOut);
+
+    if (const std::optional<Outcome> edit = ExecuteEditWorkspace(command, params, source))
+        return *edit;
 
     if (command.name == QLatin1String("sourcePicker.open") || command.name == QLatin1String("sourcePicker.close")) {
         const bool open = command.name.endsWith(QLatin1String("open"));
@@ -513,6 +897,36 @@ Outcome ExecuteMutating(const CommandDescriptor& command, const ParsedRequest& r
         if (!source.ExportCancel(&error))
             return IntentRefused(command, source, error);
         return Succeeded(source.EditorSnapshot(), /*settled=*/false);
+    }
+    if (command.name == QLatin1String("export.setOptions")) {
+        if (!source.ExportSetOptions(params, &error))
+            return IntentRefused(command, source, error);
+        // Read back rather than echoed: the panel is the authority on what it
+        // accepted, and a refused value has to show as one.
+        const QJsonObject result = source.EditorSnapshot();
+        const QJsonObject exported = result.value(QStringLiteral("export")).toObject();
+        for (const char* key : {"profile", "mode", "span", "container"}) {
+            const QJsonValue requested = params.value(Text(key));
+            if (requested.isString() && exported.value(Text(key)) != requested)
+                return PostconditionMissed(
+                    command.name, QStringLiteral("the export %1 becoming %2").arg(Text(key), requested.toString()));
+        }
+        return Succeeded(result);
+    }
+    if (command.name == QLatin1String("export.confirm")) {
+        if (!source.ExportConfirm(&error))
+            return IntentRefused(command, source, error);
+        // The run starts on its own thread, or the plan is redone when the
+        // workspace changed under the review; exportState is the completion.
+        return Succeeded(source.EditorSnapshot(), /*settled=*/false);
+    }
+    if (command.name == QLatin1String("export.discard") || command.name == QLatin1String("export.reset")) {
+        const bool discard = command.name.endsWith(QLatin1String("discard"));
+        if (!(discard ? source.ExportDiscard(&error) : source.ExportReset(&error)))
+            return IntentRefused(command, source, error);
+        if (source.State().edit_export_state != QLatin1String("idle"))
+            return PostconditionMissed(command.name, QStringLiteral("the export options returning"));
+        return Succeeded(source.EditorSnapshot());
     }
 
     // --- Diagnostics and logs --------------------------------------------------

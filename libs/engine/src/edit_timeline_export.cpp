@@ -3,6 +3,7 @@
 #include <exosnap/engine/audio_media_manifest.h>
 #include <exosnap/engine/background_io.h>
 #include <exosnap/engine/edit_types.h>
+#include <exosnap/engine/recording_media_types.h>
 
 #include "audio_media_manifest_adapter.h"
 #include "budgeted_media_avio.h"
@@ -69,6 +70,7 @@ struct Input {
     AudioMetadataReadResult metadata;
     BackgroundIoAdmission metered_admission;
     std::unique_ptr<BudgetedMediaAvio> budgeted_input;
+    std::unique_ptr<LeasedMediaAvio> leased_input;
     bool admission_denied = false;
     AVFormatContext* context = nullptr;
     ~Input() {
@@ -77,13 +79,33 @@ struct Input {
     Input() = default;
     Input(const Input&) = delete;
     Input& operator=(const Input&) = delete;
+    int Open(const TimelineExportClip& clip, const std::atomic<bool>* cancelled = nullptr) {
+        if (clip.access || clip.identity_proof) {
+            if (!clip.access || !clip.identity_proof || clip.identity_proof->Source() != clip.access ||
+                clip.source != clip.access->Path())
+                return AVERROR(EINVAL);
+        }
+        return Open(clip.source, {}, {}, cancelled, clip.access);
+    }
     int Open(const std::filesystem::path& source, const std::function<bool()>& continue_io = {},
-             const BackgroundIoAdmission& before_io = {}, const std::atomic<bool>* cancelled = nullptr) {
-        auto lease = AcquireMediaReadLease(source);
-        if (!lease.succeeded())
-            return AVERROR(EACCES);
-        media_read_lease = std::move(*lease.value());
-        if (before_io || cancelled) {
+             const BackgroundIoAdmission& before_io = {}, const std::atomic<bool>* cancelled = nullptr,
+             const std::shared_ptr<const MediaReadCapability>& access = {}, bool verify_content = true) {
+        if (!access) {
+            auto lease = AcquireMediaReadLease(source);
+            if (!lease.succeeded())
+                return AVERROR(EACCES);
+            media_read_lease = std::move(*lease.value());
+        }
+        if (access) {
+            leased_input = LeasedMediaAvio::Open(access, continue_io, before_io, cancelled);
+            if (!leased_input)
+                return AVERROR(EIO);
+            context = avformat_alloc_context();
+            if (!context)
+                return AVERROR(ENOMEM);
+            context->pb = leased_input->context();
+            context->flags |= AVFMT_FLAG_CUSTOM_IO;
+        } else if (before_io || cancelled) {
             metered_admission = [this, before_io, cancelled](uint64_t bytes, const std::atomic<bool>*) {
                 if ((!cancelled || !cancelled->load(std::memory_order_relaxed)) &&
                     (!before_io || before_io(bytes, cancelled)))
@@ -100,13 +122,14 @@ struct Input {
             context->pb = budgeted_input->context();
             context->flags |= AVFMT_FLAG_CUSTOM_IO;
         }
-        int result =
-            avformat_open_input(&context, budgeted_input ? nullptr : Utf8Path(source).c_str(), nullptr, nullptr);
+        int result = avformat_open_input(
+            &context, (budgeted_input || leased_input) ? nullptr : Utf8Path(source).c_str(), nullptr, nullptr);
         if (result < 0 || (result = avformat_find_stream_info(context, nullptr)) < 0)
             return result;
         if (admission_denied)
             return AVERROR_EXIT;
-        metadata = ReadAudioMediaMetadata(source, context, continue_io, metered_admission, cancelled);
+        metadata = ReadAudioMediaMetadata(source, context, continue_io, access ? before_io : metered_admission,
+                                          cancelled, access, verify_content);
         if (admission_denied || (cancelled && cancelled->load(std::memory_order_relaxed)))
             return AVERROR_EXIT;
         return result;
@@ -254,8 +277,8 @@ void ResolveDecodedColor(AVFormatContext* input, AVStream* stream) {
 std::vector<TimelineExportClip> Coalesce(const std::vector<TimelineExportClip>& clips) {
     std::vector<TimelineExportClip> result;
     for (const auto& clip : clips) {
-        if (!result.empty() && result.back().source == clip.source &&
-            result.back().source_out_us == clip.source_in_us &&
+        if (!result.empty() && result.back().source == clip.source && result.back().access == clip.access &&
+            result.back().identity_proof == clip.identity_proof && result.back().source_out_us == clip.source_in_us &&
             result.back().timeline_start_us + (result.back().source_out_us - result.back().source_in_us) ==
                 clip.timeline_start_us) {
             result.back().source_out_us = clip.source_out_us;
@@ -321,16 +344,22 @@ TimelineExportAssessment ValidateRecipe(const std::vector<TimelineExportClip>& c
 
 } // namespace
 
-EditMediaMetadata ProbeEditMedia(const std::filesystem::path& source, const std::function<bool()>& continue_io,
-                                 const BackgroundIoAdmission& before_io, const std::atomic<bool>* cancelled) {
+static EditMediaMetadata
+ProbeEditMediaSource(const std::filesystem::path& source, const std::function<bool()>& continue_io,
+                     const BackgroundIoAdmission& before_io, const std::atomic<bool>* cancelled,
+                     const std::shared_ptr<const MediaReadCapability>& access, bool verify_content,
+                     const std::shared_ptr<const VerifiedMediaIdentity>& observed_proof = {}) {
     EditMediaMetadata result;
     Input input;
-    const int status = input.Open(source, continue_io, before_io, cancelled);
+    const int status = input.Open(source, continue_io, before_io, cancelled, access, verify_content);
     if (status < 0) {
         result.error = AvError(status);
         return result;
     }
-    result.audio_metadata = input.metadata;
+    result.audio_metadata = observed_proof
+                                ? ReadAudioMediaMetadataForAdoption(source, input.context, access, observed_proof,
+                                                                    continue_io, before_io, cancelled)
+                                : input.metadata;
     result.duration_us = std::max<int64_t>(0, input.context->duration);
     if (input.context->start_time != AV_NOPTS_VALUE)
         result.timestamp_origin_us = input.context->start_time;
@@ -405,8 +434,14 @@ EditMediaMetadata ProbeEditMedia(const std::filesystem::path& source, const std:
     }
     if (result.duration_us <= 0 || (result.width == 0 && !result.has_audio))
         result.error = "Media has no supported timed video or audio stream.";
-    if (result.error.empty()) {
-        const auto identity = HashFinalMedia(source, continue_io, input.metered_admission, cancelled);
+    if (result.error.empty() && verify_content) {
+        const auto identity = access ? [&]() -> Outcome<MediaIdentitySnapshot> {
+            auto proof = VerifyMediaIdentity(access, result.audio_metadata.expected_content_sha256, continue_io,
+                                             before_io, cancelled);
+            return proof.succeeded() ? Outcome<MediaIdentitySnapshot>{(*proof.value())->Identity()}
+                                     : Outcome<MediaIdentitySnapshot>{*proof.error()};
+        }()
+            : HashFinalMedia(source, continue_io, input.metered_admission, cancelled, MediaHashCause::SourceProbe);
         if (!identity.succeeded())
             result.error = identity.error()->context;
         else {
@@ -419,6 +454,76 @@ EditMediaMetadata ProbeEditMedia(const std::filesystem::path& source, const std:
     return result;
 }
 
+EditMediaMetadata ProbeEditMedia(const std::filesystem::path& source, const std::function<bool()>& continue_io,
+                                 const BackgroundIoAdmission& before_io, const std::atomic<bool>* cancelled) {
+    return ProbeEditMediaSource(source, continue_io, before_io, cancelled, {}, true);
+}
+
+EditMediaMetadata ProbeEditMedia(const std::shared_ptr<const MediaReadCapability>& source,
+                                 const std::function<bool()>& continue_io, const BackgroundIoAdmission& before_io,
+                                 const std::atomic<bool>* cancelled, bool verify_content) {
+    if (!source) {
+        EditMediaMetadata result;
+        result.error = "No admitted media source.";
+        return result;
+    }
+    auto cached = CachedEditMediaMetadata(source);
+    auto result =
+        cached ? *cached : ProbeEditMediaSource(source->Path(), continue_io, before_io, cancelled, source, false);
+    if (!result.error.empty())
+        return result;
+    if (!cached) {
+        RetainEditMediaMetadata(source, std::make_shared<const EditMediaMetadata>(result));
+        result = *CachedEditMediaMetadata(source);
+    }
+    result.file_identity = source->Identity().file_identity;
+    result.file_size = source->Identity().file_size;
+    if (verify_content) {
+        const auto proof = VerifyMediaIdentity(source, result.audio_metadata.expected_content_sha256, continue_io,
+                                               before_io, cancelled);
+        if (!proof.succeeded()) {
+            result.error = proof.error()->context;
+            return result;
+        }
+        result.content_sha256 = (*proof.value())->Identity().sha256;
+        result.content_identity_valid = true;
+        result.audio_metadata =
+            ReadAudioMediaMetadata(source->Path(), nullptr, continue_io, before_io, cancelled, source, true);
+    }
+    return result;
+}
+
+EditMediaMetadata ProbeEditMediaForAdoption(const std::shared_ptr<const MediaReadCapability>& source,
+                                            const std::shared_ptr<const VerifiedMediaIdentity>& observed_proof,
+                                            const std::function<bool()>& continue_io,
+                                            const BackgroundIoAdmission& before_io,
+                                            const std::atomic<bool>* cancelled) {
+    EditMediaMetadata result;
+    if (!source || !observed_proof || observed_proof->Source() != source) {
+        result.error = EXOSNAP_TRANSLATABLE("EditRender", "Source adoption requires proof for the admitted file.");
+        return result;
+    }
+    const auto cancelled_now = [&] {
+        return (cancelled && cancelled->load(std::memory_order_relaxed)) || (continue_io && !continue_io());
+    };
+    if (cancelled_now()) {
+        result.error = EXOSNAP_TRANSLATABLE("EditRender", "Source adoption cancelled.");
+        return result;
+    }
+    result = ProbeEditMediaSource(source->Path(), continue_io, before_io, cancelled, source, false, observed_proof);
+    if (cancelled_now()) {
+        result.error = EXOSNAP_TRANSLATABLE("EditRender", "Source adoption cancelled.");
+        return result;
+    }
+    if (result.error.empty()) {
+        const auto& identity = observed_proof->Identity();
+        result.file_identity = identity.file_identity;
+        result.file_size = identity.file_size;
+        result.content_sha256 = identity.sha256;
+        result.content_identity_valid = true;
+    }
+    return result;
+}
 TimelineExportAssessment AssessTimelineExport(const std::vector<TimelineExportClip>& clips, bool to_mp4,
                                               const std::atomic<bool>* cancelled) {
     if (cancelled && cancelled->load(std::memory_order_relaxed))
@@ -433,7 +538,7 @@ TimelineExportAssessment AssessTimelineExport(const std::vector<TimelineExportCl
     std::unique_ptr<Input> reference;
     for (const auto& clip : recipe) {
         auto input = std::make_unique<Input>();
-        const int status = input->Open(clip.source, {}, {}, cancelled);
+        const int status = input->Open(clip, cancelled);
         if (status < 0)
             return Invalid("Cannot open source media: " + AvError(status));
         const auto duration = input->context->duration;
@@ -518,8 +623,11 @@ RemuxResult ExportTimelineStreamCopy(const std::vector<TimelineExportClip>& clip
     if (recipe.size() == 1) {
         const auto& clip = recipe.front();
         TrimRange trim{clip.source_in_us, clip.source_out_us};
-        const auto result = to_mp4 ? RemuxToProgressiveMp4(clip.source, output, progress_cb, trim)
-                                   : RemuxToMkv(clip.source, output, progress_cb, trim);
+        const auto result =
+            clip.access ? (to_mp4 ? RemuxToProgressiveMp4(clip.access, clip.identity_proof, output, progress_cb, trim)
+                                  : RemuxToMkv(clip.access, clip.identity_proof, output, progress_cb, trim))
+                        : (to_mp4 ? RemuxToProgressiveMp4(clip.source, output, progress_cb, trim)
+                                  : RemuxToMkv(clip.source, output, progress_cb, trim));
         staging.complete = result.success;
         return result;
     }
@@ -530,7 +638,7 @@ RemuxResult ExportTimelineStreamCopy(const std::vector<TimelineExportClip>& clip
         return RemuxResult::Fail(status, "Cannot allocate export container.");
     destination.context->avoid_negative_ts = AVFMT_AVOID_NEG_TS_DISABLED;
     Input first;
-    if ((status = first.Open(recipe.front().source)) < 0)
+    if ((status = first.Open(recipe.front())) < 0)
         return RemuxResult::Fail(status, AvError(status));
     for (unsigned i = 0; i < first.context->nb_streams; ++i) {
         auto* stream = avformat_new_stream(destination.context, nullptr);
@@ -553,7 +661,7 @@ RemuxResult ExportTimelineStreamCopy(const std::vector<TimelineExportClip>& clip
         output_manifest->derived_from_media_ids.clear();
         for (const auto& clip : recipe) {
             Input source;
-            if ((status = source.Open(clip.source)) < 0)
+            if ((status = source.Open(clip)) < 0)
                 return RemuxResult::Fail(status, AvError(status));
             if (!source.metadata.manifest)
                 return RemuxResult::Fail(AVERROR(EINVAL), "Audio metadata changed before export");
@@ -615,7 +723,7 @@ RemuxResult ExportTimelineStreamCopy(const std::vector<TimelineExportClip>& clip
     float progress = 0;
     for (const auto& clip : recipe) {
         Input source;
-        if ((status = source.Open(clip.source)) < 0)
+        if ((status = source.Open(clip)) < 0)
             return RemuxResult::Fail(status, AvError(status));
         std::vector<unsigned> mapping;
         if (!SemanticStreamMap(source, first, mapping))

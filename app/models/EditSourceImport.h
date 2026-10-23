@@ -2,6 +2,7 @@
 
 #include "models/EditCommandTypes.h"
 
+#include <exosnap/engine/audio_media_manifest.h>
 #include <exosnap/engine/edit_timeline_export.h>
 
 #include <algorithm>
@@ -38,14 +39,20 @@ inline engine::AudioTrackId SyntheticIdentity(uint8_t kind, uint32_t container_i
 // default without overlapping alternatives, needs no question. Ambiguous
 // provenance returns `mix_decision_required` with no selection. A positive
 // `declared_duration_us` (a recording segment's own length) bounds every span.
-[[nodiscard]] inline SourceImport DescribeSourceImport(const engine::EditMediaMetadata& metadata,
-                                                       Time declared_duration_us = 0) {
+namespace source_import_detail {
+
+[[nodiscard]] inline SourceImport Describe(const engine::EditMediaMetadata& metadata, Time declared_duration_us,
+                                           bool bound) {
     SourceImport result;
-    if (!metadata.error.empty() || !metadata.content_identity_valid || metadata.duration_us <= 0)
+    if (!metadata.error.empty() || (!metadata.content_identity_valid && !bound) || metadata.duration_us <= 0)
         return result;
     auto descriptor = std::make_shared<ValidatedSourceDescriptor>();
     descriptor->file_identity = metadata.file_identity;
-    descriptor->asset_identity_fingerprint = metadata.content_sha256;
+    descriptor->asset_identity_fingerprint =
+        metadata.content_identity_valid
+            ? metadata.content_sha256
+            : metadata.audio_metadata.expected_content_sha256.value_or(std::array<uint8_t, 32>{});
+    descriptor->audio_identities_verified = metadata.audio_metadata.status == engine::AudioMetadataStatus::Verified;
     std::vector<engine::AudioTrackId> audio;
     bool has_video = false;
     for (const auto& stream : metadata.streams) {
@@ -86,7 +93,7 @@ inline engine::AudioTrackId SyntheticIdentity(uint8_t kind, uint32_t container_i
     if (audio.empty())
         return result;
     InputMixSelection mix;
-    mix.asset_identity_fingerprint = metadata.content_sha256;
+    mix.asset_identity_fingerprint = descriptor->asset_identity_fingerprint;
     mix.authority = InputMixAuthority::VerifiedRecordedDefault;
     const auto& recorded = metadata.audio_metadata;
     if (audio.size() == 1) {
@@ -108,5 +115,15 @@ inline engine::AudioTrackId SyntheticIdentity(uint8_t kind, uint32_t container_i
     result.input_mix = std::move(mix);
     return result;
 }
+
+} // namespace source_import_detail
+
+[[nodiscard]] inline SourceImport DescribeSourceImport(const engine::EditMediaMetadata& metadata,
+                                                       Time declared_duration_us = 0) {
+    return source_import_detail::Describe(metadata, declared_duration_us, false);
+}
+
+[[nodiscard]] SourceImport DescribeSourceImport(const engine::EditMediaMetadata& metadata, Time declared_duration_us,
+                                                const std::shared_ptr<const engine::MediaReadCapability>& access);
 
 } // namespace exosnap::edit

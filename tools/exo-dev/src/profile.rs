@@ -187,8 +187,8 @@ impl Profile {
                     StepId::Configure,
                     StepId::QmlLint,
                     StepId::Build,
-                    StepId::Tests,
                     StepId::ClangTidy,
+                    StepId::Tests,
                 ],
                 configure_args: SCCACHE,
                 ..BASE

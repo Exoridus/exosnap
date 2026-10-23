@@ -26,6 +26,12 @@ Reusable automation lives in Rust: `exo-dev` for repository checks and release t
 
 Media tools include ffprobe, ffmpeg, ffplay, MPV (`mpv`) and VLC where installed. Check `Get-Command` and resolve an installed tool before declaring it absent from a long-lived process's PATH. Prefer noninteractive ffprobe for inspection. Opening a GUI player follows the same desktop-coordination rules as driving the app.
 
+## Tool output and context usage
+
+Keep tool output minimal by default. Use a tool's compact or quiet mode where available; `exo-dev verify --output compact` explicitly selects compact verification output. Redirect verbose build, test and analysis output to untracked log files before it reaches the conversation. Return only the exit status, concise result, log path and relevant failure excerpts. Preserve full logs and verification receipts for review.
+
+Do not dump complete logs, large files, directory trees or repeated progress output into the conversation. Read targeted ranges or filtered matches with bounded output, and expand only when needed to diagnose a specific problem or when requested. Tool response limits are a backstop, not a replacement for limiting output at its source. Apply this policy to delegated agents as well; never hide failures or treat omitted output as evidence of success.
+
 ## Driving applications and Windows
 
 The developer may be using the same machine. Never synthesize mouse/keyboard input or take focus without same-turn coordination and confirmation that the machine is free. Earlier permission does not carry forward. Prefer semantic application control or structural UI Automation over coordinate input, but do not treat either as permission to disrupt the desktop.

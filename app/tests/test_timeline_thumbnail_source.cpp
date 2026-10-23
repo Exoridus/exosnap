@@ -4,6 +4,8 @@
 #include <QGuiApplication>
 #include <QImage>
 #include <QSize>
+#include <QTemporaryDir>
+#include <exosnap/engine/edit_timeline_export.h>
 
 #include <algorithm>
 #include <atomic>
@@ -72,6 +74,90 @@ std::vector<int64_t> KeyframesEveryMs(int64_t step_ms, int count) {
 }
 
 } // namespace
+
+TEST_F(TimelineThumbnailSourceTest, RegisteredSourceReplacementCannotPoisonBrokerOrStripCache) {
+    const auto fixture_root = qEnvironmentVariable("EXOSNAP_EDIT_RENDER_FIXTURES");
+    if (fixture_root.isEmpty())
+        GTEST_SKIP() << "Set EXOSNAP_EDIT_RENDER_FIXTURES to generated red/blue media.";
+    const auto original = std::filesystem::path(fixture_root.toStdWString()) / L"red.mkv";
+    const auto replacement = std::filesystem::path(fixture_root.toStdWString()) / L"blue.mkv";
+    const auto metadata = engine::ProbeEditMedia(original);
+    ASSERT_TRUE(metadata.error.empty()) << metadata.error;
+    const auto identity = engine::ToHex(metadata.content_sha256);
+    const auto wait_for = [](const auto& predicate) {
+        const auto deadline = std::chrono::steady_clock::now() + std::chrono::seconds(10);
+        while (!predicate() && std::chrono::steady_clock::now() < deadline) {
+            QCoreApplication::processEvents();
+            std::this_thread::sleep_for(std::chrono::milliseconds(1));
+        }
+        return predicate();
+    };
+    for (const bool strip : {false, true}) {
+        SCOPED_TRACE(strip);
+        QTemporaryDir directory;
+        ASSERT_TRUE(directory.isValid());
+        const auto root = std::filesystem::path(directory.path().toStdWString());
+        const auto path = root / L"queued.mkv";
+        std::filesystem::copy_file(original, path);
+        ThumbnailRequestBroker::Config config;
+        config.disk_root = root / L"cache";
+        auto broker = std::make_shared<ThumbnailRequestBroker>(config);
+        const auto info = ThumbnailSourceInfo{
+            path, metadata.content_sha256, metadata.width, metadata.height, metadata.fps_num, metadata.fps_den};
+        broker->RegisterSource(identity, info);
+        std::atomic<bool> done{false};
+        QImage image;
+        int opened_width = -1;
+        int tile_count = 0;
+        {
+            TimelineThumbnailSource worker(broker);
+            worker.setForegroundBusy(true);
+            if (!strip)
+                broker->Request(identity, 0, 48, [&](const QImage& result) {
+                    image = result;
+                    done.store(true, std::memory_order_release);
+                });
+            std::filesystem::copy_file(replacement, path, std::filesystem::copy_options::overwrite_existing);
+            if (strip) {
+                QObject::connect(&worker, &TimelineThumbnailSource::clipOpened, &worker,
+                                 [&](int width, int, const QStringList&) { opened_width = width; });
+                QObject::connect(&worker, &TimelineThumbnailSource::tileReady, &worker,
+                                 [&](qint64, const QImage&, quint64) { ++tile_count; });
+                QObject::connect(&worker, &TimelineThumbnailSource::runFinished, &worker,
+                                 [&](quint64, int, bool) { done.store(true, std::memory_order_release); });
+                worker.openClip(QString::fromStdWString(path.wstring()), {});
+                worker.requestTiles({0}, 48);
+            }
+            worker.setForegroundBusy(false);
+            ASSERT_TRUE(wait_for([&]() { return done.load(std::memory_order_acquire); }));
+            EXPECT_TRUE(image.isNull());
+            EXPECT_EQ(tile_count, 0);
+            if (strip)
+                EXPECT_EQ(opened_width, 0);
+            EXPECT_EQ(worker.decodeCountForTest(), 0u);
+            EXPECT_EQ(broker->Disk()->store().EntryCount(), 0u);
+        }
+        const auto restored = root / L"original-elsewhere.mkv";
+        std::filesystem::copy_file(original, restored);
+        auto restored_info = info;
+        restored_info.path = restored;
+        broker->RegisterSource(identity, restored_info);
+        done.store(false, std::memory_order_release);
+        {
+            TimelineThumbnailSource worker(broker);
+            broker->Request(identity, 0, 48, [&](const QImage& result) {
+                image = result;
+                done.store(true, std::memory_order_release);
+            });
+            ASSERT_TRUE(wait_for([&]() { return done.load(std::memory_order_acquire); }));
+            ASSERT_FALSE(image.isNull());
+            const auto pixel = image.pixelColor(image.width() / 2, image.height() / 2);
+            EXPECT_GT(pixel.red(), pixel.blue());
+            EXPECT_EQ(worker.decodeCountForTest(), 1u);
+            EXPECT_EQ(broker->Disk()->store().EntryCount(), 1u);
+        }
+    }
+}
 
 // ---- Strip layout ----
 

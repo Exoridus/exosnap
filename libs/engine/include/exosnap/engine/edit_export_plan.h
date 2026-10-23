@@ -5,11 +5,12 @@
 #include <array>
 #include <atomic>
 #include <memory>
+#include <utility>
 
 namespace exosnap::engine {
 
 enum class EditExportMode { FinishedStereo, OriginalStreams };
-enum class EditExportSpan { ResultRange, EntireTimeline };
+enum class EditExportSpan { ResultRange, EntireTimeline, OccupiedContent, TimeRange, SelectedClips };
 enum class EditExportContainer { Matroska, Mp4 };
 enum class EditVideoProfile { MatchSourceAuto, H264, Hevc };
 enum class EditAudioProfile { Pcm24Stereo, AacLc192Stereo };
@@ -26,7 +27,9 @@ enum class EditExportIssueCode {
     UnsupportedAudioLayout,
     BoundaryConsentRequired,
     ResourceLimitExceeded,
-    DestinationAliasesSource
+    DestinationAliasesSource,
+    InvalidSelection,
+    PartialJunctionOwnership
 };
 enum class EditExportIssueScope { Timeline, Source, Video, Audio, Destination };
 struct EditExportIssue {
@@ -61,6 +64,9 @@ struct EditExportIntent {
     uint32_t quality = 0;
     std::filesystem::path destination;
     bool replace_destination = false;
+    int64_t selection_in_us = 0;
+    int64_t selection_out_us = 0;
+    std::vector<uint64_t> selected_clip_ids;
 };
 struct EditOriginalGroup {
     uint64_t group = 0;
@@ -104,6 +110,13 @@ struct EditExportPlan {
 [[nodiscard]] std::shared_ptr<const EditExportPlan> PrepareEditExport(TimelineRenderSnapshot snapshot,
                                                                       EditExportIntent intent, EditExportFacts facts);
 [[nodiscard]] bool AcceptsBoundaryConsent(const EditExportPlan& plan, const EditBoundaryConsent& consent);
+
+// Freezes selected contributions without changing source-time offsets. Partial
+// junction ownership remains a blocking issue when the plan is prepared.
+[[nodiscard]] TimelineRenderSnapshot SelectEditExportSnapshot(TimelineRenderSnapshot snapshot,
+                                                              const EditExportIntent& intent);
+[[nodiscard]] std::pair<int64_t, int64_t> EditExportBounds(const TimelineSnapshot& timeline,
+                                                           const EditExportIntent& intent);
 
 // Opens the snapshot's sources to establish which execution paths are actually
 // available. Blocking; run off the UI thread. `input_mix_validated` is the

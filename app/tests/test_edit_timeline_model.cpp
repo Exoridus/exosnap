@@ -8,6 +8,7 @@
 #include <vector>
 
 #include "models/EditTimelineModel.h"
+#include "models/EditWorkspace.h"
 #include "models/MarkerSidecar.h"
 #include "models/RecordingMarker.h"
 
@@ -142,5 +143,202 @@ TEST(MarkerSidecarExport, ApplyRemovesAStaleSidecarWhenNoMarkersSurvive) {
     EXPECT_FALSE(std::filesystem::exists(sidecar));
 }
 
+edit::Asset ReplacementSource(const wchar_t* path, uint8_t identity, edit::Time duration = 10'000'000) {
+    edit::Asset asset;
+    asset.path = path;
+    asset.duration = duration;
+    asset.fps_num = 30;
+    auto descriptor = std::make_shared<edit::ValidatedSourceDescriptor>();
+    descriptor->asset_identity_fingerprint.fill(identity);
+    const auto stream_identity = identity ? identity : uint8_t{1};
+    descriptor->streams.push_back({{0, engine::AudioTrackId{{stream_identity}}, 0, engine::TimelineStreamKind::Video},
+                                   {0, duration},
+                                   0,
+                                   {},
+                                   {30, 1}});
+    const engine::AudioTrackId audio{{static_cast<uint8_t>(stream_identity + 1)}};
+    descriptor->streams.push_back({{0, audio, 1, engine::TimelineStreamKind::Audio},
+                                   {0, duration},
+                                   0,
+                                   {"A_PCM/INT/LIT", {}, 48000, 2, 16, 0, "stereo"},
+                                   {}});
+    asset.source_descriptor = descriptor;
+    asset.input_mix_selection = edit::InputMixSelection{};
+    asset.input_mix_selection->asset_identity_fingerprint = descriptor->asset_identity_fingerprint;
+    asset.input_mix_selection->selected_stream_identities = {audio};
+    return asset;
+}
+
+TEST(EditSourceReplacement, ReplacesAllReferencesAtomicallyAndUndoRestoresExactBindings) {
+    edit::Workspace workspace;
+    const auto asset_id = workspace.addAsset(ReplacementSource(L"old.mkv", 11));
+    ASSERT_TRUE(workspace.insertAssets({asset_id, asset_id}, 0, false));
+    ASSERT_EQ(workspace.clips().size(), 4U);
+    const auto before = workspace.clips();
+    const auto old = *workspace.asset(asset_id);
+    auto replacement = ReplacementSource(L"new.mkv", 21, 12'000'000);
+    replacement.id = asset_id;
+    replacement.source_version = 1;
+    const auto revision = workspace.revision();
+    const edit::ReplaceAssetSource command{asset_id, 0, replacement, true};
+    ASSERT_TRUE(edit::PreviewEdit(*workspace.snapshot(), command).valid);
+    ASSERT_EQ(workspace.apply(command, revision).status, edit::CommandStatus::Applied);
+    EXPECT_EQ(workspace.revision(), revision + 1);
+    ASSERT_EQ(workspace.assets().size(), 1U);
+    EXPECT_EQ(workspace.asset(asset_id)->path, replacement.path);
+    EXPECT_EQ(workspace.asset(asset_id)->source_version, 1U);
+    EXPECT_EQ(workspace.asset(asset_id)->source_descriptor->asset_identity_fingerprint,
+              replacement.source_descriptor->asset_identity_fingerprint);
+    EXPECT_EQ(workspace.asset(asset_id)->input_mix_selection->selected_stream_identities,
+              replacement.input_mix_selection->selected_stream_identities);
+    ASSERT_EQ(workspace.clips().size(), before.size());
+    for (const auto& old_clip : before) {
+        const auto* current = workspace.clip(old_clip.id);
+        ASSERT_NE(current, nullptr);
+        ASSERT_TRUE(current->stream);
+        auto expected = old_clip;
+        expected.stream->stream_identity =
+            replacement.source_descriptor->streams[current->stream->container_index].ref.stream_identity;
+        EXPECT_EQ(*current, expected);
+    }
+    const auto after = workspace.clips();
+    ASSERT_TRUE(workspace.undo());
+    EXPECT_EQ(workspace.clips(), before);
+    EXPECT_EQ(workspace.asset(asset_id)->path, old.path);
+    EXPECT_EQ(workspace.asset(asset_id)->source_version, 0U);
+    EXPECT_EQ(workspace.asset(asset_id)->source_descriptor, old.source_descriptor);
+    EXPECT_EQ(workspace.asset(asset_id)->input_mix_selection, old.input_mix_selection);
+    ASSERT_TRUE(workspace.redo());
+    EXPECT_EQ(workspace.clips(), after);
+    EXPECT_EQ(workspace.asset(asset_id)->path, replacement.path);
+    EXPECT_EQ(workspace.asset(asset_id)->source_descriptor, replacement.source_descriptor);
+}
+
+TEST(EditSourceReplacement, SourceOnlyChangesAreUndoableAndInvalidCandidatesKeepEveryBinding) {
+    edit::Workspace workspace;
+    const auto asset_id = workspace.addAsset(ReplacementSource(L"old.mkv", 31));
+    auto replacement = ReplacementSource(L"new.mkv", 41);
+    replacement.id = asset_id;
+    replacement.source_version = 1;
+    ASSERT_EQ(workspace.apply(edit::ReplaceAssetSource{asset_id, 0, replacement, true}, workspace.revision()).status,
+              edit::CommandStatus::Applied);
+    EXPECT_TRUE(workspace.clips().empty());
+    ASSERT_TRUE(workspace.undo());
+    EXPECT_EQ(workspace.asset(asset_id)->path, L"old.mkv");
+    ASSERT_TRUE(workspace.insert(asset_id));
+    const auto before = workspace.clips();
+    const auto revision = workspace.revision();
+    const auto history = workspace.historyBytes();
+    for (int fault = 0; fault < 4; ++fault) {
+        auto candidate = replacement;
+        candidate.source_version = 2;
+        auto descriptor = std::make_shared<edit::ValidatedSourceDescriptor>(*candidate.source_descriptor);
+        if (fault == 0)
+            candidate.duration = 9'000'000;
+        if (fault == 1)
+            descriptor->streams.pop_back();
+        if (fault == 2)
+            descriptor->streams.back().codec.channels = 6;
+        candidate.source_descriptor = descriptor;
+        const auto result =
+            workspace.apply(edit::ReplaceAssetSource{asset_id, fault == 3 ? 8U : 0U, candidate, true}, revision);
+        EXPECT_EQ(result.status, edit::CommandStatus::Rejected) << fault;
+        EXPECT_EQ(workspace.revision(), revision);
+        EXPECT_EQ(workspace.historyBytes(), history);
+        EXPECT_EQ(workspace.clips(), before);
+        EXPECT_EQ(workspace.asset(asset_id)->path, L"old.mkv");
+    }
+    ASSERT_TRUE(workspace.setTrackLocked(before.front().track, true));
+    replacement.source_version = 3;
+    const auto locked = workspace.apply(edit::ReplaceAssetSource{asset_id, 0, replacement, true}, revision);
+    ASSERT_EQ(locked.status, edit::CommandStatus::Rejected);
+    ASSERT_TRUE(locked.error);
+    EXPECT_EQ(locked.error->code, edit::EditErrorCode::TrackLocked);
+    EXPECT_EQ(workspace.clips(), before);
+}
+
+TEST(EditSourceReplacement, UndoProofPublicationCannotRewriteAnotherVersionOrReuseItsNumber) {
+    edit::Workspace workspace;
+    const auto asset_id = workspace.addAsset(ReplacementSource(L"provisional.mkv", 0));
+    ASSERT_TRUE(workspace.insert(asset_id));
+    auto replacement = ReplacementSource(L"replacement.mkv", 51);
+    replacement.id = asset_id;
+    replacement.source_version = 1;
+    ASSERT_EQ(workspace.apply(edit::ReplaceAssetSource{asset_id, 0, replacement, true}, workspace.revision()).status,
+              edit::CommandStatus::Applied);
+    ASSERT_TRUE(workspace.undo());
+    const auto revision = workspace.revision();
+    std::array<uint8_t, 32> observed;
+    observed.fill(61);
+    ASSERT_TRUE(workspace.establishAssetIdentity(asset_id, observed));
+    EXPECT_EQ(workspace.revision(), revision);
+    EXPECT_EQ(workspace.asset(asset_id)->source_descriptor->asset_identity_fingerprint, observed);
+    auto reused = ReplacementSource(L"other.mkv", 71);
+    reused.id = asset_id;
+    reused.source_version = 1;
+    EXPECT_FALSE(edit::PreviewEdit(*workspace.snapshot(), edit::ReplaceAssetSource{asset_id, 0, reused, true}).valid);
+    EXPECT_EQ(workspace.apply(edit::ReplaceAssetSource{asset_id, 0, reused, true}, revision).status,
+              edit::CommandStatus::Rejected);
+    ASSERT_TRUE(workspace.redo());
+    EXPECT_EQ(workspace.asset(asset_id)->source_descriptor->asset_identity_fingerprint,
+              replacement.source_descriptor->asset_identity_fingerprint);
+    EXPECT_EQ(workspace.asset(asset_id)->input_mix_selection->asset_identity_fingerprint,
+              replacement.source_descriptor->asset_identity_fingerprint);
+    ASSERT_TRUE(workspace.undo());
+    EXPECT_EQ(workspace.asset(asset_id)->source_descriptor->asset_identity_fingerprint, observed);
+    EXPECT_EQ(workspace.asset(asset_id)->input_mix_selection->asset_identity_fingerprint, observed);
+    EXPECT_EQ(workspace.snapshot()->source_version_high_watermark, 1U);
+}
+
+TEST(EditRecordedDefaultModel, VersionAndFingerprintGuardsPreserveAuthoredOverrideAndFinalizationIsIdempotent) {
+    auto source = ReplacementSource(L"recorded.mkv", 11);
+    source.source_version = 7;
+    source.mix_decision_required = true;
+    source.input_mix_selection->selected_stream_identities.clear();
+    auto descriptor = std::make_shared<edit::ValidatedSourceDescriptor>(*source.source_descriptor);
+    auto alternative = descriptor->streams.back();
+    alternative.ref.container_index = 2;
+    alternative.ref.stream_identity.bytes[0] = 99;
+    descriptor->streams.push_back(alternative);
+    source.source_descriptor = descriptor;
+    edit::Workspace workspace;
+    const auto asset = workspace.addAsset(source);
+    ASSERT_TRUE(workspace.insert(asset));
+    const auto stem = std::find_if(workspace.clips().begin(), workspace.clips().end(),
+                                   [](const auto& clip) { return clip.stream && clip.stream->container_index == 2; });
+    ASSERT_NE(stem, workspace.clips().end());
+    const auto stem_id = stem->id;
+    ASSERT_EQ(workspace.apply(edit::SetClipEnabled{stem_id, true}, workspace.revision()).status,
+              edit::CommandStatus::Applied);
+    const auto before = workspace.clips();
+    const auto revision = workspace.revision();
+    edit::InputMixSelection recorded;
+    recorded.authority = edit::InputMixAuthority::VerifiedRecordedDefault;
+    recorded.asset_identity_fingerprint = descriptor->asset_identity_fingerprint;
+    recorded.selected_stream_identities = {descriptor->streams[1].ref.stream_identity};
+    auto verified_descriptor = std::make_shared<edit::ValidatedSourceDescriptor>(*descriptor);
+    verified_descriptor->audio_identities_verified = true;
+    EXPECT_FALSE(workspace.establishRecordedDefault(asset, 6, recorded, verified_descriptor));
+    auto wrong = recorded;
+    wrong.asset_identity_fingerprint[0] ^= 1;
+    EXPECT_FALSE(workspace.establishRecordedDefault(asset, 7, wrong, verified_descriptor));
+    EXPECT_EQ(workspace.clips(), before);
+    EXPECT_EQ(workspace.revision(), revision);
+    ASSERT_TRUE(workspace.establishRecordedDefault(asset, 7, recorded, verified_descriptor));
+    EXPECT_EQ(workspace.revision(), revision);
+    EXPECT_TRUE(workspace.clip(stem_id)->enabled);
+    EXPECT_FALSE(workspace.clip(stem_id)->original_enabled);
+    const auto monitoring = workspace.monitoringRevision();
+    const auto bytes = workspace.historyBytes();
+    EXPECT_FALSE(workspace.establishRecordedDefault(asset, 7, recorded, verified_descriptor));
+    EXPECT_EQ(workspace.monitoringRevision(), monitoring);
+    EXPECT_EQ(workspace.historyBytes(), bytes);
+    ASSERT_TRUE(workspace.undo());
+    EXPECT_FALSE(workspace.clip(stem_id)->enabled);
+    EXPECT_FALSE(workspace.asset(asset)->mix_decision_required);
+    ASSERT_TRUE(workspace.redo());
+    EXPECT_TRUE(workspace.clip(stem_id)->enabled);
+    EXPECT_FALSE(workspace.clip(stem_id)->original_enabled);
+}
 } // namespace
 } // namespace exosnap

@@ -1,4 +1,5 @@
 #pragma once
+#include "models/EditTransportBounds.h"
 
 #include <QElapsedTimer>
 #include <QObject>
@@ -7,6 +8,7 @@
 #include <QStringList>
 #include <QThread>
 #include <QTimer>
+#include <QUrl>
 #include <QVariantList>
 #include <QtQmlIntegration/qqmlintegration.h>
 
@@ -14,12 +16,16 @@
 #include <exosnap/engine/edit_timeline_compositor.h>
 
 #include "models/EditWorkspace.h"
+#include <atomic>
+#include <chrono>
 #include <memory>
 #include <mutex>
+#include <set>
 
 namespace exosnap::quick {
 
 class EditPlayerWorker;
+class EditPlaybackSnapshot;
 class EditSessionAdapter;
 class ExoEditPlayerItem;
 
@@ -39,13 +45,26 @@ class EditPlayerFrameSink {
     void deliver(exosnap::engine::RawDecodedVideoFrame frame, uint64_t generation, int64_t timeline_offset_us = 0);
     void deliverTimeline(exosnap::engine::TimelineVideoFrame frame, uint64_t generation);
     uint64_t invalidate();
+    void setRevision(uint64_t generation, edit::Revision revision);
+    [[nodiscard]] std::optional<edit::Revision> outputRevision() const;
+    struct SceneGraphConsumption {
+        uint64_t request_generation = 0;
+        edit::Revision revision = 0;
+        int64_t timeline_time_us = 0;
+    };
+    [[nodiscard]] std::optional<SceneGraphConsumption> sceneGraphConsumption() const;
+    bool recordSceneGraphConsumption(uint64_t generation, edit::Revision revision, int64_t time_us);
+    void clearSceneGraphConsumption();
     void publishClock(int64_t media_time_us);
     void clear();
 
   private:
-    std::mutex mutex_;
+    mutable std::mutex mutex_;
     ExoEditPlayerItem* item_ = nullptr;
     uint64_t generation_ = 0;
+    std::optional<edit::Revision> revision_;
+    std::optional<edit::Revision> output_revision_;
+    std::optional<SceneGraphConsumption> scene_graph_consumption_;
 };
 
 // Owns the decoder session and its pacing, on a thread of its own.
@@ -61,6 +80,7 @@ class EditPlayerAdapter : public QObject {
     QML_ELEMENT
     QML_UNCREATABLE("EditPlayerAdapter is provided by the application")
 
+    Q_PROPERTY(QUrl harnessStillSource READ harnessStillSource NOTIFY harnessStillSourceChanged FINAL)
     Q_PROPERTY(bool playing READ playing NOTIFY playingChanged FINAL)
     Q_PROPERTY(PreviewState previewState READ previewState NOTIFY previewChanged FINAL)
     Q_PROPERTY(qint64 requestedTimeUs READ requestedTimeUs NOTIFY previewChanged FINAL)
@@ -74,6 +94,14 @@ class EditPlayerAdapter : public QObject {
     // playhead" from "the preview is paused", because what it draws over the
     // picture differs between the two.
     Q_PROPERTY(bool scrubbing READ scrubbing NOTIFY scrubbingChanged FINAL)
+    Q_PROPERTY(bool desiredPlaying READ desiredPlaying NOTIFY transportChanged FINAL)
+    Q_PROPERTY(bool loopEnabled READ loopEnabled WRITE setLoopEnabled NOTIFY boundsChanged FINAL)
+    Q_PROPERTY(QVariantMap loopRegion READ loopRegion NOTIFY boundsChanged FINAL)
+    Q_PROPERTY(bool rangeOnceActive READ rangeOnceActive NOTIFY boundsChanged FINAL)
+    Q_PROPERTY(QVariant requestedRevision READ requestedRevision NOTIFY previewChanged FINAL)
+    Q_PROPERTY(QVariant outputRevision READ outputRevision NOTIFY previewChanged FINAL)
+    Q_PROPERTY(QVariant sceneGraphConsumedRevision READ sceneGraphConsumedRevision NOTIFY previewChanged FINAL)
+    Q_PROPERTY(bool transportPending READ transportPending NOTIFY transportChanged FINAL)
     Q_PROPERTY(QString placeholderText READ placeholderText NOTIFY placeholderTextChanged FINAL)
     // Is the Edit workspace the surface the user is looking at? Bound by the
     // shell from the navigation state (QCR-001) -- the same shape
@@ -96,6 +124,13 @@ class EditPlayerAdapter : public QObject {
         return requested_time_us_;
     }
     QVariant presentedTimeUs() const;
+    QVariant requestedRevision() const {
+        return timeline_revision_ ? QVariant::fromValue(*timeline_revision_) : QVariant{};
+    }
+    QVariant outputRevision() const {
+        const auto revision = sink_->outputRevision();
+        return revision ? QVariant::fromValue(*revision) : QVariant{};
+    }
     bool seekPending() const {
         return seek_pending_;
     }
@@ -107,11 +142,28 @@ class EditPlayerAdapter : public QObject {
     }
 
     void setSession(EditSessionAdapter* session);
+    // Successful scene-graph render-state consumption, not a physical display timestamp.
+    [[nodiscard]] QVariant sceneGraphConsumedRevision() const {
+        const auto consumed = sink_->sceneGraphConsumption();
+        return consumed ? QVariant::fromValue(consumed->revision) : QVariant{};
+    }
+    // Returns a cached worker sample and coalesces asynchronous refreshes. Age is monotonic.
+    [[nodiscard]] QVariantMap measurementSnapshot();
+    // Cumulative time spent copying workspaces for the playback worker.
+    [[nodiscard]] qint64 workspaceCopyTimeNs() const {
+        return workspace_copy_ns_;
+    }
 
     void attachPlayerItem(ExoEditPlayerItem* item);
     void detachPlayerItem(ExoEditPlayerItem* item);
 
     [[nodiscard]] bool playing() const noexcept;
+    bool desiredPlaying() const noexcept {
+        return desired_playing_;
+    }
+    bool transportPending() const noexcept {
+        return transport_pending_;
+    }
     [[nodiscard]] bool clipOpen() const noexcept;
     [[nodiscard]] bool scrubbing() const noexcept;
     [[nodiscard]] const QString& placeholderText() const noexcept;
@@ -131,6 +183,15 @@ class EditPlayerAdapter : public QObject {
 
     Q_INVOKABLE void togglePlay();
     Q_INVOKABLE void setPlaying(bool playing);
+    bool loopEnabled() const {
+        return bounds_.loopEnabled();
+    }
+    bool rangeOnceActive() const {
+        return bounds_.onceActive();
+    }
+    QVariantMap loopRegion() const;
+    Q_INVOKABLE void setLoopEnabled(bool enabled);
+    Q_INVOKABLE void playRangeOnce();
     Q_INVOKABLE void confirmMonitoring(QStringList trackIds, bool overlapConfirmed);
     QVariantList monitoringTracks() const {
         return monitoring_tracks_;
@@ -139,8 +200,8 @@ class EditPlayerAdapter : public QObject {
         return monitoring_confirmation_required_;
     }
     void setMonitoringState(QVariantList tracks, bool confirmationRequired);
-    // Scrubbing pauses; whether it resumes on release depends on whether the
-    // preview was playing when the scrub began.
+    // Scrubbing quiesces playback without changing the requested intent.
+    // Explicit Play/Pause during the gesture determines its release behavior.
     Q_INVOKABLE void beginScrub();
     Q_INVOKABLE void endScrub();
 
@@ -150,7 +211,19 @@ class EditPlayerAdapter : public QObject {
     // Named like EditSessionAdapter::setKeyframeTimestampsForTest.
     void setClipStateForTest(bool clip_open, qint64 duration_ms);
 
+    // Synthetic composition for --visual-test, independent of the native
+    // decoder and renderer. Does not publish a native presentation timestamp.
+    void showStillForHarness(const QUrl& source, qint64 time_us, qint64 duration_ms);
+    // Static composition only; requires a detached, paused adapter. Opening and
+    // Buffering omit the still. Degraded and Failed keep any existing still.
+    void applyPreviewStateForHarness(PreviewState state, const QString& reason = {});
+    void setLoopRangeForHarness(qint64 start_us, qint64 end_us);
+    const QUrl& harnessStillSource() const {
+        return harness_still_source_;
+    }
+
   signals:
+    void harnessStillSourceChanged();
     void previewChanged();
     void playingChanged();
     void clipOpenChanged();
@@ -159,49 +232,81 @@ class EditPlayerAdapter : public QObject {
     void surfaceVisibleChanged();
     void volumeChanged();
     void monitoringChanged();
+    void transportChanged();
+    void boundsChanged();
 
   private:
     friend class EditPlayerAdapterTestPeer;
     void openClip(const QString& master_path, qint64 duration_ms);
     void closeClip();
+    void submitTimeline();
+    std::optional<edit::PlaybackInterval> activeEditRange() const;
+    void applyBoundsChange();
     void seekUs(qint64 position_us);
     void dispatchSeek();
+    void dispatchTransport(bool seek);
     void setPreviewState(PreviewState state);
     void setPlaceholderText(const QString& text);
     [[nodiscard]] double currentScreenRefreshHz() const;
+
+    struct MeasurementSample {
+        QVariantMap values;
+        std::chrono::steady_clock::time_point captured;
+        QString captured_utc;
+        uint64_t id = 0;
+        uint64_t session = 0;
+        uint64_t generation = 0;
+    };
+    std::optional<MeasurementSample> measurement_sample_;
+    std::optional<std::chrono::steady_clock::time_point> measurement_requested_at_;
+    bool measurement_pending_ = false;
+    uint64_t measurement_session_ = 1;
+    uint64_t measurement_request_id_ = 0;
+    uint64_t measurement_sample_id_ = 0;
 
     EditSessionAdapter* session_ = nullptr;
     QThread worker_thread_;
     EditPlayerWorker* worker_ = nullptr;
     std::shared_ptr<EditPlayerFrameSink> sink_ = std::make_shared<EditPlayerFrameSink>();
     QPointer<ExoEditPlayerItem> item_;
-    QString placeholder_text_ = QStringLiteral("Preview unavailable");
+    QString placeholder_text_;
     qint64 duration_ms_ = 0;
     bool playing_ = false;
     bool desired_playing_ = false;
     bool transport_pending_ = false;
     bool clip_open_ = false;
-    bool resume_after_scrub_ = false;
     bool scrubbing_ = false;
     // True until the shell says otherwise: a session that is handed a clip is
     // handed it on Record, which is the page the workspace is visible on.
     bool surface_visible_ = true;
     double volume_ = 1.0;
     std::optional<edit::Revision> timeline_revision_;
+    std::shared_ptr<const EditPlaybackSnapshot> published_snapshot_;
+    std::set<edit::Id> unavailable_sources_;
     uint64_t timeline_monitoring_revision_ = 0;
+    edit::TransportBounds bounds_;
+    qint64 workspace_copy_ns_ = 0;
+    std::shared_ptr<std::atomic<bool>> pending_timeline_current_;
+    std::shared_ptr<std::atomic<bool>> opening_cancelled_ = std::make_shared<std::atomic<bool>>(false);
     struct SeekRequest {
         qint64 time_us = 0;
         uint64_t generation = 0;
+        uint64_t command = 0;
+        bool playing = false;
     };
     std::optional<SeekRequest> pending_seek_;
     bool seek_dispatch_active_ = false;
     uint64_t request_generation_ = 0;
+    uint64_t transport_command_ = 0;
+    uint64_t monitoring_request_ = 0;
+    std::shared_ptr<std::atomic<uint64_t>> current_transport_ = std::make_shared<std::atomic<uint64_t>>(0);
     PreviewState preview_state_ = Empty;
     qint64 requested_time_us_ = 0;
     std::optional<qint64> presented_time_us_;
     bool seek_pending_ = false;
     QVariantList monitoring_tracks_;
     bool monitoring_confirmation_required_ = false;
+    QUrl harness_still_source_;
 };
 
 } // namespace exosnap::quick

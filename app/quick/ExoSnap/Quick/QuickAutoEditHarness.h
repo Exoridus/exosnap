@@ -1,32 +1,15 @@
 #pragma once
 
-// Deterministic drive loop for the Edit -> Export half of the product flow.
-//
-// Why this exists: `--auto-record` proves a recording is produced, and the
-// visual harness proves the Editor RENDERS. Neither proves the Editor WORKS —
-// that real media decodes, that seeking lands, that a trim is applied, and that
-// an export writes a file a decoder will accept. The Qt Quick cutover made that
-// gap load-bearing: the whole edit surface was reimplemented, and a
-// synthetic fixture cannot tell a working decode path from a broken one.
-//
-// What it drives: the same QObject adapters the QML binds to
-// (EditSessionAdapter, EditPlayerAdapter, EditTimelineAdapter,
-// EditExportAdapter) — the production objects, invoked through the same
-// Q_INVOKABLE entry points the QML handlers call. It therefore covers the
-// application's edit logic and the real FFmpeg decode/export path.
-//
-// What it deliberately does NOT cover: QML hit-testing. Whether a click at a
-// given pixel reaches the right button is a rendering/input question this cannot
-// answer and must not be reported as if it could. That stays a manual check.
-//
-// No synthetic input is generated and no window is activated, so a run cannot
-// collide with whatever the developer is doing (CLAUDE.md, "Coordinate before
-// driving the running application").
-//
-// Compiled only when EXOSNAP_ENABLE_AUTO_RECORD_HARNESS is defined (see
-// EXOSNAP_BUILD_BENCHMARK_HARNESS in app/CMakeLists.txt).
+// Drives productive edit adapters and media pipelines. Pointer interaction and
+// physical display/audio acceptance require separate tests.
+// Available only in harness-enabled builds.
 
+#include <QJsonObject>
 #include <QString>
+
+#include <algorithm>
+#include <cmath>
+#include <vector>
 
 class QCoreApplication;
 class QQuickWindow;
@@ -35,7 +18,29 @@ namespace exosnap::quick {
 
 class QuickApplication;
 
+// Samples are finite millisecond durations. The p99 requires at least 1,000 observations.
+[[nodiscard]] inline QJsonObject AutoEditLatencySummary(std::vector<double> samples) {
+    std::sort(samples.begin(), samples.end());
+    QJsonObject result{{QStringLiteral("samples"), static_cast<int>(samples.size())},
+                       {QStringLiteral("unit"), QStringLiteral("ms")},
+                       {QStringLiteral("method"), QStringLiteral("nearest-rank")},
+                       {QStringLiteral("minimumP99Samples"), 1000},
+                       {QStringLiteral("p99Status"),
+                        samples.size() >= 1000 ? QStringLiteral("available") : QStringLiteral("insufficient_samples")}};
+    if (!samples.empty()) {
+        result.insert(QStringLiteral("maximum"), samples.back());
+        for (const auto p : {50, 95, 99}) {
+            if (p == 99 && samples.size() < 1000)
+                continue;
+            const auto rank = static_cast<size_t>(std::ceil(p * samples.size() / 100.0));
+            result.insert(QStringLiteral("p%1").arg(p), samples.at(rank - 1));
+        }
+    }
+    return result;
+}
+
 struct AutoEditOptions {
+    bool isolated_qualification = false;
     // Media to open. Empty means "whatever the preceding --auto-record produced",
     // which is how the end-to-end flow chains without a path round-trip.
     QString media_path;

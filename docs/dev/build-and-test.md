@@ -94,6 +94,8 @@ Commit and push are not release qualification: they check the change, not the pr
 
 `cargo exo-dev verify --full` is not a release qualification and never was: it is the pre-push contract for what still runs locally. `cargo exo-dev verify --profile ci-build-debug --event <event>` (needs a Ninja-preset build tree) and the deep advisory passes in `.github/workflows/advisory-checks.yml` are the whole-tree/deep tier; they are not implied by a green push.
 
+The Debug CI sequence is configure, `all_qmllint`, build, blocking clang-tidy, then the complete CTest suite excluding the `live` label. Clang-tidy needs the compilation database and the completed build's Ninja dependencies, but does not need CTest. A blocking analysis failure stops the run before tests. A successful analysis preserves the complete configured test suite and its receipt.
+
 Build, test and receipt publication share a host lock per build directory. Independent trees do not block each other. Do not run a second unmanaged build into a tree the test runner is currently judging.
 
 Every test run writes `<BuildDir>/Testing/last-run-receipt.json`, including a failing run. `reusable` is true only when build/source identity, phase declarations, census and evidence requirements hold. A clean printed case list does not override an unusable receipt. `-NoBuild` can refuse stale binaries (exit 3); `-AllowStale` deliberately weakens that claim. Exit 4 means no usable verdict, not a passing product. Retain raw build/CTest exit codes when diagnosing the runner.

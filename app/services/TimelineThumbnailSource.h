@@ -30,6 +30,8 @@
 
 #include <exosnap/engine/edit_player_engine.h>
 
+#include "ThumbnailCache.h"
+
 namespace exosnap {
 
 // One finished tile: a frame already scaled to row height, plus the clip time
@@ -154,6 +156,11 @@ class TimelineThumbnailSource : public QObject {
     Q_OBJECT
   public:
     explicit TimelineThumbnailSource(QObject* parent = nullptr);
+    // With a broker, the worker also serves its per-tile requests and uses its
+    // disk tier for the strip of any clip whose path the broker has registered.
+    // The worker attaches on construction and detaches on destruction; requests
+    // still outstanding then complete as unavailable.
+    explicit TimelineThumbnailSource(std::shared_ptr<ThumbnailRequestBroker> broker, QObject* parent = nullptr);
     ~TimelineThumbnailSource() override;
 
     TimelineThumbnailSource(const TimelineThumbnailSource&) = delete;
@@ -174,6 +181,21 @@ class TimelineThumbnailSource : public QObject {
     // Abandons the run in flight; its remaining tiles are never emitted.
     void cancel();
 
+    // While true, no frame is decoded: strip runs and broker requests wait
+    // between frames. Cached tiles are still served. Driven by playback, export
+    // and recording so thumbnail decoding never competes with them.
+    void setForegroundBusy(bool busy);
+    void setAnalysisPressure(bool playback, bool exclusive);
+
+    [[nodiscard]] const std::shared_ptr<ThumbnailRequestBroker>& broker() const noexcept {
+        return broker_;
+    }
+    // Frames decoded by this worker since construction, for both strip runs and
+    // broker requests.
+    [[nodiscard]] std::uint64_t decodeCountForTest() const noexcept {
+        return decodes_.load(std::memory_order_relaxed);
+    }
+
     // Cancels the run in flight AND closes the clip on the worker, so the file
     // stops being held open once the Edit surface is done with it. Without this,
     // the engine keeps the container open until the process exits and the
@@ -190,6 +212,7 @@ class TimelineThumbnailSource : public QObject {
     }
 
   signals:
+    void brokerProgressChanged();
     // The worker finished opening a clip. 0x0 means it could not be opened or
     // carries no video -- the strip then simply stays empty.
     //
@@ -230,6 +253,13 @@ class TimelineThumbnailSource : public QObject {
     };
 
     void workerLoop();
+    // Serves one broker job: memory, disk, then a decode on `engine`, which is
+    // reopened when the job names another source than `engine_path`.
+    void serveBrokerJob(const ThumbnailRequestBroker::Job& job, exosnap::engine::EditPlayerEngine& engine,
+                        std::filesystem::path& engine_path, std::string& engine_identity);
+    // Blocks while foreground work is busy. False when the run was cancelled
+    // or the worker stops meanwhile.
+    bool waitForDecodeAdmission();
 
     // Cancels the run in flight and wakes the worker. Caller holds mutex_.
     void cancelLocked();
@@ -238,6 +268,7 @@ class TimelineThumbnailSource : public QObject {
     std::mutex mutex_;
     std::condition_variable cv_;
     bool stop_ = false;
+    std::atomic<bool> shutdown_cancelled_{false};
     // Close and open are mutually exclusive requests: each clears the other, so
     // the worker never has to decide which of the two came last.
     bool pending_close_ = false;
@@ -245,6 +276,10 @@ class TimelineThumbnailSource : public QObject {
     std::optional<OpenJob> pending_open_;
     std::optional<TileJob> pending_tiles_;
     std::atomic<bool> cancelled_{false};
+    bool busy_ = false;
+    bool exclusive_ = false;
+    std::shared_ptr<ThumbnailRequestBroker> broker_;
+    std::atomic<std::uint64_t> decodes_{0};
     quint64 next_run_id_ = 0;
 
     // Owner-thread mirrors of what the worker reported, so a consumer can size

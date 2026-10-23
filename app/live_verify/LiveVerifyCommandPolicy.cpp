@@ -5,6 +5,7 @@
 #include <QJsonArray>
 
 #include <algorithm>
+#include <initializer_list>
 
 namespace exosnap::live_verify {
 namespace {
@@ -204,6 +205,109 @@ PreconditionVerdict CanTimelineEnd(const AutomationState& state) {
     return RequireEditSession(state, "edit.timelineEnd");
 }
 
+// --- Edit workspace ------------------------------------------------------------
+//
+// The timeline commands read the same facts the Edit surface's buttons read:
+// an open workspace, a selection of the right kind, a history step to take. A
+// blocking surface covers the whole window, so nothing behind it is editable.
+
+PreconditionVerdict CanChangeWorkspace(const AutomationState& state) {
+    return RefuseUnderBlockingSurface(state);
+}
+
+PreconditionVerdict CanEditTimeline(const AutomationState& state) {
+    if (const PreconditionVerdict blocked = RefuseUnderBlockingSurface(state); !blocked.allowed())
+        return blocked;
+    return RequireEditSession(state, "This timeline command");
+}
+
+PreconditionVerdict CanStartEditPlayback(const AutomationState& state) {
+    if (const PreconditionVerdict open = CanEditTimeline(state); !open.allowed())
+        return open;
+    if (state.edit_monitoring_confirmation_required)
+        return Refuse(error_code::kBlocked, QStringLiteral("Confirm the monitoring selection before playback"),
+                      QStringLiteral("monitoringConfirmationRequired"), false, true);
+    if (state.edit_playback == QLatin1String("none"))
+        return Refuse(error_code::kInvalidState, QStringLiteral("The edit player has no source ready for playback"),
+                      QStringLiteral("editPlayback"), QStringLiteral("paused|playing"), state.edit_playback);
+    return Allowed();
+}
+
+PreconditionVerdict CanAppendMedia(const AutomationState& state) {
+    if (const PreconditionVerdict blocked = RefuseUnderBlockingSurface(state); !blocked.allowed())
+        return blocked;
+    if (state.edit_media_count > 0)
+        return Allowed();
+    return Refuse(error_code::kInvalidState, QStringLiteral("The Media panel holds no imported media"),
+                  QStringLiteral("mediaCount"), QStringLiteral(">0"), state.edit_media_count);
+}
+
+PreconditionVerdict CanDeleteSelection(const AutomationState& state) {
+    if (const PreconditionVerdict open = CanEditTimeline(state); !open.allowed())
+        return open;
+    if (state.edit_selected_clip != 0 || state.edit_selected_spacer != 0 || state.edit_gap_selected)
+        return Allowed();
+    return Refuse(error_code::kInvalidState, QStringLiteral("Nothing on the timeline is selected"),
+                  QStringLiteral("selection"), QStringLiteral("clip|spacer|gap"), QStringLiteral("none"));
+}
+
+PreconditionVerdict CanCloseGap(const AutomationState& state) {
+    if (const PreconditionVerdict open = CanEditTimeline(state); !open.allowed())
+        return open;
+    if (state.edit_gap_selected)
+        return Allowed();
+    return Refuse(error_code::kInvalidState, QStringLiteral("No gap is selected"), QStringLiteral("gapSelected"), true,
+                  false);
+}
+
+PreconditionVerdict CanEditTransition(const AutomationState& state) {
+    if (const PreconditionVerdict open = CanEditTimeline(state); !open.allowed())
+        return open;
+    if (state.edit_selected_transition != 0)
+        return Allowed();
+    return Refuse(error_code::kInvalidState, QStringLiteral("No transition is selected"),
+                  QStringLiteral("selectedTransition"), QStringLiteral(">0"), 0);
+}
+
+PreconditionVerdict CanUndo(const AutomationState& state) {
+    if (const PreconditionVerdict blocked = RefuseUnderBlockingSurface(state); !blocked.allowed())
+        return blocked;
+    if (state.edit_can_undo)
+        return Allowed();
+    return Refuse(error_code::kInvalidState, QStringLiteral("There is no edit to undo"), QStringLiteral("canUndo"),
+                  true, false);
+}
+
+PreconditionVerdict CanRedo(const AutomationState& state) {
+    if (const PreconditionVerdict blocked = RefuseUnderBlockingSurface(state); !blocked.allowed())
+        return blocked;
+    if (state.edit_can_redo)
+        return Allowed();
+    return Refuse(error_code::kInvalidState, QStringLiteral("There is no undone edit to redo"),
+                  QStringLiteral("canRedo"), true, false);
+}
+
+PreconditionVerdict CanConfirmMonitoring(const AutomationState& state) {
+    if (const PreconditionVerdict open = CanEditTimeline(state); !open.allowed())
+        return open;
+    if (state.edit_monitoring_track_count > 0)
+        return Allowed();
+    return Refuse(error_code::kInvalidState, QStringLiteral("The current source offers no audio tracks to monitor"),
+                  QStringLiteral("monitoringTracks"), QStringLiteral(">0"), state.edit_monitoring_track_count);
+}
+
+// The panels belong to the Edit page, which is loaded on its first visit and
+// lays them out against its own width. Asking for them from another page would
+// change a surface nobody can see.
+PreconditionVerdict CanArrangeEditPanels(const AutomationState& state) {
+    if (const PreconditionVerdict blocked = RefuseUnderBlockingSurface(state); !blocked.allowed())
+        return blocked;
+    if (state.page == QLatin1String(page_name::kEdit))
+        return Allowed();
+    return Refuse(error_code::kInvalidState, QStringLiteral("The Edit panels belong to the Edit page"),
+                  QStringLiteral("page"), Text(page_name::kEdit), state.page);
+}
+
 PreconditionVerdict CanCloseEdit(const AutomationState& state) {
     if (const PreconditionVerdict open = RequireEditSession(state, "edit.close"); !open.allowed())
         return open;
@@ -350,6 +454,32 @@ PreconditionVerdict CanCancelExport(const AutomationState& state) {
                   true, false);
 }
 
+// The options lock while a run owns them, exactly as the Details controls do.
+PreconditionVerdict CanSetExportOptions(const AutomationState& state) {
+    if (const PreconditionVerdict blocked = RefuseUnderBlockingSurface(state); !blocked.allowed())
+        return blocked;
+    if (!state.edit_export_running)
+        return Allowed();
+    return Refuse(error_code::kInvalidState, QStringLiteral("Export options cannot change while an export runs"),
+                  QStringLiteral("exportRunning"), false, true);
+}
+
+// The review dialog's two buttons. Both need the dialog, which is the planned
+// outcome waiting for an answer.
+PreconditionVerdict CanAnswerExportReview(const AutomationState& state) {
+    if (state.edit_export_state == QLatin1String("review"))
+        return Allowed();
+    return Refuse(error_code::kInvalidState, QStringLiteral("No export outcome is waiting for review"),
+                  QStringLiteral("exportState"), QStringLiteral("review"), state.edit_export_state);
+}
+
+PreconditionVerdict CanResetExport(const AutomationState& state) {
+    if (state.edit_export_state == QLatin1String("completed") || state.edit_export_state == QLatin1String("failed"))
+        return Allowed();
+    return Refuse(error_code::kInvalidState, QStringLiteral("Only a finished or failed export can be reset"),
+                  QStringLiteral("exportState"), QStringLiteral("completed|failed"), state.edit_export_state);
+}
+
 // --- Blocking surfaces --------------------------------------------------------
 //
 // The inverse of every other precondition in this file: these commands are the
@@ -425,6 +555,20 @@ const QStringList& ScrollSurfaceValues() {
 
 CommandParameter Param(const char* name, const char* type, bool required, QStringList values = {}) {
     return CommandParameter{Text(name), Text(type), required, std::move(values)};
+}
+
+QStringList Values(std::initializer_list<const char*> names) {
+    QStringList values;
+    for (const char* name : names)
+        values.append(Text(name));
+    return values;
+}
+
+// Every timeline mutation accepts the model revision the caller last read. A
+// mismatch is refused before the edit runs, so a runner never applies an edit
+// to a timeline it has not seen.
+CommandParameter ExpectedRevision() {
+    return Param("expectedRevision", "int", false);
 }
 
 } // namespace
@@ -589,7 +733,9 @@ const QVector<CommandDescriptor>& AllCommands() {
          &CanScroll},
 
         // --- Edit --------------------------------------------------------------
-        {QStringLiteral("edit.open"), 2, true, true, Settle::Synchronous, {}, &CanOpenEdit},
+        // Adds the completed recording to the workspace. Its streams are probed
+        // off the GUI thread first, so the clips arrive after the answer.
+        {QStringLiteral("edit.open"), 2, true, true, Settle::Asynchronous, {}, &CanOpenEdit},
         // The one deliberately non-idempotent command in the set: it toggles, so
         // sending it twice is two different requests, and ipc.describe says so.
         {QStringLiteral("edit.playPause"), 2, true, false, Settle::Synchronous, {}, &CanPlayPause},
@@ -611,6 +757,203 @@ const QVector<CommandDescriptor>& AllCommands() {
         {QStringLiteral("edit.timelineHome"), 2, true, true, Settle::Synchronous, {}, &CanTimelineHome},
         {QStringLiteral("edit.timelineEnd"), 2, true, true, Settle::Synchronous, {}, &CanTimelineEnd},
         {QStringLiteral("edit.close"), 2, true, true, Settle::Synchronous, {}, &CanCloseEdit},
+
+        // --- Edit workspace ------------------------------------------------------
+        // Imports probe their sources off the GUI thread; the media list and the
+        // import-pending flag in ui.getState are the completion.
+        {QStringLiteral("edit.importMedia"),
+         2,
+         true,
+         false,
+         Settle::Asynchronous,
+         {Param("path", "string", true), Param("append", "bool", false), Param("atMs", "int", false)},
+         &CanChangeWorkspace},
+        {QStringLiteral("edit.appendRecording"),
+         2,
+         true,
+         false,
+         Settle::Asynchronous,
+         {Param("path", "string", true), Param("atMs", "int", false)},
+         &CanChangeWorkspace},
+        {QStringLiteral("edit.appendMedia"),
+         2,
+         true,
+         false,
+         Settle::Synchronous,
+         {Param("mediaId", "int", true), Param("atMs", "int", false), ExpectedRevision()},
+         &CanAppendMedia},
+        {QStringLiteral("edit.selectClip"),
+         2,
+         true,
+         true,
+         Settle::Synchronous,
+         {Param("clipId", "int", true)},
+         &CanEditTimeline},
+        {QStringLiteral("edit.selectTransition"),
+         2,
+         true,
+         true,
+         Settle::Synchronous,
+         {Param("clipId", "int", true)},
+         &CanEditTimeline},
+        {QStringLiteral("edit.selectGap"),
+         2,
+         true,
+         true,
+         Settle::Synchronous,
+         {Param("trackId", "int", true), Param("atMs", "int", true)},
+         &CanEditTimeline},
+        {QStringLiteral("edit.moveClip"),
+         2,
+         true,
+         true,
+         Settle::Synchronous,
+         {Param("clipId", "int", true), Param("atMs", "int", true), Param("snap", "bool", false), ExpectedRevision()},
+         &CanEditTimeline},
+        {QStringLiteral("edit.trimClip"),
+         2,
+         true,
+         true,
+         Settle::Synchronous,
+         {Param("clipId", "int", true), Param("inMs", "int", true), Param("outMs", "int", true), ExpectedRevision()},
+         &CanEditTimeline},
+        // Split, delete and the history steps act on what is there now, so a
+        // second identical request is a second edit.
+        {QStringLiteral("edit.split"), 2, true, false, Settle::Synchronous, {ExpectedRevision()}, &CanEditTimeline},
+        {QStringLiteral("edit.delete"),
+         2,
+         true,
+         false,
+         Settle::Synchronous,
+         {Param("ripple", "bool", false), ExpectedRevision()},
+         &CanDeleteSelection},
+        {QStringLiteral("edit.closeGap"), 2, true, false, Settle::Synchronous, {ExpectedRevision()}, &CanCloseGap},
+        {QStringLiteral("edit.deleteTrack"),
+         2,
+         true,
+         false,
+         Settle::Synchronous,
+         {Param("trackId", "int", true), Param("confirmed", "bool", false), ExpectedRevision()},
+         &CanEditTimeline},
+        {QStringLiteral("edit.undo"), 2, true, false, Settle::Synchronous, {ExpectedRevision()}, &CanUndo},
+        {QStringLiteral("edit.redo"), 2, true, false, Settle::Synchronous, {ExpectedRevision()}, &CanRedo},
+        {QStringLiteral("edit.applyCrossfade"),
+         2,
+         true,
+         false,
+         Settle::Synchronous,
+         {Param("clipId", "int", false), Param("durationMs", "int", false), ExpectedRevision()},
+         &CanEditTimeline},
+        {QStringLiteral("edit.removeTransition"),
+         2,
+         true,
+         false,
+         Settle::Synchronous,
+         {ExpectedRevision()},
+         &CanEditTransition},
+        {QStringLiteral("edit.setJunctionWindow"),
+         2,
+         true,
+         true,
+         Settle::Synchronous,
+         {Param("startMs", "int", true), Param("endMs", "int", true), ExpectedRevision()},
+         &CanEditTransition},
+        {QStringLiteral("edit.setJunctionCurve"),
+         2,
+         true,
+         true,
+         Settle::Synchronous,
+         {Param("curve", "enum", true, Values({"linear", "smooth", "bias"})), Param("bias", "any", false),
+          ExpectedRevision()},
+         &CanEditTransition},
+        {QStringLiteral("edit.setJunctionAudioLaw"),
+         2,
+         true,
+         true,
+         Settle::Synchronous,
+         {Param("law", "enum", true, Values({"equalGain", "equalPower"})), ExpectedRevision()},
+         &CanEditTransition},
+        {QStringLiteral("edit.setJunctionCut"),
+         2,
+         true,
+         true,
+         Settle::Synchronous,
+         {Param("atMs", "int", true), ExpectedRevision()},
+         &CanEditTransition},
+        {QStringLiteral("edit.setClipFade"),
+         2,
+         true,
+         true,
+         Settle::Synchronous,
+         {Param("clipId", "int", true), Param("edge", "enum", true, Values({"in", "out"})),
+          Param("durationMs", "int", true), ExpectedRevision()},
+         &CanEditTimeline},
+        {QStringLiteral("edit.setFixedTimelineEnd"),
+         2,
+         true,
+         true,
+         Settle::Synchronous,
+         {Param("fixed", "bool", true), Param("endMs", "int", false), ExpectedRevision()},
+         &CanEditTimeline},
+        {QStringLiteral("edit.setOption"),
+         2,
+         true,
+         true,
+         Settle::Synchronous,
+         {Param("option", "enum", true, Values({"snapping", "ripple", "autoCrossfade", "linkedSelection"})),
+          Param("enabled", "bool", true)},
+         &CanChangeWorkspace},
+        {QStringLiteral("edit.setSelectionBoundary"),
+         2,
+         true,
+         true,
+         Settle::Synchronous,
+         {Param("boundary", "enum", true, Values({"in", "out"}))},
+         &CanEditTimeline},
+
+        // --- Edit playback and monitoring ------------------------------------------
+        // Play and pause name the state they want, unlike edit.playPause; the
+        // player confirms from its worker thread, so both settle on editPlayback.
+        {QStringLiteral("edit.play"), 2, true, true, Settle::Asynchronous, {}, &CanStartEditPlayback},
+        {QStringLiteral("edit.pause"), 2, true, true, Settle::Asynchronous, {}, &CanEditTimeline},
+        {QStringLiteral("edit.frameStep"),
+         2,
+         true,
+         false,
+         Settle::Synchronous,
+         {Param("direction", "enum", true, Values({"previous", "next"}))},
+         &CanEditTimeline},
+        {QStringLiteral("edit.setVolume"),
+         2,
+         true,
+         true,
+         Settle::Synchronous,
+         {Param("volume", "any", true)},
+         &CanChangeWorkspace},
+        {QStringLiteral("edit.confirmMonitoring"),
+         2,
+         true,
+         true,
+         Settle::Asynchronous,
+         {Param("trackIds", "any", true), Param("overlapConfirmed", "bool", false)},
+         &CanConfirmMonitoring},
+
+        // --- Edit panels -----------------------------------------------------------
+        {QStringLiteral("edit.setPanel"),
+         2,
+         true,
+         true,
+         Settle::Synchronous,
+         {Param("panel", "enum", true, Values({"media", "details"})), Param("open", "bool", true),
+          Param("pinned", "bool", false)},
+         &CanArrangeEditPanels},
+        {QStringLiteral("edit.setSourceTab"),
+         2,
+         true,
+         true,
+         Settle::Synchronous,
+         {Param("tab", "enum", true, Values({"history", "media", "transitions"}))},
+         &CanArrangeEditPanels},
 
         // --- Popups ------------------------------------------------------------
         {QStringLiteral("sourcePicker.open"), 2, true, true, Settle::Synchronous, {}, &CanOpenSourcePicker},
@@ -742,8 +1085,23 @@ const QVector<CommandDescriptor>& AllCommands() {
         {QStringLiteral("profiles.delete"), 2, true, true, Settle::Synchronous, {}, &CanDeleteProfile},
 
         // --- Export --------------------------------------------------------------
+        // export.start plans the export and stops at the review the Export
+        // button opens; export.confirm is that dialog's Export button.
         {QStringLiteral("export.start"), 2, true, true, Settle::Asynchronous, {}, &CanStartExport},
         {QStringLiteral("export.cancel"), 2, true, true, Settle::Asynchronous, {}, &CanCancelExport},
+        {QStringLiteral("export.setOptions"),
+         2,
+         true,
+         true,
+         Settle::Synchronous,
+         {Param("profile", "enum", false, Values({"match"})),
+          Param("mode", "enum", false, Values({"finishedStereo", "originalStreams"})),
+          Param("span", "enum", false, Values({"entire", "occupied", "result", "time", "selected"})),
+          Param("container", "enum", false, Values({"mkv", "mp4"}))},
+         &CanSetExportOptions},
+        {QStringLiteral("export.confirm"), 2, true, true, Settle::Asynchronous, {}, &CanAnswerExportReview},
+        {QStringLiteral("export.discard"), 2, true, true, Settle::Synchronous, {}, &CanAnswerExportReview},
+        {QStringLiteral("export.reset"), 2, true, true, Settle::Synchronous, {}, &CanResetExport},
 
         // --- Diagnostics and logs ------------------------------------------------
         {QStringLiteral("diagnostics.run"), 2, true, true, Settle::Asynchronous, {}, &CanRunDiagnostics},
@@ -848,6 +1206,44 @@ QJsonObject StateToJson(const AutomationState& state, std::uint64_t state_revisi
                 state.source_picker_open ? QStringLiteral("open") : QStringLiteral("closed"));
     json.insert(QStringLiteral("notificationHub"),
                 state.notification_hub_open ? QStringLiteral("open") : QStringLiteral("closed"));
+
+    QJsonObject editor;
+    editor.insert(QStringLiteral("workspaceRevision"), static_cast<double>(state.edit_workspace_revision));
+    editor.insert(QStringLiteral("mediaCount"), state.edit_media_count);
+    editor.insert(QStringLiteral("clipCount"), state.edit_clip_count);
+    editor.insert(QStringLiteral("trackCount"), state.edit_track_count);
+    editor.insert(QStringLiteral("selectedClip"), static_cast<double>(state.edit_selected_clip));
+    editor.insert(QStringLiteral("selectedTransition"), static_cast<double>(state.edit_selected_transition));
+    editor.insert(QStringLiteral("selectedSpacer"), static_cast<double>(state.edit_selected_spacer));
+    editor.insert(QStringLiteral("gapSelected"), state.edit_gap_selected);
+    editor.insert(QStringLiteral("canUndo"), state.edit_can_undo);
+    editor.insert(QStringLiteral("canRedo"), state.edit_can_redo);
+    editor.insert(QStringLiteral("importPending"), state.edit_import_pending);
+    editor.insert(QStringLiteral("workspaceError"), state.edit_workspace_error.isEmpty()
+                                                        ? QJsonValue(QJsonValue::Null)
+                                                        : QJsonValue(state.edit_workspace_error));
+    QJsonObject options;
+    options.insert(QStringLiteral("snapping"), state.edit_snapping);
+    options.insert(QStringLiteral("ripple"), state.edit_ripple);
+    options.insert(QStringLiteral("autoCrossfade"), state.edit_auto_crossfade);
+    options.insert(QStringLiteral("linkedSelection"), state.edit_linked_selection);
+    editor.insert(QStringLiteral("options"), options);
+    QJsonObject monitoring;
+    monitoring.insert(QStringLiteral("trackCount"), state.edit_monitoring_track_count);
+    monitoring.insert(QStringLiteral("confirmationRequired"), state.edit_monitoring_confirmation_required);
+    editor.insert(QStringLiteral("monitoring"), monitoring);
+    QJsonObject panels;
+    QJsonObject media_panel;
+    media_panel.insert(QStringLiteral("state"), state.edit_media_panel);
+    media_panel.insert(QStringLiteral("canPin"), state.edit_media_panel_can_pin);
+    QJsonObject details_panel;
+    details_panel.insert(QStringLiteral("state"), state.edit_details_panel);
+    details_panel.insert(QStringLiteral("canPin"), state.edit_details_panel_can_pin);
+    panels.insert(QStringLiteral("media"), media_panel);
+    panels.insert(QStringLiteral("details"), details_panel);
+    panels.insert(QStringLiteral("sourceTab"), state.edit_source_tab);
+    editor.insert(QStringLiteral("panels"), panels);
+    json.insert(QStringLiteral("editor"), editor);
 
     QJsonObject source;
     source.insert(QStringLiteral("name"), state.selected_source_name);

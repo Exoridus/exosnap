@@ -666,6 +666,7 @@ fn cppcheck_arguments() -> Vec<String> {
         "--suppressions-list=.cppcheck-suppress",
         "--library=windows",
         "--library=qt",
+        "-DQ_MOC_INCLUDE(x)=",
         "-q",
         "-I",
         "libs/engine/include",

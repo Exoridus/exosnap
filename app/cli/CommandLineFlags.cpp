@@ -46,6 +46,7 @@ constexpr std::array kFlags = {
 
     // --- app/quick/ExoSnap/Quick/QuickAutoEditHarness.cpp ---
     KnownFlag{"--auto-edit", FlagArity::None},
+    KnownFlag{"--auto-edit-qualify", FlagArity::None},
     KnownFlag{"--auto-edit-media", FlagArity::Value},
     KnownFlag{"--auto-edit-add-media", FlagArity::Value},
     KnownFlag{"--auto-edit-report", FlagArity::Value},
@@ -87,6 +88,7 @@ constexpr std::array kFlags = {
     KnownFlag{"--visual-live-preview", FlagArity::None},
     KnownFlag{"--visual-full-page", FlagArity::None},
     KnownFlag{"--visual-expand-all", FlagArity::None},
+    KnownFlag{"--visual-collapse-all", FlagArity::None},
     KnownFlag{"--record-visual-state", FlagArity::Value},
     KnownFlag{"--record-visual-menu", FlagArity::None},
     KnownFlag{"--overlay-visual-state", FlagArity::Value},

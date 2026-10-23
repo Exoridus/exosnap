@@ -131,6 +131,42 @@ class QuickLiveVerifySource final : public QObject, public live_verify::LiveVeri
 
     bool ExportStart(QString* error) override;
     bool ExportCancel(QString* error) override;
+    bool ExportSetOptions(const QJsonObject& options, QString* error) override;
+    bool ExportConfirm(QString* error) override;
+    bool ExportDiscard(QString* error) override;
+    bool ExportReset(QString* error) override;
+
+    [[nodiscard]] EditOutcome LastEditOutcome() const override;
+    EditIntent EditImportMedia(const QString& path, bool append, qint64 at_ms, QString* error) override;
+    EditIntent EditAppendRecording(const QString& path, qint64 at_ms, QString* error) override;
+    EditIntent EditAppendMedia(quint64 media_id, qint64 at_ms, QString* error) override;
+    EditIntent EditSelectClip(quint64 clip_id, QString* error) override;
+    EditIntent EditSelectTransition(quint64 outgoing_clip_id, QString* error) override;
+    EditIntent EditSelectGap(quint64 track_id, qint64 at_ms, QString* error) override;
+    EditIntent EditMoveClip(quint64 clip_id, qint64 at_ms, bool snap, QString* error) override;
+    EditIntent EditTrimClip(quint64 clip_id, qint64 in_ms, qint64 out_ms, QString* error) override;
+    EditIntent EditSplit(QString* error) override;
+    EditIntent EditDelete(bool ripple, QString* error) override;
+    EditIntent EditCloseGap(QString* error) override;
+    EditIntent EditDeleteTrack(quint64 track_id, bool confirmed, QString* error) override;
+    EditIntent EditUndo(QString* error) override;
+    EditIntent EditRedo(QString* error) override;
+    EditIntent EditApplyCrossfade(quint64 clip_id, qint64 duration_ms, QString* error) override;
+    EditIntent EditRemoveTransition(QString* error) override;
+    EditIntent EditSetJunctionWindow(qint64 start_ms, qint64 end_ms, QString* error) override;
+    EditIntent EditSetJunctionCurve(const QString& curve, double bias, QString* error) override;
+    EditIntent EditSetJunctionAudioLaw(const QString& law, QString* error) override;
+    EditIntent EditSetJunctionCut(qint64 at_ms, QString* error) override;
+    EditIntent EditSetClipFade(quint64 clip_id, bool incoming, qint64 duration_ms, QString* error) override;
+    EditIntent EditSetFixedTimelineEnd(bool fixed, qint64 end_ms, QString* error) override;
+    EditIntent EditSetOption(const QString& option, bool enabled, QString* error) override;
+    EditIntent EditSetSelectionBoundary(bool out, QString* error) override;
+    EditIntent EditSetPlaying(bool playing, QString* error) override;
+    EditIntent EditFrameStep(int direction, QString* error) override;
+    EditIntent EditSetVolume(double volume, QString* error) override;
+    EditIntent EditConfirmMonitoring(const QStringList& track_ids, bool overlap_confirmed, QString* error) override;
+    EditIntent EditSetPanel(const QString& panel, bool open, bool pinned, QString* error) override;
+    EditIntent EditSetSourceTab(const QString& tab, QString* error) override;
 
     bool Navigate(const QString& page, QString* error) override;
     [[nodiscard]] RevealOutcome Reveal(const QString& surface, const QString& target, QString* error) override;

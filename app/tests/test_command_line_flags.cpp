@@ -63,6 +63,13 @@ TEST(CommandLineFlags, CombinedAutoRecordAndAutoEditIsAccepted) {
         << error.toStdString();
 }
 
+TEST(CommandLineFlags, IsolatedEditorQualificationIsAccepted) {
+    QString error;
+    EXPECT_TRUE(ValidateCommandLine(
+        Cmd({"--auto-edit-qualify", "--auto-edit-media", "clip.mkv", "--auto-edit-report", "report.json"}), &error))
+        << error.toStdString();
+}
+
 TEST(CommandLineFlags, HarnessAndServiceInvocationsAreAccepted) {
     QString error;
     EXPECT_TRUE(ValidateCommandLine(Cmd({"--visual-test", "out.png", "--visual-page", "1", "--visual-test-size",
@@ -78,6 +85,11 @@ TEST(CommandLineFlags, HarnessAndServiceInvocationsAreAccepted) {
 
 // Qt's own options are single-dash and consumed by QGuiApplication. Rejecting
 // them here would break every offscreen test run.
+TEST(CommandLineFlags, CollapsedVisualCaptureIsAccepted) {
+    QString error;
+    EXPECT_TRUE(ValidateCommandLine(Cmd({"--visual-test", "shot.png", "--visual-collapse-all"}), &error))
+        << error.toStdString();
+}
 TEST(CommandLineFlags, QtSingleDashOptionsArePassedThrough) {
     QString error;
     EXPECT_TRUE(

@@ -9,6 +9,7 @@
 
 #include <algorithm>
 #include <array>
+#include <atomic>
 #include <cerrno>
 #include <cstdint>
 #include <gtest/gtest.h>
@@ -27,6 +28,7 @@ extern "C" {
 #include <libavutil/mathematics.h>
 }
 
+#include "exosnap/engine/audio_media_manifest.h"
 #include "exosnap/engine/mp4_remuxer.h"
 #include "matroska_packet_timestamps.h"
 #include "matroska_stream_writer.h"
@@ -469,6 +471,65 @@ TEST_F(TrimTest, ExtractKeyframesReturnsNonEmpty) {
 TEST_F(TrimTest, ExtractKeyframesBadInput) {
     const auto kfs = ExtractKeyframeTimestamps("/nonexistent_xyz_exosnap_trim_input.mkv");
     EXPECT_TRUE(kfs.empty()) << "Expected empty vector for bad input path";
+}
+
+TEST_F(TrimTest, CapabilityKeyframeScanHonorsCancellationAndAdmissionBeforeReading) {
+    ASSERT_FALSE(BuildTrimMkv(src_, 6.0, 60).empty());
+    const auto acquired = exosnap::engine::AcquireMediaReadCapability(src_);
+    ASSERT_TRUE(acquired.succeeded());
+    const auto source = *acquired.value();
+    std::atomic<bool> cancelled{true};
+    int admissions = 0;
+    EXPECT_TRUE(ExtractKeyframeTimestamps(
+                    source,
+                    [&](auto, const auto*) {
+                        ++admissions;
+                        return true;
+                    },
+                    &cancelled)
+                    .empty());
+    EXPECT_EQ(admissions, 0);
+    cancelled = false;
+    EXPECT_TRUE(ExtractKeyframeTimestamps(
+                    source,
+                    [&](auto, const auto*) {
+                        ++admissions;
+                        return false;
+                    },
+                    &cancelled)
+                    .empty());
+    EXPECT_GT(admissions, 0);
+    EXPECT_EQ(source->Measurements().hash_starts, 0u);
+}
+
+TEST_F(TrimTest, CapabilityKeyframeScanUsesTheAdmittedReaderWithoutContentHashing) {
+    ASSERT_FALSE(BuildTrimMkv(src_, 6.0, 60).empty());
+    const auto expected = ExtractKeyframeTimestamps(src_);
+    ASSERT_GE(expected.size(), 2u);
+    const auto acquired = exosnap::engine::AcquireMediaReadCapability(src_);
+    ASSERT_TRUE(acquired.succeeded());
+    const auto source = *acquired.value();
+    const auto retired = std::filesystem::path(src_).concat(".retired");
+    struct Cleanup {
+        std::filesystem::path path;
+        ~Cleanup() {
+            std::error_code error;
+            std::filesystem::remove(path, error);
+        }
+    } cleanup{retired};
+    std::error_code replacement_error;
+    std::filesystem::rename(src_, retired, replacement_error);
+    if (!replacement_error)
+        ASSERT_FALSE(BuildTrimMkv(src_, 2.0, 60).empty());
+    int admissions = 0;
+    EXPECT_EQ(ExtractKeyframeTimestamps(source,
+                                        [&](auto, const auto*) {
+                                            ++admissions;
+                                            return true;
+                                        }),
+              expected);
+    EXPECT_GT(admissions, 0);
+    EXPECT_EQ(source->Measurements().hash_starts, 0u);
 }
 
 // --- No-trim pass: TrimRange{} (both kNoTimestamp) produces valid output ---

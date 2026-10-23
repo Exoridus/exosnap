@@ -82,6 +82,41 @@ capture the operator's other display locally.
 
 ## Application surfaces
 
+Timeline mutation commands accept an optional `expectedRevision` from `editor.snapshot`. A mismatch is refused before dispatch. Their response includes an `edit` object with `attempted`, `changed`, `revisionBefore` and `revisionAfter`, beside the resulting editor snapshot. A successful no-op is distinguishable from a revision change. Use the command schema from `system.capabilities` for the exact parameters this binary accepts.
+
+The `edit.timeline-semantic` preflight scenario launches the product offscreen, generates real media with FFmpeg, exercises edits and revision refusal through this endpoint, then confirms and independently decodes the export. It requires D3D11 and NVENC. It establishes semantic and media-output behavior, not native pointer, focus, physical display or audible synchronization acceptance.
+
+`exo-verify edit-reference --manifest <json> --product <installed-layout> --out <fresh-directory>` is an opt-in whole-source export check for externally frozen compact references. It is not part of default preflight. Missing files, mismatched hashes and malformed references stop before product launch. Use `--manifest <json> --validate-only` to check the inputs without launching the product or creating output. The command uses the ordinary offscreen control endpoint and export review, retains observations in `result.json` and per-case tool logs, and prints only a summary. The retained output envelope is at most 32 MiB. No ten-minute raw PCM is produced.
+
+The strict JSON schema is `exosnap.edit-reference/1`. Paths resolve relative to the manifest; every source and CSV oracle must have an explicit SHA-256. IDs contain only ASCII letters, digits, hyphens and underscores. A manifest contains one to nine cases, each with `id`, `source`, `source_sha256`, `oracle`, `oracle_sha256` and `expect`, plus the top-level `schema`, `max_output_bytes` and `cases`. Freeze all detector values before observing product output. An audio expectation has this shape:
+
+```json
+{
+  "kind": "audio",
+  "source_rate": 48000,
+  "source_channels": 1,
+  "source_frames": 192000,
+  "output_rate": 48000,
+  "output_channels": 2,
+  "channel_map": [0, 0],
+  "channel_gain": [1, 1],
+  "detector": {
+    "window_samples": 32,
+    "peak_offset_samples": 2,
+    "sum_relative_tolerance": 0.1,
+    "peak_min_ratio": 0.3,
+    "peak_max_ratio": 1.2,
+    "quiet_pcm24": 256
+  }
+}
+```
+
+Audio references are four seconds of mono or stereo PCM at 44.1, 48 or 96 kHz. The event CSV header is `channel,sample_index,pcm_s16`. Finished stereo uses an explicit expected channel map: typed timeline mono duplicates at unity gain, while stereo maps its two channels separately. At 48 kHz the oracle checks every output sample against the PCM24 full-scale quantizer. At other rates it checks declared interior impulse timing, signed area, peak bounds and unrelated silence; truncated edge-filter responses are excluded from the area/peak check. These resampling checks are not bit-exact agreement between different resamplers.
+
+A video expectation contains `kind: "video"`, `output_fps_num`, `output_fps_den`, `pts_tolerance_us`, `barcode_threshold` and `allowed_paths` (`["Copy"]` for a bounded whole-source run). Its CSV header is `frame_id,pts_ticks,duration_ticks,time_base_num,time_base_den,barcode_lsb_first`. The compact counter source is video-only 320x180, with ten LSB-first barcode cells on row 20. Known contiguous source intervals define the expected frame identities and duration independently. Output timestamps and decoded barcodes are checked; rounded nominal frame-rate labels are insufficient.
+
+Review path `Copy` is recorded as copy/export coverage, not evaluator or preview proof. A video `Render` plan is refused before confirmation because the current review does not expose a bitrate/geometry bound. Audio exports must decode as 48 kHz stereo PCM24. This command establishes neither native presentation, physical audio latency, RS-1 performance nor complete editor qualification.
+
 | Surface | Use |
 |---|---|
 | `system.hello`, `system.capabilities`, `system.snapshot` | Process identity, exact surface and display/environment facts |
@@ -94,6 +129,13 @@ capture the operator's other display locally.
 | `audio.routing.snapshot`, `audio.routing.addTrack`, `audio.routing.assignSource`, `audio.routing.setTrackRecordEnabled` | The existing audio routing adapter exposes observed track IDs, recording flags and revision. Writes require the observed revision and use the same persistence path as the profile inspector. Assignment mode 0 moves a source and mode 1 adds its route to another track. Disable recording tracks here for silent fixtures; legacy source-row flags do not configure an Audio1 graph |
 | `ui.navigate`, `ui.reveal`, `ui.scrollHome`, `ui.scrollEnd` | Guarded navigation and actual visibility/scroll postconditions |
 | `edit.open`, `edit.playPause/seek/setTrimIn/setTrimOut/timelineHome/timelineEnd/close` | Existing edit session operations; only open creates a session |
+| `editor.snapshot` | Workspace revision, media, tracks, clips, junctions, selection, options, preview readiness, playback, monitoring, panels and export state |
+| `edit.importMedia`, `edit.appendRecording`, `edit.appendMedia` | Probe/import or append through the editor adapters. Import completion is asynchronous and observable through `importPending` and the media/workspace state |
+| `edit.selectClip/selectTransition/selectGap`, `edit.moveClip/trimClip/split/delete/closeGap/deleteTrack`, `edit.undo/redo` | Selection and transactional timeline commands. Ripple deletion of a selected gap or Spacer commits its close-gap preview |
+| `edit.applyCrossfade/removeTransition/setJunctionWindow/setJunctionCurve/setJunctionAudioLaw/setJunctionCut/setClipFade` | Shared junction and fade controls, including the same overlap admission rules as the editor |
+| `edit.setOption/setFixedTimelineEnd/setSelectionBoundary` | Editor options, fixed timeline end and export selection boundaries |
+| `edit.play/pause/frameStep/setVolume/confirmMonitoring`, `edit.setPanel/setSourceTab` | Explicit transport, monitoring and page controls. Playback waits for monitoring confirmation. Panel snapshots report the page's actual overlay/pin decision |
+| `export.setOptions/start/confirm/discard/reset/cancel` | Export options and the review lifecycle. `export.start` prepares the review; `export.confirm` accepts it and starts the worker |
 | `sourcePicker.open/close`, `notificationHub.open/close`, `notification.clearAll` | Application popups and hub state |
 | `diagnostics.snapshot`, `diagnostics.setInDepth` | Measured diagnostic state and the session-scoped in-depth switch |
 | `settings.*`, `pipeline.*`, `notifications.*`, other discovered surfaces | Use the schema/allowlist returned by this build; fixture paths must match emitted data |

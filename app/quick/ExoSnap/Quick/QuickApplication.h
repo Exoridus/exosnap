@@ -65,6 +65,7 @@
 #include <QPointer>
 #include <QQmlApplicationEngine>
 #include <QStringList>
+#include <QTemporaryDir>
 #include <QThreadPool>
 #include <QTimer>
 
@@ -93,6 +94,11 @@ class QuickApplication {
     QuickApplication& operator=(const QuickApplication&) = delete;
 
     [[nodiscard]] bool load(bool no_activate = false);
+    // Applies a visual fixture after the deferred Edit page is ready.
+    bool applyEditVisualLayout();
+    [[nodiscard]] const QString& editVisualScenarioError() const noexcept {
+        return edit_visual_error_;
+    }
     [[nodiscard]] AboutViewModelAdapter* aboutViewModel() noexcept;
     [[nodiscard]] RecordPreviewAdapter* recordPreviewAdapter() noexcept;
     [[nodiscard]] RecordViewModelAdapter* recordViewModelAdapter() noexcept;
@@ -255,6 +261,8 @@ class QuickApplication {
     // on, which is what makes the QApplication + QSystemTrayIcon startup path
     // automatically covered instead of only provable by hand.
     void applyTraySuppression(bool suppressed);
+    // Before load: suppress capture preview, native hooks and audible edit playback.
+    void applyIsolatedEditHarness();
 
     // The dev feed override (--update-base-url) and, when this process is itself
     // under a control channel, the run id the updater child is to be given.
@@ -551,6 +559,13 @@ class QuickApplication {
     // there being a real recording on this machine. Never creates or drives a
     // window, and never starts a real export.
     void applyEditVisualScenario();
+    std::unique_ptr<QTemporaryDir> edit_visual_directory_;
+    QVariantMap edit_visual_layout_;
+    bool edit_visual_layout_applied_ = false;
+    QString edit_visual_scenario_;
+    QString edit_visual_error_;
+    QString edit_visual_replacement_;
+    bool edit_visual_source_started_ = false;
     void wireSettingsCommands();
     // Mirrors a Settings edit into the live config, the recording side, and disk.
     void applySettingsConfigEdit();
@@ -808,6 +823,7 @@ class QuickApplication {
     // Verification reinstall, argv-armed for this run only; never persisted.
     bool verify_update_reinstall_ = false;
     bool tray_suppressed_ = false;
+    bool isolated_edit_harness_ = false;
     // Harness only. Empty unless the corresponding CLI option was given.
     QString pending_record_visual_state_;
     QString pending_overlay_visual_state_;

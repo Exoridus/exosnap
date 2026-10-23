@@ -340,6 +340,10 @@ QVariant ExoEditPlayerItem::presentedTimeUs() const {
     return presented_time_us_ ? QVariant::fromValue<qint64>(*presented_time_us_) : QVariant{};
 }
 
+QVariant ExoEditPlayerItem::sceneGraphConsumedRevision() const {
+    return presented_presentation_ ? QVariant::fromValue(presented_presentation_->revision) : QVariant{};
+}
+
 void ExoEditPlayerItem::scheduleUpdate() {
     if (update_pending_.exchange(true, std::memory_order_acq_rel))
         return;
@@ -357,7 +361,8 @@ void ExoEditPlayerItem::presentFrame(exosnap::engine::RawDecodedVideoFrame frame
     presentFrame(std::move(frame), timeline_time_us);
 }
 
-void ExoEditPlayerItem::presentFrame(exosnap::engine::RawDecodedVideoFrame frame, int64_t timeline_time_us) {
+void ExoEditPlayerItem::presentFrame(exosnap::engine::RawDecodedVideoFrame frame, int64_t timeline_time_us,
+                                     std::optional<EditFramePresentation> presentation) {
     // Present-gate, ahead of any GPU work: the playback clock has already passed
     // this frame's own timestamp, so drawing it would show the past.
     const int64_t clock = clock_us_.load(std::memory_order_relaxed);
@@ -373,6 +378,7 @@ void ExoEditPlayerItem::presentFrame(exosnap::engine::RawDecodedVideoFrame frame
         pending_.frame = std::move(frame);
         pending_.timeline.reset();
         pending_.timeline_time_us = timeline_time_us;
+        pending_.presentation = presentation;
         pending_.clear = false;
         pending_.generation = next_generation_++;
         active_generation_.store(pending_.generation, std::memory_order_release);
@@ -385,11 +391,13 @@ void ExoEditPlayerItem::setClockUs(int64_t media_time_us) noexcept {
     clock_us_.store(media_time_us, std::memory_order_relaxed);
 }
 
-void ExoEditPlayerItem::presentTimelineFrame(exosnap::engine::TimelineVideoFrame frame) {
+void ExoEditPlayerItem::presentTimelineFrame(exosnap::engine::TimelineVideoFrame frame,
+                                             std::optional<EditFramePresentation> presentation) {
     {
         QMutexLocker lock(&pending_mutex_);
         pending_.frame.reset();
         pending_.timeline_time_us = frame.time_us;
+        pending_.presentation = presentation;
         pending_.timeline = std::move(frame);
         pending_.clear = false;
         pending_.generation = next_generation_++;
@@ -406,6 +414,7 @@ void ExoEditPlayerItem::clearFrame() {
         pending_.timeline.reset();
         pending_.clear = true;
         pending_.timeline_time_us.reset();
+        pending_.presentation.reset();
         pending_.generation = next_generation_++;
         active_generation_.store(pending_.generation, std::memory_order_release);
         generation = pending_.generation;
@@ -420,6 +429,7 @@ void ExoEditPlayerItem::supersedePendingFrame() {
     pending_.frame.reset();
     pending_.timeline.reset();
     pending_.timeline_time_us.reset();
+    pending_.presentation.reset();
     pending_.generation = next_generation_++;
     active_generation_.store(pending_.generation, std::memory_order_release);
     clock_us_.store(-1, std::memory_order_relaxed);
@@ -432,6 +442,7 @@ ExoEditPlayerItem::PendingFrame ExoEditPlayerItem::takePendingFrame() {
     pending_.timeline.reset();
     pending_.clear = false;
     pending_.timeline_time_us.reset();
+    pending_.presentation.reset();
     pending_.generation = 0;
     return result;
 }
@@ -460,7 +471,8 @@ QSGNode* ExoEditPlayerItem::updatePaintNode(QSGNode* old_node, UpdatePaintNodeDa
         } else if (!(pending.timeline ? node->upload(*pending.timeline, error) : node->upload(*pending.frame, error))) {
             postRenderState(pending.generation, false, node->sourceSize(), error);
         } else {
-            postRenderState(pending.generation, true, node->sourceSize(), {}, pending.timeline_time_us);
+            postRenderState(pending.generation, true, node->sourceSize(), {}, pending.timeline_time_us,
+                            pending.presentation);
         }
     }
 
@@ -496,7 +508,8 @@ void ExoEditPlayerItem::itemChange(ItemChange change, const ItemChangeData& valu
 }
 
 void ExoEditPlayerItem::applyRenderState(bool ready, const QSize& size, const QString& error,
-                                         std::optional<int64_t> timeline_time_us) {
+                                         std::optional<int64_t> timeline_time_us,
+                                         std::optional<EditFramePresentation> presentation) {
     if (!ready && !error.isEmpty() && has_frame_) {
         if (error_text_ != error) {
             error_text_ = error;
@@ -517,29 +530,36 @@ void ExoEditPlayerItem::applyRenderState(bool ready, const QSize& size, const QS
         emit errorTextChanged();
     }
     const auto presented = ready ? timeline_time_us : std::nullopt;
-    if (presented_time_us_ != presented) {
+    const auto consumed = ready ? presentation : std::nullopt;
+    if (presented_time_us_ != presented || presented_presentation_ != consumed) {
         presented_time_us_ = presented;
+        presented_presentation_ = consumed;
         emit presentedTimeChanged();
     }
-    if (ready && timeline_time_us)
+    if (ready && timeline_time_us) {
         emit framePresented(*timeline_time_us);
+        if (consumed)
+            emit frameConsumedWithRevision(*timeline_time_us, consumed->request_generation, consumed->revision);
+    }
 }
 
 void ExoEditPlayerItem::postRenderState(quint64 generation, bool ready, QSize size, QString error,
-                                        std::optional<int64_t> timeline_time_us) {
+                                        std::optional<int64_t> timeline_time_us,
+                                        std::optional<EditFramePresentation> presentation) {
     QMetaObject::invokeMethod(
         this,
-        [this, generation, ready, size, error = std::move(error), timeline_time_us]() {
+        [this, generation, ready, size, error = std::move(error), timeline_time_us, presentation]() {
             if (generation != active_generation_.load(std::memory_order_acquire))
                 return;
-            applyRenderState(ready, size, error, timeline_time_us);
+            applyRenderState(ready, size, error, timeline_time_us, presentation);
         },
         Qt::QueuedConnection);
 }
 
 void ExoEditPlayerItem::publishRenderStateFromRenderThread(quint64 generation, bool ready, QSize size, QString error,
-                                                           std::optional<int64_t> timeline_time_us) {
-    postRenderState(generation, ready, size, std::move(error), timeline_time_us);
+                                                           std::optional<int64_t> timeline_time_us,
+                                                           std::optional<EditFramePresentation> presentation) {
+    postRenderState(generation, ready, size, std::move(error), timeline_time_us, presentation);
 }
 
 } // namespace exosnap::quick

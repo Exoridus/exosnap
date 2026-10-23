@@ -288,6 +288,51 @@ TEST(EditAudioMixer, AHoleInEveryTrackIsPlayedAsSilenceRatherThanClosedUp) {
     EXPECT_FLOAT_EQ(block->interleaved_stereo[2 * kBlock * kCh], 0.5f); // audio again
 }
 
+TEST(EditAudioMixer, MillisecondStampedBlocksContinueWithoutDroppingOrDoublingSamples) {
+    // Matroska stamps whole milliseconds: 1024-frame AAC/PCM blocks (21.333 ms)
+    // arrive stamped 0, 21, 42, 64 ... ms. Placed at those stamps, every block
+    // would overlap or miss its predecessor by up to 47 frames -- an audible
+    // crackle 47 times a second.
+    constexpr size_t kBlock = 1024;
+    constexpr size_t kBlocks = 12;
+    constexpr int64_t kMillisecondFrames = kRate / 1000;
+    std::vector<float> ramp(kBlock * kBlocks * kCh);
+    for (size_t f = 0; f < kBlock * kBlocks; ++f)
+        for (uint32_t c = 0; c < kCh; ++c)
+            ramp[f * kCh + c] = static_cast<float>(f) * 1e-5f;
+
+    EditAudioMixer mixer;
+    mixer.Reset(1, 0);
+    std::vector<float> out;
+    for (size_t i = 0; i < kBlocks; ++i) {
+        const int64_t stamped_ms = static_cast<int64_t>(i * kBlock) * 1000 / kRate;
+        mixer.Submit(0, stamped_ms * 1000, ramp.data() + i * kBlock * kCh, kBlock, kMillisecondFrames);
+        const auto ready = DrainReady(mixer);
+        out.insert(out.end(), ready.begin(), ready.end());
+    }
+    const auto rest = DrainRemainder(mixer);
+    out.insert(out.end(), rest.begin(), rest.end());
+
+    EXPECT_EQ(mixer.LateFramesDropped(), 0u);
+    ASSERT_EQ(out.size(), ramp.size());
+    EXPECT_EQ(out, ramp);
+}
+
+TEST(EditAudioMixer, AGapBeyondTheTimestampResolutionStaysAGap) {
+    constexpr size_t kBlock = 480;
+    EditAudioMixer mixer;
+    mixer.Reset(1, 0);
+    const auto a = ConstantBlock(kBlock, 0.5f);
+    mixer.Submit(0, 0, a.data(), kBlock, 48);
+    ASSERT_TRUE(mixer.Take().has_value());
+    // 2 ms of missing audio with 1 ms stamps is a real hole, not rounding.
+    mixer.Submit(0, UsForFrames(kBlock + 96), a.data(), kBlock, 48);
+    const auto block = mixer.TakeRemainder();
+    ASSERT_TRUE(block.has_value());
+    EXPECT_EQ(block->frame_count, 96u + kBlock);
+    EXPECT_FLOAT_EQ(block->interleaved_stereo[0], 0.0f);
+}
+
 TEST(EditAudioMixer, EmittedBlocksCarryTheirOwnMediaTimestamp) {
     constexpr size_t kBlock = 480;
     EditAudioMixer mixer;

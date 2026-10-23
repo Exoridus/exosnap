@@ -135,6 +135,11 @@ class RecordingCoordinator {
 
     RecordingCoordinator();
     ~RecordingCoordinator();
+    engine::BackgroundIoAdmission backgroundIoAdmission() const {
+        return [storage = background_storage_](uint64_t bytes, const std::atomic<bool>* cancelled) {
+            return storage->Acquire(bytes, cancelled);
+        };
+    }
 
     RecordingCoordinator(const RecordingCoordinator&) = delete;
     RecordingCoordinator& operator=(const RecordingCoordinator&) = delete;
@@ -398,6 +403,9 @@ class RecordingCoordinator {
     // output_settings_.output_folder without modifying persisted settings (tooling /
     // CI isolation; mirrors EXOSNAP_CONFIG_DIR in ConfigPaths.h).
     [[nodiscard]] std::filesystem::path EffectiveOutputFolder() const;
+    // The same resolution for a configured folder that is not this
+    // coordinator's, such as an edit export's default destination.
+    [[nodiscard]] static std::filesystem::path EffectiveOutputFolderFor(const OutputSettingsModel& settings);
 
     void SetStateChangedCallback(StateChangedCallback cb);
     void SetStatsUpdatedCallback(StatsUpdatedCallback cb);
@@ -620,10 +628,6 @@ class RecordingCoordinator {
     // Builds the output path from the prepare snapshot (reads only from ctx). Runs
     // on the preparation worker thread.
     std::filesystem::path GenerateOutputPath(const PrepareContext& ctx) const;
-    // Apply the EXOSNAP_OUTPUT_DIR override to a configured output folder. The
-    // no-arg EffectiveOutputFolder() delegates here with output_settings_; the
-    // worker calls it with the snapshot's folder.
-    static std::filesystem::path EffectiveOutputFolderFor(const OutputSettingsModel& settings);
     void WriteMarkerSidecar();
     // Write a per-segment marker sidecar adjacent to `segment_media_path`,
     // containing only markers whose session time falls in this segment, rebased to

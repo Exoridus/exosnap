@@ -142,43 +142,58 @@ int visualCaptureDelayMs(const QStringList& arguments) {
     return delay_ok && delay_ms >= 0 ? delay_ms : default_delay_ms;
 }
 
-// A --visual-test capture grabs the moment its own timer fires, which races
-// AppShell's asynchronous page loaders: the active destination can still be
-// incubating, and the capture would silently photograph an empty page. Polled
-// rather than signal-driven, because AppShell::activeDestinationReady is a
-// plain QML expression with no notify signal reachable from outside the
-// engine -- this reads its current value on each tick instead.
-//
-// Bounded, and NOT silent on expiry: a capture that times out still fires
-// (the alternative is a harness run that hangs forever on a genuinely stuck
-// page), but says so, so the screenshot it produces is not mistaken for one
-// that waited successfully.
-void waitForActiveDestinationReady(QCoreApplication& app, QQuickWindow* root_window, int timeout_ms,
-                                   std::function<void()> then) {
-    QObject* shell =
-        root_window != nullptr ? root_window->findChild<QObject*>(QStringLiteral("quickAppShell")) : nullptr;
-    if (shell == nullptr) {
-        then();
-        return;
-    }
+// Visual captures fail if the requested surface never becomes ready. A valid
+// shell image cannot stand in for an absent page, dialog or asynchronous seed.
+void waitForVisualCondition(QCoreApplication& app, const QString& surface, int timeout_ms,
+                            std::function<bool(QString&)> ready, std::function<void()> then) {
+    auto* timer = new QTimer(&app);
+    timer->setInterval(20);
     auto deadline = std::make_shared<QElapsedTimer>();
     deadline->start();
-    auto continuation = std::make_shared<std::function<void()>>(std::move(then));
-    auto poll = std::make_shared<std::function<void()>>();
-    *poll = [&app, shell, deadline, timeout_ms, continuation, poll]() {
-        if (shell->property("activeDestinationReady").toBool()) {
-            (*continuation)();
-            return;
-        }
-        if (deadline->hasExpired(timeout_ms)) {
-            qWarning("--visual-test: the active page did not reach Loader.Ready within %d ms; capturing anyway",
-                     timeout_ms);
-            (*continuation)();
-            return;
-        }
-        QTimer::singleShot(20, &app, *poll);
-    };
-    (*poll)();
+    QObject::connect(timer, &QTimer::timeout, &app,
+                     [&app, timer, deadline, surface, timeout_ms, ready = std::move(ready), then = std::move(then)]() {
+                         QString error;
+                         const bool reached = ready(error);
+                         if (reached || !error.isEmpty() || deadline->hasExpired(timeout_ms)) {
+                             timer->stop();
+                             timer->deleteLater();
+                             if (reached) {
+                                 then();
+                                 return;
+                             }
+                             reportStartupError(
+                                 QStringLiteral("--visual-test: %1: %2")
+                                     .arg(surface, error.isEmpty() ? QStringLiteral("readiness timed out") : error));
+                             app.exit(2);
+                         }
+                     });
+    timer->start();
+}
+
+void waitForActiveDestinationReady(QCoreApplication& app, QQuickWindow* root_window, int timeout_ms,
+                                   std::function<void()> then) {
+    waitForVisualCondition(
+        app, QStringLiteral("active page"), timeout_ms,
+        [root_window](QString& error) {
+            QObject* shell =
+                root_window != nullptr ? root_window->findChild<QObject*>(QStringLiteral("quickAppShell")) : nullptr;
+            if (shell == nullptr) {
+                error = QStringLiteral("application shell is unavailable");
+                return false;
+            }
+            return shell->property("activeDestinationReady").toBool();
+        },
+        std::move(then));
+}
+
+bool hasVisiblePopup(QObject* root, const char* type) {
+    if (root == nullptr)
+        return false;
+    for (QObject* candidate : root->findChildren<QObject*>()) {
+        if (candidate->inherits(type) && candidate->property("visible").toBool())
+            return true;
+    }
+    return false;
 }
 
 // Scratch config directory a harness run is isolated into. Distinct per harness
@@ -300,18 +315,125 @@ HWND createPreviewPatternWindow() {
     return pattern;
 }
 
-// Grabs every visible capture-excluded overlay window alongside the main
-// --visual-test screenshot, one file per overlay, named after its objectName:
-//
-//     shell.png  ->  shell.quickOverlayRecording.png
-//
-// Written next to the main capture rather than into it: the overlays live on the
-// recorded monitor at their own positions and sizes, and compositing them into
-// the shell shot would fabricate a layout that never appears.
-//
-// Failure is silent on purpose. This is supplementary evidence; a scenario with
-// no overlay on screen must not turn the shell capture's exit code red.
-void saveOverlayWindowGrabs(const QString& screenshot_path) {
+QStringList expectedVisualOverlayNames(const QString& scenario) {
+    if (scenario == QLatin1String("region-selection-empty") || scenario == QLatin1String("region-selection-drawn"))
+        return {QStringLiteral("quickOverlayRegionSelection")};
+    if (scenario == QLatin1String("hud-countdown"))
+        return {QStringLiteral("quickOverlayCountdown")};
+    if (scenario.startsWith(QLatin1String("hud-"))) {
+        QStringList names{QStringLiteral("quickOverlayRecording")};
+        if (scenario == QLatin1String("hud-controls") || scenario == QLatin1String("hud-all"))
+            names.append(QStringLiteral("quickOverlayQuickControls"));
+        if (scenario == QLatin1String("hud-all"))
+            names.append(QStringLiteral("quickOverlayNotificationToast"));
+        return names;
+    }
+    if (scenario.startsWith(QLatin1String("toast-")) || scenario == QLatin1String("notifications"))
+        return {QStringLiteral("quickOverlayNotificationToast")};
+    return {};
+}
+
+bool overlayImageHasVisibleContent(const QImage& image) {
+    if (image.isNull())
+        return false;
+    if (!image.hasAlphaChannel())
+        return true;
+    const auto pixels = image.convertToFormat(QImage::Format_ARGB32);
+    for (int y = 0; y < pixels.height(); ++y) {
+        const auto* row = reinterpret_cast<const QRgb*>(pixels.constScanLine(y));
+        for (int x = 0; x < pixels.width(); ++x)
+            if (qAlpha(row[x]) > 0)
+                return true;
+    }
+    return false;
+}
+
+bool visualOverlayWindowsReady(const QStringList& names) {
+    for (const auto& name : names) {
+        QQuickWindow* found = nullptr;
+        for (auto* window : QGuiApplication::topLevelWindows())
+            if (window && window->objectName() == name) {
+                found = qobject_cast<QQuickWindow*>(window);
+                break;
+            }
+        if (!found || !found->property("compositionRequested").toBool() || !found->isVisible() || found->width() <= 0 ||
+            found->height() <= 0)
+            return false;
+        found->requestUpdate();
+        if (!found->isSceneGraphInitialized() || !overlayImageHasVisibleContent(found->grabWindow()))
+            return false;
+    }
+    return true;
+}
+
+bool prepareVisualRegionSelection(const QString& scenario) {
+    if (scenario != QLatin1String("region-selection-empty") && scenario != QLatin1String("region-selection-drawn"))
+        return true;
+    for (auto* window : QGuiApplication::topLevelWindows()) {
+        if (!window || window->objectName() != QLatin1String("quickOverlayRegionSelection"))
+            continue;
+        const QRectF selection =
+            scenario == QLatin1String("region-selection-drawn") ? QRectF(0.15, 0.18, 0.6, 0.6) : QRectF();
+        bool prepared = false;
+        return QMetaObject::invokeMethod(window, "prepareVisualSelection", Q_RETURN_ARG(bool, prepared),
+                                         Q_ARG(QRectF, selection)) &&
+               prepared;
+    }
+    return false;
+}
+
+bool visualReleaseNotesReady(QQuickWindow* root, const QString& scenario) {
+    if (scenario != QLatin1String("whats-new") && scenario != QLatin1String("whats-new-post-update"))
+        return true;
+    const auto* card = root ? root->findChild<QQuickItem*>(QStringLiteral("quickWhatsNewOverlay")) : nullptr;
+    return card && card->isVisible() && card->width() > 0 && card->height() > 0 &&
+           card->property("persistentVisible").toBool() == (scenario == QLatin1String("whats-new-post-update"));
+}
+
+bool visualNotificationPayloadReady(exosnap::quick::QuickApplication& application, const QString& scenario) {
+    using Type = exosnap::notifications::NotificationType;
+    QList<Type> expected;
+    if (scenario == QLatin1String("toast-success"))
+        expected = {Type::Saved};
+    else if (scenario == QLatin1String("toast-caution"))
+        expected = {Type::FramesDropped};
+    else if (scenario == QLatin1String("toast-error"))
+        expected = {Type::UnexpectedStop};
+    else if (scenario == QLatin1String("toast-info"))
+        expected = {Type::UpdateAvailable};
+    else if (scenario == QLatin1String("hud-all"))
+        expected = {Type::WindowCaptureStalled};
+    else if (scenario == QLatin1String("notifications"))
+        expected = {Type::LowStorage, Type::WindowCaptureStalled, Type::UpdateAvailable};
+    else
+        return true;
+
+    const auto& events = application.notificationsAdapter()->manager().VisibleEvents();
+    QStringList actual_payload;
+    QStringList expected_types;
+    for (const auto& event : events)
+        actual_payload.append(QStringLiteral("%1:%2").arg(event.sequence).arg(static_cast<int>(event.type)));
+    for (const auto type : expected)
+        expected_types.append(QString::number(static_cast<int>(type)));
+    const QString payload = scenario + QLatin1Char(' ') + actual_payload.join(QLatin1Char(','));
+    static QString previous_payload;
+    if (previous_payload != payload) {
+        previous_payload = payload;
+        qInfo("visual-notifications: expected types=%s; actual sequence:type=%s",
+              qPrintable(expected_types.join(QLatin1Char(','))), qPrintable(actual_payload.join(QLatin1Char(','))));
+    }
+    if (events.size() != expected.size())
+        return false;
+    for (const auto type : expected)
+        if (std::none_of(events.cbegin(), events.cend(), [type](const auto& event) { return event.type == type; }))
+            return false;
+    return true;
+}
+
+// Save each overlay separately. Compositing it into the main window would
+// invent a layout that never appears. Only explicitly requested overlay
+// compositions are required for the screenshot's success.
+bool saveOverlayWindowGrabs(const QString& screenshot_path, const QStringList& required_names = {}) {
     const int dot = screenshot_path.lastIndexOf(QLatin1Char('.'));
     const QString stem = dot > 0 ? screenshot_path.left(dot) : screenshot_path;
     const QString suffix = dot > 0 ? screenshot_path.mid(dot) : QStringLiteral(".png");
@@ -322,6 +444,7 @@ void saveOverlayWindowGrabs(const QString& screenshot_path) {
     // covered five -- the same failure the notification toast already caused
     // once by having no objectName at all.
     QSet<QString> seen;
+    QSet<QString> saved_names;
     for (QWindow* window : QGuiApplication::topLevelWindows()) {
         if (window == nullptr || !window->objectName().startsWith(QLatin1String("quickOverlay")))
             continue;
@@ -337,7 +460,14 @@ void saveOverlayWindowGrabs(const QString& screenshot_path) {
             continue;
         }
         const QString path = stem + QLatin1Char('.') + window->objectName() + suffix;
-        const bool saved = quick_window->grabWindow().save(path);
+        const auto image = quick_window->grabWindow();
+        if (!overlayImageHasVisibleContent(image)) {
+            qInfo("overlay-grab: %s skipped (no visible content)", qPrintable(window->objectName()));
+            continue;
+        }
+        const bool saved = image.save(path);
+        if (saved)
+            saved_names.insert(window->objectName());
         qInfo("overlay-grab: %s %s %dx%d", qPrintable(window->objectName()), saved ? "saved" : "SAVE FAILED",
               window->width(), window->height());
     }
@@ -351,6 +481,12 @@ void saveOverlayWindowGrabs(const QString& screenshot_path) {
             continue;
         qInfo("overlay-grab: %s skipped (not instantiated)", qPrintable(object_name));
     }
+    for (const auto& name : required_names)
+        if (!saved_names.contains(name)) {
+            qWarning("overlay-grab: required visual composition was not saved: %s", qPrintable(name));
+            return false;
+        }
+    return true;
 }
 
 // A --visual-test capture that acts on the loaded page first lets the page's
@@ -358,15 +494,9 @@ void saveOverlayWindowGrabs(const QString& screenshot_path) {
 constexpr int kHarnessPageSettleMs = 300;
 constexpr int kHarnessTransitionMs = 400;
 
-// Harness-only (--visual-expand-all): opens every collapsed element on the
-// visible part of the window, so a capture shows the content a reader would
-// otherwise have to click to reach. An element opts in through a writable
-// `expanded` property (ExoDisclosure and the cards built on it) or, where the
-// open state is not a property, through a `harnessExpand()` function.
-// Invisible subtrees are skipped: another destination's page and a collapsed
-// body are not part of what the capture shows. A nested element only becomes
-// visible once its parent opened, so the caller runs this more than once.
-int expandAllVisible(QQuickItem* item) {
+// Only visible disclosure opt-ins participate. Nested Loader bodies can
+// become visible after their parent opens, so the caller runs two passes.
+int setVisibleDisclosureState(QQuickItem* item, bool expand) {
     if (item == nullptr || !item->isVisible())
         return 0;
     int opened = 0;
@@ -374,37 +504,54 @@ int expandAllVisible(QQuickItem* item) {
     const int expanded_index = meta->indexOfProperty("expanded");
     if (expanded_index >= 0) {
         const QMetaProperty expanded = meta->property(expanded_index);
-        if (expanded.isWritable() && expanded.typeId() == QMetaType::Bool && !expanded.read(item).toBool()) {
-            expanded.write(item, true);
+        if (expanded.isWritable() && expanded.typeId() == QMetaType::Bool && expanded.read(item).toBool() != expand) {
+            expanded.write(item, expand);
             ++opened;
         }
     }
-    if (meta->indexOfMethod("harnessExpand()") >= 0 && QMetaObject::invokeMethod(item, "harnessExpand"))
-        ++opened;
+    if (meta->indexOfMethod("harnessExpand()") >= 0) {
+        if (expand) {
+            if (QMetaObject::invokeMethod(item, "harnessExpand"))
+                ++opened;
+        } else if (meta->indexOfMethod("harnessCollapse()") >= 0) {
+            if (QMetaObject::invokeMethod(item, "harnessCollapse"))
+                ++opened;
+        } else {
+            const int open_index = meta->indexOfProperty("open");
+            if (open_index >= 0) {
+                const QMetaProperty open = meta->property(open_index);
+                if (open.isWritable() && open.typeId() == QMetaType::Bool && open.write(item, false))
+                    ++opened;
+            }
+        }
+    }
     for (QQuickItem* child : item->childItems())
-        opened += expandAllVisible(child);
+        opened += setVisibleDisclosureState(child, expand);
     return opened;
 }
 
-// The page's own scroller: the widest visible Flickable with the most content.
+// The page scroller normally spans the shell. A requested recording profile
+// instead uses its narrower inspector scroller.
 // Nested lists and combo popups are narrower than the page and lose.
 QQuickItem* pageFlickable(QQuickWindow* window) {
     if (window == nullptr || window->contentItem() == nullptr)
         return nullptr;
     QQuickItem* best = nullptr;
     const qreal min_width = window->width() / 2.0;
-    const std::function<void(QQuickItem*)> visit = [&](QQuickItem* item) {
+    const bool profile = !qEnvironmentVariable("EXOSNAP_VISUAL_PROFILE_SECTION").isEmpty();
+    const std::function<void(QQuickItem*, bool)> visit = [&](QQuickItem* item, bool in_profile) {
         if (item == nullptr || !item->isVisible())
             return;
-        if (item->inherits("QQuickFlickable") && item->width() >= min_width &&
+        in_profile = in_profile || item->objectName() == QLatin1String("recordingProfileScroll");
+        if (item->inherits("QQuickFlickable") && (profile ? in_profile : item->width() >= min_width) &&
             (best == nullptr ||
              item->property("contentHeight").toDouble() > best->property("contentHeight").toDouble())) {
             best = item;
         }
         for (QQuickItem* child : item->childItems())
-            visit(child);
+            visit(child, in_profile);
     };
-    visit(window->contentItem());
+    visit(window->contentItem(), false);
     return best;
 }
 
@@ -418,8 +565,8 @@ void saveFullPage(QQuickWindow* window, const QString& path, std::function<void(
     auto* content = flickable != nullptr ? flickable->property("contentItem").value<QQuickItem*>() : nullptr;
     const QImage window_image = window->grabWindow();
     if (content == nullptr) {
-        qWarning("--visual-full-page: nothing on this page scrolls; saving the window instead");
-        done(window_image.save(path));
+        qWarning("--visual-full-page: no requested scrollable content was found");
+        done(qEnvironmentVariable("EXOSNAP_VISUAL_PROFILE_SECTION").isEmpty() && window_image.save(path));
         return;
     }
     const qreal ratio = window->effectiveDevicePixelRatio();
@@ -1041,6 +1188,24 @@ int main(int argc, char* argv[]) {
     for (int i = 0; i < argc; ++i)
         pre_application_arguments.push_back(QString::fromLocal8Bit(argv[i]));
 
+    const bool isolated_edit_qualification = pre_application_arguments.contains(QStringLiteral("--auto-edit-qualify"));
+    if (isolated_edit_qualification) {
+#if defined(EXOSNAP_ENABLE_AUTO_RECORD_HARNESS)
+        for (int i = 1; i < pre_application_arguments.size(); ++i) {
+            const auto& argument = pre_application_arguments.at(i);
+            if (argument.startsWith(QLatin1Char('-')) && !argument.startsWith(QStringLiteral("--auto-edit"))) {
+                reportStartupError(QStringLiteral("--auto-edit-qualify accepts only --auto-edit options"));
+                return 2;
+            }
+        }
+        qputenv("QT_QPA_PLATFORM", "offscreen");
+        qputenv("QT_QUICK_BACKEND", "software");
+#else
+        reportStartupError(QStringLiteral("--auto-edit-qualify requires a harness-enabled build"));
+        return 2;
+#endif
+    }
+
 #if defined(EXOSNAP_ENABLE_AUTO_RECORD_HARNESS)
     if (pre_application_arguments.contains(QStringLiteral("--auto-record-bare"))) {
         QCoreApplication app(argc, argv);
@@ -1077,7 +1242,8 @@ int main(int argc, char* argv[]) {
     }
 #endif
 
-    QQuickWindow::setGraphicsApi(QSGRendererInterface::Direct3D11);
+    QQuickWindow::setGraphicsApi(isolated_edit_qualification ? QSGRendererInterface::Software
+                                                             : QSGRendererInterface::Direct3D11);
 
     // No DWM redirection bitmap for this process's windows.
     //
@@ -1167,6 +1333,28 @@ int main(int argc, char* argv[]) {
         }
     }
 
+    if (arguments.contains(QStringLiteral("--visual-expand-all")) &&
+        arguments.contains(QStringLiteral("--visual-collapse-all"))) {
+        reportStartupError(QStringLiteral("--visual-expand-all and --visual-collapse-all are mutually exclusive"));
+        return 2;
+    }
+    const QString profile_section = qEnvironmentVariable("EXOSNAP_VISUAL_PROFILE_SECTION");
+    if (!visualOutputPath(arguments).isEmpty() && !profile_section.isEmpty() &&
+        !QStringList{QStringLiteral("preset"), QStringLiteral("format"), QStringLiteral("quality"),
+                     QStringLiteral("audio"), QStringLiteral("microphone"), QStringLiteral("audio-encoding"),
+                     QStringLiteral("output"), QStringLiteral("webcam")}
+             .contains(profile_section)) {
+        reportStartupError(QStringLiteral("--visual-test: unknown recording profile section %1").arg(profile_section));
+        return 2;
+    }
+    const QString record_panel = qEnvironmentVariable("EXOSNAP_VISUAL_RECORD_PANEL");
+    if (!visualOutputPath(arguments).isEmpty() && !record_panel.isEmpty() &&
+        !QStringList{QStringLiteral("sources"), QStringLiteral("sources-pinned"), QStringLiteral("profile-pinned"),
+                     QStringLiteral("panels-pinned")}
+             .contains(record_panel)) {
+        reportStartupError(QStringLiteral("--visual-test: unknown recording panel %1").arg(record_panel));
+        return 2;
+    }
     // The Live Verify control channel. Explicit argv opt-in and nothing else: no
     // Debug default, no environment variable, no "looks like a developer
     // machine" heuristic. A malformed option is fatal rather than ignored — a
@@ -1338,6 +1526,9 @@ int main(int argc, char* argv[]) {
     quick_application.applyTraySuppression(preview_mode || auto_record_requested || auto_edit_requested ||
                                            navigation_lifecycle_test ||
                                            arguments.contains(QStringLiteral("--visual-test")));
+
+    if (isolated_edit_qualification)
+        quick_application.applyIsolatedEditHarness();
 
     if (!quick_application.load(diagnostic_mode && !maximize_cycle))
         return -1;
@@ -1579,31 +1770,37 @@ int main(int argc, char* argv[]) {
     // to avoid. Queued, so the shell has finished its first layout — the picker
     // measures itself against the overlay it centres in.
     const QString visual_popup = optionValue(arguments, QStringLiteral("--visual-popup"));
-    if (!visual_popup.isEmpty()) {
-        QTimer::singleShot(0, &app, [root_window, &quick_application, visual_popup]() {
-            const bool picker_popup = visual_popup == QLatin1String("source-picker") ||
-                                      visual_popup == QLatin1String("source-picker-windows") ||
-                                      visual_popup == QLatin1String("source-picker-search");
-            if (picker_popup) {
-                if (auto* page = root_window != nullptr
-                                     ? root_window->findChild<QObject*>(QStringLiteral("quickRecordPage"))
-                                     : nullptr) {
-                    QMetaObject::invokeMethod(page, "openSourcePicker");
-                    if (auto* picker = root_window->findChild<QObject*>(QStringLiteral("recordSourcePicker"))) {
-                        if (visual_popup != QLatin1String("source-picker"))
-                            QMetaObject::invokeMethod(picker, "jumpToSection",
-                                                      Q_ARG(QString, QStringLiteral("window")));
-                        if (visual_popup == QLatin1String("source-picker-search"))
-                            picker->setProperty("windowQuery", QStringLiteral("Task"));
-                    }
-                }
-            } else if (visual_popup == QLatin1String("notification-hub")) {
-                if (auto* notifications = quick_application.notificationsAdapter())
-                    notifications->openHub();
-            }
-        });
-    }
-
+    const auto open_visual_popup = [root_window, &quick_application, visual_popup](QString& error) {
+        if (visual_popup.isEmpty())
+            return true;
+        const bool picker_popup = visual_popup == QLatin1String("source-picker") ||
+                                  visual_popup == QLatin1String("source-picker-windows") ||
+                                  visual_popup == QLatin1String("source-picker-search");
+        if (picker_popup) {
+            auto* page =
+                root_window != nullptr ? root_window->findChild<QObject*>(QStringLiteral("quickRecordPage")) : nullptr;
+            if (page == nullptr)
+                return false;
+            QMetaObject::invokeMethod(page, "openSourcePicker");
+            auto* picker = root_window->findChild<QObject*>(QStringLiteral("recordSourcePicker"));
+            if (picker == nullptr || !picker->property("visible").toBool())
+                return false;
+            if (visual_popup != QLatin1String("source-picker"))
+                QMetaObject::invokeMethod(picker, "jumpToSection", Q_ARG(QString, QStringLiteral("window")));
+            if (visual_popup == QLatin1String("source-picker-search"))
+                picker->setProperty("windowQuery", QStringLiteral("Task"));
+            return true;
+        }
+        if (visual_popup == QLatin1String("notification-hub")) {
+            auto* notifications = quick_application.notificationsAdapter();
+            if (notifications == nullptr)
+                return false;
+            notifications->openHub();
+            return notifications->hubOpen() && hasVisiblePopup(root_window, "QQuickPopup");
+        }
+        error = QStringLiteral("unknown popup %1").arg(visual_popup);
+        return false;
+    };
     // Harness-only: raises one of the modal surfaces that nothing but an
     // interaction reaches. Without it the confirm and preset dialogs could only
     // be reviewed by reading their source, which is how a Qt default dialog --
@@ -1615,9 +1812,17 @@ int main(int argc, char* argv[]) {
     // preset dialogs is loader-built, and a fixed delay loses to a slow load, so
     // the capture photographed the page with no dialog on it.
     const QString visual_dialog = optionValue(arguments, QStringLiteral("--visual-dialog"));
-    const auto open_visual_dialog = [root_window, visual_dialog]() {
-        if (visual_dialog.isEmpty() || root_window == nullptr)
-            return;
+    const auto open_visual_dialog = [root_window, visual_dialog](QString& error) {
+        if (visual_dialog.isEmpty())
+            return true;
+        if (root_window == nullptr)
+            return false;
+        if (!QStringList{QStringLiteral("preset-delete"), QStringLiteral("preset-rename"),
+                         QStringLiteral("preset-save-as"), QStringLiteral("close-guard")}
+                 .contains(visual_dialog)) {
+            error = QStringLiteral("unknown dialog %1").arg(visual_dialog);
+            return false;
+        }
         const bool profile_dialog = visual_dialog.startsWith(QLatin1String("preset-"));
         if (profile_dialog) {
             if (auto* shell = root_window->findChild<QObject*>(QStringLiteral("quickAppShell")))
@@ -1626,8 +1831,7 @@ int main(int argc, char* argv[]) {
         QObject* host = profile_dialog ? root_window->findChild<QObject*>(QStringLiteral("quickRecordPage"))
                                        : static_cast<QObject*>(root_window);
         if (host == nullptr) {
-            qWarning("--visual-dialog: no recording workspace");
-            return;
+            return false;
         }
         // Typed args, not QVariant: a QML function declared with a typed
         // signature registers a typed meta-method, and a QVariant call
@@ -1635,8 +1839,9 @@ int main(int argc, char* argv[]) {
         // anything.
         bool opened = false;
         QMetaObject::invokeMethod(host, "openHarnessDialog", Q_RETURN_ARG(bool, opened), Q_ARG(QString, visual_dialog));
-        if (!opened)
-            qWarning("--visual-dialog: no dialog named %s", qPrintable(visual_dialog));
+        const bool name_popup =
+            visual_dialog == QLatin1String("preset-save-as") || visual_dialog == QLatin1String("preset-rename");
+        return opened && hasVisiblePopup(root_window, name_popup ? "QQuickPopup" : "QQuickDialog");
     };
 
     // Harness-only: renders a --visual-test capture in the named appearance and
@@ -1795,9 +2000,17 @@ int main(int argc, char* argv[]) {
     // it without a real crash or a real failed recording on this machine.
     const QString overlay_visual_state = optionValue(arguments, QStringLiteral("--overlay-visual-state"));
     if (!overlay_visual_state.isEmpty()) {
-        QTimer::singleShot(0, &app, [&quick_application, overlay_visual_state]() {
-            if (!quick_application.applyOverlayVisualScenario(overlay_visual_state))
+        const bool visual_capture = arguments.contains(QStringLiteral("--visual-test"));
+        QTimer::singleShot(0, &app, [&app, &quick_application, overlay_visual_state, visual_capture]() {
+            if (!quick_application.applyOverlayVisualScenario(overlay_visual_state)) {
+                if (visual_capture) {
+                    reportStartupError(
+                        QStringLiteral("--overlay-visual-state: no state named %1").arg(overlay_visual_state));
+                    app.exit(2);
+                    return;
+                }
                 qWarning("--overlay-visual-state: no state named %s", qPrintable(overlay_visual_state));
+            }
         });
     }
 
@@ -2804,82 +3017,124 @@ int main(int argc, char* argv[]) {
 
     const QString screenshot_path = visualOutputPath(arguments);
     if (!screenshot_path.isEmpty()) {
-        // Harness-only, same class of hook as --preview-visual-test's metrics
-        // overlay: opens the Record button's countdown menu so the capture can
-        // photograph it. A menu is otherwise only reachable by hovering or
-        // clicking the chevron, and this harness synthesises no input.
-        const bool open_countdown_menu = arguments.contains(QStringLiteral("--record-visual-menu"));
-        // The active page's asynchronous Loader has to have reached Ready before
-        // any of this grabs -- see waitForActiveDestinationReady above.
-        constexpr int kActiveDestinationReadyTimeoutMs = 8000;
+        constexpr int kVisualReadyTimeoutMs = 8000;
         const bool full_page = arguments.contains(QStringLiteral("--visual-full-page"));
         const bool expand_all = arguments.contains(QStringLiteral("--visual-expand-all"));
-        const auto grab = [&app, root_window, screenshot_path, full_page]() {
+        const bool collapse_all = arguments.contains(QStringLiteral("--visual-collapse-all"));
+        const bool open_countdown_menu = arguments.contains(QStringLiteral("--record-visual-menu"));
+        const auto required_overlays = expectedVisualOverlayNames(overlay_visual_state);
+        const auto grab = [&app, root_window, screenshot_path, full_page, required_overlays]() {
             if (full_page && root_window != nullptr) {
-                saveFullPage(root_window, screenshot_path, [&app](bool saved) { app.exit(saved ? 0 : 2); });
+                saveFullPage(root_window, screenshot_path, [&app, screenshot_path, required_overlays](bool saved) {
+                    const bool overlays_saved = saveOverlayWindowGrabs(screenshot_path, required_overlays);
+                    app.exit(saved && overlays_saved ? 0 : 2);
+                });
                 return;
             }
             const bool saved = root_window != nullptr && root_window->grabWindow().save(screenshot_path);
-            // The capture-excluded overlays are separate top-level windows, so
-            // the root grab above cannot contain them -- and a desktop capture
-            // cannot either, by design. QQuickWindow::grabWindow renders the
-            // scene graph directly, which is not what SetWindowDisplayAffinity
-            // suppresses, so it is the one way to photograph these at all.
-            saveOverlayWindowGrabs(screenshot_path);
-            app.exit(saved ? 0 : 2);
+            const bool overlays_saved = saveOverlayWindowGrabs(screenshot_path, required_overlays);
+            app.exit(saved && overlays_saved ? 0 : 2);
         };
-        // Requests that act on the loaded page run once its loader is Ready:
-        // first a settle interval for the page's own layout passes, then the
-        // expansion, scroll or dialog, then the grab after their transitions.
-        const bool scrolls = !visual_scroll.isEmpty() || settings_visual_bottom;
-        const bool has_dialog = !visual_dialog.isEmpty();
-        const auto act_on_page = [&app, root_window, grab, scrolls, has_dialog, full_page, expand_all,
-                                  apply_visual_scroll, settings_visual_bottom, apply_settings_bottom,
-                                  open_visual_dialog]() {
-            if (!scrolls && !has_dialog && !full_page && !expand_all) {
-                grab();
-                return;
-            }
-            const auto act = [&app, grab, apply_visual_scroll, settings_visual_bottom, apply_settings_bottom,
-                              open_visual_dialog]() {
-                apply_visual_scroll();
-                if (settings_visual_bottom)
-                    apply_settings_bottom();
-                open_visual_dialog();
-                QTimer::singleShot(kHarnessTransitionMs, &app, grab);
-            };
-            if (!expand_all || root_window == nullptr) {
-                QTimer::singleShot(kHarnessPageSettleMs, &app, act);
-                return;
-            }
-            // Two passes: a nested element only becomes visible, and therefore
-            // reachable, once the element around it has opened and laid out.
-            QTimer::singleShot(kHarnessPageSettleMs, &app, [&app, root_window, act]() {
-                expandAllVisible(root_window->contentItem());
-                QTimer::singleShot(kHarnessTransitionMs, &app, [&app, root_window, act]() {
-                    expandAllVisible(root_window->contentItem());
-                    QTimer::singleShot(kHarnessTransitionMs, &app, act);
+        const auto prepare = [&app, &quick_application, root_window, profile_section, record_panel, expand_all,
+                              open_visual_popup, open_visual_dialog, open_countdown_menu, apply_visual_scroll,
+                              settings_visual_bottom, apply_settings_bottom, grab, required_overlays,
+                              overlay_visual_state]() {
+            auto countdown_opened = std::make_shared<bool>(false);
+            waitForVisualCondition(
+                app, QStringLiteral("requested visual state"), kVisualReadyTimeoutMs,
+                [&quick_application, root_window, profile_section, record_panel, expand_all, open_visual_popup,
+                 open_visual_dialog, open_countdown_menu, countdown_opened, required_overlays,
+                 overlay_visual_state](QString& error) {
+                    if (!prepareVisualRegionSelection(overlay_visual_state) ||
+                        !visualReleaseNotesReady(root_window, overlay_visual_state) ||
+                        !visualNotificationPayloadReady(quick_application, overlay_visual_state))
+                        return false;
+                    if (!visualOverlayWindowsReady(required_overlays))
+                        return false;
+                    if (!quick_application.applyEditVisualLayout()) {
+                        error = quick_application.editVisualScenarioError();
+                        return false;
+                    }
+                    if (!record_panel.isEmpty()) {
+                        QObject* page = root_window != nullptr
+                                            ? root_window->findChild<QObject*>(QStringLiteral("quickRecordPage"))
+                                            : nullptr;
+                        if (page == nullptr)
+                            return false;
+                        bool prepared = false;
+                        if (!QMetaObject::invokeMethod(page, "prepareRecordingPanelVisual",
+                                                       Q_RETURN_ARG(bool, prepared), Q_ARG(QString, record_panel))) {
+                            error = QStringLiteral("recording workspace preparation is unavailable");
+                            return false;
+                        }
+                        if (!prepared)
+                            return false;
+                    }
+                    if (!profile_section.isEmpty()) {
+                        QObject* page = root_window != nullptr
+                                            ? root_window->findChild<QObject*>(QStringLiteral("quickRecordPage"))
+                                            : nullptr;
+                        if (page == nullptr)
+                            return false;
+                        bool prepared = false;
+                        if (!QMetaObject::invokeMethod(page, "prepareProfileVisual", Q_RETURN_ARG(bool, prepared),
+                                                       Q_ARG(bool, expand_all))) {
+                            error = QStringLiteral("recording profile preparation is unavailable");
+                            return false;
+                        }
+                        if (!prepared)
+                            return false;
+                        int revealed = 0;
+                        if (!QMetaObject::invokeMethod(page, "revealProfileTarget", Q_RETURN_ARG(int, revealed),
+                                                       Q_ARG(QString, profile_section)) ||
+                            revealed < 0) {
+                            error = QStringLiteral("recording profile section is unavailable: %1").arg(profile_section);
+                            return false;
+                        }
+                        if (revealed != 1)
+                            return false;
+                    }
+                    if (!open_visual_popup(error) || !open_visual_dialog(error))
+                        return false;
+                    if (open_countdown_menu && !*countdown_opened) {
+                        auto* split = root_window != nullptr
+                                          ? root_window->findChild<QObject*>(QStringLiteral("quickRecordSplitButton"))
+                                          : nullptr;
+                        if (split == nullptr)
+                            return false;
+                        if (!QMetaObject::invokeMethod(split, "openCountdownMenu")) {
+                            error = QStringLiteral("recording countdown menu is unavailable");
+                            return false;
+                        }
+                        *countdown_opened = true;
+                    }
+                    return !open_countdown_menu || hasVisiblePopup(root_window, "QQuickMenu");
+                },
+                [&app, apply_visual_scroll, settings_visual_bottom, apply_settings_bottom, grab]() {
+                    apply_visual_scroll();
+                    if (settings_visual_bottom)
+                        apply_settings_bottom();
+                    QTimer::singleShot(kHarnessTransitionMs, &app, grab);
+                });
+        };
+        const auto act_on_page = [&app, root_window, expand_all, collapse_all, prepare]() {
+            QTimer::singleShot(kHarnessPageSettleMs, &app, [&app, root_window, expand_all, collapse_all, prepare]() {
+                if ((!expand_all && !collapse_all) || root_window == nullptr) {
+                    prepare();
+                    return;
+                }
+                setVisibleDisclosureState(root_window->contentItem(), expand_all);
+                // Nested bodies may be Loader-built and need a second layout pass.
+                QTimer::singleShot(kHarnessTransitionMs, &app, [&app, root_window, expand_all, prepare]() {
+                    setVisibleDisclosureState(root_window->contentItem(), expand_all);
+                    QTimer::singleShot(kHarnessTransitionMs, &app, prepare);
                 });
             });
         };
-        const auto capture = [&app, root_window, act_on_page]() {
-            waitForActiveDestinationReady(app, root_window, kActiveDestinationReadyTimeoutMs, act_on_page);
-        };
-        QTimer::singleShot(visualCaptureDelayMs(arguments), &app, [&app, root_window, open_countdown_menu, capture]() {
-            if (!open_countdown_menu) {
-                capture();
-                return;
-            }
-            if (root_window != nullptr) {
-                if (QObject* split = root_window->findChild<QObject*>(QStringLiteral("quickRecordSplitButton")))
-                    QMetaObject::invokeMethod(split, "openCountdownMenu");
-            }
-            // The popup has an enter transition; grabbing in
-            // the same tick photographs it mid-fade.
-            QTimer::singleShot(400, &app, capture);
+        QTimer::singleShot(visualCaptureDelayMs(arguments), &app, [&app, root_window, act_on_page]() {
+            waitForActiveDestinationReady(app, root_window, kVisualReadyTimeoutMs, act_on_page);
         });
     }
-
     const int exit_code = app.exec();
     return exit_code;
 }

@@ -3,9 +3,13 @@
 
 #include "EditSessionAdapter.h"
 
+#include <QByteArray>
 #include <QColor>
 
 #include <algorithm>
+#include <array>
+#include <cmath>
+#include <cstring>
 
 namespace exosnap::quick {
 namespace {
@@ -46,7 +50,9 @@ bool TimelineTileRunAllowed(bool has_source, const QString& clip_path, const QSt
     return source_clip_path == clip_path;
 }
 
-EditTimelineAdapter::EditTimelineAdapter(QObject* parent) : QObject(parent) {
+EditTimelineAdapter::EditTimelineAdapter(QObject* parent)
+    : QObject(parent), broker_(std::make_shared<ThumbnailRequestBroker>()),
+      waveforms_(std::make_unique<WaveformCacheService>()) {
     resize_debounce_.setSingleShot(true);
     resize_debounce_.setInterval(kResizeDebounceMs);
     connect(&resize_debounce_, &QTimer::timeout, this, &EditTimelineAdapter::startTileRun);
@@ -55,6 +61,13 @@ EditTimelineAdapter::EditTimelineAdapter(QObject* parent) : QObject(parent) {
 EditTimelineAdapter::~EditTimelineAdapter() = default;
 
 QString EditTimelineAdapter::posterSource() const {
+    if (session_)
+        for (const auto& asset : session_->workspace().assets())
+            if (QString::fromStdWString(asset.path) == clip_path_) {
+                const auto source = posterForIdentity(session_->sourcePreviewIdentity(asset.id));
+                if (!source.isEmpty())
+                    return source;
+            }
     if (tile_model_.rowCount() <= 0)
         return {};
     return tile_model_.data(tile_model_.index(0), EditTimelineTileModel::SourceRole).toString();
@@ -65,9 +78,38 @@ void EditTimelineAdapter::setTileProvider(EditTimelineTileProvider* provider) {
 }
 
 void EditTimelineAdapter::setSession(EditSessionAdapter* session) {
+    if (session_ == session)
+        return;
+    if (session_)
+        disconnect(session_, nullptr, this, nullptr);
+    broker_->ReleaseSources();
+    clip_thumbnail_interests_.clear();
+    waveforms_->releaseSources();
+    registered_sources_.clear();
+    if (source_)
+        source_->closeClip();
     session_ = session;
+    source_revision_.reset();
     if (session_ == nullptr)
         return;
+    connect(session_, &EditSessionAdapter::mediaChanged, this, &EditTimelineAdapter::syncSourceRegistrations);
+    connect(session_, &EditSessionAdapter::sourceVerificationChanged, this, [this](qulonglong asset) {
+        registerSessionSource(asset);
+        ++source_registration_revision_;
+        emit sourcesChanged();
+        emit tileProgressChanged();
+    });
+    connect(session_, &QObject::destroyed, this, [this] {
+        session_ = nullptr;
+        broker_->ReleaseSources();
+        waveforms_->releaseSources();
+        registered_sources_.clear();
+        if (source_)
+            source_->closeClip();
+        ++source_registration_revision_;
+        emit sourcesChanged();
+    });
+    syncSourceRegistrations();
     connect(session_, &EditSessionAdapter::clipOpened, this, &EditTimelineAdapter::openClip);
     connect(session_, &EditSessionAdapter::clipClosed, this, &EditTimelineAdapter::closeClip);
     connect(session_, &EditSessionAdapter::clipChanged, this, &EditTimelineAdapter::refreshMarkers);
@@ -79,38 +121,66 @@ void EditTimelineAdapter::setSession(EditSessionAdapter* session) {
         refreshMarkers();
         scheduleTileRun();
     });
-    // The strip's tile positions snap to the clip's own cue table, so the run
-    // waits for the keyframe scan rather than decoding an evenly-spread set that
-    // would be thrown away the moment the table lands.
-    connect(session_, &EditSessionAdapter::trimSnapReadyChanged, this, [this]() {
-        if (session_ == nullptr || !session_->trimSnapReady() || clip_path_.isEmpty())
-            return;
-        ensureThumbnailSource();
-        // Recorded before the request, not after it: the worker handles the open
-        // before any tile job queued behind it, so every run started from here on
-        // decodes out of this clip.
-        source_clip_path_ = clip_path_;
-        source_->openClip(clip_path_, session_->keyframeTimestamps());
-    });
 }
 
-// The thumbnail source is created and wired exactly once, on the first clip that
-// reaches a completed keyframe scan. It used to be (re)connected on every
-// trimSnapReadyChanged with Qt::UniqueConnection — which is not a thing Qt
-// supports for a lambda: uniqueness requires a pointer-to-member-function
-// receiver. A debug build asserts and abort()s on the first real clip; a release
-// build, where the assert is compiled out, instead accumulates a duplicate pair
-// of connections per opened clip, so the second clip counts every decoded tile
-// twice. Neither showed up in the adapter tests or the visual harness because
-// both drive setFixture(), which never reaches this path — only genuinely
-// decoded media does.
+void EditTimelineAdapter::registerSessionSource(qulonglong asset_id) {
+    if (!session_)
+        return;
+    const auto access = session_->sourceAccess(asset_id);
+    const auto metadata = session_->sourceMetadata(asset_id);
+    const auto identity = session_->sourcePreviewIdentity(asset_id);
+    const auto cache_identity = ParseContentIdentity(identity);
+    if (!access || !metadata || !cache_identity || session_->sourceVerificationFailed(asset_id)) {
+        if (const auto prior = registered_sources_.find(asset_id); prior != registered_sources_.end()) {
+            broker_->RemoveSource(prior->second.toStdString());
+            if (const auto retired_identity = ParseContentIdentity(prior->second))
+                waveforms_->unregisterSource(*retired_identity);
+            registered_sources_.erase(prior);
+            if (source_)
+                source_->closeClip();
+        }
+        return;
+    }
+    const auto proof = session_->sourceProof(asset_id);
+    if (const auto prior = broker_->Source(identity.toStdString());
+        prior && prior->access == access && prior->proof == proof)
+        return;
+    ensureThumbnailSource();
+    broker_->RegisterSource(identity.toStdString(),
+                            ThumbnailSourceInfo{access->Path(), *cache_identity, metadata->width, metadata->height,
+                                                metadata->fps_num, metadata->fps_den, access, proof, bool(proof)});
+    waveforms_->registerSource(*cache_identity, access, proof);
+    registered_sources_[asset_id] = identity;
+    refreshClipMetadata();
+}
+
+void EditTimelineAdapter::syncSourceRegistrations() {
+    if (!session_ || (source_revision_ && *source_revision_ == session_->workspace().revision()))
+        return;
+    source_revision_ = session_->workspace().revision();
+    if (session_->workspace().assets().empty()) {
+        broker_->ReleaseSources();
+        waveforms_->releaseSources();
+        registered_sources_.clear();
+        if (source_)
+            source_->closeClip();
+        ++source_registration_revision_;
+        emit sourcesChanged();
+        return;
+    }
+    for (const auto& asset : session_->workspace().assets())
+        registerSessionSource(asset.id);
+    ++source_registration_revision_;
+    emit sourcesChanged();
+}
+
 void EditTimelineAdapter::ensureThumbnailSource() {
     if (source_.has_value())
         return;
-    source_.emplace();
-    connect(&source_.value(), &TimelineThumbnailSource::clipOpened, this, &EditTimelineAdapter::handleClipOpened);
-    connect(&source_.value(), &TimelineThumbnailSource::tileReady, this, &EditTimelineAdapter::handleTileReady);
-    connect(&source_.value(), &TimelineThumbnailSource::runFinished, this, &EditTimelineAdapter::handleRunFinished);
+    source_.emplace(broker_);
+    source_->setAnalysisPressure(playback_pressure_, exclusive_pressure_);
+    connect(&source_.value(), &TimelineThumbnailSource::brokerProgressChanged, this,
+            &EditTimelineAdapter::tileProgressChanged);
 }
 
 void EditTimelineAdapter::handleClipOpened(int width, int height, const QStringList& audio_track_names) {
@@ -165,8 +235,6 @@ void EditTimelineAdapter::handleTileReady(qint64 time_ms, const QImage& image, q
 
 void EditTimelineAdapter::invalidateRun() {
     active_run_ = 0;
-    if (source_.has_value())
-        source_->cancel();
 }
 
 void EditTimelineAdapter::deliverTileForTest(qint64 time_ms, const QImage& image, quint64 run_id) {
@@ -228,28 +296,65 @@ const QStringList& EditTimelineAdapter::audioTrackLabels() const noexcept {
     return audio_track_labels_;
 }
 
-int EditTimelineAdapter::tilesExpected() const noexcept {
-    return tiles_expected_;
+int EditTimelineAdapter::tilesExpected() const {
+    return fixture_tile_count_ ? tiles_expected_ : broker_->Coverage().expected;
 }
 
-int EditTimelineAdapter::tilesReady() const noexcept {
-    return tiles_ready_;
+int EditTimelineAdapter::tilesReady() const {
+    return fixture_tile_count_ ? tiles_ready_ : broker_->Coverage().ready;
 }
 
-bool EditTimelineAdapter::generatingPreviews() const noexcept {
-    return !previews_unavailable_ && tiles_expected_ > 0 && tiles_ready_ < tiles_expected_;
+bool EditTimelineAdapter::generatingPreviews() const {
+    if (previews_unavailable_)
+        return false;
+    if (fixture_tile_count_)
+        return tiles_expected_ > 0 && tiles_ready_ < tiles_expected_;
+    const auto coverage = broker_->Coverage();
+    return coverage.ready + coverage.unavailable < coverage.expected;
 }
 
-bool EditTimelineAdapter::previewsUnavailable() const noexcept {
-    return previews_unavailable_;
+bool EditTimelineAdapter::previewsUnavailable() const {
+    if (previews_unavailable_)
+        return true;
+    if (fixture_tile_count_)
+        return false;
+    const auto coverage = broker_->Coverage();
+    return coverage.expected > 0 && coverage.unavailable == coverage.expected;
 }
 
 QString EditTimelineAdapter::previewState() const {
     if (previews_unavailable_)
         return QStringLiteral("unavailable");
-    if (tiles_expected_ <= 0)
+    if (fixture_tile_count_)
+        return tiles_expected_ <= 0             ? QStringLiteral("idle")
+               : tiles_ready_ < tiles_expected_ ? QStringLiteral("generating")
+                                                : QStringLiteral("ready");
+    const auto coverage = broker_->Coverage();
+    if (!coverage.expected)
         return QStringLiteral("idle");
-    return tiles_ready_ < tiles_expected_ ? QStringLiteral("generating") : QStringLiteral("ready");
+    if (coverage.unavailable == coverage.expected)
+        return QStringLiteral("unavailable");
+    return coverage.ready + coverage.unavailable < coverage.expected ? QStringLiteral("generating")
+                                                                     : QStringLiteral("ready");
+}
+
+void EditTimelineAdapter::refreshClipMetadata() {
+    if (!session_ || clip_path_.isEmpty() || fixture_tile_count_)
+        return;
+    for (const auto& asset : session_->workspace().assets()) {
+        if (QString::fromStdWString(asset.path) != clip_path_)
+            continue;
+        if (const auto metadata = session_->sourceMetadata(asset.id)) {
+            clip_video_width_ = metadata->width;
+            clip_video_height_ = metadata->height;
+            QStringList labels;
+            for (const auto& track : metadata->audio_metadata.actual_tracks)
+                labels.append(QString::fromStdString(track.name));
+            setAudioTrackLabels(labels);
+            scheduleTileRun();
+        }
+        break;
+    }
 }
 
 void EditTimelineAdapter::setAudioTrackLabels(const QStringList& labels) {
@@ -268,12 +373,7 @@ void EditTimelineAdapter::setAudioTrackLabels(const QStringList& labels) {
 }
 
 void EditTimelineAdapter::openClip(const QString& master_path, qint64 duration_ms) {
-    // Before anything is published for the new clip: the previous run is dropped
-    // here, not when the new one starts. Between the two lies the debounce and
-    // the source's own reopen, and a tile decoded from the previous clip that
-    // arrived in that window used to be counted as this clip's.
     invalidateRun();
-    source_clip_path_.clear();
     clip_path_ = master_path;
     duration_ms_ = duration_ms;
     clip_video_width_ = 0;
@@ -288,6 +388,7 @@ void EditTimelineAdapter::openClip(const QString& master_path, qint64 duration_m
     if (provider_ != nullptr)
         provider_->clear();
     setAudioTrackLabels({});
+    refreshClipMetadata();
     emit tileProgressChanged();
     refreshMarkers();
     scheduleTileRun();
@@ -295,7 +396,6 @@ void EditTimelineAdapter::openClip(const QString& master_path, qint64 duration_m
 
 void EditTimelineAdapter::closeClip() {
     invalidateRun();
-    source_clip_path_.clear();
     clip_path_.clear();
     resize_debounce_.stop();
     fixture_tile_count_.reset();
@@ -332,10 +432,13 @@ void EditTimelineAdapter::refreshMarkers() {
 void EditTimelineAdapter::scheduleTileRun() {
     tile_width_ = TimelineTileWidth(kTimelineVideoRowHeight, clip_video_width_, clip_video_height_);
     emit layoutChanged();
-    resize_debounce_.start();
+    if (fixture_tile_count_)
+        resize_debounce_.start();
 }
 
 void EditTimelineAdapter::startTileRun() {
+    if (!fixture_tile_count_)
+        return;
     const int tile_count = TimelineTileCount(track_width_, tile_width_);
     std::vector<int64_t> keyframes;
     if (session_ != nullptr)
@@ -361,33 +464,6 @@ void EditTimelineAdapter::startTileRun() {
         emit tileProgressChanged();
         return;
     }
-
-    if (!TimelineTileRunAllowed(source_.has_value(), clip_path_, source_clip_path_, static_cast<int>(times.size()))) {
-        active_run_ = 0;
-        // A clip whose source is still being reopened keeps its expected count:
-        // the strip is genuinely mid-decode and says so. Without a clip at all
-        // there is nothing to wait for.
-        if (clip_path_.isEmpty() || times.empty())
-            tiles_expected_ = 0;
-        tile_model_.clear();
-        emit tileProgressChanged();
-        return;
-    }
-
-    // QCR-307. A fresh run over a clip the engine DID open gets a fresh verdict:
-    // a resize is a new decode and may well succeed where the last one did not.
-    // A clip that failed to open keeps its verdict, because re-running it would
-    // only replace "Preview unavailable" with "Generating previews…" for the
-    // length of a run that is guaranteed to decode nothing — which is the exact
-    // lie this item exists to remove, once per resize.
-    if (previews_unavailable_ && clip_video_width_ > 0 && clip_video_height_ > 0)
-        previews_unavailable_ = false;
-
-    active_run_ = source_->requestTiles(times, kTimelineVideoRowHeight);
-    tile_model_.beginRun(active_run_);
-    if (provider_ != nullptr)
-        provider_->clear();
-    emit tileProgressChanged();
 }
 
 void EditTimelineAdapter::setFixture(const QStringList& audio_track_labels, int tile_count) {
@@ -407,6 +483,216 @@ void EditTimelineAdapter::applyUnavailablePreviewsForHarness() {
         return;
     previews_unavailable_ = true;
     emit tileProgressChanged();
+}
+
+void EditTimelineAdapter::configureThumbnailCache(const ThumbnailRequestBroker::Config& config) {
+    if (source_.has_value())
+        return;
+    broker_ = std::make_shared<ThumbnailRequestBroker>(config);
+}
+
+void EditTimelineAdapter::configureWaveformCache(const WaveformCacheService::Config& config) {
+    waveforms_ = std::make_unique<WaveformCacheService>(config, WaveformCacheService::DecoderFactory{});
+}
+
+void EditTimelineAdapter::useSyntheticMediaForHarness(ThumbnailRequestBroker::SyntheticImages images,
+                                                      WaveformCacheService::DecoderFactory decoders,
+                                                      const std::filesystem::path& waveform_root) {
+    broker_->UseSyntheticImagesForHarness(std::move(images));
+    WaveformCacheService::Config config;
+    config.root = waveform_root;
+    waveforms_ = std::make_unique<WaveformCacheService>(config, std::move(decoders));
+}
+
+bool EditTimelineAdapter::registerThumbnailSource(const QString& identityHex, const QString& path, int videoWidth,
+                                                  int videoHeight, int fpsNum, int fpsDen) {
+    const auto identity = ParseContentIdentity(identityHex);
+    if (!identity || path.isEmpty())
+        return false;
+    ensureThumbnailSource();
+    if (const auto prior = broker_->Source(identityHex.toLower().toStdString());
+        prior && prior->path == std::filesystem::path(path.toStdWString()) &&
+        (prior->access || (prior->video_width == videoWidth && prior->video_height == videoHeight &&
+                           prior->fps_num == fpsNum && prior->fps_den == fpsDen)))
+        return true;
+    broker_->RegisterSource(identityHex.toLower().toStdString(),
+                            ThumbnailSourceInfo{std::filesystem::path(path.toStdWString()), *identity, videoWidth,
+                                                videoHeight, fpsNum, fpsDen});
+    ++source_registration_revision_;
+    emit sourcesChanged();
+    return true;
+}
+
+QVariantList EditTimelineAdapter::thumbnailTiles(const QString& identityHex, qint64 sourceInUs, qint64 sourceOutUs,
+                                                 qreal widthPx, int heightPx) {
+    ++thumbnail_queries_;
+    QVariantList result;
+    const QString identity = identityHex.toLower();
+    const auto source = broker_->Source(identity.toStdString());
+    if (!source)
+        return result;
+    const auto tiles = ThumbnailTilesForWindow(sourceInUs, sourceOutUs, widthPx, heightPx, source->video_width,
+                                               source->video_height, source->fps_num, source->fps_den);
+    result.reserve(static_cast<qsizetype>(tiles.size()));
+    for (const auto& tile : tiles) {
+        // The source time is the tile's identity within one strip, so a keyed
+        // model keeps the tiles a changed window still shows.
+        result.append(QVariantMap{{QStringLiteral("id"), QVariant::fromValue<qulonglong>(tile.time_us)},
+                                  {QStringLiteral("timeUs"), QVariant::fromValue<qint64>(tile.time_us)},
+                                  {QStringLiteral("x"), tile.x},
+                                  {QStringLiteral("width"), tile.width},
+                                  {QStringLiteral("source"), EditThumbnailUrl(identity, tile.time_us, heightPx)}});
+    }
+    // One window of lookahead on each side covers a pan or scroll by a view
+    // width without waiting for a decode.
+    constexpr std::size_t kPrefetchLimit = 64;
+    const qint64 span = sourceOutUs - sourceInUs;
+    if (span > 0 && widthPx > 0) {
+        const auto times = ThumbnailGridTimes(std::max<qint64>(0, sourceInUs - span), sourceOutUs + span,
+                                              static_cast<double>(span) / widthPx, heightPx, source->video_width,
+                                              source->video_height, source->fps_num, source->fps_den, kPrefetchLimit);
+        broker_->Prefetch(identity.toStdString(), times, heightPx);
+    }
+    return result;
+}
+
+QString EditTimelineAdapter::posterForIdentity(const QString& identityHex, int heightPx) const {
+    if (!broker_->Source(identityHex.toLower().toStdString()))
+        return {};
+    constexpr std::array<int, 5> buckets{32, 48, 64, 96, 128};
+    const auto desired = std::clamp(heightPx, 1, 128);
+    return EditThumbnailUrl(identityHex, 0, *std::lower_bound(buckets.begin(), buckets.end(), desired));
+}
+
+void EditTimelineAdapter::retireThumbnailInterest(qulonglong clipInterestId) {
+    clip_thumbnail_interests_.erase(clipInterestId);
+    broker_->RemoveInterest(clipInterestId);
+    waveforms_->removeVisibleInterest(clipInterestId);
+    emit tileProgressChanged();
+}
+
+QVariantList EditTimelineAdapter::thumbnailTilesForClip(qulonglong clipInterestId, const QString& identityHex,
+                                                        qint64 sourceInUs, qint64 sourceOutUs, qreal widthPx,
+                                                        int heightPx, qreal devicePixelRatio, qint64 playheadSourceUs,
+                                                        qint64 trimSourceUs) {
+    ++thumbnail_queries_;
+    QVariantList result;
+    const auto source = broker_->Source(identityHex.toLower().toStdString());
+    if (!source || !clipInterestId || !std::isfinite(devicePixelRatio) || devicePixelRatio <= 0)
+        return result;
+    constexpr std::array<int, 5> buckets{32, 48, 64, 96, 128};
+    const auto desired = static_cast<int>(std::clamp(std::ceil(heightPx * devicePixelRatio), 1.0, 128.0));
+    const auto bucket = *std::lower_bound(buckets.begin(), buckets.end(), desired);
+    const auto tiles = ThumbnailTilesForWindow(sourceInUs, sourceOutUs, widthPx, heightPx, source->video_width,
+                                               source->video_height, source->fps_num, source->fps_den);
+    std::vector<ThumbnailRequestBroker::InterestTile> interests;
+    result.reserve(static_cast<qsizetype>(tiles.size()));
+    for (std::size_t index = 0; index < tiles.size(); ++index) {
+        const auto& tile = tiles[index];
+        const int priority = index == 0 || index + 1 == tiles.size() ? 1 : index % 4 == 0 ? 2 : 3;
+        interests.push_back(
+            {tile.time_us, bucket, priority, std::abs(tile.time_us - (sourceInUs + (sourceOutUs - sourceInUs) / 2))});
+        result.append(QVariantMap{{QStringLiteral("id"), QVariant::fromValue<qulonglong>(tile.time_us)},
+                                  {QStringLiteral("timeUs"), QVariant::fromValue<qint64>(tile.time_us)},
+                                  {QStringLiteral("x"), tile.x},
+                                  {QStringLiteral("width"), tile.width},
+                                  {QStringLiteral("source"), EditThumbnailUrl(identityHex, tile.time_us, bucket)}});
+    }
+    const auto span = sourceOutUs - sourceInUs;
+    if (span > 0 && widthPx > 0) {
+        const auto lookahead = ThumbnailGridTimes(std::max<qint64>(0, sourceInUs - span), sourceOutUs + span,
+                                                  static_cast<double>(span) / widthPx, heightPx, source->video_width,
+                                                  source->video_height, source->fps_num, source->fps_den, 128);
+        for (const auto time : lookahead)
+            if (time < sourceInUs || time >= sourceOutUs)
+                interests.push_back({time, bucket, 4});
+    }
+    clip_thumbnail_interests_[clipInterestId] = {identityHex.toLower().toStdString(), sourceInUs, sourceOutUs,
+                                                 std::move(interests)};
+    updateThumbnailRelevance(clipInterestId, playheadSourceUs, trimSourceUs);
+    return result;
+}
+
+void EditTimelineAdapter::updateThumbnailRelevance(qulonglong clipInterestId, qint64 playheadSourceUs,
+                                                   qint64 trimSourceUs) {
+    const auto found = clip_thumbnail_interests_.find(clipInterestId);
+    if (found == clip_thumbnail_interests_.end())
+        return;
+    const auto& interest = found->second;
+    auto tiles = interest.tiles;
+    for (int target = 0; target < 2; ++target) {
+        const auto urgent = target == 0 ? playheadSourceUs : trimSourceUs;
+        if (urgent < 0 || (target == 0 && (urgent < interest.from_us || urgent >= interest.to_us)))
+            continue;
+        auto nearest = tiles.end();
+        for (auto tile = tiles.begin(); tile != tiles.end(); ++tile)
+            if ((target == 1 || tile->priority <= 3) &&
+                (nearest == tiles.end() || std::abs(tile->time_us - urgent) < std::abs(nearest->time_us - urgent)))
+                nearest = tile;
+        if (nearest != tiles.end())
+            nearest->priority = 1;
+    }
+    broker_->ReplaceInterest(clipInterestId, interest.identity, tiles, ++view_generation_);
+    emit tileProgressChanged();
+}
+
+void EditTimelineAdapter::setForegroundBusy(bool busy) {
+    setAnalysisPressure(false, busy);
+}
+
+void EditTimelineAdapter::setAnalysisPressure(bool playback, bool exclusive) {
+    waveforms_->setAnalysisPressure(playback, exclusive);
+    playback_pressure_ = playback;
+    exclusive_pressure_ = exclusive;
+    if (source_.has_value())
+        source_->setAnalysisPressure(playback, exclusive);
+    else
+        broker_->SetAnalysisPressure(playback, exclusive);
+}
+
+qint64 EditTimelineAdapter::clearThumbnailCache() {
+    const auto released = static_cast<qint64>(broker_->Clear());
+    emit mediaCachesCleared();
+    ++source_registration_revision_;
+    emit sourcesChanged();
+    return released;
+}
+
+EditThumbnailImageProvider* EditTimelineAdapter::createThumbnailImageProvider() {
+    return new EditThumbnailImageProvider(broker_);
+}
+
+QObject* EditTimelineAdapter::waveformService() const {
+    return waveforms_.get();
+}
+
+QString EditTimelineAdapter::waveformSource(const QString& identityHex, const QString& path, int containerIndex,
+                                            const QString& streamIdentityHex, qint64 sourceEndUs,
+                                            qulonglong clipInterestId, qint64 distanceUs) {
+    const auto identity = ParseContentIdentity(identityHex);
+    if (!identity || path.isEmpty() || containerIndex < 0 || sourceEndUs <= 0)
+        return {};
+    engine::WaveformSourceKey source;
+    source.content_sha256 = *identity;
+    source.container_index = static_cast<std::uint32_t>(containerIndex);
+    if (!streamIdentityHex.isEmpty()) {
+        const auto bytes = QByteArray::fromHex(streamIdentityHex.toLatin1());
+        if (bytes.size() != static_cast<qsizetype>(source.stream_identity.size()) ||
+            bytes.toHex() != streamIdentityHex.toLower().toLatin1())
+            return {};
+        std::memcpy(source.stream_identity.data(), bytes.constData(), source.stream_identity.size());
+    }
+    const auto key = waveforms_->request(source, path, sourceEndUs);
+    waveforms_->setVisibleInterest(clipInterestId, key, distanceUs);
+    return key;
+}
+
+qint64 EditTimelineAdapter::clearMediaCaches() {
+    const auto released = static_cast<qint64>(broker_->Clear()) + waveforms_->clearCache();
+    emit mediaCachesCleared();
+    ++source_registration_revision_;
+    emit sourcesChanged();
+    return released;
 }
 
 } // namespace exosnap::quick

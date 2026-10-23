@@ -73,6 +73,66 @@ TEST(EditorExportPlan, FinishedVideoCopyAudioMix) {
     EXPECT_EQ(plan->output_audio_streams, 1u);
 }
 
+TEST(EditorExportPlan, OccupiedScopeRetainsInteriorGapsAndExcludesEmptyEnds) {
+    Fixture f;
+    for (auto& clip : f.snapshot.timeline.clips)
+        clip.start_us = 2'000'000;
+    f.snapshot.timeline.duration_us = 9'000'000;
+    f.intent.span = EditExportSpan::OccupiedContent;
+    f.facts.video_render_available = true;
+    const auto plan = f.prepare();
+    ASSERT_TRUE(plan->ready());
+    EXPECT_EQ(plan->span_in_us, 2'000'000);
+    EXPECT_EQ(plan->span_out_us, 6'000'000);
+}
+
+TEST(EditorExportPlan, SelectedClipsFreezeOnlyRequestedContributions) {
+    Fixture f;
+    f.intent.span = EditExportSpan::SelectedClips;
+    f.intent.selected_clip_ids = {1};
+    f.facts.video_render_available = true;
+    const auto plan = f.prepare();
+    ASSERT_TRUE(plan->ready());
+    ASSERT_EQ(plan->snapshot.timeline.clips.size(), 1u);
+    EXPECT_EQ(plan->snapshot.timeline.clips.front().id, 1u);
+    EXPECT_EQ(plan->audio_path, EditAudioPath::Absent);
+    const auto hash = plan->hash;
+    f.intent.selected_clip_ids = {1, 2};
+    EXPECT_NE(f.prepare()->hash, hash);
+}
+
+TEST(EditorExportPlan, DisabledExcludedSourceDoesNotBlockSelectedOutput) {
+    Fixture f;
+    auto excluded = f.snapshot.timeline.clips.back();
+    excluded.id = 99;
+    excluded.asset = 99;
+    excluded.enabled = false;
+    f.snapshot.timeline.clips.push_back(excluded);
+    f.intent.span = EditExportSpan::SelectedClips;
+    f.intent.selected_clip_ids = {1};
+    f.facts.video_render_available = true;
+    EXPECT_TRUE(f.prepare()->ready());
+}
+
+TEST(EditorExportPlan, TimeSelectionAndPartialJunctionOwnershipStayExplicit) {
+    Fixture f;
+    f.intent.span = EditExportSpan::TimeRange;
+    f.intent.selection_in_us = 1'000'000;
+    f.intent.selection_out_us = 3'000'000;
+    f.facts.video_render_available = true;
+    const auto plan = f.prepare();
+    ASSERT_TRUE(plan->ready());
+    EXPECT_EQ(plan->span_in_us, 1'000'000);
+    EXPECT_EQ(plan->span_out_us, 3'000'000);
+    f.snapshot.timeline.junctions.push_back({8, 1, 1, 98});
+    f.intent.span = EditExportSpan::SelectedClips;
+    f.intent.selected_clip_ids = {1};
+    const auto partial = f.prepare();
+    EXPECT_TRUE(std::any_of(partial->issues.begin(), partial->issues.end(), [](const auto& issue) {
+        return issue.code == EditExportIssueCode::PartialJunctionOwnership;
+    }));
+}
+
 TEST(EditorExportPlan, OriginalFourTracks) {
     Fixture f;
     f.intent.mode = EditExportMode::OriginalStreams;

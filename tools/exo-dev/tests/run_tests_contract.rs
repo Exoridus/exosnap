@@ -1133,6 +1133,7 @@ fn an_msvc_import_that_fails_aborts_the_run_with_a_receipt() {
     let outcome = run_with(
         &Options {
             no_build: false,
+            child_env: vec![("PATH".into(), "".into())],
             ..options(repo.path(), &build)
         },
         &host,
@@ -1145,6 +1146,9 @@ fn an_msvc_import_that_fails_aborts_the_run_with_a_receipt() {
             .any(|r| r.contains("No Visual Studio installation"))
     );
     assert_eq!(outcome.receipt()["build_status"], "not-started");
+    let timeline = host.timeline();
+    assert!(timeline.contains(&"msvc".to_string()));
+    assert!(!timeline.contains(&"BeforeBuild".to_string()));
 }
 
 #[test]

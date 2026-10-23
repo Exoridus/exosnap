@@ -1,16 +1,23 @@
+#include <algorithm>
+#include <array>
 #include <cstdint>
+#include <exosnap/engine/edit_types.h>
 #include <gtest/gtest.h>
 #include <ios>
+#include <iterator>
 #include <optional>
 #include <system_error>
 #include <utility>
 
 #include "edit_playback_pacing.h"
 #include "exosnap/engine/edit_player_engine.h"
+#include "exosnap/engine/edit_player_session.h"
 #include <exosnap/engine/audio_media_manifest.h>
+#include <exosnap/engine/edit_timeline_export.h>
 
 extern "C" {
 #include <libavcodec/codec_id.h>
+#include <libavcodec/codec_par.h>
 #include <libavcodec/defs.h>
 #include <libavcodec/packet.h>
 #include <libavformat/avformat.h>
@@ -26,6 +33,7 @@ extern "C" {
 #include <atomic>
 #include <chrono>
 #include <condition_variable>
+#include <cstdlib>
 #include <cstring>
 #include <filesystem>
 #include <fstream>
@@ -39,6 +47,8 @@ using exosnap::engine::AudioTrackDescription;
 using exosnap::engine::DemuxedThroughUs;
 using exosnap::engine::DemuxReadAheadWaitUs;
 using exosnap::engine::EditPlayerEngine;
+using exosnap::engine::ExtrapolatedClockUs;
+using exosnap::engine::PresentationHoldUs;
 using exosnap::engine::ShouldAdmitDemuxedPacket;
 using exosnap::engine::ShouldConvertDecodedFrame;
 using exosnap::engine::ShouldDemuxMorePackets;
@@ -91,7 +101,8 @@ class ScopedQuietAvLog {
 // One audio track per entry; an EMPTY name writes no container track name at
 // all, which is exactly what a recording made before names were muxed looks
 // like.
-bool WriteTestMkv(const std::filesystem::path& path, const std::vector<std::string>& audio_names) {
+bool WriteTestMkv(const std::filesystem::path& path, const std::vector<std::string>& audio_names,
+                  int audio_rate = kTestAudioRate, int64_t impulse_sample = -1, int64_t audio_offset_ms = 0) {
     AVFormatContext* fmt = nullptr;
     if (avformat_alloc_output_context2(&fmt, nullptr, "matroska", nullptr) < 0 || fmt == nullptr)
         return false;
@@ -123,7 +134,7 @@ bool WriteTestMkv(const std::filesystem::path& path, const std::vector<std::stri
         ast->codecpar->codec_type = AVMEDIA_TYPE_AUDIO;
         ast->codecpar->codec_id = AV_CODEC_ID_PCM_S16LE;
         ast->codecpar->format = AV_SAMPLE_FMT_S16;
-        ast->codecpar->sample_rate = kTestAudioRate;
+        ast->codecpar->sample_rate = audio_rate;
         ast->codecpar->bits_per_coded_sample = 16;
         av_channel_layout_default(&ast->codecpar->ch_layout, 2);
         ast->time_base = AVRational{1, 1000};
@@ -144,7 +155,7 @@ bool WriteTestMkv(const std::filesystem::path& path, const std::vector<std::stri
     // layout the container declares. The payload itself is filler.
     constexpr int kNalBytes = 32;
     const int video_bytes = 4 + kNalBytes;
-    const int audio_bytes = static_cast<int>(kTestAudioRate * kTestAudioBlockMs / 1000) * 2 * 2;
+    const int audio_bytes = static_cast<int>(audio_rate * kTestAudioBlockMs / 1000) * 2 * 2;
     const int blocks_per_frame = static_cast<int>(kTestVideoFrameMs / kTestAudioBlockMs);
 
     for (int i = 0; i < kTestVideoFrames && ok; ++i) {
@@ -170,8 +181,14 @@ bool WriteTestMkv(const std::filesystem::path& path, const std::vector<std::stri
                 if (!ok)
                     break;
                 std::memset(pkt->data, 0, static_cast<size_t>(audio_bytes));
+                const auto first = (frame_ms + block * kTestAudioBlockMs) * audio_rate / 1000;
+                if (impulse_sample >= first && impulse_sample < first + audio_bytes / 4) {
+                    const std::array<int16_t, 2> impulse{16384, 16384};
+                    std::memcpy(pkt->data + (impulse_sample - first) * 4, impulse.data(), sizeof(impulse));
+                }
                 pkt->stream_index = static_cast<int>(track) + 1;
-                pkt->pts = pkt->dts = frame_ms + block * kTestAudioBlockMs;
+                pkt->pts = pkt->dts =
+                    frame_ms + block * kTestAudioBlockMs + (track + 1 == audio_names.size() ? audio_offset_ms : 0);
                 pkt->duration = kTestAudioBlockMs;
                 pkt->flags |= AV_PKT_FLAG_KEY;
                 ok = av_interleaved_write_frame(fmt, pkt) >= 0;
@@ -208,6 +225,105 @@ class ScopedTestMkv {
     ScopedQuietAvLog quiet_;
     std::filesystem::path path_;
 };
+
+TEST(EditPlayerSessionAdmission, ExternalVideoClockDoesNotAdmitUnconfirmedSourceAudio) {
+    ScopedTestMkv file("edit_player_external_clock_admission.mkv");
+    ASSERT_TRUE(WriteTestMkv(file.path(), {""}));
+    exosnap::engine::EditPlayerSession session;
+    std::string error;
+    ASSERT_TRUE(session.Open(file.path(), error)) << error;
+    ASSERT_TRUE(session.MonitoringConfirmationRequired());
+    session.Play(100'000);
+    EXPECT_LT(session.ClockSnapshotUs(), 0);
+    int64_t clock = 250'000;
+    session.PlayWithExternalClock(clock, 1, [&]() { return clock; });
+    EXPECT_EQ(session.CurrentPositionUs(), 250'000);
+    clock = 350'000;
+    EXPECT_EQ(session.CurrentPositionUs(), 350'000);
+    EXPECT_TRUE(session.MonitoringConfirmationRequired());
+    session.Pause();
+    EXPECT_EQ(session.CurrentPositionUs(), 350'000);
+    EXPECT_LT(session.ClockSnapshotUs(), 0);
+    session.Play(100'000);
+    EXPECT_LT(session.ClockSnapshotUs(), 0);
+}
+
+TEST(EditPlayerEngine, DecodedAudioCoverageDistinguishesSilenceFromTailPadding) {
+    ScopedTestMkv file("edit_player_audio_coverage.mkv");
+    ASSERT_TRUE(WriteTestMkv(file.path(), {""}));
+    EditPlayerEngine engine;
+    std::string error;
+    ASSERT_TRUE(engine.OpenAudioStream(file.path(), 1, error)) << error;
+    std::vector<float> samples;
+    ASSERT_TRUE(engine.ReadAudioStreamSequential(1, 23800, 600, samples, error)) << error;
+    ASSERT_EQ(samples.size(), 1200u);
+    EXPECT_TRUE(std::all_of(samples.begin(), samples.end(), [](float sample) { return sample == 0; }));
+    const std::vector<exosnap::engine::AudioSampleSpan> expected{{23800, 24000}};
+    EXPECT_EQ(engine.AudioDecodedCoverage(), expected);
+    ASSERT_TRUE(engine.ReadAudioStreamSequential(1, 24400, 100, samples, error)) << error;
+    EXPECT_TRUE(engine.AudioDecodedCoverage().empty());
+    engine.Close();
+    EXPECT_TRUE(engine.AudioDecodedCoverage().empty());
+}
+
+TEST(EditPlayerEngine, DecodedAudioCoverageExcludesALeadingSourceGap) {
+    ScopedTestMkv file("edit_player_audio_coverage_gap.mkv");
+    ASSERT_TRUE(WriteTestMkv(file.path(), {"anchor", "delayed"}, 48000, -1, 50));
+    const auto metadata = exosnap::engine::ProbeEditMedia(file.path());
+    ASSERT_TRUE(metadata.error.empty()) << metadata.error;
+    ASSERT_TRUE(metadata.timestamp_origin_us);
+    EXPECT_EQ(*metadata.timestamp_origin_us, 0);
+    EditPlayerEngine engine;
+    std::string error;
+    ASSERT_TRUE(engine.OpenAudioStream(file.path(), 2, error)) << error;
+    std::vector<float> samples;
+    ASSERT_TRUE(engine.ReadAudioStreamSequential(2, 0, 4800, samples, error)) << error;
+    ASSERT_EQ(samples.size(), 9600u);
+    EXPECT_TRUE(std::all_of(samples.begin(), samples.end(), [](float sample) { return sample == 0; }));
+    const std::vector<exosnap::engine::AudioSampleSpan> expected{{2400, 4800}};
+    EXPECT_EQ(engine.AudioDecodedCoverage(), expected);
+}
+
+TEST(EditPlayerEngine, DecodedAudioCoverageUsesTheCommonMediaOrigin) {
+    ScopedTestMkv file("edit_player_audio_shifted_origin.mkv");
+    ASSERT_TRUE(WriteTestMkv(file.path(), {"delayed"}, 48000, -1, 50));
+    const auto metadata = exosnap::engine::ProbeEditMedia(file.path());
+    ASSERT_TRUE(metadata.error.empty()) << metadata.error;
+    ASSERT_TRUE(metadata.timestamp_origin_us);
+    EXPECT_EQ(*metadata.timestamp_origin_us, 50000);
+    EditPlayerEngine engine;
+    std::string error;
+    ASSERT_TRUE(engine.OpenAudioStream(file.path(), 1, error)) << error;
+    std::vector<float> samples;
+    ASSERT_TRUE(engine.ReadAudioStreamSequential(1, 0, 4800, samples, error)) << error;
+    const std::vector<exosnap::engine::AudioSampleSpan> expected{{0, 4800}};
+    EXPECT_EQ(engine.AudioDecodedCoverage(), expected);
+}
+
+TEST(EditPlayerEngine, NormalizedDetailWindowKeepsImpulseAlignmentAcrossSourceRates) {
+    for (const auto rate : {44100, 48000, 96000}) {
+        SCOPED_TRACE(rate);
+        ScopedTestMkv file("edit_player_audio_detail_alignment.mkv");
+        ASSERT_TRUE(WriteTestMkv(file.path(), {""}, rate, rate / 4));
+        EditPlayerEngine reference;
+        EditPlayerEngine detail;
+        std::string error;
+        ASSERT_TRUE(reference.OpenAudioStream(file.path(), 1, error)) << error;
+        ASSERT_TRUE(detail.OpenAudioStream(file.path(), 1, error)) << error;
+        std::vector<float> canonical, window;
+        ASSERT_TRUE(reference.ReadAudioStreamSequential(1, 0, 24000, canonical, error)) << error;
+        ASSERT_TRUE(detail.ReadAudioStreamSequential(1, 11800, 600, window, error)) << error;
+        ASSERT_EQ(window.size(), 1200u);
+        const std::vector<exosnap::engine::AudioSampleSpan> expected{{11800, 12400}};
+        EXPECT_EQ(detail.AudioDecodedCoverage(), expected);
+        for (std::size_t i = 0; i < window.size(); ++i)
+            ASSERT_NEAR(window[i], canonical[23600 + i], 1e-6) << "sample=" << i / 2;
+        const auto peak = std::max_element(window.begin(), window.end());
+        ASSERT_NE(peak, window.end());
+        EXPECT_GT(*peak, 0.1f);
+        EXPECT_NEAR(static_cast<double>(std::distance(window.begin(), peak) / 2), 200, 1);
+    }
+}
 
 TEST(EditPlayerEngine, OpenNonexistentFileFails) {
     EditPlayerEngine engine;
@@ -421,6 +537,29 @@ TEST(EditPlaybackPacing, ClockAtZeroStillDiscardsEarlierFrames) {
     // Boundary: clock 0 is a real clock reading, not the "no clock" sentinel.
     EXPECT_TRUE(ShouldConvertDecodedFrame(0, 0));
     EXPECT_FALSE(ShouldConvertDecodedFrame(-1, 0));
+}
+
+// ---- Presentation hold (video waits for the audio clock) -----------------
+
+TEST(EditPlaybackPacing, FrameAheadOfTheClockIsHeldForItsLead) {
+    EXPECT_EQ(PresentationHoldUs(1'500'000, 1'000'000), 500'000);
+}
+
+TEST(EditPlaybackPacing, DueOrPastFrameIsNotHeld) {
+    EXPECT_EQ(PresentationHoldUs(1'000'000, 1'000'000), 0);
+    EXPECT_EQ(PresentationHoldUs(900'000, 1'000'000), 0);
+}
+
+TEST(EditPlaybackPacing, NoClockNeverHolds) {
+    EXPECT_EQ(PresentationHoldUs(1'000'000, -1), 0);
+}
+
+TEST(EditPlaybackPacing, ClockIsExtrapolatedBetweenSamplesUpToTheBound) {
+    EXPECT_EQ(ExtrapolatedClockUs(1'000'000, 12'000, 100'000), 1'012'000);
+    // A clock that stopped advancing must not let video run on without it.
+    EXPECT_EQ(ExtrapolatedClockUs(1'000'000, 5'000'000, 100'000), 1'100'000);
+    EXPECT_EQ(ExtrapolatedClockUs(1'000'000, -3'000, 100'000), 1'000'000);
+    EXPECT_EQ(ExtrapolatedClockUs(-1, 12'000, 100'000), -1);
 }
 
 // ---- ShouldAdmitDemuxedPacket (the demuxer's soft/hard queue rule) --------
@@ -723,6 +862,10 @@ TEST(EditPlayerEngine, DecodeFrameAtRawDetectsNativeHdr10Source) {
     EXPECT_GT(frame->height, 0u);
 }
 
+// The fixture's 1/15360 s time base: a stored timestamp stands for any instant
+// within half a tick of it.
+constexpr int64_t kFixtureHalfTickUs = 32;
+
 TEST(EditPlayerEngine, ForwardPlaybackDoesNotReseekEachFrame) {
     const auto fixture = std::filesystem::path(__FILE__).parent_path() / "fixtures" / "reordered_h264.mp4";
     EditPlayerEngine engine;
@@ -732,7 +875,7 @@ TEST(EditPlayerEngine, ForwardPlaybackDoesNotReseekEachFrame) {
         const auto target = index * 1'000'000 / 30;
         const auto frame = engine.ReadFrameAtRaw(target, exosnap::engine::VideoReadMode::Sequential, 1);
         ASSERT_TRUE(frame) << index;
-        EXPECT_LE(frame->pts_us, target);
+        EXPECT_LE(frame->pts_us, target + kFixtureHalfTickUs);
         EXPECT_LT(target - frame->pts_us, 34'000);
     }
     const auto measurements = engine.VideoReadStats();
@@ -784,7 +927,7 @@ TEST(EditPlayerEngine, ForwardCursorNeverSelectsPastRequestedSourceTime) {
         const auto first = engine.ReadFrameAtRaw(source_in, mode, 7);
         ASSERT_TRUE(first);
         ASSERT_EQ(first->pts_us, source_in);
-        const auto before_next = engine.ReadFrameAtRaw(source_in + 33'332, mode, 7);
+        const auto before_next = engine.ReadFrameAtRaw(source_in + 33'333 - kFixtureHalfTickUs - 1, mode, 7);
         ASSERT_TRUE(before_next);
         EXPECT_EQ(before_next->pts_us, source_in);
         const auto after_next = engine.ReadFrameAtRaw(source_in + 33'334, mode, 7);
@@ -795,6 +938,74 @@ TEST(EditPlayerEngine, ForwardCursorNeverSelectsPastRequestedSourceTime) {
         ASSERT_TRUE(backward);
         EXPECT_EQ(backward->pts_us, source_in);
         EXPECT_EQ(first->y_plane[0], backward->y_plane[0]);
+    }
+}
+
+// Stream-copies `source` into Matroska with its default millisecond time base,
+// the way most third-party Matroska files store a 30 fps stream: every third
+// frame's instant (66.667 ms, 166.667 ms, ...) is stamped rounded UP.
+bool RemuxToMillisecondMatroska(const std::filesystem::path& source, const std::filesystem::path& destination) {
+    AVFormatContext* input = nullptr;
+    if (avformat_open_input(&input, source.string().c_str(), nullptr, nullptr) < 0)
+        return false;
+    bool ok = avformat_find_stream_info(input, nullptr) >= 0;
+    AVFormatContext* output = nullptr;
+    ok = ok && avformat_alloc_output_context2(&output, nullptr, "matroska", nullptr) >= 0 && output != nullptr;
+    int video = -1;
+    for (unsigned index = 0; ok && index < input->nb_streams; ++index) {
+        if (input->streams[index]->codecpar->codec_type != AVMEDIA_TYPE_VIDEO || video >= 0)
+            continue;
+        AVStream* stream = avformat_new_stream(output, nullptr);
+        ok = stream != nullptr && avcodec_parameters_copy(stream->codecpar, input->streams[index]->codecpar) >= 0;
+        if (ok) {
+            stream->codecpar->codec_tag = 0;
+            stream->time_base = AVRational{1, 1000};
+            video = static_cast<int>(index);
+        }
+    }
+    ok = ok && video >= 0 && avio_open(&output->pb, destination.string().c_str(), AVIO_FLAG_WRITE) >= 0;
+    ok = ok && avformat_write_header(output, nullptr) >= 0;
+    AVPacket* packet = av_packet_alloc();
+    while (ok && packet != nullptr && av_read_frame(input, packet) >= 0) {
+        if (packet->stream_index == video) {
+            av_packet_rescale_ts(packet, input->streams[video]->time_base, output->streams[0]->time_base);
+            packet->stream_index = 0;
+            packet->pos = -1;
+            ok = av_interleaved_write_frame(output, packet) >= 0;
+        }
+        av_packet_unref(packet);
+    }
+    av_packet_free(&packet);
+    if (ok)
+        ok = av_write_trailer(output) >= 0;
+    if (output != nullptr) {
+        if (output->pb != nullptr)
+            avio_closep(&output->pb);
+        avformat_free_context(output);
+    }
+    avformat_close_input(&input);
+    return ok;
+}
+
+TEST(EditPlayerEngine, MillisecondStampsStillYieldEveryFrameOfTheSourceGrid) {
+    const auto fixture = std::filesystem::path(__FILE__).parent_path() / "fixtures" / "reordered_h264.mp4";
+    ScopedTestMkv remuxed("exosnap-ms-stamped-30fps.mkv");
+    ASSERT_TRUE(RemuxToMillisecondMatroska(fixture, remuxed.path()));
+    EditPlayerEngine engine;
+    std::string error;
+    ASSERT_TRUE(engine.Open(remuxed.path(), error)) << error;
+    // The frame grid of a 30 fps output, rounded to whole microseconds the way
+    // a timeline position is. Strictly at-or-before selection held the
+    // previous frame wherever the stamp was rounded up, showing one frame
+    // twice and the next one never.
+    int64_t previous = -1;
+    for (int64_t index = 0; index < 30; ++index) {
+        const auto target = (index * 1'000'000 + 15) / 30;
+        const auto frame = engine.ReadFrameAtRaw(target, exosnap::engine::VideoReadMode::Sequential, 1);
+        ASSERT_TRUE(frame) << index;
+        EXPECT_GT(frame->pts_us, previous) << "frame " << index << " repeated its predecessor";
+        EXPECT_LE(std::abs(frame->pts_us - target), 500) << index;
+        previous = frame->pts_us;
     }
 }
 

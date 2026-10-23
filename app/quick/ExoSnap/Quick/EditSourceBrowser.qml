@@ -1,6 +1,7 @@
 pragma ComponentBehavior: Bound
 import QtQuick
 import QtQuick.Controls
+import QtQuick.Controls.Basic as Basic
 import QtQuick.Layouts
 import QtQuick.Dialogs
 
@@ -10,133 +11,192 @@ Item {
     required property RecordViewModelAdapter recordings
     required property EditTimelineAdapter timeline
     property int currentTab: 0
+    property bool pinned: false
+    property bool pinPreferred: pinned
+    property bool canPin: true
+    property var selectedFolder: ({})
+    property var replacementAsset: 0
+    signal pinToggled()
+    signal closeRequested(bool keyboardActivation)
     objectName: "editSourceBrowser"
 
     function focusTab(index: int): void {
         root.currentTab = (index + 3) % 3;
-        [historyTab, mediaTab, transitionsTab][root.currentTab].forceActiveFocus(Qt.TabFocusReason);
+        [mediaTab, foldersTab, historyTab][root.currentTab].forceActiveFocus(Qt.TabFocusReason);
     }
 
     ColumnLayout {
         anchors.fill: parent
         spacing: 4
-        Flickable {
-            id: tabsScroll
-            objectName: "editSourceTabs"
+        RowLayout {
             Layout.fillWidth: true
-            Layout.preferredHeight: 30
-            contentWidth: tabsRow.width
-            contentHeight: height
-            clip: true
-            boundsBehavior: Flickable.StopAtBounds
-            flickableDirection: Flickable.HorizontalFlick
-            function reveal(tab: Item): void {
-                if (!tab)
-                    return;
-                contentX = Math.max(0, Math.min(Math.max(0, contentWidth - width), tab.x < contentX ? tab.x : Math.max(contentX, tab.x + tab.width - width)));
-            }
-            onWidthChanged: reveal([historyTab, mediaTab, transitionsTab][root.currentTab])
-            WheelHandler {
-                onWheel: event => {
-                    tabsScroll.contentX = Math.max(0, Math.min(Math.max(0, tabsScroll.contentWidth - tabsScroll.width), tabsScroll.contentX - (event.pixelDelta.x || event.pixelDelta.y || event.angleDelta.x || event.angleDelta.y)));
-                    event.accepted = true;
+            spacing: 2
+            Flickable {
+                id: tabsScroll
+                objectName: "editSourceTabs"
+                Layout.fillWidth: true
+                Layout.minimumWidth: 0
+                Layout.preferredHeight: 30
+                contentWidth: tabsRow.width
+                contentHeight: height
+                clip: true
+                boundsBehavior: Flickable.StopAtBounds
+                flickableDirection: Flickable.HorizontalFlick
+                function reveal(tab: Item): void {
+                    if (!tab)
+                        return;
+                    const target = tab.width >= width ? tab.x : tab.x < contentX ? tab.x : Math.max(contentX, tab.x + tab.width - width);
+                    contentX = Math.max(0, Math.min(Math.max(0, contentWidth - width), target));
+                }
+                onWidthChanged: reveal([mediaTab, foldersTab, historyTab][root.currentTab])
+                WheelHandler {
+                    onWheel: event => {
+                        tabsScroll.contentX = Math.max(0, Math.min(Math.max(0, tabsScroll.contentWidth - tabsScroll.width), tabsScroll.contentX - (event.pixelDelta.x || event.pixelDelta.y || event.angleDelta.x || event.angleDelta.y)));
+                        event.accepted = true;
+                    }
+                }
+                Row {
+                    id: tabsRow
+                    Keys.onLeftPressed: root.focusTab(root.currentTab - 1)
+                    Keys.onRightPressed: root.focusTab(root.currentTab + 1)
+                    ExoNavTab {
+                        id: mediaTab
+                        objectName: "editMediaTab"
+                        text: qsTr("Project")
+                        compact: true
+                        selected: root.currentTab === 0
+                        leftPadding: 4
+                        rightPadding: 4
+                        implicitHeight: 30
+                        onActiveFocusChanged: if (activeFocus) tabsScroll.reveal(this)
+                        onSelectedChanged: if (selected) tabsScroll.reveal(this)
+                        Accessible.role: Accessible.PageTab
+                        onClicked: root.currentTab = 0
+                    }
+                    ExoNavTab {
+                        id: foldersTab
+                        objectName: "editFoldersTab"
+                        text: qsTr("Folders")
+                        compact: true
+                        selected: root.currentTab === 1
+                        leftPadding: 4
+                        rightPadding: 4
+                        implicitHeight: 30
+                        onActiveFocusChanged: if (activeFocus) tabsScroll.reveal(this)
+                        onSelectedChanged: if (selected) tabsScroll.reveal(this)
+                        Accessible.role: Accessible.PageTab
+                        onClicked: root.currentTab = 1
+                    }
+                    ExoNavTab {
+                        id: historyTab
+                        objectName: "editHistoryTab"
+                        text: qsTr("Recordings")
+                        compact: true
+                        selected: root.currentTab === 2
+                        leftPadding: 4
+                        rightPadding: 4
+                        implicitHeight: 30
+                        onActiveFocusChanged: if (activeFocus) tabsScroll.reveal(this)
+                        onSelectedChanged: if (selected) tabsScroll.reveal(this)
+                        Accessible.role: Accessible.PageTab
+                        onClicked: root.currentTab = 2
+                    }
                 }
             }
-            Row {
-                id: tabsRow
-                spacing: 0
-                Keys.onLeftPressed: root.focusTab(root.currentTab - 1)
-                Keys.onRightPressed: root.focusTab(root.currentTab + 1)
-                ExoNavTab {
-                    id: historyTab
-                    objectName: "editHistoryTab"
-                    text: qsTr("History")
-                    compact: true
-                    selected: root.currentTab === 0
-                    leftPadding: 4
-                    rightPadding: 4
-                    implicitHeight: 30
-                    onActiveFocusChanged: if (activeFocus)
-                        tabsScroll.reveal(this)
-                    onSelectedChanged: if (selected)
-                        tabsScroll.reveal(this)
-                    Accessible.role: Accessible.PageTab
-                    onClicked: root.currentTab = 0
+            EditActionButton {
+                id: add
+                objectName: "editAddMedia"
+                text: qsTr("Add media")
+                glyph: ExoGlyph.Plus
+                Layout.preferredWidth: 24
+                onClicked: addMenu.open()
+                ExoMenu {
+                    id: addMenu
+                    objectName: "editSourceAddMenu"
+                    y: add.height
+                    ExoMenuItem {
+                        objectName: "editSourceAddFiles"
+                        text: qsTr("Add files")
+                        onTriggered: picker.open()
+                    }
+                    ExoMenuItem {
+                        objectName: "editSourceAddFolder"
+                        text: qsTr("Add folder")
+                        onTriggered: folderPicker.open()
+                    }
                 }
-                ExoNavTab {
-                    id: mediaTab
-                    objectName: "editMediaTab"
-                    text: qsTr("Media")
-                    compact: true
-                    selected: root.currentTab === 1
-                    leftPadding: 4
-                    rightPadding: 4
-                    implicitHeight: 30
-                    onActiveFocusChanged: if (activeFocus)
-                        tabsScroll.reveal(this)
-                    onSelectedChanged: if (selected)
-                        tabsScroll.reveal(this)
-                    Accessible.role: Accessible.PageTab
-                    onClicked: root.currentTab = 1
+            }
+            EditActionButton {
+                objectName: "editMediaPin"
+                ToolTip.text: root.pinPreferred && !root.pinned ? qsTr("Pinned when space is available") : text
+                Layout.preferredWidth: 24
+                text: root.pinPreferred ? qsTr("Unpin") : qsTr("Pin")
+                glyph: ExoGlyph.Pin
+                enabled: root.pinPreferred || root.canPin
+                checkable: true
+                checked: root.pinPreferred
+                onClicked: {
+                    root.pinToggled();
+                    checked = Qt.binding(() => root.pinPreferred);
                 }
-                ExoNavTab {
-                    id: transitionsTab
-                    objectName: "editTransitionsTab"
-                    text: qsTr("Transitions")
-                    compact: true
-                    selected: root.currentTab === 2
-                    leftPadding: 4
-                    rightPadding: 4
-                    implicitHeight: 30
-                    onActiveFocusChanged: if (activeFocus)
-                        tabsScroll.reveal(this)
-                    onSelectedChanged: if (selected)
-                        tabsScroll.reveal(this)
-                    Accessible.role: Accessible.PageTab
-                    onClicked: root.currentTab = 2
+            }
+            EditActionButton {
+                id: closeAction
+                objectName: "editMediaClose"
+                Layout.preferredWidth: 24
+                property bool keyboardActivation: false
+                text: qsTr("Close Media")
+                glyph: ExoGlyph.Close
+                onClicked: root.closeRequested(closeAction.keyboardActivation)
+                Keys.onPressed: event => {
+                    if (event.key === Qt.Key_Space || event.key === Qt.Key_Return || event.key === Qt.Key_Enter)
+                        closeAction.keyboardActivation = true;
+                }
+                PointHandler {
+                    acceptedButtons: Qt.LeftButton
+                    onActiveChanged: if (active) closeAction.keyboardActivation = false
                 }
             }
         }
-        EditActionButton {
-            objectName: "editAddMedia"
-            text: qsTr("Import media")
-            glyph: ExoGlyph.Plus
-            visible: root.currentTab === 1
-            onClicked: picker.open()
-        }
-        Button {
-            id: crossfade
-            objectName: "editCrossfadeItem"
-            visible: root.currentTab === 2
+        ExoButton {
+            objectName: "editPlaceImportedMedia"
             Layout.fillWidth: true
-            text: qsTr("Crossfade")
-            Accessible.description: qsTr("Apply to the cut after the selected video clip, or drag onto a cut.")
-            onClicked: root.session.applyCrossfade()
-            Drag.active: crossfadeDrag.active
-            Drag.supportedActions: Qt.CopyAction
-            Drag.dragType: Drag.Automatic
-            Drag.mimeData: ({
-                    "application/x-exosnap-crossfade": "crossfade"
-                })
-            DragHandler {
-                id: crossfadeDrag
-                target: null
+            visible: root.session.hasPendingImportedMedia
+            text: qsTr("Place imported media")
+            onClicked: root.session.placeImportedMedia()
+        }
+        ExoButton {
+            objectName: "editCancelImport"
+            Layout.fillWidth: true
+            visible: root.session.importPending
+            text: qsTr("Cancel import")
+            onClicked: root.session.cancelPendingImports()
+        }
+        RowLayout {
+            Layout.fillWidth: true
+            visible: root.currentTab === 1 && !!root.selectedFolder.entryId
+            ExoButton {
+                objectName: "editFolderRefresh"
+                Layout.fillWidth: true
+                text: qsTr("Refresh")
+                enabled: !!root.selectedFolder.directory
+                onClicked: root.session.folderModel.refresh(root.selectedFolder.entryId)
             }
-            ToolTip.visible: hovered || activeFocus
-            ToolTip.text: root.session.canCrossfade() ? qsTr("Apply after selected clip (500 ms)") : qsTr("Select a video clip with an adjacent cut, or drag onto a cut.")
-        }
-        Label {
-            visible: root.currentTab === 2
-            text: qsTr("Overlaps linked video and audio. Render export: SDR BT.709, MKV with PCM audio.")
-            wrapMode: Text.Wrap
-            color: ExoTheme.textMuted
-            font.pixelSize: ExoTheme.fontCaption
-            Layout.fillWidth: true
+            ExoButton {
+                objectName: "editFolderRemove"
+                Layout.fillWidth: true
+                text: qsTr("Remove root")
+                visible: !!root.selectedFolder.root
+                onClicked: {
+                    root.session.folderModel.removeRoot(root.selectedFolder.entryId);
+                    root.selectedFolder = ({});
+                }
+            }
         }
         Label {
             objectName: "editSourceEmptyTitle"
-            text: root.currentTab === 0 ? qsTr("No recordings yet") : root.currentTab === 1 ? qsTr("Drop media here") : qsTr("Transitions will appear here when available.")
-            visible: sourceItems.count === 0 && root.currentTab !== 2
+            text: root.currentTab === 0 ? qsTr("Drop media here") : root.currentTab === 1 ? qsTr("No folders added") : qsTr("No recordings yet")
+            visible: sourceItems.count === 0
             color: ExoTheme.textSecondary
             wrapMode: Text.Wrap
             Layout.fillWidth: true
@@ -146,8 +206,8 @@ Item {
         }
         Label {
             objectName: "editSourceEmptyHelp"
-            text: root.currentTab === 0 ? qsTr("Recent recordings appear here automatically.") : qsTr("Or use the Add Media button.")
-            visible: sourceItems.count === 0 && root.currentTab !== 2
+            text: root.currentTab === 2 ? qsTr("Recent recordings appear here automatically.") : qsTr("Add files or a folder with +.")
+            visible: sourceItems.count === 0
             color: ExoTheme.textMuted
             font.pixelSize: ExoTheme.fontCaption
             wrapMode: Text.Wrap
@@ -162,66 +222,189 @@ Item {
             Layout.fillHeight: true
             clip: true
             reuseItems: true
-            model: root.currentTab === 0 ? root.recordings.recentRecordingOptions : root.currentTab === 1 ? root.session.media : []
-            ScrollBar.vertical: ScrollBar {
-                policy: ScrollBar.AsNeeded
+            model: root.currentTab === 0 ? root.session.mediaModel : root.currentTab === 1 ? root.session.folderModel : root.recordings.recentRecordingOptions
+            ScrollBar.vertical: ExoScrollBar { policy: ScrollBar.AsNeeded }
+            // The library owns its keys: Delete must not reach the timeline and
+            // remove a clip selection the user can no longer see.
+            Keys.onDeletePressed: event => event.accepted = true
+            Keys.onPressed: event => {
+                if (event.key === Qt.Key_Backspace)
+                    event.accepted = true;
             }
-            delegate: ItemDelegate {
+            delegate: Basic.ItemDelegate {
                 id: sourceItem
                 required property var modelData
+                required property int index
+                readonly property bool folderEntry: root.currentTab === 1
+                readonly property string detail: folderEntry ? (modelData.error || (modelData.loading ? qsTr("Reading folder...") : ""))
+                    : modelData.verificationReason || modelData.reason || (modelData.verifying ? qsTr("Verifying media...") : modelData.audioChoiceRequired ? qsTr("Choose an audio stream") : modelData.available === false ? qsTr("Media unavailable") : (modelData.metadata || ""))
                 width: sourceItems.width
-                height: 66
-                leftPadding: thumbnail.visible ? 80 : 12
-                text: (modelData.name || modelData.label) + "\n" + (modelData.available ? (modelData.metadata || "") + " " + root.session.formatClock(modelData.durationMs || 0) : qsTr("Media unavailable"))
+                height: folderEntry ? detail.length > 0 ? 60 : 38 : 66
+                leftPadding: folderEntry ? 36 + Math.min(12, modelData.depth || 0) * 12 : thumbnail.visible ? 80 : 12
+                readonly property bool insertable: !folderEntry || modelData.mediaCandidate === true
+                rightPadding: (root.currentTab === 0 ? 38 : ExoTheme.spacingMd) + (insertable ? 30 : 0)
+                highlighted: folderEntry ? root.selectedFolder.entryId === modelData.entryId : ListView.isCurrentItem
+                text: modelData.name || modelData.label
                 Accessible.name: text
+                Accessible.description: detail
+                contentItem: Column {
+                    spacing: 2
+                    Label {
+                        width: parent.width
+                        text: sourceItem.text
+                        elide: Text.ElideMiddle
+                        color: ExoTheme.text
+                        font.family: ExoTheme.sansFamily
+                        font.pixelSize: ExoTheme.fontBody
+                    }
+                    Label {
+                        width: parent.width
+                        visible: sourceItem.detail.length > 0
+                        text: sourceItem.detail
+                        elide: Text.ElideRight
+                        color: sourceItem.modelData.error || sourceItem.modelData.available === false ? ExoTheme.warning : ExoTheme.textSecondary
+                        font.family: ExoTheme.sansFamily
+                        font.pixelSize: ExoTheme.fontCaption
+                    }
+                }
+                background: Rectangle {
+                    color: sourceItem.down || sourceItem.highlighted ? ExoTheme.surfaceHover
+                        : sourceItem.hovered || sourceItem.visualFocus ? ExoTheme.hoverTint(ExoTheme.surfaceRaised) : "transparent"
+                    radius: ExoTheme.radiusSm
+                    border.width: sourceItem.visualFocus ? 1 : 0
+                    border.color: ExoTheme.accent
+                }
+                ExoGlyph {
+                    x: sourceItem.leftPadding - 28
+                    anchors.verticalCenter: parent.verticalCenter
+                    width: 20
+                    height: 20
+                    visible: sourceItem.folderEntry
+                    kind: sourceItem.modelData.directory ? ExoGlyph.Folder : ExoGlyph.AppWindow
+                    color: ExoTheme.textSecondary
+                    Accessible.ignored: true
+                }
                 Image {
                     id: thumbnail
                     x: 4
                     y: 8
                     width: 68
                     height: 48
-                    source: sourceItem.modelData.path === root.timeline.sourcePath ? root.timeline.posterSource : ""
+                    source: !sourceItem.folderEntry && root.timeline.sourceRevision > 0 && sourceItem.modelData.sourceIdentity ? root.timeline.posterForIdentity(sourceItem.modelData.sourceIdentity, Math.ceil(48 * Screen.devicePixelRatio)) : ""
+                    sourceSize: Qt.size(72 * Screen.devicePixelRatio, 48 * Screen.devicePixelRatio)
+                    asynchronous: true
+                    cache: false
                     visible: status === Image.Ready
                     fillMode: Image.PreserveAspectFit
                     Accessible.ignored: true
                 }
-                onDoubleClicked: add()
-                Keys.onReturnPressed: add()
-                function add(): void {
-                    if (root.currentTab === 0)
-                        root.session.addHistory(modelData.path);
-                    else
-                        root.session.appendAsset(modelData.id);
+                EditActionButton {
+                    objectName: "editSourceInsert-" + sourceItem.index
+                    anchors.right: parent.right
+                    anchors.rightMargin: root.currentTab === 0 ? 34 : 4
+                    anchors.verticalCenter: parent.verticalCenter
+                    width: 28
+                    visible: sourceItem.insertable
+                    glyph: ExoGlyph.Plus
+                    text: qsTr("Insert %1 at the playhead").arg(sourceItem.text)
+                    onClicked: sourceItem.insert()
+                }
+                EditActionButton {
+                    objectName: "editSourceActions-" + sourceItem.modelData.id
+                    anchors.right: parent.right
+                    anchors.rightMargin: 4
+                    anchors.verticalCenter: parent.verticalCenter
+                    width: 28
+                    visible: root.currentTab === 0
+                    glyph: ExoGlyph.Overflow
+                    text: qsTr("Actions for %1").arg(sourceItem.text)
+                    onClicked: sourceMenu.open()
+                    ExoMenu {
+                        id: sourceMenu
+                        y: parent.height
+                        ExoMenuItem {
+                            objectName: "editSourceRelink-" + sourceItem.modelData.id
+                            text: qsTr("Relink source…")
+                            onTriggered: {
+                                root.replacementAsset = sourceItem.modelData.id;
+                                replacementPicker.open();
+                            }
+                        }
+                    }
+                }
+                // Click and double click only choose; the document changes only
+                // through Enter, the insert button or a drop.
+                onClicked: {
+                    sourceItems.currentIndex = index;
+                    if (folderEntry) root.selectedFolder = modelData;
+                }
+                onDoubleClicked: {
+                    sourceItems.currentIndex = index;
+                    if (folderEntry && modelData.directory)
+                        root.session.folderModel.toggle(modelData.entryId);
+                }
+                Keys.onReturnPressed: insert()
+                Keys.onEnterPressed: insert()
+                Keys.onRightPressed: if (folderEntry && modelData.directory && !modelData.expanded) root.session.folderModel.toggle(modelData.entryId)
+                Keys.onLeftPressed: if (folderEntry && modelData.directory && modelData.expanded) root.session.folderModel.toggle(modelData.entryId)
+                function insert(): void {
+                    sourceItems.currentIndex = index;
+                    const at = root.session.positionUs;
+                    if (folderEntry) {
+                        root.selectedFolder = modelData;
+                        if (modelData.directory)
+                            root.session.folderModel.toggle(modelData.entryId);
+                        else if (modelData.mediaCandidate)
+                            root.session.routeMediaDrop([modelData.url], true, at);
+                    } else if (root.currentTab === 2) {
+                        root.session.addHistoryUs(modelData.path, at);
+                    } else {
+                        root.session.appendAssetUs(modelData.id, at);
+                    }
                 }
                 Drag.active: drag.active
                 Drag.supportedActions: Qt.CopyAction
                 Drag.dragType: Drag.Automatic
-                Drag.mimeData: root.currentTab === 0 ? {
+                Drag.mimeData: folderEntry ? {"text/uri-list": String(modelData.url)} : root.currentTab === 2 ? {
                     "application/x-exosnap-history": modelData.path
-                } : {
-                    "application/x-exosnap-asset": String(modelData.id)
-                }
-                DragHandler {
-                    id: drag
-                    target: null
-                }
+                } : {"application/x-exosnap-asset": String(modelData.id)}
+                DragHandler { id: drag; target: null }
                 ToolTip.visible: hovered || activeFocus
-                ToolTip.text: qsTr("Double-click or press Enter to add")
+                ToolTip.text: folderEntry ? String(modelData.url) + (detail.length > 0 ? "\n" + detail : "") : detail
             }
         }
     }
     FileDialog {
         id: picker
-        title: qsTr("Import media")
+        title: qsTr("Add files")
         fileMode: FileDialog.OpenFiles
-        nameFilters: [qsTr("Video files (*.mkv *.mp4 *.mov *.webm *.avi)"), qsTr("All files (*)")]
+        nameFilters: [qsTr("Media files (*.mkv *.mp4 *.mov *.webm *.avi *.wav *.mp3 *.flac *.m4a *.aac *.ogg *.opus)"), qsTr("All files (*)")]
         onAccepted: root.session.importMediaBatch(selectedFiles)
+    }
+    FileDialog {
+        id: replacementPicker
+        title: qsTr("Choose replacement source")
+        fileMode: FileDialog.OpenFile
+        nameFilters: picker.nameFilters
+        onAccepted: root.session.beginSourceReplacement(root.replacementAsset, selectedFile)
+    }
+    EditSourceReplacement {
+        session: root.session
+        parent: Overlay.overlay
+    }
+    FolderDialog {
+        id: folderPicker
+        title: qsTr("Add folder")
+        onAccepted: {
+            root.session.folderModel.addRoot(folderPicker.selectedFolder);
+            root.currentTab = 1;
+        }
     }
     DropArea {
         anchors.fill: parent
         onDropped: drop => {
             if (drop.hasUrls) {
-                root.session.importMediaBatch(drop.urls);
+                root.session.routeMediaDrop(drop.urls, false);
                 drop.acceptProposedAction();
             }
         }

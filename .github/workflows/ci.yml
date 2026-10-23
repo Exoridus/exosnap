@@ -484,7 +484,7 @@ jobs:
         uses: mozilla-actions/sccache-action@9e7fa8a12102821edf02ca5dbea1acd0f89a2696 # v0.0.10
         # zizmor: ignore[cache-poisoning] -- restored on tag pushes by decision: a cold release build is ~46 min and the key is scoped to runner image + lock files; revisiting it is an ADR, not a lint fix
 
-      # Blocking static analysis runs inside this job, as the last step of the
+      # Blocking static analysis runs after build and before tests in the
       # ci-build-debug profile. Deliberately a step inside build-test-debug
       # rather than a job of its own: build-test-debug is already a required
       # check, so the required status-check set does not change (a brand-new
@@ -523,16 +523,16 @@ jobs:
           restore-keys: |
             clang-tidy-blocking-${{ runner.os }}-
 
-      # Configure (sccache on), qmllint over every QML module, build, the test
-      # suite through exo-dev test without the `live` label (this runner has no
-      # GPU, and a test reading real machine state is excluded rather than
-      # trusted to skip itself), then the scoped blocking clang-tidy set against
-      # HEAD^. Tests and clang-tidy only run behind a build that passed in the
-      # same invocation.
+      # Configure (sccache on), qmllint over every QML module, build, the scoped
+      # blocking clang-tidy set against HEAD^, then the complete test suite through
+      # exo-dev test without the `live` label (this runner has no GPU). The build
+      # supplies the compile database and Ninja dependencies used by clang-tidy.
+      # A blocking tidy failure stops the run before CTest. Both steps require a
+      # build that passed in the same invocation.
       #
       # PowerShell, not bash: Git Bash puts its own link.exe ahead of MSVC's on
       # PATH, and the compiler processes inherit this step's environment.
-      - name: Build, qmllint, test and clang-tidy (exo-dev ci-build-debug)
+      - name: Configure, qmllint, build, clang-tidy and tests (exo-dev ci-build-debug)
         env:
           EVENT: ${{ github.event_name }}
           TIDY_CACHE: ${{ runner.temp }}/clang-tidy-cache

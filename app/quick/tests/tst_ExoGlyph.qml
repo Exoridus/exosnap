@@ -68,7 +68,14 @@ Item {
         "StepBack": ExoGlyph.StepBack,
         "Braces": ExoGlyph.Braces,
         "Hash": ExoGlyph.Hash,
-        "Swatch": ExoGlyph.Swatch
+        "Swatch": ExoGlyph.Swatch,
+        "Pin": ExoGlyph.Pin,
+        "Repeat": ExoGlyph.Repeat,
+        "PlayRange": ExoGlyph.PlayRange,
+        "Pointer": ExoGlyph.Pointer,
+        "RangeTool": ExoGlyph.RangeTool,
+        "Grip": ExoGlyph.Grip,
+        "Mixer": ExoGlyph.Mixer
     })
 
     Component {

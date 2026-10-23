@@ -424,6 +424,7 @@ add_library(exosnap_engine STATIC
     src/edit_frame_gpu_converter.cpp
     src/edit_timeline_compositor.cpp
     src/edit_timeline_reader.cpp
+    src/edit_timeline_audio.cpp
     src/edit_export_plan.cpp
     src/edit_timeline_render.cpp
     src/edit_hybrid_export.cpp
@@ -435,6 +436,10 @@ add_library(exosnap_engine STATIC
     src/playback_clock.cpp
     include/exosnap/engine/edit_player_session.h
     src/edit_player_session.cpp
+    include/exosnap/engine/media_cache_store.h
+    src/media_cache_store.cpp
+    include/exosnap/engine/waveform_cache.h
+    src/waveform_cache.cpp
 )
 
 target_include_directories(exosnap_engine
@@ -1523,6 +1528,15 @@ exosnap_add_gtest(
 )
 target_include_directories(test_edit_audio_mix PRIVATE src)
 
+exosnap_add_gtest(
+    NAME test_edit_timeline_audio
+    TEST_PREFIX engine.
+    SOURCES tests/test_edit_timeline_audio.cpp
+    LIBRARIES exosnap_engine FFmpeg::mux
+)
+target_include_directories(test_edit_timeline_audio PRIVATE src include)
+target_compile_definitions(test_edit_timeline_audio PRIVATE NOMINMAX)
+
 # EditPlayerSession: the top-level orchestrator's lifecycle safety (no real
 # file/device touched -- real playback is user-live-verified, see the plan's
 # Task 11). Links the full exosnap_engine library, which now includes
@@ -1534,6 +1548,17 @@ exosnap_add_gtest(
     LIBRARIES exosnap_engine
 )
 target_include_directories(test_edit_player_session PRIVATE src include)
+
+# EditPlayerSession audio-clocked presentation against the real default output
+# endpoint, played silently. Live: hosted runners have no audio device.
+exosnap_add_gtest(
+    NAME test_edit_player_av_sync
+    TEST_PREFIX engine.
+    LABELS live
+    SOURCES tests/test_edit_player_av_sync.cpp
+    LIBRARIES exosnap_engine FFmpeg::mux
+)
+target_include_directories(test_edit_player_av_sync PRIVATE src include)
 
 # EditFrameGpuConverter (editor-playback GPU render path): WARP-backed proof that
 # the YUV->BGRA shader renders every DecodedPixelFormat exactly like the CPU
@@ -1864,6 +1889,16 @@ exosnap_add_gtest(
     TEST_PREFIX engine.
     SOURCES tests/test_edit_timeline_export.cpp
     LIBRARIES exosnap_engine FFmpeg::mux
+)
+
+# Persistent media caches: store envelope/atomicity/budget, waveform pyramid,
+# keys and analysis. One case decodes the red/blue fixtures named by
+# EXOSNAP_EDIT_RENDER_FIXTURES and skips without them.
+exosnap_add_gtest(
+    NAME test_media_caches
+    TEST_PREFIX engine.
+    SOURCES tests/test_media_cache_store.cpp tests/test_waveform_cache.cpp
+    LIBRARIES exosnap_engine
 )
 
 exosnap_add_gtest(

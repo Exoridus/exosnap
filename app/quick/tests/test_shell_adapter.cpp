@@ -385,6 +385,22 @@ TEST(ShellNavigation, DiagnosticsSectionNamesTheInternalView) {
     EXPECT_EQ(changes, 2);
 }
 
+TEST(ShellNavigation, TheEditPanelLayoutIsPublishedOnlyWhenItChanges) {
+    ShellAdapter adapter;
+    EXPECT_TRUE(adapter.editPanels().isEmpty());
+    int changes = 0;
+    QObject::connect(&adapter, &ShellAdapter::editPanelsChanged, &adapter, [&changes]() { ++changes; });
+    const QVariantMap open{{QStringLiteral("mediaOpen"), true}, {QStringLiteral("sourceTab"), 1}};
+    adapter.setEditPanels(open);
+    EXPECT_EQ(adapter.editPanels(), open);
+    EXPECT_EQ(changes, 1);
+    // A Binding re-evaluating to the same layout is not a change.
+    adapter.setEditPanels(open);
+    EXPECT_EQ(changes, 1);
+    adapter.setEditPanels({});
+    EXPECT_EQ(changes, 2);
+}
+
 TEST(ShellNavigation, EveryDestinationIsDirectlyAddressable) {
     // The visible band is four peers -- Record, Settings, Diagnostics, About.
     // Logs is an internal Diagnostics view, and a sixth destination added here

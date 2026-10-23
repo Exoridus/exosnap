@@ -37,6 +37,13 @@ namespace exosnap::engine {
 
 class EditPlayerSession {
   public:
+    struct SeekPerformance {
+        uint64_t read_count = 0;
+        int64_t read_ns = 0;
+    };
+    // Completed random-access reads, including engine synchronization and decode.
+    // Playback reads are excluded. Safe to sample while a seek is running.
+    [[nodiscard]] SeekPerformance SeekPerformanceSnapshot() const;
     EditPlayerSession();
     ~EditPlayerSession();
 
@@ -50,12 +57,16 @@ class EditPlayerSession {
     // == false, matching "no audio stream" behavior, per the design's stance
     // that a broken audio device should degrade to silent video, not break
     // the whole preview).
-    bool Open(const std::filesystem::path& path, std::string& out_error);
+    bool Open(const std::filesystem::path& path, std::string& out_error, const std::atomic<bool>* cancelled = nullptr);
+    bool Open(const std::shared_ptr<const MediaReadCapability>& source, std::string& out_error,
+              const std::atomic<bool>* cancelled = nullptr);
     void Close();
 
     [[nodiscard]] bool HasAudioStream() const noexcept;
     [[nodiscard]] AudioMetadataReadResult AudioMetadata() const;
-    bool SetMonitorSelection(MonitorSelectionSnapshot selection, std::string& error);
+    // External legacy bindings can require cancellable verification on the current lease.
+    bool SetMonitorSelection(MonitorSelectionSnapshot selection, std::string& error,
+                             const std::atomic<bool>* cancelled = nullptr);
     [[nodiscard]] bool MonitoringConfirmationRequired() const;
 
     // The opened clip's own frame rate in fps, or 0.0 when unknown -- the
@@ -86,6 +97,12 @@ class EditPlayerSession {
     // see that method's doc comment.
     void Play(int64_t start_us = 0, uint64_t generation = 0);
 
+    // Plays raw video without source audio against an absolute source-time
+    // clock. Samples the callback only from the owning thread when position is
+    // read. Its dependencies must remain alive until Pause or Close returns.
+    // Source audio remains disabled even when its monitoring choice is unresolved.
+    void PlayWithExternalClock(int64_t start_us, uint64_t generation, std::function<int64_t()> clock);
+
     // Pauses continuous playback. No-op if not open or not playing.
     void Pause();
     void SetVolume(float volume);
@@ -100,6 +117,9 @@ class EditPlayerSession {
     // delivers through SetOnFrameReady's callback -- see that method's doc
     // comment.
     void SeekTo(int64_t target_us, uint64_t generation = 0);
+    // Discards pending seeks and joins an in-flight read before callback remapping.
+    // Call from the owning thread while playback is paused.
+    void CancelPendingSeek();
 
     // Current playback position derived from the audio master clock (0 if no
     // audio stream). While paused, holds steady at the position playback
@@ -125,7 +145,12 @@ class EditPlayerSession {
     // class's own single-thread-only members directly.
     [[nodiscard]] int64_t ClockSnapshotUs() const noexcept;
 
+    // 48 kHz frames the audio output replaced with silence since the current
+    // Play() started delivering sound: audible gaps. Zero without audio output.
+    [[nodiscard]] uint64_t AudioShortfallFrames() const noexcept;
+
   private:
+    void StartPlayback(int64_t start_us, uint64_t generation, std::function<int64_t()> clock);
     struct Impl;
     std::unique_ptr<Impl> impl_;
 };

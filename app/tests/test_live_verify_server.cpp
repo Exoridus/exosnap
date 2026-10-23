@@ -233,6 +233,111 @@ class StubSource final : public LiveVerifySource {
     bool ExportCancel(QString*) override {
         return true;
     }
+    bool ExportSetOptions(const QJsonObject&, QString*) override {
+        return true;
+    }
+    bool ExportConfirm(QString*) override {
+        return true;
+    }
+    bool ExportDiscard(QString*) override {
+        return true;
+    }
+    bool ExportReset(QString*) override {
+        return true;
+    }
+    [[nodiscard]] EditOutcome LastEditOutcome() const override {
+        return {};
+    }
+    EditIntent EditImportMedia(const QString&, bool, qint64, QString*) override {
+        return EditIntent::Delivered;
+    }
+    EditIntent EditAppendRecording(const QString&, qint64, QString*) override {
+        return EditIntent::Delivered;
+    }
+    EditIntent EditAppendMedia(quint64, qint64, QString*) override {
+        return EditIntent::Delivered;
+    }
+    EditIntent EditSelectClip(quint64, QString*) override {
+        return EditIntent::Delivered;
+    }
+    EditIntent EditSelectTransition(quint64, QString*) override {
+        return EditIntent::Delivered;
+    }
+    EditIntent EditSelectGap(quint64, qint64, QString*) override {
+        return EditIntent::Delivered;
+    }
+    EditIntent EditMoveClip(quint64, qint64, bool, QString*) override {
+        return EditIntent::Delivered;
+    }
+    EditIntent EditTrimClip(quint64, qint64, qint64, QString*) override {
+        return EditIntent::Delivered;
+    }
+    EditIntent EditSplit(QString*) override {
+        return EditIntent::Delivered;
+    }
+    EditIntent EditDelete(bool, QString*) override {
+        return EditIntent::Delivered;
+    }
+    EditIntent EditCloseGap(QString*) override {
+        return EditIntent::Delivered;
+    }
+    EditIntent EditDeleteTrack(quint64, bool, QString*) override {
+        return EditIntent::Delivered;
+    }
+    EditIntent EditUndo(QString*) override {
+        return EditIntent::Delivered;
+    }
+    EditIntent EditRedo(QString*) override {
+        return EditIntent::Delivered;
+    }
+    EditIntent EditApplyCrossfade(quint64, qint64, QString*) override {
+        return EditIntent::Delivered;
+    }
+    EditIntent EditRemoveTransition(QString*) override {
+        return EditIntent::Delivered;
+    }
+    EditIntent EditSetJunctionWindow(qint64, qint64, QString*) override {
+        return EditIntent::Delivered;
+    }
+    EditIntent EditSetJunctionCurve(const QString&, double, QString*) override {
+        return EditIntent::Delivered;
+    }
+    EditIntent EditSetJunctionAudioLaw(const QString&, QString*) override {
+        return EditIntent::Delivered;
+    }
+    EditIntent EditSetJunctionCut(qint64, QString*) override {
+        return EditIntent::Delivered;
+    }
+    EditIntent EditSetClipFade(quint64, bool, qint64, QString*) override {
+        return EditIntent::Delivered;
+    }
+    EditIntent EditSetFixedTimelineEnd(bool, qint64, QString*) override {
+        return EditIntent::Delivered;
+    }
+    EditIntent EditSetOption(const QString&, bool, QString*) override {
+        return EditIntent::Delivered;
+    }
+    EditIntent EditSetSelectionBoundary(bool, QString*) override {
+        return EditIntent::Delivered;
+    }
+    EditIntent EditSetPlaying(bool, QString*) override {
+        return EditIntent::Delivered;
+    }
+    EditIntent EditFrameStep(int, QString*) override {
+        return EditIntent::Delivered;
+    }
+    EditIntent EditSetVolume(double, QString*) override {
+        return EditIntent::Delivered;
+    }
+    EditIntent EditConfirmMonitoring(const QStringList&, bool, QString*) override {
+        return EditIntent::Delivered;
+    }
+    EditIntent EditSetPanel(const QString&, bool, bool, QString*) override {
+        return EditIntent::Delivered;
+    }
+    EditIntent EditSetSourceTab(const QString&, QString*) override {
+        return EditIntent::Delivered;
+    }
     bool RecordAddMarker(QString*) override {
         return true;
     }

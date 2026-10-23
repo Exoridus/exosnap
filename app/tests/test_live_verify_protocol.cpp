@@ -63,6 +63,20 @@ AutomationState PermissiveState() {
     state.edit_session_open = true;
     state.edit_visible = true;
     state.can_export = true;
+    // A workspace with something of every kind selected and a step of history
+    // either way, so each timeline command meets its own precondition.
+    state.edit_workspace_revision = 7;
+    state.edit_media_count = 1;
+    state.edit_clip_count = 2;
+    state.edit_track_count = 2;
+    state.edit_selected_clip = 1;
+    state.edit_selected_transition = 1;
+    state.edit_gap_selected = true;
+    state.edit_can_undo = true;
+    state.edit_can_redo = true;
+    state.edit_monitoring_track_count = 1;
+    state.edit_media_panel_can_pin = true;
+    state.edit_details_panel_can_pin = true;
     // One entry in the hub, so the notification commands have something to act
     // on. Deliberately NOT an export in flight: export.cancel needs one and
     // edit.close refuses under one, so that flag is set per command below.
@@ -122,7 +136,9 @@ class FakeSource final : public LiveVerifySource {
         return Marker(QStringLiteral("overlay"));
     }
     [[nodiscard]] QJsonObject EditorSnapshot() const override {
-        return Marker(QStringLiteral("editor"));
+        QJsonObject json = Marker(QStringLiteral("editor"));
+        json.insert(QStringLiteral("export"), export_options);
+        return json;
     }
     [[nodiscard]] QJsonObject DiagnosticsSnapshot() const override {
         return Marker(QStringLiteral("diagnostics"));
@@ -349,6 +365,203 @@ class FakeSource final : public LiveVerifySource {
         calls.append(QStringLiteral("export.cancel"));
         return Outcome(error);
     }
+    bool ExportSetOptions(const QJsonObject& options, QString* error) override {
+        calls.append(QStringLiteral("export.setOptions"));
+        if (!Outcome(error))
+            return false;
+        // The panel refuses values it does not know; the fake accepts what the
+        // test allows, so a refusal is visible as a value that did not change.
+        for (const QString& key : options.keys())
+            if (!refused_export_keys.contains(key))
+                export_options.insert(key, options.value(key));
+        return true;
+    }
+    bool ExportConfirm(QString* error) override {
+        calls.append(QStringLiteral("export.confirm"));
+        return Outcome(error);
+    }
+    bool ExportDiscard(QString* error) override {
+        calls.append(QStringLiteral("export.discard"));
+        if (allow_intents && discard_returns_to_idle)
+            state.edit_export_state = QStringLiteral("idle");
+        return Outcome(error);
+    }
+    bool ExportReset(QString* error) override {
+        calls.append(QStringLiteral("export.reset"));
+        if (allow_intents)
+            state.edit_export_state = QStringLiteral("idle");
+        return Outcome(error);
+    }
+
+    // --- Edit workspace ---------------------------------------------------------
+    // A model in miniature: an intent either names something that exists, or it
+    // does not; a delivered edit is accepted or refused by `model_accepts`, and
+    // an accepted one advances the workspace revision exactly once.
+    bool open_probes_first = false;
+    bool open_has_effect = true;
+    bool targets_exist = true;
+    bool model_accepts = true;
+    bool panels_follow = true;
+    bool discard_returns_to_idle = true;
+    QStringList refused_export_keys;
+    QJsonObject export_options;
+    EditOutcome edit_outcome;
+
+    [[nodiscard]] EditOutcome LastEditOutcome() const override {
+        return edit_outcome;
+    }
+    EditIntent EditImportMedia(const QString& path, bool append, qint64 at_ms, QString* error) override {
+        calls.append(QStringLiteral("edit.importMedia:%1/%2/%3").arg(path).arg(append).arg(at_ms));
+        return Target(error);
+    }
+    EditIntent EditAppendRecording(const QString& path, qint64 at_ms, QString* error) override {
+        calls.append(QStringLiteral("edit.appendRecording:%1/%2").arg(path).arg(at_ms));
+        return Target(error);
+    }
+    EditIntent EditAppendMedia(quint64 media_id, qint64 at_ms, QString* error) override {
+        calls.append(QStringLiteral("edit.appendMedia:%1/%2").arg(media_id).arg(at_ms));
+        return ModelEdit(error);
+    }
+    EditIntent EditSelectClip(quint64 clip_id, QString* error) override {
+        calls.append(QStringLiteral("edit.selectClip:%1").arg(clip_id));
+        const EditIntent intent = Target(error);
+        if (intent == EditIntent::Delivered)
+            state.edit_selected_clip = clip_id;
+        return intent;
+    }
+    EditIntent EditSelectTransition(quint64 outgoing_clip_id, QString* error) override {
+        calls.append(QStringLiteral("edit.selectTransition:%1").arg(outgoing_clip_id));
+        const EditIntent intent = Target(error);
+        if (intent == EditIntent::Delivered)
+            state.edit_selected_transition = outgoing_clip_id;
+        return intent;
+    }
+    EditIntent EditSelectGap(quint64 track_id, qint64 at_ms, QString* error) override {
+        calls.append(QStringLiteral("edit.selectGap:%1/%2").arg(track_id).arg(at_ms));
+        const EditIntent intent = Target(error);
+        if (intent == EditIntent::Delivered)
+            state.edit_gap_selected = true;
+        return intent;
+    }
+    EditIntent EditMoveClip(quint64 clip_id, qint64 at_ms, bool snap, QString* error) override {
+        calls.append(QStringLiteral("edit.moveClip:%1/%2/%3").arg(clip_id).arg(at_ms).arg(snap));
+        return ModelEdit(error);
+    }
+    EditIntent EditTrimClip(quint64 clip_id, qint64 in_ms, qint64 out_ms, QString* error) override {
+        calls.append(QStringLiteral("edit.trimClip:%1/%2/%3").arg(clip_id).arg(in_ms).arg(out_ms));
+        return ModelEdit(error);
+    }
+    EditIntent EditSplit(QString* error) override {
+        calls.append(QStringLiteral("edit.split"));
+        return ModelEdit(error);
+    }
+    EditIntent EditDelete(bool ripple, QString* error) override {
+        calls.append(QStringLiteral("edit.delete:%1").arg(ripple));
+        return ModelEdit(error);
+    }
+    EditIntent EditCloseGap(QString* error) override {
+        calls.append(QStringLiteral("edit.closeGap"));
+        return ModelEdit(error);
+    }
+    EditIntent EditDeleteTrack(quint64 track_id, bool confirmed, QString* error) override {
+        calls.append(QStringLiteral("edit.deleteTrack:%1/%2").arg(track_id).arg(confirmed));
+        return ModelEdit(error);
+    }
+    EditIntent EditUndo(QString* error) override {
+        calls.append(QStringLiteral("edit.undo"));
+        return ModelEdit(error);
+    }
+    EditIntent EditRedo(QString* error) override {
+        calls.append(QStringLiteral("edit.redo"));
+        return ModelEdit(error);
+    }
+    EditIntent EditApplyCrossfade(quint64 clip_id, qint64 duration_ms, QString* error) override {
+        calls.append(QStringLiteral("edit.applyCrossfade:%1/%2").arg(clip_id).arg(duration_ms));
+        return ModelEdit(error);
+    }
+    EditIntent EditRemoveTransition(QString* error) override {
+        calls.append(QStringLiteral("edit.removeTransition"));
+        return ModelEdit(error);
+    }
+    EditIntent EditSetJunctionWindow(qint64 start_ms, qint64 end_ms, QString* error) override {
+        calls.append(QStringLiteral("edit.setJunctionWindow:%1/%2").arg(start_ms).arg(end_ms));
+        return ModelEdit(error);
+    }
+    EditIntent EditSetJunctionCurve(const QString& curve, double bias, QString* error) override {
+        calls.append(QStringLiteral("edit.setJunctionCurve:%1/%2").arg(curve).arg(bias));
+        return ModelEdit(error);
+    }
+    EditIntent EditSetJunctionAudioLaw(const QString& law, QString* error) override {
+        calls.append(QStringLiteral("edit.setJunctionAudioLaw:%1").arg(law));
+        return ModelEdit(error);
+    }
+    EditIntent EditSetJunctionCut(qint64 at_ms, QString* error) override {
+        calls.append(QStringLiteral("edit.setJunctionCut:%1").arg(at_ms));
+        return ModelEdit(error);
+    }
+    EditIntent EditSetClipFade(quint64 clip_id, bool incoming, qint64 duration_ms, QString* error) override {
+        calls.append(QStringLiteral("edit.setClipFade:%1/%2/%3").arg(clip_id).arg(incoming).arg(duration_ms));
+        return ModelEdit(error);
+    }
+    EditIntent EditSetFixedTimelineEnd(bool fixed, qint64 end_ms, QString* error) override {
+        calls.append(QStringLiteral("edit.setFixedTimelineEnd:%1/%2").arg(fixed).arg(end_ms));
+        return ModelEdit(error);
+    }
+    EditIntent EditSetOption(const QString& option, bool enabled, QString* error) override {
+        calls.append(QStringLiteral("edit.setOption:%1/%2").arg(option).arg(enabled));
+        const EditIntent intent = Target(error);
+        if (intent != EditIntent::Delivered)
+            return intent;
+        if (option == QLatin1String("snapping"))
+            state.edit_snapping = enabled;
+        else if (option == QLatin1String("ripple"))
+            state.edit_ripple = enabled;
+        else if (option == QLatin1String("autoCrossfade"))
+            state.edit_auto_crossfade = enabled;
+        else
+            state.edit_linked_selection = enabled;
+        return intent;
+    }
+    EditIntent EditSetSelectionBoundary(bool out, QString* error) override {
+        calls.append(QStringLiteral("edit.setSelectionBoundary:%1").arg(out));
+        return Target(error);
+    }
+    EditIntent EditSetPlaying(bool playing, QString* error) override {
+        calls.append(QStringLiteral("edit.setPlaying:%1").arg(playing));
+        return Target(error);
+    }
+    EditIntent EditFrameStep(int direction, QString* error) override {
+        calls.append(QStringLiteral("edit.frameStep:%1").arg(direction));
+        return Target(error);
+    }
+    EditIntent EditSetVolume(double volume, QString* error) override {
+        calls.append(QStringLiteral("edit.setVolume:%1").arg(volume));
+        return Target(error);
+    }
+    EditIntent EditConfirmMonitoring(const QStringList& track_ids, bool overlap_confirmed, QString* error) override {
+        calls.append(QStringLiteral("edit.confirmMonitoring:%1/%2")
+                         .arg(track_ids.join(QLatin1Char(',')))
+                         .arg(overlap_confirmed));
+        return Target(error);
+    }
+    EditIntent EditSetPanel(const QString& panel, bool open, bool pinned, QString* error) override {
+        calls.append(QStringLiteral("edit.setPanel:%1/%2/%3").arg(panel).arg(open).arg(pinned));
+        const EditIntent intent = Target(error);
+        if (intent == EditIntent::Delivered && panels_follow) {
+            const QString value = !open    ? QStringLiteral("closed")
+                                  : pinned ? QStringLiteral("pinned")
+                                           : QStringLiteral("open");
+            (panel == QLatin1String("media") ? state.edit_media_panel : state.edit_details_panel) = value;
+        }
+        return intent;
+    }
+    EditIntent EditSetSourceTab(const QString& tab, QString* error) override {
+        calls.append(QStringLiteral("edit.setSourceTab:%1").arg(tab));
+        const EditIntent intent = Target(error);
+        if (intent == EditIntent::Delivered && panels_follow)
+            state.edit_source_tab = tab;
+        return intent;
+    }
 
     bool MoveWindowToScreen(const QString& screen_name, QString* error) override {
         calls.append(QStringLiteral("moveToScreen:%1").arg(screen_name));
@@ -463,7 +676,13 @@ class FakeSource final : public LiveVerifySource {
         calls.append(QStringLiteral("edit.open"));
         if (!Outcome(error))
             return false;
-        state.edit_session_open = true;
+        // A recording file that exists is probed before it reaches the timeline.
+        if (!open_has_effect)
+            return true;
+        if (open_probes_first)
+            state.edit_import_pending = true;
+        else
+            state.edit_session_open = true;
         return true;
     }
     bool EditPlayPause(QString* error) override {
@@ -533,6 +752,28 @@ class FakeSource final : public LiveVerifySource {
         *error = QStringLiteral("refused by the application");
         return false;
     }
+    [[nodiscard]] EditIntent Target(QString* error) const {
+        if (!allow_intents) {
+            *error = QStringLiteral("refused by the application");
+            return EditIntent::Failed;
+        }
+        if (!targets_exist) {
+            *error = QStringLiteral("no such clip");
+            return EditIntent::InvalidTarget;
+        }
+        return EditIntent::Delivered;
+    }
+    EditIntent ModelEdit(QString* error) {
+        const EditIntent intent = Target(error);
+        if (intent != EditIntent::Delivered)
+            return intent;
+        ++edit_outcome.sequence;
+        edit_outcome.accepted = model_accepts;
+        edit_outcome.error = model_accepts ? QString() : QStringLiteral("The edit would overlap another clip");
+        if (model_accepts)
+            ++state.edit_workspace_revision;
+        return intent;
+    }
 };
 
 constexpr const char* kRunId = "run-0123456789ab";
@@ -567,7 +808,7 @@ QJsonObject PlausibleParams(const CommandDescriptor& command) {
         if (parameter.type == QLatin1String("enum"))
             params.insert(parameter.name, parameter.values.value(0));
         else if (parameter.type == QLatin1String("int"))
-            params.insert(parameter.name, 0);
+            params.insert(parameter.name, 1);
         else if (parameter.type == QLatin1String("bool"))
             params.insert(parameter.name, true);
         else
@@ -575,6 +816,13 @@ QJsonObject PlausibleParams(const CommandDescriptor& command) {
     }
     if (command.name == QLatin1String("system.hello"))
         params.insert(QStringLiteral("runId"), QString::fromLatin1(kRunId));
+    // The "any" parameters whose type the command itself checks.
+    if (command.name == QLatin1String("edit.setVolume"))
+        params.insert(QStringLiteral("volume"), 0.5);
+    if (command.name == QLatin1String("edit.confirmMonitoring"))
+        params.insert(QStringLiteral("trackIds"), QJsonArray{QStringLiteral("track-1")});
+    if (command.name == QLatin1String("edit.setFixedTimelineEnd"))
+        params.insert(QStringLiteral("endMs"), 60000);
     return params;
 }
 
@@ -877,6 +1125,8 @@ TEST(LiveVerifyDispatcher, EveryListedCommandIsActuallyImplemented) {
         if (command.name == QStringLiteral("system.hello"))
             continue;
         source.state = PermissiveState();
+        if (command.name == QStringLiteral("edit.play"))
+            source.state.edit_playback = QStringLiteral("paused");
         // Two preconditions genuinely disagree about where the user has to be:
         // the source picker belongs to Record, and the scroll surfaces do not
         // exist there. Put each command in the page its own policy names.
@@ -909,6 +1159,14 @@ TEST(LiveVerifyDispatcher, EveryListedCommandIsActuallyImplemented) {
         }
         if (command.name == QStringLiteral("export.cancel"))
             source.state.edit_export_running = true;
+        // The review dialog's buttons need the review; reset needs a finished run.
+        if (command.name == QStringLiteral("export.confirm") || command.name == QStringLiteral("export.discard"))
+            source.state.edit_export_state = QStringLiteral("review");
+        if (command.name == QStringLiteral("export.reset"))
+            source.state.edit_export_state = QStringLiteral("completed");
+        // The side panels exist on the Edit page only.
+        if (command.name == QStringLiteral("edit.setPanel") || command.name == QStringLiteral("edit.setSourceTab"))
+            source.state.page = QString::fromLatin1(page_name::kEdit);
         const QJsonObject response = dispatcher.Dispatch(RequestV2(command.name, PlausibleParams(command)));
         if (!exosnap::product::kRecordingClipsAvailable &&
             (command.name == QLatin1String("clip.request") || command.name == QLatin1String("clip.confirm"))) {
@@ -1824,8 +2082,16 @@ TEST(LiveVerifyEdit, EveryEditCommandExceptOpenNeedsASession) {
     LiveVerifyDispatcher dispatcher(&source, QString::fromLatin1(kRunId));
     ASSERT_TRUE(Ok(Hello(dispatcher, QString::fromLatin1(kRunId), 2)));
 
+    // The commands that fill an empty workspace, step its history (deleting the
+    // last clip leaves an undo step and no session), or change something that
+    // is not on the timeline. Everything else edits content that has to exist.
+    const QStringList without_session = {
+        QStringLiteral("edit.open"),        QStringLiteral("edit.importMedia"), QStringLiteral("edit.appendRecording"),
+        QStringLiteral("edit.appendMedia"), QStringLiteral("edit.undo"),        QStringLiteral("edit.redo"),
+        QStringLiteral("edit.setOption"),   QStringLiteral("edit.setVolume"),   QStringLiteral("edit.setPanel"),
+        QStringLiteral("edit.setSourceTab")};
     for (const CommandDescriptor& command : AllCommands()) {
-        if (!command.name.startsWith(QStringLiteral("edit.")) || command.name == QStringLiteral("edit.open"))
+        if (!command.name.startsWith(QStringLiteral("edit.")) || without_session.contains(command.name))
             continue;
         const QJsonObject response = dispatcher.Dispatch(RequestV2(command.name, PlausibleParams(command)));
         EXPECT_FALSE(Ok(response)) << command.name.toStdString();
@@ -1877,6 +2143,439 @@ TEST(LiveVerifyEdit, CloseSettlesOnTheSessionActuallyBeingClosed) {
     ASSERT_TRUE(Ok(response));
     EXPECT_TRUE(response.value(QStringLiteral("settled")).toBool());
     EXPECT_FALSE(source.State().edit_session_open);
+}
+
+// ---------------------------------------------------------------------------
+// Edit workspace
+// ---------------------------------------------------------------------------
+
+namespace {
+
+QJsonObject ResultOf(const QJsonObject& response) {
+    return response.value(QStringLiteral("result")).toObject();
+}
+
+QJsonObject EditReport(const QJsonObject& response) {
+    return ResultOf(response).value(QStringLiteral("edit")).toObject();
+}
+
+} // namespace
+
+TEST(LiveVerifyEditWorkspace, OpeningARecordingThatIsStillBeingProbedIsAcceptedNotSettled) {
+    FakeSource source;
+    source.state.edit_session_open = false;
+    source.open_probes_first = true;
+    LiveVerifyDispatcher dispatcher(&source, QString::fromLatin1(kRunId));
+    ASSERT_TRUE(Ok(Hello(dispatcher, QString::fromLatin1(kRunId), 2)));
+
+    const QJsonObject probing = dispatcher.Dispatch(RequestV2(QStringLiteral("edit.open")));
+    ASSERT_TRUE(Ok(probing)) << ErrorCode(probing).toStdString();
+    EXPECT_FALSE(probing.value(QStringLiteral("settled")).toBool());
+
+    // A recording that reaches the timeline at once is settled in the answer.
+    source.open_probes_first = false;
+    source.state.edit_import_pending = false;
+    const QJsonObject opened = dispatcher.Dispatch(RequestV2(QStringLiteral("edit.open")));
+    ASSERT_TRUE(Ok(opened));
+    EXPECT_TRUE(opened.value(QStringLiteral("settled")).toBool());
+}
+
+TEST(LiveVerifyEditWorkspace, AnOpenThatNeitherOpensNorProbesIsAFailure) {
+    FakeSource source;
+    source.state.edit_session_open = false;
+    source.open_has_effect = false;
+    LiveVerifyDispatcher dispatcher(&source, QString::fromLatin1(kRunId));
+    ASSERT_TRUE(Ok(Hello(dispatcher, QString::fromLatin1(kRunId), 2)));
+
+    EXPECT_EQ(ErrorCode(dispatcher.Dispatch(RequestV2(QStringLiteral("edit.open")))),
+              QString::fromLatin1(error_code::kOperationFailed));
+}
+
+TEST(LiveVerifyEditWorkspace, AnAcceptedEditReportsTheRevisionItMovedAndTheResultingTimeline) {
+    FakeSource source;
+    LiveVerifyDispatcher dispatcher(&source, QString::fromLatin1(kRunId));
+    ASSERT_TRUE(Ok(Hello(dispatcher, QString::fromLatin1(kRunId), 2)));
+
+    const QJsonObject response = dispatcher.Dispatch(RequestV2(
+        QStringLiteral("edit.moveClip"),
+        QJsonObject{{QStringLiteral("clipId"), 3}, {QStringLiteral("atMs"), 2500}, {QStringLiteral("snap"), false}}));
+    ASSERT_TRUE(Ok(response)) << ErrorCode(response).toStdString();
+    EXPECT_TRUE(response.value(QStringLiteral("settled")).toBool());
+    EXPECT_EQ(source.calls, QStringList{QStringLiteral("edit.moveClip:3/2500/0")});
+    const QJsonObject edit = EditReport(response);
+    EXPECT_TRUE(edit.value(QStringLiteral("attempted")).toBool());
+    EXPECT_TRUE(edit.value(QStringLiteral("changed")).toBool());
+    EXPECT_EQ(edit.value(QStringLiteral("revisionBefore")).toInt(), 7);
+    EXPECT_EQ(edit.value(QStringLiteral("revisionAfter")).toInt(), 8);
+    // The editor snapshot rides along: it is the postcondition, not an echo.
+    EXPECT_EQ(ResultOf(response).value(QStringLiteral("marker")).toString(), QStringLiteral("editor"));
+}
+
+TEST(LiveVerifyEditWorkspace, AModelRefusalIsBlockedInTheWordsTheTimelineShows) {
+    FakeSource source;
+    source.model_accepts = false;
+    LiveVerifyDispatcher dispatcher(&source, QString::fromLatin1(kRunId));
+    ASSERT_TRUE(Ok(Hello(dispatcher, QString::fromLatin1(kRunId), 2)));
+
+    const QJsonObject response = dispatcher.Dispatch(RequestV2(QStringLiteral("edit.split")));
+    EXPECT_FALSE(Ok(response));
+    EXPECT_EQ(ErrorCode(response), QString::fromLatin1(error_code::kBlocked));
+    EXPECT_EQ(ErrorOf(response).value(QStringLiteral("message")).toString(),
+              QStringLiteral("The edit would overlap another clip"));
+    EXPECT_EQ(ErrorOf(response).value(QStringLiteral("requires")).toObject().value(QStringLiteral("edit")).toString(),
+              QStringLiteral("accepted"));
+    EXPECT_EQ(ErrorOf(response).value(QStringLiteral("actual")).toObject().value(QStringLiteral("edit")).toString(),
+              QStringLiteral("refused"));
+    EXPECT_EQ(source.state.edit_workspace_revision, 7U);
+}
+
+TEST(LiveVerifyEditWorkspace, AStaleExpectedRevisionIsRefusedBeforeTheEditRuns) {
+    FakeSource source;
+    LiveVerifyDispatcher dispatcher(&source, QString::fromLatin1(kRunId));
+    ASSERT_TRUE(Ok(Hello(dispatcher, QString::fromLatin1(kRunId), 2)));
+
+    const QJsonObject response = dispatcher.Dispatch(
+        RequestV2(QStringLiteral("edit.delete"), QJsonObject{{QStringLiteral("expectedRevision"), 6}}));
+    EXPECT_FALSE(Ok(response));
+    EXPECT_EQ(ErrorCode(response), QString::fromLatin1(error_code::kInvalidState));
+    EXPECT_EQ(ErrorOf(response)
+                  .value(QStringLiteral("requires"))
+                  .toObject()
+                  .value(QStringLiteral("workspaceRevision"))
+                  .toInt(),
+              6);
+    EXPECT_EQ(
+        ErrorOf(response).value(QStringLiteral("actual")).toObject().value(QStringLiteral("workspaceRevision")).toInt(),
+        7);
+    EXPECT_TRUE(source.calls.isEmpty());
+
+    // The revision the caller has seen goes through.
+    const QJsonObject current = dispatcher.Dispatch(
+        RequestV2(QStringLiteral("edit.delete"), QJsonObject{{QStringLiteral("expectedRevision"), 7}}));
+    EXPECT_TRUE(Ok(current)) << ErrorCode(current).toStdString();
+}
+
+TEST(LiveVerifyEditWorkspace, AnIdThatNamesNothingIsAClientErrorAndNeverAnEdit) {
+    FakeSource source;
+    source.targets_exist = false;
+    LiveVerifyDispatcher dispatcher(&source, QString::fromLatin1(kRunId));
+    ASSERT_TRUE(Ok(Hello(dispatcher, QString::fromLatin1(kRunId), 2)));
+
+    const QJsonObject response = dispatcher.Dispatch(RequestV2(
+        QStringLiteral("edit.trimClip"),
+        QJsonObject{{QStringLiteral("clipId"), 99}, {QStringLiteral("inMs"), 0}, {QStringLiteral("outMs"), 1000}}));
+    EXPECT_FALSE(Ok(response));
+    EXPECT_EQ(ErrorCode(response), QString::fromLatin1(error_code::kInvalidParams));
+    EXPECT_EQ(source.edit_outcome.sequence, 0U);
+}
+
+TEST(LiveVerifyEditWorkspace, NumbersThatAreNotWholeOrInRangeNeverReachTheModel) {
+    FakeSource source;
+    LiveVerifyDispatcher dispatcher(&source, QString::fromLatin1(kRunId));
+    ASSERT_TRUE(Ok(Hello(dispatcher, QString::fromLatin1(kRunId), 2)));
+
+    const QList<QPair<QString, QJsonObject>> bad = {
+        {QStringLiteral("edit.moveClip"), {{QStringLiteral("clipId"), 1.5}, {QStringLiteral("atMs"), 0}}},
+        {QStringLiteral("edit.moveClip"), {{QStringLiteral("clipId"), 1}, {QStringLiteral("atMs"), -5}}},
+        {QStringLiteral("edit.selectClip"), {{QStringLiteral("clipId"), -1}}},
+        {QStringLiteral("edit.split"), {{QStringLiteral("expectedRevision"), 7.25}}},
+        {QStringLiteral("edit.setVolume"), {{QStringLiteral("volume"), 1.5}}},
+        {QStringLiteral("edit.setVolume"), {{QStringLiteral("volume"), QStringLiteral("loud")}}},
+        {QStringLiteral("edit.setJunctionCurve"),
+         {{QStringLiteral("curve"), QStringLiteral("bias")}, {QStringLiteral("bias"), 2}}},
+        {QStringLiteral("edit.confirmMonitoring"), {{QStringLiteral("trackIds"), QStringLiteral("track-1")}}},
+        {QStringLiteral("edit.confirmMonitoring"), {{QStringLiteral("trackIds"), QJsonArray{1, 2}}}},
+        {QStringLiteral("edit.setFixedTimelineEnd"), {{QStringLiteral("fixed"), true}}},
+    };
+    for (const auto& [command, params] : bad) {
+        const QJsonObject response = dispatcher.Dispatch(RequestV2(command, params));
+        EXPECT_FALSE(Ok(response)) << command.toStdString();
+        EXPECT_EQ(ErrorCode(response), QString::fromLatin1(error_code::kInvalidParams)) << command.toStdString();
+    }
+    EXPECT_TRUE(source.calls.isEmpty()) << source.calls.join(QLatin1Char(',')).toStdString();
+}
+
+TEST(LiveVerifyEditWorkspace, SelectionSettlesOnTheSelectionTheStateReports) {
+    FakeSource source;
+    source.state.edit_selected_clip = 0;
+    LiveVerifyDispatcher dispatcher(&source, QString::fromLatin1(kRunId));
+    ASSERT_TRUE(Ok(Hello(dispatcher, QString::fromLatin1(kRunId), 2)));
+
+    const QJsonObject response =
+        dispatcher.Dispatch(RequestV2(QStringLiteral("edit.selectClip"), QJsonObject{{QStringLiteral("clipId"), 4}}));
+    ASSERT_TRUE(Ok(response)) << ErrorCode(response).toStdString();
+    EXPECT_EQ(source.state.edit_selected_clip, 4U);
+
+    // A transition is named by its outgoing clip.
+    ASSERT_TRUE(Ok(dispatcher.Dispatch(
+        RequestV2(QStringLiteral("edit.selectTransition"), QJsonObject{{QStringLiteral("clipId"), 4}}))));
+    EXPECT_EQ(source.state.edit_selected_transition, 4U);
+}
+
+TEST(LiveVerifyEditWorkspace, SelectionCommandsDoNotPretendToBeEdits) {
+    FakeSource source;
+    LiveVerifyDispatcher dispatcher(&source, QString::fromLatin1(kRunId));
+    ASSERT_TRUE(Ok(Hello(dispatcher, QString::fromLatin1(kRunId), 2)));
+
+    const QJsonObject response =
+        dispatcher.Dispatch(RequestV2(QStringLiteral("edit.selectClip"), QJsonObject{{QStringLiteral("clipId"), 2}}));
+    ASSERT_TRUE(Ok(response));
+    EXPECT_FALSE(ResultOf(response).contains(QStringLiteral("edit")));
+    EXPECT_EQ(source.state.edit_workspace_revision, 7U);
+}
+
+TEST(LiveVerifyEditWorkspace, HistoryStepsFollowTheirOwnAvailability) {
+    FakeSource source;
+    source.state.edit_can_undo = false;
+    source.state.edit_can_redo = true;
+    LiveVerifyDispatcher dispatcher(&source, QString::fromLatin1(kRunId));
+    ASSERT_TRUE(Ok(Hello(dispatcher, QString::fromLatin1(kRunId), 2)));
+
+    const QJsonObject refused = dispatcher.Dispatch(RequestV2(QStringLiteral("edit.undo")));
+    EXPECT_EQ(ErrorCode(refused), QString::fromLatin1(error_code::kInvalidState));
+    EXPECT_TRUE(source.calls.isEmpty());
+
+    const QJsonObject redone = dispatcher.Dispatch(RequestV2(QStringLiteral("edit.redo")));
+    ASSERT_TRUE(Ok(redone));
+    EXPECT_TRUE(EditReport(redone).value(QStringLiteral("changed")).toBool());
+}
+
+TEST(LiveVerifyEditWorkspace, TransitionEditsNeedASelectedTransition) {
+    FakeSource source;
+    source.state.edit_selected_transition = 0;
+    LiveVerifyDispatcher dispatcher(&source, QString::fromLatin1(kRunId));
+    ASSERT_TRUE(Ok(Hello(dispatcher, QString::fromLatin1(kRunId), 2)));
+
+    for (const auto& [command, params] : QList<QPair<QString, QJsonObject>>{
+             {QStringLiteral("edit.removeTransition"), {}},
+             {QStringLiteral("edit.setJunctionWindow"), {{QStringLiteral("startMs"), 0}, {QStringLiteral("endMs"), 1}}},
+             {QStringLiteral("edit.setJunctionCurve"), {{QStringLiteral("curve"), QStringLiteral("smooth")}}},
+             {QStringLiteral("edit.setJunctionAudioLaw"), {{QStringLiteral("law"), QStringLiteral("equalPower")}}},
+             {QStringLiteral("edit.setJunctionCut"), {{QStringLiteral("atMs"), 10}}}}) {
+        const QJsonObject response = dispatcher.Dispatch(RequestV2(command, params));
+        EXPECT_EQ(ErrorCode(response), QString::fromLatin1(error_code::kInvalidState)) << command.toStdString();
+    }
+    EXPECT_TRUE(source.calls.isEmpty());
+}
+
+TEST(LiveVerifyEditWorkspace, ImportIsAcceptedNotFinished) {
+    FakeSource source;
+    source.state.edit_session_open = false;
+    LiveVerifyDispatcher dispatcher(&source, QString::fromLatin1(kRunId));
+    ASSERT_TRUE(Ok(Hello(dispatcher, QString::fromLatin1(kRunId), 2)));
+
+    const QJsonObject response = dispatcher.Dispatch(RequestV2(
+        QStringLiteral("edit.importMedia"),
+        QJsonObject{{QStringLiteral("path"), QStringLiteral("C:/media/a.mkv")}, {QStringLiteral("append"), true}}));
+    ASSERT_TRUE(Ok(response)) << ErrorCode(response).toStdString();
+    EXPECT_FALSE(response.value(QStringLiteral("settled")).toBool());
+    EXPECT_EQ(source.calls, QStringList{QStringLiteral("edit.importMedia:C:/media/a.mkv/1/-1")});
+
+    source.targets_exist = false;
+    const QJsonObject missing =
+        dispatcher.Dispatch(RequestV2(QStringLiteral("edit.importMedia"),
+                                      QJsonObject{{QStringLiteral("path"), QStringLiteral("C:/media/none.mkv")}}));
+    EXPECT_EQ(ErrorCode(missing), QString::fromLatin1(error_code::kInvalidParams));
+}
+
+TEST(LiveVerifyEditWorkspace, PlaybackSettlesOnlyWhenThePlayerReportsIt) {
+    FakeSource source;
+    source.state.edit_playback = QStringLiteral("paused");
+    LiveVerifyDispatcher dispatcher(&source, QString::fromLatin1(kRunId));
+    ASSERT_TRUE(Ok(Hello(dispatcher, QString::fromLatin1(kRunId), 2)));
+
+    const QJsonObject play = dispatcher.Dispatch(RequestV2(QStringLiteral("edit.play")));
+    ASSERT_TRUE(Ok(play));
+    EXPECT_FALSE(play.value(QStringLiteral("settled")).toBool());
+
+    // Pausing a paused preview is already where it was asked to be.
+    const QJsonObject pause = dispatcher.Dispatch(RequestV2(QStringLiteral("edit.pause")));
+    ASSERT_TRUE(Ok(pause));
+    EXPECT_TRUE(pause.value(QStringLiteral("settled")).toBool());
+    EXPECT_EQ(source.calls, (QStringList{QStringLiteral("edit.setPlaying:1"), QStringLiteral("edit.setPlaying:0")}));
+}
+
+TEST(LiveVerifyEditWorkspace, MonitoringConfirmationNeedsTracksAndSettlesOnTheRequirementClearing) {
+    FakeSource source;
+    source.state.edit_monitoring_confirmation_required = true;
+    LiveVerifyDispatcher dispatcher(&source, QString::fromLatin1(kRunId));
+    ASSERT_TRUE(Ok(Hello(dispatcher, QString::fromLatin1(kRunId), 2)));
+
+    const QJsonObject response = dispatcher.Dispatch(
+        RequestV2(QStringLiteral("edit.confirmMonitoring"),
+                  QJsonObject{{QStringLiteral("trackIds"), QJsonArray{QStringLiteral("a"), QStringLiteral("b")}},
+                              {QStringLiteral("overlapConfirmed"), true}}));
+    ASSERT_TRUE(Ok(response));
+    EXPECT_FALSE(response.value(QStringLiteral("settled")).toBool());
+    EXPECT_EQ(source.calls, QStringList{QStringLiteral("edit.confirmMonitoring:a,b/1")});
+
+    source.state.edit_monitoring_track_count = 0;
+    const QJsonObject none = dispatcher.Dispatch(
+        RequestV2(QStringLiteral("edit.confirmMonitoring"), QJsonObject{{QStringLiteral("trackIds"), QJsonArray{}}}));
+    EXPECT_EQ(ErrorCode(none), QString::fromLatin1(error_code::kInvalidState));
+}
+
+TEST(LiveVerifyEditWorkspace, OptionsSettleOnTheReportedValue) {
+    FakeSource source;
+    LiveVerifyDispatcher dispatcher(&source, QString::fromLatin1(kRunId));
+    ASSERT_TRUE(Ok(Hello(dispatcher, QString::fromLatin1(kRunId), 2)));
+
+    const QJsonObject response = dispatcher.Dispatch(
+        RequestV2(QStringLiteral("edit.setOption"), QJsonObject{{QStringLiteral("option"), QStringLiteral("ripple")},
+                                                                {QStringLiteral("enabled"), true}}));
+    ASSERT_TRUE(Ok(response));
+    EXPECT_TRUE(source.state.edit_ripple);
+}
+
+TEST(LiveVerifyEditPanels, PanelsBelongToTheEditPage) {
+    FakeSource source;
+    LiveVerifyDispatcher dispatcher(&source, QString::fromLatin1(kRunId));
+    ASSERT_TRUE(Ok(Hello(dispatcher, QString::fromLatin1(kRunId), 2)));
+
+    const QJsonObject response = dispatcher.Dispatch(
+        RequestV2(QStringLiteral("edit.setPanel"),
+                  QJsonObject{{QStringLiteral("panel"), QStringLiteral("details")}, {QStringLiteral("open"), true}}));
+    EXPECT_EQ(ErrorCode(response), QString::fromLatin1(error_code::kInvalidState));
+    EXPECT_EQ(ErrorOf(response).value(QStringLiteral("requires")).toObject().value(QStringLiteral("page")).toString(),
+              QStringLiteral("edit"));
+    EXPECT_TRUE(source.calls.isEmpty());
+}
+
+TEST(LiveVerifyEditPanels, OpeningAndPinningSettleOnTheLayoutThePageReports) {
+    FakeSource source;
+    source.state.page = QString::fromLatin1(page_name::kEdit);
+    LiveVerifyDispatcher dispatcher(&source, QString::fromLatin1(kRunId));
+    ASSERT_TRUE(Ok(Hello(dispatcher, QString::fromLatin1(kRunId), 2)));
+
+    ASSERT_TRUE(Ok(dispatcher.Dispatch(
+        RequestV2(QStringLiteral("edit.setPanel"), QJsonObject{{QStringLiteral("panel"), QStringLiteral("media")},
+                                                               {QStringLiteral("open"), true},
+                                                               {QStringLiteral("pinned"), true}}))));
+    EXPECT_EQ(source.state.edit_media_panel, QStringLiteral("pinned"));
+    ASSERT_TRUE(Ok(dispatcher.Dispatch(RequestV2(
+        QStringLiteral("edit.setSourceTab"), QJsonObject{{QStringLiteral("tab"), QStringLiteral("transitions")}}))));
+    EXPECT_EQ(source.state.edit_source_tab, QStringLiteral("transitions"));
+
+    // The page did not do what was asked: a failure, not a quiet success.
+    source.panels_follow = false;
+    const QJsonObject ignored = dispatcher.Dispatch(
+        RequestV2(QStringLiteral("edit.setPanel"),
+                  QJsonObject{{QStringLiteral("panel"), QStringLiteral("details")}, {QStringLiteral("open"), true}}));
+    EXPECT_EQ(ErrorCode(ignored), QString::fromLatin1(error_code::kOperationFailed));
+}
+
+TEST(LiveVerifyEditPanels, PinningIsRefusedWhenTheViewerIsTooNarrow) {
+    FakeSource source;
+    source.state.page = QString::fromLatin1(page_name::kEdit);
+    source.state.edit_details_panel_can_pin = false;
+    LiveVerifyDispatcher dispatcher(&source, QString::fromLatin1(kRunId));
+    ASSERT_TRUE(Ok(Hello(dispatcher, QString::fromLatin1(kRunId), 2)));
+
+    const QJsonObject response = dispatcher.Dispatch(
+        RequestV2(QStringLiteral("edit.setPanel"), QJsonObject{{QStringLiteral("panel"), QStringLiteral("details")},
+                                                               {QStringLiteral("open"), true},
+                                                               {QStringLiteral("pinned"), true}}));
+    EXPECT_EQ(ErrorCode(response), QString::fromLatin1(error_code::kBlocked));
+    EXPECT_EQ(ErrorOf(response).value(QStringLiteral("requires")).toObject().value(QStringLiteral("canPin")).toBool(),
+              true);
+    EXPECT_TRUE(source.calls.isEmpty());
+}
+
+TEST(LiveVerifyEditState, TheStateCarriesTheEditorRevisionSelectionAndPanels) {
+    FakeSource source;
+    source.state.edit_media_panel = QStringLiteral("open");
+    source.state.edit_source_tab = QStringLiteral("media");
+    source.state.edit_workspace_error = QStringLiteral("The edit would overlap another clip");
+    LiveVerifyDispatcher dispatcher(&source, QString::fromLatin1(kRunId));
+    ASSERT_TRUE(Ok(Hello(dispatcher, QString::fromLatin1(kRunId), 2)));
+
+    const QJsonObject editor = ResultOf(dispatcher.Dispatch(RequestV2(QStringLiteral("ui.getState"))))
+                                   .value(QStringLiteral("editor"))
+                                   .toObject();
+    EXPECT_EQ(editor.value(QStringLiteral("workspaceRevision")).toInt(), 7);
+    EXPECT_EQ(editor.value(QStringLiteral("selectedClip")).toInt(), 1);
+    EXPECT_EQ(editor.value(QStringLiteral("workspaceError")).toString(),
+              QStringLiteral("The edit would overlap another clip"));
+    const QJsonObject panels = editor.value(QStringLiteral("panels")).toObject();
+    EXPECT_EQ(panels.value(QStringLiteral("media")).toObject().value(QStringLiteral("state")).toString(),
+              QStringLiteral("open"));
+    EXPECT_EQ(panels.value(QStringLiteral("sourceTab")).toString(), QStringLiteral("media"));
+    EXPECT_TRUE(editor.value(QStringLiteral("options")).toObject().value(QStringLiteral("snapping")).toBool());
+}
+
+// ---------------------------------------------------------------------------
+// Export review and options
+// ---------------------------------------------------------------------------
+
+TEST(LiveVerifyExport, TheReviewButtonsNeedAReview) {
+    FakeSource source;
+    LiveVerifyDispatcher dispatcher(&source, QString::fromLatin1(kRunId));
+    ASSERT_TRUE(Ok(Hello(dispatcher, QString::fromLatin1(kRunId), 2)));
+
+    for (const char* command : {"export.confirm", "export.discard"}) {
+        const QJsonObject response = dispatcher.Dispatch(RequestV2(QString::fromLatin1(command)));
+        EXPECT_EQ(ErrorCode(response), QString::fromLatin1(error_code::kInvalidState)) << command;
+        EXPECT_EQ(ErrorOf(response)
+                      .value(QStringLiteral("requires"))
+                      .toObject()
+                      .value(QStringLiteral("exportState"))
+                      .toString(),
+                  QStringLiteral("review"));
+    }
+    EXPECT_TRUE(source.calls.isEmpty());
+
+    source.state.edit_export_state = QStringLiteral("review");
+    const QJsonObject confirmed = dispatcher.Dispatch(RequestV2(QStringLiteral("export.confirm")));
+    ASSERT_TRUE(Ok(confirmed));
+    EXPECT_FALSE(confirmed.value(QStringLiteral("settled")).toBool());
+    ASSERT_TRUE(Ok(dispatcher.Dispatch(RequestV2(QStringLiteral("export.discard")))));
+    EXPECT_EQ(source.state.edit_export_state, QStringLiteral("idle"));
+}
+
+TEST(LiveVerifyExport, DiscardThatLeavesTheReviewUpIsAFailedPostcondition) {
+    FakeSource source;
+    source.state.edit_export_state = QStringLiteral("review");
+    source.discard_returns_to_idle = false;
+    LiveVerifyDispatcher dispatcher(&source, QString::fromLatin1(kRunId));
+    ASSERT_TRUE(Ok(Hello(dispatcher, QString::fromLatin1(kRunId), 2)));
+
+    const QJsonObject response = dispatcher.Dispatch(RequestV2(QStringLiteral("export.discard")));
+    EXPECT_EQ(ErrorCode(response), QString::fromLatin1(error_code::kOperationFailed));
+}
+
+TEST(LiveVerifyExport, OptionsAreReadBackAndARefusedValueIsAFailure) {
+    FakeSource source;
+    LiveVerifyDispatcher dispatcher(&source, QString::fromLatin1(kRunId));
+    ASSERT_TRUE(Ok(Hello(dispatcher, QString::fromLatin1(kRunId), 2)));
+
+    const QJsonObject accepted = dispatcher.Dispatch(RequestV2(
+        QStringLiteral("export.setOptions"), QJsonObject{{QStringLiteral("span"), QStringLiteral("occupied")},
+                                                         {QStringLiteral("container"), QStringLiteral("mp4")}}));
+    ASSERT_TRUE(Ok(accepted)) << ErrorCode(accepted).toStdString();
+    EXPECT_EQ(ResultOf(accepted).value(QStringLiteral("export")).toObject().value(QStringLiteral("span")).toString(),
+              QStringLiteral("occupied"));
+
+    source.refused_export_keys = {QStringLiteral("mode")};
+    const QJsonObject refused = dispatcher.Dispatch(RequestV2(
+        QStringLiteral("export.setOptions"), QJsonObject{{QStringLiteral("mode"), QStringLiteral("originalStreams")}}));
+    EXPECT_EQ(ErrorCode(refused), QString::fromLatin1(error_code::kOperationFailed));
+
+    source.state.edit_export_running = true;
+    const QJsonObject running = dispatcher.Dispatch(RequestV2(
+        QStringLiteral("export.setOptions"), QJsonObject{{QStringLiteral("span"), QStringLiteral("entire")}}));
+    EXPECT_EQ(ErrorCode(running), QString::fromLatin1(error_code::kInvalidState));
+}
+
+TEST(LiveVerifyExport, ResetNeedsAFinishedRun) {
+    FakeSource source;
+    LiveVerifyDispatcher dispatcher(&source, QString::fromLatin1(kRunId));
+    ASSERT_TRUE(Ok(Hello(dispatcher, QString::fromLatin1(kRunId), 2)));
+
+    EXPECT_EQ(ErrorCode(dispatcher.Dispatch(RequestV2(QStringLiteral("export.reset")))),
+              QString::fromLatin1(error_code::kInvalidState));
+    source.state.edit_export_state = QStringLiteral("failed");
+    ASSERT_TRUE(Ok(dispatcher.Dispatch(RequestV2(QStringLiteral("export.reset")))));
+    EXPECT_EQ(source.state.edit_export_state, QStringLiteral("idle"));
 }
 
 // ---------------------------------------------------------------------------
@@ -2062,7 +2761,12 @@ TEST(LiveVerifyDescribe, IdempotencyIsDeclaredAndPlayPauseIsTheExceptionThatIsNo
     // two notifications), and webcam.overlay.set, whose effect repeats but whose
     // answer does not: the applied sequence advances on every accepted call, which
     // is what lets a caller tell a second identical request from a dropped one.
-    EXPECT_EQ(non_idempotent, 12);
+    // Twelve editor edits act on what the timeline holds now, so a repeat is a
+    // second edit: importMedia, appendRecording and appendMedia (another copy),
+    // split, delete, closeGap and deleteTrack (the next target), undo and redo
+    // (the next history step), applyCrossfade and removeTransition (the next
+    // cut), and frameStep (the next frame).
+    EXPECT_EQ(non_idempotent, 24);
 }
 
 // ---------------------------------------------------------------------------

@@ -157,6 +157,14 @@ SettingsAdapter::SettingsAdapter(QObject* parent) : QObject(parent) {
     rebuildDerivedText();
 }
 
+void SettingsAdapter::clearMediaCaches() {
+    emit clearMediaCachesRequested();
+}
+
+void SettingsAdapter::completeMediaCacheClear() {
+    emit mediaCachesCleared();
+}
+
 void SettingsAdapter::setOutputFolderValidator(OutputFolderValidator validator) {
     output_folder_validator_ = validator ? std::move(validator) : OutputFolderValidator(ValidateOutputFolder);
 }

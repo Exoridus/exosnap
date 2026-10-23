@@ -64,7 +64,8 @@ Window {
     title: qsTr("ExoSnap Overlay — Countdown")
     color: "transparent"
 
-    visible: exclusion.granted && root.countdownActive && root.remainingSeconds > 0
+    readonly property bool compositionRequested: root.countdownActive && root.remainingSeconds > 0
+    visible: (exclusion.granted || exclusion.renderOnlyPreview) && root.compositionRequested
 
     width: root.circleSize + 2 * root.shadowMargin
     height: root.circleSize + 2 * root.shadowMargin
@@ -98,7 +99,9 @@ Window {
         // Rendered through the item's own layer, so the effect draws this
         // circle rather than duplicating it, and `autoPaddingEnabled` grows the
         // layer to fit the blur instead of clipping it at the circle's edge.
-        layer.enabled: true
+        // Software composition cannot render shader layers. Keep the actual
+        // circle visible in the headless preview without claiming its shadow.
+        layer.enabled: !exclusion.renderOnlyPreview
         layer.effect: MultiEffect {
             shadowEnabled: true
             // Literal rather than a token on the window root: a `layer.effect`

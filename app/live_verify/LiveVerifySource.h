@@ -30,6 +30,7 @@
 #include <QJsonObject>
 #include <QJsonValue>
 #include <QString>
+#include <QStringList>
 
 #include <cstdint>
 
@@ -299,6 +300,93 @@ class LiveVerifySource {
     // resolved from the settings and the clip.
     virtual bool ExportStart(QString* error) = 0;
     virtual bool ExportCancel(QString* error) = 0;
+
+    // --- Edit workspace (protocol 2) ----------------------------------------
+    // Each of these calls the Q_INVOKABLE the timeline, the Media panel, Details
+    // or a shortcut calls, with the interaction options (snapping, ripple, auto
+    // crossfade, linked selection) the user has set. Overlap rules, snapping,
+    // linked groups and history stay in the workspace model.
+    //
+    // A refusal by the timeline model is NOT a failed intent: the intent was
+    // delivered, and the model's answer is observed through LastEditOutcome().
+    enum class EditIntent {
+        Delivered,
+        // An id or value that names nothing the workspace holds. A client
+        // error, answered as one.
+        InvalidTarget,
+        // The surface could not be reached, or the product refused before the
+        // model was asked.
+        Failed,
+    };
+
+    // What the last timeline edit attempt did. `sequence` advances once per
+    // attempt that reached the model, accepted or refused; `accepted` is that
+    // attempt's answer and `error` the text the timeline header shows.
+    struct EditOutcome {
+        quint64 sequence = 0;
+        bool accepted = true;
+        QString error;
+    };
+    [[nodiscard]] virtual EditOutcome LastEditOutcome() const = 0;
+
+    // The Media panel's import, from one local file. Asynchronous: the probe
+    // runs off the GUI thread and the result lands in the media list.
+    virtual EditIntent EditImportMedia(const QString& path, bool append, qint64 at_ms, QString* error) = 0;
+    // A History row: a completed recording this process knows by its path.
+    virtual EditIntent EditAppendRecording(const QString& path, qint64 at_ms, QString* error) = 0;
+    // `at_ms` < 0 appends at the timeline end.
+    virtual EditIntent EditAppendMedia(quint64 media_id, qint64 at_ms, QString* error) = 0;
+    virtual EditIntent EditSelectClip(quint64 clip_id, QString* error) = 0;
+    // Transitions are named by their outgoing clip, as the surface names them.
+    virtual EditIntent EditSelectTransition(quint64 outgoing_clip_id, QString* error) = 0;
+    virtual EditIntent EditSelectGap(quint64 track_id, qint64 at_ms, QString* error) = 0;
+    virtual EditIntent EditMoveClip(quint64 clip_id, qint64 at_ms, bool snap, QString* error) = 0;
+    virtual EditIntent EditTrimClip(quint64 clip_id, qint64 in_ms, qint64 out_ms, QString* error) = 0;
+    virtual EditIntent EditSplit(QString* error) = 0;
+    virtual EditIntent EditDelete(bool ripple, QString* error) = 0;
+    // The gap-closure preview and its Apply, as one intent.
+    virtual EditIntent EditCloseGap(QString* error) = 0;
+    // `confirmed` is the answer to the track-delete confirmation dialog.
+    virtual EditIntent EditDeleteTrack(quint64 track_id, bool confirmed, QString* error) = 0;
+    virtual EditIntent EditUndo(QString* error) = 0;
+    virtual EditIntent EditRedo(QString* error) = 0;
+    // `clip_id` 0 means the selected clip; `duration_ms` is the Transitions
+    // panel's default when not positive.
+    virtual EditIntent EditApplyCrossfade(quint64 clip_id, qint64 duration_ms, QString* error) = 0;
+    virtual EditIntent EditRemoveTransition(QString* error) = 0;
+    virtual EditIntent EditSetJunctionWindow(qint64 start_ms, qint64 end_ms, QString* error) = 0;
+    // `curve` is "linear" | "smooth" | "bias"; bias in [-1, 1].
+    virtual EditIntent EditSetJunctionCurve(const QString& curve, double bias, QString* error) = 0;
+    // `law` is "equalGain" | "equalPower".
+    virtual EditIntent EditSetJunctionAudioLaw(const QString& law, QString* error) = 0;
+    virtual EditIntent EditSetJunctionCut(qint64 at_ms, QString* error) = 0;
+    virtual EditIntent EditSetClipFade(quint64 clip_id, bool incoming, qint64 duration_ms, QString* error) = 0;
+    virtual EditIntent EditSetFixedTimelineEnd(bool fixed, qint64 end_ms, QString* error) = 0;
+    // `option` is "snapping" | "ripple" | "autoCrossfade" | "linkedSelection".
+    virtual EditIntent EditSetOption(const QString& option, bool enabled, QString* error) = 0;
+    virtual EditIntent EditSetSelectionBoundary(bool out, QString* error) = 0;
+
+    virtual EditIntent EditSetPlaying(bool playing, QString* error) = 0;
+    virtual EditIntent EditFrameStep(int direction, QString* error) = 0;
+    virtual EditIntent EditSetVolume(double volume, QString* error) = 0;
+    // Details' "Confirm selection". The ids are the monitoring track ids the
+    // editor snapshot reports.
+    virtual EditIntent EditConfirmMonitoring(const QStringList& track_ids, bool overlap_confirmed, QString* error) = 0;
+
+    // `panel` is "media" | "details"; `tab` is "history" | "media" |
+    // "transitions". Pinning is refused by the page when the viewer is too
+    // narrow; the reported layout is the answer.
+    virtual EditIntent EditSetPanel(const QString& panel, bool open, bool pinned, QString* error) = 0;
+    virtual EditIntent EditSetSourceTab(const QString& tab, QString* error) = 0;
+
+    // Only the keys present change. Values are the Details export controls'
+    // own keys.
+    virtual bool ExportSetOptions(const QJsonObject& options, QString* error) = 0;
+    // The review dialog's Export and Cancel.
+    virtual bool ExportConfirm(QString* error) = 0;
+    virtual bool ExportDiscard(QString* error) = 0;
+    // Back to the options after a finished or failed run.
+    virtual bool ExportReset(QString* error) = 0;
 };
 
 } // namespace exosnap::live_verify

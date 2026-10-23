@@ -1,6 +1,7 @@
 #include "exosnap/engine/edit_player_session.h"
 #include <exosnap/engine/audio_media_manifest.h>
 
+#include "edit_playback_pacing.h"
 #include "exosnap/engine/edit_player_engine.h"
 #include "exosnap/engine/wasapi_audio_render.h"
 
@@ -25,6 +26,7 @@ struct EditPlayerSession::Impl {
     WasapiAudioRenderer audio;
     bool has_audio = false;
     bool playing = false;
+    std::function<int64_t()> external_clock;
     std::atomic<float> volume{1.0f};
 
     // WasapiAudioRenderer::FramesPlayed() (and therefore AudioClockMs())
@@ -35,7 +37,9 @@ struct EditPlayerSession::Impl {
     // run, added back into every clock read in CurrentPositionMs(). Only
     // ever written from the caller's own UI thread (Play(), same as the rest
     // of this class's public API contract), so no extra synchronization is
-    // needed to read it from that same method.
+    // needed to read it from that same method. The decode thread reads it
+    // too; Play() writes it before starting that thread and Pause() joins the
+    // thread before the next Play() can write it again.
     int64_t playback_start_us = 0;
     int64_t paused_position_us = 0;
     std::chrono::steady_clock::time_point playback_started;
@@ -66,6 +70,8 @@ struct EditPlayerSession::Impl {
     };
     std::optional<SeekRequest> pending_seek;
     bool seek_stopped = false;
+    std::mutex seek_performance_mutex;
+    SeekPerformance seek_performance;
 
     void StopSeek() {
         {
@@ -92,7 +98,58 @@ struct EditPlayerSession::Impl {
     // to a "has this frame's time already passed" decision, and a stale
     // snapshot can only ever fail towards delivering a frame that a fresher
     // clock would have discarded -- never the other way round.
+    //
+    // The audio-clocked presentation hold also reads it, extrapolated from
+    // media_clock_sampled_ns. That time is stored before the clock (release)
+    // and read after it (acquire), so a reader never pairs a fresh clock with
+    // an older sample time, which would release a frame early.
     std::atomic<int64_t> media_clock_us{-1};
+    std::atomic<int64_t> media_clock_sampled_ns{0};
+
+    void PublishClock(int64_t position_us) {
+        media_clock_sampled_ns.store(SteadyNowNs(), std::memory_order_relaxed);
+        media_clock_us.store(position_us, std::memory_order_release);
+    }
+
+    static int64_t SteadyNowNs() {
+        return std::chrono::duration_cast<std::chrono::nanoseconds>(std::chrono::steady_clock::now().time_since_epoch())
+            .count();
+    }
+
+    // Blocks the decode thread until the audio clock reaches pts_us or
+    // presentation stops. Blocking here is the backpressure the demuxer's
+    // admission rule already allows for: the audio queue keeps filling.
+    void HoldUntilAudioClockReaches(int64_t pts_us) {
+        std::unique_lock lock(presentation_mutex);
+        while (!presentation_stopped.load()) {
+            const int64_t sampled_clock_us = media_clock_us.load(std::memory_order_acquire);
+            const int64_t elapsed_us = (SteadyNowNs() - media_clock_sampled_ns.load(std::memory_order_relaxed)) / 1000;
+            // Until the device has played anything the clock is not running, and
+            // extrapolating it would show the first frames before their sound.
+            const int64_t max_extrapolation_us =
+                sampled_clock_us > playback_start_us ? kAudioClockMaxExtrapolationUs : 0;
+            const int64_t hold_us =
+                PresentationHoldUs(pts_us - kPresentationEarlyReleaseUs,
+                                   ExtrapolatedClockUs(sampled_clock_us, elapsed_us, max_extrapolation_us));
+            if (hold_us == 0)
+                return;
+            presentation_cv.wait_for(lock, std::chrono::microseconds(std::min(hold_us, kPresentationRecheckUs)),
+                                     [this] { return presentation_stopped.load(); });
+        }
+    }
+
+    // The tick samples the clock once per clip frame, down to 10 fps. The bound
+    // must exceed that interval: a frame released only at the next sample is
+    // already behind that sample, and the present gate drops it.
+    static constexpr int64_t kAudioClockMaxExtrapolationUs = 100'000;
+    // The clock only moves when the tick samples it; re-reading it more often
+    // than this buys nothing.
+    static constexpr int64_t kPresentationRecheckUs = 4'000;
+    // A timed wait can wake one scheduler tick (15.6 ms by default) late. A
+    // frame released that late is already behind the next clock sample and
+    // the present gate drops it, so frames leave up to one tick early instead,
+    // well inside the lead lip sync tolerates.
+    static constexpr int64_t kPresentationEarlyReleaseUs = 16'000;
 
     void DeliverFrame(RawDecodedVideoFrame frame, uint64_t generation) {
         std::lock_guard<std::mutex> lock(callback_mutex);
@@ -112,10 +169,11 @@ void EditPlayerSession::SetVolume(float volume) {
     impl_->volume.store(std::clamp(volume, 0.0f, 1.0f));
 }
 
-bool EditPlayerSession::Open(const std::filesystem::path& path, std::string& out_error) {
+bool EditPlayerSession::Open(const std::filesystem::path& path, std::string& out_error,
+                             const std::atomic<bool>* cancelled) {
     Close();
 
-    if (!impl_->engine.Open(path, out_error))
+    if (!impl_->engine.Open(path, out_error, cancelled))
         return false;
 
     impl_->has_audio = impl_->engine.HasAudioStream();
@@ -126,6 +184,20 @@ bool EditPlayerSession::Open(const std::filesystem::path& path, std::string& out
             // stream" fallback contract rather than failing the whole open.
             impl_->has_audio = false;
         }
+    }
+    return true;
+}
+
+bool EditPlayerSession::Open(const std::shared_ptr<const MediaReadCapability>& source, std::string& out_error,
+                             const std::atomic<bool>* cancelled) {
+    Close();
+    if (!impl_->engine.Open(source, out_error, cancelled))
+        return false;
+    impl_->has_audio = impl_->engine.HasAudioStream();
+    if (impl_->has_audio) {
+        std::string audio_error;
+        if (!impl_->audio.Init(audio_error))
+            impl_->has_audio = false;
     }
     return true;
 }
@@ -165,12 +237,13 @@ AudioMetadataReadResult EditPlayerSession::AudioMetadata() const {
     return impl_->engine.AudioMetadata();
 }
 
-bool EditPlayerSession::SetMonitorSelection(MonitorSelectionSnapshot selection, std::string& error) {
+bool EditPlayerSession::SetMonitorSelection(MonitorSelectionSnapshot selection, std::string& error,
+                                            const std::atomic<bool>* cancelled) {
     if (impl_->playing) {
         error = "Pause playback before changing the monitoring selection.";
         return false;
     }
-    return impl_->engine.SetMonitorSelection(std::move(selection), error);
+    return impl_->engine.SetMonitorSelection(std::move(selection), error, cancelled);
 }
 
 bool EditPlayerSession::MonitoringConfirmationRequired() const {
@@ -178,46 +251,59 @@ bool EditPlayerSession::MonitoringConfirmationRequired() const {
 }
 
 void EditPlayerSession::Play(int64_t start_us, uint64_t generation) {
-    if (impl_->playing || !impl_->engine.HasVideoStream() || MonitoringConfirmationRequired())
+    StartPlayback(start_us, generation, {});
+}
+
+void EditPlayerSession::PlayWithExternalClock(int64_t start_us, uint64_t generation, std::function<int64_t()> clock) {
+    if (clock)
+        StartPlayback(start_us, generation, std::move(clock));
+}
+
+void EditPlayerSession::StartPlayback(int64_t start_us, uint64_t generation, std::function<int64_t()> clock) {
+    if (impl_->playing || !impl_->engine.HasVideoStream() || (!clock && MonitoringConfirmationRequired()))
         return;
 
     impl_->StopSeek();
 
+    impl_->external_clock = std::move(clock);
     impl_->playing = true;
     impl_->playback_start_us = start_us;
     impl_->paused_position_us = start_us;
     impl_->playback_started = std::chrono::steady_clock::now();
-    impl_->independent_clock.store(!impl_->has_audio);
+    impl_->independent_clock.store(!impl_->has_audio && !impl_->external_clock);
     impl_->presentation_stopped.store(false);
     // Seed the clock the decode thread reads before it can produce anything:
     // the frames between the preceding keyframe and start_us are already in
     // the past and must not be paid a colour conversion for.
-    impl_->media_clock_us.store(start_us);
+    impl_->PublishClock(start_us);
 
-    if (impl_->has_audio)
+    if (impl_->has_audio && !impl_->external_clock)
         impl_->audio.Start();
 
     // GPU render path (see SetOnFrameReady's doc comment): delivered straight
-    // to on_frame from the engine's own decode thread, no intermediate queue
-    // -- EditPlayerRenderer::PresentFrame does the present-time clock gate
-    // that used to live in a queue/poll path.
+    // to on_frame from the engine's own decode thread, no intermediate queue.
+    // The consumer's present gate only drops frames the clock has passed, so
+    // this thread holds each frame until it is due; delivering on decode would
+    // show video ahead of its sound by the demuxer's read-ahead.
     impl_->engine.StartPlaybackDecode(
         start_us,
         [this, generation](RawDecodedVideoFrame frame) {
             // The engine publishes this before spawning workers. The owner
             // thread may not yet have observed audio setup failure.
-            if (!impl_->engine.PlaybackDeliversAudio()) {
+            if (!impl_->external_clock && !impl_->engine.PlaybackDeliversAudio()) {
                 const auto deadline =
                     impl_->playback_started + std::chrono::microseconds(frame.pts_us - impl_->playback_start_us);
                 std::unique_lock lock(impl_->presentation_mutex);
                 impl_->presentation_cv.wait_until(lock, deadline,
                                                   [this] { return impl_->presentation_stopped.load(); });
+            } else {
+                impl_->HoldUntilAudioClockReaches(frame.pts_us);
             }
             if (!impl_->presentation_stopped.load())
                 impl_->DeliverFrame(std::move(frame), generation);
         },
         [this](DecodedAudioBlock block) {
-            if (impl_->has_audio && block.interleaved_stereo) {
+            if (!impl_->external_clock && impl_->has_audio && block.interleaved_stereo) {
                 const float volume = impl_->volume.load();
                 if (volume == 1.0f) {
                     impl_->audio.PushSamples(block.interleaved_stereo->data(), block.frame_count);
@@ -229,7 +315,8 @@ void EditPlayerSession::Play(int64_t start_us, uint64_t generation) {
                 }
             }
         },
-        [this]() -> int64_t { return impl_->media_clock_us.load(); });
+        [this]() -> int64_t { return impl_->media_clock_us.load(); },
+        impl_->external_clock ? PlaybackAudioMode::Disabled : PlaybackAudioMode::MonitorSelection);
 
     // The engine builds a playback resampler per audio track inside
     // StartPlaybackDecode, and those can fail on a file whose audio streams
@@ -242,11 +329,11 @@ void EditPlayerSession::Play(int64_t start_us, uint64_t generation) {
     // PlaybackDeliversAudio() answers "at least one track", which is exactly
     // the question this needs: one surviving track advances the clock just as
     // well as three, and the blocks arriving here are their mix either way.
-    if (impl_->has_audio && !impl_->engine.PlaybackDeliversAudio()) {
+    if (!impl_->external_clock && impl_->has_audio && !impl_->engine.PlaybackDeliversAudio()) {
         impl_->has_audio = false;
         impl_->audio.Stop();
         impl_->independent_clock.store(true);
-        impl_->media_clock_us.store(start_us);
+        impl_->PublishClock(start_us);
     }
 }
 
@@ -269,6 +356,7 @@ void EditPlayerSession::Pause() {
     if (impl_->has_audio)
         impl_->audio.Stop();
     impl_->engine.StopPlaybackDecode();
+    impl_->external_clock = {};
     impl_->media_clock_us.store(-1);
 }
 
@@ -291,8 +379,16 @@ void EditPlayerSession::SeekTo(int64_t target_us, uint64_t generation) {
                 const auto request = *impl_->pending_seek;
                 impl_->pending_seek.reset();
                 seek_lock.unlock();
+                const auto started = std::chrono::steady_clock::now();
                 auto frame =
                     impl_->engine.ReadFrameAtRaw(request.target_us, VideoReadMode::RandomAccess, request.generation);
+                {
+                    std::lock_guard performance_lock(impl_->seek_performance_mutex);
+                    ++impl_->seek_performance.read_count;
+                    impl_->seek_performance.read_ns +=
+                        std::chrono::duration_cast<std::chrono::nanoseconds>(std::chrono::steady_clock::now() - started)
+                            .count();
+                }
                 seek_lock.lock();
                 if (!impl_->seek_stopped && frame && impl_->seek_generation.load() == request.generation)
                     impl_->DeliverFrame(std::move(*frame), request.presentation_generation);
@@ -301,8 +397,19 @@ void EditPlayerSession::SeekTo(int64_t target_us, uint64_t generation) {
     }
     impl_->seek_cv.notify_one();
 }
+EditPlayerSession::SeekPerformance EditPlayerSession::SeekPerformanceSnapshot() const {
+    std::lock_guard lock(impl_->seek_performance_mutex);
+    return impl_->seek_performance;
+}
+void EditPlayerSession::CancelPendingSeek() {
+    impl_->StopSeek();
+}
 int64_t EditPlayerSession::ClockSnapshotUs() const noexcept {
     return impl_->media_clock_us.load(std::memory_order_relaxed);
+}
+
+uint64_t EditPlayerSession::AudioShortfallFrames() const noexcept {
+    return impl_->has_audio ? impl_->audio.ShortfallFrames() : 0;
 }
 
 int64_t EditPlayerSession::CurrentPositionMs() const noexcept {
@@ -313,7 +420,8 @@ int64_t EditPlayerSession::CurrentPositionUs() const noexcept {
     if (!impl_->playing)
         return impl_->paused_position_us;
     const int64_t position_us =
-        impl_->independent_clock.load()
+        impl_->external_clock ? impl_->external_clock()
+        : impl_->independent_clock.load()
             ? impl_->playback_start_us + std::chrono::duration_cast<std::chrono::microseconds>(
                                              std::chrono::steady_clock::now() - impl_->playback_started)
                                              .count()
@@ -323,7 +431,7 @@ int64_t EditPlayerSession::CurrentPositionUs() const noexcept {
                   return rate == 0 ? int64_t{0}
                                    : static_cast<int64_t>(frames / rate * 1'000'000 + frames % rate * 1'000'000 / rate);
               }();
-    impl_->media_clock_us.store(position_us);
+    impl_->PublishClock(position_us);
     return position_us;
 }
 } // namespace exosnap::engine

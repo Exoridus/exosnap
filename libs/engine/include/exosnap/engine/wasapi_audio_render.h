@@ -1,32 +1,24 @@
 #pragma once
 
-// WasapiAudioRenderer -- the Edit-page video player's audio-out path and
-// playback master clock (docs/architecture/edit-and-export.md). No WASAPI
-// render path existed anywhere in this codebase before this class; only
-// capture (WasapiCaptureSrc, wasapi_loopback.cpp) did.
-//
-// Opens the system default render endpoint (eRender/eConsole -- no in-app
-// device picker, matching the design's scope decision) in shared mode.
-// PushSamples() accepts 48 kHz stereo interleaved float32 PCM (the same fixed
-// format EditPlayerEngine's playback decode produces) from any thread; an
-// internal ring buffer plus an event-driven render callback thread write it
-// to the device, resampling to the device's own mix format first if it
-// differs from 48kHz/stereo/float32.
-//
-// FramesPlayed() (frames the endpoint has actually played out, read from
-// IAudioClock) is the playback master clock -- feed it to AudioClockMs()
-// (playback_clock.h). Deliberately NOT the count of frames written into the
-// endpoint buffer: that buffer is 200 ms deep, so a write-counting clock runs
-// ahead of the sound by the whole buffer depth and makes video lead audio.
+// Shared-mode output through the default render endpoint (eRender/eConsole).
+// PushSamples accepts 48 kHz stereo Float32 PCM from any thread through a
+// bounded ring. InitTimeline instead pulls prepared PCM with a short final
+// lead. Both paths convert to the endpoint's actual mix format as needed.
+// Playback time uses the device clock with a normalized monotonic fallback,
+// independently of buffered or submitted PCM.
 
 #include <atomic>
 #include <condition_variable>
 #include <cstdint>
 #include <deque>
+#include <functional>
+#include <memory>
 #include <mutex>
+#include <optional>
 #include <span>
 #include <string>
 #include <thread>
+#include <vector>
 
 struct IMMDevice;
 struct IAudioClient;
@@ -44,6 +36,27 @@ struct IAudioRenderClient;
 struct SwrContext;
 
 namespace exosnap::engine {
+
+class TimelineAudioClock;
+enum class RenderClockMode { Stopped, Device, MonotonicFallback };
+struct WasapiRenderMeasurements {
+    bool initialized = false;
+    bool running = false;
+    bool timeline_pull = false;
+    uint32_t sample_rate = 0;
+    uint32_t buffer_frames = 0;
+    uint32_t requested_buffer_ms = 0;
+    std::optional<int64_t> device_period_ns;
+    uint64_t endpoint_submissions = 0;
+    uint64_t submitted_lead_frames = 0;
+    uint64_t peak_submitted_lead_frames = 0;
+    uint64_t clock_reanchors = 0;
+    bool timeline_recovery_pending = false;
+    uint64_t timeline_reanchors = 0;
+    uint64_t timeline_skipped_frames = 0;
+    uint64_t recovery_played_frames = 0;
+    RenderClockMode clock_mode = RenderClockMode::Stopped;
+};
 
 // Ring capacity used unless a caller overrides it. 200 ms @ 48 kHz stereo is
 // the fixed backpressure point that paces the playback AUDIO decode thread
@@ -71,6 +84,12 @@ class WasapiAudioRenderer {
     // with a message in out_error on failure (no default device, format
     // negotiation failure).
     bool Init(std::string& out_error);
+    // Refuses an endpoint whose reported period cannot fit the control budget.
+    bool InitTimeline(std::string& out_error);
+    using TimelineAudioPull = std::function<void(uint64_t first_engine_frame, std::span<float> stereo)>;
+    // The pull must service prepared memory only. Stop joins before releasing it.
+    void StartTimeline(TimelineAudioPull pull);
+    [[nodiscard]] WasapiRenderMeasurements Measurements() const;
 
     // Starts/stops the render callback thread. Init() must have succeeded.
     // No-op (not an error) if not initialized or already in the requested state.
@@ -95,12 +114,11 @@ class WasapiAudioRenderer {
     // Frames the render endpoint has actually played since the current Start()
     // -- the playback master clock. 0 before Init()/Start(), and reset by every
     // Start() (it measures time-since-resume, not absolute clip position).
-    // Read from IAudioClock; falls back to the count of frames written into the
-    // endpoint buffer only if that service was unavailable at Init().
+    // Uses IAudioClock when available and a monotonic estimate on loss/stall,
+    // reanchoring when the device clock recovers. Never counts queued PCM as played.
     //
     // Same single-caller-thread contract as the rest of this class's control
-    // API (Start/Stop/Shutdown): call it from the owner's thread -- in-app,
-    // EditPlayerSession's UI thread. It is NOT internally synchronized against
+    // API (Start/Stop/Shutdown): call it from the owner's thread. It is not synchronized against
     // a concurrent Stop()/Shutdown(), which releases the clock object this
     // reads through. (PushSamples() is the one deliberate exception: it is
     // callable from any thread, because the decode thread pushes into the ring.)
@@ -109,11 +127,20 @@ class WasapiAudioRenderer {
     // The render endpoint's actual sample rate (post-Init; 0 before Init()).
     [[nodiscard]] uint32_t SampleRate() const noexcept;
 
+    // 48 kHz frames the render thread had to replace with silence because the
+    // ring ran short, counted from the first audio of the current Start(). Each is
+    // an audible gap; any steady growth is an underrun the listener hears as
+    // crackle. Safe from any thread.
+    [[nodiscard]] uint64_t ShortfallFrames() const noexcept {
+        return shortfall_frames_.load(std::memory_order_relaxed);
+    }
+
     // Stops the render thread, releases the COM device/client objects, and
     // clears the ring buffer. Safe to call multiple times / without Init().
     void Shutdown();
 
   private:
+    bool InitInternal(std::string& out_error, uint32_t buffer_ms);
     void RenderThreadMain();
 
     // Live play-cursor read (only meaningful while the stream is running).
@@ -158,11 +185,27 @@ class WasapiAudioRenderer {
     // hold at where playback was paused instead of snapping back to the start.
     std::atomic<uint64_t> frames_played_latched_{0};
 
-    // Frames written into the endpoint buffer. Only the fallback clock now --
-    // see the class comment on why it is not the playback clock.
+    // Submitted device frames, including silence. This is not the playback clock.
     std::atomic<uint64_t> frames_rendered_{0};
+    std::atomic<uint64_t> shortfall_frames_{0};
+    bool audio_arrived_ = false; // render thread only; reset by Start()
 
     bool initialized_ = false;
+    bool low_latency_timeline_ = false;
+    uint32_t requested_buffer_ms_ = 0;
+    std::optional<int64_t> device_period_ns_;
+    TimelineAudioPull timeline_pull_;
+    std::atomic<uint64_t> pull_consumed_frames_{0};
+    mutable std::atomic<uint64_t> normalized_played_frames_{0};
+    std::atomic<bool> timeline_recovery_pending_{false};
+    std::atomic<uint64_t> timeline_reanchors_{0};
+    std::atomic<uint64_t> timeline_skipped_frames_{0};
+    std::atomic<uint64_t> recovery_played_frames_{0};
+    std::atomic<uint64_t> endpoint_submissions_{0};
+    std::atomic<uint64_t> submitted_lead_frames_{0};
+    std::atomic<uint64_t> peak_submitted_lead_frames_{0};
+    std::unique_ptr<TimelineAudioClock> normalized_clock_;
+    std::vector<float> engine_buffer_;
 };
 
 } // namespace exosnap::engine

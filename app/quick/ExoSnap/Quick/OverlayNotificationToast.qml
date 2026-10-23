@@ -103,7 +103,8 @@ Window {
     title: qsTr("ExoSnap Overlay — Notification")
     color: "transparent"
 
-    visible: exclusion.granted && stack.count > 0
+    readonly property bool compositionRequested: stack.count > 0
+    visible: (exclusion.granted || exclusion.renderOnlyPreview) && root.compositionRequested
 
     // The window is created before the first toast and keeps its place in the
     // topmost band. A topmost window that came up in the meantime, such as a
@@ -246,7 +247,8 @@ Window {
             // shadows the inner card's already-composited (card + tight
             // shadow) texture, giving the two layers their own visible depth
             // rather than one blur pass standing in for both.
-            layer.enabled: true
+            // Headless software composition omits the shader shadow, not the card.
+            layer.enabled: !exclusion.renderOnlyPreview
             layer.effect: MultiEffect {
                 shadowEnabled: true
                 shadowColor: root.shadowWideColor
@@ -331,7 +333,7 @@ Window {
 
                 // The tight contact shadow, the layer nearer the card. See
                 // `cardRoot`'s own layer above for the wide one.
-                layer.enabled: true
+                layer.enabled: !exclusion.renderOnlyPreview
                 layer.effect: MultiEffect {
                     shadowEnabled: true
                     shadowColor: root.shadowTightColor

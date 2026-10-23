@@ -197,7 +197,8 @@ Window {
     // otherwise, so no evaluation order can put this window on screen unexcluded.
     // Either section can carry the pill alone -- "recording off, diagnostics
     // on" is the same independence the two separate windows used to have.
-    visible: exclusion.granted && (root.overlayActive || (root.diagnosticsActive && root.diagnosticsContentPresent))
+    readonly property bool compositionRequested: root.overlayActive || (root.diagnosticsActive && root.diagnosticsContentPresent)
+    visible: (exclusion.granted || exclusion.renderOnlyPreview) && root.compositionRequested
 
     width: pill.implicitWidth
     height: pill.implicitHeight

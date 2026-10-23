@@ -7,16 +7,17 @@ Item {
     required property real pixelsPerMs
     required property real viewportX
     required property real viewportWidth
+    property real originUs: 0
     property real labelSpacing: 90
     readonly property real majorMs: majorInterval(pixelsPerMs, labelSpacing)
     readonly property real minorMs: majorMs / 5
-    readonly property int firstTick: Math.max(0, Math.floor(viewportX / (minorMs * pixelsPerMs)))
+    readonly property real firstTick: Math.max(0, Math.floor((originUs / 1000 + viewportX / pixelsPerMs) / minorMs))
     readonly property int tickCount: Math.ceil(viewportWidth / (minorMs * pixelsPerMs)) + 2
     implicitHeight: 32
     Accessible.ignored: true
 
     function majorInterval(scale: real, spacing: real): real {
-        const intervals = [100, 200, 500, 1000, 2000, 5000, 10000, 15000,
+        const intervals = [1, 2, 5, 10, 20, 50, 100, 200, 500, 1000, 2000, 5000, 10000, 15000,
                            30000, 60000, 120000, 300000, 600000, 1800000, 3600000];
         for (const interval of intervals) {
             if (interval * scale >= spacing)
@@ -43,9 +44,9 @@ Item {
         model: root.tickCount
         delegate: Item {
             required property int index
-            readonly property int tick: root.firstTick + index
+            readonly property real tick: root.firstTick + index
             readonly property bool major: tick % 5 === 0
-            x: tick * root.minorMs * root.pixelsPerMs
+            x: (tick * root.minorMs - root.originUs / 1000) * root.pixelsPerMs
             height: root.height
             Rectangle {
                 anchors.bottom: parent.bottom

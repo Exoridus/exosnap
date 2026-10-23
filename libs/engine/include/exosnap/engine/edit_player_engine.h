@@ -30,7 +30,9 @@
 
 #include <exosnap/engine/audio_media_manifest.h>
 #include <exosnap/engine/color_metadata.h>
+#include <exosnap/engine/edit_types.h>
 
+#include <array>
 #include <atomic>
 #include <cstdint>
 #include <filesystem>
@@ -41,6 +43,8 @@
 #include <vector>
 
 namespace exosnap::engine {
+
+enum class PlaybackAudioMode { MonitorSelection, Disabled };
 
 // One decoded video frame, ready to paint: top-down BGRA8888, already
 // color-converted using the SOURCE FILE's own container color tags (falls
@@ -155,12 +159,26 @@ class EditPlayerEngine {
     // (missing file, unreadable container, no decodable video stream).
     // Cancellation applies to opening. Playback is stopped separately.
     bool Open(const std::filesystem::path& path, std::string& out_error, const std::atomic<bool>* cancelled = nullptr);
+    bool Open(const std::shared_ptr<const MediaReadCapability>& source, std::string& out_error,
+              const std::atomic<bool>* cancelled = nullptr);
 
+    // Opens the exact global container video stream. Refuses an absent/non-video index.
+    bool OpenVideoStream(const std::filesystem::path& path, uint32_t container_index, std::string& out_error,
+                         const std::atomic<bool>* cancelled = nullptr);
+    bool OpenVideoStream(const std::shared_ptr<const MediaReadCapability>& source, uint32_t container_index,
+                         std::string& out_error, const std::atomic<bool>* cancelled = nullptr);
     // Opens one global container audio stream without a video decoder.
     // The selected stream is independent of transient monitoring selection.
     bool OpenAudioStream(const std::filesystem::path& path, uint32_t container_index, std::string& out_error,
                          const std::atomic<bool>* cancelled = nullptr);
+    bool OpenAudioStream(const std::shared_ptr<const MediaReadCapability>& source, uint32_t container_index,
+                         std::string& out_error, const std::atomic<bool>* cancelled = nullptr);
 
+    // Validates the bytes retained by the open source's immutable read lease.
+    bool ValidateContentIdentity(const std::array<uint8_t, 32>& expected, std::string& error,
+                                 const std::atomic<bool>* cancelled = nullptr) const;
+    [[nodiscard]] uint64_t AudioSeekCount() const noexcept;
+    [[nodiscard]] uint64_t AudioDecodedFrameCount() const noexcept;
     // Closes the file and stops any running playback decode (see Task 6).
     void Close();
 
@@ -222,19 +240,31 @@ class EditPlayerEngine {
     // nothing for a GPU hop to save there.
     [[nodiscard]] std::optional<RawDecodedVideoFrame> DecodeFrameAtRaw(int64_t target_us);
     [[nodiscard]] std::optional<RawDecodedVideoFrame> ReadFrameAtRaw(int64_t target_us, VideoReadMode mode,
-                                                                     uint64_t generation = 0);
+                                                                     uint64_t generation = 0,
+                                                                     const std::atomic<bool>* cancelled = nullptr);
     [[nodiscard]] const VideoReadMeasurements& VideoReadStats() const noexcept;
 
     // Synchronous, single-owner range decode for timeline rendering. The output
     // is exactly frame_count stereo Float32 frames at 48 kHz, with source gaps
     // filled by silence. Fails if any declared audio track cannot be decoded.
-    bool DecodeAudioRange(int64_t first_sample, uint32_t frame_count, std::vector<float>& output, std::string& error);
+    bool DecodeAudioRange(int64_t first_sample, uint32_t frame_count, std::vector<float>& output, std::string& error,
+                          const std::atomic<bool>* cancelled = nullptr);
 
     // Reads one global container audio stream at unity gain, independent of
     // monitor controls. first_sample is absolute media-local 48 kHz time.
     bool DecodeAudioStreamRange(uint32_t container_index, int64_t first_sample, uint32_t frame_count,
                                 std::vector<float>& output, std::string& error);
 
+    // Audio-only analysis cursor. Adjacent calls retain decoder/resampler state
+    // and bounded frame tails. Discontinuous requests seek with normal preroll.
+    bool ReadAudioStreamSequential(uint32_t container_index, int64_t first_sample, uint32_t frame_count,
+                                   std::vector<float>& output, std::string& error,
+                                   const std::atomic<bool>* cancelled = nullptr);
+    // Sorted, disjoint half-open normalized 48 kHz spans copied from decoded
+    // samples by the last audio range read. Excludes gap/tail padding and is
+    // empty after a failed read.
+    // Single-owner observation; invalidated by the next audio read or Close().
+    [[nodiscard]] const std::vector<AudioSampleSpan>& AudioDecodedCoverage() const noexcept;
     // Every audio track the open file carries, in stream order. `name` comes
     // from the container's track name and is empty for recordings written
     // before names were muxed — callers fall back to a positional label rather
@@ -255,7 +285,9 @@ class EditPlayerEngine {
     [[nodiscard]] AudioMetadataReadResult AudioMetadata() const;
     // Selection changes require a stopped decode run. The same snapshot is used
     // by continuous playback and range decoding for export.
-    bool SetMonitorSelection(MonitorSelectionSnapshot selection, std::string& error);
+    // Reusing an external legacy binding on a provisional lease can verify source bytes.
+    bool SetMonitorSelection(MonitorSelectionSnapshot selection, std::string& error,
+                             const std::atomic<bool>* cancelled = nullptr);
 
     // ---- Continuous playback decode ----
 
@@ -298,8 +330,11 @@ class EditPlayerEngine {
     // player's GPU render path (docs/architecture/edit-and-export.md) -- the
     // caller's own EditFrameGpuConverter does the colour conversion, not this
     // engine.
+    // Disabled audio skips source-audio admission and creates no audio decode
+    // queue or resamplers. It does not confirm or change the monitoring choice.
     void StartPlaybackDecode(int64_t start_us, VideoFrameCallback on_video, AudioBlockCallback on_audio,
-                             std::function<int64_t()> current_media_time_us);
+                             std::function<int64_t()> current_media_time_us,
+                             PlaybackAudioMode audio_mode = PlaybackAudioMode::MonitorSelection);
 
     // Stops and joins the playback decode threads, if running. Safe to call
     // even if not running (no-op). Called from Close() and the destructor.
@@ -307,7 +342,8 @@ class EditPlayerEngine {
 
   private:
     bool OpenSource(const std::filesystem::path& path, std::string& out_error, const std::atomic<bool>* cancelled,
-                    std::optional<uint32_t> audio_stream);
+                    std::optional<uint32_t> audio_stream, const std::shared_ptr<const MediaReadCapability>& source = {},
+                    std::optional<uint32_t> video_stream = {});
     struct Impl;
     std::unique_ptr<Impl> impl_;
 };

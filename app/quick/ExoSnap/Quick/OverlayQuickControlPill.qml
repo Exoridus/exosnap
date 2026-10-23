@@ -159,7 +159,8 @@ Window {
 
     color: "transparent"
 
-    visible: exclusion.granted && root.overlayActive
+    readonly property bool compositionRequested: root.overlayActive
+    visible: (exclusion.granted || exclusion.renderOnlyPreview) && root.compositionRequested
 
     width: root.pad + root.gripWidth + root.pad
            + (root.expanded ? 3 * root.buttonSize + 3 * root.buttonGap : 0)

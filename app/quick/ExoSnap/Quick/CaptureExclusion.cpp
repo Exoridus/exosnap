@@ -2,6 +2,8 @@
 
 #include "diagnostics/AppLog.h"
 
+#include <QCoreApplication>
+#include <QGuiApplication>
 #include <QRegion>
 
 #if defined(Q_OS_WIN)
@@ -78,7 +80,17 @@ bool dropLayeredAttribute(HWND hwnd) {
 
 } // namespace
 
-CaptureExclusion::CaptureExclusion(QObject* parent) : QObject(parent) {
+CaptureExclusion::CaptureExclusion(QObject* parent)
+    : QObject(parent), render_only_preview_(qGuiApp && RenderOnlyPreviewAllowed(QGuiApplication::platformName(),
+                                                                                QCoreApplication::arguments())) {
+}
+
+bool CaptureExclusion::RenderOnlyPreviewAllowed(const QString& platform, const QStringList& arguments) {
+    if (platform != QLatin1String("offscreen"))
+        return false;
+    const auto index = arguments.indexOf(QStringLiteral("--visual-test"));
+    return index >= 0 && index + 1 < arguments.size() && !arguments[index + 1].trimmed().isEmpty() &&
+           !arguments[index + 1].startsWith(QLatin1Char('-'));
 }
 
 QQuickWindow* CaptureExclusion::target() const noexcept {
@@ -94,6 +106,15 @@ void CaptureExclusion::setTarget(QQuickWindow* window) {
 
     if (window == nullptr)
         return;
+
+    if (render_only_preview_) {
+        window->create();
+        diagnostics::AppLog::info(
+            QStringLiteral("overlay"),
+            QStringLiteral("render-only offscreen composition for %1; capture exclusion not asserted")
+                .arg(window->objectName()));
+        return;
+    }
 
     // A previous attempt in this session already failed. Do not try again:
     // flipping `granted` back to true would un-hide a window we have already

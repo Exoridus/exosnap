@@ -18,6 +18,9 @@
 class QThread;
 
 namespace exosnap {
+namespace edit {
+struct EditSnapshot;
+}
 struct OutputSettingsModel;
 struct VideoSettingsModel;
 namespace capability {
@@ -72,6 +75,12 @@ class EditExportAdapter : public QObject {
     Q_PROPERTY(QString outputFolder READ outputFolder NOTIFY resultChanged FINAL)
     Q_PROPERTY(QString errorText READ errorText NOTIFY resultChanged FINAL)
     Q_PROPERTY(bool destinationFailure READ destinationFailure NOTIFY resultChanged FINAL)
+    // A review, finished or failed run nobody has looked at yet. Session state only:
+    // cleared by markResultSeen() or reset(), never stored with the project.
+    Q_PROPERTY(bool resultUnseen READ resultUnseen NOTIFY resultChanged FINAL)
+    // The finished file no longer matches the timeline: it was edited after the
+    // run's snapshot was taken.
+    Q_PROPERTY(bool resultOutdated READ resultOutdated NOTIFY resultChanged FINAL)
 
     Q_PROPERTY(QString containerKey READ containerKey WRITE setContainerKey NOTIFY optionsChanged FINAL)
     Q_PROPERTY(QString saveModeKey READ saveModeKey WRITE setSaveModeKey NOTIFY optionsChanged FINAL)
@@ -88,6 +97,7 @@ class EditExportAdapter : public QObject {
     Q_PROPERTY(QString modeKey READ modeKey WRITE setModeKey NOTIFY optionsChanged FINAL)
     // "result" exports the result range; "entire" the whole timeline without changing that range.
     Q_PROPERTY(QString spanKey READ spanKey WRITE setSpanKey NOTIFY optionsChanged FINAL)
+    Q_PROPERTY(QVariantList spanOptions READ spanOptions CONSTANT FINAL)
 
   public:
     enum State {
@@ -129,6 +139,9 @@ class EditExportAdapter : public QObject {
         return span_key_;
     }
     void setSpanKey(const QString& key);
+    [[nodiscard]] QVariantList spanOptions() const;
+    Q_INVOKABLE void setTimeSelection(qint64 in_ms, qint64 out_ms);
+    Q_INVOKABLE void setTimeSelectionUs(qint64 in_us, qint64 out_us);
     Q_INVOKABLE void chooseDestination();
 
     [[nodiscard]] int stateValue() const noexcept;
@@ -140,6 +153,11 @@ class EditExportAdapter : public QObject {
     [[nodiscard]] QString outputFolder() const;
     [[nodiscard]] const QString& errorText() const noexcept;
     [[nodiscard]] bool destinationFailure() const noexcept;
+    [[nodiscard]] bool resultUnseen() const noexcept {
+        return result_unseen_;
+    }
+    Q_INVOKABLE void markResultSeen();
+    [[nodiscard]] bool resultOutdated() const;
 
     [[nodiscard]] const QString& containerKey() const noexcept;
     void setContainerKey(const QString& key);
@@ -168,6 +186,9 @@ class EditExportAdapter : public QObject {
     // touches the export thread or the cancel flag, so a visual capture of
     // "Running" cannot leave a real remux behind.
     void applyVisualState(State state, int percent, const QString& output_path, const QString& error);
+    // Harness/test-only: shows `outcome` in the review dialog as a planned
+    // export would. Nothing is prepared, so confirming it starts nothing.
+    void applyVisualReview(const QVariantMap& outcome);
 
   signals:
     void stateChanged();
@@ -193,17 +214,24 @@ class EditExportAdapter : public QObject {
     QString save_mode_key_ = QStringLiteral("new");
     QString error_text_;
     bool destination_failure_ = false;
+    bool result_unseen_ = false;
+    std::shared_ptr<const edit::EditSnapshot> result_snapshot_;
+    bool last_replace_existing_ = false;
     std::filesystem::path output_path_;
     std::optional<std::filesystem::path> retry_output_path_;
     std::function<QString()> output_directory_;
     std::function<engine::RecorderConfig()> render_config_;
     QString profile_key_ = QStringLiteral("match");
     QString mode_key_ = QStringLiteral("finishedStereo");
-    QString span_key_ = QStringLiteral("result");
+    QString span_key_ = QStringLiteral("entire");
+    qint64 selection_in_us_ = -1;
+    qint64 selection_out_us_ = -1;
+    bool span_explicit_ = false;
     std::optional<std::filesystem::path> chosen_output_;
     bool overwrite_confirmed_ = false;
     QVariantMap review_outcome_;
     std::shared_ptr<PreparedExport> prepared_;
+    std::function<void(uint64_t)> source_verified_;
 
     struct RunState {
         std::atomic<bool> cancel{false};

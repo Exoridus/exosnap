@@ -1,10 +1,15 @@
 #include "exosnap/engine/wasapi_audio_render.h"
+#include "exosnap/engine/edit_timeline_audio.h"
 #include "exosnap/engine/timeline_audio_queue.h"
+#include <memory>
+#include <optional>
+#include <utility>
 
 #include "exosnap/engine/logging/logging.h"
 #include "playback_clock.h"
 
 #include <Audioclient.h>
+#include <atomic>
 #include <avrt.h>
 #include <cstddef>
 #include <cstdint>
@@ -23,6 +28,7 @@ extern "C" {
 }
 
 #include <algorithm>
+#include <chrono>
 #include <cstring>
 #include <vector>
 
@@ -32,7 +38,10 @@ namespace {
 constexpr const char* kLogComponent = "wasapi_audio_render";
 constexpr uint32_t kEngineSampleRate = 48000;
 constexpr uint32_t kEngineChannels = 2;
-constexpr REFERENCE_TIME kBufferDurationHns = 2000000; // 200 ms shared-mode buffer
+int64_t SteadyAudioNowNs() noexcept {
+    return std::chrono::duration_cast<std::chrono::nanoseconds>(std::chrono::steady_clock::now().time_since_epoch())
+        .count();
+}
 
 // Upper bound on how far an IAudioClock reading may be extrapolated past the
 // QPC instant it was taken at. One device period is the real gap; 20 ms leaves
@@ -90,7 +99,8 @@ WORD ResolveRenderWaveFormatTag(const WAVEFORMATEX* fmt) {
 } // namespace
 
 WasapiAudioRenderer::WasapiAudioRenderer(uint32_t ring_capacity_frames)
-    : ring_capacity_floats_(ring_capacity_frames * kEngineChannels) {
+    : ring_capacity_floats_(ring_capacity_frames * kEngineChannels),
+      normalized_clock_(std::make_unique<TimelineAudioClock>()) {
 }
 
 WasapiAudioRenderer::~WasapiAudioRenderer() {
@@ -98,7 +108,15 @@ WasapiAudioRenderer::~WasapiAudioRenderer() {
 }
 
 bool WasapiAudioRenderer::Init(std::string& out_error) {
+    return InitInternal(out_error, 200);
+}
+bool WasapiAudioRenderer::InitTimeline(std::string& out_error) {
+    return InitInternal(out_error, 20);
+}
+bool WasapiAudioRenderer::InitInternal(std::string& out_error, uint32_t buffer_ms) {
     Shutdown(); // tear down any previous session first
+    low_latency_timeline_ = buffer_ms == 20;
+    requested_buffer_ms_ = buffer_ms;
 
     // Defensive COM init for the caller's thread. RPC_E_CHANGED_MODE means the
     // thread already has COM in a different apartment mode -- usable as-is,
@@ -137,6 +155,13 @@ bool WasapiAudioRenderer::Init(std::string& out_error) {
     if (FAILED(hr) || audio_client_ == nullptr)
         return fail("IMMDevice::Activate(IAudioClient) failed");
 
+    REFERENCE_TIME default_period = 0;
+    REFERENCE_TIME minimum_period = 0;
+    if (SUCCEEDED(audio_client_->GetDevicePeriod(&default_period, &minimum_period)) && default_period > 0)
+        device_period_ns_ = default_period * 100;
+    if (low_latency_timeline_ && (!device_period_ns_ || *device_period_ns_ > 30'000'000))
+        return fail("Audio endpoint period cannot satisfy the 50 ms timeline control budget");
+
     WAVEFORMATEX* mix_format = nullptr;
     hr = audio_client_->GetMixFormat(&mix_format);
     if (FAILED(hr) || mix_format == nullptr)
@@ -147,8 +172,8 @@ bool WasapiAudioRenderer::Init(std::string& out_error) {
     const WORD device_tag = ResolveRenderWaveFormatTag(mix_format);
     const WORD device_bits = mix_format->wBitsPerSample;
 
-    hr = audio_client_->Initialize(AUDCLNT_SHAREMODE_SHARED, AUDCLNT_STREAMFLAGS_EVENTCALLBACK, kBufferDurationHns, 0,
-                                   mix_format, nullptr);
+    hr = audio_client_->Initialize(AUDCLNT_SHAREMODE_SHARED, AUDCLNT_STREAMFLAGS_EVENTCALLBACK,
+                                   static_cast<REFERENCE_TIME>(buffer_ms) * 10000, 0, mix_format, nullptr);
     CoTaskMemFree(mix_format);
     if (FAILED(hr))
         return fail("IAudioClient::Initialize failed");
@@ -191,6 +216,13 @@ bool WasapiAudioRenderer::Init(std::string& out_error) {
     hr = audio_client_->GetBufferSize(&buffer_frame_count_);
     if (FAILED(hr))
         return fail("IAudioClient::GetBufferSize failed");
+    if (device_sample_rate_ == 0 || buffer_frame_count_ > device_sample_rate_)
+        return fail("Audio endpoint buffer exceeds the supported bounded output size");
+    const auto engine_frames =
+        static_cast<size_t>((static_cast<uint64_t>(buffer_frame_count_) * kEngineSampleRate + device_sample_rate_ - 1) /
+                                device_sample_rate_ +
+                            1024);
+    engine_buffer_.reserve(engine_frames * kEngineChannels);
 
     buffer_event_ = CreateEventW(nullptr, FALSE, FALSE, nullptr);
     if (buffer_event_ == nullptr)
@@ -203,21 +235,19 @@ bool WasapiAudioRenderer::Init(std::string& out_error) {
     if (FAILED(hr) || render_client_ == nullptr)
         return fail("IAudioClient::GetService(IAudioRenderClient) failed");
 
-    // Play cursor for the playback clock. Not fatal if unavailable: the clock
-    // degrades to counting written frames (the old, buffer-depth-early
-    // behaviour) rather than failing the whole Edit-page player.
+    // An unavailable device clock uses a monotonic estimate until it recovers.
     hr = audio_client_->GetService(__uuidof(IAudioClock), reinterpret_cast<void**>(&audio_clock_));
     if (FAILED(hr) || audio_clock_ == nullptr) {
         audio_clock_ = nullptr;
         clock_frequency_ = 0;
-        LogWarn("IAudioClock unavailable -- playback clock falls back to written frames");
+        LogWarn("IAudioClock unavailable -- using monotonic playback clock");
     } else {
         UINT64 frequency = 0;
         if (FAILED(audio_clock_->GetFrequency(&frequency)) || frequency == 0) {
             audio_clock_->Release();
             audio_clock_ = nullptr;
             clock_frequency_ = 0;
-            LogWarn("IAudioClock::GetFrequency failed -- playback clock falls back to written frames");
+            LogWarn("IAudioClock::GetFrequency failed -- using monotonic playback clock");
         } else {
             clock_frequency_ = frequency;
         }
@@ -230,8 +260,26 @@ bool WasapiAudioRenderer::Init(std::string& out_error) {
 void WasapiAudioRenderer::Start(std::span<const float> initial_samples, bool timeline) {
     if (!initialized_ || running_.load())
         return;
+    if (resampler_) {
+        // Buffered filter history belongs to the old source position.
+        // Reinitialize on the owner before the endpoint thread can run.
+        swr_close(resampler_);
+        if (swr_init(resampler_) < 0) {
+            LogError("audio render resampler restart failed");
+            return;
+        }
+    }
     frames_rendered_.store(0);
     frames_played_latched_.store(0);
+    shortfall_frames_.store(0);
+    endpoint_submissions_.store(0);
+    submitted_lead_frames_.store(0);
+    peak_submitted_lead_frames_.store(0);
+    pull_consumed_frames_.store(0);
+    normalized_played_frames_.store(0);
+    timeline_recovery_pending_.store(false);
+    recovery_played_frames_.store(0);
+    audio_arrived_ = false;
     {
         // Reset here, not at the end of Stop(): the decode thread that was
         // pushing into this ring is not guaranteed to have stopped yet when
@@ -267,8 +315,18 @@ void WasapiAudioRenderer::Start(std::span<const float> initial_samples, bool tim
         else
             clock_baseline_.store(0);
     }
+    normalized_clock_->Reset(device_sample_rate_, SteadyAudioNowNs());
     running_.store(true);
     render_thread_ = std::thread(&WasapiAudioRenderer::RenderThreadMain, this);
+}
+
+void WasapiAudioRenderer::StartTimeline(TimelineAudioPull pull) {
+    if (!initialized_ || !low_latency_timeline_ || running_.load() || !pull)
+        return;
+    timeline_pull_ = std::move(pull);
+    Start({}, true);
+    if (!Running())
+        timeline_pull_ = {};
 }
 
 void WasapiAudioRenderer::Stop() {
@@ -294,6 +352,7 @@ void WasapiAudioRenderer::Stop() {
         SetEvent(static_cast<HANDLE>(buffer_event_)); // wake the render thread so it can observe running_==false
     if (render_thread_.joinable())
         render_thread_.join();
+    timeline_pull_ = {};
     if (initialized_ && audio_client_ != nullptr) {
         audio_client_->Stop();
         // Flush the endpoint buffer and rewind the stream position. Without
@@ -341,34 +400,64 @@ void WasapiAudioRenderer::PushTimelineSamples(uint64_t first_frame, std::span<co
 }
 
 uint64_t WasapiAudioRenderer::TimelineConsumedFrames() {
+    if (low_latency_timeline_)
+        return pull_consumed_frames_.load(std::memory_order_relaxed);
     std::lock_guard<std::mutex> lock(ring_mutex_);
     return timeline_consumed_frames_;
 }
 
 uint64_t WasapiAudioRenderer::FramesPlayed() const noexcept {
     if (!running_.load())
-        return frames_played_latched_.load();
+        return (std::max)(frames_played_latched_.load(), normalized_played_frames_.load());
     return ReadPlayedFramesLive();
 }
 
 uint64_t WasapiAudioRenderer::ReadPlayedFramesLive() const noexcept {
+    const auto observe = [this](std::optional<uint64_t> frames) {
+        const auto normalized = normalized_clock_->Observe(frames, SteadyAudioNowNs());
+        normalized_played_frames_.store(normalized, std::memory_order_release);
+        return normalized;
+    };
     if (audio_clock_ == nullptr || clock_frequency_ == 0)
-        return frames_rendered_.load(); // no clock service: the old written-frames fallback
+        return observe(std::nullopt);
 
     UINT64 position = 0;
     UINT64 qpc_position_100ns = 0;
     if (FAILED(audio_clock_->GetPosition(&position, &qpc_position_100ns)))
-        return frames_rendered_.load();
+        return observe(std::nullopt);
 
     const uint64_t baseline = clock_baseline_.load();
     if (position <= baseline)
-        return 0; // nothing played yet in this run
+        return observe(uint64_t{0});
 
     // Extrapolate to now: GetPosition reports where the cursor was as of
     // qpc_position_100ns, which lags by up to one device period.
     const uint64_t interpolated = InterpolateClockPosition(position, clock_frequency_, qpc_position_100ns,
                                                            QpcNow100ns(), kMaxClockExtrapolation100ns);
-    return ClockPositionToFrames(interpolated - baseline, clock_frequency_, device_sample_rate_);
+    return observe(ClockPositionToFrames(interpolated - baseline, clock_frequency_, device_sample_rate_));
+}
+
+WasapiRenderMeasurements WasapiAudioRenderer::Measurements() const {
+    WasapiRenderMeasurements result;
+    result.initialized = initialized_;
+    result.running = Running();
+    result.timeline_pull = low_latency_timeline_;
+    result.sample_rate = device_sample_rate_;
+    result.buffer_frames = buffer_frame_count_;
+    result.requested_buffer_ms = requested_buffer_ms_;
+    result.device_period_ns = device_period_ns_;
+    result.endpoint_submissions = endpoint_submissions_.load();
+    result.submitted_lead_frames = submitted_lead_frames_.load();
+    result.peak_submitted_lead_frames = peak_submitted_lead_frames_.load();
+    result.clock_reanchors = normalized_clock_->Reanchors();
+    result.timeline_recovery_pending = timeline_recovery_pending_.load(std::memory_order_acquire);
+    result.timeline_reanchors = timeline_reanchors_.load();
+    result.timeline_skipped_frames = timeline_skipped_frames_.load();
+    result.recovery_played_frames = recovery_played_frames_.load();
+    result.clock_mode = !Running()                                              ? RenderClockMode::Stopped
+                        : (!audio_clock_ || normalized_clock_->UsingFallback()) ? RenderClockMode::MonotonicFallback
+                                                                                : RenderClockMode::Device;
+    return result;
 }
 
 uint32_t WasapiAudioRenderer::SampleRate() const noexcept {
@@ -388,7 +477,7 @@ void WasapiAudioRenderer::RenderThreadMain() {
     DWORD task_index = 0;
     HANDLE task_handle = AvSetMmThreadCharacteristicsW(L"Pro Audio", &task_index);
 
-    std::vector<float> engine_buf; // pulled from ring_, engine format
+    auto& engine_buf = engine_buffer_;
 
     while (running_.load()) {
         const DWORD wait_ret = WaitForSingleObject(static_cast<HANDLE>(buffer_event_), 200);
@@ -410,7 +499,32 @@ void WasapiAudioRenderer::RenderThreadMain() {
         }
         if (FAILED(padding_hr) || padding_frames > buffer_frame_count_)
             continue;
-        const UINT32 available_frames = buffer_frame_count_ - padding_frames;
+        if (timeline_pull_) {
+            const auto played = normalized_played_frames_.load(std::memory_order_acquire);
+            const auto engine_played = played / device_sample_rate_ * kEngineSampleRate +
+                                       played % device_sample_rate_ * kEngineSampleRate / device_sample_rate_;
+            const auto next = pull_consumed_frames_.load(std::memory_order_relaxed);
+            const auto tolerance =
+                static_cast<uint64_t>(device_period_ns_.value_or(10'000'000)) * kEngineSampleRate / 1'000'000'000 + 1;
+            if (const auto recovery = PlanTimelineAudioRecovery(next, engine_played, tolerance, next != 0)) {
+                recovery_played_frames_.store(recovery->next_frame, std::memory_order_relaxed);
+                timeline_skipped_frames_.fetch_add(recovery->skipped_frames, std::memory_order_relaxed);
+                timeline_reanchors_.fetch_add(1, std::memory_order_relaxed);
+                frames_played_latched_.store(played, std::memory_order_relaxed);
+                // No buffer is outstanding. Freeze stale queued audio now, then
+                // let the owner reset the endpoint and prepare a new generation.
+                audio_client_->Stop();
+                timeline_recovery_pending_.store(true, std::memory_order_release);
+                running_.store(false);
+                break;
+            }
+        }
+        UINT32 available_frames = buffer_frame_count_ - padding_frames;
+        if (timeline_pull_) {
+            const auto maximum_lead = (device_sample_rate_ + 49) / 50;
+            available_frames =
+                padding_frames >= maximum_lead ? 0 : (std::min)(available_frames, maximum_lead - padding_frames);
+        }
         if (available_frames == 0)
             continue;
 
@@ -432,11 +546,28 @@ void WasapiAudioRenderer::RenderThreadMain() {
         // Pull up to want_engine_frames worth of engine-format samples out of the ring.
         const size_t want_floats = want_engine_frames * kEngineChannels;
         engine_buf.clear();
-        {
+        if (timeline_pull_) {
+            if (want_floats > engine_buf.capacity()) {
+                running_.store(false);
+                break;
+            }
+            engine_buf.resize(want_floats);
+            try {
+                timeline_pull_(pull_consumed_frames_.load(std::memory_order_relaxed), engine_buf);
+            } catch (...) {
+                std::fill(engine_buf.begin(), engine_buf.end(), 0.0f);
+                running_.store(false);
+            }
+            pull_consumed_frames_.fetch_add(want_engine_frames, std::memory_order_relaxed);
+        } else {
             std::lock_guard<std::mutex> lock(ring_mutex_);
             // Explicit template args so windows.h's min() function-like macro
             // cannot expand (this target compiles without NOMINMAX).
             const size_t take = std::min<size_t>(want_floats, ring_.size());
+            if (take > 0)
+                audio_arrived_ = true;
+            if (audio_arrived_ && take < want_floats)
+                shortfall_frames_.fetch_add((want_floats - take) / kEngineChannels, std::memory_order_relaxed);
             engine_buf.assign(ring_.begin(), ring_.begin() + static_cast<std::ptrdiff_t>(take));
             ring_.erase(ring_.begin(), ring_.begin() + static_cast<std::ptrdiff_t>(take));
             if (timeline_mode_) {
@@ -457,11 +588,27 @@ void WasapiAudioRenderer::RenderThreadMain() {
         if (FAILED(buffer_hr))
             continue;
 
+        const auto release = [&](DWORD flags) {
+            const auto status = render_client_->ReleaseBuffer(available_frames, flags);
+            if (FAILED(status)) {
+                LogRenderFailure("ReleaseBuffer", status);
+                running_.store(false);
+                return;
+            }
+            const uint64_t lead = padding_frames + available_frames;
+            submitted_lead_frames_.store(lead, std::memory_order_relaxed);
+            auto peak = peak_submitted_lead_frames_.load(std::memory_order_relaxed);
+            while (peak < lead &&
+                   !peak_submitted_lead_frames_.compare_exchange_weak(peak, lead, std::memory_order_relaxed)) {
+            }
+            endpoint_submissions_.fetch_add(1, std::memory_order_relaxed);
+        };
+
         if (engine_frames == 0) {
             // Nothing decoded yet (e.g. paused/starved) -- render silence rather
             // than blocking, so the device clock (and playback clock derived
             // from it) keeps advancing honestly instead of stalling.
-            render_client_->ReleaseBuffer(available_frames, AUDCLNT_BUFFERFLAGS_SILENT);
+            release(AUDCLNT_BUFFERFLAGS_SILENT);
         } else if (resampler_ == nullptr) {
             // Device is exactly 48k/stereo/float32 -- straight copy.
             const size_t copy_bytes = engine_buf.size() * sizeof(float); // <= available_frames worth by construction
@@ -470,7 +617,7 @@ void WasapiAudioRenderer::RenderThreadMain() {
                 memset(device_data + copy_bytes, 0,
                        (static_cast<size_t>(available_frames) - engine_frames) * kEngineChannels * sizeof(float));
             }
-            render_client_->ReleaseBuffer(available_frames, 0);
+            release(0);
         } else {
             const uint8_t* in_ptr = reinterpret_cast<const uint8_t*>(engine_buf.data());
             const int produced = swr_convert(resampler_, &device_data, static_cast<int>(available_frames), &in_ptr,
@@ -479,7 +626,7 @@ void WasapiAudioRenderer::RenderThreadMain() {
                 // Error, or all input got buffered inside swr with nothing
                 // produced yet -- the buffer contents are untouched garbage, so
                 // tell the engine to treat it as silence.
-                render_client_->ReleaseBuffer(available_frames, AUDCLNT_BUFFERFLAGS_SILENT);
+                release(AUDCLNT_BUFFERFLAGS_SILENT);
             } else {
                 if (static_cast<uint32_t>(produced) < available_frames) {
                     // Pad any shortfall with silence rather than leaving garbage,
@@ -492,7 +639,7 @@ void WasapiAudioRenderer::RenderThreadMain() {
                         (static_cast<size_t>(available_frames) - static_cast<size_t>(produced)) * device_frame_bytes;
                     memset(tail, 0, tail_bytes);
                 }
-                render_client_->ReleaseBuffer(available_frames, 0);
+                release(0);
             }
         }
 
@@ -507,6 +654,9 @@ void WasapiAudioRenderer::RenderThreadMain() {
 
 void WasapiAudioRenderer::Shutdown() {
     Stop();
+    device_period_ns_.reset();
+    low_latency_timeline_ = false;
+    requested_buffer_ms_ = 0;
     if (buffer_event_ != nullptr) {
         CloseHandle(static_cast<HANDLE>(buffer_event_));
         buffer_event_ = nullptr;
@@ -522,6 +672,11 @@ void WasapiAudioRenderer::Shutdown() {
     clock_frequency_ = 0;
     clock_baseline_.store(0);
     frames_played_latched_.store(0);
+    normalized_played_frames_.store(0);
+    timeline_recovery_pending_.store(false);
+    timeline_reanchors_.store(0);
+    timeline_skipped_frames_.store(0);
+    recovery_played_frames_.store(0);
     if (render_client_ != nullptr) {
         render_client_->Release();
         render_client_ = nullptr;
