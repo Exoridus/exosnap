@@ -193,11 +193,8 @@ void EditSessionAdapter::setEditContextUs(const EditContext& context, qint64 tim
                 }
                 imports[index] = edit::DescribeSourceImport(
                     metadata, static_cast<edit::Time>(std::llround(segment.duration_seconds * 1000000.0)), access);
-                publications[index] = {std::move(access),
-                                       {},
-                                       std::make_shared<const engine::EditMediaMetadata>(std::move(metadata)),
-                                       {},
-                                       false};
+                publications[index].access = std::move(access);
+                publications[index].metadata = std::make_shared<const engine::EditMediaMetadata>(std::move(metadata));
             }
             if (self)
                 QMetaObject::invokeMethod(

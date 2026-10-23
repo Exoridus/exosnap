@@ -7,6 +7,7 @@
 #include <exosnap/engine/edit_timeline_compositor.h>
 #include <exosnap/engine/edit_timeline_export.h>
 #include <exosnap/engine/edit_timeline_render.h>
+#include <exosnap/engine/edit_types.h>
 #include <exosnap/engine/mp4_remuxer.h>
 #include <exosnap/engine/recorder_session.h>
 #include <exosnap/engine/recording_media_types.h>

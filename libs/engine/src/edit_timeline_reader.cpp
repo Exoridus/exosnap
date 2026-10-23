@@ -1,4 +1,6 @@
+#include <atomic>
 #include <capability/translatable.h>
+#include <exosnap/engine/audio_media_manifest.h>
 #include <exosnap/engine/edit_player_engine.h>
 #include <exosnap/engine/edit_timeline.h>
 #include <exosnap/engine/edit_timeline_compositor.h>
@@ -6,6 +8,7 @@
 #include <exosnap/engine/edit_timeline_render.h>
 #include <exosnap/engine/edit_types.h>
 #include <exosnap/engine/output_geometry.h>
+#include <iterator>
 
 #include "brickwall_limiter.h"
 

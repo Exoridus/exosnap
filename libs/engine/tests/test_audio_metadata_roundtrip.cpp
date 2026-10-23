@@ -5,6 +5,9 @@
 #include "media_identity_sidecar.h"
 #include "opus_audio_encoder.h"
 #include "test_unique_temp.h"
+#include <array>
+#include <cstddef>
+#include <exosnap/engine/edit_types.h>
 
 #include <exosnap/engine/audio_media_manifest.h>
 #include <exosnap/engine/audio_routing_model.h>

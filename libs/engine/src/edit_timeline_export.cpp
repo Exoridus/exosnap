@@ -3,6 +3,7 @@
 #include <exosnap/engine/audio_media_manifest.h>
 #include <exosnap/engine/background_io.h>
 #include <exosnap/engine/edit_types.h>
+#include <exosnap/engine/recording_media_types.h>
 
 #include "audio_media_manifest_adapter.h"
 #include "budgeted_media_avio.h"

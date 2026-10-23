@@ -1,4 +1,6 @@
+#include <exosnap/engine/audio_media_manifest.h>
 #include <exosnap/engine/edit_player_engine.h>
+#include <exosnap/engine/edit_types.h>
 #include <exosnap/engine/media_cache_store.h>
 #include <exosnap/engine/waveform_cache.h>
 

@@ -1,6 +1,10 @@
+#include <algorithm>
+#include <array>
 #include <cstdint>
+#include <exosnap/engine/edit_types.h>
 #include <gtest/gtest.h>
 #include <ios>
+#include <iterator>
 #include <optional>
 #include <system_error>
 #include <utility>

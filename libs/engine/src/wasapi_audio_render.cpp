@@ -1,6 +1,9 @@
 #include "exosnap/engine/wasapi_audio_render.h"
 #include "exosnap/engine/edit_timeline_audio.h"
 #include "exosnap/engine/timeline_audio_queue.h"
+#include <memory>
+#include <optional>
+#include <utility>
 
 #include "exosnap/engine/logging/logging.h"
 #include "playback_clock.h"

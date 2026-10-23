@@ -1,4 +1,17 @@
+#include <algorithm>
+#include <cstddef>
+#include <cstdint>
+#include <exosnap/engine/audio_media_manifest.h>
+#include <exosnap/engine/edit_timeline.h>
 #include <exosnap/engine/edit_timeline_audio.h>
+#include <exosnap/engine/edit_timeline_export.h>
+#include <exosnap/engine/edit_timeline_render.h>
+#include <exosnap/engine/edit_types.h>
+#include <memory>
+#include <optional>
+#include <system_error>
+#include <utility>
+#include <vector>
 
 #include "test_unique_temp.h"
 
@@ -8,16 +21,18 @@
 #include <atomic>
 #include <chrono>
 #include <cmath>
-#include <condition_variable>
 #include <filesystem>
-#include <fstream>
-#include <mutex>
 #include <semaphore>
 #include <thread>
 
 extern "C" {
+#include <libavcodec/codec_id.h>
+#include <libavcodec/packet.h>
 #include <libavformat/avformat.h>
+#include <libavformat/avio.h>
+#include <libavutil/avutil.h>
 #include <libavutil/channel_layout.h>
+#include <libavutil/mathematics.h>
 #include <libavutil/samplefmt.h>
 }
 

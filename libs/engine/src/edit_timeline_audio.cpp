@@ -1,5 +1,17 @@
+#include <atomic>
 #include <capability/translatable.h>
+#include <cstddef>
+#include <cstdint>
+#include <exception>
+#include <exosnap/engine/edit_timeline.h>
 #include <exosnap/engine/edit_timeline_audio.h>
+#include <exosnap/engine/edit_timeline_render.h>
+#include <exosnap/engine/recording_media_types.h>
+#include <iterator>
+#include <memory>
+#include <span>
+#include <string>
+#include <vector>
 
 #include "brickwall_limiter.h"
 

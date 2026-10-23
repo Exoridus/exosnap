@@ -6,6 +6,7 @@
 #include <cstdlib>
 #include <exosnap/engine/audio_limits.h>
 #include <exosnap/engine/audio_media_manifest.h>
+#include <exosnap/engine/edit_types.h>
 #include <exosnap/engine/performance_measurements.h>
 #include <exosnap/engine/recording_media_types.h>
 #include <filesystem>

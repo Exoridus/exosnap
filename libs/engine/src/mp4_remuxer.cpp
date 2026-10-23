@@ -35,7 +35,6 @@ extern "C" {
 #include <libavutil/avutil.h>
 #include <libavutil/dict.h>
 #include <libavutil/error.h>
-#include <libavutil/log.h>
 #include <libavutil/macros.h>
 #include <libavutil/mastering_display_metadata.h>
 #include <libavutil/mathematics.h>

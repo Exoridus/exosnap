@@ -1,4 +1,5 @@
 #include <gtest/gtest.h>
+#include <span>
 
 #include <atomic>
 #include <chrono>
