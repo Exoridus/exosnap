@@ -169,13 +169,13 @@ class EditSessionAdapter : public QObject {
     Q_INVOKABLE void selectClipWithModifiers(qulonglong id, bool toggle = false, bool extend = false);
     Q_INVOKABLE bool beginClipPointerSelection(qulonglong id, bool toggle = false, bool extend = false,
                                                bool preserve_selection = true);
-    Q_INVOKABLE bool beginLanePointerSelection(qulonglong track_id, qint64 at_us);
-    // Selects the clips a marquee touches, on top of `base_ids`. Selection only:
-    // no undo step. `exact` skips link-group expansion for this selection.
+    Q_INVOKABLE bool beginLanePointerSelection(qulonglong track_id, qint64 at_us, bool seek = true);
     // Explicit link-group edits on the selected clips, one undo step each.
     // Linking needs at least two clips.
     Q_INVOKABLE bool linkSelectedClips();
     Q_INVOKABLE bool unlinkSelectedClips();
+    // Selects the clips a marquee touches, on top of `base_ids`. Selection only:
+    // no undo step. `exact` skips link-group expansion for this selection.
     Q_INVOKABLE void selectClipArea(qint64 start_us, qint64 end_us, const QVariantList& track_ids,
                                     const QVariantList& base_ids, bool exact = false);
     Q_INVOKABLE bool hasPointerSelection() const {

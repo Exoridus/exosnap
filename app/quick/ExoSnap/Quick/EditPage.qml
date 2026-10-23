@@ -57,7 +57,9 @@ FocusScope {
     Keys.forwardTo: [clips]
     Keys.onPressed: event => {
         const focused = root.Window.window ? root.Window.window.activeFocusItem : null;
-        if (focused instanceof TextInput || focused instanceof TextEdit)
+        const draft = focused as EditDraftField;
+        if ((focused instanceof TextInput || focused instanceof TextEdit)
+                && !(event.key === Qt.Key_Escape && draft && !draft.draftActive))
             return;
         if (event.key === Qt.Key_Escape && (root.detailsOpen || root.mediaOpen)) {
             if (root.detailsOpen) {

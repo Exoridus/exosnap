@@ -727,6 +727,7 @@ void EditExportAdapter::chooseDestination() {
     setContainerKey(QFileInfo(path).suffix().toLower() == QStringLiteral("mp4") ? QStringLiteral("mp4")
                                                                                 : QStringLiteral("mkv"));
     chosen_output_ = std::filesystem::path(path.toStdWString());
+    retry_output_path_.reset();
     overwrite_confirmed_ = QFileInfo::exists(path);
     startExport();
 }
@@ -903,6 +904,10 @@ void EditExportAdapter::setState(State state) {
     if (state_ == state)
         return;
     state_ = state;
+    if (state == State::Review || state == State::Options) {
+        result_unseen_ = state == State::Review;
+        emit resultChanged();
+    }
     emit stateChanged();
 }
 
@@ -914,13 +919,34 @@ void EditExportAdapter::reset() {
     error_text_.clear();
     destination_failure_ = false;
     result_unseen_ = false;
+    result_snapshot_.reset();
+    last_replace_existing_ = false;
     emit progressChanged();
     emit resultChanged();
     setState(State::Options);
 }
 
 bool EditExportAdapter::resultOutdated() const {
-    return state_ == State::Done && session_ != nullptr && session_->workspace().revision() != result_revision_;
+    if (state_ != State::Done || !session_ || !result_snapshot_)
+        return false;
+    const auto current = session_->workspace().snapshot();
+    const auto& before = *result_snapshot_;
+    if (before.tracks != current->tracks || before.clips != current->clips || before.junctions != current->junctions ||
+        before.spacers != current->spacers || before.timeline_end != current->timeline_end ||
+        before.result_range != current->result_range || before.output_fps != current->output_fps ||
+        before.output_width != current->output_width || before.output_height != current->output_height)
+        return true;
+    for (const auto& asset : before.assets) {
+        if (std::none_of(before.clips.begin(), before.clips.end(),
+                         [&](const auto& clip) { return clip.asset == asset->id; }))
+            continue;
+        const auto* now = session_->workspace().asset(asset->id);
+        if (!now || asset->path != now->path || asset->source_version != now->source_version ||
+            asset->state != now->state || asset->markers != now->markers ||
+            !SameSelection(asset->monitor_selection, now->monitor_selection))
+            return true;
+    }
+    return false;
 }
 
 void EditExportAdapter::markResultSeen() {
@@ -938,6 +964,10 @@ void EditExportAdapter::publishProgress(int percent) {
 }
 
 void EditExportAdapter::retry() {
+    if (state_ == State::Failed && !output_path_.empty()) {
+        retry_output_path_ = output_path_;
+        overwrite_confirmed_ = last_replace_existing_;
+    }
     startExport();
 }
 
@@ -945,6 +975,7 @@ void EditExportAdapter::retryInFolder(const QUrl& folder) {
     if (state_ != State::Failed || !destination_failure_ || !folder.isLocalFile() || output_path_.empty())
         return;
     retry_output_path_ = std::filesystem::path(folder.toLocalFile().toStdWString()) / output_path_.filename();
+    overwrite_confirmed_ = false;
     startExport();
 }
 
@@ -964,6 +995,7 @@ void EditExportAdapter::startExport() {
     error_text_.clear();
     destination_failure_ = false;
     result_unseen_ = false;
+    last_replace_existing_ = false;
     progress_percent_ = 0;
     emit progressChanged();
     emit resultChanged();
@@ -983,6 +1015,7 @@ void EditExportAdapter::startExport() {
         (L"ExoSnap-" + QDateTime::currentDateTime().toString(QStringLiteral("yyyyMMdd-HHmmss")).toStdWString() +
          (to_mp4 ? L".mp4" : L".mkv"));
     const std::filesystem::path output = retry_output_path_.value_or(chosen_output_.value_or(suggested));
+    retry_output_path_.reset();
     std::vector<engine::TimelineExportClip> recipe;
     engine::TimelineRenderSnapshot render_snapshot;
     render_snapshot.timeline = session_->workspace().timeline();
@@ -1033,6 +1066,7 @@ void EditExportAdapter::startExport() {
             timeline_markers.push_back(std::move(retimed));
         }
     }
+    output_path_ = output;
     if (QFileInfo::exists(QString::fromStdWString(output.wstring())) && !overwrite_confirmed_) {
         error_text_ = tr("Choose a destination and confirm before replacing an existing file.");
         emit resultChanged();
@@ -1040,10 +1074,9 @@ void EditExportAdapter::startExport() {
         return;
     }
     const bool replace_existing = overwrite_confirmed_;
+    last_replace_existing_ = replace_existing;
     overwrite_confirmed_ = false;
-    retry_output_path_.reset();
     MarkerExportPlan marker_plan = PlanMarkerSidecarForExport(output, timeline_markers);
-    output_path_ = output;
     emit resultChanged();
 
     auto prepared = std::make_shared<PreparedExport>();
@@ -1126,7 +1159,7 @@ void EditExportAdapter::confirmPreparedExport() {
 
 void EditExportAdapter::beginPreparedExport() {
     auto prepared = std::exchange(prepared_, std::shared_ptr<PreparedExport>{});
-    result_revision_ = prepared->workspace_revision;
+    result_snapshot_ = session_->workspace().snapshot();
     review_outcome_.clear();
     emit reviewChanged();
     run_ = std::make_shared<RunState>();

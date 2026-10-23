@@ -66,6 +66,10 @@
 namespace exosnap::quick {
 class EditExportAdapterTestPeer {
   public:
+    static void chooseOutput(EditExportAdapter& adapter, const std::filesystem::path& path, bool replace) {
+        adapter.chosen_output_ = path;
+        adapter.overwrite_confirmed_ = replace;
+    }
     static QThread* worker(const EditExportAdapter& adapter) {
         return adapter.export_thread_;
     }
@@ -2757,6 +2761,76 @@ TEST(EditWorkspaceAdapter, UnknownSegmentDurationIsResolvedBeforeOrderedPosition
 
 // ── Export ─────────────────────────────────────────────────────────────────
 
+TEST(EditWorkspaceAdapter, AnUnchangedMarqueeDoesNotRepublishTheWorkspace) {
+    EnsureApplication();
+    EditSessionAdapter session;
+    session.setEditContext(MakeContext());
+    session.clearSelection();
+    const auto clip = session.workspace().clips().front();
+    const QVariantList tracks{QVariant::fromValue<qulonglong>(clip.track)};
+    int publications = 0;
+    QObject::connect(&session, &EditSessionAdapter::workspaceChanged, [&] { ++publications; });
+    session.selectClipArea(clip.start, clip.end(), tracks, {}, true);
+    ASSERT_EQ(publications, 1);
+    const auto selected = session.selectedClipIds();
+    session.selectClipArea(clip.start, clip.end(), tracks, {}, true);
+    EXPECT_EQ(publications, 1);
+    EXPECT_EQ(session.selectedClipIds(), selected);
+}
+
+TEST(EditExportAdapterRun, RetryPreservesTheFailedDestinationAndItsReplaceConsent) {
+    EnsureApplication();
+    QTemporaryDir directory;
+    ASSERT_TRUE(directory.isValid());
+    const auto destination = directory.filePath(QStringLiteral("existing.mkv"));
+    QFile file(destination);
+    ASSERT_TRUE(file.open(QIODevice::WriteOnly));
+    ASSERT_EQ(file.write("keep", 4), 4);
+    file.close();
+    EditSessionAdapter session;
+    auto context = MakeContext();
+    context.output_path = directory.filePath(QStringLiteral("missing-source.mkv"));
+    session.setEditContext(context);
+    EditExportAdapter exporter;
+    exporter.setSession(&session);
+    EditExportAdapterTestPeer::chooseOutput(exporter, std::filesystem::path(destination.toStdWString()), true);
+    const auto await_failure = [&] {
+        QElapsedTimer timer;
+        timer.start();
+        while (exporter.state() != EditExportAdapter::Failed && timer.elapsed() < 10000) {
+            QCoreApplication::processEvents();
+            QThread::msleep(1);
+        }
+        return exporter.state() == EditExportAdapter::Failed;
+    };
+    exporter.startExport();
+    ASSERT_TRUE(await_failure());
+    ASSERT_FALSE(exporter.errorText().contains(QStringLiteral("confirm before replacing")));
+    exporter.retry();
+    EXPECT_EQ(exporter.state(), EditExportAdapter::Preparing) << exporter.errorText().toStdString();
+    ASSERT_TRUE(await_failure());
+    EXPECT_EQ(QDir::fromNativeSeparators(exporter.outputPath()), destination);
+    EXPECT_FALSE(exporter.errorText().contains(QStringLiteral("confirm before replacing")));
+    EditExportAdapterTestPeer::chooseOutput(exporter, std::filesystem::path(destination.toStdWString()), false);
+    exporter.startExport();
+    ASSERT_EQ(exporter.state(), EditExportAdapter::Failed);
+    exporter.retry();
+    EXPECT_EQ(exporter.state(), EditExportAdapter::Failed);
+    EXPECT_TRUE(exporter.errorText().contains(QStringLiteral("confirm before replacing")));
+    const auto other_destination = directory.filePath(QStringLiteral("other.mkv"));
+    QFile other(other_destination);
+    ASSERT_TRUE(other.open(QIODevice::WriteOnly));
+    ASSERT_EQ(other.write("other", 5), 5);
+    other.close();
+    EditExportAdapterTestPeer::chooseOutput(exporter, std::filesystem::path(other_destination.toStdWString()), true);
+    exporter.startExport();
+    EXPECT_EQ(exporter.state(), EditExportAdapter::Preparing);
+    EXPECT_EQ(QDir::fromNativeSeparators(exporter.outputPath()), other_destination);
+    ASSERT_TRUE(await_failure());
+    ASSERT_TRUE(file.open(QIODevice::ReadOnly));
+    EXPECT_EQ(file.readAll(), QByteArray("keep"));
+}
+
 TEST(EditExportPath, DefaultDestinationUsesConfiguredFolderAndSelectedContainer) {
     const std::filesystem::path directory(L"D:/Configured output");
     EXPECT_EQ(DefaultEditExportPath(directory, false), directory / L"ExoSnap-export.mkv");
@@ -3429,6 +3503,15 @@ TEST(EditWorkspaceAdapter, RealEditingHistoryAndBlankTimeReachScopedExportsWitho
         ASSERT_TRUE(after.error.empty()) << after.error;
         EXPECT_EQ(after.content_sha256, source_metadata[i].content_sha256);
     }
+    EXPECT_FALSE(exporter.resultOutdated());
+    auto bin_metadata = source_metadata.front();
+    bin_metadata.content_sha256.fill(91);
+    session.addProbedMediaForHarness(QStringLiteral("bin-only.mkv"), bin_metadata, false);
+    EXPECT_FALSE(exporter.resultOutdated());
+    session.moveClip(blue_id, 2600, false);
+    EXPECT_TRUE(exporter.resultOutdated());
+    session.undo();
+    EXPECT_FALSE(exporter.resultOutdated());
     if (!evidence.isEmpty()) {
         QFile manifest(QDir(evidence).filePath(QStringLiteral("manifest.json")));
         ASSERT_TRUE(manifest.open(QIODevice::WriteOnly | QIODevice::NewOnly));

@@ -357,7 +357,7 @@ Item {
                         else if (modelData.mediaCandidate)
                             root.session.routeMediaDrop([modelData.url], true, at);
                     } else if (root.currentTab === 2) {
-                        root.session.addHistory(modelData.path, Math.floor(at / 1000));
+                        root.session.addHistoryUs(modelData.path, at);
                     } else {
                         root.session.appendAssetUs(modelData.id, at);
                     }

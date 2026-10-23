@@ -932,7 +932,7 @@ bool EditSessionAdapter::beginClipPointerSelection(qulonglong id, bool toggle, b
     return true;
 }
 
-bool EditSessionAdapter::beginLanePointerSelection(qulonglong track, qint64 at) {
+bool EditSessionAdapter::beginLanePointerSelection(qulonglong track, qint64 at, bool seek) {
     if (!preflightPendingDraft() || at < 0 || at > workspace_.duration() ||
         std::none_of(workspace_.tracks().begin(), workspace_.tracks().end(),
                      [track](const auto& row) { return row.id == track; }))
@@ -952,8 +952,10 @@ bool EditSessionAdapter::beginLanePointerSelection(qulonglong track, qint64 at) 
     if (selection_.range)
         pointer_selection_->range_bounds = edit::Span{selection_.range->start_us, selection_.range->end_us};
     pointer_selection_->playhead = workspace_.playhead();
-    selectGapUs(track, at);
-    requestSeekUs(at);
+    if (seek) {
+        selectGapUs(track, at);
+        requestSeekUs(at);
+    }
     return true;
 }
 
@@ -976,8 +978,11 @@ void EditSessionAdapter::selectClipArea(qint64 start, qint64 end, const QVariant
             result.push_back(value.toULongLong());
         return result;
     };
+    const auto before = selection_;
     selection_.selectArea(*workspace_.snapshot(), std::min(start, end), std::max(start, end), ids(track_ids),
                           ids(base_ids), linkedSelection && !exact);
+    if (selection_ == before)
+        return;
     workspace_.select(selection_.primary_clip);
     publishSelection();
 }

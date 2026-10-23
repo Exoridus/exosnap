@@ -73,6 +73,14 @@ TestCase {
         verify(!item.draftActive);
         compare(commits, 0);
     }
+    function test_escape_without_a_draft_restores_canvas_focus() {
+        const item = field();
+        verify(item.commitPendingDraft());
+        verify(item.activeFocus && !item.draftActive);
+        keyClick(Qt.Key_Escape);
+        tryVerify(() => canvas.activeFocus);
+        compare(commits, 0);
+    }
     function test_background_gain_update_does_not_replace_active_text() {
         const item = field();
         item.selectAll();

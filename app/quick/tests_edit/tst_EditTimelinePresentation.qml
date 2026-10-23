@@ -100,6 +100,7 @@ TestCase {
     }
     function test_header_click_preserves_playhead_and_content_click_seeks() {
         const strip = createTemporaryObject(timelineComponent, tests);
+        strip.pixelsPerSecond = 137;
         verify(!!strip);
         strip.view.setVisibleInterval(0, 10000000);
         waitForRendering(strip);
@@ -108,8 +109,11 @@ TestCase {
         testSession.requestSeekUs(0);
         mouseClick(clip, 60, 8, Qt.LeftButton);
         compare(testSession.positionUs, 0);
-        mouseClick(clip, 120, 40, Qt.LeftButton);
+        mouseClick(clip, 121, 40, Qt.LeftButton);
         verify(testSession.positionUs > 0);
+        const landed = testSession.positionUs;
+        testSession.finishPointerSeek();
+        compare(testSession.positionUs, landed);
         compare(testSession.selectionMode, EditSessionAdapter.ClipSelection);
     }
     function test_range_band_moves_then_clears_without_seeking() {
@@ -593,6 +597,24 @@ TestCase {
         compare(testSession.selectionMode, EditSessionAdapter.ClipSelection);
         compare(testSession.canUndo, undoable);
         testSession.clearSelection();
+    }
+    function test_marquee_escape_restores_the_previous_range() {
+        verify(testSession.applyTimeValue(0, "timelineEnd", 300000000));
+        const strip = createTemporaryObject(timelineComponent, tests);
+        strip.view.setVisibleInterval(0, 300000000);
+        waitForRendering(strip);
+        const tracks = testSession.tracks.map(track => track.id);
+        testSession.setEditRangeUs(1000000, 2000000, tracks);
+        const original = JSON.stringify(testSession.editRange);
+        const scroll = findChild(strip, "editTimelineScroll");
+        const y = strip.rulerHeight + 40;
+        mousePress(scroll, strip.labelWidth + 300, y, Qt.LeftButton);
+        mouseMove(scroll, strip.labelWidth + 4, y, 20);
+        verify(findChild(strip, "editMarquee").visible);
+        keyClick(Qt.Key_Escape);
+        compare(testSession.selectionMode, EditSessionAdapter.RangeSelection);
+        compare(JSON.stringify(testSession.editRange), original);
+        mouseRelease(scroll, strip.labelWidth + 4, y, Qt.LeftButton);
     }
     function test_clear_cache_refreshes_unchanged_visible_media_data() {
         return [{tag: "video-combined", audio: false, combined: true},

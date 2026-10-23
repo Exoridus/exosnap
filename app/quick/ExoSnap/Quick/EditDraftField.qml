@@ -21,6 +21,13 @@ TextField {
     property var capturedContext: null
     property string capturedText: ""
 
+    // Let the containing surface handle Escape before restoring canvas focus.
+    Timer {
+        id: idleEscapeFocus
+        interval: 0
+        onTriggered: if (root.activeFocus && !root.editing) root.focusCanvas()
+    }
+
     implicitHeight: ExoTheme.controlHeight
     selectByMouse: true
     maximumLength: 128
@@ -122,6 +129,9 @@ TextField {
             cancelPendingDraft("");
             focusCanvas();
             event.accepted = true;
+        } else if (event.key === Qt.Key_Escape) {
+            idleEscapeFocus.restart();
+            event.accepted = false;
         } else if (event.key === Qt.Key_Tab || event.key === Qt.Key_Backtab) {
             event.accepted = !commitPendingDraft();
         }

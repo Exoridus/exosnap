@@ -103,6 +103,7 @@ class EditSelection {
     Id anchor_clip = 0;
     Id active_track = 0;
     std::optional<EditRange> range;
+    bool operator==(const EditSelection&) const = default;
 
     bool selectClip(const EditSnapshot& snapshot, Id id, bool toggle, bool extend, bool linked) {
         if (toggle && extend)

@@ -865,8 +865,9 @@ FocusScope {
             function cancelMarquee(): void {
                 marquee = false;
                 marqueeArmed = false;
+                pressPolicy = {valid: false};
                 root.stopPointerScroll();
-                root.session.selectClipArea(0, 0, [], marqueeOriginal, true);
+                root.session.finishPointerSelection(true);
             }
             function updateMarquee(local: point): void {
                 marqueeEndX = local.x;
@@ -926,8 +927,8 @@ FocusScope {
                     const anchor = pressPolicy.anchorAtPlayhead ? root.session.positionUs : pressTimeUs;
                     root.session.beginRangeGestureUs(anchor, [pressTrack], pressPolicy.extend, pressPolicy.preserveBounds);
                     root.session.updateRangeGestureToTrackUs(pressTimeUs, pressTrack);
-                } else if (pressPolicy.seek) {
-                    root.session.beginLanePointerSelection(pressTrack, pressTimeUs);
+                } else if (marqueeArmed || pressPolicy.seek) {
+                    root.session.beginLanePointerSelection(pressTrack, pressTimeUs, pressPolicy.seek === true);
                 }
                 root.pointerPosition = pressPoint;
                 root.pointerScrollVertical = true;
@@ -946,6 +947,7 @@ FocusScope {
                         // The press already seeked and picked a gap; a drag means
                         // neither, so both are undone before the marquee begins.
                         root.session.finishPointerSelection(true);
+                        root.session.beginLanePointerSelection(pressTrack, pressPlayheadUs, false);
                         if (root.session.positionUs !== pressPlayheadUs)
                             root.session.requestSeekUs(pressPlayheadUs);
                         marquee = true;
@@ -1768,8 +1770,10 @@ FocusScope {
                         root.session.finishPointerSelection(false, started);
                         if (pressPolicy.seek)
                             root.session.finishPointerSeek();
-                        else if (clickSeek && !started)
+                        else if (clickSeek && !started) {
                             root.session.requestSeekUs(pressTimeUs);
+                            root.session.finishPointerSeek();
+                        }
                     }
                     onCanceled: {
                         root.stopPointerScroll();

@@ -39,10 +39,11 @@ ExoScrollView {
         }
         Repeater {
             id: rows
-            model: root.audioTracks
+            model: root.audioTracks.length
             delegate: ColumnLayout {
                 id: row
-                required property var modelData
+                required property int index
+                readonly property var modelData: root.audioTracks[index] || ({})
                 property alias muteButton: mute
                 objectName: "editMixRow" + modelData.id
                 Layout.fillWidth: true
@@ -104,12 +105,16 @@ ExoScrollView {
                         // One gesture, one edit: the document changes on release,
                         // and Escape during the drag restores the stored value.
                         property bool cancelled: false
+                        property var gestureTrack: 0
                         onPressedChanged: {
                             if (pressed) {
+                                gestureTrack = row.modelData.id;
+                                // Unrelated track updates must not replace the live gesture value.
+                                value = value;
                                 cancelled = false;
                                 return;
                             }
-                            if (!cancelled && Math.abs(value - row.modelData.gainDb) >= 0.05)
+                            if (!cancelled && gestureTrack === row.modelData.id && Math.abs(value - row.modelData.gainDb) >= 0.05)
                                 root.session.setTrackGain(row.modelData.id, Math.round(value * 10) / 10);
                             value = Qt.binding(() => row.modelData.gainDb);
                         }

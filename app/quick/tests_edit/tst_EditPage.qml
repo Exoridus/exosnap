@@ -750,6 +750,43 @@ Item {
             while (testSession.canUndo) testSession.undo();
         }
 
+        function test_hidden_export_review_is_announced_on_the_rail() {
+            const page = make();
+            testEditHarness.exportVisualState(EditExportAdapter.Preparing);
+            page.openExport();
+            verify(page.exportVisible);
+            page.openExport();
+            verify(!page.exportVisible);
+            testEditHarness.exportVisualState(EditExportAdapter.Review);
+            verify(child(page, "editExportRailDot").visible);
+            const originalMode = testPageExporter.modeKey;
+            testPageExporter.modeKey = originalMode === "finishedStereo" ? "originalStreams" : "finishedStereo";
+            compare(testPageExporter.state, EditExportAdapter.Options);
+            verify(!child(page, "editExportRailDot").visible);
+            testPageExporter.modeKey = originalMode;
+            testEditHarness.exportVisualState(EditExportAdapter.Review);
+            page.openExport();
+            verify(page.exportVisible);
+            verify(!child(page, "editExportRailDot").visible);
+            testEditHarness.exportVisualState(EditExportAdapter.Options);
+        }
+
+        function test_escape_from_a_focused_field_without_a_draft_closes_its_panel() {
+            testSession.appendAsset(testSession.media[0].id);
+            const page = make({session: testSession, width: 1280, height: 800});
+            child(page, "editClipTimeline").forceActiveFocus();
+            page.toggleRight("mix", true);
+            const audio = testSession.tracks.find(track => !track.video);
+            const gain = child(page, "editMixGain" + audio.id);
+            gain.forceActiveFocus();
+            verify(gain.draftActive);
+            verify(gain.commitPendingDraft());
+            verify(gain.activeFocus && !gain.draftActive);
+            keyClick(Qt.Key_Escape);
+            compare(page.detailsOpen, false);
+            while (testSession.canUndo) testSession.undo();
+        }
+
         function test_mix_rows_edit_the_same_track_values_as_details() {
             testSession.appendAsset(testSession.media[0].id);
             const page = make({session: testSession, width: 1280, height: 800});
@@ -757,8 +794,11 @@ Item {
             verify(audio !== undefined);
             mouseClick(child(page, "editMixAccess"));
             const mute = child(page, "editMixMute" + audio.id);
+            mute.forceActiveFocus();
             mute.clicked();
             compare(testSession.tracks.find(track => track.id === audio.id).enabled, false);
+            compare(child(page, "editMixMute" + audio.id), mute);
+            verify(mute.activeFocus);
             testSession.undo();
             compare(testSession.tracks.find(track => track.id === audio.id).enabled, true);
             const solo = child(page, "editMixSolo" + audio.id);
@@ -767,6 +807,21 @@ Item {
             verify(testSession.tracks.find(track => track.id === audio.id).solo);
             compare(testSession.canUndo, undoable);
             solo.clicked();
+            const fader = child(page, "editMixFader" + audio.id);
+            const originalGain = testSession.tracks.find(track => track.id === audio.id).gainDb;
+            mousePress(fader, fader.width * 0.4, fader.height / 2, Qt.LeftButton);
+            mouseMove(fader, fader.width * 0.7, fader.height / 2);
+            verify(fader.pressed);
+            const heldGain = fader.value;
+            testSession.setTrackSolo(audio.id, true);
+            compare(child(page, "editMixFader" + audio.id), fader);
+            verify(fader.pressed);
+            compare(fader.value, heldGain);
+            mouseRelease(fader, fader.width * 0.7, fader.height / 2, Qt.LeftButton);
+            compare(testSession.tracks.find(track => track.id === audio.id).gainDb, Math.round(heldGain * 10) / 10);
+            testSession.undo();
+            compare(testSession.tracks.find(track => track.id === audio.id).gainDb, originalGain);
+            testSession.setTrackSolo(audio.id, false);
             while (testSession.canUndo) testSession.undo();
         }
 
