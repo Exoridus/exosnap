@@ -158,6 +158,23 @@ TEST(PipelineSnapshotJson, ProblemDropsUseTheEngineDefinitionAndNotTheTotal) {
               static_cast<double>(s.capture.frames_dropped_problem()));
 }
 
+TEST(PipelineSnapshotJson, QueueIdentityAndByteMeasurementsKeepUnknownValuesNull) {
+    auto snapshot = HealthyRecording();
+    snapshot.video_queue.retained_bytes = 128;
+    snapshot.video_queue.peak_retained_bytes = 256;
+    snapshot.video_queue.byte_capacity = 64;
+    snapshot.audio_queue.byte_capacity = 32 * 1024 * 1024;
+    const auto json = PipelineSnapshotToJson(snapshot);
+    EXPECT_EQ(At(json, {"videoQueue", "identity"}).toString(), QStringLiteral("encodedMux"));
+    EXPECT_EQ(At(json, {"audioQueue", "identity"}).toString(), QStringLiteral("audioPremux"));
+    EXPECT_EQ(At(json, {"videoQueue", "retainedBytes"}).toDouble(), 128);
+    EXPECT_EQ(At(json, {"videoQueue", "peakRetainedBytes"}).toDouble(), 256);
+    EXPECT_EQ(At(json, {"videoQueue", "byteCapacity"}).toDouble(), 64);
+    EXPECT_EQ(At(json, {"audioQueue", "byteCapacity"}).toDouble(), 32 * 1024 * 1024);
+    EXPECT_TRUE(At(json, {"audioQueue", "retainedBytes"}).isNull());
+    EXPECT_TRUE(At(json, {"audioQueue", "peakRetainedBytes"}).isNull());
+}
+
 TEST(PipelineSnapshotJson, VfrEncoderHeartbeatsStaySeparateFromCfrDuplicates) {
     auto snapshot = HealthyRecording();
     snapshot.capture.frames_duplicated = 5;

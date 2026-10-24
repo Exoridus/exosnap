@@ -18,6 +18,7 @@
 #include <array>
 #include <cstdint>
 #include <functional>
+#include <optional>
 #include <string>
 #include <string_view>
 
@@ -377,8 +378,11 @@ struct QueueDiagnostics {
     TimingDistribution producer_wait;
     uint32_t current_depth = 0;
     uint32_t peak_depth = 0;
-    uint32_t capacity = 0; // 0 == unbounded / not fixed
+    uint32_t capacity = 0; // packet admission threshold when bounded
     bool bounded = false;
+    std::optional<uint64_t> retained_bytes;
+    std::optional<uint64_t> peak_retained_bytes;
+    std::optional<uint64_t> byte_capacity;
     uint64_t dropped_items = 0;
     MetricAvailability availability = MetricAvailability::Available;
 };
@@ -520,7 +524,7 @@ struct RecordingDiagnosticsSnapshot {
     EncoderDiagnostics video_encoder;
     VideoTimingDiagnostics video_timing;
     AudioDiagnostics audio;
-    QueueDiagnostics video_queue; // post-encode mux queue (unbounded by design)
+    QueueDiagnostics video_queue; // shared encoded audio/video mux queue
     QueueDiagnostics audio_queue; // audio premux (bounded)
     MuxDiagnostics mux;
     DiskDiagnostics disk;

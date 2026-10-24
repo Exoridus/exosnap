@@ -65,7 +65,9 @@ DiagnosticsStaticConfig MakeDiagnosticsStaticConfig(const RecorderConfig& config
                                                      : static_cast<uint32_t>(config.audio_track_plan.tracks.size());
     }
 
-    cfg.video_queue_capacity = 0; // mux queue is unbounded by design (architecture finding)
+    const MuxQueue::Limits mux_limits;
+    cfg.video_queue_capacity = static_cast<uint32_t>(mux_limits.packets);
+    cfg.video_queue_byte_capacity = mux_limits.bytes;
     cfg.audio_queue_capacity = static_cast<uint32_t>(AudioHoldPacketLimit(cfg.audio_track_count));
     return cfg;
 }
@@ -179,6 +181,8 @@ void PipelineDiagnosticsAggregator::Reset(uint64_t generation, const Diagnostics
 
     video_queue_depth_ = 0;
     video_queue_peak_ = 0;
+    mux_queue_bytes_.reset();
+    mux_queue_peak_bytes_.reset();
     audio_premux_depth_ = 0;
     audio_premux_peak_ = 0;
     queue_saturation_events_ = 0;
@@ -639,16 +643,18 @@ void PipelineDiagnosticsAggregator::OnAudioClockSlavingSaturated(uint32_t track_
     }
 }
 
-void PipelineDiagnosticsAggregator::OnVideoQueueDepth(uint32_t depth) noexcept {
+void PipelineDiagnosticsAggregator::OnMuxQueueDepth(const MuxQueue::Measurements& queue) noexcept {
     std::lock_guard lk(mutex_);
+    const auto depth = static_cast<uint32_t>(queue.packets);
+    cfg_.video_queue_capacity = static_cast<uint32_t>(queue.limits.packets);
+    cfg_.video_queue_byte_capacity = queue.limits.bytes;
+    mux_queue_bytes_ = queue.retained_bytes;
+    mux_queue_peak_bytes_ = (std::max)(mux_queue_peak_bytes_.value_or(0), uint64_t{queue.retained_bytes});
     video_queue_depth_ = depth;
     if (depth > video_queue_peak_) {
         video_queue_peak_ = depth;
     }
-    // The post-encode mux queue is unbounded by design, so there is no ratio to
-    // cross; its saturation is the same absolute depth the classifier warns on
-    // (mux_queue_warn). Count only the rising edge so a queue that stays backed
-    // up is one event, not one per publish.
+    // The health threshold is independent of admission limits. Count only its rising edge.
     const bool saturated = depth >= thresholds_.mux_queue_warn;
     if (saturated && !video_queue_saturated_) {
         ++queue_saturation_events_;
@@ -1001,11 +1007,16 @@ RecordingDiagnosticsSnapshot PipelineDiagnosticsAggregator::BuildSnapshot(time_p
     s.video_queue.current_depth = video_queue_depth_;
     s.video_queue.peak_depth = video_queue_peak_;
     s.video_queue.capacity = cfg_.video_queue_capacity;
-    s.video_queue.bounded = (cfg_.video_queue_capacity > 0);
+    s.video_queue.bounded = cfg_.video_queue_capacity > 0 || cfg_.video_queue_byte_capacity.has_value();
+    s.video_queue.retained_bytes = mux_queue_bytes_;
+    s.video_queue.peak_retained_bytes = mux_queue_peak_bytes_;
+    s.video_queue.byte_capacity = cfg_.video_queue_byte_capacity;
     s.audio_queue.current_depth = audio_premux_depth_;
     s.audio_queue.peak_depth = audio_premux_peak_;
     s.audio_queue.capacity = cfg_.audio_queue_capacity;
     s.audio_queue.bounded = (cfg_.audio_queue_capacity > 0);
+    if (cfg_.audio_queue_capacity)
+        s.audio_queue.byte_capacity = kAudioPremuxPayloadBytes;
 
     // ---- Mux / Disk (single filesystem write boundary) ----
     const RollingTimeWindow::Aggregate wl = write_window_.Compute(now);

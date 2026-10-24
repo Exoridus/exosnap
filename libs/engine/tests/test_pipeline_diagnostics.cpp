@@ -723,17 +723,58 @@ TEST(PipelineDiagnostics, AudioFormatQueuePeakAndDiscontinuities) {
 // Queues
 // ---------------------------------------------------------------------------
 
-TEST(PipelineDiagnostics, QueueCapacityVideoUnboundedAudioBounded) {
+TEST(PipelineDiagnostics, ProductionMuxQueuePublishesItsBound) {
+    PipelineDiagnosticsAggregator agg;
+    agg.Reset(1, MakeDiagnosticsStaticConfig(RecorderConfig{}));
+    agg.OnMuxQueueDepth({5, 0, {}});
+    const auto snapshot = agg.BuildSnapshot(At(0), MakeStats(), DiagnosticsLifecycle::Recording, 0.0);
+    EXPECT_TRUE(snapshot.video_queue.bounded);
+    EXPECT_GT(snapshot.video_queue.capacity, 0u);
+}
+
+TEST(PipelineDiagnostics, MuxPacketAndByteLimitsFollowTheObservedQueue) {
+    MuxQueue queue;
+    queue.Configure({3, 64, milliseconds(1)});
+    EncodedAudioPacket packet;
+    packet.bytes.reserve(128);
+    packet.bytes.resize(1);
+    const auto retained = packet.bytes.capacity();
+    ASSERT_EQ(queue.Push(
+                  MuxItem{std::move(packet)}, [] { return false; }, [] { return false; }, [](auto, double) {}),
+              MuxQueueWait::Ready);
+    PipelineDiagnosticsAggregator agg;
+    agg.Reset(1, MakeDiagnosticsStaticConfig(RecorderConfig{}));
+    EXPECT_FALSE(agg.BuildSnapshot(At(0), MakeStats(), DiagnosticsLifecycle::Recording, 0).video_queue.retained_bytes);
+    agg.OnMuxQueueDepth(queue.ReadMeasurements());
+    auto snapshot = agg.BuildSnapshot(At(0), MakeStats(), DiagnosticsLifecycle::Recording, 0);
+    EXPECT_EQ(snapshot.video_queue.current_depth, 1u);
+    EXPECT_EQ(snapshot.video_queue.capacity, 3u);
+    EXPECT_EQ(snapshot.video_queue.byte_capacity.value_or(0), 64u);
+    EXPECT_EQ(snapshot.video_queue.retained_bytes.value_or(0), retained);
+    ASSERT_TRUE(queue.Pop());
+    agg.OnMuxQueueDepth(queue.ReadMeasurements());
+    snapshot = agg.BuildSnapshot(At(0), MakeStats(), DiagnosticsLifecycle::Recording, 0);
+    EXPECT_EQ(snapshot.video_queue.retained_bytes.value_or(1), 0u);
+    EXPECT_EQ(snapshot.video_queue.peak_retained_bytes.value_or(0), retained);
+    queue.Configure({0, 0, milliseconds(1)});
+    agg.OnMuxQueueDepth(queue.ReadMeasurements());
+    snapshot = agg.BuildSnapshot(At(0), MakeStats(), DiagnosticsLifecycle::Recording, 0);
+    EXPECT_TRUE(snapshot.video_queue.bounded);
+    ASSERT_TRUE(snapshot.video_queue.byte_capacity);
+    EXPECT_EQ(*snapshot.video_queue.byte_capacity, 0u);
+}
+
+TEST(PipelineDiagnostics, QueueCapacityMuxAndAudioBounded) {
     PipelineDiagnosticsAggregator agg;
     agg.Reset(1, MakeConfig());
-    agg.OnVideoQueueDepth(2);
-    agg.OnVideoQueueDepth(5);
+    agg.OnMuxQueueDepth({2, 0, {}});
+    agg.OnMuxQueueDepth({5, 0, {}});
     agg.OnAudioPremuxDepth(10);
     const auto s = agg.BuildSnapshot(At(0), MakeStats(), DiagnosticsLifecycle::Recording, 0.0);
     EXPECT_EQ(s.video_queue.current_depth, 5u);
     EXPECT_EQ(s.video_queue.peak_depth, 5u);
-    EXPECT_FALSE(s.video_queue.bounded);
-    EXPECT_EQ(s.video_queue.capacity, 0u);
+    EXPECT_TRUE(s.video_queue.bounded);
+    EXPECT_EQ(s.video_queue.capacity, 2048u);
     EXPECT_TRUE(s.audio_queue.bounded);
     EXPECT_EQ(s.audio_queue.capacity, 600u);
     EXPECT_EQ(s.audio_queue.peak_depth, 10u);
@@ -921,7 +962,7 @@ TEST(PipelineDiagnosticsClassifier, SustainedDiskLatencyReturnsDisk) {
     for (int i = 0; i < 6; ++i) {
         stats.video_frames_captured = static_cast<uint64_t>(12 * (i + 1));
         stats.encoded_video_packets = static_cast<uint64_t>(12 * (i + 1));
-        agg.OnVideoQueueDepth(12);
+        agg.OnMuxQueueDepth({12, 0, {}});
         agg.OnDiskWrite(At(200 * i), 20.0, 1024); // 20 ms write-call latency (> 8 ms warn)
         agg.OnMuxProducerWait(At(200 * i), 30.0);
         s = agg.BuildSnapshot(At(200 * i), stats, DiagnosticsLifecycle::Recording, 0.2 * i + 2.0);
@@ -937,7 +978,7 @@ TEST(PipelineDiagnosticsClassifier, SustainedMuxQueueReturnsMuxer) {
     for (int i = 0; i < 6; ++i) {
         stats.video_frames_captured = static_cast<uint64_t>(12 * (i + 1));
         stats.encoded_video_packets = static_cast<uint64_t>(12 * (i + 1));
-        agg.OnVideoQueueDepth(16); // >= mux_queue_warn (8), writes healthy
+        agg.OnMuxQueueDepth({16, 0, {}}); // >= mux_queue_warn (8), writes healthy
         agg.OnMuxProducerWait(At(200 * i), 30.0);
         s = agg.BuildSnapshot(At(200 * i), stats, DiagnosticsLifecycle::Recording, 0.2 * i + 2.0);
     }
@@ -953,7 +994,7 @@ TEST(PipelineDiagnosticsClassifier, SingleSpikeDoesNotTrigger) {
         stats.video_frames_captured = static_cast<uint64_t>(12 * (i + 1));
         stats.encoded_video_packets = static_cast<uint64_t>(12 * (i + 1));
         // single transient spike on iteration 2 only
-        agg.OnVideoQueueDepth(i == 2 ? 32u : 0u);
+        agg.OnMuxQueueDepth({i == 2 ? 32u : 0u, 0, {}});
         s = agg.BuildSnapshot(At(200 * i), stats, DiagnosticsLifecycle::Recording, 0.2 * i + 2.0);
     }
     EXPECT_EQ(s.bottleneck, PipelineBottleneck::None);
@@ -967,7 +1008,7 @@ TEST(PipelineDiagnosticsClassifier, NotRecordingClearsBottleneck) {
     for (int i = 0; i < 6; ++i) {
         stats.video_frames_captured = static_cast<uint64_t>(12 * (i + 1));
         stats.encoded_video_packets = static_cast<uint64_t>(12 * (i + 1));
-        agg.OnVideoQueueDepth(16);
+        agg.OnMuxQueueDepth({16, 0, {}});
         (void)agg.BuildSnapshot(At(200 * i), stats, DiagnosticsLifecycle::Recording, 0.2 * i + 2.0);
     }
     // ...then stop: bottleneck must clear immediately.
@@ -1496,11 +1537,11 @@ TEST(QueueSaturation, VideoQueueCountsRisingEdgeOnly) {
     PipelineDiagnosticsAggregator agg;
     agg.Reset(1, MakeConfig());
     // Default mux_queue_warn == 8.
-    agg.OnVideoQueueDepth(2);  // below
-    agg.OnVideoQueueDepth(10); // rising edge -> +1
-    agg.OnVideoQueueDepth(12); // stays saturated -> no new event
-    agg.OnVideoQueueDepth(3);  // drops below -> reset edge
-    agg.OnVideoQueueDepth(9);  // rising edge again -> +1
+    agg.OnMuxQueueDepth({2, 0, {}});  // below
+    agg.OnMuxQueueDepth({10, 0, {}}); // rising edge -> +1
+    agg.OnMuxQueueDepth({12, 0, {}}); // stays saturated -> no new event
+    agg.OnMuxQueueDepth({3, 0, {}});  // drops below -> reset edge
+    agg.OnMuxQueueDepth({9, 0, {}});  // rising edge again -> +1
     EXPECT_EQ(agg.SamplePerfWindow(At(0)).queue_saturation_events, 2u);
 }
 
@@ -1518,11 +1559,11 @@ TEST(QueueSaturation, AudioPremuxUsesCriticalRatioOfCapacity) {
 TEST(QueueSaturation, ResetClearsCounterAndEdgeState) {
     PipelineDiagnosticsAggregator agg;
     agg.Reset(1, MakeConfig());
-    agg.OnVideoQueueDepth(20); // +1, and leaves the edge latched high
+    agg.OnMuxQueueDepth({20, 0, {}}); // +1, and leaves the edge latched high
     EXPECT_EQ(agg.SamplePerfWindow(At(0)).queue_saturation_events, 1u);
     agg.Reset(2, MakeConfig());
     // After reset the latch is cleared, so the next high depth is a fresh edge.
-    agg.OnVideoQueueDepth(20); // +1
+    agg.OnMuxQueueDepth({20, 0, {}}); // +1
     EXPECT_EQ(agg.SamplePerfWindow(At(0)).queue_saturation_events, 1u);
 }
 

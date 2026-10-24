@@ -1377,7 +1377,7 @@ std::vector<PipelineStage> PipelineCardBuilder::BuildStatic(bool data_ready, boo
 
     planned("capture", QCoreApplication::translate("Diagnostics", "Source capture").toStdString(),
             QCoreApplication::translate("Diagnostics", "Live during recording.").toStdString());
-    planned("queue", QCoreApplication::translate("Diagnostics", "Frame queue").toStdString(),
+    planned("queue", QCoreApplication::translate("Diagnostics", "Mux queue").toStdString(),
             QCoreApplication::translate("Diagnostics", "Live during recording.").toStdString());
     planned("compositor", "Compositor",
             QCoreApplication::translate("Diagnostics", "Live during recording.").toStdString());
@@ -1531,15 +1531,15 @@ std::vector<PipelineStage> PipelineCardBuilder::BuildLive(const exosnap::engine:
     {
         PipelineStage stage;
         stage.key = "queue";
-        stage.title = QCoreApplication::translate("Diagnostics", "Frame queue").toStdString();
+        stage.title = QCoreApplication::translate("Diagnostics", "Mux queue").toStdString();
         stage.lane = kDash;
         stage.status = StatusOf(health_of(StageId::FrameQueue));
         stage.value = s.video_queue.bounded && s.video_queue.capacity > 0
                           ? Number(s.video_queue.current_depth) + " / " + Number(s.video_queue.capacity)
                           : Number(s.video_queue.current_depth);
-        stage.tip =
-            QCoreApplication::translate("Diagnostics", "Frames waiting between encode and mux (peak ").toStdString() +
-            Number(s.video_queue.peak_depth) + ")";
+        stage.tip = QCoreApplication::translate("Diagnostics", "Encoded audio/video packets waiting for mux (peak ")
+                        .toStdString() +
+                    Number(s.video_queue.peak_depth) + ")";
         stages.push_back(std::move(stage));
     }
 

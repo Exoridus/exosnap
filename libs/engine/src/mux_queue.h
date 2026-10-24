@@ -42,6 +42,17 @@ class MuxQueue {
         std::chrono::milliseconds timeout{10000};
     };
 
+    struct Measurements {
+        size_t packets = 0;
+        size_t retained_bytes = 0;
+        Limits limits;
+    };
+
+    [[nodiscard]] Measurements ReadMeasurements() const {
+        std::lock_guard lock(mutex_);
+        return {queue_.size(), bytes_, limits_};
+    }
+
     void Configure(Limits limits) {
         std::lock_guard lock(mutex_);
         limits_ = limits;
