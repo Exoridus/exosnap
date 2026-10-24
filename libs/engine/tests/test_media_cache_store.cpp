@@ -3,6 +3,8 @@
 #include "test_unique_temp.h"
 
 #include <gtest/gtest.h>
+#include <memory>
+#include <windows.h>
 
 #include <algorithm>
 #include <array>
@@ -283,6 +285,59 @@ TEST(MediaCacheStore, BudgetIsNeverExceededAndEvictionIsLeastRecentlyUsed) {
     EXPECT_LE(on_disk, budget);
 
     EXPECT_FALSE(store.Publish(Key(99), Payload(static_cast<std::size_t>(budget), 1), error));
+}
+
+TEST(MediaCacheStore, ClearKeepsLockedEntryChargedUntilWindowsAllowsDeletion) {
+    TempDir dir;
+    MediaCacheStore store(Config(dir.path));
+    std::string error;
+    ASSERT_TRUE(store.Publish(Key(10), Payload(1000, 1), error)) << error;
+    ASSERT_TRUE(store.Publish(Key(11), Payload(1000, 2), error)) << error;
+    const auto entry_bytes = store.TotalBytes() / 2;
+    const auto handle = CreateFileW(store.EntryPath(Key(10)).c_str(), GENERIC_READ, FILE_SHARE_READ, nullptr,
+                                    OPEN_EXISTING, FILE_ATTRIBUTE_NORMAL, nullptr);
+    ASSERT_NE(handle, INVALID_HANDLE_VALUE);
+    std::unique_ptr<void, decltype(&CloseHandle)> held(handle, CloseHandle);
+    EXPECT_EQ(store.Clear(), entry_bytes);
+    EXPECT_EQ(store.TotalBytes(), entry_bytes);
+    EXPECT_TRUE(store.Contains(Key(10)));
+    EXPECT_FALSE(store.Contains(Key(11)));
+    EXPECT_TRUE(std::filesystem::exists(store.EntryPath(Key(10))));
+    held.reset();
+    EXPECT_EQ(store.Clear(), entry_bytes);
+    EXPECT_EQ(store.TotalBytes(), 0u);
+}
+
+TEST(MediaCacheStore, LockedBudgetRejectsNewDirectAndStreamedPublications) {
+    for (const bool streamed : {false, true}) {
+        TempDir dir;
+        const auto payload = Payload(1000, 1);
+        const auto entry_bytes = 64 + Key(10).size() + payload.size();
+        MediaCacheStore store(Config(dir.path, entry_bytes));
+        std::string error;
+        ASSERT_TRUE(store.Publish(Key(10), payload, error)) << error;
+        const auto handle = CreateFileW(store.EntryPath(Key(10)).c_str(), GENERIC_READ, FILE_SHARE_READ, nullptr,
+                                        OPEN_EXISTING, FILE_ATTRIBUTE_NORMAL, nullptr);
+        ASSERT_NE(handle, INVALID_HANDLE_VALUE);
+        std::unique_ptr<void, decltype(&CloseHandle)> held(handle, CloseHandle);
+        if (streamed) {
+            auto writer = store.BeginWrite(Key(11), payload.size(), error);
+            ASSERT_TRUE(writer) << error;
+            ASSERT_TRUE(writer->Write(0, payload));
+            EXPECT_FALSE(writer->Publish(error));
+        } else {
+            EXPECT_FALSE(store.Publish(Key(11), payload, error));
+        }
+        EXPECT_FALSE(error.empty());
+        EXPECT_EQ(store.TotalBytes(), entry_bytes);
+        EXPECT_TRUE(store.Contains(Key(10)));
+        EXPECT_FALSE(store.Contains(Key(11)));
+        EXPECT_EQ(store.Stats().evicted, 0u);
+        EXPECT_EQ(store.Stats().published, 1u);
+        held.reset();
+        EXPECT_TRUE(store.Publish(Key(11), payload, error)) << error;
+        EXPECT_EQ(store.TotalBytes(), entry_bytes);
+    }
 }
 
 TEST(MediaCacheStore, EvictionOrderSurvivesRestart) {

@@ -98,8 +98,8 @@ class MediaCacheStore {
     [[nodiscard]] static bool IsValidKey(std::string_view key) noexcept;
 
     // Publishes `payload` under `key`, replacing an existing entry, then evicts
-    // least recently used entries until the budget holds again. An entry larger
-    // than the whole budget is refused.
+    // least recently used entries until the budget holds again. Refuses oversized
+    // entries and publications whose budget cannot be reclaimed from locked files.
     bool Publish(std::string_view key, std::span<const std::uint8_t> payload, std::string& error,
                  std::optional<std::uint64_t> expected_epoch = {});
 
@@ -126,8 +126,8 @@ class MediaCacheStore {
     [[nodiscard]] bool Contains(std::string_view key);
     void Remove(std::string_view key);
 
-    // Deletes every entry and leftover temporary file of this store. Returns
-    // the number of entry bytes released.
+    // Attempts to delete every entry and leftover temporary file. Returns entry
+    // bytes actually released. Failed deletions remain indexed and charged.
     std::uint64_t Clear();
 
     // Revokes current writers and switches to an empty physical generation.

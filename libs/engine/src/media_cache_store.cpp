@@ -27,6 +27,7 @@ extern "C" {
 #include <new>
 #include <optional>
 #include <random>
+#include <set>
 #include <span>
 #include <string>
 #include <string_view>
@@ -227,10 +228,13 @@ struct MediaCacheStore::Impl {
         entries.erase(found);
     }
 
-    void DeleteEntry(const std::string& key) {
-        std::error_code ignored;
-        std::filesystem::remove(PathFor(key), ignored);
+    bool DeleteEntry(const std::string& key) {
+        std::error_code error;
+        std::filesystem::remove(PathFor(key), error);
+        if (error)
+            return false;
         Drop(key);
+        return true;
     }
 
     // Classifies one file below the root. Entries of this store's kind but
@@ -321,7 +325,7 @@ struct MediaCacheStore::Impl {
         for (const auto& key : keys)
             DeleteEntry(key);
         std::error_code error;
-        if (config.root != namespace_state->root) {
+        if (config.root != namespace_state->root && entries.empty()) {
             std::filesystem::remove_all(config.root, error);
         } else if (std::filesystem::exists(config.root, error)) {
             for (auto it = std::filesystem::recursive_directory_iterator(
@@ -335,24 +339,28 @@ struct MediaCacheStore::Impl {
                 }
             }
         }
-        return released;
+        return released - total_bytes;
     }
 
-    void EvictToBudget(const std::string& keep) {
+    bool EvictToBudget(const std::string& keep) {
+        std::set<std::string> blocked;
         while (total_bytes > config.budget_bytes && !entries.empty()) {
             auto oldest = entries.end();
             for (auto it = entries.begin(); it != entries.end(); ++it) {
-                if (it->first == keep)
+                if (it->first == keep || blocked.contains(it->first))
                     continue;
                 if (oldest == entries.end() || it->second.last_use < oldest->second.last_use)
                     oldest = it;
             }
             if (oldest == entries.end())
-                return;
+                return false;
             const auto key = oldest->first;
-            DeleteEntry(key);
-            ++stats.evicted;
+            if (DeleteEntry(key))
+                ++stats.evicted;
+            else
+                blocked.insert(key);
         }
+        return true;
     }
 
     void Touch(const std::string& key, Entry& entry) {
@@ -582,8 +590,12 @@ bool MediaCacheStore::Publish(std::string_view key_view, std::span<const std::ui
     impl->entries[key] = entry;
     impl->total_bytes += file_bytes;
     impl->known_bytes.store(impl->total_bytes, std::memory_order_relaxed);
+    if (!impl->EvictToBudget(key)) {
+        impl->DeleteEntry(key);
+        error = "Locked media cache entries prevent publication within the disk budget.";
+        return false;
+    }
     ++impl->stats.published;
-    impl->EvictToBudget(key);
     return true;
 }
 
@@ -691,8 +703,12 @@ bool MediaCacheStore::Writer::Publish(std::string& error, const std::function<bo
     store.entries[state_->key] = entry;
     store.total_bytes += state_->file_bytes;
     store.known_bytes.store(store.total_bytes, std::memory_order_relaxed);
+    if (!store.EvictToBudget(state_->key)) {
+        store.DeleteEntry(state_->key);
+        error = "Locked media cache entries prevent publication within the disk budget.";
+        return false;
+    }
     ++store.stats.published;
-    store.EvictToBudget(state_->key);
     return true;
 }
 
