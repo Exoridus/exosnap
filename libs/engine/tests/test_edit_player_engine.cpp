@@ -13,8 +13,11 @@
 #include "edit_playback_pacing.h"
 #include "exosnap/engine/edit_player_engine.h"
 #include "exosnap/engine/edit_player_session.h"
+#include "media_timestamp_origin.h"
+#include "test_timestamp_media.h"
 #include <exosnap/engine/audio_media_manifest.h>
 #include <exosnap/engine/edit_timeline_export.h>
+#include <exosnap/engine/mp4_remuxer.h>
 
 extern "C" {
 #include <libavcodec/codec_id.h>
@@ -1009,6 +1012,50 @@ TEST(EditPlayerEngine, MillisecondStampsStillYieldEveryFrameOfTheSourceGrid) {
         EXPECT_GT(frame->pts_us, previous) << "frame " << index << " repeated its predecessor";
         EXPECT_LE(std::abs(frame->pts_us - target), 500) << index;
         previous = frame->pts_us;
+    }
+}
+
+TEST(EditPlayerEngine, SourceRelativeTimePreservesSignedOrigins) {
+    EXPECT_EQ(exosnap::engine::SourceRelativeTimeUs(-9'800'000, -10'000'000), 200'000);
+    EXPECT_EQ(exosnap::engine::SourceTimestampUs(200'000, -10'000'000), -9'800'000);
+    EXPECT_EQ(exosnap::engine::SourceRelativeTimeUs(10'200'000, 10'000'000), 200'000);
+    EXPECT_EQ(exosnap::engine::SourceTimestampUs(200'000, 10'000'000), 10'200'000);
+}
+
+TEST(EditPlayerEngine, SourceRelativeVideoAndAudioIgnoreShiftedContainerOrigins) {
+    const auto fixture = std::filesystem::path(__FILE__).parent_path() / "fixtures" / "timestamp_av.mkv";
+    EditPlayerEngine reference;
+    std::string error;
+    ASSERT_TRUE(reference.Open(fixture, error)) << error;
+    for (const int64_t offset : {0LL, 10'000'000LL}) {
+        ScopedTestMkv shifted("exosnap-timestamp-origin.mkv");
+        ASSERT_TRUE(RemuxTimestampMedia(shifted.path(), offset));
+        const auto metadata = exosnap::engine::ProbeEditMedia(shifted.path());
+        ASSERT_TRUE(metadata.timestamp_origin_us);
+        EXPECT_EQ(*metadata.timestamp_origin_us > 0, offset > 0);
+        const auto keyframes = exosnap::engine::ExtractKeyframeTimestamps(shifted.path());
+        ASSERT_FALSE(keyframes.empty());
+        EXPECT_EQ(keyframes.front(), 0);
+        EditPlayerEngine engine;
+        ASSERT_TRUE(engine.Open(shifted.path(), error)) << error;
+        for (const int64_t target : {200'000LL, 700'000LL, 300'000LL}) {
+            const auto expected = reference.ReadFrameAtRaw(target, exosnap::engine::VideoReadMode::RandomAccess);
+            const auto actual = engine.ReadFrameAtRaw(target, exosnap::engine::VideoReadMode::RandomAccess);
+            ASSERT_TRUE(expected);
+            ASSERT_TRUE(actual) << offset << ": " << target;
+            EXPECT_EQ(actual->pts_us, expected->pts_us);
+            EXPECT_EQ(actual->y_plane[0], expected->y_plane[0]);
+            const auto thumbnail = engine.DecodeFrameAt(target);
+            ASSERT_TRUE(thumbnail);
+            EXPECT_GE(thumbnail->pts_us, target);
+            EXPECT_LT(thumbnail->pts_us, target + 34'000);
+        }
+        std::vector<float> expected_audio, actual_audio;
+        ASSERT_TRUE(reference.DecodeAudioStreamRange(1, 9600, 480, expected_audio, error)) << error;
+        ASSERT_TRUE(engine.DecodeAudioStreamRange(1, 9600, 480, actual_audio, error)) << error;
+        ASSERT_EQ(actual_audio.size(), expected_audio.size());
+        for (size_t i = 0; i < actual_audio.size(); ++i)
+            ASSERT_NEAR(actual_audio[i], expected_audio[i], 0.0005f) << offset << ": " << i;
     }
 }
 

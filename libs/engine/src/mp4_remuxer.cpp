@@ -17,6 +17,7 @@
 #include "audio_media_manifest_adapter.h"
 #include "budgeted_media_avio.h"
 #include "media_identity_sidecar.h"
+#include "media_timestamp_origin.h"
 #include <atomic>
 #include <cerrno>
 #include <cstdint>
@@ -1215,7 +1216,9 @@ std::vector<int64_t> ExtractKeyframeTimestamps(const std::shared_ptr<const Media
         if (!entry)
             break;
         if (entry->flags & AVINDEX_KEYFRAME)
-            keyframes.push_back(av_rescale_q(entry->timestamp, video->time_base, {1, AV_TIME_BASE}));
+            keyframes.push_back(
+                SourceRelativeTimeUs(av_rescale_q(entry->timestamp, video->time_base, {1, AV_TIME_BASE}),
+                                     context->start_time == AV_NOPTS_VALUE ? 0 : context->start_time));
     }
     std::sort(keyframes.begin(), keyframes.end());
     return keyframes;

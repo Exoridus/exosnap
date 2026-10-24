@@ -13,6 +13,12 @@ ffmpeg -hide_banner -loglevel error -f lavfi -i 'color=c=black:s=64x64:r=30:d=4'
 
 # Decoder format fixtures
 
+`timestamp_av.mkv` contains one second of 192x108 H.264 test video at 30 FPS and stereo Opus audio at 48 kHz. Timestamp tests remux its packets with a common offset and compare video selection, keyframe positions and decoded audio. Negative Opus preroll does not imply a negative container origin in every FFmpeg version.
+
+```powershell
+ffmpeg -hide_banner -loglevel error -f lavfi -i 'testsrc2=size=192x108:rate=30:duration=1' -f lavfi -i 'sine=frequency=1000:sample_rate=48000:duration=1' -map 0:v -map 1:a -c:v libx264 -preset medium -g 30 -bf 2 -pix_fmt yuv420p -x264-params 'colorprim=bt709:transfer=bt709:colormatrix=bt709' -color_range tv -c:a libopus -ac 2 -b:a 96k -y timestamp_av.mkv
+```
+
 The `h264_420_8.mp4`, `h264_444_8.mp4`, `hevc_420_10.mp4` and
 `hevc_444_8.mp4` fixtures contain three 32x32 red frames at 10 FPS, with
 BT.709 color tags. They exercise real decoding, planar normalization and

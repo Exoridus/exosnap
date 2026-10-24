@@ -1584,7 +1584,7 @@ exosnap_add_gtest(
     PHASE gpu
     LABELS live
     SOURCES tests/test_edit_timeline_render.cpp
-    LIBRARIES exosnap_engine
+    LIBRARIES exosnap_engine FFmpeg::mux
 )
 target_include_directories(test_edit_timeline_render PRIVATE include)
 target_compile_definitions(test_edit_timeline_render PRIVATE NOMINMAX)

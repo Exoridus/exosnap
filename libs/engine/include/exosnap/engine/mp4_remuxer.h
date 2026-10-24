@@ -133,8 +133,8 @@ RemuxResult RemuxToMkv(const std::filesystem::path& input_path, const std::files
                        RemuxProgressCallback progress_cb, TrimRange tr, const RemuxIoFaults* faults = nullptr,
                        const RemuxIoControl* io = nullptr);
 
-// Returns sorted video keyframe PTS values in microseconds from the container
-// index without decoding. Empty means no index, open failure or cancellation.
+// Returns sorted source-relative video keyframe times in microseconds from the
+// container index without decoding. Empty means no index, open failure or cancellation.
 std::vector<int64_t> ExtractKeyframeTimestamps(const std::filesystem::path& input_path);
 // Reads the admitted object with an independent cursor. Never hashes or reopens
 // the path. Admission and cancellation apply before each underlying read.
