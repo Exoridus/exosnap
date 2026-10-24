@@ -1,4 +1,5 @@
 #include "WebcamService.h"
+#include "WebcamReadCallback.h"
 
 #include "../diagnostics/StructuredLog.h"
 
@@ -249,7 +250,20 @@ void ApplyControlChanges(IMFMediaSource* source, const std::vector<WebcamControl
 }
 
 struct ReaderContext {
+    ReaderContext() = default;
+    ReaderContext(ReaderContext&&) = default;
+    ReaderContext(const ReaderContext&) = delete;
+    ReaderContext& operator=(const ReaderContext&) = delete;
+    ~ReaderContext() {
+        if (callback)
+            callback->Close();
+        if (reader)
+            reader->Flush(kFirstVideoStream);
+        if (source)
+            source->Shutdown();
+    }
     winrt::com_ptr<IMFSourceReader> reader;
+    Microsoft::WRL::ComPtr<WebcamReadCallback> callback;
     // The device itself, for the UVC controls the reader does not expose.
     winrt::com_ptr<IMFMediaSource> source;
     std::vector<WebcamControlRange> control_ranges;
@@ -339,6 +353,12 @@ std::optional<ReaderContext> OpenReader(const std::string& device_id, int want_w
     if (FAILED(hr))
         return fail("MFCreateAttributes:readerAttrs", hr);
     readerAttrs->SetUINT32(MF_SOURCE_READER_ENABLE_ADVANCED_VIDEO_PROCESSING, TRUE);
+    auto callback = Microsoft::WRL::Make<WebcamReadCallback>();
+    if (!callback)
+        return fail("CreateSourceReaderCallback", E_OUTOFMEMORY);
+    hr = readerAttrs->SetUnknown(MF_SOURCE_READER_ASYNC_CALLBACK, callback.Get());
+    if (FAILED(hr))
+        return fail("SetSourceReaderCallback", hr);
 
     winrt::com_ptr<IMFSourceReader> reader;
     hr = MFCreateSourceReaderFromMediaSource(source.get(), readerAttrs.get(), reader.put());
@@ -476,6 +496,7 @@ std::optional<ReaderContext> OpenReader(const std::string& device_id, int want_w
 
     ReaderContext ctx;
     ctx.reader = std::move(reader);
+    ctx.callback = std::move(callback);
     ctx.source = source;
     ctx.control_ranges = QueryControls(source.get());
     ctx.width = actual_w;
@@ -994,7 +1015,16 @@ void WebcamService::ThreadMain(const std::string& device_id, int width, int heig
             DWORD flags = 0;
             LONGLONG ts = 0;
             winrt::com_ptr<IMFSample> sample;
-            HRESULT hr = ctx->reader->ReadSample(kFirstVideoStream, 0, nullptr, &flags, &ts, sample.put());
+            HRESULT hr = ctx->reader->ReadSample(kFirstVideoStream, 0, nullptr, nullptr, nullptr, nullptr);
+            if (SUCCEEDED(hr)) {
+                WebcamReadCallback::Sample next;
+                if (!ctx->callback->Wait(stop, next))
+                    break;
+                hr = next.status;
+                flags = next.flags;
+                ts = next.timestamp;
+                sample.attach(next.sample.Detach());
+            }
 
             switch (ClassifyWebcamReadResult(hr, flags, sample != nullptr)) {
             case WebcamReadAction::Reconnect:

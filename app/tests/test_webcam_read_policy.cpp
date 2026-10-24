@@ -5,6 +5,7 @@
 // MF_SOURCE_READERF_ERROR, or MF_SOURCE_READERF_ENDOFSTREAM) maps to Reconnect so the
 // capture thread reopens the device while TryGetFrame keeps serving the last frame.
 
+#include "services/WebcamReadCallback.h"
 #include "services/WebcamService.h"
 
 // MF header order matches WebcamService.cpp: mfidl.h declares the interfaces
@@ -14,11 +15,55 @@
 #include <mfidl.h>
 #include <mfreadwrite.h>
 
+#include <chrono>
+#include <future>
 #include <gtest/gtest.h>
+#include <thread>
 
 using namespace exosnap;
 
 namespace {
+
+TEST(WebcamReadPolicy, StopWakesAnOutstandingAsyncReadWithoutADeviceCallback) {
+    auto callback = Microsoft::WRL::Make<WebcamReadCallback>();
+    std::promise<void> entered;
+    auto started = entered.get_future();
+    std::promise<bool> completed;
+    auto result = completed.get_future();
+    std::jthread worker([&](std::stop_token stop) {
+        entered.set_value();
+        WebcamReadCallback::Sample sample;
+        completed.set_value(callback->Wait(stop, sample));
+    });
+    started.wait();
+    worker.request_stop();
+    const auto stopped = result.wait_for(std::chrono::milliseconds(250));
+    callback->OnReadSample(S_OK, 0, 0, 42, nullptr);
+    worker.join();
+    EXPECT_EQ(stopped, std::future_status::ready);
+    EXPECT_FALSE(result.get());
+}
+
+TEST(WebcamReadPolicy, CallbackOwnsOneResultAndIgnoresDeliveryAfterClose) {
+    auto callback = Microsoft::WRL::Make<WebcamReadCallback>();
+    Microsoft::WRL::ComPtr<IMFSample> original;
+    ASSERT_EQ(MFCreateSample(&original), S_OK);
+    ASSERT_EQ(original->SetSampleTime(123), S_OK);
+    ASSERT_EQ(callback->OnReadSample(E_FAIL, 0, MF_SOURCE_READERF_ERROR, 42, original.Get()), S_OK);
+    original.Reset();
+    WebcamReadCallback::Sample sample;
+    ASSERT_TRUE(callback->Wait({}, sample));
+    EXPECT_EQ(sample.status, E_FAIL);
+    EXPECT_EQ(sample.flags, MF_SOURCE_READERF_ERROR);
+    EXPECT_EQ(sample.timestamp, 42);
+    LONGLONG sample_time = 0;
+    ASSERT_TRUE(sample.sample);
+    ASSERT_EQ(sample.sample->GetSampleTime(&sample_time), S_OK);
+    EXPECT_EQ(sample_time, 123);
+    callback->Close();
+    ASSERT_EQ(callback->OnReadSample(S_OK, 0, 0, 99, nullptr), S_OK);
+    EXPECT_FALSE(callback->Wait({}, sample));
+}
 
 TEST(WebcamReadPolicy, HealthyReadWithSampleDelivers) {
     EXPECT_EQ(ClassifyWebcamReadResult(S_OK, 0, /*has_sample=*/true), WebcamReadAction::Deliver);

@@ -8,6 +8,8 @@ The GUI-side start performs a reentrancy/start-state gate, snapshots every confi
 
 Preparation owns the webcam just as recording does. Idle preview synchronization must not concurrently stop or reopen the camera between the Preparing callback and the worker's recording flag. Cancellation is cooperative at preparation checkpoints; an already-running device operation finishes before the cancellation takes effect. A failed preparation closes resources it acquired and reports its phase. It must not flash Recording or restore a false Ready state after the user explicitly started a failed operation.
 
+Webcam reads use asynchronous Media Foundation delivery with one outstanding request and a stop-aware worker wait. The callback owns its result without borrowing the service. Teardown closes callback admission before flushing the reader and shutting down the media source on its owning worker. A missing read callback cannot prevent the worker from observing stop. Native activation, control and shutdown calls remain separate driver boundaries.
+
 Input snapshots include output, split, video, webcam, audio, target context and resolved capabilities. Reading mutable presentation models from that worker would create a recording assembled from different settings moments.
 
 ## Workers and queues
