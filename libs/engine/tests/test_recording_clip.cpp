@@ -119,6 +119,20 @@ TEST(RecordingClipTest, StartupMetadataBudgetRejectsOversizedPinnedDescriptorBef
     EXPECT_EQ(result.error()->code, EngineErrorCode::ResourceBudgetExceeded);
 }
 
+TEST(RecordingClipTest, RetainedPlanCapacityIsRejectedBeforeOpeningSource) {
+    MediaIndexSnapshot snapshot;
+    snapshot.token.recording_id = NewId<RecordingId>();
+    ClipBoundaryPlan plan;
+    plan.recording_id = snapshot.token.recording_id;
+    plan.snapshot = snapshot.token;
+    plan.segments.reserve(2 * 1024 * 1024 / sizeof(ClipPlannedSegment) + 1);
+    plan.segments.resize(1);
+    const std::array<ClipPinnedSource, 1> sources{};
+    const auto result =
+        RunRecordingClipJob(plan, snapshot, sources, exosnap_test::UniqueTempPath("clip_plan_capacity_rejected.mkv"));
+    ASSERT_FALSE(result.succeeded());
+    EXPECT_EQ(result.error()->code, EngineErrorCode::ResourceBudgetExceeded);
+}
 TEST(RecordingClipTest, PlannerRejectsHighSegmentCountWithinFiniteJournal) {
     const auto journal = exosnap_test::UniqueTempPath("clip_many_segments.index");
     const RecordingId recording_id = NewId<RecordingId>();
