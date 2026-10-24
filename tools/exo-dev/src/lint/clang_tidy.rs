@@ -3473,6 +3473,98 @@ mod tests {
 
     #[test]
     #[ignore = "requires cmake, ninja and a working C++ toolchain"]
+    fn adding_a_target_reuses_unchanged_units_but_compile_changes_invalidate_them() {
+        let fixture = build_ninja_fixture().expect("working Ninja fixture");
+        let root = fixture.build_dir.parent().unwrap();
+        std::fs::write(root.join(".clang-tidy"), "Checks: '-*'\n").unwrap();
+        let ninja = RealNinja {
+            build_dir: fixture.build_dir.clone(),
+            extraction_seconds: std::cell::Cell::new(0.0),
+            parse_metrics: std::cell::Cell::new((0.0, 0, 0, 0)),
+            freshness_seconds: std::cell::Cell::new(0.0),
+        };
+        let snapshot = || {
+            let entries = parse_compile_db(
+                &std::fs::read_to_string(fixture.build_dir.join("compile_commands.json")).unwrap(),
+            )
+            .unwrap();
+            let build = normalize_root(&fixture.build_dir);
+            let (objects, sources) = object_maps(&entries, &build);
+            let selected: Vec<_> = sources.keys().cloned().collect();
+            let graph = deps_for_sources(&ninja, &selected, &sources, &objects, &build, None)
+                .expect("current complete dependency graph");
+            let identity = input_identity::configuration_hash(root, &fixture.build_dir).unwrap();
+            let salt =
+                compute_salt("fixture tool", &["fixture checks".into()], Some(&identity)).unwrap();
+            let keys = build_cache_keys(&selected, &graph, &command_identities(&entries), &salt);
+            assert_eq!(keys.len(), selected.len());
+            keys
+        };
+        let environment = crate::msvc::environment()
+            .unwrap()
+            .map(|(_, values)| values)
+            .unwrap_or_default();
+        let rebuild = || {
+            let output = std::process::Command::new("cmake")
+                .arg("--build")
+                .arg(&fixture.build_dir)
+                .envs(environment.iter().map(|(name, value)| (name, value)))
+                .output()
+                .unwrap();
+            assert!(
+                output.status.success(),
+                "{}\n{}",
+                String::from_utf8_lossy(&output.stdout),
+                String::from_utf8_lossy(&output.stderr)
+            );
+        };
+        let before = snapshot();
+        let cmake = root.join("CMakeLists.txt");
+        let mut configuration = std::fs::read_to_string(&cmake).unwrap();
+        configuration.push_str("\nadd_library(added_test OBJECT added_test.cpp)\n");
+        std::fs::write(
+            root.join("added_test.cpp"),
+            "int added_test() { return 3; }\n",
+        )
+        .unwrap();
+        std::fs::write(&cmake, &configuration).unwrap();
+        let old_objects: Vec<_> = fixture.obj_to_source.keys().cloned().collect();
+        assert!(
+            !ninja.objects_current(&old_objects),
+            "unconfigured target addition"
+        );
+        rebuild();
+        let added = snapshot();
+        assert_eq!(added.len(), before.len() + 1);
+        for (source, key) in &before {
+            assert_eq!(added.get(source), Some(key), "unchanged {source}");
+        }
+        for change in [
+            "target_compile_definitions(fixture PRIVATE CACHE_DEFINITION=1)\n",
+            "target_include_directories(fixture PRIVATE \"${CMAKE_CURRENT_SOURCE_DIR}/extra_include\")\n",
+        ] {
+            std::fs::create_dir_all(root.join("extra_include")).unwrap();
+            let previous = snapshot();
+            configuration.push_str(change);
+            std::fs::write(&cmake, &configuration).unwrap();
+            assert!(
+                !ninja.objects_current(&old_objects),
+                "unconfigured {change}"
+            );
+            rebuild();
+            let changed = snapshot();
+            for source in before.keys() {
+                assert_ne!(
+                    changed.get(source),
+                    previous.get(source),
+                    "{change}: {source}"
+                );
+            }
+        }
+    }
+
+    #[test]
+    #[ignore = "requires cmake, ninja and a working C++ toolchain"]
     fn an_always_generated_header_only_disables_its_own_consumers() {
         let fixture = build_ninja_fixture_with_metadata(true).expect("working Ninja fixture");
         let ninja = RealNinja {
