@@ -1284,7 +1284,7 @@ std::optional<DecodedVideoFrame> DecodeForwardToTarget(AVFormatContext* fmt_ctx,
     const AVRational tb = fmt_ctx->streams[video_stream_idx]->time_base;
 
     const auto finish = [&]() -> std::optional<DecodedVideoFrame> {
-        if (!have_candidate)
+        if (!have_candidate || !NormalizeHwFrame(held.frame))
             return std::nullopt;
         return ConvertToDecodedFrame(held.frame, candidate_pts_us, matrix, range, pq);
     };
@@ -1319,21 +1319,9 @@ std::optional<DecodedVideoFrame> DecodeForwardToTarget(AVFormatContext* fmt_ctx,
                 return finish();
             }
 
-            // Hardware readback normalizes back to a plain software pixel
-            // format before anything below inspects frame.frame->format.
-            if (!NormalizeHwFrame(frame.frame))
-                return std::nullopt;
-
-            // best_effort_timestamp already falls back from a missing pts to
-            // the interpolated dts-based estimate; a frame with neither is
-            // treated as t=0 rather than fed to av_rescale_q as
-            // AV_NOPTS_VALUE (which would rescale into garbage).
-            const int64_t raw_pts =
-                (frame.frame->best_effort_timestamp != AV_NOPTS_VALUE) ? frame.frame->best_effort_timestamp : 0;
             const int64_t pts_us =
-                SourceRelativeTimeUs(av_rescale_q(raw_pts, tb, AVRational{1, AV_TIME_BASE}), SourceOriginUs(fmt_ctx));
-
-            if (IsConvertibleFrame(frame.frame)) {
+                SourceRelativeFrameTimeUs(frame.frame->best_effort_timestamp, tb, SourceOriginUs(fmt_ctx));
+            if (frame.frame->format == AV_PIX_FMT_D3D11 || IsConvertibleFrame(frame.frame)) {
                 av_frame_unref(held.frame);
                 if (av_frame_ref(held.frame, frame.frame) == 0) {
                     have_candidate = true;
@@ -1359,41 +1347,59 @@ ReadForwardToTargetRaw(AVFormatContext* fmt_ctx, AVCodecContext* vctx, int video
                        VideoReadMeasurements& measurements, const std::atomic<bool>* cancelled) {
     PacketGuard pkt(av_packet_alloc());
     FrameGuard frame(av_frame_alloc());
-    if (!pkt.pkt || !frame.frame)
+    FrameGuard held(av_frame_alloc());
+    if (!pkt.pkt || !frame.frame || !held.frame)
         return std::nullopt;
     const AVRational tb = fmt_ctx->streams[video_stream_idx]->time_base;
+    bool have_candidate = false;
+    int64_t candidate_pts_us = 0;
+    const auto own = [&](AVFrame* candidate, int64_t pts_us) -> std::optional<RawDecodedVideoFrame> {
+        if (!NormalizeHwFrame(candidate))
+            return std::nullopt;
+        const bool is_pq = pq != nullptr && candidate->format == AV_PIX_FMT_YUV420P10LE;
+        return WrapRawDecodedFrame(candidate, pts_us, matrix, range, is_pq);
+    };
+    const auto finish = [&]() -> std::optional<RawDecodedVideoFrame> {
+        if (have_candidate) {
+            auto owned = own(held.frame, candidate_pts_us);
+            if (!owned)
+                return std::nullopt;
+            selected = std::move(owned);
+        }
+        return selected;
+    };
     for (;;) {
         if (cancelled && cancelled->load(std::memory_order_relaxed))
             return std::nullopt;
         const int received = avcodec_receive_frame(vctx, frame.frame);
         if (received >= 0) {
             ++measurements.decoded;
-            if (!NormalizeHwFrame(frame.frame))
-                return std::nullopt;
-            if (IsConvertibleFrame(frame.frame)) {
-                const int64_t raw_pts =
-                    frame.frame->best_effort_timestamp != AV_NOPTS_VALUE ? frame.frame->best_effort_timestamp : 0;
-                const int64_t pts_us = SourceRelativeTimeUs(av_rescale_q(raw_pts, tb, AVRational{1, AV_TIME_BASE}),
-                                                            SourceOriginUs(fmt_ctx));
-                const bool is_pq = pq != nullptr && frame.frame->format == AV_PIX_FMT_YUV420P10LE;
-                auto owned = WrapRawDecodedFrame(frame.frame, pts_us, matrix, range, is_pq);
-                av_frame_unref(frame.frame);
-                if (!owned)
-                    return std::nullopt;
+            if (frame.frame->format == AV_PIX_FMT_D3D11 || IsConvertibleFrame(frame.frame)) {
+                const int64_t pts_us =
+                    SourceRelativeFrameTimeUs(frame.frame->best_effort_timestamp, tb, SourceOriginUs(fmt_ctx));
                 if (pts_us > target_us) {
+                    auto owned = own(frame.frame, pts_us);
+                    av_frame_unref(frame.frame);
+                    if (!owned)
+                        return std::nullopt;
                     lookahead = std::move(owned);
-                    return selected;
+                    return finish();
                 }
-                selected = std::move(owned);
+                av_frame_unref(held.frame);
+                if (av_frame_ref(held.frame, frame.frame) < 0)
+                    return std::nullopt;
+                have_candidate = true;
+                candidate_pts_us = pts_us;
+                av_frame_unref(frame.frame);
                 if (pts_us == target_us)
-                    return selected;
+                    return finish();
             } else {
                 av_frame_unref(frame.frame);
             }
             continue;
         }
         if (received == AVERROR_EOF)
-            return selected;
+            return finish();
         if (received != AVERROR(EAGAIN) || draining)
             return std::nullopt;
 
@@ -1405,7 +1411,7 @@ ReadForwardToTargetRaw(AVFormatContext* fmt_ctx, AVCodecContext* vctx, int video
         if (read < 0) {
             draining = true;
             if (avcodec_send_packet(vctx, nullptr) < 0)
-                return selected;
+                return finish();
         } else {
             const int sent = avcodec_send_packet(vctx, pkt.pkt);
             av_packet_unref(pkt.pkt);
@@ -1451,14 +1457,6 @@ SwrContext* BuildPlaybackResampler(AVCodecContext* actx, bool unity_mono = false
         return nullptr;
     }
     return swr;
-}
-
-// Microsecond pts for one decoded frame, with the same missing-timestamp
-// fallback DecodeForwardToTarget applies (best_effort_timestamp, else t=0 --
-// never AV_NOPTS_VALUE into av_rescale_q).
-int64_t FramePtsUs(const AVFrame* frame, AVRational tb, int64_t origin_us) noexcept {
-    const int64_t raw = (frame->best_effort_timestamp != AV_NOPTS_VALUE) ? frame->best_effort_timestamp : 0;
-    return SourceRelativeTimeUs(av_rescale_q(raw, tb, AVRational{1, AV_TIME_BASE}), origin_us);
 }
 
 // Index of the track carrying `stream_index`, or tracks.size() when none does
@@ -2214,7 +2212,8 @@ void EditPlayerEngine::StartPlaybackDecode(int64_t start_us, VideoFrameCallback 
                         if (recv_ret < 0)
                             break; // EAGAIN (need more input) or EOF (fully drained)
 
-                        const int64_t pts_us = FramePtsUs(frame.frame, vtb, origin_us);
+                        const int64_t pts_us =
+                            SourceRelativeFrameTimeUs(frame.frame->best_effort_timestamp, vtb, origin_us);
                         // A negative clock reading means "nobody is presenting
                         // this" -- then nothing is known to be late and nothing is
                         // discarded (see ShouldConvertDecodedFrame).
@@ -2330,7 +2329,8 @@ void EditPlayerEngine::StartPlaybackDecode(int64_t start_us, VideoFrameCallback 
                     if (avcodec_receive_frame(track->codec.ctx, frame.frame) < 0)
                         break; // EAGAIN (need more input) or EOF (fully drained)
                     // Capture the pts BEFORE av_frame_unref resets the frame.
-                    const int64_t pts_us = FramePtsUs(frame.frame, track->time_base, origin_us);
+                    const int64_t pts_us =
+                        SourceRelativeFrameTimeUs(frame.frame->best_effort_timestamp, track->time_base, origin_us);
                     const int64_t max_out_frames = swr_get_out_samples(track->resampler.ctx, frame.frame->nb_samples);
                     if (max_out_frames <= 0) {
                         av_frame_unref(frame.frame);

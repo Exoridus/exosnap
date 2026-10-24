@@ -3,8 +3,10 @@
 #include <cstdint>
 #include <exosnap/engine/color_metadata.h>
 #include <exosnap/engine/edit_types.h>
+#include <exosnap/engine/performance_measurements.h>
 #include <gtest/gtest.h>
 #include <ios>
+#include <iostream>
 #include <iterator>
 #include <optional>
 #include <system_error>
@@ -739,6 +741,68 @@ std::filesystem::path TestFixturePath(const char* filename) {
     return std::filesystem::path(EXOSNAP_SOURCE_DIR) / ".workspace" / "test-fixtures" / filename;
 }
 
+TEST(EditPlayerEngine, HardwareSeekReadsBackOnlySelectedAndLookaheadFrames) {
+    using namespace exosnap::engine;
+    const auto fixture = TestFixturePath("audiotest_60fps.mkv");
+    if (!std::filesystem::exists(fixture))
+        GTEST_SKIP() << "optional long-GOP hardware fixture unavailable";
+    struct MeasurementsScope {
+        MeasurementsScope() {
+            EnablePerformanceMeasurements(true);
+        }
+        ~MeasurementsScope() {
+            EnablePerformanceMeasurements(false);
+        }
+    } scope;
+    EditPlayerEngine engine;
+    std::string error;
+    ASSERT_TRUE(engine.Open(fixture, error)) << error;
+    const auto measure = [&](const char* path, auto decode) {
+        const auto readback = ReadPerformanceMeasurement(PerformanceStage::DecodeReadback);
+        const auto normalize = ReadPerformanceMeasurement(PerformanceStage::DecodeNormalize);
+        const auto start = std::chrono::steady_clock::now();
+        const bool succeeded = decode();
+        const auto wall = std::chrono::steady_clock::now() - start;
+        const auto after = ReadPerformanceMeasurement(PerformanceStage::DecodeReadback);
+        std::cout << "seek_measurement path=" << path << " readbacks=" << after.calls - readback.calls
+                  << " readback_ms=" << (after.total_ns - readback.total_ns) / 1e6 << " normalize_ms="
+                  << (ReadPerformanceMeasurement(PerformanceStage::DecodeNormalize).total_ns - normalize.total_ns) / 1e6
+                  << " wall_ms=" << std::chrono::duration<double, std::milli>(wall).count() << '\n';
+        EXPECT_TRUE(succeeded);
+        return after.calls - readback.calls;
+    };
+    const auto cpu_readbacks = measure("bgra", [&] {
+        const auto frame = engine.DecodeFrameAt(800'000);
+        EXPECT_TRUE(frame);
+        if (frame) {
+            EXPECT_GE(frame->pts_us, 800'000);
+            EXPECT_LT(frame->pts_us, 817'000);
+        }
+        return frame.has_value();
+    });
+    if (!cpu_readbacks)
+        GTEST_SKIP() << "D3D11 decode unavailable; software fallback is not a hardware measurement";
+    EXPECT_LE(cpu_readbacks, 1u);
+    std::optional<RawDecodedVideoFrame> held;
+    const auto raw_readbacks = measure("raw", [&] {
+        held = engine.ReadFrameAtRaw(800'000, VideoReadMode::Sequential, 1);
+        return held.has_value();
+    });
+    EXPECT_LE(raw_readbacks, 2u);
+    ASSERT_TRUE(held);
+    EXPECT_LE(held->pts_us, 800'500);
+    EXPECT_LT(800'000 - held->pts_us, 17'000);
+    const auto pixel = held->y_plane[0];
+    const auto before = ReadPerformanceMeasurement(PerformanceStage::DecodeReadback).calls;
+    const auto cached = engine.ReadFrameAtRaw(800'001, VideoReadMode::Sequential, 1);
+    ASSERT_TRUE(cached);
+    EXPECT_EQ(cached->pts_us, held->pts_us);
+    EXPECT_EQ(ReadPerformanceMeasurement(PerformanceStage::DecodeReadback).calls, before);
+    ASSERT_TRUE(engine.ReadFrameAtRaw(100'000, VideoReadMode::RandomAccess));
+    engine.Close();
+    EXPECT_EQ(held->y_plane[0], pixel);
+}
+
 // Sums the Y plane's first row. Not a meaningful image checksum by itself --
 // it exists only to prove the bytes behind y_plane are still the SAME real
 // decoded pixel data across two points in time (a freed/reused buffer would
@@ -1021,6 +1085,10 @@ TEST(EditPlayerEngine, SourceRelativeTimePreservesSignedOrigins) {
     EXPECT_EQ(exosnap::engine::SourceTimestampUs(200'000, -10'000'000), -9'800'000);
     EXPECT_EQ(exosnap::engine::SourceRelativeTimeUs(10'200'000, 10'000'000), 200'000);
     EXPECT_EQ(exosnap::engine::SourceTimestampUs(200'000, 10'000'000), 10'200'000);
+    EXPECT_EQ(exosnap::engine::SourceRelativeFrameTimeUs(-9800, {1, 1000}, -10'000'000), 200'000);
+    EXPECT_EQ(exosnap::engine::SourceRelativeFrameTimeUs(10200, {1, 1000}, 10'000'000), 200'000);
+    EXPECT_EQ(exosnap::engine::SourceRelativeFrameTimeUs(AV_NOPTS_VALUE, {1, 1000}, 10'000'000), 0);
+    EXPECT_EQ(exosnap::engine::SourceRelativeFrameTimeUs(AV_NOPTS_VALUE, {1, 1000}, -10'000'000), 0);
 }
 
 TEST(EditPlayerEngine, SourceRelativeVideoAndAudioIgnoreShiftedContainerOrigins) {
