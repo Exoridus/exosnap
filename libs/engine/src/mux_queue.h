@@ -163,10 +163,10 @@ class MuxQueue {
 
     [[nodiscard]] static size_t PayloadBytes(const MuxItem& item) {
         if (const auto* video = std::get_if<EncodedVideoPacket>(&item.payload)) {
-            return video->bytes.size();
+            return video->bytes.capacity();
         }
         if (const auto* audio = std::get_if<EncodedAudioPacket>(&item.payload)) {
-            return audio->bytes.size();
+            return audio->bytes.capacity();
         }
         return 0;
     }
