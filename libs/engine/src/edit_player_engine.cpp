@@ -541,6 +541,8 @@ bool TryAttachD3D11VA(AVCodecContext* vctx) {
         return false;
     vctx->hw_device_ctx = device_ctx; // ownership transferred; avcodec_free_context releases it
     vctx->get_format = SelectD3D11HwFormat;
+    // A seek holds its candidate while receiving the next frame from the fixed surface pool.
+    vctx->extra_hw_frames = 1;
     return true;
 }
 
