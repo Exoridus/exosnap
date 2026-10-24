@@ -70,7 +70,7 @@ The controller detaches scope/window subscriptions and its event filter before d
 
 ## Hardware decode boundary
 
-Open attempts D3D11VA hardware decoding without a vendor-specific preference. Failed device creation or unsupported stream negotiation falls back to software at open. There is no arbitrary mid-stream hardware/software switch.
+Open attempts D3D11VA without a vendor-specific preference. Format negotiation permits supported nominal 8-/10-bit 4:2:0 only after the driver frame parameters confirm NV12/P010 readback. Unsupported layouts and 8-bit 4:4:4 select an offered software format. Failed hardware open retains one software retry. Runtime readback validates the actual layout and stops the operation with a diagnostic on unexpected failures, rather than dropping every frame or retrying indefinitely. There is no arbitrary mid-stream hardware/software switch.
 
 This path is not zero-copy. Hardware frames are read back using `av_hwframe_transfer_data`, deinterleaved and passed through the same plane-based converter. FFmpeg owns the decoder device and does not supply the Record preview's shared NT-handle transport. A future GPU-native decoder/renderer path needs its own explicit device/surface ownership contract.
 
@@ -150,7 +150,7 @@ Missing, invalid or stale metadata requires an explicit stopped-state monitoring
 
 ## Recording clip jobs and storage ownership
 
-Recording Clip creation is unavailable in v1.3. `product::kRecordingClipsAvailable` in `app/models/RecordingCapabilities.h` is the compile-time authority. The coordinator rejects requests with `ProductCapabilityUnavailable` before consulting committed media or allocating a request, and does not construct a ClipJob worker. Confirm/cancel cannot admit work. The adapter clamps availability and rejects invokable plan/confirm/cancel calls even with stale positive state. The control policy rejects request/confirm with `unavailable`, and dormant QML controls follow the adapter's constant capability. Runtime settings cannot override it.
+Recording Clip creation is unavailable in the current development build. `product::kRecordingClipsAvailable` in `app/models/RecordingCapabilities.h` is the compile-time authority. The coordinator rejects requests with `ProductCapabilityUnavailable` before consulting committed media or allocating a request, and does not construct a ClipJob worker. Confirm/cancel cannot admit work. The adapter clamps availability and rejects invokable plan/confirm/cancel calls even with stale positive state. The control policy rejects request/confirm with `unavailable`, and dormant QML controls follow the adapter's constant capability. Runtime settings cannot override it.
 
 The following clip implementation remains compiled and directly testable. Its regression results are engineering evidence, not qualification of a shipping creation feature. Enabling it requires the inclusive 33,554,432-byte per-active-job contract, codec/long-duration decode evidence and recording/isolation qualification. That memory contract remains unresolved. Previously saved clips use normal import, History, playback and editing/export. Background index, file identity, leases, publication recovery and MP4 delivery retain their ordinary recording/editor ownership.
 

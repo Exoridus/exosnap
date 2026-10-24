@@ -21,7 +21,9 @@ Maintain repeatable privacy review and symbol delivery for official crash report
 | Localization qualification | German ships through Qt translations with English fallback. Broaden native screen-reader and real-device qualification, and maintain translation coverage as product copy changes. |
 | Cold navigation responsiveness | Explore lightweight page shells and asynchronous section construction without layout jumps, blank pages or a second notion of selected state. |
 | Capture-format rollover | Consider ending one segment and rebuilding capture/color/encoder state when HDR or source dimensions change. Existing mux-only split does not rebuild those resources. Current behavior remains an explicit stop. |
-| Replay and richer editing | Replay buffering and richer edit operations are capability gaps, not controls that should be advertised as working. Lossless keyframe trim remains the current editing boundary. |
+| Replay and editing qualification | Replay buffering remains future work. The development editor already implements multi-track video/audio, unlinking, waveforms, crossfades and copy/render/hybrid export. v0.11 still needs native hardware/UX and media-profile acceptance. |
+
+The published product line is v0.10.x; development prepares v0.11 without promising a release date. PQ-desktop linear composition, decoder compatibility and the product AudioIntent harness are hardening work. Recording Clips remain disabled until inclusive job memory, long split-spanning media and concurrent recording acceptance are demonstrated. Separate webcam recording tracks and a general multi-output graph remain future designs.
 
 ## Deferred to v0.11 and later
 

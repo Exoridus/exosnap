@@ -109,6 +109,8 @@ exosnap.exe --auto-record --auto-record-bare --target monitor --duration 30 --fr
 
 Use isolated configuration as well when the selected mode does not provide it. Harness outputs are scratch artifacts, not source files or normal user recordings. `--cq <n>` selects a canonical quality value for a measurement, independently of the named ladder.
 
+The auto-record audio rows are migrated into an explicit AudioIntent and passed through the coordinator's ordinary resolver and AudioRuntimeGraph. Shared physical capture and logical DSP fan-out therefore use the product path. No implicit legacy audio initialization is selected by the harness. Fake-source routing tests prove graph behavior, not physical endpoint timing, CPU usage or the number of encoders in a live run.
+
 `--capture-backend default|wgc` is a developer override for a monitor target. Default chooses the product's display duplication path; `wgc` measures WGC on the same monitor. It is refused for other target kinds and is never persisted. It is not a supported end-user backend selector.
 
 Harness-only modes require a non-Release configuration or a Release configured with `EXOSNAP_BUILD_BENCHMARK_HARNESS=ON`. Do not use a shipping release binary as though the harness was enabled. The presence of an option string in the executable is insufficient evidence that its guarded implementation is available. Official release recording checks use [Live Verify](live-verify.md).

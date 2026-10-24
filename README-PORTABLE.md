@@ -24,7 +24,7 @@ MKV offers H.264/HEVC/AV1 and AAC/Opus/PCM/FLAC. MP4 offers H.264/HEVC with AAC.
 
 HDR defaults to tone-mapped SDR. Native HDR10 is an explicit display-relevant setting, with HEVC/AV1, 10-bit and compatible playback. Expert 4:4:4 is 8-bit H.264/HEVC only on capable GPUs. A higher requested recording rate is not a throughput guarantee.
 
-After a normal completed recording, Edit can preview, scrub and keyframe-trim without re-encoding. Export writes MKV or MP4. Markers travel in a sibling `<stem>.markers.json`, not chapters. This is not a frame-accurate or multitrack project editor.
+After a completed recording, the development editor supports a multi-track video/audio timeline, unlinking, waveforms and crossfades. Export writes MKV or supported MP4 through copy, render or hybrid paths; rendered exact cuts require supported SDR sources. Original-stream copy retains codec and keyframe constraints. v0.11 hardware/UX and media-profile qualification remains required. Markers travel in a sibling `<stem>.markers.json`, not chapters. Projects do not persist across application exit. Recording Clips remain unavailable.
 
 ## Updates and crash reports
 
