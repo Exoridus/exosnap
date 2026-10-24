@@ -89,6 +89,266 @@ class FiniteCapture final : public IAudioCaptureSource {
     std::vector<float> pcm_;
     std::string name_ = "Finite fixture";
 };
+struct OutageControl {
+    std::atomic<uint32_t> phase{0};
+    std::atomic<bool> block_reinit{false};
+    std::atomic<bool> reinit_entered{false};
+    int64_t recovery_offset_ns = -50000000;
+    std::atomic<uint64_t> last_native_end{0};
+    std::atomic<uint64_t> recovery_qpc{0};
+};
+
+class OutageCapture final : public IAudioCaptureSource {
+  public:
+    OutageCapture(uint64_t start, bool fails, std::shared_ptr<OutageControl> control)
+        : next_qpc_(start), fails_(fails), control_(std::move(control)), pcm_(960, 0.5f) {
+    }
+    bool Init(std::string&) override {
+        return true;
+    }
+    bool Reinit(std::string& error) override {
+        control_->reinit_entered = true;
+        while (control_->block_reinit)
+            Sleep(1);
+        if (control_->phase < 2) {
+            error = "Capture remains unavailable";
+            return false;
+        }
+        recovered_ = true;
+        next_qpc_ = static_cast<uint64_t>(static_cast<int64_t>(NowNs()) + control_->recovery_offset_ns);
+        control_->recovery_qpc = next_qpc_;
+        return true;
+    }
+    uint32_t PendingFrameCount() override {
+        return (fails_ && control_->phase == 1) || NowNs() >= next_qpc_ + 10000000ULL ? 480 : 0;
+    }
+    bool AcquireBuffer(RawAudioBuffer& buffer, std::string& error) override {
+        if (fails_ && control_->phase == 1) {
+            error = "Capture was disconnected";
+            return false;
+        }
+        std::fill(pcm_.begin(), pcm_.end(), fails_ ? (recovered_ ? 0.75f : 0.25f) : 0.5f);
+        buffer = {};
+        buffer.bytes = reinterpret_cast<const uint8_t*>(pcm_.data());
+        buffer.num_frames = 480;
+        return true;
+    }
+    void ReleaseBuffer() override {
+        next_qpc_ += 10000000ULL;
+        if (fails_ && !recovered_)
+            control_->last_native_end = next_qpc_;
+    }
+    std::optional<uint64_t> MaxCaptureLatencyNs() const override {
+        return 50000000ULL;
+    }
+    uint64_t LastBufferQpcNs() const override {
+        return next_qpc_;
+    }
+    uint32_t SampleRate() const override {
+        return 48000;
+    }
+    uint32_t Channels() const override {
+        return 2;
+    }
+    AudioSampleFormat SampleFormat() const override {
+        return AudioSampleFormat::Float32;
+    }
+    const std::string& EndpointName() const override {
+        return name_;
+    }
+    void Shutdown() override {
+    }
+
+  private:
+    uint64_t next_qpc_;
+    bool fails_, recovered_ = false;
+    std::shared_ptr<OutageControl> control_;
+    std::vector<float> pcm_;
+    std::string name_ = "Outage fixture";
+};
+
+class AudioGraphOutage : public ::testing::Test {
+  protected:
+    std::shared_ptr<OutageControl> control = std::make_shared<OutageControl>();
+    std::shared_ptr<SharedAudioCaptureRegistry> registry = std::make_shared<SharedAudioCaptureRegistry>();
+    std::shared_ptr<AudioRuntimeGraph> graph;
+    std::vector<std::unique_ptr<IAudioCaptureSource>> tracks;
+    std::vector<float> pcm[3];
+    bool saw_discontinuity[3]{};
+    uint64_t start = 0;
+    std::string error;
+
+    bool Start(bool denoise = false) {
+        start = NowNs();
+        ResolvedAudioPlan plan;
+        for (uint32_t i = 0; i < 2; ++i) {
+            ResolvedAudioSource source;
+            source.spec.id = NewId<AudioSourceId>();
+            source.spec.binding.kind = i ? AudioBindingKind::MicrophoneEndpoint : AudioBindingKind::PlaybackEndpoint;
+            source.spec.dsp.rnnoise_enabled = i && denoise;
+            source.capture_key = PhysicalCaptureKey{};
+            source.capture_key->endpoint_id = i ? "failed-source" : "healthy-source";
+            plan.sources.push_back(source);
+        }
+        for (uint32_t i = 0; i < 3; ++i) {
+            ResolvedRoutingTrack track;
+            track.id = NewId<AudioTrackId>();
+            track.mux_index = {i};
+            track.fixed_average_divisor = 2;
+            track.limiter.enabled = false;
+            for (const auto& source : plan.sources)
+                track.routes.push_back({NewId<AudioRouteId>(), source.spec.id, 1.f});
+            plan.tracks.push_back(track);
+        }
+        graph = AudioRuntimeGraph::Prepare(plan, registry, start, 48000, 2, false, error,
+                                           [this](const ResolvedAudioSource& source) {
+                                               SharedAudioCaptureRequest request;
+                                               request.key = *source.capture_key;
+                                               request.admission.sample_rate = 48000;
+                                               request.admission.channels = 2;
+                                               request.admission.maximum_packet_frames = 480;
+                                               const bool fails = request.key.endpoint_id == "failed-source";
+                                               request.native_factory = [this, fails] {
+                                                   return std::make_unique<OutageCapture>(start, fails, control);
+                                               };
+                                               return request;
+                                           });
+        if (!graph)
+            return false;
+        tracks = graph->TakeTracks();
+        for (auto& track : tracks)
+            if (!track->Init(error))
+                return false;
+        graph->Start();
+        return true;
+    }
+    bool Consume(size_t index) {
+        while (tracks[index]->PendingFrameCount()) {
+            RawAudioBuffer raw;
+            if (!tracks[index]->AcquireBuffer(raw, error))
+                return false;
+            const auto* samples = reinterpret_cast<const float*>(raw.bytes);
+            pcm[index].insert(pcm[index].end(), samples, samples + static_cast<size_t>(raw.num_frames) * 2);
+            saw_discontinuity[index] |= raw.data_discontinuity;
+            tracks[index]->ReleaseBuffer();
+        }
+        return true;
+    }
+    bool RunFor(uint32_t milliseconds) {
+        const uint64_t end = NowNs() + static_cast<uint64_t>(milliseconds) * 1000000ULL;
+        while (NowNs() < end) {
+            if (!Consume(0) || !Consume(1))
+                return false;
+            Sleep(1);
+        }
+        return true;
+    }
+    void TearDown() override {
+        control->phase = 2;
+        control->block_reinit = false;
+        if (graph) {
+            graph->RequestStop(NowNs());
+            std::string ignored;
+            graph->WaitDrained(2000, ignored);
+        }
+        for (auto& track : tracks)
+            track->Shutdown();
+        tracks.clear();
+        graph.reset();
+    }
+};
+
+TEST_F(AudioGraphOutage, ActivePeerSurvivesOutageRecoveryAndSlowConsumerOverflow) {
+    ASSERT_TRUE(Start()) << error;
+    ASSERT_TRUE(RunFor(80)) << error;
+    control->phase = 1;
+    ASSERT_TRUE(RunFor(3000)) << error;
+    ASSERT_GT(pcm[0].size(), 250000u);
+    EXPECT_TRUE(std::all_of(pcm[0].end() - 48000, pcm[0].end(), [](float value) { return value == 0.25f; }));
+    EXPECT_TRUE(control->reinit_entered);
+    control->phase = 2;
+    const uint64_t deadline = NowNs() + 4000000000ULL;
+    while ((pcm[0].empty() || pcm[0].back() != 0.625f) && NowNs() < deadline)
+        ASSERT_TRUE(RunFor(20)) << error;
+    ASSERT_FALSE(pcm[0].empty());
+    EXPECT_FLOAT_EQ(pcm[0].back(), 0.625f);
+    const uint64_t end = NowNs();
+    graph->RequestStop(end);
+    ASSERT_TRUE(graph->WaitDrained(1500, error)) << error;
+    for (size_t i = 0; i < tracks.size(); ++i) {
+        auto* track = dynamic_cast<AudioRuntimeTrackSource*>(tracks[i].get());
+        ASSERT_NE(track, nullptr);
+        ASSERT_TRUE(track->BeginDrain(end, error)) << error;
+        ASSERT_TRUE(Consume(i)) << error;
+    }
+    EXPECT_EQ(pcm[0], pcm[1]);
+    EXPECT_EQ(pcm[0].size(), pcm[2].size());
+    EXPECT_TRUE(saw_discontinuity[2]);
+    const auto meters = graph->SourceMeters();
+    EXPECT_TRUE(
+        std::any_of(meters.begin(), meters.end(), [](const auto& meter) { return meter.reader_overflow_frames > 0; }));
+    EXPECT_TRUE(
+        std::any_of(meters.begin(), meters.end(), [](const auto& meter) { return meter.missing_frames > 120000; }));
+}
+
+TEST_F(AudioGraphOutage, BlockedRecoveryStillPublishesSharedSilenceAndStopsWithDspTail) {
+    ASSERT_TRUE(Start(true)) << error;
+    ASSERT_TRUE(RunFor(80)) << error;
+    control->block_reinit = true;
+    control->phase = 1;
+    ASSERT_TRUE(RunFor(500)) << error;
+    EXPECT_TRUE(control->reinit_entered);
+    ASSERT_GT(pcm[0].size(), 40000u);
+    EXPECT_TRUE(std::all_of(pcm[0].end() - 9600, pcm[0].end(), [](float value) { return value == 0.25f; }));
+    const uint64_t end = NowNs();
+    graph->RequestStop(end);
+    ASSERT_TRUE(graph->WaitDrained(1500, error)) << error;
+    for (size_t i = 0; i < 2; ++i) {
+        auto* track = dynamic_cast<AudioRuntimeTrackSource*>(tracks[i].get());
+        ASSERT_NE(track, nullptr);
+        ASSERT_TRUE(track->BeginDrain(end, error)) << error;
+        ASSERT_TRUE(Consume(i)) << error;
+    }
+    EXPECT_EQ(pcm[0], pcm[1]);
+    tracks.clear();
+    graph.reset();
+    EXPECT_GT(registry->ReservedPayloadBytes(), 0u);
+    control->phase = 2;
+    control->block_reinit = false;
+    for (uint32_t wait = 0; wait < 2000 && registry->ReservedPayloadBytes(); ++wait)
+        Sleep(1);
+    EXPECT_EQ(registry->ReservedPayloadBytes(), 0u);
+}
+
+TEST_F(AudioGraphOutage, RecoveryCountsTheGapAfterTheLastSyntheticPacketOnce) {
+    control->recovery_offset_ns = 200000000;
+    ASSERT_TRUE(Start()) << error;
+    ASSERT_TRUE(RunFor(80)) << error;
+    control->phase = 1;
+    ASSERT_TRUE(RunFor(500)) << error;
+    control->phase = 2;
+    const uint64_t deadline = NowNs() + 4000000000ULL;
+    while ((pcm[0].empty() || pcm[0].back() != 0.625f) && NowNs() < deadline)
+        ASSERT_TRUE(RunFor(20)) << error;
+    ASSERT_FALSE(pcm[0].empty());
+    ASSERT_FLOAT_EQ(pcm[0].back(), 0.625f);
+    const uint64_t elapsed = control->recovery_qpc - control->last_native_end;
+    const uint64_t expected = elapsed / 1000000000ULL * 48000 + elapsed % 1000000000ULL * 48000 / 1000000000ULL;
+    const auto meters = graph->SourceMeters();
+    const auto failed =
+        std::find_if(meters.begin(), meters.end(), [](const auto& meter) { return meter.missing_frames > 0; });
+    ASSERT_NE(failed, meters.end());
+    EXPECT_GE(failed->missing_frames, expected);
+    EXPECT_LE(failed->missing_frames, expected + 1);
+    const uint64_t counted = failed->missing_frames;
+    ASSERT_TRUE(RunFor(100)) << error;
+    const auto later = graph->SourceMeters();
+    const auto same = std::find_if(later.begin(), later.end(),
+                                   [&](const auto& meter) { return meter.source_id == failed->source_id; });
+    ASSERT_NE(same, later.end());
+    EXPECT_EQ(same->missing_frames, counted);
+}
+
 TEST(AudioRuntimeGraph, SharedCaptureProcessesEachSourceOnceAndFansOutToTwoTracks) {
     const uint64_t start = NowNs();
     ResolvedAudioPlan plan;

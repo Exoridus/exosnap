@@ -446,6 +446,7 @@ bool LogicalAudioSource::Process(const AudioBlockView& input, std::string& error
         d.format_generation != p.input_descriptor.format_generation ||
         d.clock_corrected != p.input_descriptor.clock_corrected || d.sample_format != AudioSampleFormat::Float32 ||
         input.metadata.frames > p.input_descriptor.maximum_packet_frames ||
+        (input.metadata.synthetic_gap && !input.metadata.silence) ||
         (!input.metadata.silence && input.samples.size() != static_cast<size_t>(input.metadata.frames) * d.channels) ||
         (!input.samples.empty() && input.samples.size() != static_cast<size_t>(input.metadata.frames) * d.channels) ||
         (p.sequence_seen && input.metadata.sequence <= p.last_sequence)) {
@@ -476,11 +477,12 @@ bool LogicalAudioSource::Process(const AudioBlockView& input, std::string& error
     }
     {
         std::lock_guard lock(p.meter_mutex);
-        if (gap > limit - p.meter.missing_frames) {
+        const uint64_t missing = gap + (input.metadata.synthetic_gap ? input.metadata.frames : 0ULL);
+        if (missing < gap || missing > limit - p.meter.missing_frames) {
             error = "Logical missing-frame count exhausted";
             return false;
         }
-        p.meter.missing_frames += gap;
+        p.meter.missing_frames += missing;
         p.meter.reader_overflow_frames += input.reader_overflow_frames;
     }
     auto metadata = input.metadata;
@@ -540,7 +542,9 @@ bool LogicalAudioSource::Process(const AudioBlockView& input, std::string& error
         error = "Logical sample timeline exhausted";
         return false;
     }
-    if (!p.ProcessPcm(input.samples, metadata, false, error))
+    if (metadata.synthetic_gap)
+        p.missing_intervals.emplace_back(p.input_frames, p.input_frames + metadata.frames);
+    if (!p.ProcessPcm(input.samples, metadata, metadata.synthetic_gap, error))
         return false;
     if (metadata.output_qpc_ns) {
         const uint64_t duration = DeviceFramesToNs(metadata.frames, d.sample_rate);

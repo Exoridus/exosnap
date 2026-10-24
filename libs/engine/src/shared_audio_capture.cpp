@@ -383,7 +383,12 @@ class PhysicalOwner : public std::enable_shared_from_this<PhysicalOwner> {
     std::shared_ptr<AudioTee> Tee() const {
         return tee_;
     }
-    uint64_t CompletedThrough() const {
+    uint64_t CompletedThrough() {
+        if (degraded_ && !timeline_faulted_) {
+            std::lock_guard lock(mutex_);
+            if (degraded_ && !timeline_faulted_)
+                PublishOutageSilence(CapturePollQpcNs(), false);
+        }
         return completed_through_qpc_ns_.load(std::memory_order_acquire);
     }
     AudioCaptureDescriptor PreparedDescriptor() const {
@@ -475,6 +480,13 @@ class PhysicalOwner : public std::enable_shared_from_this<PhysicalOwner> {
         PendingAudioSeal result{promise->get_future(), reader, end_qpc_ns};
         {
             std::lock_guard lock(mutex_);
+            if (degraded_ && !timeline_faulted_) {
+                PublishOutageSilence(end_qpc_ns, true);
+                if (!timeline_faulted_) {
+                    promise->set_value(reader->SealEnd(end_qpc_ns));
+                    return result;
+                }
+            }
             if (seals_.size() == kMaxAudioTeeReaders) {
                 auto end = reader->SealEnd(end_qpc_ns);
                 end.stalled = true;
@@ -525,7 +537,54 @@ class PhysicalOwner : public std::enable_shared_from_this<PhysicalOwner> {
     uint64_t idle_poll_qpc_ns_ = 0;
     uint64_t idle_certified_through_qpc_ns_ = 0;
     std::atomic<uint64_t> completed_through_qpc_ns_{0};
+    uint64_t outage_origin_qpc_ns_ = 0;
+    uint64_t outage_frames_ = 0;
+    uint64_t outage_end_qpc_ns_ = 0;
+    bool recovery_gap_pending_ = false;
     bool next_discontinuity_ = false;
+
+    // The owner lock serializes outage decisions with native publication and recovery.
+    // Readers may publish gaps while native reactivation is blocked on the owner thread.
+    void PublishOutageSilence(uint64_t end, bool finite) {
+        const auto& descriptor = prepared_descriptor_;
+        const uint32_t rate = descriptor.sample_rate;
+        const uint32_t block = (std::min)(descriptor.maximum_packet_frames, rate / 100);
+        if (!block)
+            return;
+        if (!outage_origin_qpc_ns_) {
+            outage_origin_qpc_ns_ =
+                (std::max)(last_output_end_qpc_, completed_through_qpc_ns_.load(std::memory_order_relaxed));
+            if (!outage_origin_qpc_ns_)
+                outage_origin_qpc_ns_ = end;
+        }
+        if (end <= outage_origin_qpc_ns_)
+            return;
+        if (end - outage_origin_qpc_ns_ > kAudioTeeHorizonNs + DeviceFramesToNs(outage_frames_, rate)) {
+            // Older absence is a timestamp gap; only the retained horizon needs explicit PCM.
+            outage_origin_qpc_ns_ = end - kAudioTeeHorizonNs;
+            outage_frames_ = 0;
+        }
+        const uint64_t elapsed = end - outage_origin_qpc_ns_;
+        const uint64_t available = elapsed / 1000000000ULL * rate +
+                                   ((elapsed % 1000000000ULL) * rate + (finite ? 999999999ULL : 0)) / 1000000000ULL;
+        while (available > outage_frames_ && (finite || available - outage_frames_ >= block)) {
+            AudioBlockMetadata metadata;
+            metadata.output_qpc_ns = outage_origin_qpc_ns_ + DeviceFramesToNs(outage_frames_, rate);
+            metadata.frames = static_cast<uint32_t>((std::min)(available - outage_frames_, uint64_t{block}));
+            metadata.silence = metadata.synthetic_gap = metadata.discontinuity = true;
+            std::string error;
+            if (!tee_->Publish({}, metadata, error)) {
+                error_ = std::move(error);
+                timeline_faulted_.store(true, std::memory_order_release);
+                return;
+            }
+            outage_frames_ += metadata.frames;
+            last_output_end_qpc_ = outage_origin_qpc_ns_ + DeviceFramesToNs(outage_frames_, rate);
+            outage_end_qpc_ns_ = last_output_end_qpc_;
+            recovery_gap_pending_ = true;
+            completed_through_qpc_ns_.store(last_output_end_qpc_, std::memory_order_release);
+        }
+    }
 
     void UpdateStatistics() {
         std::lock_guard lock(mutex_);
@@ -564,21 +623,45 @@ class PhysicalOwner : public std::enable_shared_from_this<PhysicalOwner> {
         }
     }
     bool Publish(RawAudioBuffer buffer, std::string& error) {
+        std::lock_guard lock(mutex_);
         if (!buffer.num_frames)
             return true;
+        uint64_t qpc = source_->LastBufferQpcNs();
+        uint32_t trimmed = 0;
+        if (qpc < outage_end_qpc_ns_) {
+            const uint64_t elapsed = outage_end_qpc_ns_ - qpc;
+            const uint64_t skip = elapsed / 1000000000ULL * source_->SampleRate() +
+                                  ((elapsed % 1000000000ULL) * source_->SampleRate() + 999999999ULL) / 1000000000ULL;
+            if (skip >= buffer.num_frames)
+                return true;
+            trimmed = static_cast<uint32_t>(skip);
+            qpc += DeviceFramesToNs(trimmed, source_->SampleRate());
+            buffer.num_frames -= trimmed;
+            if (buffer.bytes)
+                buffer.bytes += static_cast<size_t>(trimmed) * source_->Channels() * sizeof(float);
+        }
         AudioBlockMetadata metadata;
         metadata.frames = buffer.num_frames;
         metadata.device_gap_frames = buffer.gap_frames;
+        if (outage_end_qpc_ns_) {
+            const uint64_t elapsed = qpc - outage_end_qpc_ns_;
+            const uint64_t remaining =
+                elapsed / 1000000000ULL * source_->SampleRate() +
+                ((elapsed % 1000000000ULL) * source_->SampleRate() + 999999999ULL) / 1000000000ULL;
+            metadata.device_gap_frames = static_cast<uint32_t>(
+                (std::min)(recovery_gap_pending_ ? remaining : (std::min)(uint64_t{buffer.gap_frames}, remaining),
+                           uint64_t{(std::numeric_limits<uint32_t>::max)()}));
+        }
         metadata.silence = buffer.silent;
         metadata.discontinuity = buffer.data_discontinuity || next_discontinuity_;
-        metadata.output_qpc_ns = source_->LastBufferQpcNs();
+        metadata.output_qpc_ns = qpc;
         if (metadata.output_qpc_ns < idle_certified_through_qpc_ns_) {
             error = "Physical audio packet precedes its certified idle frontier";
-            SetError(error);
+            error_ = error;
             timeline_faulted_.store(true, std::memory_order_release);
             return false;
         }
-        metadata.device_timing_valid = source_->LastBufferDeviceTiming(metadata.device_timing);
+        metadata.device_timing_valid = !trimmed && source_->LastBufferDeviceTiming(metadata.device_timing);
         metadata.filter_latency_ns = DeviceFramesToNs(source_->BufferedFrames(), source_->SampleRate());
         if (metadata.device_timing_valid) {
             metadata.capture_qpc_ns = metadata.device_timing.qpc_position_ns;
@@ -590,6 +673,7 @@ class PhysicalOwner : public std::enable_shared_from_this<PhysicalOwner> {
                                       : std::span<const float>();
         const bool result = tee_->SetDescriptor(source_->Descriptor(), error) && tee_->Publish(pcm, metadata, error);
         if (result) {
+            recovery_gap_pending_ = false;
             next_discontinuity_ = false;
             last_output_end_qpc_ = metadata.output_qpc_ns + DeviceFramesToNs(buffer.num_frames, source_->SampleRate());
         }
@@ -698,9 +782,18 @@ void PhysicalOwner::Run() {
                     if (degraded_) {
                         idle_poll_qpc_ns_ = 0;
                         if (!timeline_faulted_ && SteadyClock::now() >= next_retry) {
-                            if (source_->Reinit(error) && tee_->SetDescriptor(source_->Descriptor(), error)) {
+                            bool recovered = source_->Reinit(error);
+                            if (recovered) {
+                                std::lock_guard lock(mutex_);
+                                recovered = tee_->SetDescriptor(source_->Descriptor(), error);
+                                if (recovered) {
+                                    prepared_descriptor_ = source_->Descriptor();
+                                    outage_origin_qpc_ns_ = outage_frames_ = 0;
+                                    degraded_ = false;
+                                }
+                            }
+                            if (recovered) {
                                 ++budget_->capture_opens;
-                                degraded_ = false;
                                 capture_hresult_ = 0;
                                 init_hresult_ = 0;
                                 next_discontinuity_ = true;
@@ -743,16 +836,19 @@ void PhysicalOwner::Run() {
                             backoff = std::chrono::milliseconds(500);
                         }
                     }
-                    uint64_t completed = last_output_end_qpc_;
                     const auto latency = source_->MaxCaptureLatencyNs();
-                    if (!degraded_ && latency && idle_poll_qpc_ns_ >= *latency && source_->BufferedFrames() == 0) {
-                        idle_certified_through_qpc_ns_ =
-                            (std::max)(idle_certified_through_qpc_ns_, idle_poll_qpc_ns_ - *latency);
-                        completed = (std::max)(completed, idle_certified_through_qpc_ns_);
+                    {
+                        std::lock_guard lock(mutex_);
+                        uint64_t completed = last_output_end_qpc_;
+                        if (!degraded_ && latency && idle_poll_qpc_ns_ >= *latency && source_->BufferedFrames() == 0) {
+                            idle_certified_through_qpc_ns_ =
+                                (std::max)(idle_certified_through_qpc_ns_, idle_poll_qpc_ns_ - *latency);
+                            completed = (std::max)(completed, idle_certified_through_qpc_ns_);
+                        }
+                        completed_through_qpc_ns_.store(
+                            (std::max)(completed, completed_through_qpc_ns_.load(std::memory_order_relaxed)),
+                            std::memory_order_release);
                     }
-                    completed_through_qpc_ns_.store(
-                        (std::max)(completed, completed_through_qpc_ns_.load(std::memory_order_relaxed)),
-                        std::memory_order_release);
                     CompleteSeals();
                     if (!pending)
                         WaitForWork(std::chrono::milliseconds(10));
