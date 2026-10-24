@@ -25,6 +25,11 @@ extern "C" {
 
 namespace exosnap::engine {
 
+// Selects D3D11 only for nominal formats whose hardware readback we can
+// normalize. Otherwise selects an offered software format, or NONE if absent.
+[[nodiscard]] AVPixelFormat SelectSupportedDecodeFormat(AVPixelFormat software_format, const AVPixelFormat* offered,
+                                                        bool enable_hardware) noexcept;
+
 // True for the two hardware readback pixel formats DeinterleaveHwReadbackFrame
 // accepts. 4:4:4 hardware readback is deliberately not supported here yet --
 // the design doc's "Not yet verified" note requires confirming the exact

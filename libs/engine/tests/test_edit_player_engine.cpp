@@ -1018,4 +1018,51 @@ TEST(EditPlayerEngine, LegacyRawSeekStillSelectsAtOrAfterRequestedTime) {
     ASSERT_TRUE(frame);
     EXPECT_GE(frame->pts_us, 1'033'332);
 }
+
+TEST(EditPlayerEngine, Decodes420And444WithHardwarePermittedAndForcedSoftware) {
+    struct DecodeMode {
+        std::optional<std::string> previous;
+        DecodeMode() {
+            if (const char* value = std::getenv("EXOSNAP_EDIT_SOFTWARE_DECODE"))
+                previous = value;
+        }
+        ~DecodeMode() {
+            _putenv_s("EXOSNAP_EDIT_SOFTWARE_DECODE", previous ? previous->c_str() : "");
+        }
+    } decode_mode;
+    using exosnap::engine::DecodedPixelFormat;
+    const std::pair<const char*, DecodedPixelFormat> fixtures[] = {
+        {"h264_420_8.mp4", DecodedPixelFormat::Yuv420P8},
+        {"hevc_420_10.mp4", DecodedPixelFormat::Yuv420P10},
+        {"h264_444_8.mp4", DecodedPixelFormat::Yuv444P8},
+        {"hevc_444_8.mp4", DecodedPixelFormat::Yuv444P8},
+    };
+    for (const bool software : {false, true}) {
+        ASSERT_EQ(_putenv_s("EXOSNAP_EDIT_SOFTWARE_DECODE", software ? "1" : ""), 0);
+        for (const auto& [filename, format] : fixtures) {
+            SCOPED_TRACE(filename);
+            SCOPED_TRACE(software ? "forced software" : "hardware permitted");
+            const auto path = std::filesystem::path(__FILE__).parent_path() / "fixtures" / filename;
+            EditPlayerEngine engine;
+            std::string error;
+            ASSERT_TRUE(engine.Open(path, error)) << error;
+            for (const int64_t target : {0LL, 100'000LL, 200'000LL}) {
+                const auto raw = engine.DecodeFrameAtRaw(target);
+                ASSERT_TRUE(raw) << target;
+                EXPECT_EQ(raw->format, format);
+                EXPECT_EQ(raw->width, 32u);
+                EXPECT_EQ(raw->height, 32u);
+                ASSERT_NE(raw->y_plane, nullptr);
+                ASSERT_NE(raw->u_plane, nullptr);
+                ASSERT_NE(raw->v_plane, nullptr);
+            }
+            const auto frame = engine.DecodeFrameAt(0);
+            ASSERT_TRUE(frame);
+            ASSERT_NE(frame->bgra, nullptr);
+            EXPECT_LT(frame->bgra[0], 80);
+            EXPECT_LT(frame->bgra[1], 80);
+            EXPECT_GT(frame->bgra[2], 180);
+        }
+    }
+}
 } // namespace
