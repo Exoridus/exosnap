@@ -650,11 +650,10 @@ void PipelineDiagnosticsAggregator::OnMuxQueueDepth(const MuxQueue::Measurements
     cfg_.video_queue_capacity = static_cast<uint32_t>(queue.limits.packets);
     cfg_.video_queue_byte_capacity = queue.limits.bytes;
     mux_queue_bytes_ = queue.retained_bytes;
-    mux_queue_peak_bytes_ = (std::max)(mux_queue_peak_bytes_.value_or(0), uint64_t{queue.retained_bytes});
+    mux_queue_peak_bytes_ = (std::max)(
+        {mux_queue_peak_bytes_.value_or(0), uint64_t{queue.retained_bytes}, uint64_t{queue.peak_retained_bytes}});
     video_queue_depth_ = depth;
-    if (depth > video_queue_peak_) {
-        video_queue_peak_ = depth;
-    }
+    video_queue_peak_ = (std::max)({video_queue_peak_, depth, static_cast<uint32_t>(queue.peak_packets)});
     // The health threshold is independent of admission limits. Count only its rising edge.
     const bool saturated = depth >= thresholds_.mux_queue_warn;
     if (saturated && !video_queue_saturated_) {

@@ -332,11 +332,38 @@ TEST(MediaCacheStore, LockedBudgetRejectsNewDirectAndStreamedPublications) {
         EXPECT_EQ(store.TotalBytes(), entry_bytes);
         EXPECT_TRUE(store.Contains(Key(10)));
         EXPECT_FALSE(store.Contains(Key(11)));
+        EXPECT_FALSE(std::filesystem::exists(store.EntryPath(Key(11))));
+        EXPECT_TRUE(FilesUnder(dir.path, ".tmp").empty());
         EXPECT_EQ(store.Stats().evicted, 0u);
         EXPECT_EQ(store.Stats().published, 1u);
         held.reset();
         EXPECT_TRUE(store.Publish(Key(11), payload, error)) << error;
         EXPECT_EQ(store.TotalBytes(), entry_bytes);
+    }
+}
+
+TEST(MediaCacheStore, ReplacingAnEntryInAFullCacheEvictsNothing) {
+    for (const bool streamed : {false, true}) {
+        TempDir dir;
+        const auto payload = Payload(1000, 1);
+        const auto entry_bytes = 64 + Key(10).size() + payload.size();
+        MediaCacheStore store(Config(dir.path, entry_bytes * 2));
+        std::string error;
+        ASSERT_TRUE(store.Publish(Key(10), payload, error)) << error;
+        ASSERT_TRUE(store.Publish(Key(11), payload, error)) << error;
+        const auto replacement = Payload(1000, 7);
+        if (streamed) {
+            auto writer = store.BeginWrite(Key(10), replacement.size(), error);
+            ASSERT_TRUE(writer) << error;
+            ASSERT_TRUE(writer->Write(0, replacement));
+            ASSERT_TRUE(writer->Publish(error)) << error;
+        } else {
+            ASSERT_TRUE(store.Publish(Key(10), replacement, error)) << error;
+        }
+        EXPECT_EQ(store.Stats().evicted, 0u);
+        EXPECT_TRUE(store.Contains(Key(11)));
+        EXPECT_EQ(store.Read(Key(10)), replacement);
+        EXPECT_EQ(store.TotalBytes(), entry_bytes * 2);
     }
 }
 

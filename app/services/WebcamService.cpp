@@ -21,7 +21,12 @@
 #include <algorithm>
 #include <cassert>
 #include <chrono>
+#include <condition_variable>
+#include <cstdint>
 #include <cstring>
+#include <format>
+#include <mutex>
+#include <optional>
 #include <thread>
 
 // MF libs are listed in CMakeLists.txt target_link_libraries and in the
@@ -624,6 +629,14 @@ bool ShouldDeliverWebcamSample(long long last_delivered_100ns, long long sample_
     return sample_100ns > last_delivered_100ns;
 }
 
+bool WaitForWebcamReconnect(std::stop_token stop, std::chrono::milliseconds delay) {
+    std::mutex mutex;
+    std::condition_variable_any wake;
+    std::unique_lock lock(mutex);
+    wake.wait_for(lock, stop, delay, [] { return false; });
+    return !stop.stop_requested();
+}
+
 // ---------------------------------------------------------------------------
 // Webcam device selection / preview policy — pure, MF-call-free
 // ---------------------------------------------------------------------------
@@ -956,7 +969,7 @@ void WebcamService::ThreadMain(const std::string& device_id, int width, int heig
                 PostStatus(false, QString::fromStdString(fail_reason));
             }
             // Device not (yet) available: hold whatever frame we have and retry.
-            std::this_thread::sleep_for(kReconnectDelay);
+            WaitForWebcamReconnect(stop, kReconnectDelay);
             continue;
         }
         const bool recovered = open_failure_logged || first_open;
@@ -1016,6 +1029,7 @@ void WebcamService::ThreadMain(const std::string& device_id, int width, int heig
             LONGLONG ts = 0;
             winrt::com_ptr<IMFSample> sample;
             HRESULT hr = ctx->reader->ReadSample(kFirstVideoStream, 0, nullptr, nullptr, nullptr, nullptr);
+            std::optional<MediaEventType> failed_event;
             if (SUCCEEDED(hr)) {
                 WebcamReadCallback::Sample next;
                 if (!ctx->callback->Wait(stop, next))
@@ -1024,11 +1038,17 @@ void WebcamService::ThreadMain(const std::string& device_id, int width, int heig
                 flags = next.flags;
                 ts = next.timestamp;
                 sample.attach(next.sample.Detach());
+                failed_event = next.event;
             }
 
             switch (ClassifyWebcamReadResult(hr, flags, sample != nullptr)) {
             case WebcamReadAction::Reconnect:
                 // Reader dead — drop it and let the outer loop poll a reopen.
+                diagnostics::logEvent(
+                    diagnostics::LogSeverity::Warning, "webcam", "webcam.reader_lost",
+                    {{"hresult", std::format("0x{:08X}", static_cast<std::uint32_t>(hr))},
+                     {"flags", std::format("0x{:X}", flags)},
+                     {"source", failed_event ? "event_" + std::to_string(*failed_event) : std::string("read")}});
                 reader_lost = true;
                 continue;
             case WebcamReadAction::Skip:
@@ -1087,10 +1107,9 @@ void WebcamService::ThreadMain(const std::string& device_id, int width, int heig
         }
 
         // Reader released as ctx goes out of scope. Wait before reopening so a
-        // permanently-gone device does not spin; stop is honoured on the next check.
-        if (stop.stop_requested())
+        // permanently-gone device does not spin.
+        if (!WaitForWebcamReconnect(stop, kReconnectDelay))
             break;
-        std::this_thread::sleep_for(kReconnectDelay);
     }
 
     running_.store(false);
