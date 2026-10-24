@@ -262,13 +262,20 @@ QJsonObject AvTimingJson(const exosnap::engine::RecordingDiagnosticsSnapshot& s)
     return json;
 }
 
-QJsonObject QueueJson(const exosnap::engine::QueueDiagnostics& q) {
+QJsonObject QueueJson(const exosnap::engine::QueueDiagnostics& q, const char* identity) {
     const bool available = IsAvailable(q.availability);
     QJsonObject json;
+    json.insert(QStringLiteral("identity"), QString::fromLatin1(identity));
     json.insert(QStringLiteral("currentDepth"), Metric(static_cast<double>(q.current_depth), available));
     json.insert(QStringLiteral("peakDepth"), Metric(static_cast<double>(q.peak_depth), available));
     json.insert(QStringLiteral("capacity"), static_cast<double>(q.capacity));
     json.insert(QStringLiteral("bounded"), q.bounded);
+    json.insert(QStringLiteral("retainedBytes"),
+                Metric(static_cast<double>(q.retained_bytes.value_or(0)), available && q.retained_bytes.has_value()));
+    json.insert(QStringLiteral("peakRetainedBytes"), Metric(static_cast<double>(q.peak_retained_bytes.value_or(0)),
+                                                            available && q.peak_retained_bytes.has_value()));
+    json.insert(QStringLiteral("byteCapacity"),
+                Metric(static_cast<double>(q.byte_capacity.value_or(0)), q.byte_capacity.has_value()));
     json.insert(QStringLiteral("droppedItems"), Count(q.dropped_items));
     json.insert(QStringLiteral("availability"), AvailabilityKey(q.availability));
     return json;
@@ -411,8 +418,8 @@ QJsonObject PipelineSnapshotToJson(const RecordingDiagnosticsSnapshot& snapshot)
     json.insert(QStringLiteral("videoTiming"), VideoTimingJson(snapshot.video_timing));
     json.insert(QStringLiteral("audio"), AudioJson(snapshot.audio));
     json.insert(QStringLiteral("avTiming"), AvTimingJson(snapshot));
-    json.insert(QStringLiteral("videoQueue"), QueueJson(snapshot.video_queue));
-    json.insert(QStringLiteral("audioQueue"), QueueJson(snapshot.audio_queue));
+    json.insert(QStringLiteral("videoQueue"), QueueJson(snapshot.video_queue, "encodedMux"));
+    json.insert(QStringLiteral("audioQueue"), QueueJson(snapshot.audio_queue, "audioPremux"));
     json.insert(QStringLiteral("mux"), MuxJson(snapshot.mux));
     json.insert(QStringLiteral("disk"), DiskJson(snapshot));
     json.insert(QStringLiteral("split"), SplitJson(snapshot.split));

@@ -30,7 +30,7 @@ Windows SDR-content brightness affects interpretation of the composed desktop an
 
 H.264 cannot carry the native HDR10 mode offered here. AV1 4:4:4, 10-bit 4:4:4 and 4:2:2 are not implemented product paths, irrespective of what a newer GPU SDK might support.
 
-The already-PQ 10-bit desktop path is an explicit exception to the normal linear composition pipeline. It cannot composite webcam/cursor or provide the usual shared pre-encode image. The application must disclose omitted overlays and avoid showing a PiP that the file will not contain.
+Native PQ/BT.2020 R10G10B10A2 capture is decoded by the GPU color pass into one session-owned scRGB FP16 intermediate. The ST 2084 EOTF yields absolute light scaled to scRGB's 80-nit unit; the inverse BT.2020-to-BT.709 matrix preserves negative wide-gamut components. The existing compositor applies SDR overlays at the observed reference white in linear light. Preview sharing, region luminance measurement and native P010 conversion consume that same linear result, even on frames without overlays. Capture-format/HDR classification remains based on both the negotiated format and active display state. There is no CPU full-frame copy or additional video encoding. All resources and immediate-context calls remain video-thread owned, and shader views are unbound before reuse. Composition GPU timing includes PQ linearization and overlay draws; host submission timing remains separate. Physical PQ10 capture and encoded overlay qualification require a separate live recording.
 
 ## HDR metadata
 

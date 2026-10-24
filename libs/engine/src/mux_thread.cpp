@@ -953,8 +953,8 @@ void MuxThread::Run() {
         if (m_state.HasFailure() || write_error)
             break;
 
-        const auto mux_queue_depth =
-            static_cast<uint32_t>(m_state.mux_queue.WaitForItems([&] { return m_state.stop_requested.load(); }));
+        m_state.mux_queue.WaitForItems([&] { return m_state.stop_requested.load(); });
+        const auto mux_queue = m_state.mux_queue.ReadMeasurements();
         if (m_state.HasFailure())
             break;
 
@@ -970,7 +970,7 @@ void MuxThread::Run() {
             m_state.diagnostics.OnMuxLatency(mux_t1,
                                              std::chrono::duration<double, std::milli>(mux_t1 - mux_t0).count());
         }
-        m_state.diagnostics.OnVideoQueueDepth(mux_queue_depth);
+        m_state.diagnostics.OnMuxQueueDepth(mux_queue);
         sample_mux_diagnostics();
     }
 

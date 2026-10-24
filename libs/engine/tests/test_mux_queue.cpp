@@ -11,6 +11,7 @@
 #include <cstdint>
 #include <future>
 #include <thread>
+#include <type_traits>
 #include <utility>
 #include <variant>
 
@@ -54,6 +55,37 @@ TEST(MuxQueue, ByteBoundAppliesBeforePacketBound) {
     ASSERT_EQ(Push(queue, Packet(32)), MuxQueueWait::Ready);
     EXPECT_EQ(Push(queue), MuxQueueWait::TimedOut);
     EXPECT_EQ(queue.Size(), 1u);
+}
+
+TEST(MuxQueue, RetainedAudioAndVideoCapacityTriggersBackpressureAndIsReleasedOnPop) {
+    for (const bool video : {false, true}) {
+        MuxQueue queue;
+        queue.Configure({100, 64, 1ms});
+        auto packet = Packet(1);
+        if (video)
+            packet = MuxItem{EncodedVideoPacket{}};
+        const auto reserve = [](auto& value) {
+            using PacketType = std::decay_t<decltype(value)>;
+            if constexpr (std::is_same_v<PacketType, EncodedAudioPacket> ||
+                          std::is_same_v<PacketType, EncodedVideoPacket>) {
+                value.bytes.reserve(128);
+                value.bytes.resize(1);
+                return value.bytes.capacity();
+            } else {
+                return size_t{0};
+            }
+        };
+        const auto retained = std::visit(reserve, packet.payload);
+        ASSERT_GE(retained, 128u);
+        EXPECT_EQ(Push(queue, std::move(packet)), MuxQueueWait::Ready);
+        EXPECT_EQ(queue.Bytes(), retained);
+        EXPECT_EQ(Push(queue), MuxQueueWait::TimedOut);
+        EXPECT_EQ(queue.Size(), 1u);
+        auto popped = queue.Pop();
+        ASSERT_TRUE(popped);
+        EXPECT_EQ(queue.Bytes(), 0u);
+        EXPECT_EQ(Push(queue), MuxQueueWait::Ready);
+    }
 }
 
 TEST(MuxQueue, ConsumerMakesRoomForAnActuallyWaitingProducer) {

@@ -9,6 +9,7 @@
 #include <exosnap/engine/audio_track_model.h>
 #include <exosnap/engine/interfaces/IAudioCaptureSource.h>
 #include <exosnap/engine/recording_media_types.h>
+#include <functional>
 #include <gtest/gtest.h>
 #include <limits>
 #include <memory>
@@ -314,6 +315,52 @@ TEST(AudioSourceRoutes, ReservationsPrecedeAllocationAndRejectInvalidAdmission) 
     EXPECT_EQ(TrackAudioMixer::RequiredPayloadBytes(48000, 2, 0), (std::numeric_limits<size_t>::max)());
 }
 
+TEST(AudioSourceRoutes, OverlappingPacketsKeepTheSameSamplesAcrossConsumerSchedules) {
+    std::string error;
+    const auto descriptor = Descriptor();
+    auto source = LogicalAudioSource::Create(Source(), descriptor, error);
+    ASSERT_NE(source, nullptr) << error;
+    auto readers = source->AttachReaders(2, 1000000000ULL, error);
+    ASSERT_EQ(readers.size(), 2u);
+    uint64_t completed = 1000000000ULL;
+    std::vector<std::unique_ptr<TrackAudioMixer>> mixers;
+    for (size_t i = 0; i < 2; ++i) {
+        ResolvedRoutingTrack track;
+        track.fixed_average_divisor = 1;
+        track.routes.resize(1);
+        std::vector<std::unique_ptr<IAudioCaptureSource>> inputs;
+        inputs.push_back(MakeLogicalAudioReader(readers[i]));
+        mixers.push_back(std::make_unique<TrackAudioMixer>(
+            track, std::move(inputs), 48000, 2, std::function<uint64_t()>{}, 1000000000ULL, [&] { return completed; }));
+        ASSERT_TRUE(mixers.back()->Init(error)) << error;
+    }
+    std::vector<float> pcm[2];
+    auto consume = [&](size_t index) {
+        RawAudioBuffer buffer;
+        if (!mixers[index]->AcquireBuffer(buffer, error))
+            return false;
+        const auto* samples = reinterpret_cast<const float*>(buffer.bytes);
+        pcm[index].insert(pcm[index].end(), samples, samples + static_cast<size_t>(buffer.num_frames) * 2);
+        mixers[index]->ReleaseBuffer();
+        return true;
+    };
+    std::vector<float> first(960, 0.25f);
+    ASSERT_TRUE(source->Process(Block(descriptor, first), error)) << error;
+    completed = 1010000000ULL;
+    ASSERT_TRUE(consume(0)) << error;
+    std::vector<float> second(960, 0.75f);
+    auto overlapping = Block(descriptor, second, 1);
+    overlapping.metadata.output_qpc_ns = overlapping.metadata.capture_qpc_ns = 1009000000ULL;
+    ASSERT_TRUE(source->Process(overlapping, error)) << error;
+    completed = 1019000000ULL;
+    for (size_t i = 0; i < 2; ++i)
+        while (mixers[i]->PendingFrameCount())
+            ASSERT_TRUE(consume(i)) << error;
+    EXPECT_EQ(pcm[0], pcm[1]);
+    ASSERT_EQ(pcm[0].size(), 1824u);
+    EXPECT_TRUE(std::all_of(pcm[0].begin(), pcm[0].begin() + 960, [](float value) { return value == 0.25f; }));
+    EXPECT_TRUE(std::all_of(pcm[0].begin() + 960, pcm[0].end(), [](float value) { return value == 0.75f; }));
+}
 TEST(AudioSourceRoutes, DelayedTrackConsumersPreserveBacklogWithinTeeHorizon) {
     for (uint32_t source_count : {1u, 2u}) {
         for (uint32_t track_count : {1u, 3u}) {

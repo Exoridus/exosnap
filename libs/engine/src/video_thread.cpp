@@ -1647,8 +1647,9 @@ void VideoThread::RunAttachment(const std::shared_ptr<NativeState>& native, cons
     // first-frame negotiation.
     bool hdrNativeActive = false;
     bool hdrPqInputIsPq = false; // true when the source is an already-PQ HDR10 R10G10B10A2 desktop
-    DXGI_FORMAT hdrPqSrcFormat = DXGI_FORMAT_R16G16B16A16_FLOAT;
     HdrPqConverter hdrPqConverter;
+    HdrToneMapper hdrPqLinearizer;
+    winrt::com_ptr<ID3D11Texture2D> hdrLinearTex;
 
     // Per-frame content luminance. One compute dispatch over the pre-encode
     // surface feeds both consumers: the stream's content light levels, which
@@ -1668,7 +1669,7 @@ void VideoThread::RunAttachment(const std::shared_ptr<NativeState>& native, cons
     // The WGC path decides its HDR handling up front from wgcPlan (the frame
     // pool format is *requested*, not negotiated from frames). A WGC FP16 pool is
     // always scRGB linear — never an already-PQ desktop — so hdrPqInputIsPq stays
-    // false and hdrPqSrcFormat stays FP16 (the defaults above). The OD path leaves
+    // false. The OD path leaves
     // these untouched here and sets them during first-frame negotiation instead.
     if (!useOdCapture) {
         hdrToneMapActive = (wgcPlan.mode == OdCaptureMode::HdrToneMap);
@@ -2026,7 +2027,6 @@ void VideoThread::RunAttachment(const std::shared_ptr<NativeState>& native, cons
         hdrToneMapPqSource = toneMap && !sdrScrgb && odSrc.Format() == DXGI_FORMAT_R10G10B10A2_UNORM;
         hdrNativeActive = nativeHdr;
         hdrPqInputIsPq = (rawDesc.Format == DXGI_FORMAT_R10G10B10A2_UNORM);
-        hdrPqSrcFormat = rawDesc.Format;
 
         char fmtBuf[32];
         char modeBuf[32];
@@ -2451,9 +2451,9 @@ void VideoThread::RunAttachment(const std::shared_ptr<NativeState>& native, cons
     };
 
     auto compositeFrameGpu = [&](ID3D11Texture2D* source, const WebcamOverlayLive& overlay) -> ID3D11Texture2D* {
-        if (!gpuCompositorReady || source == nullptr) {
-            return source;
-        }
+        if (source == nullptr)
+            return nullptr;
+        const bool linearizePq = hdrNativeActive && hdrPqInputIsPq;
 
         // Before cursorActive is decided, not after: on a desktop nobody touches
         // there is no pointer update to hang this off, and the frames that need
@@ -2466,7 +2466,8 @@ void VideoThread::RunAttachment(const std::shared_ptr<NativeState>& native, cons
         }
         const bool cursorActive =
             m_state.config.capture_cursor && (!useOdCapture || (odCursorVisible && odCursorShapeValid));
-        if (!webcamActive && !cursorActive) {
+        const bool drawOverlays = gpuCompositorReady && (webcamActive || cursorActive);
+        if (!linearizePq && !drawOverlays) {
             return source;
         }
 
@@ -2481,6 +2482,19 @@ void VideoThread::RunAttachment(const std::shared_ptr<NativeState>& native, cons
                 m_state.diagnostics.OnCompositionGpuTime(std::chrono::steady_clock::now(), *gpu_ms);
             }
         };
+        if (linearizePq) {
+            std::string linearErr;
+            if (!hdrPqLinearizer.Convert(source, hdrLinearTex.get(), linearErr)) {
+                endCompositeTimer();
+                m_state.RecordFailure(E_FAIL, ErrorPhase::VideoCapture, "HDR PQ linearization: " + linearErr);
+                return nullptr;
+            }
+            source = hdrLinearTex.get();
+        }
+        if (!drawOverlays) {
+            endCompositeTimer();
+            return source;
+        }
         if (!gpuCompositor.BeginFrame(source, compErr)) {
             endCompositeTimer();
             m_state.RecordFailure(E_FAIL, ErrorPhase::VideoCapture, "GPU compositor begin: " + compErr);
@@ -3150,6 +3164,28 @@ void VideoThread::RunAttachment(const std::shared_ptr<NativeState>& native, cons
     // PQ/BT.2020 P010 encode frame (colour + crop / contain-fit scale /
     // letterbox), bypassing the SDR compositor and VideoProcessor.
     if (hdrNativeActive) {
+        if (hdrPqInputIsPq) {
+            D3D11_TEXTURE2D_DESC linearDesc{};
+            linearDesc.Width = sourceWidth;
+            linearDesc.Height = sourceHeight;
+            linearDesc.MipLevels = linearDesc.ArraySize = linearDesc.SampleDesc.Count = 1;
+            linearDesc.Format = DXGI_FORMAT_R16G16B16A16_FLOAT;
+            linearDesc.BindFlags = D3D11_BIND_RENDER_TARGET | D3D11_BIND_SHADER_RESOURCE;
+            const HRESULT linearHr =
+                CreateTrackedTexture2D(d3dDevice.get(), &linearDesc, nullptr, hdrLinearTex.put(), GpuSurfaceOwner::Hdr);
+            std::string linearErr;
+            if (FAILED(linearHr) ||
+                !hdrPqLinearizer.Init(d3dDevice.get(), d3dContext.get(), sourceWidth, sourceHeight, hdrPeakScale, false,
+                                      linearErr, hdrPaperWhiteScale, true, HdrToneMapper::Output::LinearScrgb)) {
+                m_state.RecordFailure(FAILED(linearHr) ? linearHr : E_FAIL, ErrorPhase::Prepare,
+                                      "HDR PQ linearization init: " + linearErr);
+                return;
+            }
+            logging::log(logging::LogLevel::Warn, "video_thread",
+                         "native HDR10 from a PQ10 desktop uses GPU linear-light composition; encoded webcam and "
+                         "cursor output on this capture variant still requires hardware qualification",
+                         {});
+        }
         HdrPqConverter::Geometry geom;
         geom.src_crop_x = hasCrop ? static_cast<uint32_t>(cropX) : 0u;
         geom.src_crop_y = hasCrop ? static_cast<uint32_t>(cropY) : 0u;
@@ -3164,7 +3200,8 @@ void VideoThread::RunAttachment(const std::shared_ptr<NativeState>& native, cons
         geom.encode_width = encodeWidth;
         geom.encode_height = encodeHeight;
         std::string pqErr;
-        if (!hdrPqConverter.Init(d3dDevice.get(), d3dContext.get(), geom, hdrPqInputIsPq, hdrPqSrcFormat, pqErr)) {
+        if (!hdrPqConverter.Init(d3dDevice.get(), d3dContext.get(), geom, false, DXGI_FORMAT_R16G16B16A16_FLOAT,
+                                 pqErr)) {
             m_state.RecordFailure(E_FAIL, ErrorPhase::Prepare, "HDR10 native converter init: " + pqErr);
             if (!useOdCapture) {
                 if (captureSession != nullptr)
@@ -3174,20 +3211,6 @@ void VideoThread::RunAttachment(const std::shared_ptr<NativeState>& native, cons
             }
             return;
         }
-        // Webcam PiP + cursor are composited in linear scRGB FP16 before the PQ
-        // conversion (see the compositor init below), so soft chroma-keyed edges
-        // blend correctly. The already-PQ R10G10B10A2 desktop variant is the
-        // exception — its surface is non-linear, so linear compositing does not
-        // apply and overlays are omitted for that (rare) sub-path.
-        if (hdrPqInputIsPq && needsGpuCompositor) {
-            logging::log(logging::LogLevel::Warn, "video_thread",
-                         "native HDR10 from an already-PQ 10-bit desktop: webcam PiP and cursor overlay are omitted "
-                         "(the surface is non-linear, so linear-light compositing does not apply)",
-                         {});
-            // Also surface this calmly through live diagnostics (not a fault).
-            std::lock_guard lk(m_state.stats_mutex);
-            m_state.stats.webcam_overlay_omitted = true;
-        }
     }
 
     // --- GPU compositor init (deferred until the capture format is known) ---
@@ -3195,10 +3218,9 @@ void VideoThread::RunAttachment(const std::shared_ptr<NativeState>& native, cons
     // wgcPlan chose HDR); OD frames use the format negotiated from the first
     // acquired frame above. If stop was requested before the first OD frame arrived
     // the format is unknown — skip init; the encode loop below will not run.
-    // The already-PQ R10G10B10A2 native sub-path composites nothing (non-linear
-    // surface); every other path gets a compositor matched to its working format.
-    const bool nativeOverlaysUnsupported = hdrNativeActive && hdrPqInputIsPq;
-    if (needsGpuCompositor && !nativeOverlaysUnsupported && (!useOdCapture || odCapturedTex != nullptr)) {
+    // Native PQ capture is linearized before this compositor, including ticks
+    // with no active overlays, so encode, preview and metering share one format.
+    if (needsGpuCompositor && (!useOdCapture || odCapturedTex != nullptr)) {
         // Native HDR10 (FP16): overlays are composited in linear scRGB FP16 before
         // the PQ conversion. Tone-mapped HDR: composited on the SDR tone-map
         // surface (R10G10B10A2 for a 10-bit encode, else BGRA8). The compositor
@@ -3248,7 +3270,7 @@ void VideoThread::RunAttachment(const std::shared_ptr<NativeState>& native, cons
         const RECT luminanceRegion = {hasCrop ? cropX : 0, hasCrop ? cropY : 0,
                                       (hasCrop ? cropX : 0) + static_cast<LONG>(sourceContentWidth),
                                       (hasCrop ? cropY : 0) + static_cast<LONG>(sourceContentHeight)};
-        const bool luminancePqSource = hdrNativeActive ? hdrPqInputIsPq : hdrToneMapPqSource;
+        const bool luminancePqSource = !hdrNativeActive && hdrToneMapPqSource;
         std::string lumErr;
         if (!frameLuminance.Init(d3dDevice.get(), d3dContext.get(), sourceWidth, sourceHeight, luminancePqSource,
                                  lumErr, &luminanceRegion)) {
@@ -3746,11 +3768,8 @@ void VideoThread::RunAttachment(const std::shared_ptr<NativeState>& native, cons
     // to the consumer once, on creation, together with the display transform the
     // consumer must apply (an FP16 scRGB tap is tone-mapped preview-side).
     //
-    // The only untapped session is the already-PQ R10G10B10A2 native sub-path:
-    // its surface is non-linear PQ with no linear intermediate, so the preview
-    // keeps its own WGC capture there. See product-spec / KNOWN_LIMITATIONS.
-    PreviewTapPlan previewTapPlan =
-        ResolvePreviewTapPlan(hdrNativeActive, hdrPqInputIsPq, hdrPeakScale, hdrPaperWhiteScale);
+    // Native capture reaches this tap as linear FP16, including PQ desktops.
+    PreviewTapPlan previewTapPlan = ResolvePreviewTapPlan(hdrNativeActive, false, hdrPeakScale, hdrPaperWhiteScale);
     PreviewSharedTexture previewSharedTex;
     bool previewSharedInitFailed = false;
     bool previewTransportPoisoned = false;
@@ -3789,8 +3808,7 @@ void VideoThread::RunAttachment(const std::shared_ptr<NativeState>& native, cons
         // Re-resolved rather than assigned field by field: which scalars are
         // meaningful for this session is the plan's decision, and there must not
         // be a second copy of it here.
-        previewTapPlan =
-            ResolvePreviewTapPlan(hdrNativeActive, hdrPqInputIsPq, state.peak_scale, state.paper_white_scale);
+        previewTapPlan = ResolvePreviewTapPlan(hdrNativeActive, false, state.peak_scale, state.paper_white_scale);
         // Dropping the shared texture is what re-announces the descriptor: the
         // handle callback is one-shot by contract, so the next tapped frame
         // creates a texture and hands the consumer the new transform with it.
@@ -4595,7 +4613,7 @@ void VideoThread::RunAttachment(const std::shared_ptr<NativeState>& native, cons
                     const auto comp_t1 = std::chrono::steady_clock::now();
                     m_state.diagnostics.OnCompositorSubmit(
                         comp_t1, std::chrono::duration<double, std::milli>(comp_t1 - comp_t0).count(),
-                        needsGpuCompositor);
+                        needsGpuCompositor || hdrPqInputIsPq);
                     if (nativeSrc == nullptr) {
                         encoder->ReleaseSlot(slot);
                         goto end_encode_loop;
@@ -5206,7 +5224,7 @@ void VideoThread::RunAttachment(const std::shared_ptr<NativeState>& native, cons
                     const auto comp_t1 = std::chrono::steady_clock::now();
                     m_state.diagnostics.OnCompositorSubmit(
                         comp_t1, std::chrono::duration<double, std::milli>(comp_t1 - comp_t0).count(),
-                        needsGpuCompositor);
+                        needsGpuCompositor || hdrPqInputIsPq);
                     if (nativeSrc == nullptr) {
                         encoder->ReleaseSlot(slot);
                         goto end_encode_loop;

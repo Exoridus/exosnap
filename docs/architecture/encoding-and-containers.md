@@ -66,7 +66,7 @@ Markers are external JSON sidecars, never embedded chapters. The shared sidecar-
 
 ## Distribution boundary
 
-The bundled FFmpeg is a shared LGPL build providing avformat, avcodec, avutil and swresample. It supports native AAC encoding and media decode/remux. It does not ship libx264/libx265 or the analysis filters used by developer quality tools. No software H.264/HEVC encoder is linked into first-party release binaries. A distribution change requires dependency, license and patent review rather than treating a library's open-source license as patent clearance.
+The bundled FFmpeg is a shared LGPL build providing avformat, avcodec, avutil and swresample. It supports native AAC encoding and media decode/remux. It does not ship libx264/libx265 or the analysis filters used by developer quality tools. No software H.264/HEVC encoder is linked into first-party release binaries. The internal software decoders do not require those external encoders. LGPL compliance and codec-patent clearance are separate: software decoding and hardware encoding do not by themselves establish patent freedom. Public distribution requires review of the exact build, codecs, regions and licensee obligations. This technical configuration is not legal clearance.
 
 Exact dependency versions, license texts and linkage belong to [third-party notices](../../THIRD_PARTY_NOTICES.md), not duplicated legal declarations here.
 

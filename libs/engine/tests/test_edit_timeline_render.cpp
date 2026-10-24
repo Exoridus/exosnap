@@ -13,6 +13,7 @@
 #include <exosnap/engine/recording_media_types.h>
 #include <exosnap/engine/sdr_transfer.h>
 
+#include "test_timestamp_media.h"
 #include "test_unique_temp.h"
 
 #include <gtest/gtest.h>
@@ -23,6 +24,7 @@
 #include <array>
 #include <atomic>
 #include <chrono>
+#include <cmath>
 #include <cstdint>
 #include <cstdlib>
 #include <cstring>
@@ -34,6 +36,64 @@
 #include <vector>
 
 using namespace exosnap::engine;
+
+TEST(EditTimelineMedia, RenderUsesSourceRelativeTimeWithShiftedOrigins) {
+    for (const int64_t offset : {0LL, 10'000'000LL}) {
+        const auto source = exosnap_test::UniqueTempPath("origin-source.mkv");
+        const auto output = exosnap_test::UniqueTempPath("origin-render.mkv");
+        ASSERT_TRUE(RemuxTimestampMedia(source, offset));
+        auto metadata = ProbeEditMedia(source);
+        ASSERT_TRUE(metadata.error.empty()) << metadata.error;
+        ASSERT_TRUE(metadata.render_color_supported) << metadata.render_color_reason;
+        ASSERT_EQ(metadata.audio_metadata.actual_tracks.size(), 1u);
+        const auto& audio = metadata.audio_metadata;
+        TimelineRenderSnapshot snapshot;
+        snapshot.sources = {{1, source, metadata}};
+        snapshot.sources.front().monitor_selection =
+            MonitorSelectionSnapshot{audio.selection_media_id,
+                                     {1},
+                                     {{audio.actual_tracks.front().track_id, 1.0f, false}},
+                                     true,
+                                     audio.unverified_asset_binding};
+        snapshot.timeline = {
+            {{1, 1, 1, false, 0, 200'000, 800'000}, {2, 1, 1, true, 0, 200'000, 800'000}}, {}, 600'000};
+        snapshot.timeline.output_fps_num = 30;
+        const auto plan = ClassifyEditExport(snapshot, {TimelineExportEligibility::RenderRequired, {}}, false);
+        ASSERT_EQ(plan.path, EditExportPath::Render) << plan.reason;
+        EditTimelineReader reader;
+        std::string error;
+        ASSERT_TRUE(reader.Open(snapshot, plan, error)) << error;
+        TimelineVideoFrame frame;
+        ASSERT_TRUE(reader.VideoAt(0, frame, error)) << error;
+        ASSERT_EQ(frame.layers.size(), 1u);
+        EXPECT_GE(frame.layers.front().frame.pts_us, 167'000);
+        EXPECT_LE(frame.layers.front().frame.pts_us, 200'000);
+        RecorderConfig config;
+        config.video_codec = VideoCodec::H264;
+        TimelineRenderMeasurements measurements;
+        const auto result =
+            RenderEditTimeline(snapshot, plan, config, output, false, RemuxNoopCallback(), &measurements);
+        ASSERT_TRUE(result.success) << result.message;
+        EXPECT_EQ(measurements.video_frames, 18u);
+        EXPECT_EQ(measurements.audio_frames, 28'800u);
+        EditPlayerEngine rendered;
+        ASSERT_TRUE(rendered.Open(output, error)) << error;
+        ASSERT_TRUE(rendered.DecodeFrameAtRaw(0));
+        std::vector<float> actual, expected;
+        ASSERT_TRUE(reader.AudioAt(0, 480, expected, error)) << error;
+        EXPECT_TRUE(
+            std::any_of(expected.begin(), expected.end(), [](float sample) { return std::abs(sample) > 0.02f; }));
+        ASSERT_TRUE(rendered.DecodeAudioStreamRange(1, 0, 480, actual, error)) << error;
+        ASSERT_EQ(actual.size(), expected.size());
+        for (size_t i = 0; i < actual.size(); ++i)
+            ASSERT_NEAR(actual[i], expected[i], 0.0005f) << i;
+        rendered.Close();
+        std::error_code ignored;
+        std::filesystem::remove(output, ignored);
+        std::filesystem::remove(std::filesystem::path(output.wstring() + L".exosnap.json"), ignored);
+        std::filesystem::remove(source, ignored);
+    }
+}
 
 namespace {
 TimelineRenderSnapshot Fixture(const std::filesystem::path& directory) {

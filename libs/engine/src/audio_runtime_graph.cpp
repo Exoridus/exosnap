@@ -8,6 +8,8 @@
 #include "wasapi_loopback.h"
 #include "wasapi_loopback_src.h"
 #include "wasapi_process_loopback_src.h"
+#include <algorithm>
+#include <atomic>
 #include <cstddef>
 #include <cstdint>
 #include <exception>
@@ -158,6 +160,7 @@ std::shared_ptr<AudioRuntimeGraph> AudioRuntimeGraph::Prepare(const ResolvedAudi
             return false;
         }
         std::map<AudioSourceId, LogicalAudioSource*> logical;
+        std::map<AudioSourceId, std::shared_ptr<std::atomic<uint64_t>>> completion;
         for (size_t i = 0; i < physical_descriptors.size(); ++i) {
             const auto& descriptor = physical_descriptors[i];
             const auto& source = *sources.at(captured_ids[i]);
@@ -169,11 +172,14 @@ std::shared_ptr<AudioRuntimeGraph> AudioRuntimeGraph::Prepare(const ResolvedAudi
             if (!processor)
                 return false;
             logical[captured_ids[i]] = processor.get();
-            graph->nodes_.push_back({nullptr, std::move(reservation), std::move(processor)});
+            auto frontier = std::make_shared<std::atomic<uint64_t>>(start);
+            completion[captured_ids[i]] = frontier;
+            graph->nodes_.push_back({nullptr, std::move(reservation), std::move(processor), std::move(frontier)});
         }
         for (const auto& track : plan.tracks) {
             std::vector<std::unique_ptr<IAudioCaptureSource>> inputs;
             std::vector<AudioCaptureDescriptor> descriptors;
+            std::vector<std::shared_ptr<std::atomic<uint64_t>>> frontiers;
             for (const auto& route : track.routes) {
                 const auto found = logical.find(route.source_id);
                 if (found == logical.end()) {
@@ -189,14 +195,21 @@ std::shared_ptr<AudioRuntimeGraph> AudioRuntimeGraph::Prepare(const ResolvedAudi
                 if (attached.size() != 1)
                     return false;
                 descriptors.push_back(found->second->Descriptor());
+                frontiers.push_back(completion.at(route.source_id));
                 inputs.push_back(MakeLogicalAudioReader(std::move(attached.front())));
             }
             auto reservation = graph->registry_->ReservePayload(
                 TrackAudioMixer::RequiredPayloadBytes(rate, channels, descriptors), admission_error);
             if (!reservation)
                 return false;
-            auto mixer = std::make_unique<TrackAudioMixer>(track, std::move(inputs), rate, channels,
-                                                           std::function<uint64_t()>{}, start);
+            auto mixer = std::make_unique<TrackAudioMixer>(
+                track, std::move(inputs), rate, channels, std::function<uint64_t()>{}, start,
+                [frontiers = std::move(frontiers)] {
+                    uint64_t completed = NowNs();
+                    for (const auto& frontier : frontiers)
+                        completed = (std::min)(completed, frontier->load(std::memory_order_acquire));
+                    return completed;
+                });
             graph->track_telemetry_.push_back(mixer->Telemetry());
             graph->tracks_.push_back({std::move(reservation), std::move(mixer)});
         }
@@ -253,6 +266,8 @@ void AudioRuntimeGraph::Run() {
             }
             bool work = false, all_ended = sealed;
             for (auto& node : nodes_) {
+                // Snapshot before draining: a newer frontier can include packets not processed yet.
+                const uint64_t completed = SharedAudioReaderCompletedThrough(*node.physical);
                 for (uint32_t count = 0; count < 256 && node.physical->PendingFrameCount(); ++count) {
                     RawAudioBuffer raw;
                     AudioBlockView block;
@@ -271,6 +286,8 @@ void AudioRuntimeGraph::Run() {
                         break;
                     }
                 }
+                if (!node.physical->PendingFrameCount())
+                    node.completed_through->store(node.logical->CompletedThrough(completed), std::memory_order_release);
                 if (sealed && !AudioReaderEnded(*node.physical))
                     all_ended = false;
             }

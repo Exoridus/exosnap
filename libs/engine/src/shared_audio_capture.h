@@ -40,6 +40,7 @@ class PhysicalAudioClockSource final : public IAudioCaptureSource {
     bool Init(std::string& error) override;
     bool Reinit(std::string& error) override;
     uint32_t PendingFrameCount() override;
+    std::optional<uint64_t> MaxCaptureLatencyNs() const override;
     bool AcquireBuffer(RawAudioBuffer& buffer, std::string& error) override;
     void ReleaseBuffer() override;
     uint32_t SampleRate() const override;
@@ -99,6 +100,8 @@ class SharedAudioCaptureRegistry {
 BatchSealAudioReadersEnd(std::span<IAudioCaptureSource* const> readers, uint64_t end_qpc_ns,
                          std::chrono::milliseconds timeout = std::chrono::milliseconds(500));
 [[nodiscard]] bool AudioReaderEnded(const IAudioCaptureSource& reader);
+// Timeline progress established by posted PCM and certified idle intervals.
+[[nodiscard]] uint64_t SharedAudioReaderCompletedThrough(const IAudioCaptureSource& reader);
 [[nodiscard]] bool LastSharedAudioBlock(const IAudioCaptureSource& reader, AudioBlockView& block);
 [[nodiscard]] std::optional<AudioCaptureDescriptor> SharedAudioReaderDescriptor(const IAudioCaptureSource& reader);
 [[nodiscard]] std::string SharedAudioCaptureError(const IAudioCaptureSource& reader);

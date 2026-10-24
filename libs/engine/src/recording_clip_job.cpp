@@ -688,7 +688,11 @@ Outcome<RecordingClipDraft> RunRecordingClipJob(const ClipBoundaryPlan& plan, co
         return ClipError(EngineErrorCode::InvalidConfig, "Clip job does not match its frozen plan");
     if (sources.size() > kClipSegmentLimit)
         return ClipError(EngineErrorCode::ResourceBudgetExceeded, "Clip segment count exceeds resource budget");
-    uint64_t metadata_bytes = 0;
+    uint64_t metadata_bytes = ArrayBytes(plan.segments.capacity(), sizeof(ClipPlannedSegment));
+    if (snapshot.descriptor)
+        metadata_bytes = AddBytes(metadata_bytes, EstimateRecordingClipDescriptorBytes(*snapshot.descriptor));
+    if (metadata_bytes > kStartupMetadataBudgetBytes)
+        return ClipError(EngineErrorCode::ResourceBudgetExceeded, "Clip startup metadata budget exceeded");
     for (const auto& source : sources) {
         if (!source.descriptor)
             continue;

@@ -42,6 +42,17 @@ class MuxQueue {
         std::chrono::milliseconds timeout{10000};
     };
 
+    struct Measurements {
+        size_t packets = 0;
+        size_t retained_bytes = 0;
+        Limits limits;
+    };
+
+    [[nodiscard]] Measurements ReadMeasurements() const {
+        std::lock_guard lock(mutex_);
+        return {queue_.size(), bytes_, limits_};
+    }
+
     void Configure(Limits limits) {
         std::lock_guard lock(mutex_);
         limits_ = limits;
@@ -163,10 +174,10 @@ class MuxQueue {
 
     [[nodiscard]] static size_t PayloadBytes(const MuxItem& item) {
         if (const auto* video = std::get_if<EncodedVideoPacket>(&item.payload)) {
-            return video->bytes.size();
+            return video->bytes.capacity();
         }
         if (const auto* audio = std::get_if<EncodedAudioPacket>(&item.payload)) {
-            return audio->bytes.size();
+            return audio->bytes.capacity();
         }
         return 0;
     }

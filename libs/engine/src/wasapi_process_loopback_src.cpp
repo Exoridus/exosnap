@@ -1,4 +1,5 @@
 #include "wasapi_process_loopback_src.h"
+#include "wasapi_loopback.h"
 #include <optional>
 
 #include "discontinuity_gap.h"
@@ -561,6 +562,10 @@ void WasapiProcessLoopbackSrc::ReleaseBuffer() {
 
     buffer_acquired_ = false;
     acquired_frames_ = 0;
+}
+
+std::optional<uint64_t> WasapiProcessLoopbackSrc::MaxCaptureLatencyNs() const {
+    return WasapiMaxCaptureLatencyNs(audio_client_, SampleRate());
 }
 
 uint32_t WasapiProcessLoopbackSrc::SampleRate() const {

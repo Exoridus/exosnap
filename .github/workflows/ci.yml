@@ -66,7 +66,7 @@ on:
 # Because push -> next no longer builds, next's sccache scope (the only scope
 # every PR can read from) would otherwise only get refreshed once a night by
 # advisory-checks.yml's debug-only build. .github/workflows/cache-warm.yml
-# builds both Ninja presets on every push to next instead, so the next PR's
+# builds both Ninja presets on non-documentation pushes to next instead, so the next PR's
 # first run starts from a warm cache rather than the nightly leftovers.
 # ---------------------------------------------------------------------------
 
@@ -338,18 +338,12 @@ jobs:
   #   - `packaging` gates the packaging smoke step on the release leg (a
   #     scoped-down slice of the release-candidate pipeline) so it
   #     only runs when it can actually catch something.
-  #   - `build` gates the windows-x64-release leg of build-test on PRs (PR-CI
-  #     tiering): the debug leg always runs and carries the test suite, so the
-  #     release leg — which proves the Release configure/build/link still works
-  #     — runs on a PR when anything that can plausibly diverge between Debug
-  #     and Release changed. That includes ordinary C++ code, not just build
-  #     config: NDEBUG, debug-only assertions, optimization/inlining, and
-  #     conditional compilation all produce Release-only breaks that the debug
-  #     leg cannot see. Only changes that touch no C++ and no build machinery
-  #     (docs, screenshots, packaging-unrelated scripts) skip the release leg.
+  #   - `build` gates both Windows build-test legs on PRs. Product sources,
+  #     resources, tests and build machinery require Debug tests and a Release
+  #     configure/build/link check. Canonical documentation alone needs neither.
   #
   # This job runs on EVERY trigger, not just pull_request, even though its
-  # outputs are only consulted on pull_request (see build-test-release below).
+  # outputs are only consulted on pull_request (see the build-test jobs below).
   # That is deliberate: build-test-release has
   # `needs: changes`, and a job-level `if:` has an implicit `success()` guard
   # unless it names a status-check function. If `changes` were skipped (as it
@@ -376,7 +370,7 @@ jobs:
       cancel-in-progress: true
     outputs:
       packaging: ${{ steps.filter.outputs.packaging }}
-      build: ${{ steps.filter.outputs.build }}
+      build: ${{ steps.build-filter.outputs.build }}
     steps:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
 
@@ -394,24 +388,24 @@ jobs:
               - 'apps/updater/CMakeLists.txt'
               - 'third_party/CMakeLists.txt'
               - 'THIRD_PARTY_NOTICES.md'
-            # `packaging` is a subset of `build` by construction: the packaging
-            # smoke runs on the release leg's build, so a path that arms the
-            # smoke has to arm that leg. ci-required checks the subset holds.
+
+      - uses: dorny/paths-filter@d1c1ffe0248fe513906c8e24db8ea791d46f8590 # v3.0.3
+        id: build-filter
+        with:
+          # Every rule must match a file: unknown inputs remain eligible, while
+          # only known uncompiled documentation is excluded. Packaging remains
+          # an independent any-pattern filter above.
+          predicate-quantifier: every
+          filters: |
             build:
-              - 'app/**'
-              - 'apps/**'
-              - 'libs/**'
-              - 'tools/**'
-              - 'tests/**'
-              - 'CMakeLists.txt'
-              - '**/CMakeLists.txt'
-              - '**/*.cmake'
-              - 'CMakePresets.json'
-              - 'cmake/**'
-              - 'packaging/**'
-              - 'THIRD_PARTY_NOTICES.md'
-              - '.github/workflows/**'
-              - 'scripts/build-*'
+              - '**'
+              - '!docs/**/*.md'
+              - '!docs/assets/readme-hero.png'
+              - '!README.md'
+              - '!AGENTS.md'
+              - '!CLAUDE.md'
+              - '!PRIVACY.md'
+              - '!CHANGELOG.md'
 
   # ---------------------------------------------------------------------------
   # build-test was a single job with a 2-way (debug/release) matrix. It is now
@@ -436,7 +430,7 @@ jobs:
     # of this exact job just went green (see "WHAT RUNS WHERE" at the top of this
     # file). Written as a positive list over the events this workflow can see
     # rather than as a negation, so each trigger is decided explicitly:
-    #   pull_request      -> first clause
+    #   pull_request      -> first clause, only when `build` matched
     #   workflow_dispatch -> second clause
     #   push, refs/tags/v* -> third clause  (release gate: full suite)
     #   push, refs/heads/main|next -> no clause matches -> skipped
@@ -447,11 +441,11 @@ jobs:
     # branch that trips one of them still spends ~15 min of Windows runner time
     # proving a build nobody will merge. A job-level `if:` that names no status
     # function carries an implicit success() over `needs`, so a failed guardrails
-    # skips this job — and ci-required reads that skip as a failure, because a
-    # pull request is not an event where this leg is allowed to skip.
-    needs: guardrails
+    # skips this job. ci-required permits the skip only for a filtered-out PR
+    # or an ordinary branch push; a guardrail failure still blocks the verdict.
+    needs: [changes, guardrails]
     if: >-
-      github.event_name == 'pull_request' ||
+      (github.event_name == 'pull_request' && needs.changes.outputs.build == 'true') ||
       github.event_name == 'workflow_dispatch' ||
       startsWith(github.ref, 'refs/tags/v')
     concurrency:
@@ -765,14 +759,16 @@ jobs:
 
           # The heavy legs deliberately do not re-run on branch pushes. A next
           # merge passed pull request CI; main advances only to release bytes
-          # that passed the candidate gates. Other events must run the legs.
+          # that passed the candidate gates. PRs without build inputs also skip.
+          # Tags and manual runs require both legs regardless of the filter.
           debug_skip=not-allowed
           if [ "$EVENT" = "push" ] && [ "$is_tag" = false ]; then debug_skip=skip-ok; fi
+          if [ "$EVENT" = "pull_request" ] && [ "$BUILD_FILTER" = "false" ]; then debug_skip=skip-ok; fi
           require "build-test (debug)" "$R_DEBUG" "$debug_skip"
 
           release_skip=not-allowed
           if [ "$EVENT" = "push" ] && [ "$is_tag" = false ]; then release_skip=skip-ok; fi
-          if [ "$EVENT" = "pull_request" ] && [ "$BUILD_FILTER" != "true" ]; then release_skip=skip-ok; fi
+          if [ "$EVENT" = "pull_request" ] && [ "$BUILD_FILTER" = "false" ]; then release_skip=skip-ok; fi
           require "build-test (release)" "$R_RELEASE" "$release_skip"
 
           # The packaging smoke is a step of the release leg, armed by the

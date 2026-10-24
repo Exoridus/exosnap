@@ -1,19 +1,26 @@
 #include <algorithm>
 #include <array>
 #include <cstdint>
+#include <exosnap/engine/color_metadata.h>
 #include <exosnap/engine/edit_types.h>
+#include <exosnap/engine/performance_measurements.h>
 #include <gtest/gtest.h>
 #include <ios>
+#include <iostream>
 #include <iterator>
 #include <optional>
+#include <ratio>
 #include <system_error>
 #include <utility>
 
 #include "edit_playback_pacing.h"
 #include "exosnap/engine/edit_player_engine.h"
 #include "exosnap/engine/edit_player_session.h"
+#include "media_timestamp_origin.h"
+#include "test_timestamp_media.h"
 #include <exosnap/engine/audio_media_manifest.h>
 #include <exosnap/engine/edit_timeline_export.h>
+#include <exosnap/engine/mp4_remuxer.h>
 
 extern "C" {
 #include <libavcodec/codec_id.h>
@@ -25,8 +32,10 @@ extern "C" {
 #include <libavutil/avutil.h>
 #include <libavutil/channel_layout.h>
 #include <libavutil/dict.h>
+#include <libavutil/frame.h>
 #include <libavutil/log.h>
 #include <libavutil/mem.h>
+#include <libavutil/pixfmt.h>
 #include <libavutil/samplefmt.h>
 }
 
@@ -213,6 +222,7 @@ class ScopedTestMkv {
     ~ScopedTestMkv() {
         std::error_code ec;
         std::filesystem::remove(path_, ec);
+        std::filesystem::remove(std::filesystem::path(path_.wstring() + L".exosnap.json"), ec);
     }
     ScopedTestMkv(const ScopedTestMkv&) = delete;
     ScopedTestMkv& operator=(const ScopedTestMkv&) = delete;
@@ -732,6 +742,68 @@ std::filesystem::path TestFixturePath(const char* filename) {
     return std::filesystem::path(EXOSNAP_SOURCE_DIR) / ".workspace" / "test-fixtures" / filename;
 }
 
+TEST(EditPlayerEngine, HardwareSeekReadsBackOnlySelectedAndLookaheadFrames) {
+    using namespace exosnap::engine;
+    const auto fixture = TestFixturePath("audiotest_60fps.mkv");
+    if (!std::filesystem::exists(fixture))
+        GTEST_SKIP() << "optional long-GOP hardware fixture unavailable";
+    struct MeasurementsScope {
+        MeasurementsScope() {
+            EnablePerformanceMeasurements(true);
+        }
+        ~MeasurementsScope() {
+            EnablePerformanceMeasurements(false);
+        }
+    } scope;
+    EditPlayerEngine engine;
+    std::string error;
+    ASSERT_TRUE(engine.Open(fixture, error)) << error;
+    const auto measure = [&](const char* path, auto decode) {
+        const auto readback = ReadPerformanceMeasurement(PerformanceStage::DecodeReadback);
+        const auto normalize = ReadPerformanceMeasurement(PerformanceStage::DecodeNormalize);
+        const auto start = std::chrono::steady_clock::now();
+        const bool succeeded = decode();
+        const auto wall = std::chrono::steady_clock::now() - start;
+        const auto after = ReadPerformanceMeasurement(PerformanceStage::DecodeReadback);
+        std::cout << "seek_measurement path=" << path << " readbacks=" << after.calls - readback.calls
+                  << " readback_ms=" << (after.total_ns - readback.total_ns) / 1e6 << " normalize_ms="
+                  << (ReadPerformanceMeasurement(PerformanceStage::DecodeNormalize).total_ns - normalize.total_ns) / 1e6
+                  << " wall_ms=" << std::chrono::duration<double, std::milli>(wall).count() << '\n';
+        EXPECT_TRUE(succeeded);
+        return after.calls - readback.calls;
+    };
+    const auto cpu_readbacks = measure("bgra", [&] {
+        const auto frame = engine.DecodeFrameAt(800'000);
+        EXPECT_TRUE(frame);
+        if (frame) {
+            EXPECT_GE(frame->pts_us, 800'000);
+            EXPECT_LT(frame->pts_us, 817'000);
+        }
+        return frame.has_value();
+    });
+    if (!cpu_readbacks)
+        GTEST_SKIP() << "D3D11 decode unavailable; software fallback is not a hardware measurement";
+    EXPECT_LE(cpu_readbacks, 1u);
+    std::optional<RawDecodedVideoFrame> held;
+    const auto raw_readbacks = measure("raw", [&] {
+        held = engine.ReadFrameAtRaw(800'000, VideoReadMode::Sequential, 1);
+        return held.has_value();
+    });
+    EXPECT_LE(raw_readbacks, 2u);
+    ASSERT_TRUE(held);
+    EXPECT_LE(held->pts_us, 800'500);
+    EXPECT_LT(800'000 - held->pts_us, 17'000);
+    const auto pixel = held->y_plane[0];
+    const auto before = ReadPerformanceMeasurement(PerformanceStage::DecodeReadback).calls;
+    const auto cached = engine.ReadFrameAtRaw(800'001, VideoReadMode::Sequential, 1);
+    ASSERT_TRUE(cached);
+    EXPECT_EQ(cached->pts_us, held->pts_us);
+    EXPECT_EQ(ReadPerformanceMeasurement(PerformanceStage::DecodeReadback).calls, before);
+    ASSERT_TRUE(engine.ReadFrameAtRaw(100'000, VideoReadMode::RandomAccess));
+    engine.Close();
+    EXPECT_EQ(held->y_plane[0], pixel);
+}
+
 // Sums the Y plane's first row. Not a meaningful image checksum by itself --
 // it exists only to prove the bytes behind y_plane are still the SAME real
 // decoded pixel data across two points in time (a freed/reused buffer would
@@ -1009,6 +1081,85 @@ TEST(EditPlayerEngine, MillisecondStampsStillYieldEveryFrameOfTheSourceGrid) {
     }
 }
 
+TEST(EditPlayerEngine, SourceRelativeTimePreservesSignedOrigins) {
+    EXPECT_EQ(exosnap::engine::SourceRelativeTimeUs(-9'800'000, -10'000'000), 200'000);
+    EXPECT_EQ(exosnap::engine::SourceTimestampUs(200'000, -10'000'000), -9'800'000);
+    EXPECT_EQ(exosnap::engine::SourceRelativeTimeUs(10'200'000, 10'000'000), 200'000);
+    EXPECT_EQ(exosnap::engine::SourceTimestampUs(200'000, 10'000'000), 10'200'000);
+    EXPECT_EQ(exosnap::engine::SourceRelativeFrameTimeUs(-9800, {1, 1000}, -10'000'000), 200'000);
+    EXPECT_EQ(exosnap::engine::SourceRelativeFrameTimeUs(10200, {1, 1000}, 10'000'000), 200'000);
+    EXPECT_EQ(exosnap::engine::SourceRelativeFrameTimeUs(AV_NOPTS_VALUE, {1, 1000}, 10'000'000), 0);
+    EXPECT_EQ(exosnap::engine::SourceRelativeFrameTimeUs(AV_NOPTS_VALUE, {1, 1000}, -10'000'000), 0);
+}
+
+TEST(EditPlayerEngine, SourceRelativeVideoAndAudioIgnoreShiftedContainerOrigins) {
+    const auto fixture = std::filesystem::path(__FILE__).parent_path() / "fixtures" / "timestamp_av.mkv";
+    EditPlayerEngine reference;
+    std::string error;
+    ASSERT_TRUE(reference.Open(fixture, error)) << error;
+    for (const int64_t offset : {0LL, 10'000'000LL}) {
+        ScopedTestMkv shifted("exosnap-timestamp-origin.mkv");
+        ASSERT_TRUE(RemuxTimestampMedia(shifted.path(), offset));
+        const auto metadata = exosnap::engine::ProbeEditMedia(shifted.path());
+        ASSERT_TRUE(metadata.timestamp_origin_us);
+        EXPECT_EQ(*metadata.timestamp_origin_us > 0, offset > 0);
+        const auto keyframes = exosnap::engine::ExtractKeyframeTimestamps(shifted.path());
+        ASSERT_FALSE(keyframes.empty());
+        EXPECT_EQ(keyframes.front(), 0);
+        EditPlayerEngine engine;
+        ASSERT_TRUE(engine.Open(shifted.path(), error)) << error;
+        for (const int64_t target : {200'000LL, 700'000LL, 300'000LL}) {
+            const auto expected = reference.ReadFrameAtRaw(target, exosnap::engine::VideoReadMode::RandomAccess);
+            const auto actual = engine.ReadFrameAtRaw(target, exosnap::engine::VideoReadMode::RandomAccess);
+            ASSERT_TRUE(expected);
+            ASSERT_TRUE(actual) << offset << ": " << target;
+            EXPECT_EQ(actual->pts_us, expected->pts_us);
+            EXPECT_EQ(actual->y_plane[0], expected->y_plane[0]);
+            const auto thumbnail = engine.DecodeFrameAt(target);
+            ASSERT_TRUE(thumbnail);
+            EXPECT_GE(thumbnail->pts_us, target);
+            EXPECT_LT(thumbnail->pts_us, target + 34'000);
+        }
+        std::vector<float> expected_audio, actual_audio;
+        ASSERT_TRUE(reference.DecodeAudioStreamRange(1, 9600, 480, expected_audio, error)) << error;
+        ASSERT_TRUE(engine.DecodeAudioStreamRange(1, 9600, 480, actual_audio, error)) << error;
+        ASSERT_EQ(actual_audio.size(), expected_audio.size());
+        for (size_t i = 0; i < actual_audio.size(); ++i)
+            ASSERT_NEAR(actual_audio[i], expected_audio[i], 0.0005f) << offset << ": " << i;
+        const auto audio = engine.AudioMetadata();
+        ASSERT_EQ(audio.actual_tracks.size(), 1u);
+        const exosnap::engine::MonitorSelectionSnapshot selection{audio.selection_media_id,
+                                                                  {1},
+                                                                  {{audio.actual_tracks.front().track_id, 1.0f, false}},
+                                                                  true,
+                                                                  audio.unverified_asset_binding};
+        ASSERT_TRUE(engine.SetMonitorSelection(selection, error)) << error;
+        ASSERT_TRUE(engine.DecodeAudioRange(9600, 480, actual_audio, error)) << error;
+        ASSERT_EQ(actual_audio.size(), expected_audio.size());
+        for (size_t i = 0; i < actual_audio.size(); ++i)
+            ASSERT_NEAR(actual_audio[i], expected_audio[i], 0.0005f) << offset << ": " << i;
+    }
+}
+
+TEST(EditPlayerEngine, StreamCopyTrimUsesSourceRelativeBoundariesWithShiftedOrigins) {
+    for (const int64_t offset : {0LL, 10'000'000LL}) {
+        ScopedTestMkv shifted("exosnap-copy-origin-source.mkv");
+        ScopedTestMkv copied("exosnap-copy-origin-result.mp4");
+        ASSERT_TRUE(RemuxTimestampMedia(shifted.path(), offset));
+        ASSERT_TRUE(exosnap::engine::ProbeEditMedia(shifted.path()).timestamp_origin_us);
+        const auto result = exosnap::engine::RemuxToProgressiveMp4(shifted.path(), copied.path(),
+                                                                   exosnap::engine::RemuxNoopCallback(), {0, 200'000});
+        ASSERT_TRUE(result.success) << result.message;
+        const auto metadata = exosnap::engine::ProbeEditMedia(copied.path());
+        EXPECT_GT(metadata.duration_us, 0);
+        EXPECT_LE(metadata.duration_us, 1'100'000);
+        EditPlayerEngine engine;
+        std::string error;
+        ASSERT_TRUE(engine.Open(copied.path(), error)) << error;
+        ASSERT_TRUE(engine.ReadFrameAtRaw(100'000, exosnap::engine::VideoReadMode::RandomAccess));
+    }
+}
+
 TEST(EditPlayerEngine, LegacyRawSeekStillSelectsAtOrAfterRequestedTime) {
     const auto fixture = std::filesystem::path(__FILE__).parent_path() / "fixtures" / "reordered_h264.mp4";
     EditPlayerEngine engine;
@@ -1017,5 +1168,75 @@ TEST(EditPlayerEngine, LegacyRawSeekStillSelectsAtOrAfterRequestedTime) {
     const auto frame = engine.DecodeFrameAtRaw(1'033'332);
     ASSERT_TRUE(frame);
     EXPECT_GE(frame->pts_us, 1'033'332);
+}
+
+TEST(EditPlayerEngine, Decodes420And444WithHardwarePermittedAndForcedSoftware) {
+    struct DecodeMode {
+        std::optional<std::string> previous;
+        DecodeMode() {
+            if (const char* value = std::getenv("EXOSNAP_EDIT_SOFTWARE_DECODE"))
+                previous = value;
+        }
+        ~DecodeMode() {
+            _putenv_s("EXOSNAP_EDIT_SOFTWARE_DECODE", previous ? previous->c_str() : "");
+        }
+    } decode_mode;
+    using exosnap::engine::DecodedPixelFormat;
+    struct Fixture {
+        const char* filename;
+        DecodedPixelFormat format;
+        exosnap::engine::ColorRange range = exosnap::engine::ColorRange::Limited;
+    };
+    const Fixture fixtures[] = {
+        {"h264_420_8.mp4", DecodedPixelFormat::Yuv420P8},
+        {"h264_420_8_full.mp4", DecodedPixelFormat::Yuv420P8, exosnap::engine::ColorRange::Full},
+        {"hevc_420_10.mp4", DecodedPixelFormat::Yuv420P10},
+        {"h264_444_8.mp4", DecodedPixelFormat::Yuv444P8},
+        {"hevc_444_8.mp4", DecodedPixelFormat::Yuv444P8},
+    };
+    for (const bool software : {false, true}) {
+        ASSERT_EQ(_putenv_s("EXOSNAP_EDIT_SOFTWARE_DECODE", software ? "1" : ""), 0);
+        for (const auto& [filename, format, range] : fixtures) {
+            SCOPED_TRACE(filename);
+            SCOPED_TRACE(software ? "forced software" : "hardware permitted");
+            const auto path = std::filesystem::path(__FILE__).parent_path() / "fixtures" / filename;
+            EditPlayerEngine engine;
+            std::string error;
+            ASSERT_TRUE(engine.Open(path, error)) << error;
+            for (const int64_t target : {0LL, 100'000LL, 200'000LL}) {
+                const auto raw = engine.DecodeFrameAtRaw(target);
+                ASSERT_TRUE(raw) << target;
+                EXPECT_EQ(raw->format, format);
+                EXPECT_EQ(raw->range, range);
+                EXPECT_EQ(raw->width, 32u);
+                EXPECT_EQ(raw->height, 32u);
+                ASSERT_NE(raw->y_plane, nullptr);
+                ASSERT_NE(raw->u_plane, nullptr);
+                ASSERT_NE(raw->v_plane, nullptr);
+                if (range == exosnap::engine::ColorRange::Full) {
+                    EXPECT_EQ(raw->y_plane[0], 64);
+                    EXPECT_EQ(raw->y_plane[16], 192);
+                    const auto* decoded = static_cast<const AVFrame*>(raw->backing_frame.get());
+                    EXPECT_EQ(decoded->color_range, AVCOL_RANGE_JPEG);
+                    EXPECT_EQ(decoded->colorspace, AVCOL_SPC_BT709);
+                    if (software)
+                        EXPECT_EQ(decoded->format, AV_PIX_FMT_YUVJ420P);
+                }
+            }
+            const auto frame = engine.DecodeFrameAt(0);
+            ASSERT_TRUE(frame);
+            ASSERT_NE(frame->bgra, nullptr);
+            if (range == exosnap::engine::ColorRange::Full) {
+                for (const int channel : {0, 1, 2}) {
+                    EXPECT_NEAR(frame->bgra[channel], 64, 1);
+                    EXPECT_NEAR(frame->bgra[16 * 4 + channel], 192, 1);
+                }
+            } else {
+                EXPECT_LT(frame->bgra[0], 80);
+                EXPECT_LT(frame->bgra[1], 80);
+                EXPECT_GT(frame->bgra[2], 180);
+            }
+        }
+    }
 }
 } // namespace

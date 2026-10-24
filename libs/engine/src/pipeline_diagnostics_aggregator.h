@@ -8,6 +8,7 @@
 // (steady_clock::time_point) so aggregation/cadence/expiry are deterministically testable
 // without sleeps. Not part of the public API.
 
+#include "mux_queue.h"
 #include "perf_histogram.h"
 
 #include <exosnap/engine/pipeline_diagnostics.h>
@@ -231,7 +232,8 @@ struct DiagnosticsStaticConfig {
     std::string output_target; // drive / root only
     uint32_t audio_track_count = 0;
     bool audio_present = false;
-    uint32_t video_queue_capacity = 0; // 0 == unbounded
+    uint32_t video_queue_capacity = 0;
+    std::optional<uint64_t> video_queue_byte_capacity;
     uint32_t audio_queue_capacity = 0; // premux bound (bounded)
 };
 
@@ -497,7 +499,7 @@ class PipelineDiagnosticsAggregator {
     void OnAudioSourceHealth(uint32_t track_id, uint32_t degraded_sources, uint32_t total_sources,
                              uint32_t degraded_source_kinds = 0, bool endpoint_in_use = false) noexcept;
     // Queues
-    void OnVideoQueueDepth(uint32_t depth) noexcept;  // post-encode mux queue
+    void OnMuxQueueDepth(const MuxQueue::Measurements& queue) noexcept;
     void OnAudioPremuxDepth(uint32_t depth) noexcept; // bounded premux
     // Mux / Disk (MuxThread)
     void OnMuxPacket(uint64_t bytes) noexcept;
@@ -660,6 +662,8 @@ class PipelineDiagnosticsAggregator {
     // Queues
     uint32_t video_queue_depth_ = 0;
     uint32_t video_queue_peak_ = 0;
+    std::optional<uint64_t> mux_queue_bytes_;
+    std::optional<uint64_t> mux_queue_peak_bytes_;
     uint32_t audio_premux_depth_ = 0;
     uint32_t audio_premux_peak_ = 0;
     // Queue-saturation event counter: cumulative rising-edge crossings of a

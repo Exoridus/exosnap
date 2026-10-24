@@ -29,6 +29,7 @@
 #include "hdr_preview.h"
 #include "hdr_tonemap.h"
 #include "media_identity_sidecar.h"
+#include "media_timestamp_origin.h"
 #include "playback_clock.h"
 #include "yuv_to_bgra.h"
 #include <cmath>
@@ -201,6 +202,10 @@ MatrixCoefficients MapMatrix(AVColorSpace cs) noexcept {
     default:
         return MatrixCoefficients::Bt709;
     }
+}
+
+int64_t SourceOriginUs(const AVFormatContext* format) noexcept {
+    return format->start_time == AV_NOPTS_VALUE ? 0 : format->start_time;
 }
 
 ColorRange MapRange(AVColorRange r) noexcept {
@@ -498,24 +503,25 @@ struct AudioTrack {
     SwrCtxGuard resampler;
 };
 
-// get_format callback for a codec context with hw_device_ctx set to a
-// D3D11VA device (docs/architecture/edit-and-export.md).
-// Prefers AV_PIX_FMT_D3D11 when the decoder offers it -- meaning D3D11VA
-// negotiation accepted this stream's exact profile/chroma/bit-depth -- and
-// otherwise falls back to the LAST format libavcodec itself offered (never
-// AV_PIX_FMT_NONE, which would abort the open). That fallback also covers
-// Open()'s own hw_device_ctx-cleared retry below: with no hw_device_ctx, the
-// decoder never advertises AV_PIX_FMT_D3D11 in `pix_fmts` at all, so this
-// callback -- left installed, deliberately not reset -- degrades to picking
-// the plain software format exactly as if it had never been overridden.
-enum AVPixelFormat SelectD3D11HwFormat(AVCodecContext*, const enum AVPixelFormat* pix_fmts) {
-    enum AVPixelFormat fallback = AV_PIX_FMT_NONE;
-    for (const enum AVPixelFormat* p = pix_fmts; *p != AV_PIX_FMT_NONE; ++p) {
-        if (*p == AV_PIX_FMT_D3D11)
-            return AV_PIX_FMT_D3D11;
-        fallback = *p;
+// D3D11 accepting a stream does not imply that its readback layout is
+// supported by our planar conversion, particularly for 4:4:4 surfaces.
+enum AVPixelFormat SelectD3D11HwFormat(AVCodecContext* context, const enum AVPixelFormat* pix_fmts) {
+    const AVPixelFormat selected =
+        SelectSupportedDecodeFormat(context->sw_pix_fmt, pix_fmts, context->hw_device_ctx != nullptr);
+    if (selected != AV_PIX_FMT_D3D11)
+        return selected;
+
+    AVBufferRef* parameters = nullptr;
+    const int result = avcodec_get_hw_frames_parameters(context, context->hw_device_ctx, selected, &parameters);
+    const bool supported =
+        result >= 0 && parameters &&
+        IsSupportedHwReadbackFormat(reinterpret_cast<const AVHWFramesContext*>(parameters->data)->sw_format);
+    av_buffer_unref(&parameters);
+    if (!supported) {
+        LogWarn("D3D11 decoder readback layout is unsupported; selecting software decoding");
+        return SelectSupportedDecodeFormat(context->sw_pix_fmt, pix_fmts, false);
     }
-    return fallback;
+    return selected;
 }
 
 // Attempts to enable D3D11VA hardware decode for `vctx`, called immediately
@@ -535,6 +541,8 @@ bool TryAttachD3D11VA(AVCodecContext* vctx) {
         return false;
     vctx->hw_device_ctx = device_ctx; // ownership transferred; avcodec_free_context releases it
     vctx->get_format = SelectD3D11HwFormat;
+    // A seek holds its candidate while receiving the next frame from the fixed surface pool.
+    vctx->extra_hw_frames = 1;
     return true;
 }
 
@@ -1092,41 +1100,39 @@ namespace {
 // "Chroma": H.264/HEVC 8-bit only, no AV1, no 10-bit, no HDR10).
 bool IsConvertibleFrame(const AVFrame* frame) noexcept {
     return frame->width > 0 && frame->height > 0 &&
-           (frame->format == AV_PIX_FMT_YUV420P || frame->format == AV_PIX_FMT_YUV420P10LE ||
-            frame->format == AV_PIX_FMT_YUV444P);
+           (frame->format == AV_PIX_FMT_YUV420P || frame->format == AV_PIX_FMT_YUVJ420P ||
+            frame->format == AV_PIX_FMT_YUV420P10LE || frame->format == AV_PIX_FMT_YUV444P);
 }
 
-// Normalizes a D3D11 hardware-decode readback frame in place, so every call
-// site below can call IsConvertibleFrame/WrapRawDecodedFrame/
-// ConvertToDecodedFrame exactly as before regardless of which decode path
-// produced `frame` (docs/architecture/edit-and-export.md).
-// A no-op unless frame->format == AV_PIX_FMT_D3D11. Transfers the hardware
-// surface to system memory (av_hwframe_transfer_data) and de-interleaves it
-// via edit_player_hw_decode.h. On any failure -- including a 4:4:4 hardware
-// frame, which DeinterleaveHwReadbackFrame does not yet accept, see the
-// design doc's "Not yet verified" note -- `frame` is left unref'd (empty),
-// so the caller's existing not-IsConvertibleFrame handling drops this one
-// frame instead of the whole decode failing.
-void NormalizeHwFrame(AVFrame* frame) {
+// A readback failure ends this decode operation instead of silently discarding
+// every frame. Normal negotiation selects software for unsupported layouts.
+bool NormalizeHwFrame(AVFrame* frame) {
     if (frame->format != AV_PIX_FMT_D3D11)
-        return;
+        return true;
+    if (!frame->hw_frames_ctx ||
+        !IsSupportedHwReadbackFormat(
+            reinterpret_cast<const AVHWFramesContext*>(frame->hw_frames_ctx->data)->sw_format)) {
+        LogWarn("D3D11 decoder produced an unexpected readback layout; video decoding stopped");
+        return false;
+    }
     const auto transfer = [](AVFrame* destination, AVFrame* source) {
         ScopedPerformanceMeasurement measurement(PerformanceStage::DecodeReadback);
         return av_hwframe_transfer_data(destination, source, 0);
     };
     FrameGuard sw(av_frame_alloc());
     if (sw.frame == nullptr || transfer(sw.frame, frame) < 0 || av_frame_copy_props(sw.frame, frame) < 0) {
-        av_frame_unref(frame);
-        return;
+        LogWarn("D3D11 decoder readback failed; video decoding stopped");
+        return false;
     }
     AVFrame* planar = DeinterleaveHwReadbackFrame(sw.frame);
     if (planar == nullptr) {
-        av_frame_unref(frame);
-        return;
+        LogWarn("D3D11 decoder readback normalization failed; video decoding stopped");
+        return false;
     }
     av_frame_unref(frame);
     av_frame_move_ref(frame, planar);
     av_frame_free(&planar);
+    return true;
 }
 
 // Converts one held decoder frame to a ready-to-paint DecodedVideoFrame.
@@ -1280,7 +1286,7 @@ std::optional<DecodedVideoFrame> DecodeForwardToTarget(AVFormatContext* fmt_ctx,
     const AVRational tb = fmt_ctx->streams[video_stream_idx]->time_base;
 
     const auto finish = [&]() -> std::optional<DecodedVideoFrame> {
-        if (!have_candidate)
+        if (!have_candidate || !NormalizeHwFrame(held.frame))
             return std::nullopt;
         return ConvertToDecodedFrame(held.frame, candidate_pts_us, matrix, range, pq);
     };
@@ -1315,19 +1321,9 @@ std::optional<DecodedVideoFrame> DecodeForwardToTarget(AVFormatContext* fmt_ctx,
                 return finish();
             }
 
-            // Hardware readback normalizes back to a plain software pixel
-            // format before anything below inspects frame.frame->format.
-            NormalizeHwFrame(frame.frame);
-
-            // best_effort_timestamp already falls back from a missing pts to
-            // the interpolated dts-based estimate; a frame with neither is
-            // treated as t=0 rather than fed to av_rescale_q as
-            // AV_NOPTS_VALUE (which would rescale into garbage).
-            const int64_t raw_pts =
-                (frame.frame->best_effort_timestamp != AV_NOPTS_VALUE) ? frame.frame->best_effort_timestamp : 0;
-            const int64_t pts_us = av_rescale_q(raw_pts, tb, AVRational{1, AV_TIME_BASE});
-
-            if (IsConvertibleFrame(frame.frame)) {
+            const int64_t pts_us =
+                SourceRelativeFrameTimeUs(frame.frame->best_effort_timestamp, tb, SourceOriginUs(fmt_ctx));
+            if (frame.frame->format == AV_PIX_FMT_D3D11 || IsConvertibleFrame(frame.frame)) {
                 av_frame_unref(held.frame);
                 if (av_frame_ref(held.frame, frame.frame) == 0) {
                     have_candidate = true;
@@ -1353,39 +1349,59 @@ ReadForwardToTargetRaw(AVFormatContext* fmt_ctx, AVCodecContext* vctx, int video
                        VideoReadMeasurements& measurements, const std::atomic<bool>* cancelled) {
     PacketGuard pkt(av_packet_alloc());
     FrameGuard frame(av_frame_alloc());
-    if (!pkt.pkt || !frame.frame)
+    FrameGuard held(av_frame_alloc());
+    if (!pkt.pkt || !frame.frame || !held.frame)
         return std::nullopt;
     const AVRational tb = fmt_ctx->streams[video_stream_idx]->time_base;
+    bool have_candidate = false;
+    int64_t candidate_pts_us = 0;
+    const auto own = [&](AVFrame* candidate, int64_t pts_us) -> std::optional<RawDecodedVideoFrame> {
+        if (!NormalizeHwFrame(candidate))
+            return std::nullopt;
+        const bool is_pq = pq != nullptr && candidate->format == AV_PIX_FMT_YUV420P10LE;
+        return WrapRawDecodedFrame(candidate, pts_us, matrix, range, is_pq);
+    };
+    const auto finish = [&]() -> std::optional<RawDecodedVideoFrame> {
+        if (have_candidate) {
+            auto owned = own(held.frame, candidate_pts_us);
+            if (!owned)
+                return std::nullopt;
+            selected = std::move(owned);
+        }
+        return selected;
+    };
     for (;;) {
         if (cancelled && cancelled->load(std::memory_order_relaxed))
             return std::nullopt;
         const int received = avcodec_receive_frame(vctx, frame.frame);
         if (received >= 0) {
             ++measurements.decoded;
-            NormalizeHwFrame(frame.frame);
-            if (IsConvertibleFrame(frame.frame)) {
-                const int64_t raw_pts =
-                    frame.frame->best_effort_timestamp != AV_NOPTS_VALUE ? frame.frame->best_effort_timestamp : 0;
-                const int64_t pts_us = av_rescale_q(raw_pts, tb, AVRational{1, AV_TIME_BASE});
-                const bool is_pq = pq != nullptr && frame.frame->format == AV_PIX_FMT_YUV420P10LE;
-                auto owned = WrapRawDecodedFrame(frame.frame, pts_us, matrix, range, is_pq);
-                av_frame_unref(frame.frame);
-                if (!owned)
-                    return std::nullopt;
+            if (frame.frame->format == AV_PIX_FMT_D3D11 || IsConvertibleFrame(frame.frame)) {
+                const int64_t pts_us =
+                    SourceRelativeFrameTimeUs(frame.frame->best_effort_timestamp, tb, SourceOriginUs(fmt_ctx));
                 if (pts_us > target_us) {
+                    auto owned = own(frame.frame, pts_us);
+                    av_frame_unref(frame.frame);
+                    if (!owned)
+                        return std::nullopt;
                     lookahead = std::move(owned);
-                    return selected;
+                    return finish();
                 }
-                selected = std::move(owned);
+                av_frame_unref(held.frame);
+                if (av_frame_ref(held.frame, frame.frame) < 0)
+                    return std::nullopt;
+                have_candidate = true;
+                candidate_pts_us = pts_us;
+                av_frame_unref(frame.frame);
                 if (pts_us == target_us)
-                    return selected;
+                    return finish();
             } else {
                 av_frame_unref(frame.frame);
             }
             continue;
         }
         if (received == AVERROR_EOF)
-            return selected;
+            return finish();
         if (received != AVERROR(EAGAIN) || draining)
             return std::nullopt;
 
@@ -1397,7 +1413,7 @@ ReadForwardToTargetRaw(AVFormatContext* fmt_ctx, AVCodecContext* vctx, int video
         if (read < 0) {
             draining = true;
             if (avcodec_send_packet(vctx, nullptr) < 0)
-                return selected;
+                return finish();
         } else {
             const int sent = avcodec_send_packet(vctx, pkt.pkt);
             av_packet_unref(pkt.pkt);
@@ -1445,14 +1461,6 @@ SwrContext* BuildPlaybackResampler(AVCodecContext* actx, bool unity_mono = false
     return swr;
 }
 
-// Microsecond pts for one decoded frame, with the same missing-timestamp
-// fallback DecodeForwardToTarget applies (best_effort_timestamp, else t=0 --
-// never AV_NOPTS_VALUE into av_rescale_q).
-int64_t FramePtsUs(const AVFrame* frame, AVRational tb) noexcept {
-    const int64_t raw = (frame->best_effort_timestamp != AV_NOPTS_VALUE) ? frame->best_effort_timestamp : 0;
-    return av_rescale_q(raw, tb, AVRational{1, AV_TIME_BASE});
-}
-
 // Index of the track carrying `stream_index`, or tracks.size() when none does
 // (a stream this run does not play -- the demuxer already filters those out,
 // so this is the belt to that pair of braces).
@@ -1469,11 +1477,11 @@ size_t TrackIndexForStream(const std::vector<AudioTrack*>& tracks, int stream_in
 // untouched (ShouldDemuxMorePackets then simply never paces, which is the safe
 // direction -- the queue limits still bound memory). Monotonic by max() so a
 // small container reordering cannot walk the position backwards.
-void AdvanceDemuxPosition(int64_t& position_us, const AVPacket* pkt, AVRational tb) noexcept {
+void AdvanceDemuxPosition(int64_t& position_us, const AVPacket* pkt, AVRational tb, int64_t origin_us) noexcept {
     const int64_t raw = (pkt->pts != AV_NOPTS_VALUE) ? pkt->pts : pkt->dts;
     if (raw == AV_NOPTS_VALUE)
         return;
-    const int64_t pts_us = av_rescale_q(raw, tb, AVRational{1, AV_TIME_BASE});
+    const int64_t pts_us = SourceRelativeTimeUs(av_rescale_q(raw, tb, AVRational{1, AV_TIME_BASE}), origin_us);
     if (position_us == kUnknownDemuxPositionUs || pts_us > position_us)
         position_us = pts_us;
 }
@@ -1498,7 +1506,8 @@ std::optional<DecodedVideoFrame> EditPlayerEngine::DecodeFrameAt(int64_t target_
     // form takes AV_TIME_BASE), so rescale from microseconds first -- same as
     // mp4_remuxer.cpp's trim-start seek. AVSEEK_FLAG_BACKWARD snaps to the
     // keyframe at or before the target so decode-forward starts clean.
-    const int64_t seek_ts = av_rescale_q(target_us, AVRational{1, AV_TIME_BASE}, vst->time_base);
+    const int64_t seek_ts = av_rescale_q(SourceTimestampUs(target_us, SourceOriginUs(fmt_ctx)),
+                                         AVRational{1, AV_TIME_BASE}, vst->time_base);
     const int seek_ret = av_seek_frame(fmt_ctx, impl_->video_stream_idx, seek_ts, AVSEEK_FLAG_BACKWARD);
     if (seek_ret < 0) {
         LogWarn((std::string("av_seek_frame failed: ") + av_err2str(seek_ret)).c_str());
@@ -1536,7 +1545,8 @@ std::optional<RawDecodedVideoFrame> EditPlayerEngine::ReadFrameAtRaw(int64_t tar
         impl_->cursor_lookahead.reset();
         impl_->cursor_draining = false;
         const auto time_base = format->streams[impl_->video_stream_idx]->time_base;
-        const auto timestamp = av_rescale_q(target_us, AVRational{1, AV_TIME_BASE}, time_base);
+        const auto timestamp =
+            av_rescale_q(SourceTimestampUs(target_us, SourceOriginUs(format)), AVRational{1, AV_TIME_BASE}, time_base);
         ++impl_->video_read_measurements.seeks;
         if (av_seek_frame(format, impl_->video_stream_idx, timestamp, AVSEEK_FLAG_BACKWARD) < 0)
             return std::nullopt;
@@ -1781,7 +1791,7 @@ bool EditPlayerEngine::Impl::DecodeAudioRange(std::optional<uint32_t> stream, in
     }
     auto* format = fmt.ctx;
     const int64_t start_us = av_rescale_q(first_sample, AVRational{1, 48000}, AVRational{1, AV_TIME_BASE});
-    const int64_t origin_us = stream && format->start_time != AV_NOPTS_VALUE ? format->start_time : 0;
+    const int64_t origin_us = SourceOriginUs(format);
     const int64_t origin_sample = av_rescale_q(origin_us, AVRational{1, AV_TIME_BASE}, AVRational{1, 48000});
     // Decode preroll through the normal resampler so range boundaries do not
     // reset its filter at an audible sample.
@@ -2010,6 +2020,7 @@ void EditPlayerEngine::StartPlaybackDecode(int64_t start_us, VideoFrameCallback 
     AVFormatContext* const fmt_ctx = impl->fmt.ctx;
     AVCodecContext* const vctx = impl->video_codec.ctx;
     AVStream* const vst = fmt_ctx->streams[impl->video_stream_idx];
+    const int64_t origin_us = SourceOriginUs(fmt_ctx);
     start_us = std::max<int64_t>(start_us, 0);
 
     // Everything from here to the thread spawns runs on the CALLER's thread,
@@ -2021,7 +2032,8 @@ void EditPlayerEngine::StartPlaybackDecode(int64_t start_us, VideoFrameCallback 
     // A failed seek is logged and playback continues from the demuxer's
     // current position rather than producing nothing (same convention as
     // DecodeFrameAt).
-    const int64_t seek_ts = av_rescale_q(start_us, AVRational{1, AV_TIME_BASE}, vst->time_base);
+    const int64_t seek_ts =
+        av_rescale_q(SourceTimestampUs(start_us, origin_us), AVRational{1, AV_TIME_BASE}, vst->time_base);
     impl->cursor_valid = false;
     impl->cursor_frame.reset();
     impl->cursor_lookahead.reset();
@@ -2091,77 +2103,79 @@ void EditPlayerEngine::StartPlaybackDecode(int64_t start_us, VideoFrameCallback 
     audio_indices.reserve(playing_tracks.size());
     for (const AudioTrack* track : playing_tracks)
         audio_indices.push_back(track->stream_index);
-    impl->demux_thread = std::thread(
-        [impl, fmt_ctx, video_idx, audio_indices = std::move(audio_indices), media_clock_us = current_media_time_us]() {
-            PacketGuard pkt(av_packet_alloc());
-            // Largest presentation timestamp handed on so far, video vs. audio.
-            // Only the streams actually played contribute; a stray stream's
-            // timestamps must not move the read position. All audio tracks share
-            // one position because they share one queue and one consumer -- and
-            // because the muxer emits every track in one global timestamp order,
-            // so the leading audio track is the read position for all of them.
-            int64_t video_pos_us = kUnknownDemuxPositionUs;
-            int64_t audio_pos_us = kUnknownDemuxPositionUs;
-            const bool has_audio = !audio_indices.empty();
-            if (pkt.pkt != nullptr) {
-                while (!impl->playback_cancel.load()) {
-                    const int64_t demuxed_through_us =
-                        has_audio ? DemuxedThroughUs(video_pos_us, audio_pos_us) : video_pos_us;
-                    // Read-ahead gate. Bounded by the playback position, NOT by
-                    // queue occupancy: an occupancy bound makes the demuxer's
-                    // forward progress follow whichever consumer drains slowest,
-                    // which stamps that consumer's cadence onto the other
-                    // stream's delivery -- precisely the coupling this topology
-                    // exists to remove. With no clock (throughput probes,
-                    // video-only sessions) this never waits.
-                    for (;;) {
-                        if (impl->playback_cancel.load())
-                            break;
-                        const int64_t clock_us = media_clock_us ? media_clock_us() : -1;
-                        if (ShouldDemuxMorePackets(demuxed_through_us, clock_us, kDemuxReadAheadUs))
-                            break;
-                        const auto wait_us = std::chrono::microseconds(
-                            DemuxReadAheadWaitUs(demuxed_through_us, clock_us, kDemuxReadAheadUs,
-                                                 kDemuxReadAheadWaitFloorUs, kDemuxReadAheadWaitCapUs));
-                        std::unique_lock<std::mutex> lock(impl->demux_wait_mutex);
-                        impl->demux_wait_cv.wait_for(lock, wait_us, [impl] { return impl->playback_cancel.load(); });
-                    }
+    impl->demux_thread = std::thread([impl, fmt_ctx, origin_us, video_idx, audio_indices = std::move(audio_indices),
+                                      media_clock_us = current_media_time_us]() {
+        PacketGuard pkt(av_packet_alloc());
+        // Largest presentation timestamp handed on so far, video vs. audio.
+        // Only the streams actually played contribute; a stray stream's
+        // timestamps must not move the read position. All audio tracks share
+        // one position because they share one queue and one consumer -- and
+        // because the muxer emits every track in one global timestamp order,
+        // so the leading audio track is the read position for all of them.
+        int64_t video_pos_us = kUnknownDemuxPositionUs;
+        int64_t audio_pos_us = kUnknownDemuxPositionUs;
+        const bool has_audio = !audio_indices.empty();
+        if (pkt.pkt != nullptr) {
+            while (!impl->playback_cancel.load()) {
+                const int64_t demuxed_through_us =
+                    has_audio ? DemuxedThroughUs(video_pos_us, audio_pos_us) : video_pos_us;
+                // Read-ahead gate. Bounded by the playback position, NOT by
+                // queue occupancy: an occupancy bound makes the demuxer's
+                // forward progress follow whichever consumer drains slowest,
+                // which stamps that consumer's cadence onto the other
+                // stream's delivery -- precisely the coupling this topology
+                // exists to remove. With no clock (throughput probes,
+                // video-only sessions) this never waits.
+                for (;;) {
                     if (impl->playback_cancel.load())
                         break;
+                    const int64_t clock_us = media_clock_us ? media_clock_us() : -1;
+                    if (ShouldDemuxMorePackets(demuxed_through_us, clock_us, kDemuxReadAheadUs))
+                        break;
+                    const auto wait_us = std::chrono::microseconds(
+                        DemuxReadAheadWaitUs(demuxed_through_us, clock_us, kDemuxReadAheadUs,
+                                             kDemuxReadAheadWaitFloorUs, kDemuxReadAheadWaitCapUs));
+                    std::unique_lock<std::mutex> lock(impl->demux_wait_mutex);
+                    impl->demux_wait_cv.wait_for(lock, wait_us, [impl] { return impl->playback_cancel.load(); });
+                }
+                if (impl->playback_cancel.load())
+                    break;
 
-                    const int read_ret = av_read_frame(fmt_ctx, pkt.pkt);
-                    if (read_ret < 0)
-                        break; // EOF or a terminal read error: both decoders drain below
-                    // Push moves the payload (refcounted hand-off, no copy); it
-                    // only fails when the queue is aborted or its decode thread
-                    // has already left, in which case the packet is dropped.
-                    if (pkt.pkt->stream_index == video_idx) {
-                        AdvanceDemuxPosition(video_pos_us, pkt.pkt, fmt_ctx->streams[video_idx]->time_base);
-                        if (!impl->video_packets->Push(pkt.pkt))
-                            av_packet_unref(pkt.pkt);
-                    } else if (std::find(audio_indices.begin(), audio_indices.end(), pkt.pkt->stream_index) !=
-                               audio_indices.end()) {
-                        AdvanceDemuxPosition(audio_pos_us, pkt.pkt, fmt_ctx->streams[pkt.pkt->stream_index]->time_base);
-                        if (!impl->audio_packets->Push(pkt.pkt))
-                            av_packet_unref(pkt.pkt);
-                    } else {
-                        av_packet_unref(pkt.pkt); // a stream we don't play (or audio with no usable resampler)
-                    }
+                const int read_ret = av_read_frame(fmt_ctx, pkt.pkt);
+                if (read_ret < 0)
+                    break; // EOF or a terminal read error: both decoders drain below
+                // Push moves the payload (refcounted hand-off, no copy); it
+                // only fails when the queue is aborted or its decode thread
+                // has already left, in which case the packet is dropped.
+                if (pkt.pkt->stream_index == video_idx) {
+                    AdvanceDemuxPosition(video_pos_us, pkt.pkt, fmt_ctx->streams[video_idx]->time_base, origin_us);
+                    if (!impl->video_packets->Push(pkt.pkt))
+                        av_packet_unref(pkt.pkt);
+                } else if (std::find(audio_indices.begin(), audio_indices.end(), pkt.pkt->stream_index) !=
+                           audio_indices.end()) {
+                    AdvanceDemuxPosition(audio_pos_us, pkt.pkt, fmt_ctx->streams[pkt.pkt->stream_index]->time_base,
+                                         origin_us);
+                    if (!impl->audio_packets->Push(pkt.pkt))
+                        av_packet_unref(pkt.pkt);
+                } else {
+                    av_packet_unref(pkt.pkt); // a stream we don't play (or audio with no usable resampler)
                 }
             }
-            impl->video_packets->SignalEndOfStream();
-            if (has_audio)
-                impl->audio_packets->SignalEndOfStream();
-            impl->NotePlaybackThreadFinished();
-        });
+        }
+        impl->video_packets->SignalEndOfStream();
+        if (has_audio)
+            impl->audio_packets->SignalEndOfStream();
+        impl->NotePlaybackThreadFinished();
+    });
 
     // ---- Video thread: owns the video AVCodecContext ----
-    impl->video_thread = std::thread([impl, vctx, vtb, start_us, on_video = std::move(on_video),
+    impl->video_thread = std::thread([impl, vctx, vtb, origin_us, start_us, on_video = std::move(on_video),
                                       media_clock_us = std::move(current_media_time_us)]() {
         PacketGuard pkt(av_packet_alloc());
         FrameGuard frame(av_frame_alloc());
         int late_streak = 0;
         bool skipping_nonref = false;
+        bool decode_failed = false;
         // A decoded frame here is wrapped (WrapRawDecodedFrame) rather than
         // converted into a fresh multi-megabyte allocation -- the per-frame
         // cost is an AVFrame struct plus a shared_ptr control block, a few
@@ -2200,7 +2214,8 @@ void EditPlayerEngine::StartPlaybackDecode(int64_t start_us, VideoFrameCallback 
                         if (recv_ret < 0)
                             break; // EAGAIN (need more input) or EOF (fully drained)
 
-                        const int64_t pts_us = FramePtsUs(frame.frame, vtb);
+                        const int64_t pts_us =
+                            SourceRelativeFrameTimeUs(frame.frame->best_effort_timestamp, vtb, origin_us);
                         // A negative clock reading means "nobody is presenting
                         // this" -- then nothing is known to be late and nothing is
                         // discarded (see ShouldConvertDecodedFrame).
@@ -2219,8 +2234,10 @@ void EditPlayerEngine::StartPlaybackDecode(int64_t start_us, VideoFrameCallback 
                             RecordPerformanceEvent(PerformanceStage::DecodeDropped);
                         }
 
-                        if (worth_converting)
-                            NormalizeHwFrame(frame.frame);
+                        if (worth_converting && !NormalizeHwFrame(frame.frame)) {
+                            decode_failed = true;
+                            break;
+                        }
                         if (worth_converting && IsConvertibleFrame(frame.frame)) {
                             // Wrap and release the decoder's frame BEFORE
                             // handing the result on: on_video is allowed to
@@ -2258,7 +2275,7 @@ void EditPlayerEngine::StartPlaybackDecode(int64_t start_us, VideoFrameCallback 
                         }
                     }
 
-                    if (draining)
+                    if (draining || decode_failed)
                         break; // EOF reached and the decoder fully drained above
                 }
             }
@@ -2274,7 +2291,7 @@ void EditPlayerEngine::StartPlaybackDecode(int64_t start_us, VideoFrameCallback 
     // ---- Audio thread: owns every track's AVCodecContext and resampler ----
     if (audio_enabled) {
         impl->audio_thread = std::thread([impl, tracks = std::move(playing_tracks), gains = std::move(playing_gains),
-                                          start_us, on_audio = std::move(on_audio)]() {
+                                          origin_us, start_us, on_audio = std::move(on_audio)]() {
             PacketGuard pkt(av_packet_alloc());
             FrameGuard frame(av_frame_alloc());
             // Sums the tracks by timestamp before anything reaches the
@@ -2314,7 +2331,8 @@ void EditPlayerEngine::StartPlaybackDecode(int64_t start_us, VideoFrameCallback 
                     if (avcodec_receive_frame(track->codec.ctx, frame.frame) < 0)
                         break; // EAGAIN (need more input) or EOF (fully drained)
                     // Capture the pts BEFORE av_frame_unref resets the frame.
-                    const int64_t pts_us = FramePtsUs(frame.frame, track->time_base);
+                    const int64_t pts_us =
+                        SourceRelativeFrameTimeUs(frame.frame->best_effort_timestamp, track->time_base, origin_us);
                     const int64_t max_out_frames = swr_get_out_samples(track->resampler.ctx, frame.frame->nb_samples);
                     if (max_out_frames <= 0) {
                         av_frame_unref(frame.frame);

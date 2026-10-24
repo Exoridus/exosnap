@@ -95,7 +95,7 @@ fn creation_unavailable(ctx: &mut Context) -> Step {
 fn recording_live_scenario() -> Scenario {
     Scenario {
         id: "clip.recording-live",
-        revision: 3,
+        revision: 4,
         title: "A live recording saves an offered last-30-seconds clip while capture continues",
         class: ScenarioClass::Hardware,
         contract: "after 35 seconds of recording, the production clip adapter plans the offered last-30-seconds request, confirms its available range, and creates a decodable H.264/Opus MKV with relative timestamps and preserved audio identity while primary capture continues; the completed clip matches the reviewed range and opens and seeks in Edit",
@@ -113,6 +113,21 @@ fn recording_live_scenario() -> Scenario {
         ],
         timeout: secs(300.0),
         run: recording_live,
+    }
+}
+
+fn judge_live_job(job: &Value) -> Step<bool> {
+    match job["phase"].as_u64() {
+        Some(9) => {
+            product_ensure!(
+                job["canOpen"] == true && job["hasActual"] == true,
+                "completed clip has no published asset: {job}"
+            );
+            Ok(true)
+        }
+        Some(11 | 12) => Err(Stop::fail(format!("the clip did not complete: {job}"))),
+        Some(_) => Ok(false),
+        None => Err(Stop::infra("clip job has no numeric phase")),
     }
 }
 
@@ -309,36 +324,24 @@ fn recording_live(ctx: &mut Context) -> Step {
             } else {
                 selected_id = Some(id.clone());
             }
-            match job["phase"].as_u64() {
-                Some(8) => {
-                    product_ensure!(
-                        job["canOpen"] == true && job["hasActual"] == true,
-                        "completed clip has no published asset: {job}"
-                    );
-                    break (*job).clone();
+            if judge_live_job(job)? {
+                break (*job).clone();
+            }
+            if job["phase"] == 1 && job["canConfirm"] == true {
+                let generation = job["generation"]
+                    .as_str()
+                    .ok_or_else(|| Stop::infra("clip review has no generation string"))?
+                    .to_owned();
+                if confirmed_generation.as_deref() != Some(generation.as_str()) {
+                    reviewed_range = Some((job["actualBegin"].clone(), job["actualEnd"].clone()));
+                    ctx.evidence.put("clipReview", (*job).clone());
+                    snapshot = accepted(
+                        &mut app,
+                        "clip.confirm",
+                        json!({ "jobId": id, "generation": generation }),
+                    )?;
+                    confirmed_generation = Some(generation);
                 }
-                Some(10 | 11) => {
-                    return Err(Stop::fail(format!("the clip did not complete: {job}")));
-                }
-                Some(1) if job["canConfirm"] == true => {
-                    let generation = job["generation"]
-                        .as_str()
-                        .ok_or_else(|| Stop::infra("clip review has no generation string"))?
-                        .to_owned();
-                    if confirmed_generation.as_deref() != Some(generation.as_str()) {
-                        reviewed_range =
-                            Some((job["actualBegin"].clone(), job["actualEnd"].clone()));
-                        ctx.evidence.put("clipReview", (*job).clone());
-                        snapshot = accepted(
-                            &mut app,
-                            "clip.confirm",
-                            json!({ "jobId": id, "generation": generation }),
-                        )?;
-                        confirmed_generation = Some(generation);
-                    }
-                }
-                Some(_) => {}
-                None => return Err(Stop::infra("clip job has no numeric phase")),
             }
         }
         product_ensure!(
@@ -558,6 +561,28 @@ mod tests {
     use super::*;
 
     #[test]
+    fn live_oracle_waits_for_publication_and_recognizes_terminal_phases() {
+        assert!(matches!(
+            judge_live_job(&json!({"phase": 8, "canOpen": false, "hasActual": true})),
+            Ok(false)
+        ));
+        assert!(matches!(
+            judge_live_job(&json!({"phase": 9, "canOpen": true, "hasActual": true})),
+            Ok(true)
+        ));
+        for phase in [11, 12] {
+            assert!(matches!(
+                judge_live_job(&json!({"phase": phase})),
+                Err(Stop::Fail(_))
+            ));
+        }
+        assert!(matches!(
+            judge_live_job(&json!({"phase": 9, "canOpen": false, "hasActual": true})),
+            Err(Stop::Fail(_))
+        ));
+    }
+
+    #[test]
     fn unavailable_oracle_rejects_jobs_capability_drift_and_staging() {
         let directory = tempfile::tempdir().unwrap();
         let snapshot = json!({"productAvailable": false, "canRequest": false, "jobs": []});
@@ -608,7 +633,7 @@ mod tests {
     fn retained_positive_oracle_keeps_its_historical_identity() {
         let scenario = recording_live_scenario();
         assert_eq!(scenario.id, "clip.recording-live");
-        assert_eq!(scenario.revision, 3);
+        assert_eq!(scenario.revision, 4);
         assert_eq!(scenario.tier, Tier::Required);
         assert_eq!(scenario.lane, Lane::Gpu);
         assert!(scenario.also.contains(&Lane::Preflight));

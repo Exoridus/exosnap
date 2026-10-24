@@ -2033,8 +2033,8 @@ Wahrscheinliche Ursache: </translation>
     <message>
         <location line="-3"/>
         <location line="+154"/>
-        <source>Frame queue</source>
-        <translation>Frame-Warteschlange</translation>
+        <source>Mux queue</source>
+        <translation>Mux-Warteschlange</translation>
     </message>
     <message>
         <location line="-147"/>
@@ -2093,8 +2093,8 @@ Wahrscheinliche Ursache: </translation>
     </message>
     <message>
         <location line="+15"/>
-        <source>Frames waiting between encode and mux (peak </source>
-        <translation>Frames zwischen Encoder und Mux (Spitze </translation>
+        <source>Encoded audio/video packets waiting for mux (peak </source>
+        <translation>Kodierte Audio-/Videopakete vor dem Mux (Spitze </translation>
     </message>
     <message>
         <location line="+12"/>
