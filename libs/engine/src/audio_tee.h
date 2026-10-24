@@ -38,6 +38,7 @@ struct AudioBlockMetadata {
     uint32_t frames = 0;
     uint32_t device_gap_frames = 0;
     bool silence = false;
+    bool synthetic_gap = false;
     bool discontinuity = false;
     AudioDeviceTiming device_timing;
     bool device_timing_valid = false;

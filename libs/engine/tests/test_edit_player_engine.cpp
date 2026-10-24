@@ -1,6 +1,7 @@
 #include <algorithm>
 #include <array>
 #include <cstdint>
+#include <exosnap/engine/color_metadata.h>
 #include <exosnap/engine/edit_types.h>
 #include <gtest/gtest.h>
 #include <ios>
@@ -25,8 +26,10 @@ extern "C" {
 #include <libavutil/avutil.h>
 #include <libavutil/channel_layout.h>
 #include <libavutil/dict.h>
+#include <libavutil/frame.h>
 #include <libavutil/log.h>
 #include <libavutil/mem.h>
+#include <libavutil/pixfmt.h>
 #include <libavutil/samplefmt.h>
 }
 
@@ -1017,5 +1020,75 @@ TEST(EditPlayerEngine, LegacyRawSeekStillSelectsAtOrAfterRequestedTime) {
     const auto frame = engine.DecodeFrameAtRaw(1'033'332);
     ASSERT_TRUE(frame);
     EXPECT_GE(frame->pts_us, 1'033'332);
+}
+
+TEST(EditPlayerEngine, Decodes420And444WithHardwarePermittedAndForcedSoftware) {
+    struct DecodeMode {
+        std::optional<std::string> previous;
+        DecodeMode() {
+            if (const char* value = std::getenv("EXOSNAP_EDIT_SOFTWARE_DECODE"))
+                previous = value;
+        }
+        ~DecodeMode() {
+            _putenv_s("EXOSNAP_EDIT_SOFTWARE_DECODE", previous ? previous->c_str() : "");
+        }
+    } decode_mode;
+    using exosnap::engine::DecodedPixelFormat;
+    struct Fixture {
+        const char* filename;
+        DecodedPixelFormat format;
+        exosnap::engine::ColorRange range = exosnap::engine::ColorRange::Limited;
+    };
+    const Fixture fixtures[] = {
+        {"h264_420_8.mp4", DecodedPixelFormat::Yuv420P8},
+        {"h264_420_8_full.mp4", DecodedPixelFormat::Yuv420P8, exosnap::engine::ColorRange::Full},
+        {"hevc_420_10.mp4", DecodedPixelFormat::Yuv420P10},
+        {"h264_444_8.mp4", DecodedPixelFormat::Yuv444P8},
+        {"hevc_444_8.mp4", DecodedPixelFormat::Yuv444P8},
+    };
+    for (const bool software : {false, true}) {
+        ASSERT_EQ(_putenv_s("EXOSNAP_EDIT_SOFTWARE_DECODE", software ? "1" : ""), 0);
+        for (const auto& [filename, format, range] : fixtures) {
+            SCOPED_TRACE(filename);
+            SCOPED_TRACE(software ? "forced software" : "hardware permitted");
+            const auto path = std::filesystem::path(__FILE__).parent_path() / "fixtures" / filename;
+            EditPlayerEngine engine;
+            std::string error;
+            ASSERT_TRUE(engine.Open(path, error)) << error;
+            for (const int64_t target : {0LL, 100'000LL, 200'000LL}) {
+                const auto raw = engine.DecodeFrameAtRaw(target);
+                ASSERT_TRUE(raw) << target;
+                EXPECT_EQ(raw->format, format);
+                EXPECT_EQ(raw->range, range);
+                EXPECT_EQ(raw->width, 32u);
+                EXPECT_EQ(raw->height, 32u);
+                ASSERT_NE(raw->y_plane, nullptr);
+                ASSERT_NE(raw->u_plane, nullptr);
+                ASSERT_NE(raw->v_plane, nullptr);
+                if (range == exosnap::engine::ColorRange::Full) {
+                    EXPECT_EQ(raw->y_plane[0], 64);
+                    EXPECT_EQ(raw->y_plane[16], 192);
+                    const auto* decoded = static_cast<const AVFrame*>(raw->backing_frame.get());
+                    EXPECT_EQ(decoded->color_range, AVCOL_RANGE_JPEG);
+                    EXPECT_EQ(decoded->colorspace, AVCOL_SPC_BT709);
+                    if (software)
+                        EXPECT_EQ(decoded->format, AV_PIX_FMT_YUVJ420P);
+                }
+            }
+            const auto frame = engine.DecodeFrameAt(0);
+            ASSERT_TRUE(frame);
+            ASSERT_NE(frame->bgra, nullptr);
+            if (range == exosnap::engine::ColorRange::Full) {
+                for (const int channel : {0, 1, 2}) {
+                    EXPECT_NEAR(frame->bgra[channel], 64, 1);
+                    EXPECT_NEAR(frame->bgra[16 * 4 + channel], 192, 1);
+                }
+            } else {
+                EXPECT_LT(frame->bgra[0], 80);
+                EXPECT_LT(frame->bgra[1], 80);
+                EXPECT_GT(frame->bgra[2], 180);
+            }
+        }
+    }
 }
 } // namespace

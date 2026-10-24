@@ -209,7 +209,7 @@ Tone-map exposure follows measured luminance inside the selected source region w
 
 Toggling the captured display's Windows HDR state ends the current recording cleanly once detected, keeping the footage and requesting a new recording. Moving a window between HDR/SDR displays retains the session's initial color decision. No seamless color rollover, HLG or general wide-gamut management beyond the implemented BT.2020 path is promised.
 
-Native-HDR recording preview and Edit playback are SDR approximations. Edit uses the reference display peak, not a display-adaptive HDR preview. The already-PQ desktop exception has no ordinary composited tap and omits webcam/cursor with an explicit notification.
+Native-HDR recording preview and Edit playback are SDR approximations. Edit uses the reference display peak, not a display-adaptive HDR preview. Native PQ10 desktop capture is decoded from PQ/BT.2020 into linear scRGB FP16 before webcam/cursor composition. The same composited FP16 image feeds the shared preview, luminance measurement and the single PQ/P010 encode conversion. Physical HDR10 recording qualification remains distinct from shader tests.
 
 ## 7. Capture targets and webcam
 
@@ -219,7 +219,7 @@ Region selection offers Draw custom first, then 16:9, 9:16, 1:1 and 4:5 starting
 
 The Record preview canvas fills the available page area with the same inset and gap as the transport dock. The source image remains centered and contained at its own aspect ratio as the target or region changes. Its border stays a neutral structural line; state belongs to the local pill/timer/actions. On-screen metadata is drawn above the video and PiP but is not part of recordings or frame screenshots.
 
-Idle display preview uses the selected capture hub and holds through transient loss. Window/region idle preview uses WGC. Preview stops when Record is no longer actually displayed. During recording it normally switches to the engine's composited image and stops independent capture, without a black flash during handoff. Cross-adapter sharing failure and the already-PQ path are explicit exceptions, so WYSIWYG is not unconditional on every configuration.
+Idle display preview uses the selected capture hub and holds through transient loss. Window/region idle preview uses WGC. Preview stops when Record is no longer actually displayed. During recording it normally switches to the engine's composited image and stops independent capture, without a black flash during handoff. Cross-adapter sharing failure remains an explicit exception, so WYSIWYG is not unconditional on every configuration.
 
 Preview frame rate is a global preference under Settings / App behaviour: Off, 15, 30, 60 or 120 fps, default 60. Unsupported display-derived choices remain visible but disabled. It caps idle acquisition/publication and preview presentation independently of recording cadence. Off releases the idle capture subscription and shows Preview off; framing and webcam placement cannot be checked there while disabled. Recording and its composited tap continue. The preference is not part of a recording preset.
 
@@ -278,7 +278,7 @@ Sources on the left and Recording profile on the right start closed. Opening an 
 
 The source overview uses the configured source identities and shows availability, participation and measured levels. The profile inspector owns format, quality, output, audio routing, microphone, audio encoding and webcam configuration. It reuses the shared preset draft and the single track routing editor. Named preset apply retains environment-owned capture and HDR fields. During recording, Active recording is a frozen read-only view. Edit next recording explicitly exposes the separate next draft, whose changes take effect at the next start. Operational mute and webcam participation remain session actions.
 
-The transport uses compact source meters and a geometrically centered timer with reserved width for hours. Stop remains directly reachable while secondary actions use a named overflow at narrow widths. Recording Clip creation is unavailable in v1.3. Opening the editor retains its existing availability rules.
+The transport uses compact source meters and a geometrically centered timer with reserved width for hours. Stop remains directly reachable while secondary actions use a named overflow at narrow widths. Recording Clip creation is unavailable in the current development build. Opening the editor retains its existing availability rules.
 
 ### Runtime health and duration
 
@@ -313,7 +313,7 @@ Manifest failure does not abort a good recording. It raises Recovery protection 
 
 ### Recording clips
 
-Recording Clip creation is outside the offered v1.3 product scope. The transport and overflow menu contain no Save clip action, and no clip panel is constructed. A compile-time C++ product capability rejects application requests before planning, leases, staging or background work. QML methods, stale adapter state and control-channel requests cannot enable it. There is no configuration, runtime switch or production development bypass.
+Recording Clip creation is outside the currently offered product scope. The transport and overflow menu contain no Save clip action, and no clip panel is constructed. A compile-time C++ product capability rejects application requests before planning, leases, staging or background work. QML methods, stale adapter state and control-channel requests cannot enable it. There is no configuration, runtime switch or production development bypass.
 
 The retained clip engine, UI components and regression tests remain engineering groundwork. Reactivation requires an intentional source change, proof of the inclusive 33,554,432-byte per-active-job memory contract and complete codec, long-duration and recording/isolation qualification. The memory contract is unresolved, not passed or waived. No H.264, HEVC, AV1 or audio clip-creation profile is advertised as available.
 
@@ -464,7 +464,7 @@ Self-test, Hardware capabilities, Environment & configuration and Support bundle
 
 Audio resources retain distinct physical capture, logical source and track output rows. Opaque capture/clock IDs link shared resources without exposing endpoint paths, process IDs or window titles. Physical capture and source DSP counters are counted once per owner, independent of route count. Runtime rows show reader counts, clock quality, raw/residual drift and compensation, reinitialization, source gaps and reader overflow, source pre-mute RMS/peak, and track post-limiter RMS/peaks and current gain reduction.
 
-Processing costs are cumulative elapsed milliseconds for capture/clock conversion, logical source processing, and track mixing/limiting. They are not CPU utilization or an estimate from route counts. Unmeasured values show n/a with a reason; measured silence remains distinct. The retained clip adapter can project exact job counters for engineering tests. The v1.3 product admits no ClipJobs and shows no active clip rows. A shared recording storage row shows the disk floor plus the current recording/remux allowance enforced by clip admission. It is shown once regardless of job count and is not a disk free-space measurement. Index commit lag and CPU utilization remain unavailable because the runtime does not publish those measurements.
+Processing costs are cumulative elapsed milliseconds for capture/clock conversion, logical source processing, and track mixing/limiting. They are not CPU utilization or an estimate from route counts. Unmeasured values show n/a with a reason; measured silence remains distinct. The retained clip adapter can project exact job counters for engineering tests. The current product admits no ClipJobs and shows no active clip rows. A shared recording storage row shows the disk floor plus the current recording/remux allowance enforced by clip admission. It is shown once regardless of job count and is not a disk free-space measurement. Index commit lag and CPU utilization remain unavailable because the runtime does not publish those measurements.
 
 Each diagnosis declares both severity (Pass/Notice/Blocker) and tier: Blocker, Measured problem, Optimization or Fact. Blockers prevent start. Measured problems remain represented and attention-colored. Optimization tips bundle quietly and cannot alone make readiness amber. Facts are neutral reference and do not count in the verdict.
 
@@ -555,7 +555,7 @@ The dynamic Visual C++ x64 runtime is required. No application artifact bundles 
 
 Windows installation is per-machine under `C:\Program Files\ExoSnap`, with the product marker at `HKLM\Software\ExoSnap` and an all-users Start Menu entry. The desktop shortcut is an unchecked Setup option and is absent for MSI and package-manager installs. Uninstalling preserves the current user's `%LOCALAPPDATA%\ExoSnap` unless the operator explicitly asks Setup to remove that local data; recordings and other output files are never removed by an uninstall.
 
-Replay buffer, arbitrary frame-accurate re-encode cuts, persistent edit projects, transitions, video compositing, embedded chapters, surround output, HLG, 4:2:2, 10-bit 4:4:4 and cross-vendor encoding are not current features. See [known limitations](../KNOWN_LIMITATIONS.md) for narrower behavioral and verification boundaries, and [roadmap](roadmap.md) for explicitly future work.
+Replay buffering, persistent edit projects, transitions beyond crossfade, embedded chapters, surround output, HLG, 4:2:2, 10-bit 4:4:4 and cross-vendor encoding are not current features. The development editor implements frame-accurate rendered cuts and video composition for supported SDR sources. Native hardware/UX and media-profile qualification for v0.11 remains required. See [known limitations](../KNOWN_LIMITATIONS.md) for narrower behavioral and verification boundaries, and [roadmap](roadmap.md) for explicitly future work.
 
 ExoSnap is GPL-3.0-or-later. Bundled components retain their own notices and license terms in [THIRD_PARTY_NOTICES.md](../THIRD_PARTY_NOTICES.md).
 

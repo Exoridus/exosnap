@@ -23,7 +23,7 @@ class TrackAudioMixer final : public IAudioCaptureSource {
     [[nodiscard]] std::string Failure() const;
     TrackAudioMixer(ResolvedRoutingTrack track, std::vector<std::unique_ptr<IAudioCaptureSource>> inputs,
                     uint32_t sample_rate, uint32_t channels, std::function<uint64_t()> clock_now_ns = {},
-                    uint64_t start_qpc_ns = 0);
+                    uint64_t start_qpc_ns = 0, std::function<uint64_t()> completed_through = {});
     ~TrackAudioMixer() override;
     bool Init(std::string& error) override;
     bool Reinit(std::string& error) override;

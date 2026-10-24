@@ -4,11 +4,19 @@ name: Cache Warm
 # so without this workflow next's sccache scope -- the only scope every PR can
 # read from -- would go stale between nightly advisory-checks.yml runs, and the
 # next PR's first build would start cold. This workflow exists solely to keep
-# that scope warm for both Ninja presets: it builds, nothing else. It reports no
+# that scope warm for both Ninja presets when build inputs change. It reports no
 # tests and no status the README badge or branch protection depends on.
 on:
   push:
     branches: [next]
+    paths-ignore:
+      - 'docs/**/*.md'
+      - 'docs/assets/readme-hero.png'
+      - 'README.md'
+      - 'AGENTS.md'
+      - 'CLAUDE.md'
+      - 'PRIVACY.md'
+      - 'CHANGELOG.md'
   workflow_dispatch:
 
 env:

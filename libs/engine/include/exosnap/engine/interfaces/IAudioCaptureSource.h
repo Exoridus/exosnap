@@ -3,6 +3,7 @@
 // Windows implementation: WasapiLoopbackSrc (wraps WasapiLoopback).
 
 #include <cstdint>
+#include <optional>
 #include <string>
 
 namespace exosnap::engine {
@@ -85,6 +86,12 @@ class IAudioCaptureSource {
 
     // Number of frames ready in the pending buffer (0 = none).
     virtual uint32_t PendingFrameCount() = 0;
+
+    // After a successful empty poll at QPC Q, no future packet can contain samples
+    // older than Q minus this bound. Unknown prevents an idle finite-end seal.
+    virtual std::optional<uint64_t> MaxCaptureLatencyNs() const {
+        return std::nullopt;
+    }
 
     // Acquire the next available buffer. Only call when PendingFrameCount() > 0.
     virtual bool AcquireBuffer(RawAudioBuffer& out_buf, std::string& out_error) = 0;

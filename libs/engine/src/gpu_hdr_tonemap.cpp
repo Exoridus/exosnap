@@ -39,6 +39,7 @@ cbuffer ToneMapConstants : register(b0) {
     float4 params; // x = peakScale (reference-white multiples that map to 1.0)
                    // y = 1.0 when the source is an SDR scRGB (Advanced Color)
                    //     desktop: clamp + sRGB OETF, no roll-off
+                   //     2.0 returns linear scRGB, retaining HDR and wide gamut
                    // z = SDR paper-white scale
                    // w = 1.0 when the source is PQ-encoded BT.2020 (R10G10B10A2)
                    //     rather than linear scRGB: decoded to scRGB first
@@ -60,9 +61,9 @@ float PqToScRgb(float n) {
 
 // BT.2020 -> BT.709 primaries, linear light.
 float3 Bt2020ToBt709(float3 c) {
-    return float3(1.6605f * c.r - 0.5876f * c.g - 0.0728f * c.b,
-                  -0.1246f * c.r + 1.1329f * c.g - 0.0083f * c.b,
-                  -0.0182f * c.r - 0.1006f * c.g + 1.1187f * c.b);
+    return float3(1.6604910023f * c.r - 0.5876411389f * c.g - 0.0728498633f * c.b,
+                  -0.1245504746f * c.r + 1.1328998971f * c.g - 0.0083494226f * c.b,
+                  -0.0181507634f * c.r - 0.1005788980f * c.g + 1.1187296614f * c.b);
 }
 
 static const float kKnee = 0.80f;
@@ -89,6 +90,9 @@ float4 main(float4 position : SV_POSITION, float2 texcoord : TEXCOORD0) : SV_TAR
     if (params.w > 0.5f) {
         c.rgb = Bt2020ToBt709(float3(PqToScRgb(c.r), PqToScRgb(c.g), PqToScRgb(c.b)));
     }
+    if (params.y > 1.5f) {
+        return float4(c.rgb, 1.0f);
+    }
     if (params.y > 0.5f) {
         // SDR scRGB desktop: content already ends at reference white (1.0), so
         // only the transfer is applied and the roll-off is skipped.
@@ -110,14 +114,14 @@ float4 main(float4 position : SV_POSITION, float2 texcoord : TEXCOORD0) : SV_TAR
 )";
 
 struct ToneMapConstants {
-    float params[4]; // x = peak scale, y = sdr scRGB source flag, z = SDR paper-white scale, w reserved
+    float params[4]; // x = peak scale, y = output mode, z = SDR paper-white scale, w = PQ source
 };
 
-ToneMapConstants MakeToneMapConstants(float peak_scale, float paper_white_scale, bool sdr_scrgb_source,
-                                      bool pq_source) {
+ToneMapConstants MakeToneMapConstants(float peak_scale, float paper_white_scale, bool sdr_scrgb_source, bool pq_source,
+                                      HdrToneMapper::Output output) {
     ToneMapConstants pc{};
     pc.params[0] = peak_scale;
-    pc.params[1] = sdr_scrgb_source ? 1.0f : 0.0f;
+    pc.params[1] = output == HdrToneMapper::Output::LinearScrgb ? 2.0f : (sdr_scrgb_source ? 1.0f : 0.0f);
     // Only the scene-referred (HDR desktop) path normalises. An SDR
     // Advanced-Color desktop is display-referred -- documented as "(1.0, 1.0,
     // 1.0) always means the maximum white luminance that the display can
@@ -137,7 +141,8 @@ void SetHResultError(std::string& err, const char* what, HRESULT hr) {
 } // namespace
 
 bool HdrToneMapper::Init(ID3D11Device* device, ID3D11DeviceContext* context, UINT width, UINT height, float peak_scale,
-                         bool sdr_scrgb_source, std::string& err, float paper_white_scale, bool pq_source) {
+                         bool sdr_scrgb_source, std::string& err, float paper_white_scale, bool pq_source,
+                         Output output) {
     if (device == nullptr || context == nullptr || width == 0 || height == 0) {
         err = "HdrToneMapper::Init invalid arguments";
         return false;
@@ -198,7 +203,9 @@ bool HdrToneMapper::Init(ID3D11Device* device, ID3D11DeviceContext* context, UIN
     paper_white_scale_ = paper_white_scale;
     sdr_scrgb_source_ = sdr_scrgb_source;
     pq_source_ = pq_source;
-    const ToneMapConstants pc = MakeToneMapConstants(peak_scale_, paper_white_scale_, sdr_scrgb_source_, pq_source_);
+    output_ = output;
+    const ToneMapConstants pc =
+        MakeToneMapConstants(peak_scale_, paper_white_scale_, sdr_scrgb_source_, pq_source_, output_);
 
     D3D11_BUFFER_DESC const_desc{};
     const_desc.ByteWidth = sizeof(ToneMapConstants);
@@ -225,7 +232,8 @@ void HdrToneMapper::SetDisplayScales(float peak_scale, float paper_white_scale) 
 }
 
 void HdrToneMapper::WriteConstants() {
-    const ToneMapConstants pc = MakeToneMapConstants(peak_scale_, paper_white_scale_, sdr_scrgb_source_, pq_source_);
+    const ToneMapConstants pc =
+        MakeToneMapConstants(peak_scale_, paper_white_scale_, sdr_scrgb_source_, pq_source_, output_);
     context_->UpdateSubresource(constants_.get(), 0, nullptr, &pc, 0, 0);
 }
 
@@ -273,6 +281,14 @@ ID3D11RenderTargetView* HdrToneMapper::RtvFor(ID3D11Texture2D* tex, std::string&
 bool HdrToneMapper::Convert(ID3D11Texture2D* src, ID3D11Texture2D* dst, std::string& err) {
     if (context_ == nullptr || src == nullptr || dst == nullptr) {
         err = "HdrToneMapper::Convert called before Init or with null texture";
+        return false;
+    }
+
+    D3D11_TEXTURE2D_DESC dst_desc{};
+    dst->GetDesc(&dst_desc);
+    if (dst_desc.Width != width_ || dst_desc.Height != height_ || src == dst ||
+        (output_ == Output::LinearScrgb && dst_desc.Format != DXGI_FORMAT_R16G16B16A16_FLOAT)) {
+        err = "HDR color pass destination does not match its output contract";
         return false;
     }
 

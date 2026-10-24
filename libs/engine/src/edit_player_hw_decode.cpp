@@ -6,10 +6,26 @@
 #include <cstring>
 extern "C" {
 #include <libavutil/frame.h>
+#include <libavutil/pixdesc.h>
 #include <libavutil/pixfmt.h>
 }
 
 namespace exosnap::engine {
+
+AVPixelFormat SelectSupportedDecodeFormat(AVPixelFormat software_format, const AVPixelFormat* offered,
+                                          bool enable_hardware) noexcept {
+    const bool supported = software_format == AV_PIX_FMT_YUV420P || software_format == AV_PIX_FMT_YUVJ420P ||
+                           software_format == AV_PIX_FMT_YUV420P10LE || IsSupportedHwReadbackFormat(software_format);
+    AVPixelFormat fallback = AV_PIX_FMT_NONE;
+    for (const AVPixelFormat* p = offered; *p != AV_PIX_FMT_NONE; ++p) {
+        if (*p == AV_PIX_FMT_D3D11 && enable_hardware && supported)
+            return *p;
+        const AVPixFmtDescriptor* descriptor = av_pix_fmt_desc_get(*p);
+        if (fallback == AV_PIX_FMT_NONE && descriptor && !(descriptor->flags & AV_PIX_FMT_FLAG_HWACCEL))
+            fallback = *p;
+    }
+    return fallback;
+}
 
 bool IsSupportedHwReadbackFormat(int av_pix_fmt) noexcept {
     return av_pix_fmt == AV_PIX_FMT_NV12 || av_pix_fmt == AV_PIX_FMT_P010LE;

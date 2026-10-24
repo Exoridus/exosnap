@@ -16,6 +16,7 @@
 #include <filesystem>
 #include <fstream>
 #include <iterator>
+#include <limits>
 #include <memory>
 #include <optional>
 #include <string>
@@ -249,6 +250,42 @@ TEST_F(RecordingClipPublicationTest, CancellationPreservesSourceAndPublishesNoth
     clips.Shutdown();
 }
 
+TEST_F(RecordingClipPublicationTest, RecordingReserveRefusesClipBeforeReviewOrStaging) {
+    const auto destination = exosnap_test::UniqueTempPath("clip_publication_storage_reserve.mkv");
+    const auto source_size = std::filesystem::file_size(source);
+    RecordingClipJobs clips(registry, {}, {}, [] { return (std::numeric_limits<uint64_t>::max)(); });
+    ASSERT_TRUE(clips.RequestPlan(Request(destination)).succeeded());
+    const auto failed = WaitFor(clips, RecordingClipPhase::Failed);
+    ASSERT_TRUE(failed);
+    ASSERT_EQ(failed->phase, RecordingClipPhase::Failed);
+    ASSERT_TRUE(failed->error);
+    EXPECT_EQ(failed->error->code, engine::EngineErrorCode::StorageInsufficient);
+    EXPECT_FALSE(failed->completed);
+    EXPECT_EQ(failed->reserved_bytes, 0u);
+    EXPECT_FALSE(std::filesystem::exists(destination));
+    EXPECT_EQ(std::filesystem::file_size(source), source_size);
+    clips.Shutdown();
+}
+
+TEST_F(RecordingClipPublicationTest, ShutdownCancelsReviewAndClosesLeasedSources) {
+    const auto destination = exosnap_test::UniqueTempPath("clip_publication_shutdown_review.mkv");
+    RecordingClipJobs clips(registry, {}, {}, {});
+    ASSERT_TRUE(clips.RequestPlan(Request(destination)).succeeded());
+    const auto review = WaitFor(clips, RecordingClipPhase::Review);
+    ASSERT_TRUE(review);
+    ASSERT_EQ(review->phase, RecordingClipPhase::Review);
+    clips.Shutdown();
+    const auto jobs = clips.Snapshots();
+    ASSERT_EQ(jobs.size(), 1u);
+    EXPECT_EQ(jobs.front().phase, RecordingClipPhase::Cancelled);
+    EXPECT_EQ(jobs.front().reserved_bytes, 0u);
+    EXPECT_FALSE(jobs.front().completed);
+    EXPECT_FALSE(std::filesystem::exists(destination));
+    HANDLE exclusive = CreateFileW(source.c_str(), GENERIC_READ, 0, nullptr, OPEN_EXISTING, 0, nullptr);
+    EXPECT_NE(exclusive, INVALID_HANDLE_VALUE);
+    if (exclusive != INVALID_HANDLE_VALUE)
+        CloseHandle(exclusive);
+}
 TEST_F(RecordingClipPublicationTest, PinnedSourceSurvivesPathReplacementDuringReview) {
     const auto destination = exosnap_test::UniqueTempPath("clip_publication_pinned.mkv");
     const auto moved = exosnap_test::UniqueTempPath("clip_publication_original.mkv");

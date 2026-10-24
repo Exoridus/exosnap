@@ -35,6 +35,8 @@ struct WasapiNativeFormat {
     AudioSampleFormat sample_format = AudioSampleFormat::Float32;
 };
 
+std::optional<uint64_t> WasapiMaxCaptureLatencyNs(IAudioClient* client, uint32_t sample_rate);
+
 std::optional<WasapiNativeFormat> ClassifyNativeWasapiFormat(const WAVEFORMATEX& format);
 bool DescribeNativePlaybackFormat(const std::optional<std::string>& endpoint_id, WasapiNativeFormat& format,
                                   std::string& out_error);
@@ -58,6 +60,10 @@ class WasapiLoopback {
               bool native_format = false);
     const WasapiNativeFormat& Format() const noexcept {
         return format_;
+    }
+
+    std::optional<uint64_t> MaxCaptureLatencyNs() const {
+        return WasapiMaxCaptureLatencyNs(m_pAudioClient, format_.sample_rate);
     }
 
     // Retrieve the next available packet.

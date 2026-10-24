@@ -569,6 +569,9 @@ engine::Outcome<engine::JobId> RecordingClipJobs::RequestPlan(RecordingClipReque
     if (request.snapshot.token.recording_id == engine::RecordingId{} || request.requested_begin_r_ns < 0 ||
         request.requested_end_r_ns <= request.requested_begin_r_ns || request.destination.empty())
         return ClipFailure(engine::EngineErrorCode::InvalidConfig, "Invalid recording clip request");
+    if (request.snapshot.descriptor &&
+        engine::EstimateRecordingClipDescriptorBytes(*request.snapshot.descriptor) > 2ULL * 1024 * 1024)
+        return ClipFailure(engine::EngineErrorCode::ResourceBudgetExceeded, "Clip snapshot memory budget exceeded");
     constexpr size_t marker_budget_bytes = 2 * 1024 * 1024;
     constexpr size_t seal_budget_bytes = 2 * 1024 * 1024;
     if (request.closed_segments.capacity() > seal_budget_bytes / sizeof(engine::RecordingSegmentSeal))

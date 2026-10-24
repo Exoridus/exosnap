@@ -65,6 +65,8 @@ struct TrackAudioMixer::Impl {
     std::vector<Input> inputs;
     uint32_t rate, channels, block_frames, capacity;
     std::function<uint64_t()> now;
+    std::function<uint64_t()> completed_through;
+    uint64_t completed_snapshot = 0;
     BrickwallLimiter limiter;
     std::shared_ptr<TrackAudioTelemetry> telemetry = std::make_shared<TrackAudioTelemetry>();
     std::vector<float> output;
@@ -111,6 +113,9 @@ struct TrackAudioMixer::Impl {
             if (position < cursor)
                 continue;
             const size_t slot = static_cast<size_t>(position % capacity);
+            // Overlap must not replace a sample another consumer may already have emitted.
+            if (input.tags[slot] == position)
+                continue;
             input.tags[slot] = position;
             for (uint32_t c = 0; c < channels; ++c)
                 input.samples[slot * channels + c] =
@@ -197,7 +202,15 @@ struct TrackAudioMixer::Impl {
         int64_t end = latest;
         if (draining)
             end = (std::max)(end, finite_end);
-        else {
+        else if (completed_through) {
+            end = Position(completed_snapshot, rate);
+            for (const auto& input : inputs) {
+                if (input.packet.num_frames > input.packet_offset)
+                    end = (std::min)(end, input.packet_start + input.packet_offset);
+                if (input.normalized && (input.normalized->BufferedFrames() || input.normalized->PendingFrameCount()))
+                    end = (std::min)(end, input.end);
+            }
+        } else {
             const uint64_t qpc = now();
             const int64_t horizon = qpc > 30000000ULL ? Position(qpc - 30000000ULL, rate) : 0;
             end = inputs.size() > 1 ? horizon : (std::max)(end, horizon);
@@ -208,9 +221,11 @@ struct TrackAudioMixer::Impl {
     }
 };
 TrackAudioMixer::TrackAudioMixer(ResolvedRoutingTrack track, std::vector<std::unique_ptr<IAudioCaptureSource>> inputs,
-                                 uint32_t rate, uint32_t channels, std::function<uint64_t()> now, uint64_t start)
+                                 uint32_t rate, uint32_t channels, std::function<uint64_t()> now, uint64_t start,
+                                 std::function<uint64_t()> completed_through)
     : impl_(std::make_unique<Impl>(std::move(track), std::move(inputs), rate, channels, std::move(now))) {
     impl_->start_qpc = start;
+    impl_->completed_through = std::move(completed_through);
 }
 TrackAudioMixer::~TrackAudioMixer() {
     Shutdown();
@@ -340,6 +355,8 @@ uint32_t TrackAudioMixer::PendingFrameCount() {
     if (!impl_->initialized || impl_->leased)
         return 0;
     std::string error;
+    if (impl_->completed_through)
+        impl_->completed_snapshot = impl_->completed_through();
     if (!impl_->Collect(error)) {
         impl_->failure = error.empty() ? "Track audio normalization failed" : std::move(error);
         return 0;
@@ -357,6 +374,9 @@ bool TrackAudioMixer::AcquireBuffer(RawAudioBuffer& buffer, std::string& error) 
         error = "Track mixer has no available lease";
         return false;
     }
+    // Acquire the published frontier before consuming the packets it certifies.
+    if (p.completed_through)
+        p.completed_snapshot = p.completed_through();
     if (!p.Collect(error))
         return false;
     const uint32_t frames = p.Ready();

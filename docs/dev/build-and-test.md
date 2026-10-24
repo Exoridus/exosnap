@@ -96,6 +96,13 @@ Commit and push are not release qualification: they check the change, not the pr
 
 The Debug CI sequence is configure, `all_qmllint`, build, blocking clang-tidy, then the complete CTest suite excluding the `live` label. Clang-tidy needs the compilation database and the completed build's Ninja dependencies, but does not need CTest. A blocking analysis failure stops the run before tests. A successful analysis preserves the complete configured test suite and its receipt.
 
+Pull requests changing only canonical documentation skip both Windows product build legs.
+The existing build-path filter keeps product sources, resources, test fixtures and build machinery eligible.
+Cheap Rust, AV-sync and documentation checks retain their normal gates.
+Cache warming on `next` also skips known uncompiled documentation alone. Shipped documentation,
+unknown paths and mixed documentation/code changes remain eligible. Tags and manual CI runs retain full verification.
+This scheduling policy does not weaken test receipts: changing any tracked working-tree input during a run still invalidates its source identity.
+
 Build, test and receipt publication share a host lock per build directory. Independent trees do not block each other. Do not run a second unmanaged build into a tree the test runner is currently judging.
 
 Every test run writes `<BuildDir>/Testing/last-run-receipt.json`, including a failing run. `reusable` is true only when build/source identity, phase declarations, census and evidence requirements hold. A clean printed case list does not override an unusable receipt. `-NoBuild` can refuse stale binaries (exit 3); `-AllowStale` deliberately weakens that claim. Exit 4 means no usable verdict, not a passing product. Retain raw build/CTest exit codes when diagnosing the runner.

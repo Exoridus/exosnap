@@ -48,6 +48,8 @@ class LogicalAudioSource {
     // Advancing generations can shrink within admission; growth requires a new prepare transaction.
     bool Reconfigure(const AudioCaptureDescriptor& descriptor, std::string& error);
     bool Drain(std::string& error);
+    // Called by the source owner after processing the physical queue snapshot.
+    [[nodiscard]] uint64_t CompletedThrough(uint64_t physical_qpc_ns) const;
     void Stop();
 
   private:

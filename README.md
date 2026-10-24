@@ -27,7 +27,7 @@ A Windows screen recorder for gameplay, software demos and everyday capture. NVI
 | Choose the output | H.264, HEVC or AV1 with compatible MKV, MP4 or WebM output; resolution and frame-rate controls. |
 | See problems early | Readiness checks before recording, live drop/drift/storage monitoring, and a report after stopping. |
 | Keep a long session manageable | Split recordings by time or size; recover interrupted sessions on the next launch. |
-| Prepare a short clip | Play back, scrub, trim at keyframes and export without re-encoding; keep markers in a JSON sidecar. |
+| Prepare a short clip | Arrange linked or independent video/audio clips, preview crossfades and waveforms, and export through copy, render or hybrid paths; keep markers in a JSON sidecar. |
 
 ## Your first recording
 
@@ -85,7 +85,7 @@ Optional microphone processing includes a high-pass filter, noise gate, automati
 
 MP4 delivery uses stream-copy remuxing from the recording, avoiding a second video encode. Low-disk checks account for the temporary space needed while both files exist. Splitting can be triggered by time or size, with per-segment background MP4 remux as each segment completes.
 
-The editor supports **keyframe-accurate lossless trim**, not arbitrary frame-accurate cuts or a multi-track editing timeline. Marker export is a JSON sidecar, not embedded chapters. There is no replay buffer in the current preview.
+The development editor supports a multi-track timeline, unlinking, waveforms, crossfades and exact rendered cuts for supported SDR sources. Export selects copy, render or hybrid processing from the authored result. Original-stream copy retains codec and keyframe constraints. Native hardware/UX and media-profile qualification for v0.11 remains required. Marker export is a JSON sidecar, not embedded chapters. Recording Clips and replay buffering are unavailable.
 
 ## Local by default
 

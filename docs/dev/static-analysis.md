@@ -108,7 +108,13 @@ Their content trees, compiler identity and include environment therefore contrib
 fingerprint, rechecked before fresh results are cached. Use a matching Developer PowerShell for direct lint invocations.
 Without an explicit INCLUDE environment or readable supported toolchain inputs, verdicts are
 not reused. The CI job initializes that environment before building and analysing. Header scoping includes consumers with incomplete
-coverage rather than reporting an empty successful scope. CMake/preset changes select the full tree.
+coverage rather than reporting an empty successful scope. CMake/preset changes select the full tree,
+but selection does not force fresh analysis of every unit. After configuring and building the changed
+tree, adding a target with only a new source preserves cache keys for existing units whose compiler
+commands and recorded inputs remain unchanged. Changed definitions, compiler options or include
+paths change the affected units' keys. A stale or unconfigured Ninja graph cannot support reuse.
+Repository header edits still invalidate the global identity, including when the same change adds
+a target. A full selection with no cache hits must not be attributed to CMake selection alone.
 Added, removed or renamed headers select the full tree and reload current dependency records.
 The header-membership fingerprint invalidates earlier verdicts when include search changes,
 while later runs with the same verified inputs can reuse the new results.

@@ -729,6 +729,10 @@ void WasapiCaptureSrc::ReleaseBuffer() {
     acquired_frames_ = 0;
 }
 
+std::optional<uint64_t> WasapiCaptureSrc::MaxCaptureLatencyNs() const {
+    return WasapiMaxCaptureLatencyNs(audio_client_, SampleRate());
+}
+
 uint32_t WasapiCaptureSrc::SampleRate() const {
     return sample_rate_;
 }

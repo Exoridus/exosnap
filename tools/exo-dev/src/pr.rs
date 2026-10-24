@@ -1208,6 +1208,155 @@ mod tests {
     }
 
     #[test]
+    fn documentation_only_pull_requests_skip_both_product_builds() {
+        let ci = workflow("ci.yml");
+        for job in ["build-test-debug", "build-test-release"] {
+            let body = job_body(&ci, job);
+            assert!(body.contains("needs: [changes, guardrails]"), "{job}");
+            assert!(
+                body.contains("(github.event_name == 'pull_request' && needs.changes.outputs.build == 'true') ||"),
+                "{job} must use the build filter for pull requests"
+            );
+            for forced in [
+                "github.event_name == 'workflow_dispatch' ||",
+                "startsWith(github.ref, 'refs/tags/v')",
+            ] {
+                assert!(body.contains(forced), "{job}: {forced}");
+            }
+        }
+        let required = job_body(&ci, "ci-required");
+        for leg in ["debug", "release"] {
+            assert!(required.contains(&format!("{leg}_skip=not-allowed")));
+            assert_eq!(required.matches(&format!("{leg}_skip=skip-ok")).count(), 2);
+            assert!(
+                required.contains(&format!(
+                    "if [ \"$EVENT\" = \"pull_request\" ] && [ \"$BUILD_FILTER\" = \"false\" ]; then {leg}_skip=skip-ok; fi"
+                )),
+                "the required verdict must allow the filtered {leg} skip"
+            );
+        }
+        assert!(required.contains("require \"build-test (debug)\" \"$R_DEBUG\" \"$debug_skip\""));
+        assert!(
+            required.contains("require \"build-test (release)\" \"$R_RELEASE\" \"$release_skip\"")
+        );
+    }
+
+    #[test]
+    fn missing_or_unknown_build_filter_output_does_not_authorize_a_product_skip() {
+        let required = job_body(&workflow("ci.yml"), "ci-required");
+        let condition = Regex::new(
+            r#"if \[ "\$EVENT" = "pull_request" \] && \[ "\$BUILD_FILTER" (!?=) "([^"]+)" \]; then (debug|release)_skip=skip-ok; fi"#,
+        )
+        .unwrap();
+        let conditions: Vec<_> = condition.captures_iter(&required).collect();
+        assert_eq!(conditions.len(), 2);
+        for condition in conditions {
+            for output in ["false", "true", "", "unknown"] {
+                let allowed = match &condition[1] {
+                    "=" => output == &condition[2],
+                    "!=" => output != &condition[2],
+                    _ => unreachable!(),
+                };
+                assert_eq!(allowed, output == "false", "{}: {output:?}", &condition[3]);
+            }
+        }
+    }
+
+    #[test]
+    fn cache_warming_ignores_only_known_uncompiled_documentation() {
+        let warm = workflow("cache-warm.yml").replace("\r\n", "\n");
+        let push = warm.split_once("\n  push:\n").unwrap().1;
+        let (push, _) = push.split_once("\n  workflow_dispatch:").unwrap();
+        let ignored = push
+            .split_once("    paths-ignore:\n")
+            .expect("docs-only pushes must not warm builds")
+            .1;
+        let patterns: Vec<_> = ignored
+            .lines()
+            .map(str::trim)
+            .filter_map(|line| {
+                line.strip_prefix("- '")
+                    .and_then(|line| line.strip_suffix('\''))
+            })
+            .collect();
+        assert_eq!(
+            patterns,
+            [
+                "docs/**/*.md",
+                "docs/assets/readme-hero.png",
+                "README.md",
+                "AGENTS.md",
+                "CLAUDE.md",
+                "PRIVACY.md",
+                "CHANGELOG.md",
+            ]
+        );
+        let changes = job_body(&workflow("ci.yml"), "changes");
+        let build_filter = changes
+            .split_once("        id: build-filter\n")
+            .expect("unknown build inputs must remain eligible")
+            .1;
+        assert!(build_filter.contains("predicate-quantifier: every"));
+        assert!(changes.contains("build: ${{ steps.build-filter.outputs.build }}"));
+        let rules = build_filter.split_once("            build:\n").unwrap().1;
+        let build_patterns: Vec<_> = rules
+            .lines()
+            .map(str::trim)
+            .filter_map(|line| {
+                line.strip_prefix("- '")
+                    .and_then(|line| line.strip_suffix('\''))
+            })
+            .collect();
+        assert_eq!(build_patterns.first(), Some(&"**"));
+        let exclusions: Vec<_> = build_patterns[1..]
+            .iter()
+            .map(|pattern| {
+                pattern
+                    .strip_prefix('!')
+                    .expect("only documentation is excluded")
+            })
+            .collect();
+        assert_eq!(exclusions, patterns);
+        let ignored_path = |path: &str| {
+            patterns.iter().any(|pattern| {
+                *pattern == path
+                    || (*pattern == "docs/**/*.md"
+                        && path.starts_with("docs/")
+                        && path.ends_with(".md"))
+            })
+        };
+        for paths in [
+            &["docs/product-spec.md", "docs/dev/build-and-test.md"][..],
+            &["README.md", "docs/assets/readme-hero.png"][..],
+        ] {
+            assert!(paths.iter().all(|path| ignored_path(path)));
+        }
+        for path in [
+            "app/runtime.md",
+            "libs/engine/tests/fixtures/README.md",
+            "README-PORTABLE.md",
+            "KNOWN_LIMITATIONS.md",
+            "THIRD_PARTY_NOTICES.md",
+            "LICENSE",
+            "CMakeLists.txt",
+            ".clang-tidy",
+            ".qt-version",
+            ".github/actions/setup-qt/action.yml",
+            "third_party/vendor.cpp",
+            "app/main.cpp",
+            ".github/workflows/cache-warm.yml",
+            "unknown.input",
+        ] {
+            assert!(
+                !["docs/product-spec.md", path]
+                    .iter()
+                    .all(|path| ignored_path(path)),
+                "{path}"
+            );
+        }
+    }
+
+    #[test]
     fn the_expensive_legs_wait_for_the_cheap_guardrails() {
         let ci = workflow("ci.yml");
         let needs_guardrails = Regex::new(r"(?m)^\s*needs:.*guardrails").unwrap();

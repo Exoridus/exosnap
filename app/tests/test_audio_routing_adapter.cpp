@@ -1,3 +1,4 @@
+#include "models/AudioRoutingMigration.h"
 #include "models/RecordingPreset.h"
 #include "quick/ExoSnap/Quick/AudioRoutingAdapter.h"
 #include "settings/RecordingPresetStore.h"
@@ -45,6 +46,50 @@ AudioEnvironmentSnapshot Environment() {
 
 QString Id(const auto& id) {
     return QString::fromStdString(ToUuid(id));
+}
+
+TEST(AudioHarnessIntent, SourceRowsResolveThroughProductPlanWithMergeAndDspSettings) {
+    for (const bool merge : {false, true}) {
+        capability::AudioUiState audio;
+        audio.source_rows = {{AudioSourceKind::Sys, true, false}, {AudioSourceKind::Mic, true, merge}};
+        audio.mic_gain_linear = 0.5f;
+        audio.mic_hpf_enabled = true;
+        audio.mic_hpf_cutoff_hz = 120.f;
+        audio.limiter_enabled = false;
+        const auto intent = CreateLegacyAudioIntent(audio, NewId<PresetNamespaceId>());
+        AudioEnvironmentSnapshot environment;
+        environment.default_playback_endpoint = "speaker";
+        environment.playback_endpoints = {"speaker"};
+        environment.default_microphone_endpoint = "microphone";
+        environment.microphone_endpoints = {"microphone"};
+        const auto resolved = ResolveAudioIntent(intent, environment, {7});
+        ASSERT_TRUE(resolved.succeeded());
+        const auto& plan = *resolved.value();
+        EXPECT_EQ(plan.revision.value, 7u);
+        ASSERT_EQ(plan.sources.size(), 2u);
+        ASSERT_TRUE(plan.sources[0].capture_key.has_value());
+        ASSERT_TRUE(plan.sources[1].capture_key.has_value());
+        EXPECT_EQ(plan.sources[0].capture_key->kind, AudioBindingKind::PlaybackEndpoint);
+        EXPECT_EQ(plan.sources[1].capture_key->kind, AudioBindingKind::MicrophoneEndpoint);
+        EXPECT_FLOAT_EQ(plan.sources[1].spec.post_dsp_gain_linear, 0.5f);
+        EXPECT_TRUE(plan.sources[1].spec.dsp.hpf_enabled);
+        EXPECT_FLOAT_EQ(plan.sources[1].spec.dsp.hpf_cutoff_hz, 120.f);
+        ASSERT_EQ(plan.tracks.size(), merge ? 1u : 2u);
+        EXPECT_EQ(plan.tracks[0].routes.size(), merge ? 2u : 1u);
+        EXPECT_EQ(plan.tracks[0].fixed_average_divisor, merge ? 2u : 1u);
+        for (size_t i = 0; i < plan.tracks.size(); ++i) {
+            EXPECT_EQ(plan.tracks[i].mux_index.value, i);
+            EXPECT_FALSE(plan.tracks[i].limiter.enabled);
+        }
+    }
+}
+
+TEST(AudioHarnessIntent, EmptyRowsProduceNoAudioTracks) {
+    const auto intent = CreateLegacyAudioIntent({}, NewId<PresetNamespaceId>());
+    const auto resolved = ResolveAudioIntent(intent, {});
+    ASSERT_TRUE(resolved.succeeded());
+    EXPECT_TRUE(resolved.value()->sources.empty());
+    EXPECT_TRUE(resolved.value()->tracks.empty());
 }
 
 TEST(AudioRoutingAdapter, FailedSaveAndStaleCommandPreserveRevisionAndVisibleCards) {

@@ -28,9 +28,9 @@
 // ceiling) are clamped, never rolled off.
 //
 // A rarer capture variant delivers an HDR10 desktop already PQ/BT.2020-encoded
-// as R10G10B10A2 (non-linear R'G'B'). That path skips the nit-scale / gamut /
-// PQ stages entirely and only applies the Y'CbCr conversion + packing
-// (PqRgbToYcbcr / QuantizeYcbcr10Limited below).
+// as R10G10B10A2 (non-linear R'G'B'). Recording first decodes this into linear
+// scRGB for composition and then applies the same native HDR output transform.
+// PqRgbToYcbcr / QuantizeYcbcr10Limited also support direct PQ packing.
 
 namespace exosnap::engine {
 

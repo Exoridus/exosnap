@@ -694,6 +694,14 @@ exosnap_add_gtest(
 )
 target_include_directories(auto_record_harness_tests PRIVATE ${CMAKE_CURRENT_SOURCE_DIR})
 
+exosnap_add_gtest(
+    NAME benchmark_effective_config_tests
+    TEST_PREFIX auto_record.
+    SOURCES tests/test_benchmark_effective_config.cpp
+            benchmark/BenchmarkEffectiveConfig.cpp
+    LIBRARIES exosnap_engine Qt6::Core
+)
+target_include_directories(benchmark_effective_config_tests PRIVATE ${CMAKE_CURRENT_SOURCE_DIR})
 # The registry of every long option this binary understands. Five parsers read
 # argv and each skips what it does not own, so an unregistered option used to be
 # skipped by all of them -- a harness run that succeeded without doing its job.

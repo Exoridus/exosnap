@@ -45,9 +45,8 @@ struct PreviewTapDesc {
 };
 
 struct PreviewTapPlan {
-    // False only for the already-PQ R10G10B10A2 native sub-path: its surface is
-    // non-linear PQ with no linear intermediate, and the preview keeps its own
-    // WGC capture there (see the capture-hubs design doc).
+    // False for a non-linear PQ surface. The recorder linearizes native PQ
+    // capture before resolving this plan, so its pre-encode surface is tappable.
     bool tap_enabled = true;
     PreviewTapDesc desc{};
 };

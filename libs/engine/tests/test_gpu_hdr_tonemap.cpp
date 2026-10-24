@@ -6,8 +6,10 @@
 
 #include <gtest/gtest.h>
 
+#include "hdr_pq.h"
 #include "hdr_tonemap.h"
 
+#include <exosnap/engine/gpu_compositor.h>
 #include <exosnap/engine/gpu_hdr_tonemap.h>
 
 #include <d3d11.h>
@@ -350,6 +352,70 @@ TEST(GpuHdrToneMapR10, UpdatedPaperWhiteIsIgnoredForAnSdrScrgbSource) {
     // still round-trips.
     EXPECT_EQ(R8(texels.back()), 255u);
     EXPECT_NEAR(static_cast<int>(R8(texels[1])), 128, 1);
+}
+
+TEST(GpuHdrToneMapR10, PqToLinearPreservesWideGamutAndCompositesAtReferenceWhite) {
+    auto d3d = CreateWarpDevice();
+    ASSERT_TRUE(d3d.device);
+    constexpr uint32_t red = 769;
+    const uint32_t pixel = red | (3u << 30);
+    D3D11_TEXTURE2D_DESC desc{};
+    desc.Width = desc.Height = desc.MipLevels = desc.ArraySize = desc.SampleDesc.Count = 1;
+    desc.Format = DXGI_FORMAT_R10G10B10A2_UNORM;
+    desc.BindFlags = D3D11_BIND_SHADER_RESOURCE;
+    D3D11_SUBRESOURCE_DATA data{};
+    data.pSysMem = &pixel;
+    data.SysMemPitch = sizeof(pixel);
+    winrt::com_ptr<ID3D11Texture2D> source;
+    ASSERT_TRUE(SUCCEEDED(d3d.device->CreateTexture2D(&desc, &data, source.put())));
+    auto linear = CreateRenderTarget(d3d.device.get(), DXGI_FORMAT_R16G16B16A16_FLOAT, 1);
+    HdrToneMapper mapper;
+    std::string err;
+    ASSERT_TRUE(mapper.Init(d3d.device.get(), d3d.context.get(), 1, 1, kPeak400, false, err, 2.5f, true,
+                            HdrToneMapper::Output::LinearScrgb))
+        << err;
+    auto clipped = CreateRenderTarget(d3d.device.get(), DXGI_FORMAT_B8G8R8A8_UNORM, 1);
+    EXPECT_FALSE(mapper.Convert(source.get(), clipped.get(), err));
+    ASSERT_TRUE(mapper.Convert(source.get(), linear.get(), err)) << err;
+    auto read = [&](ID3D11Texture2D* texture) {
+        D3D11_TEXTURE2D_DESC staging_desc{};
+        texture->GetDesc(&staging_desc);
+        staging_desc.Usage = D3D11_USAGE_STAGING;
+        staging_desc.BindFlags = 0;
+        staging_desc.CPUAccessFlags = D3D11_CPU_ACCESS_READ;
+        winrt::com_ptr<ID3D11Texture2D> staging;
+        EXPECT_TRUE(SUCCEEDED(d3d.device->CreateTexture2D(&staging_desc, nullptr, staging.put())));
+        d3d.context->CopyResource(staging.get(), texture);
+        D3D11_MAPPED_SUBRESOURCE mapped{};
+        EXPECT_TRUE(SUCCEEDED(d3d.context->Map(staging.get(), 0, D3D11_MAP_READ, 0, &mapped)));
+        const auto* halfs = static_cast<const uint16_t*>(mapped.pData);
+        const exosnap::engine::LinearRgb result{HalfToFloat(halfs[0]), HalfToFloat(halfs[1]), HalfToFloat(halfs[2])};
+        d3d.context->Unmap(staging.get(), 0);
+        return result;
+    };
+    const float light = exosnap::engine::PqEotf(static_cast<float>(red) / 1023.0f) * 125.0f;
+    const auto expected = exosnap::engine::Bt2020ToBt709({light, 0.0f, 0.0f});
+    const auto decoded = read(linear.get());
+    EXPECT_NEAR(decoded.r, expected.r, 0.03f);
+    EXPECT_NEAR(decoded.g, expected.g, 0.003f);
+    EXPECT_NEAR(decoded.b, expected.b, 0.003f);
+    EXPECT_LT(decoded.g, 0.0f);
+    exosnap::engine::GpuCompositor compositor;
+    ASSERT_TRUE(compositor.Init(d3d.device.get(), d3d.context.get(), 1, 1, err, DXGI_FORMAT_R16G16B16A16_FLOAT, 200.0f))
+        << err;
+    ASSERT_TRUE(compositor.BeginFrame(linear.get(), err)) << err;
+    const uint8_t white[] = {255, 255, 255, 255};
+    ASSERT_TRUE(compositor.DrawWebcam(white, 1, 1, {0, 0, 1, 1}, false, {}, err, 0.5f)) << err;
+    const auto blended = read(compositor.Result());
+    EXPECT_NEAR(blended.r, decoded.r * 0.5f + 1.25f, 0.03f);
+    EXPECT_NEAR(blended.g, decoded.g * 0.5f + 1.25f, 0.003f);
+    EXPECT_NEAR(blended.b, decoded.b * 0.5f + 1.25f, 0.003f);
+    const uint8_t cursor[] = {0, 0, 0, 128};
+    ASSERT_TRUE(compositor.DrawCursor(cursor, 1, 1, {0, 0, 1, 1}, err)) << err;
+    const auto with_cursor = read(compositor.Result());
+    EXPECT_NEAR(with_cursor.r, blended.r * (127.0f / 255.0f), 0.03f);
+    EXPECT_NEAR(with_cursor.g, blended.g * (127.0f / 255.0f), 0.003f);
+    EXPECT_NEAR(with_cursor.b, blended.b * (127.0f / 255.0f), 0.003f);
 }
 
 } // namespace

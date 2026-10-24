@@ -3,6 +3,7 @@
 #include "discontinuity_gap.h"
 #include "exosnap/engine/interfaces/IAudioCaptureSource.h"
 #include <cstdint>
+#include <optional>
 #include <string>
 
 namespace exosnap::engine {
@@ -80,6 +81,10 @@ void WasapiLoopbackSrc::ReleaseBuffer() {
     wasapi_.ReleasePacket(last_frames_);
     buffer_acquired_ = false;
     last_frames_ = 0;
+}
+
+std::optional<uint64_t> WasapiLoopbackSrc::MaxCaptureLatencyNs() const {
+    return wasapi_.MaxCaptureLatencyNs();
 }
 
 uint32_t WasapiLoopbackSrc::SampleRate() const {

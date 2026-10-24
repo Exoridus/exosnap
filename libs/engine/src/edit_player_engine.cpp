@@ -498,24 +498,25 @@ struct AudioTrack {
     SwrCtxGuard resampler;
 };
 
-// get_format callback for a codec context with hw_device_ctx set to a
-// D3D11VA device (docs/architecture/edit-and-export.md).
-// Prefers AV_PIX_FMT_D3D11 when the decoder offers it -- meaning D3D11VA
-// negotiation accepted this stream's exact profile/chroma/bit-depth -- and
-// otherwise falls back to the LAST format libavcodec itself offered (never
-// AV_PIX_FMT_NONE, which would abort the open). That fallback also covers
-// Open()'s own hw_device_ctx-cleared retry below: with no hw_device_ctx, the
-// decoder never advertises AV_PIX_FMT_D3D11 in `pix_fmts` at all, so this
-// callback -- left installed, deliberately not reset -- degrades to picking
-// the plain software format exactly as if it had never been overridden.
-enum AVPixelFormat SelectD3D11HwFormat(AVCodecContext*, const enum AVPixelFormat* pix_fmts) {
-    enum AVPixelFormat fallback = AV_PIX_FMT_NONE;
-    for (const enum AVPixelFormat* p = pix_fmts; *p != AV_PIX_FMT_NONE; ++p) {
-        if (*p == AV_PIX_FMT_D3D11)
-            return AV_PIX_FMT_D3D11;
-        fallback = *p;
+// D3D11 accepting a stream does not imply that its readback layout is
+// supported by our planar conversion, particularly for 4:4:4 surfaces.
+enum AVPixelFormat SelectD3D11HwFormat(AVCodecContext* context, const enum AVPixelFormat* pix_fmts) {
+    const AVPixelFormat selected =
+        SelectSupportedDecodeFormat(context->sw_pix_fmt, pix_fmts, context->hw_device_ctx != nullptr);
+    if (selected != AV_PIX_FMT_D3D11)
+        return selected;
+
+    AVBufferRef* parameters = nullptr;
+    const int result = avcodec_get_hw_frames_parameters(context, context->hw_device_ctx, selected, &parameters);
+    const bool supported =
+        result >= 0 && parameters &&
+        IsSupportedHwReadbackFormat(reinterpret_cast<const AVHWFramesContext*>(parameters->data)->sw_format);
+    av_buffer_unref(&parameters);
+    if (!supported) {
+        LogWarn("D3D11 decoder readback layout is unsupported; selecting software decoding");
+        return SelectSupportedDecodeFormat(context->sw_pix_fmt, pix_fmts, false);
     }
-    return fallback;
+    return selected;
 }
 
 // Attempts to enable D3D11VA hardware decode for `vctx`, called immediately
@@ -1092,41 +1093,39 @@ namespace {
 // "Chroma": H.264/HEVC 8-bit only, no AV1, no 10-bit, no HDR10).
 bool IsConvertibleFrame(const AVFrame* frame) noexcept {
     return frame->width > 0 && frame->height > 0 &&
-           (frame->format == AV_PIX_FMT_YUV420P || frame->format == AV_PIX_FMT_YUV420P10LE ||
-            frame->format == AV_PIX_FMT_YUV444P);
+           (frame->format == AV_PIX_FMT_YUV420P || frame->format == AV_PIX_FMT_YUVJ420P ||
+            frame->format == AV_PIX_FMT_YUV420P10LE || frame->format == AV_PIX_FMT_YUV444P);
 }
 
-// Normalizes a D3D11 hardware-decode readback frame in place, so every call
-// site below can call IsConvertibleFrame/WrapRawDecodedFrame/
-// ConvertToDecodedFrame exactly as before regardless of which decode path
-// produced `frame` (docs/architecture/edit-and-export.md).
-// A no-op unless frame->format == AV_PIX_FMT_D3D11. Transfers the hardware
-// surface to system memory (av_hwframe_transfer_data) and de-interleaves it
-// via edit_player_hw_decode.h. On any failure -- including a 4:4:4 hardware
-// frame, which DeinterleaveHwReadbackFrame does not yet accept, see the
-// design doc's "Not yet verified" note -- `frame` is left unref'd (empty),
-// so the caller's existing not-IsConvertibleFrame handling drops this one
-// frame instead of the whole decode failing.
-void NormalizeHwFrame(AVFrame* frame) {
+// A readback failure ends this decode operation instead of silently discarding
+// every frame. Normal negotiation selects software for unsupported layouts.
+bool NormalizeHwFrame(AVFrame* frame) {
     if (frame->format != AV_PIX_FMT_D3D11)
-        return;
+        return true;
+    if (!frame->hw_frames_ctx ||
+        !IsSupportedHwReadbackFormat(
+            reinterpret_cast<const AVHWFramesContext*>(frame->hw_frames_ctx->data)->sw_format)) {
+        LogWarn("D3D11 decoder produced an unexpected readback layout; video decoding stopped");
+        return false;
+    }
     const auto transfer = [](AVFrame* destination, AVFrame* source) {
         ScopedPerformanceMeasurement measurement(PerformanceStage::DecodeReadback);
         return av_hwframe_transfer_data(destination, source, 0);
     };
     FrameGuard sw(av_frame_alloc());
     if (sw.frame == nullptr || transfer(sw.frame, frame) < 0 || av_frame_copy_props(sw.frame, frame) < 0) {
-        av_frame_unref(frame);
-        return;
+        LogWarn("D3D11 decoder readback failed; video decoding stopped");
+        return false;
     }
     AVFrame* planar = DeinterleaveHwReadbackFrame(sw.frame);
     if (planar == nullptr) {
-        av_frame_unref(frame);
-        return;
+        LogWarn("D3D11 decoder readback normalization failed; video decoding stopped");
+        return false;
     }
     av_frame_unref(frame);
     av_frame_move_ref(frame, planar);
     av_frame_free(&planar);
+    return true;
 }
 
 // Converts one held decoder frame to a ready-to-paint DecodedVideoFrame.
@@ -1317,7 +1316,8 @@ std::optional<DecodedVideoFrame> DecodeForwardToTarget(AVFormatContext* fmt_ctx,
 
             // Hardware readback normalizes back to a plain software pixel
             // format before anything below inspects frame.frame->format.
-            NormalizeHwFrame(frame.frame);
+            if (!NormalizeHwFrame(frame.frame))
+                return std::nullopt;
 
             // best_effort_timestamp already falls back from a missing pts to
             // the interpolated dts-based estimate; a frame with neither is
@@ -1362,7 +1362,8 @@ ReadForwardToTargetRaw(AVFormatContext* fmt_ctx, AVCodecContext* vctx, int video
         const int received = avcodec_receive_frame(vctx, frame.frame);
         if (received >= 0) {
             ++measurements.decoded;
-            NormalizeHwFrame(frame.frame);
+            if (!NormalizeHwFrame(frame.frame))
+                return std::nullopt;
             if (IsConvertibleFrame(frame.frame)) {
                 const int64_t raw_pts =
                     frame.frame->best_effort_timestamp != AV_NOPTS_VALUE ? frame.frame->best_effort_timestamp : 0;
@@ -2162,6 +2163,7 @@ void EditPlayerEngine::StartPlaybackDecode(int64_t start_us, VideoFrameCallback 
         FrameGuard frame(av_frame_alloc());
         int late_streak = 0;
         bool skipping_nonref = false;
+        bool decode_failed = false;
         // A decoded frame here is wrapped (WrapRawDecodedFrame) rather than
         // converted into a fresh multi-megabyte allocation -- the per-frame
         // cost is an AVFrame struct plus a shared_ptr control block, a few
@@ -2219,8 +2221,10 @@ void EditPlayerEngine::StartPlaybackDecode(int64_t start_us, VideoFrameCallback 
                             RecordPerformanceEvent(PerformanceStage::DecodeDropped);
                         }
 
-                        if (worth_converting)
-                            NormalizeHwFrame(frame.frame);
+                        if (worth_converting && !NormalizeHwFrame(frame.frame)) {
+                            decode_failed = true;
+                            break;
+                        }
                         if (worth_converting && IsConvertibleFrame(frame.frame)) {
                             // Wrap and release the decoder's frame BEFORE
                             // handing the result on: on_video is allowed to
@@ -2258,7 +2262,7 @@ void EditPlayerEngine::StartPlaybackDecode(int64_t start_us, VideoFrameCallback 
                         }
                     }
 
-                    if (draining)
+                    if (draining || decode_failed)
                         break; // EOF reached and the decoder fully drained above
                 }
             }
