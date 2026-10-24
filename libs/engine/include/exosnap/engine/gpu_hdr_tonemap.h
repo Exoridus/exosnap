@@ -8,7 +8,7 @@
 
 namespace exosnap::engine {
 
-// scRGB FP16 -> SDR BT.709 tone-map render pass. Reads an FP16 shader-resource
+// HDR color render pass, with SDR tone-map and linear scRGB output. Reads an FP16 shader-resource
 // texture (scRGB: linear, BT.709 primaries, 1.0 = 80 cd/m^2 reference white) and
 // writes a BGRA8 render target of identical dimensions, applying the documented
 // per-channel highlight roll-off + sRGB OETF from hdr_tonemap.h. The result is
@@ -22,6 +22,8 @@ namespace exosnap::engine {
 // device/context.
 class HdrToneMapper {
   public:
+    enum class Output { Sdr, LinearScrgb };
+
     // peak_scale: display peak luminance in reference-white multiples that maps
     // to output 1.0 (see HdrPeakScale in hdr_tonemap.h). Ignored when
     // sdr_scrgb_source is true.
@@ -37,8 +39,11 @@ class HdrToneMapper {
     // out far too bright. Ignored when sdr_scrgb_source is true, where 1.0
     // already means the display's own reference white. Defaults to the
     // scene-referred identity.
+    // LinearScrgb decodes PQ/BT.2020 to FP16 scRGB without tone-mapping or
+    // reference-white normalization. Negative wide-gamut components are retained.
     bool Init(ID3D11Device* device, ID3D11DeviceContext* context, UINT width, UINT height, float peak_scale,
-              bool sdr_scrgb_source, std::string& err, float paper_white_scale = 1.0f, bool pq_source = false);
+              bool sdr_scrgb_source, std::string& err, float paper_white_scale = 1.0f, bool pq_source = false,
+              Output output = Output::Sdr);
 
     // Replace the two display-derived scalars on an initialised pass, with the
     // same meaning and the same source-kind gating Init applies to them.
@@ -51,8 +56,9 @@ class HdrToneMapper {
     // draws under the new numbers. Does nothing before a successful Init.
     void SetDisplayScales(float peak_scale, float paper_white_scale);
 
-    // Tone-map src (FP16, must have D3D11_BIND_SHADER_RESOURCE) into dst (BGRA8,
-    // must have D3D11_BIND_RENDER_TARGET). Both must be width x height. SRVs and
+    // Convert src (FP16 scRGB or PQ RGB10, with D3D11_BIND_SHADER_RESOURCE)
+    // into dst (SDR, or FP16 for LinearScrgb, with D3D11_BIND_RENDER_TARGET).
+    // Both must be width x height and distinct textures. SRVs and
     // RTVs are created lazily and cached by texture pointer (the capture path
     // reuses a small fixed set of source/destination textures per session).
     bool Convert(ID3D11Texture2D* src, ID3D11Texture2D* dst, std::string& err);
@@ -73,6 +79,7 @@ class HdrToneMapper {
     float paper_white_scale_ = 1.0f;
     bool sdr_scrgb_source_ = false;
     bool pq_source_ = false;
+    Output output_ = Output::Sdr;
 
     winrt::com_ptr<ID3D11VertexShader> vertex_shader_;
     winrt::com_ptr<ID3D11PixelShader> pixel_shader_;
