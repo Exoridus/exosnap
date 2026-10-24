@@ -9,6 +9,7 @@
 #include <iostream>
 #include <iterator>
 #include <optional>
+#include <ratio>
 #include <system_error>
 #include <utility>
 
