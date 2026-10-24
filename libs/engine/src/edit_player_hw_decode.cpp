@@ -14,8 +14,8 @@ namespace exosnap::engine {
 
 AVPixelFormat SelectSupportedDecodeFormat(AVPixelFormat software_format, const AVPixelFormat* offered,
                                           bool enable_hardware) noexcept {
-    const bool supported = software_format == AV_PIX_FMT_YUV420P || software_format == AV_PIX_FMT_YUV420P10LE ||
-                           IsSupportedHwReadbackFormat(software_format);
+    const bool supported = software_format == AV_PIX_FMT_YUV420P || software_format == AV_PIX_FMT_YUVJ420P ||
+                           software_format == AV_PIX_FMT_YUV420P10LE || IsSupportedHwReadbackFormat(software_format);
     AVPixelFormat fallback = AV_PIX_FMT_NONE;
     for (const AVPixelFormat* p = offered; *p != AV_PIX_FMT_NONE; ++p) {
         if (*p == AV_PIX_FMT_D3D11 && enable_hardware && supported)

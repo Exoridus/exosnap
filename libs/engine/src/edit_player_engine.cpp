@@ -1093,8 +1093,8 @@ namespace {
 // "Chroma": H.264/HEVC 8-bit only, no AV1, no 10-bit, no HDR10).
 bool IsConvertibleFrame(const AVFrame* frame) noexcept {
     return frame->width > 0 && frame->height > 0 &&
-           (frame->format == AV_PIX_FMT_YUV420P || frame->format == AV_PIX_FMT_YUV420P10LE ||
-            frame->format == AV_PIX_FMT_YUV444P);
+           (frame->format == AV_PIX_FMT_YUV420P || frame->format == AV_PIX_FMT_YUVJ420P ||
+            frame->format == AV_PIX_FMT_YUV420P10LE || frame->format == AV_PIX_FMT_YUV444P);
 }
 
 // A readback failure ends this decode operation instead of silently discarding

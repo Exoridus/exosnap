@@ -165,6 +165,27 @@ TEST(EditPlayerHwDecode, NegotiationFallsBackFor444AndUnknownLayouts) {
     EXPECT_EQ(exosnap::engine::SelectSupportedDecodeFormat(AV_PIX_FMT_NONE, formats, true), AV_PIX_FMT_YUV444P);
 }
 
+TEST(EditPlayerHwDecode, NegotiationKeepsFullRange420HardwareAndSoftwareFormats) {
+    const AVPixelFormat formats[] = {AV_PIX_FMT_D3D11, AV_PIX_FMT_YUVJ420P, AV_PIX_FMT_NONE};
+    EXPECT_EQ(exosnap::engine::SelectSupportedDecodeFormat(AV_PIX_FMT_YUVJ420P, formats, true), AV_PIX_FMT_D3D11);
+    EXPECT_EQ(exosnap::engine::SelectSupportedDecodeFormat(AV_PIX_FMT_YUVJ420P, formats, false), AV_PIX_FMT_YUVJ420P);
+}
+
+TEST(EditPlayerHwDecode, Nv12ReadbackPreservesFullRangeColorMetadata) {
+    FramePtr source = MakeFrame(AV_PIX_FMT_NV12, 4, 2);
+    ASSERT_NE(source, nullptr);
+    source->color_range = AVCOL_RANGE_JPEG;
+    source->colorspace = AVCOL_SPC_BT709;
+    source->color_primaries = AVCOL_PRI_BT709;
+    source->color_trc = AVCOL_TRC_BT709;
+    FramePtr output(DeinterleaveHwReadbackFrame(source.get()));
+    ASSERT_NE(output, nullptr);
+    EXPECT_EQ(output->color_range, AVCOL_RANGE_JPEG);
+    EXPECT_EQ(output->colorspace, AVCOL_SPC_BT709);
+    EXPECT_EQ(output->color_primaries, AVCOL_PRI_BT709);
+    EXPECT_EQ(output->color_trc, AVCOL_TRC_BT709);
+}
+
 TEST(EditPlayerHwDecode, NegotiationRespectsForcedSoftwareAndExcludesOtherHardwareFormats) {
     const AVPixelFormat formats[] = {AV_PIX_FMT_D3D11, AV_PIX_FMT_CUDA, AV_PIX_FMT_YUV420P, AV_PIX_FMT_NONE};
     EXPECT_EQ(exosnap::engine::SelectSupportedDecodeFormat(AV_PIX_FMT_YUV420P, formats, false), AV_PIX_FMT_YUV420P);
