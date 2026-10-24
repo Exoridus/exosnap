@@ -24,6 +24,7 @@
 #include <array>
 #include <atomic>
 #include <chrono>
+#include <cmath>
 #include <cstdint>
 #include <cstdlib>
 #include <cstring>
@@ -80,6 +81,8 @@ TEST(EditTimelineMedia, RenderUsesSourceRelativeTimeWithShiftedOrigins) {
         ASSERT_TRUE(rendered.DecodeFrameAtRaw(0));
         std::vector<float> actual, expected;
         ASSERT_TRUE(reader.AudioAt(0, 480, expected, error)) << error;
+        EXPECT_TRUE(
+            std::any_of(expected.begin(), expected.end(), [](float sample) { return std::abs(sample) > 0.02f; }));
         ASSERT_TRUE(rendered.DecodeAudioStreamRange(1, 0, 480, actual, error)) << error;
         ASSERT_EQ(actual.size(), expected.size());
         for (size_t i = 0; i < actual.size(); ++i)

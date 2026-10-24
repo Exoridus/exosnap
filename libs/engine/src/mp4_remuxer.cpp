@@ -675,6 +675,12 @@ static RemuxResult RemuxStreamCopy(const std::filesystem::path& input_path, cons
         }
     }
 
+    const int64_t source_origin_us = in_ctx->start_time == AV_NOPTS_VALUE ? 0 : in_ctx->start_time;
+    if (tr.HasStart())
+        tr.start_us = SourceTimestampUs(tr.start_us, source_origin_us);
+    if (tr.HasEnd())
+        tr.end_us = SourceTimestampUs(tr.end_us, source_origin_us);
+
     if (tr.HasStart()) {
         // Seek to the keyframe at or before start_us.
         // AVSEEK_FLAG_BACKWARD ensures we snap to the nearest preceding keyframe

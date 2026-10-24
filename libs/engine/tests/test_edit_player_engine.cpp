@@ -219,6 +219,7 @@ class ScopedTestMkv {
     ~ScopedTestMkv() {
         std::error_code ec;
         std::filesystem::remove(path_, ec);
+        std::filesystem::remove(std::filesystem::path(path_.wstring() + L".exosnap.json"), ec);
     }
     ScopedTestMkv(const ScopedTestMkv&) = delete;
     ScopedTestMkv& operator=(const ScopedTestMkv&) = delete;
@@ -1056,6 +1057,37 @@ TEST(EditPlayerEngine, SourceRelativeVideoAndAudioIgnoreShiftedContainerOrigins)
         ASSERT_EQ(actual_audio.size(), expected_audio.size());
         for (size_t i = 0; i < actual_audio.size(); ++i)
             ASSERT_NEAR(actual_audio[i], expected_audio[i], 0.0005f) << offset << ": " << i;
+        const auto audio = engine.AudioMetadata();
+        ASSERT_EQ(audio.actual_tracks.size(), 1u);
+        const exosnap::engine::MonitorSelectionSnapshot selection{audio.selection_media_id,
+                                                                  {1},
+                                                                  {{audio.actual_tracks.front().track_id, 1.0f, false}},
+                                                                  true,
+                                                                  audio.unverified_asset_binding};
+        ASSERT_TRUE(engine.SetMonitorSelection(selection, error)) << error;
+        ASSERT_TRUE(engine.DecodeAudioRange(9600, 480, actual_audio, error)) << error;
+        ASSERT_EQ(actual_audio.size(), expected_audio.size());
+        for (size_t i = 0; i < actual_audio.size(); ++i)
+            ASSERT_NEAR(actual_audio[i], expected_audio[i], 0.0005f) << offset << ": " << i;
+    }
+}
+
+TEST(EditPlayerEngine, StreamCopyTrimUsesSourceRelativeBoundariesWithShiftedOrigins) {
+    for (const int64_t offset : {0LL, 10'000'000LL}) {
+        ScopedTestMkv shifted("exosnap-copy-origin-source.mkv");
+        ScopedTestMkv copied("exosnap-copy-origin-result.mp4");
+        ASSERT_TRUE(RemuxTimestampMedia(shifted.path(), offset));
+        ASSERT_TRUE(exosnap::engine::ProbeEditMedia(shifted.path()).timestamp_origin_us);
+        const auto result = exosnap::engine::RemuxToProgressiveMp4(shifted.path(), copied.path(),
+                                                                   exosnap::engine::RemuxNoopCallback(), {0, 200'000});
+        ASSERT_TRUE(result.success) << result.message;
+        const auto metadata = exosnap::engine::ProbeEditMedia(copied.path());
+        EXPECT_GT(metadata.duration_us, 0);
+        EXPECT_LE(metadata.duration_us, 1'100'000);
+        EditPlayerEngine engine;
+        std::string error;
+        ASSERT_TRUE(engine.Open(copied.path(), error)) << error;
+        ASSERT_TRUE(engine.ReadFrameAtRaw(100'000, exosnap::engine::VideoReadMode::RandomAccess));
     }
 }
 

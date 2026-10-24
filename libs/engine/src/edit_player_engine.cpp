@@ -1791,7 +1791,7 @@ bool EditPlayerEngine::Impl::DecodeAudioRange(std::optional<uint32_t> stream, in
     }
     auto* format = fmt.ctx;
     const int64_t start_us = av_rescale_q(first_sample, AVRational{1, 48000}, AVRational{1, AV_TIME_BASE});
-    const int64_t origin_us = stream && format->start_time != AV_NOPTS_VALUE ? format->start_time : 0;
+    const int64_t origin_us = SourceOriginUs(format);
     const int64_t origin_sample = av_rescale_q(origin_us, AVRational{1, AV_TIME_BASE}, AVRational{1, 48000});
     // Decode preroll through the normal resampler so range boundaries do not
     // reset its filter at an audible sample.
