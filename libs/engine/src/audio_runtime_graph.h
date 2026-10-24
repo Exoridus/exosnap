@@ -65,6 +65,7 @@ class AudioRuntimeGraph : public std::enable_shared_from_this<AudioRuntimeGraph>
         std::unique_ptr<IAudioCaptureSource> physical;
         std::shared_ptr<void> reservation;
         std::unique_ptr<LogicalAudioSource> logical;
+        std::shared_ptr<std::atomic<uint64_t>> completed_through;
     };
     AudioRuntimeGraph();
     void Run();

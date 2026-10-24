@@ -21,6 +21,7 @@ class WasapiLoopbackSrc : public IAudioCaptureSource {
 
     bool Init(std::string& out_error) override;
     uint32_t PendingFrameCount() override;
+    std::optional<uint64_t> MaxCaptureLatencyNs() const override;
     bool AcquireBuffer(RawAudioBuffer& out_buf, std::string& out_error) override;
     void ReleaseBuffer() override;
 

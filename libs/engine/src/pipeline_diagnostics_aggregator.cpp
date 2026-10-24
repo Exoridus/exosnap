@@ -60,7 +60,9 @@ DiagnosticsStaticConfig MakeDiagnosticsStaticConfig(const RecorderConfig& config
     cfg.audio_present = config.record_audio;
     if (config.record_audio) {
         cfg.audio_track_count =
-            config.audio_track_plan.tracks.empty() ? 1u : static_cast<uint32_t>(config.audio_track_plan.tracks.size());
+            config.resolved_audio_plan               ? static_cast<uint32_t>(config.resolved_audio_plan->tracks.size())
+            : config.audio_track_plan.tracks.empty() ? 1u
+                                                     : static_cast<uint32_t>(config.audio_track_plan.tracks.size());
     }
 
     cfg.video_queue_capacity = 0; // mux queue is unbounded by design (architecture finding)

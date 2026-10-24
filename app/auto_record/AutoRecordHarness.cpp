@@ -22,6 +22,7 @@
 #include <exosnap/engine/codec_types.h>
 #include <exosnap/engine/recorder_session.h>
 
+#include "../models/AudioRoutingMigration.h"
 #include "../models/OutputSettingsModel.h"
 #include "../models/VideoSettingsModel.h"
 #include "../services/RecordingCoordinator.h"
@@ -295,6 +296,7 @@ int RunAutoRecordOnCoordinator(QCoreApplication& app, exosnap::RecordingCoordina
     }
 
     const capability::AudioUiState audio_state = BuildAudioUiState(options);
+    const auto audio_intent = CreateLegacyAudioIntent(audio_state, engine::NewId<engine::PresetNamespaceId>());
 
     // repeat_cycles > 1 drives N start/stop cycles on this same coordinator instance
     // instead of exiting after one, so the capture hub sees the "warm" (already-leased,
@@ -370,7 +372,8 @@ int RunAutoRecordOnCoordinator(QCoreApplication& app, exosnap::RecordingCoordina
         // A seeded Ready notification delivered after capture is leased returns
         // that new lease and reopens the preview over the engine's duplication.
         if (!StartAutoRecordAfterPendingState(app, [&]() {
-                return coordinator.StartRecording(selected_target, audio_state, std::nullopt, capture_backend);
+                return coordinator.StartRecording(selected_target, audio_state, std::nullopt, capture_backend,
+                                                  audio_intent);
             })) {
             return FailWith(
                 QStringLiteral("StartRecording refused (coordinator not ready or busy, cycle %1)").arg(cycle + 1));

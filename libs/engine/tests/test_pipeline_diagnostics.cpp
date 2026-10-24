@@ -2,6 +2,7 @@
 #include <cstdint>
 #include <gtest/gtest.h>
 
+#include "exosnap/engine/audio_limits.h"
 #include "exosnap/engine/codec_types.h"
 #include "exosnap/engine/pipeline_diagnostics.h"
 #include "exosnap/engine/recorder_session.h"
@@ -22,6 +23,19 @@ using std::chrono::milliseconds;
 const clock::time_point kBase = clock::time_point{} + std::chrono::hours(10);
 clock::time_point At(int64_t ms) {
     return kBase + milliseconds(ms);
+}
+
+TEST(PipelineDiagnostics, ResolvedAudioTracksDetermineStaticCountAndQueueBudget) {
+    RecorderConfig config;
+    config.record_audio = true;
+    config.resolved_audio_plan.emplace();
+    config.resolved_audio_plan->tracks.resize(8);
+    const auto active = MakeDiagnosticsStaticConfig(config);
+    EXPECT_EQ(active.audio_track_count, 8u);
+    EXPECT_EQ(active.audio_queue_capacity, AudioHoldPacketLimit(8));
+    config.record_audio = false;
+    const auto disabled = MakeDiagnosticsStaticConfig(config);
+    EXPECT_EQ(disabled.audio_track_count, 0u);
 }
 
 DiagnosticsStaticConfig MakeConfig(bool split_supported = true, bool audio = true) {

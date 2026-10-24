@@ -5,6 +5,7 @@
 #include "discontinuity_gap.h"
 #include "exosnap/engine/interfaces/IAudioCaptureSource.h"
 #include <memory>
+#include <optional>
 #include <string>
 #include <utility>
 
@@ -453,6 +454,10 @@ AudioSampleFormat OutputFormatAudioSrc::SampleFormat() const {
 
 const std::string& OutputFormatAudioSrc::EndpointName() const {
     return inner_->EndpointName();
+}
+
+std::optional<uint64_t> OutputFormatAudioSrc::MaxCaptureLatencyNs() const {
+    return inner_ ? inner_->MaxCaptureLatencyNs() : std::nullopt;
 }
 
 int32_t OutputFormatAudioSrc::LastCaptureHresult() const {

@@ -426,6 +426,13 @@ LogicalAudioSource::Create(ResolvedAudioSource source, const AudioCaptureDescrip
         return {};
     return std::unique_ptr<LogicalAudioSource>(new LogicalAudioSource(std::move(impl)));
 }
+uint64_t LogicalAudioSource::CompletedThrough(uint64_t physical_qpc_ns) const {
+    const auto& p = *impl_;
+    if (p.input_frames > p.output_frames)
+        return (std::min)(physical_qpc_ns,
+                          p.origin_qpc_ns + DeviceFramesToNs(p.output_frames, p.descriptor.sample_rate));
+    return physical_qpc_ns;
+}
 bool LogicalAudioSource::Process(const AudioBlockView& input, std::string& error) {
     error.clear();
     auto& p = *impl_;

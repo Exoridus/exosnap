@@ -1,5 +1,6 @@
 #include "shared_audio_capture.h"
 #include "audio_tee.h"
+#include "qpc_100ns.h"
 #include <cmath>
 #include <cstddef>
 #include <cstdint>
@@ -135,6 +136,10 @@ bool PhysicalAudioClockSource::Reinit(std::string& error) {
     ++impl_->statistics.reinit_count;
     return true;
 }
+std::optional<uint64_t> PhysicalAudioClockSource::MaxCaptureLatencyNs() const {
+    return impl_->conversion.MaxCaptureLatencyNs();
+}
+
 uint32_t PhysicalAudioClockSource::PendingFrameCount() {
     return impl_->conversion.PendingFrameCount();
 }
@@ -252,6 +257,13 @@ uint32_t PhysicalAudioClockSource::DrainResampler(RawAudioBuffer& buffer, int64_
 
 namespace {
 using SteadyClock = std::chrono::steady_clock;
+
+uint64_t CapturePollQpcNs() {
+    LARGE_INTEGER ticks{}, frequency{};
+    QueryPerformanceCounter(&ticks);
+    QueryPerformanceFrequency(&frequency);
+    return QpcTicksTo100ns(static_cast<uint64_t>(ticks.QuadPart), static_cast<uint64_t>(frequency.QuadPart)) * 100;
+}
 
 bool SameAdmission(const AudioCaptureDescriptor& left, const AudioCaptureDescriptor& right) {
     return left.sample_rate == right.sample_rate && left.channels == right.channels &&
@@ -371,6 +383,9 @@ class PhysicalOwner : public std::enable_shared_from_this<PhysicalOwner> {
     std::shared_ptr<AudioTee> Tee() const {
         return tee_;
     }
+    uint64_t CompletedThrough() const {
+        return completed_through_qpc_ns_.load(std::memory_order_acquire);
+    }
     AudioCaptureDescriptor PreparedDescriptor() const {
         std::lock_guard lock(mutex_);
         return prepared_descriptor_;
@@ -451,6 +466,9 @@ class PhysicalOwner : public std::enable_shared_from_this<PhysicalOwner> {
         std::lock_guard lock(mutex_);
         return error_;
     }
+    std::string TimelineFailure() const {
+        return timeline_faulted_.load(std::memory_order_acquire) ? Error() : std::string{};
+    }
     PendingAudioSeal QueueSeal(std::shared_ptr<AudioTeeReader> reader, uint64_t end_qpc_ns,
                                SteadyClock::time_point deadline) {
         auto promise = std::make_shared<std::promise<AudioReaderEnd>>();
@@ -496,6 +514,7 @@ class PhysicalOwner : public std::enable_shared_from_this<PhysicalOwner> {
     std::atomic<bool> require_exact_format_ = false;
     std::atomic<bool> ready_ = false;
     std::atomic<bool> degraded_ = false;
+    std::atomic<bool> timeline_faulted_ = false;
     std::atomic<uint64_t> reinit_requested_ = 0;
     std::atomic<uint64_t> generation_ = 1;
     std::atomic<int32_t> capture_hresult_ = 0;
@@ -503,6 +522,9 @@ class PhysicalOwner : public std::enable_shared_from_this<PhysicalOwner> {
     size_t reserved_bytes_ = 0;
     bool owner_reserved_ = false;
     uint64_t last_output_end_qpc_ = 0;
+    uint64_t idle_poll_qpc_ns_ = 0;
+    uint64_t idle_certified_through_qpc_ns_ = 0;
+    std::atomic<uint64_t> completed_through_qpc_ns_{0};
     bool next_discontinuity_ = false;
 
     void UpdateStatistics() {
@@ -518,7 +540,12 @@ class PhysicalOwner : public std::enable_shared_from_this<PhysicalOwner> {
         std::lock_guard lock(mutex_);
         for (auto iterator = seals_.begin(); iterator != seals_.end();) {
             const bool timeout = SteadyClock::now() >= iterator->deadline;
-            if (!force && !timeout && last_output_end_qpc_ < iterator->qpc_ns) {
+            // Loopback can be healthy without emitting packets during silence.
+            const auto latency = source_ ? source_->MaxCaptureLatencyNs() : std::nullopt;
+            const bool idle_through_end = !degraded_ && latency && idle_poll_qpc_ns_ >= iterator->qpc_ns &&
+                                          idle_poll_qpc_ns_ - iterator->qpc_ns >= *latency &&
+                                          source_->BufferedFrames() == 0;
+            if (!force && !timeout && last_output_end_qpc_ < iterator->qpc_ns && !idle_through_end) {
                 ++iterator;
                 continue;
             }
@@ -529,7 +556,7 @@ class PhysicalOwner : public std::enable_shared_from_this<PhysicalOwner> {
                 continue;
             }
             auto end = reader->SealEnd(iterator->qpc_ns);
-            end.stalled = (timeout || force) && last_output_end_qpc_ < iterator->qpc_ns;
+            end.stalled = (timeout || force) && last_output_end_qpc_ < iterator->qpc_ns && !idle_through_end;
             if (end.stalled && source_)
                 end.undrained_frames = source_->BufferedFrames();
             iterator->promise->set_value(end);
@@ -545,6 +572,12 @@ class PhysicalOwner : public std::enable_shared_from_this<PhysicalOwner> {
         metadata.silence = buffer.silent;
         metadata.discontinuity = buffer.data_discontinuity || next_discontinuity_;
         metadata.output_qpc_ns = source_->LastBufferQpcNs();
+        if (metadata.output_qpc_ns < idle_certified_through_qpc_ns_) {
+            error = "Physical audio packet precedes its certified idle frontier";
+            SetError(error);
+            timeline_faulted_.store(true, std::memory_order_release);
+            return false;
+        }
         metadata.device_timing_valid = source_->LastBufferDeviceTiming(metadata.device_timing);
         metadata.filter_latency_ns = DeviceFramesToNs(source_->BufferedFrames(), source_->SampleRate());
         if (metadata.device_timing_valid) {
@@ -657,12 +690,14 @@ void PhysicalOwner::Run() {
                 while (!stopping_) {
                     const uint64_t requested_generation = reinit_requested_.exchange(0);
                     if (requested_generation && requested_generation == generation_ && !degraded_) {
+                        idle_poll_qpc_ns_ = 0;
                         degraded_ = true;
                         next_retry = SteadyClock::now();
                         backoff = std::chrono::milliseconds(250);
                     }
                     if (degraded_) {
-                        if (SteadyClock::now() >= next_retry) {
+                        idle_poll_qpc_ns_ = 0;
+                        if (!timeline_faulted_ && SteadyClock::now() >= next_retry) {
                             if (source_->Reinit(error) && tee_->SetDescriptor(source_->Descriptor(), error)) {
                                 ++budget_->capture_opens;
                                 degraded_ = false;
@@ -684,7 +719,9 @@ void PhysicalOwner::Run() {
                         WaitForWork(std::chrono::milliseconds(10));
                         continue;
                     }
+                    const uint64_t poll_qpc_ns = CapturePollQpcNs();
                     const uint32_t pending = source_->PendingFrameCount();
+                    idle_poll_qpc_ns_ = pending ? 0 : poll_qpc_ns;
                     if (pending) {
                         RawAudioBuffer buffer;
                         error.clear();
@@ -706,6 +743,16 @@ void PhysicalOwner::Run() {
                             backoff = std::chrono::milliseconds(500);
                         }
                     }
+                    uint64_t completed = last_output_end_qpc_;
+                    const auto latency = source_->MaxCaptureLatencyNs();
+                    if (!degraded_ && latency && idle_poll_qpc_ns_ >= *latency && source_->BufferedFrames() == 0) {
+                        idle_certified_through_qpc_ns_ =
+                            (std::max)(idle_certified_through_qpc_ns_, idle_poll_qpc_ns_ - *latency);
+                        completed = (std::max)(completed, idle_certified_through_qpc_ns_);
+                    }
+                    completed_through_qpc_ns_.store(
+                        (std::max)(completed, completed_through_qpc_ns_.load(std::memory_order_relaxed)),
+                        std::memory_order_release);
                     CompleteSeals();
                     if (!pending)
                         WaitForWork(std::chrono::milliseconds(10));
@@ -762,10 +809,19 @@ class SharedAudioReader final : public IAudioCaptureSource {
         return true;
     }
     uint32_t PendingFrameCount() override {
+        if (!timeline_failure_reported_ && owner_ && !owner_->TimelineFailure().empty())
+            return 1;
         return reader_ ? reader_->PendingFrames() : 0;
     }
     bool AcquireBuffer(RawAudioBuffer& buffer, std::string& error) override {
         buffer = {};
+        if (!timeline_failure_reported_ && owner_) {
+            error = owner_->TimelineFailure();
+            if (!error.empty()) {
+                timeline_failure_reported_ = true;
+                return false;
+            }
+        }
         if (!reader_ || !reader_->Acquire(block_, error))
             return false;
         observed_generation_ = block_.descriptor.source_generation;
@@ -801,6 +857,9 @@ class SharedAudioReader final : public IAudioCaptureSource {
     }
     uint64_t LastBufferQpcNs() const override {
         return block_.metadata.output_qpc_ns;
+    }
+    uint64_t CompletedThrough() const {
+        return owner_ ? owner_->CompletedThrough() : 0;
     }
     void* BufferReadyEvent() const override {
         return reader_ ? reader_->ReadyEvent() : nullptr;
@@ -854,6 +913,7 @@ class SharedAudioReader final : public IAudioCaptureSource {
     AudioBlockView block_;
     std::string endpoint_name_;
     uint64_t observed_generation_ = 1;
+    bool timeline_failure_reported_ = false;
 };
 } // namespace
 
@@ -1035,6 +1095,10 @@ std::vector<AudioReaderEnd> BatchSealAudioReadersEnd(std::span<IAudioCaptureSour
 bool AudioReaderEnded(const IAudioCaptureSource& reader) {
     const auto adapter = dynamic_cast<const SharedAudioReader*>(&reader);
     return adapter && adapter->Ended();
+}
+uint64_t SharedAudioReaderCompletedThrough(const IAudioCaptureSource& reader) {
+    const auto adapter = dynamic_cast<const SharedAudioReader*>(&reader);
+    return adapter ? adapter->CompletedThrough() : 0;
 }
 bool LastSharedAudioBlock(const IAudioCaptureSource& reader, AudioBlockView& block) {
     const auto adapter = dynamic_cast<const SharedAudioReader*>(&reader);

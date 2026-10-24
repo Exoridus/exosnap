@@ -15,9 +15,22 @@
 #include <initguid.h>
 
 #include <cstdio>
+#include <limits>
 #include <wrl/client.h>
 
 namespace exosnap::engine {
+
+std::optional<uint64_t> WasapiMaxCaptureLatencyNs(IAudioClient* client, uint32_t sample_rate) {
+    REFERENCE_TIME latency = 0;
+    UINT32 buffer_frames = 0;
+    if (!client || !sample_rate || FAILED(client->GetStreamLatency(&latency)) || latency < 0 ||
+        FAILED(client->GetBufferSize(&buffer_frames)) || buffer_frames == 0)
+        return std::nullopt;
+    const uint64_t buffer_ns = DeviceFramesToNs(buffer_frames, sample_rate);
+    if (static_cast<uint64_t>(latency) > ((std::numeric_limits<uint64_t>::max)() - buffer_ns) / 100)
+        return std::nullopt;
+    return static_cast<uint64_t>(latency) * 100 + buffer_ns;
+}
 
 namespace {
 HRESULT SelectRenderEndpoint(IMMDeviceEnumerator* enumerator, const std::optional<std::string>& id,

@@ -11,6 +11,7 @@
 #include <exosnap/engine/recording_media_types.h>
 #include <exosnap/engine/session_stats.h>
 #include <memory>
+#include <optional>
 #include <string>
 #include <utility>
 #include <vector>
@@ -29,15 +30,24 @@ uint64_t NowNs() {
 }
 class FiniteCapture final : public IAudioCaptureSource {
   public:
-    explicit FiniteCapture(std::shared_ptr<std::atomic<uint32_t>> opens, uint64_t start)
-        : opens_(std::move(opens)), start_(start), pcm_(960, 0.25f) {
+    explicit FiniteCapture(std::shared_ptr<std::atomic<uint32_t>> opens, uint64_t start, uint32_t packet_limit = 20,
+                           uint64_t delivery_delay_ns = 0, bool latency_known = true,
+                           std::shared_ptr<std::atomic<bool>> release_next = {})
+        : opens_(std::move(opens)), start_(start), packet_limit_(packet_limit), delivery_delay_ns_(delivery_delay_ns),
+          latency_known_(latency_known), release_next_(std::move(release_next)), pcm_(960, 0.25f) {
     }
     bool Init(std::string&) override {
         ++*opens_;
         return true;
     }
+    std::optional<uint64_t> MaxCaptureLatencyNs() const override {
+        return latency_known_ ? std::optional<uint64_t>{50000000ULL} : std::nullopt;
+    }
     uint32_t PendingFrameCount() override {
-        return packets_ < 20 ? 480 : 0;
+        return packets_ < packet_limit_ && NowNs() >= start_ + delivery_delay_ns_ &&
+                       (!packets_ || !release_next_ || release_next_->load())
+                   ? 480
+                   : 0;
     }
     bool AcquireBuffer(RawAudioBuffer& buffer, std::string&) override {
         if (!PendingFrameCount())
@@ -72,6 +82,10 @@ class FiniteCapture final : public IAudioCaptureSource {
     std::shared_ptr<std::atomic<uint32_t>> opens_;
     uint64_t start_;
     uint32_t packets_ = 0;
+    uint32_t packet_limit_ = 20;
+    uint64_t delivery_delay_ns_ = 0;
+    bool latency_known_ = true;
+    std::shared_ptr<std::atomic<bool>> release_next_;
     std::vector<float> pcm_;
     std::string name_ = "Finite fixture";
 };
@@ -82,6 +96,7 @@ TEST(AudioRuntimeGraph, SharedCaptureProcessesEachSourceOnceAndFansOutToTwoTrack
     ResolvedAudioSource source;
     source.spec.id = NewId<AudioSourceId>();
     source.capture_key = PhysicalCaptureKey{};
+    source.spec.post_dsp_gain_linear = 0.5f;
     plan.sources.push_back(source);
     for (uint32_t i = 0; i < 2; ++i) {
         ResolvedRoutingTrack track;
@@ -121,6 +136,12 @@ TEST(AudioRuntimeGraph, SharedCaptureProcessesEachSourceOnceAndFansOutToTwoTrack
     EXPECT_EQ(meters.front().processed_blocks, 20u);
     EXPECT_EQ(meters.front().processed_frames, 9600u);
     EXPECT_EQ(opens->load(), 1u);
+    const auto physical = graph->PhysicalMeters();
+    ASSERT_EQ(physical.size(), 1u);
+    EXPECT_EQ(physical.front().capture_opens, 1u);
+    EXPECT_EQ(physical.front().reader_count, 1u);
+    EXPECT_EQ(physical.front().input_frames, 9600u);
+    EXPECT_GT(registry->ReservedPayloadBytes(), 0u);
     graph->RequestStop(start + 200000000ULL);
     ASSERT_TRUE(graph->WaitDrained(3000, error)) << error;
     std::vector<float> first;
@@ -137,6 +158,8 @@ TEST(AudioRuntimeGraph, SharedCaptureProcessesEachSourceOnceAndFansOutToTwoTrack
             track->ReleaseBuffer();
         }
         ASSERT_FALSE(samples.empty());
+        ASSERT_EQ(samples.size(), 9600u * 2);
+        EXPECT_NEAR(samples[960], 0.125f, 0.0001f);
         if (i == 0)
             first = samples;
         else
@@ -149,6 +172,297 @@ TEST(AudioRuntimeGraph, SharedCaptureProcessesEachSourceOnceAndFansOutToTwoTrack
     EXPECT_EQ(registry->ReservedPayloadBytes(), 0u);
 }
 
+TEST(AudioRuntimeGraph, DelayedSharedProducerPreservesPcmAcrossUnequalTrackSchedules) {
+    const uint64_t start = NowNs();
+    ResolvedAudioPlan plan;
+    ResolvedAudioSource source;
+    source.spec.id = NewId<AudioSourceId>();
+    source.capture_key = PhysicalCaptureKey{};
+    plan.sources.push_back(source);
+    for (uint32_t i = 0; i < 2; ++i) {
+        ResolvedRoutingTrack track;
+        track.id = NewId<AudioTrackId>();
+        track.mux_index = {i};
+        track.fixed_average_divisor = 1;
+        track.routes.push_back({NewId<AudioRouteId>(), source.spec.id, 1.f});
+        plan.tracks.push_back(track);
+    }
+    auto opens = std::make_shared<std::atomic<uint32_t>>(0);
+    auto release_next = std::make_shared<std::atomic<bool>>(false);
+    auto registry = std::make_shared<SharedAudioCaptureRegistry>();
+    std::string error;
+    auto graph = AudioRuntimeGraph::Prepare(plan, registry, start, 48000, 2, false, error,
+                                            [opens, start, release_next](const ResolvedAudioSource& resolved) {
+                                                SharedAudioCaptureRequest request;
+                                                request.key = *resolved.capture_key;
+                                                request.admission.sample_rate = 48000;
+                                                request.admission.channels = 2;
+                                                request.admission.maximum_packet_frames = 480;
+                                                request.native_factory = [opens, start, release_next] {
+                                                    return std::make_unique<FiniteCapture>(opens, start, 2, 0, false,
+                                                                                           release_next);
+                                                };
+                                                return request;
+                                            });
+    ASSERT_NE(graph, nullptr) << error;
+    auto tracks = graph->TakeTracks();
+    ASSERT_EQ(tracks.size(), 2u);
+    for (auto& track : tracks)
+        ASSERT_TRUE(track->Init(error)) << error;
+    graph->Start();
+    auto wait_for_frames = [&](uint64_t frames) {
+        for (uint32_t wait = 0; wait < 2000; ++wait) {
+            if (graph->SourceMeters().front().processed_frames == frames)
+                return true;
+            Sleep(1);
+        }
+        return false;
+    };
+    ASSERT_TRUE(wait_for_frames(480));
+    for (uint32_t wait = 0; wait < 2000 && !tracks[0]->PendingFrameCount(); ++wait)
+        Sleep(1);
+    std::vector<float> pcm[2];
+    auto consume = [&](size_t index) {
+        RawAudioBuffer raw;
+        if (!tracks[index]->AcquireBuffer(raw, error))
+            return false;
+        const auto* samples = reinterpret_cast<const float*>(raw.bytes);
+        pcm[index].insert(pcm[index].end(), samples, samples + static_cast<size_t>(raw.num_frames) * 2);
+        tracks[index]->ReleaseBuffer();
+        return true;
+    };
+    for (size_t i = 0; i < 2; ++i)
+        ASSERT_TRUE(consume(i)) << error;
+    Sleep(50);
+    const auto premature_frames = tracks[0]->PendingFrameCount();
+    EXPECT_EQ(premature_frames, 0u);
+    if (premature_frames)
+        ASSERT_TRUE(consume(0)) << error;
+    release_next->store(true);
+    ASSERT_TRUE(wait_for_frames(960));
+    const uint64_t end = start + 20000000ULL;
+    graph->RequestStop(end);
+    ASSERT_TRUE(graph->WaitDrained(1500, error)) << error;
+    for (size_t i = 0; i < 2; ++i) {
+        auto* output = dynamic_cast<AudioRuntimeTrackSource*>(tracks[i].get());
+        ASSERT_NE(output, nullptr);
+        ASSERT_TRUE(output->BeginDrain(end, error)) << error;
+        while (output->PendingFrameCount())
+            ASSERT_TRUE(consume(i)) << error;
+    }
+    EXPECT_EQ(pcm[0], pcm[1]);
+    ASSERT_EQ(pcm[0].size(), 1920u);
+    EXPECT_TRUE(std::all_of(pcm[0].begin(), pcm[0].end(), [](float value) { return value == 0.25f; }));
+}
+TEST(AudioRuntimeGraph, NativePacketBeforeCertifiedIdleFrontierFailsGraph) {
+    const uint64_t start = NowNs();
+    ResolvedAudioPlan plan;
+    ResolvedAudioSource source;
+    source.spec.id = NewId<AudioSourceId>();
+    source.capture_key = PhysicalCaptureKey{};
+    plan.sources.push_back(source);
+    for (uint32_t i = 0; i < 2; ++i) {
+        ResolvedRoutingTrack track;
+        track.id = NewId<AudioTrackId>();
+        track.mux_index = {i};
+        track.fixed_average_divisor = 1;
+        track.routes.push_back({NewId<AudioRouteId>(), source.spec.id, 1.f});
+        plan.tracks.push_back(track);
+    }
+    auto opens = std::make_shared<std::atomic<uint32_t>>(0);
+    auto release_next = std::make_shared<std::atomic<bool>>(false);
+    auto registry = std::make_shared<SharedAudioCaptureRegistry>();
+    std::string error;
+    auto graph = AudioRuntimeGraph::Prepare(plan, registry, start, 48000, 2, false, error,
+                                            [opens, start, release_next](const ResolvedAudioSource& resolved) {
+                                                SharedAudioCaptureRequest request;
+                                                request.key = *resolved.capture_key;
+                                                request.admission.sample_rate = 48000;
+                                                request.admission.channels = 2;
+                                                request.admission.maximum_packet_frames = 480;
+                                                request.native_factory = [opens, start, release_next] {
+                                                    return std::make_unique<FiniteCapture>(opens, start, 2, 0, true,
+                                                                                           release_next);
+                                                };
+                                                return request;
+                                            });
+    ASSERT_NE(graph, nullptr) << error;
+    auto tracks = graph->TakeTracks();
+    ASSERT_EQ(tracks.size(), 2u);
+    for (auto& track : tracks)
+        ASSERT_TRUE(track->Init(error)) << error;
+    graph->Start();
+    auto wait_for_frames = [&](uint64_t frames) {
+        for (uint32_t wait = 0; wait < 2000; ++wait) {
+            if (graph->SourceMeters().front().processed_frames == frames)
+                return true;
+            Sleep(1);
+        }
+        return false;
+    };
+    ASSERT_TRUE(wait_for_frames(480));
+    for (uint32_t wait = 0; wait < 2000 && !tracks[0]->PendingFrameCount(); ++wait)
+        Sleep(1);
+    std::vector<float> pcm[2];
+    auto consume = [&](size_t index) {
+        RawAudioBuffer raw;
+        if (!tracks[index]->AcquireBuffer(raw, error))
+            return false;
+        const auto* samples = reinterpret_cast<const float*>(raw.bytes);
+        pcm[index].insert(pcm[index].end(), samples, samples + static_cast<size_t>(raw.num_frames) * 2);
+        tracks[index]->ReleaseBuffer();
+        return true;
+    };
+    for (size_t i = 0; i < 2; ++i)
+        ASSERT_TRUE(consume(i)) << error;
+    for (uint32_t wait = 0; wait < 2000 && !tracks[0]->PendingFrameCount(); ++wait)
+        Sleep(1);
+    ASSERT_GT(tracks[0]->PendingFrameCount(), 0u);
+    release_next->store(true);
+    EXPECT_FALSE(graph->WaitDrained(1500, error));
+    EXPECT_EQ(error, "Physical audio packet precedes its certified idle frontier");
+    graph->RequestStop(NowNs());
+    std::string cleanup_error;
+    graph->WaitDrained(1500, cleanup_error);
+}
+TEST(AudioRuntimeGraph, HealthyIdleCaptureSealsAndPadsTheFiniteTrackWithoutPackets) {
+    const uint64_t start = NowNs();
+    ResolvedAudioPlan plan;
+    ResolvedAudioSource source;
+    source.spec.id = NewId<AudioSourceId>();
+    source.capture_key = PhysicalCaptureKey{};
+    plan.sources.push_back(source);
+    ResolvedRoutingTrack track;
+    track.id = NewId<AudioTrackId>();
+    track.fixed_average_divisor = 1;
+    track.routes.push_back({NewId<AudioRouteId>(), source.spec.id, 1.f});
+    plan.tracks.push_back(track);
+    auto opens = std::make_shared<std::atomic<uint32_t>>(0);
+    auto registry = std::make_shared<SharedAudioCaptureRegistry>();
+    std::string error;
+    auto graph = AudioRuntimeGraph::Prepare(
+        plan, registry, start, 48000, 2, false, error, [opens, start](const ResolvedAudioSource& resolved) {
+            SharedAudioCaptureRequest request;
+            request.key = *resolved.capture_key;
+            request.admission.sample_rate = 48000;
+            request.admission.channels = 2;
+            request.admission.maximum_packet_frames = 480;
+            request.native_factory = [opens, start] { return std::make_unique<FiniteCapture>(opens, start, 0); };
+            return request;
+        });
+    ASSERT_NE(graph, nullptr) << error;
+    auto tracks = graph->TakeTracks();
+    ASSERT_EQ(tracks.size(), 1u);
+    ASSERT_TRUE(tracks[0]->Init(error)) << error;
+    graph->Start();
+    const uint64_t end = start + 20000000ULL;
+    graph->RequestStop(end);
+    ASSERT_TRUE(graph->WaitDrained(1500, error)) << error;
+    auto* output = dynamic_cast<AudioRuntimeTrackSource*>(tracks[0].get());
+    ASSERT_NE(output, nullptr);
+    ASSERT_TRUE(output->BeginDrain(end, error)) << error;
+    uint64_t frames = 0;
+    while (output->PendingFrameCount()) {
+        RawAudioBuffer raw;
+        ASSERT_TRUE(output->AcquireBuffer(raw, error)) << error;
+        frames += raw.num_frames;
+        const auto* pcm = reinterpret_cast<const float*>(raw.bytes);
+        EXPECT_TRUE(
+            std::all_of(pcm, pcm + static_cast<size_t>(raw.num_frames) * 2, [](float value) { return value == 0.f; }));
+        output->ReleaseBuffer();
+    }
+    EXPECT_EQ(frames, 960u);
+    EXPECT_EQ(opens->load(), 1u);
+}
+TEST(AudioRuntimeGraph, UnknownCaptureLatencyCannotSealIdleSource) {
+    const uint64_t start = NowNs();
+    ResolvedAudioPlan plan;
+    ResolvedAudioSource source;
+    source.spec.id = NewId<AudioSourceId>();
+    source.capture_key = PhysicalCaptureKey{};
+    plan.sources.push_back(source);
+    ResolvedRoutingTrack track;
+    track.id = NewId<AudioTrackId>();
+    track.fixed_average_divisor = 1;
+    track.routes.push_back({NewId<AudioRouteId>(), source.spec.id, 1.f});
+    plan.tracks.push_back(track);
+    auto opens = std::make_shared<std::atomic<uint32_t>>(0);
+    auto registry = std::make_shared<SharedAudioCaptureRegistry>();
+    std::string error;
+    auto graph = AudioRuntimeGraph::Prepare(plan, registry, start, 48000, 2, false, error,
+                                            [opens, start](const ResolvedAudioSource& resolved) {
+                                                SharedAudioCaptureRequest request;
+                                                request.key = *resolved.capture_key;
+                                                request.admission.sample_rate = 48000;
+                                                request.admission.channels = 2;
+                                                request.admission.maximum_packet_frames = 480;
+                                                request.native_factory = [opens, start] {
+                                                    return std::make_unique<FiniteCapture>(opens, start, 0, 0, false);
+                                                };
+                                                return request;
+                                            });
+    ASSERT_NE(graph, nullptr) << error;
+    auto tracks = graph->TakeTracks();
+    ASSERT_EQ(tracks.size(), 1u);
+    ASSERT_TRUE(tracks[0]->Init(error)) << error;
+    graph->Start();
+    const uint64_t end = start + 20000000ULL;
+    graph->RequestStop(end);
+    EXPECT_FALSE(graph->WaitDrained(1500, error));
+    EXPECT_EQ(error, "Physical audio reader could not seal its finite endpoint");
+}
+
+TEST(AudioRuntimeGraph, DelayedPacketSpanningStopKeepsItsPreStopSamples) {
+    const uint64_t start = NowNs();
+    ResolvedAudioPlan plan;
+    ResolvedAudioSource source;
+    source.spec.id = NewId<AudioSourceId>();
+    source.capture_key = PhysicalCaptureKey{};
+    plan.sources.push_back(source);
+    ResolvedRoutingTrack track;
+    track.id = NewId<AudioTrackId>();
+    track.fixed_average_divisor = 1;
+    track.routes.push_back({NewId<AudioRouteId>(), source.spec.id, 1.f});
+    plan.tracks.push_back(track);
+    auto opens = std::make_shared<std::atomic<uint32_t>>(0);
+    auto registry = std::make_shared<SharedAudioCaptureRegistry>();
+    std::string error;
+    auto graph = AudioRuntimeGraph::Prepare(
+        plan, registry, start, 48000, 2, false, error, [opens, start](const ResolvedAudioSource& resolved) {
+            SharedAudioCaptureRequest request;
+            request.key = *resolved.capture_key;
+            request.admission.sample_rate = 48000;
+            request.admission.channels = 2;
+            request.admission.maximum_packet_frames = 480;
+            request.native_factory = [opens, start] {
+                return std::make_unique<FiniteCapture>(opens, start, 1, 30000000ULL);
+            };
+            return request;
+        });
+    ASSERT_NE(graph, nullptr) << error;
+    auto tracks = graph->TakeTracks();
+    ASSERT_EQ(tracks.size(), 1u);
+    ASSERT_TRUE(tracks[0]->Init(error)) << error;
+    graph->Start();
+    const uint64_t end = start + 5000000ULL;
+    graph->RequestStop(end);
+    ASSERT_TRUE(graph->WaitDrained(1500, error)) << error;
+    auto* output = dynamic_cast<AudioRuntimeTrackSource*>(tracks[0].get());
+    ASSERT_NE(output, nullptr);
+    ASSERT_TRUE(output->BeginDrain(end, error)) << error;
+    uint64_t frames = 0;
+    while (output->PendingFrameCount()) {
+        RawAudioBuffer raw;
+        ASSERT_TRUE(output->AcquireBuffer(raw, error)) << error;
+        frames += raw.num_frames;
+        const auto* pcm = reinterpret_cast<const float*>(raw.bytes);
+        EXPECT_TRUE(std::all_of(pcm, pcm + static_cast<size_t>(raw.num_frames) * 2,
+                                [](float value) { return value == 0.25f; }));
+        output->ReleaseBuffer();
+    }
+    EXPECT_EQ(frames, 240u);
+    EXPECT_EQ(opens->load(), 1u);
+}
 TEST(AudioRuntimeGraph, MetersKeepPhysicalLogicalAndTrackOwnershipDistinct) {
     const uint64_t start = NowNs();
     ResolvedAudioPlan plan;

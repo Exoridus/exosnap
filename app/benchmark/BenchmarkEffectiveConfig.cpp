@@ -268,7 +268,11 @@ EffectiveRecordingConfig DescribeEffectiveConfig(const exosnap::engine::Recorder
 
     // ---- Audio --------------------------------------------------------------
     builder.Add("record_audio", config.record_audio);
-    builder.Add("audio_track_count", static_cast<qint64>(config.audio_track_plan.tracks.size()));
+    const auto audio_track_count = !config.record_audio                     ? 0u
+                                   : config.resolved_audio_plan             ? config.resolved_audio_plan->tracks.size()
+                                   : config.audio_track_plan.tracks.empty() ? 1u
+                                                                            : config.audio_track_plan.tracks.size();
+    builder.Add("audio_track_count", static_cast<qint64>(audio_track_count));
     for (const ResolvedAudioTrack& track : config.audio_track_plan.tracks) {
         QStringList sources;
         sources.reserve(static_cast<qsizetype>(track.sources.size()));
