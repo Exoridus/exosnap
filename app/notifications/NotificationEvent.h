@@ -24,7 +24,6 @@ enum class NotificationType : uint8_t {
                                // frame-processing failure (DROP-NOTIFY) — never benign CFR pacing
     SettingsRepaired,          // the preset store needed a field-wise repair on load
     PresetSwitched,            // a preset switch applied immediately; offers an Undo
-    OverlayOmitted,            // this display's HDR10 format cannot carry the webcam/cursor overlays
     HotkeyConflict,            // a persisted global hotkey could not be registered at startup (held elsewhere)
     SettingsSaveFailed,        // a settings/preset write failed (disk full, file locked, ...) — the change may be lost
     AudioDefaultDeviceChanged, // Windows switched the default microphone mid-recording; the session keeps its device
@@ -151,7 +150,6 @@ struct NotificationEvent {
     // would paint the bell coral within seconds of every launch that finds a
     // recoverable session.
     case NotificationType::FramesDropped:
-    case NotificationType::OverlayOmitted:
     case NotificationType::AudioSourceDegraded:
     case NotificationType::AudioDefaultDeviceChanged:
     case NotificationType::RecoveryAvailable:

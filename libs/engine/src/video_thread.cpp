@@ -1053,9 +1053,8 @@ void VideoThread::RunAttachment(const std::shared_ptr<NativeState>& native, cons
                 native->wgc_format = wgcPlan.frame_pool_format;
                 captureSession = framePool.CreateCaptureSession(item);
                 captureSession.IsBorderRequired(false);
-                // WGC's built-in cursor would be baked into the source frame before
-                // webcam composition. Draw it manually through the GPU compositor so
-                // cursor z-order matches DXGI Output Duplication.
+                // Drawn by the GPU compositor instead, like DXGI Output Duplication,
+                // so both backends share one cursor path and layer order.
                 captureSession.IsCursorCaptureEnabled(false);
                 WgcMinUpdateIntervalResult intervalResult;
                 const HRESULT intervalHr = ConfigureWgcMinUpdateInterval(
@@ -2500,15 +2499,17 @@ void VideoThread::RunAttachment(const std::shared_ptr<NativeState>& native, cons
             m_state.RecordFailure(E_FAIL, ErrorPhase::VideoCapture, "GPU compositor begin: " + compErr);
             return nullptr;
         }
-        if (!drawWebcamGpu(overlay)) {
-            endCompositeTimer();
-            return nullptr;
-        }
+        // The cursor belongs to the desktop layer: overlays cover it, and a keyed
+        // webcam lets it show through where the key made the camera transparent.
         if (!drawCursorGpu()) {
             endCompositeTimer();
             return nullptr;
         }
         if (!drawWin32CursorGpu()) {
+            endCompositeTimer();
+            return nullptr;
+        }
+        if (!drawWebcamGpu(overlay)) {
             endCompositeTimer();
             return nullptr;
         }
@@ -3769,7 +3770,7 @@ void VideoThread::RunAttachment(const std::shared_ptr<NativeState>& native, cons
     // consumer must apply (an FP16 scRGB tap is tone-mapped preview-side).
     //
     // Native capture reaches this tap as linear FP16, including PQ desktops.
-    PreviewTapPlan previewTapPlan = ResolvePreviewTapPlan(hdrNativeActive, false, hdrPeakScale, hdrPaperWhiteScale);
+    PreviewTapPlan previewTapPlan = ResolvePreviewTapPlan(hdrNativeActive, hdrPeakScale, hdrPaperWhiteScale);
     PreviewSharedTexture previewSharedTex;
     bool previewSharedInitFailed = false;
     bool previewTransportPoisoned = false;
@@ -3808,12 +3809,11 @@ void VideoThread::RunAttachment(const std::shared_ptr<NativeState>& native, cons
         // Re-resolved rather than assigned field by field: which scalars are
         // meaningful for this session is the plan's decision, and there must not
         // be a second copy of it here.
-        previewTapPlan = ResolvePreviewTapPlan(hdrNativeActive, false, state.peak_scale, state.paper_white_scale);
+        previewTapPlan = ResolvePreviewTapPlan(hdrNativeActive, state.peak_scale, state.paper_white_scale);
         // Dropping the shared texture is what re-announces the descriptor: the
         // handle callback is one-shot by contract, so the next tapped frame
         // creates a texture and hands the consumer the new transform with it.
-        if (previewTapPlan.tap_enabled)
-            previewSharedTex.Reset();
+        previewSharedTex.Reset();
 
         const logging::LogField fields[] = {
             {"sdr_white_level_nits", std::to_string(sessionDisplayFacts.sdr_white_level_nits)},
@@ -3870,7 +3870,7 @@ void VideoThread::RunAttachment(const std::shared_ptr<NativeState>& native, cons
     auto tapPreviewSource = [&](ID3D11Texture2D* vpInput, uint64_t pts_ns) {
         if (!m_state.preview_shared_handle_cb)
             return; // no consumer registered -- zero cost beyond this check
-        if (previewSharedInitFailed || vpInput == nullptr || !previewTapPlan.tap_enabled)
+        if (previewSharedInitFailed || vpInput == nullptr)
             return;
         // Counted AFTER the cheap disqualifiers and BEFORE the gate: a zero here
         // says the tap never had a frame to offer, which is a different defect

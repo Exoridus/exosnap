@@ -45,9 +45,6 @@ struct PreviewTapDesc {
 };
 
 struct PreviewTapPlan {
-    // False for a non-linear PQ surface. The recorder linearizes native PQ
-    // capture before resolving this plan, so its pre-encode surface is tappable.
-    bool tap_enabled = true;
     PreviewTapDesc desc{};
 };
 
@@ -69,15 +66,11 @@ struct PreviewTapPlan {
 // derived here so the session policy has exactly one owner: the caller holds the
 // display facts, and a second derivation could disagree with the one the encoder
 // already applied.
-[[nodiscard]] inline PreviewTapPlan ResolvePreviewTapPlan(bool hdr_native_active, bool pq_input_is_pq,
-                                                          float hdr_peak_scale, float paper_white_scale) noexcept {
+[[nodiscard]] inline PreviewTapPlan ResolvePreviewTapPlan(bool hdr_native_active, float hdr_peak_scale,
+                                                          float paper_white_scale) noexcept {
     PreviewTapPlan plan;
     if (!hdr_native_active) {
         return plan; // SDR / tone-mapped sessions tap an SDR surface: no transform
-    }
-    if (pq_input_is_pq) {
-        plan.tap_enabled = false; // already-PQ 10-bit desktop: nothing linear to tap
-        return plan;
     }
     plan.desc.transform = PreviewTapTransform::ScrgbHdr;
     plan.desc.peak_scale = hdr_peak_scale;

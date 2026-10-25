@@ -1,7 +1,6 @@
 // Pins the pure decision of whether a session's pre-encode surface is shared
 // with the preview and which display transform the consumer must apply
-// (preview_tap.h). The rule under test: every session taps except the
-// already-PQ R10G10B10A2 native sub-path, and only a native HDR10 (FP16 scRGB)
+// (preview_tap.h). The rule under test: only a native HDR10 (FP16 scRGB)
 // session needs a preview-side tone-map.
 
 #include "exosnap/engine/device_generation.h"
@@ -12,8 +11,7 @@
 using namespace exosnap::engine;
 
 TEST(PreviewTapPlan, SdrSessionTapsWithoutTransform) {
-    const PreviewTapPlan plan = ResolvePreviewTapPlan(false, false, 1.0f, 1.0f);
-    EXPECT_TRUE(plan.tap_enabled);
+    const PreviewTapPlan plan = ResolvePreviewTapPlan(false, 1.0f, 1.0f);
     EXPECT_EQ(plan.desc.transform, PreviewTapTransform::None);
     EXPECT_FLOAT_EQ(plan.desc.peak_scale, 1.0f);
 }
@@ -21,15 +19,13 @@ TEST(PreviewTapPlan, SdrSessionTapsWithoutTransform) {
 TEST(PreviewTapPlan, ToneMappedSessionTapsWithoutTransform) {
     // A tone-mapped HDR session already shares an SDR surface; its peak scale
     // was consumed engine-side and must not leak into the consumer transform.
-    const PreviewTapPlan plan = ResolvePreviewTapPlan(false, false, 12.5f, 3.5f);
-    EXPECT_TRUE(plan.tap_enabled);
+    const PreviewTapPlan plan = ResolvePreviewTapPlan(false, 12.5f, 3.5f);
     EXPECT_EQ(plan.desc.transform, PreviewTapTransform::None);
     EXPECT_FLOAT_EQ(plan.desc.peak_scale, 1.0f);
 }
 
 TEST(PreviewTapPlan, NativeHdrTapsWithScrgbToneMapAndSessionPeak) {
-    const PreviewTapPlan plan = ResolvePreviewTapPlan(true, false, 12.5f, 3.5f);
-    EXPECT_TRUE(plan.tap_enabled);
+    const PreviewTapPlan plan = ResolvePreviewTapPlan(true, 12.5f, 3.5f);
     EXPECT_EQ(plan.desc.transform, PreviewTapTransform::ScrgbHdr);
     EXPECT_FLOAT_EQ(plan.desc.peak_scale, 12.5f);
 }
@@ -39,33 +35,16 @@ TEST(PreviewTapPlan, NativeHdrCarriesTheSessionPaperWhiteScale) {
     // tone-maps scene-referred values the encoder has already normalised, and
     // the same frame is brighter in the preview than in the file by exactly this
     // factor.
-    const PreviewTapPlan plan = ResolvePreviewTapPlan(true, false, 12.5f, 3.5f);
+    const PreviewTapPlan plan = ResolvePreviewTapPlan(true, 12.5f, 3.5f);
     EXPECT_FLOAT_EQ(plan.desc.paper_white_scale, 3.5f);
 }
 
 TEST(PreviewTapPlan, PaperWhiteScaleReachesOnlyTheScrgbHdrTransform) {
     // Paper white is meaningful for ScrgbHdr alone (PreviewTapDesc). A session
-    // that taps an SDR surface, and the untapped already-PQ sub-path, must both
-    // report the identity whatever the caller resolved.
-    EXPECT_FLOAT_EQ(ResolvePreviewTapPlan(false, false, 12.5f, 3.5f).desc.paper_white_scale, 1.0f);
-    EXPECT_FLOAT_EQ(ResolvePreviewTapPlan(true, true, 12.5f, 3.5f).desc.paper_white_scale, 1.0f);
-    EXPECT_FLOAT_EQ(ResolvePreviewTapPlan(false, true, 1.0f, 3.5f).desc.paper_white_scale, 1.0f);
-}
-
-TEST(PreviewTapPlan, AlreadyPqNativeSubPathDoesNotTap) {
-    // R10G10B10A2 PQ desktop: non-linear surface, no linear intermediate to
-    // share — the preview keeps its own WGC capture (see the design doc).
-    const PreviewTapPlan plan = ResolvePreviewTapPlan(true, true, 12.5f, 3.5f);
-    EXPECT_FALSE(plan.tap_enabled);
-    EXPECT_EQ(plan.desc.transform, PreviewTapTransform::None);
-}
-
-TEST(PreviewTapPlan, PqFlagWithoutNativeIsIgnored) {
-    // pq_input_is_pq is only ever set for native sessions; if it leaks in for a
-    // non-native one the tap must still behave like plain SDR.
-    const PreviewTapPlan plan = ResolvePreviewTapPlan(false, true, 1.0f, 3.5f);
-    EXPECT_TRUE(plan.tap_enabled);
-    EXPECT_EQ(plan.desc.transform, PreviewTapTransform::None);
+    // that taps an SDR surface must report the identity whatever the caller
+    // resolved.
+    EXPECT_FLOAT_EQ(ResolvePreviewTapPlan(false, 12.5f, 3.5f).desc.paper_white_scale, 1.0f);
+    EXPECT_FLOAT_EQ(ResolvePreviewTapPlan(false, 1.0f, 3.5f).desc.paper_white_scale, 1.0f);
 }
 
 // ---- Raw captured desktop frames (idle DXGI-hub source, no session policy) ----

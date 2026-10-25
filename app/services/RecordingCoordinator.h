@@ -458,9 +458,8 @@ class RecordingCoordinator {
     // void*; ownership transfers to the callee (open then CloseHandle). `tap`
     // names the display transform the consumer must apply before drawing
     // (recorder_core/preview_tap.h — a native HDR10 session shares FP16 scRGB,
-    // which the preview tone-maps). Fires for every session except the
-    // already-PQ 10-bit native sub-path, and only when the callback is set before
-    // StartRecording. The callback must return fast and must not make D3D calls
+    // which the preview tone-maps). Fires for every session when the callback is set
+    // before StartRecording. The callback must return fast and must not make D3D calls
     // on the calling thread.
     using PreviewSharedHandleReadyCallback =
         std::function<void(void* nt_handle, uint32_t width, uint32_t height, exosnap::engine::PreviewTapDesc tap)>;

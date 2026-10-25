@@ -75,11 +75,6 @@ struct SessionStats {
     // honest silence. A post-flight fact so the "Saved" report can
     // note the recording contains a silence gap, rather than surprising the user.
     bool audio_degraded_occurred = false;
-    // Set once when a requested webcam PiP / cursor overlay cannot be recorded in
-    // the active mode (native HDR10 from an already-PQ 10-bit desktop composites
-    // nothing — the surface is non-linear). Surfaced as a calm diagnostics notice,
-    // never a blocker.
-    bool webcam_overlay_omitted = false;
     // The video encoder's end-of-stream drain was cut short: EOS refused, the
     // device stopped delivering within the drain budget, or a lock failed. The
     // file was still finalised with every packet that did drain, so this is a

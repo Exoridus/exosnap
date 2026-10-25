@@ -48,7 +48,7 @@ The mid-session monitor watches frame production, not emitted CFR packets. Ten s
 
 ## Recording preview transport
 
-The recording tap publishes the composited source image with cursor and webcam before encoder-format conversion. It is not a CPU copy of NV12/P010 and it is not a second capture of the desktop. Native HDR uses a shared linear HDR image that the preview tone-maps for SDR presentation. The already-PQ desktop path lacks this shareable/compositable image and has explicit overlay/preview limitations.
+The recording tap publishes the composited source image with cursor and webcam before encoder-format conversion. It is not a CPU copy of NV12/P010 and it is not a second capture of the desktop. Native HDR uses a shared linear HDR image that the preview tone-maps for SDR presentation. A desktop captured already in PQ/BT.2020 is linearized into the same FP16 image first, so overlays and the preview tap work on every capture format.
 
 An NT shared handle and a keyed mutex transfer access between D3D11 devices. The producer takes key 0 and publishes key 1. The Quick render thread attempts key 1 with zero wait, copies into a cached private texture and releases key 0 promptly. Conversion and scene composition then use the private copy. Holding the producer's mutex across a full scene render would couple capture latency to UI latency.
 

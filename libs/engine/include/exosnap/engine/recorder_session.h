@@ -334,8 +334,8 @@ using SegmentCallback = std::function<void(const CompletedSegment&)>;
 // (preview_tap.h): SDR / HDR-tone-map / 4:4:4 sessions share a samplable SDR or
 // 10-bit surface (PreviewTapTransform::None); a native HDR10 session shares its
 // linear scRGB FP16 pre-encode surface (ScrgbHdr — tone-map before display).
-// The only session that never fires is the already-PQ R10G10B10A2 native
-// sub-path, which has no linear surface to share. Must be set before Record();
+// A PQ10 desktop is linearized before composition, so every session fires.
+// Must be set before Record();
 // the callback is captured at Record() start and does not survive
 // Stop()/Record() cycles.
 using PreviewSharedHandleCallback =

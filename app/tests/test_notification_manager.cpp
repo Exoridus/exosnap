@@ -134,7 +134,6 @@ TEST_F(NotificationManagerTest, Standing_Types_AreExactlyTheSelfClearingConditio
     EXPECT_FALSE(NotificationManager::IsStanding(NotificationType::UpdateAvailable));
     EXPECT_FALSE(NotificationManager::IsStanding(NotificationType::FramesDropped));
     EXPECT_FALSE(NotificationManager::IsStanding(NotificationType::SettingsRepaired));
-    EXPECT_FALSE(NotificationManager::IsStanding(NotificationType::OverlayOmitted));
     EXPECT_FALSE(NotificationManager::IsStanding(NotificationType::PresetSwitched));
     EXPECT_FALSE(NotificationManager::IsStanding(NotificationType::HotkeyConflict));
     EXPECT_FALSE(NotificationManager::IsStanding(NotificationType::SettingsSaveFailed));
@@ -147,11 +146,11 @@ TEST_F(NotificationManagerTest, TimedDwellsAreExactlyTwoValues) {
     for (const NotificationType type :
          {NotificationType::Saved, NotificationType::UnexpectedStop, NotificationType::RecoveryAvailable,
           NotificationType::UpdateAvailable, NotificationType::FramesDropped, NotificationType::SettingsRepaired,
-          NotificationType::PresetSwitched, NotificationType::OverlayOmitted, NotificationType::HotkeyConflict,
-          NotificationType::SettingsSaveFailed, NotificationType::CaptureActionFailed,
-          NotificationType::RecoveryProtectionUnavailable, NotificationType::SettingsLoadFailed,
-          NotificationType::LowStorage, NotificationType::AudioSourceDegraded, NotificationType::FrameCaptured,
-          NotificationType::PresetTransferFailed, NotificationType::WindowCaptureStalled}) {
+          NotificationType::PresetSwitched, NotificationType::HotkeyConflict, NotificationType::SettingsSaveFailed,
+          NotificationType::CaptureActionFailed, NotificationType::RecoveryProtectionUnavailable,
+          NotificationType::SettingsLoadFailed, NotificationType::LowStorage, NotificationType::AudioSourceDegraded,
+          NotificationType::FrameCaptured, NotificationType::PresetTransferFailed,
+          NotificationType::WindowCaptureStalled}) {
         const int dwell = NotificationManager::DismissIntervalMs(type);
         EXPECT_TRUE(dwell == 0 || dwell == NotificationManager::kDwellBrief ||
                     dwell == NotificationManager::kDwellAction)
@@ -168,7 +167,6 @@ TEST_F(NotificationManagerTest, ADwellIsChosenByWhetherThereIsAnythingToDo) {
     // Nothing to do about either: the repair already happened, the overlay was
     // already omitted. A glance is the whole interaction.
     EXPECT_EQ(NotificationManager::kDismissMs_SettingsRepaired, NotificationManager::kDwellBrief);
-    EXPECT_EQ(NotificationManager::kDismissMs_OverlayOmitted, NotificationManager::kDwellBrief);
     // Past 10 s a toast reads as standing and teaches the reflex to dismiss unread.
     EXPECT_LE(NotificationManager::kDwellAction, 10000);
     EXPECT_LT(NotificationManager::kDwellBrief, NotificationManager::kDwellAction);
@@ -401,16 +399,6 @@ TEST_F(NotificationManagerTest, HasAction_SecondaryAction_ReturnsTrue) {
 // "Webcam not recorded" reports a condition of the running session that the user
 // can do nothing about mid-recording. It states the fact and leaves on its own.
 // ---------------------------------------------------------------------------
-TEST(NotificationManagerOverlayOmitted, AutoDismisses) {
-    EXPECT_GT(NotificationManager::DismissIntervalMs(NotificationType::OverlayOmitted), 0)
-        << "the recording is unaffected; the notice must not demand a decision";
-}
-
-TEST(NotificationManagerOverlayOmitted, IsNotStandingLikeAFailure) {
-    EXPECT_NE(NotificationManager::DismissIntervalMs(NotificationType::OverlayOmitted),
-              NotificationManager::DismissIntervalMs(NotificationType::UnexpectedStop));
-}
-
 // ── Enqueue() returns the assigned sequence ───────────────────────────────────
 // A caller (MainWindow) that raises a standing toast programmatically needs the
 // sequence back immediately so it can Dismiss() the SAME toast later when the
@@ -573,7 +561,6 @@ TEST(AdvisoryStatusForTypeTest, FailuresAreErrors) {
 
 TEST(AdvisoryStatusForTypeTest, DegradedButWorkingIsCaution) {
     EXPECT_EQ(AdvisoryStatusForType(NotificationType::FramesDropped), QStringLiteral("caution"));
-    EXPECT_EQ(AdvisoryStatusForType(NotificationType::OverlayOmitted), QStringLiteral("caution"));
     EXPECT_EQ(AdvisoryStatusForType(NotificationType::AudioSourceDegraded), QStringLiteral("caution"));
     // Previously fell through to "info": a bound hotkey is dead.
     EXPECT_EQ(AdvisoryStatusForType(NotificationType::HotkeyConflict), QStringLiteral("caution"));
@@ -612,7 +599,6 @@ TEST(AdvisoryStatusForTypeTest, EveryTypeResolvesToAKnownStatus) {
         NotificationType::FramesDropped,
         NotificationType::SettingsRepaired,
         NotificationType::PresetSwitched,
-        NotificationType::OverlayOmitted,
         NotificationType::HotkeyConflict,
         NotificationType::SettingsSaveFailed,
         NotificationType::AudioSourceDegraded,
@@ -628,7 +614,7 @@ TEST(AdvisoryStatusForTypeTest, EveryTypeResolvesToAKnownStatus) {
     // The count is a reminder, not a proof: it compares this list against itself,
     // so a type added here and nowhere else still passes. FrameCaptured was
     // missing from it for exactly that reason.
-    ASSERT_EQ(std::size(kAll), 20u) << "a NotificationType was added without a severity decision";
+    ASSERT_EQ(std::size(kAll), 19u) << "a NotificationType was added without a severity decision";
 
     for (const NotificationType type : kAll) {
         const QString status = AdvisoryStatusForType(type);
