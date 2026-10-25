@@ -160,6 +160,7 @@ TEST_F(InstallTreeTest, AllExpectedLicensesPresent) {
         "licenses/presentmon.txt",
         "licenses/miniz.txt",
         "licenses/monocypher.txt",
+        "licenses/gameinput.txt",
     };
     for (const auto& lic : expected) {
         EXPECT_TRUE(file_exists(_root, lic)) << "Missing license: " << lic;

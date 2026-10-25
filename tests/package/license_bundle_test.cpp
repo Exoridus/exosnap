@@ -60,6 +60,7 @@ const std::vector<std::string> k_expected_licenses = {
     "hanken-grotesk.txt",
     "ffmpeg.txt",
     "presentmon.txt",
+    "gameinput.txt",
     // Official-release-build-only (EXOSNAP_OFFICIAL_BUILD=ON); still documented unconditionally.
     "sentry-native.txt",
     "crashpad.txt",
@@ -67,9 +68,10 @@ const std::vector<std::string> k_expected_licenses = {
 };
 
 const std::vector<std::string> k_expected_notices_sections = {
-    "spdlog",   "nlohmann/json", "toml++",     "Opus",       "FLAC",           "RNNoise",
-    "libebml",  "libmatroska",   "Qt",         "FFmpeg",     "PresentMon",     "sentry-native",
-    "Crashpad", "mini_chromium", "GoogleTest", "Build-only", "System/runtime",
+    "spdlog",     "nlohmann/json", "toml++",         "Opus",     "FLAC",
+    "RNNoise",    "libebml",       "libmatroska",    "Qt",       "FFmpeg",
+    "PresentMon", "GameInput",     "sentry-native",  "Crashpad", "mini_chromium",
+    "GoogleTest", "Build-only",    "System/runtime",
 };
 
 } // namespace

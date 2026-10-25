@@ -113,6 +113,21 @@ directory alongside the ExoSnap binary.
   vendored unmodified; provenance and per-file hashes are in
   `libs/update/third_party/monocypher/NOTICE.md`.
 
+### Microsoft GameInput
+
+- **Version:** 4.0.302 (NuGet package `Microsoft.GameInput`, pinned by SHA-256)
+- **Project:** https://aka.ms/gameinput
+- **License:** the public header and the loader source (`native/src/GameInput.cpp`)
+  are MIT-licensed, Copyright (c) Microsoft Corporation, as stated in each file.
+  The GameInput redistributable runtime is licensed under the Microsoft Software
+  License Terms for the Microsoft GameInput Redistributable.
+- **Linkage:** static (the loader is compiled from the package source); the
+  runtime is resolved at run time from the in-box `GameInput.dll` or an
+  installed or application-local `GameInputRedist.dll`
+- **Bundled license:** `licenses/gameinput.txt` (the package's `LICENSE.txt`,
+  unmodified)
+- **Role:** gamepad input for the recording overlay.
+
 ### PresentMon (ETW present-diagnostics consumer)
 
 - **Version:** v1.10.0 (pinned by commit SHA

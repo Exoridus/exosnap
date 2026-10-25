@@ -175,6 +175,7 @@ const REQUIRED_LICENSES: &[&str] = &[
     "presentmon.txt",
     "miniz.txt",
     "monocypher.txt",
+    "gameinput.txt",
 ];
 
 const CRASH_CAPTURE_LICENSES: &[&str] = &["sentry-native.txt", "crashpad.txt", "mini_chromium.txt"];

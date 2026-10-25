@@ -26,6 +26,7 @@ Run visible/audio-producing probes only with desktop coordination, and run them 
 | `probe_gpup_nvenc`, `probe_idd_duplication` | Is NVENC/duplication usable in the declared guest and output configuration? |
 | `probe_encode_file`, `probe_edit_playback` | Exercise real encoder or editor code with controlled media |
 | `probe_luminance_cost` | GPU query cost of luminance analysis and tone-mapping |
+| `probe_gamepad` | Does GameInput deliver this controller, with which vendor/product id and layout, and what readings? Needs the GameInput v4 runtime (`GameInputRedist`); `--seconds N` stops it. |
 
 ## Interpreting evidence
 
