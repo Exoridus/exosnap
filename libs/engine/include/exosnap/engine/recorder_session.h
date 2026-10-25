@@ -4,6 +4,7 @@
 #include <exosnap/engine/audio_track_model.h>
 #include <exosnap/engine/background_io.h>
 #include <exosnap/engine/color_metadata.h>
+#include <exosnap/engine/overlay_sprites.h>
 #include <exosnap/engine/recording_media_types.h>
 #include <exosnap/engine/split_trigger_source.h>
 
@@ -637,6 +638,11 @@ struct RecorderConfig {
 
     // Optional webcam overlay composited into the recorded video.
     WebcamConfig webcam;
+
+    // Sprite overlay layers composited above the webcam, first entry lowest.
+    // Not owned; each must outlive Record(). Null entries are ignored. See
+    // SpriteSourceProvider for the threading contract.
+    std::vector<SpriteSourceProvider*> sprite_sources;
 
     // Automatic/manual segment splitting. Default Off == single-file recording.
     RecordingSplitSettings split;

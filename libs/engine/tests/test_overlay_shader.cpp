@@ -228,6 +228,11 @@ TEST(OverlayShaderConstants, PacksKeyColorMirrorAndOpacity) {
     EXPECT_FLOAT_EQ(pc.params[3], 0.15f);
     EXPECT_FLOAT_EQ(pc.params2[0], 0.0f);
     EXPECT_FLOAT_EQ(pc.params2[2], 0.5f);
+    // The whole texture unless a caller selects a sub-rectangle.
+    EXPECT_FLOAT_EQ(pc.uv_rect[0], 0.0f);
+    EXPECT_FLOAT_EQ(pc.uv_rect[1], 0.0f);
+    EXPECT_FLOAT_EQ(pc.uv_rect[2], 1.0f);
+    EXPECT_FLOAT_EQ(pc.uv_rect[3], 1.0f);
 }
 
 TEST(OverlayShaderConstants, NonFiniteOpacityFallsBackToOpaque) {

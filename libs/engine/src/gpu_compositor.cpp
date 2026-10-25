@@ -443,6 +443,42 @@ bool GpuCompositor::DrawCursorInvert(const uint8_t* bgra, int width, int height,
     return DrawTexture(cursor_invert_tex_.srv.get(), rect, false, chroma, false, 1.0f, err, invert_blend_state_.get());
 }
 
+bool GpuCompositor::DrawSpriteLayer(size_t layer_index, const SpriteLayerSnapshot& layer,
+                                    const WebcamPixelRect& content, std::string& err) {
+    const SpriteAtlas* atlas = layer.atlas.get();
+    if (atlas == nullptr || !atlas->HasCompletePayload() || layer.quads.empty())
+        return true;
+    if (sprite_atlases_.size() <= layer_index)
+        sprite_atlases_.resize(layer_index + 1);
+    SpriteAtlasTexture& cached = sprite_atlases_[layer_index];
+    if (cached.generation != atlas->generation || !cached.texture.srv ||
+        cached.texture.width != static_cast<UINT>(atlas->width) ||
+        cached.texture.height != static_cast<UINT>(atlas->height)) {
+        if (!UploadTexture(cached.texture, atlas->pixels.data(), atlas->width, atlas->height,
+                           static_cast<UINT>(atlas->width) * 4u, err)) {
+            cached.generation.reset();
+            return false;
+        }
+        cached.generation = atlas->generation;
+        ++sprite_atlas_upload_count_;
+    }
+
+    const ChromaKeyParams no_key;
+    for (const SpriteQuad& quad : layer.quads) {
+        const SpriteDraw draw =
+            MapSpriteQuad(quad, atlas->width, atlas->height, content.x, content.y, content.w, content.h);
+        if (!draw.IsValid())
+            continue;
+        const float uv_rect[4] = {draw.u0, draw.v0, draw.u1, draw.v1};
+        if (!DrawTexture(cached.texture.srv.get(), draw.destination, false, no_key, false, draw.opacity, err, nullptr,
+                         uv_rect)) {
+            return false;
+        }
+        ++sprite_quad_draw_count_;
+    }
+    return true;
+}
+
 bool GpuCompositor::UploadTexture(TextureResource& resource, const uint8_t* bgra, int width, int height, UINT row_pitch,
                                   std::string& err) {
     if (device_ == nullptr || context_ == nullptr || bgra == nullptr || width <= 0 || height <= 0) {
@@ -460,7 +496,7 @@ bool GpuCompositor::UploadTexture(TextureResource& resource, const uint8_t* bgra
 
 bool GpuCompositor::DrawTexture(ID3D11ShaderResourceView* srv, const WebcamPixelRect& rect, bool mirror,
                                 const ChromaKeyParams& chroma, bool force_opaque, float opacity, std::string& err,
-                                ID3D11BlendState* blend) {
+                                ID3D11BlendState* blend, const float* uv_rect) {
     if (srv == nullptr || context_ == nullptr || composite_rtv_ == nullptr || !rect.IsValid()) {
         err = "GpuCompositor::DrawTexture invalid arguments";
         return false;
@@ -475,8 +511,10 @@ bool GpuCompositor::DrawTexture(ID3D11ShaderResourceView* srv, const WebcamPixel
     // scale to the configured overlay reference white (in scRGB, where 1.0 = 80
     // nits) — the display's SDR content brightness when known, else the 203
     // cd/m^2 fallback (see GpuCompositor::Init / EffectiveOverlayReferenceWhiteNits).
-    const OverlayPixelConstants pc = MakeOverlayPixelConstants(chroma, mirror, force_opaque, opacity, hdr_linear_,
-                                                               overlay_ref_white_nits_ / kScrgbReferenceWhiteNits);
+    OverlayPixelConstants pc = MakeOverlayPixelConstants(chroma, mirror, force_opaque, opacity, hdr_linear_,
+                                                         overlay_ref_white_nits_ / kScrgbReferenceWhiteNits);
+    if (uv_rect != nullptr)
+        std::memcpy(pc.uv_rect, uv_rect, sizeof(pc.uv_rect));
     context_->UpdateSubresource(constants_.get(), 0, nullptr, &pc, 0, 0);
 
     D3D11_VIEWPORT viewport{};

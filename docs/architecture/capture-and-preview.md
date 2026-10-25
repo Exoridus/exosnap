@@ -38,6 +38,14 @@ The normal mid-session duplication reopen has no give-up deadline. Waiting does 
 
 During capture-loss recovery, hold the composed picture. On a static healthy display or window, observe the immutable webcam snapshot before comparing visual keys. Recompose only when a visual generation changes. Upload camera pixels only for a new generation or a replaced texture. The camera mailbox reuses unreferenced payload buffers and preserves snapshots still held by a consumer.
 
+## Overlay composition
+
+The recording compositor draws in source coordinates, bottom to top: desktop, cursor, webcam, then sprite layers in the order of `RecorderConfig::sprite_sources`. All overlays share one overlay shader, so they receive the same sRGB handling, straight-alpha blend and, on the native HDR path, the same overlay reference white.
+
+A sprite layer is an atlas plus quads, defined in [overlay sprites](../../libs/engine/include/exosnap/engine/overlay_sprites.h). Adding an overlay of this kind needs a new source, not new compositor logic. The video thread asks every source for a snapshot once per composed frame, passing that frame's time on the QPC clock in 100 ns units. A source answers from its own published state without blocking, Qt or D3D. The snapshot carries an immutable straight-alpha BGRA atlas with a generation, and quads with an atlas source rectangle, a destination normalized to the content rectangle and an opacity. Destinations are clipped at the content edge. The atlas is uploaded only when its generation changes.
+
+A changed sprite snapshot (atlas generation or size, or the quad list) advances the sprite generation in the visual frame key. On a static desktop it recomposes the held screen exactly like a camera or cursor change. A sprite overlay therefore keeps moving over a still picture instead of freezing in the duplicated frame.
+
 ## Exclusive fullscreen and stalls
 
 Window shape alone cannot distinguish borderless content from legacy exclusive fullscreen. Pre-flight classification combines shape, WGC evidence and corroborating fullscreen signals. No-frame evidence is not a pixel analysis of whether a picture is black. A failed evidence probe supplies no evidence, never proof of a blocked capture.
