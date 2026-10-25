@@ -68,8 +68,7 @@ TEST(RecordingHistoryStoreTest, MissingStoreRestoresEmptyHistory) {
     EXPECT_TRUE(recordings.isEmpty());
 }
 
-TEST(RecordingHistoryStoreTest, ExistingStandaloneClipRemainsInHistoryWhenCreationIsUnavailable) {
-    EXPECT_FALSE(product::kRecordingClipsAvailable);
+TEST(RecordingHistoryStoreTest, ExistingStandaloneClipRemainsInHistory) {
     QTemporaryDir directory;
     ASSERT_TRUE(directory.isValid());
     const auto path = directory.filePath(QStringLiteral("saved.clip.mkv"));

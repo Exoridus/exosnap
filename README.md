@@ -85,7 +85,7 @@ Optional microphone processing includes a high-pass filter, noise gate, automati
 
 MP4 delivery uses stream-copy remuxing from the recording, avoiding a second video encode. Low-disk checks account for the temporary space needed while both files exist. Splitting can be triggered by time or size, with per-segment background MP4 remux as each segment completes.
 
-The development editor supports a multi-track timeline, unlinking, waveforms, crossfades and exact rendered cuts for supported SDR sources. Export selects copy, render or hybrid processing from the authored result. Original-stream copy retains codec and keyframe constraints. Native hardware/UX and media-profile qualification for v0.11 remains required. Marker export is a JSON sidecar, not embedded chapters. Recording Clips and replay buffering are unavailable.
+The development editor supports a multi-track timeline, unlinking, waveforms, crossfades and exact rendered cuts for supported SDR sources. Export selects copy, render or hybrid processing from the authored result. Original-stream copy retains codec and keyframe constraints. Native hardware/UX and media-profile qualification for v0.11 remains required. Marker export is a JSON sidecar, not embedded chapters. Recording Clips are enabled for qualification as MKV stream copies of the running recording. Replay buffering is unavailable.
 
 ## Local by default
 

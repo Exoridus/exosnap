@@ -2681,9 +2681,8 @@ TEST(EditWorkspaceAdapter, LocalMediaBatchPreservesInputOrderAndUndoesAsOneOpera
     EXPECT_EQ(session.workspace().clips(), imported);
 }
 
-TEST(EditWorkspaceAdapter, SavedStandaloneClipRemainsImportableAndEditableWhenCreationIsUnavailable) {
+TEST(EditWorkspaceAdapter, SavedStandaloneClipRemainsImportableAndEditable) {
     EnsureApplication();
-    EXPECT_FALSE(product::kRecordingClipsAvailable);
     QTemporaryDir directory;
     ASSERT_TRUE(directory.isValid());
     const auto fixture =
