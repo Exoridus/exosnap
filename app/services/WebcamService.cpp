@@ -630,8 +630,11 @@ bool ShouldDeliverWebcamSample(long long last_delivered_100ns, long long sample_
 }
 
 bool WaitForWebcamReconnect(std::stop_token stop, std::chrono::milliseconds delay) {
+    // The wait shares no state; the mutex only satisfies the condition-variable
+    // contract while the stop token's callback provides the wake-up.
     std::mutex mutex;
     std::condition_variable_any wake;
+    // cppcheck-suppress localMutex
     std::unique_lock lock(mutex);
     wake.wait_for(lock, stop, delay, [] { return false; });
     return !stop.stop_requested();
