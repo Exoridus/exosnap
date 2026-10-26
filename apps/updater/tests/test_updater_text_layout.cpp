@@ -9,19 +9,69 @@
 
 #include <gtest/gtest.h>
 
+#include <QLocale>
 #include <QString>
+#include <QTemporaryFile>
 
 #include "UpdaterController.h"
 #include "UpdaterViewAdapter.h"
 
 using namespace exosnap::updater;
 
+TEST(UpdaterRepairProjection, RepairActionRoutesOnlyWhenOffered) {
+    UpdaterController controller("0.10.1", "0.11.0");
+    controller.onFailure(FailureCase::VerifyInstallFailedMsi, {});
+    UpdaterViewAdapter adapter;
+    adapter.render(controller.state());
+    int retries = 0;
+    QObject::connect(&adapter, &UpdaterViewAdapter::retryRequested, [&] { ++retries; });
+    adapter.activateAction("Repair ExoSnap");
+    EXPECT_EQ(retries, 1);
+    UpdaterController idle("0.10.1", "0.11.0");
+    adapter.render(idle.state());
+    adapter.activateAction("Repair ExoSnap");
+    EXPECT_EQ(retries, 1);
+}
+
+TEST(UpdaterRepairProjection, LogActionDependsOnAnExistingDiagnosticFile) {
+    UpdaterViewAdapter adapter;
+    EXPECT_FALSE(adapter.logAvailable());
+    QTemporaryFile log;
+    ASSERT_TRUE(log.open());
+    adapter.setLogPath(log.fileName());
+    EXPECT_TRUE(adapter.logAvailable());
+    ASSERT_TRUE(log.remove());
+    EXPECT_FALSE(adapter.logAvailable());
+}
+
+TEST(UpdaterRepairProjection, InstallationStepSaysRepairing) {
+    UpdaterController controller("0.10.1", "0.11.0");
+    controller.onRepairStarted();
+    controller.onStepDone(UpStep::CloseApp);
+    controller.onStepStarted(UpStep::Install);
+    UpdaterViewAdapter adapter;
+    adapter.render(controller.state());
+    EXPECT_EQ(adapter.panelTitle(), "Repairing ExoSnap");
+    EXPECT_FALSE(adapter.closeEnabled());
+}
+
+TEST(UpdaterRepairProjection, PreparationBlocksCloseBeforeTheWorkerStarts) {
+    UpdaterController controller("0.10.1", "0.11.0");
+    controller.onRepairStarted();
+    EXPECT_EQ(controller.flowState().phase, exosnap::update::UpdatePhase::WaitingForParent);
+    UpdaterViewAdapter adapter;
+    adapter.render(controller.state());
+    EXPECT_FALSE(adapter.closeEnabled());
+    EXPECT_FALSE(adapter.requestClose());
+    EXPECT_FALSE(adapter.cancelConfirmationVisible());
+}
+
 namespace {
 
 UpdaterUiState DownloadInFlight() {
     UpdaterController c(QStringLiteral("0.8.1"), QStringLiteral("0.9.0"));
     c.onStepStarted(UpStep::Download);
-    c.onDownloadProgress(38, 100);
+    c.onDownloadProgress(38000000, 100000000);
     return c.state();
 }
 
@@ -113,8 +163,8 @@ TEST(UpdaterTextLayoutTest, SuccessSaysTheAppIsRelaunchingOnlyOnce) {
     UpdaterViewAdapter adapter;
     adapter.render(c.state());
 
-    const QStringList copy = {adapter.panelTitle(), adapter.panelDetail(), adapter.panelSafety(),
-                              adapter.statusHeadline(), adapter.statusLine(), adapter.hint()};
+    const QStringList copy = {adapter.panelTitle(),     adapter.panelDetail(), adapter.panelSafety(),
+                              adapter.statusHeadline(), adapter.statusLine(),  adapter.hint()};
     EXPECT_EQ(CountOccurrences(copy, QStringLiteral("starting automatically")), 1);
 }
 
@@ -189,9 +239,108 @@ TEST(UpdaterTextLayoutTest, StepListExposesEveryPhaseAndItsStatus) {
         EXPECT_TRUE(row.contains(QStringLiteral("status")));
         EXPECT_TRUE(row.contains(QStringLiteral("tag")));
         EXPECT_TRUE(row.contains(QStringLiteral("accessible")));
-        EXPECT_TRUE(row.value(QStringLiteral("accessible")).toString().contains(
-            row.value(QStringLiteral("label")).toString()));
-        EXPECT_TRUE(row.value(QStringLiteral("accessible")).toString().contains(
-            row.value(QStringLiteral("tag")).toString()));
+        EXPECT_TRUE(
+            row.value(QStringLiteral("accessible")).toString().contains(row.value(QStringLiteral("label")).toString()));
+        EXPECT_TRUE(
+            row.value(QStringLiteral("accessible")).toString().contains(row.value(QStringLiteral("tag")).toString()));
+    }
+}
+
+TEST(UpdaterTextLayoutTest, CompactProgressUsesMeasuredStateAndPreservesFullDetails) {
+    UpdaterViewAdapter adapter;
+    adapter.render(DownloadInFlight());
+    EXPECT_TRUE(adapter.progressVisible());
+    EXPECT_EQ(adapter.versionText(), QStringLiteral("0.8.1 → 0.9.0"));
+    const QLocale locale;
+    EXPECT_EQ(adapter.compactDetail(),
+              QStringLiteral("%1 of %2 MB").arg(locale.toString(38.0, 'f', 1), locale.toString(100.0, 'f', 1)));
+    EXPECT_TRUE(adapter.detailsText().contains(adapter.panelSafety()));
+
+    adapter.render(Terminal(FailureCase::VerifyInstallFailed));
+    EXPECT_FALSE(adapter.progressVisible());
+    EXPECT_EQ(adapter.compactDetail(), adapter.panelSafety());
+    EXPECT_TRUE(adapter.detailsText().contains(adapter.panelSafety()));
+    EXPECT_TRUE(adapter.detailsText().contains(adapter.panelDetail()));
+}
+
+TEST(UpdaterTextLayoutTest, CompactSuccessKeepsAutomaticLaunchVisible) {
+    UpdaterController controller(QStringLiteral("0.8.1"), QStringLiteral("0.9.0"));
+    controller.onAllDone();
+    UpdaterViewAdapter adapter;
+    adapter.render(controller.state());
+    EXPECT_FALSE(adapter.progressVisible());
+    EXPECT_EQ(adapter.compactDetail(), QStringLiteral("ExoSnap is starting automatically."));
+    EXPECT_TRUE(adapter.primaryAction().isEmpty());
+}
+TEST(UpdaterTextLayoutTest, CompactTerminalSafetyRemainsVisibleForEveryFailureCase) {
+    for (const auto failure :
+         {FailureCase::DownloadFailed, FailureCase::VerifyDownloadFailed, FailureCase::VerifyReinstallMismatch,
+          FailureCase::TargetVersionMismatch, FailureCase::HandoffRejected, FailureCase::AppWontClose,
+          FailureCase::InstallFailed, FailureCase::VerifyInstallFailed, FailureCase::RestoreFailed,
+          FailureCase::VerifyInstallFailedMsi, FailureCase::LaunchFailed, FailureCase::UacDeclined,
+          FailureCase::MsiFailed, FailureCase::MsiRebootRequired}) {
+        UpdaterViewAdapter adapter;
+        adapter.render(Terminal(failure));
+        EXPECT_FALSE(adapter.panelSafety().isEmpty()) << static_cast<int>(failure);
+        EXPECT_EQ(adapter.compactDetail(), adapter.panelSafety()) << static_cast<int>(failure);
+        EXPECT_TRUE(adapter.detailsText().contains(adapter.panelDetail())) << static_cast<int>(failure);
+    }
+}
+
+TEST(UpdaterTextLayoutTest, CompactSafetyDistinguishesRestoredBackupAndUnknownInstallation) {
+    UpdaterViewAdapter adapter;
+    adapter.render(Terminal(FailureCase::VerifyInstallFailed));
+    EXPECT_TRUE(adapter.compactDetail().contains(QStringLiteral("was restored")));
+    adapter.render(Terminal(FailureCase::RestoreFailed));
+    EXPECT_TRUE(adapter.compactDetail().contains(QStringLiteral("backup folder")));
+    EXPECT_TRUE(adapter.compactDetail().contains(QStringLiteral("isn't ready to run")));
+    adapter.render(Terminal(FailureCase::VerifyInstallFailedMsi));
+    EXPECT_TRUE(adapter.compactDetail().contains(QStringLiteral("didn't confirm")));
+    EXPECT_TRUE(adapter.compactDetail().contains(QStringLiteral("Repair ExoSnap")));
+    adapter.render(Terminal(FailureCase::MsiRebootRequired));
+    EXPECT_TRUE(adapter.compactDetail().contains(QStringLiteral("keeps working until you restart Windows")));
+}
+
+TEST(UpdaterTextLayoutTest, CompactDownloadUsesLocaleDecimalMegabytes) {
+    const QLocale previous;
+    QLocale::setDefault(QLocale(QLocale::German, QLocale::Germany));
+    UpdaterController controller(QStringLiteral("0.8.1"), QStringLiteral("0.9.0"));
+    controller.onStepStarted(UpStep::Download);
+    controller.onDownloadProgress(1260000, 42500000);
+    UpdaterViewAdapter adapter;
+    adapter.render(controller.state());
+    EXPECT_EQ(adapter.compactDetail(), QStringLiteral("1,3 of 42,5 MB"));
+    EXPECT_EQ(controller.state().downloaded_bytes, 1260000u);
+    EXPECT_EQ(controller.state().total_bytes, 42500000u);
+    QLocale::setDefault(previous);
+}
+
+TEST(UpdaterTextLayoutTest, CompactDownloadDoesNotInventUnknownSizeOrEtaAndResetsOnRetry) {
+    UpdaterController controller(QStringLiteral("0.8.1"), QStringLiteral("0.9.0"));
+    controller.onStepStarted(UpStep::Download);
+    controller.onDownloadProgress(1250000, 42500000);
+    controller.onStepStarted(UpStep::Download);
+    EXPECT_EQ(controller.state().downloaded_bytes, 0u);
+    EXPECT_EQ(controller.state().total_bytes, 0u);
+    EXPECT_EQ(controller.flowState().downloaded_bytes, 0u);
+    EXPECT_EQ(controller.flowState().total_bytes, 0u);
+    EXPECT_FALSE(controller.state().determinate);
+    UpdaterViewAdapter adapter;
+    adapter.render(controller.state());
+    EXPECT_EQ(adapter.compactDetail(), adapter.panelDetail());
+    controller.onDownloadProgress(1250000, 0);
+    adapter.render(controller.state());
+    EXPECT_EQ(adapter.compactDetail(), adapter.panelDetail());
+    EXPECT_FALSE(adapter.compactDetail().contains(QStringLiteral("MB")));
+    EXPECT_FALSE(adapter.compactDetail().contains(QStringLiteral("ETA")));
+}
+
+TEST(UpdaterTextLayoutTest, CompactProtectedPhaseStatesInterruptionRule) {
+    UpdaterController controller(QStringLiteral("0.8.1"), QStringLiteral("0.9.0"));
+    for (const auto step : {UpStep::Install, UpStep::Verify, UpStep::Launch}) {
+        controller.onStepStarted(step);
+        UpdaterViewAdapter adapter;
+        adapter.render(controller.state());
+        EXPECT_EQ(adapter.compactDetail(), QStringLiteral("This step can't be interrupted."));
     }
 }

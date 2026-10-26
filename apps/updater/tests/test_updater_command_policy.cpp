@@ -326,4 +326,14 @@ TEST(UpdaterStatePayload, AvailableActionsIsPartOfTheSnapshot) {
     EXPECT_FALSE(names.contains(QStringLiteral("updater.apply")));
 }
 
+TEST(UpdaterCommandPolicy, UnconfirmedRepairPreparationRefusesCloseAndCancel) {
+    auto state = Manual(UpdatePhase::WaitingForParent);
+    state.install_state = InstallState::Unknown;
+    EXPECT_EQ(VerdictFor("updater.close", state).code, QLatin1String(kBlocked));
+    EXPECT_EQ(VerdictFor("updater.cancel", state).code, QLatin1String(kBlocked));
+    EXPECT_FALSE(AvailableActions(state).contains("updater.close"));
+    state.install_state = InstallState::Intact;
+    EXPECT_TRUE(VerdictFor("updater.close", state).allowed());
+}
+
 } // namespace

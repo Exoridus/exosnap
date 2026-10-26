@@ -998,6 +998,7 @@ qt_add_qml_module(record_controls_qml_tests
         DeviceCapabilityRow.qml
         DeviceCodecChip.qml
         ExoButton.qml
+        ExoSetupProgress.qml
         ExoChevron.qml
         # The 24 px interaction target and the keyboard toggle are geometry and
         # input, so they are asserted rather than judged on a screenshot.

@@ -25,7 +25,7 @@ const QStringList& PreviewStateNames() {
         QStringLiteral("download"), QStringLiteral("progress"), QStringLiteral("verifying"),
         QStringLiteral("success"),  QStringLiteral("amber"),    QStringLiteral("red"),
         QStringLiteral("green"),    QStringLiteral("reboot"),   QStringLiteral("reinstall"),
-        QStringLiteral("long"),
+        QStringLiteral("long"), QStringLiteral("unknown"), QStringLiteral("repair"), QStringLiteral("repair-failed"),
     };
     return names;
 }

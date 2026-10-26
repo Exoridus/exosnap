@@ -176,15 +176,15 @@ UpStep RetryEntryStep(FailureCase failure) noexcept {
     case FailureCase::TargetVersionMismatch:   // A4 (nothing downloaded into place)
     case FailureCase::HandoffRejected:         // A0 (the pipeline never started)
         return UpStep::Download;
+    case FailureCase::VerifyInstallFailedMsi:
     case FailureCase::AppWontClose: // B1 (download kept)
         return UpStep::CloseApp;
-    case FailureCase::InstallFailed:          // B2 (staging kept)
-    case FailureCase::VerifyInstallFailed:    // B3 (portable: previous version restored)
-    case FailureCase::RestoreFailed:          // B3-R (backup preserved; retry heals it)
-    case FailureCase::VerifyInstallFailedMsi: // B3-MSI
-    case FailureCase::UacDeclined:            // C1 (re-handoff)
-    case FailureCase::MsiFailed:              // C2
-    case FailureCase::MsiRebootRequired:      // C3 (terminal success; no Retry offered)
+    case FailureCase::InstallFailed:       // B2 (staging kept)
+    case FailureCase::VerifyInstallFailed: // B3 (portable: previous version restored)
+    case FailureCase::RestoreFailed:       // B3-R (backup preserved; retry heals it)
+    case FailureCase::UacDeclined:         // C1 (re-handoff)
+    case FailureCase::MsiFailed:           // C2
+    case FailureCase::MsiRebootRequired:   // C3 (terminal success; no Retry offered)
         return UpStep::Install;
     case FailureCase::LaunchFailed: // B4 (soft success; manual start)
         return UpStep::Launch;

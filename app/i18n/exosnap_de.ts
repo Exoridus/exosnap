@@ -10442,6 +10442,14 @@ Kleiner Text auf dem Bildschirm verliert früher an Qualität als Videoinhalte. 
 </context>
 <context>
     <name>UpdaterController</name>
+    <message><source>Repair ExoSnap</source><translation>ExoSnap reparieren</translation></message>
+    <message><source>Installation state unknown</source><translation>Installationszustand unbekannt</translation></message>
+    <message><source>Windows Installer didn't confirm the result. Repair ExoSnap before you use it.</source><translation>Windows Installer hat das Ergebnis nicht bestätigt. Repariere ExoSnap, bevor du es verwendest.</translation></message>
+    <message><source>Restart Windows before using ExoSnap. The installed files are not verified yet.</source><translation>Starte Windows neu, bevor du ExoSnap verwendest. Die installierten Dateien sind noch nicht geprüft.</translation></message>
+    <message><source>Repair didn't complete</source><translation>Reparatur nicht abgeschlossen</translation></message>
+    <message><source>The installation is still unconfirmed. Repair ExoSnap before you use it.</source><translation>Die Installation ist weiterhin unbestätigt. Repariere ExoSnap, bevor du es verwendest.</translation></message>
+    <message><source>Restart to finish</source><translation>Neustart erforderlich</translation></message>
+    <message><source>Reapplying the verified MSI package.</source><translation>Das geprüfte MSI-Paket wird erneut angewendet.</translation></message>
     <message>
         <location filename="../../apps/updater/UpdaterController.cpp" line="+34"/>
         <source>Downloading version %1 again…</source>
@@ -10887,28 +10895,40 @@ Kleiner Text auf dem Bildschirm verliert früher an Qualität als Videoinhalte. 
 </context>
 <context>
     <name>UpdaterMain</name>
+    <message><source>Close</source><translation>Schließen</translation></message>
+    <message><source>Open log</source><translation>Protokoll öffnen</translation></message>
     <message>
-        <location filename="../../apps/updater/quick/UpdaterMain.qml" line="+25"/>
+        <location filename="../../apps/updater/quick/UpdaterMain.qml" line="+9"/>
         <source>ExoSnap Updater</source>
         <translation>ExoSnap Updater</translation>
     </message>
     <message>
-        <location line="+178"/>
-        <source>Minimize updater</source>
-        <translation>Updater minimieren</translation>
+        <location line="+22"/>
+        <source>Updater</source>
+        <translation>Updater</translation>
     </message>
     <message>
-        <location line="+492"/>
+        <location line="+45"/>
+        <source>%1%</source>
+        <translation>%1 %</translation>
+    </message>
+    <message>
+        <location line="+39"/>
+        <source>Details</source>
+        <translation>Details</translation>
+    </message>
+    <message>
+        <location line="+79"/>
         <source>Cancel this update?</source>
         <translation>Dieses Update abbrechen?</translation>
     </message>
     <message>
-        <location line="+14"/>
+        <location line="+8"/>
         <source>Download and preparation progress will be discarded. Your installed ExoSnap version remains unchanged.</source>
         <translation>Der Download- und Vorbereitungsfortschritt wird verworfen. Die installierte ExoSnap-Version bleibt unverändert.</translation>
     </message>
     <message>
-        <location line="+22"/>
+        <location line="+11"/>
         <source>Cancel update</source>
         <translation>Update abbrechen</translation>
     </message>
@@ -10928,6 +10948,16 @@ Kleiner Text auf dem Bildschirm verliert früher an Qualität als Videoinhalte. 
 </context>
 <context>
     <name>UpdaterViewAdapter</name>
+    <message><source>Repair ExoSnap</source><translation>ExoSnap reparieren</translation></message>
+    <message><source>Repairing ExoSnap</source><translation>ExoSnap wird repariert</translation></message>
+    <message>
+        <source>%1 of %2 MB</source>
+        <translation>%1 von %2 MB</translation>
+    </message>
+    <message>
+        <source>This step can't be interrupted.</source>
+        <translation>Dieser Schritt kann nicht unterbrochen werden.</translation>
+    </message>
     <message>
         <location filename="../../apps/updater/UpdaterViewAdapter.cpp" line="+15"/>
         <source>done</source>
@@ -10954,7 +10984,12 @@ Kleiner Text auf dem Bildschirm verliert früher an Qualität als Videoinhalte. 
         <translation>wartend</translation>
     </message>
     <message>
-        <location line="+26"/>
+        <location line="+25"/>
+        <source>%1 → %2</source>
+        <translation>%1 → %2</translation>
+    </message>
+    <message>
+        <location line="+27"/>
         <location line="+182"/>
         <source>Downloading update</source>
         <translation>Update wird heruntergeladen</translation>
@@ -13563,6 +13598,343 @@ Kleiner Text auf dem Bildschirm verliert früher an Qualität als Videoinhalte. 
         <location line="+1"/>
         <source>Notifications (%1)</source>
         <translation>Benachrichtigungen (%1)</translation>
+    </message>
+</context>
+<context>
+    <name>ExoSetupHeader</name>
+    <message>
+        <location filename="../quick/ExoSnap/Quick/ExoSetupHeader.qml" line="+11"/>
+        <source>Close</source>
+        <translation>Schließen</translation>
+    </message>
+    <message>
+        <location line="+40"/>
+        <source>Minimize</source>
+        <translation>Minimieren</translation>
+    </message>
+</context>
+<context>
+    <name>SetupDecision</name>
+    <message>
+        <location filename="../../apps/setup/quick/SetupDecision.qml" line="+68"/>
+        <source>Create a desktop shortcut</source>
+        <translation>Desktopverknüpfung erstellen</translation>
+    </message>
+    <message>
+        <location line="+19"/>
+        <source>Also delete my ExoSnap data</source>
+        <translation>Auch meine ExoSnap-Daten löschen</translation>
+    </message>
+    <message>
+        <location line="+21"/>
+        <source>Settings, presets, history, caches, recovery data, logs and crash reports. This can&apos;t be undone.</source>
+        <translation>Einstellungen, Voreinstellungen, Verlauf, Caches, Wiederherstellungsdaten, Protokolle und Absturzberichte. Das kann nicht rückgängig gemacht werden.</translation>
+    </message>
+    <message>
+        <location line="+21"/>
+        <source>Repair</source>
+        <translation>Reparieren</translation>
+    </message>
+    <message>
+        <location line="+0"/>
+        <source>Replace missing or damaged program files</source>
+        <translation>Fehlende oder beschädigte Programmdateien ersetzen</translation>
+    </message>
+    <message>
+        <location line="+1"/>
+        <source>Uninstall</source>
+        <translation>Deinstallieren</translation>
+    </message>
+    <message>
+        <location line="+0"/>
+        <source>Remove ExoSnap from this computer</source>
+        <translation>ExoSnap von diesem Computer entfernen</translation>
+    </message>
+</context>
+<context>
+    <name>SetupMain</name>
+    <message>
+        <location filename="../../apps/setup/quick/SetupMain.qml" line="+10"/>
+        <source>ExoSnap Setup</source>
+        <translation>ExoSnap-Setup</translation>
+    </message>
+    <message>
+        <location line="+33"/>
+        <source>Setup</source>
+        <translation>Setup</translation>
+    </message>
+    <message>
+        <location line="+3"/>
+        <source>Close Setup</source>
+        <translation>Setup schließen</translation>
+    </message>
+    <message>
+        <location line="+31"/>
+        <source>View license</source>
+        <translation>Lizenz anzeigen</translation>
+    </message>
+    <message>
+        <location line="+7"/>
+        <source>Details</source>
+        <translation>Details</translation>
+    </message>
+    <message>
+        <location line="+7"/>
+        <source>Open log</source>
+        <translation>Protokoll öffnen</translation>
+    </message>
+    <message>
+        <location line="+65"/>
+        <source>Cancel Setup?</source>
+        <translation>Setup abbrechen?</translation>
+    </message>
+    <message>
+        <location line="+9"/>
+        <source>Keep going</source>
+        <translation>Fortfahren</translation>
+    </message>
+    <message>
+        <location line="+1"/>
+        <source>Cancel Setup</source>
+        <translation>Setup abbrechen</translation>
+    </message>
+    <message>
+        <location line="+29"/>
+        <source>Close</source>
+        <translation>Schließen</translation>
+    </message>
+    <message>
+        <location line="+13"/>
+        <source>License</source>
+        <translation>Lizenz</translation>
+    </message>
+    <message>
+        <location line="+16"/>
+        <source>Back</source>
+        <translation>Zurück</translation>
+    </message>
+</context>
+<context>
+    <name>SetupStatus</name>
+    <message>
+        <location filename="../../apps/setup/quick/SetupStatus.qml" line="+40"/>
+        <source>%1%</source>
+        <translation>%1 %</translation>
+    </message>
+</context>
+<context>
+    <name>exosnap::setup::SetupController</name>
+    <message>
+        <source>This step can't be interrupted.</source>
+        <translation>Dieser Schritt kann nicht unterbrochen werden.</translation>
+    </message>
+    <message>
+        <source>Close ExoSnap and any apps using its files, then try Setup again.</source>
+        <translation>Schließe ExoSnap und alle Apps, die auf seine Dateien zugreifen, und starte Setup erneut.</translation>
+    </message>
+    <message>
+        <source>ExoSnap is installed but couldn't be started. Launch it from the Start menu.</source>
+        <translation>ExoSnap ist installiert, konnte aber nicht gestartet werden. Starte es über das Startmenü.</translation>
+    </message>
+    <message>
+        <location filename="../../apps/setup/SetupController.cpp" line="+87"/>
+        <source>Windows Installer returned error %1.</source>
+        <translation>Windows Installer hat den Fehler %1 zurückgegeben.</translation>
+    </message>
+    <message>
+        <location line="+18"/>
+        <source>%1 → %2</source>
+        <translation>%1 → %2</translation>
+    </message>
+    <message>
+        <location line="+2"/>
+        <source>%1 installed</source>
+        <translation>%1 installiert</translation>
+    </message>
+    <message>
+        <location line="+5"/>
+        <source>Install ExoSnap</source>
+        <translation>ExoSnap installieren</translation>
+    </message>
+    <message>
+        <location line="+0"/>
+        <source>Update ExoSnap</source>
+        <translation>ExoSnap aktualisieren</translation>
+    </message>
+    <message>
+        <location line="+2"/>
+        <source>Manage ExoSnap</source>
+        <translation>ExoSnap verwalten</translation>
+    </message>
+    <message>
+        <location line="+2"/>
+        <source>Uninstall ExoSnap</source>
+        <translation>ExoSnap deinstallieren</translation>
+    </message>
+    <message>
+        <location line="+3"/>
+        <source>Uninstalling ExoSnap</source>
+        <translation>ExoSnap wird deinstalliert</translation>
+    </message>
+    <message>
+        <location line="+1"/>
+        <source>Repairing ExoSnap</source>
+        <translation>ExoSnap wird repariert</translation>
+    </message>
+    <message>
+        <location line="+0"/>
+        <source>Installing ExoSnap</source>
+        <translation>ExoSnap wird installiert</translation>
+    </message>
+    <message>
+        <location line="+4"/>
+        <source>ExoSnap was uninstalled</source>
+        <translation>ExoSnap wurde deinstalliert</translation>
+    </message>
+    <message>
+        <location line="+1"/>
+        <source>ExoSnap was repaired</source>
+        <translation>ExoSnap wurde repariert</translation>
+    </message>
+    <message>
+        <location line="+0"/>
+        <source>ExoSnap is installed</source>
+        <translation>ExoSnap ist installiert</translation>
+    </message>
+    <message>
+        <location line="+3"/>
+        <source>Restart to finish</source>
+        <translation>Zum Abschließen neu starten</translation>
+    </message>
+    <message>
+        <location line="+2"/>
+        <source>Setup was cancelled</source>
+        <translation>Setup wurde abgebrochen</translation>
+    </message>
+    <message>
+        <location line="+2"/>
+        <source>Setup didn&apos;t complete</source>
+        <translation>Setup wurde nicht abgeschlossen</translation>
+    </message>
+    <message>
+        <location line="+1"/>
+        <source>Checking installation</source>
+        <translation>Installation wird geprüft</translation>
+    </message>
+    <message>
+        <location line="+4"/>
+        <source>For everyone on this computer. Everything Setup needs is included.</source>
+        <translation>Für alle Benutzer dieses Computers. Alles für die Installation ist enthalten.</translation>
+    </message>
+    <message>
+        <location line="+2"/>
+        <source>Removes the app, its Start menu entry and its shortcut. Recordings and exported files are never touched.</source>
+        <translation>Entfernt die App, ihren Startmenüeintrag und ihre Verknüpfung. Aufnahmen und exportierte Dateien bleiben immer erhalten.</translation>
+    </message>
+    <message>
+        <location line="+3"/>
+        <source>Cancelling. Waiting for Windows Installer to finish safely.</source>
+        <translation>Abbruch läuft. Es wird gewartet, bis Windows Installer sicher beendet werden kann.</translation>
+    </message>
+    <message>
+        <location line="+2"/>
+        <source>Finishing up. This step can&apos;t be interrupted.</source>
+        <translation>Wird abgeschlossen. Dieser Schritt kann nicht unterbrochen werden.</translation>
+    </message>
+    <message>
+        <location line="+2"/>
+        <source>Preparing Microsoft Visual C++ Runtime</source>
+        <translation>Microsoft Visual C++ Runtime wird vorbereitet</translation>
+    </message>
+    <message>
+        <location line="+1"/>
+        <source>Preparing program files</source>
+        <translation>Programmdateien werden vorbereitet</translation>
+    </message>
+    <message>
+        <location line="+4"/>
+        <source>Your ExoSnap data was deleted. Recordings were kept.</source>
+        <translation>Deine ExoSnap-Daten wurden gelöscht. Aufnahmen wurden beibehalten.</translation>
+    </message>
+    <message>
+        <location line="+1"/>
+        <source>Your ExoSnap data and recordings were kept.</source>
+        <translation>Deine ExoSnap-Daten und Aufnahmen wurden beibehalten.</translation>
+    </message>
+    <message>
+        <location line="+1"/>
+        <source>You&apos;ll find it in the Start menu.</source>
+        <translation>Du findest ExoSnap im Startmenü.</translation>
+    </message>
+    <message>
+        <location line="+3"/>
+        <source>Restart Windows to complete the operation.</source>
+        <translation>Starte Windows neu, um den Vorgang abzuschließen.</translation>
+    </message>
+    <message>
+        <location line="+2"/>
+        <source>Setup stopped. Recordings and exported files were kept.</source>
+        <translation>Setup wurde beendet. Aufnahmen und exportierte Dateien wurden beibehalten.</translation>
+    </message>
+    <message>
+        <location line="+2"/>
+        <source>Windows Installer stopped with error %1. Restart Windows before trying again.</source>
+        <translation>Windows Installer wurde mit dem Fehler %1 beendet. Starte Windows vor einem erneuten Versuch neu.</translation>
+    </message>
+    <message>
+        <location line="+1"/>
+        <source>Windows Installer stopped with error %1.</source>
+        <translation>Windows Installer wurde mit dem Fehler %1 beendet.</translation>
+    </message>
+    <message>
+        <location line="+7"/>
+        <source>Install</source>
+        <translation>Installieren</translation>
+    </message>
+    <message>
+        <location line="+0"/>
+        <source>Update</source>
+        <translation>Aktualisieren</translation>
+    </message>
+    <message>
+        <location line="+2"/>
+        <source>Uninstall and delete data</source>
+        <translation>Deinstallieren und Daten löschen</translation>
+    </message>
+    <message>
+        <location line="+0"/>
+        <source>Uninstall</source>
+        <translation>Deinstallieren</translation>
+    </message>
+    <message>
+        <location line="+2"/>
+        <source>Launch ExoSnap</source>
+        <translation>ExoSnap starten</translation>
+    </message>
+    <message>
+        <location line="+2"/>
+        <source>Restart now</source>
+        <translation>Jetzt neu starten</translation>
+    </message>
+    <message>
+        <location line="+7"/>
+        <source>Back</source>
+        <translation>Zurück</translation>
+    </message>
+    <message>
+        <location line="+2"/>
+        <source>Later</source>
+        <translation>Später</translation>
+    </message>
+    <message>
+        <location line="+2"/>
+        <source>Cancel</source>
+        <translation>Abbrechen</translation>
+    </message>
+    <message>
+        <location line="+2"/>
+        <source>Close</source>
+        <translation>Schließen</translation>
     </message>
 </context>
 </TS>

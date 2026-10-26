@@ -60,6 +60,8 @@ struct UpdaterUiState {
     // false rather than a large "0 percent", which is a number nothing has
     // measured yet.
     bool determinate = false;
+    quint64 downloaded_bytes = 0;
+    quint64 total_bytes = 0;
     QString status_line; // mono line under the ring
     TerminalVariant variant = TerminalVariant::None;
     PromptKind prompt = PromptKind::None;
@@ -82,6 +84,7 @@ struct UpdaterUiState {
     // eyebrow reads "EXOSNAP UPDATER" while resting, because "UPDATING EXOSNAP"
     // over an idle window is a claim about something that is not happening.
     bool manual = false;
+    bool repairing = false;
 };
 
 class UpdaterController {
@@ -90,6 +93,7 @@ class UpdaterController {
 
     // Mark this run as a verification reinstall. Affects wording only.
     void setVerificationReinstall(bool on);
+    void onRepairStarted();
     // Manual vs. handoff. Set once, at construction time of the run; it decides
     // which commands exist at all and cannot be derived afterwards.
     void setMode(exosnap::update::UpdaterMode mode);

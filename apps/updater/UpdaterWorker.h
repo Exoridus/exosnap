@@ -75,11 +75,11 @@ namespace exosnap::updater {
 // returns package-manager guidance suitable for display without executing it.
 [[nodiscard]] QString SelfUpdateRefusalReason(exosnap::update::DistributionContext distribution);
 
-// msiexec parameter string for a silent install. Normal upgrades use
-// /i "<msi>" /qn /norestart. Verification reinstall mode additionally sets
-// REINSTALL=ALL REINSTALLMODE=vomus so Windows Installer actually reapplies the
-// already-installed identical package instead of accepting a maintenance no-op.
-[[nodiscard]] std::wstring BuildMsiexecParams(const std::wstring& msi_path, bool verification_reinstall);
+// Includes silent/no-restart switches and a verbose log beside the package.
+// Verification reinstall reapplies the identical package. Repair additionally
+// forces all files to be replaced from the verified source.
+[[nodiscard]] std::wstring BuildMsiexecParams(const std::wstring& msi_path, bool verification_reinstall,
+                                              bool repair = false);
 
 // Terminal meaning of an msiexec process exit code for the silent
 // (/qn /norestart) install this app performs.
@@ -177,6 +177,7 @@ class UpdaterWorker : public QObject {
     void download();
     // Close the parent (if any), install, verify and relaunch.
     void apply();
+    void repair();
 
   signals:
     void stepStarted(UpStep step);
@@ -187,6 +188,7 @@ class UpdaterWorker : public QObject {
     void releaseResolved(QString to_version);
     void allDone();
     void failed(FailureCase c, QString detail);
+    void installerLogAvailable(QString path);
     // The run stopped because requestCancel() was observed. Terminal, and NOT a
     // failure: nothing was installed and nothing broke. Emitted instead of
     // failed(...) at the points where the engine actually honours cancellation.
@@ -268,6 +270,7 @@ class UpdaterWorker : public QObject {
     // what was already downloaded/staged.
     std::wstring download_dir_;
     bool have_package_ = false; // Download completed at least once
+    bool repair_msi_ = false;
 
     // Deny-write / deny-delete lock on package_path_, held from verification
     // until the package is consumed (closes the verify->consume TOCTOU window).

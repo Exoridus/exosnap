@@ -8,8 +8,6 @@ Broaden real-hardware coverage of capture transitions, HDR, high-refresh recordi
 
 Complete candidate-bound verification where a scenario still cannot prove which installed bytes it exercised. Continue hardening disposable-environment provisioning, interactive-console execution, clean installation, upgrade and restoration. A gate body existing is not evidence that its preconditions can be satisfied or that a release passed it.
 
-Give the offline Setup a dark native title bar and ExoSnap-styled buttons once WiX supports them. WixStandardBootstrapperApplication exposes no DWM option, and thmutil's graphic buttons lose the default-button bit and draw no disabled state, so both wait on an upstream change or a reviewed native extension rather than a custom bootstrapper application.
-
 Strengthen display restoration against identity ambiguity. The current matcher prefers an exact connector path before panel metadata; it cannot guarantee that a different physical panel on that connector will be rejected. Any stronger promise needs matcher changes and regression tests, not just different wording.
 
 Maintain repeatable privacy review and symbol delivery for official crash reports. Authenticode signing and its operational integration remain release work; signed update manifests are not a substitute for executable publisher signing. Keep signing status explicit in release documentation.

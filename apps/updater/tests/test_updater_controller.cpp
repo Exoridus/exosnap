@@ -124,10 +124,38 @@ TEST(UpdaterController, VerifyInstallFailedMsiDoesNotClaimAConfirmedRollback) {
     // Windows Installer for an actual rollback outcome either -- it only re-reads the
     // registry install path and re-checks the version -- so the copy must not assert a
     // rollback happened, only that the post-install state could not be confirmed.
-    EXPECT_TRUE(s.headline.contains(QStringLiteral("confirm")));
+    EXPECT_TRUE(s.headline.contains(QStringLiteral("unknown")));
     EXPECT_FALSE(s.safety_text.contains(QStringLiteral("was restored")));
-    EXPECT_EQ(s.primary_action, QStringLiteral("Retry"));
-    EXPECT_EQ(s.secondary_action, QStringLiteral("Close"));
+    EXPECT_EQ(s.primary_action, QStringLiteral("Repair ExoSnap"));
+    EXPECT_TRUE(s.secondary_action.isEmpty());
+}
+
+TEST(UpdaterController, UnconfirmedMsiInstallationOffersRepairOfTheVerifiedTarget) {
+    UpdaterController c = MakeController();
+    c.onFailure(FailureCase::VerifyInstallFailedMsi, {});
+    EXPECT_EQ(c.state().primary_action, QStringLiteral("Repair ExoSnap"));
+    EXPECT_EQ(c.flowState().install_state, exosnap::update::InstallState::Unknown);
+    EXPECT_EQ(c.flowState().retry_entry_step, UpStep::CloseApp);
+}
+
+TEST(UpdaterController, RepairRetainsUncertaintyUntilVerificationSucceeds) {
+    for (FailureCase failure : {FailureCase::AppWontClose, FailureCase::UacDeclined, FailureCase::MsiFailed,
+                                FailureCase::MsiRebootRequired, FailureCase::VerifyInstallFailedMsi}) {
+        UpdaterController c = MakeController();
+        c.onRepairStarted();
+        c.onStepStarted(UpStep::CloseApp);
+        EXPECT_EQ(c.flowState().install_state, exosnap::update::InstallState::Unknown);
+        c.onStepStarted(UpStep::Install);
+        c.onFailure(failure, {});
+        EXPECT_EQ(c.flowState().install_state, exosnap::update::InstallState::Unknown);
+        EXPECT_FALSE(c.state().safety_text.contains("still usable"));
+        EXPECT_FALSE(c.state().safety_text.contains("keeps working"));
+        EXPECT_FALSE(c.state().safety_text.contains("was restored"));
+    }
+    UpdaterController c = MakeController();
+    c.onRepairStarted();
+    c.onAllDone();
+    EXPECT_EQ(c.flowState().install_state, exosnap::update::InstallState::Intact);
 }
 
 TEST(UpdaterController, MsiRebootRequiredIsTerminalSuccessWithRestartCopy) {
@@ -139,7 +167,7 @@ TEST(UpdaterController, MsiRebootRequiredIsTerminalSuccessWithRestartCopy) {
     // own terminal variant rather than a red failure card.
     EXPECT_EQ(s.steps[size_t(UpStep::Install)], StepStatus::Done);
     EXPECT_EQ(s.variant, TerminalVariant::RebootRequired);
-    EXPECT_TRUE(s.headline.contains(QStringLiteral("restart Windows")));
+    EXPECT_EQ(s.headline, QStringLiteral("Restart to finish"));
     EXPECT_TRUE(s.detail_text.contains(QStringLiteral("system restart")));
     // Not the generic C2 failure wording.
     EXPECT_FALSE(s.headline.contains(QStringLiteral("Installation failed")));
@@ -319,7 +347,7 @@ TEST(UpdaterFlowState, TheMsiVerifyFailureDoesNotClaimAnIntactInstall) {
     UpdaterController c = MakeController();
     c.onFailure(FailureCase::VerifyInstallFailedMsi, QString());
     EXPECT_EQ(c.flowState().install_state, InstallState::Unknown);
-    EXPECT_TRUE(c.state().safety_text.contains(QStringLiteral("no rollback is being claimed")));
+    EXPECT_TRUE(c.state().safety_text.contains(QStringLiteral("didn't confirm")));
 }
 
 TEST(UpdaterFlowState, RestartingWorkClearsThePreviousFailure) {

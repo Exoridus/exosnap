@@ -1,26 +1,7 @@
 <Wix xmlns="http://wixtoolset.org/schemas/v4/wxs"
-     xmlns:bal="http://wixtoolset.org/schemas/v4/wxs/bal"
      xmlns:util="http://wixtoolset.org/schemas/v4/wxs/util">
 
-  <!--
-    ExoSnap offline Setup bootstrapper
-    ==================================
-    One self-contained ExoSnap-<version>-Setup.exe for normal direct
-    installation. The chain installs the exact pinned Microsoft Visual C++
-    2015-2022 x64 runtime first and the MSI only after it succeeds; both
-    payloads are embedded, so nothing is downloaded at install time.
-
-    `exo-verify package` supplies BundleVersion, VCRedistPath,
-    VCRedistMinVersion, MsiPath, IconPath, ThemePath, LogoPath and
-    LicenseRtfPath with `-d`; the redistributable digest, the minimum version
-    and the license RTF live in Rust so the policy has one owner.
-
-    The redistributable is Permanent: removing ExoSnap must never remove a
-    shared system runtime. Its package is cached like the MSI's, because a
-    Burn repair after the original Setup.exe is gone must be able to restore a
-    runtime that was removed later; the two payloads together are the price of
-    an offline repair.
-  -->
+  <!-- The private UI payload is available before the chain installs the shared VC runtime. -->
 
   <Bundle Name="ExoSnap"
           Version="$(var.BundleVersion)"
@@ -50,14 +31,8 @@
     <Variable Name="ExoSnapRemoveUserData" Type="numeric" Value="0" />
 
     <BootstrapperApplication>
-      <bal:WixStandardBootstrapperApplication
-          Theme="rtfLicense"
-          ThemeFile="$(var.ThemePath)"
-          LogoFile="$(var.LogoPath)"
-          LicenseFile="$(var.LicenseRtfPath)"
-          ShowVersion="yes"
-          LaunchTarget="[ProgramFiles64Folder]ExoSnap\exosnap.exe"
-          LaunchWorkingFolder="[ProgramFiles64Folder]ExoSnap" />
+      <BootstrapperApplicationDll Id="ExoSnapNativeBA" SourceFile="$(var.BootstrapperPath)" />
+      <PayloadGroupRef Id="ExoSnapSetupUiPayloads" />
     </BootstrapperApplication>
 
     <Chain>
