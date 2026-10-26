@@ -1,0 +1,35 @@
+<!doctype html>
+<html lang="de">
+<head>
+<meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
+<title>ExoSnap · Controller-Assets & Mappings</title>
+<link rel="stylesheet" href="preview.css"><script src="controller-assets.js" defer></script>
+<style>
+  a{color:var(--accent)}.original-controls{display:flex;gap:16px;flex-wrap:wrap;align-items:center;margin:20px 0}.original-controls label{display:flex;gap:8px;align-items:center}.original-controls select{width:auto;padding:8px}.original-controls input[type=color]{width:48px;height:34px}.original-controls output{white-space:nowrap}.original-grid{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:20px}.original-card{border:1px solid var(--edge);border-radius:12px;overflow:hidden;background:var(--panel)}.original-card h2{font-size:16px;margin:16px}.original-card .stage{border:0;border-radius:0;min-height:0;aspect-ratio:419/305}.composition{position:absolute;inset:5%}.composition img{position:absolute;inset:0;width:100%;height:100%;object-fit:contain;pointer-events:none}.contrast-shadow{filter:drop-shadow(0 1px 1px #000b)}.sticks{display:flex;gap:24px;flex-wrap:wrap;margin:20px 0}.sticks label{display:flex;gap:8px;align-items:center}table{table-layout:fixed;white-space:normal}.mapping-wrap{overflow:auto;min-width:0}.sticks label{white-space:nowrap}.sticks label input{width:120px}td{overflow-wrap:anywhere}td:first-child{width:20%}@media(max-width:850px){.original-grid{grid-template-columns:1fr}}
+</style>
+</head>
+<body><main class="wrap">
+<header><div><h1>Controller-Assets & Mappings</h1><p class="sub">Weiße Line-Art aus AL2009mans SVGs. Gehäuse, Tasten und bewegliche Stick-Kappen als getrennte Assets.</p></div><a href="./">Zur interaktiven Vorschau →</a></header>
+<nav id="gallery" class="gallery" aria-label="Controllerlayouts"></nav>
+<div class="original-controls">
+<label>Controller <select id="layout"></select></label>
+<label>Hintergrund <select id="background"><option value="scene">Spielartige Szene</option><option value="dark">Dunkel</option><option value="gray">Grau</option><option value="light">Hell</option><option value="checker">Transparenzraster</option><option value="custom" selected>Eigene Farbe</option></select></label>
+<label>Farbe <input id="color" type="color" value="#ffffff"></label>
+<label>Größe <input id="size" type="range" min="30" max="100" value="90"><output id="size-value">90 %</output></label>
+<label><input id="shadow" type="checkbox" checked> Kontrastschatten</label>
+</div>
+<h2 id="controller-name">Controller wird geladen …</h2>
+<div class="original-grid">
+<article class="original-card"><h2>Aus einzelnen Assets zusammengesetzt</h2><div class="stage bg-custom" aria-label="Zusammengesetzte Controller-Vorschau"><div class="composition" id="composite"></div></div></article>
+<article class="original-card"><h2>Nur die Basis · ohne bewegliche Stick-Kappen</h2><div class="stage bg-custom" aria-label="Statische Basis ohne Bedienelemente"><div class="composition" id="body-only"></div></div></article>
+</div>
+<div class="sticks" aria-label="Stickbewegung manuell prüfen">
+<label>Links X <input id="lx" type="range" min="-1" max="1" step="0.01" value="0"></label><label>Links Y <input id="ly" type="range" min="-1" max="1" step="0.01" value="0"></label>
+<label>Rechts X <input id="rx" type="range" min="-1" max="1" step="0.01" value="0"></label><label>Rechts Y <input id="ry" type="range" min="-1" max="1" step="0.01" value="0"></label><button type="button" id="neutral" class="action">Zentrieren</button>
+</div>
+<p id="load-status" class="fine" role="status">Assets werden geladen …</p>
+<p><a id="source-link">Editierbare SVG-Quelle</a> · <a id="mapping-link">mapping.json öffnen</a> · <a href="../controllers/README.md">Asset-Vertrag</a> · <a href="./">Bisherige interaktive Vorschau</a></p>
+<details open><summary>Elementdateien und Eingabezuordnung</summary><div class="mapping-wrap"><table><thead><tr><th>SVG-Datei</th><th>Rolle</th><th>Eingabezuordnung</th><th>Bewegung / Füllung</th></tr></thead><tbody id="mapping-body"></tbody></table></div></details>
+<p class="fine">Die Basis enthält nur feste Geometrie, beispielsweise Stick-Einfassungen. Die Kappen darüber bewegen sich anhand der Werte aus dem JSON. Tastenanimation und reale Geräteanbindung sind in dieser Asset-Ansicht noch nicht integriert. Ein Joy-Con-Paar als Grafik bedeutet keine automatische Zusammenfassung zweier Geräte. Nicht qualifizierte Zusatzfunktionen bleiben im Mapping ausdrücklich ohne Eingabezuordnung.</p>
+<footer>Grundlage: AL2009man / Al. Lopez · MIT · <a href="../controllers/LICENSE.txt">Lizenzhinweis</a>. Alle aktuellen Layouts verwenden AL2009man-Vektorquellen.</footer>
+</main></body></html>

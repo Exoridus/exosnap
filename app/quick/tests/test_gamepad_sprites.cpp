@@ -3,13 +3,131 @@
 
 #include <QCoreApplication>
 #include <QDir>
+#include <QFile>
 #include <QImage>
+#include <QJsonArray>
+#include <QJsonDocument>
+#include <QJsonObject>
 #include <QPainter>
+#include <QSvgRenderer>
 #include <algorithm>
 #include <cmath>
 #include <gtest/gtest.h>
 
 using namespace exosnap::quick;
+
+TEST(GamepadArtworkSources, ExportedLayersMatchSourceWithoutBakingStickCapsIntoBody) {
+    const QDir root(QStringLiteral(EXOSNAP_GAMEPAD_ASSET_DIR "/controllers"));
+    QFile catalog(root.filePath(QStringLiteral("catalog.json")));
+    ASSERT_TRUE(catalog.open(QIODevice::ReadOnly));
+    const auto controllers = QJsonDocument::fromJson(catalog.readAll()).object().value("controllers").toArray();
+    ASSERT_EQ(controllers.size(), 14);
+    for (const auto& controller : controllers) {
+        const auto entry = controller.toObject();
+        const QDir directory(root.filePath(entry.value("id").toString()));
+        SCOPED_TRACE(directory.path().toStdString());
+        QFile file(directory.filePath(QStringLiteral("mapping.json")));
+        ASSERT_TRUE(file.open(QIODevice::ReadOnly));
+        const auto mapping = QJsonDocument::fromJson(file.readAll()).object();
+        ASSERT_EQ(mapping.value("schemaVersion").toInt(), 1);
+        EXPECT_EQ(mapping.value("appearance").toObject().value("detailWidth").toInt(), 50);
+        EXPECT_EQ(mapping.value("appearance").toObject().value("detailOpacity").toInt(), 40);
+        const auto box = mapping.value("viewBox").toArray();
+        ASSERT_EQ(box.size(), 4);
+        ASSERT_GT(box[2].toDouble(), 0);
+        ASSERT_GT(box[3].toDouble(), 0);
+        const QSize size(480, qRound(480 * box[3].toDouble() / box[2].toDouble()));
+        QImage expected(size, QImage::Format_ARGB32_Premultiplied);
+        QImage composed(size, QImage::Format_ARGB32_Premultiplied);
+        expected.fill(Qt::transparent);
+        composed.fill(Qt::transparent);
+        QSvgRenderer source(directory.filePath(mapping.value("source").toString()));
+        ASSERT_TRUE(source.isValid());
+        {
+            QPainter painter(&expected);
+            source.render(&painter, QRectF(QPointF(), size));
+        }
+        const auto layers = mapping.value("layers").toArray();
+        ASSERT_FALSE(layers.isEmpty());
+        ASSERT_EQ(layers[0].toObject().value("role").toString(), QStringLiteral("body"));
+        {
+            QPainter painter(&composed);
+            for (const auto& value : layers) {
+                const auto layer = value.toObject();
+                const auto bounds = layer.value("bounds").toObject();
+                EXPECT_GT(bounds.value("width").toDouble(), 0);
+                EXPECT_GT(bounds.value("height").toDouble(), 0);
+                EXPECT_GE(bounds.value("x").toDouble(), box[0].toDouble() - 1);
+                EXPECT_GE(bounds.value("y").toDouble(), box[1].toDouble() - 1);
+                EXPECT_LE(bounds.value("x").toDouble() + bounds.value("width").toDouble(),
+                          box[0].toDouble() + box[2].toDouble() + 1);
+                EXPECT_LE(bounds.value("y").toDouble() + bounds.value("height").toDouble(),
+                          box[1].toDouble() + box[3].toDouble() + 1);
+                QSvgRenderer element(directory.filePath(layer.value("file").toString()));
+                ASSERT_TRUE(element.isValid()) << layer.value("id").toString().toStdString();
+                if (layer.value("role").toString() == QStringLiteral("body")) {
+                    EXPECT_FALSE(element.elementExists(QStringLiteral("stick-l-cap")));
+                    EXPECT_FALSE(element.elementExists(QStringLiteral("stick-r-cap")));
+                } else if (layer.value("role").toString() == QStringLiteral("stick")) {
+                    EXPECT_TRUE(element.elementExists(layer.value("id").toString()));
+                    const auto motion = layer.value("motion").toObject();
+                    EXPECT_EQ(motion.value("center").toArray().size(), 2);
+                    EXPECT_GT(motion.value("travelRadius").toDouble(), 0);
+                }
+                element.render(&painter, QRectF(QPointF(), size));
+            }
+        }
+        double alpha_difference = 0;
+        double source_alpha = 0;
+        int non_white_pixels = 0;
+        for (int y = 0; y < size.height(); ++y) {
+            for (int x = 0; x < size.width(); ++x) {
+                const auto alpha = qAlpha(expected.pixel(x, y));
+                const auto pixel = expected.pixel(x, y);
+                if (qRed(pixel) != alpha || qGreen(pixel) != alpha || qBlue(pixel) != alpha)
+                    ++non_white_pixels;
+                source_alpha += alpha;
+                alpha_difference += std::abs(alpha - qAlpha(composed.pixel(x, y)));
+            }
+        }
+        const double pixels = static_cast<double>(size.width()) * size.height();
+        EXPECT_EQ(non_white_pixels, 0);
+        EXPECT_GT(source_alpha / pixels, 1);
+        EXPECT_LT(alpha_difference / pixels, 0.6);
+    }
+}
+
+TEST(GamepadArtworkSources, HorizontalJoyConsUseRailButtonsAsShoulders) {
+    for (const auto* name : {"joycon_left_horizontal", "joycon_right_horizontal"}) {
+        QFile file(QStringLiteral(EXOSNAP_GAMEPAD_ASSET_DIR "/controllers/") + QString::fromLatin1(name) +
+                   QStringLiteral("/mapping.json"));
+        ASSERT_TRUE(file.open(QIODevice::ReadOnly));
+        const auto mapping = QJsonDocument::fromJson(file.readAll()).object();
+        EXPECT_EQ(mapping.value("orientation").toString(), QStringLiteral("horizontal"));
+        bool found_sl = false;
+        bool found_sr = false;
+        bool found_stick = false;
+        for (const auto& value : mapping.value("layers").toArray()) {
+            const auto layer = value.toObject();
+            const auto binding = layer.value("binding").toObject();
+            const auto id = layer.value("id").toString();
+            if (id == QStringLiteral("btn-sl")) {
+                EXPECT_EQ(binding.value("mask").toInt(), 1024);
+                found_sl = true;
+            } else if (id == QStringLiteral("btn-sr")) {
+                EXPECT_EQ(binding.value("mask").toInt(), 2048);
+                found_sr = true;
+            } else if (layer.value("role").toString() == QStringLiteral("stick")) {
+                EXPECT_EQ(binding.value("axes").toArray()[0].toString(), QStringLiteral("left_x"));
+                EXPECT_EQ(binding.value("clickMask").toInt(), 4096);
+                found_stick = true;
+            }
+        }
+        EXPECT_TRUE(found_sl);
+        EXPECT_TRUE(found_sr);
+        EXPECT_TRUE(found_stick);
+    }
+}
 
 namespace exosnap::quick {
 

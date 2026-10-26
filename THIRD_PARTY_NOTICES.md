@@ -260,6 +260,24 @@ not download, link, or ship any of the three components below, and does not prod
 These components are used during the build process and are not included in the
 distributed binary.
 
+### Controller artwork preview assets
+
+- **Source:** AL2009man / Al. Lopez, Gamepad Asset Pack
+- **License:** MIT, Copyright (c) 2024 Al. Lopez
+- **License and credits:** `app/assets/gamepad/controllers/LICENSE.txt` and
+  `app/assets/gamepad/controllers/SOURCE-NOTICE.txt`
+- **Role:** editable controller sources and exported layers used by the artwork
+  viewer and regression tests. These assets are not yet the native widget's
+  bundled artwork.
+
+### SVGO
+
+- **Version:** 4.1.0
+- **Project:** https://github.com/svg/svgo
+- **License:** MIT
+- **Role:** optional development tool for controller-layer exports. It is
+  installed separately and is not included in the application distribution.
+
 ### GoogleTest
 
 - **Version:** 1.14.0

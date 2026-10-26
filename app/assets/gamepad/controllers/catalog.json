@@ -1,0 +1,94 @@
+{
+  "schemaVersion": 1,
+  "defaultLayouts": {
+    "steam_deck": "steam_deck_full",
+    "steam_controller": "steam_controller",
+    "unknown": "generic"
+  },
+  "controllers": [
+    {
+      "id": "dualsense",
+      "name": "DualSense",
+      "mapping": "dualsense/mapping.json",
+      "family": "playstation"
+    },
+    {
+      "id": "dualshock4",
+      "name": "DualShock 4",
+      "mapping": "dualshock4/mapping.json",
+      "family": "playstation"
+    },
+    {
+      "id": "xbox_series",
+      "name": "Xbox Series",
+      "mapping": "xbox_series/mapping.json",
+      "family": "xbox"
+    },
+    {
+      "id": "xbox_one",
+      "name": "Xbox One",
+      "mapping": "xbox_one/mapping.json",
+      "family": "xbox"
+    },
+    {
+      "id": "generic",
+      "name": "Generic Dual-Stick",
+      "mapping": "generic/mapping.json",
+      "family": "generic"
+    },
+    {
+      "id": "switch_pro",
+      "name": "Switch Pro",
+      "mapping": "switch_pro/mapping.json",
+      "family": "nintendo"
+    },
+    {
+      "id": "joycon_grip",
+      "name": "Joy-Cons im Grip",
+      "mapping": "joycon_grip/mapping.json",
+      "family": "nintendo"
+    },
+    {
+      "id": "joycon_pair",
+      "name": "Joy-Cons getrennt",
+      "mapping": "joycon_pair/mapping.json",
+      "family": "nintendo"
+    },
+    {
+      "id": "joycon_left",
+      "name": "Joy-Con L",
+      "mapping": "joycon_left/mapping.json",
+      "family": "nintendo"
+    },
+    {
+      "id": "joycon_right",
+      "name": "Joy-Con R",
+      "mapping": "joycon_right/mapping.json",
+      "family": "nintendo"
+    },
+    {
+      "id": "joycon_left_horizontal",
+      "name": "Joy-Con L · horizontal",
+      "mapping": "joycon_left_horizontal/mapping.json",
+      "family": "nintendo"
+    },
+    {
+      "id": "joycon_right_horizontal",
+      "name": "Joy-Con R · horizontal",
+      "mapping": "joycon_right_horizontal/mapping.json",
+      "family": "nintendo"
+    },
+    {
+      "id": "steam_controller",
+      "name": "Steam Controller (2015)",
+      "mapping": "steam_controller/mapping.json",
+      "family": "steam"
+    },
+    {
+      "id": "steam_deck_full",
+      "name": "Steam Deck",
+      "mapping": "steam_deck_full/mapping.json",
+      "family": "steam"
+    }
+  ]
+}

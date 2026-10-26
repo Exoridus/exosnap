@@ -160,6 +160,16 @@ enum Command {
         #[arg(long)]
         check: bool,
     },
+    /// Export controller layers without modifying their editable SVG sources.
+    #[cfg(feature = "dev-tools")]
+    GenerateGamepadAssets {
+        /// Report stale exports without writing them.
+        #[arg(long)]
+        check: bool,
+        /// Optimize exports with this SVGO 4.1.0 JavaScript CLI, using Node.js.
+        #[arg(long)]
+        svgo: Option<PathBuf>,
+    },
 }
 
 #[derive(Args)]
@@ -1271,6 +1281,20 @@ fn run_cli() -> anyhow::Result<ExitCode> {
         }
         #[cfg(feature = "dev-tools")]
         Command::GenerateBrandMarks { check } => generate_brand_marks(&repo_root, check),
+        #[cfg(feature = "dev-tools")]
+        Command::GenerateGamepadAssets { check, svgo } => {
+            let report = exo_dev::gamepad_assets::generate(&repo_root, check, svgo.as_deref())?;
+            if !report.stale.is_empty() {
+                eprintln!("{} stale controller exports", report.stale.len());
+                return Ok(ExitCode::FAILURE);
+            }
+            println!(
+                "{} controller exports {}",
+                report.exported,
+                if check { "verified" } else { "generated" }
+            );
+            Ok(ExitCode::SUCCESS)
+        }
     }
 }
 

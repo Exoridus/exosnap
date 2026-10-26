@@ -1,0 +1,43 @@
+# Gamepad Asset Pack by AL2009man
+
+This is a collection of image assets originally created for VSCViewhttps://github.com/Nielk1/VSCView/, now expanded for general uses such as custom controller overlay, modding, etc. This also includes WIP or unfinished assets.
+
+This is the downloaded Version of the pack, for more information; refer to the GitHub Page
+
+---
+
+# Asset List:
+
+**Controller Overlays**:
+
+* Arcade Controller
+* DualShock 4 Controller
+* DualSense Controller
+* Nintendo Switch Controllers
+* Steam Controller
+* Steam Deck
+* Simple Gamepad
+* Xbox One  Controller
+* Xbox Series X|S Controller
+* Xbox 360 Controller
+
+**Controller Icons**:
+
+* Arcade Controller
+* DualShock 3 Controller
+* DualShock 4 Controller
+* DualSense Controller
+* Nintendo Switch Controllers
+* Steam Controller
+* Steam Deck
+* Xbox One  Controller
+* Xbox Series X|S Controller
+* Xbox 360 Controller
+
+---
+
+* Additional Credits:
+
+Open Sans font family (by Steve Matteson) used for certain themes (such as the Compact theme for Steam Controller, Steam Deck and Arcade Controller)
+
+The PlayStation 20th Anniversary Touchpad Symbols was created by GT Planet forums user Maninashed.

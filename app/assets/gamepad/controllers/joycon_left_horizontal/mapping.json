@@ -1,0 +1,235 @@
+{
+  "schemaVersion": 1,
+  "id": "joycon_left_horizontal",
+  "name": "Joy-Con L · horizontal",
+  "status": "artwork-preview",
+  "source": "source.svg",
+  "viewBox": [
+    0,
+    0,
+    252.88096618652344,
+    93.14138793945312
+  ],
+  "coordinateSystem": {
+    "xPositive": "right",
+    "yPositive": "down"
+  },
+  "appearance": {
+    "detailWidth": 50,
+    "detailOpacity": 40
+  },
+  "orientation": "horizontal",
+  "license": {
+    "spdx": "MIT",
+    "copyright": "Copyright (c) 2024 Al. Lopez",
+    "notice": "../LICENSE.txt"
+  },
+  "layers": [
+    {
+      "id": "body",
+      "file": "elements/body.svg",
+      "role": "body",
+      "binding": null,
+      "bounds": {
+        "x": 0,
+        "y": 0,
+        "width": 252.88096618652344,
+        "height": 93.14138793945312
+      }
+    },
+    {
+      "id": "btn-sr",
+      "file": "elements/btn-sr.svg",
+      "role": "button",
+      "binding": {
+        "type": "button",
+        "mask": 2048
+      },
+      "bounds": {
+        "x": 159.72050476074216,
+        "y": 3.9999730587001063,
+        "width": 20.614547729492188,
+        "height": 4.457488059997557
+      }
+    },
+    {
+      "id": "btn-sl",
+      "file": "elements/btn-sl.svg",
+      "role": "button",
+      "binding": {
+        "type": "button",
+        "mask": 1024
+      },
+      "bounds": {
+        "x": 66.48553466796874,
+        "y": 3.9999730587001063,
+        "width": 20.614356994628906,
+        "height": 4.493437767028807
+      }
+    },
+    {
+      "id": "btn-aux-zl",
+      "file": "elements/btn-aux-zl.svg",
+      "role": "button",
+      "binding": null,
+      "bounds": {
+        "x": 4.000032424926756,
+        "y": 26.71714782714798,
+        "width": 23.007814407348633,
+        "height": 53.25595092773436
+      },
+      "preview": {
+        "key": "aux-zl",
+        "label": "ZL (non-standard)"
+      },
+      "inputStatus": "unqualified"
+    },
+    {
+      "id": "btn-aux-l",
+      "file": "elements/btn-aux-l.svg",
+      "role": "button",
+      "binding": null,
+      "bounds": {
+        "x": 8.33566570281982,
+        "y": 24.362991333007354,
+        "width": 33.5833625793457,
+        "height": 63.78296661376952
+      },
+      "preview": {
+        "key": "aux-l",
+        "label": "L (non-standard)"
+      },
+      "inputStatus": "unqualified"
+    },
+    {
+      "id": "btn-share",
+      "file": "elements/btn-share.svg",
+      "role": "button",
+      "binding": {
+        "type": "auxiliary",
+        "field": "share",
+        "availability": "device-dependent"
+      },
+      "bounds": {
+        "x": 174.65629577636716,
+        "y": 27.517791748046417,
+        "width": 14.283721923828125,
+        "height": 14.283657073974606
+      }
+    },
+    {
+      "id": "btn-up",
+      "file": "elements/btn-up.svg",
+      "role": "button",
+      "binding": {
+        "type": "button",
+        "mask": 16
+      },
+      "bounds": {
+        "x": 111.0737838745117,
+        "y": 39.04328155517532,
+        "width": 17.137947082519517,
+        "height": 17.13201904296875
+      }
+    },
+    {
+      "id": "btn-left",
+      "file": "elements/btn-left.svg",
+      "role": "button",
+      "binding": {
+        "type": "button",
+        "mask": 4
+      },
+      "bounds": {
+        "x": 128.72853088378903,
+        "y": 57.63547897338821,
+        "width": 17.144058227539062,
+        "height": 17.144031524658196
+      }
+    },
+    {
+      "id": "btn-right",
+      "file": "elements/btn-right.svg",
+      "role": "button",
+      "binding": {
+        "type": "button",
+        "mask": 32
+      },
+      "bounds": {
+        "x": 128.72853088378903,
+        "y": 20.439006805419464,
+        "width": 17.144058227539062,
+        "height": 17.144062042236325
+      }
+    },
+    {
+      "id": "btn-down",
+      "file": "elements/btn-down.svg",
+      "role": "button",
+      "binding": {
+        "type": "button",
+        "mask": 8
+      },
+      "bounds": {
+        "x": 146.3893890380859,
+        "y": 39.04328155517532,
+        "width": 17.137939453125,
+        "height": 17.13201904296875
+      }
+    },
+    {
+      "id": "stick-l-cap",
+      "file": "elements/stick-l-cap.svg",
+      "role": "stick",
+      "binding": {
+        "type": "stick",
+        "axes": [
+          "left_x",
+          "left_y"
+        ],
+        "clickMask": 4096
+      },
+      "bounds": {
+        "x": 53.09767913818359,
+        "y": 29.332515716552276,
+        "width": 36.573616027832024,
+        "height": 36.54752731323241
+      },
+      "motion": {
+        "center": [
+          71.3844871520996,
+          47.606279373168476
+        ],
+        "travelRadius": 6.578554916381833,
+        "deadzone": 0.08,
+        "yPositive": "up"
+      },
+      "pressElement": "stick-l-cap-pressure"
+    },
+    {
+      "id": "btn-view",
+      "file": "elements/btn-view.svg",
+      "role": "button",
+      "binding": {
+        "type": "button",
+        "mask": 2
+      },
+      "bounds": {
+        "x": 32.70692062377929,
+        "y": 16.485637664794464,
+        "width": 4.348236083984375,
+        "height": 14.919443130493164
+      },
+      "pressElement": "btn-view-surface"
+    }
+  ],
+  "controlLabels": {
+    "r1": "SR",
+    "l1": "SL",
+    "west": "Left",
+    "south": "Down",
+    "north": "Up",
+    "east": "Right"
+  },
+  "deviceNote": "Artwork does not imply automatic Joy-Con pairing or qualified single-controller GameInput support."
+}
