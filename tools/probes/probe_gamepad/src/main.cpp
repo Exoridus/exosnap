@@ -1,6 +1,6 @@
 // Prints gamepad identity and live readings until Ctrl+C or --seconds elapse.
 //
-//   probe_gamepad [--seconds N] [--cycles N]
+//   probe_gamepad [--seconds N] [--cycles N] [--no-extra]
 
 #include "gamepad/gamepad.h"
 
@@ -227,7 +227,12 @@ int main(int argc, char** argv) {
     int seconds = 0;
     int cycles = 1;
     bool enhanced = false;
+    bool extra_readings = true;
     for (int i = 1; i < argc; ++i) {
+        if (std::strcmp(argv[i], "--no-extra") == 0) {
+            extra_readings = false;
+            continue;
+        }
         if (std::strcmp(argv[i], "--enhanced") == 0) {
             enhanced = true;
             continue;
@@ -236,7 +241,7 @@ int main(int argc, char** argv) {
                       : std::strcmp(argv[i], "--cycles") == 0 ? &cycles
                                                               : nullptr;
         if (target == nullptr || i + 1 >= argc) {
-            std::fprintf(stderr, "usage: probe_gamepad [--seconds N] [--cycles N] [--enhanced]\n");
+            std::fprintf(stderr, "usage: probe_gamepad [--seconds N] [--cycles N] [--enhanced] [--no-extra]\n");
             return 2;
         }
         const char* value = argv[++i];
@@ -246,6 +251,10 @@ int main(int argc, char** argv) {
     }
     if (cycles < 1 || (cycles > 1 && seconds < 1)) {
         std::fprintf(stderr, "--cycles requires a positive count and --seconds\n");
+        return 2;
+    }
+    if (enhanced && !extra_readings) {
+        std::fprintf(stderr, "--enhanced requires the extra reading probe\n");
         return 2;
     }
 
@@ -258,7 +267,8 @@ int main(int argc, char** argv) {
         }
         std::printf("GameInput started; waiting for gamepad readings\n");
         ExtraProbe extras;
-        extras.Start();
+        if (extra_readings)
+            extras.Start();
         if (cycle == 0)
             PrintGameInputAvailability();
 

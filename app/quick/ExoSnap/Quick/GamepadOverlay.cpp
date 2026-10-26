@@ -1,9 +1,25 @@
 #include "GamepadOverlay.h"
+#include "GamepadSprites.h"
+#include "models/GamepadOverlaySettings.h"
+
+#include <exosnap/engine/overlay_sprites.h>
+#include <gamepad/gamepad.h>
 
 #include <QByteArray>
 #include <QMetaObject>
+#include <QSize>
+#include <QStringList>
+#include <QVariantList>
 
+#include <algorithm>
 #include <cmath>
+#include <cstdint>
+#include <memory>
+#include <mutex>
+#include <optional>
+#include <string>
+#include <utility>
+#include <vector>
 
 namespace exosnap::quick {
 
@@ -19,6 +35,27 @@ GamepadOverlay::GamepadOverlay(QObject* parent) : QObject(parent) {
 GamepadOverlaySettings GamepadOverlay::Settings() const {
     const std::scoped_lock lock(mutex_);
     return settings_;
+}
+
+QVariantList GamepadOverlay::layouts() const {
+    const QStringList labels{tr("PlayStation 5 DualSense"),
+                             tr("Xbox Series"),
+                             tr("Generic dual-stick"),
+                             tr("PlayStation 4 DualShock 4"),
+                             tr("Xbox One"),
+                             tr("Switch Pro"),
+                             tr("Joy-Cons in grip"),
+                             tr("Separate Joy-Cons"),
+                             tr("Joy-Con L"),
+                             tr("Joy-Con R"),
+                             tr("Joy-Con L (horizontal)"),
+                             tr("Joy-Con R (horizontal)"),
+                             tr("Steam Controller (2015)"),
+                             tr("Steam Deck")};
+    QVariantList result{QVariantMap{{QStringLiteral("value"), -1}, {QStringLiteral("label"), tr("Automatic layout")}}};
+    for (qsizetype index = 0; index < labels.size(); ++index)
+        result.push_back(QVariantMap{{QStringLiteral("value"), index}, {QStringLiteral("label"), labels[index]}});
+    return result;
 }
 
 QRectF GamepadOverlay::placement() const {
@@ -153,16 +190,14 @@ void GamepadOverlay::Rebuild() {
     if (!settings.enabled)
         return;
     const int layout = settings.layout < 0 ? automatic_layout_ : settings.layout;
-    const QString file = layout == 0   ? QStringLiteral("dualsense")
-                         : layout == 1 ? QStringLiteral("xbox_series")
-                                       : QStringLiteral("generic");
+    const QString file = QString::fromLatin1(kGamepadOverlayArtworkIds[layout].data());
     const int width = std::clamp(qRound(content_width_ * settings.width), 96, 2048);
     const QString key = QStringLiteral("%1/%2/%3/%4").arg(file).arg(width).arg(settings.glass).arg(settings.glow);
     if (atlas_key_ == key || pending_atlas_key_ == key)
         return;
     pending_atlas_key_ = key;
     raster_pool_.clear();
-    const QString path = QStringLiteral(":/gamepad/") + file + QStringLiteral(".svg");
+    const QString path = QStringLiteral(":/gamepad/controllers/") + file + QStringLiteral("/mapping.json");
     raster_pool_.start([this, key, path, width, glass = settings.glass, glow = settings.glow]() {
         QString error;
         auto sprites = RasterizeGamepad(path, width, glass, glow, error);
@@ -197,11 +232,11 @@ void GamepadOverlay::Poll() {
     const auto reading = input ? input->StateAt(gamepad::GameInputSource::NowCapture100ns()) : std::nullopt;
     int detected = automatic_layout_;
     if (reading && reading->connected) {
-        detected = reading->device.layout == gamepad::LayoutKind::DualSense ? 0
-                   : reading->device.layout == gamepad::LayoutKind::XboxSeries ||
-                           reading->device.layout == gamepad::LayoutKind::XboxOne
-                       ? 1
-                       : 2;
+        detected = reading->device.layout == gamepad::LayoutKind::DualSense    ? 0
+                   : reading->device.layout == gamepad::LayoutKind::XboxSeries ? 1
+                   : reading->device.layout == gamepad::LayoutKind::XboxOne    ? 4
+                   : reading->device.layout == gamepad::LayoutKind::SwitchPro  ? 5
+                                                                               : 2;
         SetStatus(tr("Controller connected"));
     } else if (input) {
         SetStatus(tr("Waiting for controller"));

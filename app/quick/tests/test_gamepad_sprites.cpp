@@ -1,5 +1,9 @@
 #include "GamepadOverlay.h"
 #include "GamepadSprites.h"
+#include "models/GamepadOverlaySettings.h"
+
+#include <exosnap/engine/overlay_sprites.h>
+#include <gamepad/gamepad.h>
 
 #include <QCoreApplication>
 #include <QDir>
@@ -8,13 +12,109 @@
 #include <QJsonArray>
 #include <QJsonDocument>
 #include <QJsonObject>
+#include <QObject>
 #include <QPainter>
+#include <QSize>
 #include <QSvgRenderer>
 #include <algorithm>
 #include <cmath>
+#include <cstddef>
 #include <gtest/gtest.h>
+#include <iterator>
+#include <memory>
+#include <utility>
 
 using namespace exosnap::quick;
+
+TEST(GamepadSprites, MappedCatalogProducesVisiblePressedTilesWithoutAtlasChanges) {
+    const QDir root(QStringLiteral(EXOSNAP_GAMEPAD_ASSET_DIR "/controllers"));
+    QFile catalog(root.filePath(QStringLiteral("catalog.json")));
+    ASSERT_TRUE(catalog.open(QIODevice::ReadOnly));
+    const auto controllers = QJsonDocument::fromJson(catalog.readAll()).object().value("controllers").toArray();
+    for (const auto& value : controllers) {
+        const auto entry = value.toObject();
+        SCOPED_TRACE(entry.value("id").toString().toStdString());
+        QString error;
+        const auto sprites =
+            RasterizeGamepad(root.filePath(entry.value("mapping").toString()), 480, false, false, error);
+        ASSERT_TRUE(sprites) << error.toStdString();
+        const auto blue_pixels = [&](const exosnap::engine::SpriteAtlasRect& rect) {
+            int count = 0;
+            for (int y = rect.y; y < rect.y + rect.h; ++y) {
+                for (int x = rect.x; x < rect.x + rect.w; ++x) {
+                    const auto* pixel =
+                        &sprites->atlas->pixels[(static_cast<size_t>(y) * sprites->atlas->width + x) * 4];
+                    if (pixel[0] > pixel[2] + 15 && pixel[1] > pixel[2] + 5 && pixel[3] > 15)
+                        ++count;
+                }
+            }
+            return count;
+        };
+        for (const auto& part : sprites->parts) {
+            if (part.button || part.auxiliary != PadAuxiliary::None || part.motion != PadMotion::None) {
+                EXPECT_EQ(blue_pixels(part.idle), 0);
+                EXPECT_GT(blue_pixels(part.pressed), 0);
+            }
+        }
+        exosnap::gamepad::GamepadState state;
+        const auto idle = GamepadLayer(*sprites, state, {0, 0, 1, 1}, 1);
+        state.buttons = 0x3FFF;
+        state.left_x = 1;
+        state.right_trigger = 0.5F;
+        state.home = true;
+        const auto pressed = GamepadLayer(*sprites, state, {0, 0, 1, 1}, 1);
+        EXPECT_EQ(idle->atlas, pressed->atlas);
+        EXPECT_NE(idle->quads, pressed->quads);
+    }
+}
+
+TEST(GamepadSprites, MappedResourcesExposeEveryPersistableLayout) {
+    GamepadOverlay overlay;
+    EXPECT_EQ(overlay.layouts().size(), exosnap::kGamepadOverlayArtworkIds.size() + 1);
+    for (int index = 0; index < static_cast<int>(exosnap::kGamepadOverlayArtworkIds.size()); ++index) {
+        exosnap::GamepadOverlaySettings settings;
+        settings.layout = index;
+        EXPECT_EQ(exosnap::SanitizeGamepadOverlaySettings(settings).layout, index);
+        QString error;
+        const auto sprites = RasterizeGamepad(
+            QStringLiteral(":/gamepad/controllers/") +
+                QString::fromLatin1(exosnap::kGamepadOverlayArtworkIds[index].data()) + QStringLiteral("/mapping.json"),
+            240, false, false, error);
+        ASSERT_TRUE(sprites) << error.toStdString();
+    }
+}
+
+TEST(GamepadSprites, MappedPressureStaysInsideShouldersAndDpadDirection) {
+    for (const auto* name : {"xbox_series", "xbox_one", "generic"}) {
+        SCOPED_TRACE(name);
+        QString error;
+        const auto sprites = RasterizeGamepad(QStringLiteral(EXOSNAP_GAMEPAD_ASSET_DIR "/controllers/") +
+                                                  QString::fromLatin1(name) + QStringLiteral("/mapping.json"),
+                                              480, false, false, error);
+        ASSERT_TRUE(sprites) << error.toStdString();
+        for (const auto& part : sprites->parts) {
+            if (part.button != 1024 && part.button != 2048 && part.button != 64)
+                continue;
+            int outside = 0;
+            for (int y = 0; y < part.pressed.h; ++y) {
+                for (int x = 0; x < part.pressed.w; ++x) {
+                    const float world_x = part.bounds.x + part.bounds.w * (x + 0.5F) / part.pressed.w;
+                    const bool excluded =
+                        part.button == 64 ? y > part.pressed.h * 0.6F : world_x > 0.42F && world_x < 0.58F;
+                    if (!excluded)
+                        continue;
+                    const auto* pixel =
+                        &sprites->atlas->pixels[(static_cast<size_t>(part.pressed.y + y) * sprites->atlas->width +
+                                                 part.pressed.x + x) *
+                                                4];
+                    if (pixel[0] > pixel[2] + 15 && pixel[1] > pixel[2] + 5 && pixel[3] > 15)
+                        ++outside;
+                }
+            }
+            EXPECT_EQ(outside, 0) << part.button;
+        }
+    }
+}
 
 TEST(GamepadArtworkSources, ExportedLayersMatchSourceWithoutBakingStickCapsIntoBody) {
     const QDir root(QStringLiteral(EXOSNAP_GAMEPAD_ASSET_DIR "/controllers"));
@@ -297,12 +397,13 @@ TEST(GamepadSprites, StickTravelIsRadialAndTriggerFillKeepsItsScale) {
 
 TEST(GamepadSprites, AllArtworkRendersForVisualReview) {
     const QString output = qEnvironmentVariable("EXOSNAP_GAMEPAD_VISUAL_OUTPUT");
-    for (const auto& name : {QStringLiteral("dualsense"), QStringLiteral("xbox_series"), QStringLiteral("generic")}) {
+    for (const auto& id : exosnap::kGamepadOverlayArtworkIds) {
+        const QString name = QString::fromLatin1(id.data());
         for (const bool glass : {false, true}) {
             QString error;
-            const auto sprites =
-                RasterizeGamepad(QStringLiteral(EXOSNAP_GAMEPAD_ASSET_DIR "/") + name + QStringLiteral(".svg"), 960,
-                                 glass, false, error);
+            const auto sprites = RasterizeGamepad(QStringLiteral(EXOSNAP_GAMEPAD_ASSET_DIR "/controllers/") + name +
+                                                      QStringLiteral("/mapping.json"),
+                                                  960, glass, false, error);
             ASSERT_NE(sprites, nullptr) << error.toStdString();
             if (output.isEmpty())
                 continue;
@@ -323,6 +424,9 @@ TEST(GamepadSprites, AllArtworkRendersForVisualReview) {
                         state.right_y = 1;
                         state.left_trigger = 0.5F;
                         state.right_trigger = 1;
+                        state.home = true;
+                        state.share = true;
+                        state.touchpad = true;
                     }
                     const auto layer = GamepadLayer(*sprites, state, {0, 0, 1, 1}, 1);
                     for (const auto& quad : layer->quads) {

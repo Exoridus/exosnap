@@ -1,14 +1,23 @@
 #include "GamepadSprites.h"
+#include "GamepadArtwork.h"
+
+#include <exosnap/engine/overlay_sprites.h>
+#include <gamepad/gamepad.h>
 
 #include <QCoreApplication>
 #include <QImage>
 #include <QPainter>
+#include <QRectF>
 #include <QSvgRenderer>
 
 #include <algorithm>
 #include <atomic>
 #include <cmath>
+#include <cstdint>
 #include <cstring>
+#include <memory>
+#include <utility>
+#include <vector>
 
 namespace exosnap::quick {
 namespace {
@@ -55,7 +64,7 @@ struct Tile {
 };
 
 QImage RasterizeElement(QSvgRenderer& renderer, const QString& id, const QRectF& bounds, double scale, int padding,
-                        bool glow) {
+                        bool glow, bool shadow) {
     const int w = std::max(1, static_cast<int>(std::ceil(bounds.width() * scale)));
     const int h = std::max(1, static_cast<int>(std::ceil(bounds.height() * scale)));
     QImage image(w + padding * 2, h + padding * 2, QImage::Format_ARGB32_Premultiplied);
@@ -64,6 +73,21 @@ QImage RasterizeElement(QSvgRenderer& renderer, const QString& id, const QRectF&
         QPainter painter(&image);
         painter.setRenderHint(QPainter::Antialiasing);
         renderer.render(&painter, id, QRectF(padding, padding, w, h));
+    }
+    if (shadow) {
+        QImage silhouette = image;
+        QPainter tint(&silhouette);
+        tint.setCompositionMode(QPainter::CompositionMode_SourceIn);
+        tint.fillRect(silhouette.rect(), QColor(0, 0, 0, 170));
+        tint.end();
+        QPainter painter(&image);
+        painter.setCompositionMode(QPainter::CompositionMode_DestinationOver);
+        for (int y = -1; y <= 1; ++y) {
+            for (int x = -1; x <= 1; ++x) {
+                painter.setOpacity(static_cast<double>((x == 0 ? 2 : 1) * (y == 0 ? 2 : 1)) / 16);
+                painter.drawImage(QPoint(x, y + 1), silhouette);
+            }
+        }
     }
     if (glow) {
         QImage halo = image;
@@ -103,20 +127,29 @@ engine::SpriteContentRect Placed(engine::SpriteContentRect local, engine::Sprite
             local.h * placement.h};
 }
 
-void MoveStick(engine::SpriteContentRect& bounds, float x, float y) {
+void MoveStick(engine::SpriteContentRect& bounds, float x, float y, const GamepadSpritePart& part) {
     const float length = std::hypot(x, y);
     if (length <= 0.08F)
         return;
-    const float travel = std::min(1.0F, (length - 0.08F) / 0.92F) * 8.0F;
-    bounds.x += x / length * travel / 480.0F;
-    bounds.y -= y / length * travel / 320.0F;
+    const float travel = std::min(1.0F, (length - 0.08F) / 0.92F);
+    bounds.x += x / length * travel * part.travel_x;
+    bounds.y -= y / length * travel * part.travel_y;
 }
 
 } // namespace
 
 std::shared_ptr<const GamepadSpriteSet> RasterizeGamepad(const QString& path, int width, bool glass, bool glow,
                                                          QString& error) {
-    QSvgRenderer renderer(path);
+    MappedGamepadArtwork mapped;
+    QSvgRenderer renderer;
+    if (path.endsWith(QStringLiteral(".json"))) {
+        mapped = PrepareMappedGamepadArtwork(path, error);
+        if (mapped.svg.isEmpty())
+            return nullptr;
+        renderer.load(mapped.svg);
+    } else {
+        renderer.load(path);
+    }
     if (!renderer.isValid() || renderer.viewBoxF() != QRectF(0, 0, 480, 320) || width < 96 || width > 2048) {
         error = QCoreApplication::translate("GamepadArtwork", "Invalid gamepad artwork or raster size.");
         return nullptr;
@@ -132,7 +165,7 @@ std::shared_ptr<const GamepadSpriteSet> RasterizeGamepad(const QString& path, in
     int row_height = 0;
     auto add = [&](const QString& id, QRectF bounds, bool pressed) {
         Tile tile;
-        tile.pixels = RasterizeElement(renderer, id, bounds, scale, padding, glow && pressed);
+        tile.pixels = RasterizeElement(renderer, id, bounds, scale, padding, glow && pressed, !mapped.svg.isEmpty());
         if (x + tile.pixels.width() + 1 > atlas->width) {
             x = 1;
             y += row_height + 2;
@@ -152,6 +185,11 @@ std::shared_ptr<const GamepadSpriteSet> RasterizeGamepad(const QString& path, in
         GamepadSpritePart part;
         part.button = button;
         part.motion = motion;
+        if (mapped.stick_travel.contains(id)) {
+            const auto travel = mapped.stick_travel.value(id);
+            part.travel_x = static_cast<float>(travel.x());
+            part.travel_y = static_cast<float>(travel.y());
+        }
         part.idle = add(id, bounds, false);
         part.bounds = {static_cast<float>((bounds.x() - padding / scale) / 480),
                        static_cast<float>((bounds.y() - padding / scale) / 320),
@@ -194,9 +232,9 @@ std::shared_ptr<const engine::SpriteLayerSnapshot> GamepadLayer(const GamepadSpr
     for (const auto& part : sprites.parts) {
         auto bounds = part.bounds;
         if (part.motion == PadMotion::LeftStick)
-            MoveStick(bounds, state.left_x, state.left_y);
+            MoveStick(bounds, state.left_x, state.left_y, part);
         if (part.motion == PadMotion::RightStick)
-            MoveStick(bounds, state.right_x, state.right_y);
+            MoveStick(bounds, state.right_x, state.right_y, part);
         const bool pressed = (part.button & state.buttons) != 0 ||
                              (part.auxiliary == PadAuxiliary::Home && state.home.value_or(false)) ||
                              (part.auxiliary == PadAuxiliary::Share && state.share.value_or(false)) ||

@@ -254,11 +254,14 @@ Media Foundation is a webcam dependency, not an AAC/recording dependency. Window
 The Record preview's Gamepad control adds one recorded controller widget. It is off by default.
 Automatic device selection prefers the first actively used gamepad and stays with it until disconnect.
 Manual selection pins one device and never borrows another controller's inputs. Disconnect resets the visible inputs.
-Automatic or manual artwork selection offers DualSense, Xbox Series and a generic dual-stick layout.
-Other families currently use the generic layout, except Xbox One, which uses the Xbox-family artwork.
+Automatic artwork selection recognizes DualSense, Xbox Series, Xbox One and Switch Pro families.
+Manual selection additionally offers DualShock 4, Joy-Cons in a grip or separate, individual Joy-Cons
+in upright or horizontal orientation, the Steam Controller (2015), and the Steam Deck device view.
+Generic uses a vendor-neutral Xbox Series silhouette. Selecting a Joy-Con drawing does not combine physical devices.
 
 Lines is the default. Glass adds subtle transparent highlights. Opacity is adjustable and glow defaults to off.
-Controls light blue when pressed while their vector symbols stay white. Stick caps move within circular wells,
+Controls light blue when pressed while their vector symbols stay white, except the PS logo button itself, which turns blue.
+A subtle contrast shadow keeps the line artwork visible on light backgrounds. Stick caps move within circular wells,
 L3/R3 tint the caps, and trigger fills are proportional. PS and touchpad clicks are shown when GameInput exposes them.
 Microphone-button and finger-position visualization is not offered until the input transport is qualified.
 The application never switches a DualSense into an enhanced Bluetooth mode automatically.
@@ -266,6 +269,9 @@ The application never switches a DualSense into an enhanced Bluetooth mode autom
 The widget is moved and resized directly in the preview while recording settings are editable.
 Artwork keeps its proportions inside its placement rectangle. Device, artwork, appearance and placement belong
 to the recording profile and survive restart. Inclusion and appearance changes can apply during recording.
+The native widget and HTML artwork viewer use the same editable SVG sources and JSON input mappings.
+Normal and pressed variants are rasterized only when building a settled-size atlas. SVG clip paths are
+adapted to masks for the Qt rasterizer. Stick movement and trigger fills only change sprite quads.
 Idle preview and recording use the same immutable sprite atlas and GPU compositor. The recorded order is desktop,
 cursor, webcam, gamepad. The widget is burned into the existing encoded image, without another track or encoder.
 

@@ -53,7 +53,7 @@ endif()
 # single symbol from it. Dropping the component would still build and still run
 # here, and would ship a package whose logo silently fails to load.
 find_package(Qt6 6.12 QUIET COMPONENTS
-    Core Gui Widgets Svg Qml Quick QuickControls2 QuickDialogs2 QuickTest Test LabsPlatform)
+    Core Gui Widgets Svg Xml Qml Quick QuickControls2 QuickDialogs2 QuickTest Test LabsPlatform)
 
 # A stand-in `exosnap` custom target is created on the deliberate opt-out path
 # below, so add_subdirectory(app) always leaves a target named `exosnap`

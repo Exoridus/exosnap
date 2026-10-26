@@ -17,6 +17,8 @@ struct GamepadSpritePart {
     uint32_t button = 0;
     PadMotion motion = PadMotion::None;
     PadAuxiliary auxiliary = PadAuxiliary::None;
+    float travel_x = 8.0F / 480.0F;
+    float travel_y = 8.0F / 320.0F;
 };
 
 struct GamepadSpriteSet {

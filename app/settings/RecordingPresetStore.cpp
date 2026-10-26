@@ -1,4 +1,5 @@
 #include "RecordingPresetStore.h"
+#include "models/GamepadOverlaySettings.h"
 
 #include <QCryptographicHash>
 #include <QDir>
@@ -1469,7 +1470,9 @@ RecordingPresetConfig ConfigFromToml(const toml::table& tbl) {
     auto& pad = config.gamepad;
     pad.enabled = TomlBool(tbl["gamepad"]["enabled"], false);
     pad.device = TomlStr(tbl["gamepad"]["device"]);
-    pad.layout = static_cast<int>(std::clamp<int64_t>(TomlInt(tbl["gamepad"]["layout"], -1), -1, 2));
+    // Preserve an invalid sentinel so sanitization chooses the generic fallback.
+    pad.layout = static_cast<int>(std::clamp<int64_t>(TomlInt(tbl["gamepad"]["layout"], -1), -1,
+                                                      static_cast<int64_t>(kGamepadOverlayArtworkIds.size())));
     pad.glass = TomlBool(tbl["gamepad"]["glass"], false);
     pad.glow = TomlBool(tbl["gamepad"]["glow"], false);
     pad.opacity = static_cast<float>(TomlFloat(tbl["gamepad"]["opacity"], 1));
@@ -1477,6 +1480,7 @@ RecordingPresetConfig ConfigFromToml(const toml::table& tbl) {
     pad.y = static_cast<float>(TomlFloat(tbl["gamepad"]["y"], 0.65));
     pad.width = static_cast<float>(TomlFloat(tbl["gamepad"]["width"], 0.25));
     pad.height = static_cast<float>(TomlFloat(tbl["gamepad"]["height"], 0.30));
+    pad = SanitizeGamepadOverlaySettings(std::move(pad));
 
     auto& wc = config.webcam;
     wc.enabled = TomlBool(tbl["webcam"]["enabled"], false);

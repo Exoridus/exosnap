@@ -2,6 +2,7 @@
 
 #include "exosnap/engine/color_metadata.h"
 #include "exosnap/engine/overlay_shader.h"
+#include "exosnap/engine/overlay_sprites.h"
 #include "exosnap/engine/recorder_session.h"
 #include "exosnap/engine/visual_generations.h"
 #include "exosnap/engine/webcam_placement.h"

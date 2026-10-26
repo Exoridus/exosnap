@@ -134,13 +134,17 @@ directory alongside the ExoSnap binary.
 
 ### Controller artwork
 
-- **Source:** Nicolae (Xelu) Berbece, Free Controller & Key Prompts,
-  https://thoseawesomeguys.com/prompts/ (CC0).
-- **Bundled license:** `licenses/gamepad-artwork.txt`, the pack's original Readme.
-- **Modifications:** simplified continuous contours, geometric controls and vector
-  button glyphs. DualSense and Xbox Series retain the reference layouts. Generic
-  uses a simplified dual-stick layout. No controller manufacturer logos are used.
-- **Role:** SVG sources compiled into the gamepad overlay's Qt resources.
+- **Source:** AL2009man / Al. Lopez, Gamepad Asset Pack
+- **License:** MIT, Copyright (c) 2024 Al. Lopez
+- **Bundled license and credits:** `licenses/gamepad-al2009man.txt` and
+  `licenses/gamepad-al2009man-notice.txt`
+- **Role:** editable SVG sources and JSON mappings compiled into the native
+  controller widget's resources, also used by the HTML artwork viewer.
+- **Modifications:** transparent line artwork, separate moving controls, pressure
+  surfaces and vendor-neutral generic controls.
+- **Legacy fixtures:** Nicolae (Xelu) Berbece, Free Controller & Key Prompts,
+  https://thoseawesomeguys.com/prompts/ (CC0), remain in compatibility tests.
+  Their original notice is retained as `licenses/gamepad-artwork.txt`.
 
 ### PresentMon (ETW present-diagnostics consumer)
 
@@ -259,16 +263,6 @@ not download, link, or ship any of the three components below, and does not prod
 
 These components are used during the build process and are not included in the
 distributed binary.
-
-### Controller artwork preview assets
-
-- **Source:** AL2009man / Al. Lopez, Gamepad Asset Pack
-- **License:** MIT, Copyright (c) 2024 Al. Lopez
-- **License and credits:** `app/assets/gamepad/controllers/LICENSE.txt` and
-  `app/assets/gamepad/controllers/SOURCE-NOTICE.txt`
-- **Role:** editable controller sources and exported layers used by the artwork
-  viewer and regression tests. These assets are not yet the native widget's
-  bundled artwork.
 
 ### SVGO
 

@@ -424,6 +424,10 @@ set(EXOSNAP_GAMEINPUT_RUNTIME_FILES
 install(FILES ${EXOSNAP_GAMEINPUT_RUNTIME_FILES} DESTINATION ".")
 _exosnap_install_license("Gamepad artwork (CC0)"
     "${PROJECT_SOURCE_DIR}/third_party/gamepad/xelu.txt" "gamepad-artwork.txt")
+_exosnap_install_license("Controller artwork (MIT)"
+    "${PROJECT_SOURCE_DIR}/app/assets/gamepad/controllers/LICENSE.txt" "gamepad-al2009man.txt")
+_exosnap_install_license("Controller artwork source credits"
+    "${PROJECT_SOURCE_DIR}/app/assets/gamepad/controllers/SOURCE-NOTICE.txt" "gamepad-al2009man-notice.txt")
 
 # ---------------------------------------------------------------------------
 # Vendored in-tree sources (libs/update/third_party) -- no FetchContent step,

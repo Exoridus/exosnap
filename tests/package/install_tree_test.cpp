@@ -111,6 +111,7 @@ TEST_F(InstallTreeTest, QtRuntimeDllsPresentAtRoot) {
     EXPECT_TRUE(file_exists(_root, "Qt6Core.dll")) << "Missing Qt6Core.dll next to the executable";
     EXPECT_TRUE(file_exists(_root, "Qt6Gui.dll")) << "Missing Qt6Gui.dll next to the executable";
     EXPECT_TRUE(file_exists(_root, "Qt6Widgets.dll")) << "Missing Qt6Widgets.dll next to the executable";
+    EXPECT_TRUE(file_exists(_root, "Qt6Xml.dll")) << "Missing Qt6Xml.dll next to the executable";
 }
 
 TEST_F(InstallTreeTest, QtPluginsDirExists) {
@@ -170,6 +171,8 @@ TEST_F(InstallTreeTest, AllExpectedLicensesPresent) {
         "licenses/gameinput-notice.txt",
         "licenses/gameinput-mit.txt",
         "licenses/gamepad-artwork.txt",
+        "licenses/gamepad-al2009man.txt",
+        "licenses/gamepad-al2009man-notice.txt",
     };
     for (const auto& lic : expected) {
         EXPECT_TRUE(file_exists(_root, lic)) << "Missing license: " << lic;

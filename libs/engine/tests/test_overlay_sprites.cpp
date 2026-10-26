@@ -1,11 +1,14 @@
 #include "sprite_layers_observation.h"
 #include <exosnap/engine/overlay_sprites.h>
+#include <exosnap/engine/visual_generations.h>
 
 #include <gtest/gtest.h>
 
-#include <cmath>
+#include <cstddef>
+#include <cstdint>
 #include <limits>
 #include <memory>
+#include <utility>
 #include <vector>
 
 using namespace exosnap::engine;

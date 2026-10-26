@@ -196,7 +196,6 @@ TEST(RecordingPresetStore, GamepadOverlayRoundTripsInLiveConfig) {
     auto config = MakeDefaultPreset().config;
     config.gamepad.enabled = true;
     config.gamepad.device = std::string(64, 'a');
-    config.gamepad.layout = 0;
     config.gamepad.glass = true;
     config.gamepad.glow = true;
     config.gamepad.opacity = 0.42F;
@@ -204,11 +203,14 @@ TEST(RecordingPresetStore, GamepadOverlayRoundTripsInLiveConfig) {
     config.gamepad.y = 0.2F;
     config.gamepad.width = 0.4F;
     config.gamepad.height = 0.5F;
-    ASSERT_TRUE(store.Save({}, MakeDefaultPreset().id, config));
-    const auto restored = store.Load();
-    ASSERT_TRUE(restored.live);
-    EXPECT_EQ(restored.live->gamepad, config.gamepad);
-    EXPECT_FALSE(ConfigDirtyDifference(config, *restored.live).size());
+    for (int layout = 0; layout < static_cast<int>(kGamepadOverlayArtworkIds.size()); ++layout) {
+        config.gamepad.layout = layout;
+        ASSERT_TRUE(store.Save({}, MakeDefaultPreset().id, config));
+        const auto restored = store.Load();
+        ASSERT_TRUE(restored.live);
+        EXPECT_EQ(restored.live->gamepad, config.gamepad);
+        EXPECT_FALSE(ConfigDirtyDifference(config, *restored.live).size());
+    }
 }
 
 TEST(RecordingPresetStore, GamepadOverlaySanitizesInvalidPlacementAndDevice) {

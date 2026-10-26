@@ -5,6 +5,7 @@
 #include <exosnap/engine/backend_tuning.h>
 #include <exosnap/engine/encoder_device.h>
 #include <exosnap/engine/mic_dsp_config.h>
+#include <exosnap/engine/overlay_sprites.h>
 #include <exosnap/engine/recorder_session.h>
 #include <exosnap/engine/recording_media_types.h>
 #include <optional>

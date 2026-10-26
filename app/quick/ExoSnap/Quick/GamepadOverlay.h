@@ -25,6 +25,7 @@ class GamepadOverlay final : public QObject, public engine::SpriteSourceProvider
     Q_PROPERTY(QRectF placement READ placement WRITE setPlacement NOTIFY settingsChanged FINAL)
     Q_PROPERTY(QString device READ device WRITE setDevice NOTIFY settingsChanged FINAL)
     Q_PROPERTY(QVariantList devices READ devices NOTIFY devicesChanged FINAL)
+    Q_PROPERTY(QVariantList layouts READ layouts CONSTANT FINAL)
     Q_PROPERTY(QString status READ status NOTIFY statusChanged FINAL)
 
   public:
@@ -55,6 +56,7 @@ class GamepadOverlay final : public QObject, public engine::SpriteSourceProvider
     QVariantList devices() const {
         return devices_;
     }
+    QVariantList layouts() const;
     const QString& status() const {
         return status_;
     }

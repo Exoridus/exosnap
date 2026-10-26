@@ -3,6 +3,7 @@
 #include <exosnap/engine/gpu_surface_inventory.h>
 
 #include "exosnap/engine/overlay_shader.h"
+#include "exosnap/engine/overlay_sprites.h"
 #include "exosnap/engine/recorder_session.h"
 #include "exosnap/engine/sdr_white_level.h"
 #include "exosnap/engine/webcam_placement.h"

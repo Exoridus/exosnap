@@ -2,8 +2,8 @@
 
 Each controller directory contains an editable `source.svg`, separately renderable
 `elements/*.svg`, and a `mapping.json`. The catalog lists the available layouts.
-These assets are artwork previews. They do not expand the native application's
-qualified device support. Steam Deck uses its full device view. The Steam Controller artwork represents
+The native widget and HTML viewer use the same SVG sources and JSON mappings.
+Available artwork does not imply qualified support for a physical input device. Steam Deck uses its full device view. The Steam Controller artwork represents
 the 2015 model, not the separate 2026 hardware.
 
 The source artwork is adapted from AL2009man's Gamepad Asset Pack, under the MIT
@@ -99,6 +99,11 @@ Use the same option with `--check` to check optimized output. The command stages
 optimization in a temporary directory, verifies the mapped IDs, and leaves
 `source.svg`, JSON mappings and licensing files unchanged. It does not download
 tools or optimize during application startup or frame rendering.
+
+The native atlas adapter normalizes these coordinates into its logical canvas,
+prepares pressure variants and adapts clip paths to Qt-supported masks. It does
+not modify these sources. The native widget uses the same atlas for preview and
+recording.
 
 The contrast shadow is a composition option. It is not baked into these sources
 or the transparent body. Rasterize the settled artwork resolution once and

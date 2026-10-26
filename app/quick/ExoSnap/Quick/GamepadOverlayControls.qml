@@ -55,12 +55,7 @@ Item {
             }
             ExoSelect {
                 Layout.fillWidth: true
-                options: [
-                    { value: -1, label: qsTr("Automatic layout") },
-                    { value: 0, label: qsTr("PlayStation 5 DualSense") },
-                    { value: 1, label: qsTr("Xbox Series") },
-                    { value: 2, label: qsTr("Generic dual-stick") }
-                ]
+                options: root.overlay ? root.overlay.layouts : []
                 value: root.overlay ? root.overlay.layout : -1
                 Accessible.name: qsTr("Controller layout")
                 onValueActivated: value => root.overlay.layout = value

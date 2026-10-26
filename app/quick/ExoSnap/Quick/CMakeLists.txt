@@ -23,8 +23,8 @@ set(EXOSNAP_QUICK_TESTS_DIR "${PROJECT_SOURCE_DIR}/app/quick/tests")
 exosnap_add_gtest(
     NAME gamepad_sprite_tests
     TEST_PREFIX gamepad.sprites.
-    SOURCES "${EXOSNAP_QUICK_TESTS_DIR}/test_gamepad_sprites.cpp" GamepadSprites.cpp GamepadOverlay.cpp GamepadOverlay.h
-    LIBRARIES Qt6::Gui Qt6::Svg Qt6::Qml exosnap::gamepad
+    SOURCES "${EXOSNAP_QUICK_TESTS_DIR}/test_gamepad_sprites.cpp" GamepadSprites.cpp GamepadArtwork.cpp GamepadOverlay.cpp GamepadOverlay.h
+    LIBRARIES Qt6::Gui Qt6::Svg Qt6::Xml Qt6::Qml exosnap::gamepad
 )
 target_include_directories(gamepad_sprite_tests PRIVATE
     ${CMAKE_CURRENT_SOURCE_DIR} ${PROJECT_SOURCE_DIR}/app ${PROJECT_SOURCE_DIR}/libs/engine/include)
@@ -44,19 +44,38 @@ qt_add_executable(exosnap WIN32
     ${PROJECT_SOURCE_DIR}/app/assets/fonts/exosnap_fonts.qrc
 )
 
+set(EXOSNAP_GAMEPAD_MAPPED_ASSETS)
+foreach(controller IN ITEMS
+    dualsense
+    dualshock4
+    xbox_series
+    xbox_one
+    generic
+    switch_pro
+    joycon_grip
+    joycon_pair
+    joycon_left
+    joycon_right
+    joycon_left_horizontal
+    joycon_right_horizontal
+    steam_controller
+    steam_deck_full
+)
+    list(APPEND EXOSNAP_GAMEPAD_MAPPED_ASSETS
+        "${PROJECT_SOURCE_DIR}/app/assets/gamepad/controllers/${controller}/source.svg"
+        "${PROJECT_SOURCE_DIR}/app/assets/gamepad/controllers/${controller}/mapping.json")
+endforeach()
+
 qt_add_resources(exosnap "gamepad_artwork"
     PREFIX "/gamepad"
     BASE "${PROJECT_SOURCE_DIR}/app/assets/gamepad"
-    FILES
-        "${PROJECT_SOURCE_DIR}/app/assets/gamepad/dualsense.svg"
-        "${PROJECT_SOURCE_DIR}/app/assets/gamepad/xbox_series.svg"
-        "${PROJECT_SOURCE_DIR}/app/assets/gamepad/generic.svg"
+    FILES ${EXOSNAP_GAMEPAD_MAPPED_ASSETS}
 )
 
 qt_add_resources(gamepad_sprite_tests "gamepad_test_artwork"
     PREFIX "/gamepad"
     BASE "${PROJECT_SOURCE_DIR}/app/assets/gamepad"
-    FILES
+    FILES ${EXOSNAP_GAMEPAD_MAPPED_ASSETS}
         "${PROJECT_SOURCE_DIR}/app/assets/gamepad/dualsense.svg"
         "${PROJECT_SOURCE_DIR}/app/assets/gamepad/xbox_series.svg"
         "${PROJECT_SOURCE_DIR}/app/assets/gamepad/generic.svg"
@@ -273,6 +292,8 @@ qt_add_qml_module(exosnap
         GamepadOverlay.h
         GamepadSprites.cpp
         GamepadSprites.h
+        GamepadArtwork.cpp
+        GamepadArtwork.h
         QuickPreviewRgbaConverter.cpp
         QuickPreviewRgbaConverter.h
         RoundedRectClipGeometry.h
@@ -677,6 +698,7 @@ target_link_libraries(exosnap
         # The brand marks are SVG assets recoloured at load, so the renderer
         # rasterizes them rather than a build step doing it ahead of time.
         Qt6::Svg
+        Qt6::Xml
         Qt6::Qml
         Qt6::Quick
         Qt6::QuickControls2

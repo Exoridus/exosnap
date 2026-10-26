@@ -124,6 +124,7 @@ const REQUIRED_FILES: &[&str] = &[
     "Qt6Gui.dll",
     "Qt6Widgets.dll",
     "Qt6Svg.dll",
+    "Qt6Xml.dll",
     "Qt6Qml.dll",
     "Qt6QmlModels.dll",
     "Qt6Network.dll",
@@ -181,6 +182,8 @@ const REQUIRED_LICENSES: &[&str] = &[
     "gameinput-notice.txt",
     "gameinput-mit.txt",
     "gamepad-artwork.txt",
+    "gamepad-al2009man.txt",
+    "gamepad-al2009man-notice.txt",
 ];
 
 const CRASH_CAPTURE_LICENSES: &[&str] = &["sentry-native.txt", "crashpad.txt", "mini_chromium.txt"];
