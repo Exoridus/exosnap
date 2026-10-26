@@ -117,7 +117,6 @@ QJsonObject CompositorJson(const exosnap::engine::CompositorDiagnostics& c) {
     json.insert(QStringLiteral("vpBltPeakMs"), Metric(c.vpblt_peak_ms, c.vpblt_availability));
     json.insert(QStringLiteral("vpBltAvailability"), AvailabilityKey(c.vpblt_availability));
 
-    json.insert(QStringLiteral("overlayOmitted"), c.overlay_omitted);
     // The one thing a reader must not get wrong about these numbers. There is no
     // GPU timestamp query in this pipeline, so nothing here is GPU execution
     // time, and no field may ever be renamed to suggest that it is.

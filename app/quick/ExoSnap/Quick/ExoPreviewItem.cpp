@@ -438,7 +438,8 @@ class PreviewTextureNode final : public QSGNode {
     bool composeAndConvert(QString& error) {
         if (composes_) {
             std::string compositor_error;
-            if (!compositor_.BeginFrame(local_texture_.Get(), compositor_error) || !drawWebcam(compositor_error)) {
+            if (!compositor_.BeginFrame(local_texture_.Get(), compositor_error) || !drawWebcam(compositor_error) ||
+                !drawSprites(compositor_error)) {
                 error = QString::fromStdString(compositor_error);
                 return false;
             }
@@ -462,6 +463,15 @@ class PreviewTextureNode final : public QSGNode {
 
     // Same mapping as the recording: the placement is a fraction of the content
     // rectangle, which here is the part of the source the preview shows.
+    bool drawSprites(std::string& error) {
+        if (!webcam_.sprites)
+            return true;
+        const engine::WebcamPixelRect content{
+            qRound(normalized_source_rect_.x() * width_), qRound(normalized_source_rect_.y() * height_),
+            qRound(normalized_source_rect_.width() * width_), qRound(normalized_source_rect_.height() * height_)};
+        return compositor_.DrawSpriteLayer(0, *webcam_.sprites, content, error);
+    }
+
     bool drawWebcam(std::string& error) {
         if (!webcam_.visible || webcam_.frame == nullptr)
             return true;
@@ -748,6 +758,22 @@ void ExoPreviewItem::setWebcamFrame(std::shared_ptr<const exosnap::engine::Webca
     // the next visible change hands the latest one over.
     if (webcam_overlay_.visible)
         webcamOverlayChanged();
+}
+
+void ExoPreviewItem::setGamepadOverlay(GamepadOverlay* overlay) {
+    if (gamepad_overlay_ == overlay)
+        return;
+    QObject::disconnect(gamepad_connection_);
+    gamepad_overlay_ = overlay;
+    const auto refresh = [this]() {
+        webcam_overlay_.sprites =
+            gamepad_overlay_ ? gamepad_overlay_->Snapshot(gamepad::GameInputSource::NowCapture100ns()) : nullptr;
+        webcamOverlayChanged();
+    };
+    if (overlay)
+        gamepad_connection_ = connect(overlay, &GamepadOverlay::frameChanged, this, refresh);
+    refresh();
+    emit gamepadOverlayChanged();
 }
 
 void ExoPreviewItem::webcamOverlayChanged() {

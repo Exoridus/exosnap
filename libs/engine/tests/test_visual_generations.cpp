@@ -29,6 +29,10 @@ TEST(VisualFrameKey, DiffersWhenAnySingleGenerationDiffers) {
     VisualFrameKey colorChanged{};
     colorChanged.color_pipeline_generation = 1;
     EXPECT_NE(base, colorChanged);
+
+    VisualFrameKey spritesChanged{};
+    spritesChanged.sprite_generation = 1;
+    EXPECT_NE(base, spritesChanged);
 }
 
 TEST(VisualFrameKey, EqualWhenAllFieldsMatch) {
@@ -44,6 +48,7 @@ TEST(MakeVisualFrameKeyTest, CopiesEachGenerationFieldByName) {
     gens.cursor = 30;
     gens.overlay = 40;
     gens.color_pipeline = 50;
+    gens.sprites = 60;
 
     const VisualFrameKey key = MakeVisualFrameKey(gens);
     EXPECT_EQ(key.screen_generation, 10u);
@@ -51,6 +56,7 @@ TEST(MakeVisualFrameKeyTest, CopiesEachGenerationFieldByName) {
     EXPECT_EQ(key.cursor_generation, 30u);
     EXPECT_EQ(key.overlay_generation, 40u);
     EXPECT_EQ(key.color_pipeline_generation, 50u);
+    EXPECT_EQ(key.sprite_generation, 60u);
 }
 
 TEST(MakeVisualFrameKeyTest, IsConstexprEvaluable) {

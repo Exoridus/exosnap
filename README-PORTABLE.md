@@ -8,6 +8,10 @@ Use Windows 10/11 x64 (Windows 11 primary) and an NVIDIA GPU/driver supporting t
 
 Extract the entire `ExoSnap-<version>-windows-x64-portable` folder and run `exosnap.exe`. Keep its DLLs, plugins, QML runtime and other files together. Do not copy only the executable or mix files from releases. Current unsigned builds can trigger a SmartScreen warning.
 
+GameInputRedist.dll and GameInputRawInputProxy.exe are application-local controller runtime files.
+No GameInput MSI installation is required. Their separate Microsoft terms and notices are included in
+`licenses/gameinput.txt` and `licenses/gameinput-notice.txt`.
+
 Choose a source, review APP/SYS/MIC routing and readiness, then Record. The default global start/stop shortcut is **Alt+Shift+R**, configurable in Settings > Hotkeys. Other defaults are Alt+Shift+P for pause/resume, S for a frame, M for a marker and C for a manual split. A default binding unavailable on your system may be cleared; inspect the current Settings value.
 
 The built-in setup is MKV / AV1 / Opus / CFR 60. First-run codec reconciliation selects AV1, then HEVC, then H.264 according to available capability. The default output is the Windows Videos known folder plus `ExoSnap`, including folder redirection, not an assumed literal user-profile path.

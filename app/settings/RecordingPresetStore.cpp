@@ -1,4 +1,5 @@
 #include "RecordingPresetStore.h"
+#include "models/GamepadOverlaySettings.h"
 
 #include <QCryptographicHash>
 #include <QDir>
@@ -1061,6 +1062,18 @@ toml::table ConfigToToml(const RecordingPresetConfig& config) {
     aud_tbl.emplace("intent", IntentToToml(intent));
     tbl.emplace("audio", std::move(aud_tbl));
 
+    const auto& pad = config.gamepad;
+    tbl.emplace("gamepad", toml::table{{"enabled", pad.enabled},
+                                       {"device", pad.device},
+                                       {"layout", pad.layout},
+                                       {"glass", pad.glass},
+                                       {"glow", pad.glow},
+                                       {"opacity", static_cast<double>(pad.opacity)},
+                                       {"x", static_cast<double>(pad.x)},
+                                       {"y", static_cast<double>(pad.y)},
+                                       {"width", static_cast<double>(pad.width)},
+                                       {"height", static_cast<double>(pad.height)}});
+
     // --- Webcam ---
     const auto& wc = config.webcam;
     toml::table wc_tbl;
@@ -1454,6 +1467,21 @@ RecordingPresetConfig ConfigFromToml(const toml::table& tbl) {
     }
 
     // --- Webcam ---
+    auto& pad = config.gamepad;
+    pad.enabled = TomlBool(tbl["gamepad"]["enabled"], false);
+    pad.device = TomlStr(tbl["gamepad"]["device"]);
+    // Preserve an invalid sentinel so sanitization chooses the generic fallback.
+    pad.layout = static_cast<int>(std::clamp<int64_t>(TomlInt(tbl["gamepad"]["layout"], -1), -1,
+                                                      static_cast<int64_t>(kGamepadOverlayArtworkIds.size())));
+    pad.glass = TomlBool(tbl["gamepad"]["glass"], false);
+    pad.glow = TomlBool(tbl["gamepad"]["glow"], false);
+    pad.opacity = static_cast<float>(TomlFloat(tbl["gamepad"]["opacity"], 1));
+    pad.x = static_cast<float>(TomlFloat(tbl["gamepad"]["x"], 0.70));
+    pad.y = static_cast<float>(TomlFloat(tbl["gamepad"]["y"], 0.65));
+    pad.width = static_cast<float>(TomlFloat(tbl["gamepad"]["width"], 0.25));
+    pad.height = static_cast<float>(TomlFloat(tbl["gamepad"]["height"], 0.30));
+    pad = SanitizeGamepadOverlaySettings(std::move(pad));
+
     auto& wc = config.webcam;
     wc.enabled = TomlBool(tbl["webcam"]["enabled"], false);
     wc.device_id = TomlStr(tbl["webcam"]["device_id"]);

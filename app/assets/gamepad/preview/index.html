@@ -1,0 +1,92 @@
+<!doctype html>
+<html lang="de">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>ExoSnap · Gamepad-Vorschau & Mappings</title>
+<link rel="stylesheet" href="preview.css">
+<script src="preview.js" defer></script>
+</head>
+<body>
+<main class="wrap">
+  <header>
+    <div>
+      <h1>Gamepad-Vorschau</h1>
+      <p class="sub">Controller vergleichen, Bedienelemente prüfen und die Transparenz auf verschiedenen Hintergründen beurteilen.</p>
+    </div>
+    <div class="chip" id="status" data-src="demo"><span>Demo</span></div>
+  </header>
+  <p class="fine"><a href="al2009man.html">Einzelassets und JSON-Mappings ansehen →</a></p>
+  <nav id="gallery" class="gallery" aria-label="Controllerübersicht"></nav>
+  <div class="review-layout">
+    <section class="preview-column" aria-label="Controllerdarstellung">
+      <div class="stage bg-scene" id="stage">
+        <img id="bg-image" alt="Eigener Hintergrund" hidden>
+        <video id="bg-video" muted loop playsinline hidden></video>
+        <span class="stage-tag">Transparente Overlay-Vorschau</span>
+        <svg id="pad" viewBox="0 0 480 320" role="img" aria-label="Interaktives Gamepad">
+          <defs>
+            <linearGradient id="preview-glass" x1="0" y1="0" x2="0.2" y2="1">
+              <stop offset="0" stop-color="white" stop-opacity="0.10"/>
+              <stop offset="0.45" stop-color="white" stop-opacity="0.035"/>
+              <stop offset="1" stop-color="white" stop-opacity="0.015"/>
+            </linearGradient>
+            <radialGradient id="preview-dome"><stop offset="0" stop-color="white" stop-opacity="0.08"/><stop offset="1" stop-color="white" stop-opacity="0.01"/></radialGradient>
+            <radialGradient id="preview-well"><stop offset="0" stop-color="white" stop-opacity="0"/><stop offset="1" stop-color="white" stop-opacity="0.06"/></radialGradient>
+          </defs>
+          <g id="host"></g>
+        </svg>
+        <img id="reference" alt="Controllerreferenz" hidden>
+      </div>
+      <div class="asset-line"><span id="asset-status">App-SVG · P0</span><span id="source-status">Grafik wird geladen …</span></div>
+      <p id="reference-note" hidden>Lizenzierte Referenz, noch kein fertiges ExoSnap-Overlay. SVG-Elemente und native Mappings sind für dieses Modell noch offen. Es werden keine animierten Bedienelemente vorgetäuscht.</p>
+      <div class="readout" id="readout" aria-live="off"></div>
+<p id="touch-note" class="fine" hidden>Touchpads: gefüllter Kreis = simulierter Kontakt; Ring = konfigurierte Stick-Ausgabe, kein Fingerkontakt. Auf die Padfläche klicken und ziehen oder den Kontakt über die Mapping-Tabelle umschalten. Die Standard-Browser-API liefert hier keine Fingerposition.</p>
+      <div class="stick-controls" aria-label="Joysticks ausprobieren">
+        <fieldset class="stick-control"><legend>Linker Stick</legend><div id="stick-l" class="stick-field" role="group" tabindex="0" aria-label="Linker Stick" aria-describedby="stick-help"><span class="stick-thumb"></span></div><output id="stick-l-value">0.00 / 0.00</output><div class="actions"><button type="button" class="action" id="center-l">Zentrieren</button><button type="button" class="action" id="click-l" aria-pressed="false">L3</button></div></fieldset>
+        <fieldset class="stick-control"><legend>Rechter Stick</legend><div id="stick-r" class="stick-field" role="group" tabindex="0" aria-label="Rechter Stick" aria-describedby="stick-help"><span class="stick-thumb"></span></div><output id="stick-r-value">0.00 / 0.00</output><div class="actions"><button type="button" class="action" id="center-r">Zentrieren</button><button type="button" class="action" id="click-r" aria-pressed="false">R3</button></div></fieldset>
+        <p id="stick-help" class="fine">Ziehen oder mit Pfeiltasten bewegen; Shift für feine Schritte. Position bleibt stehen. Doppelklick, Pos1 oder „Zentrieren“ setzt zurück. L3/R3 separat anklicken.</p>
+      </div>
+      <p class="hint">Tasten direkt am Controller anklicken. Stick-Kappen ziehen; ein kurzer Klick schaltet L3/R3. Mit „Ruhezustand“ bleibt die Grafik still. Die Mapping-Tabelle erlaubt gezieltes Ein- und Ausschalten.</p>
+    </section>
+    <aside class="controls" aria-label="Vorschau einstellen">
+      <label class="field" for="layout">Controller<select id="layout"></select></label>
+      <label class="field" for="mode">Eingabe<select id="mode"><option value="demo">Demo-Animation</option><option value="manual">Manuell / Ruhezustand</option><option value="browser">Browser-Gamepad</option></select></label>
+      <label class="field" for="device">Browser-Gerät<select id="device"><option value="auto">Automatisch · aktives Gerät</option></select></label>
+      <div class="actions"><button type="button" class="action" id="reset">Ruhezustand</button><button type="button" class="action" id="all">Alle Tasten drücken</button></div>
+      <label class="field inline" for="body-only"><span>Nur Gehäuse</span><input id="body-only" type="checkbox"></label>
+      <label class="field" for="look">Stil<select id="look"><option value="lines">Linien</option><option value="glass">Glas</option></select></label>
+      <label class="field" for="background">Hintergrund<select id="background"><option value="scene">Szene / Verlauf</option><option value="dark">Dunkel</option><option value="grey">Grau</option><option value="light">Hell</option><option value="checker">Transparenzraster</option><option value="custom">Eigene Farbe</option><option value="file">Eigenes Bild / Video</option></select></label>
+      <label class="field inline" for="background-color">Hintergrundfarbe<input type="color" id="background-color" value="#34495e"></label>
+      <label class="file-button" for="background-file">Bild oder Video wählen<input id="background-file" type="file" accept="image/*,video/*" hidden></label>
+      <label class="field" for="size"><span class="inline">Größe <output id="size-value">58 %</output></span><input id="size" type="range" min="20" max="90" value="58"></label>
+      <label class="field" for="opacity"><span class="inline">Deckkraft <output id="opacity-value">100 %</output></span><input id="opacity" type="range" min="0" max="100" value="100"></label>
+      <details class="appearance-details" open><summary>Innere Konturen & Kontrast</summary>
+        <label class="field" for="detail-width"><span class="inline">Linienstärke <output id="detail-width-value">50 %</output></span><input id="detail-width" type="range" min="30" max="130" value="50"></label>
+        <label class="field" for="detail-opacity"><span class="inline">Deckkraft innen <output id="detail-opacity-value">40 %</output></span><input id="detail-opacity" type="range" min="0" max="100" value="40"></label>
+        <label class="field inline" for="shadow">Kontrastschatten<input id="shadow" type="checkbox" checked></label>
+        <p class="fine">Betrifft innere Linien und feste Stick-Einfassungen. Außenkontur, Kappen und Symbole bleiben erhalten. Bei gefüllten Konturringen wirkt nur die Deckkraft.</p>
+      </details>
+      <label class="field inline" for="glow">Glow beim Drücken<input type="checkbox" id="glow"></label>
+      <div class="analog-grid wide">
+        <input id="lx" type="hidden" value="0"><input id="ly" type="hidden" value="0">
+        <input id="rx" type="hidden" value="0"><input id="ry" type="hidden" value="0">
+        <fieldset class="analog"><legend>Trigger</legend><label for="lt">L2<input id="lt" type="range" min="0" max="1" step="0.01" value="0"></label><label for="rt">R2<input id="rt" type="range" min="0" max="1" step="0.01" value="0"></label></fieldset>
+      </div>
+    </aside>
+  </div>
+  <details open>
+    <summary>Mappings und aktive Bedienelemente</summary>
+    <p class="fine">Die Face-Buttons sind nach ihrer Position zugeordnet. Native GameInput-Felder und Browser-Indizes sind getrennt angegeben. Klicke einen Namen, um das Element manuell zu prüfen.</p>
+    <div class="table-scroll"><table><thead><tr><th>Bedienelement</th><th>SVG-Element</th><th>GameInput</th><th>Browser</th><th>Wert</th></tr></thead><tbody id="mapping-body"></tbody></table></div>
+    <p class="fine">* b17 ist eine optionale Browser-Erweiterung, kein garantiertes Standard-Mapping. PS/Home und Zusatzknöpfe hängen vom Gerät und der API ab. Mikrofon und weitere Zusatzfunktionen sind nur manuell simulierbar; ihre API-Zuordnung ist nicht qualifiziert. Zusatzfunktionen wie Mikrofon und Touch-Fingerpositionen sind nicht qualifiziert.</p>
+  </details>
+  <details><summary>Browser-Rohdaten</summary><pre id="raw"></pre></details>
+  <footer>
+    Die Browser-Vorschau verwendet die Gamepad-API des Browsers. Sie ist ein separates Werkzeug zur visuellen Prüfung und bestätigt nicht die native GameInput-Anbindung in ExoSnap.<br>
+    Alle Controller verwenden AL2009man-Vektorquellen mit getrennten Elementen und JSON-Mappings. Generic ist eine markenfreie Ableitung. Steam Deck verwendet die Geräteansicht; der Steam Controller ist das Modell von 2015.<br>
+    Quelle: <a href="../controllers/LICENSE.txt">AL2009man / Al. Lopez · MIT, © 2024</a>. Eigene Hintergrunddateien bleiben im Browser und werden nicht hochgeladen.
+  </footer>
+</main>
+</body>
+</html>

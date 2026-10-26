@@ -308,6 +308,10 @@ class RecordingCoordinator {
     // The camera's latest frame, as the recording would composite it. Null before
     // the first frame. Any thread.
     [[nodiscard]] std::shared_ptr<const exosnap::engine::WebcamFrameSnapshot> WebcamSnapshot();
+    /// Bind before recording starts. The provider must outlive this coordinator.
+    void SetSpriteSourceProvider(exosnap::engine::SpriteSourceProvider* provider) {
+        sprite_source_ = provider;
+    }
     // Receiver-scoped open-reader status transitions (see WebcamService::
     // SetStatusCallback): forwarded verbatim so the Record dock can flag a webcam
     // that cannot be opened. Dropped if the receiver dies.
@@ -458,9 +462,8 @@ class RecordingCoordinator {
     // void*; ownership transfers to the callee (open then CloseHandle). `tap`
     // names the display transform the consumer must apply before drawing
     // (recorder_core/preview_tap.h — a native HDR10 session shares FP16 scRGB,
-    // which the preview tone-maps). Fires for every session except the
-    // already-PQ 10-bit native sub-path, and only when the callback is set before
-    // StartRecording. The callback must return fast and must not make D3D calls
+    // which the preview tone-maps). Fires for every session when the callback is set
+    // before StartRecording. The callback must return fast and must not make D3D calls
     // on the calling thread.
     using PreviewSharedHandleReadyCallback =
         std::function<void(void* nt_handle, uint32_t width, uint32_t height, exosnap::engine::PreviewTapDesc tap)>;
@@ -745,6 +748,7 @@ class RecordingCoordinator {
     exosnap::engine::ResolvedEncoderDevice resolved_encoder_device_;
     std::optional<capability::CapabilitySet> encoder_caps_;
     WebcamSettings webcam_settings_;
+    exosnap::engine::SpriteSourceProvider* sprite_source_ = nullptr;
     WebcamService webcam_service_;
     // Owned rather than borrowed: it must outlive any session that composites
     // from it, and the session holds a bare pointer.

@@ -53,7 +53,7 @@ Both Setup and updater screenshot previews accept `--preview-details` to capture
 | `--visual-shell-appearance dark\|light` | Shell-owned toast appearance, separate from app preference |
 | `--visual-expert` | Expert recording-profile controls |
 | `--visual-scroll F` | Fraction of current page's scrollable range |
-| `--visual-popup source-picker\|notification-hub` | Lazy popup |
+| `--visual-popup source-picker\|notification-hub\|gamepad` | Lazy popup |
 | `--visual-dialog <name>` | Named close/preset dialog |
 | `--record-visual-state <name>` | Named Record lifecycle state |
 | `--overlay-visual-state <name>` | Named recovery, error or crash surface, recording HUD variant (`hud-*`) or single desktop toast (`toast-success\|caution\|error\|info`) |

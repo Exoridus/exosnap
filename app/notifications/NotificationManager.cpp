@@ -111,8 +111,6 @@ int NotificationManager::DismissIntervalMs(NotificationType type) noexcept {
         return kDismissMs_SettingsRepaired;
     case NotificationType::PresetSwitched:
         return kDismissMs_PresetSwitched;
-    case NotificationType::OverlayOmitted:
-        return kDismissMs_OverlayOmitted;
     case NotificationType::HotkeyConflict:
         return kDismissMs_HotkeyConflict;
     case NotificationType::SettingsSaveFailed:

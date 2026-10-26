@@ -387,6 +387,48 @@ if(EXOSNAP_WITH_PRESENTMON)
         "${presentmon_SOURCE_DIR}/LICENSE.txt" "presentmon.txt")
 endif()
 
+# ---- Microsoft GameInput (NuGet Microsoft.GameInput) -----------------------
+# The loader is built from the package's MIT source rather than its prebuilt
+# GameInput.lib so it follows this tree's toolchain and runtime flags. At run
+# time the loader picks the newest of the in-box GameInput.dll, an installed
+# GameInputRedist.dll, and a GameInputRedist.dll next to the executable. The
+# in-box Windows DLL only implements API v0, so the v4 interface needs the
+# redistributable on the end-user machine. The .nupkg is a zip archive;
+# DOWNLOAD_NAME gives it an extension the extract step recognizes.
+FetchContent_Declare(
+  gameinput
+  URL           https://api.nuget.org/v3-flatcontainer/microsoft.gameinput/4.0.302/microsoft.gameinput.4.0.302.nupkg
+  URL_HASH      SHA256=A4F000C3A41385819B51E5CDD7DAE66D7DDE85C6DE0BFD823CFE617D4BAAAC33
+  DOWNLOAD_NAME microsoft.gameinput.4.0.302.zip
+  DOWNLOAD_EXTRACT_TIMESTAMP TRUE
+)
+FetchContent_MakeAvailable(gameinput)
+add_library(gameinput_loader STATIC "${gameinput_SOURCE_DIR}/native/src/GameInput.cpp")
+target_include_directories(gameinput_loader SYSTEM PUBLIC "${gameinput_SOURCE_DIR}/native/include")
+target_compile_options(gameinput_loader PRIVATE
+    $<$<CXX_COMPILER_ID:MSVC>:/W0>
+    $<$<CXX_COMPILER_ID:Clang>:-w>
+)
+add_library(GameInput::GameInput ALIAS gameinput_loader)
+_exosnap_install_license("Microsoft GameInput 4.0.302"
+    "${gameinput_SOURCE_DIR}/LICENSE.txt" "gameinput.txt")
+_exosnap_install_license("Microsoft GameInput notices"
+    "${gameinput_SOURCE_DIR}/NOTICE.txt" "gameinput-notice.txt")
+_exosnap_install_license("Microsoft GameInput loader (MIT)"
+    "${PROJECT_SOURCE_DIR}/third_party/gameinput/LICENSE-MIT.txt" "gameinput-mit.txt")
+
+set(EXOSNAP_GAMEINPUT_RUNTIME_FILES
+    "${gameinput_SOURCE_DIR}/native/bin/x64/GameInputRedist.dll"
+    "${gameinput_SOURCE_DIR}/native/bin/x64/GameInputRawInputProxy.exe"
+    CACHE INTERNAL "Application-local GameInput x64 runtime")
+install(FILES ${EXOSNAP_GAMEINPUT_RUNTIME_FILES} DESTINATION ".")
+_exosnap_install_license("Gamepad artwork (CC0)"
+    "${PROJECT_SOURCE_DIR}/third_party/gamepad/xelu.txt" "gamepad-artwork.txt")
+_exosnap_install_license("Controller artwork (MIT)"
+    "${PROJECT_SOURCE_DIR}/app/assets/gamepad/controllers/LICENSE.txt" "gamepad-al2009man.txt")
+_exosnap_install_license("Controller artwork source credits"
+    "${PROJECT_SOURCE_DIR}/app/assets/gamepad/controllers/SOURCE-NOTICE.txt" "gamepad-al2009man-notice.txt")
+
 # ---------------------------------------------------------------------------
 # Vendored in-tree sources (libs/update/third_party) -- no FetchContent step,
 # so they are registered here rather than next to their add_library() call:

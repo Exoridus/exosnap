@@ -26,6 +26,7 @@ Run visible/audio-producing probes only with desktop coordination, and run them 
 | `probe_gpup_nvenc`, `probe_idd_duplication` | Is NVENC/duplication usable in the declared guest and output configuration? |
 | `probe_encode_file`, `probe_edit_playback` | Exercise real encoder or editor code with controlled media |
 | `probe_luminance_cost` | GPU query cost of luminance analysis and tone-mapping |
+| `probe_gamepad` | GameInput identity, timestamp age, normalized input, auxiliary buttons and raw DualSense reports. The build stages the app-local v4 runtime. `--seconds N` stops it; `--cycles N` repeats initialization/teardown. `--enhanced` experimentally reads the DualSense firmware feature report to request enhanced Bluetooth reports. This can alter compatibility until reconnect and is never used by the application. |
 
 ## Interpreting evidence
 

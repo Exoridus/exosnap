@@ -13,6 +13,7 @@ FocusScope {
     property bool editable: false
     property bool error: false
     property bool idlePreview: true
+    property string overlayName: qsTr("Webcam overlay")
     // The item gestures are measured in. It must not move with the overlay.
     property Item stage: parent
 
@@ -29,7 +30,7 @@ FocusScope {
     width: parent.width * draftRect.width
     height: parent.height * draftRect.height
     activeFocusOnTab: webcamOverlay.editable
-    Accessible.name: qsTr("Webcam overlay")
+    Accessible.name: webcamOverlay.overlayName
     Accessible.description: qsTr("Drag to move. Use arrow keys to move and Shift plus arrow keys to resize.")
     Keys.onPressed: event => {
         if (!webcamOverlay.editable)

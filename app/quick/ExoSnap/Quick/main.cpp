@@ -1798,6 +1798,12 @@ int main(int argc, char* argv[]) {
             notifications->openHub();
             return notifications->hubOpen() && hasVisiblePopup(root_window, "QQuickPopup");
         }
+        if (visual_popup == QLatin1String("gamepad")) {
+            auto* popup = root_window != nullptr
+                              ? root_window->findChild<QObject*>(QStringLiteral("gamepadOverlayPopup"))
+                              : nullptr;
+            return popup != nullptr && QMetaObject::invokeMethod(popup, "open") && popup->property("visible").toBool();
+        }
         error = QStringLiteral("unknown popup %1").arg(visual_popup);
         return false;
     };

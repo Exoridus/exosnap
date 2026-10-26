@@ -243,11 +243,37 @@ Resolution and frame-rate choices list only the modes the selected camera offers
 
 The Webcam card shows the included camera live, drawn exactly as recorded; the camera is opened for it only while the card is on screen. Its Camera image group lists the standard UVC controls the selected camera reports (brightness, contrast, hue, saturation, sharpness, gamma, white balance, backlight compensation, gain, anti-flicker, exposure, focus, zoom, pan, tilt), each with Auto where the camera offers it. A control left alone keeps the camera's own value; set values belong to the profile, are applied whenever the camera opens and change live, including during a recording. Reset returns every control to the camera's defaults, and choosing another camera drops the values.
 
-Placement/size are adjusted inside the preview's displayed video area, reaching its edges without distortion or clipping. Default placement is bottom-right with a margin. Metadata overlays stay above it. The idle preview draws the camera with the recording's own compositor, so mirror, opacity and chroma key look exactly as recorded; opacity defaults to 100%. The chroma key uses one key color, green by default, typed as hex (a leading # and the three-digit shorthand are accepted) or picked; it stays visible while the key is off so it can be set first. Tolerance, softness and spill reduction are disclosed when the key is enabled. Invalid input marks the field and explains itself on hover or focus without changing the layout.
+Placement/size are adjusted inside the preview's displayed video area, reaching its edges without distortion or clipping. Default placement is bottom-right with a margin. In the recording the webcam lies above the mouse cursor, which belongs to the desktop layer. Where the chroma key makes the camera transparent, the cursor shows through. Metadata overlays stay above it. The idle preview draws the camera with the recording's own compositor, so mirror, opacity and chroma key look exactly as recorded; opacity defaults to 100%. The chroma key uses one key color, green by default, typed as hex (a leading # and the three-digit shorthand are accepted) or picked; it stays visible while the key is off so it can be set first. Tolerance, softness and spill reduction are disclosed when the key is enabled. Invalid input marks the field and explains itself on hover or focus without changing the layout.
 
 Device and resolution are fixed during recording. Supported mirror/opacity/chroma and inclusion changes apply live. A healthy static desktop is recomposed with the current webcam each CFR tick; actual capture-loss recovery holds the picture. A lost camera holds its last image and retries the same device. No camera and a selected camera that fails to open are different states; the latter exposes the actual reason, not a fabricated generic device absence.
 
 Media Foundation is a webcam dependency, not an AAC/recording dependency. Windows N/KN without the Media Feature Pack can still launch and record without webcam; webcam UI and Diagnostics explain the missing runtime.
+
+### Gamepad overlay
+
+The Record preview's Gamepad control adds one recorded controller widget. It is off by default.
+Automatic device selection prefers the first actively used gamepad and stays with it until disconnect.
+Manual selection pins one device and never borrows another controller's inputs. Disconnect resets the visible inputs.
+Automatic artwork selection recognizes DualSense, Xbox Series, Xbox One and Switch Pro families.
+Manual selection additionally offers DualShock 4, Joy-Cons in a grip or separate, individual Joy-Cons
+in upright or horizontal orientation, the Steam Controller (2015), and the Steam Deck device view.
+Generic uses a vendor-neutral Xbox Series silhouette. Selecting a Joy-Con drawing does not combine physical devices.
+
+Lines is the default. Glass adds subtle transparent highlights. Opacity is adjustable and glow defaults to off.
+Controls light blue when pressed while their vector symbols stay white, except the PS logo button itself, which turns blue.
+A subtle contrast shadow keeps the line artwork visible on light backgrounds. Stick caps move within circular wells,
+L3/R3 tint the caps, and trigger fills are proportional. PS and touchpad clicks are shown when GameInput exposes them.
+Microphone-button and finger-position visualization is not offered until the input transport is qualified.
+The application never switches a DualSense into an enhanced Bluetooth mode automatically.
+
+The widget is moved and resized directly in the preview while recording settings are editable.
+Artwork keeps its proportions inside its placement rectangle. Device, artwork, appearance and placement belong
+to the recording profile and survive restart. Inclusion and appearance changes can apply during recording.
+The native widget and HTML artwork viewer use the same editable SVG sources and JSON input mappings.
+Normal and pressed variants are rasterized only when building a settled-size atlas. SVG clip paths are
+adapted to masks for the Qt rasterizer. Stick movement and trigger fills only change sprite quads.
+Idle preview and recording use the same immutable sprite atlas and GPU compositor. The recorded order is desktop,
+cursor, webcam, gamepad. The widget is burned into the existing encoded image, without another track or encoder.
 
 ## 8. Recording lifecycle
 

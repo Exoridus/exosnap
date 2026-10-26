@@ -1793,6 +1793,14 @@ exosnap_add_gtest(
 )
 target_include_directories(test_visual_generations PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/include)
 
+# Overlay sprite mapping, change detection and per-frame observation: pure, no D3D.
+exosnap_add_gtest(
+    NAME test_overlay_sprites
+    TEST_PREFIX engine.
+    SOURCES tests/test_overlay_sprites.cpp
+)
+target_include_directories(test_overlay_sprites PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/include src)
+
 # Retained-frame plan: separates DXGI cursor-only acquires from real desktop
 # presents (CV-CURSOR-001) — pure logic, no D3D/NVENC.
 exosnap_add_gtest(

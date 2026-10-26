@@ -17,7 +17,6 @@ constexpr std::array<std::pair<NotificationType, const char*>, 20> kTypeNames{{
     {NotificationType::FramesDropped, "framesDropped"},
     {NotificationType::SettingsRepaired, "settingsRepaired"},
     {NotificationType::PresetSwitched, "presetSwitched"},
-    {NotificationType::OverlayOmitted, "overlayOmitted"},
     {NotificationType::HotkeyConflict, "hotkeyConflict"},
     {NotificationType::SettingsSaveFailed, "settingsSaveFailed"},
     {NotificationType::AudioDefaultDeviceChanged, "audioDefaultDeviceChanged"},

@@ -68,7 +68,7 @@ enum class MaskCursorComposition {
 }
 
 // Mirrors `cbuffer DrawConstants` in kOverlayPixelShaderSrc, register b0.
-// Three float4 rows; HLSL constant buffers round up to 16-byte rows, so the
+// Four float4 rows; HLSL constant buffers round up to 16-byte rows, so the
 // static_asserts below are the contract between C++ and the shader.
 struct OverlayPixelConstants {
     float key_color[4]; // r, g, b (0-1) + tolerance
@@ -76,17 +76,21 @@ struct OverlayPixelConstants {
     float params[4];
     // x=hdrLinear (0/1), y=refWhiteScale, z=opacity, w=reserved
     float params2[4];
+    // u0, v0, u1, v1: the part of the texture the destination rectangle shows.
+    float uv_rect[4];
 };
 
-static_assert(sizeof(OverlayPixelConstants) == 48, "DrawConstants is three float4 rows");
+static_assert(sizeof(OverlayPixelConstants) == 64, "DrawConstants is four float4 rows");
 static_assert(sizeof(OverlayPixelConstants) % 16 == 0, "D3D11 constant buffers require 16-byte rows");
 static_assert(offsetof(OverlayPixelConstants, params) == 16, "params must start at row 1");
 static_assert(offsetof(OverlayPixelConstants, params2) == 32, "params2 must start at row 2");
+static_assert(offsetof(OverlayPixelConstants, uv_rect) == 48, "uv_rect must start at row 3");
 
 // ref_white_scale: linear-light scale applied to sRGB-decoded sprites on the FP16
 // native-HDR path (overlay reference white / scRGB reference white). Ignored when
 // hdr_linear is false; pass 1.0f there.
 // opacity: uniform overlay opacity, clamped to [0,1]; non-finite falls back to 1.
+// The whole texture is sampled; set uv_rect afterwards to draw a sub-rectangle.
 [[nodiscard]] inline OverlayPixelConstants MakeOverlayPixelConstants(const ChromaKeyParams& chroma, bool mirror,
                                                                      bool force_opaque, float opacity, bool hdr_linear,
                                                                      float ref_white_scale) noexcept {
@@ -105,6 +109,8 @@ static_assert(offsetof(OverlayPixelConstants, params2) == 32, "params2 must star
     pc.params2[0] = hdr_linear ? 1.0f : 0.0f;
     pc.params2[1] = ref_white_scale;
     pc.params2[2] = safe_opacity;
+    pc.uv_rect[2] = 1.0f;
+    pc.uv_rect[3] = 1.0f;
     return pc;
 }
 
@@ -140,6 +146,7 @@ cbuffer DrawConstants : register(b0) {
     float4 keyColor; // r, g, b, tolerance
     float4 params;   // x=mirror, y=mode(0=cursor/1=chroma/2=opaque), z=spillReduction, w=softness
     float4 params2;  // x=hdrLinear, y=refWhiteScale, z=opacity, w=reserved
+    float4 uvRect;   // u0, v0, u1, v1
 };
 
 // BT.601 RGB->CbCr. Output range [0,1] with neutral at 0.5.
@@ -160,6 +167,7 @@ float4 main(float4 position : SV_POSITION, float2 texcoord : TEXCOORD0) : SV_TAR
     float2 uv = texcoord;
     if (params.x > 0.5f)
         uv.x = 1.0f - uv.x;
+    uv = lerp(uvRect.xy, uvRect.zw, uv);
 
     float4 color = frameTex.Sample(frameSamp, uv);
     const float mode = params.y;

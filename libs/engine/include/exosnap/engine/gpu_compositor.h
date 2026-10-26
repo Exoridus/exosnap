@@ -1,6 +1,7 @@
 #pragma once
 
 #include <exosnap/engine/overlay_shader.h>
+#include <exosnap/engine/overlay_sprites.h>
 #include <exosnap/engine/recorder_session.h>
 #include <exosnap/engine/sdr_white_level.h>
 #include <exosnap/engine/webcam_placement.h>
@@ -8,13 +9,15 @@
 #include <d3d11.h>
 #include <winrt/base.h>
 
+#include <cstddef>
 #include <cstdint>
 #include <optional>
 #include <string>
+#include <vector>
 
 namespace exosnap::engine {
 
-// D3D11 shader compositor for webcam and cursor overlays.
+// D3D11 shader compositor for webcam, cursor and sprite overlays.
 //
 // Threading: single-thread. Every call comes from the thread that owns the
 // immediate context it was initialised with (the recording's VideoThread, or
@@ -77,6 +80,15 @@ class GpuCompositor {
     // reports.
     bool DrawCursorInvert(const uint8_t* bgra, int width, int height, const WebcamPixelRect& rect, std::string& err);
 
+    // Draws one sprite layer, its quads in list order, with the cursor's
+    // compositing rules (sprite alpha, sRGB, HDR overlay reference white).
+    // `content` is the rectangle of the composite the quad destinations are
+    // relative to. Each layer_index keeps its own atlas texture, uploaded again
+    // only when the atlas generation or size differs from the last one drawn
+    // there. A layer without a complete atlas draws nothing and is not an error.
+    bool DrawSpriteLayer(size_t layer_index, const SpriteLayerSnapshot& layer, const WebcamPixelRect& content,
+                         std::string& err);
+
     // Which inversion semantics this compositor's render format allows.
     [[nodiscard]] MaskCursorComposition MaskComposition() const noexcept {
         return SelectMaskCursorComposition(hdr_linear_);
@@ -88,6 +100,14 @@ class GpuCompositor {
 
     [[nodiscard]] uint64_t WebcamUploadCount() const noexcept {
         return webcam_upload_count_;
+    }
+
+    [[nodiscard]] uint64_t SpriteAtlasUploadCount() const noexcept {
+        return sprite_atlas_upload_count_;
+    }
+
+    [[nodiscard]] uint64_t SpriteQuadDrawCount() const noexcept {
+        return sprite_quad_draw_count_;
     }
 
   private:
@@ -106,9 +126,10 @@ class GpuCompositor {
     bool ConvertWebcamYuv(const WebcamFrameSnapshot& frame, std::string& err);
     bool UploadTexture(TextureResource& resource, const uint8_t* bgra, int width, int height, UINT row_pitch,
                        std::string& err);
+    // uv_rect: u0, v0, u1, v1 of the texture the rectangle shows; null = all of it.
     bool DrawTexture(ID3D11ShaderResourceView* srv, const WebcamPixelRect& rect, bool mirror,
                      const ChromaKeyParams& chroma, bool force_opaque, float opacity, std::string& err,
-                     ID3D11BlendState* blend = nullptr);
+                     ID3D11BlendState* blend = nullptr, const float* uv_rect = nullptr);
 
     ID3D11Device* device_ = nullptr;
     ID3D11DeviceContext* context_ = nullptr;
@@ -140,6 +161,14 @@ class GpuCompositor {
     uint64_t webcam_upload_count_ = 0;
     TextureResource cursor_tex_;
     TextureResource cursor_invert_tex_;
+
+    struct SpriteAtlasTexture {
+        TextureResource texture;
+        std::optional<uint64_t> generation;
+    };
+    std::vector<SpriteAtlasTexture> sprite_atlases_;
+    uint64_t sprite_atlas_upload_count_ = 0;
+    uint64_t sprite_quad_draw_count_ = 0;
 };
 
 } // namespace exosnap::engine
