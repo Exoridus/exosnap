@@ -342,12 +342,18 @@ struct MediaCacheStore::Impl {
         return released - total_bytes;
     }
 
-    bool EvictToBudget(const std::string& keep) {
+    // Makes room for `incoming` bytes that will replace the entry `replaced`,
+    // which is therefore never evicted. Publication evicts before its rename
+    // because a published file cannot be reliably rolled back: another
+    // process may open it the moment it becomes visible.
+    bool EvictToBudget(const std::string& replaced, std::uint64_t incoming = 0) {
         std::set<std::string> blocked;
-        while (total_bytes > config.budget_bytes && !entries.empty()) {
+        const auto found = entries.find(replaced);
+        const std::uint64_t replaced_bytes = found == entries.end() ? 0 : found->second.file_bytes;
+        while (total_bytes - replaced_bytes + incoming > config.budget_bytes && !entries.empty()) {
             auto oldest = entries.end();
             for (auto it = entries.begin(); it != entries.end(); ++it) {
-                if (it->first == keep || blocked.contains(it->first))
+                if (it->first == replaced || blocked.contains(it->first))
                     continue;
                 if (oldest == entries.end() || it->second.last_use < oldest->second.last_use)
                     oldest = it;
@@ -579,6 +585,11 @@ bool MediaCacheStore::Publish(std::string_view key_view, std::span<const std::ui
         error = "The media cache generation was retired.";
         return false;
     }
+    if (!impl->EvictToBudget(key, file_bytes)) {
+        std::filesystem::remove(temp_path, fs_error);
+        error = "Locked media cache entries prevent publication within the disk budget.";
+        return false;
+    }
     if (!MoveFileExW(temp_path.c_str(), final_path.c_str(), MOVEFILE_REPLACE_EXISTING | MOVEFILE_WRITE_THROUGH)) {
         std::filesystem::remove(temp_path, fs_error);
         error = "Cannot publish a media cache entry.";
@@ -590,11 +601,6 @@ bool MediaCacheStore::Publish(std::string_view key_view, std::span<const std::ui
     impl->entries[key] = entry;
     impl->total_bytes += file_bytes;
     impl->known_bytes.store(impl->total_bytes, std::memory_order_relaxed);
-    if (!impl->EvictToBudget(key)) {
-        impl->DeleteEntry(key);
-        error = "Locked media cache entries prevent publication within the disk budget.";
-        return false;
-    }
     ++impl->stats.published;
     return true;
 }
@@ -689,25 +695,24 @@ bool MediaCacheStore::Writer::Publish(std::string& error, const std::function<bo
         error = "The media cache generation was retired.";
         return false;
     }
+    std::error_code ignored;
+    if (!store.EvictToBudget(state_->key, state_->file_bytes)) {
+        std::filesystem::remove(state_->path, ignored);
+        error = "Locked media cache entries prevent publication within the disk budget.";
+        return false;
+    }
     const auto final_path = store.PathFor(state_->key);
     if (!MoveFileExW(state_->path.c_str(), final_path.c_str(), MOVEFILE_REPLACE_EXISTING | MOVEFILE_WRITE_THROUGH)) {
-        std::error_code ignored;
         std::filesystem::remove(state_->path, ignored);
         error = "Cannot publish a media cache entry.";
         return false;
     }
     store.Drop(state_->key);
     Impl::Entry entry{state_->file_bytes, std::filesystem::file_time_type::clock::now(), state_->payload_size};
-    std::error_code ignored;
     std::filesystem::last_write_time(final_path, entry.last_use, ignored);
     store.entries[state_->key] = entry;
     store.total_bytes += state_->file_bytes;
     store.known_bytes.store(store.total_bytes, std::memory_order_relaxed);
-    if (!store.EvictToBudget(state_->key)) {
-        store.DeleteEntry(state_->key);
-        error = "Locked media cache entries prevent publication within the disk budget.";
-        return false;
-    }
     ++store.stats.published;
     return true;
 }
