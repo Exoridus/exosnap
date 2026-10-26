@@ -79,7 +79,7 @@ class ExoPreviewItem : public QQuickItem {
     void setWebcamStyle(bool mirror, float opacity, const exosnap::engine::ChromaKeyParams& chroma);
     void setWebcamFrame(std::shared_ptr<const exosnap::engine::WebcamFrameSnapshot> frame);
     GamepadOverlay* gamepadOverlay() const {
-        return gamepad_overlay_;
+        return gamepad_overlay_.data();
     }
     void setGamepadOverlay(GamepadOverlay* overlay);
 

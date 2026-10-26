@@ -55,7 +55,7 @@ class GamepadOverlay final : public QObject, public engine::SpriteSourceProvider
     QVariantList devices() const {
         return devices_;
     }
-    QString status() const {
+    const QString& status() const {
         return status_;
     }
 
@@ -65,7 +65,7 @@ class GamepadOverlay final : public QObject, public engine::SpriteSourceProvider
     void setGlow(bool value);
     void setOpacity(double value);
     void setPlacement(QRectF value);
-    void setDevice(QString value);
+    void setDevice(const QString& value);
     Q_INVOKABLE void setContentSize(QSize size);
 
   signals:

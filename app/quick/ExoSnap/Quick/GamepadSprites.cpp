@@ -14,8 +14,8 @@ namespace exosnap::quick {
 namespace {
 
 struct Element {
-    const char* id;
-    uint32_t button;
+    const char* id = nullptr;
+    uint32_t button = 0;
     PadMotion motion = PadMotion::None;
     PadAuxiliary auxiliary = PadAuxiliary::None;
 };

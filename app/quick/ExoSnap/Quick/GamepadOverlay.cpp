@@ -115,7 +115,7 @@ void GamepadOverlay::setOpacity(double value) {
     settings.opacity = static_cast<float>(value);
     Configure(settings);
 }
-void GamepadOverlay::setDevice(QString value) {
+void GamepadOverlay::setDevice(const QString& value) {
     auto settings = Settings();
     settings.device = value.toStdString();
     Configure(settings);
