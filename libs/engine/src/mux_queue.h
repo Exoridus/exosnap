@@ -3,6 +3,7 @@
 #include <exosnap/engine/packet_types.h>
 #include <exosnap/engine/split_trigger_source.h>
 
+#include <algorithm>
 #include <chrono>
 #include <condition_variable>
 #include <cstddef>
@@ -46,11 +47,15 @@ class MuxQueue {
         size_t packets = 0;
         size_t retained_bytes = 0;
         Limits limits;
+        // Exact high-water marks since the last Reset(), including states that
+        // existed only between two observations.
+        size_t peak_packets = 0;
+        size_t peak_retained_bytes = 0;
     };
 
     [[nodiscard]] Measurements ReadMeasurements() const {
         std::lock_guard lock(mutex_);
-        return {queue_.size(), bytes_, limits_};
+        return {queue_.size(), bytes_, limits_, peak_packets_, peak_bytes_};
     }
 
     void Configure(Limits limits) {
@@ -142,6 +147,8 @@ class MuxQueue {
         std::lock_guard lock(mutex_);
         queue_.clear();
         bytes_ = 0;
+        peak_packets_ = 0;
+        peak_bytes_ = 0;
         space_cv_.notify_all();
     }
 
@@ -186,6 +193,8 @@ class MuxQueue {
         const size_t bytes = PayloadBytes(item);
         queue_.push_back(std::move(item));
         bytes_ += bytes;
+        peak_packets_ = (std::max)(peak_packets_, queue_.size());
+        peak_bytes_ = (std::max)(peak_bytes_, bytes_);
         items_cv_.notify_one();
     }
 
@@ -195,6 +204,8 @@ class MuxQueue {
     std::condition_variable waiting_cv_;
     std::deque<MuxItem> queue_;
     size_t bytes_ = 0;
+    size_t peak_packets_ = 0;
+    size_t peak_bytes_ = 0;
     size_t waiting_producers_ = 0;
     Limits limits_;
 };

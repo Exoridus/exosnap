@@ -65,6 +65,44 @@ TEST(WebcamReadPolicy, CallbackOwnsOneResultAndIgnoresDeliveryAfterClose) {
     EXPECT_FALSE(callback->Wait({}, sample));
 }
 
+TEST(WebcamReadPolicy, AFailedSourceEventIsDeliveredAfterThePendingReadResult) {
+    auto callback = Microsoft::WRL::Make<WebcamReadCallback>();
+    Microsoft::WRL::ComPtr<IMFSample> original;
+    ASSERT_EQ(MFCreateSample(&original), S_OK);
+    ASSERT_EQ(callback->OnReadSample(S_OK, 0, 0, 42, original.Get()), S_OK);
+    Microsoft::WRL::ComPtr<IMFMediaEvent> failed;
+    ASSERT_EQ(MFCreateMediaEvent(MEConnectEnd, GUID_NULL, E_FAIL, nullptr, &failed), S_OK);
+    ASSERT_EQ(callback->OnEvent(0, failed.Get()), S_OK);
+    Microsoft::WRL::ComPtr<IMFMediaEvent> healthy;
+    ASSERT_EQ(MFCreateMediaEvent(MESourceCharacteristicsChanged, GUID_NULL, S_OK, nullptr, &healthy), S_OK);
+    ASSERT_EQ(callback->OnEvent(0, healthy.Get()), S_OK);
+
+    WebcamReadCallback::Sample sample;
+    ASSERT_TRUE(callback->Wait({}, sample));
+    EXPECT_EQ(sample.status, S_OK);
+    EXPECT_EQ(sample.timestamp, 42);
+    EXPECT_TRUE(sample.sample);
+    EXPECT_FALSE(sample.event);
+
+    ASSERT_TRUE(callback->Wait({}, sample));
+    EXPECT_EQ(sample.status, E_FAIL);
+    EXPECT_EQ(sample.flags, MF_SOURCE_READERF_ERROR);
+    EXPECT_FALSE(sample.sample);
+    EXPECT_EQ(sample.event, MEConnectEnd);
+    EXPECT_EQ(ClassifyWebcamReadResult(sample.status, sample.flags, false), WebcamReadAction::Reconnect);
+}
+
+TEST(WebcamReadPolicy, StopInterruptsTheReconnectDelay) {
+    std::promise<bool> completed;
+    auto result = completed.get_future();
+    std::jthread worker(
+        [&](std::stop_token stop) { completed.set_value(WaitForWebcamReconnect(stop, std::chrono::seconds(30))); });
+    worker.request_stop();
+    ASSERT_EQ(result.wait_for(std::chrono::seconds(2)), std::future_status::ready);
+    EXPECT_FALSE(result.get());
+    EXPECT_TRUE(WaitForWebcamReconnect({}, std::chrono::milliseconds(1)));
+}
+
 TEST(WebcamReadPolicy, HealthyReadWithSampleDelivers) {
     EXPECT_EQ(ClassifyWebcamReadResult(S_OK, 0, /*has_sample=*/true), WebcamReadAction::Deliver);
 }

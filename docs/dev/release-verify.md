@@ -26,15 +26,15 @@ The [mandatory v0.11 hardware gates](../release-checklist.md#mandatory-v011-hard
 
 ## Candidate and execution lanes
 
-Recording Clip creation is unavailable in the offered product. The required
-`clip.creation-unavailable` scenario (revision 1) uses the candidate's production
-control endpoint to verify typed request/stale-confirmation rejection, empty job
-snapshots and no output or staging entries through shutdown. It belongs to
-release-ci-core and also runs in release-gpu and ordinary preflight. The positive
-`clip.recording-live` implementation retains revision 3 outside the active registry
-for future source-level reactivation after qualification. New candidate plans
-require the negative contract. Existing frozen plans and historical results keep
-their identities; plan validation never rewrites or waives a positive failure.
+Recording Clip creation is offered. The required `clip.recording-live` scenario
+(revision 4) records through the candidate's production control endpoint, saves an
+offered last-30-seconds clip while capture continues and opens it in Edit. It
+belongs to release-gpu and also runs in ordinary preflight. The negative
+`clip.creation-unavailable` implementation retains revision 1 outside the active
+registry for a source-level deactivation. New candidate plans require the positive
+contract, and a passing negative result cannot stand in for it. Existing frozen
+plans and historical results keep their identities; plan validation never rewrites
+or waives a failure.
 
 The `Build release candidate` workflow creates one official final-version build from a commit on `next`. Download `candidate-bundle/` and `candidate-plan.json` from the same Actions run. Keep them together with the separately signed disposable test-feed artifact. The bundle inventories the exact MSI, portable ZIP and verifier bytes; the plan freezes the source registry for that candidate.
 

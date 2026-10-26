@@ -372,6 +372,8 @@ struct AudioDiagnostics {
 struct QueueDiagnostics {
     TimingDistribution producer_wait;
     uint32_t current_depth = 0;
+    // For the mux queue, both peaks are exact per-recording high-water marks
+    // kept by the queue itself, not maxima of the sampled values.
     uint32_t peak_depth = 0;
     uint32_t capacity = 0; // packet admission threshold when bounded
     bool bounded = false;

@@ -37,6 +37,7 @@
 #include "diagnostics/DiskSpaceProvider.h"
 #include "diagnostics/DiskSpaceThresholds.h"
 #include "models/OutputPathValidator.h"
+#include "models/RecordingCapabilities.h"
 #include "quick/ExoSnap/Quick/RecordingClipAdapter.h"
 #include "services/RecordingAdmission.h"
 #include "services/RecordingCoordinator.h"
@@ -64,12 +65,21 @@ class RecordingCoordinatorTestPeer {
 
 namespace {
 
+// With the capability off, the coordinator refuses before consulting media. With
+// it on, a coordinator without committed recording media refuses the same way
+// before planning, leases or staging.
+constexpr auto kClipRefusal = product::kRecordingClipsAvailable ? engine::EngineErrorCode::InvalidConfig
+                                                                : engine::EngineErrorCode::ProductCapabilityUnavailable;
+constexpr const char* kClipRefusalContext = product::kRecordingClipsAvailable
+                                                ? "Recording clip duration or media time is unavailable"
+                                                : product::kRecordingClipsUnavailableReason;
+
 TEST(RecordingClipProduct, RejectsRequestsBeforePlanningRegardlessOfDurationOrTransportState) {
     QTemporaryDir output;
     ASSERT_TRUE(output.isValid());
     RecordingCoordinator coordinator;
     RecordingCoordinatorTestPeer::SetClipOutput(coordinator, output.path().toStdWString() + L"/recording.mkv");
-    EXPECT_FALSE(RecordingCoordinatorTestPeer::HasClipWorker(coordinator));
+    EXPECT_EQ(RecordingCoordinatorTestPeer::HasClipWorker(coordinator), product::kRecordingClipsAvailable);
     for (const bool recording : {false, true}) {
         for (const bool preparing : {false, true}) {
             for (const uint64_t time : {uint64_t{0}, uint64_t{60'000'000'000}, UINT64_MAX}) {
@@ -79,9 +89,9 @@ TEST(RecordingClipProduct, RejectsRequestsBeforePlanningRegardlessOfDurationOrTr
                     const auto result = coordinator.RequestRecordingClip(duration);
                     ASSERT_FALSE(result.succeeded());
                     EXPECT_EQ(result.error()->owner, engine::EngineModule::Clip);
-                    EXPECT_EQ(result.error()->code, engine::EngineErrorCode::ProductCapabilityUnavailable);
+                    EXPECT_EQ(result.error()->code, kClipRefusal);
                     EXPECT_EQ(result.error()->retryability, engine::Retryability::Never);
-                    EXPECT_EQ(result.error()->context, "Recording Clips are unavailable in this product version");
+                    EXPECT_EQ(result.error()->context, kClipRefusalContext);
                     EXPECT_TRUE(coordinator.RecordingClipSnapshots().empty());
                 }
             }
@@ -100,7 +110,7 @@ TEST(RecordingClipProduct, StaleConfirmationAndCancellationCannotAdmitWork) {
         }
     }
     EXPECT_TRUE(coordinator.RecordingClipSnapshots().empty());
-    EXPECT_FALSE(RecordingCoordinatorTestPeer::HasClipWorker(coordinator));
+    EXPECT_EQ(RecordingCoordinatorTestPeer::HasClipWorker(coordinator), product::kRecordingClipsAvailable);
 }
 
 TEST(RecordingClipProduct, DirectAdapterSignalsCannotBypassCoordinatorAdmission) {
@@ -120,12 +130,12 @@ TEST(RecordingClipProduct, DirectAdapterSignalsCannotBypassCoordinatorAdmission)
     adapter.planRequested(30);
     ASSERT_TRUE(requested);
     ASSERT_FALSE(requested->succeeded());
-    EXPECT_EQ(requested->error()->code, engine::EngineErrorCode::ProductCapabilityUnavailable);
+    EXPECT_EQ(requested->error()->code, kClipRefusal);
     const auto stale = engine::NewId<engine::JobId>();
     adapter.confirmRequested(stale, 1);
     adapter.cancelRequested(stale, 1);
     EXPECT_TRUE(coordinator.RecordingClipSnapshots().empty());
-    EXPECT_FALSE(RecordingCoordinatorTestPeer::HasClipWorker(coordinator));
+    EXPECT_EQ(RecordingCoordinatorTestPeer::HasClipWorker(coordinator), product::kRecordingClipsAvailable);
 }
 
 using diagnostics::ExclusiveEvidence;
