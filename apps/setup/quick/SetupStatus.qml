@@ -53,6 +53,16 @@ ColumnLayout {
             Accessible.role: Accessible.Heading
             Accessible.description: text
         }
+        BusyIndicator {
+            objectName: "setupBusyIndicator"
+            Layout.preferredWidth: 16
+            Layout.preferredHeight: 16
+            padding: 0
+            visible: root.applying && root.controller.indeterminate
+            running: visible
+            palette.dark: ExoTheme.accent
+            Accessible.name: root.controller.headline
+        }
         Label {
             visible: root.applying && !root.controller.indeterminate
             text: qsTr("%1%").arg(Math.round(root.controller.progress * 100))

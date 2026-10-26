@@ -31,7 +31,7 @@ The screenshot runner creates a real per-shot output directory and sets both `EX
 The standalone updater has its own deterministic render path, used by its tests and evidence: `exosnap-updater.exe --preview-state <idle|checking|available|ready|uptodate|cancelled|download|progress|verifying|success|amber|red|green|reboot|reinstall|long>` renders a canned state from the real controller, `--appearance dark|light` sets the shared theme singleton for that render, `--preview-smoke` exits after the first paint, and `--screenshot <path>` grabs the real Quick window and exits. These are argument-configured harness modes; they do not drive update transactions.
 
 The separate `exosnap-setup-preview.exe` target renders the offline Setup without loading Burn or installing anything.
-Use `--preview-state <install|manage|uninstall|uninstall-data|progress|protected|success|reboot|failure|removed|cancelled>`,
+Use `--preview-state <checking|install|manage|uninstall|uninstall-data|progress|protected|success|reboot|failure|removed|cancelled>`,
 `--ui-language en|de`, and either `--screenshot <path>` or `--preview-smoke`.
 Set `QT_QPA_PLATFORM=offscreen` and `QT_QUICK_BACKEND=software` for deterministic rendering without desktop input.
 The preview uses the development Qt plugin directory for the offscreen plugin. The real bootstrapper uses only its private deployed runtime.

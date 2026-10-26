@@ -48,12 +48,14 @@ QString RuntimeDirectory(const SetupHost* host) {
 }
 
 bool Preview(SetupController& controller, const QString& name) {
-    const QStringList names{QStringLiteral("install"),        QStringLiteral("manage"),   QStringLiteral("uninstall"),
-                            QStringLiteral("uninstall-data"), QStringLiteral("progress"), QStringLiteral("protected"),
-                            QStringLiteral("success"),        QStringLiteral("reboot"),   QStringLiteral("failure"),
-                            QStringLiteral("removed"),        QStringLiteral("cancelled")};
+    const QStringList names{QStringLiteral("checking"),  QStringLiteral("install"),        QStringLiteral("manage"),
+                            QStringLiteral("uninstall"), QStringLiteral("uninstall-data"), QStringLiteral("progress"),
+                            QStringLiteral("protected"), QStringLiteral("success"),        QStringLiteral("reboot"),
+                            QStringLiteral("failure"),   QStringLiteral("removed"),        QStringLiteral("cancelled")};
     if (!names.contains(name))
         return false;
+    if (name == QStringLiteral("checking"))
+        return true;
     SetupEvent event{SetupEventKind::Detected};
     event.installed = name == QStringLiteral("manage") || name.startsWith(QStringLiteral("uninstall")) ||
                       name == QStringLiteral("removed");

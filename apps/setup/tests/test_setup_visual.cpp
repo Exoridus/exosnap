@@ -9,10 +9,11 @@
 #include "SetupPreviewPath.h"
 
 TEST(SetupVisualTest, EveryFinalStateRendersWithoutQmlErrorsAtItsDeclaredSize) {
-    const QStringList states{QStringLiteral("install"),        QStringLiteral("manage"),   QStringLiteral("uninstall"),
-                             QStringLiteral("uninstall-data"), QStringLiteral("progress"), QStringLiteral("protected"),
-                             QStringLiteral("success"),        QStringLiteral("reboot"),   QStringLiteral("failure"),
-                             QStringLiteral("removed"),        QStringLiteral("cancelled")};
+    const QStringList states{
+        QStringLiteral("checking"),  QStringLiteral("install"),        QStringLiteral("manage"),
+        QStringLiteral("uninstall"), QStringLiteral("uninstall-data"), QStringLiteral("progress"),
+        QStringLiteral("protected"), QStringLiteral("success"),        QStringLiteral("reboot"),
+        QStringLiteral("failure"),   QStringLiteral("removed"),        QStringLiteral("cancelled")};
     QTemporaryDir directory;
     ASSERT_TRUE(directory.isValid());
     for (const QString& language : {QStringLiteral("en"), QStringLiteral("de")}) {

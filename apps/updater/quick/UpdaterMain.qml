@@ -105,6 +105,17 @@ Window {
                 ToolTip.visible: headlineHover.hovered && truncated
                 HoverHandler { id: headlineHover }
             }
+            BusyIndicator {
+                objectName: "updaterBusyIndicator"
+                Layout.preferredWidth: 16
+                Layout.preferredHeight: 16
+                padding: 0
+                visible: window.adapter.progressVisible && window.adapter.indeterminate
+                running: visible
+                palette.dark: ExoTheme.accent
+                Accessible.name: window.adapter.panelTitle
+                Accessible.description: window.adapter.ringDescription
+            }
             Label {
                 visible: window.adapter.progressVisible && !window.adapter.indeterminate
                 text: qsTr("%1%").arg(window.adapter.ringPercent)
