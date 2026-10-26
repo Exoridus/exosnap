@@ -2,6 +2,7 @@
 
 #include "exosnap/engine/color_metadata.h"
 #include "exosnap/engine/overlay_shader.h"
+#include "exosnap/engine/overlay_sprites.h"
 #include "exosnap/engine/recorder_session.h"
 #include "exosnap/engine/visual_generations.h"
 #include "exosnap/engine/webcam_placement.h"
@@ -906,4 +907,137 @@ TEST(GpuCompositorWebcamYuv, AnIncompletePayloadDrawsNothing) {
     WebcamFrameSnapshot truncated = Nv12Frame(235, 128, 128);
     truncated.pixels.pop_back();
     ExpectPixelNear(ComposeOnBlack(truncated), 2, 0, 0, 0, 0, 0, 255);
+}
+
+namespace {
+
+using exosnap::engine::SpriteAtlas;
+using exosnap::engine::SpriteLayerSnapshot;
+using exosnap::engine::SpriteQuad;
+
+// One-pixel atlas cells: red, green, half-transparent blue, white.
+std::shared_ptr<const SpriteAtlas> FourCellAtlas(uint64_t generation) {
+    auto atlas = std::make_shared<SpriteAtlas>();
+    atlas->width = 4;
+    atlas->height = 1;
+    atlas->generation = generation;
+    atlas->pixels = {0, 0, 255, 255, 0, 255, 0, 255, 255, 0, 0, 128, 255, 255, 255, 255};
+    return atlas;
+}
+
+SpriteQuad CellQuad(int cell, float x, float y, float w, float h, float opacity = 1.0f) {
+    SpriteQuad quad;
+    quad.source = {cell, 0, 1, 1};
+    quad.destination = {x, y, w, h};
+    quad.opacity = opacity;
+    return quad;
+}
+
+} // namespace
+
+TEST(GpuCompositorSprites, QuadsSampleTheirAtlasCellWithStraightAlphaAndOpacity) {
+    auto d3d = CreateWarpDevice();
+    ASSERT_TRUE(d3d.device);
+    GpuCompositor compositor;
+    std::string err;
+    ASSERT_TRUE(compositor.Init(d3d.device.get(), d3d.context.get(), 4, 3, err)) << err;
+    auto background = CreateTexture(d3d.device.get(), 4, 3, SolidBgra(4, 3, 0, 0, 0));
+    ASSERT_TRUE(compositor.BeginFrame(background.get(), err)) << err;
+
+    // Content rect is the bottom 4x2 of the composite, as a crop would place it.
+    SpriteLayerSnapshot layer;
+    layer.atlas = FourCellAtlas(1);
+    layer.quads = {CellQuad(1, 0.0f, 0.0f, 0.25f, 0.5f), CellQuad(2, 0.25f, 0.0f, 0.25f, 0.5f),
+                   CellQuad(3, 0.5f, 0.5f, 0.25f, 0.5f, 0.5f)};
+    ASSERT_TRUE(compositor.DrawSpriteLayer(0, layer, WebcamPixelRect{0, 1, 4, 2}, err)) << err;
+
+    const auto pixels = ReadTexture(d3d.device.get(), d3d.context.get(), compositor.Result());
+    ExpectPixelNear(pixels, 4, 0, 0, 0, 0, 0, 255);
+    ExpectPixelNear(pixels, 4, 0, 1, 0, 255, 0, 255);
+    ExpectPixelNear(pixels, 4, 1, 1, 128, 0, 0, 255);
+    ExpectPixelNear(pixels, 4, 2, 2, 128, 128, 128, 255);
+    ExpectPixelNear(pixels, 4, 3, 1, 0, 0, 0, 255);
+    EXPECT_EQ(compositor.SpriteQuadDrawCount(), 3u);
+}
+
+TEST(GpuCompositorSprites, AnAtlasIsUploadedOncePerGenerationAndLayer) {
+    auto d3d = CreateWarpDevice();
+    ASSERT_TRUE(d3d.device);
+    GpuCompositor compositor;
+    std::string err;
+    ASSERT_TRUE(compositor.Init(d3d.device.get(), d3d.context.get(), 2, 2, err)) << err;
+    auto background = CreateTexture(d3d.device.get(), 2, 2, SolidBgra(2, 2, 0, 0, 0));
+    SpriteLayerSnapshot layer;
+    layer.atlas = FourCellAtlas(5);
+    layer.quads = {CellQuad(0, 0.0f, 0.0f, 0.5f, 0.5f)};
+    const WebcamPixelRect content{0, 0, 2, 2};
+    for (int i = 0; i < 3; ++i) {
+        ASSERT_TRUE(compositor.BeginFrame(background.get(), err)) << err;
+        ASSERT_TRUE(compositor.DrawSpriteLayer(0, layer, content, err)) << err;
+    }
+    EXPECT_EQ(compositor.SpriteAtlasUploadCount(), 1u);
+
+    ASSERT_TRUE(compositor.DrawSpriteLayer(1, layer, content, err)) << err;
+    EXPECT_EQ(compositor.SpriteAtlasUploadCount(), 2u);
+
+    layer.atlas = FourCellAtlas(6);
+    ASSERT_TRUE(compositor.DrawSpriteLayer(0, layer, content, err)) << err;
+    EXPECT_EQ(compositor.SpriteAtlasUploadCount(), 3u);
+
+    // No atlas payload: nothing drawn, nothing uploaded, not an error.
+    layer.atlas = std::make_shared<SpriteAtlas>();
+    ASSERT_TRUE(compositor.DrawSpriteLayer(0, layer, content, err)) << err;
+    EXPECT_EQ(compositor.SpriteAtlasUploadCount(), 3u);
+}
+
+TEST(GpuCompositorSprites, HdrLinearScalesSpritesToTheOverlayReferenceWhite) {
+    auto d3d = CreateWarpDevice();
+    ASSERT_TRUE(d3d.device);
+    GpuCompositor compositor;
+    std::string err;
+    ASSERT_TRUE(compositor.Init(d3d.device.get(), d3d.context.get(), 2, 1, err, DXGI_FORMAT_R16G16B16A16_FLOAT, 240.0f))
+        << err;
+
+    D3D11_TEXTURE2D_DESC bg_desc{};
+    bg_desc.Width = 2;
+    bg_desc.Height = 1;
+    bg_desc.MipLevels = 1;
+    bg_desc.ArraySize = 1;
+    bg_desc.Format = DXGI_FORMAT_R16G16B16A16_FLOAT;
+    bg_desc.SampleDesc.Count = 1;
+    bg_desc.Usage = D3D11_USAGE_DEFAULT;
+    std::vector<uint16_t> zeros(8, 0);
+    D3D11_SUBRESOURCE_DATA init{};
+    init.pSysMem = zeros.data();
+    init.SysMemPitch = 16;
+    winrt::com_ptr<ID3D11Texture2D> background;
+    ASSERT_TRUE(SUCCEEDED(d3d.device->CreateTexture2D(&bg_desc, &init, background.put())));
+    ASSERT_TRUE(compositor.BeginFrame(background.get(), err)) << err;
+
+    // White cell on the right pixel only.
+    SpriteLayerSnapshot layer;
+    layer.atlas = FourCellAtlas(1);
+    layer.quads = {CellQuad(3, 0.5f, 0.0f, 0.5f, 1.0f)};
+    ASSERT_TRUE(compositor.DrawSpriteLayer(0, layer, WebcamPixelRect{0, 0, 2, 1}, err)) << err;
+
+    D3D11_TEXTURE2D_DESC desc{};
+    compositor.Result()->GetDesc(&desc);
+    desc.Usage = D3D11_USAGE_STAGING;
+    desc.BindFlags = 0;
+    desc.CPUAccessFlags = D3D11_CPU_ACCESS_READ;
+    winrt::com_ptr<ID3D11Texture2D> staging;
+    ASSERT_TRUE(SUCCEEDED(d3d.device->CreateTexture2D(&desc, nullptr, staging.put())));
+    d3d.context->CopyResource(staging.get(), compositor.Result());
+    D3D11_MAPPED_SUBRESOURCE mapped{};
+    ASSERT_TRUE(SUCCEEDED(d3d.context->Map(staging.get(), 0, D3D11_MAP_READ, 0, &mapped)));
+    const auto* halfs = static_cast<const uint16_t*>(mapped.pData);
+    const float left_r = HalfToFloat(halfs[0]);
+    const float right_r = HalfToFloat(halfs[4]);
+    const float right_b = HalfToFloat(halfs[6]);
+    d3d.context->Unmap(staging.get(), 0);
+
+    // sRGB white at 240 nits on scRGB (1.0 = 80 nits).
+    EXPECT_NEAR(left_r, 0.0f, 0.001f);
+    EXPECT_NEAR(right_r, 3.0f, 0.03f);
+    EXPECT_NEAR(right_b, 3.0f, 0.03f);
 }

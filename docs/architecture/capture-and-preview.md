@@ -38,6 +38,41 @@ The normal mid-session duplication reopen has no give-up deadline. Waiting does 
 
 During capture-loss recovery, hold the composed picture. On a static healthy display or window, observe the immutable webcam snapshot before comparing visual keys. Recompose only when a visual generation changes. Upload camera pixels only for a new generation or a replaced texture. The camera mailbox reuses unreferenced payload buffers and preserves snapshots still held by a consumer.
 
+## Overlay composition
+
+The recording compositor draws in source coordinates, bottom to top: desktop, cursor, webcam, then sprite layers in the order of `RecorderConfig::sprite_sources`. All overlays share one overlay shader, so they receive the same sRGB handling, straight-alpha blend and, on the native HDR path, the same overlay reference white.
+
+A sprite layer is an atlas plus quads, defined in [overlay sprites](../../libs/engine/include/exosnap/engine/overlay_sprites.h). Adding an overlay of this kind needs a new source, not new compositor logic. The video thread asks every source for a snapshot once per composed frame, passing that frame's time on the QPC clock in 100 ns units. A source answers from its own published state without blocking, Qt or D3D. The snapshot carries an immutable straight-alpha BGRA atlas with a generation, and quads with an atlas source rectangle, a destination normalized to the content rectangle and an opacity. Destinations are clipped at the content edge. The atlas is uploaded only when its generation changes.
+
+A changed sprite snapshot (atlas generation or size, or the quad list) advances the sprite generation in the visual frame key. On a static desktop it recomposes the held screen exactly like a camera or cursor change. A sprite overlay therefore keeps moving over a still picture instead of freezing in the duplicated frame.
+
+### Gamepad source and artwork
+
+The Qt-free gamepad library uses GameInput v4 reading and device callbacks. Each application-local device ID has
+its own bounded timestamp history. IDs distinguish identical VID/PID pairs. Partial auxiliary readings merge only
+with that same device's state at or before the reading timestamp. Disconnect publishes a neutral state.
+The initial GameInput microsecond/QPC-100ns anchor is sampled between two QPC reads. The video thread queries
+history at its actual frame time, without a UI timer in the input-to-recording path.
+
+GamepadOverlay owns input capture and app-side artwork. SVG groups rasterize only when artwork, style or settled
+recording-content size changes. A resize temporarily transforms existing quads, then debounces rasterization.
+Raster work runs on one joined worker. Stale results are discarded before GUI delivery.
+The atlas stores straight-alpha BGRA8, transparent gutters and edge RGB for bilinear filtering. Stick deadzone
+and travel affect presentation only. Raw captured axis values are retained. The GUI notification snapshot is
+separate from the recording consumer's snapshot cache, so consuming a recording frame cannot suppress an idle
+preview update. The Quick scene-graph node draws sprites after the webcam into its clean private copy with
+GpuCompositor. An already-composited recording tap is never composed a second time.
+
+The x64 GameInputRedist.dll and GameInputRawInputProxy.exe ship beside the executable through the common CMake
+install tree used by both package formats. Runtime terms, Microsoft notices and the MIT loader notice ship together.
+The loader uses the newest supported local/system runtime. No GameInput MSI is installed.
+Microsoft recommends retaining the process-wide GameInput instance until application shutdown.
+With the 4.0.302 runtime, final IGameInput release can block after successful callback unregistration.
+One process reference is therefore retained and reused across source restarts. Each source unregisters both
+callbacks before freeing its context and releases its own interface reference. This bounds retention to one
+runtime instance, rather than leaking one instance per recording. Omitting the final release is a workaround,
+not a documented GameInput requirement. Clean final runtime release remains unqualified.
+
 ## Exclusive fullscreen and stalls
 
 Window shape alone cannot distinguish borderless content from legacy exclusive fullscreen. Pre-flight classification combines shape, WGC evidence and corroborating fullscreen signals. No-frame evidence is not a pixel analysis of whether a picture is black. A failed evidence probe supplies no evidence, never proof of a blocked capture.
@@ -48,7 +83,7 @@ The mid-session monitor watches frame production, not emitted CFR packets. Ten s
 
 ## Recording preview transport
 
-The recording tap publishes the composited source image with cursor and webcam before encoder-format conversion. It is not a CPU copy of NV12/P010 and it is not a second capture of the desktop. Native HDR uses a shared linear HDR image that the preview tone-maps for SDR presentation. The already-PQ desktop path lacks this shareable/compositable image and has explicit overlay/preview limitations.
+The recording tap publishes the composited source image with cursor and webcam before encoder-format conversion. It is not a CPU copy of NV12/P010 and it is not a second capture of the desktop. Native HDR uses a shared linear HDR image that the preview tone-maps for SDR presentation. A desktop captured already in PQ/BT.2020 is linearized into the same FP16 image first, so overlays and the preview tap work on every capture format.
 
 An NT shared handle and a keyed mutex transfer access between D3D11 devices. The producer takes key 0 and publishes key 1. The Quick render thread attempts key 1 with zero wait, copies into a cached private texture and releases key 0 promptly. Conversion and scene composition then use the private copy. Holding the producer's mutex across a full scene render would couple capture latency to UI latency.
 

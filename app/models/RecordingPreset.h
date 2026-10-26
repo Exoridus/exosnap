@@ -1,5 +1,6 @@
 #pragma once
 
+#include "GamepadOverlaySettings.h"
 #include "OutputSettingsModel.h"
 #include "StableDisplayId.h"
 #include "VideoSettingsModel.h"
@@ -130,6 +131,7 @@ struct RecordingPresetConfig {
     bool audio_read_only = false;
     std::string audio_validation_error;
     WebcamSettings webcam;
+    GamepadOverlaySettings gamepad;
     int countdown_seconds = 0; // One of {0, 3, 5, 10}
 };
 

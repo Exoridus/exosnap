@@ -512,6 +512,7 @@ RecordingPresetConfig SanitizePresetConfig(RecordingPresetConfig config) {
 
     // Webcam: delegate to the provided sanitizer (handles NaN/Inf + clamping).
     config.webcam = SanitizeWebcamSettings(config.webcam);
+    config.gamepad = SanitizeGamepadOverlaySettings(config.gamepad);
 
     // Capture: if kind is Region but the normalized region has no area, clear it.
     if (config.capture.kind == PresetCaptureKind::Region &&
@@ -861,6 +862,9 @@ bool NormalizedConfigEquals(const RecordingPresetConfig& a, const RecordingPrese
     if (a.webcam.controls != b.webcam.controls) {
         return false;
     }
+    if (a.gamepad != b.gamepad) {
+        return false;
+    }
 
     return true;
 }
@@ -1153,6 +1157,9 @@ std::string_view ConfigDirtyDifference(const RecordingPresetConfig& a, const Rec
     }
     if (a.webcam.controls != b.webcam.controls) {
         return "webcam.controls";
+    }
+    if (a.gamepad != b.gamepad) {
+        return "gamepad";
     }
 
     return {};

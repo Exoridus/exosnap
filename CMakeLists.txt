@@ -205,6 +205,7 @@ add_subdirectory(libs/engine)
 add_subdirectory(libs/capability)
 add_subdirectory(libs/crash_capture)
 add_subdirectory(libs/update)
+add_subdirectory(libs/gamepad)
 # Before app/ and apps/updater/: both link the shared control-channel layer and
 # the shared update-handoff document (one schema, two processes).
 add_subdirectory(libs/control)

@@ -34,6 +34,7 @@ struct ReadyFrameComposition {
     VideoSettingsModel video;
     WebcamSettings webcam;
     std::shared_ptr<const exosnap::engine::WebcamFrameSnapshot> webcam_frame;
+    std::shared_ptr<const exosnap::engine::SpriteLayerSnapshot> sprites;
 };
 
 class ReadyFrameCaptureService final {

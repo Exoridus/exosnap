@@ -12,6 +12,15 @@
 
 #include "models/RecordingPreset.h"
 
+TEST(GamepadPreset, ChangesAffectPersistenceEqualityAndProfileDirtyState) {
+    const auto original = exosnap::MakeDefaultPreset().config;
+    auto edited = original;
+    edited.gamepad.enabled = true;
+    EXPECT_FALSE(exosnap::NormalizedConfigEquals(original, edited));
+    EXPECT_FALSE(exosnap::ConfigDirtyEquivalent(original, edited));
+    EXPECT_EQ(exosnap::ConfigDirtyDifference(original, edited), "gamepad");
+}
+
 namespace exosnap {
 namespace {
 

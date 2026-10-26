@@ -4,6 +4,7 @@
 #include <exosnap/engine/audio_track_model.h>
 #include <exosnap/engine/background_io.h>
 #include <exosnap/engine/color_metadata.h>
+#include <exosnap/engine/overlay_sprites.h>
 #include <exosnap/engine/recording_media_types.h>
 #include <exosnap/engine/split_trigger_source.h>
 
@@ -334,8 +335,8 @@ using SegmentCallback = std::function<void(const CompletedSegment&)>;
 // (preview_tap.h): SDR / HDR-tone-map / 4:4:4 sessions share a samplable SDR or
 // 10-bit surface (PreviewTapTransform::None); a native HDR10 session shares its
 // linear scRGB FP16 pre-encode surface (ScrgbHdr — tone-map before display).
-// The only session that never fires is the already-PQ R10G10B10A2 native
-// sub-path, which has no linear surface to share. Must be set before Record();
+// A PQ10 desktop is linearized before composition, so every session fires.
+// Must be set before Record();
 // the callback is captured at Record() start and does not survive
 // Stop()/Record() cycles.
 using PreviewSharedHandleCallback =
@@ -637,6 +638,11 @@ struct RecorderConfig {
 
     // Optional webcam overlay composited into the recorded video.
     WebcamConfig webcam;
+
+    // Sprite overlay layers composited above the webcam, first entry lowest.
+    // Not owned; each must outlive Record(). Null entries are ignored. See
+    // SpriteSourceProvider for the threading contract.
+    std::vector<SpriteSourceProvider*> sprite_sources;
 
     // Automatic/manual segment splitting. Default Off == single-file recording.
     RecordingSplitSettings split;

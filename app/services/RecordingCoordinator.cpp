@@ -1356,6 +1356,8 @@ void RecordingCoordinator::PrepareAndRecordThreadProc(const PrepareContext& ctx)
     // product's own, so the overlay and compositing paths under measurement are
     // the shipping ones.
     const bool static_webcam = static_webcam_source_ != nullptr;
+    if (sprite_source_ != nullptr)
+        config.sprite_sources.push_back(sprite_source_);
     config.webcam.enabled = static_webcam || (ctx.webcam_settings.enabled && !ctx.webcam_settings.device_id.empty());
     config.webcam.frame_provider = static_webcam
                                        ? static_cast<exosnap::engine::WebcamFrameProvider*>(static_webcam_source_.get())

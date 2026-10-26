@@ -20,6 +20,17 @@
 # part of the application.
 set(EXOSNAP_QUICK_TESTS_DIR "${PROJECT_SOURCE_DIR}/app/quick/tests")
 
+exosnap_add_gtest(
+    NAME gamepad_sprite_tests
+    TEST_PREFIX gamepad.sprites.
+    SOURCES "${EXOSNAP_QUICK_TESTS_DIR}/test_gamepad_sprites.cpp" GamepadSprites.cpp GamepadArtwork.cpp GamepadOverlay.cpp GamepadOverlay.h
+    LIBRARIES Qt6::Gui Qt6::Svg Qt6::Xml Qt6::Qml exosnap::gamepad
+)
+target_include_directories(gamepad_sprite_tests PRIVATE
+    ${CMAKE_CURRENT_SOURCE_DIR} ${PROJECT_SOURCE_DIR}/app ${PROJECT_SOURCE_DIR}/libs/engine/include)
+target_compile_definitions(gamepad_sprite_tests PRIVATE
+    EXOSNAP_GAMEPAD_ASSET_DIR="${PROJECT_SOURCE_DIR}/app/assets/gamepad")
+
 set_source_files_properties(ExoTheme.qml PROPERTIES
     QT_QML_SINGLETON_TYPE TRUE
 )
@@ -31,6 +42,43 @@ qt_add_executable(exosnap WIN32
     # recoloured for the running theme before anything rasterizes it.
     ${PROJECT_SOURCE_DIR}/app/assets/brand/exosnap_marks.qrc
     ${PROJECT_SOURCE_DIR}/app/assets/fonts/exosnap_fonts.qrc
+)
+
+set(EXOSNAP_GAMEPAD_MAPPED_ASSETS)
+foreach(controller IN ITEMS
+    dualsense
+    dualshock4
+    xbox_series
+    xbox_one
+    generic
+    switch_pro
+    joycon_grip
+    joycon_pair
+    joycon_left
+    joycon_right
+    joycon_left_horizontal
+    joycon_right_horizontal
+    steam_controller
+    steam_deck_full
+)
+    list(APPEND EXOSNAP_GAMEPAD_MAPPED_ASSETS
+        "${PROJECT_SOURCE_DIR}/app/assets/gamepad/controllers/${controller}/source.svg"
+        "${PROJECT_SOURCE_DIR}/app/assets/gamepad/controllers/${controller}/mapping.json")
+endforeach()
+
+qt_add_resources(exosnap "gamepad_artwork"
+    PREFIX "/gamepad"
+    BASE "${PROJECT_SOURCE_DIR}/app/assets/gamepad"
+    FILES ${EXOSNAP_GAMEPAD_MAPPED_ASSETS}
+)
+
+qt_add_resources(gamepad_sprite_tests "gamepad_test_artwork"
+    PREFIX "/gamepad"
+    BASE "${PROJECT_SOURCE_DIR}/app/assets/gamepad"
+    FILES ${EXOSNAP_GAMEPAD_MAPPED_ASSETS}
+        "${PROJECT_SOURCE_DIR}/app/assets/gamepad/dualsense.svg"
+        "${PROJECT_SOURCE_DIR}/app/assets/gamepad/xbox_series.svg"
+        "${PROJECT_SOURCE_DIR}/app/assets/gamepad/generic.svg"
 )
 
 qt_add_qml_module(exosnap
@@ -137,6 +185,7 @@ qt_add_qml_module(exosnap
         PreviewTestCard.qml
         RecordActionButton.qml
         RecordPage.qml
+        GamepadOverlayControls.qml
         RecordingSourcePanel.qml
         RecordingProfileInspector.qml
         RecordingErrorOverlay.qml
@@ -239,6 +288,12 @@ qt_add_qml_module(exosnap
         ExoWebcamPreviewItem.h
         WebcamPreviewFeed.cpp
         WebcamPreviewFeed.h
+        GamepadOverlay.cpp
+        GamepadOverlay.h
+        GamepadSprites.cpp
+        GamepadSprites.h
+        GamepadArtwork.cpp
+        GamepadArtwork.h
         QuickPreviewRgbaConverter.cpp
         QuickPreviewRgbaConverter.h
         RoundedRectClipGeometry.h
@@ -643,6 +698,7 @@ target_link_libraries(exosnap
         # The brand marks are SVG assets recoloured at load, so the renderer
         # rasterizes them rather than a build step doing it ahead of time.
         Qt6::Svg
+        Qt6::Xml
         Qt6::Qml
         Qt6::Quick
         Qt6::QuickControls2
@@ -659,6 +715,7 @@ target_link_libraries(exosnap
         Qt6::Widgets
         exosnap::warnings
         exosnap::capability
+        exosnap::gamepad
         exosnap::update
         # The App -> Updater handoff document. One schema, two processes: this
         # target writes it, exosnap-updater.exe reads it.
@@ -772,6 +829,11 @@ foreach(_exosnap_ffmpeg_dll IN LISTS EXOSNAP_FFMPEG_DLLS)
     )
 endforeach()
 exosnap_stage_asan_runtime(exosnap)
+add_custom_command(TARGET exosnap POST_BUILD
+    COMMAND ${CMAKE_COMMAND} -E copy_if_different
+        ${EXOSNAP_GAMEINPUT_RUNTIME_FILES} "$<TARGET_FILE_DIR:exosnap>"
+    VERBATIM
+)
 
 # ---- Qt runtime staging (build tree) ----
 # A correctness requirement, not a convenience. The

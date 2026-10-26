@@ -16,6 +16,8 @@ pub mod encoder_quality_matrix;
 pub mod evidence;
 pub mod executor;
 #[cfg(feature = "dev-tools")]
+pub mod gamepad_assets;
+#[cfg(feature = "dev-tools")]
 pub mod gen_manifest_fixture;
 pub mod git;
 pub mod hook;

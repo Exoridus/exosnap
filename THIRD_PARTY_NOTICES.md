@@ -113,6 +113,39 @@ directory alongside the ExoSnap binary.
   vendored unmodified; provenance and per-file hashes are in
   `libs/update/third_party/monocypher/NOTICE.md`.
 
+### Microsoft GameInput
+
+- **Version:** 4.0.302 (NuGet package `Microsoft.GameInput`, pinned by SHA-256)
+- **Project:** https://aka.ms/gameinput
+- **License:** the public header and the loader source (`native/src/GameInput.cpp`)
+  are MIT-licensed, Copyright (c) Microsoft Corporation, as stated in each file.
+  The GameInput redistributable runtime is licensed under the Microsoft Software
+  License Terms for the Microsoft GameInput Redistributable.
+- **Linkage:** static (the loader is compiled from the package source); the
+  runtime is resolved at run time from the in-box `GameInput.dll` or an
+  installed or application-local `GameInputRedist.dll`
+- **Bundled files:** `GameInputRedist.dll` and `GameInputRawInputProxy.exe`,
+  from `native/bin/x64`, next to `exosnap.exe` in MSI and portable packages.
+  No system-wide GameInput installation is performed.
+- **Bundled licenses:** `licenses/gameinput.txt` (the package's `LICENSE.txt`),
+  `licenses/gameinput-notice.txt` (the package's `NOTICE.txt`) and
+  `licenses/gameinput-mit.txt` (the header/loader MIT notice).
+- **Role:** gamepad input for the recording overlay.
+
+### Controller artwork
+
+- **Source:** AL2009man / Al. Lopez, Gamepad Asset Pack
+- **License:** MIT, Copyright (c) 2024 Al. Lopez
+- **Bundled license and credits:** `licenses/gamepad-al2009man.txt` and
+  `licenses/gamepad-al2009man-notice.txt`
+- **Role:** editable SVG sources and JSON mappings compiled into the native
+  controller widget's resources, also used by the HTML artwork viewer.
+- **Modifications:** transparent line artwork, separate moving controls, pressure
+  surfaces and vendor-neutral generic controls.
+- **Legacy fixtures:** Nicolae (Xelu) Berbece, Free Controller & Key Prompts,
+  https://thoseawesomeguys.com/prompts/ (CC0), remain in compatibility tests.
+  Their original notice is retained as `licenses/gamepad-artwork.txt`.
+
 ### PresentMon (ETW present-diagnostics consumer)
 
 - **Version:** v1.10.0 (pinned by commit SHA
@@ -230,6 +263,14 @@ not download, link, or ship any of the three components below, and does not prod
 
 These components are used during the build process and are not included in the
 distributed binary.
+
+### SVGO
+
+- **Version:** 4.1.0
+- **Project:** https://github.com/svg/svgo
+- **License:** MIT
+- **Role:** optional development tool for controller-layer exports. It is
+  installed separately and is not included in the application distribution.
 
 ### GoogleTest
 

@@ -35,6 +35,7 @@ Item {
 
     required property AboutViewModelAdapter aboutViewModel
     required property RecordViewModelAdapter recordViewModel
+    property GamepadOverlay gamepadOverlay: null
     required property RecordingClipAdapter clipAdapter
     required property RecordPreviewAdapter previewAdapter
     required property SettingsAdapter settingsAdapter
@@ -717,6 +718,7 @@ Item {
 
             RecordPage {
                 id: recordPage
+                gamepadOverlay: root.gamepadOverlay
                 workspaceState: recordingWorkspaceState
                 settings: root.settingsAdapter
                 recordViewModel: root.recordViewModel

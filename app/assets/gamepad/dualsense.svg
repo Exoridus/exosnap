@@ -1,0 +1,186 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 480 320">
+  <defs>
+    <linearGradient id="glass" x1="0" y1="0" x2="0.2" y2="1" xmlns="">
+      <stop offset="0" stop-color="#ffffff" stop-opacity="0.10" />
+      <stop offset="0.45" stop-color="#ffffff" stop-opacity="0.035" />
+      <stop offset="1" stop-color="#ffffff" stop-opacity="0.015" />
+    </linearGradient>
+  </defs>
+  <style>.line,.sline,.glyph { fill:none; stroke:#ffffff; stroke-opacity:0.92; stroke-width:1.5; stroke-linecap:round; stroke-linejoin:round } .press { fill:#4cb8ff; fill-opacity:0.36; opacity:0 } .silhouette { fill:none; stroke:#ffffff; stroke-opacity:0.92; stroke-width:1.5; stroke-linejoin:round }</style>
+  <g id="body">
+    <path class="silhouette" d="M78 64 C67 66 58 85 49 107 C34 144 20 184 20 224 C20 265 36 302 65 309 C81 313 96 305 108 290 L145 259 Q153 251 174 252 L306 252 Q327 251 335 259 L372 290 C384 305 399 313 415 309 C444 302 460 265 460 224 C460 184 446 144 431 107 C422 85 413 66 402 64 C350 54 130 54 78 64 Z" xmlns="" />
+    <circle class="line" cx="167" cy="221" r="29" xmlns="http://www.w3.org/2000/svg" />
+    <circle class="line" cx="313" cy="221" r="29" xmlns="http://www.w3.org/2000/svg" />
+    <path class="line" d="M125 78 C137 89 141 123 145 158 C148 181 140 192 127 207 C103 234 80 271 65 309 M355 78 C343 89 339 123 335 158 C332 181 340 192 353 207 C377 234 400 271 415 309 M126 56 Q240 48 354 56" xmlns="" />
+  </g>
+  <g id="body-glass">
+    <path class="silhouette" d="M78 64 C67 66 58 85 49 107 C34 144 20 184 20 224 C20 265 36 302 65 309 C81 313 96 305 108 290 L145 259 Q153 251 174 252 L306 252 Q327 251 335 259 L372 290 C384 305 399 313 415 309 C444 302 460 265 460 224 C460 184 446 144 431 107 C422 85 413 66 402 64 C350 54 130 54 78 64 Z" fill="url(#glass)" style="fill:url(#glass)" xmlns="" />
+    <circle class="line" cx="167" cy="221" r="29" xmlns="http://www.w3.org/2000/svg" />
+    <circle class="line" cx="313" cy="221" r="29" xmlns="http://www.w3.org/2000/svg" />
+    <path class="line" d="M125 78 C137 89 141 123 145 158 C148 181 140 192 127 207 C103 234 80 271 65 309 M355 78 C343 89 339 123 335 158 C332 181 340 192 353 207 C377 234 400 271 415 309 M126 56 Q240 48 354 56" xmlns="" />
+  </g>
+  <g id="trigger-l2" transform="translate(100 30)">
+    <path class="press" d="M-25 22 Q-20 2 -3 -10 Q9 -16 20 -8 Q27 -1 27 20 Q2 13 -25 22 Z" xmlns="" />
+    <path class="line" d="M-25 22 Q-20 2 -3 -10 Q9 -16 20 -8 Q27 -1 27 20 Q2 13 -25 22 Z" xmlns="" />
+  </g>
+  <g id="trigger-l2-on" transform="translate(100 30)">
+    <path class="press" d="M-25 22 Q-20 2 -3 -10 Q9 -16 20 -8 Q27 -1 27 20 Q2 13 -25 22 Z" style="opacity:1" xmlns="" />
+    <path class="line" d="M-25 22 Q-20 2 -3 -10 Q9 -16 20 -8 Q27 -1 27 20 Q2 13 -25 22 Z" style="stroke:#8fdcff;stroke-opacity:1" xmlns="" />
+  </g>
+  <g id="trigger-r2" transform="translate(380 30)">
+    <path class="press" d="M-25 22 Q-20 2 -3 -10 Q9 -16 20 -8 Q27 -1 27 20 Q2 13 -25 22 Z" xmlns="" />
+    <path class="line" d="M-25 22 Q-20 2 -3 -10 Q9 -16 20 -8 Q27 -1 27 20 Q2 13 -25 22 Z" xmlns="" />
+  </g>
+  <g id="trigger-r2-on" transform="translate(380 30)">
+    <path class="press" d="M-25 22 Q-20 2 -3 -10 Q9 -16 20 -8 Q27 -1 27 20 Q2 13 -25 22 Z" style="opacity:1" xmlns="" />
+    <path class="line" d="M-25 22 Q-20 2 -3 -10 Q9 -16 20 -8 Q27 -1 27 20 Q2 13 -25 22 Z" style="stroke:#8fdcff;stroke-opacity:1" xmlns="" />
+  </g>
+  <g id="btn-l1" transform="translate(100 63)">
+    <path class="press" d="M-31 -7 Q0 -15 31 -7 L30 8 Q4 15 -28 11 Q-35 7 -31 -7 Z" xmlns="" />
+    <path class="line" d="M-31 -7 Q0 -15 31 -7 L30 8 Q4 15 -28 11 Q-35 7 -31 -7 Z" xmlns="" />
+  </g>
+  <g id="btn-l1-on" transform="translate(100 63)">
+    <path class="press" d="M-31 -7 Q0 -15 31 -7 L30 8 Q4 15 -28 11 Q-35 7 -31 -7 Z" style="opacity:1" xmlns="" />
+    <path class="line" d="M-31 -7 Q0 -15 31 -7 L30 8 Q4 15 -28 11 Q-35 7 -31 -7 Z" style="stroke:#8fdcff;stroke-opacity:1" xmlns="" />
+  </g>
+  <g id="btn-r1" transform="translate(380 63)">
+    <path class="press" d="M-31 -7 Q0 -15 31 -7 L30 8 Q4 15 -28 11 Q-35 7 -31 -7 Z" xmlns="" />
+    <path class="line" d="M-31 -7 Q0 -15 31 -7 L30 8 Q4 15 -28 11 Q-35 7 -31 -7 Z" xmlns="" />
+  </g>
+  <g id="btn-r1-on" transform="translate(380 63)">
+    <path class="press" d="M-31 -7 Q0 -15 31 -7 L30 8 Q4 15 -28 11 Q-35 7 -31 -7 Z" style="opacity:1" xmlns="" />
+    <path class="line" d="M-31 -7 Q0 -15 31 -7 L30 8 Q4 15 -28 11 Q-35 7 -31 -7 Z" style="stroke:#8fdcff;stroke-opacity:1" xmlns="" />
+  </g>
+  <g id="btn-touchpad">
+    <path class="press" d="M164 78 Q240 74 316 78 Q337 80 332 101 L321 153 Q315 173 293 175 H187 Q165 173 159 153 L148 101 Q143 80 164 78 Z" xmlns="" />
+    <path class="line" d="M164 78 Q240 74 316 78 Q337 80 332 101 L321 153 Q315 173 293 175 H187 Q165 173 159 153 L148 101 Q143 80 164 78 Z" xmlns="" />
+  </g>
+  <g id="btn-touchpad-on">
+    <path class="press" d="M164 78 Q240 74 316 78 Q337 80 332 101 L321 153 Q315 173 293 175 H187 Q165 173 159 153 L148 101 Q143 80 164 78 Z" style="opacity:1" xmlns="" />
+    <path class="line" d="M164 78 Q240 74 316 78 Q337 80 332 101 L321 153 Q315 173 293 175 H187 Q165 173 159 153 L148 101 Q143 80 164 78 Z" style="stroke:#8fdcff;stroke-opacity:1" xmlns="" />
+  </g>
+  <g id="stick-l-cap">
+    <circle class="press" cx="167" cy="221" r="18" />
+    <circle class="line" cx="167" cy="221" r="18" />
+    <circle class="line" cx="167" cy="221" r="12" />
+  </g>
+  <g id="stick-l-cap-on">
+    <circle class="press" cx="167" cy="221" r="18" style="opacity:1" />
+    <circle class="line" cx="167" cy="221" r="18" style="stroke:#8fdcff;stroke-opacity:1" />
+    <circle class="line" cx="167" cy="221" r="12" style="stroke:#8fdcff;stroke-opacity:1" />
+  </g>
+  <g id="stick-r-cap">
+    <circle class="press" cx="313" cy="221" r="18" />
+    <circle class="line" cx="313" cy="221" r="18" />
+    <circle class="line" cx="313" cy="221" r="12" />
+  </g>
+  <g id="stick-r-cap-on">
+    <circle class="press" cx="313" cy="221" r="18" style="opacity:1" />
+    <circle class="line" cx="313" cy="221" r="18" style="stroke:#8fdcff;stroke-opacity:1" />
+    <circle class="line" cx="313" cy="221" r="12" style="stroke:#8fdcff;stroke-opacity:1" />
+  </g>
+  <g id="btn-triangle">
+    <circle class="press" cx="388.0" cy="128.0" r="15" />
+    <circle class="line" cx="388.0" cy="128.0" r="15" />
+    <path class="glyph" d="M388.00,120.50L394.52,132.12L381.48,132.12Z" />
+  </g>
+  <g id="btn-triangle-on">
+    <circle class="press" cx="388.0" cy="128.0" r="15" style="opacity:1" />
+    <circle class="line" cx="388.0" cy="128.0" r="15" style="stroke:#8fdcff;stroke-opacity:1" />
+    <path class="glyph" d="M388.00,120.50L394.52,132.12L381.48,132.12Z" />
+  </g>
+  <g id="btn-square">
+    <circle class="press" cx="352.5" cy="158.5" r="15" />
+    <circle class="line" cx="352.5" cy="158.5" r="15" />
+    <path class="glyph" d="M347.62,153.62h9.75v9.75h-9.75Z" />
+  </g>
+  <g id="btn-square-on">
+    <circle class="press" cx="352.5" cy="158.5" r="15" style="opacity:1" />
+    <circle class="line" cx="352.5" cy="158.5" r="15" style="stroke:#8fdcff;stroke-opacity:1" />
+    <path class="glyph" d="M347.62,153.62h9.75v9.75h-9.75Z" />
+  </g>
+  <g id="btn-circle">
+    <circle class="press" cx="423.5" cy="158.5" r="15" />
+    <circle class="line" cx="423.5" cy="158.5" r="15" />
+    <path class="glyph" d="M418.10,158.50a5.40,5.40 0 1 0 10.80,0a5.40,5.40 0 1 0 -10.80,0Z" />
+  </g>
+  <g id="btn-circle-on">
+    <circle class="press" cx="423.5" cy="158.5" r="15" style="opacity:1" />
+    <circle class="line" cx="423.5" cy="158.5" r="15" style="stroke:#8fdcff;stroke-opacity:1" />
+    <path class="glyph" d="M418.10,158.50a5.40,5.40 0 1 0 10.80,0a5.40,5.40 0 1 0 -10.80,0Z" />
+  </g>
+  <g id="btn-cross">
+    <circle class="press" cx="388.0" cy="189.0" r="15" />
+    <circle class="line" cx="388.0" cy="189.0" r="15" />
+    <path class="glyph" d="M382.75,183.75L393.25,194.25M393.25,183.75L382.75,194.25" />
+  </g>
+  <g id="btn-cross-on">
+    <circle class="press" cx="388.0" cy="189.0" r="15" style="opacity:1" />
+    <circle class="line" cx="388.0" cy="189.0" r="15" style="stroke:#8fdcff;stroke-opacity:1" />
+    <path class="glyph" d="M382.75,183.75L393.25,194.25M393.25,183.75L382.75,194.25" />
+  </g>
+  <g id="btn-up" transform="translate(92.5 158.5) rotate(0)">
+    <path class="press" d="M-10 -39 H10 Q13 -39 13 -36 V-22 L0 -9 L-13 -22 V-36 Q-13 -39 -10 -39 Z" xmlns="" />
+    <path class="line" d="M-10 -39 H10 Q13 -39 13 -36 V-22 L0 -9 L-13 -22 V-36 Q-13 -39 -10 -39 Z" xmlns="" />
+  </g>
+  <g id="btn-up-on" transform="translate(92.5 158.5) rotate(0)">
+    <path class="press" d="M-10 -39 H10 Q13 -39 13 -36 V-22 L0 -9 L-13 -22 V-36 Q-13 -39 -10 -39 Z" style="opacity:1" xmlns="" />
+    <path class="line" d="M-10 -39 H10 Q13 -39 13 -36 V-22 L0 -9 L-13 -22 V-36 Q-13 -39 -10 -39 Z" style="stroke:#8fdcff;stroke-opacity:1" xmlns="" />
+  </g>
+  <g id="btn-down" transform="translate(92.5 158.5) rotate(180)">
+    <path class="press" d="M-10 -39 H10 Q13 -39 13 -36 V-22 L0 -9 L-13 -22 V-36 Q-13 -39 -10 -39 Z" xmlns="" />
+    <path class="line" d="M-10 -39 H10 Q13 -39 13 -36 V-22 L0 -9 L-13 -22 V-36 Q-13 -39 -10 -39 Z" xmlns="" />
+  </g>
+  <g id="btn-down-on" transform="translate(92.5 158.5) rotate(180)">
+    <path class="press" d="M-10 -39 H10 Q13 -39 13 -36 V-22 L0 -9 L-13 -22 V-36 Q-13 -39 -10 -39 Z" style="opacity:1" xmlns="" />
+    <path class="line" d="M-10 -39 H10 Q13 -39 13 -36 V-22 L0 -9 L-13 -22 V-36 Q-13 -39 -10 -39 Z" style="stroke:#8fdcff;stroke-opacity:1" xmlns="" />
+  </g>
+  <g id="btn-left" transform="translate(92.5 158.5) rotate(270)">
+    <path class="press" d="M-10 -39 H10 Q13 -39 13 -36 V-22 L0 -9 L-13 -22 V-36 Q-13 -39 -10 -39 Z" xmlns="" />
+    <path class="line" d="M-10 -39 H10 Q13 -39 13 -36 V-22 L0 -9 L-13 -22 V-36 Q-13 -39 -10 -39 Z" xmlns="" />
+  </g>
+  <g id="btn-left-on" transform="translate(92.5 158.5) rotate(270)">
+    <path class="press" d="M-10 -39 H10 Q13 -39 13 -36 V-22 L0 -9 L-13 -22 V-36 Q-13 -39 -10 -39 Z" style="opacity:1" xmlns="" />
+    <path class="line" d="M-10 -39 H10 Q13 -39 13 -36 V-22 L0 -9 L-13 -22 V-36 Q-13 -39 -10 -39 Z" style="stroke:#8fdcff;stroke-opacity:1" xmlns="" />
+  </g>
+  <g id="btn-right" transform="translate(92.5 158.5) rotate(90)">
+    <path class="press" d="M-10 -39 H10 Q13 -39 13 -36 V-22 L0 -9 L-13 -22 V-36 Q-13 -39 -10 -39 Z" xmlns="" />
+    <path class="line" d="M-10 -39 H10 Q13 -39 13 -36 V-22 L0 -9 L-13 -22 V-36 Q-13 -39 -10 -39 Z" xmlns="" />
+  </g>
+  <g id="btn-right-on" transform="translate(92.5 158.5) rotate(90)">
+    <path class="press" d="M-10 -39 H10 Q13 -39 13 -36 V-22 L0 -9 L-13 -22 V-36 Q-13 -39 -10 -39 Z" style="opacity:1" xmlns="" />
+    <path class="line" d="M-10 -39 H10 Q13 -39 13 -36 V-22 L0 -9 L-13 -22 V-36 Q-13 -39 -10 -39 Z" style="stroke:#8fdcff;stroke-opacity:1" xmlns="" />
+  </g>
+  <g id="btn-create" transform="translate(126 104)">
+    <rect class="press" x="-4" y="-9" width="8" height="18" rx="4" xmlns="" />
+    <rect class="line" x="-4" y="-9" width="8" height="18" rx="4" xmlns="" />
+  </g>
+  <g id="btn-create-on" transform="translate(126 104)">
+    <rect class="press" x="-4" y="-9" width="8" height="18" rx="4" style="opacity:1" xmlns="" />
+    <rect class="line" x="-4" y="-9" width="8" height="18" rx="4" style="stroke:#8fdcff;stroke-opacity:1" xmlns="" />
+  </g>
+  <g id="btn-options" transform="translate(354 104)">
+    <rect class="press" x="-4" y="-9" width="8" height="18" rx="4" xmlns="" />
+    <rect class="line" x="-4" y="-9" width="8" height="18" rx="4" xmlns="" />
+  </g>
+  <g id="btn-options-on" transform="translate(354 104)">
+    <rect class="press" x="-4" y="-9" width="8" height="18" rx="4" style="opacity:1" xmlns="" />
+    <rect class="line" x="-4" y="-9" width="8" height="18" rx="4" style="stroke:#8fdcff;stroke-opacity:1" xmlns="" />
+  </g>
+  <g id="btn-home">
+    <circle class="press" cx="240" cy="214" r="7" />
+    <circle class="sline" cx="240" cy="214" r="7" />
+  </g>
+  <g id="btn-home-on">
+    <circle class="press" cx="240" cy="214" r="7" style="opacity:1" />
+    <circle class="sline" cx="240" cy="214" r="7" style="stroke:#8fdcff;stroke-opacity:1" />
+  </g>
+  <g id="btn-mute">
+    <rect class="press" x="232.0" y="231.5" width="16" height="5" rx="2.5" />
+    <rect class="sline" x="232.0" y="231.5" width="16" height="5" rx="2.5" />
+  </g>
+  <g id="btn-mute-on">
+    <rect class="press" x="232.0" y="231.5" width="16" height="5" rx="2.5" style="opacity:1" />
+    <rect class="sline" x="232.0" y="231.5" width="16" height="5" rx="2.5" style="stroke:#8fdcff;stroke-opacity:1" />
+  </g>
+</svg>

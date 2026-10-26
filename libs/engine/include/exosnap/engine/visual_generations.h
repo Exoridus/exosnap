@@ -7,10 +7,10 @@ namespace exosnap::engine {
 // One monotonically-increasing counter per independently-changing visual
 // input. Each counter is bumped only when that specific input actually
 // changed: a new accepted screen/webcam sample, a cursor position/
-// visibility/shape/capture-toggle change, or an overlay geometry/opacity/
-// chroma-key change. Comparing the resulting VisualFrameKey tells the
-// pipeline whether the previous composited/converted frame is still valid
-// without ever touching pixels.
+// visibility/shape/capture-toggle change, an overlay geometry/opacity/
+// chroma-key change, or a change in what any sprite layer draws. Comparing
+// the resulting VisualFrameKey tells the pipeline whether the previous
+// composited/converted frame is still valid without ever touching pixels.
 //
 // Every capture backend must advance the counters for the inputs it owns. A
 // backend that leaves one standing makes two different frames compare equal,
@@ -26,6 +26,7 @@ struct VisualGenerations {
     // session runs -- a display whose HDR is toggled mid-session fails the
     // recording rather than reconfiguring -- so nothing advances this today.
     uint64_t color_pipeline = 0;
+    uint64_t sprites = 0;
 };
 
 // Snapshot of VisualGenerations at the moment a frame was composited/
@@ -38,12 +39,13 @@ struct VisualFrameKey {
     uint64_t cursor_generation = 0;
     uint64_t overlay_generation = 0;
     uint64_t color_pipeline_generation = 0;
+    uint64_t sprite_generation = 0;
 
     auto operator<=>(const VisualFrameKey&) const = default;
 };
 
 [[nodiscard]] constexpr VisualFrameKey MakeVisualFrameKey(const VisualGenerations& gens) noexcept {
-    return VisualFrameKey{gens.screen, gens.webcam, gens.cursor, gens.overlay, gens.color_pipeline};
+    return VisualFrameKey{gens.screen, gens.webcam, gens.cursor, gens.overlay, gens.color_pipeline, gens.sprites};
 }
 
 // Whether one input's generation advanced since the last composited frame.

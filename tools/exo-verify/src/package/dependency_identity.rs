@@ -102,6 +102,11 @@ const EXPECTED_VENDORED: &[(&str, &str, &str)] = &[
         "header only (NVENC entry points, resolved at runtime)",
     ),
     ("fonts", "app/assets/fonts", "compiled into the Qt resource"),
+    (
+        "controller-artwork",
+        "app/assets/gamepad",
+        "compiled into the Qt resource",
+    ),
 ];
 
 const FFMPEG_LIBRARY_MAJORS: &[&str] = &["AVFORMAT", "AVCODEC", "AVUTIL", "SWRESAMPLE"];
@@ -208,6 +213,7 @@ pub fn derive(repo_root: &Path) -> Result<DependencyInventory> {
     entries.push(ffmpeg_entry(&ffmpeg_text)?);
 
     let third_party_text = std::fs::read_to_string(&third_party_path)?;
+    entries.push(gameinput_entry(&third_party_text)?);
     for (name, linkage) in EXPECTED_FETCH_CONTENT {
         let Some(pin) = fetch_content_pin(&third_party_text, name) else {
             bail!(
@@ -235,6 +241,23 @@ pub fn derive(repo_root: &Path) -> Result<DependencyInventory> {
     }
 
     Ok(DependencyInventory { entries })
+}
+
+fn gameinput_entry(text: &str) -> Result<DependencyEntry> {
+    static PIN: LazyLock<Regex> = LazyLock::new(|| {
+        Regex::new(
+        r"(?is)FetchContent_Declare\(\s*gameinput\s+URL\s+(https://api\.nuget\.org/v3-flatcontainer/microsoft\.gameinput/([0-9.]+)/microsoft\.gameinput\.[0-9.]+\.nupkg)\s+URL_HASH\s+SHA256=([0-9a-f]{64})\s"
+    ).unwrap()
+    });
+    let Some(pin) = PIN.captures(text) else {
+        bail!("dependency identity: no readable GameInput NuGet URL, version and SHA-256 pin");
+    };
+    Ok(DependencyEntry {
+        version: Some(pin[2].to_string()),
+        source: Some(pin[1].to_string()),
+        archive_sha256: Some(pin[3].to_ascii_lowercase()),
+        ..DependencyEntry::named("GameInput", "static loader, application-local runtime")
+    })
 }
 
 /// The FFmpeg entry: the archive is pinned by tag and SHA-256 rather than by
@@ -333,6 +356,7 @@ mod tests {
         );
         write(root, "third_party/nvidia/nvEncodeAPI.h", "#pragma once");
         write(root, "app/assets/fonts/font.txt", "font");
+        write(root, "app/assets/gamepad/controller.svg", "<svg/>");
         write(
             root,
             "cmake/VendorFFmpeg.cmake",
@@ -368,6 +392,9 @@ mod tests {
             )
         })
         .collect();
+        let declarations = format!(
+            "{declarations}\nFetchContent_Declare(\n gameinput\n URL https://api.nuget.org/v3-flatcontainer/microsoft.gameinput/4.0.302/microsoft.gameinput.4.0.302.nupkg\n URL_HASH SHA256=A4F000C3A41385819B51E5CDD7DAE66D7DDE85C6DE0BFD823CFE617D4BAAAC33\n)\n"
+        );
         write(root, "third_party/CMakeLists.txt", &declarations);
         dir
     }
@@ -395,6 +422,26 @@ mod tests {
                 .unwrap_or_else(|| panic!("'{expected}' is missing from the dependency identity"));
             assert!(entry.source.is_some(), "'{expected}' has no source");
         }
+    }
+
+    #[test]
+    fn gameinput_records_the_runtime_archive_pin() {
+        let inventory = derive(&repo_root()).unwrap();
+        let entry = inventory
+            .find("GameInput")
+            .expect("GameInput runtime missing");
+        assert_eq!(entry.version.as_deref(), Some("4.0.302"));
+        assert_eq!(
+            entry.archive_sha256.as_deref(),
+            Some("a4f000c3a41385819b51e5cdd7dae66d7dde85c6de0bfd823cfe617d4baaac33")
+        );
+        assert!(
+            entry
+                .source
+                .as_deref()
+                .unwrap()
+                .ends_with("microsoft.gameinput.4.0.302.nupkg")
+        );
     }
 
     #[test]

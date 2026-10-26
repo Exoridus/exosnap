@@ -28,8 +28,9 @@ resvg = { version = "0.48.1", default-features = false, optional = true }
 serde.workspace = true
 serde_json.workspace = true
 sha2.workspace = true
-# Optional, pulled in only by `test-support`: the self-referencing dev-dependency
-# below builds this crate as a plain dependency of its own test targets, where
+# Optional, used by `dev-tools` for staged exports and by `test-support` for
+# fixtures. The self-referencing dev-dependency below builds this crate as a
+# plain dependency of its own test targets, where
 # `[dev-dependencies]` is not on the graph, so a fixture helper's tempfile use
 # has to reach it through an ordinary, feature-gated dependency instead.
 tempfile = { workspace = true, optional = true }
@@ -58,7 +59,7 @@ default = ["dev-tools"]
 # Developer-only commands (currently `gen-manifest-fixture`) that a release
 # build of this binary does not need. Kept optional so a build that turns off
 # default features skips their dependency (e.g. curve25519-dalek) entirely.
-dev-tools = ["dep:ed25519-dalek", "dep:tiny-skia", "dep:resvg"]
+dev-tools = ["dep:ed25519-dalek", "dep:tiny-skia", "dep:resvg", "dep:tempfile"]
 # Exposes `test_support` outside this crate's own `#[cfg(test)]` unit tests, for
 # integration tests under `tests/`. Never enabled by a normal build; only the
 # self-referencing dev-dependency below turns it on for test targets.

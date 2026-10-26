@@ -120,8 +120,6 @@ class NotificationManager : public QObject {
     // --- Brief: happened, nothing to do --------------------------------------
     // NOLINTNEXTLINE(readability-identifier-naming)
     static constexpr int kDismissMs_SettingsRepaired = kDwellBrief;
-    // NOLINTNEXTLINE(readability-identifier-naming)
-    static constexpr int kDismissMs_OverlayOmitted = kDwellBrief;
     // Recorded in the hub only — never a toast (see class note).
     // NOLINTNEXTLINE(readability-identifier-naming)
     static constexpr int kDismissMs_PresetSwitched = kDwellBrief;

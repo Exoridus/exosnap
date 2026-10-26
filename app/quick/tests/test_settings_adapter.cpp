@@ -7,6 +7,7 @@
 #include <QClipboard>
 #include <QGuiApplication>
 #include <QPalette>
+#include <QTemporaryDir>
 #include <QThreadPool>
 
 #include <capability/capability_builder.h>
@@ -1288,8 +1289,12 @@ TEST_F(SettingsAdapterTest, OutputValidationRequestsCoverEveryLifecycleTrigger) 
     QObject::connect(&adapter, &SettingsAdapter::outputValidationRequested, &adapter,
                      [&](SettingsAdapter::OutputValidationTrigger trigger) { triggers.push_back(trigger); });
 
+    // A path edit validates the folder, and validation creates a missing one.
+    QTemporaryDir edited_folder;
+    ASSERT_TRUE(edited_folder.isValid());
+
     adapter.requestOutputValidation(SettingsAdapter::OutputValidationTrigger::Startup);
-    adapter.setOutputFolder(adapter.outputFolder() + QStringLiteral("_edited"));
+    adapter.setOutputFolder(edited_folder.path());
     adapter.requestOutputValidation(SettingsAdapter::OutputValidationTrigger::ApplicationActivation);
     adapter.requestOutputValidation(SettingsAdapter::OutputValidationTrigger::OutputCardReveal);
 

@@ -116,6 +116,7 @@ pub const WINDOWS_SYSTEM_DLLS: &[&str] = &[
     "powrprof.dll",
     "cfgmgr32.dll",
     "setupapi.dll",
+    "hid.dll",
     "normaliz.dll",
     "ucrtbase.dll",
     "msvcrt.dll",
@@ -312,6 +313,19 @@ mod tests {
             imports(&synthetic_pe(&["KERNEL32.dll", "Qt6Core.dll"])).unwrap(),
             vec!["KERNEL32.dll", "Qt6Core.dll"]
         );
+    }
+
+    #[test]
+    fn gameinput_hid_import_is_supplied_by_windows() {
+        let dir = tempfile::tempdir().unwrap();
+        std::fs::write(
+            dir.path().join("GameInputRedist.dll"),
+            synthetic_pe(&["HID.DLL"]),
+        )
+        .unwrap();
+        let audit = audit_tree(dir.path()).unwrap();
+        assert_eq!(audit.system, 1);
+        assert!(audit.unresolved.is_empty(), "{:?}", audit.unresolved);
     }
 
     #[test]

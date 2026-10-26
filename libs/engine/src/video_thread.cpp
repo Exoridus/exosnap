@@ -14,6 +14,7 @@
 #include "premux_state.h"
 #include "production_runtime.h"
 #include "qpc_100ns.h"
+#include "sprite_layers_observation.h"
 #include "webcam_frame_observation.h"
 #include <atomic>
 #include <cstdint>
@@ -178,6 +179,7 @@ constexpr const char* kWgcCursorSummaryLogMessage = "wgc cursor pipeline summary
 // The per-session overlay-generation record. Separate from the cursor summary
 // because it answers a different question and applies to both backends.
 constexpr const char* kWebcamOverlaySummaryLogMessage = "webcam overlay pipeline summary";
+constexpr const char* kSpriteOverlaySummaryLogMessage = "sprite overlay pipeline summary";
 
 std::string RectToken(const RECT& r) {
     std::ostringstream out;
@@ -1053,9 +1055,8 @@ void VideoThread::RunAttachment(const std::shared_ptr<NativeState>& native, cons
                 native->wgc_format = wgcPlan.frame_pool_format;
                 captureSession = framePool.CreateCaptureSession(item);
                 captureSession.IsBorderRequired(false);
-                // WGC's built-in cursor would be baked into the source frame before
-                // webcam composition. Draw it manually through the GPU compositor so
-                // cursor z-order matches DXGI Output Duplication.
+                // Drawn by the GPU compositor instead, like DXGI Output Duplication,
+                // so both backends share one cursor path and layer order.
                 captureSession.IsCursorCaptureEnabled(false);
                 WgcMinUpdateIntervalResult intervalResult;
                 const HRESULT intervalHr = ConfigureWgcMinUpdateInterval(
@@ -2046,7 +2047,8 @@ void VideoThread::RunAttachment(const std::shared_ptr<NativeState>& native, cons
     // For OD the compositor's render target must match the negotiated capture
     // format, so Init is deferred until after the first frame (see below).
     const bool webcamProviderAvailable = (m_state.config.webcam.frame_provider != nullptr);
-    const bool needsGpuCompositor = webcamProviderAvailable || m_state.config.capture_cursor;
+    const bool spriteSourcesConfigured = !m_state.config.sprite_sources.empty();
+    const bool needsGpuCompositor = webcamProviderAvailable || m_state.config.capture_cursor || spriteSourcesConfigured;
     const uint32_t compositorWidth = sourceWidth;
     const uint32_t compositorHeight = sourceHeight;
 
@@ -2063,6 +2065,44 @@ void VideoThread::RunAttachment(const std::shared_ptr<NativeState>& native, cons
             m_state.diagnostics.OnWebcamGenerationChanged();
         return key;
     };
+    // Sprite layers change on their own schedule (a gamepad press on a still
+    // desktop), so they are observed into the frame key exactly like the camera.
+    // generation_changes against recomposited_for_sprites separates a source
+    // that never changed from one whose changes never reached a held screen.
+    SpriteLayersObservation spriteObservation;
+    struct SpriteTrace {
+        uint64_t generation_changes = 0;
+        uint64_t recomposited_for_sprites = 0;
+    };
+    SpriteTrace spriteTrace;
+    // Before the frame key is taken, so a change lands in this frame's key.
+    auto observeSprites = [&](uint64_t frameTimeQpc100ns) {
+        if (spriteSourcesConfigured &&
+            spriteObservation.Observe(visualGenerations, m_state.config.sprite_sources, frameTimeQpc100ns)) {
+            ++spriteTrace.generation_changes;
+        }
+    };
+    auto sourceContentRect = [&]() {
+        // Crop is a property of the monitor target, not of the backend that reads
+        // it: the blit and the encode geometry both key on hasCrop alone, and the
+        // overlay has to land in the same content rectangle they produce.
+        return WebcamPixelRect{hasCrop ? cropX : 0, hasCrop ? cropY : 0, static_cast<int>(sourceContentWidth),
+                               static_cast<int>(sourceContentHeight)};
+    };
+    auto drawSpritesGpu = [&]() -> bool {
+        const auto& layers = spriteObservation.Layers();
+        for (size_t i = 0; i < layers.size(); ++i) {
+            if (!layers[i])
+                continue;
+            std::string compErr;
+            if (!gpuCompositor.DrawSpriteLayer(i, *layers[i], sourceContentRect(), compErr)) {
+                m_state.RecordFailure(E_FAIL, ErrorPhase::VideoCapture, "GPU sprite composite: " + compErr);
+                return false;
+            }
+        }
+        return true;
+    };
+
     auto webcamRectFor = [&](const WebcamOverlayLive& overlay) {
         WebcamPlacement placement;
         placement.x = overlay.overlay_x_norm;
@@ -2070,14 +2110,8 @@ void VideoThread::RunAttachment(const std::shared_ptr<NativeState>& native, cons
         placement.w = overlay.overlay_w_norm;
         placement.h = overlay.overlay_h_norm;
         placement.mirror = overlay.mirror;
-
-        // Crop is a property of the monitor target, not of the backend that reads
-        // it: the blit and the encode geometry both key on hasCrop alone, and the
-        // overlay has to land in the same content rectangle they produce.
-        const int contentX = hasCrop ? cropX : 0;
-        const int contentY = hasCrop ? cropY : 0;
-        return MapWebcamPlacementToContent(placement, contentX, contentY, static_cast<int>(sourceContentWidth),
-                                           static_cast<int>(sourceContentHeight));
+        const WebcamPixelRect content = sourceContentRect();
+        return MapWebcamPlacementToContent(placement, content.x, content.y, content.w, content.h);
     };
 
     auto drawWebcamGpu = [&](const WebcamOverlayLive& overlay) -> bool {
@@ -2466,7 +2500,8 @@ void VideoThread::RunAttachment(const std::shared_ptr<NativeState>& native, cons
         }
         const bool cursorActive =
             m_state.config.capture_cursor && (!useOdCapture || (odCursorVisible && odCursorShapeValid));
-        const bool drawOverlays = gpuCompositorReady && (webcamActive || cursorActive);
+        const bool spritesActive = spriteObservation.AnyVisible();
+        const bool drawOverlays = gpuCompositorReady && (webcamActive || cursorActive || spritesActive);
         if (!linearizePq && !drawOverlays) {
             return source;
         }
@@ -2500,15 +2535,21 @@ void VideoThread::RunAttachment(const std::shared_ptr<NativeState>& native, cons
             m_state.RecordFailure(E_FAIL, ErrorPhase::VideoCapture, "GPU compositor begin: " + compErr);
             return nullptr;
         }
-        if (!drawWebcamGpu(overlay)) {
-            endCompositeTimer();
-            return nullptr;
-        }
+        // The cursor belongs to the desktop layer: overlays cover it, and a keyed
+        // webcam lets it show through where the key made the camera transparent.
         if (!drawCursorGpu()) {
             endCompositeTimer();
             return nullptr;
         }
         if (!drawWin32CursorGpu()) {
+            endCompositeTimer();
+            return nullptr;
+        }
+        if (!drawWebcamGpu(overlay)) {
+            endCompositeTimer();
+            return nullptr;
+        }
+        if (!drawSpritesGpu()) {
             endCompositeTimer();
             return nullptr;
         }
@@ -3769,7 +3810,7 @@ void VideoThread::RunAttachment(const std::shared_ptr<NativeState>& native, cons
     // consumer must apply (an FP16 scRGB tap is tone-mapped preview-side).
     //
     // Native capture reaches this tap as linear FP16, including PQ desktops.
-    PreviewTapPlan previewTapPlan = ResolvePreviewTapPlan(hdrNativeActive, false, hdrPeakScale, hdrPaperWhiteScale);
+    PreviewTapPlan previewTapPlan = ResolvePreviewTapPlan(hdrNativeActive, hdrPeakScale, hdrPaperWhiteScale);
     PreviewSharedTexture previewSharedTex;
     bool previewSharedInitFailed = false;
     bool previewTransportPoisoned = false;
@@ -3808,12 +3849,11 @@ void VideoThread::RunAttachment(const std::shared_ptr<NativeState>& native, cons
         // Re-resolved rather than assigned field by field: which scalars are
         // meaningful for this session is the plan's decision, and there must not
         // be a second copy of it here.
-        previewTapPlan = ResolvePreviewTapPlan(hdrNativeActive, false, state.peak_scale, state.paper_white_scale);
+        previewTapPlan = ResolvePreviewTapPlan(hdrNativeActive, state.peak_scale, state.paper_white_scale);
         // Dropping the shared texture is what re-announces the descriptor: the
         // handle callback is one-shot by contract, so the next tapped frame
         // creates a texture and hands the consumer the new transform with it.
-        if (previewTapPlan.tap_enabled)
-            previewSharedTex.Reset();
+        previewSharedTex.Reset();
 
         const logging::LogField fields[] = {
             {"sdr_white_level_nits", std::to_string(sessionDisplayFacts.sdr_white_level_nits)},
@@ -3870,7 +3910,7 @@ void VideoThread::RunAttachment(const std::shared_ptr<NativeState>& native, cons
     auto tapPreviewSource = [&](ID3D11Texture2D* vpInput, uint64_t pts_ns) {
         if (!m_state.preview_shared_handle_cb)
             return; // no consumer registered -- zero cost beyond this check
-        if (previewSharedInitFailed || vpInput == nullptr || !previewTapPlan.tap_enabled)
+        if (previewSharedInitFailed || vpInput == nullptr)
             return;
         // Counted AFTER the cheap disqualifiers and BEFORE the gate: a zero here
         // says the tap never had a frame to offer, which is a different defect
@@ -4563,6 +4603,7 @@ void VideoThread::RunAttachment(const std::shared_ptr<NativeState>& native, cons
                 // Sampled before the key is taken, so a pointer move or overlay
                 // edit lands in this tick's key instead of the next one's.
                 sampleWgcCursor();
+                observeSprites(epochQpc100ns + cfr_frame_idx * frame_interval_100ns);
                 const WebcamOverlayLive overlay = sampleOverlay();
                 const VisualFrameKey currentVisualKey = observeWebcam(overlay);
                 const bool cursorOverlayMoved =
@@ -4572,7 +4613,10 @@ void VideoThread::RunAttachment(const std::shared_ptr<NativeState>& native, cons
                 const bool webcamMoved = overlay.enabled && webcamProviderAvailable &&
                                          (!haveLastCompositedKey ||
                                           currentVisualKey.webcam_generation != lastCompositedKey.webcam_generation);
-                const bool dynamicOverlayChanged = cursorOverlayMoved || webcamMoved;
+                const bool spritesChanged = spriteSourcesConfigured &&
+                                            (!haveLastCompositedKey ||
+                                             currentVisualKey.sprite_generation != lastCompositedKey.sprite_generation);
+                const bool dynamicOverlayChanged = cursorOverlayMoved || webcamMoved || spritesChanged;
                 // Attributed, not pooled: cursorOverlayMoved is true for a pointer
                 // move as well, and a measurement of the overlay cannot use a
                 // count that a moving cursor also raises.
@@ -4601,6 +4645,10 @@ void VideoThread::RunAttachment(const std::shared_ptr<NativeState>& native, cons
                     ++wgcCursorTrace.recomposited_for_overlay;
                     if (overlayMoved) {
                         ++overlayTrace.recomposited_for_overlay;
+                    }
+                    if (GenerationAdvanced(haveLastCompositedKey, currentVisualKey.sprite_generation,
+                                           lastCompositedKey.sprite_generation)) {
+                        ++spriteTrace.recomposited_for_sprites;
                     }
                     rawSourceTex = heldScreenTex;
                 }
@@ -5217,6 +5265,7 @@ void VideoThread::RunAttachment(const std::shared_ptr<NativeState>& native, cons
                     // Native HDR10 (VFR): composite webcam/cursor in linear scRGB
                     // FP16, then convert straight into the P010 slot.
                     sampleWgcCursor();
+                    observeSprites(static_cast<uint64_t>(latestFrameTicks100ns));
                     const WebcamOverlayLive overlay = sampleOverlay();
                     observeWebcam(overlay);
                     const auto comp_t0 = std::chrono::steady_clock::now();
@@ -5278,6 +5327,7 @@ void VideoThread::RunAttachment(const std::shared_ptr<NativeState>& native, cons
                         tick_t1, std::chrono::duration<double, std::milli>(tick_t1 - tick_t0).count());
                 } else if (slot >= 0) {
                     sampleWgcCursor();
+                    observeSprites(static_cast<uint64_t>(latestFrameTicks100ns));
                     const WebcamOverlayLive overlay = sampleOverlay();
                     observeWebcam(overlay);
                     const auto comp_t0 = std::chrono::steady_clock::now();
@@ -5533,6 +5583,21 @@ end_encode_loop:
             {"composited_with_overlay", std::to_string(overlayTrace.composited_with_overlay)},
             {"backend", useOdCapture ? "od" : "wgc"}};
         logging::log(logging::LogLevel::Info, "video_thread", kWebcamOverlaySummaryLogMessage,
+                     std::span<const logging::LogField>(fields, std::size(fields)));
+    }
+
+    // Same baseline rule as the webcam line: emitted whenever a sprite source is
+    // configured. A generation change that never meets a held screen is normal
+    // on a busy desktop; uploads above generation changes would be a cache fault.
+    if (spriteSourcesConfigured) {
+        const logging::LogField fields[] = {
+            {"sources", std::to_string(m_state.config.sprite_sources.size())},
+            {"generation_changes", std::to_string(spriteTrace.generation_changes)},
+            {"recomposited_for_sprites", std::to_string(spriteTrace.recomposited_for_sprites)},
+            {"atlas_gpu_uploads", std::to_string(gpuCompositor.SpriteAtlasUploadCount())},
+            {"quads_drawn", std::to_string(gpuCompositor.SpriteQuadDrawCount())},
+            {"backend", useOdCapture ? "od" : "wgc"}};
+        logging::log(logging::LogLevel::Info, "video_thread", kSpriteOverlaySummaryLogMessage,
                      std::span<const logging::LogField>(fields, std::size(fields)));
     }
 

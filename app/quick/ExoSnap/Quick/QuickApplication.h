@@ -12,6 +12,7 @@
 #include "EditSessionAdapter.h"
 #include "EditTimelineAdapter.h"
 #include "EditTimelineModels.h"
+#include "GamepadOverlay.h"
 #include "LogsAdapter.h"
 #include "NotificationsAdapter.h"
 #include "OverlayAdapter.h"
@@ -794,6 +795,7 @@ class QuickApplication {
     // holds an evidence provider that reads this probe. Null until a window target
     // is selected for the first time.
     std::unique_ptr<WindowEvidenceProbe> window_evidence_probe_;
+    GamepadOverlay gamepad_overlay_;
     std::unique_ptr<RecordingCoordinator> recording_coordinator_;
     CaptureTargetNotifier capture_target_notifier_;
     // Runs only while the source picker has cards on screen. Declared after the
