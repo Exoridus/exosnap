@@ -44,6 +44,23 @@ The existing Settings card shows the manager and offers Copy command, without ru
 
 Ownership attribution is installer metadata, not a cryptographic guarantee. WinGet's caller-controlled `--override` can replace manifest switches. Installations predating this marker, or arriving without the owner switch, remain Direct through the legacy fallback. There is no reliable retroactive WinGet/Chocolatey discovery. The first future manager-driven upgrade passing its owner property establishes durable ownership. Ordinary later MSI maintenance without an explicit owner preserves it. There is no in-app ownership override.
 
+## Offline Setup
+
+The WiX 4 Burn bundle uses a native bootstrapper application and a Qt Quick interface.
+Burn retains detection, planning, elevation, caching, MSI execution, rollback, logs and exit codes.
+The native loader links its C runtime statically and restricts DLL loading to the extracted bootstrapper payload and Windows system directories before loading the UI.
+The UI has a private Qt and Visual C++ runtime payload because it starts before the system redistributable is installed.
+That payload stays outside the installed application and is cached with the bundle for offline maintenance.
+Release packaging rejects debug Qt/CRT payloads and checks the native loader and UI runtime imports.
+
+`SetupController` projects copied engine events into the compact Qt Quick window and emits commands back to the native host.
+Engine calls are serialized independently of the UI thread.
+Quiet mode does not load Qt, and passive mode completes without user input.
+Cancellation is accepted only while the native callbacks observe it. Execution and finalization block close.
+An explicit Restart now action requests Burn's restart path; a pending restart never hides an installation failure.
+The MSI owns shortcut creation and opt-in local-data removal, which is never enabled for repair.
+The license is embedded from the canonical repository file and requires no acceptance.
+
 ## Signed release trust chain
 
 The update manifest is verified with the embedded Ed25519 public key over its exact received bytes **before** parsing any manifest field. Detached signature and manifest must belong together. Package download is selected from the verified manifest and SHA-256 checked through a file handle that denies modification/replacement while the verified package is consumed.
@@ -72,6 +89,12 @@ Each directory rename retries access, sharing and lock violations with a short b
 Any other error, or a lock that outlasts the budget, fails the step with the last Windows error written to the updater's standard error.
 
 MSI update invokes Windows Installer with the verified, locked package and the required UAC boundary. The updater itself remains `asInvoker`, not a generally elevated application. Windows Installer results and post-install verification do **not** establish the same rollback guarantee as a portable backup. `installState` can truthfully be `unknown`; the application must not promise that every MSI verification failure restored the previous version.
+
+An unconfirmed MSI installation offers an explicit repair using the retained package and the same signature/hash/version and distribution-ownership guards.
+The package stays locked across the handoff. Repair forces file replacement and recaches that verified source with `REINSTALL=ALL REINSTALLMODE=vamus`.
+It re-enters at app-close preflight and remains non-interruptible through that preflight and the installer/verify steps.
+The unknown installation state survives retries, UAC refusal and installer failure until installed-version verification succeeds.
+The MSI log is retained beside the package on failure and is removed with successful transaction cleanup.
 
 ExoSnap 0.10.1 installs under `C:\Program Files\ExoSnap` and publishes its product marker under `HKLM\Software\ExoSnap`. The immutable 0.10.0 updater re-reads the legacy `HKLM\Software\Codexo\ExoSnap` key after its MSI handoff and relaunches from the path it names, so an upgrade from 0.10.0 or older writes a one-time handoff into that legacy key that points at the new location. A fresh 0.10.1 install writes only the new marker; the runtime always prefers it, and accepts the legacy key only as a fallback while an old installation is still present. The handoff values are removed when the product is uninstalled.
 

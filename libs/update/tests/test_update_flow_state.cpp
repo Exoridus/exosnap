@@ -110,7 +110,7 @@ TEST(InstallStateForFailure, FailedRestoreIsStrandedNotRestored) {
 }
 
 TEST(InstallStateForFailure, MsiVerifyFailureRefusesToGuess) {
-    // The shipping failure copy says "no rollback is being claimed" because this
+    // An unconfirmed post-install read cannot establish rollback because this
     // process never asked Windows Installer for one. The published state has to
     // say the same thing: `unknown`, never `intact`.
     EXPECT_EQ(InstallStateForFailure(FailureCase::VerifyInstallFailedMsi), InstallState::Unknown);

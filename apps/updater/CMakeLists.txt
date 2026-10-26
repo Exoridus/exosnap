@@ -95,6 +95,8 @@ set(_updater_shared_qml
     "${_updater_quick_dir}/ExoTheme.qml"
     "${_updater_quick_dir}/ExoButton.qml"
     "${_updater_quick_dir}/ExoGlyph.qml"
+    "${_updater_quick_dir}/ExoSetupHeader.qml"
+    "${_updater_quick_dir}/ExoSetupProgress.qml"
 )
 foreach(_shared_qml IN LISTS _updater_shared_qml)
     get_filename_component(_shared_name "${_shared_qml}" NAME)

@@ -38,11 +38,14 @@
 #include <windows.h>
 // clang-format on
 
+#include <QDesktopServices>
 #include <QDir>
 #include <QFileInfo>
 #include <QGuiApplication>
 #include <QImage>
 #include <QQmlApplicationEngine>
+#include <QTemporaryFile>
+#include <QUrl>
 #if !defined(QT_NO_DEBUG)
 #include <QtQml/qqmldebug.h>
 #endif
@@ -135,13 +138,13 @@ std::optional<UpdaterUiState> MakePreviewState(const QString& which) {
     }
     if (which == QStringLiteral("cancelled")) {
         c.onStepStarted(UpStep::Download);
-        c.onDownloadProgress(21, 100);
+        c.onDownloadProgress(21000000, 100000000);
         c.onCancelled();
         return c.state();
     }
     if (which == QStringLiteral("download")) {
         c.onStepStarted(UpStep::Download);
-        c.onDownloadProgress(38, 100);
+        c.onDownloadProgress(38000000, 100000000);
         return c.state();
     }
     if (which == QStringLiteral("progress")) {
@@ -173,7 +176,7 @@ std::optional<UpdaterUiState> MakePreviewState(const QString& which) {
     if (which == QStringLiteral("reinstall")) {
         c.setVerificationReinstall(true);
         c.onStepStarted(UpStep::Download);
-        c.onDownloadProgress(64, 100);
+        c.onDownloadProgress(64000000, 100000000);
         return c.state();
     }
     if (which == QStringLiteral("long")) {
@@ -208,6 +211,24 @@ std::optional<UpdaterUiState> MakePreviewState(const QString& which) {
         c.onStepDone(UpStep::Download);
         c.onStepDone(UpStep::CloseApp);
         c.onFailure(FailureCase::MsiRebootRequired, QString());
+        return c.state();
+    }
+    if (which == QStringLiteral("unknown") || which == QStringLiteral("repair") ||
+        which == QStringLiteral("repair-failed")) {
+        c.setContext(exosnap::update::InstallMode::Installed, true);
+        c.onStepDone(UpStep::Download);
+        c.onStepDone(UpStep::CloseApp);
+        if (which == QStringLiteral("unknown")) {
+            c.onStepDone(UpStep::Install);
+            c.onStepStarted(UpStep::Verify);
+            c.onFailure(FailureCase::VerifyInstallFailedMsi, {});
+        } else {
+            c.onRepairStarted();
+            c.onStepDone(UpStep::CloseApp);
+            c.onStepStarted(UpStep::Install);
+            if (which == QStringLiteral("repair-failed"))
+                c.onFailure(FailureCase::UacDeclined, {});
+        }
         return c.state();
     }
     if (which == QStringLiteral("green")) {
@@ -418,7 +439,9 @@ int main(int argc, char** argv) {
     // root objects) -- one ownership, held from outside.
     const auto load_updater_ui = [&](QQmlApplicationEngine& engine, UpdaterViewAdapter& adapter) -> QQuickWindow* {
         QQuickStyle::setStyle(QStringLiteral("Basic"));
-        engine.setInitialProperties({{QStringLiteral("adapter"), QVariant::fromValue(&adapter)}});
+        engine.setInitialProperties({{QStringLiteral("adapter"), QVariant::fromValue(&adapter)},
+                                     {QStringLiteral("detailsPreview"),
+                                      previewIdx >= 0 && arguments.contains(QStringLiteral("--preview-details"))}});
         engine.loadFromModule(QStringLiteral("ExoSnap.Updater"), QStringLiteral("UpdaterMain"));
         if (engine.rootObjects().isEmpty()) {
             std::fprintf(stderr, "exosnap-updater: the update window failed to load (no QML root object)\n");
@@ -446,6 +469,12 @@ int main(int argc, char** argv) {
         }
         UpdaterViewAdapter adapter;
         adapter.render(*state);
+        QTemporaryFile preview_log;
+        if ((which == QStringLiteral("unknown") || which == QStringLiteral("repair-failed")) && preview_log.open()) {
+            preview_log.write("MSI diagnostic preview\nWindows Installer returned a result requiring repair.\n");
+            preview_log.flush();
+            adapter.setLogPath(preview_log.fileName());
+        }
         QQmlApplicationEngine engine;
         QQuickWindow* window = load_updater_ui(engine, adapter);
         if (window == nullptr)
@@ -543,7 +572,6 @@ int main(int argc, char** argv) {
         return c;
     };
     auto controller = MakeController(to_version);
-    FailureCase last_failure = FailureCase::DownloadFailed;
     // Reentrancy guard: true while a worker call is queued or running. A
     // double-fired Retry (or a click landing before a terminal state) must not
     // queue a second run onto the worker. Cleared only on a terminal state.
@@ -587,8 +615,15 @@ int main(int argc, char** argv) {
     worker_thread.start();
 
     QObject::connect(&worker, &UpdaterWorker::stepStarted, &view_adapter, [&](UpStep step) {
+        if (step == UpStep::Install)
+            view_adapter.setLogPath({});
         controller->onStepStarted(step);
         render();
+    });
+    QObject::connect(&worker, &UpdaterWorker::installerLogAvailable, &view_adapter, &UpdaterViewAdapter::setLogPath);
+    QObject::connect(&view_adapter, &UpdaterViewAdapter::openLogRequested, &app, [&] {
+        if (view_adapter.logAvailable())
+            QDesktopServices::openUrl(QUrl::fromLocalFile(view_adapter.logPath()));
     });
     QObject::connect(&worker, &UpdaterWorker::downloadProgress, &view_adapter, [&](quint64 received, quint64 total) {
         controller->onDownloadProgress(received, total);
@@ -631,7 +666,6 @@ int main(int argc, char** argv) {
     });
     QObject::connect(&worker, &UpdaterWorker::failed, &view_adapter, [&](FailureCase c, const QString& detail) {
         in_flight = false;
-        last_failure = c;
         controller->onFailure(c, detail);
         // Technical diagnostics remain reproducible evidence without becoming
         // the primary UI copy (in particular raw WinHTTP and filesystem paths).
@@ -710,14 +744,25 @@ int main(int argc, char** argv) {
         if (in_flight) {
             return false; // a run is already queued/running -- ignore the double-fire
         }
-        const UpStep entry = RetryEntryStep(last_failure);
+        if (!controller->flowState().retry_entry_step.has_value())
+            return false;
+        const bool repairing = args.install_mode == exosnap::update::InstallMode::Installed &&
+                               controller->flowState().install_state == exosnap::update::InstallState::Unknown;
+        const UpStep entry = *controller->flowState().retry_entry_step;
         // Reset the UI to a clean in-progress state: steps before the re-entry
         // point are already done (their artifacts are kept by the worker).
         controller = MakeController(to_version);
+        if (repairing)
+            controller->onRepairStarted();
         for (int i = 0; i < int(entry); ++i) {
             controller->onStepDone(static_cast<UpStep>(i));
         }
         render();
+        if (repairing) {
+            in_flight = true;
+            QMetaObject::invokeMethod(&worker, &UpdaterWorker::repair, Qt::QueuedConnection);
+            return true;
+        }
         if (manual) {
             // A manual retry must re-enter the manual flow, never the
             // straight-through pipeline: re-resolve when no release was ever
@@ -838,7 +883,6 @@ int main(int argc, char** argv) {
         // before doing any work, which is exactly why its "nothing was touched"
         // claim needs no further evidence. The endpoint (armed above) publishes
         // the same terminal state a runner asserts on.
-        last_failure = FailureCase::HandoffRejected;
         controller->onFailure(FailureCase::HandoffRejected, handoff_rejection);
         render();
         window->show();

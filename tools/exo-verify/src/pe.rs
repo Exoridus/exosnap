@@ -256,7 +256,7 @@ pub fn audit_tree(root: &Path) -> Result<Audit> {
 }
 
 #[cfg(test)]
-mod tests {
+pub(crate) mod tests {
     use super::*;
 
     #[test]

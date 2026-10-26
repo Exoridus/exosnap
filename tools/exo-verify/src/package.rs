@@ -615,13 +615,15 @@ pub fn msi_missing_binaries(staging: &Path, extracted: &Path) -> Result<Vec<Stri
 /// embedded, never downloaded at install time, and is `Permanent` so
 /// uninstalling ExoSnap can never remove a shared system runtime.
 fn build_setup(
-    wix: &Path,
     repo_root: &Path,
+    build_dir: &Path,
+    staging: &Path,
     out: &Path,
     base: &str,
     msi: &Path,
     vc_redist: &Path,
 ) -> Result<PathBuf> {
+    let wix = crate::tools::require("wix")?;
     let (hash, size) = crate::bundle::sha256_file(vc_redist)?;
     ensure!(
         hash.eq_ignore_ascii_case(VC_REDIST_SHA256),
@@ -630,25 +632,62 @@ fn build_setup(
     );
     let icon = repo_root.join("app/assets/brand/exosnap-app.ico");
     ensure!(icon.is_file(), "product icon missing: {}", icon.display());
-    let theme = repo_root.join("packaging/burn/ExoSnapTheme.xml");
-    ensure!(theme.is_file(), "Setup theme missing: {}", theme.display());
-    let logo = repo_root.join("packaging/burn/exosnap-brand.png");
+    let bootstrapper = setup_build_file(build_dir, "exosnap-setup-ba.dll")?;
+    let shim_imports = pe::imports_of(&bootstrapper)?;
     ensure!(
-        logo.is_file(),
-        "Setup brand lockup missing: {}",
-        logo.display()
+        shim_imports
+            .iter()
+            .all(|name| !pe::MSVC_RUNTIME_DLLS.contains(&name.to_ascii_lowercase().as_str())),
+        "the native Setup loader must use the static CRT before the prerequisite is installed"
     );
-    let license = repo_root.join("LICENSE");
-    ensure!(license.is_file(), "license missing: {}", license.display());
-    // The license shown by Setup is generated from the canonical LICENSE at
-    // build time: one source of truth, nothing hand-maintained, and the file
-    // ships inside the bundle so the page works offline.
-    let license_rtf = out.join("ExoSnap-GPL-3.0.rtf");
+    let runtime = setup_build_file(build_dir, "runtime/exosnap-setup-ui.dll")?
+        .parent()
+        .unwrap()
+        .to_path_buf();
+    let payload_root = out.join("setup-runtime");
+    fs::create_dir_all(&payload_root)?;
+    for file in walk_files(&runtime)? {
+        let rel = relative(&runtime, &file);
+        let extension = file.extension().and_then(|e| e.to_str()).unwrap_or("");
+        if FORBIDDEN_EXTENSIONS.contains(&extension) || rel == "exosnap-setup-preview.exe" {
+            continue;
+        }
+        let name = file
+            .file_name()
+            .unwrap()
+            .to_string_lossy()
+            .to_ascii_lowercase();
+        ensure!(!is_debug_qt(&name), "debug Qt in Setup payload: {rel}");
+        ensure!(
+            !is_debug_msvc(&name),
+            "debug MSVC runtime in Setup payload: {rel}"
+        );
+        let destination = payload_root.join(&rel);
+        fs::create_dir_all(destination.parent().unwrap())?;
+        fs::copy(&file, &destination)?;
+    }
+    fs::copy(repo_root.join("LICENSE"), payload_root.join("LICENSE"))?;
+    fs::copy(
+        staging.join("THIRD_PARTY_NOTICES.md"),
+        payload_root.join("THIRD_PARTY_NOTICES.md"),
+    )?;
+    for file in walk_files(&staging.join("licenses"))? {
+        let destination = payload_root
+            .join("licenses")
+            .join(relative(&staging.join("licenses"), &file));
+        fs::create_dir_all(destination.parent().unwrap())?;
+        fs::copy(file, destination)?;
+    }
+    fs::copy(
+        repo_root.join("packaging/burn/wix-license.txt"),
+        payload_root.join("licenses/wix.txt"),
+    )?;
+    validate_setup_runtime(&payload_root)?;
+    let payloads = out.join("setup-payloads.wxs");
     fs::write(
-        &license_rtf,
-        license_text_to_rtf(&fs::read_to_string(&license)?),
-    )
-    .with_context(|| format!("write {}", license_rtf.display()))?;
+        &payloads,
+        setup_payload_xml(&payload_root, &walk_files(&payload_root)?),
+    )?;
     let bundle = out.join(format!("ExoSnap-{base}-Setup.exe"));
     println!("==> {}", bundle.display());
     println!(
@@ -678,11 +717,8 @@ fn build_setup(
             .arg("-d")
             .arg(format!("IconPath={}", icon.display()))
             .arg("-d")
-            .arg(format!("ThemePath={}", theme.display()))
-            .arg("-d")
-            .arg(format!("LogoPath={}", logo.display()))
-            .arg("-d")
-            .arg(format!("LicenseRtfPath={}", license_rtf.display()))
+            .arg(format!("BootstrapperPath={}", bootstrapper.display()))
+            .arg(&payloads)
             .arg(repo_root.join("packaging/burn/Setup.wxs")),
         "wix build (Setup)",
         Duration::from_secs(900),
@@ -690,28 +726,76 @@ fn build_setup(
     Ok(bundle)
 }
 
-/// The canonical LICENSE as RTF for WixStdBA's offline license page. Plain
-/// text with the two RTF metacharacters escaped and one paragraph per source
-/// line.
-///
-/// No colours are emitted. thmutil paints the richedit background only through
-/// WM_CTLCOLOR, which RichEdit ignores, and its own default document surface is
-/// white; forcing the dark theme ink on that control produced near-white text
-/// on white. The control's own document colours are readable on every machine.
-fn license_text_to_rtf(text: &str) -> String {
-    let mut body = String::new();
-    for line in text.replace("\r\n", "\n").lines() {
-        body.push_str(
-            &line
-                .replace('\\', "\\\\")
-                .replace('{', "\\{")
-                .replace('}', "\\}"),
+fn setup_build_file(build_dir: &Path, name: &str) -> Result<PathBuf> {
+    let mut candidates = vec![
+        build_dir.join("apps/setup").join(name),
+        build_dir.join("apps/setup/Release").join(name),
+    ];
+    if let Some(runtime_file) = name.strip_prefix("runtime/") {
+        candidates.push(
+            build_dir
+                .join("apps/setup/runtime/Release")
+                .join(runtime_file),
         );
-        body.push_str("\\par\r\n");
     }
-    format!(
-        "{{\\rtf1\\ansi\\ansicpg1252\\deff0\\nouicompat{{\\fonttbl{{\\f0\\fswiss Segoe UI;}}}}\\viewkind4\\uc1\\f0\\fs20 {body}}}"
-    )
+    candidates.into_iter().find(|path| path.is_file())
+        .with_context(|| format!("Setup build output missing: {name}; build exosnap_setup_ba and exosnap_setup_ui in Release"))
+}
+
+fn validate_setup_runtime(root: &Path) -> Result<()> {
+    let audit = pe::audit_tree(root)?;
+    ensure!(
+        audit.msvc == 0 && audit.unresolved.is_empty(),
+        "Setup UI needs a complete private runtime before the VC chain runs: {} unresolved MSVC imports; {:?}",
+        audit.msvc,
+        audit.unresolved
+    );
+    for file in walk_files(root)? {
+        if !file
+            .extension()
+            .and_then(|e| e.to_str())
+            .is_some_and(|e| e.eq_ignore_ascii_case("dll"))
+        {
+            continue;
+        }
+        for import in pe::imports_of(&file)? {
+            if pe::MSVC_RUNTIME_DLLS.contains(&import.to_ascii_lowercase().as_str()) {
+                ensure!(
+                    root.join(&import).is_file(),
+                    "Setup private runtime must be at payload root: {import}"
+                );
+            }
+        }
+    }
+    Ok(())
+}
+
+fn is_debug_msvc(name: &str) -> bool {
+    name == "ucrtbased.dll"
+        || (["vcruntime", "msvcp", "concrt", "vcomp"]
+            .iter()
+            .any(|prefix| name.starts_with(prefix))
+            && (name.ends_with("d.dll") || name.contains("d_")))
+}
+
+fn setup_payload_xml(root: &Path, files: &[PathBuf]) -> String {
+    fn escaped(text: &str) -> String {
+        text.replace('&', "&amp;")
+            .replace('<', "&lt;")
+            .replace('"', "&quot;")
+    }
+    let mut xml = String::from(
+        "<Wix xmlns=\"http://wixtoolset.org/schemas/v4/wxs\"><Fragment><PayloadGroup Id=\"ExoSnapSetupUiPayloads\">\n",
+    );
+    for (index, file) in files.iter().enumerate() {
+        xml.push_str(&format!(
+            "<Payload Id=\"SetupUi{index}\" Name=\"{}\" SourceFile=\"{}\" Compressed=\"yes\" />\n",
+            escaped(&relative(root, file).replace('/', "\\")),
+            escaped(&file.to_string_lossy())
+        ));
+    }
+    xml.push_str("</PayloadGroup></Fragment></Wix>\n");
+    xml
 }
 
 fn ownership_probe_path(build_dir: &Path) -> Result<PathBuf> {
@@ -904,8 +988,9 @@ pub fn run(args: &PackageArgs) -> Result<PackageResult> {
 
     let setup = match (&installer, &args.vc_redist) {
         (Some(msi), Some(vc_redist)) => Some(build_setup(
-            &crate::tools::require("wix")?,
             &repo_root,
+            &args.build_dir,
+            &staging,
             &out,
             &base,
             msi,
@@ -1192,66 +1277,83 @@ mod tests {
             !setup.contains(r#"Cache="remove""#),
             "a repair after the original Setup.exe is gone must still restore the runtime"
         );
-        assert!(setup.contains(r#"ThemeFile="$(var.ThemePath)""#));
+        assert!(setup.contains(r#"<BootstrapperApplicationDll Id="ExoSnapNativeBA""#));
     }
 
     #[test]
-    fn the_setup_theme_binds_the_two_exosnap_options_without_gating_the_install() {
-        let theme = packaging_source("packaging/burn/ExoSnapTheme.xml");
-        assert!(theme.contains(r#"Name="ExoSnapDesktopShortcut""#));
-        assert!(theme.contains(r#"Name="ExoSnapRemoveUserData""#));
-        assert!(theme.contains(r#"Name="InstallButton""#));
-        assert!(theme.contains(r#"Name="UninstallButton""#));
-        assert!(theme.contains(r#"Name="LaunchButton""#));
-        assert!(
-            !theme.contains(r#"Name="EulaAcceptCheckbox""#)
-                && !theme.contains(r#"Name="EulaHyperlink""#),
-            "GPL installation must not require a licence acceptance control"
-        );
-        assert!(
-            theme.contains(r#"Name="EulaRichedit""#),
-            "the canonical license must be viewable inside Setup"
-        );
-        assert!(
-            packaging_source("packaging/burn/Setup.wxs")
-                .contains(r#"LicenseFile="$(var.LicenseRtfPath)""#),
-            "the license page must use the embedded offline license, not a URL"
-        );
+    fn setup_payloads_preserve_nested_names_and_escape_xml_paths() {
+        let root = Path::new(r"C:\runtime & ui");
+        let file = root.join(r"qml\QtQuick\module.dll");
+        let xml = setup_payload_xml(root, &[file]);
+        assert!(xml.contains(r#"Name="qml\QtQuick\module.dll""#));
+        assert!(xml.contains(r#"SourceFile="C:\runtime &amp; ui\qml\QtQuick\module.dll""#));
+        assert!(xml.contains(r#"Compressed="yes""#));
     }
 
     #[test]
-    fn the_setup_theme_comments_are_well_formed() {
-        // An XML comment cannot contain a double hyphen; MSXML rejects the
-        // whole document, WixStdBA then has no theme and the Setup dies before
-        // it can show a window. Comments are prose, so nothing catches this at
-        // build time and only a live run would.
-        let theme = packaging_source("packaging/burn/ExoSnapTheme.xml");
-        let mut rest = theme.as_str();
-        while let Some(start) = rest.find("<!--") {
-            let after = start + "<!--".len();
-            let end = rest[after..]
-                .find("-->")
-                .expect("the Setup theme has an unterminated comment")
-                + after;
-            assert!(
-                !rest[after..end].contains("--"),
-                "an XML comment in the Setup theme contains a double hyphen"
-            );
-            rest = &rest[end + "-->".len()..];
+    fn setup_uses_the_prerequisite_safe_loader_and_offline_license() {
+        let setup = packaging_source("packaging/burn/Setup.wxs");
+        assert!(setup.contains(r#"SourceFile="$(var.BootstrapperPath)""#));
+        assert!(setup.contains(r#"<PayloadGroupRef Id="ExoSnapSetupUiPayloads" />"#));
+        assert!(!setup.contains("WixStandardBootstrapperApplication"));
+        let cmake = packaging_source("apps/setup/CMakeLists.txt");
+        assert!(cmake.contains("MSVC_RUNTIME_LIBRARY MultiThreaded"));
+        assert!(cmake.contains("CMAKE_INSTALL_SYSTEM_RUNTIME_LIBS"));
+        assert!(cmake.contains("qt_add_resources(exosnap_setup_ui setup_license"));
+        assert!(cmake.contains(r#"FILES "${PROJECT_SOURCE_DIR}/LICENSE""#));
+    }
+
+    #[test]
+    fn setup_runtime_cannot_depend_on_a_preinstalled_vc_runtime() {
+        let root = tempfile::tempdir().unwrap();
+        fs::write(
+            root.path().join("exosnap-setup-ui.dll"),
+            pe::tests::synthetic_pe(&["vcruntime140.dll"]),
+        )
+        .unwrap();
+        assert!(validate_setup_runtime(root.path()).is_err());
+        fs::create_dir(root.path().join("nested")).unwrap();
+        fs::write(
+            root.path().join("nested/vcruntime140.dll"),
+            pe::tests::synthetic_pe(&[]),
+        )
+        .unwrap();
+        assert!(validate_setup_runtime(root.path()).is_err());
+        fs::rename(
+            root.path().join("nested/vcruntime140.dll"),
+            root.path().join("vcruntime140.dll"),
+        )
+        .unwrap();
+        validate_setup_runtime(root.path()).unwrap();
+        for name in [
+            "msvcp140d.dll",
+            "msvcp140d_atomic_wait.dll",
+            "vcruntime140_1d.dll",
+            "ucrtbased.dll",
+        ] {
+            assert!(is_debug_msvc(name));
         }
+        assert!(!is_debug_msvc("msvcp140_atomic_wait.dll"));
     }
 
     #[test]
-    fn the_license_rtf_escapes_rtf_control_characters() {
-        let rtf = license_text_to_rtf("GPL \\ text {with} braces\r\nsecond line\r\n");
-        assert!(rtf.starts_with("{\\rtf1"));
-        assert!(rtf.ends_with('}'));
-        assert!(rtf.contains(r"GPL \\ text \{with\} braces\par"));
-        assert!(rtf.contains("second line\\par"));
-        assert!(!rtf.contains("text {with} braces"));
-        assert!(
-            !rtf.contains("\\colortbl") && !rtf.contains("\\cf") && !rtf.contains("\\cbpat"),
-            "the license page must use the richedit control's own readable document colours"
+    fn setup_build_outputs_resolve_visual_studio_release_layout() {
+        let root = tempfile::tempdir().unwrap();
+        let dll = root
+            .path()
+            .join("apps/setup/runtime/Release/exosnap-setup-ui.dll");
+        fs::create_dir_all(dll.parent().unwrap()).unwrap();
+        fs::write(&dll, []).unwrap();
+        assert_eq!(
+            setup_build_file(root.path(), "runtime/exosnap-setup-ui.dll").unwrap(),
+            dll
+        );
+        let loader = root.path().join("apps/setup/Release/exosnap-setup-ba.dll");
+        fs::create_dir_all(loader.parent().unwrap()).unwrap();
+        fs::write(&loader, []).unwrap();
+        assert_eq!(
+            setup_build_file(root.path(), "exosnap-setup-ba.dll").unwrap(),
+            loader
         );
     }
 }

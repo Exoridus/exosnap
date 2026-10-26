@@ -1,5 +1,9 @@
 #include "UpdaterViewAdapter.h"
+
 #include <QCoreApplication>
+#include <QFileInfo>
+#include <QLocale>
+#include <utility>
 
 #include <QVariantMap>
 #include <QtMath>
@@ -42,6 +46,52 @@ QString StatusKey(StepStatus status) {
 
 UpdaterViewAdapter::UpdaterViewAdapter(QObject* parent) : QObject(parent) {
     render(UpdaterUiState{});
+}
+
+QString UpdaterViewAdapter::versionText() const {
+    return hasTarget() ? QCoreApplication::translate("UpdaterViewAdapter", "%1 → %2").arg(fromVersion(), toVersion())
+                       : fromVersion();
+}
+
+void UpdaterViewAdapter::setLogPath(QString path) {
+    log_path_ = std::move(path);
+    emit stateChanged();
+}
+
+bool UpdaterViewAdapter::logAvailable() const {
+    return QFileInfo(log_path_).isFile();
+}
+const QString& UpdaterViewAdapter::logPath() const {
+    return log_path_;
+}
+
+bool UpdaterViewAdapter::progressVisible() const noexcept {
+    return state_.variant == TerminalVariant::None && state_.prompt == PromptKind::None;
+}
+
+QString UpdaterViewAdapter::compactDetail() const {
+    if (state_.variant != TerminalVariant::None && !panel_safety_.isEmpty())
+        return panel_safety_;
+    if (progressVisible()) {
+        if (close_blocked_)
+            return QCoreApplication::translate("UpdaterViewAdapter", "This step can't be interrupted.");
+        if (state_.steps[size_t(UpStep::Download)] == StepStatus::Working && state_.total_bytes > 0) {
+            const QLocale locale;
+            return QCoreApplication::translate("UpdaterViewAdapter", "%1 of %2 MB")
+                .arg(locale.toString(double(state_.downloaded_bytes) / 1000000.0, 'f', 1),
+                     locale.toString(double(state_.total_bytes) / 1000000.0, 'f', 1));
+        }
+    }
+    return panel_detail_;
+}
+
+QString UpdaterViewAdapter::detailsText() const {
+    QStringList lines{panel_title_, panel_detail_, panel_safety_, status_line_, hint_};
+    for (const QVariant& value : step_rows_)
+        lines.append(value.toMap().value(QStringLiteral("accessible")).toString());
+    lines.removeAll(QString());
+    lines.removeDuplicates();
+    return lines.join(QLatin1Char('\n'));
 }
 
 QStringList UpdaterViewAdapter::stepLabels() {
@@ -243,7 +293,8 @@ void UpdaterViewAdapter::render(const UpdaterUiState& state) {
                 panel_glyph_ = QStringLiteral("close");
                 break;
             case UpStep::Install:
-                panel_title_ = state.verification_reinstall
+                panel_title_ = state.repairing ? QCoreApplication::translate("UpdaterViewAdapter", "Repairing ExoSnap")
+                               : state.verification_reinstall
                                    ? QCoreApplication::translate("UpdaterViewAdapter", "Reinstalling ExoSnap")
                                    : QCoreApplication::translate("UpdaterViewAdapter", "Installing new files");
                 panel_detail_ = QCoreApplication::translate("UpdaterViewAdapter", "Replacing the application files.");
@@ -277,7 +328,8 @@ void UpdaterViewAdapter::render(const UpdaterUiState& state) {
     }
 
     // Action row.
-    const bool critical = state.steps[size_t(UpStep::Install)] == StepStatus::Working ||
+    const bool critical = (state.repairing && state.variant == TerminalVariant::None) ||
+                          state.steps[size_t(UpStep::Install)] == StepStatus::Working ||
                           state.steps[size_t(UpStep::Verify)] == StepStatus::Working ||
                           state.steps[size_t(UpStep::Launch)] == StepStatus::Working;
     primary_action_ = result_terminal ? state.primary_action : QString();
@@ -523,7 +575,8 @@ void UpdaterViewAdapter::dismissCancelConfirmation() {
 
 void UpdaterViewAdapter::activateAction(const QString& action) {
     if (action == QCoreApplication::translate("UpdaterViewAdapter", "Retry") ||
-        action == QCoreApplication::translate("UpdaterViewAdapter", "Re-download"))
+        action == QCoreApplication::translate("UpdaterViewAdapter", "Re-download") ||
+        (action == primaryAction() && action == QCoreApplication::translate("UpdaterViewAdapter", "Repair ExoSnap")))
         emit retryRequested();
     else if (action == QCoreApplication::translate("UpdaterViewAdapter", "Open ExoSnap"))
         emit openExoSnapRequested();

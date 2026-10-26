@@ -94,8 +94,8 @@ TEST(UpdaterVisualProofTest, EveryPreviewStateRendersDarkAndLightEvidence) {
 
             const QImage image(shot.path);
             EXPECT_FALSE(image.isNull()) << shot.path.toStdString();
-            EXPECT_EQ(image.width(), 520) << shot.path.toStdString();
-            EXPECT_EQ(image.height(), 680) << shot.path.toStdString();
+            EXPECT_EQ(image.width(), 480) << shot.path.toStdString();
+            EXPECT_EQ(image.height(), 176) << shot.path.toStdString();
             ++captured;
         }
     }
@@ -116,8 +116,8 @@ TEST(UpdaterVisualProofTest, GermanPreviewStatesRenderAtAllSupportedScales) {
             EXPECT_EQ(shot.exit_code, 0) << state.toStdString() << " scale " << scale.toStdString();
             const QImage image(shot.path);
             EXPECT_FALSE(image.isNull()) << shot.path.toStdString();
-            EXPECT_GE(image.width(), 520);
-            EXPECT_GE(image.height(), 680);
+            EXPECT_GE(image.width(), 480);
+            EXPECT_GE(image.height(), 176);
         }
     }
 }

@@ -149,6 +149,9 @@ PreconditionVerdict CanCancel(const FlowState& state) {
 // Same rule as the window's close X, from the same three phases -- so a client
 // and a user are told the same thing about when the process may end.
 PreconditionVerdict CanClose(const FlowState& state) {
+    if (state.phase == UpdatePhase::WaitingForParent && state.install_state == exosnap::update::InstallState::Unknown)
+        return Refuse(ec::kBlocked, QStringLiteral("Repair preparation cannot be interrupted"),
+                      QStringLiteral("installState"), QStringLiteral("confirmed"), QStringLiteral("unknown"));
     switch (state.phase) {
     case UpdatePhase::Applying:
     case UpdatePhase::Verifying:
