@@ -992,17 +992,21 @@ TEST(LiveVerifyProtocol, ProtocolTwoErrorCodesFoldOntoCommandFailedForVersionOne
 // ---------------------------------------------------------------------------
 
 TEST(LiveVerifyDispatcher, DisabledRecordingClipRequestsNeverReachTheApplicationSource) {
-    FakeSource source;
-    source.state.can_request_clip = true;
-    LiveVerifyDispatcher dispatcher(&source, QString::fromLatin1(kRunId));
-    Hello(dispatcher, QString::fromLatin1(kRunId), 2);
-    for (const auto& name : {QStringLiteral("clip.request"), QStringLiteral("clip.confirm")}) {
-        const QJsonObject params{{QStringLiteral("durationSeconds"), QStringLiteral("30")},
-                                 {QStringLiteral("jobId"), QStringLiteral("stale-job")},
-                                 {QStringLiteral("generation"), QStringLiteral("1")}};
-        const auto response = dispatcher.Dispatch(RequestV2(name, params));
-        EXPECT_EQ(ErrorCode(response), QString::fromLatin1(error_code::kUnavailable));
-        EXPECT_TRUE(source.calls.isEmpty());
+    if constexpr (exosnap::product::kRecordingClipsAvailable) {
+        GTEST_SKIP() << "covers the disabled product capability";
+    } else {
+        FakeSource source;
+        source.state.can_request_clip = true;
+        LiveVerifyDispatcher dispatcher(&source, QString::fromLatin1(kRunId));
+        Hello(dispatcher, QString::fromLatin1(kRunId), 2);
+        for (const auto& name : {QStringLiteral("clip.request"), QStringLiteral("clip.confirm")}) {
+            const QJsonObject params{{QStringLiteral("durationSeconds"), QStringLiteral("30")},
+                                     {QStringLiteral("jobId"), QStringLiteral("stale-job")},
+                                     {QStringLiteral("generation"), QStringLiteral("1")}};
+            const auto response = dispatcher.Dispatch(RequestV2(name, params));
+            EXPECT_EQ(ErrorCode(response), QString::fromLatin1(error_code::kUnavailable));
+            EXPECT_TRUE(source.calls.isEmpty());
+        }
     }
 }
 TEST(LiveVerifyDispatcher, RefusesEveryCommandBeforeTheHandshake) {
@@ -1168,8 +1172,11 @@ TEST(LiveVerifyDispatcher, EveryListedCommandIsActuallyImplemented) {
         if (command.name == QStringLiteral("edit.setPanel") || command.name == QStringLiteral("edit.setSourceTab"))
             source.state.page = QString::fromLatin1(page_name::kEdit);
         const QJsonObject response = dispatcher.Dispatch(RequestV2(command.name, PlausibleParams(command)));
-        if (!exosnap::product::kRecordingClipsAvailable &&
-            (command.name == QLatin1String("clip.request") || command.name == QLatin1String("clip.confirm"))) {
+        bool clip_refused = false;
+        if constexpr (!exosnap::product::kRecordingClipsAvailable)
+            clip_refused =
+                command.name == QLatin1String("clip.request") || command.name == QLatin1String("clip.confirm");
+        if (clip_refused) {
             EXPECT_FALSE(Ok(response));
             EXPECT_EQ(ErrorCode(response), QLatin1String(error_code::kUnavailable));
         } else {

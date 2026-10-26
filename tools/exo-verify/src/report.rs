@@ -746,7 +746,7 @@ mod tests {
     }
 
     #[test]
-    fn unavailable_clip_contract_is_required_without_demanding_creation() {
+    fn offered_clip_creation_is_required_and_the_negative_contract_cannot_stand_in() {
         let mut plan = plan();
         plan.scenarios = crate::scenarios::clips::scenarios()
             .iter()
@@ -759,21 +759,25 @@ mod tests {
             })
             .collect();
         assert_eq!(plan.scenarios.len(), 1);
-        assert_eq!(plan.scenarios[0].id, "clip.creation-unavailable");
+        assert_eq!(plan.scenarios[0].id, "clip.recording-live");
         let missing = merge(&plan, &[], None).unwrap();
         assert!(!missing.ready_for_approval);
-        assert_eq!(
-            missing.blocking,
-            vec!["clip.creation-unavailable (not run)"]
-        );
+        assert_eq!(missing.blocking, vec!["clip.recording-live (not run)"]);
+        let planned = plan.scenarios[0].clone();
+        let gpu_lane = |verdicts: &[(&str, Verdict)]| {
+            let mut result = lane(Some(SHA), verdicts);
+            result.lane = planned.lane.clone();
+            result.scenarios[0].scenario_revision = planned.scenario_revision;
+            result
+        };
         for verdict in [Verdict::Pass, Verdict::Fail, Verdict::Unavailable] {
-            let results = [lane(Some(SHA), &[("clip.creation-unavailable", verdict)])];
+            let results = [gpu_lane(&[("clip.recording-live", verdict)])];
             let report = merge(&plan, &results, None).unwrap();
             assert_eq!(report.ready_for_approval, verdict == Verdict::Pass);
             assert_eq!(report.scenarios[0].tier, Tier::Required);
             verify(&report, &plan, &results, None).unwrap();
         }
-        let historical = [lane(Some(SHA), &[("clip.recording-live", Verdict::Pass)])];
+        let historical = [gpu_lane(&[("clip.creation-unavailable", Verdict::Pass)])];
         assert!(!merge(&plan, &historical, None).unwrap().ready_for_approval);
     }
 

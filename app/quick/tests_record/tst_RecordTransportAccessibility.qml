@@ -94,7 +94,7 @@ TestCase {
         compare(findAccessible(dock, qsTr("Pause recording")), null);
     }
 
-    function test_recording_clips_are_absent_data() {
+    function test_recording_clip_action_follows_the_product_capability_data() {
         return [
             {tag: "compact-recording", width: 860, state: "recording"},
             {tag: "compact-paused", width: 860, state: "paused"},
@@ -103,42 +103,53 @@ TestCase {
         ];
     }
 
-    function test_recording_clips_are_absent(data) {
+    function test_recording_clip_action_follows_the_product_capability(data) {
         recordDriver.setRecordingState(data.state);
         const dock = createTemporaryObject(dockComponent, testCase, {width: data.width});
         verify(!!dock);
         waitForRendering(dock);
-        compare(findAccessible(dock, qsTr("Save clip, %1 seconds selected").arg("30")), null);
+        const offered = recordDriver.clipAdapter.productAvailable;
+        const wide = data.width >= 1100;
         const clip = findChild(dock, "recordClipAction");
         const overflow = findChild(dock, "recordClipOverflowAction");
         const loader = findChild(dock, "recordClipPanelLoader");
         verify(clip && overflow && loader);
-        for (const action of [clip, overflow]) {
-            verify(!action.visible);
-            verify(!action.enabled);
-            verify(!action.activeFocusOnTab);
-            verify(action.Accessible.ignored);
-            verify(!action.activeFocus);
+        compare(clip.visible, offered && wide);
+        if (wide)
+            verify(!overflow.visible);
+        compare(!!findAccessible(dock, qsTr("Save clip, %1 seconds selected").arg("30")), offered && wide);
+        if (!offered) {
+            for (const action of [clip, overflow]) {
+                verify(!action.enabled);
+                verify(!action.activeFocusOnTab);
+                verify(action.Accessible.ignored);
+                verify(!action.activeFocus);
+            }
         }
-        if (data.width < 1100) {
+        if (!wide) {
             const menu = overflow.menu;
             verify(!!menu);
             menu.open();
             tryCompare(menu, "visible", true);
             waitForRendering(dock);
-            compare(overflow.height, 0);
+            compare(overflow.visible, offered);
+            compare(overflow.height > 0, offered);
             const marker = menu.itemAt(1);
             const split = menu.itemAt(2);
             verify(marker.visible && marker.height > 0);
             verify(split.visible && split.height > 0);
             compare(menu.itemAt(3), overflow);
-            verify(menu.currentIndex !== 3);
+            if (!offered)
+                verify(menu.currentIndex !== 3);
             menu.close();
         }
-        verify(!loader.active);
-        compare(loader.item, null);
+        compare(loader.active, offered);
         dock.openClipPanel();
-        compare(loader.item, null);
+        compare(!!loader.item, offered);
+        if (offered) {
+            tryCompare(loader.item, "opened", true);
+            loader.item.close();
+        }
         verify(!!findAccessible(dock, qsTr("Stop recording")));
         if (data.state === "paused")
             verify(!!findAccessible(dock, qsTr("Resume recording")));

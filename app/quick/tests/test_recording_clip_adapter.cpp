@@ -1,4 +1,5 @@
 #include "RecordingClipAdapter.h"
+#include "models/RecordingCapabilities.h"
 
 #include <gtest/gtest.h>
 
@@ -25,33 +26,38 @@ TEST(RecordingClipAdapterTest, MetadataBudgetFailureDoesNotClaimQueueIsFull) {
 }
 
 TEST(RecordingClipAdapterTest, StaleAvailabilityAndInvokableMethodsCannotRequestOrConfirmWork) {
-    RecordingClipAdapter adapter;
-    adapter.setAvailability(true, {});
-    EXPECT_FALSE(adapter.canRequest());
-    EXPECT_EQ(adapter.unavailableReason(),
-              RecordingClipAdapter::tr("Recording Clips are unavailable in this product version"));
-    RecordingClipJobSnapshot review;
-    review.job_id = engine::NewId<engine::JobId>();
-    review.generation = 1;
-    review.phase = RecordingClipPhase::Review;
-    review.actual_begin_r_ns = 1;
-    review.actual_end_r_ns = 2;
-    adapter.setJobs({review});
-    int plans = 0;
-    int confirms = 0;
-    int cancels = 0;
-    QObject::connect(&adapter, &RecordingClipAdapter::planRequested, [&](int64_t) { ++plans; });
-    QObject::connect(&adapter, &RecordingClipAdapter::confirmRequested, [&](engine::JobId, uint64_t) { ++confirms; });
-    QObject::connect(&adapter, &RecordingClipAdapter::cancelRequested, [&](engine::JobId, uint64_t) { ++cancels; });
-    EXPECT_TRUE(QMetaObject::invokeMethod(&adapter, "requestPlan", Q_ARG(QString, QStringLiteral("30"))));
-    const auto id = QString::fromStdString(engine::ToUuid(review.job_id));
-    EXPECT_TRUE(
-        QMetaObject::invokeMethod(&adapter, "confirmPlan", Q_ARG(QString, id), Q_ARG(QString, QStringLiteral("1"))));
-    EXPECT_TRUE(
-        QMetaObject::invokeMethod(&adapter, "cancelJob", Q_ARG(QString, id), Q_ARG(QString, QStringLiteral("1"))));
-    EXPECT_EQ(plans, 0);
-    EXPECT_EQ(confirms, 0);
-    EXPECT_EQ(cancels, 0);
+    if constexpr (product::kRecordingClipsAvailable) {
+        GTEST_SKIP() << "covers the disabled product capability";
+    } else {
+        RecordingClipAdapter adapter;
+        adapter.setAvailability(true, {});
+        EXPECT_FALSE(adapter.canRequest());
+        EXPECT_EQ(adapter.unavailableReason(),
+                  RecordingClipAdapter::tr("Recording Clips are unavailable in this product version"));
+        RecordingClipJobSnapshot review;
+        review.job_id = engine::NewId<engine::JobId>();
+        review.generation = 1;
+        review.phase = RecordingClipPhase::Review;
+        review.actual_begin_r_ns = 1;
+        review.actual_end_r_ns = 2;
+        adapter.setJobs({review});
+        int plans = 0;
+        int confirms = 0;
+        int cancels = 0;
+        QObject::connect(&adapter, &RecordingClipAdapter::planRequested, [&](int64_t) { ++plans; });
+        QObject::connect(&adapter, &RecordingClipAdapter::confirmRequested,
+                         [&](engine::JobId, uint64_t) { ++confirms; });
+        QObject::connect(&adapter, &RecordingClipAdapter::cancelRequested, [&](engine::JobId, uint64_t) { ++cancels; });
+        EXPECT_TRUE(QMetaObject::invokeMethod(&adapter, "requestPlan", Q_ARG(QString, QStringLiteral("30"))));
+        const auto id = QString::fromStdString(engine::ToUuid(review.job_id));
+        EXPECT_TRUE(QMetaObject::invokeMethod(&adapter, "confirmPlan", Q_ARG(QString, id),
+                                              Q_ARG(QString, QStringLiteral("1"))));
+        EXPECT_TRUE(
+            QMetaObject::invokeMethod(&adapter, "cancelJob", Q_ARG(QString, id), Q_ARG(QString, QStringLiteral("1"))));
+        EXPECT_EQ(plans, 0);
+        EXPECT_EQ(confirms, 0);
+        EXPECT_EQ(cancels, 0);
+    }
 }
 TEST(RecordingClipAdapterTest, PositiveDurationRequiresBackendAvailability) {
     RecordingClipAdapter adapter;
