@@ -767,6 +767,33 @@ TEST(PipelineDiagnostics, MuxPacketAndByteLimitsFollowTheObservedQueue) {
     EXPECT_EQ(*snapshot.video_queue.byte_capacity, 0u);
 }
 
+TEST(PipelineDiagnostics, MuxQueuePeaksIncludeStatesBetweenObservations) {
+    MuxQueue queue;
+    const auto push = [&](size_t reserve) {
+        EncodedAudioPacket packet;
+        packet.bytes.reserve(reserve);
+        return queue.Push(MuxItem{std::move(packet)}, [] { return false; }, [] { return false; }, [](auto, double) {});
+    };
+    ASSERT_EQ(push(100), MuxQueueWait::Ready);
+    ASSERT_EQ(push(200), MuxQueueWait::Ready);
+    const auto peak_bytes = queue.ReadMeasurements().retained_bytes;
+    ASSERT_TRUE(queue.Pop());
+    ASSERT_TRUE(queue.Pop());
+
+    PipelineDiagnosticsAggregator agg;
+    agg.Reset(1, MakeDiagnosticsStaticConfig(RecorderConfig{}));
+    agg.OnMuxQueueDepth(queue.ReadMeasurements());
+    auto snapshot = agg.BuildSnapshot(At(0), MakeStats(), DiagnosticsLifecycle::Recording, 0);
+    EXPECT_EQ(snapshot.video_queue.current_depth, 0u);
+    EXPECT_EQ(snapshot.video_queue.peak_depth, 2u);
+    EXPECT_EQ(snapshot.video_queue.retained_bytes.value_or(1), 0u);
+    EXPECT_EQ(snapshot.video_queue.peak_retained_bytes.value_or(0), peak_bytes);
+
+    queue.Reset();
+    EXPECT_EQ(queue.ReadMeasurements().peak_packets, 0u);
+    EXPECT_EQ(queue.ReadMeasurements().peak_retained_bytes, 0u);
+}
+
 TEST(PipelineDiagnostics, QueueCapacityMuxAndAudioBounded) {
     PipelineDiagnosticsAggregator agg;
     agg.Reset(1, MakeConfig());

@@ -11,9 +11,11 @@
 #include <windows.h> // HRESULT / DWORD for ClassifyWebcamReadResult
 
 #include <atomic>
+#include <chrono>
 #include <functional>
 #include <memory>
 #include <mutex>
+#include <stop_token>
 #include <string>
 #include <thread>
 #include <vector>
@@ -50,6 +52,10 @@ WebcamReadAction ClassifyWebcamReadResult(HRESULT hr, DWORD reader_flags, bool h
 // (last < 0) always passes; a non-positive/absent sample time (sample_100ns <= 0)
 // passes (no basis to reject).
 bool ShouldDeliverWebcamSample(long long last_delivered_100ns, long long sample_100ns) noexcept;
+
+// Waits up to `delay` between reopen attempts. Returns false as soon as a stop
+// is requested, so Stop() never waits out a reconnect delay.
+bool WaitForWebcamReconnect(std::stop_token stop, std::chrono::milliseconds delay);
 
 struct WebcamDeviceInfo {
     std::string id;
