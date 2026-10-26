@@ -101,4 +101,64 @@ std::optional<GamepadReading> ReadingRing::StateAt(uint64_t capture_100ns) const
     return *best;
 }
 
+void DeviceHistory::Push(GamepadReading reading) {
+    const std::scoped_lock lock(mutex_);
+    auto& entry = devices_[reading.device.id];
+    if (!reading.connected) {
+        reading.state = {};
+    }
+    entry.history.Push(reading);
+    if (reading.capture_100ns >= entry.latest_100ns) {
+        entry.identity = reading.device;
+        entry.latest_100ns = reading.capture_100ns;
+        entry.connected = reading.connected;
+        const auto& state = reading.state;
+        const bool active = (state.buttons & 0x3FFFU) != 0 || std::hypot(state.left_x, state.left_y) > 0.20F ||
+                            std::hypot(state.right_x, state.right_y) > 0.20F || state.left_trigger > 0.1F ||
+                            state.right_trigger > 0.1F;
+        if (!reading.connected && automatic_ == reading.device.id) {
+            automatic_engaged_ = false;
+            automatic_since_ = reading.capture_100ns;
+        }
+        if (reading.connected && reading.capture_100ns >= automatic_since_ &&
+            (!automatic_ || !devices_.at(*automatic_).connected || (!automatic_engaged_ && active))) {
+            automatic_ = reading.device.id;
+            automatic_since_ = reading.capture_100ns;
+            automatic_engaged_ = active;
+        }
+    }
+}
+
+void DeviceHistory::Select(std::optional<DeviceId> device) {
+    const std::scoped_lock lock(mutex_);
+    manual_ = device;
+}
+
+std::optional<GamepadReading> DeviceHistory::StateFor(const DeviceId& device, uint64_t timestamp) const {
+    const std::scoped_lock lock(mutex_);
+    const auto found = devices_.find(device);
+    return found == devices_.end() ? std::nullopt : found->second.history.StateAt(timestamp);
+}
+
+std::vector<DeviceIdentity> DeviceHistory::Devices() const {
+    const std::scoped_lock lock(mutex_);
+    std::vector<DeviceIdentity> result;
+    for (const auto& [id, entry] : devices_) {
+        if (entry.connected) {
+            result.push_back(entry.identity);
+        }
+    }
+    return result;
+}
+
+std::optional<GamepadReading> DeviceHistory::StateAt(uint64_t capture_100ns) const {
+    const std::scoped_lock lock(mutex_);
+    const auto selected = manual_ ? manual_ : automatic_;
+    if (!selected) {
+        return std::nullopt;
+    }
+    const auto found = devices_.find(*selected);
+    return found == devices_.end() ? std::nullopt : found->second.history.StateAt(capture_100ns);
+}
+
 } // namespace exosnap::gamepad

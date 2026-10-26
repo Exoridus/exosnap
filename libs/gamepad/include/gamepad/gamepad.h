@@ -1,7 +1,9 @@
 #pragma once
 
+#include <array>
 #include <cstddef>
 #include <cstdint>
+#include <map>
 #include <memory>
 #include <mutex>
 #include <optional>
@@ -17,7 +19,10 @@ enum class LayoutKind : uint8_t { Generic, DualSense, XboxSeries, XboxOne, Switc
 /// `Generic`.
 [[nodiscard]] LayoutKind LayoutKindFor(uint16_t vendor_id, uint16_t product_id) noexcept;
 
+using DeviceId = std::array<uint8_t, 32>;
+
 struct DeviceIdentity {
+    DeviceId id{};
     uint16_t vendor_id = 0;
     uint16_t product_id = 0;
     LayoutKind layout = LayoutKind::Generic;
@@ -33,6 +38,11 @@ struct GamepadState {
     float right_y = 0.0F;
     float left_trigger = 0.0F;
     float right_trigger = 0.0F;
+    // Empty when the device/reading does not expose the auxiliary control.
+    std::optional<bool> home;
+    std::optional<bool> share;
+    std::optional<bool> touchpad;
+    bool operator==(const GamepadState&) const = default;
 };
 
 /// Clamps every axis into its documented range and replaces NaN with the rest
@@ -80,6 +90,31 @@ class ReadingRing {
     std::size_t count_ = 0;
 };
 
+/// Independent bounded histories for each physical device. Automatic selection
+/// stays on one connected device. A manual selection never falls back.
+class DeviceHistory {
+  public:
+    void Push(GamepadReading reading);
+    void Select(std::optional<DeviceId> device);
+    [[nodiscard]] std::vector<DeviceIdentity> Devices() const;
+    [[nodiscard]] std::optional<GamepadReading> StateAt(uint64_t capture_100ns) const;
+    [[nodiscard]] std::optional<GamepadReading> StateFor(const DeviceId& device, uint64_t capture_100ns) const;
+
+  private:
+    struct Entry {
+        ReadingRing history;
+        DeviceIdentity identity;
+        uint64_t latest_100ns = 0;
+        bool connected = false;
+    };
+    mutable std::mutex mutex_;
+    std::map<DeviceId, Entry> devices_;
+    std::optional<DeviceId> manual_;
+    std::optional<DeviceId> automatic_;
+    uint64_t automatic_since_ = 0;
+    bool automatic_engaged_ = false;
+};
+
 /// Live gamepad input through Microsoft GameInput, including background input
 /// while another application has focus. Readings arrive on GameInput's own
 /// threads and are queried from any thread.
@@ -95,6 +130,8 @@ class GameInputSource {
     GameInputSource& operator=(const GameInputSource&) = delete;
 
     [[nodiscard]] std::optional<GamepadReading> StateAt(uint64_t capture_100ns) const;
+    void SelectDevice(std::optional<DeviceId> device);
+    [[nodiscard]] std::vector<DeviceIdentity> Devices() const;
 
     /// The capture clock's current time.
     [[nodiscard]] static uint64_t NowCapture100ns() noexcept;

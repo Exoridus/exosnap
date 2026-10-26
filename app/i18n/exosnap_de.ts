@@ -90,7 +90,7 @@
 <context>
     <name>AppShell</name>
     <message>
-        <location filename="../quick/ExoSnap/Quick/AppShell.qml" line="+263"/>
+        <location filename="../quick/ExoSnap/Quick/AppShell.qml" line="+264"/>
         <source>Record</source>
         <translation>Aufnehmen</translation>
     </message>
@@ -2092,12 +2092,12 @@ Wahrscheinliche Ursache: </translation>
         <translation>Erfassungszeiten für diesen Capture-Modus nicht verfügbar</translation>
     </message>
     <message>
-        <location line="+15"/>
+        <location line="+14"/>
         <source>Encoded audio/video packets waiting for mux (peak </source>
         <translation>Kodierte Audio-/Videopakete vor dem Mux (Spitze </translation>
     </message>
     <message>
-        <location line="+12"/>
+        <location line="+13"/>
         <source>CPU submit (GPU execution time not measured in this view). VPBlt </source>
         <translation>CPU-Submission (GPU-Ausführungszeit wird hier nicht gemessen). VPBlt </translation>
     </message>
@@ -3408,7 +3408,7 @@ Wahrscheinliche Ursache: </translation>
 <context>
     <name>EditDraftField</name>
     <message>
-        <location filename="../quick/ExoSnap/Quick/EditDraftField.qml" line="+77"/>
+        <location filename="../quick/ExoSnap/Quick/EditDraftField.qml" line="+84"/>
         <source>This value is not valid for the selected item.</source>
         <translation>Dieser Wert ist für das ausgewählte Element ungültig.</translation>
     </message>
@@ -3546,7 +3546,7 @@ Wahrscheinliche Ursache: </translation>
         <translation>Importieren Sie diese Quelle erneut, um den belegten oder einen ausgewählten Bereich zu exportieren.</translation>
     </message>
     <message>
-        <location line="+452"/>
+        <location line="+453"/>
         <source>New file</source>
         <translation>Neue Datei</translation>
     </message>
@@ -3577,12 +3577,12 @@ The original cannot be recovered afterwards.</source>
 Das Original kann danach nicht wiederhergestellt werden.</translation>
     </message>
     <message>
-        <location line="+94"/>
+        <location line="+125"/>
         <source>No edit master available for export.</source>
         <translation>Keine Edit-Master-Datei für den Export verfügbar.</translation>
     </message>
     <message>
-        <location line="+288"/>
+        <location line="+289"/>
         <source>Unknown error</source>
         <translation>Unbekannter Fehler</translation>
     </message>
@@ -4262,7 +4262,7 @@ Das Original kann danach nicht wiederhergestellt werden.</translation>
         <translation>Diese Zeitleiste hat keine Audiospuren.</translation>
     </message>
     <message>
-        <location line="+32"/>
+        <location line="+33"/>
         <source>Mute %1</source>
         <translation>%1 stummschalten</translation>
     </message>
@@ -4282,7 +4282,7 @@ Das Original kann danach nicht wiederhergestellt werden.</translation>
         <translation>%1 Verstärkung</translation>
     </message>
     <message>
-        <location line="+34"/>
+        <location line="+38"/>
         <source>%1 gain in decibels</source>
         <translation>%1 Verstärkung in Dezibel</translation>
     </message>
@@ -4308,7 +4308,7 @@ Das Original kann danach nicht wiederhergestellt werden.</translation>
 <context>
     <name>EditPage</name>
     <message>
-        <location filename="../quick/ExoSnap/Quick/EditPage.qml" line="+623"/>
+        <location filename="../quick/ExoSnap/Quick/EditPage.qml" line="+649"/>
         <source>Pause</source>
         <translation>Pause</translation>
     </message>
@@ -4359,36 +4359,36 @@ Das Original kann danach nicht wiederhergestellt werden.</translation>
         <translation>Audiospuren auswählen</translation>
     </message>
     <message>
-        <location line="-229"/>
-        <location line="+107"/>
+        <location line="-232"/>
+        <location line="+108"/>
         <source>Media</source>
         <translation>Medien</translation>
     </message>
     <message>
-        <location line="-102"/>
+        <location line="-103"/>
         <source>Close Media</source>
         <translation>Medien schließen</translation>
     </message>
     <message>
-        <location line="+40"/>
-        <location line="+78"/>
+        <location line="+41"/>
+        <location line="+79"/>
         <source>Details</source>
         <translation>Details</translation>
     </message>
     <message>
-        <location line="-71"/>
+        <location line="-72"/>
         <source>Close Details</source>
         <translation>Details schließen</translation>
     </message>
     <message>
-        <location line="+154"/>
+        <location line="+156"/>
         <location line="+84"/>
         <source>Ripple delete</source>
         <translation>Mit Lückenschluss löschen</translation>
     </message>
     <message>
-        <location line="-245"/>
-        <location line="+100"/>
+        <location line="-247"/>
+        <location line="+102"/>
         <source>Export</source>
         <translation>Exportieren</translation>
     </message>
@@ -4436,7 +4436,7 @@ Das Original kann danach nicht wiederhergestellt werden.</translation>
         <translation>Zeitleiste einpassen</translation>
     </message>
     <message>
-        <location line="-557"/>
+        <location line="-560"/>
         <source>Resize Media. Use Left and Right.</source>
         <translation>Medienbereich vergrößern oder verkleinern. Verwenden Sie die Pfeiltasten nach links und rechts.</translation>
     </message>
@@ -4446,7 +4446,7 @@ Das Original kann danach nicht wiederhergestellt werden.</translation>
         <translation>Detailbereich vergrößern oder verkleinern. Verwenden Sie die Pfeiltasten nach links und rechts.</translation>
     </message>
     <message>
-        <location line="+366"/>
+        <location line="+369"/>
         <source>There is no edit to undo.</source>
         <translation>Es gibt keine Bearbeitung zum Rückgängigmachen.</translation>
     </message>
@@ -4468,13 +4468,13 @@ Das Original kann danach nicht wiederhergestellt werden.</translation>
         <translation>Die Zeitleiste ist leer.</translation>
     </message>
     <message>
-        <location line="-197"/>
-        <location line="+87"/>
+        <location line="-199"/>
+        <location line="+89"/>
         <source>Audio mix</source>
         <translation>Audiomix</translation>
     </message>
     <message>
-        <location line="-80"/>
+        <location line="-82"/>
         <source>Close Audio mix</source>
         <translation>Audiomix schließen</translation>
     </message>
@@ -4484,7 +4484,7 @@ Das Original kann danach nicht wiederhergestellt werden.</translation>
         <translation>Export schließen</translation>
     </message>
     <message>
-        <location line="+90"/>
+        <location line="+92"/>
         <source>Export %1%</source>
         <translation>Export %1 %</translation>
     </message>
@@ -4677,12 +4677,12 @@ Das Original kann danach nicht wiederhergestellt werden.</translation>
         <translation>Abbrechen</translation>
     </message>
     <message>
-        <location line="-579"/>
+        <location line="-582"/>
         <source>Resize preview and timeline. Use Up and Down.</source>
         <translation>Größe von Vorschau und Zeitleiste ändern. Pfeiltasten nach oben und unten verwenden.</translation>
     </message>
     <message>
-        <location line="+316"/>
+        <location line="+319"/>
         <location line="+13"/>
         <source>Snapping</source>
         <translation>Einrasten</translation>
@@ -4757,7 +4757,7 @@ Das Original kann danach nicht wiederhergestellt werden.</translation>
 <context>
     <name>EditRender</name>
     <message>
-        <location filename="../../libs/engine/src/edit_timeline_reader.cpp" line="+79"/>
+        <location filename="../../libs/engine/src/edit_timeline_reader.cpp" line="+82"/>
         <source>Render export currently supports Matroska with PCM audio. Choose MKV.</source>
         <translation>Renderexport unterstützt derzeit Matroska mit PCM-Audio. MKV auswählen.</translation>
     </message>
@@ -4849,7 +4849,7 @@ Das Original kann danach nicht wiederhergestellt werden.</translation>
         <translation>Ungültige vorausberechnete Audioquellposition.</translation>
     </message>
     <message>
-        <location filename="../../libs/engine/src/edit_timeline_export.cpp" line="+424"/>
+        <location filename="../../libs/engine/src/edit_timeline_export.cpp" line="+425"/>
         <source>Render export requires explicitly tagged 8-bit BT.709 4:2:0 SDR with known range. HDR and unsupported color paths remain lossless-only.</source>
         <translation>Renderexport benötigt ausdrücklich gekennzeichnetes SDR-Video mit 8 Bit, BT.709, 4:2:0 und bekanntem Wertebereich. HDR und nicht unterstützte Farbformate bleiben auf verlustlosen Export beschränkt.</translation>
     </message>
@@ -4959,7 +4959,7 @@ Das Original kann danach nicht wiederhergestellt werden.</translation>
 <context>
     <name>EditSessionAdapter</name>
     <message>
-        <location filename="../quick/ExoSnap/Quick/EditSessionAdapter.cpp" line="+677"/>
+        <location filename="../quick/ExoSnap/Quick/EditSessionAdapter.cpp" line="+674"/>
         <source>Frame drops: %1%</source>
         <translation>Verworfene Frames: %1%</translation>
     </message>
@@ -5421,7 +5421,7 @@ Ermittelte SHA-256: %2</translation>
 <context>
     <name>EditTimeline</name>
     <message>
-        <location filename="../quick/ExoSnap/Quick/EditTimeline.qml" line="+382"/>
+        <location filename="../quick/ExoSnap/Quick/EditTimeline.qml" line="+383"/>
         <source>Copy blank duration</source>
         <translation>Leere Zeitspanne kopieren</translation>
     </message>
@@ -5499,12 +5499,12 @@ Ermittelte SHA-256: %2</translation>
     </message>
     <message>
         <location line="-393"/>
-        <location line="+882"/>
+        <location line="+884"/>
         <source>Delete track</source>
         <translation>Spur löschen</translation>
     </message>
     <message>
-        <location line="-988"/>
+        <location line="-990"/>
         <source>Edit timeline</source>
         <translation>Zeitleiste bearbeiten</translation>
     </message>
@@ -5540,12 +5540,12 @@ Ermittelte SHA-256: %2</translation>
     </message>
     <message>
         <location line="+0"/>
-        <location line="+1613"/>
+        <location line="+1617"/>
         <source>Hard cut</source>
         <translation>Harter Schnitt</translation>
     </message>
     <message>
-        <location line="-1604"/>
+        <location line="-1608"/>
         <source>Duration</source>
         <translation>Dauer</translation>
     </message>
@@ -5602,12 +5602,12 @@ Ermittelte SHA-256: %2</translation>
     </message>
     <message>
         <location line="+40"/>
-        <location line="+557"/>
+        <location line="+559"/>
         <source>Track settings</source>
         <translation>Spureinstellungen</translation>
     </message>
     <message>
-        <location line="-556"/>
+        <location line="-558"/>
         <source>Name</source>
         <translation>Name</translation>
     </message>
@@ -5672,7 +5672,7 @@ Ermittelte SHA-256: %2</translation>
         <translation>Abbrechen</translation>
     </message>
     <message>
-        <location line="+276"/>
+        <location line="+278"/>
         <source>Track actions</source>
         <translation>Spuraktionen</translation>
     </message>
@@ -5757,7 +5757,7 @@ Ermittelte SHA-256: %2</translation>
         <translation>Deaktiviert</translation>
     </message>
     <message>
-        <location line="+478"/>
+        <location line="+480"/>
         <source>Hard cut. Enter to adjust.</source>
         <translation>Harter Schnitt. Zum Anpassen Eingabe drücken.</translation>
     </message>
@@ -5767,12 +5767,12 @@ Ermittelte SHA-256: %2</translation>
         <translation>%1 ms</translation>
     </message>
     <message>
-        <location line="+323"/>
+        <location line="+339"/>
         <source>Track header width</source>
         <translation>Spurkopfbreite</translation>
     </message>
     <message>
-        <location line="-521"/>
+        <location line="-537"/>
         <source>Unavailable</source>
         <translation>Nicht verfügbar</translation>
     </message>
@@ -6108,6 +6108,98 @@ Ermittelte SHA-256: %2</translation>
     </message>
 </context>
 <context>
+    <name>GamepadArtwork</name>
+    <message>
+        <location filename="../quick/ExoSnap/Quick/GamepadSprites.cpp" line="+121"/>
+        <source>Invalid gamepad artwork or raster size.</source>
+        <translation>Ungültige Gamepad-Grafik oder Rastergröße.</translation>
+    </message>
+    <message>
+        <location line="+49"/>
+        <source>Gamepad atlas exceeds the supported texture size.</source>
+        <translation>Der Gamepad-Atlas überschreitet die unterstützte Texturgröße.</translation>
+    </message>
+</context>
+<context>
+    <name>GamepadOverlayControls</name>
+    <message>
+        <location filename="../quick/ExoSnap/Quick/GamepadOverlayControls.qml" line="+15"/>
+        <source>Gamepad</source>
+        <translation>Gamepad</translation>
+    </message>
+    <message>
+        <location line="+23"/>
+        <location line="+6"/>
+        <source>Gamepad overlay</source>
+        <translation>Gamepad-Overlay</translation>
+    </message>
+    <message>
+        <location line="+8"/>
+        <source>Automatic controller</source>
+        <translation>Automatische Controllerauswahl</translation>
+    </message>
+    <message>
+        <location line="+1"/>
+        <source>Controller device</source>
+        <translation>Controllergerät</translation>
+    </message>
+    <message>
+        <location line="+6"/>
+        <source>Automatic layout</source>
+        <translation>Automatisches Layout</translation>
+    </message>
+    <message>
+        <location line="+1"/>
+        <source>PlayStation 5 DualSense</source>
+        <translation>PlayStation 5 DualSense</translation>
+    </message>
+    <message>
+        <location line="+1"/>
+        <source>Xbox Series</source>
+        <translation>Xbox Series</translation>
+    </message>
+    <message>
+        <location line="+1"/>
+        <source>Generic dual-stick</source>
+        <translation>Generischer Dual-Stick-Controller</translation>
+    </message>
+    <message>
+        <location line="+3"/>
+        <source>Controller layout</source>
+        <translation>Controllerlayout</translation>
+    </message>
+    <message>
+        <location line="+5"/>
+        <source>Lines</source>
+        <translation>Linien</translation>
+    </message>
+    <message>
+        <location line="+0"/>
+        <source>Glass</source>
+        <translation>Glas</translation>
+    </message>
+    <message>
+        <location line="+2"/>
+        <source>Controller style</source>
+        <translation>Controllerstil</translation>
+    </message>
+    <message>
+        <location line="+5"/>
+        <source>Opacity</source>
+        <translation>Deckkraft</translation>
+    </message>
+    <message>
+        <location line="+6"/>
+        <source>Gamepad opacity</source>
+        <translation>Gamepad-Deckkraft</translation>
+    </message>
+    <message>
+        <location line="+5"/>
+        <source>Glow</source>
+        <translation>Leuchten</translation>
+    </message>
+</context>
+<context>
     <name>HotkeyCaptureField</name>
     <message>
         <location filename="../quick/ExoSnap/Quick/HotkeyCaptureField.qml" line="+77"/>
@@ -6206,7 +6298,7 @@ Ermittelte SHA-256: %2</translation>
         <translation>Win</translation>
     </message>
     <message>
-        <location filename="../quick/ExoSnap/Quick/QuickApplication.cpp" line="+3438"/>
+        <location filename="../quick/ExoSnap/Quick/QuickApplication.cpp" line="+3448"/>
         <location filename="../services/GlobalHotkeyService.cpp" line="+52"/>
         <source>This shortcut is already used by Windows or another application.</source>
         <translation>Dieser Hotkey wird bereits von Windows oder einer anderen Anwendung verwendet.</translation>
@@ -6481,7 +6573,7 @@ Ermittelte SHA-256: %2</translation>
 <context>
     <name>Notifications</name>
     <message>
-        <location filename="../notifications/NotificationEvent.h" line="+200"/>
+        <location filename="../notifications/NotificationEvent.h" line="+198"/>
         <source>Microphone</source>
         <translation>Mikrofon</translation>
     </message>
@@ -6955,7 +7047,7 @@ Ermittelte SHA-256: %2</translation>
 <context>
     <name>QuickApplication</name>
     <message>
-        <location filename="../quick/ExoSnap/Quick/QuickApplication.cpp" line="-2670"/>
+        <location filename="../quick/ExoSnap/Quick/QuickApplication.cpp" line="-2672"/>
         <source>Recording is blocked</source>
         <translation>Aufnahme blockiert</translation>
     </message>
@@ -7026,14 +7118,14 @@ Ermittelte SHA-256: %2</translation>
     </message>
     <message>
         <location line="+1201"/>
-        <location line="+386"/>
+        <location line="+388"/>
         <location line="+69"/>
         <source>Settings could not be saved</source>
         <translation>Einstellungen konnten nicht gespeichert werden</translation>
     </message>
     <message>
-        <location line="-454"/>
-        <location line="+387"/>
+        <location line="-456"/>
+        <location line="+389"/>
         <source>The change may be lost when ExoSnap restarts.</source>
         <translation>Die Änderung kann beim Neustart von ExoSnap verloren gehen.</translation>
     </message>
@@ -7206,12 +7298,12 @@ Ermittelte SHA-256: %2</translation>
         <translation>Speicherplatz wird knapp</translation>
     </message>
     <message>
-        <location line="-4990"/>
+        <location line="-4992"/>
         <source>Recording is blocked by the current system configuration.</source>
         <translation>Die aktuelle Systemkonfiguration verhindert eine Aufnahme.</translation>
     </message>
     <message numerus="yes">
-        <location line="+4350"/>
+        <location line="+4352"/>
         <source>Unfinalized recordings from the last session: %n</source>
         <translation>
             <numerusform>Nicht abgeschlossene Aufnahmen der letzten Sitzung: %n</numerusform>
@@ -7239,7 +7331,7 @@ Ermittelte SHA-256: %2</translation>
         <translation>Export fehlgeschlagen</translation>
     </message>
     <message>
-        <location line="+390"/>
+        <location line="+391"/>
         <source>Hotkey unavailable</source>
         <translation>Tastenkürzel nicht verfügbar</translation>
     </message>
@@ -7267,7 +7359,7 @@ Ermittelte SHA-256: %2</translation>
 <context>
     <name>RecordPage</name>
     <message>
-        <location filename="../quick/ExoSnap/Quick/RecordPage.qml" line="+38"/>
+        <location filename="../quick/ExoSnap/Quick/RecordPage.qml" line="+39"/>
         <source>Sources</source>
         <translation>Quellen</translation>
     </message>
@@ -7287,7 +7379,7 @@ Ermittelte SHA-256: %2</translation>
         <translation>Aufnahmeprofil öffnen</translation>
     </message>
     <message>
-        <location line="+91"/>
+        <location line="+99"/>
         <source>Preview off</source>
         <translation>Vorschau aus</translation>
     </message>
@@ -7305,6 +7397,11 @@ Ermittelte SHA-256: %2</translation>
         <location line="+10"/>
         <source>Choose source</source>
         <translation>Quelle wählen</translation>
+    </message>
+    <message>
+        <location line="+25"/>
+        <source>Gamepad overlay</source>
+        <translation>Gamepad-Overlay</translation>
     </message>
 </context>
 <context>
@@ -8103,12 +8200,12 @@ Ermittelte SHA-256: %2</translation>
 <context>
     <name>RecordWebcamOverlay</name>
     <message>
-        <location filename="../quick/ExoSnap/Quick/RecordWebcamOverlay.qml" line="+32"/>
+        <location filename="../quick/ExoSnap/Quick/RecordWebcamOverlay.qml" line="+16"/>
         <source>Webcam overlay</source>
         <translation>Webcam-Overlay</translation>
     </message>
     <message>
-        <location line="+1"/>
+        <location line="+18"/>
         <source>Drag to move. Use arrow keys to move and Shift plus arrow keys to resize.</source>
         <translation>Zum Verschieben ziehen. Pfeiltasten verschieben, Umschalt plus Pfeiltasten ändern die Größe.</translation>
     </message>
@@ -8121,7 +8218,7 @@ Ermittelte SHA-256: %2</translation>
 <context>
     <name>RecordingActions</name>
     <message>
-        <location filename="../services/RecordingCoordinator.cpp" line="+1833"/>
+        <location filename="../services/RecordingCoordinator.cpp" line="+1835"/>
         <source>Split is only available while recording.</source>
         <translation>Aufteilen ist nur während einer Aufnahme möglich.</translation>
     </message>
@@ -11899,7 +11996,7 @@ Kleiner Text auf dem Bildschirm verliert früher an Qualität als Videoinhalte. 
 <context>
     <name>exosnap::quick::EditExportAdapter</name>
     <message>
-        <location filename="../quick/ExoSnap/Quick/EditExportAdapter.cpp" line="-697"/>
+        <location filename="../quick/ExoSnap/Quick/EditExportAdapter.cpp" line="-730"/>
         <source>No probed encoder adapter supports this render format.</source>
         <translation>Kein geprüfter Encoder-Adapter unterstützt dieses Renderformat.</translation>
     </message>
@@ -11979,7 +12076,7 @@ Kleiner Text auf dem Bildschirm verliert früher an Qualität als Videoinhalte. 
         <translation>Matroska-Video (*.mkv);;MP4-Video (*.mp4)</translation>
     </message>
     <message>
-        <location line="+137"/>
+        <location line="+138"/>
         <source>Render Crossfade: SDR BT.709 video and PCM audio in Matroska. Choose an MKV destination.</source>
         <translation>Überblendung rendern: SDR-BT.709-Video und PCM-Audio in Matroska. Ein MKV-Ziel auswählen.</translation>
     </message>
@@ -11989,12 +12086,12 @@ Kleiner Text auf dem Bildschirm verliert früher an Qualität als Videoinhalte. 
         <translation>Verlustfreie Stream-Kopie. Dateinamen und Ordner wählen (%1).</translation>
     </message>
     <message>
-        <location line="+171"/>
+        <location line="+204"/>
         <source>Choose a destination and confirm before replacing an existing file.</source>
         <translation>Ziel wählen und das Ersetzen einer vorhandenen Datei bestätigen.</translation>
     </message>
     <message>
-        <location line="+63"/>
+        <location line="+62"/>
         <source>The timeline or monitoring selection changed during export preparation.</source>
         <translation>Zeitleiste oder Abhörauswahl haben sich während der Exportvorbereitung geändert.</translation>
     </message>
@@ -12074,12 +12171,12 @@ Kleiner Text auf dem Bildschirm verliert früher an Qualität als Videoinhalte. 
 <context>
     <name>exosnap::quick::EditSessionAdapter</name>
     <message>
-        <location filename="../quick/ExoSnap/Quick/EditWorkspaceSession.cpp" line="+1744"/>
+        <location filename="../quick/ExoSnap/Quick/EditWorkspaceSession.cpp" line="+1749"/>
         <source>The edit would overlap another clip or exceed the source.</source>
         <translation>Die Bearbeitung würde einen anderen Clip überlappen oder die Quelle überschreiten.</translation>
     </message>
     <message>
-        <location line="-1555"/>
+        <location line="-1560"/>
         <source>Choose a valid time format.</source>
         <translation>Wählen Sie ein gültiges Zeitformat aus.</translation>
     </message>
@@ -12126,12 +12223,12 @@ Kleiner Text auf dem Bildschirm verliert früher an Qualität als Videoinhalte. 
     </message>
     <message>
         <location line="+1"/>
-        <location line="+1262"/>
+        <location line="+1267"/>
         <source>%1 fps</source>
         <translation>%1 fps</translation>
     </message>
     <message>
-        <location line="-1261"/>
+        <location line="-1266"/>
         <source>%1/%2 fps</source>
         <translation>%1/%2 fps</translation>
     </message>
@@ -12147,14 +12244,14 @@ Kleiner Text auf dem Bildschirm verliert früher an Qualität als Videoinhalte. 
     </message>
     <message>
         <location line="+34"/>
-        <location line="+3066"/>
+        <location line="+3071"/>
         <location line="+457"/>
         <location filename="../quick/ExoSnap/Quick/EditSessionAdapter.cpp" line="-122"/>
         <source>Apply or cancel the track scope review before continuing.</source>
         <translation>Übernehmen oder verwerfen Sie die Spurauswahl, bevor Sie fortfahren.</translation>
     </message>
     <message>
-        <location line="-3507"/>
+        <location line="-3512"/>
         <source>Correct or cancel the pending value before continuing.</source>
         <translation>Korrigieren oder verwerfen Sie den ausstehenden Wert, bevor Sie fortfahren.</translation>
     </message>
@@ -12241,12 +12338,12 @@ Kleiner Text auf dem Bildschirm verliert früher an Qualität als Videoinhalte. 
     <message>
         <location line="+89"/>
         <location line="+168"/>
-        <location line="+539"/>
+        <location line="+544"/>
         <source>Choose existing tracks for the range.</source>
         <translation>Wählen Sie vorhandene Spuren für den Bereich aus.</translation>
     </message>
     <message>
-        <location line="-546"/>
+        <location line="-551"/>
         <source>The range needs distinct valid boundaries and existing tracks.</source>
         <translation>Der Bereich benötigt unterschiedliche gültige Grenzen und vorhandene Spuren.</translation>
     </message>
@@ -12271,7 +12368,7 @@ Kleiner Text auf dem Bildschirm verliert früher an Qualität als Videoinhalte. 
         <translation>Das bearbeitete Element ist nicht mehr verfügbar.</translation>
     </message>
     <message>
-        <location line="+476"/>
+        <location line="+481"/>
         <source>The range needs distinct valid boundaries and at least one existing track.</source>
         <translation>Der Bereich benötigt unterschiedliche gültige Grenzen und mindestens eine vorhandene Spur.</translation>
     </message>
@@ -12297,7 +12394,7 @@ Kleiner Text auf dem Bildschirm verliert früher an Qualität als Videoinhalte. 
     </message>
     <message>
         <location line="+31"/>
-        <location filename="../quick/ExoSnap/Quick/EditSessionAdapter.cpp" line="-481"/>
+        <location filename="../quick/ExoSnap/Quick/EditSessionAdapter.cpp" line="-478"/>
         <source>The timeline position is out of range.</source>
         <translation>Die Zeitleistenposition liegt außerhalb des gültigen Bereichs.</translation>
     </message>
@@ -12441,7 +12538,7 @@ Kleiner Text auf dem Bildschirm verliert früher an Qualität als Videoinhalte. 
         <translation>Die Ersatzquelle konnte nicht übernommen werden.</translation>
     </message>
     <message>
-        <location filename="../quick/ExoSnap/Quick/EditSessionAdapter.cpp" line="+127"/>
+        <location filename="../quick/ExoSnap/Quick/EditSessionAdapter.cpp" line="+124"/>
         <source>The recording overlaps existing clips.</source>
         <translation>Die Aufnahme überlappt vorhandene Clips.</translation>
     </message>
@@ -12454,6 +12551,59 @@ Kleiner Text auf dem Bildschirm verliert früher an Qualität als Videoinhalte. 
         <location line="+237"/>
         <source>The editor was closed.</source>
         <translation>Der Editor wurde geschlossen.</translation>
+    </message>
+</context>
+<context>
+    <name>exosnap::quick::GamepadOverlay</name>
+    <message>
+        <location filename="../quick/ExoSnap/Quick/GamepadOverlay.cpp" line="+50"/>
+        <source>GameInput unavailable: %1</source>
+        <translation>GameInput nicht verfügbar: %1</translation>
+    </message>
+    <message>
+        <location line="+153"/>
+        <source>Controller connected</source>
+        <translation>Controller verbunden</translation>
+    </message>
+    <message>
+        <location line="+2"/>
+        <source>Waiting for controller</source>
+        <translation>Warte auf Controller</translation>
+    </message>
+    <message>
+        <location line="+11"/>
+        <source>Automatic</source>
+        <translation>Automatisch</translation>
+    </message>
+    <message>
+        <location line="+5"/>
+        <source>DualSense</source>
+        <translation>DualSense</translation>
+    </message>
+    <message>
+        <location line="+1"/>
+        <source>Xbox Series</source>
+        <translation>Xbox Series</translation>
+    </message>
+    <message>
+        <location line="+1"/>
+        <source>Xbox One</source>
+        <translation>Xbox One</translation>
+    </message>
+    <message>
+        <location line="+1"/>
+        <source>Switch Pro</source>
+        <translation>Switch Pro</translation>
+    </message>
+    <message>
+        <location line="+1"/>
+        <source>Gamepad</source>
+        <translation>Gamepad</translation>
+    </message>
+    <message>
+        <location line="+9"/>
+        <source>Selected controller (disconnected)</source>
+        <translation>Ausgewählter Controller (getrennt)</translation>
     </message>
 </context>
 <context>

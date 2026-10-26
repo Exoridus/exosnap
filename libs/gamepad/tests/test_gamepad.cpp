@@ -23,6 +23,105 @@ TEST(ReadingRing, EmptyHasNoState) {
     EXPECT_FALSE(ring.StateAt(std::numeric_limits<uint64_t>::max()).has_value());
 }
 
+TEST(DeviceHistory, KeepsIdenticalModelsSeparateAndManualSelectionStable) {
+    DeviceHistory history;
+    auto first = At(100, 1);
+    auto second = At(110, 2);
+    first.device.id[0] = 1;
+    second.device.id[0] = 2;
+    history.Push(first);
+    history.Push(second);
+    EXPECT_EQ(history.Devices().size(), 2U);
+    EXPECT_EQ(history.StateAt(120)->state.buttons, 1U);
+    history.Select(second.device.id);
+    EXPECT_EQ(history.StateAt(120)->state.buttons, 2U);
+    first.capture_100ns = 130;
+    first.state.buttons = 4;
+    history.Push(first);
+    EXPECT_EQ(history.StateAt(140)->state.buttons, 2U);
+}
+
+TEST(DeviceHistory, BusyDeviceCannotEvictQuietDeviceState) {
+    DeviceHistory history;
+    auto quiet = At(100, 1);
+    quiet.device.id[0] = 1;
+    history.Push(quiet);
+    for (uint64_t time = 101; time < 1000; ++time) {
+        auto busy = At(time, 2);
+        busy.device.id[0] = 2;
+        history.Push(busy);
+    }
+    history.Select(quiet.device.id);
+    ASSERT_TRUE(history.StateAt(1000));
+    EXPECT_EQ(history.StateAt(1000)->state.buttons, 1U);
+}
+
+TEST(DeviceHistory, DisconnectRestsAndReconnectDoesNotRestoreOldPress) {
+    DeviceHistory history;
+    auto reading = At(100, 1);
+    reading.device.id[0] = 1;
+    history.Push(reading);
+    reading.capture_100ns = 200;
+    reading.connected = false;
+    history.Push(reading);
+    EXPECT_TRUE(history.Devices().empty());
+    ASSERT_TRUE(history.StateAt(200));
+    EXPECT_FALSE(history.StateAt(200)->connected);
+    EXPECT_EQ(history.StateAt(200)->state.buttons, 0U);
+    EXPECT_EQ(history.StateAt(150)->state.buttons, 1U);
+    reading.capture_100ns = 300;
+    reading.connected = true;
+    reading.state = {};
+    history.Push(reading);
+    EXPECT_TRUE(history.StateAt(300)->connected);
+    EXPECT_EQ(history.StateAt(300)->state.buttons, 0U);
+}
+
+TEST(DeviceHistory, MissingManualDeviceNeverFallsBackToAnotherPad) {
+    DeviceHistory history;
+    auto reading = At(100, 1);
+    reading.device.id[0] = 1;
+    history.Push(reading);
+    DeviceId missing{};
+    missing[0] = 2;
+    history.Select(missing);
+    EXPECT_FALSE(history.StateAt(200));
+    history.Select(std::nullopt);
+    EXPECT_EQ(history.StateAt(200)->device.id, reading.device.id);
+}
+
+TEST(DeviceHistory, AutomaticSelectionPrefersFirstActivePadThenStaysWithIt) {
+    DeviceHistory history;
+    auto quiet = At(100);
+    quiet.device.id[0] = 1;
+    history.Push(quiet);
+    auto active = At(200, 4);
+    active.device.id[0] = 2;
+    history.Push(active);
+    EXPECT_EQ(history.StateAt(200)->device.id, active.device.id);
+    quiet.capture_100ns = 300;
+    quiet.state.buttons = 8;
+    history.Push(quiet);
+    EXPECT_EQ(history.StateAt(300)->device.id, active.device.id);
+}
+
+TEST(DeviceHistory, PartialReadingLookupIgnoresManualSelectionAndFutureStates) {
+    DeviceHistory history;
+    auto first = At(100, 4);
+    first.device.id[0] = 1;
+    first.state.home = true;
+    history.Push(first);
+    auto second = At(200, 8);
+    second.device.id[0] = 2;
+    history.Push(second);
+    history.Select(second.device.id);
+    const auto previous = history.StateFor(first.device.id, 150);
+    ASSERT_TRUE(previous);
+    EXPECT_EQ(previous->state.buttons, 4U);
+    EXPECT_EQ(previous->state.home, true);
+    EXPECT_FALSE(history.StateFor(second.device.id, 150));
+}
+
 TEST(ReadingRing, ReturnsNewestAtOrBefore) {
     ReadingRing ring(8);
     ring.Push(At(100, 1));

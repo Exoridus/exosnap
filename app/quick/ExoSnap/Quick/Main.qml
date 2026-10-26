@@ -6,6 +6,7 @@ ApplicationWindow {
 
     required property AboutViewModelAdapter aboutViewModel
     required property RecordViewModelAdapter recordViewModel
+    property GamepadOverlay gamepadOverlay: null
     required property RecordingClipAdapter clipAdapter
     required property RecordPreviewAdapter previewAdapter
     required property SettingsAdapter settingsAdapter
@@ -450,6 +451,7 @@ ApplicationWindow {
     }
 
     AppShell {
+        gamepadOverlay: root.gamepadOverlay
         id: appShell
 
         anchors.fill: parent

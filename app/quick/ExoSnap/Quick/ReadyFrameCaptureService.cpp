@@ -395,9 +395,11 @@ void captureOnWorker(ReadyFrameSource source, ReadyFrameComposition composition,
     exosnap::engine::GpuCompositor compositor;
     if (!compositor.Init(device.Get(), context.Get(), crop.width(), crop.height(), error) ||
         !compositor.BeginFrame(bgra.Get(), error) ||
+        (composition.video.capture_cursor && !drawCursor(compositor, source, crop, error)) ||
         !drawWebcam(compositor, composition.webcam, composition.webcam_frame.get(), crop.width(), crop.height(),
                     error) ||
-        (composition.video.capture_cursor && !drawCursor(compositor, source, crop, error))) {
+        (composition.sprites &&
+         !compositor.DrawSpriteLayer(0, *composition.sprites, {0, 0, crop.width(), crop.height()}, error))) {
         fail(std::move(error));
         return;
     }

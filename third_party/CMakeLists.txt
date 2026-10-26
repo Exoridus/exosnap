@@ -412,6 +412,18 @@ target_compile_options(gameinput_loader PRIVATE
 add_library(GameInput::GameInput ALIAS gameinput_loader)
 _exosnap_install_license("Microsoft GameInput 4.0.302"
     "${gameinput_SOURCE_DIR}/LICENSE.txt" "gameinput.txt")
+_exosnap_install_license("Microsoft GameInput notices"
+    "${gameinput_SOURCE_DIR}/NOTICE.txt" "gameinput-notice.txt")
+_exosnap_install_license("Microsoft GameInput loader (MIT)"
+    "${PROJECT_SOURCE_DIR}/third_party/gameinput/LICENSE-MIT.txt" "gameinput-mit.txt")
+
+set(EXOSNAP_GAMEINPUT_RUNTIME_FILES
+    "${gameinput_SOURCE_DIR}/native/bin/x64/GameInputRedist.dll"
+    "${gameinput_SOURCE_DIR}/native/bin/x64/GameInputRawInputProxy.exe"
+    CACHE INTERNAL "Application-local GameInput x64 runtime")
+install(FILES ${EXOSNAP_GAMEINPUT_RUNTIME_FILES} DESTINATION ".")
+_exosnap_install_license("Gamepad artwork (CC0)"
+    "${PROJECT_SOURCE_DIR}/third_party/gamepad/xelu.txt" "gamepad-artwork.txt")
 
 # ---------------------------------------------------------------------------
 # Vendored in-tree sources (libs/update/third_party) -- no FetchContent step,

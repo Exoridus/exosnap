@@ -2,7 +2,9 @@
 
 #include <windows.h>
 
+#include <cmath>
 #include <filesystem>
+#include <limits>
 #include <string>
 #include <vector>
 
@@ -185,6 +187,47 @@ TEST(RecordingPresetStore, RoundTrip_3Presets_AllFieldsPreserved) {
     }
 
     CleanupFile(path);
+}
+
+TEST(RecordingPresetStore, GamepadOverlayRoundTripsInLiveConfig) {
+    QTemporaryDir temporary;
+    ASSERT_TRUE(temporary.isValid());
+    RecordingPresetStore store(temporary.filePath(QStringLiteral("presets.toml")));
+    auto config = MakeDefaultPreset().config;
+    config.gamepad.enabled = true;
+    config.gamepad.device = std::string(64, 'a');
+    config.gamepad.layout = 0;
+    config.gamepad.glass = true;
+    config.gamepad.glow = true;
+    config.gamepad.opacity = 0.42F;
+    config.gamepad.x = 0.1F;
+    config.gamepad.y = 0.2F;
+    config.gamepad.width = 0.4F;
+    config.gamepad.height = 0.5F;
+    ASSERT_TRUE(store.Save({}, MakeDefaultPreset().id, config));
+    const auto restored = store.Load();
+    ASSERT_TRUE(restored.live);
+    EXPECT_EQ(restored.live->gamepad, config.gamepad);
+    EXPECT_FALSE(ConfigDirtyDifference(config, *restored.live).size());
+}
+
+TEST(RecordingPresetStore, GamepadOverlaySanitizesInvalidPlacementAndDevice) {
+    GamepadOverlaySettings settings;
+    settings.device = "invalid";
+    settings.layout = 900;
+    settings.x = 3;
+    settings.y = -1;
+    settings.width = 0;
+    settings.height = 2;
+    settings.opacity = std::numeric_limits<float>::quiet_NaN();
+    const auto safe = SanitizeGamepadOverlaySettings(settings);
+    EXPECT_TRUE(safe.device.empty());
+    EXPECT_EQ(safe.layout, 2);
+    EXPECT_GE(safe.x, 0);
+    EXPECT_LE(safe.x + safe.width, 1);
+    EXPECT_GE(safe.y, 0);
+    EXPECT_LE(safe.y + safe.height, 1);
+    EXPECT_TRUE(std::isfinite(safe.opacity));
 }
 
 // ===========================================================================

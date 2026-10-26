@@ -8,6 +8,7 @@ Item {
     id: root
 
     required property RecordViewModelAdapter recordViewModel
+    property GamepadOverlay gamepadOverlay: null
     required property RecordingClipAdapter clipAdapter
     required property RecordPreviewAdapter previewAdapter
     required property RecordingWorkspaceState workspaceState
@@ -125,6 +126,14 @@ Item {
                         ExoPreviewItem {
                             objectName: "quickPreviewItem"
                             previewAdapter: root.previewAdapter
+                            gamepadOverlay: root.gamepadOverlay
+                            function updateGamepadSize(): void {
+                                if (root.gamepadOverlay)
+                                    root.gamepadOverlay.setContentSize(Qt.size(sourceSize.width * normalizedSourceRect.width,
+                                                                             sourceSize.height * normalizedSourceRect.height))
+                            }
+                            onSourceSizeChanged: updateGamepadSize()
+                            onNormalizedSourceRectChanged: updateGamepadSize()
                             normalizedSourceRect: root.recordViewModel.normalizedSourceRect
                             cornerRadius: 0
                             anchors.fill: parent
@@ -227,6 +236,32 @@ Item {
                             editable: root.recordViewModel.webcamOverlayEditable
                             error: root.recordViewModel.webcamError
                             onRectRequested: rect => root.recordViewModel.requestWebcamOverlayRect(rect)
+                        }
+
+                        RecordWebcamOverlay {
+                            id: gamepadPlacement
+                            stage: previewStage
+                            overlayName: qsTr("Gamepad overlay")
+                            visible: root.gamepadOverlay !== null && root.gamepadOverlay.enabled
+                            idlePreview: false
+                            modelRect: root.gamepadOverlay ? root.gamepadOverlay.placement : Qt.rect(0, 0, 1, 1)
+                            editable: root.recordViewModel.webcamOverlayEditable
+                            onDraftRectChanged: {
+                                if (root.gamepadOverlay && editable)
+                                    root.gamepadOverlay.placement = draftRect
+                            }
+                            onRectRequested: rect => {
+                                if (root.gamepadOverlay)
+                                    root.gamepadOverlay.placement = rect
+                            }
+                        }
+
+                        GamepadOverlayControls {
+                            visible: root.gamepadOverlay !== null
+                            overlay: root.gamepadOverlay
+                            anchors.right: parent.right
+                            anchors.bottom: parent.bottom
+                            anchors.margins: ExoTheme.spacingMd
                         }
 
                         RecordPreviewChrome {

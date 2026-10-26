@@ -308,6 +308,10 @@ class RecordingCoordinator {
     // The camera's latest frame, as the recording would composite it. Null before
     // the first frame. Any thread.
     [[nodiscard]] std::shared_ptr<const exosnap::engine::WebcamFrameSnapshot> WebcamSnapshot();
+    /// Bind before recording starts. The provider must outlive this coordinator.
+    void SetSpriteSourceProvider(exosnap::engine::SpriteSourceProvider* provider) {
+        sprite_source_ = provider;
+    }
     // Receiver-scoped open-reader status transitions (see WebcamService::
     // SetStatusCallback): forwarded verbatim so the Record dock can flag a webcam
     // that cannot be opened. Dropped if the receiver dies.
@@ -744,6 +748,7 @@ class RecordingCoordinator {
     exosnap::engine::ResolvedEncoderDevice resolved_encoder_device_;
     std::optional<capability::CapabilitySet> encoder_caps_;
     WebcamSettings webcam_settings_;
+    exosnap::engine::SpriteSourceProvider* sprite_source_ = nullptr;
     WebcamService webcam_service_;
     // Owned rather than borrowed: it must outlive any session that composites
     // from it, and the session holds a bare pointer.

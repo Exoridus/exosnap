@@ -1,5 +1,6 @@
 #pragma once
 
+#include "GamepadOverlay.h"
 #include "PreviewMetricsSnapshot.h"
 #include "PreviewUpdateScheduler.h"
 #include "RecordPreviewAdapter.h"
@@ -45,6 +46,8 @@ class ExoPreviewItem : public QQuickItem {
     // the overlay and ignores both.
     Q_PROPERTY(bool webcamVisible READ webcamVisible WRITE setWebcamVisible NOTIFY webcamVisibleChanged FINAL)
     Q_PROPERTY(QRectF webcamRect READ webcamRect WRITE setWebcamRect NOTIFY webcamRectChanged FINAL)
+    Q_PROPERTY(exosnap::quick::GamepadOverlay* gamepadOverlay READ gamepadOverlay WRITE setGamepadOverlay NOTIFY
+                   gamepadOverlayChanged FINAL)
 
   public:
     explicit ExoPreviewItem(QQuickItem* parent = nullptr);
@@ -75,6 +78,10 @@ class ExoPreviewItem : public QQuickItem {
     // the camera rather than from QML.
     void setWebcamStyle(bool mirror, float opacity, const exosnap::engine::ChromaKeyParams& chroma);
     void setWebcamFrame(std::shared_ptr<const exosnap::engine::WebcamFrameSnapshot> frame);
+    GamepadOverlay* gamepadOverlay() const {
+        return gamepad_overlay_;
+    }
+    void setGamepadOverlay(GamepadOverlay* overlay);
 
     // GUI-thread handoff. Ownership of nt_handle transfers to this item. The
     // handle is opened and closed on the scene-graph render thread.
@@ -125,6 +132,7 @@ class ExoPreviewItem : public QQuickItem {
         float opacity = 1.0f;
         exosnap::engine::ChromaKeyParams chroma;
         std::shared_ptr<const exosnap::engine::WebcamFrameSnapshot> frame;
+        std::shared_ptr<const exosnap::engine::SpriteLayerSnapshot> sprites;
     };
 
     static constexpr size_t kMetricWindow = 1024;
@@ -212,6 +220,7 @@ class ExoPreviewItem : public QQuickItem {
     void errorTextChanged();
     void webcamVisibleChanged();
     void webcamRectChanged();
+    void gamepadOverlayChanged();
 
   protected:
     QSGNode* updatePaintNode(QSGNode* old_node, UpdatePaintNodeData*) override;
@@ -269,6 +278,8 @@ class ExoPreviewItem : public QQuickItem {
     QMetaObject::Connection frame_swapped_connection_;
 
     WebcamOverlay webcam_overlay_;
+    QPointer<GamepadOverlay> gamepad_overlay_;
+    QMetaObject::Connection gamepad_connection_;
     quint64 webcam_revision_ = 1;
 
     bool frame_ready_ = false;

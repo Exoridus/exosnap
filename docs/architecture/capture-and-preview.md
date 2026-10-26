@@ -46,6 +46,33 @@ A sprite layer is an atlas plus quads, defined in [overlay sprites](../../libs/e
 
 A changed sprite snapshot (atlas generation or size, or the quad list) advances the sprite generation in the visual frame key. On a static desktop it recomposes the held screen exactly like a camera or cursor change. A sprite overlay therefore keeps moving over a still picture instead of freezing in the duplicated frame.
 
+### Gamepad source and artwork
+
+The Qt-free gamepad library uses GameInput v4 reading and device callbacks. Each application-local device ID has
+its own bounded timestamp history. IDs distinguish identical VID/PID pairs. Partial auxiliary readings merge only
+with that same device's state at or before the reading timestamp. Disconnect publishes a neutral state.
+The initial GameInput microsecond/QPC-100ns anchor is sampled between two QPC reads. The video thread queries
+history at its actual frame time, without a UI timer in the input-to-recording path.
+
+GamepadOverlay owns input capture and app-side artwork. SVG groups rasterize only when artwork, style or settled
+recording-content size changes. A resize temporarily transforms existing quads, then debounces rasterization.
+Raster work runs on one joined worker. Stale results are discarded before GUI delivery.
+The atlas stores straight-alpha BGRA8, transparent gutters and edge RGB for bilinear filtering. Stick deadzone
+and travel affect presentation only. Raw captured axis values are retained. The GUI notification snapshot is
+separate from the recording consumer's snapshot cache, so consuming a recording frame cannot suppress an idle
+preview update. The Quick scene-graph node draws sprites after the webcam into its clean private copy with
+GpuCompositor. An already-composited recording tap is never composed a second time.
+
+The x64 GameInputRedist.dll and GameInputRawInputProxy.exe ship beside the executable through the common CMake
+install tree used by both package formats. Runtime terms, Microsoft notices and the MIT loader notice ship together.
+The loader uses the newest supported local/system runtime. No GameInput MSI is installed.
+Microsoft recommends retaining the process-wide GameInput instance until application shutdown.
+With the 4.0.302 runtime, final IGameInput release can block after successful callback unregistration.
+One process reference is therefore retained and reused across source restarts. Each source unregisters both
+callbacks before freeing its context and releases its own interface reference. This bounds retention to one
+runtime instance, rather than leaking one instance per recording. Omitting the final release is a workaround,
+not a documented GameInput requirement. Clean final runtime release remains unqualified.
+
 ## Exclusive fullscreen and stalls
 
 Window shape alone cannot distinguish borderless content from legacy exclusive fullscreen. Pre-flight classification combines shape, WGC evidence and corroborating fullscreen signals. No-frame evidence is not a pixel analysis of whether a picture is black. A failed evidence probe supplies no evidence, never proof of a blocked capture.

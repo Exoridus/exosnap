@@ -124,9 +124,23 @@ directory alongside the ExoSnap binary.
 - **Linkage:** static (the loader is compiled from the package source); the
   runtime is resolved at run time from the in-box `GameInput.dll` or an
   installed or application-local `GameInputRedist.dll`
-- **Bundled license:** `licenses/gameinput.txt` (the package's `LICENSE.txt`,
-  unmodified)
+- **Bundled files:** `GameInputRedist.dll` and `GameInputRawInputProxy.exe`,
+  from `native/bin/x64`, next to `exosnap.exe` in MSI and portable packages.
+  No system-wide GameInput installation is performed.
+- **Bundled licenses:** `licenses/gameinput.txt` (the package's `LICENSE.txt`),
+  `licenses/gameinput-notice.txt` (the package's `NOTICE.txt`) and
+  `licenses/gameinput-mit.txt` (the header/loader MIT notice).
 - **Role:** gamepad input for the recording overlay.
+
+### Controller artwork
+
+- **Source:** Nicolae (Xelu) Berbece, Free Controller & Key Prompts,
+  https://thoseawesomeguys.com/prompts/ (CC0).
+- **Bundled license:** `licenses/gamepad-artwork.txt`, the pack's original Readme.
+- **Modifications:** simplified continuous contours, geometric controls and vector
+  button glyphs. DualSense and Xbox Series retain the reference layouts. Generic
+  uses a simplified dual-stick layout. No controller manufacturer logos are used.
+- **Role:** SVG sources compiled into the gamepad overlay's Qt resources.
 
 ### PresentMon (ETW present-diagnostics consumer)
 

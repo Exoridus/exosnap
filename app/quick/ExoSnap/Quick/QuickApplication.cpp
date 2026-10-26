@@ -702,6 +702,13 @@ void QuickApplication::initializeRecordWorkflow() {
     });
 
     recording_coordinator_->SetRecoveryManifestStore(&recovery_manifest_store_);
+    recording_coordinator_->SetSpriteSourceProvider(&gamepad_overlay_);
+    gamepad_overlay_.Configure(live_config_.gamepad);
+    QObject::connect(&gamepad_overlay_, &GamepadOverlay::settingsChanged, &record_view_model_adapter_, [this]() {
+        live_config_.gamepad = gamepad_overlay_.Settings();
+        webcam_overlay_persist_timer_.start();
+        refreshPresetState();
+    });
     recording_coordinator_->SetOutputSettings(live_config_.output);
     recording_coordinator_->SetVideoSettings(live_config_.video);
     recording_coordinator_->SetWebcamSettings(webcamSettingsForCapture());
@@ -716,6 +723,7 @@ void QuickApplication::initializeRecordWorkflow() {
         composition.video = live_config_.video;
         composition.webcam = webcamSettingsForCapture();
         composition.webcam_frame = recording_coordinator_->WebcamSnapshot();
+        composition.sprites = gamepad_overlay_.Snapshot(gamepad::GameInputSource::NowCapture100ns());
         record_preview_adapter_.requestReadyFrame(std::move(composition), std::move(callback));
     });
     wireRecordCommands();
@@ -3188,6 +3196,7 @@ void QuickApplication::applySettingsConfigEdit() {
     edited.capture = live_config_.capture;
     edited.countdown_seconds = live_config_.countdown_seconds;
     edited.webcam.overlay = live_config_.webcam.overlay;
+    edited.gamepad = live_config_.gamepad;
     if (edited.audio_intent) {
         if (const auto* legacy = std::get_if<engine::LegacyRows25Intent>(&*edited.audio_intent)) {
             auto synchronized = SynchronizeLegacyAudioRows(*legacy, edited.audio);
@@ -3231,6 +3240,7 @@ void QuickApplication::applySettingsConfigEdit() {
 
 void QuickApplication::applyPresetConfig(RecordingPresetConfig config) {
     live_config_ = SanitizePresetConfig(std::move(config));
+    gamepad_overlay_.Configure(live_config_.gamepad);
     audio_routing_adapter_.refresh(live_config_.audio_intent.value_or(engine::AudioIntent{engine::TrackGraph1Intent{}}),
                                    live_config_.audio_read_only,
                                    QString::fromStdString(live_config_.audio_validation_error));
@@ -6330,6 +6340,7 @@ bool QuickApplication::load(bool no_activate) {
         {QStringLiteral("minimumWindowSize"), QVariant::fromValue(QSizeF(minimum_size))},
         {QStringLiteral("aboutViewModel"), QVariant::fromValue(&about_view_model_)},
         {QStringLiteral("recordViewModel"), QVariant::fromValue(&record_view_model_adapter_)},
+        {QStringLiteral("gamepadOverlay"), QVariant::fromValue(&gamepad_overlay_)},
         {QStringLiteral("clipAdapter"), QVariant::fromValue(&recording_clip_adapter_)},
         {QStringLiteral("previewAdapter"), QVariant::fromValue(&record_preview_adapter_)},
         {QStringLiteral("settingsAdapter"), QVariant::fromValue(&settings_adapter_)},

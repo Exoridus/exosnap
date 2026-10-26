@@ -61,6 +61,9 @@ const std::vector<std::string> k_expected_licenses = {
     "ffmpeg.txt",
     "presentmon.txt",
     "gameinput.txt",
+    "gameinput-notice.txt",
+    "gameinput-mit.txt",
+    "gamepad-artwork.txt",
     // Official-release-build-only (EXOSNAP_OFFICIAL_BUILD=ON); still documented unconditionally.
     "sentry-native.txt",
     "crashpad.txt",

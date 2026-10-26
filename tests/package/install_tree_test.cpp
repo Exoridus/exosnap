@@ -95,6 +95,12 @@ TEST_F(InstallTreeTest, ExosnapExeExists) {
     EXPECT_TRUE(file_exists(_root, "exosnap.exe")) << "Missing exosnap.exe in install tree";
 }
 
+TEST_F(InstallTreeTest, GameInputRuntimeAtRoot) {
+    SKIP_IF_NO_TREE();
+    EXPECT_TRUE(file_exists(_root, "GameInputRedist.dll"));
+    EXPECT_TRUE(file_exists(_root, "GameInputRawInputProxy.exe"));
+}
+
 TEST_F(InstallTreeTest, QtConfAtRoot) {
     SKIP_IF_NO_TREE();
     EXPECT_TRUE(file_exists(_root, "qt.conf")) << "Missing qt.conf next to the executable (flat deploy layout)";
@@ -161,6 +167,9 @@ TEST_F(InstallTreeTest, AllExpectedLicensesPresent) {
         "licenses/miniz.txt",
         "licenses/monocypher.txt",
         "licenses/gameinput.txt",
+        "licenses/gameinput-notice.txt",
+        "licenses/gameinput-mit.txt",
+        "licenses/gamepad-artwork.txt",
     };
     for (const auto& lic : expected) {
         EXPECT_TRUE(file_exists(_root, lic)) << "Missing license: " << lic;

@@ -117,6 +117,8 @@ fn external_path(path: &Path) -> PathBuf {
 const REQUIRED_FILES: &[&str] = &[
     "exosnap.exe",
     "exosnap-updater.exe",
+    "GameInputRedist.dll",
+    "GameInputRawInputProxy.exe",
     "qt.conf",
     "Qt6Core.dll",
     "Qt6Gui.dll",
@@ -176,6 +178,9 @@ const REQUIRED_LICENSES: &[&str] = &[
     "miniz.txt",
     "monocypher.txt",
     "gameinput.txt",
+    "gameinput-notice.txt",
+    "gameinput-mit.txt",
+    "gamepad-artwork.txt",
 ];
 
 const CRASH_CAPTURE_LICENSES: &[&str] = &["sentry-native.txt", "crashpad.txt", "mini_chromium.txt"];

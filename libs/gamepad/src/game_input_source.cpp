@@ -7,6 +7,8 @@
 
 #include <GameInput.h>
 
+#include <algorithm>
+#include <array>
 #include <cstdio>
 
 using Microsoft::WRL::ComPtr;
@@ -14,10 +16,30 @@ using namespace GameInput::v4;
 
 namespace exosnap::gamepad {
 
+namespace {
+
+HRESULT AcquireRuntime(ComPtr<IGameInput>& input) {
+    static std::mutex mutex;
+    // shortcut: v4 can deadlock on its final Release after reading callbacks;
+    // retain one process reference until a runtime supports clean final release.
+    static IGameInput* runtime = nullptr;
+    const std::scoped_lock lock(mutex);
+    if (runtime == nullptr) {
+        const HRESULT hr = GameInputCreate(&runtime);
+        if (FAILED(hr)) {
+            return hr;
+        }
+    }
+    input = runtime;
+    return S_OK;
+}
+
+} // namespace
+
 struct GameInputSource::Impl {
     ComPtr<IGameInput> input;
     ClockAnchor anchor;
-    ReadingRing ring;
+    DeviceHistory history;
     GameInputCallbackToken reading_token = 0;
     GameInputCallbackToken device_token = 0;
 
@@ -26,31 +48,55 @@ struct GameInputSource::Impl {
         if (device != nullptr) {
             identity.vendor_id = device->GetVendorId();
             identity.product_id = device->GetProductId();
+            APP_LOCAL_DEVICE_ID id{};
+            device->GetDeviceId(&id);
+            std::copy(std::begin(id.value), std::end(id.value), identity.id.begin());
             identity.layout = LayoutKindFor(identity.vendor_id, identity.product_id);
         }
         return identity;
     }
 
     void PushReading(IGameInputReading* reading) {
-        GameInputGamepadState raw{};
-        if (reading == nullptr || !reading->GetGamepadState(&raw)) {
+        if (reading == nullptr) {
             return;
         }
         ComPtr<IGameInputDevice> device;
         reading->GetDevice(&device);
+        if (!device || (device->GetSupportedInput() & GameInputKindGamepad) == 0)
+            return;
         GamepadReading out;
         out.capture_100ns = GameInputToCapture100ns(reading->GetTimestamp(), anchor);
         out.device = IdentityOf(device.Get());
-        out.state = Normalized(GamepadState{
-            .buttons = static_cast<uint32_t>(raw.buttons),
-            .left_x = raw.leftThumbstickX,
-            .left_y = raw.leftThumbstickY,
-            .right_x = raw.rightThumbstickX,
-            .right_y = raw.rightThumbstickY,
-            .left_trigger = raw.leftTrigger,
-            .right_trigger = raw.rightTrigger,
-        });
-        ring.Push(out);
+        const auto previous = history.StateFor(out.device.id, out.capture_100ns);
+        if (previous && previous->connected)
+            out.state = previous->state;
+        GameInputGamepadState raw{};
+        if (reading->GetGamepadState(&raw)) {
+            out.state.buttons = static_cast<uint32_t>(raw.buttons);
+            out.state.left_x = raw.leftThumbstickX;
+            out.state.left_y = raw.leftThumbstickY;
+            out.state.right_x = raw.rightThumbstickX;
+            out.state.right_y = raw.rightThumbstickY;
+            out.state.left_trigger = raw.leftTrigger;
+            out.state.right_trigger = raw.rightTrigger;
+            out.state = Normalized(out.state);
+        } else if (!previous || !previous->connected) {
+            return;
+        }
+        GameInputSystemButtons system{};
+        if (reading->GetSystemButtonState(&system)) {
+            out.state.home = (system & GameInputSystemButtonGuide) != 0;
+            out.state.share = (system & GameInputSystemButtonShare) != 0;
+        }
+        if (out.device.layout == LayoutKind::DualSense) {
+            // DualSense HID ordering puts PS and touchpad after the twelve common buttons.
+            std::array<bool, 14> buttons{};
+            if (reading->GetControllerButtonState(static_cast<uint32_t>(buttons.size()), buttons.data()) >= 14) {
+                out.state.home = buttons[12];
+                out.state.touchpad = buttons[13];
+            }
+        }
+        history.Push(out);
     }
 
     void PushCurrent(IGameInputDevice* device) {
@@ -76,7 +122,7 @@ struct GameInputSource::Impl {
             out.capture_100ns = GameInputToCapture100ns(self->input->GetCurrentTimestamp(), self->anchor);
             out.connected = false;
             out.device = IdentityOf(device);
-            self->ring.Push(out);
+            self->history.Push(out);
         }
     }
 
@@ -88,13 +134,6 @@ struct GameInputSource::Impl {
         }
         if (reading_token != 0) {
             input->UnregisterCallback(reading_token);
-        }
-        // shortcut: with GameInputRedist 4.0.302 loaded application-local, the
-        // final Release blocks forever once a reading callback was ever
-        // registered, even after it is unregistered. The interface is left to
-        // process teardown instead; drop this once a runtime releases cleanly.
-        if (reading_token != 0) {
-            input.Detach();
         }
     }
 };
@@ -112,7 +151,7 @@ uint64_t GameInputSource::NowCapture100ns() noexcept {
 
 std::unique_ptr<GameInputSource> GameInputSource::Start(std::string& error) {
     auto impl = std::make_unique<Impl>();
-    const HRESULT created = GameInputCreate(&impl->input);
+    const HRESULT created = AcquireRuntime(impl->input);
     if (FAILED(created)) {
         char text[96];
         std::snprintf(text, sizeof(text), "GameInputCreate failed (0x%08lX)", static_cast<unsigned long>(created));
@@ -128,8 +167,9 @@ std::unique_ptr<GameInputSource> GameInputSource::Start(std::string& error) {
     const uint64_t after = NowCapture100ns();
     impl->anchor.capture_100ns = before + (after - before) / 2;
 
-    HRESULT hr = impl->input->RegisterReadingCallback(nullptr, GameInputKindGamepad, impl.get(), &Impl::OnReading,
-                                                      &impl->reading_token);
+    HRESULT hr = impl->input->RegisterReadingCallback(
+        nullptr, GameInputKindGamepad | GameInputKindControllerButton | GameInputKindSystemButton, impl.get(),
+        &Impl::OnReading, &impl->reading_token);
     if (SUCCEEDED(hr)) {
         hr = impl->input->RegisterDeviceCallback(nullptr, GameInputKindGamepad, impl.get(), &Impl::OnDevice,
                                                  &impl->device_token);
@@ -152,7 +192,15 @@ GameInputSource::GameInputSource(std::unique_ptr<Impl> impl) : impl_(std::move(i
 GameInputSource::~GameInputSource() = default;
 
 std::optional<GamepadReading> GameInputSource::StateAt(uint64_t capture_100ns) const {
-    return impl_->ring.StateAt(capture_100ns);
+    return impl_->history.StateAt(capture_100ns);
+}
+
+void GameInputSource::SelectDevice(std::optional<DeviceId> device) {
+    impl_->history.Select(device);
+}
+
+std::vector<DeviceIdentity> GameInputSource::Devices() const {
+    return impl_->history.Devices();
 }
 
 } // namespace exosnap::gamepad
