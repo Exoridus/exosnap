@@ -83,6 +83,9 @@ class EditExportAdapterTestPeer {
 
 class EditSessionAdapterTestPeer {
   public:
+    static QThreadPool& metadataPool(EditSessionAdapter& adapter) {
+        return adapter.metadata_pool_;
+    }
     static bool setFade(EditSessionAdapter& adapter, edit::Id id, bool incoming, edit::EdgeFade fade) {
         return adapter.applyCommand(edit::SetFade{id, incoming ? edit::FadeEdge::In : edit::FadeEdge::Out, fade});
     }
@@ -247,6 +250,67 @@ EditContext MakeContext(double duration_seconds = 100.0) {
 }
 
 // ── Edit outcomes ───────────────────────────────────────────────────────────
+
+TEST(EditWorkspaceMarkers, SidecarUsesMetadataWorkerAndRejectsAReplacedContext) {
+    EnsureApplication();
+    QTemporaryDir directory;
+    ASSERT_TRUE(directory.isValid());
+    const auto sidecar = directory.filePath("source.markers.json");
+    QFile file(sidecar);
+    ASSERT_TRUE(file.open(QIODevice::WriteOnly));
+    ASSERT_GT(file.write(R"({"version":1,"markers":[{"timeMs":900,"type":"general","label":"sidecar"}]})"), 0);
+    file.close();
+    enum class Action { KeepContext, ReplaceContext, CancelImport };
+    for (const auto state : {EditExportAdapter::Review, EditExportAdapter::Done, EditExportAdapter::Failed}) {
+        for (const auto action : {Action::KeepContext, Action::ReplaceContext, Action::CancelImport}) {
+            const bool replace_context = action == Action::ReplaceContext;
+            for (const bool has_fallback : {false, true}) {
+                SCOPED_TRACE(static_cast<int>(action));
+                SCOPED_TRACE(has_fallback);
+                QSemaphore entered;
+                auto release = std::make_shared<QSemaphore>();
+                EditSessionAdapter session;
+                EditExportAdapter exporter;
+                exporter.setSession(&session);
+                auto& pool = EditSessionAdapterTestPeer::metadataPool(session);
+                pool.start([&entered, release] {
+                    entered.release();
+                    release->acquire();
+                });
+                auto unblock = qScopeGuard([release] { release->release(); });
+                ASSERT_TRUE(entered.tryAcquire(1, 5000));
+                auto context = MakeContext();
+                if (has_fallback)
+                    context.markers = {MakeMarker(100, "fallback")};
+                context.marker_sidecar_path = sidecar;
+                session.setEditContext(context);
+                ASSERT_EQ(session.markers().size(), has_fallback ? 1u : 0u);
+                if (has_fallback)
+                    EXPECT_EQ(session.markers().front().time_ms, 100);
+                if (replace_context) {
+                    context.marker_sidecar_path.clear();
+                    context.markers = {MakeMarker(200, "replacement")};
+                    session.setEditContext(context);
+                }
+                if (action == Action::CancelImport)
+                    session.cancelPendingImports();
+                exporter.applyVisualState(state, 100, QStringLiteral("result.mkv"), QString());
+                int unsaved_notifications = 0;
+                QObject::connect(&session, &EditSessionAdapter::unsavedEditsChanged, &session,
+                                 [&unsaved_notifications] { ++unsaved_notifications; });
+                release->release();
+                unblock.dismiss();
+                ASSERT_TRUE(pool.waitForDone(5000));
+                QCoreApplication::processEvents();
+                ASSERT_EQ(session.markers().size(), 1);
+                EXPECT_EQ(session.markers().front().time_ms, replace_context ? 200 : 900);
+                EXPECT_EQ(session.markers().front().label, replace_context ? "replacement" : "sidecar");
+                EXPECT_EQ(exporter.state(), state);
+                EXPECT_EQ(unsaved_notifications, !has_fallback && !replace_context ? 1 : 0);
+            }
+        }
+    }
+}
 
 TEST(EditWorkspaceOutcome, EveryEditAttemptIsCountedWithItsAnswer) {
     EnsureApplication();
@@ -3269,9 +3333,8 @@ TEST(EditWorkspaceAdapter, RealEditingHistoryAndBlankTimeReachScopedExportsWitho
         EXPECT_FALSE(exporter.reviewOutcome().value(QStringLiteral("videoOnly")).toBool());
         const auto reviewed = exporter.reviewOutcome();
         if (session.workspace().assets().size() == 1) {
-            EXPECT_EQ(reviewed.value(QStringLiteral("path")).toString(),
-                      exporter.modeKey() == QStringLiteral("originalStreams") ? QStringLiteral("Copy")
-                                                                              : QStringLiteral("Render"));
+            // An unchanged picture is copied even when the finished stereo mix is rendered.
+            EXPECT_EQ(reviewed.value(QStringLiteral("path")).toString(), QStringLiteral("Copy"));
             if (exporter.modeKey() == QStringLiteral("finishedStereo")) {
                 const auto tracks = reviewed.value(QStringLiteral("outputAudioTracks")).toList();
                 ASSERT_EQ(tracks.size(), 1);
@@ -6403,6 +6466,28 @@ TEST(EditRemainingContracts, OccupiedFitBoundsExcludeEmptyTailAndDoNotChangeTheW
     EXPECT_EQ(session.workspace().revision(), revision);
     EXPECT_FALSE(session.applyRangeGain(1));
 }
+TEST(EditThumbnailScheduling, PixelResizingReusesFivePosterRasterVariants) {
+    EnsureApplication();
+    EditTimelineAdapter timeline;
+    ThumbnailRequestBroker::Config config;
+    config.disk_enabled = false;
+    timeline.configureThumbnailCache(config);
+    std::array<uint8_t, 32> digest{};
+    digest.fill(90);
+    const auto identity = QString::fromStdString(engine::ToHex(digest));
+    timeline.thumbnailBroker()->RegisterSource(identity.toStdString(),
+                                               ThumbnailSourceInfo{"raster-only.mkv", digest, 1920, 1080, 30, 1});
+    QStringList variants;
+    for (int height = 1; height <= 256; ++height) {
+        const auto url = timeline.posterForIdentity(identity, height);
+        ASSERT_FALSE(url.isEmpty());
+        if (!variants.contains(url))
+            variants.push_back(url);
+        EXPECT_EQ(timeline.posterForIdentity(identity, height), url);
+    }
+    EXPECT_EQ(variants.size(), 5);
+}
+
 TEST(EditThumbnailScheduling, SparseCoverageStartsAtTheVisibleCenterAfterBoundaries) {
     EnsureApplication();
     EditTimelineAdapter timeline;

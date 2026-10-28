@@ -157,6 +157,50 @@ TEST_F(TimelineAudioFixture, LoopStartAdmissionEvictsFutureLookaheadBeforeCurren
     EXPECT_GT(deferred, 0);
 }
 
+TEST_F(TimelineAudioFixture, BackwardSeekRetiresLaterDecodersAndRetainsReusableCursors) {
+    auto timeline = *snapshot;
+    const auto original = timeline.timeline.clips.front();
+    timeline.timeline.clips.front().start_us = 1'000'000;
+    timeline.timeline.clips.front().source_out_us = 1'000'000;
+    for (uint64_t index = 0; index < 8; ++index) {
+        auto clip = original;
+        clip.id = index + 2;
+        clip.track = index + 2;
+        clip.start_us = 20'000'000;
+        clip.source_out_us = 1'000'000;
+        timeline.timeline.clips.push_back(clip);
+        timeline.timeline.tracks.push_back({clip.track, true});
+    }
+    timeline.timeline.duration_us = 21'000'000;
+    for (const bool source_audio : {false, true}) {
+        SCOPED_TRACE(source_audio);
+        EditTimelineReader reader;
+        EditRenderPlan plan;
+        plan.path = EditExportPath::Render;
+        std::string error;
+        ASSERT_TRUE(reader.Open(timeline, plan, error)) << error;
+        std::vector<TimelineSourceAudio> sources;
+        std::vector<float> mixed;
+        const auto read = [&](int64_t first) {
+            return source_audio ? reader.SourceAudioAt(first, 480, sources, error)
+                                : reader.AudioAt(first, 480, mixed, error);
+        };
+        ASSERT_TRUE(read(20 * 48000)) << error;
+        ASSERT_EQ(reader.AudioReadStats().decoder_opens, 8);
+        reader.ResetAudio();
+        ASSERT_TRUE(read(48000)) << error;
+        EXPECT_FLOAT_EQ(source_audio ? sources.front().interleaved_stereo.front() : mixed.front(), 0.25f);
+        const auto opens = reader.AudioReadStats().decoder_opens;
+        ASSERT_EQ(opens, 9);
+        ASSERT_TRUE(read(48000)) << error;
+        ASSERT_TRUE(read(48480)) << error;
+        EXPECT_EQ(reader.AudioReadStats().decoder_opens, opens);
+        ASSERT_TRUE(read(20 * 48000)) << error;
+        EXPECT_EQ(reader.AudioReadStats().decoder_opens, opens);
+        EXPECT_EQ(reader.PeakDecoders(), 8);
+    }
+}
+
 TEST_F(TimelineAudioFixture, StalledProducerCannotAccumulateUnboundedRetiredControlTables) {
     TimelineAudioProducer producer;
     std::binary_semaphore stalled(0);

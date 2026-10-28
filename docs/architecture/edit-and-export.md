@@ -6,6 +6,8 @@ This document owns the application-lifetime edit workspace, decoder/render owner
 
 Edit is a resident top-level page. Its C++ workspace owns assets, typed video/audio tracks, linked clips, selection and playhead independently of QML. Imported files remain in place. Navigation pauses playback and retains the workspace; application exit discards it because project persistence is not implemented. Completed recordings reuse retained masters where available. Split recordings add ordered segment assets. Unavailable segments with known duration retain their intervals. Segments whose duration cannot be probed remain in Media with an explicit warning and are not placed on the timeline.
 
+Marker sidecars are read on the metadata worker. Context markers remain available until an existing sidecar is published, and context generations reject results from an earlier open or a closed workspace.
+
 Source time is relative to the container's common timestamp origin. Decoder seeks add that origin and decoded video, playback audio, demux progress and keyframe positions subtract it. Streams retain their offsets relative to one another. An unavailable origin uses zero, and signed origins retain their sign.
 
 A finalized MKV master is available for explicit editing while MP4 delivery continues. The editor holds a source lease, so retention defers its rename until the reader can release the path. MP4 remains pending until publication finishes. Opening the master does not create a successful History entry.
