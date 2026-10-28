@@ -113,9 +113,11 @@ SDR and native-HDR outputs carry their actual color descriptions. Native HDR is 
 
 ### Sources and tracks
 
-New configurations use stable source, track and route identities. Settings presents track cards with names, roles, recording participation, assigned source chips and route gains. Empty tracks remain visible and produce no output stream. Move removes a source's previous routes and assigns it to the chosen track; Also add preserves existing routes. One source can feed several tracks, and several sources can feed one track. Output supports up to eight recorded tracks.
+New configurations use stable source, track and route identities. Settings presents a compact row per recording track with its index, drag handle, name, source chips and one actions menu. Dragging or Alt+Up/Down changes order. The menu renames inline, selects the default playback track, enables or disables recording, or removes the track and its routes after confirmation in the same menu. Empty active tracks show No source beside the name and produce no output stream. One source can feed several tracks, and several sources can feed one track. Output supports up to eight recorded tracks.
 
-The source list separates participation, availability and mute. New sources are unassigned until explicitly routed. Application sources use a specific selected capture application; independent application sources freeze that process instance instead of following later capture-target edits. Source details own device, channel, post-DSP gain and individual processing controls.
+Each track's Add source popup has one assignment switch per configured source. Turning it off removes only that track's route. Turning it on preserves other routes and restores source participation if an older configuration disabled it globally. Clicking a source chip opens its route gain and Remove from this track action. Route gain spans -60 to +24 dB. Source device, channel, post-DSP gain and processing settings are reached from the source popup. Application sources use a specific selected capture application; independent application sources freeze that process instance instead of following later capture-target edits. The playback-track action selects recorded-file playback defaults, not live speaker monitoring. Existing track roles and source mute remain stored even though the compact routing list does not expose them as extra controls.
+
+Set up audio source in that popup retains creation of system, microphone, capture-target and independent application source definitions. The type choice replaces the assignment popup rather than nesting another popup. Newly created definitions are unassigned until their track switch is enabled. Application source creation requires an explicitly confirmed current window target.
 
 Existing configurations retain their ordered-row routing and shared microphone settings until a structural edit is explicitly converted. Conversion fixes the current track layout, preserves IDs and can be undone. Unsupported future configurations remain read-only. There is one persistent routing editor; during recording its Active view describes the frozen output and edits configure the Next plan.
 
@@ -125,7 +127,7 @@ Source gain is −60 to +24 dB, default 0 dB, with microphone gain on its own ca
 
 ### Meters and microphone
 
-Source rows show measured pre-mute RMS and peak independently of post-limiter track RMS. Values use dBFS and remain unavailable until measured; silence is distinct from a finite -60 dB reading. Meter updates publish separately from editable routing cards so they do not replace focused inputs or drafts. Active output meter snapshots reach the routing panel at 10 Hz.
+Source meters measure pre-mute RMS and peak independently of post-limiter track RMS. Values use dBFS and remain unavailable until measured; silence is distinct from a finite -60 dB reading. Meter updates publish separately from editable routing rows so they do not replace focused inputs or drafts. The compact routing card has no permanent meter or status footer. Active meters remain available to the transport and Diagnostics at their existing cadence.
 
 Microphone Device, Channels, Gain and Post-processing belong to the explicitly chosen source's details. Legacy configurations retain a separate shared microphone card. A disconnected configured device is not silently replaced by an arbitrary one.
 

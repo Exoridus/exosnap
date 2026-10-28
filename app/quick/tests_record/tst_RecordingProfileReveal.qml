@@ -13,11 +13,10 @@ TestCase {
 
     Component {
         id: inspectorComponent
-        RecordingProfileInspector {
-            width: 360
+        SettingsPage {
+            width: 860
             height: 600
             settings: recordDriver.settings
-            workspaceState: RecordingWorkspaceState {}
         }
     }
 
@@ -76,7 +75,7 @@ TestCase {
         verify(!!inspector);
         waitForRendering(inspector);
         verify(!recordDriver.settings.audioRouting.legacy);
-        compare(inspector.revealAutomationTarget("microphone"), 0);
+        compare(inspector.revealAutomationTarget("microphone"), 1);
         compare(inspector.revealAutomationTarget("unknown-section"), -1);
     }
 
@@ -93,21 +92,21 @@ TestCase {
         const group = findGroup(inspector);
         verify(!!group);
         verify(!group.open);
-        inspector.setAutomationDetailsExpanded(true);
+        inspector.prepareProfileVisual(true);
         tryCompare(group, "open", true);
         tryVerify(() => !!findControl(inspector, qsTr("Microphone high-pass filter")));
         tryVerify(() => inspector.revealAutomationTarget("microphone") === 1);
         group.forceActiveFocus();
         keyClick(Qt.Key_Space);
         tryCompare(group, "open", false);
-        inspector.setAutomationDetailsExpanded(true);
+        inspector.prepareProfileVisual(true);
         tryCompare(group, "open", true);
-        inspector.setAutomationDetailsExpanded(false);
+        inspector.prepareProfileVisual(false);
         tryCompare(group, "open", false);
         tryVerify(() => !findControl(inspector, qsTr("Microphone high-pass filter")));
-        inspector.setAutomationDetailsExpanded(true);
+        inspector.prepareProfileVisual(true);
         tryCompare(group, "open", true);
-        inspector.setAutomationDetailsExpanded(false);
+        inspector.prepareProfileVisual(false);
         tryCompare(group, "open", false);
     }
 
@@ -144,10 +143,12 @@ TestCase {
         waitForRendering(inspector);
         const name = qsTr("Channel mode for %1").arg("Desktop 0");
         verify(!findControl(inspector, name));
-        inspector.setAutomationDetailsExpanded(true);
-        tryVerify(() => !!findControl(inspector, name));
-        inspector.setAutomationDetailsExpanded(false);
-        tryVerify(() => !findControl(inspector, name));
+        inspector.prepareProfileVisual(true);
+        const popup = findChild(inspector, "audioSourceDetails");
+        tryCompare(popup, "opened", true);
+        tryVerify(() => !!findControl(popup.contentItem, name));
+        inspector.prepareProfileVisual(false);
+        tryCompare(popup, "opened", false);
         compare(recordDriver.settings.audioRouting.sources.length, 1);
     }
 
@@ -156,9 +157,9 @@ TestCase {
         const inspector = createTemporaryObject(inspectorComponent, testCase);
         verify(!!inspector);
         waitForRendering(inspector);
-        inspector.setAutomationDetailsExpanded(true);
+        inspector.prepareProfileVisual(true);
         compare(recordDriver.settings.audioRouting.sources.length, 0);
-        inspector.setAutomationDetailsExpanded(false);
+        inspector.prepareProfileVisual(false);
         compare(recordDriver.settings.audioRouting.sources.length, 0);
     }
 }

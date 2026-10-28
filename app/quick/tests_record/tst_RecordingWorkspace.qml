@@ -36,22 +36,19 @@ TestCase {
 
     Component {
         id: inspectorComponent
-        RecordingProfileInspector {
-            width: 360
+        SettingsPage {
+            width: 860
             height: 600
             settings: recordDriver.settings
-            workspaceState: RecordingWorkspaceState {}
         }
     }
 
     Component {
         id: sourcePanelComponent
-        RecordingSourcePanel {
+        AudioRoutingPanel {
             width: 320
             height: 600
-            recordViewModel: recordDriver.adapter
-            settings: recordDriver.settings
-            workspaceState: RecordingWorkspaceState {}
+            routing: recordDriver.settings.audioRouting
         }
     }
 
@@ -300,7 +297,7 @@ TestCase {
         const inspector = createTemporaryObject(inspectorComponent, testCase);
         verify(!!inspector);
         waitForRendering(inspector);
-        verify(!!findAccessible(inspector, qsTr("Active recording (read-only)")));
+        verify(!!findAccessible(inspector, qsTr("Active recording (read-only): %1").arg(settings.activePresetName)));
         const frameRate = findAccessibleControl(inspector, qsTr("Frame rate"));
         verify(!!frameRate);
         verify(!frameRate.enabled);
@@ -348,10 +345,10 @@ TestCase {
         const panel = createTemporaryObject(sourcePanelComponent, testCase);
         verify(!!panel);
         waitForRendering(panel);
-        const names = [];
-        findTextItems(panel, prefix, names);
-        compare(names.length, 8);
-        for (const name of names)
-            verify(name.width <= panel.width, "source identity remains within the panel width");
+        for (const route of recordDriver.settings.audioRouting.tracks[0].routes) {
+            const chip = findChild(panel, "audioRoute-" + route.id);
+            verify(!!chip);
+            verify(chip.width <= panel.width, "source identity remains within the card width");
+        }
     }
 }
