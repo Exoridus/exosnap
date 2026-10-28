@@ -156,17 +156,23 @@ ExoCard {
     }
     RowLayout {
         Layout.fillWidth: true
-        ComboBox {
+        ExoSelect {
             id: newSourceKind
+            property int selectedKind: 0
             Layout.fillWidth: true
-            model: [qsTr("System audio"), qsTr("Microphone"), qsTr("Capture target audio"), qsTr("Independent selected application")]
+            options: [{ value: 0, label: qsTr("System audio"), selectable: true },
+                      { value: 1, label: qsTr("Microphone"), selectable: true },
+                      { value: 2, label: qsTr("Capture target audio"), selectable: true },
+                      { value: 3, label: qsTr("Independent selected application"), selectable: true }]
+            value: selectedKind
+            onValueActivated: value => selectedKind = value
             Accessible.name: qsTr("New audio source type")
             enabled: !root.routing.readOnly
         }
         ExoButton {
             text: qsTr("Add source")
             enabled: !root.routing.readOnly
-            onClicked: root.routing.addSource(newSourceKind.currentIndex, newSourceKind.currentText, root.routing.revision)
+            onClicked: root.routing.addSource(newSourceKind.selectedKind, newSourceKind.currentText, root.routing.revision)
         }
     }
     Label {

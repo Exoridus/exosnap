@@ -74,14 +74,16 @@ ExoCard {
                 root.routing.setDefaultMonitorSelection(ids, root.routing.revision);
             }
         }
-        ComboBox {
+        ExoSelect {
             Layout.fillWidth: true
             Layout.minimumWidth: 120
             Accessible.name: qsTr("Role for %1").arg(root.track.name)
-            model: [qsTr("Standard"), qsTr("Stem"), qsTr("Mix")]
-            currentIndex: root.track.role
+            options: [{ value: 0, label: qsTr("Standard"), selectable: true },
+                      { value: 1, label: qsTr("Stem"), selectable: true },
+                      { value: 2, label: qsTr("Mix"), selectable: true }]
+            value: root.track.role
             enabled: !root.routing.readOnly
-            onActivated: index => root.routing.setTrackRole(root.track.id, index, root.routing.revision)
+            onValueActivated: value => root.routing.setTrackRole(root.track.id, value, root.routing.revision)
         }
         ExoButton {
             text: root.detailsOpen ? qsTr("Hide details") : qsTr("Track details")

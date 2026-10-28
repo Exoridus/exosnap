@@ -1736,6 +1736,43 @@ TEST(RecordingPresetStore, OldSchemaVersion_Load_KeepsData_NotRepaired) {
 // Frame pacing — default Smooth + Newest round-trip (schema 19)
 // ===========================================================================
 
+TEST(RecordingPresetStore, OverlayOutputVisibilityDefaultsAndRoundtrips) {
+    const QString path = UniqueTempPath();
+    RecordingPreset preset = MakeDefaultPreset();
+    EXPECT_TRUE(preset.config.webcam.output_visible);
+    EXPECT_TRUE(preset.config.gamepad.output_visible);
+    preset.id = GeneratePresetId();
+    preset.name = "Preview-only overlays";
+    preset.config.audio_intent.reset();
+    preset.config.webcam.enabled = true;
+    preset.config.webcam.output_visible = false;
+    preset.config.gamepad.enabled = true;
+    preset.config.gamepad.output_visible = false;
+    RecordingPresetStore store(path);
+    store.Save({preset}, preset.id, preset.config);
+    const auto loaded = store.Load();
+    ASSERT_EQ(loaded.user_presets.size(), 1u);
+    EXPECT_TRUE(loaded.user_presets[0].config.webcam.enabled);
+    EXPECT_FALSE(loaded.user_presets[0].config.webcam.output_visible);
+    EXPECT_TRUE(loaded.user_presets[0].config.gamepad.enabled);
+    EXPECT_FALSE(loaded.user_presets[0].config.gamepad.output_visible);
+    ASSERT_TRUE(loaded.live);
+    EXPECT_FALSE(loaded.live->webcam.output_visible);
+    EXPECT_FALSE(loaded.live->gamepad.output_visible);
+    QFile saved(path);
+    ASSERT_TRUE(saved.open(QIODevice::ReadOnly | QIODevice::Text));
+    QString legacy = QString::fromUtf8(saved.readAll());
+    saved.close();
+    legacy.remove(QRegularExpression(QStringLiteral("(?m)^[ \\t]*output_visible[ \\t]*=[ \\t]*false[ \\t]*\\r?\\n")));
+    ASSERT_FALSE(legacy.contains(QStringLiteral("output_visible")));
+    ASSERT_TRUE(WriteTomlString(path, legacy));
+    const auto old_profile = store.Load();
+    ASSERT_EQ(old_profile.user_presets.size(), 1u);
+    EXPECT_TRUE(old_profile.user_presets[0].config.webcam.output_visible);
+    EXPECT_TRUE(old_profile.user_presets[0].config.gamepad.output_visible);
+    CleanupFile(path);
+}
+
 TEST(RecordingPresetStore, FramePacingRoundtrips) {
     using exosnap::engine::FramePacingMode;
     const QString path = UniqueTempPath();

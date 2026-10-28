@@ -767,7 +767,7 @@ void ExoPreviewItem::setGamepadOverlay(GamepadOverlay* overlay) {
     gamepad_overlay_ = overlay;
     const auto refresh = [this]() {
         webcam_overlay_.sprites =
-            gamepad_overlay_ ? gamepad_overlay_->Snapshot(gamepad::GameInputSource::NowCapture100ns()) : nullptr;
+            gamepad_overlay_ ? gamepad_overlay_->PreviewSnapshot(gamepad::GameInputSource::NowCapture100ns()) : nullptr;
         webcamOverlayChanged();
     };
     if (overlay)

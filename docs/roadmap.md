@@ -36,9 +36,17 @@ Distribution ownership and package-manager delegation are implemented. Evaluate 
 
 Evaluate draw-on-start, explicit reuse of the previous region and optional saved areas against the current reusable-region workflow. Define hotkey, countdown, cancel/restore and source-preview behavior before changing the default. Preserve physical-coordinate, display-identity, DPI and capture-exclusion correctness. v0.10 keeps the existing region selection and recording-start semantics.
 
-### Optional presentation tracing integration (post-v0.10)
+### Installation scope and optional privileged diagnostics helper (v0.12)
 
-Evaluate a PresentMon Service client or another narrowly scoped collector only if it provides sufficient attribution value. Keep the main UI unelevated. Define installation consent, privilege boundaries, service/API compatibility, update ownership, unavailable behavior and bounded resource use before shipping a dependency. Core recording diagnostics must remain useful without that component. A service moves privileged work to another process; it does not make system rights unnecessary.
+Status: Accepted, not implemented. Target v0.12; v0.11 retains its per-machine installation and elevated diagnostic relaunch.
+
+Default new direct installations to the current user under `%LOCALAPPDATA%\Programs\ExoSnap`, with an optional all-users installation under `C:\Program Files\ExoSnap`. Use matching user or machine registration and Start Menu entries, and retain normal Installed Apps management. Preserve the existing installation scope, path and distribution ownership through updates, repairs and removal. Do not silently migrate a machine installation or create a duplicate user installation. Keep application data separate from program files.
+
+User-scope updates should run without elevation when no system prerequisite needs changing. Define the VC++ runtime deployment policy before implementation. If retaining a shared runtime, detect a sufficient version, explain any required elevation, and install the prerequisite before application changes. A denied UAC request must produce a clear cancellation result and preserve an existing working installation. Never report installation success without usable dependencies. Validate both scopes through native install, upgrade, repair and uninstall scenarios, including missing prerequisites and UAC refusal.
+
+Replace the elevated application relaunch for PresentMon and other privileged diagnostics with a narrowly scoped helper. Keep the running ExoSnap application unelevated and allow the user to enable or disable privileged collection without restarting it. Request UAC consent when starting the helper, run it only while enabled, and stop collection and the helper when disabled or when ExoSnap exits. Do not introduce a permanently privileged background service. Core recording and ordinary diagnostics must remain useful when the helper is off, unavailable or denied elevation.
+
+Define authenticated, bounded IPC, permitted operations, process ownership, crash cleanup and update compatibility before implementation. Review executable and DLL loading from user-writable installations, and do not expose arbitrary elevated execution or file writes. Qualify repeated enable/disable, UAC refusal, helper failure and application exit without leaving privileged processes or tracing sessions behind.
 
 ### Overlay presentation policy (post-v0.10)
 

@@ -71,6 +71,8 @@ TEST(GamepadSprites, MappedCatalogProducesVisiblePressedTilesWithoutAtlasChanges
 TEST(GamepadSprites, MappedResourcesExposeEveryPersistableLayout) {
     GamepadOverlay overlay;
     EXPECT_EQ(overlay.layouts().size(), exosnap::kGamepadOverlayArtworkIds.size() + 1);
+    for (const auto& option : overlay.layouts())
+        EXPECT_TRUE(option.toMap().value(QStringLiteral("selectable")).toBool());
     for (int index = 0; index < static_cast<int>(exosnap::kGamepadOverlayArtworkIds.size()); ++index) {
         exosnap::GamepadOverlaySettings settings;
         settings.layout = index;
@@ -268,6 +270,32 @@ TEST_F(GamepadOverlayTest, RecorderSnapshotDoesNotConsumePreviewNotification) {
     ASSERT_TRUE(overlay.Snapshot(0));
     Poll(overlay);
     EXPECT_EQ(notifications, 2);
+}
+
+TEST_F(GamepadOverlayTest, HiddenOutputRetainsDimmedPreviewAndInputUpdates) {
+    int argc = 1;
+    char name[] = "gamepad-tests";
+    char* argv[]{name, nullptr};
+    QCoreApplication application(argc, argv);
+    QString error;
+    auto sprites =
+        RasterizeGamepad(QStringLiteral(EXOSNAP_GAMEPAD_ASSET_DIR "/dualsense.svg"), 480, false, false, error);
+    ASSERT_TRUE(sprites) << error.toStdString();
+    GamepadOverlay overlay;
+    Seed(overlay, std::move(sprites));
+    ASSERT_TRUE(overlay.Snapshot(0));
+    int notifications = 0;
+    QObject::connect(&overlay, &GamepadOverlay::frameChanged, [&]() { ++notifications; });
+    overlay.setOutputVisible(false);
+    EXPECT_TRUE(overlay.enabled());
+    EXPECT_FALSE(overlay.Snapshot(0));
+    ASSERT_TRUE(overlay.PreviewSnapshot(0));
+    ASSERT_FALSE(overlay.PreviewSnapshot(0)->quads.empty());
+    EXPECT_FLOAT_EQ(overlay.PreviewSnapshot(0)->quads.front().opacity, 0.35F);
+    Poll(overlay);
+    EXPECT_GT(notifications, 0);
+    overlay.setOutputVisible(true);
+    EXPECT_TRUE(overlay.Snapshot(0));
 }
 
 TEST_F(GamepadOverlayTest, ArtworkReplacementWaitsForGuiDelivery) {

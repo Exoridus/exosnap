@@ -2,6 +2,7 @@ pragma ComponentBehavior: Bound
 
 import QtQuick
 import QtQuick.Controls
+import QtQuick.Layouts
 
 FocusScope {
     id: webcamOverlay
@@ -13,11 +14,17 @@ FocusScope {
     property bool editable: false
     property bool error: false
     property bool idlePreview: true
+    property bool selected: activeFocus
+    property bool outputVisible: true
+    property real toolbarTopInset: 0
     property string overlayName: qsTr("Webcam overlay")
     // The item gestures are measured in. It must not move with the overlay.
     property Item stage: parent
 
     signal rectRequested(rect rect)
+    signal selectionRequested()
+    signal outputVisibilityRequested(bool visible)
+    signal removeRequested()
 
     property rect draftRect: Qt.rect(0, 0, 1, 1)
     // Corner index (0 top-left, clockwise) of the grip being
@@ -29,12 +36,22 @@ FocusScope {
     y: parent.height * draftRect.y
     width: parent.width * draftRect.width
     height: parent.height * draftRect.height
+    z: selected ? 2 : 1
     activeFocusOnTab: webcamOverlay.editable
     Accessible.name: webcamOverlay.overlayName
     Accessible.description: qsTr("Drag to move. Use arrow keys to move and Shift plus arrow keys to resize.")
+    onActiveFocusChanged: {
+        if (activeFocus && editable)
+            selectionRequested()
+    }
     Keys.onPressed: event => {
         if (!webcamOverlay.editable)
             return
+        if (event.key === Qt.Key_Delete && webcamOverlay.selected) {
+            webcamOverlay.removeRequested()
+            event.accepted = true
+            return
+        }
         const step = Boolean(event.modifiers & Qt.ControlModifier) ? 0.01 : 0.02
         const resize = Boolean(event.modifiers & Qt.ShiftModifier)
         let x = webcamOverlay.draftRect.x
@@ -92,14 +109,13 @@ FocusScope {
 
         color: Qt.rgba(0, 0, 0, 0)
         border.width: 1
-        border.color: webcamOverlay.error ? ExoTheme.error : ExoTheme.lineStrong
+        border.color: webcamOverlay.error ? ExoTheme.error : ExoTheme.overlayAccent
         radius: ExoTheme.radiusSm
         // `pressed` as well as `containsMouse`: a drag that
         // leaves the frame's own bounds is still a drag, and
         // chrome that blinks out mid-gesture reads as a dropped
         // grab.
-        visible: webcamOverlay.error || webcamOverlay.activeFocus
-                 || webcamDrag.containsMouse || webcamOverlay.hoverCorner >= 0
+        visible: webcamOverlay.selected
                  || webcamDrag.pressed || webcamOverlay.resizeCorner >= 0
         anchors.fill: parent
     }
@@ -125,7 +141,7 @@ FocusScope {
                                                 && webcamOverlay.hoverCorner === webcamCorner.index)
             readonly property color ink: webcamCorner.engaged
                 ? ExoTheme.accent
-                : (webcamOverlay.error ? ExoTheme.error : ExoTheme.lineStrong)
+                : (webcamOverlay.error ? ExoTheme.error : ExoTheme.overlayAccent)
 
             width: 14
             height: 14
@@ -168,6 +184,7 @@ FocusScope {
         // what makes it look like lag rather than like a bug.
         onPressed: mouse => {
             webcamOverlay.forceActiveFocus()
+            webcamOverlay.selectionRequested()
             pressPoint = webcamDrag.mapToItem(webcamOverlay.stage, mouse.x, mouse.y)
             pressRect = webcamOverlay.draftRect
         }
@@ -226,6 +243,7 @@ FocusScope {
                 onPressed: mouse => {
                     mouse.accepted = true
                     webcamOverlay.forceActiveFocus()
+                    webcamOverlay.selectionRequested()
                     pressPoint = gripArea.mapToItem(webcamOverlay.stage, mouse.x, mouse.y)
                     pressRect = webcamOverlay.draftRect
                     webcamOverlay.resizeCorner = webcamGrip.index
@@ -256,6 +274,58 @@ FocusScope {
                     webcamOverlay.resizeCorner = -1
                 }
                 onCanceled: webcamOverlay.resizeCorner = -1
+            }
+        }
+    }
+
+    Rectangle {
+        id: toolbar
+        objectName: "overlayToolbar"
+        z: 10
+        width: 72
+        height: 32
+        x: Math.max(4 - webcamOverlay.x,
+                    Math.min((webcamOverlay.width - width) / 2,
+                             webcamOverlay.stage.width - webcamOverlay.x - width - 4))
+        y: webcamOverlay.y >= webcamOverlay.toolbarTopInset + height + 6 ? -height - 6
+           : webcamOverlay.height < height + 28 ? Math.max(webcamOverlay.height + 6, webcamOverlay.toolbarTopInset - webcamOverlay.y)
+           : Math.max(18, webcamOverlay.toolbarTopInset - webcamOverlay.y)
+        visible: webcamOverlay.selected && webcamOverlay.editable
+        color: ExoTheme.overlaySurfaceRaised
+        border.color: ExoTheme.overlayLine
+        radius: ExoTheme.radiusSm
+
+        RowLayout {
+            anchors.fill: parent
+            anchors.margins: 2
+            spacing: 2
+            ExoButton {
+                objectName: "overlayOutputButton"
+                Layout.fillWidth: true
+                Layout.fillHeight: true
+                compact: true
+                glyph: webcamOverlay.outputVisible ? ExoGlyph.Eye : ExoGlyph.EyeClosed
+                leftPadding: 4
+                rightPadding: 4
+                text: webcamOverlay.outputVisible ? qsTr("Hide from recording") : qsTr("Include in recording")
+                Accessible.description: webcamOverlay.overlayName
+                ToolTip.visible: hovered
+                ToolTip.text: text
+                onClicked: webcamOverlay.outputVisibilityRequested(!webcamOverlay.outputVisible)
+            }
+            ExoButton {
+                objectName: "overlayRemoveButton"
+                Layout.fillWidth: true
+                Layout.fillHeight: true
+                compact: true
+                glyph: ExoGlyph.Close
+                leftPadding: 4
+                rightPadding: 4
+                text: qsTr("Remove overlay")
+                Accessible.description: webcamOverlay.overlayName
+                ToolTip.visible: hovered
+                ToolTip.text: text
+                onClicked: webcamOverlay.removeRequested()
             }
         }
     }

@@ -140,7 +140,7 @@ static exosnap::engine::WebcamOverlayLive ToLiveWebcamOverlay(const WebcamSettin
     overlay.overlay_w_norm = sanitized.overlay.w_norm;
     overlay.overlay_h_norm = sanitized.overlay.h_norm;
     overlay.mirror = sanitized.mirror;
-    overlay.opacity = sanitized.opacity;
+    overlay.opacity = sanitized.output_visible ? sanitized.opacity : 0.0f;
     overlay.chroma_key_enabled = sanitized.chroma_key.enabled;
     {
         const auto ac = sanitized.chroma_key.active_color();
@@ -1367,7 +1367,7 @@ void RecordingCoordinator::PrepareAndRecordThreadProc(const PrepareContext& ctx)
     config.webcam.overlay_w_norm = ctx.webcam_settings.overlay.w_norm;
     config.webcam.overlay_h_norm = ctx.webcam_settings.overlay.h_norm;
     config.webcam.mirror = ctx.webcam_settings.mirror;
-    config.webcam.opacity = ctx.webcam_settings.opacity;
+    config.webcam.opacity = ctx.webcam_settings.output_visible ? ctx.webcam_settings.opacity : 0.0f;
     config.webcam.chroma_key_enabled = ctx.webcam_settings.chroma_key.enabled;
     {
         const auto ac = ctx.webcam_settings.chroma_key.active_color();

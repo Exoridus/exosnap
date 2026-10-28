@@ -213,6 +213,7 @@ QJsonObject OutputConfigJson(const OutputSettingsModel& out) {
 QJsonObject WebcamConfigJson(const WebcamSettings& webcam) {
     QJsonObject json;
     json.insert(QStringLiteral("enabled"), webcam.enabled);
+    json.insert(QStringLiteral("outputVisible"), webcam.output_visible);
     json.insert(QStringLiteral("mirror"), webcam.mirror);
     json.insert(QStringLiteral("width"), webcam.width);
     json.insert(QStringLiteral("height"), webcam.height);
