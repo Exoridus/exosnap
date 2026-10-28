@@ -113,6 +113,7 @@ void EditTimelineAdapter::setSession(EditSessionAdapter* session) {
     connect(session_, &EditSessionAdapter::clipOpened, this, &EditTimelineAdapter::openClip);
     connect(session_, &EditSessionAdapter::clipClosed, this, &EditTimelineAdapter::closeClip);
     connect(session_, &EditSessionAdapter::clipChanged, this, &EditTimelineAdapter::refreshMarkers);
+    connect(session_, &EditSessionAdapter::markersChanged, this, &EditTimelineAdapter::refreshMarkers);
     // A fixture clip (visual harness, adapter tests) carries a duration but no
     // master path, so it never reaches clipOpened -- the strip layout still
     // needs the length to place its tiles.

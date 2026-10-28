@@ -732,32 +732,42 @@ void EditSessionAdapter::rebuildFacts() {
 }
 
 void EditSessionAdapter::loadMarkers() {
-    markers_.clear();
-    // Canonical source: the "<media>.markers.json" sidecar RecordingCoordinator
-    // writes. Once it exists it is authoritative; otherwise fall back to the
-    // markers the result carried.
-    if (!context_.marker_sidecar_path.isEmpty()) {
-        const std::filesystem::path sidecar(context_.marker_sidecar_path.toStdWString());
-        std::error_code ec;
-        if (std::filesystem::exists(sidecar, ec)) {
-            int skipped = 0;
-            markers_ = ReadMarkerSidecar(sidecar, &skipped);
-            // QCR-207: a dropped marker is a silent difference between the file
-            // and the timeline, so it is stated once here rather than nowhere.
-            // No separate marker-error surface — the sidecar is a companion
-            // file, and losing an entry costs a bookmark, not the recording.
-            if (skipped > 0) {
-                diagnostics::AppLog::warning(
-                    QStringLiteral("edit"),
-                    QCoreApplication::translate("EditSessionAdapter",
-                                                "Skipped %1 marker(s) with an unusable time in %2")
-                        .arg(skipped)
-                        .arg(context_.marker_sidecar_path));
-            }
-            return;
-        }
-    }
     markers_ = context_.markers;
+    if (context_.marker_sidecar_path.isEmpty())
+        return;
+    const QPointer<EditSessionAdapter> self(this);
+    const auto generation = clip_generation_;
+    const auto cancelled = source_cancelled_;
+    metadata_pool_.start([self, generation, cancelled, path = context_.marker_sidecar_path] {
+        if (cancelled->load(std::memory_order_relaxed))
+            return;
+        const std::filesystem::path sidecar(path.toStdWString());
+        std::error_code ec;
+        if (!std::filesystem::exists(sidecar, ec))
+            return;
+        int skipped = 0;
+        auto markers = ReadMarkerSidecar(sidecar, &skipped);
+        if (self)
+            QMetaObject::invokeMethod(
+                self,
+                [self, generation, cancelled, path, markers = std::move(markers), skipped]() mutable {
+                    if (!self || cancelled->load(std::memory_order_relaxed) || generation != self->clip_generation_)
+                        return;
+                    const bool had_unsaved_edits = self->hasUnsavedEdits();
+                    self->markers_ = std::move(markers);
+                    if (skipped > 0)
+                        diagnostics::AppLog::warning(
+                            QStringLiteral("edit"),
+                            QCoreApplication::translate("EditSessionAdapter",
+                                                        "Skipped %1 marker(s) with an unusable time in %2")
+                                .arg(skipped)
+                                .arg(path));
+                    emit self->markersChanged();
+                    if (self && had_unsaved_edits != self->hasUnsavedEdits())
+                        emit self->unsavedEditsChanged();
+                },
+                Qt::QueuedConnection);
+    });
 }
 
 // Reading a container's full index is proportional to the recording's length,

@@ -2306,6 +2306,41 @@ TEST(ThumbnailBroker, QueuedVisibleDecodePrecedesSpeculativeCacheProbes) {
     EXPECT_EQ(speculative_before_visible, 0);
     EXPECT_TRUE(Done(visible));
 }
+TEST(ThumbnailBroker, ReplenishedPrefetchCannotDisplaceVisibleSources) {
+    ThumbnailFixture fixture;
+    auto broker = fixture.Broker();
+    broker->AttachWorker([] {});
+    const auto first = engine::ToHex(Identity(36));
+    const auto second = engine::ToHex(Identity(37));
+    const auto background = engine::ToHex(Identity(38));
+    broker->RegisterSource(first, ThumbnailSourceInfo{"first.mkv", Identity(36), 1920, 1080, 30, 1});
+    broker->RegisterSource(second, ThumbnailSourceInfo{"second.mkv", Identity(37), 1920, 1080, 30, 1});
+    broker->RegisterSource(background, ThumbnailSourceInfo{"background.mkv", Identity(38), 1920, 1080, 30, 1});
+    for (int index = 0; index < 32; ++index) {
+        broker->Request(first, index * 100'000, 48, [](const QImage&) {});
+        broker->Request(second, index * 100'000, 48, [](const QImage&) {});
+    }
+    int first_jobs = 0;
+    int second_jobs = 0;
+    for (int step = 0; step < 64; ++step) {
+        std::vector<int64_t> times;
+        for (int index = 0; index < 128; ++index)
+            times.push_back((step * 128LL + index) * 100'000);
+        broker->Prefetch(background, times, 48);
+        EXPECT_LE(broker->Stats().pending_jobs, 192u);
+        const auto job = broker->TakeJob();
+        ASSERT_TRUE(job);
+        ASSERT_NE(job->identity, background);
+        first_jobs += job->identity == first;
+        second_jobs += job->identity == second;
+        EXPECT_LE(std::abs(first_jobs - second_jobs), 1);
+        broker->Complete(*job, {});
+    }
+    EXPECT_EQ(first_jobs, 32);
+    EXPECT_EQ(second_jobs, 32);
+    EXPECT_EQ(broker->Stats().pending_jobs, 128u);
+}
+
 TEST(ThumbnailBroker, ClearingRetiresOldRequestsAndReadmitsTheSameContent) {
     ThumbnailFixture fixture;
     auto broker = fixture.Broker();

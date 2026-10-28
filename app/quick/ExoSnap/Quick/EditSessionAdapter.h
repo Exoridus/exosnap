@@ -574,6 +574,7 @@ class EditSessionAdapter : public QObject {
     void editPageRequested();
     void openChanged();
     void clipChanged();
+    void markersChanged();
     void durationChanged();
     void trimChanged();
     void trimSnapReadyChanged();
