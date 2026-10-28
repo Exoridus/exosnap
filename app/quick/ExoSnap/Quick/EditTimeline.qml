@@ -1033,7 +1033,8 @@ FocusScope {
                 Label {
                     x: 18
                     y: 2
-                    width: Math.max(0, parent.width - x - 31)
+                    width: Math.max(0, (trackStateSummary.visible && trackStateSummary.text.length > 0
+                        ? trackStateSummary.x - 4 : parent.width - 31) - x)
                     text: trackLabel.modelData.typeName + " " + trackLabel.modelData.name
                     color: ExoTheme.text
                     font.pixelSize: ExoTheme.fontCaption
@@ -1122,9 +1123,10 @@ FocusScope {
                     }
                 }
                 Label {
+                    id: trackStateSummary
                     x: 18
                     y: 2
-                    visible: trackLabel.modelData.collapsed || root.labelWidth < 120
+                    visible: trackLabel.modelData.collapsed || root.labelWidth < 120 || (trackLabel.modelData.locked && root.labelWidth < 168)
                     anchors.right: parent.right
                     anchors.rightMargin: 30
                     horizontalAlignment: Text.AlignRight

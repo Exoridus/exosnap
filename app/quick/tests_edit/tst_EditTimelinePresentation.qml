@@ -422,6 +422,38 @@ TestCase {
         compare(JSON.stringify(testSession.editRange), original);
         compare(testSession.positionUs, position);
     }
+    function test_compact_header_keeps_hidden_lock_state_visible() {
+        const strip = createTemporaryObject(timelineComponent, tests, {width: 1200});
+        const track = testSession.tracks[0];
+        verify(testSession.setTrackLocked(track.id, true));
+        try {
+            waitForRendering(strip);
+            const header = findChild(strip, "editTrackLabel0");
+            verify(!!header);
+            const summary = header.children.find(item => item.text === "L");
+            verify(!!summary);
+            const name = header.children.find(item => item.text === track.typeName + " " + track.name);
+            verify(!!name);
+            for (const width of [150, 120, 167]) {
+                strip.userHeaderWidth = width;
+                compare(strip.labelWidth, width);
+                if (width === 150 && testVisualDirectory.length > 0) {
+                    let saved = false;
+                    verify(strip.grabToImage(result => {
+                        saved = result.saveToFile(testVisualDirectory + "/edit-locked-header-150.png");
+                    }));
+                    tryVerify(() => saved);
+                }
+                verify(summary.visible, "Hidden lock state at header width " + width);
+                verify(name.x + name.width <= summary.x, "Track name overlaps lock state at header width " + width);
+            }
+            strip.userHeaderWidth = 168;
+            verify(findChild(strip, "editTrackLock" + track.id).visible);
+        } finally {
+            testSession.setTrackLocked(track.id, false);
+        }
+    }
+
     function test_track_controls_and_header_resize_are_available() {
         const strip = createTemporaryObject(timelineComponent, tests, {width: 1200});
         waitForRendering(strip);

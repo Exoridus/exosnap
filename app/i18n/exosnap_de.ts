@@ -11006,8 +11006,8 @@ Kleiner Text auf dem Bildschirm verliert früher an Qualität als Videoinhalte. 
     </message>
     <message>
         <location line="+45"/>
-        <source>%1%</source>
-        <translation>%1 %</translation>
+        <source>Overall: %1%</source>
+        <translation>Gesamt: %1 %</translation>
     </message>
     <message>
         <location line="+39"/>
