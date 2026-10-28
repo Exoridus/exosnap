@@ -176,6 +176,51 @@ Item {
             while (testSession.canUndo) testSession.undo();
         }
 
+        function test_toolbar_pending_audio_choice_does_not_overlap_actions() {
+            const fixture = testEditHarness.prepareSourceAudioChoice();
+            verify(fixture.ready, fixture.reason || "Audio-choice fixture is unavailable");
+            try {
+                testPageSession.cancelSourceAudioChoice();
+                const page = make();
+                const actions = child(page, "editActionGroup");
+                const transport = child(page, "editTransportGroup");
+                const output = child(page, "editOutputGroup");
+                verify(child(page, "editAudioChoice").visible);
+                for (const width of [860, 1000, 1099, 1100, 1200, 1600]) {
+                    page.width = width;
+                    wait(0);
+                    verify(actions.x + actions.width <= transport.x, "Actions overlap transport at " + width);
+                    verify(transport.x + transport.width <= output.x, "Transport overlaps output at " + width);
+                }
+            } finally {
+                testEditHarness.clearSourceAudioChoiceFixture();
+            }
+        }
+
+        function test_project_source_tooltip_keeps_full_identity_and_metadata() {
+            const page = make({session: testSession, timeline: testTimeline, player: testPlayer});
+            page.toggleMedia();
+            const list = child(page, "editSourceItems");
+            tryVerify(() => list.itemAtIndex(0) !== null);
+            const row = list.itemAtIndex(0);
+            row.text = "2026-08-10 - Ridge Run, full walkthrough with diagnostics and commentary from a second source.mkv";
+            verify(row.text.length > 0);
+            row.forceActiveFocus(Qt.TabFocusReason);
+            tryCompare(row.ToolTip, "visible", true);
+            if (testVisualDirectory.length > 0) {
+                let saved = false;
+                verify(row.Window.window.contentItem.grabToImage(result => {
+                    saved = result.saveToFile(testVisualDirectory + "/edit-source-identity.png");
+                }));
+                tryVerify(() => saved);
+            }
+            verify(row.ToolTip.text.includes(row.text));
+            if (row.modelData.path)
+                verify(row.ToolTip.text.includes(row.modelData.path));
+            verify(row.ToolTip.text.includes(row.detail));
+            verify(row.Accessible.description.includes(row.text));
+        }
+
         function test_ToolbarAtFourSizes_data() {
             return [
                 { tag: "860", width: 860, height: 700 },

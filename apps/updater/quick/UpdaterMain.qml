@@ -118,7 +118,7 @@ Window {
             }
             Label {
                 visible: window.adapter.progressVisible && !window.adapter.indeterminate
-                text: qsTr("%1%").arg(window.adapter.ringPercent)
+                text: qsTr("Overall: %1%").arg(window.adapter.ringPercent)
                 color: ExoTheme.textMuted
                 font.family: ExoTheme.monoFamily
                 font.pixelSize: 13
