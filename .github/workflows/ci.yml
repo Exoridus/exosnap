@@ -323,6 +323,9 @@ jobs:
           cargo build --manifest-path tools/Cargo.toml -p exo-verify
           cargo exo-dev verify --profile ci-dev-scripts --event $env:EVENT
 
+      - name: Package footprint regression tests
+        run: python -m unittest discover -s scripts -p test_package_size_report.py
+
       - name: Retain verification failure logs
         if: failure()
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
@@ -382,6 +385,7 @@ jobs:
               - 'packaging/**'
               - 'tools/exo-verify/src/package.rs'
               - 'tools/exo-verify/src/package/**'
+              - 'scripts/*package_size_report.py'
               - 'cmake/Vendor*'
               - 'CMakeLists.txt'
               - 'app/CMakeLists.txt'
@@ -675,6 +679,13 @@ jobs:
           include-hidden-files: true
           if-no-files-found: warn
 
+      - name: Report pruned package footprint
+        if: ${{ !cancelled() && github.event_name == 'pull_request' && needs.changes.outputs.packaging == 'true' }}
+        shell: pwsh
+        run: |
+          python scripts/package_size_report.py --package-dir .workspace/package-smoke --summary $env:GITHUB_STEP_SUMMARY
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+
       - name: Upload packaging validation report
         if: ${{ !cancelled() && github.event_name == 'pull_request' && needs.changes.outputs.packaging == 'true' }}
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
@@ -682,6 +693,8 @@ jobs:
           name: packaging-smoke-report
           path: |
             .workspace/package-smoke/package.json
+            .workspace/package-smoke/package-size.json
+            .workspace/package-smoke/package-size.md
           include-hidden-files: true
           if-no-files-found: warn
 
