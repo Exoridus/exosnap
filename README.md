@@ -102,13 +102,15 @@ Requires Windows, Visual Studio 2022 with Desktop development with C++, CMake 3.
 ```powershell
 git clone https://github.com/Exoridus/exosnap.git
 cd exosnap
-git switch -c my-change origin/main
-cmake --preset windows-x64-debug
-cmake --build --preset windows-x64-debug-exosnap
+git switch -c my-change origin/next
+cmake --preset windows-x64-ninja-debug
+cmake --build --preset windows-x64-ninja-debug-exosnap
 cargo exo-dev test --filter recorder_core.
 ```
 
-Use `cargo exo-dev verify --fast` for scoped iteration and `cargo exo-dev verify --full` for the complete local gate before pushing. Hooks use the same entry point. Work on a branch and submit a pull request. `main` is updated through merges. Follow [AGENTS.md](AGENTS.md) for repository rules.
+Use `cargo exo-dev verify --fast` for scoped iteration and `cargo exo-dev verify --full` for the complete local gate before pushing. Hooks use the same entry point. `next` is the development integration branch; `main` tracks Stable. Follow [AGENTS.md](AGENTS.md) for repository rules.
+
+Dependent changes can use GitHub's native [stacked pull requests](https://docs.github.com/en/pull-requests/get-started/about-stacked-prs): each layer has a focused diff, its own checks and an explicit dependency on the layer below. Independent changes remain separate PRs against `next`. See [CONTRIBUTING.md](CONTRIBUTING.md#stacked-pull-requests) for CLI setup, existing-PR linking and merge requirements. A stack never bypasses review, CI or ExoSnap's merge approval.
 
 | Reference | Contents |
 | --- | --- |
