@@ -1598,6 +1598,15 @@ set_tests_properties(quick.qml.record_source_picker_contracts PROPERTIES
 )
 exosnap_set_test_phase(quick.qml.record_source_picker_contracts desktop)
 
+# Focused builds also need the shared runtime staging dependency. Reuse the
+# directory's existing writer so parallel test builds cannot race DLL copies.
+get_property(_exosnap_quick_test_runtime DIRECTORY PROPERTY EXOSNAP_TEST_RUNTIME_TARGET)
+if(NOT _exosnap_quick_test_runtime OR NOT TARGET ${_exosnap_quick_test_runtime})
+    message(FATAL_ERROR "QuickTest runtime staging target is missing")
+endif()
+add_dependencies(edit_timeline_qml_tests ${_exosnap_quick_test_runtime})
+add_dependencies(record_source_picker_qml_tests ${_exosnap_quick_test_runtime})
+
 add_test(NAME quick.qml.record_preview_smoke COMMAND exosnap --preview-smoke-test)
 set_tests_properties(quick.qml.record_preview_smoke PROPERTIES
     LABELS "quick;live"

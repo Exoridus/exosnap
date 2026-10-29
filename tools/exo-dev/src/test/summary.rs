@@ -57,7 +57,7 @@ pub fn summary(lines: &[String]) -> Summary {
 pub fn failed_tests(lines: &[String]) -> Vec<String> {
     static FAILED: LazyLock<Regex> = LazyLock::new(|| {
         Regex::new(
-            r"(?i)^\s*\d+\s+-\s+(.+?)\s+\((Failed|Timeout|Not Run|Exception[^)]*|Subprocess aborted|Child aborted|SEGFAULT|Illegal|Numerical|Other)\)",
+            r"(?i)^\s*\d+\s+-\s+(.+?)\s+\((?:Exit code\s+0x[0-9a-f]+|(?:Failed|Timeout|Not Run|Exception[^)]*|Subprocess aborted|Child aborted|SEGFAULT|Illegal|Numerical|Other)\))",
         )
         .unwrap()
     });
@@ -199,6 +199,11 @@ pub fn failure_classification(lines: &[String]) -> &'static str {
         "qml-load-error"
     } else if lines.iter().any(|line| line.contains("(Timeout)")) {
         "timeout"
+    } else if lines
+        .iter()
+        .any(|line| line.to_ascii_lowercase().contains("exit code 0xc0000135"))
+    {
+        "infrastructure-error"
     } else if lines.iter().any(|line| {
         ["(Exception", "(Subprocess aborted)", "(SEGFAULT)", "QFATAL"]
             .iter()
@@ -254,6 +259,18 @@ mod tests {
             failure_classification(&lines("  1 - fixture (Failed)\n")),
             "test-failure"
         );
+    }
+
+    #[test]
+    fn missing_runtime_dll_preserves_program_names_and_startup_classification() {
+        let log = lines(
+            "The following tests FAILED:\n\t281 - quick.qml.edit_timeline_contracts (Exit code 0xc0000135\n) phase.desktop quick quicktest\n",
+        );
+        assert_eq!(
+            failed_tests(&log),
+            vec!["quick.qml.edit_timeline_contracts"]
+        );
+        assert_eq!(failure_classification(&log), "infrastructure-error");
     }
 
     #[test]
