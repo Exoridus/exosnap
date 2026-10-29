@@ -130,19 +130,18 @@ impl GhRunner for StoredView {
     }
 }
 
-fn validate_settings(gh: &dyn GhRunner, commit_counts: &[usize]) -> anyhow::Result<()> {
+fn validate_settings(gh: &dyn GhRunner) -> anyhow::Result<()> {
     let settings = api(gh, &format!("repos/{REPO}"))?;
     ensure!(
         settings["allow_squash_merge"].as_bool() == Some(true),
         "repository does not allow squash merging"
     );
-    match settings["squash_merge_commit_title"].as_str() {
-        Some("PR_TITLE") => Ok(()),
-        Some("COMMIT_OR_PR_TITLE") if commit_counts.iter().all(|count| *count > 1) => Ok(()),
-        _ => bail!(
-            "repository squash title defaults cannot guarantee every member's validated title (#N)"
-        ),
-    }
+    ensure!(
+        settings["squash_merge_commit_title"].as_str() == Some("PR_TITLE")
+            && settings["squash_merge_commit_message"].as_str() == Some("BLANK"),
+        "repository squash defaults must be PR_TITLE and BLANK to preserve validated subjects and empty commit bodies"
+    );
+    Ok(())
 }
 
 /// Validates every member and previews by default. Confirmation submits one
@@ -170,7 +169,6 @@ fn merge_stack_with_poll(
     );
     let stack = snapshot(gh, request.number)?;
     let mut previews = Vec::new();
-    let mut commit_counts = Vec::new();
     for member in &stack.pull_requests {
         let view = view_json(
             gh,
@@ -199,7 +197,6 @@ fn merge_stack_with_poll(
             .as_array()
             .context("pull request commit metadata is missing")?;
         ensure!(!commits.is_empty(), "pull request commit list is empty");
-        commit_counts.push(commits.len());
         let MergeOutcome::Preview(preview) = merge(
             repo_root,
             &StoredView(view.to_string()),
@@ -220,11 +217,11 @@ fn merge_stack_with_poll(
         );
         previews.push(preview);
     }
-    validate_settings(gh, &commit_counts)?;
+    validate_settings(gh)?;
     if !request.confirm {
         return Ok(MergeStackOutcome::Preview { members: previews });
     }
-    validate_settings(gh, &commit_counts)?;
+    validate_settings(gh)?;
     ensure!(
         snapshot(gh, request.number)? == stack,
         "stack identity changed before submission; nothing submitted"
@@ -390,7 +387,7 @@ mod tests {
                     json!({"number":492,"open":true,"base":{"ref":"next"},"pull_requests":[lower,upper]}),
                 ])),
                 views,
-                settings: json!({"allow_squash_merge":true,"squash_merge_commit_title":"COMMIT_OR_PR_TITLE"}),
+                settings: json!({"allow_squash_merge":true,"squash_merge_commit_title":"PR_TITLE","squash_merge_commit_message":"BLANK"}),
                 responses: RefCell::new(VecDeque::from([Ok(
                     json!({"status":"merged","details":{"message":"done","sha":"d".repeat(40)}}),
                 )])),
@@ -497,6 +494,28 @@ mod tests {
     }
 
     #[test]
+    fn nonblank_unknown_or_missing_squash_message_defaults_refuse_mutation() {
+        for setting in [
+            Some("COMMIT_MESSAGES"),
+            Some("PR_BODY"),
+            Some("UNKNOWN"),
+            None,
+        ] {
+            let mut gh = FakeGh::valid();
+            if let Some(setting) = setting {
+                gh.settings["squash_merge_commit_message"] = json!(setting);
+            } else {
+                gh.settings
+                    .as_object_mut()
+                    .unwrap()
+                    .remove("squash_merge_commit_message");
+            }
+            assert!(run(&gh, true).is_err(), "{setting:?}");
+            assert!(gh.mutations().is_empty());
+        }
+    }
+
+    #[test]
     fn lower_automatic_subject_cannot_duplicate_or_drop_a_trailing_number() {
         let mut gh = FakeGh::valid();
         let title = "fix(ui): validate settings (#73)";
@@ -507,10 +526,11 @@ mod tests {
     }
 
     #[test]
-    fn pr_title_default_supports_a_single_commit_lower_member() {
+    fn pr_title_and_blank_defaults_support_single_commit_members() {
         let mut gh = FakeGh::valid();
         gh.settings["squash_merge_commit_title"] = json!("PR_TITLE");
         gh.views.get_mut(&491).unwrap()["commits"] = json!([{}]);
+        gh.views.get_mut(&490).unwrap()["commits"] = json!([{}]);
         assert!(matches!(
             run(&gh, false).unwrap(),
             MergeStackOutcome::Preview { .. }
@@ -596,9 +616,9 @@ mod tests {
     }
 
     #[test]
-    fn automatic_title_defaults_cover_the_top_member_too() {
+    fn commit_or_pr_title_is_rejected_even_with_multiple_commits() {
         let mut gh = FakeGh::valid();
-        gh.views.get_mut(&490).unwrap()["commits"] = json!([{}]);
+        gh.settings["squash_merge_commit_title"] = json!("COMMIT_OR_PR_TITLE");
         assert!(run(&gh, false).is_err());
         assert!(gh.mutations().is_empty());
     }
