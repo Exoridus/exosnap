@@ -126,6 +126,22 @@ jobs:
           & $verify plan verify --bundle candidate-bundle --plan candidate-plan.json
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
 
+      - name: Report exact package footprint
+        shell: pwsh
+        run: |
+          python scripts/package_size_report.py --package-dir candidate-package --vc-redist vc_redist.x64.exe --summary $env:GITHUB_STEP_SUMMARY
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+
+      - name: Upload candidate package footprint
+        uses: actions/upload-artifact@b7c566a772e6b6bfb58ed0dc250532a479d7789f # v6.0.0
+        with:
+          name: candidate-package-size-${{ inputs.candidate_id || format('v010-{0}', github.sha) }}
+          path: |
+            candidate-package/package-size.json
+            candidate-package/package-size.md
+          if-no-files-found: error
+          retention-days: 90
+
       - name: Upload exact candidate bytes and frozen plan
         uses: actions/upload-artifact@b7c566a772e6b6bfb58ed0dc250532a479d7789f # v6.0.0
         with:
