@@ -200,6 +200,7 @@ qt_add_qml_module(exosnap
         SettingsAudioEncodingSection.qml
         SettingsAudioSourcesSection.qml
         AudioTrackCard.qml
+        AudioSourceDetailsPopup.qml
         AudioRoutingPanel.qml
         SettingsAudioSourceRow.qml
         SettingsAudioTrackLedger.qml
@@ -1476,6 +1477,7 @@ qt_add_qml_module(record_source_picker_qml_tests
         HotkeyCaptureField.qml
         AudioRoutingPanel.qml
         AudioTrackCard.qml
+        AudioSourceDetailsPopup.qml
         ExoCard.qml
         ExoCheckBox.qml
         ExoConfirmDialog.qml

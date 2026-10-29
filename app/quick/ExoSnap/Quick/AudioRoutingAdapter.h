@@ -37,6 +37,8 @@ class AudioRoutingAdapter : public QObject {
     Q_PROPERTY(bool recordingActive READ recordingActive NOTIFY changed FINAL)
     Q_PROPERTY(QVariantMap sourceMeters READ sourceMeters NOTIFY metersChanged FINAL)
     Q_PROPERTY(QVariantMap trackMeters READ trackMeters NOTIFY metersChanged FINAL)
+    Q_PROPERTY(double minimumGainDb READ minimumGainDb CONSTANT FINAL)
+    Q_PROPERTY(double maximumGainDb READ maximumGainDb CONSTANT FINAL)
 
   public:
     enum AssignmentMode { Move, Additional };
@@ -86,14 +88,24 @@ class AudioRoutingAdapter : public QObject {
     }
     QVariantMap sourceMeters() const;
     QVariantMap trackMeters() const;
+    double minimumGainDb() const {
+        return engine::kMinGainDb;
+    }
+    double maximumGainDb() const {
+        return engine::kMaxGainDb;
+    }
 
     Q_INVOKABLE bool addEmptyTrack(qulonglong expectedRevision);
+    Q_INVOKABLE bool removeTrack(const QString& trackId, qulonglong expectedRevision);
+    Q_INVOKABLE bool moveTrackTo(const QString& trackId, int position, qulonglong expectedRevision);
     Q_INVOKABLE bool addSource(int bindingKind, const QString& name, qulonglong expectedRevision);
     Q_INVOKABLE bool setTrackName(QString trackId, QString name, qulonglong expectedRevision);
     Q_INVOKABLE bool reorderTrackById(const QString& trackId, int delta, qulonglong expectedRevision);
     Q_INVOKABLE bool assignSource(const QString& sourceId, const QString& trackId, int mode,
                                   qulonglong expectedRevision);
     Q_INVOKABLE bool removeRoute(const QString& routeId, qulonglong expectedRevision);
+    Q_INVOKABLE bool setTrackSourceAssigned(const QString& sourceId, const QString& trackId, bool assigned,
+                                            qulonglong expectedRevision);
     Q_INVOKABLE bool setRouteGain(QString routeId, double gainDb, qulonglong expectedRevision);
     Q_INVOKABLE bool setRouteMute(QString routeId, bool muted, qulonglong expectedRevision);
     Q_INVOKABLE bool setSourceParticipation(QString sourceId, bool participating, qulonglong expectedRevision);
