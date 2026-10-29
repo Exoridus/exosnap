@@ -209,13 +209,13 @@ TEST(RetryEntryStep, AppWontCloseReentersCloseApp) {
 }
 
 TEST(RetryEntryStep, InstallFailuresReenterInstall) {
-    EXPECT_EQ(RetryEntryStep(FailureCase::InstallFailed), UpStep::Install);          // B2
-    EXPECT_EQ(RetryEntryStep(FailureCase::VerifyInstallFailed), UpStep::Install);    // B3
-    EXPECT_EQ(RetryEntryStep(FailureCase::RestoreFailed), UpStep::Install);          // B3-R
-    EXPECT_EQ(RetryEntryStep(FailureCase::VerifyInstallFailedMsi), UpStep::Install); // B3-MSI
-    EXPECT_EQ(RetryEntryStep(FailureCase::UacDeclined), UpStep::Install);            // C1 re-handoff
-    EXPECT_EQ(RetryEntryStep(FailureCase::MsiFailed), UpStep::Install);              // C2
-    EXPECT_EQ(RetryEntryStep(FailureCase::MsiRebootRequired), UpStep::Install);      // C3
+    EXPECT_EQ(RetryEntryStep(FailureCase::InstallFailed), UpStep::Install);           // B2
+    EXPECT_EQ(RetryEntryStep(FailureCase::VerifyInstallFailed), UpStep::Install);     // B3
+    EXPECT_EQ(RetryEntryStep(FailureCase::RestoreFailed), UpStep::Install);           // B3-R
+    EXPECT_EQ(RetryEntryStep(FailureCase::VerifyInstallFailedMsi), UpStep::CloseApp); // B3-MSI
+    EXPECT_EQ(RetryEntryStep(FailureCase::UacDeclined), UpStep::Install);             // C1 re-handoff
+    EXPECT_EQ(RetryEntryStep(FailureCase::MsiFailed), UpStep::Install);               // C2
+    EXPECT_EQ(RetryEntryStep(FailureCase::MsiRebootRequired), UpStep::Install);       // C3
 }
 
 TEST(RetryEntryStep, LaunchFailedReentersLaunch) {
@@ -252,18 +252,46 @@ TEST(ClassifyMsiExit, RealErrorCodesAreFailed) {
 // ---------------------------------------------------------------------------
 
 TEST(BuildMsiexecParams, QuotesPathAndAppendsSilentFlags) {
-    EXPECT_EQ(BuildMsiexecParams(L"C:\\Temp\\pkg.msi", false), L"/i \"C:\\Temp\\pkg.msi\" /qn /norestart");
+    EXPECT_EQ(BuildMsiexecParams(L"C:\\Temp\\pkg.msi", false),
+              L"/i \"C:\\Temp\\pkg.msi\" /qn /norestart /L*V \"C:\\Temp\\msiexec.log\"");
 }
 
 TEST(BuildMsiexecParams, PathWithSpacesStaysOneArgument) {
     EXPECT_EQ(
         BuildMsiexecParams(L"C:\\Users\\Some User\\AppData\\Local\\Temp\\ExoSnapUpdate\\0.9.0\\package.msi", false),
-        L"/i \"C:\\Users\\Some User\\AppData\\Local\\Temp\\ExoSnapUpdate\\0.9.0\\package.msi\" /qn /norestart");
+        L"/i \"C:\\Users\\Some User\\AppData\\Local\\Temp\\ExoSnapUpdate\\0.9.0\\package.msi\" /qn /norestart"
+        L" /L*V \"C:\\Users\\Some User\\AppData\\Local\\Temp\\ExoSnapUpdate\\0.9.0\\msiexec.log\"");
 }
 
 TEST(BuildMsiexecParams, VerificationReinstallForcesIdenticalPackageReapplication) {
     EXPECT_EQ(BuildMsiexecParams(L"C:\\Temp\\pkg.msi", true),
-              L"/i \"C:\\Temp\\pkg.msi\" /qn /norestart REINSTALL=ALL REINSTALLMODE=vomus");
+              L"/i \"C:\\Temp\\pkg.msi\" /qn /norestart REINSTALL=ALL REINSTALLMODE=vomus"
+              L" /L*V \"C:\\Temp\\msiexec.log\"");
+}
+
+TEST(BuildMsiexecParams, RepairForcesAllFilesAndRecachesTheVerifiedPackage) {
+    for (bool verification_reinstall : {false, true})
+        EXPECT_EQ(BuildMsiexecParams(L"C:\\Temp\\pkg.msi", verification_reinstall, true),
+                  L"/i \"C:\\Temp\\pkg.msi\" /qn /norestart REINSTALL=ALL REINSTALLMODE=vamus"
+                  L" /L*V \"C:\\Temp\\msiexec.log\"");
+}
+
+TEST(UpdaterWorker, RepairRefusesMissingVerifiedPackageWithoutStartingAnyStep) {
+    for (auto mode : {exosnap::update::InstallMode::Installed, exosnap::update::InstallMode::Portable}) {
+        UpdaterArgs args;
+        args.install_mode = mode;
+        UpdaterWorker worker(args);
+        int failures = 0;
+        int steps = 0;
+        QObject::connect(&worker, &UpdaterWorker::failed, [&](FailureCase failure, const QString&) {
+            ++failures;
+            EXPECT_EQ(failure, FailureCase::VerifyInstallFailedMsi);
+        });
+        QObject::connect(&worker, &UpdaterWorker::stepStarted, [&](UpStep) { ++steps; });
+        worker.repair();
+        EXPECT_EQ(failures, 1);
+        EXPECT_EQ(steps, 0);
+    }
 }
 
 // ---------------------------------------------------------------------------

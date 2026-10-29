@@ -246,7 +246,7 @@ Item {
                 highlighted: folderEntry ? root.selectedFolder.entryId === modelData.entryId : ListView.isCurrentItem
                 text: modelData.name || modelData.label
                 Accessible.name: text
-                Accessible.description: detail
+                Accessible.description: sourceItem.ToolTip.text
                 contentItem: Column {
                     spacing: 2
                     Label {
@@ -370,7 +370,7 @@ Item {
                 } : {"application/x-exosnap-asset": String(modelData.id)}
                 DragHandler { id: drag; target: null }
                 ToolTip.visible: hovered || activeFocus
-                ToolTip.text: folderEntry ? String(modelData.url) + (detail.length > 0 ? "\n" + detail : "") : detail
+                ToolTip.text: (folderEntry ? String(modelData.url) : sourceItem.text + (modelData.path ? "\n" + modelData.path : "")) + (detail.length > 0 ? "\n" + detail : "")
             }
         }
     }

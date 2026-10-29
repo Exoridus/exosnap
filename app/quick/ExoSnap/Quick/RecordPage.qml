@@ -267,6 +267,7 @@ Item {
                         RecordPreviewChrome {
                             parent: previewSurface
                             anchors.fill: parent
+                            anchors.topMargin: Math.max(sourcesButton.height, profileButton.height)
                             z: 10
                             formatText: root.recordViewModel.formatText
                             sourceText: root.recordViewModel.sourceButtonText

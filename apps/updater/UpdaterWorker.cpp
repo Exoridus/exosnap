@@ -198,13 +198,16 @@ bool TargetVersionAccepts(const QString& target_version, const QString& manifest
     return VersionsMatchExactly(manifest_version, target_version);
 }
 
-std::wstring BuildMsiexecParams(const std::wstring& msi_path, bool verification_reinstall) {
+std::wstring BuildMsiexecParams(const std::wstring& msi_path, bool verification_reinstall, bool repair) {
     std::wstring params = L"/i \"" + msi_path + L"\" /qn /norestart";
-    if (verification_reinstall) {
+    if (repair) {
+        params += L" REINSTALL=ALL REINSTALLMODE=vamus";
+    } else if (verification_reinstall) {
         // Reapply every already-installed feature and recache the identical MSI.
-        // The normal upgrade path deliberately keeps its existing command line.
+        // Normal upgrades do not request a reinstall.
         params += L" REINSTALL=ALL REINSTALLMODE=vomus";
     }
+    params += L" /L*V \"" + (fs::path(msi_path).parent_path() / L"msiexec.log").wstring() + L"\"";
     return params;
 }
 
@@ -276,6 +279,16 @@ bool LaunchExoSnapFrom(const std::wstring& install_dir) {
 UpdaterWorker::UpdaterWorker(UpdaterArgs args, QObject* parent) : QObject(parent), args_(std::move(args)) {
     qRegisterMetaType<UpStep>("UpStep");
     qRegisterMetaType<FailureCase>("FailureCase");
+}
+
+void UpdaterWorker::repair() {
+    if (args_.install_mode != InstallMode::Installed || !have_package_) {
+        emit failed(FailureCase::VerifyInstallFailedMsi,
+                    QStringLiteral("The verified MSI package is unavailable for repair."));
+        return;
+    }
+    repair_msi_ = true;
+    run(UpStep::CloseApp);
 }
 
 void UpdaterWorker::run(UpStep entry) {
@@ -488,6 +501,7 @@ bool UpdaterWorker::runDownload() {
 
 // ── Manifest, gates, package, staging ────────────────────────────────────────
 bool UpdaterWorker::fetchAndStage() {
+    repair_msi_ = false;
     const bool handoff = args_.mode == exosnap::update::UpdaterMode::AppHandoff;
     if (!handoff && !have_release_) {
         emit failed(FailureCase::DownloadFailed, QStringLiteral("No release has been resolved yet.")); // A1
@@ -825,6 +839,10 @@ bool UpdaterWorker::runCloseApp() {
     }
 
     emit stepDone(UpStep::CloseApp);
+    if (repair_msi_ && IsInstanceMutexPresent(kInstanceMutexName)) {
+        emit failed(FailureCase::AppWontClose, QString());
+        return false;
+    }
     return true;
 }
 
@@ -927,7 +945,7 @@ bool UpdaterWorker::runInstallMsi() {
         return false;
     }
 
-    const std::wstring params = BuildMsiexecParams(package_path_, args_.verify_reinstall);
+    const std::wstring params = BuildMsiexecParams(package_path_, args_.verify_reinstall, repair_msi_);
     SHELLEXECUTEINFOW sei{};
     sei.cbSize = sizeof(sei);
     sei.fMask = SEE_MASK_NOCLOSEPROCESS;
@@ -948,6 +966,8 @@ bool UpdaterWorker::runInstallMsi() {
         emit failed(FailureCase::MsiFailed, QStringLiteral("no process")); // C2 -- can't observe the install
         return false;
     }
+    emit installerLogAvailable(
+        QString::fromStdWString((fs::path(package_path_).parent_path() / L"msiexec.log").wstring()));
 
     // Bounded, cancel-aware wait -- not WaitForSingleObject(..., INFINITE). A
     // wedged msiexec (a hung custom action, a suppressed-but-still-open reboot

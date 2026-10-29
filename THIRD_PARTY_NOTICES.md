@@ -4,6 +4,24 @@ ExoSnap is built with and distributes components from the following third-party
 projects. This document identifies each component, its version (where
 deterministically known), its license, and its linkage or deployment role.
 
+## Setup bootstrapper dependencies
+
+The offline Setup bundle contains its own UI runtime, separate from the
+application installed by the MSI. Its native bootstrapper links the official
+WiX Toolset 4.0.5 `WixToolset.BalUtil` and `WixToolset.DUtil` static libraries and
+uses the `WixToolset.BootstrapperCore.Native` headers. The NuGet archives are
+pinned by SHA-256 in `apps/setup/CMakeLists.txt`.
+
+- **Project:** https://github.com/wixtoolset/wix
+- **License:** Microsoft Reciprocal License (MS-RL)
+- **Bundled license:** `licenses/wix.txt` in the Setup UI payload
+- **Source:** https://github.com/wixtoolset/wix/tree/v4.0.5
+
+Setup also embeds the same Qt and font license texts as the application and
+private Microsoft Visual C++ runtime DLLs to render its UI before the system
+redistributable is installed. The permanent chained redistributable remains the
+application's shared runtime prerequisite.
+
 ## Bundled dependencies
 
 The license text for each shipped dependency is installed into the `licenses/`

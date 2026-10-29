@@ -118,6 +118,12 @@ void UpdaterController::setVerificationReinstall(bool on) {
     state_.verification_reinstall = on;
 }
 
+void UpdaterController::onRepairStarted() {
+    state_.repairing = true;
+    flow_.install_state = exosnap::update::InstallState::Unknown;
+    onStepStarted(UpStep::CloseApp);
+}
+
 void UpdaterController::setMode(exosnap::update::UpdaterMode mode) {
     flow_.mode = mode;
     state_.manual = mode == exosnap::update::UpdaterMode::Manual;
@@ -140,7 +146,6 @@ void UpdaterController::setPhase(UpdatePhase phase) {
     if (phase != UpdatePhase::Failed && phase != UpdatePhase::RebootRequired && phase != UpdatePhase::RestartPending) {
         flow_.failure_case.reset();
         flow_.retry_entry_step.reset();
-        flow_.install_state = exosnap::update::InstallState::Intact;
         flow_.reboot_required = false;
     }
 }
@@ -293,13 +298,25 @@ void UpdaterController::onStepStarted(UpStep s) {
     if (s == UpStep::Count) {
         return;
     }
+    if (s == UpStep::Download) {
+        state_.downloaded_bytes = 0;
+        state_.total_bytes = 0;
+        flow_.downloaded_bytes = 0;
+        flow_.total_bytes = 0;
+        state_.ring = 0.0;
+        state_.determinate = false;
+    }
     state_.prompt = PromptKind::None;
     state_.steps[size_t(s)] = StepStatus::Working;
     state_.status_line = WorkingStatusLine(s, state_.to_version, state_.verification_reinstall);
+    if (state_.repairing && s == UpStep::Install)
+        state_.status_line = QCoreApplication::translate("UpdaterController", "Reapplying the verified MSI package.");
     setPhase(PhaseForStep(s));
 }
 
 void UpdaterController::onDownloadProgress(quint64 got, quint64 total) {
+    state_.downloaded_bytes = got;
+    state_.total_bytes = total;
     flow_.downloaded_bytes = got;
     flow_.total_bytes = total;
     if (total == 0) {
@@ -328,10 +345,12 @@ void UpdaterController::onAllDone() {
     state_.variant = TerminalVariant::Success;
     state_.prompt = PromptKind::None;
     state_.status_line.clear();
+    flow_.install_state = exosnap::update::InstallState::Intact;
     setPhase(UpdatePhase::Completed);
 }
 
 void UpdaterController::onFailure(FailureCase c, const QString& detail) {
+    const bool unconfirmed = flow_.install_state == exosnap::update::InstallState::Unknown;
     // MsiRebootRequired is a terminal success: its step (Install) actually
     // completed, so it is marked Done, not Failed.
     state_.steps[size_t(FailedStepFor(c))] =
@@ -349,6 +368,8 @@ void UpdaterController::onFailure(FailureCase c, const QString& detail) {
     flow_.retry_entry_step =
         exosnap::update::RetryOffered(c, flow_.mode) ? std::optional<UpStep>(RetryEntryStep(c)) : std::nullopt;
     flow_.install_state = exosnap::update::InstallStateForFailure(c);
+    if (unconfirmed && c != FailureCase::LaunchFailed)
+        flow_.install_state = exosnap::update::InstallState::Unknown;
     flow_.reboot_required = c == FailureCase::MsiRebootRequired;
 
     // Raw WinHTTP/filesystem details stay in stderr evidence (main.cpp); this
@@ -500,15 +521,13 @@ void UpdaterController::onFailure(FailureCase c, const QString& detail) {
         // returned 0 (success), so asserting "rolled back" here would be a guess this
         // code cannot back up; only "could not confirm" is truthful. The published
         // installState says the same thing: `unknown`, not `intact`.
-        state_.headline = QCoreApplication::translate("UpdaterController", "Couldn't confirm the installed version");
+        state_.headline = QCoreApplication::translate("UpdaterController", "Installation state unknown");
         state_.detail_text = QCoreApplication::translate(
             "UpdaterController", "Windows Installer finished, but ExoSnap couldn't verify the installed files.");
-        state_.safety_text =
-            QCoreApplication::translate("UpdaterController",
-                                        "Version %1 may still be installed; no rollback is being claimed.")
-                .arg(state_.from_version);
-        state_.primary_action = QCoreApplication::translate("UpdaterController", "Retry");
-        state_.secondary_action = QCoreApplication::translate("UpdaterController", "Close");
+        state_.safety_text = QCoreApplication::translate(
+            "UpdaterController", "Windows Installer didn't confirm the result. Repair ExoSnap before you use it.");
+        state_.primary_action = QCoreApplication::translate("UpdaterController", "Repair ExoSnap");
+        state_.secondary_action.clear();
         break;
     case FailureCase::LaunchFailed: // B4 (soft success)
         state_.variant = TerminalVariant::Green;
@@ -548,8 +567,7 @@ void UpdaterController::onFailure(FailureCase c, const QString& detail) {
         break;
     case FailureCase::MsiRebootRequired: // C3 (terminal success; restart pending)
         state_.variant = TerminalVariant::RebootRequired;
-        state_.headline =
-            QCoreApplication::translate("UpdaterController", "Update installed — restart Windows to finish");
+        state_.headline = QCoreApplication::translate("UpdaterController", "Restart to finish");
         state_.detail_text = QCoreApplication::translate(
             "UpdaterController", "Windows Installer needs a system restart to complete the update.");
         state_.safety_text =
@@ -558,6 +576,22 @@ void UpdaterController::onFailure(FailureCase c, const QString& detail) {
         state_.primary_action = QCoreApplication::translate("UpdaterController", "Close");
         state_.secondary_action.clear();
         break;
+    }
+    if (flow_.install_state == exosnap::update::InstallState::Unknown) {
+        if (c == FailureCase::MsiRebootRequired) {
+            state_.safety_text = QCoreApplication::translate(
+                "UpdaterController", "Restart Windows before using ExoSnap. The installed files are not verified yet.");
+        } else if (c != FailureCase::VerifyInstallFailedMsi) {
+            state_.variant = TerminalVariant::Red;
+            state_.headline = QCoreApplication::translate("UpdaterController", "Repair didn't complete");
+            state_.safety_text = QCoreApplication::translate(
+                "UpdaterController", "The installation is still unconfirmed. Repair ExoSnap before you use it.");
+        }
+        if (flow_.retry_entry_step.has_value()) {
+            flow_.retry_entry_step = UpStep::CloseApp;
+            state_.primary_action = QCoreApplication::translate("UpdaterController", "Repair ExoSnap");
+            state_.secondary_action.clear();
+        }
     }
 }
 

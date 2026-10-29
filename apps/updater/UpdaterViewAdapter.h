@@ -33,6 +33,11 @@ class UpdaterViewAdapter : public QObject {
     QML_ELEMENT
     QML_UNCREATABLE("UpdaterViewAdapter is provided by the updater process")
 
+    Q_PROPERTY(QString versionText READ versionText NOTIFY stateChanged FINAL)
+    Q_PROPERTY(bool progressVisible READ progressVisible NOTIFY stateChanged FINAL)
+    Q_PROPERTY(QString compactDetail READ compactDetail NOTIFY stateChanged FINAL)
+    Q_PROPERTY(QString detailsText READ detailsText NOTIFY stateChanged FINAL)
+
     // ── Header and version transition ────────────────────────────────────────
     Q_PROPERTY(QString eyebrow READ eyebrow NOTIFY stateChanged FINAL)
     Q_PROPERTY(QString fromVersion READ fromVersion NOTIFY stateChanged FINAL)
@@ -86,11 +91,20 @@ class UpdaterViewAdapter : public QObject {
     // The actual footer buttons, in order. Introspection seam the old widget
     // exposed, now answered from the same projection the QML footer reads.
     Q_PROPERTY(QStringList footerButtonLabels READ footerButtonLabels NOTIFY stateChanged FINAL)
+    Q_PROPERTY(bool logAvailable READ logAvailable NOTIFY stateChanged FINAL)
 
   public:
     explicit UpdaterViewAdapter(QObject* parent = nullptr);
 
+    [[nodiscard]] QString versionText() const;
+    [[nodiscard]] bool progressVisible() const noexcept;
+    [[nodiscard]] QString compactDetail() const;
+    [[nodiscard]] QString detailsText() const;
+
     void render(const UpdaterUiState& state);
+    void setLogPath(QString path);
+    [[nodiscard]] bool logAvailable() const;
+    [[nodiscard]] const QString& logPath() const;
 
     [[nodiscard]] const QString& eyebrow() const noexcept;
     [[nodiscard]] const QString& fromVersion() const noexcept;
@@ -149,6 +163,7 @@ class UpdaterViewAdapter : public QObject {
     void cancelConfirmationRequested();
 
     void retryRequested();
+    void openLogRequested();
     void closeRequested();
     void openExoSnapRequested();
     void checkRequested();
@@ -159,6 +174,7 @@ class UpdaterViewAdapter : public QObject {
     void rebuildStepRows();
 
     UpdaterUiState state_;
+    QString log_path_;
     QString eyebrow_;
     bool failed_terminal_ = false;
     bool indeterminate_ = true;

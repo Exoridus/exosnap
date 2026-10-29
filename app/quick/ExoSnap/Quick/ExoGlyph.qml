@@ -87,7 +87,8 @@ Item {
         Pointer,
         RangeTool,
         Grip,
-        Mixer
+        Mixer,
+        Shield
     }
 
     // An ExoGlyph.Kind value. Declared `int` because a QML-declared enum is not
@@ -255,7 +256,8 @@ Item {
         // Grip -- six round-capped stubs that render as dots: a drag handle.
         "M6 4H6.2 M11 4H11.2 M6 9H6.2 M11 9H11.2 M6 14H6.2 M11 14H11.2",
         // Mixer -- three faders at different positions.
-        "M4 2V16 M9 2V16 M14 2V16 M2 6H6 M7 12H11 M12 5H16"
+        "M4 2V16 M9 2V16 M14 2V16 M2 6H6 M7 12H11 M12 5H16",
+        "M9 2L15 4.5V8.5C15 12 12.5 14.5 9 16C5.5 14.5 3 12 3 8.5V4.5Z"
     ]
 
     // Kinds drawn as a filled silhouette instead of a stroked outline.
