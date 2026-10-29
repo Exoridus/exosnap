@@ -1465,6 +1465,15 @@ qt_add_qml_module(record_source_picker_qml_tests
         # ExoTheme.qml resolves wheelScrollLines through this singleton.
         QuickWheelMetrics.h
     QML_FILES
+        SettingsPage.qml
+        SettingsAppearanceSection.qml
+        SettingsDeveloperSection.qml
+        SettingsHotkeysSection.qml
+        SettingsOverlaysSection.qml
+        SettingsPresenceSection.qml
+        SettingsStorageSection.qml
+        SettingsUpdatesSection.qml
+        HotkeyCaptureField.qml
         AudioRoutingPanel.qml
         AudioTrackCard.qml
         ExoCard.qml
@@ -1546,7 +1555,7 @@ target_link_libraries(record_source_picker_qml_tests
         exosnap_engine
 )
 
-add_test(NAME quick.qml.record_source_picker COMMAND record_source_picker_qml_tests)
+add_test(NAME quick.qml.record_source_picker COMMAND record_source_picker_qml_tests -o "${CMAKE_CURRENT_BINARY_DIR}/record-source-picker-test.txt,txt")
 set_tests_properties(quick.qml.record_source_picker PROPERTIES
     LABELS "quick;quicktest"
     ENVIRONMENT "QT_QPA_PLATFORM=offscreen;QML_IMPORT_PATH=${_exosnap_quick_qt_prefix}/qml"
