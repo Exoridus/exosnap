@@ -20,19 +20,110 @@ TestCase {
             sourceEnabled: true
         }
     }
-    SignalSpy { id: activated; signalName: "sourceRequested" }
+    SignalSpy {
+        id: activated
+        signalName: "sourceRequested"
+    }
+    SignalSpy {
+        id: menuOpened
+        signalName: "opened"
+    }
+    SignalSpy {
+        id: menuClosed
+        signalName: "closed"
+    }
+
+    function test_overlay_button_toggles_without_press_reopen() {
+        const chrome = createTemporaryObject(chromeComponent, root);
+        const button = findChild(chrome, "previewAddOverlayButton");
+        const menu = findChild(chrome, "recordOverlayMenu");
+        verify(menu !== null, "the production chrome owns its overlay menu");
+        menuOpened.target = menu;
+        menuClosed.target = menu;
+        for (let cycle = 0; cycle < 2; ++cycle) {
+            menuOpened.clear();
+            menuClosed.clear();
+            mouseClick(button);
+            tryCompare(menu, "opened", true);
+            compare(menuOpened.count, 1);
+            mousePress(button);
+            compare(menu.visible, true, "the anchor press must not close the menu");
+            compare(menuClosed.count, 0);
+            mouseRelease(button);
+            tryCompare(menu, "visible", false);
+            compare(menuOpened.count, 1, "release must not reopen the menu");
+            compare(menuClosed.count, 1);
+        }
+    }
+
+    function test_overlay_menu_outside_escape_and_page_hide() {
+        const chrome = createTemporaryObject(chromeComponent, root);
+        const button = findChild(chrome, "previewAddOverlayButton");
+        const menu = findChild(chrome, "recordOverlayMenu");
+        verify(menu !== null);
+        mouseClick(button);
+        tryCompare(menu, "opened", true);
+        mouseClick(chrome, 5, chrome.height / 2);
+        tryCompare(menu, "visible", false);
+        mouseClick(button);
+        tryCompare(menu, "opened", true);
+        keyClick(Qt.Key_Escape);
+        tryCompare(menu, "visible", false);
+        button.forceActiveFocus();
+        keyClick(Qt.Key_Space);
+        tryCompare(menu, "opened", true);
+        chrome.visible = false;
+        tryCompare(menu, "visible", false);
+        chrome.visible = true;
+        compare(menu.visible, false);
+        chrome.overlayEnabled = false;
+        mouseClick(button);
+        compare(menu.visible, false);
+    }
+
+    function test_overlay_menu_uses_shared_webcam_and_gamepad_glyphs() {
+        const chrome = createTemporaryObject(chromeComponent, root);
+        const menu = findChild(chrome, "recordOverlayMenu");
+        verify(menu !== null);
+        const webcam = findChild(chrome, "recordOverlayWebcamGlyph");
+        const gamepad = findChild(chrome, "recordOverlayGamepadGlyph");
+        verify(webcam !== null && gamepad !== null);
+        compare(webcam.kind, ExoGlyph.Webcam);
+        compare(gamepad.kind, ExoGlyph.Gamepad);
+        verify(webcam.pathData.length > 0 && gamepad.pathData.length > 0);
+    }
     function test_source_states_data() {
         return [
-            { tag: "none", text: "Select source" },
-            { tag: "display", text: "Screen: Display 1" },
-            { tag: "window", text: "App: Google Chrome" },
-            { tag: "selecting", text: "Selecting region…" },
-            { tag: "region", text: "Region: 1920×1080" },
-            { tag: "long", text: "App: " + "Long window title ".repeat(30) }
+            {
+                tag: "none",
+                text: "Select source"
+            },
+            {
+                tag: "display",
+                text: "Screen: Display 1"
+            },
+            {
+                tag: "window",
+                text: "App: Google Chrome"
+            },
+            {
+                tag: "selecting",
+                text: "Selecting region…"
+            },
+            {
+                tag: "region",
+                text: "Region: 1920×1080"
+            },
+            {
+                tag: "long",
+                text: "App: " + "Long window title ".repeat(30)
+            }
         ];
     }
     function test_source_states(data) {
-        const chrome = createTemporaryObject(chromeComponent, root, {sourceText: data.text});
+        const chrome = createTemporaryObject(chromeComponent, root, {
+            sourceText: data.text
+        });
         verify(chrome);
         const button = findChild(chrome, "previewSourceButton");
         compare(button.Accessible.name, data.text);
@@ -45,7 +136,9 @@ TestCase {
         compare(activated.count, 1);
     }
     function test_narrow_geometry_preserves_chrome() {
-        const chrome = createTemporaryObject(chromeComponent, root, {width: 400});
+        const chrome = createTemporaryObject(chromeComponent, root, {
+            width: 400
+        });
         const button = findChild(chrome, "previewSourceButton");
         verify(button.width > 0 && button.x + button.width <= chrome.width);
         verify(findChild(chrome, "previewContractText").width > 0);
@@ -62,14 +155,33 @@ TestCase {
     }
     Component {
         id: confidenceComponent
-        SourceConfidence { indicators: [] }
+        SourceConfidence {
+            indicators: []
+        }
     }
     function test_status_is_accessible_without_keyboard_stops() {
-        const view = createTemporaryObject(confidenceComponent, root, {indicators: [
-            {key: "speaker", included: true, tone: "success", description: "Application audio active; system audio muted"},
-            {key: "microphone", included: false, tone: "neutral", description: "Microphone muted"},
-            {key: "webcam", included: true, tone: "warning", description: "Camera recovering"}
-        ]});
+        const view = createTemporaryObject(confidenceComponent, root, {
+            indicators: [
+                {
+                    key: "speaker",
+                    included: true,
+                    tone: "success",
+                    description: "Application audio active; system audio muted"
+                },
+                {
+                    key: "microphone",
+                    included: false,
+                    tone: "neutral",
+                    description: "Microphone muted"
+                },
+                {
+                    key: "webcam",
+                    included: true,
+                    tone: "warning",
+                    description: "Camera recovering"
+                }
+            ]
+        });
         const mic = findChild(view, "confidence-microphone");
         verify(mic);
         compare(mic.Accessible.name, "Microphone muted");

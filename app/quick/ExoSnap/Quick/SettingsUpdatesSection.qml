@@ -67,12 +67,14 @@ ExoCard {
         spacing: ExoTheme.spacingSm
         Layout.fillWidth: true
 
+        Item {
+            Layout.fillWidth: true
+        }
+
         ExoButton {
             text: root.settings.updateActionText
             enabled: root.settings.updateActionEnabled
-            onClicked: root.settings.updateAvailable
-                       ? root.settings.runUpdatePrimaryAction()
-                       : root.settings.checkForUpdates()
+            onClicked: root.settings.updateAvailable ? root.settings.runUpdatePrimaryAction() : root.settings.checkForUpdates()
         }
 
         ExoButton {
@@ -91,10 +93,6 @@ ExoCard {
             quiet: true
             visible: root.settings.whatsNewAvailable
             onClicked: root.settings.showWhatsNew()
-        }
-
-        Item {
-            Layout.fillWidth: true
         }
     }
 }

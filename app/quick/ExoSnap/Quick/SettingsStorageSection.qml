@@ -2,12 +2,11 @@ pragma ComponentBehavior: Bound
 import QtQuick
 import QtQuick.Layouts
 
-ExoCard {
+ColumnLayout {
     id: root
     required property SettingsAdapter settings
     required property bool stacked
     property bool cacheCleared: false
-    title: qsTr("Storage")
     ExoSettingRow {
         label: qsTr("Editor previews")
         hint: root.cacheCleared ? qsTr("Preview cache cleared. Visible previews regenerate as needed.") : qsTr("Cached thumbnails and waveforms. Source recordings are kept.")
@@ -23,6 +22,8 @@ ExoCard {
     }
     Connections {
         target: root.settings
-        function onMediaCachesCleared(): void { root.cacheCleared = true; }
+        function onMediaCachesCleared(): void {
+            root.cacheCleared = true;
+        }
     }
 }

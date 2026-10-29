@@ -1,18 +1,27 @@
+pragma ComponentBehavior: Bound
 import QtQuick
 import QtQuick.Controls.Basic
+import QtQuick.Templates as T
 
-SpinBox {
+// Basic leaves unfinished indicator creation contexts when both steppers are replaced.
+T.DoubleSpinBox {
     id: root
 
     property string suffix: ""
+    property bool resetEnabled: false
+    readonly property Menu resetMenu: resetMenuLoader.item as Menu
+    decimals: 0
+    to: 99
 
     // Both steppers are stacked on the right edge, so they occupy ONE column of
     // this width, not two.
     readonly property int stepperWidth: 30
 
-    signal valueCommitted(int value)
+    signal valueCommitted(real value)
+    signal resetRequested
 
     implicitHeight: ExoTheme.controlHeight
+    implicitWidth: Math.max(140, implicitContentWidth + leftPadding + rightPadding)
     editable: true
     focusPolicy: Qt.StrongFocus
     // up.hovered / down.hovered stay false without it, and the steppers then
@@ -28,23 +37,23 @@ SpinBox {
     leftPadding: 0
     rightPadding: root.stepperWidth
 
-    textFromValue: (value, locale) => root.suffix === ""
-                                      ? Number(value).toLocaleString(locale, 'f', 0)
-                                      : qsTr("%1 %2").arg(Number(value).toLocaleString(locale, 'f', 0)).arg(root.suffix)
+    textFromValue: (value, decimals, locale) => Number(value).toLocaleString(locale, 'f', decimals)
 
-    // The default valueFromText expects a plain number and fails on the
-    // suffix textFromValue appended above. SpinBox re-parses the displayed
-    // text through this on every revalidation point, including focus loss,
-    // so without a matching override a suffixed field snaps to `from` the
-    // moment it is left. Falling back to the current value (not `from`) on a
-    // genuinely unparseable string, since a value field should never jump to
-    // its floor because of a formatting artifact it introduced itself.
     valueFromText: (text, locale) => {
-        const digitsOnly = text.replace(/[^0-9\u2212-]/g, '').replace(/\u2212/g, '-');
-        if (digitsOnly === '' || digitsOnly === '-')
+        try {
+            const parsed = Number.fromLocaleString(locale, text.trim().replace(/\u2212/g, '-'));
+            return Number.isFinite(parsed) && parsed >= Math.min(root.from, root.to) && parsed <= Math.max(root.from, root.to) ? parsed : root.value;
+        } catch (error) {
             return root.value;
-        const parsed = Number.fromLocaleString(locale, digitsOnly);
-        return Number.isFinite(parsed) ? parsed : root.value;
+        }
+    }
+
+    validator: DoubleValidator {
+        locale: root.locale.name
+        bottom: Math.min(root.from, root.to)
+        top: Math.max(root.from, root.to)
+        decimals: root.decimals
+        notation: DoubleValidator.StandardNotation
     }
 
     // Why the current value is not accepted, or empty when it is. Shown as a
@@ -57,7 +66,7 @@ SpinBox {
     ToolTip.visible: root.hasError && (root.hovered || root.activeFocus)
     ToolTip.text: root.errorText
     ToolTip.delay: 200
-    Accessible.description: root.errorText
+    Accessible.description: root.hasError ? root.errorText : root.suffix
 
     contentItem: TextInput {
         text: root.displayText
@@ -67,16 +76,51 @@ SpinBox {
         validator: root.validator
         inputMethodHints: Qt.ImhFormattedNumbersOnly
         selectByMouse: true
+        clip: true
         // The number itself stays readable while locked; the stepper glyphs and
         // the frame below already carry that it cannot be changed.
         color: root.enabled ? ExoTheme.text : ExoTheme.textSecondary
         selectionColor: ExoTheme.accent
         selectedTextColor: ExoTheme.accentInk
         leftPadding: ExoTheme.spacingMd
-        rightPadding: root.hasError ? 16 + ExoTheme.spacingSm : 0
+        rightPadding: (root.suffix !== "" ? unit.implicitWidth + ExoTheme.spacingMd : ExoTheme.spacingSm) + (root.hasError ? 16 + ExoTheme.spacingSm : 0)
         font {
             family: ExoTheme.sansFamily
             pixelSize: ExoTheme.fontBody
+        }
+
+        Text {
+            id: unit
+            text: root.suffix
+            anchors.right: parent.right
+            anchors.rightMargin: ExoTheme.spacingSm + (root.hasError ? 16 + ExoTheme.spacingSm : 0)
+            anchors.verticalCenter: parent.verticalCenter
+            color: ExoTheme.textMuted
+            font: parent.font
+            Accessible.ignored: true
+        }
+
+        ContextMenu.menu: root.resetMenu
+        Keys.onPressed: event => {
+            if (root.resetEnabled && (event.key === Qt.Key_Menu || (event.key === Qt.Key_F10 && event.modifiers === Qt.ShiftModifier))) {
+                root.resetMenu.popup();
+                event.accepted = true;
+            }
+        }
+    }
+
+    Loader {
+        id: resetMenuLoader
+        active: root.resetEnabled
+        sourceComponent: Component {
+            ExoMenu {
+                objectName: "numberFieldResetMenu"
+                parent: root
+                ExoMenuItem {
+                    text: qsTr("Reset to default")
+                    onTriggered: root.resetRequested()
+                }
+            }
         }
     }
 

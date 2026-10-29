@@ -27,8 +27,10 @@ Item {
         }
         const audio = item as AudioRoutingPanel;
         if (audio) {
-            if (expanded) audio.harnessExpand();
-            else audio.harnessCollapse();
+            if (expanded)
+                audio.harnessExpand();
+            else
+                audio.harnessCollapse();
             return;
         }
         for (const child of item.children)
@@ -49,21 +51,21 @@ Item {
     }
 
     readonly property var automationTargets: ({
-        "preset": presetSection,
-        "format": formatSection,
-        "quality": qualitySection,
-        "audio": audioSourcesSection,
-        "microphone": root.settings.audioRouting.legacy ? microphoneSection : audioSourcesSection,
-        "audio-encoding": audioEncodingSection,
-        "output": outputSection,
-        "webcam": webcamSection,
-        "overlays": overlaysSection,
-        "presence": presenceSection,
-        "hotkeys": hotkeysSection,
-        "updates": updatesSection,
-        "appearance": appearanceSection,
-        "developer": developerSection
-    })
+            "preset": presetSection,
+            "format": formatSection,
+            "quality": qualitySection,
+            "audio": audioSourcesSection,
+            "microphone": root.settings.audioRouting.legacy ? microphoneSection : audioSourcesSection,
+            "audio-encoding": audioEncodingSection,
+            "output": outputSection,
+            "webcam": webcamSection,
+            "overlays": overlaysSection,
+            "presence": presenceSection,
+            "hotkeys": hotkeysSection,
+            "updates": updatesSection,
+            "appearance": appearanceSection,
+            "developer": developerSection
+        })
 
     function revealAutomationTarget(name: string): int {
         const section = root.automationTargets[name];
@@ -309,14 +311,6 @@ Item {
         Layout.fillWidth: true
     }
 
-    SettingsStorageSection {
-        id: storageSection
-        settings: root.settings
-        stacked: root.stackedRows
-        visible: false
-        Layout.fillWidth: true
-    }
-
     ColumnLayout {
         spacing: ExoTheme.spacingMd
         anchors {
@@ -331,15 +325,16 @@ Item {
             Layout.rightMargin: root.sideInset + ExoTheme.spacingLg
             Label {
                 Layout.fillWidth: true
-                text: root.settings.editingNextRecording ? qsTr("For the next recording")
-                      : qsTr("Active recording (read-only): %1").arg(root.settings.activePresetName)
+                text: root.settings.editingNextRecording ? qsTr("For the next recording") : qsTr("Active recording (read-only): %1").arg(root.settings.activePresetName)
                 color: ExoTheme.textMuted
             }
             ExoButton {
                 text: root.settings.editingNextRecording ? qsTr("Show active recording") : qsTr("Edit next recording")
                 onClicked: {
-                    if (root.settings.editingNextRecording) root.settings.showActiveRecording();
-                    else root.settings.editNextRecording();
+                    if (root.settings.editingNextRecording)
+                        root.settings.showActiveRecording();
+                    else
+                        root.settings.editNextRecording();
                 }
             }
         }
@@ -358,8 +353,7 @@ Item {
 
                 x: root.sideInset
                 width: root.contentWidth
-                implicitHeight: root.cardColumns === 1 ? oneColumn.implicitHeight
-                                                       : twoColumn.implicitHeight
+                implicitHeight: root.cardColumns === 1 ? oneColumn.implicitHeight : twoColumn.implicitHeight
 
                 ColumnLayout {
                     id: oneColumn
@@ -368,21 +362,50 @@ Item {
                     spacing: ExoTheme.sectionGap
                     visible: root.cardColumns === 1
 
-                    LayoutItemProxy { target: presetSection; visible: !root.settings.recordingActive || root.settings.editingNextRecording }
-                    LayoutItemProxy { target: formatSection }
-                    LayoutItemProxy { target: audioSourcesSection }
-                    LayoutItemProxy { target: microphoneSection; visible: root.settings.audioRouting.legacy }
-                    LayoutItemProxy { target: outputSection }
-                    LayoutItemProxy { target: presenceSection }
-                    LayoutItemProxy { target: hotkeysSection }
-                    LayoutItemProxy { target: appearanceSection }
-                    LayoutItemProxy { target: qualitySection }
-                    LayoutItemProxy { target: audioEncodingSection }
-                    LayoutItemProxy { target: webcamSection }
-                    LayoutItemProxy { target: overlaysSection }
-                    LayoutItemProxy { target: storageSection }
-                    LayoutItemProxy { target: updatesSection }
-                    LayoutItemProxy { target: developerSection }
+                    LayoutItemProxy {
+                        target: presetSection
+                        visible: !root.settings.recordingActive || root.settings.editingNextRecording
+                    }
+                    LayoutItemProxy {
+                        target: formatSection
+                    }
+                    LayoutItemProxy {
+                        target: audioSourcesSection
+                    }
+                    LayoutItemProxy {
+                        target: microphoneSection
+                        visible: root.settings.audioRouting.legacy
+                    }
+                    LayoutItemProxy {
+                        target: outputSection
+                    }
+                    LayoutItemProxy {
+                        target: presenceSection
+                    }
+                    LayoutItemProxy {
+                        target: hotkeysSection
+                    }
+                    LayoutItemProxy {
+                        target: appearanceSection
+                    }
+                    LayoutItemProxy {
+                        target: qualitySection
+                    }
+                    LayoutItemProxy {
+                        target: audioEncodingSection
+                    }
+                    LayoutItemProxy {
+                        target: webcamSection
+                    }
+                    LayoutItemProxy {
+                        target: overlaysSection
+                    }
+                    LayoutItemProxy {
+                        target: updatesSection
+                    }
+                    LayoutItemProxy {
+                        target: developerSection
+                    }
                 }
 
                 ColumnLayout {
@@ -392,7 +415,10 @@ Item {
                     spacing: ExoTheme.sectionGap
                     visible: root.cardColumns > 1
 
-                    LayoutItemProxy { target: presetSection; visible: !root.settings.recordingActive || root.settings.editingNextRecording }
+                    LayoutItemProxy {
+                        target: presetSection
+                        visible: !root.settings.recordingActive || root.settings.editingNextRecording
+                    }
 
                     RowLayout {
                         spacing: ExoTheme.sectionGap
@@ -404,13 +430,31 @@ Item {
                             Layout.preferredWidth: 1
                             Layout.alignment: Qt.AlignTop
 
-                            LayoutItemProxy { target: formatSection }
-                            LayoutItemProxy { target: audioSourcesSection }
-                            LayoutItemProxy { target: microphoneSection; visible: root.settings.audioRouting.legacy }
-                            LayoutItemProxy { target: outputSection }
-                            LayoutItemProxy { target: presenceSection }
-                            LayoutItemProxy { target: hotkeysSection }
-                            LayoutItemProxy { target: appearanceSection }
+                            LayoutItemProxy {
+                                target: formatSection
+                            }
+                            LayoutItemProxy {
+                                target: audioSourcesSection
+                            }
+                            LayoutItemProxy {
+                                target: microphoneSection
+                                visible: root.settings.audioRouting.legacy
+                            }
+                            LayoutItemProxy {
+                                target: outputSection
+                            }
+                            LayoutItemProxy {
+                                target: presenceSection
+                            }
+                            LayoutItemProxy {
+                                target: hotkeysSection
+                            }
+                            LayoutItemProxy {
+                                target: appearanceSection
+                            }
+                            LayoutItemProxy {
+                                target: developerSection
+                            }
 
                             Item {
                                 Layout.fillHeight: true
@@ -423,13 +467,21 @@ Item {
                             Layout.preferredWidth: 1
                             Layout.alignment: Qt.AlignTop
 
-                            LayoutItemProxy { target: qualitySection }
-                            LayoutItemProxy { target: audioEncodingSection }
-                            LayoutItemProxy { target: webcamSection }
-                            LayoutItemProxy { target: overlaysSection }
-                            LayoutItemProxy { target: storageSection }
-                            LayoutItemProxy { target: updatesSection }
-                            LayoutItemProxy { target: developerSection }
+                            LayoutItemProxy {
+                                target: qualitySection
+                            }
+                            LayoutItemProxy {
+                                target: audioEncodingSection
+                            }
+                            LayoutItemProxy {
+                                target: webcamSection
+                            }
+                            LayoutItemProxy {
+                                target: overlaysSection
+                            }
+                            LayoutItemProxy {
+                                target: updatesSection
+                            }
 
                             Item {
                                 Layout.fillHeight: true

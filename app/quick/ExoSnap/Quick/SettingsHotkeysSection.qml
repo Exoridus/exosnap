@@ -12,7 +12,6 @@ ExoCard {
     required property bool stacked
 
     title: qsTr("Hotkeys")
-    subtitle: qsTr("Also work while ExoSnap is in the background.")
 
     Repeater {
         model: root.settings.hotkeyRows
@@ -40,8 +39,7 @@ ExoCard {
                 enabled: !root.settings.controlsLocked
                 Layout.fillWidth: true
                 Accessible.name: qsTr("Shortcut for %1").arg(hotkeyRow.modelData.label)
-                clearAccessibleName: shortcutField.erred ? qsTr("Discard this combination")
-                                           : qsTr("Clear shortcut for %1").arg(hotkeyRow.modelData.label)
+                clearAccessibleName: shortcutField.erred ? qsTr("Discard this combination") : qsTr("Clear shortcut for %1").arg(hotkeyRow.modelData.label)
                 onCaptureStarted: root.settings.beginHotkeyCapture(hotkeyRow.modelData.action)
                 onCaptureCancelled: root.settings.cancelHotkeyCapture()
                 onCaptured: (key, modifiers) => root.settings.commitHotkeyCapture(key, modifiers)

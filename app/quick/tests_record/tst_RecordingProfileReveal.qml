@@ -47,13 +47,18 @@ TestCase {
     }
 
     function findSection(item, section) {
-        const titles = ({ format: qsTr("Recording format"), quality: qsTr("Video quality & timing"),
-                          audio: qsTr("Audio routing"), microphone: qsTr("Microphone"),
-                          "audio-encoding": qsTr("Audio encoding"), output: qsTr("Output"), webcam: qsTr("Webcam") });
+        const titles = ({
+                format: qsTr("Recording format"),
+                quality: qsTr("Video quality & timing"),
+                audio: qsTr("Audio tracks"),
+                microphone: qsTr("Microphone"),
+                "audio-encoding": qsTr("Audio encoding"),
+                output: qsTr("Output"),
+                webcam: qsTr("Webcam")
+            });
         if (!item || !item.visible)
             return null;
-        if (section === "preset" ? typeof item.openHarnessDialog === "function" && item.stacked !== undefined
-                                 : item.title === titles[section])
+        if (section === "preset" ? typeof item.openHarnessDialog === "function" && item.stacked !== undefined : item.title === titles[section])
             return item;
         for (const child of item.children) {
             const result = findSection(child, section);
@@ -80,7 +85,16 @@ TestCase {
     }
 
     function test_details_follow_real_configure_hide_state_data() {
-        return [{ tag: "simple", expert: false }, { tag: "expert", expert: true }];
+        return [
+            {
+                tag: "simple",
+                expert: false
+            },
+            {
+                tag: "expert",
+                expert: true
+            }
+        ];
     }
 
     function test_details_follow_real_configure_hide_state(data) {
@@ -114,7 +128,11 @@ TestCase {
         const rows = [];
         for (const expert of [false, true]) {
             for (const section of ["preset", "format", "quality", "audio", "microphone", "audio-encoding", "output", "webcam"])
-                rows.push({ tag: (expert ? "expert-" : "simple-") + section, expert: expert, section: section });
+                rows.push({
+                    tag: (expert ? "expert-" : "simple-") + section,
+                    expert: expert,
+                    section: section
+                });
         }
         return rows;
     }
@@ -132,7 +150,16 @@ TestCase {
         verify(position.y >= 0 && position.y < inspector.height, "the section heading reached the inspector viewport");
     }
     function test_audio_source_details_follow_existing_opt_in_data() {
-        return [{ tag: "simple", expert: false }, { tag: "expert", expert: true }];
+        return [
+            {
+                tag: "simple",
+                expert: false
+            },
+            {
+                tag: "expert",
+                expert: true
+            }
+        ];
     }
 
     function test_audio_source_details_follow_existing_opt_in(data) {
