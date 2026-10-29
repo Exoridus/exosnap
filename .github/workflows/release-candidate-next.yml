@@ -129,8 +129,9 @@ jobs:
       - name: Report exact package footprint
         shell: pwsh
         run: |
-          python scripts/package_size_report.py --package-dir candidate-package --vc-redist vc_redist.x64.exe --summary $env:GITHUB_STEP_SUMMARY
-          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          $report = 'candidate-package/package-size.md'
+          if (-not (Test-Path -LiteralPath $report)) { throw 'missing generated package-size report' }
+          Get-Content -LiteralPath $report -Raw | Out-File -FilePath $env:GITHUB_STEP_SUMMARY -Append -Encoding utf8
 
       - name: Upload candidate package footprint
         uses: actions/upload-artifact@b7c566a772e6b6bfb58ed0dc250532a479d7789f # v6.0.0
