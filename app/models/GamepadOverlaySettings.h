@@ -26,6 +26,7 @@ inline constexpr std::array<std::string_view, 14> kGamepadOverlayArtworkIds{"dua
 
 struct GamepadOverlaySettings {
     bool enabled = false;
+    bool output_visible = true;
     std::string device;
     int layout = -1;
     bool glass = false;

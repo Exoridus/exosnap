@@ -11,7 +11,6 @@ Item {
     property GamepadOverlay gamepadOverlay: null
     required property RecordingClipAdapter clipAdapter
     required property RecordPreviewAdapter previewAdapter
-    required property RecordingWorkspaceState workspaceState
     required property SettingsAdapter settings
     // The shell adapter, for the two directions the source picker now has to
     // travel: it publishes whether the picker is on screen (nothing outside this
@@ -22,37 +21,15 @@ Item {
     property bool active: false
     property bool benchmarkInteractionActive: false
     property bool showMetricsOverlay: false
-    property int pendingProfileTarget: -1
+    property string selectedOverlay: ""
+    signal settingsRequested(int target)
     focus: true
     Keys.onEscapePressed: event => {
-        event.accepted = root.workspaceState.closeTopPanel();
+        event.accepted = root.selectedOverlay.length > 0;
+        root.selectedOverlay = "";
     }
 
     objectName: "quickRecordPage"
-    ExoButton {
-        id: sourcesButton
-        visible: root.workspaceState.sourceState === "Closed"
-        z: 3
-        anchors.top: parent.top
-        anchors.left: parent.left
-        anchors.margins: ExoTheme.spacingSm
-        text: qsTr("Sources")
-        Accessible.name: qsTr("Open recording sources")
-        onClicked: root.workspaceState.toggleSources()
-    }
-
-    ExoButton {
-        id: profileButton
-        visible: root.workspaceState.profileState === "Closed"
-        z: 3
-        anchors.top: parent.top
-        anchors.right: parent.right
-        anchors.margins: ExoTheme.spacingSm
-        text: qsTr("Profile")
-        Accessible.name: qsTr("Open recording profile")
-        onClicked: root.workspaceState.toggleProfile()
-    }
-
     Binding {
         target: root.previewAdapter
         property: "active"
@@ -87,10 +64,9 @@ Item {
             Layout.fillHeight: true
             Layout.minimumHeight: 280
 
-            RecordingWorkspaceSurface {
+            Item {
                 id: workspaceSurface
                 anchors.fill: parent
-                workspaceState: root.workspaceState
 
                 Rectangle {
                     id: previewSurface
@@ -142,7 +118,7 @@ Item {
                             // recording's own compositor; the overlay below is only its
                             // editing chrome. Bound to the draft so a drag moves the
                             // real picture, not a stand-in.
-                            webcamVisible: webcamOverlay.visible && webcamOverlay.idlePreview
+                            webcamVisible: webcamOverlay.visible && (webcamOverlay.idlePreview || !webcamOverlay.outputVisible)
                             webcamRect: webcamOverlay.draftRect
                         }
 
@@ -225,6 +201,15 @@ Item {
                             }
                         }
 
+                        MouseArea {
+                            z: -1
+                            anchors.fill: parent
+                            onClicked: {
+                                root.selectedOverlay = "";
+                                root.forceActiveFocus();
+                            }
+                        }
+
                         RecordWebcamOverlay {
                             id: webcamOverlay
 
@@ -235,6 +220,15 @@ Item {
                             modelRect: root.recordViewModel.webcamOverlayRect
                             editable: root.recordViewModel.webcamOverlayEditable
                             error: root.recordViewModel.webcamError
+                            selected: root.selectedOverlay === "webcam"
+                            toolbarTopInset: Math.max(0, previewChrome.controlsBottom - previewStage.y + 4)
+                            outputVisible: root.recordViewModel.webcamOutputVisible
+                            onSelectionRequested: root.selectedOverlay = "webcam"
+                            onOutputVisibilityRequested: value => root.recordViewModel.requestWebcamOutputVisible(value)
+                            onRemoveRequested: {
+                                root.recordViewModel.requestToggleSource("webcam");
+                                root.selectedOverlay = "";
+                            }
                             onRectRequested: rect => root.recordViewModel.requestWebcamOverlayRect(rect)
                         }
 
@@ -246,6 +240,15 @@ Item {
                             idlePreview: false
                             modelRect: root.gamepadOverlay ? root.gamepadOverlay.placement : Qt.rect(0, 0, 1, 1)
                             editable: root.recordViewModel.webcamOverlayEditable
+                            selected: root.selectedOverlay === "gamepad"
+                            toolbarTopInset: Math.max(0, previewChrome.controlsBottom - previewStage.y + 4)
+                            outputVisible: root.gamepadOverlay === null || root.gamepadOverlay.outputVisible
+                            onSelectionRequested: root.selectedOverlay = "gamepad"
+                            onOutputVisibilityRequested: value => root.gamepadOverlay.outputVisible = value
+                            onRemoveRequested: {
+                                root.gamepadOverlay.enabled = false;
+                                root.selectedOverlay = "";
+                            }
                             onDraftRectChanged: {
                                 if (root.gamepadOverlay && editable)
                                     root.gamepadOverlay.placement = draftRect
@@ -257,27 +260,73 @@ Item {
                         }
 
                         GamepadOverlayControls {
+                            id: gamepadControls
                             visible: root.gamepadOverlay !== null
                             overlay: root.gamepadOverlay
+                            showButton: false
                             anchors.right: parent.right
                             anchors.bottom: parent.bottom
                             anchors.margins: ExoTheme.spacingMd
                         }
 
                         RecordPreviewChrome {
+                            id: previewChrome
                             parent: previewSurface
                             anchors.fill: parent
-                            anchors.topMargin: Math.max(sourcesButton.height, profileButton.height)
                             z: 10
                             formatText: root.recordViewModel.formatText
                             sourceText: root.recordViewModel.sourceButtonText
                             sourceGlyph: root.sourceGlyph
                             sourceEnabled: root.recordViewModel.canSelectSource
+                            overlayEnabled: root.recordViewModel.webcamOverlayEditable
                             metricsVisible: (root.recordViewModel.recording || root.recordViewModel.paused) && root.recordViewModel.liveStatsAvailable
                             dropsText: root.recordViewModel.droppedFramesText
                             driftText: root.recordViewModel.driftText
                             sizeText: root.recordViewModel.outputSizeText
                             onSourceRequested: root.openSourcePicker()
+                            onOverlayRequested: overlayMenu.open()
+                        }
+
+                        ExoMenu {
+                            id: overlayMenu
+                            objectName: "recordOverlayMenu"
+                            parent: previewChrome
+                            x: Math.max(0, parent.width - width - ExoTheme.spacingMd)
+                            y: ExoTheme.controlHeightCompact + ExoTheme.spacingMd
+                            ExoMenuItem {
+                                text: root.recordViewModel.webcamEnabled ? qsTr("Webcam settings") : qsTr("Add webcam")
+                                enabled: root.recordViewModel.webcamOverlayEditable
+                                onTriggered: {
+                                    if (root.recordViewModel.webcamEnabled || !root.recordViewModel.webcamAvailable)
+                                        root.settingsRequested(SettingsAdapter.Webcam);
+                                    else {
+                                        root.recordViewModel.requestToggleSource("webcam");
+                                        root.recordViewModel.requestWebcamOutputVisible(true);
+                                        root.selectedOverlay = "webcam";
+                                        Qt.callLater(() => {
+                                            if (root.active && webcamOverlay.visible)
+                                                webcamOverlay.forceActiveFocus(Qt.OtherFocusReason);
+                                        });
+                                    }
+                                }
+                            }
+                            ExoMenuItem {
+                                text: root.gamepadOverlay && root.gamepadOverlay.enabled ? qsTr("Controller settings") : qsTr("Add controller")
+                                enabled: root.gamepadOverlay !== null && root.recordViewModel.webcamOverlayEditable
+                                onTriggered: {
+                                    if (root.gamepadOverlay.enabled)
+                                        gamepadControls.openOptions();
+                                    else {
+                                        root.gamepadOverlay.outputVisible = true;
+                                        root.gamepadOverlay.enabled = true;
+                                        root.selectedOverlay = "gamepad";
+                                        Qt.callLater(() => {
+                                            if (root.active && gamepadPlacement.visible)
+                                                gamepadPlacement.forceActiveFocus(Qt.OtherFocusReason);
+                                        });
+                                    }
+                                }
+                            }
                         }
 
                         // Harness surface, so it is not built in an ordinary run.
@@ -369,50 +418,7 @@ Item {
                 }
             }
 
-            Loader {
-                id: sourcePanelLoader
-                objectName: "recordingSourcePanel"
-                z: 20
-                active: root.workspaceState.sourceState !== "Closed"
-                width: root.workspaceState.sourceWidth
-                height: previewHost.height
-                anchors.left: parent.left
-                anchors.top: parent.top
-                sourceComponent: RecordingSourcePanel {
-                    recordViewModel: root.recordViewModel
-                    workspaceState: root.workspaceState
-                    settings: root.settings
-                    onChooseSource: root.openSourcePicker()
-                    onOpenProfile: target => root.openProfile(target)
-                }
-            }
 
-            Loader {
-                id: profilePanelLoader
-                objectName: "recordingProfileInspector"
-                z: 21
-                active: root.workspaceState.profileState !== "Closed"
-                width: root.workspaceState.profileWidth
-                height: previewHost.height
-                anchors.right: parent.right
-                anchors.top: parent.top
-                sourceComponent: RecordingProfileInspector {
-                    settings: root.settings
-                    workspaceState: root.workspaceState
-                }
-                onLoaded: root.focusPendingProfileTarget()
-            }
-
-            ExoNotice {
-                z: 30
-                anchors.horizontalCenter: parent.horizontalCenter
-                anchors.bottom: parent.bottom
-                anchors.bottomMargin: ExoTheme.spacingMd
-                width: Math.min(parent.width - 2 * ExoTheme.spacingMd, 440)
-                visible: root.workspaceState.notice.length > 0
-                text: root.workspaceState.notice
-                tone: "info"
-            }
         }
 
         // One Preview Surface, 16 px, the transport dock: nothing sits between
@@ -460,91 +466,18 @@ Item {
             picker.open();
     }
 
-    function openProfile(target: int): void {
-        root.pendingProfileTarget = target;
-        root.workspaceState.openProfile();
-        root.focusPendingProfileTarget();
-    }
-
-    function focusPendingProfileTarget(): void {
-        if (root.pendingProfileTarget < 0 || profilePanelLoader.status !== Loader.Ready)
-            return;
-        const target = root.pendingProfileTarget;
-        Qt.callLater(() => {
-            if (profilePanelLoader.status === Loader.Ready)
-                (profilePanelLoader.item as RecordingProfileInspector).focusTarget(target);
-        });
-        root.pendingProfileTarget = -1;
-    }
-
     function prepareRecordingPanelVisual(name: string): bool {
-        if (["sources", "sources-pinned", "profile-pinned", "panels-pinned"].indexOf(name) < 0)
-            return false;
-        const sources = name !== "profile-pinned";
-        const profile = name === "profile-pinned" || name === "panels-pinned";
-        if (!sources)
-            root.workspaceState.closeSources();
-        if (!profile)
-            root.workspaceState.closeProfile();
-        if (sources) {
-            root.workspaceState.openSources();
-            if (name === "sources" && root.workspaceState.sourceState === "Pinned")
-                root.workspaceState.toggleSourcePin();
-            else if (name !== "sources" && root.workspaceState.sourceState !== "Pinned"
-                     && root.workspaceState.canPinSources)
-                root.workspaceState.pinSources();
+        if (name === "overlay-menu") {
+            overlayMenu.open();
+            return overlayMenu.opened;
         }
-        if (profile) {
-            root.workspaceState.openProfile();
-            if (root.workspaceState.profileState !== "Pinned" && root.workspaceState.canPinProfile)
-                root.workspaceState.pinProfile();
+        if ((name === "gamepad" || name === "gamepad-hidden") && root.gamepadOverlay) {
+            root.gamepadOverlay.enabled = true;
+            root.gamepadOverlay.outputVisible = name !== "gamepad-hidden";
+            root.selectedOverlay = "gamepad";
+            return gamepadPlacement.visible;
         }
-        const sourceItem = sourcePanelLoader.item as Item;
-        const profileItem = profilePanelLoader.item as Item;
-        return (!sources || (root.workspaceState.sourceState !== "Closed" && sourcePanelLoader.status === Loader.Ready
-                            && sourceItem && sourceItem.visible && sourceItem.width > 0 && sourceItem.height > 0))
-                && (!profile || (root.workspaceState.profileState !== "Closed" && profilePanelLoader.status === Loader.Ready
-                                 && profileItem && profileItem.visible && profileItem.width > 0 && profileItem.height > 0));
-    }
-
-    function prepareProfileVisual(expanded: bool): bool {
-        root.workspaceState.openProfile();
-        const profile = profilePanelLoader.status === Loader.Ready
-                        ? profilePanelLoader.item as RecordingProfileInspector : null;
-        if (!profile || !profile.visible || profile.width <= 0 || profile.height <= 0)
-            return false;
-        profile.setAutomationDetailsExpanded(expanded);
-        return true;
-    }
-
-    function revealProfileTarget(name: string): int {
-        root.workspaceState.openProfile();
-        const profile = profilePanelLoader.status === Loader.Ready
-                        ? profilePanelLoader.item as RecordingProfileInspector : null;
-        return profile ? profile.revealAutomationTarget(name) : 0;
-    }
-
-    function openHarnessDialog(name: string): bool {
-        root.workspaceState.openProfile();
-        const profile = profilePanelLoader.status === Loader.Ready
-                        ? profilePanelLoader.item as RecordingProfileInspector : null;
-        return profile ? profile.openHarnessDialog(name) : false;
-    }
-
-    Connections {
-        target: root.workspaceState
-        function onPanelClosed(panel: string): void {
-            Qt.callLater(() => {
-                if (root.workspaceState.activePanel === "sources" && sourcePanelLoader.status === Loader.Ready)
-                    (sourcePanelLoader.item as RecordingSourcePanel).forceActiveFocus(Qt.OtherFocusReason);
-                else if (root.workspaceState.activePanel === "profile" && profilePanelLoader.status === Loader.Ready)
-                    (profilePanelLoader.item as RecordingProfileInspector).forceActiveFocus(Qt.OtherFocusReason);
-                else if (panel === "sources")
-                    sourcesButton.forceActiveFocus(Qt.OtherFocusReason);
-                else
-                    profileButton.forceActiveFocus(Qt.OtherFocusReason);
-            });
-        }
+        return false;
     }
 
     // The counterpart, for a control-channel close. A picker that was never

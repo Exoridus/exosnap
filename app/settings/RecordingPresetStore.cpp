@@ -1064,6 +1064,7 @@ toml::table ConfigToToml(const RecordingPresetConfig& config) {
 
     const auto& pad = config.gamepad;
     tbl.emplace("gamepad", toml::table{{"enabled", pad.enabled},
+                                       {"output_visible", pad.output_visible},
                                        {"device", pad.device},
                                        {"layout", pad.layout},
                                        {"glass", pad.glass},
@@ -1078,6 +1079,7 @@ toml::table ConfigToToml(const RecordingPresetConfig& config) {
     const auto& wc = config.webcam;
     toml::table wc_tbl;
     wc_tbl.emplace("enabled", wc.enabled);
+    wc_tbl.emplace("output_visible", wc.output_visible);
     wc_tbl.emplace("device_id", wc.device_id);
     wc_tbl.emplace("width", static_cast<int64_t>(wc.width));
     wc_tbl.emplace("height", static_cast<int64_t>(wc.height));
@@ -1469,6 +1471,7 @@ RecordingPresetConfig ConfigFromToml(const toml::table& tbl) {
     // --- Webcam ---
     auto& pad = config.gamepad;
     pad.enabled = TomlBool(tbl["gamepad"]["enabled"], false);
+    pad.output_visible = TomlBool(tbl["gamepad"]["output_visible"], true);
     pad.device = TomlStr(tbl["gamepad"]["device"]);
     // Preserve an invalid sentinel so sanitization chooses the generic fallback.
     pad.layout = static_cast<int>(std::clamp<int64_t>(TomlInt(tbl["gamepad"]["layout"], -1), -1,
@@ -1484,6 +1487,7 @@ RecordingPresetConfig ConfigFromToml(const toml::table& tbl) {
 
     auto& wc = config.webcam;
     wc.enabled = TomlBool(tbl["webcam"]["enabled"], false);
+    wc.output_visible = TomlBool(tbl["webcam"]["output_visible"], true);
     wc.device_id = TomlStr(tbl["webcam"]["device_id"]);
     wc.width = static_cast<int>(TomlInt(tbl["webcam"]["width"], 1280));
     wc.height = static_cast<int>(TomlInt(tbl["webcam"]["height"], 720));

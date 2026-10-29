@@ -9,6 +9,7 @@
 // rebuilds the target list through the same revision bump a rescan uses.
 
 #include "AudioRoutingAdapter.h"
+#include "CaptureExclusion.h"
 #include "RecordViewModelAdapter.h"
 #include "RecordingClipAdapter.h"
 #include "RecordingWorkspaceState.h"
@@ -78,6 +79,19 @@ class RecordPickerTestDriver final : public QObject {
         adapter_.setHiddenWindowRules({});
         adapter_.setShowHiddenWindows(false);
         ++seed_generation_;
+    }
+    Q_INVOKABLE void forceCaptureExclusionFailure() {
+        capture_exclusion_attempts_ = 0;
+        exosnap::quick::CaptureExclusion::SetAffinityFunctionForTest([this](void*, quint32) {
+            ++capture_exclusion_attempts_;
+            return false;
+        });
+    }
+    Q_INVOKABLE int captureExclusionAttempts() const {
+        return capture_exclusion_attempts_;
+    }
+    Q_INVOKABLE void resetCaptureExclusion() {
+        exosnap::quick::CaptureExclusion::ResetAffinityFunctionForTest();
     }
     Q_INVOKABLE void prepareRegionSelection() {
         source_.state = exosnap::UiRecordingState::RegionSelecting;
@@ -221,6 +235,7 @@ class RecordPickerTestDriver final : public QObject {
     }
 
   private:
+    int capture_exclusion_attempts_ = 0;
     quint64 seed_generation_ = 1;
     RecordViewModel source_;
     RecordViewModelAdapter adapter_;

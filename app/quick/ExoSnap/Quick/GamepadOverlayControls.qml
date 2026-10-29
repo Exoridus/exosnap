@@ -7,11 +7,14 @@ import QtQuick.Layouts
 Item {
     id: root
     required property GamepadOverlay overlay
+    property bool showButton: true
+    function openOptions(): void { optionsPopup.open(); }
     implicitWidth: openButton.implicitWidth
     implicitHeight: openButton.implicitHeight
 
     ExoButton {
         id: openButton
+        visible: root.showButton
         text: qsTr("Gamepad")
         selected: root.overlay !== null && root.overlay.enabled
         onClicked: optionsPopup.open()
@@ -62,7 +65,8 @@ Item {
             }
             ExoSelect {
                 Layout.fillWidth: true
-                options: [{ value: false, label: qsTr("Lines") }, { value: true, label: qsTr("Glass") }]
+                options: [{ value: false, label: qsTr("Lines"), selectable: true },
+                          { value: true, label: qsTr("Glass"), selectable: true }]
                 value: root.overlay !== null && root.overlay.glass
                 Accessible.name: qsTr("Controller style")
                 onValueActivated: value => root.overlay.glass = value

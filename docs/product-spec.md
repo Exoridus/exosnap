@@ -14,7 +14,7 @@ Configuration and compatibility have one C++ owner. Presentation consumes resolv
 
 The title band provides five direct destinations in this order: **Record, Edit, Settings, Diagnostics, About**. Logs is not a top-level destination: it is the full log view inside Diagnostics, reached from the Reference section, a failed recording's View log action or a Show in log action, and it keeps Diagnostics selected. Hotkeys is a Settings card. Hardware inspection is a collapsed Diagnostics reference, not a Device destination or an encoder selector.
 
-The Recording profile inspector owns recording choices. Settings owns global application preferences. Diagnostics owns observations and hosts both its overview and the internal Logs view. Record owns capture setup, preview and transport. Edit owns the in-memory recording-edit workspace. About owns application identity and project links.
+Settings owns recording choices and global application preferences. Diagnostics owns observations and hosts both its overview and the internal Logs view. Record owns capture setup, preview, recorded overlay placement and transport. Edit owns the in-memory recording-edit workspace. About owns application identity and project links.
 
 ### Shell and window
 
@@ -237,7 +237,7 @@ A fullscreen-shaped, alive, visible window with no capture-frame progress for te
 
 ### Webcam
 
-Webcam is an optional recorded PiP, not a fourth target. Device/resolution selection lives in Settings; its include control is synchronized with the Record camera control. Off is the default, and opening Settings with the webcam off does not open the camera. The first available camera can be preselected without recording it.
+Webcam is an optional recorded PiP, not a fourth target. Device/resolution selection lives in Settings. The preview's Add overlay menu adds it, and its selected frame offers output visibility and removal. Off is the default, and opening Settings with the webcam off does not open the camera. The first available camera can be preselected without recording it.
 
 Resolution and frame-rate choices list only the modes the selected camera offers. A stored mode the camera lacks shows, and is captured as, the smallest offered size at least as large, else the largest; then the closest offered rate. Enabling the camera on an idle Record page shows it in the preview immediately.
 
@@ -251,7 +251,7 @@ Media Foundation is a webcam dependency, not an AAC/recording dependency. Window
 
 ### Gamepad overlay
 
-The Record preview's Gamepad control adds one recorded controller widget. It is off by default.
+The Record preview's Add overlay menu adds one controller widget and provides access to its device, layout and appearance settings. It is off by default.
 Automatic device selection prefers the first actively used gamepad and stays with it until disconnect.
 Manual selection pins one device and never borrows another controller's inputs. Disconnect resets the visible inputs.
 Automatic artwork selection recognizes DualSense, Xbox Series, Xbox One and Switch Pro families.
@@ -300,9 +300,11 @@ A successful recording is confirmed by the Saved notification, whose Edit and fo
 
 ### Recording workspace and profile
 
-Sources on the left and Recording profile on the right start closed. Opening an overlay leaves the preview geometry unchanged. Below 1200 logical pixels of workspace width, opening one overlay closes the other. Pinning is an explicit action and requires at least 480 by 280 logical pixels for the preview. A resize that violates this minimum closes the most recently opened panel with a visible explanation. Growing the window does not reopen it. Escape closes the active panel, and focus returns to its opening control without stopping a recording.
+Record has no source or profile side panels. Its preview exposes the Source Picker and an Add overlay button for webcam and controller widgets. Recording configuration lives in Settings. Selecting an overlay shows its placement frame, four resize corners and a fixed-size toolbar centered above it. At the top edge the toolbar moves inside, or below a very small frame to keep its resize corners clear. Its horizontal position stays within the preview, and it avoids the source controls. Resizing an overlay never scales the toolbar buttons. Escape or clicking the preview background clears the selection.
 
-The source overview uses the configured source identities and shows availability, participation and measured levels. The profile inspector owns format, quality, output, audio routing, microphone, audio encoding and webcam configuration. It reuses the shared preset draft and the single track routing editor. Named preset apply retains environment-owned capture and HDR fields. During recording, Active recording is a frozen read-only view. Edit next recording explicitly exposes the separate next draft, whose changes take effect at the next start. Operational mute and webcam participation remain session actions.
+An open eye includes the selected overlay in output. A closed eye excludes it from recordings and captured frames while retaining a dimmed, editable preview. Visibility is stored in the recording profile and defaults to included for existing profiles. Delete removes the selected editable overlay when its preview controls have keyboard focus; the toolbar's close button offers the same action without a keyboard. Removing an overlay disables it without deleting device settings. Preview frames, resize handles and toolbar buttons are never encoded. Desktop recording, countdown and diagnostics overlays keep their existing capture-excluded behavior.
+
+Settings owns format, quality, output, audio routing, microphone, audio encoding and webcam configuration through one shared preset draft and track routing editor. Named preset apply retains environment-owned capture and HDR fields. During recording, Active recording is a frozen read-only view. Edit next recording explicitly exposes the separate next draft, whose changes take effect at the next start. Operational mute, webcam participation and editable recorded-overlay controls remain session actions.
 
 The transport uses compact source meters and a geometrically centered timer with reserved width for hours. Stop remains directly reachable while secondary actions use a named overflow at narrow widths. While recording or paused, and while clip jobs exist, the transport offers Save clip, which moves into the overflow at narrow widths. Opening the editor retains its existing availability rules.
 
@@ -480,7 +482,7 @@ The top bar retains three noninteractive source-health indicators across every p
 
 ## 11. Diagnostics and fix actions
 
-Diagnostics keeps four main live tiles: Frame pacing, Encoder, Storage and Audio sync. The recording verdict and ledger describe measured impact. Raw timing, presentation, GPU/memory and kernel evidence stays in grouped In-depth details; missing PresentMon is neutral. Compensated condition periods stay in In-depth/reports. Diagnostics is state-ordered, not a separate Simple/Expert mode. The shared Expert preference is edited in the recording profile inspector.
+Diagnostics keeps four main live tiles: Frame pacing, Encoder, Storage and Audio sync. The recording verdict and ledger describe measured impact. Raw timing, presentation, GPU/memory and kernel evidence stays in grouped In-depth details; missing PresentMon is neutral. Compensated condition periods stay in In-depth/reports. Diagnostics is state-ordered, not a separate Simple/Expert mode. The shared Expert preference is edited in Settings.
 
 | State | Main contents |
 |---|---|
@@ -510,9 +512,9 @@ Logs provides a virtualized structured list with Time, Level, Category and Messa
 
 ## 12. Settings model (Default / Expert)
 
-Settings retains card-based global application preferences: App behaviour, Hotkeys, Appearance, Overlays, Storage, Updates and Support & diagnostics. Recording choices are edited in the Recording profile inspector. A Settings shortcut opens that inspector rather than providing another editable copy. Expert reveals raw or compatibility-sensitive mechanics within the recording cards; it never hides an entire section.
+Settings presents recording configuration and global application preferences as cards. It includes presets, format, quality, output, audio routing, microphone, audio encoding, webcam, App behaviour, Hotkeys, Appearance, Overlays, Storage, Updates and Support & diagnostics. Focus shortcuts navigate to the matching card. Expert reveals raw or compatibility-sensitive mechanics within the recording cards; it never hides an entire section.
 
-Global Settings adapts its card columns to the available width. The inspector uses one scrollable column and retains preset actions and the shared Expert preference.
+Settings uses one column at narrow widths and two independent card columns at wider widths, preserving one instance of every section across breakpoints. Preset actions span the columns, and the shared Expert preference remains available.
 
 Expert owns numeric rate control/CQ/bitrate, custom frame-rate entry, pacing, NVENC preset and advanced tuning, keyframe interval, color range/depth/chroma, specialized Opus/sample-rate/clock controls and relevant raw gain/limiter/float choices. Relevance can narrow these further: no H.264 10-bit row, no unsupported 4:4:4 row, and no lossy-codec bit-depth field. HDR handling is Default-visible on a relevant HDR display. Automatic splitting, microphone processing and ordinary audio controls are not hidden just for sounding technical.
 
