@@ -48,6 +48,16 @@ Preparing or testing a release does not authorize publication. Creating or pushi
 
 Use `cargo exo-dev pr open` and `cargo exo-dev pr merge` for their validation rules. `pr merge --confirm` is a mechanical guard, not authorization. Pass it only after approval to merge that exact pull request. Work in a branch and preserve Git history.
 
+## Multi-workstream pull requests and stacked integration
+
+For a substantial multi-agent or multi-subsystem change, choose the PR dependency graph before coding. Independent workstreams use separate worktrees and branches from the same current `origin/next` base, independent PRs against `next`, and concurrent CI. Do not stack unrelated fixes just to group a sprint. Give shared source, generated assets and build outputs a single owner; group closely related small corrections into one coherent PR with logical commits.
+
+For genuinely dependent workstreams, prefer GitHub's native stacked pull requests when the installed tools and repository policy support them. Inspect `gh stack --help` first; the supported lifecycle includes `gh stack init`, `gh stack link`, `gh stack submit` and `gh stack merge`, not guessed commands. Explicitly set `--base next` when initializing or linking a new stack: the repository default is `main`, but development PRs target `next`. Retain narrow per-level diffs, review each actual head, and require passing CI for all levels and the integrated result. Squash per PR remains the default. If an ancestor was squash-merged separately, reconcile descendants onto `next` without replaying already merged commits; rewrite a published branch only after inspecting its old SHA and with explicit `--force-with-lease=<ref>:<expected-sha>`.
+
+Keep `cargo exo-dev pr open`, `cargo exo-dev pr merge`, their policy checks, and the exact-PR merge authorization in the preceding section authoritative. Do not substitute `gh stack merge` if it bypasses those guards or the maintainer's approval for each exact PR; instead use a compatible integration path or request the required authorization/tooling change. Preserve the existing per-PR Windows CI, `sccache`, and separate PR-policy checks; run the required checks for every relevant stack level and avoid repeating an identical expensive local matrix without changed evidence.
+
+Keep workstream ownership, dependencies and validation receipts in private untracked notes, not in committed product documentation. Do not enable merge queues, modify branch protection or weaken required checks as part of ordinary implementation.
+
 ## Source hygiene and language
 
 Prefer self-explanatory code. Comments explain non-obvious correctness, safety, invariants, ownership/ordering, compatibility workarounds or intentional deviations, not what a line visibly does. API documentation is concise and caller-facing: behavior, constraints, side effects and edge cases, not a restatement of names/types.
