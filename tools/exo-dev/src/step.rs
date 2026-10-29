@@ -51,10 +51,10 @@ pub enum StepId {
     Zizmor,
     Rust,
     Configure,
+    QmlSmoke,
     /// `all_qmllint` over every QML module rather than per-module targets, so a
     /// new module cannot slip past by not being named.
     QmlLint,
-    QmlSmoke,
     Build,
     ClangTidy,
     /// `exo-dev test` in process: builds the tree, runs ctest with isolated
@@ -124,8 +124,8 @@ impl StepId {
         StepId::Zizmor,
         StepId::Rust,
         StepId::Configure,
-        StepId::QmlLint,
         StepId::QmlSmoke,
+        StepId::QmlLint,
         StepId::Build,
         StepId::ClangTidy,
         StepId::Tests,

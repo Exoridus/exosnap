@@ -193,8 +193,8 @@ impl Profile {
                 name: "ci-build-debug",
                 steps: &[
                     StepId::Configure,
-                    StepId::QmlLint,
                     StepId::QmlSmoke,
+                    StepId::QmlLint,
                     StepId::Build,
                     StepId::ClangTidy,
                     StepId::Tests,

@@ -38,7 +38,7 @@ Include-cleaner checks direct standard and project dependencies. Its Windows SDK
 
 ## Manual include-cleaner repairs
 
-`cargo exo-dev lint clang-tidy` is read-only and has no `--fix` or `--apply` option. Hooks and CI do not apply clang-tidy replacements. Debug CI runs configure, `all_qmllint`, build, blocking clang-tidy, then the complete CTest suite excluding `live`. The completed build supplies Ninja dependency data for changed-header scope. Blocking analysis failures stop before CTest.
+`cargo exo-dev lint clang-tidy` is read-only and has no `--fix` or `--apply` option. Hooks and CI do not apply clang-tidy replacements. Debug CI runs configure, focused QML contracts, `all_qmllint`, the complete build, blocking clang-tidy, then the complete CTest suite excluding `live`. The completed build supplies Ninja dependency data for changed-header scope. Blocking analysis failures stop before CTest.
 
 For a narrow repair, first run the read-only gate against the configured and built Ninja tree. `--base HEAD` selects uncommitted changes against HEAD. Use another explicit revision when reviewing committed changes:
 
