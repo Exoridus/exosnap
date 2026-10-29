@@ -151,6 +151,28 @@ The lockfile is part of the tool input. A locked build must fail if dependencies
 
 A GPU-free unit test does not establish real capture/encode behavior, a generated screenshot does not establish native HWND ownership or overlay desktop composition, and a development build is not a signed downloadable release. Report exactly which layers ran. Native window checks, real playback, endpoint unplug and release installation belong to their named runbooks and acceptance scenarios.
 
+## Release package footprint
+
+Packaging-relevant pull requests reuse the Release packaging-smoke staging tree.
+The `scripts/package_size_report.py` helper measures that **pruned** runtime
+and publishes `.workspace/package-smoke/package-size.json` and
+`package-size.md` in the PR build's uploaded packaging report and step summary.
+The release-candidate build measures the same runtime alongside the exact
+portable ZIP, MSI, offline Setup, separate Setup UI runtime and bundled Visual
+C++ redistributable. Its size inventory is uploaded separately from the frozen
+candidate bundle so it does not change the release identity.
+
+Reports group Qt Widgets and Qt Labs Platform separately from the remaining Qt,
+QML, plugin and media runtime. That sum is an **uncompressed candidate
+footprint**, not a measured compressed-size saving or permission to remove a
+transitively imported DLL. The existing PE audit, package smoke and actual
+Windows tray behavior remain necessary when exploring removal.
+
+The helper accepts `--baseline <previous-package-size.json>` for exact file
+size deltas against an earlier report of the same schema. Without a supplied
+baseline it reports absolute sizes only; it does not invent a comparison or
+download artifacts from an untrusted source.
+
 ## Translation maintenance
 
 English source text is canonical. German is the supported production localization.
