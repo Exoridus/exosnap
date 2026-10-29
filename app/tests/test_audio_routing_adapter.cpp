@@ -138,6 +138,92 @@ TEST(AudioRoutingAdapter, EmptyTrackAppearsAndCustomNameSurvivesIdentityReorder)
     EXPECT_EQ(std::get<TrackGraph1Intent>(saved).tracks.size(), 3u);
 }
 
+TEST(AudioRoutingAdapter, RemovingTrackAtomicallyRemovesOnlyItsRoutesAndMonitorReferences) {
+    auto graph = ExampleGraph();
+    graph.routes.push_back({NewId<AudioRouteId>(), graph.sources.front().id, graph.tracks.back().id, -12.f});
+    graph.default_monitor_track_ids.push_back(graph.tracks.back().id);
+    graph.monitor_selection_origin = MonitorSelectionOrigin::User;
+    AudioIntent saved = graph;
+    bool save_ok = false;
+    AudioRoutingAdapter adapter;
+    adapter.configure(
+        [&](const AudioIntent& candidate, QString&) {
+            if (!save_ok)
+                return false;
+            saved = candidate;
+            return true;
+        },
+        Environment);
+    adapter.refresh(graph);
+    const auto revision = adapter.revision();
+    const auto before = adapter.tracks();
+    EXPECT_FALSE(adapter.removeTrack(Id(graph.tracks.front().id), revision));
+    EXPECT_EQ(adapter.tracks(), before);
+    EXPECT_EQ(adapter.revision(), revision);
+    save_ok = true;
+    EXPECT_FALSE(adapter.removeTrack(Id(graph.tracks.front().id), revision + 1));
+    EXPECT_FALSE(adapter.removeTrack(Id(NewId<AudioTrackId>()), revision));
+    ASSERT_TRUE(adapter.removeTrack(Id(graph.tracks.front().id), revision));
+    const auto& remaining = std::get<TrackGraph1Intent>(saved);
+    ASSERT_EQ(remaining.tracks.size(), 1u);
+    EXPECT_EQ(remaining.tracks.front().id, graph.tracks.back().id);
+    EXPECT_EQ(remaining.tracks.front().order, 0u);
+    ASSERT_EQ(remaining.routes.size(), 1u);
+    EXPECT_EQ(remaining.routes.front().id, graph.routes.back().id);
+    EXPECT_EQ(remaining.sources, graph.sources);
+    EXPECT_EQ(remaining.default_monitor_track_ids, std::vector{graph.tracks.back().id});
+    const auto plan = ResolveAudioIntent(saved, Environment());
+    ASSERT_TRUE(plan.succeeded());
+    ASSERT_EQ(plan.value()->tracks.size(), 1u);
+    EXPECT_EQ(plan.value()->tracks.front().mux_index.value, 0u);
+    EXPECT_NEAR(plan.value()->tracks.front().routes.front().gain_linear, GainDbToLinear(-12.f, false), 0.0001f);
+    ASSERT_TRUE(adapter.removeTrack(Id(graph.tracks.back().id), adapter.revision()));
+    EXPECT_TRUE(adapter.tracks().empty());
+    EXPECT_TRUE(std::get<TrackGraph1Intent>(saved).default_monitor_track_ids.empty());
+    EXPECT_EQ(adapter.sources().size(), 1);
+}
+
+TEST(AudioRoutingAdapter, CompactAssignmentReactivatesLegacySourceWithoutDroppingOtherTrackRoutes) {
+    auto graph = ExampleGraph();
+    graph.sources.front().participation = false;
+    graph.routes.front().enabled = false;
+    graph.routes.front().gain_db = -6.f;
+    AudioIntent saved;
+    AudioRoutingAdapter adapter;
+    adapter.configure(
+        [&](const AudioIntent& candidate, QString&) {
+            saved = candidate;
+            return true;
+        },
+        Environment);
+    adapter.refresh(graph);
+    const auto source = Id(graph.sources.front().id);
+    ASSERT_TRUE(adapter.setTrackSourceAssigned(source, Id(graph.tracks.front().id), true, adapter.revision()));
+    auto configured = std::get<TrackGraph1Intent>(saved);
+    EXPECT_TRUE(configured.sources.front().participation);
+    EXPECT_TRUE(configured.routes.front().enabled);
+    EXPECT_EQ(configured.routes.front().id, graph.routes.front().id);
+    EXPECT_EQ(configured.routes.front().gain_db, -6.f);
+    ASSERT_TRUE(adapter.setTrackSourceAssigned(source, Id(graph.tracks.back().id), true, adapter.revision()));
+    auto resolved = ResolveAudioIntent(saved, Environment());
+    ASSERT_TRUE(resolved.succeeded());
+    ASSERT_EQ(resolved.value()->tracks.size(), 2u);
+    EXPECT_EQ(resolved.value()->tracks[0].routes[0].source_id, resolved.value()->tracks[1].routes[0].source_id);
+    EXPECT_NE(resolved.value()->tracks[0].routes[0].gain_linear, resolved.value()->tracks[1].routes[0].gain_linear);
+    ASSERT_TRUE(adapter.setTrackSourceAssigned(source, Id(graph.tracks.front().id), false, adapter.revision()));
+    EXPECT_EQ(std::get<TrackGraph1Intent>(saved).routes.size(), 1u);
+    EXPECT_TRUE(std::get<TrackGraph1Intent>(saved).sources.front().participation);
+    const auto before = adapter.tracks();
+    EXPECT_FALSE(adapter.moveTrackTo(Id(graph.tracks.back().id), 2, adapter.revision()));
+    EXPECT_EQ(adapter.tracks(), before);
+    ASSERT_TRUE(adapter.moveTrackTo(Id(graph.tracks.back().id), 0, adapter.revision()));
+    EXPECT_EQ(adapter.tracks().front().toMap().value("id").toString(), Id(graph.tracks.back().id));
+    const auto reordered = ResolveAudioIntent(saved, Environment());
+    ASSERT_TRUE(reordered.succeeded());
+    EXPECT_EQ(reordered.value()->tracks[0].id, graph.tracks.back().id);
+    EXPECT_EQ(reordered.value()->tracks[0].mux_index.value, 0u);
+}
+
 TEST(AudioRoutingAdapter, AdditionalKeepsOldRouteAndMoveRemovesAllOtherRoutesAtomically) {
     auto graph = ExampleGraph();
     AudioIntent saved;
@@ -201,6 +287,41 @@ TEST(AudioRoutingAdapter, LegacyCancelPreservesCapsuleAndConfirmUndoRestoresWhol
     EXPECT_EQ(std::get<LegacyRows25Intent>(saved), legacy);
 }
 
+TEST(AudioRoutingAdapter, DisabledLegacyTrackRemainsEditableThroughExplicitConversion) {
+    auto legacy = Legacy();
+    legacy.rows.front().row.enabled = false;
+    for (const bool assign : {false, true}) {
+        AudioIntent saved = legacy;
+        AudioRoutingAdapter adapter;
+        adapter.configure(
+            [&](const AudioIntent& candidate, QString&) {
+                saved = candidate;
+                return true;
+            },
+            Environment);
+        adapter.refresh(legacy);
+        ASSERT_EQ(adapter.tracks().size(), 1);
+        EXPECT_TRUE(adapter.tracks().front().toMap().value("empty").toBool());
+        const auto revision = adapter.revision();
+        const auto track = Id(legacy.rows.front().anchor_track_id);
+        const auto source = Id(legacy.rows.front().source_id);
+        EXPECT_FALSE(assign ? adapter.setTrackSourceAssigned(source, track, true, revision)
+                            : adapter.removeTrack(track, revision));
+        ASSERT_TRUE(adapter.conversionPending());
+        EXPECT_EQ(saved, AudioIntent{legacy});
+        ASSERT_TRUE(adapter.confirmLegacyConversion(revision));
+        const auto& graph = std::get<TrackGraph1Intent>(saved);
+        EXPECT_EQ(graph.tracks.size(), assign ? 1u : 0u);
+        EXPECT_EQ(graph.routes.size(), assign ? 1u : 0u);
+        if (assign) {
+            EXPECT_TRUE(graph.sources.front().participation);
+            const auto resolved = ResolveAudioIntent(saved, Environment());
+            ASSERT_TRUE(resolved.succeeded());
+            EXPECT_EQ(resolved.value()->tracks.size(), 1u);
+        }
+    }
+}
+
 TEST(AudioRoutingAdapter, SaveReloadKeepsIdsAndUndoSaveFailureKeepsCurrentState) {
     QTemporaryDir directory;
     ASSERT_TRUE(directory.isValid());
@@ -225,6 +346,16 @@ TEST(AudioRoutingAdapter, SaveReloadKeepsIdsAndUndoSaveFailureKeepsCurrentState)
         Environment);
     adapter.refresh(*config.audio_intent);
     ASSERT_TRUE(adapter.addEmptyTrack(adapter.revision()));
+    const auto source_id = adapter.sources().front().toMap().value("id").toString();
+    const auto track_id = adapter.tracks().last().toMap().value("id").toString();
+    ASSERT_TRUE(adapter.setTrackSourceAssigned(source_id, track_id, true, adapter.revision()));
+    const auto routes = adapter.tracks().last().toMap().value("routes").toList();
+    ASSERT_EQ(routes.size(), 1);
+    ASSERT_TRUE(adapter.setRouteGain(routes.front().toMap().value("id").toString(), -12.0, adapter.revision()));
+    ASSERT_TRUE(adapter.setTrackName(track_id, "Microphone copy", adapter.revision()));
+    ASSERT_TRUE(adapter.moveTrackTo(track_id, 0, adapter.revision()));
+    ASSERT_TRUE(adapter.setDefaultMonitorSelection({track_id}, adapter.revision()));
+    ASSERT_TRUE(adapter.setTrackRecordEnabled(track_id, false, adapter.revision()));
     const auto cards = adapter.tracks();
     const auto loaded = store.Load();
     ASSERT_TRUE(loaded.live);
@@ -232,6 +363,8 @@ TEST(AudioRoutingAdapter, SaveReloadKeepsIdsAndUndoSaveFailureKeepsCurrentState)
     AudioRoutingAdapter reopened;
     reopened.refresh(*loaded.live->audio_intent);
     EXPECT_EQ(reopened.tracks(), cards);
+    EXPECT_EQ(reopened.defaultMonitorTrackIds(), QStringList{track_id});
+    EXPECT_EQ(*loaded.live->audio_intent, *config.audio_intent);
     fail = true;
     const auto revision = adapter.revision();
     EXPECT_FALSE(adapter.undo(revision));

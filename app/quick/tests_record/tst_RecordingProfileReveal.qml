@@ -144,9 +144,11 @@ TestCase {
         const name = qsTr("Channel mode for %1").arg("Desktop 0");
         verify(!findControl(inspector, name));
         inspector.prepareProfileVisual(true);
-        tryVerify(() => !!findControl(inspector, name));
+        const popup = findChild(inspector, "audioSourceDetails");
+        tryCompare(popup, "opened", true);
+        tryVerify(() => !!findControl(popup.contentItem, name));
         inspector.prepareProfileVisual(false);
-        tryVerify(() => !findControl(inspector, name));
+        tryCompare(popup, "opened", false);
         compare(recordDriver.settings.audioRouting.sources.length, 1);
     }
 

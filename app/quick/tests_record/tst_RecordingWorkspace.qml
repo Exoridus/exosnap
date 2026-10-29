@@ -345,12 +345,10 @@ TestCase {
         const panel = createTemporaryObject(sourcePanelComponent, testCase);
         verify(!!panel);
         waitForRendering(panel);
-        for (let index = 0; index < 8; ++index) {
-            const names = [];
-            findTextItems(panel, prefix + index, names);
-            verify(names.length > 0, "each configured source has a visible identity");
-            for (const name of names)
-                verify(name.width <= panel.width, "source identity remains within the card width");
+        for (const route of recordDriver.settings.audioRouting.tracks[0].routes) {
+            const chip = findChild(panel, "audioRoute-" + route.id);
+            verify(!!chip);
+            verify(chip.width <= panel.width, "source identity remains within the card width");
         }
     }
 }

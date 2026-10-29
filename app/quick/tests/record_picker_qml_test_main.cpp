@@ -10,6 +10,7 @@
 
 #include "AudioRoutingAdapter.h"
 #include "CaptureExclusion.h"
+#include "QuickThemeTokens.h"
 #include "RecordViewModelAdapter.h"
 #include "RecordingClipAdapter.h"
 #include "RecordingWorkspaceState.h"
@@ -41,6 +42,7 @@ class RecordPickerTestDriver final : public QObject {
     Q_PROPERTY(exosnap::quick::RecordingClipAdapter* clipAdapter READ clipAdapter CONSTANT)
     Q_PROPERTY(exosnap::quick::RecordingWorkspaceState* workspaceState READ workspaceState CONSTANT)
     Q_PROPERTY(exosnap::quick::SettingsAdapter* settings READ settings CONSTANT)
+    Q_PROPERTY(QString visualArtifactDirectory READ visualArtifactDirectory CONSTANT)
 
   public:
     explicit RecordPickerTestDriver(QObject* parent = nullptr) : QObject(parent) {
@@ -149,6 +151,51 @@ class RecordPickerTestDriver final : public QObject {
     Q_INVOKABLE void seedLegacyAudio() {
         routing_.setActivePlan(std::nullopt);
         routing_.refresh(exosnap::engine::LegacyRows25Intent{});
+    }
+
+    Q_INVOKABLE void clearActiveAudioPlan() {
+        routing_.setActivePlan(std::nullopt);
+    }
+
+    QString visualArtifactDirectory() const {
+        return qEnvironmentVariable("EXOSNAP_QML_TEST_ARTIFACT_DIR");
+    }
+
+    Q_INVOKABLE void setTestAppearance(QObject* tokens, const QString& appearance) {
+        if (auto* theme = qobject_cast<exosnap::quick::QuickThemeTokens*>(tokens))
+            theme->setAppearance(appearance, QStringLiteral("aqua"));
+    }
+
+    Q_INVOKABLE void seedCompactAudioRouting() {
+        using namespace exosnap::engine;
+        TrackGraph1Intent graph;
+        AudioSourceSpec system;
+        system.id = NewId<AudioSourceId>();
+        system.name = "System audio";
+        AudioSourceSpec mic;
+        mic.id = NewId<AudioSourceId>();
+        mic.name = "Microphone";
+        mic.binding.kind = AudioBindingKind::MicrophoneEndpoint;
+        graph.sources = {system, mic};
+        for (uint32_t index = 0; index != 2; ++index) {
+            AudioTrackSpec track;
+            track.id = NewId<AudioTrackId>();
+            track.order = index;
+            graph.tracks.push_back(track);
+        }
+        graph.routes = {{NewId<AudioRouteId>(), system.id, graph.tracks[0].id},
+                        {NewId<AudioRouteId>(), mic.id, graph.tracks[0].id},
+                        {NewId<AudioRouteId>(), mic.id, graph.tracks[1].id}};
+        graph.default_monitor_track_ids = {graph.tracks[0].id};
+        graph.monitor_selection_origin = MonitorSelectionOrigin::User;
+        AudioEnvironmentSnapshot environment;
+        environment.playback_endpoints = {"speaker"};
+        environment.microphone_endpoints = {"microphone"};
+        environment.default_playback_by_role[1] = "speaker";
+        environment.default_microphone_by_role[1] = "microphone";
+        routing_.configure([](const AudioIntent&, QString&) { return true; }, [environment] { return environment; });
+        routing_.setActivePlan(std::nullopt);
+        routing_.refresh(graph);
     }
 
     Q_INVOKABLE void seedAudioSources(int count, const QString& prefix) {
