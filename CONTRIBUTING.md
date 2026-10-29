@@ -71,6 +71,23 @@ Two `exo-dev` subcommands own this, and neither the title nor the merge subject 
 - `cargo exo-dev pr open` derives the title from the branch's newest commit subject (or takes `--subject`), validates it against the same parser the changelog cut reads, creates the pull request as a draft, reads its stored metadata back, and only then marks it ready for review. A draft does not start the heavy Windows legs, so a title that has to be fixed is fixed before anything expensive runs.
 - `cargo exo-dev pr merge` builds the merged subject as `title (#N)` from the *parsed* title and passes it with `--subject`, so the number cannot land twice. It prints the subject and merges nothing unless `--confirm` is given — and it is only ever given when the merge was explicitly asked for.
 
+## Stacked pull requests
+
+Use [GitHub stacked pull requests](https://docs.github.com/en/pull-requests/get-started/about-stacked-prs) for changes that depend on one another. The bottom PR targets `next`, and each higher PR targets the head branch directly below it. This keeps reviews and diffs focused; unrelated workstreams use independent PRs and worktrees against `next`. Stack membership does not replace per-layer verification, review or approval.
+
+GitHub's official CLI extension supports stacks and existing branches. Install it once, then inspect the available commands:
+
+```powershell
+gh extension install github/gh-stack
+gh stack --help
+```
+
+For a new stack, `gh stack init --base next feat/foundation` starts at the development trunk, and `gh stack add feat/dependent` adds a branch on top. Keep Conventional Commits and run the normal local gates. To preserve ExoSnap's title/readback policy, create each PR through `cargo exo-dev pr open --base <lower-branch> --keep-draft` in that branch's worktree (use `next` for the bottom one). Once all PRs exist, `gh stack link <bottom-pr> <next-pr> [more-prs...]` links existing PRs without replacing the local worktree layout. Inspect the resulting bases and compare each level; `gh stack link` may change the base of an existing PR.
+
+GitHub can merge a native stack atomically using `gh stack merge`, but ExoSnap currently relies on `cargo exo-dev pr merge` to validate the exact PR, require explicit authorization and format each squash subject as `title (#N)` for the changelog. Do not bypass those protections with `gh stack merge --yes`. Until equivalent stack-wide validation and commit-subject guarantees are integrated and verified, merge approved PRs bottom-up using `cargo exo-dev pr merge --confirm`, with the required checks satisfied at each level.
+
+If the bottom PR has already been squash-merged separately, the descendants may no longer be linear against `next`. Reconcile by replaying only unmerged commits onto the new base, then cascade through each dependent branch; check the old branch SHA, tree diff, conflicts and validation first. Do not blindly rebase all old ancestry or use plain force push. Published-history rewrites require explicit coordination and an exact expected SHA with `--force-with-lease`. Preserve each PR's scope, CI evidence and draft state until its own acceptance is complete.
+
 No machine paths, private workspace references, or agent and session history in commit messages, pull request descriptions, or source comments.
 
 ## The changelog is written by the release cut
