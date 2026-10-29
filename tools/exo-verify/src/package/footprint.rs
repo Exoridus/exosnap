@@ -73,9 +73,16 @@ fn category(path: &str) -> &'static str {
         "Qt Quick libraries"
     } else if name.starts_with("qt6") || name.starts_with("icu") {
         "Other Qt libraries"
-    } else if ["avcodec", "avformat", "avutil", "swresample", "swscale", "ffmpeg"]
-        .iter()
-        .any(|prefix| name.starts_with(prefix))
+    } else if [
+        "avcodec",
+        "avformat",
+        "avutil",
+        "swresample",
+        "swscale",
+        "ffmpeg",
+    ]
+    .iter()
+    .any(|prefix| name.starts_with(prefix))
     {
         "FFmpeg libraries"
     } else if name.starts_with("gameinput") || name.starts_with("xinput") {
@@ -102,7 +109,11 @@ fn category(path: &str) -> &'static str {
 }
 
 fn scan(root: &Path) -> Result<RuntimeSize> {
-    ensure!(root.is_dir(), "runtime directory missing: {}", root.display());
+    ensure!(
+        root.is_dir(),
+        "runtime directory missing: {}",
+        root.display()
+    );
     let mut totals: BTreeMap<&'static str, u64> = BTreeMap::new();
     let mut files = Vec::new();
     let mut total_bytes = 0u64;
@@ -170,7 +181,13 @@ fn markdown(report: &Report) -> String {
     out.push_str("Sizes are measured from the **pruned shipping runtime**. Compressed packages and uncompressed files are separate measurements.\n\n");
     out.push_str("### Packaged downloads\n\n| Artifact | Bytes | Size |\n| --- | ---: | ---: |\n");
     for item in &report.artifacts {
-        let _ = writeln!(out, "| {} | {} | {} |", item.name, item.bytes, mib(item.bytes));
+        let _ = writeln!(
+            out,
+            "| {} | {} | {} |",
+            item.name,
+            item.bytes,
+            mib(item.bytes)
+        );
     }
     let _ = writeln!(
         out,
@@ -181,7 +198,13 @@ fn markdown(report: &Report) -> String {
     );
     out.push_str("| Category | Bytes | Size |\n| --- | ---: | ---: |\n");
     for item in &report.runtime.categories {
-        let _ = writeln!(out, "| {} | {} | {} |", item.name, item.bytes, mib(item.bytes));
+        let _ = writeln!(
+            out,
+            "| {} | {} | {} |",
+            item.name,
+            item.bytes,
+            mib(item.bytes)
+        );
     }
     out.push_str("\n### Largest shipped files\n\n| File | Size |\n| --- | ---: |\n");
     for item in report.runtime.largest_files.iter().take(15) {
@@ -251,7 +274,10 @@ mod tests {
     #[test]
     fn categories_separate_labs_and_widgets() {
         assert_eq!(category("Qt6Widgets.dll"), "Qt Widgets");
-        assert_eq!(category("qml/Qt/labs/platform/plugin.dll"), "Qt Labs Platform");
+        assert_eq!(
+            category("qml/Qt/labs/platform/plugin.dll"),
+            "Qt Labs Platform"
+        );
         assert_eq!(category("qml/QtQuick/Controls/Basic/qmldir"), "QML modules");
         assert_eq!(category("Qt6Quick.dll"), "Qt Quick libraries");
     }
@@ -284,7 +310,11 @@ mod tests {
         assert_eq!(report["runtime"]["totalBytes"], 32);
         assert_eq!(report["runtime"]["qtWidgetsAndLabsGrossBytes"], 14);
         assert_eq!(report["artifacts"][0]["bytes"], 7);
-        assert!(!report.to_string().contains(&temp.path().display().to_string()));
+        assert!(
+            !report
+                .to_string()
+                .contains(&temp.path().display().to_string())
+        );
         let summary = fs::read_to_string(temp.path().join("package-size.md")).unwrap();
         assert!(summary.contains("not** a proven removal"));
     }
