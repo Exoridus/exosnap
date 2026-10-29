@@ -134,7 +134,7 @@ def mib(value: int) -> str:
 def markdown(report: dict[str, Any]) -> str:
     runtime = report["runtime"]
     lines = [
-        f"## ExoSnap package footprint — {report['version']}",
+        f"## ExoSnap package footprint - {report['version']}",
         "",
         "Sizes are measured from the **pruned shipping runtime**; they are not build-directory sizes.",
         "Compressed artifacts and uncompressed runtime files are reported separately.",
@@ -148,7 +148,7 @@ def markdown(report: dict[str, Any]) -> str:
         lines.append(f"| {item['name']} | {item['bytes']:,} | {mib(item['bytes'])} |")
     lines += [
         "", "### Application runtime (uncompressed)", "",
-        f"**{runtime['fileCount']} files — {runtime['totalBytes']:,} bytes ({mib(runtime['totalBytes'])}).**",
+        f"**{runtime['fileCount']} files - {runtime['totalBytes']:,} bytes ({mib(runtime['totalBytes'])}).**",
         "", "| Component group | Bytes | MiB |", "| --- | ---: | ---: |",
     ]
     for item in runtime["categories"]:
