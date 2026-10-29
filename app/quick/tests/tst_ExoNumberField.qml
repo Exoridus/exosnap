@@ -3,12 +3,7 @@ import QtTest
 
 import ExoSnap.Quick.TestControls
 
-// Every ExoNumberField with a non-empty suffix appends it to the displayed
-// text (textFromValue), which SpinBox then has to parse back on blur
-// (valueFromText). The suffix is what breaks the default parser -- without
-// this coverage a regression here silently resets every suffixed field
-// (bitrate, frame rate, split interval, segment size, DSP thresholds) to
-// its minimum the moment the user tabs away.
+// Unit decoration must never change a value on focus loss or become editable.
 TestCase {
     id: testCase
 
@@ -42,6 +37,29 @@ TestCase {
             suffix: "dB"
             value: 3
         }
+    }
+
+    SignalSpy {
+        id: resetSpy
+        signalName: "resetRequested"
+    }
+
+    function test_default_reset_is_keyboard_accessible_and_does_not_break_value_binding() {
+        const field = createTemporaryObject(negativeFieldComponent, testCase);
+        field.resetEnabled = true;
+        field.value = Qt.binding(() => 3);
+        resetSpy.target = field;
+        resetSpy.clear();
+        field.forceActiveFocus();
+        keyClick(Qt.Key_F10, Qt.ShiftModifier);
+        const menu = findChild(field, "numberFieldResetMenu");
+        verify(menu);
+        tryCompare(menu, "opened", true);
+        keyClick(Qt.Key_Down);
+        keyClick(Qt.Key_Return);
+        compare(resetSpy.count, 1);
+        tryCompare(menu, "visible", false);
+        compare(field.value, 3);
     }
 
     function test_blur_after_a_stepper_click_keeps_the_stepped_value() {
@@ -100,5 +118,31 @@ TestCase {
 
         tryCompare(field, "activeFocus", false);
         compare(field.value, 3);
+    }
+
+    function test_decimal_entry_locale_units_validation_and_keyboard_step() {
+        const field = createTemporaryObject(negativeFieldComponent, testCase);
+        verify(field);
+        field.decimals = 3;
+        field.stepSize = 0.5;
+        field.locale = Qt.locale("de_DE");
+        field.forceActiveFocus();
+        field.contentItem.selectAll();
+        field.contentItem.remove(field.contentItem.selectionStart, field.contentItem.selectionEnd);
+        field.contentItem.insert(0, "-3,125");
+        keyClick(Qt.Key_Return);
+        compare(field.value, -3.125);
+        keyClick(Qt.Key_Up);
+        compare(field.value, -2.625);
+        field.contentItem.selectAll();
+        field.contentItem.remove(field.contentItem.selectionStart, field.contentItem.selectionEnd);
+        field.contentItem.insert(0, "99");
+        keyClick(Qt.Key_Return);
+        verify(field.value >= field.from && field.value <= field.to);
+        compare(field.valueFromText("garbage", field.locale), field.value);
+        compare(field.valueFromText("1,5", field.locale), 1.5);
+        field.focus = false;
+        testCase.forceActiveFocus();
+        compare(field.value >= field.from && field.value <= field.to, true);
     }
 }

@@ -36,22 +36,19 @@ TestCase {
 
     Component {
         id: inspectorComponent
-        RecordingProfileInspector {
-            width: 360
+        SettingsPage {
+            width: 860
             height: 600
             settings: recordDriver.settings
-            workspaceState: RecordingWorkspaceState {}
         }
     }
 
     Component {
         id: sourcePanelComponent
-        RecordingSourcePanel {
+        AudioRoutingPanel {
             width: 320
             height: 600
-            recordViewModel: recordDriver.adapter
-            settings: recordDriver.settings
-            workspaceState: RecordingWorkspaceState {}
+            routing: recordDriver.settings.audioRouting
         }
     }
 
@@ -113,7 +110,7 @@ TestCase {
     }
 
     function findTextItems(item, prefix, result) {
-        if (!item)
+        if (!item || !item.visible)
             return;
         if (typeof item.text === "string" && item.text.startsWith(prefix))
             result.push(item);
@@ -300,7 +297,7 @@ TestCase {
         const inspector = createTemporaryObject(inspectorComponent, testCase);
         verify(!!inspector);
         waitForRendering(inspector);
-        verify(!!findAccessible(inspector, qsTr("Active recording (read-only)")));
+        verify(!!findAccessible(inspector, qsTr("Active recording (read-only): %1").arg(settings.activePresetName)));
         const frameRate = findAccessibleControl(inspector, qsTr("Frame rate"));
         verify(!!frameRate);
         verify(!frameRate.enabled);
@@ -339,7 +336,7 @@ TestCase {
         tryCompare(frameRate, "activeFocus", true);
         const position = frameRate.mapToItem(inspector, 0, 0);
         verify(position.y >= 0 && position.y + frameRate.height <= inspector.height,
-               "the focused frame rate control is within the 360 by 600 inspector");
+               "the focused frame rate control is within the settings viewport");
     }
 
     function test_source_panel_shows_eight_long_named_sources_at_320_width() {
@@ -348,10 +345,10 @@ TestCase {
         const panel = createTemporaryObject(sourcePanelComponent, testCase);
         verify(!!panel);
         waitForRendering(panel);
-        const names = [];
-        findTextItems(panel, prefix, names);
-        compare(names.length, 8);
-        for (const name of names)
-            verify(name.width <= panel.width, "source identity remains within the panel width");
+        for (const route of recordDriver.settings.audioRouting.tracks[0].routes) {
+            const chip = findChild(panel, "audioRoute-" + route.id);
+            verify(!!chip);
+            verify(chip.width <= panel.width, "source identity remains within the card width");
+        }
     }
 }

@@ -151,8 +151,7 @@ TestCase {
         compare(tabs.options[1], "Windows");
         compare(tabs.options[2], "Region");
         const title = pick(page, "pickerTitle");
-        verify(tabs.mapToItem(page.picker.contentItem, 0, 0).x >
-               title.mapToItem(page.picker.contentItem, title.width, 0).x);
+        verify(tabs.mapToItem(page.picker.contentItem, 0, 0).x > title.mapToItem(page.picker.contentItem, title.width, 0).x);
         const header = pick(page, "pickerHeader");
         verify(tabs.mapToItem(header, tabs.width, 0).x < header.width);
         verify(header.width > page.picker.contentItem.width * 0.9);
@@ -218,9 +217,7 @@ TestCase {
 
     function test_window_list_virtualizes_all_windows_and_scroll_extent_grows() {
         let page = makePage();
-        recordDriver.seedTargets(1, ["Window 1", "Window 2", "Window 3", "Window 4", "Window 5", "Window 6",
-            "Window 7", "Window 8", "Window 9", "Window 10", "Window 11", "Window 12", "Window 13", "Window 14",
-            "Window 15"]);
+        recordDriver.seedTargets(1, ["Window 1", "Window 2", "Window 3", "Window 4", "Window 5", "Window 6", "Window 7", "Window 8", "Window 9", "Window 10", "Window 11", "Window 12", "Window 13", "Window 14", "Window 15"]);
         showTab(page, 1);
         const list = pick(page, "sourceList");
         const bar = findChild(page.picker, "sourceScrollBar");
@@ -329,9 +326,18 @@ TestCase {
         verify(cardAt(page, 2).pending);
 
         recordDriver.seedWindowTargets([
-            { id: 99, label: "New Window - Fresh" },
-            { id: 100, label: "Claude Design - Brave" },
-            { id: 101, label: "Task Manager" }
+            {
+                id: 99,
+                label: "New Window - Fresh"
+            },
+            {
+                id: 100,
+                label: "Claude Design - Brave"
+            },
+            {
+                id: 101,
+                label: "Task Manager"
+            }
         ]);
         waitForRendering(page);
         tryVerify(() => cardAt(page, 2) !== null);
@@ -354,7 +360,12 @@ TestCase {
         waitForRendering(page);
         verify(pick(page, "confirmButton").enabled);
 
-        recordDriver.seedWindowTargets([{ id: 101, label: "Task Manager" }]);
+        recordDriver.seedWindowTargets([
+            {
+                id: 101,
+                label: "Task Manager"
+            }
+        ]);
         waitForRendering(page);
         verify(!pick(page, "confirmButton").enabled, "a vanished source cannot be confirmed");
         compare(pick(page, "windowsCount").text, "Selected source is no longer available.");
@@ -502,8 +513,7 @@ TestCase {
         recordDriver.adapter.requestRegionPreset("16:9");
         verify(selector.selectionNormalized.width > 0);
         const preset = selector.selectionNormalized;
-        const physicalAspect = preset.width * selector.sourcePixelSize.width
-                               / (preset.height * selector.sourcePixelSize.height);
+        const physicalAspect = preset.width * selector.sourcePixelSize.width / (preset.height * selector.sourcePixelSize.height);
         verify(Math.abs(physicalAspect - 16 / 9) < 0.001);
         selector.visible = false;
         selector.visible = true;
@@ -511,8 +521,7 @@ TestCase {
 
         recordDriver.adapter.requestRegionPreset("9:16");
         const portrait = selector.selectionNormalized;
-        const portraitAspect = portrait.width * selector.sourcePixelSize.width
-                               / (portrait.height * selector.sourcePixelSize.height);
+        const portraitAspect = portrait.width * selector.sourcePixelSize.width / (portrait.height * selector.sourcePixelSize.height);
         verify(Math.abs(portraitAspect - 9 / 16) < 0.001);
 
         selector.setSelectionEdges(0.99, 0.99, 0.99, 0.99);
@@ -552,23 +561,203 @@ TestCase {
         verify(page.picker.opened, "the picker opens");
 
         page.visible = false;
-        tryCompare(page.picker, "opened", false,
-                   1000, "the picker must not outlive the destination that owns it");
+        tryCompare(page.picker, "opened", false, 1000, "the picker must not outlive the destination that owns it");
     }
     function test_pending_window_lifetime_is_not_rebound_after_hwnd_or_pid_reuse() {
         let page = makePage();
-        recordDriver.seedWindowTargets([{id: 100, label: "Document - Editor", pid: 10, creation: 20, generation: 1}]);
+        recordDriver.seedWindowTargets([
+            {
+                id: 100,
+                label: "Document - Editor",
+                pid: 10,
+                creation: 20,
+                generation: 1
+            }
+        ]);
         showTab(page, 1);
         mouseClick(cardAt(page, 0));
         const identity = page.picker.pendingIdentity;
-        recordDriver.seedWindowTargets([{id: 100, label: "Document - Editor", pid: 10, creation: 20, generation: 2}]);
+        recordDriver.seedWindowTargets([
+            {
+                id: 100,
+                label: "Document - Editor",
+                pid: 10,
+                creation: 20,
+                generation: 2
+            }
+        ]);
         waitForRendering(page);
         verify(page.picker.pendingIdentity === identity);
         verify(!page.picker.confirmEnabled);
         verify(!recordDriver.adapter.confirmTarget(identity, 1));
         compare(selectSpy.count, 0);
-        recordDriver.seedWindowTargets([{id: 100, label: "Document - Editor", pid: 10, creation: 21, generation: 2}]);
+        recordDriver.seedWindowTargets([
+            {
+                id: 100,
+                label: "Document - Editor",
+                pid: 10,
+                creation: 21,
+                generation: 2
+            }
+        ]);
         verify(!recordDriver.adapter.confirmTarget(identity, 1));
         compare(selectSpy.count, 0);
+    }
+    function refreshWindows() {
+        const rows = [];
+        for (let i = 0; i < 24; ++i)
+            rows.push({
+                id: 100 + i,
+                label: "Document " + i + " - Editor"
+            });
+        return rows;
+    }
+
+    function test_refresh_preserves_scrolled_source_and_keyboard_focus() {
+        const rows = refreshWindows();
+        recordDriver.seedWindowTargets(rows);
+        const page = makePage();
+        const list = pick(page, "sourceList");
+        list.positionViewAtIndex(8, ListView.Beginning);
+        waitForRendering(page);
+        const identity = page.picker.pickerRows[8].cards[0].identity;
+        const nativeId = rows[page.picker.pickerRows[8].cards[0].targetIndex].id;
+        const card = pick(page, "targetCard-" + identity);
+        card.forceActiveFocus(Qt.TabFocusReason);
+        keyClick(Qt.Key_Space);
+        const offset = card.mapToItem(list, 0, 0).y;
+        const scroll = list.contentY;
+        verify(scroll > 0);
+
+        rows[0].label = "Renamed document - Editor";
+        recordDriver.seedWindowTargets(rows);
+        waitForRendering(page);
+        tryCompare(list, "contentY", scroll);
+        const refreshed = pick(page, "targetCard-" + identity);
+        compare(refreshed.mapToItem(list, 0, 0).y, offset);
+        verify(refreshed.activeFocus, "refresh retains the focused lifetime identity");
+        compare(page.picker.pendingIdentity, identity);
+        tryVerify(() => JSON.stringify(lastPublished()) === JSON.stringify(viewportTargets(page)));
+
+        rows.unshift({
+            id: 99,
+            label: "Inserted window - Editor"
+        });
+        recordDriver.seedWindowTargets(rows);
+        waitForRendering(page);
+        tryVerify(() => findVisual(page.picker.contentItem, "targetCard-" + identity) !== null && findVisual(page.picker.contentItem, "targetCard-" + identity).mapToItem(list, 0, 0).y === offset, 5000, "focused source keeps viewport offset " + offset + "; contentY=" + list.contentY + ", originY=" + list.originY);
+        verify(pick(page, "targetCard-" + identity).activeFocus);
+        compare(page.picker.pendingIdentity, identity);
+
+        rows.splice(0, 3);
+        recordDriver.seedWindowTargets(rows);
+        waitForRendering(page);
+        compare(pick(page, "targetCard-" + identity).mapToItem(list, 0, 0).y, offset);
+        compare(page.picker.pendingIdentity, identity);
+        keyClick(Qt.Key_Return);
+        tryCompare(selectSpy, "count", 1);
+        compare(selectSpy.signalArguments[0][0], rows.findIndex(row => row.id === nativeId));
+    }
+
+    function test_unavailable_card_cannot_confirm_previous_pending_source() {
+        const page = makePage();
+        mouseClick(cardAt(page, 0));
+        const identity = page.picker.pendingIdentity;
+        verify(identity !== "");
+        page.picker.confirmCard({
+            available: false,
+            identity: "",
+            targetIndex: 1,
+            kind: "window"
+        }, 1);
+        compare(selectSpy.count, 0);
+        verify(page.picker.opened);
+        compare(page.picker.pendingIdentity, identity);
+    }
+    function test_selected_target_and_region_have_independent_focus_markers() {
+        const page = makePage();
+        const card = cardAt(page, 0);
+        mouseClick(card);
+        card.forceActiveFocus(Qt.TabFocusReason);
+        const targetFocus = findVisual(card, "cardFocusRing");
+        verify(targetFocus !== null, "target exposes keyboard focus independently of selection");
+        verify(targetFocus.visible);
+        verify(card.pending);
+        showTab(page, 2);
+        const preset = pick(page, "presetCard-custom");
+        preset.forceActiveFocus(Qt.TabFocusReason);
+        const regionFocus = findVisual(preset, "cardFocusRing");
+        verify(regionFocus !== null, "region preset exposes keyboard focus");
+        verify(regionFocus.visible);
+    }
+    function test_title_refresh_keeps_an_active_flick_moving() {
+        const rows = refreshWindows();
+        recordDriver.seedWindowTargets(rows);
+        const page = makePage();
+        const list = pick(page, "sourceList");
+        list.positionViewAtIndex(5, ListView.Beginning);
+        waitForRendering(page);
+        list.flick(0, -900);
+        tryCompare(list, "moving", true);
+        const scroll = list.contentY;
+        rows[0].label = "Renamed document - Editor";
+        recordDriver.seedWindowTargets(rows);
+        waitForRendering(page);
+        verify(list.moving, "a title refresh does not cancel an active flick");
+        verify(list.contentY >= scroll, "a refresh does not jump back while scrolling");
+        list.cancelFlick();
+    }
+    function test_recycled_focused_window_does_not_receive_keyboard_confirmation() {
+        recordDriver.seedWindowTargets([{id: 100, label: "Document - Editor", generation: 1}]);
+        const page = makePage();
+        showTab(page, 1);
+        const card = cardAt(page, 0);
+        card.forceActiveFocus(Qt.TabFocusReason);
+        keyClick(Qt.Key_Space);
+        const identity = page.picker.pendingIdentity;
+        recordDriver.seedWindowTargets([{id: 100, label: "Replacement - Editor", generation: 2}]);
+        waitForRendering(page);
+        verify(!cardAt(page, 0).activeFocus, "a recycled lifetime does not inherit keyboard focus");
+        keyClick(Qt.Key_Return);
+        compare(selectSpy.count, 0);
+        compare(page.picker.pendingIdentity, identity);
+        verify(!page.picker.confirmEnabled);
+    }
+    function test_queued_structural_refreshes_keep_surviving_card_focus() {
+        const rows = refreshWindows();
+        recordDriver.seedWindowTargets(rows);
+        const page = makePage();
+        const list = pick(page, "sourceList");
+        list.positionViewAtIndex(8, ListView.Beginning);
+        waitForRendering(page);
+        const identity = page.picker.pickerRows[8].cards[0].identity;
+        const card = pick(page, "targetCard-" + identity);
+        card.forceActiveFocus(Qt.TabFocusReason);
+        const offset = card.mapToItem(list, 0, 0).y;
+        rows.unshift({id: 99, label: "Inserted A - Editor"});
+        recordDriver.seedWindowTargets(rows);
+        rows.unshift({id: 98, label: "Inserted B - Editor"});
+        recordDriver.seedWindowTargets(rows);
+        waitForRendering(page);
+        const refreshed = pick(page, "targetCard-" + identity);
+        verify(refreshed.activeFocus, "a queued refresh batch keeps the original surviving lifetime focused");
+        compare(refreshed.mapToItem(list, 0, 0).y, offset);
+    }
+
+    function test_user_focus_navigation_supersedes_queued_refresh_restore() {
+        const rows = refreshWindows();
+        recordDriver.seedWindowTargets(rows);
+        const page = makePage();
+        const list = pick(page, "sourceList");
+        list.positionViewAtIndex(5, ListView.Beginning);
+        waitForRendering(page);
+        const identity = page.picker.pickerRows[5].cards[0].identity;
+        pick(page, "targetCard-" + identity).forceActiveFocus(Qt.TabFocusReason);
+        rows.unshift({id: 99, label: "Inserted window - Editor"});
+        recordDriver.seedWindowTargets(rows);
+        const search = pick(page, "windowSearch");
+        search.forceActiveFocus(Qt.TabFocusReason);
+        waitForRendering(page);
+        verify(search.activeFocus, "a queued restore cannot steal focus after explicit navigation");
     }
 }

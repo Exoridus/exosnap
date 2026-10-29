@@ -186,8 +186,6 @@ qt_add_qml_module(exosnap
         RecordActionButton.qml
         RecordPage.qml
         GamepadOverlayControls.qml
-        RecordingSourcePanel.qml
-        RecordingProfileInspector.qml
         RecordingErrorOverlay.qml
         RecordSourcePicker.qml
         RecordSourceToggle.qml
@@ -202,6 +200,7 @@ qt_add_qml_module(exosnap
         SettingsAudioEncodingSection.qml
         SettingsAudioSourcesSection.qml
         AudioTrackCard.qml
+        AudioSourceDetailsPopup.qml
         AudioRoutingPanel.qml
         SettingsAudioSourceRow.qml
         SettingsAudioTrackLedger.qml
@@ -1493,8 +1492,18 @@ qt_add_qml_module(record_source_picker_qml_tests
         # ExoTheme.qml resolves wheelScrollLines through this singleton.
         QuickWheelMetrics.h
     QML_FILES
+        SettingsPage.qml
+        SettingsAppearanceSection.qml
+        SettingsDeveloperSection.qml
+        SettingsHotkeysSection.qml
+        SettingsOverlaysSection.qml
+        SettingsPresenceSection.qml
+        SettingsStorageSection.qml
+        SettingsUpdatesSection.qml
+        HotkeyCaptureField.qml
         AudioRoutingPanel.qml
         AudioTrackCard.qml
+        AudioSourceDetailsPopup.qml
         ExoCard.qml
         ExoCheckBox.qml
         ExoConfirmDialog.qml
@@ -1507,8 +1516,6 @@ qt_add_qml_module(record_source_picker_qml_tests
         ExoSlider.qml
         ExoSwitch.qml
         ExoTextField.qml
-        RecordingProfileInspector.qml
-        RecordingSourcePanel.qml
         SettingsAudioEncodingSection.qml
         SettingsAudioSourcesSection.qml
         SettingsChromaSlider.qml

@@ -192,7 +192,7 @@ bool cropToBgra(ID3D11Device* device, ID3D11DeviceContext* context, ID3D11Textur
 
 bool drawWebcam(exosnap::engine::GpuCompositor& compositor, const WebcamSettings& settings,
                 const exosnap::engine::WebcamFrameSnapshot* frame, int width, int height, std::string& error) {
-    if (!settings.enabled || frame == nullptr)
+    if (!settings.enabled || !settings.output_visible || frame == nullptr)
         return true;
     exosnap::engine::WebcamPlacement placement;
     placement.x = settings.overlay.x_norm;

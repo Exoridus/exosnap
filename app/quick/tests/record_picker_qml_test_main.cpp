@@ -9,6 +9,8 @@
 // rebuilds the target list through the same revision bump a rescan uses.
 
 #include "AudioRoutingAdapter.h"
+#include "CaptureExclusion.h"
+#include "QuickThemeTokens.h"
 #include "RecordViewModelAdapter.h"
 #include "RecordingClipAdapter.h"
 #include "RecordingWorkspaceState.h"
@@ -40,6 +42,7 @@ class RecordPickerTestDriver final : public QObject {
     Q_PROPERTY(exosnap::quick::RecordingClipAdapter* clipAdapter READ clipAdapter CONSTANT)
     Q_PROPERTY(exosnap::quick::RecordingWorkspaceState* workspaceState READ workspaceState CONSTANT)
     Q_PROPERTY(exosnap::quick::SettingsAdapter* settings READ settings CONSTANT)
+    Q_PROPERTY(QString visualArtifactDirectory READ visualArtifactDirectory CONSTANT)
 
   public:
     explicit RecordPickerTestDriver(QObject* parent = nullptr) : QObject(parent) {
@@ -78,6 +81,19 @@ class RecordPickerTestDriver final : public QObject {
         adapter_.setHiddenWindowRules({});
         adapter_.setShowHiddenWindows(false);
         ++seed_generation_;
+    }
+    Q_INVOKABLE void forceCaptureExclusionFailure() {
+        capture_exclusion_attempts_ = 0;
+        exosnap::quick::CaptureExclusion::SetAffinityFunctionForTest([this](void*, quint32) {
+            ++capture_exclusion_attempts_;
+            return false;
+        });
+    }
+    Q_INVOKABLE int captureExclusionAttempts() const {
+        return capture_exclusion_attempts_;
+    }
+    Q_INVOKABLE void resetCaptureExclusion() {
+        exosnap::quick::CaptureExclusion::ResetAffinityFunctionForTest();
     }
     Q_INVOKABLE void prepareRegionSelection() {
         source_.state = exosnap::UiRecordingState::RegionSelecting;
@@ -137,7 +153,53 @@ class RecordPickerTestDriver final : public QObject {
         routing_.refresh(exosnap::engine::LegacyRows25Intent{});
     }
 
-    Q_INVOKABLE void seedAudioSources(int count, const QString& prefix) {
+    Q_INVOKABLE void clearActiveAudioPlan() {
+        routing_.setActivePlan(std::nullopt);
+    }
+
+    QString visualArtifactDirectory() const {
+        return qEnvironmentVariable("EXOSNAP_QML_TEST_ARTIFACT_DIR");
+    }
+
+    Q_INVOKABLE void setTestAppearance(QObject* tokens, const QString& appearance) {
+        if (auto* theme = qobject_cast<exosnap::quick::QuickThemeTokens*>(tokens))
+            theme->setAppearance(appearance, QStringLiteral("aqua"));
+    }
+
+    Q_INVOKABLE void seedCompactAudioRouting() {
+        using namespace exosnap::engine;
+        TrackGraph1Intent graph;
+        AudioSourceSpec system;
+        system.id = NewId<AudioSourceId>();
+        system.name = "System audio";
+        AudioSourceSpec mic;
+        mic.id = NewId<AudioSourceId>();
+        mic.name = "Microphone";
+        mic.binding.kind = AudioBindingKind::MicrophoneEndpoint;
+        graph.sources = {system, mic};
+        for (uint32_t index = 0; index != 2; ++index) {
+            AudioTrackSpec track;
+            track.id = NewId<AudioTrackId>();
+            track.order = index;
+            graph.tracks.push_back(track);
+        }
+        graph.routes = {{NewId<AudioRouteId>(), system.id, graph.tracks[0].id},
+                        {NewId<AudioRouteId>(), mic.id, graph.tracks[0].id},
+                        {NewId<AudioRouteId>(), mic.id, graph.tracks[1].id}};
+        graph.default_monitor_track_ids = {graph.tracks[0].id};
+        graph.monitor_selection_origin = MonitorSelectionOrigin::User;
+        AudioEnvironmentSnapshot environment;
+        environment.playback_endpoints = {"speaker"};
+        environment.microphone_endpoints = {"microphone"};
+        environment.default_playback_by_role[1] = "speaker";
+        environment.default_microphone_by_role[1] = "microphone";
+        routing_.configure([](const AudioIntent&, QString&) { return true; }, [environment] { return environment; });
+        routing_.setActivePlan(std::nullopt);
+        routing_.refresh(graph);
+    }
+
+    Q_INVOKABLE void seedAudioSources(int count, const QString& prefix, double firstSourceGain = 1.0,
+                                      double trackRms = -1.0) {
         using namespace exosnap::engine;
         TrackGraph1Intent graph;
         AudioTrackSpec track;
@@ -147,6 +209,8 @@ class RecordPickerTestDriver final : public QObject {
             AudioSourceSpec source;
             source.id = NewId<AudioSourceId>();
             source.name = (prefix + QString::number(index)).toStdString();
+            if (index == 0)
+                source.post_dsp_gain_linear = static_cast<float>(firstSourceGain);
             source.binding.follow_default = false;
             source.binding.endpoint_id = "endpoint";
             graph.sources.push_back(source);
@@ -168,6 +232,11 @@ class RecordPickerTestDriver final : public QObject {
             if (resolved.succeeded())
                 routing_.setActivePlan(*resolved.value());
         }
+        TrackMeterSnapshot meter;
+        meter.track_id = track.id;
+        meter.has_measurement = trackRms >= 0.0;
+        meter.rms = meter.has_measurement ? static_cast<float>(trackRms) : 0.0f;
+        routing_.setMeters({}, {meter});
     }
     Q_INVOKABLE void seedWindowTargets(const QVariantList& windows) {
         source_.targets.clear();
@@ -221,6 +290,7 @@ class RecordPickerTestDriver final : public QObject {
     }
 
   private:
+    int capture_exclusion_attempts_ = 0;
     quint64 seed_generation_ = 1;
     RecordViewModel source_;
     RecordViewModelAdapter adapter_;

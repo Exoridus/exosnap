@@ -120,6 +120,7 @@ class RecordViewModelAdapter : public QObject {
     Q_PROPERTY(QString webcamErrorText READ webcamErrorText NOTIFY changed FINAL)
     Q_PROPERTY(QRectF webcamOverlayRect READ webcamOverlayRect NOTIFY changed FINAL)
     Q_PROPERTY(bool webcamOverlayEditable READ webcamOverlayEditable NOTIFY changed FINAL)
+    Q_PROPERTY(bool webcamOutputVisible READ webcamOutputVisible NOTIFY changed FINAL)
     Q_PROPERTY(bool webcamMirror READ webcamMirror NOTIFY changed FINAL)
     Q_PROPERTY(double webcamOpacity READ webcamOpacity NOTIFY changed FINAL)
     Q_PROPERTY(double systemMeter READ systemMeter NOTIFY metersChanged FINAL)
@@ -242,6 +243,9 @@ class RecordViewModelAdapter : public QObject {
     [[nodiscard]] const QString& webcamErrorText() const noexcept;
     [[nodiscard]] QRectF webcamOverlayRect() const noexcept;
     [[nodiscard]] bool webcamOverlayEditable() const noexcept;
+    [[nodiscard]] bool webcamOutputVisible() const noexcept {
+        return webcam_output_visible_;
+    }
     [[nodiscard]] bool webcamMirror() const noexcept;
     [[nodiscard]] double webcamOpacity() const noexcept;
     [[nodiscard]] double systemMeter() const noexcept;
@@ -258,7 +262,7 @@ class RecordViewModelAdapter : public QObject {
     void setFormatText(QString text);
     void setDeviceState(bool microphone_available, bool webcam_available, bool webcam_enabled,
                         QString webcam_error = {});
-    void setWebcamPresentation(QRectF overlay_rect, bool mirror, double opacity);
+    void setWebcamPresentation(QRectF overlay_rect, bool mirror, double opacity, bool output_visible = true);
     void setCountdownState(int configured_seconds, int remaining_seconds, double progress);
     void setRegionState(QRectF normalized_rect, bool selection_needed);
     void setPreviewFrameReady(bool ready);
@@ -299,6 +303,7 @@ class RecordViewModelAdapter : public QObject {
     Q_INVOKABLE void requestRegionPreset(const QString& key);
     Q_INVOKABLE void requestToggleSource(const QString& key);
     Q_INVOKABLE void requestWebcamOverlayRect(QRectF normalized_rect);
+    Q_INVOKABLE void requestWebcamOutputVisible(bool visible);
     Q_INVOKABLE void requestCountdownSeconds(int seconds);
     Q_INVOKABLE void requestDismissResult();
     Q_INVOKABLE void requestOpenRecent(const QString& file_path);
@@ -337,6 +342,7 @@ class RecordViewModelAdapter : public QObject {
     void regionPresetRequested(QString key);
     void toggleSourceRequested(QString key);
     void webcamOverlayRectRequested(QRectF normalized_rect);
+    void webcamOutputVisibleRequested(bool visible);
     void countdownSecondsRequested(int seconds);
     void dismissResultRequested();
     void openRecentRequested(QString file_path);
@@ -411,6 +417,7 @@ class RecordViewModelAdapter : public QObject {
     QRectF webcam_overlay_rect_{0.0, 0.0, 0.25, 0.25};
     bool webcam_mirror_ = false;
     double webcam_opacity_ = 1.0;
+    bool webcam_output_visible_ = true;
     double system_meter_ = 0.0;
     double app_meter_ = 0.0;
     double microphone_meter_ = 0.0;

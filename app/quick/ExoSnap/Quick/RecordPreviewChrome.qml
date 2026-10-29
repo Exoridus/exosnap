@@ -8,16 +8,79 @@ Item {
     required property string sourceText
     required property int sourceGlyph
     required property bool sourceEnabled
+    property bool overlayEnabled: true
+    property bool webcamEnabled: false
+    property bool controllerEnabled: false
+    property bool controllerAvailable: false
+    readonly property real controlsBottom: previewChrome.y + previewChrome.height
     property bool metricsVisible: false
     property string dropsText: ""
     property string driftText: ""
     property string sizeText: ""
-    signal sourceRequested()
+    signal sourceRequested
+    signal webcamRequested
+    signal controllerRequested
+
+    function openOverlayMenu(): bool {
+        overlayMenu.open();
+        return overlayMenu.opened;
+    }
+
+    component OverlayMenuItem: ExoMenuItem {
+        id: menuItem
+        required property int glyph
+        required property string glyphObjectName
+
+        contentItem: RowLayout {
+            spacing: ExoTheme.spacingSm
+            ExoGlyph {
+                objectName: menuItem.glyphObjectName
+                kind: menuItem.glyph
+                color: menuItem.enabled ? ExoTheme.text : ExoTheme.textDim
+                Accessible.ignored: true
+            }
+            Label {
+                text: menuItem.text
+                textFormat: Text.PlainText
+                color: menuItem.enabled ? ExoTheme.text : ExoTheme.textDim
+                font.family: ExoTheme.sansFamily
+                font.pixelSize: ExoTheme.fontBody
+            }
+        }
+    }
+
+    ExoMenu {
+        id: overlayMenu
+        objectName: "recordOverlayMenu"
+        parent: addOverlayButton
+        x: parent.width - width
+        y: parent.height
+        modal: false
+        focus: true
+        // The anchor press must reach its release toggle without closing first.
+        closePolicy: Popup.CloseOnEscape | Popup.CloseOnPressOutsideParent
+
+        OverlayMenuItem {
+            text: root.webcamEnabled ? qsTr("Webcam settings") : qsTr("Add webcam")
+            enabled: root.overlayEnabled
+            glyph: ExoGlyph.Webcam
+            glyphObjectName: "recordOverlayWebcamGlyph"
+            onTriggered: root.webcamRequested()
+        }
+        OverlayMenuItem {
+            text: root.controllerEnabled ? qsTr("Controller settings") : qsTr("Add controller")
+            enabled: root.controllerAvailable && root.overlayEnabled
+            glyph: ExoGlyph.Gamepad
+            glyphObjectName: "recordOverlayGamepadGlyph"
+            onTriggered: root.controllerRequested()
+        }
+    }
 
     RowLayout {
         id: previewChrome
         z: 10
         spacing: ExoTheme.spacingSm
+        readonly property real contentWidth: Math.max(0, width - addOverlayButton.width - 3 * spacing)
         anchors {
             top: parent.top
             left: parent.left
@@ -25,8 +88,7 @@ Item {
             margins: ExoTheme.spacingMd
         }
         Rectangle {
-            Layout.preferredWidth: Math.min(contractText.implicitWidth + 2 * ExoTheme.spacingMd,
-                                           previewChrome.width * 0.52)
+            Layout.preferredWidth: Math.min(contractText.implicitWidth + 2 * ExoTheme.spacingMd, previewChrome.contentWidth * 0.52)
             Layout.preferredHeight: ExoTheme.controlHeightCompact
             radius: ExoTheme.radiusSm
             color: ExoTheme.overlaySurface
@@ -46,14 +108,16 @@ Item {
                 Accessible.name: qsTr("Recording format: %1").arg(text)
             }
         }
-        Item { Layout.fillWidth: true }
+        Item {
+            Layout.fillWidth: true
+        }
         Button {
             id: previewSourceButton
             objectName: "previewSourceButton"
             text: root.sourceText
             enabled: root.sourceEnabled
             focusPolicy: Qt.StrongFocus
-            Layout.preferredWidth: Math.min(implicitWidth, previewChrome.width * 0.43)
+            Layout.preferredWidth: Math.min(implicitWidth, previewChrome.contentWidth * 0.43)
             Layout.minimumWidth: 0
             Layout.preferredHeight: ExoTheme.controlHeightCompact
             leftPadding: ExoTheme.spacingMd
@@ -85,6 +149,31 @@ Item {
                     Layout.minimumWidth: 0
                     font.pixelSize: ExoTheme.fontCaption
                 }
+            }
+            ToolTip.visible: hovered
+            ToolTip.text: text
+        }
+        Button {
+            id: addOverlayButton
+            objectName: "previewAddOverlayButton"
+            text: qsTr("Add overlay")
+            enabled: root.overlayEnabled
+            Layout.preferredWidth: ExoTheme.controlHeightCompact
+            Layout.preferredHeight: ExoTheme.controlHeightCompact
+            Accessible.name: text
+            onClicked: overlayMenu.visible ? overlayMenu.close() : overlayMenu.open()
+            background: Rectangle {
+                radius: ExoTheme.radiusSm
+                color: addOverlayButton.hovered ? ExoTheme.overlaySurfaceRaised : ExoTheme.overlaySurface
+                border.width: addOverlayButton.activeFocus ? 2 : 1
+                border.color: addOverlayButton.activeFocus ? ExoTheme.overlayAccent : ExoTheme.overlayLine
+            }
+            contentItem: ExoGlyph {
+                kind: ExoGlyph.Plus
+                color: ExoTheme.overlayInk
+                width: 18
+                height: 18
+                Accessible.ignored: true
             }
             ToolTip.visible: hovered
             ToolTip.text: text

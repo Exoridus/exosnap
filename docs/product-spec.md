@@ -14,7 +14,7 @@ Configuration and compatibility have one C++ owner. Presentation consumes resolv
 
 The title band provides five direct destinations in this order: **Record, Edit, Settings, Diagnostics, About**. Logs is not a top-level destination: it is the full log view inside Diagnostics, reached from the Reference section, a failed recording's View log action or a Show in log action, and it keeps Diagnostics selected. Hotkeys is a Settings card. Hardware inspection is a collapsed Diagnostics reference, not a Device destination or an encoder selector.
 
-The Recording profile inspector owns recording choices. Settings owns global application preferences. Diagnostics owns observations and hosts both its overview and the internal Logs view. Record owns capture setup, preview and transport. Edit owns the in-memory recording-edit workspace. About owns application identity and project links.
+Settings owns recording choices and global application preferences. Diagnostics owns observations and hosts both its overview and the internal Logs view. Record owns capture setup, preview, recorded overlay placement and transport. Edit owns the in-memory recording-edit workspace. About owns application identity and project links.
 
 ### Shell and window
 
@@ -48,7 +48,7 @@ Text and filled-control ink target 4.5:1 contrast; state/focus indicators target
 
 Unavailable controls retain labels/current values, drop interactive emphasis and expose the real reason. A locked-on switch preserves its on shape without looking pressable. A row dims only when all its controls are unavailable. Accent swatches show the value for the current appearance and use a separate selection ring and accessible name.
 
-The source picker groups displays, application windows and region actions in one scrollable selection. Search and section jumps change the visible choices without changing the active source. All eligible windows remain reachable; virtualization limits thumbnail work to visible rows. Confirmation resolves the pending lifetime identity against a fresh target list. A disappeared or recycled window is unavailable and never falls back to its old list index.
+The source picker groups displays, application windows and region actions in one scrollable selection. Search and section jumps change the visible choices without changing the active source. All eligible windows remain reachable; virtualization limits thumbnail work to visible rows. Confirmation resolves the pending lifetime identity against a fresh target list. A disappeared or recycled window is unavailable and never falls back to its old list index. Background title refreshes preserve visible position, keyboard focus and ongoing scrolling. Structural changes anchor the visible source by lifetime identity where it survives. An unavailable card cannot confirm a previously pending source. Selection and keyboard focus have separate themed indicators.
 
 Hiding a window until restart applies only to that window lifetime. Persistent title rules explicitly choose equals or contains, case sensitivity and application scope. The default is contains, case insensitive and scoped to the selected application. Application-wide hiding requires separate confirmation. The picker menu reviews, disables and removes global rules independently of recording presets. The hidden count deduplicates eligible windows before text search; search matches have a separate count. Hidden windows have no thumbnail demand unless the user reveals them and they are in the viewport. Hiding the selected window does not stop or retarget its recording, and does not conceal its contents in a monitor recording.
 ## 3. Recording defaults and profiles
@@ -113,21 +113,23 @@ SDR and native-HDR outputs carry their actual color descriptions. Native HDR is 
 
 ### Sources and tracks
 
-New configurations use stable source, track and route identities. Settings presents track cards with names, roles, recording participation, assigned source chips and route gains. Empty tracks remain visible and produce no output stream. Move removes a source's previous routes and assigns it to the chosen track; Also add preserves existing routes. One source can feed several tracks, and several sources can feed one track. Output supports up to eight recorded tracks.
+New configurations use stable source, track and route identities. Settings presents a compact row per recording track with its index, name, source chips and one actions menu. More than one track exposes quiet drag handles with hand cursors and a compact drag preview. Dragging or Alt+Up/Down changes order. The menu renames inline, selects the default playback track, enables or disables recording, or removes the track and its routes directly, without another confirmation or a new undo control. Empty active tracks show No source beside the name and produce no output stream. One source can feed several tracks, and several sources can feed one track. Output supports up to eight recorded tracks.
 
-The source list separates participation, availability and mute. New sources are unassigned until explicitly routed. Application sources use a specific selected capture application; independent application sources freeze that process instance instead of following later capture-target edits. Source details own device, channel, post-DSP gain and individual processing controls.
+Each track's Add source popup has one assignment switch per configured source. Turning it off removes only that track's route. Turning it on preserves other routes and restores source participation if an older configuration disabled it globally. Clicking a source chip opens its route gain and Remove from this track action. Route gain spans -60 to +24 dB. Source device, channel, post-DSP gain and processing settings are reached from the source popup. Application sources use a specific selected capture application; independent application sources freeze that process instance instead of following later capture-target edits. The playback action selects ExoSnap playback defaults, not live speaker monitoring or a general player default. Automatic selection includes all resolved recorded tracks, so repeated source assignments may overlap. The menu describes that effective state without a permanent speaker glyph. Existing track roles and source mute remain stored even though the compact routing list does not expose them as extra controls.
+
+Add source offers existing assignments and supported source types in one popup. Creating a system, microphone or supported capture-application source assigns it to that track in one persisted transaction. Application source creation requires an explicitly confirmed current window target. A separate independent-application picker is not offered; existing independent definitions remain supported and assignable. Action errors stay beside their affected track, source or field.
 
 Existing configurations retain their ordered-row routing and shared microphone settings until a structural edit is explicitly converted. Conversion fixes the current track layout, preserves IDs and can be undone. Unsupported future configurations remain read-only. There is one persistent routing editor; during recording its Active view describes the frozen output and edits configure the Next plan.
 
 During recording, a source admitted at start can be muted and unmuted. Muting preserves its track and duration with silence. A source absent from the initial plan cannot be added mid-session and its toggle remains locked. Changing capture device or track structure requires a new recording.
 
-Source gain is −60 to +24 dB, default 0 dB, with microphone gain on its own card. Source mute contributes silence. Recording mixes use fixed configured-source weighting, so a quiet source does not automatically make another louder. The mixed-bus limiter defaults on at 0 dBFS; its Expert ceiling is −12 to 0 dBFS. Limiting reduces clipping risk but does not reconstruct a clipped capture input.
+Source gain is −60 to +24 dB, default 0 dB, with microphone gain in the source details. Source mute contributes silence. Recording mixes use fixed configured-source weighting, so a quiet source does not automatically make another louder. The mixed-bus limiter defaults on at 0 dBFS; its Expert ceiling is −12 to 0 dBFS. Limiting reduces clipping risk but does not reconstruct a clipped capture input.
 
 ### Meters and microphone
 
-Source rows show measured pre-mute RMS and peak independently of post-limiter track RMS. Values use dBFS and remain unavailable until measured; silence is distinct from a finite -60 dB reading. Meter updates publish separately from editable routing cards so they do not replace focused inputs or drafts. Active output meter snapshots reach the routing panel at 10 Hz.
+Source meters measure post-DSP, pre-mute RMS and peak independently of post-limiter track RMS. Values use dBFS and remain unavailable until measured; silence is distinct from a finite -60 dB reading. Meter updates publish separately from editable routing rows so they do not replace focused inputs or drafts. A narrow horizontal track-title meter displays only measured post-limiter RMS for the active plan. It has no peak or clipping indication and is hidden for an editable next plan or unavailable data. Settings never starts a capture session for meters. Source RMS is post-processing and is not presented as the noise gate input detector. Active meters remain available to the transport and Diagnostics at their existing cadence.
 
-Microphone Device, Channels, Gain and Post-processing belong to the explicitly chosen source's details. Legacy configurations retain a separate shared microphone card. A disconnected configured device is not silently replaced by an arbitrary one.
+Microphone Device, Channels, Gain and Post-processing belong to the explicitly chosen source's details. Source and route numeric parameters use the existing Exo number field with explicit units, locale-aware decimal entry, keyboard steps, validated ranges and a keyboard-accessible default reset. DSP resets use engine defaults. A retained source value outside the editable range stays visible as its actual read-only value, including silent gain, until explicitly reset. Opening or leaving the field never rewrites it. Legacy configurations retain a separate shared microphone card. A disconnected configured device is not silently replaced by an arbitrary one.
 
 The optional microphone chain is **high-pass → noise gate → AGC → RNNoise**, each independently off by default. RNNoise adds one 10 ms block of latency at 48 kHz; turning processing off does not negate other conversions or clock compensation. No master DSP switch implies all stages share one setting.
 
@@ -237,7 +239,7 @@ A fullscreen-shaped, alive, visible window with no capture-frame progress for te
 
 ### Webcam
 
-Webcam is an optional recorded PiP, not a fourth target. Device/resolution selection lives in Settings; its include control is synchronized with the Record camera control. Off is the default, and opening Settings with the webcam off does not open the camera. The first available camera can be preselected without recording it.
+Webcam is an optional recorded PiP, not a fourth target. Device/resolution selection lives in Settings. The preview's Add overlay menu adds it, and its selected frame offers output visibility and removal. Off is the default, and opening Settings with the webcam off does not open the camera. The first available camera can be preselected without recording it.
 
 Resolution and frame-rate choices list only the modes the selected camera offers. A stored mode the camera lacks shows, and is captured as, the smallest offered size at least as large, else the largest; then the closest offered rate. Enabling the camera on an idle Record page shows it in the preview immediately.
 
@@ -251,7 +253,7 @@ Media Foundation is a webcam dependency, not an AAC/recording dependency. Window
 
 ### Gamepad overlay
 
-The Record preview's Gamepad control adds one recorded controller widget. It is off by default.
+The Record preview's Add overlay menu adds one controller widget and provides access to its device, layout and appearance settings. It is off by default.
 Automatic device selection prefers the first actively used gamepad and stays with it until disconnect.
 Manual selection pins one device and never borrows another controller's inputs. Disconnect resets the visible inputs.
 Automatic artwork selection recognizes DualSense, Xbox Series, Xbox One and Switch Pro families.
@@ -300,9 +302,11 @@ A successful recording is confirmed by the Saved notification, whose Edit and fo
 
 ### Recording workspace and profile
 
-Sources on the left and Recording profile on the right start closed. Opening an overlay leaves the preview geometry unchanged. Below 1200 logical pixels of workspace width, opening one overlay closes the other. Pinning is an explicit action and requires at least 480 by 280 logical pixels for the preview. A resize that violates this minimum closes the most recently opened panel with a visible explanation. Growing the window does not reopen it. Escape closes the active panel, and focus returns to its opening control without stopping a recording.
+Record has no source or profile side panels. Its preview exposes the Source Picker and an Add overlay button for webcam and controller widgets. The Add button toggles its menu on successive clicks, and outside clicks or Escape close it. Entries use the shared webcam and controller glyphs. Recording configuration lives in Settings. Selecting an overlay shows its placement frame, four resize corners and a fixed-size toolbar centered above it. At the top edge the toolbar moves inside, or below a very small frame to keep its resize corners clear. Its horizontal position stays within the preview, and it avoids the source controls. Resizing an overlay never scales the toolbar buttons. Escape or clicking the preview background clears the selection.
 
-The source overview uses the configured source identities and shows availability, participation and measured levels. The profile inspector owns format, quality, output, audio routing, microphone, audio encoding and webcam configuration. It reuses the shared preset draft and the single track routing editor. Named preset apply retains environment-owned capture and HDR fields. During recording, Active recording is a frozen read-only view. Edit next recording explicitly exposes the separate next draft, whose changes take effect at the next start. Operational mute and webcam participation remain session actions.
+An open eye includes the selected overlay in output. A closed eye excludes it from recordings and captured frames while retaining a dimmed, editable preview. Visibility is stored in the recording profile and defaults to included for existing profiles. Delete removes the selected editable overlay when its preview controls have keyboard focus; the toolbar's close button offers the same action without a keyboard. Removing an overlay disables it without deleting device settings. Preview frames, resize handles and toolbar buttons are never encoded. Desktop recording, countdown and diagnostics overlays keep their existing capture-excluded behavior.
+
+Settings owns format, quality, output, audio tracks, microphone, audio encoding and webcam configuration through one shared preset draft and track routing editor. Named preset apply retains environment-owned capture and HDR fields. During recording, Active recording is a frozen read-only view. Edit next recording explicitly exposes the separate next draft, whose changes take effect at the next start. Operational mute, webcam participation and editable recorded-overlay controls remain session actions.
 
 The transport uses compact source meters and a geometrically centered timer with reserved width for hours. Stop remains directly reachable while secondary actions use a named overflow at narrow widths. While recording or paused, and while clip jobs exist, the transport offers Save clip, which moves into the overflow at narrow widths. Opening the editor retains its existing availability rules.
 
@@ -480,7 +484,7 @@ The top bar retains three noninteractive source-health indicators across every p
 
 ## 11. Diagnostics and fix actions
 
-Diagnostics keeps four main live tiles: Frame pacing, Encoder, Storage and Audio sync. The recording verdict and ledger describe measured impact. Raw timing, presentation, GPU/memory and kernel evidence stays in grouped In-depth details; missing PresentMon is neutral. Compensated condition periods stay in In-depth/reports. Diagnostics is state-ordered, not a separate Simple/Expert mode. The shared Expert preference is edited in the recording profile inspector.
+Diagnostics keeps four main live tiles: Frame pacing, Encoder, Storage and Audio sync. The recording verdict and ledger describe measured impact. Raw timing, presentation, GPU/memory and kernel evidence stays in grouped In-depth details; missing PresentMon is neutral. Compensated condition periods stay in In-depth/reports. Diagnostics is state-ordered, not a separate Simple/Expert mode. The shared Expert preference is edited in Settings.
 
 | State | Main contents |
 |---|---|
@@ -510,9 +514,9 @@ Logs provides a virtualized structured list with Time, Level, Category and Messa
 
 ## 12. Settings model (Default / Expert)
 
-Settings retains card-based global application preferences: App behaviour, Hotkeys, Appearance, Overlays, Storage, Updates and Support & diagnostics. Recording choices are edited in the Recording profile inspector. A Settings shortcut opens that inspector rather than providing another editable copy. Expert reveals raw or compatibility-sensitive mechanics within the recording cards; it never hides an entire section.
+Settings presents recording configuration and global application preferences as cards. It includes presets, format, quality, output, audio tracks, microphone, audio encoding, webcam, App behaviour, Hotkeys, Appearance, Overlays, Updates and Support & diagnostics. Focus shortcuts navigate to the matching card. Expert reveals raw or compatibility-sensitive mechanics within the recording cards; it never hides an entire section.
 
-Global Settings adapts its card columns to the available width. The inspector uses one scrollable column and retains preset actions and the shared Expert preference.
+Settings uses one column at narrow widths and two independent card columns at wider widths, preserving one instance of every section across breakpoints. Preset actions span the columns, and the shared Expert preference remains available. Support & diagnostics ends the left column and owns preview-cache maintenance, which preserves source recordings. The narrow layout keeps Support last. Static card descriptions are reduced; configuration summaries and operational status remain. Comparable primary actions align right. Scroll areas stop at their bounds.
 
 Expert owns numeric rate control/CQ/bitrate, custom frame-rate entry, pacing, NVENC preset and advanced tuning, keyframe interval, color range/depth/chroma, specialized Opus/sample-rate/clock controls and relevant raw gain/limiter/float choices. Relevance can narrow these further: no H.264 10-bit row, no unsupported 4:4:4 row, and no lossy-codec bit-depth field. HDR handling is Default-visible on a relevant HDR display. Automatic splitting, microphone processing and ordinary audio controls are not hidden just for sounding technical.
 

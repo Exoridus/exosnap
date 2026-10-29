@@ -1349,8 +1349,7 @@ int main(int argc, char* argv[]) {
     }
     const QString record_panel = qEnvironmentVariable("EXOSNAP_VISUAL_RECORD_PANEL");
     if (!visualOutputPath(arguments).isEmpty() && !record_panel.isEmpty() &&
-        !QStringList{QStringLiteral("sources"), QStringLiteral("sources-pinned"), QStringLiteral("profile-pinned"),
-                     QStringLiteral("panels-pinned")}
+        !QStringList{QStringLiteral("overlay-menu"), QStringLiteral("gamepad"), QStringLiteral("gamepad-hidden")}
              .contains(record_panel)) {
         reportStartupError(QStringLiteral("--visual-test: unknown recording panel %1").arg(record_panel));
         return 2;
@@ -1751,7 +1750,8 @@ int main(int argc, char* argv[]) {
     // Harness-only: selects which navigation destination a --visual-test capture
     // renders. Nav indices follow the canonical product order (Record, Settings,
     // Diagnostics, Logs, About).
-    const QString visual_page = optionValue(arguments, QStringLiteral("--visual-page"));
+    const QString visual_page = profile_section.isEmpty() ? optionValue(arguments, QStringLiteral("--visual-page"))
+                                                          : QString::number(exosnap::quick::ShellAdapter::SettingsPage);
     if (!visual_page.isEmpty()) {
         bool page_ok = false;
         const int page_index = visual_page.toInt(&page_ok);
@@ -1832,9 +1832,9 @@ int main(int argc, char* argv[]) {
         const bool profile_dialog = visual_dialog.startsWith(QLatin1String("preset-"));
         if (profile_dialog) {
             if (auto* shell = root_window->findChild<QObject*>(QStringLiteral("quickAppShell")))
-                shell->setProperty("currentPage", 0);
+                shell->setProperty("currentPage", static_cast<int>(exosnap::quick::ShellAdapter::SettingsPage));
         }
-        QObject* host = profile_dialog ? root_window->findChild<QObject*>(QStringLiteral("quickRecordPage"))
+        QObject* host = profile_dialog ? root_window->findChild<QObject*>(QStringLiteral("quickSettingsPage"))
                                        : static_cast<QObject*>(root_window);
         if (host == nullptr) {
             return false;
@@ -3078,7 +3078,7 @@ int main(int argc, char* argv[]) {
                     }
                     if (!profile_section.isEmpty()) {
                         QObject* page = root_window != nullptr
-                                            ? root_window->findChild<QObject*>(QStringLiteral("quickRecordPage"))
+                                            ? root_window->findChild<QObject*>(QStringLiteral("quickSettingsPage"))
                                             : nullptr;
                         if (page == nullptr)
                             return false;
@@ -3091,7 +3091,7 @@ int main(int argc, char* argv[]) {
                         if (!prepared)
                             return false;
                         int revealed = 0;
-                        if (!QMetaObject::invokeMethod(page, "revealProfileTarget", Q_RETURN_ARG(int, revealed),
+                        if (!QMetaObject::invokeMethod(page, "revealAutomationTarget", Q_RETURN_ARG(int, revealed),
                                                        Q_ARG(QString, profile_section)) ||
                             revealed < 0) {
                             error = QStringLiteral("recording profile section is unavailable: %1").arg(profile_section);

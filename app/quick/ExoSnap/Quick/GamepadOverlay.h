@@ -18,6 +18,7 @@ class GamepadOverlay final : public QObject, public engine::SpriteSourceProvider
     QML_ELEMENT
     QML_UNCREATABLE("GamepadOverlay is provided by the application")
     Q_PROPERTY(bool enabled READ enabled WRITE setEnabled NOTIFY settingsChanged FINAL)
+    Q_PROPERTY(bool outputVisible READ outputVisible WRITE setOutputVisible NOTIFY settingsChanged FINAL)
     Q_PROPERTY(int layout READ layout WRITE setLayout NOTIFY settingsChanged FINAL)
     Q_PROPERTY(bool glass READ glass WRITE setGlass NOTIFY settingsChanged FINAL)
     Q_PROPERTY(bool glow READ glow WRITE setGlow NOTIFY settingsChanged FINAL)
@@ -33,9 +34,13 @@ class GamepadOverlay final : public QObject, public engine::SpriteSourceProvider
     void Configure(GamepadOverlaySettings settings);
     [[nodiscard]] GamepadOverlaySettings Settings() const;
     [[nodiscard]] std::shared_ptr<const engine::SpriteLayerSnapshot> Snapshot(uint64_t frame_time_qpc_100ns) override;
+    [[nodiscard]] std::shared_ptr<const engine::SpriteLayerSnapshot> PreviewSnapshot(uint64_t frame_time_qpc_100ns);
 
     bool enabled() const {
         return Settings().enabled;
+    }
+    bool outputVisible() const {
+        return Settings().output_visible;
     }
     int layout() const {
         return Settings().layout;
@@ -62,6 +67,7 @@ class GamepadOverlay final : public QObject, public engine::SpriteSourceProvider
     }
 
     void setEnabled(bool value);
+    void setOutputVisible(bool value);
     void setLayout(int value);
     void setGlass(bool value);
     void setGlow(bool value);
@@ -81,6 +87,7 @@ class GamepadOverlay final : public QObject, public engine::SpriteSourceProvider
     void Poll();
     void Rebuild();
     void SetStatus(QString text);
+    std::shared_ptr<const engine::SpriteLayerSnapshot> BuildSnapshot(uint64_t timestamp, bool preview);
     mutable std::mutex mutex_;
     GamepadOverlaySettings settings_;
     int content_width_ = 1920;

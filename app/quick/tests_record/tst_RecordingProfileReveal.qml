@@ -13,11 +13,10 @@ TestCase {
 
     Component {
         id: inspectorComponent
-        RecordingProfileInspector {
-            width: 360
+        SettingsPage {
+            width: 860
             height: 600
             settings: recordDriver.settings
-            workspaceState: RecordingWorkspaceState {}
         }
     }
 
@@ -48,13 +47,18 @@ TestCase {
     }
 
     function findSection(item, section) {
-        const titles = ({ format: qsTr("Recording format"), quality: qsTr("Video quality & timing"),
-                          audio: qsTr("Audio routing"), microphone: qsTr("Microphone"),
-                          "audio-encoding": qsTr("Audio encoding"), output: qsTr("Output"), webcam: qsTr("Webcam") });
+        const titles = ({
+                format: qsTr("Recording format"),
+                quality: qsTr("Video quality & timing"),
+                audio: qsTr("Audio tracks"),
+                microphone: qsTr("Microphone"),
+                "audio-encoding": qsTr("Audio encoding"),
+                output: qsTr("Output"),
+                webcam: qsTr("Webcam")
+            });
         if (!item || !item.visible)
             return null;
-        if (section === "preset" ? typeof item.openHarnessDialog === "function" && item.stacked !== undefined
-                                 : item.title === titles[section])
+        if (section === "preset" ? typeof item.openHarnessDialog === "function" && item.stacked !== undefined : item.title === titles[section])
             return item;
         for (const child of item.children) {
             const result = findSection(child, section);
@@ -70,18 +74,27 @@ TestCase {
         recordDriver.seedAudioSources(0, "");
     }
 
-    function test_unavailable_microphone_section_is_not_reported_revealed() {
+    function test_graph_microphone_target_reveals_audio_routing() {
         recordDriver.seedAudioSources(0, "");
         const inspector = createTemporaryObject(inspectorComponent, testCase);
         verify(!!inspector);
         waitForRendering(inspector);
         verify(!recordDriver.settings.audioRouting.legacy);
-        compare(inspector.revealAutomationTarget("microphone"), 0);
+        compare(inspector.revealAutomationTarget("microphone"), 1);
         compare(inspector.revealAutomationTarget("unknown-section"), -1);
     }
 
     function test_details_follow_real_configure_hide_state_data() {
-        return [{ tag: "simple", expert: false }, { tag: "expert", expert: true }];
+        return [
+            {
+                tag: "simple",
+                expert: false
+            },
+            {
+                tag: "expert",
+                expert: true
+            }
+        ];
     }
 
     function test_details_follow_real_configure_hide_state(data) {
@@ -93,21 +106,21 @@ TestCase {
         const group = findGroup(inspector);
         verify(!!group);
         verify(!group.open);
-        inspector.setAutomationDetailsExpanded(true);
+        inspector.prepareProfileVisual(true);
         tryCompare(group, "open", true);
         tryVerify(() => !!findControl(inspector, qsTr("Microphone high-pass filter")));
         tryVerify(() => inspector.revealAutomationTarget("microphone") === 1);
         group.forceActiveFocus();
         keyClick(Qt.Key_Space);
         tryCompare(group, "open", false);
-        inspector.setAutomationDetailsExpanded(true);
+        inspector.prepareProfileVisual(true);
         tryCompare(group, "open", true);
-        inspector.setAutomationDetailsExpanded(false);
+        inspector.prepareProfileVisual(false);
         tryCompare(group, "open", false);
         tryVerify(() => !findControl(inspector, qsTr("Microphone high-pass filter")));
-        inspector.setAutomationDetailsExpanded(true);
+        inspector.prepareProfileVisual(true);
         tryCompare(group, "open", true);
-        inspector.setAutomationDetailsExpanded(false);
+        inspector.prepareProfileVisual(false);
         tryCompare(group, "open", false);
     }
 
@@ -115,7 +128,11 @@ TestCase {
         const rows = [];
         for (const expert of [false, true]) {
             for (const section of ["preset", "format", "quality", "audio", "microphone", "audio-encoding", "output", "webcam"])
-                rows.push({ tag: (expert ? "expert-" : "simple-") + section, expert: expert, section: section });
+                rows.push({
+                    tag: (expert ? "expert-" : "simple-") + section,
+                    expert: expert,
+                    section: section
+                });
         }
         return rows;
     }
@@ -133,7 +150,16 @@ TestCase {
         verify(position.y >= 0 && position.y < inspector.height, "the section heading reached the inspector viewport");
     }
     function test_audio_source_details_follow_existing_opt_in_data() {
-        return [{ tag: "simple", expert: false }, { tag: "expert", expert: true }];
+        return [
+            {
+                tag: "simple",
+                expert: false
+            },
+            {
+                tag: "expert",
+                expert: true
+            }
+        ];
     }
 
     function test_audio_source_details_follow_existing_opt_in(data) {
@@ -144,10 +170,12 @@ TestCase {
         waitForRendering(inspector);
         const name = qsTr("Channel mode for %1").arg("Desktop 0");
         verify(!findControl(inspector, name));
-        inspector.setAutomationDetailsExpanded(true);
-        tryVerify(() => !!findControl(inspector, name));
-        inspector.setAutomationDetailsExpanded(false);
-        tryVerify(() => !findControl(inspector, name));
+        inspector.prepareProfileVisual(true);
+        const popup = findChild(inspector, "audioSourceDetails");
+        tryCompare(popup, "opened", true);
+        tryVerify(() => !!findControl(popup.contentItem, name));
+        inspector.prepareProfileVisual(false);
+        tryCompare(popup, "opened", false);
         compare(recordDriver.settings.audioRouting.sources.length, 1);
     }
 
@@ -156,9 +184,9 @@ TestCase {
         const inspector = createTemporaryObject(inspectorComponent, testCase);
         verify(!!inspector);
         waitForRendering(inspector);
-        inspector.setAutomationDetailsExpanded(true);
+        inspector.prepareProfileVisual(true);
         compare(recordDriver.settings.audioRouting.sources.length, 0);
-        inspector.setAutomationDetailsExpanded(false);
+        inspector.prepareProfileVisual(false);
         compare(recordDriver.settings.audioRouting.sources.length, 0);
     }
 }

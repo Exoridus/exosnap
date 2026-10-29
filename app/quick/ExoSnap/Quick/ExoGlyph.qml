@@ -88,7 +88,10 @@ Item {
         RangeTool,
         Grip,
         Mixer,
-        Shield
+        Shield,
+        Eye,
+        EyeClosed,
+        Gamepad
     }
 
     // An ExoGlyph.Kind value. Declared `int` because a QML-declared enum is not
@@ -123,16 +126,13 @@ Item {
         // ring. A camcorder body reads as "recording" in general, which is the
         // one thing this toggle must not claim: it names the camera source
         // beside three audio sources, and it is off far more often than on.
-        "M3.8 8.2A5.2 5.2 0 1 0 14.2 8.2A5.2 5.2 0 1 0 3.8 8.2"
-            + " M6.8 8.2A2.2 2.2 0 1 0 11.2 8.2A2.2 2.2 0 1 0 6.8 8.2"
-            + " M9 13.4V15.3 M5.8 15.3H12.2",
+        "M3.8 8.2A5.2 5.2 0 1 0 14.2 8.2A5.2 5.2 0 1 0 3.8 8.2" + " M6.8 8.2A2.2 2.2 0 1 0 11.2 8.2A2.2 2.2 0 1 0 6.8 8.2" + " M9 13.4V15.3 M5.8 15.3H12.2",
         // Shutter — still camera: capture one frame out of the recording.
         "M2.5 6H6L7 4H11L12 6H15.5V14H2.5Z M6.2 10A2.8 2.8 0 1 0 11.8 10A2.8 2.8 0 1 0 6.2 10",
         // Flag — marker.
         "M4.5 2.5V15.5 M4.5 3.5H13.5L11 6.75L13.5 10H4.5Z",
         // Scissors — split the recording into a new file.
-        "M5 3L13 13 M13 3L5 13 M2.5 14.5A2 2 0 1 0 6.5 14.5A2 2 0 1 0 2.5 14.5"
-            + " M11.5 14.5A2 2 0 1 0 15.5 14.5A2 2 0 1 0 11.5 14.5",
+        "M5 3L13 13 M13 3L5 13 M2.5 14.5A2 2 0 1 0 6.5 14.5A2 2 0 1 0 2.5 14.5" + " M11.5 14.5A2 2 0 1 0 15.5 14.5A2 2 0 1 0 11.5 14.5",
         // Pause (filled).
         "M5 4H8V14H5Z M10 4H13V14H10Z",
         // Stop (filled).
@@ -142,9 +142,7 @@ Item {
         "M4.4 9A4.6 4.6 0 1 0 13.6 9A4.6 4.6 0 1 0 4.4 9",
         // Chip — package, die, three pins a side. The Device page drew a square
         // inside a square, which is the shape of a generic placeholder.
-        "M4 4H14V14H4Z M7 7H11V11H7Z"
-            + " M6.5 4V1.5 M9 4V1.5 M11.5 4V1.5 M6.5 14V16.5 M9 14V16.5 M11.5 14V16.5"
-            + " M4 6.5H1.5 M4 9H1.5 M4 11.5H1.5 M14 6.5H16.5 M14 9H16.5 M14 11.5H16.5",
+        "M4 4H14V14H4Z M7 7H11V11H7Z" + " M6.5 4V1.5 M9 4V1.5 M11.5 4V1.5 M6.5 14V16.5 M9 14V16.5 M11.5 14V16.5" + " M4 6.5H1.5 M4 9H1.5 M4 11.5H1.5 M14 6.5H16.5 M14 9H16.5 M14 11.5H16.5",
         // Check — "on", "supported", "passed", "included".
         "M3.8 9.4L7.4 13L14.2 5.4",
         // Close — dismiss, and the same mark for "unsupported" / "failed" /
@@ -154,11 +152,9 @@ Item {
         // Search.
         "M12.5 7.5A5 5 0 1 0 2.5 7.5A5 5 0 1 0 12.5 7.5 M11.05 11.05L15.5 15.5",
         // Plus / Minus — the number field's stepper.
-        "M9 4.2V13.8 M4.2 9H13.8",
-        "M4.2 9H13.8",
+        "M9 4.2V13.8 M4.2 9H13.8", "M4.2 9H13.8",
         // Overflow (filled) — the "more actions" menu.
-        "M2.4 9A1.5 1.5 0 1 0 5.4 9A1.5 1.5 0 1 0 2.4 9 M7.5 9A1.5 1.5 0 1 0 10.5 9A1.5 1.5 0 1 0 7.5 9"
-            + " M12.6 9A1.5 1.5 0 1 0 15.6 9A1.5 1.5 0 1 0 12.6 9",
+        "M2.4 9A1.5 1.5 0 1 0 5.4 9A1.5 1.5 0 1 0 2.4 9 M7.5 9A1.5 1.5 0 1 0 10.5 9A1.5 1.5 0 1 0 7.5 9" + " M12.6 9A1.5 1.5 0 1 0 15.6 9A1.5 1.5 0 1 0 12.6 9",
         // Dot (filled) — a neutral marker where Check would claim too much.
         "M6.6 9A2.4 2.4 0 1 0 11.4 9A2.4 2.4 0 1 0 6.6 9",
         // Warning — triangle and bang. The bang's dot is a round-capped stub
@@ -201,8 +197,7 @@ Item {
         // PreviewBroken -- a picture frame with its corner mark, struck through.
         // The strike is what separates "no preview will come" from "no preview
         // yet": the frame alone reads as an image that is still loading.
-        "M2.5 3.5H15.5V14.5H2.5Z M2.5 11.4L6.4 8.1L9.6 10.9 M11.6 6.3A1 1 0 1 0 13.6 6.3A1 1 0 1 0 11.6 6.3"
-            + " M3.6 15.4L14.4 2.6",
+        "M2.5 3.5H15.5V14.5H2.5Z M2.5 11.4L6.4 8.1L9.6 10.9 M11.6 6.3A1 1 0 1 0 13.6 6.3A1 1 0 1 0 11.6 6.3" + " M3.6 15.4L14.4 2.6",
         // Layers -- choosing a capture source. A stack of candidate surfaces, one
         // of which becomes the recorded one. Not a Display: the same action picks
         // a window or a region, and an icon that names one of the three claims
@@ -228,17 +223,9 @@ Item {
         // leads somewhere else. Back (above) is this same head shape, pointing
         // left, on a bent shaft; this one mirrors that head onto a straight
         // shaft, so the two read as one family.
-        "M4 9H14 M10 5L14 9L10 13",
-        "M6 3L2.5 6.5L6 10 M3 6.5H10.5A4 4 0 0 1 10.5 14.5H7",
-        "M12 3L15.5 6.5L12 10 M15 6.5H7.5A4 4 0 0 0 7.5 14.5H11",
-        "M3 5H15 M6 5V2.5H12V5 M4.5 5L5.5 15.5H12.5L13.5 5 M7.5 8V12.5 M10.5 8V12.5",
-        "M2 4H5V14H2 M16 4H13V14H16 M5 9H13 M7 7L9 9L7 11 M11 7L9 9L11 11",
-        "M3 3V10A6 6 0 0 0 15 10V3H11.5V10A2.5 2.5 0 0 1 6.5 10V3Z M3 6H6.5 M11.5 6H15",
-        "M3.5 3.5V14.5 M14 3.5L6 9L14 14.5Z",
-        "M11.5 3.5L4 9L11.5 14.5 M15 3.5V14.5",
+        "M4 9H14 M10 5L14 9L10 13", "M6 3L2.5 6.5L6 10 M3 6.5H10.5A4 4 0 0 1 10.5 14.5H7", "M12 3L15.5 6.5L12 10 M15 6.5H7.5A4 4 0 0 0 7.5 14.5H11", "M3 5H15 M6 5V2.5H12V5 M4.5 5L5.5 15.5H12.5L13.5 5 M7.5 8V12.5 M10.5 8V12.5", "M2 4H5V14H2 M16 4H13V14H16 M5 9H13 M7 7L9 9L7 11 M11 7L9 9L11 11", "M3 3V10A6 6 0 0 0 15 10V3H11.5V10A2.5 2.5 0 0 1 6.5 10V3Z M3 6H6.5 M11.5 6H15", "M3.5 3.5V14.5 M14 3.5L6 9L14 14.5Z", "M11.5 3.5L4 9L11.5 14.5 M15 3.5V14.5",
         // Braces -- a pair of curly brackets: insert a {placeholder}.
-        "M7 3.5C5.5 3.5 5.5 4.5 5.5 5.5V7.5C5.5 8.3 4.9 9 4 9C4.9 9 5.5 9.7 5.5 10.5V12.5C5.5 13.5 5.5 14.5 7 14.5"
-            + " M11 3.5C12.5 3.5 12.5 4.5 12.5 5.5V7.5C12.5 8.3 13.1 9 14 9C13.1 9 12.5 9.7 12.5 10.5V12.5C12.5 13.5 12.5 14.5 11 14.5",
+        "M7 3.5C5.5 3.5 5.5 4.5 5.5 5.5V7.5C5.5 8.3 4.9 9 4 9C4.9 9 5.5 9.7 5.5 10.5V12.5C5.5 13.5 5.5 14.5 7 14.5" + " M11 3.5C12.5 3.5 12.5 4.5 12.5 5.5V7.5C12.5 8.3 13.1 9 14 9C13.1 9 12.5 9.7 12.5 10.5V12.5C12.5 13.5 12.5 14.5 11 14.5",
         // Hash -- the number sign: a hex value follows.
         "M7.5 3.5L6 14.5 M12 3.5L10.5 14.5 M3.5 7H14.5 M3 11H14",
         // Swatch (filled) -- a rounded square, tinted with the colour it stands for.
@@ -256,17 +243,14 @@ Item {
         // Grip -- six round-capped stubs that render as dots: a drag handle.
         "M6 4H6.2 M11 4H11.2 M6 9H6.2 M11 9H11.2 M6 14H6.2 M11 14H11.2",
         // Mixer -- three faders at different positions.
-        "M4 2V16 M9 2V16 M14 2V16 M2 6H6 M7 12H11 M12 5H16",
-        "M9 2L15 4.5V8.5C15 12 12.5 14.5 9 16C5.5 14.5 3 12 3 8.5V4.5Z"
-    ]
+        "M4 2V16 M9 2V16 M14 2V16 M2 6H6 M7 12H11 M12 5H16", "M9 2L15 4.5V8.5C15 12 12.5 14.5 9 16C5.5 14.5 3 12 3 8.5V4.5Z", "M1.5 9C5 2.5 13 2.5 16.5 9C13 15.5 5 15.5 1.5 9Z M11.5 9A2.5 2.5 0 1 1 6.5 9A2.5 2.5 0 1 1 11.5 9", "M2 2L16 16 M1.5 9C3 6 5 4.5 7 4 M11 4C13 4.5 15 6 16.5 9C15 12 13 13.5 11 14 M7 14C5 13.5 3 12 1.5 9", "M5 5H13C15 5 15.5 7 16 10L16.5 13C16.8 15 15 15.5 14 14L11.5 11.5H6.5L4 14C3 15.5 1.2 15 1.5 13L2 10C2.5 7 3 5 5 5Z M5.5 7V10 M4 8.5H7 M12 7.5H12.1 M14 9.5H14.1"]
 
     // Kinds drawn as a filled silhouette instead of a stroked outline.
     readonly property var _filledKinds: [ExoGlyph.Pause, ExoGlyph.Stop, ExoGlyph.Overflow, ExoGlyph.Dot, ExoGlyph.Swatch]
 
     // Empty for a kind outside the table. Read by tst_ExoGlyph to prove every
     // declared kind is drawn.
-    readonly property string pathData: root.kind >= 0 && root.kind < root._paths.length
-                                       ? root._paths[root.kind] : ""
+    readonly property string pathData: root.kind >= 0 && root.kind < root._paths.length ? root._paths[root.kind] : ""
     readonly property int kindCount: root._paths.length
     readonly property bool filled: root._filledKinds.indexOf(root.kind) >= 0
 
