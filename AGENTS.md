@@ -60,6 +60,16 @@ Markdown follows the same writing rules. Use fences for literal commands/files/l
 
 Wrap user-visible text for Qt translation as it is written. English source text is the canonical fallback for German localization. German text uses natural ä/ö/ü/ß, not ASCII transliteration. A font/encoding defect is fixed at that layer. Developer docs remain English regardless of locales.
 
+## Worktrees and storage
+
+Create local linked Git worktrees under `<repository-root>/.worktrees/<short-descriptive-name>/`, with short, stable, collision-free names. `.workspace` holds untracked evidence, research and scratch data, not source checkouts. Each checkout owns its `build/` CMake/Ninja outputs and its `tools/target/` Cargo outputs under the existing Cargo configuration. Share compatible artifact caches, not mutable CMake caches, Ninja graphs, compilation databases, generated QML or test receipts.
+
+Keep active worktrees and useful incremental outputs in place while an agent, developer process, IDE, preview or test may use them. An open PR normally retains its source checkout and useful Debug build. Reclaim other artifacts only after checking their continued use and evidence requirements. A successful push is not a cleanup trigger.
+
+Before retiring a merged or closed worktree, verify desired commits on the intended remote, a clean working tree, inactivity and no lock. Retain required evidence outside it, remove it through Git, and verify metadata and refs afterward. Use `git worktree prune --dry-run` for missing administrative entries only. Do not use forced removal, branch deletion, `git clean -fdx` or broad recursive deletion as generic cleanup strategies.
+
+Migrate a noncanonical worktree only when inactive and safe, preferably with `git worktree move`. Never silently relocate the primary checkout. Technical exceptions such as isolated cloud filesystems, Windows path limits or incompatible tooling belong in private session notes with their reason. Independently managed clones retain their own ownership.
+
 ## Change discipline and validation
 
 Keep work scoped to a subsystem unless a technical dependency requires integration. Record incidental polish separately instead of silently broadening scope. Parallel workers need disjoint file ownership. Do not silently expand product scope or mark a planned control as working.

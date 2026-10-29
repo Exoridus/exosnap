@@ -327,6 +327,39 @@ mod tests {
     }
 
     #[test]
+    fn staged_fix_restages_the_candidate_index_without_changing_the_permanent_index() {
+        let dir = fixture_repo_committed(&[("app/thing.cpp", "int x = 0;\n")]);
+        let candidate = dir.path().join(".git/candidate-index");
+        std::fs::copy(dir.path().join(".git/index"), &candidate).unwrap();
+        write_files(dir.path(), &[("app/thing.cpp", "int   x=1;\n")]);
+        let mut command = crate::process::command("git");
+        command
+            .arg("-C")
+            .arg(dir.path())
+            .args(["add", "app/thing.cpp"])
+            .env("GIT_INDEX_FILE", &candidate);
+        assert_eq!(crate::process::query(command).unwrap().0, 0);
+        Git::with_index(dir.path(), &candidate, || {
+            let report = run(dir.path(), true, true, |_args, files| {
+                assert_eq!(files, ["app/thing.cpp"]);
+                std::fs::write(dir.path().join("app/thing.cpp"), "int x = 1;\n").unwrap();
+                Ok((0, String::new()))
+            })
+            .unwrap();
+            assert!(report.fixed);
+            assert_eq!(
+                Git::new(dir.path()).run(&["show", ":app/thing.cpp"]).1,
+                "int x = 1;\n"
+            );
+        })
+        .unwrap();
+        assert_eq!(
+            Git::new(dir.path()).run(&["show", ":app/thing.cpp"]).1,
+            "int x = 0;\n"
+        );
+    }
+
+    #[test]
     fn a_staged_file_with_further_unstaged_edits_on_top_is_refused() {
         let dir = fixture_repo_committed(&[("app/thing.cpp", "int x=0;\n")]);
         write_files(dir.path(), &[("app/thing.cpp", "int x = 0;\n")]);

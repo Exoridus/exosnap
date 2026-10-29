@@ -54,6 +54,7 @@ pub enum StepId {
     /// `all_qmllint` over every QML module rather than per-module targets, so a
     /// new module cannot slip past by not being named.
     QmlLint,
+    QmlSmoke,
     Build,
     ClangTidy,
     /// `exo-dev test` in process: builds the tree, runs ctest with isolated
@@ -105,7 +106,7 @@ const TREE_AND_BUILD: Locks = Locks {
 };
 
 impl StepId {
-    pub const ALL: [StepId; 25] = [
+    pub const ALL: [StepId; 26] = [
         StepId::Sanity,
         StepId::Diff,
         StepId::Drift,
@@ -124,6 +125,7 @@ impl StepId {
         StepId::Rust,
         StepId::Configure,
         StepId::QmlLint,
+        StepId::QmlSmoke,
         StepId::Build,
         StepId::ClangTidy,
         StepId::Tests,
@@ -195,6 +197,13 @@ impl StepId {
                 ),
                 locks: TREE_AND_BUILD,
                 ..step("qmllint", CONFIGURE)
+            },
+            StepId::QmlSmoke => StepInfo {
+                windows_only: true,
+                ci_only: Some(
+                    "builds and runs the UI smoke targets before the full Debug CI build and analysis",
+                ),
+                ..step("qml-smoke", CONFIGURE)
             },
             StepId::Build => StepInfo {
                 windows_only: true,

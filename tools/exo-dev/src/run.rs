@@ -356,6 +356,7 @@ pub(crate) mod tests {
                 "sanity",
                 "configure",
                 "qmllint",
+                "qml-smoke",
                 "build",
                 "clang-tidy",
                 "tests"

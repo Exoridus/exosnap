@@ -202,6 +202,8 @@ This measures extraction/parsing, not analysis correctness or reusable cache ver
 
 Compiler caching is distinct. Use `sccache --show-stats` after a build to inspect the active server. Size its cache for the number of build configurations and worktrees in use; a fixed historical hit rate is not a guarantee. A changed absolute source path can change cache identity. Do not enable path rewriting merely for hits until crash symbolication against the resulting PDB has been verified.
 
+`SCCACHE_BASEDIRS` accepts absolute roots separated by `;` on Windows, as described in [sccache's configuration reference](https://github.com/mozilla/sccache/blob/main/docs/Configuration.md). Normalizing cache keys does not establish that the object is independent of its source root. A reused object can retain another checkout's `__FILE__` strings and embedded debug paths. Check observable paths, compiler arguments, generated inputs and symbolication before adopting cross-root normalization. Keep the default unchanged when those identities differ. Measure experiments with a separate server port and cache directory so active builds retain their configuration and statistics.
+
 ```powershell
 [Environment]::SetEnvironmentVariable('SCCACHE_CACHE_SIZE', '20G', 'User')
 sccache --stop-server

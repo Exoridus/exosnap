@@ -9,6 +9,7 @@ use crate::step::StepId;
 pub enum Profile {
     PreCommit,
     PrePush,
+    QmlSmoke,
     CiLint,
     CiGuardrails,
     PrPolicy,
@@ -106,9 +107,10 @@ const BASE: ProfileSpec = ProfileSpec {
 };
 
 impl Profile {
-    pub const ALL: [Profile; 8] = [
+    pub const ALL: [Profile; 9] = [
         Profile::PreCommit,
         Profile::PrePush,
+        Profile::QmlSmoke,
         Profile::CiLint,
         Profile::CiGuardrails,
         Profile::PrPolicy,
@@ -141,6 +143,12 @@ impl Profile {
                 steps: LOCAL_STEPS,
                 ci: false,
                 exclude_label: None,
+                ..BASE
+            },
+            Profile::QmlSmoke => ProfileSpec {
+                name: "qml-smoke",
+                steps: &[StepId::Configure, StepId::QmlSmoke],
+                ci: false,
                 ..BASE
             },
             Profile::CiLint => ProfileSpec {
@@ -186,6 +194,7 @@ impl Profile {
                 steps: &[
                     StepId::Configure,
                     StepId::QmlLint,
+                    StepId::QmlSmoke,
                     StepId::Build,
                     StepId::ClangTidy,
                     StepId::Tests,

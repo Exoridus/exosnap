@@ -460,6 +460,9 @@ enum PrCommand {
 
 #[derive(Args)]
 struct TestArgs {
+    /// Build only these CMake targets before testing. Repeat for multiple targets.
+    #[arg(long = "build-target")]
+    build_targets: Vec<String>,
     /// CMake build tree to test, relative to the repository root. The tree
     /// `exo-dev verify` configures and builds by default, so the inner loop
     /// and the gate judge the same binaries.
@@ -783,10 +786,10 @@ struct VerifyArgs {
     /// may never be falsely safe.
     #[arg(long, conflicts_with_all = ["full", "profile"])]
     fast: bool,
-    /// The complete local blocking contract, at full scope.
+    /// The complete local blocking contract, with Rust selected by branch changes.
     #[arg(long, conflicts_with = "profile")]
     full: bool,
-    /// A named profile: pre-commit, pre-push, ci-lint, ci-guardrails, pr-policy,
+    /// A named profile: pre-commit, pre-push, qml-smoke, ci-lint, ci-guardrails, pr-policy,
     /// ci-dev-scripts, ci-build-debug, ci-build-release.
     #[arg(long)]
     profile: Option<String>,
@@ -900,7 +903,9 @@ fn run_cli() -> anyhow::Result<ExitCode> {
         Command::Check { check } => match check {
             CheckCommand::AutomationPolicy { staged } => {
                 let findings = if staged {
-                    exo_dev::automation_policy::check_staged(&repo_root)?
+                    Git::with_active_index(&repo_root, || {
+                        exo_dev::automation_policy::check_staged(&repo_root)
+                    })??
                 } else {
                     exo_dev::automation_policy::check(&repo_root)?
                 };
@@ -1203,15 +1208,17 @@ fn run_cli() -> anyhow::Result<ExitCode> {
                 verify(&repo_root, args)
             }
             _ => {
-                if !hook::pushes_a_branch(std::io::stdin().lock()) {
+                let updates = hook::branch_updates(std::io::stdin().lock())?;
+                if updates.is_empty() {
                     return Ok(ExitCode::SUCCESS);
                 }
+                let scope = hook::pre_push_scope(&Git::new(&repo_root), &updates)?;
                 let args = VerifyArgs {
                     full: true,
                     failure_tail_lines: 120,
                     ..VerifyArgs::default()
                 };
-                verify(&repo_root, args)
+                verify_with_scope(&repo_root, args, Some(scope))
             }
         },
         #[cfg(feature = "dev-tools")]
@@ -1485,6 +1492,7 @@ fn test(repo_root: &std::path::Path, args: TestArgs) -> anyhow::Result<ExitCode>
         jobs: args.jobs,
         no_build: args.no_build,
         allow_stale: args.allow_stale,
+        build_targets: args.build_targets,
         ..runner::Options::new(repo_root)
     };
     let result = runner::run(&options, &RealHost::default(), &mut Console::live());
@@ -2010,7 +2018,13 @@ fn check_commit_policy(
 }
 
 fn check_format(repo_root: &std::path::Path, staged: bool, fix: bool) -> anyhow::Result<ExitCode> {
-    let report = exo_dev::lint::format::format(repo_root, staged, fix)?;
+    let report = if staged {
+        Git::with_active_index(repo_root, || {
+            exo_dev::lint::format::format(repo_root, staged, fix)
+        })??
+    } else {
+        exo_dev::lint::format::format(repo_root, staged, fix)?
+    };
     print!("{}", report.output);
 
     if report.files.is_empty() {
@@ -2607,6 +2621,17 @@ fn lint_quality(
 }
 
 fn verify(repo_root: &std::path::Path, args: VerifyArgs) -> anyhow::Result<ExitCode> {
+    if args.staged {
+        return Git::with_active_index(repo_root, || verify_with_scope(repo_root, args, None))?;
+    }
+    verify_with_scope(repo_root, args, None)
+}
+
+fn verify_with_scope(
+    repo_root: &std::path::Path,
+    args: VerifyArgs,
+    push_scope: Option<Scope>,
+) -> anyhow::Result<ExitCode> {
     let profile = if args.full {
         Profile::PrePush
     } else if let Some(name) = &args.profile {
@@ -2628,14 +2653,22 @@ fn verify(repo_root: &std::path::Path, args: VerifyArgs) -> anyhow::Result<ExitC
     };
 
     let git = Git::new(repo_root);
+    if args.staged {
+        hook::ensure_staged_inputs_match(&git)?;
+    }
     let head = git.head();
     let dirty = git.dirty();
     let base = args
         .base
         .clone()
         .or_else(|| if spec.ci { None } else { git.default_base() });
-    let scope = if spec.scoped {
-        Scope::of(&git.changed_files(base.as_deref(), args.staged))
+    let scope = if let Some(scope) = push_scope {
+        scope
+    } else if spec.scoped || profile == Profile::PrePush {
+        match git.scope_files(base.as_deref(), args.staged) {
+            Ok(files) => Scope::of(&files),
+            Err(_) => Scope::of(&[]),
+        }
     } else {
         Scope::everything()
     };
@@ -2683,6 +2716,11 @@ fn verify(repo_root: &std::path::Path, args: VerifyArgs) -> anyhow::Result<ExitC
                 "  scope: {categories} ({} file(s))",
                 scope.changed_files.len()
             );
+            for reason in &scope.escalation_reasons {
+                println!("  escalated: {reason}");
+            }
+        } else if profile == Profile::PrePush {
+            println!("  scope: complete guardrails; Rust selected from branch and working changes");
             for reason in &scope.escalation_reasons {
                 println!("  escalated: {reason}");
             }
@@ -2772,6 +2810,23 @@ fn verify(repo_root: &std::path::Path, args: VerifyArgs) -> anyhow::Result<ExitC
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn test_build_targets_are_repeatable() {
+        let cli = Cli::try_parse_from([
+            "exo-dev",
+            "test",
+            "--build-target",
+            "qml_tests",
+            "--build-target",
+            "adapters_tests",
+        ])
+        .unwrap();
+        let Command::Test(args) = cli.command else {
+            panic!("expected test command")
+        };
+        assert_eq!(args.build_targets, ["qml_tests", "adapters_tests"]);
+    }
 
     #[test]
     fn a_tool_missing_error_becomes_exit_code_3() {

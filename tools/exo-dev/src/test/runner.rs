@@ -28,8 +28,8 @@
 //!   source-identity contradiction, or evidence that could not be secured.
 //! - Anything else: the build's or ctest's own exit code.
 
-use std::fs::File;
-use std::io::{BufRead, BufReader};
+use std::fs::{File, OpenOptions};
+use std::io::{BufRead, BufReader, Write};
 use std::path::{Path, PathBuf};
 use std::process::{Command, Stdio};
 use std::time::Duration;
@@ -68,6 +68,10 @@ pub struct Options {
     /// Zero means the host job budget.
     pub jobs: usize,
     pub no_build: bool,
+    /// Explicit CMake targets. Empty builds the complete default tree.
+    pub build_targets: Vec<String>,
+    /// Named tests that must be selected and enabled.
+    pub required_tests: Vec<String>,
     pub allow_stale: bool,
     /// Applied to every child before anything this run sets, e.g. an MSVC
     /// environment the caller already imported.
@@ -85,6 +89,8 @@ impl Options {
             phase: None,
             jobs: 0,
             no_build: false,
+            build_targets: Vec::new(),
+            required_tests: Vec::new(),
             allow_stale: false,
             child_env: Vec::new(),
         }
@@ -155,6 +161,9 @@ pub fn run(options: &Options, host: &dyn Host, console: &mut Console) -> RunResu
         freshness_detail: "the run did not get far enough to judge the tree".into(),
         allow_stale: options.allow_stale,
         no_build: options.no_build,
+        build_targets: options.build_targets.clone(),
+        resolved_test_targets: Vec::new(),
+        failure_classification: None,
         build_status: if options.no_build {
             "skipped"
         } else {
@@ -362,11 +371,16 @@ impl Run<'_> {
                 self.enter_msvc()?;
             }
             self.console.line(format!(
-                "Building all targets in {} ({})...",
+                "Building {} in {} ({})...",
+                if self.options.build_targets.is_empty() {
+                    "all targets".to_string()
+                } else {
+                    format!("targets [{}]", self.options.build_targets.join(", "))
+                },
                 self.build_dir.display(),
                 self.options.config
             ));
-            let code = self.build()?;
+            let code = self.build(&self.options.build_targets.clone())?;
             self.receipt.build_exit_code = Some(code);
             if code != 0 {
                 self.receipt.build_status = "failed";
@@ -511,6 +525,96 @@ impl Run<'_> {
             }
         };
         self.receipt.tests_selected = selected.len();
+        if !self.options.build_targets.is_empty() {
+            let tree = std::fs::canonicalize(&self.build_dir)?;
+            let mut binaries = Vec::new();
+            for test in selected.iter().filter(|test| !test.disabled) {
+                let previous = binaries.len();
+                if let Some(executable) = test.command.first() {
+                    let path = PathBuf::from(executable);
+                    if path.is_absolute() {
+                        let path = std::path::absolute(path)?;
+                        if let Ok(relative) = path.strip_prefix(&self.build_dir) {
+                            binaries.push(relative.to_string_lossy().replace('\\', "/"));
+                        } else if let Ok(path) = std::fs::canonicalize(path) {
+                            if let Ok(relative) = path.strip_prefix(&tree) {
+                                binaries.push(relative.to_string_lossy().replace('\\', "/"));
+                            }
+                        }
+                    }
+                }
+                if binaries.len() == previous {
+                    let detail = format!(
+                        "cannot prove dependencies of selected test {} outside the Ninja build graph; use a full build",
+                        test.name
+                    );
+                    self.receipt.freshness = Freshness::Unknown;
+                    self.receipt.freshness_detail = detail.clone();
+                    self.console.line(&detail);
+                    self.invalid(detail);
+                    return Ok(3);
+                }
+            }
+            if !binaries.is_empty() {
+                binaries.sort();
+                binaries.dedup();
+                self.receipt.resolved_test_targets = binaries.clone();
+                if self.options.no_build {
+                    let (freshness, detail) = self.ninja_freshness(&cache, &binaries)?;
+                    self.receipt.freshness = freshness;
+                    self.receipt.freshness_detail = format!("selected test executables: {detail}");
+                    if freshness != Freshness::Fresh && !self.options.allow_stale {
+                        self.invalid(format!(
+                            "selected test executables are not current: {detail}"
+                        ));
+                        return Ok(3);
+                    }
+                } else {
+                    self.console.line(format!(
+                        "Building selected test outputs [{}]...",
+                        binaries.join(", ")
+                    ));
+                    let code = self.build(&binaries)?;
+                    self.receipt.build_exit_code = Some(code);
+                    if code != 0 {
+                        self.receipt.build_status = "failed";
+                        return Ok(code);
+                    }
+                    let current =
+                        catalog::query(&self.build_dir, &self.options.config, &selection, &env)
+                            .map_err(anyhow::Error::msg)?;
+                    if current != selected {
+                        self.invalid(
+                            "test selection changed while building its executable outputs",
+                        );
+                        return Ok(EXIT_INVALID_RUN);
+                    }
+                    self.receipt.freshness = Freshness::Fresh;
+                    self.receipt.freshness_detail =
+                        "selected test outputs built by this invocation".into();
+                }
+            }
+        }
+        let missing: Vec<_> = self
+            .options
+            .required_tests
+            .iter()
+            .filter(|name| {
+                !selected
+                    .iter()
+                    .any(|test| test.name == **name && !test.disabled)
+            })
+            .cloned()
+            .collect();
+        if !missing.is_empty() {
+            let reason = format!(
+                "required tests are absent, excluded or disabled: {}",
+                missing.join(", ")
+            );
+            self.console.line(&reason);
+            self.invalid(reason);
+            return Ok(EXIT_INVALID_RUN);
+        }
         // ctest leaves a disabled test out of the summary it prints, so what
         // has to be accounted for is the selection without them.
         let expected = selected.iter().filter(|t| !t.disabled).count();
@@ -542,12 +646,74 @@ impl Run<'_> {
         // error with the suite already run and its logs already written: that
         // is the run whose logs are worth the most. No verdict counts as "not
         // evaluated", never as a pass.
+        let qt_logs = self.quicktest_logs(&selected)?;
+        for (_, path) in &qt_logs {
+            if path.exists() {
+                std::fs::remove_file(path)
+                    .with_context(|| format!("cannot clear QtTest log {}", path.display()))?;
+            }
+        }
         let suite = self.suite(&ctest_args);
         self.save_evidence(suite.as_ref().ok().copied());
         let ctest_exit = suite?;
         self.receipt.ctest_exit_code = Some(ctest_exit);
+        for (name, path) in &qt_logs {
+            match std::fs::read_to_string(path) {
+                Ok(text) if !text.trim().is_empty() => {
+                    let mut log = OpenOptions::new().append(true).open(&self.log)?;
+                    writeln!(
+                        log,
+                        "\n--- First-run QtTest output: {name} ({})\n{text}",
+                        path.display()
+                    )?;
+                }
+                Ok(_) => self.invalid(format!("first-run QtTest output empty for {name}")),
+                Err(error) => self.invalid(format!(
+                    "first-run QtTest output unavailable for {name}: {error}"
+                )),
+            }
+        }
 
         self.judge(ctest_exit, expected)
+    }
+
+    fn quicktest_logs(
+        &self,
+        selected: &[catalog::CatalogTest],
+    ) -> anyhow::Result<Vec<(String, PathBuf)>> {
+        let tree = std::fs::canonicalize(&self.build_dir)?;
+        let mut logs = Vec::new();
+        for test in selected
+            .iter()
+            .filter(|test| !test.disabled && test.labels.iter().any(|label| label == "quicktest"))
+        {
+            for args in test.command.windows(2).filter(|args| args[0] == "-o") {
+                let Some(file) = args[1].strip_suffix(",txt").filter(|file| *file != "-") else {
+                    continue;
+                };
+                let path = PathBuf::from(file);
+                anyhow::ensure!(
+                    path.is_absolute(),
+                    "QtTest log for {} must be absolute",
+                    test.name
+                );
+                let parent =
+                    std::fs::canonicalize(path.parent().context("QtTest log has no parent")?)?;
+                anyhow::ensure!(
+                    parent.starts_with(&tree),
+                    "QtTest log for {} must stay within the build tree",
+                    test.name
+                );
+                let path = parent.join(path.file_name().context("QtTest log has no filename")?);
+                anyhow::ensure!(
+                    !logs.iter().any(|(_, previous)| *previous == path),
+                    "QtTest log shared by multiple selected tests: {}",
+                    path.display()
+                );
+                logs.push((test.name.clone(), path));
+            }
+        }
+        Ok(logs)
     }
 
     /// Makes cl.exe reachable for a Ninja tree. A no-op when it resolves
@@ -578,7 +744,7 @@ impl Run<'_> {
         Ok(lock)
     }
 
-    fn build(&mut self) -> anyhow::Result<i32> {
+    fn build(&mut self, targets: &[String]) -> anyhow::Result<i32> {
         let lock = self.acquire(LockKind::Build)?;
         self.host.checkpoint(Checkpoint::BeforeBuild)?;
         let mut command = crate::process::command("cmake");
@@ -586,6 +752,9 @@ impl Run<'_> {
             .arg("--build")
             .arg(&self.build_dir)
             .args(["--config", &self.options.config]);
+        if !targets.is_empty() {
+            command.arg("--target").args(targets);
+        }
         self.env_for(&[lock.child_env()]).apply(&mut command);
         let code = self
             .stream(command)
@@ -623,8 +792,15 @@ impl Run<'_> {
     /// asked, and a timestamp comparison is not an answer: a copied or
     /// restored tree keeps the mtimes it was created with.
     fn freshness(&mut self, ninja: bool, cache: &Path) -> anyhow::Result<(Freshness, String)> {
-        if !self.options.no_build {
-            return Ok((Freshness::Fresh, "built by this invocation".into()));
+        if !self.options.no_build && (self.options.build_targets.is_empty() || ninja) {
+            return Ok((
+                Freshness::Fresh,
+                if self.options.build_targets.is_empty() {
+                    "built by this invocation".into()
+                } else {
+                    "selected targets built by this invocation".into()
+                },
+            ));
         }
         let unknown = |detail: &str| Ok((Freshness::Unknown, detail.to_string()));
         if !ninja {
@@ -632,6 +808,15 @@ impl Run<'_> {
                 "this generator cannot report staleness without building; drop --no-build",
             );
         }
+        self.ninja_freshness(cache, &self.options.build_targets)
+    }
+
+    fn ninja_freshness(
+        &self,
+        cache: &Path,
+        targets: &[String],
+    ) -> anyhow::Result<(Freshness, String)> {
+        let unknown = |detail: &str| Ok((Freshness::Unknown, detail.to_string()));
         let program = freshness::cache_value(cache, "CMAKE_MAKE_PROGRAM").unwrap_or_default();
         if program.is_empty() || !Path::new(&program).exists() {
             return unknown(
@@ -640,6 +825,7 @@ impl Run<'_> {
         }
         let mut command = crate::process::command(&program);
         command.arg("-C").arg(&self.build_dir).arg("-n");
+        command.args(targets);
         self.env_for(&[]).apply(&mut command);
         let output = command
             .stdin(Stdio::null())
@@ -716,6 +902,12 @@ impl Run<'_> {
         }
 
         if ctest_exit != 0 {
+            self.receipt.failure_classification =
+                Some(summary::failure_classification(&lines).into());
+            self.console.line(format!(
+                "Failure classification: {}",
+                self.receipt.failure_classification.as_deref().unwrap()
+            ));
             self.failed_tests = summary::failed_tests(&lines);
             for line in summary::failure_report(&lines) {
                 self.console.line(line);
@@ -848,6 +1040,18 @@ impl Run<'_> {
         if exit_code == 0 && !record.invalid_reasons.is_empty() {
             exit_code = EXIT_INVALID_RUN;
             record.exit_code = exit_code;
+        }
+        if exit_code != 0 && record.failure_classification.is_none() {
+            record.failure_classification = Some(
+                if record.build_status == "failed" {
+                    "build-failure"
+                } else if record.freshness == Freshness::Stale {
+                    "stale-build"
+                } else {
+                    "invalid-evidence"
+                }
+                .into(),
+            );
         }
 
         if self.log_dir.is_dir() {

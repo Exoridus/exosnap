@@ -1,11 +1,6 @@
 #!/bin/sh
-# The full local blocking contract, for pushes that update a branch. Build and
-# test are one evidence chain: tests only run behind a build that succeeded in
-# the same invocation. The ref list on stdin is passed through to exo-dev, which
-# decides whether the push updates a branch.
-#
-# To keep the machine usable during a push, export EXOSNAP_VERIFY_JOBS=<n>. It is
-# read from the environment so this shared hook stays uncapped and CI is
-# unaffected.
+# The build-free local blocking contract for branch updates. exo-dev reads every
+# pushed ref, checks source identity and selects Rust from branch and working
+# changes. Other guardrails stay complete. CI owns native builds and tests.
 cd "$(git rev-parse --show-toplevel)" || exit 1
 exec cargo exo-dev hook pre-push
