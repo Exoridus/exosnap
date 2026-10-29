@@ -926,67 +926,13 @@ impl Executor for RealExecutor {
         outcome
     }
 
-    /// A failing QML test that reports only an exit code is not a test report.
-    /// Re-run the QuickTest binaries behind the failing names with `-o <file>,txt`
-    /// so the per-function diagnosis exists as evidence.
+    /// Returns retained output from the original test run without starting processes.
     fn diagnose(&mut self, _check: &Check, _outcome: &Outcome) -> Vec<String> {
-        let original = self
-            .test_log
-            .as_ref()
-            .and_then(|path| std::fs::read_to_string(path).ok());
-        let needing_diagnosis: Vec<_> = self
-            .failed_tests
+        self.test_log
             .iter()
-            .filter(|name| {
-                !original.as_ref().is_some_and(|text| {
-                    text.contains(&format!("--- First-run QtTest output: {name} ("))
-                })
-            })
-            .cloned()
-            .collect();
-        if needing_diagnosis.is_empty() {
-            return self
-                .test_log
-                .iter()
-                .map(|path| path.display().to_string())
-                .collect();
-        }
-        let tree = self.ctx.tree();
-        let registration =
-            evidence::ctest_registration(&tree, &self.ctx.config, &self.ctx.runner.env);
-        if registration.is_empty() && !self.ctx.runner.output_mode().is_silent() {
-            println!();
-            println!(
-                "no CTest registration could be read from {}; the QuickTest re-run is skipped",
-                tree.display()
-            );
-        }
-        let mut produced = Vec::new();
-        for command in evidence::qml_diagnostic_commands(
-            &needing_diagnosis,
-            &registration,
-            &self.ctx.runner.log_dir,
-        ) {
-            if !Path::new(&command.file_path).is_file() {
-                continue;
-            }
-            let mut process = crate::process::command(&command.file_path);
-            process.args(&command.arguments);
-            for (key, value) in &self.ctx.runner.env {
-                process.env(key, value);
-            }
-            let _ = crate::process::query(process);
-            if command.output_path.is_file() {
-                self.ctx.runner.print_failure(
-                    &command.test_name,
-                    "QuickTest diagnosis",
-                    &command.output_path,
-                );
-
-                produced.push(command.output_path.display().to_string());
-            }
-        }
-        produced
+            .filter(|path| path.is_file())
+            .map(|path| path.display().to_string())
+            .collect()
     }
 }
 
@@ -1146,12 +1092,63 @@ mod tests {
             ["quick.qml.fixture"]
         );
 
-        // The QuickTest diagnosis reads the same names.
-        let registration = evidence::ctest_registration(&build, "Debug", &[]);
-        let commands =
-            evidence::qml_diagnostic_commands(&executor.failed_tests, &registration, logs.path());
-        assert_eq!(commands.len(), 1);
-        assert_eq!(commands[0].test_name, "quick.qml.fixture");
+        assert_eq!(
+            executor.diagnose(plan.check(StepId::Tests).unwrap(), &outcome),
+            [full_log.display().to_string()]
+        );
+    }
+
+    #[test]
+    fn native_diagnosis_never_restarts_missing_qt_log() {
+        use crate::test_support::test_runner::cmake_path;
+
+        let root = tempfile::tempdir().unwrap();
+        let marker = root.path().join("restarted.txt");
+        let source = root.path().join("console_fixture.rs");
+        let binary = root.path().join(if cfg!(windows) {
+            "console_fixture.exe"
+        } else {
+            "console_fixture"
+        });
+        std::fs::write(
+            &source,
+            format!("fn main() {{ std::fs::write({marker:?}, b\"restarted\").unwrap(); }}"),
+        )
+        .unwrap();
+        let built = crate::process::command("rustc")
+            .arg(&source)
+            .arg("-o")
+            .arg(&binary)
+            .output()
+            .unwrap();
+        assert!(
+            built.status.success(),
+            "{}",
+            String::from_utf8_lossy(&built.stderr)
+        );
+        std::fs::write(root.path().join("CTestTestfile.cmake"), format!(
+            "add_test(quick.qml.fixture \"{}\")\nset_tests_properties(quick.qml.fixture PROPERTIES LABELS \"phase.hermetic;quicktest\")\n", cmake_path(&binary)
+        )).unwrap();
+        let original = root.path().join("original-ctest.log");
+        std::fs::write(&original, "Qt platform plugin could not be initialized\n").unwrap();
+        let mut executor = executor(root.path());
+        executor.ctx.build_dir = root.path().display().to_string();
+        executor.failed_tests = vec!["quick.qml.fixture".into()];
+        executor.test_log = Some(original.clone());
+        let scope = Scope::everything();
+        let plan = plan::build(&plan::tests::input_for_spec(
+            plan::tests::full_test_spec(false),
+            &scope,
+        ));
+        let diagnostics = executor.diagnose(
+            plan.check(StepId::Tests).unwrap(),
+            &Outcome::fail("startup failed"),
+        );
+        assert!(
+            !marker.exists(),
+            "diagnosis restarted the registered test executable"
+        );
+        assert_eq!(diagnostics, [original.display().to_string()]);
     }
 
     #[test]
