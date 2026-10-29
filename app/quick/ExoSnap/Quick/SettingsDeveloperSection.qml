@@ -53,4 +53,10 @@ ExoCard {
             onClicked: root.settings.openDiagnostics()
         }
     }
+
+    SettingsStorageSection {
+        settings: root.settings
+        stacked: root.stacked
+        Layout.fillWidth: true
+    }
 }

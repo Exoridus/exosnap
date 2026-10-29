@@ -15,7 +15,6 @@ ExoCard {
     readonly property bool webcamEditable: !root.settings.controlsLocked && root.settings.webcamAvailable
 
     title: qsTr("Webcam")
-    subtitle: qsTr("Position and size are set in the Record preview.")
 
     // The empty state has the shape of the filled one. A notice where the picture
     // will be means the card jumps into a different geometry the moment a camera
@@ -301,8 +300,7 @@ ExoCard {
     // touched keeps the camera's value; the reset hands every one back.
     ExoSettingRow {
         label: qsTr("Camera image")
-        hint: root.settings.webcamControlsAdjusted ? qsTr("Adjusted")
-                                                   : qsTr("Camera defaults")
+        hint: root.settings.webcamControlsAdjusted ? qsTr("Adjusted") : qsTr("Camera defaults")
         stacked: root.stacked
         visible: root.settings.webcamAvailable && root.settings.webcamControls.length > 0
         controlWidth: 100
@@ -333,8 +331,10 @@ ExoCard {
 
                     required property var modelData
                     readonly property bool isChoice: controlRow.modelData.options !== undefined
-                    readonly property var controlState: root.settings.webcamControlStates[String(controlRow.modelData.control)]
-                                                        ?? ({ value: 0, automatic: false })
+                    readonly property var controlState: root.settings.webcamControlStates[String(controlRow.modelData.control)] ?? ({
+                            value: 0,
+                            automatic: false
+                        })
                     readonly property bool manual: !controlRow.controlState.automatic && controlRow.modelData.canManual
 
                     label: controlRow.modelData.label
@@ -370,8 +370,7 @@ ExoCard {
                             enabled: root.webcamEditable && controlRow.manual
                             Layout.fillWidth: true
                             Accessible.name: controlRow.modelData.label
-                            onMovedByUser: value => root.settings.setWebcamControlValue(controlRow.modelData.control,
-                                                                                        Math.round(value))
+                            onMovedByUser: value => root.settings.setWebcamControlValue(controlRow.modelData.control, Math.round(value))
                         }
 
                         Label {
@@ -401,8 +400,7 @@ ExoCard {
                                 enabled: root.webcamEditable
                                 anchors.verticalCenter: parent.verticalCenter
                                 Accessible.name: qsTr("Automatic %1").arg(controlRow.modelData.label)
-                                onToggledByUser: value => root.settings.setWebcamControlAutomatic(
-                                                     controlRow.modelData.control, value)
+                                onToggledByUser: value => root.settings.setWebcamControlAutomatic(controlRow.modelData.control, value)
                             }
                         }
                     }

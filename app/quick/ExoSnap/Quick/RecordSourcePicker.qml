@@ -45,19 +45,39 @@ Popup {
     onWindowQueryChanged: root.recordViewModel.setWindowSearchQuery(root.windowQuery)
     readonly property var hiddenWindowRules: recordViewModel.hiddenWindowRules
 
-    readonly property var pickerRows: {
+    property var pickerRows: []
+    property int viewportRevision: 0
+    // Queued refreshes retain the geometry and lifetime focus from before the first update.
+    property var pendingViewport: null
+    readonly property var incomingPickerRows: {
         const rows = [];
         function appendCards(kind, targets, columns) {
-            rows.push({kind: "heading", section: kind});
+            rows.push({
+                kind: "heading",
+                section: kind
+            });
             for (let index = 0; index < targets.length; index += columns)
-                rows.push({kind: "cards", section: kind, cards: targets.slice(index, index + columns)});
+                rows.push({
+                    kind: "cards",
+                    section: kind,
+                    cards: targets.slice(index, index + columns)
+                });
             if (targets.length === 0)
-                rows.push({kind: "empty", section: kind});
+                rows.push({
+                    kind: "empty",
+                    section: kind
+                });
         }
         appendCards("display", root.displayRows, root.displayColumns);
         appendCards("window", root.windowRows, root.windowColumns);
-        rows.push({kind: "heading", section: "region"});
-        rows.push({kind: "region", section: "region"});
+        rows.push({
+            kind: "heading",
+            section: "region"
+        });
+        rows.push({
+            kind: "region",
+            section: "region"
+        });
         return rows;
     }
 
@@ -79,15 +99,9 @@ Popup {
     // size from before the shell's first resize. The shell title bar belongs to
     // the content item but not to the host page, so the dialog never centres
     // itself under the window buttons.
-    readonly property Item hostWindowContent: root.hostPage.Window.window !== null
-                                              && root.hostPage.Window.window !== undefined
-                                              ? root.hostPage.Window.window.contentItem : null
-    readonly property real safeWidth: Math.max(1, Math.min(root.hostWindowContent !== null
-                                                           ? root.hostWindowContent.width : root.hostPage.width,
-                                                           root.hostPage.width))
-    readonly property real safeHeight: Math.max(1, Math.min(root.hostWindowContent !== null
-                                                            ? root.hostWindowContent.height : root.hostPage.height,
-                                                            root.hostPage.height))
+    readonly property Item hostWindowContent: root.hostPage.Window.window !== null && root.hostPage.Window.window !== undefined ? root.hostPage.Window.window.contentItem : null
+    readonly property real safeWidth: Math.max(1, Math.min(root.hostWindowContent !== null ? root.hostWindowContent.width : root.hostPage.width, root.hostPage.width))
+    readonly property real safeHeight: Math.max(1, Math.min(root.hostWindowContent !== null ? root.hostWindowContent.height : root.hostPage.height, root.hostPage.height))
     // 24 px of breathing room normally; 16 when the safe area is too narrow to
     // afford it at the product's minimum window.
     readonly property real outerInset: root.safeWidth < 760 ? ExoTheme.spacingLg : ExoTheme.spacingXl
@@ -115,16 +129,13 @@ Popup {
         const mediaHeight = Math.round(cardWidth * 9 / 16);
         const titleLine = Math.ceil(ExoTheme.fontBody * 1.3);
         const secondaryLine = Math.ceil(ExoTheme.fontCaption * 1.3);
-        return mediaHeight + ExoTheme.spacingMd + 2 * titleLine + ExoTheme.spacingXs
-                + secondaryLine + ExoTheme.spacingMd;
+        return mediaHeight + ExoTheme.spacingMd + 2 * titleLine + ExoTheme.spacingXs + secondaryLine + ExoTheme.spacingMd;
     }
 
     parent: Overlay.overlay
     padding: root.contentPadding
-    width: Math.max(320, Math.min(1440, root.safeWidth - 2 * root.outerInset,
-                                     Math.max(720, root.safeWidth * 0.8)))
-    height: Math.max(240, Math.min(root.safeHeight - 2 * root.outerInset,
-                                   root.chromeHeight + root.naturalGridHeight))
+    width: Math.max(320, Math.min(1440, root.safeWidth - 2 * root.outerInset, Math.max(720, root.safeWidth * 0.8)))
+    height: Math.max(240, Math.min(root.safeHeight - 2 * root.outerInset, root.chromeHeight + root.naturalGridHeight))
 
     // x/y are assigned imperatively rather than bound: a Popup positions itself
     // when it opens, and that internal write breaks a binding on them. The item
@@ -135,8 +146,7 @@ Popup {
         if (!root.visible || root.hostPage === null)
             return;
         const window = root.hostPage.Window.window;
-        const host = (window !== null && window !== undefined) ? window.contentItem
-                                                               : (root.parent !== null ? root.parent : root.hostPage);
+        const host = (window !== null && window !== undefined) ? window.contentItem : (root.parent !== null ? root.parent : root.hostPage);
         if (host === null || host === undefined)
             return;
         const origin = root.hostPage.mapToItem(host, 0, 0);
@@ -181,8 +191,7 @@ Popup {
     function targetRow(kind: string, identity: string): var {
         if (identity === "")
             return null;
-        const rows = kind === "display" ? root.recordViewModel.displayTargetOptions
-                                        : root.recordViewModel.windowTargetOptions;
+        const rows = kind === "display" ? root.recordViewModel.displayTargetOptions : root.recordViewModel.windowTargetOptions;
         for (let i = 0; i < rows.length; ++i) {
             if (rows[i].identity === identity)
                 return rows[i];
@@ -202,8 +211,7 @@ Popup {
     }
 
     readonly property var pendingRow: root.resolvePendingRow()
-    readonly property bool pendingMissing: root.pendingKind !== "" && root.pendingKind !== "region"
-                                            && root.pendingRow === null
+    readonly property bool pendingMissing: root.pendingKind !== "" && root.pendingKind !== "region" && root.pendingRow === null
 
     readonly property bool confirmEnabled: {
         if (root.pendingKind === "region")
@@ -269,6 +277,8 @@ Popup {
     }
 
     function jumpToSection(section: string): void {
+        ++root.viewportRevision;
+        root.pendingViewport = null;
         let index = 0;
         for (const row of root.pickerRows) {
             if (row.kind === "heading" && row.section === section) {
@@ -280,6 +290,90 @@ Popup {
         }
     }
 
+    function rowKeys(row: var): var {
+        return row.kind === "cards" ? row.cards.map(card => card.identity).filter(identity => identity !== "") : [row.kind + ":" + row.section];
+    }
+
+    function findPickerItem(item: Item, name: string): Item {
+        if (item.objectName === name)
+            return item;
+        for (const child of item.children) {
+            const found = root.findPickerItem(child, name);
+            if (found)
+                return found;
+        }
+        return null;
+    }
+
+    function refreshPickerRows(): void {
+        const next = root.incomingPickerRows;
+        const previous = root.pickerRows;
+        const sameLayout = previous.length === next.length && previous.every((row, index) => JSON.stringify(root.rowKeys(row)) === JSON.stringify(root.rowKeys(next[index])));
+        if (!root.opened || sameLayout) {
+            root.pickerRows = next;
+            return;
+        }
+        const revision = ++root.viewportRevision;
+        const window = root.hostPage.Window.window;
+        if (root.pendingViewport && window.activeFocusItem !== root.pendingViewport.focusOwner)
+            root.pendingViewport = null;
+        let viewport = root.pendingViewport;
+        if (!viewport) {
+            const focusedItem = window ? window.activeFocusItem : null;
+            const focusedName = focusedItem ? focusedItem.objectName : "";
+            const first = Math.max(0, sourceList.indexAt(1, sourceList.contentY + 1));
+            const firstItem = sourceList.itemAtIndex(first);
+            let offset = firstItem ? firstItem.y - sourceList.contentY : 0;
+            const keys = [];
+            if (focusedName.startsWith("targetCard-")) {
+                const focusedY = focusedItem.mapToItem(sourceList, 0, 0).y;
+                if (focusedY < sourceList.height && focusedY + focusedItem.height > 0) {
+                    keys.push(focusedName.slice("targetCard-".length));
+                    offset = focusedY;
+                }
+            }
+            for (let i = first; i < previous.length; ++i)
+                keys.push(...root.rowKeys(previous[i]));
+            for (let i = first - 1; i >= 0; --i)
+                keys.push(...root.rowKeys(previous[i]));
+            if (focusedName.startsWith("targetCard-") || focusedName.startsWith("presetCard-"))
+                root.contentItem.forceActiveFocus(Qt.TabFocusReason);
+            viewport = {keys, offset, focusedName, focusOwner: window.activeFocusItem};
+            root.pendingViewport = viewport;
+        }
+        const positions = {};
+        for (let i = 0; i < next.length; ++i)
+            for (const key of root.rowKeys(next[i]))
+                positions[key] = i;
+        const anchor = viewport.keys.find(key => positions[key] !== undefined);
+        root.pickerRows = next;
+        Qt.callLater(() => {
+            if (!root.opened || root.viewportRevision !== revision)
+                return;
+            root.pendingViewport = null;
+            if (window.activeFocusItem !== viewport.focusOwner)
+                return;
+            sourceList.forceLayout();
+            if (anchor !== undefined) {
+                sourceList.positionViewAtIndex(positions[anchor], ListView.Beginning);
+                sourceList.forceLayout();
+                const row = sourceList.itemAtIndex(positions[anchor]);
+                if (row) {
+                    const end = sourceList.originY + Math.max(0, sourceList.contentHeight - sourceList.height);
+                    sourceList.contentY = Math.max(sourceList.originY, Math.min(row.y - viewport.offset, end));
+                }
+            }
+            sourceList.forceLayout();
+            if (viewport.focusedName.startsWith("targetCard-") || viewport.focusedName.startsWith("presetCard-")) {
+                const focused = root.findPickerItem(sourceList.contentItem, viewport.focusedName);
+                if (focused && !focused.activeFocus)
+                    focused.forceActiveFocus(Qt.TabFocusReason);
+            }
+            visiblePublishDelay.restart();
+        });
+    }
+
+    onIncomingPickerRowsChanged: root.refreshPickerRows()
     onPickerRowsChanged: visiblePublishDelay.restart()
 
     // Hiding the Record destination does not take this popup down: it parents
@@ -308,6 +402,8 @@ Popup {
     }
 
     onAboutToShow: {
+        ++root.viewportRevision;
+        root.pendingViewport = null;
         root.currentTab = 0;
         sourceList.positionViewAtBeginning();
         root.windowQuery = "";
@@ -364,7 +460,10 @@ Popup {
 
     // The service is told the picker is gone rather than being left to poll a
     // hidden popup: a closed picker must not capture anything at all.
-    onClosed: recordViewModel.setVisibleTargetIdentities([])
+    onClosed: {
+        root.pendingViewport = null;
+        recordViewModel.setVisibleTargetIdentities([]);
+    }
 
     function selectCard(row: var, captureMode: int): void {
         if (row.available === false || row.identity === "")
@@ -401,6 +500,8 @@ Popup {
     }
 
     function confirmCard(row: var, captureMode: int): void {
+        if (row.available === false || row.identity === "")
+            return;
         root.selectCard(row, captureMode);
         root.commit();
     }
@@ -419,16 +520,16 @@ Popup {
     // The display a Region-tab rectangle anchors on: the display the user has
     // pending, else the one already capturing, else the first display.
     function regionAnchorRow(): var {
-        const rows = recordViewModel.displayTargetOptions
-        let fallback = null
+        const rows = recordViewModel.displayTargetOptions;
+        let fallback = null;
         for (let i = 0; i < rows.length; ++i) {
-            const row = rows[i]
+            const row = rows[i];
             if (root.pendingIdentity !== "" && row.identity === root.pendingIdentity)
-                return row
+                return row;
             if (fallback === null && row.targetIndex === recordViewModel.selectedTargetIndex)
-                fallback = row
+                fallback = row;
         }
-        return fallback !== null ? fallback : (rows.length > 0 ? rows[0] : null)
+        return fallback !== null ? fallback : (rows.length > 0 ? rows[0] : null);
     }
 
     background: Rectangle {
@@ -458,9 +559,7 @@ Popup {
             Flow {
                 id: headerFlow
 
-                readonly property bool stacked: width > 0
-                                                && titleBlock.width + tabsControl.width + 2 * ExoTheme.spacingMd
-                                                   > width
+                readonly property bool stacked: width > 0 && titleBlock.width + tabsControl.width + 2 * ExoTheme.spacingMd > width
 
                 anchors {
                     left: parent.left
@@ -509,9 +608,7 @@ Popup {
                 Item {
                     id: headerSpacer
 
-                    width: headerFlow.stacked ? 0
-                           : Math.max(0, headerFlow.width - titleBlock.width - tabsControl.width
-                                         - 2 * ExoTheme.spacingMd)
+                    width: headerFlow.stacked ? 0 : Math.max(0, headerFlow.width - titleBlock.width - tabsControl.width - 2 * ExoTheme.spacingMd)
                     height: 1
                 }
 
@@ -554,11 +651,11 @@ Popup {
                 font.pixelSize: ExoTheme.fontCaption
             }
 
-            CheckBox {
+            ExoCheckBox {
                 objectName: "showHiddenWindows"
                 text: qsTr("Show hidden (%1)").arg(root.hiddenWindowCount)
                 checked: root.recordViewModel.showHiddenWindows
-                onToggled: root.recordViewModel.setShowHiddenWindows(checked)
+                onToggledByUser: value => root.recordViewModel.setShowHiddenWindows(value)
             }
 
             ExoButton {
@@ -594,25 +691,29 @@ Popup {
                 anchors.fill: parent
                 clip: true
                 boundsBehavior: Flickable.StopAtBounds
-                model: root.pickerRows
+                // Replacing an array model resets the viewport and cancels an active flick.
+                model: root.pickerRows.length
                 onContentYChanged: visiblePublishDelay.restart()
                 onHeightChanged: visiblePublishDelay.restart()
                 onWidthChanged: visiblePublishDelay.restart()
-                ScrollBar.vertical: ExoScrollBar { objectName: "sourceScrollBar" }
+                ScrollBar.vertical: ExoScrollBar {
+                    objectName: "sourceScrollBar"
+                }
 
                 delegate: Item {
                     id: rowItem
-                    required property var modelData
+                    required property int index
+                    readonly property var modelData: root.pickerRows[rowItem.index] ?? {
+                        kind: "empty",
+                        section: "window"
+                    }
                     width: sourceList.width
                     height: root.pickerRowHeight(rowItem.modelData)
 
                     Label {
-                        objectName: rowItem.modelData.kind === "heading"
-                                    ? rowItem.modelData.section + "SectionLabel" : ""
+                        objectName: rowItem.modelData.kind === "heading" ? rowItem.modelData.section + "SectionLabel" : ""
                         visible: rowItem.modelData.kind === "heading"
-                        text: rowItem.modelData.section === "display" ? qsTr("Displays")
-                              : rowItem.modelData.section === "window" ? qsTr("Windows / Applications")
-                              : qsTr("Region")
+                        text: rowItem.modelData.section === "display" ? qsTr("Displays") : rowItem.modelData.section === "window" ? qsTr("Windows / Applications") : qsTr("Region")
                         anchors.left: parent.left
                         anchors.verticalCenter: parent.verticalCenter
                         color: ExoTheme.text
@@ -622,13 +723,9 @@ Popup {
                     }
 
                     Label {
-                        objectName: rowItem.modelData.kind !== "empty" ? "" : rowItem.modelData.section === "display"
-                                    ? "displaysEmptyState" : "windowsEmptyState"
+                        objectName: rowItem.modelData.kind !== "empty" ? "" : rowItem.modelData.section === "display" ? "displaysEmptyState" : "windowsEmptyState"
                         visible: rowItem.modelData.kind === "empty"
-                        text: rowItem.modelData.section === "display" ? qsTr("No displays found.")
-                              : root.windowTotalCount === 0 ? qsTr("No windows to capture.")
-                              : root.windowSearchMatchCount === 0 ? qsTr("No windows match your search.")
-                              : qsTr("No visible windows. Show hidden windows to review them.")
+                        text: rowItem.modelData.section === "display" ? qsTr("No displays found.") : root.windowTotalCount === 0 ? qsTr("No windows to capture.") : root.windowSearchMatchCount === 0 ? qsTr("No windows match your search.") : qsTr("No visible windows. Show hidden windows to review them.")
                         anchors.centerIn: parent
                         color: ExoTheme.textMuted
                         font.family: ExoTheme.sansFamily
@@ -640,13 +737,21 @@ Popup {
                         spacing: root.gridGap
                         visible: rowItem.modelData.kind === "cards"
                         Repeater {
-                            model: rowItem.modelData.kind === "cards" ? rowItem.modelData.cards : []
+                            model: rowItem.modelData.kind === "cards" ? rowItem.modelData.cards.length : 0
                             delegate: TargetCard {
+                                required property int index
+                                modelData: rowItem.modelData.cards?.[index] ?? ({
+                                        identity: "",
+                                        targetIndex: -1,
+                                        label: "",
+                                        kind: "",
+                                        appName: "",
+                                        windowTitle: "",
+                                        available: false
+                                    })
                                 captureMode: rowItem.modelData.section === "window" ? 1 : 0
-                                width: rowItem.modelData.section === "window"
-                                       ? root.windowsCardWidth : root.displaysCardWidth
-                                height: rowItem.modelData.section === "window"
-                                        ? root.windowsCardHeight : root.displaysCardHeight
+                                width: rowItem.modelData.section === "window" ? root.windowsCardWidth : root.displaysCardWidth
+                                height: rowItem.modelData.section === "window" ? root.windowsCardHeight : root.displaysCardHeight
                             }
                         }
                     }
@@ -661,9 +766,8 @@ Popup {
                                     objectName: "regionCaption"
                                     width: parent.width
                                     text: {
-                                        const anchor = root.regionAnchorRow()
-                                        return anchor ? qsTr("A preset starts an editable rectangle on %1.").arg(anchor.regionLabel)
-                                                      : qsTr("Select a display first.")
+                                        const anchor = root.regionAnchorRow();
+                                        return anchor ? qsTr("A preset starts an editable rectangle on %1.").arg(anchor.regionLabel) : qsTr("Select a display first.");
                                     }
                                     wrapMode: Text.WordWrap
                                     color: ExoTheme.textSecondary
@@ -724,12 +828,7 @@ Popup {
         }
     }
 
-    readonly property real chromeHeight: root.contentPadding * 2
-                                         + pickerHeader.implicitHeight
-                                         + searchRow.implicitHeight
-                                         + ExoTheme.fontCaption * 2
-                                         + footerRow.implicitHeight
-                                         + ExoTheme.spacingLg * 4
+    readonly property real chromeHeight: root.contentPadding * 2 + pickerHeader.implicitHeight + searchRow.implicitHeight + ExoTheme.fontCaption * 2 + footerRow.implicitHeight + ExoTheme.spacingLg * 4
 
     Popup {
         id: rulesPopup
@@ -761,16 +860,14 @@ Popup {
                             id: ruleRow
                             required property var modelData
                             Layout.fillWidth: true
-                            CheckBox {
+                            ExoCheckBox {
                                 checked: ruleRow.modelData.enabled
                                 Accessible.name: qsTr("Enable rule %1").arg(ruleRow.modelData.text)
-                                onToggled: recordViewModel.setHiddenRuleEnabled(ruleRow.modelData.id, checked)
+                                onToggledByUser: value => root.recordViewModel.setHiddenRuleEnabled(ruleRow.modelData.id, value)
                             }
                             Label {
                                 Layout.fillWidth: true
-                                text: ruleRow.modelData.kind === "application"
-                                      ? qsTr("Application: %1 (%2)").arg(ruleRow.modelData.applicationScope).arg(ruleRow.modelData.affectedCount)
-                                      : qsTr("Title: %1 (%2)").arg(ruleRow.modelData.text).arg(ruleRow.modelData.affectedCount)
+                                text: ruleRow.modelData.kind === "application" ? qsTr("Application: %1 (%2)").arg(ruleRow.modelData.applicationScope).arg(ruleRow.modelData.affectedCount) : qsTr("Title: %1 (%2)").arg(ruleRow.modelData.text).arg(ruleRow.modelData.affectedCount)
                                 elide: Text.ElideMiddle
                                 color: ExoTheme.text
                             }
@@ -800,32 +897,42 @@ Popup {
         title: qsTr("Hide windows by title")
         standardButtons: Dialog.Ok | Dialog.Cancel
         onOpened: {
-            titleMatch.currentIndex = 1;
+            titleMatch.value = "contains";
             titleCase.checked = false;
             allApplications.checked = false;
         }
         onAccepted: {
             if (root.hideCandidate)
-                recordViewModel.addTitleRule(root.hideCandidate.identity, titlePattern.text,
-                                             titleMatch.currentIndex === 0 ? "equals" : "contains",
-                                             titleCase.checked, allApplications.checked);
+                recordViewModel.addTitleRule(root.hideCandidate.identity, titlePattern.value, titleMatch.value, titleCase.checked, allApplications.checked);
         }
         contentItem: ColumnLayout {
-            TextField {
+            ExoTextField {
                 id: titlePattern
                 Layout.preferredWidth: 320
                 placeholderText: qsTr("Window title text")
+                onTextEdited: titlePattern.value = titlePattern.text
             }
-            ComboBox {
+            ExoSelect {
                 id: titleMatch
                 Layout.fillWidth: true
-                model: [qsTr("Equals"), qsTr("Contains")]
+                options: [
+                    {
+                        value: "equals",
+                        label: qsTr("Equals")
+                    },
+                    {
+                        value: "contains",
+                        label: qsTr("Contains")
+                    }
+                ]
+                value: "contains"
+                onValueActivated: value => titleMatch.value = value
             }
-            CheckBox {
+            ExoCheckBox {
                 id: titleCase
                 text: qsTr("Match case")
             }
-            CheckBox {
+            ExoCheckBox {
                 id: allApplications
                 text: qsTr("Match all applications")
             }
@@ -846,9 +953,7 @@ Popup {
         contentItem: Label {
             width: 320
             wrapMode: Text.WordWrap
-            text: root.hideCandidate
-                  ? qsTr("Hide all windows from %1?").arg(root.hideCandidate.appName)
-                  : ""
+            text: root.hideCandidate ? qsTr("Hide all windows from %1?").arg(root.hideCandidate.appName) : ""
         }
     }
 
@@ -879,38 +984,46 @@ Popup {
         readonly property string thumbnailSource: card.still ? card.still.source : ""
 
         property int captureMode: 0
-        readonly property bool pending: root.pendingIdentity !== "" && card.identity === root.pendingIdentity
-                                        && root.pendingKind === card.kind
-                                        && root.pendingCaptureMode === card.captureMode
+        readonly property bool pending: root.pendingIdentity !== "" && card.identity === root.pendingIdentity && root.pendingKind === card.kind && root.pendingCaptureMode === card.captureMode
 
+        enabled: card.modelData.available !== false && card.identity !== ""
+        opacity: card.enabled ? 1 : ExoTheme.disabledOpacity
         objectName: "targetCard-" + card.identity
-        color: card.pending ? ExoTheme.accentTint(ExoTheme.surfaceRaised, 0.14)
-                            : cardHover.hovered ? ExoTheme.surfaceHover : ExoTheme.surface
+        color: card.pending ? ExoTheme.accentTint(ExoTheme.surfaceRaised, 0.14) : cardHover.hovered ? ExoTheme.surfaceHover : ExoTheme.surface
         border.width: card.pending ? 2 : 1
-        border.color: card.pending ? ExoTheme.accent
-                      : card.activeFocus ? ExoTheme.text
-                      : cardHover.hovered ? ExoTheme.lineStrong : ExoTheme.line
+        border.color: card.pending ? ExoTheme.accent : card.activeFocus ? ExoTheme.text : cardHover.hovered ? ExoTheme.lineStrong : ExoTheme.line
         radius: ExoTheme.radiusSm
         activeFocusOnTab: true
         Accessible.role: Accessible.ListItem
         Accessible.name: card.label
 
+        Rectangle {
+            objectName: "cardFocusRing"
+            anchors.fill: parent
+            anchors.margins: -3
+            visible: parent.activeFocus
+            color: "transparent"
+            border.width: ExoTheme.focusRingWidth
+            border.color: ExoTheme.text
+            radius: ExoTheme.radiusSm + 3
+        }
+
         Keys.onReturnPressed: event => {
-            root.confirmCard(card.modelData, card.captureMode)
-            event.accepted = true
+            root.confirmCard(card.modelData, card.captureMode);
+            event.accepted = true;
         }
         Keys.onEnterPressed: event => {
-            root.confirmCard(card.modelData, card.captureMode)
-            event.accepted = true
+            root.confirmCard(card.modelData, card.captureMode);
+            event.accepted = true;
         }
         Keys.onSpacePressed: event => {
-            root.selectCard(card.modelData, card.captureMode)
-            event.accepted = true
+            root.selectCard(card.modelData, card.captureMode);
+            event.accepted = true;
         }
 
         HoverHandler {
             id: cardHover
-            cursorShape: Qt.PointingHandCursor
+            cursorShape: card.enabled ? Qt.PointingHandCursor : Qt.ArrowCursor
         }
 
         ToolTip {
@@ -938,21 +1051,21 @@ Popup {
             }
         }
 
-        Menu {
+        ExoMenu {
             id: hideMenu
-            MenuItem {
+            ExoMenuItem {
                 text: qsTr("Hide this window until restart")
                 onTriggered: root.hideCandidateSession()
             }
-            MenuItem {
+            ExoMenuItem {
                 text: qsTr("Hide windows by title...")
                 enabled: card.modelData.applicationIdentity !== ""
                 onTriggered: {
-                    titlePattern.text = card.windowTitle;
+                    titlePattern.value = card.windowTitle;
                     titleRuleDialog.open();
                 }
             }
-            MenuItem {
+            ExoMenuItem {
                 text: qsTr("Hide this application...")
                 enabled: card.modelData.applicationIdentity !== ""
                 onTriggered: applicationRuleDialog.open()
@@ -1101,25 +1214,35 @@ Popup {
         objectName: "presetCard-" + presetCard.key
         color: presetCard.pendingPreset ? ExoTheme.surfaceHover : ExoTheme.surface
         border.width: presetCard.pendingPreset ? 2 : 1
-        border.color: presetCard.pendingPreset ? ExoTheme.accent
-                     : presetCard.emphasized ? ExoTheme.accent : ExoTheme.line
+        border.color: presetCard.pendingPreset ? ExoTheme.accent : presetCard.emphasized ? ExoTheme.accent : ExoTheme.line
         radius: ExoTheme.radiusSm
         activeFocusOnTab: true
         Accessible.role: Accessible.ListItem
         Accessible.name: presetCard.label
 
+        Rectangle {
+            objectName: "cardFocusRing"
+            anchors.fill: parent
+            anchors.margins: -3
+            visible: parent.activeFocus
+            color: "transparent"
+            border.width: ExoTheme.focusRingWidth
+            border.color: ExoTheme.text
+            radius: ExoTheme.radiusSm + 3
+        }
+
         Keys.onReturnPressed: event => {
-            root.commitPreset(presetCard.key)
-            event.accepted = true
+            root.commitPreset(presetCard.key);
+            event.accepted = true;
         }
         Keys.onEnterPressed: event => {
-            root.commitPreset(presetCard.key)
-            event.accepted = true
+            root.commitPreset(presetCard.key);
+            event.accepted = true;
         }
         Keys.onSpacePressed: event => {
-            root.pendingPresetKey = presetCard.key
-            root.pendingKind = "region"
-            event.accepted = true
+            root.pendingPresetKey = presetCard.key;
+            root.pendingKind = "region";
+            event.accepted = true;
         }
 
         HoverHandler {

@@ -30,14 +30,14 @@ ColumnLayout {
     // "mix into previous track" is meaningless when there is no visible row above
     // it. The column keeps its width regardless -- see below.
     property bool showMixOption: true
-    // Whole-dB gain applied to this source in the mix; hidden when the source
+    // Gain applied to this source in the mix; hidden when the source
     // carries its own gain elsewhere (the microphone).
     property bool showGain: false
-    property int gainDb: 0
+    property real gainDb: 0
 
     signal sourceToggled(bool value)
     signal separateToggled(bool value)
-    signal gainCommitted(int value)
+    signal gainCommitted(real value)
 
     readonly property bool _live: root.sourceEnabled && !root.locked
 
@@ -93,21 +93,23 @@ ColumnLayout {
             visible: root.showGain
             from: -60
             to: 24
+            decimals: 3
+            stepSize: 0.5
+            resetEnabled: true
             suffix: qsTr("dB")
             value: root.gainDb
             enabled: root._live
-            Layout.preferredWidth: 96
+            Layout.preferredWidth: 156
             Layout.alignment: Qt.AlignTop
             Accessible.name: qsTr("%1 gain").arg(root.label)
             onValueCommitted: value => root.gainCommitted(value)
+            onResetRequested: root.gainCommitted(0)
         }
 
         // Column two: the reading. Fixed width and tabular figures, so every row
         // on the card shares one right edge whatever it is showing.
         Label {
-            text: !root._live ? "—"
-                : root.meterDb === Number.NEGATIVE_INFINITY ? qsTr("-∞ dB")
-                : qsTr("%1 dB").arg(root.meterDb.toFixed(1))
+            text: !root._live ? "—" : root.meterDb === Number.NEGATIVE_INFINITY ? qsTr("-∞ dB") : qsTr("%1 dB").arg(root.meterDb.toFixed(1))
             textFormat: Text.PlainText
             horizontalAlignment: Text.AlignRight
             color: root._live ? ExoTheme.textSecondary : ExoTheme.textDim

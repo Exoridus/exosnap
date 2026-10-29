@@ -46,9 +46,7 @@ Item {
     // spelled out as an eyebrow ("SCREEN") beside a name that already said
     // "Display 1"; one icon carries the same fact without a second text run, and
     // the accessible name below still states it in words.
-    readonly property int sourceGlyph: root.recordViewModel.sourceKindText === "WINDOW" ? ExoGlyph.AppWindow
-                                       : root.recordViewModel.sourceKindText === "REGION" ? ExoGlyph.Region
-                                       : ExoGlyph.Display
+    readonly property int sourceGlyph: root.recordViewModel.sourceKindText === "WINDOW" ? ExoGlyph.AppWindow : root.recordViewModel.sourceKindText === "REGION" ? ExoGlyph.Region : ExoGlyph.Display
 
     ColumnLayout {
         spacing: ExoTheme.spacingLg
@@ -72,11 +70,9 @@ Item {
                     id: previewSurface
 
                     readonly property real sourceAspect: {
-                        const sourceWidth = root.previewAdapter.sourceSize.width
-                                            * root.recordViewModel.normalizedSourceRect.width
-                        const sourceHeight = root.previewAdapter.sourceSize.height
-                                             * root.recordViewModel.normalizedSourceRect.height
-                        return sourceHeight > 0 ? sourceWidth / sourceHeight : 16 / 9
+                        const sourceWidth = root.previewAdapter.sourceSize.width * root.recordViewModel.normalizedSourceRect.width;
+                        const sourceHeight = root.previewAdapter.sourceSize.height * root.recordViewModel.normalizedSourceRect.height;
+                        return sourceHeight > 0 ? sourceWidth / sourceHeight : 16 / 9;
                     }
                     readonly property real frameWidth: Math.max(0, Math.min(width - 2, (height - 2) * previewSurface.sourceAspect))
 
@@ -105,8 +101,7 @@ Item {
                             gamepadOverlay: root.gamepadOverlay
                             function updateGamepadSize(): void {
                                 if (root.gamepadOverlay)
-                                    root.gamepadOverlay.setContentSize(Qt.size(sourceSize.width * normalizedSourceRect.width,
-                                                                             sourceSize.height * normalizedSourceRect.height))
+                                    root.gamepadOverlay.setContentSize(Qt.size(sourceSize.width * normalizedSourceRect.width, sourceSize.height * normalizedSourceRect.height));
                             }
                             onSourceSizeChanged: updateGamepadSize()
                             onNormalizedSourceRectChanged: updateGamepadSize()
@@ -166,8 +161,7 @@ Item {
 
                         Column {
                             spacing: ExoTheme.spacingMd
-                            visible: !root.recordViewModel.selectedTargetAvailable
-                                     && !root.recordViewModel.harnessBrandStage
+                            visible: !root.recordViewModel.selectedTargetAvailable && !root.recordViewModel.harnessBrandStage
                             anchors.centerIn: parent
 
                             Label {
@@ -215,8 +209,7 @@ Item {
 
                             stage: previewStage
                             visible: root.active && root.previewAdapter.previewFrameRate > 0 && root.recordViewModel.webcamEnabled
-                            idlePreview: !root.recordViewModel.recording && !root.recordViewModel.paused
-                                         && !root.recordViewModel.preparing && !root.recordViewModel.finalizing
+                            idlePreview: !root.recordViewModel.recording && !root.recordViewModel.paused && !root.recordViewModel.preparing && !root.recordViewModel.finalizing
                             modelRect: root.recordViewModel.webcamOverlayRect
                             editable: root.recordViewModel.webcamOverlayEditable
                             error: root.recordViewModel.webcamError
@@ -251,11 +244,11 @@ Item {
                             }
                             onDraftRectChanged: {
                                 if (root.gamepadOverlay && editable)
-                                    root.gamepadOverlay.placement = draftRect
+                                    root.gamepadOverlay.placement = draftRect;
                             }
                             onRectRequested: rect => {
                                 if (root.gamepadOverlay)
-                                    root.gamepadOverlay.placement = rect
+                                    root.gamepadOverlay.placement = rect;
                             }
                         }
 
@@ -279,52 +272,38 @@ Item {
                             sourceGlyph: root.sourceGlyph
                             sourceEnabled: root.recordViewModel.canSelectSource
                             overlayEnabled: root.recordViewModel.webcamOverlayEditable
+                            webcamEnabled: root.recordViewModel.webcamEnabled
+                            controllerEnabled: root.gamepadOverlay !== null && root.gamepadOverlay.enabled
+                            controllerAvailable: root.gamepadOverlay !== null
                             metricsVisible: (root.recordViewModel.recording || root.recordViewModel.paused) && root.recordViewModel.liveStatsAvailable
                             dropsText: root.recordViewModel.droppedFramesText
                             driftText: root.recordViewModel.driftText
                             sizeText: root.recordViewModel.outputSizeText
                             onSourceRequested: root.openSourcePicker()
-                            onOverlayRequested: overlayMenu.open()
-                        }
-
-                        ExoMenu {
-                            id: overlayMenu
-                            objectName: "recordOverlayMenu"
-                            parent: previewChrome
-                            x: Math.max(0, parent.width - width - ExoTheme.spacingMd)
-                            y: ExoTheme.controlHeightCompact + ExoTheme.spacingMd
-                            ExoMenuItem {
-                                text: root.recordViewModel.webcamEnabled ? qsTr("Webcam settings") : qsTr("Add webcam")
-                                enabled: root.recordViewModel.webcamOverlayEditable
-                                onTriggered: {
-                                    if (root.recordViewModel.webcamEnabled || !root.recordViewModel.webcamAvailable)
-                                        root.settingsRequested(SettingsAdapter.Webcam);
-                                    else {
-                                        root.recordViewModel.requestToggleSource("webcam");
-                                        root.recordViewModel.requestWebcamOutputVisible(true);
-                                        root.selectedOverlay = "webcam";
-                                        Qt.callLater(() => {
-                                            if (root.active && webcamOverlay.visible)
-                                                webcamOverlay.forceActiveFocus(Qt.OtherFocusReason);
-                                        });
-                                    }
+                            onWebcamRequested: {
+                                if (root.recordViewModel.webcamEnabled || !root.recordViewModel.webcamAvailable)
+                                    root.settingsRequested(SettingsAdapter.Webcam);
+                                else {
+                                    root.recordViewModel.requestToggleSource("webcam");
+                                    root.recordViewModel.requestWebcamOutputVisible(true);
+                                    root.selectedOverlay = "webcam";
+                                    Qt.callLater(() => {
+                                        if (root.active && webcamOverlay.visible)
+                                            webcamOverlay.forceActiveFocus(Qt.OtherFocusReason);
+                                    });
                                 }
                             }
-                            ExoMenuItem {
-                                text: root.gamepadOverlay && root.gamepadOverlay.enabled ? qsTr("Controller settings") : qsTr("Add controller")
-                                enabled: root.gamepadOverlay !== null && root.recordViewModel.webcamOverlayEditable
-                                onTriggered: {
-                                    if (root.gamepadOverlay.enabled)
-                                        gamepadControls.openOptions();
-                                    else {
-                                        root.gamepadOverlay.outputVisible = true;
-                                        root.gamepadOverlay.enabled = true;
-                                        root.selectedOverlay = "gamepad";
-                                        Qt.callLater(() => {
-                                            if (root.active && gamepadPlacement.visible)
-                                                gamepadPlacement.forceActiveFocus(Qt.OtherFocusReason);
-                                        });
-                                    }
+                            onControllerRequested: {
+                                if (root.gamepadOverlay.enabled)
+                                    gamepadControls.openOptions();
+                                else {
+                                    root.gamepadOverlay.outputVisible = true;
+                                    root.gamepadOverlay.enabled = true;
+                                    root.selectedOverlay = "gamepad";
+                                    Qt.callLater(() => {
+                                        if (root.active && gamepadPlacement.visible)
+                                            gamepadPlacement.forceActiveFocus(Qt.OtherFocusReason);
+                                    });
                                 }
                             }
                         }
@@ -384,8 +363,7 @@ Item {
                             // the empty state used to do until the adapter stopped
                             // reporting it as an error. Belt and braces: a future
                             // producer of errorText cannot bring the overlap back.
-                            visible: text.length > 0 && !root.recordViewModel.regionSelectionNeeded
-                                     && root.recordViewModel.selectedTargetAvailable
+                            visible: text.length > 0 && !root.recordViewModel.regionSelectionNeeded && root.recordViewModel.selectedTargetAvailable
                             width: Math.max(0, Math.min(440, parent.width - 48))
                             anchors.centerIn: parent
                             font.family: ExoTheme.sansFamily
@@ -410,15 +388,23 @@ Item {
                             SequentialAnimation {
                                 running: root.benchmarkInteractionActive && root.active
                                 loops: Animation.Infinite
-                                ScaleAnimator { target: benchmarkActivity; from: 1.0; to: 1.8; duration: 280 }
-                                ScaleAnimator { target: benchmarkActivity; from: 1.8; to: 1.0; duration: 280 }
+                                ScaleAnimator {
+                                    target: benchmarkActivity
+                                    from: 1.0
+                                    to: 1.8
+                                    duration: 280
+                                }
+                                ScaleAnimator {
+                                    target: benchmarkActivity
+                                    from: 1.8
+                                    to: 1.0
+                                    duration: 280
+                                }
                             }
                         }
                     }
                 }
             }
-
-
         }
 
         // One Preview Surface, 16 px, the transport dock: nothing sits between
@@ -468,8 +454,7 @@ Item {
 
     function prepareRecordingPanelVisual(name: string): bool {
         if (name === "overlay-menu") {
-            overlayMenu.open();
-            return overlayMenu.opened;
+            return previewChrome.openOverlayMenu();
         }
         if ((name === "gamepad" || name === "gamepad-hidden") && root.gamepadOverlay) {
             root.gamepadOverlay.enabled = true;
