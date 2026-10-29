@@ -208,7 +208,7 @@ fn markdown(report: &Report) -> String {
     }
     out.push_str("\n### Largest shipped files\n\n| File | Size |\n| --- | ---: |\n");
     for item in report.runtime.largest_files.iter().take(15) {
-        let _ = writeln!(out, "| {} | {} |\n", item.path, mib(item.bytes));
+        let _ = writeln!(out, "| {} | {} |", item.path, mib(item.bytes));
     }
     let _ = writeln!(
         out,
