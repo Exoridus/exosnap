@@ -44,12 +44,12 @@ ExoCard {
     }
 
     title: qsTr("Overlays")
-    subtitle: qsTr("Visible while recording, never in the file.")
 
     // ── Recording HUD ────────────────────────────────────────────────────────
 
     ExoSettingRow {
         label: qsTr("Recording overlay")
+        hint: qsTr("Visible while recording, never in the file.")
         stacked: root.stacked
         controlWidth: ExoTheme.controlSlotSwitch
         Layout.fillWidth: true

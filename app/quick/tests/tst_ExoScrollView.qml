@@ -55,6 +55,29 @@ TestCase {
         }
     }
 
+    function test_wrapped_flickable_stops_at_bounds() {
+        const vertical = createTemporaryObject(viewComponent, testCase);
+        const horizontal = createTemporaryObject(horizontalViewComponent, testCase);
+        verify(vertical && horizontal);
+        verify(vertical.flickable !== null && horizontal.flickable !== null);
+        compare(vertical.flickable.boundsBehavior, Flickable.StopAtBounds);
+        compare(horizontal.flickable.boundsBehavior, Flickable.StopAtBounds);
+    }
+
+    function test_drag_cannot_pull_content_past_start() {
+        const view = createTemporaryObject(viewComponent, testCase);
+        verify(view);
+        view.flickable.interactive = true;
+        view.flickable.acceptedButtons = Qt.LeftButton;
+        mousePress(view, 80, 40);
+        for (let y = 60; y <= 160; y += 20) {
+            mouseMove(view, 80, y, 20);
+            compare(view.flickable.contentY, 0, "content must stay bounded during the drag");
+        }
+        mouseRelease(view, 80, 160);
+        compare(view.flickable.contentY, 0);
+    }
+
     function test_one_notch_moves_wheelScrollLines_body_lines() {
         let view = createTemporaryObject(viewComponent, testCase);
         verify(view);

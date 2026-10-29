@@ -105,15 +105,16 @@ TestCase {
         mouseClick(findChild(item, "audioRoute-" + track.routes[0].id));
         const popup = findChild(item, "audioGainPopup");
         tryCompare(popup, "opened", true);
-        const slider = findChild(popup, "audioRouteGain");
-        compare(slider.from, item.routing.minimumGainDb);
-        compare(slider.to, item.routing.maximumGainDb);
-        slider.forceActiveFocus();
-        keyClick(Qt.Key_Left);
+        const field = findChild(popup, "audioRouteGain");
+        compare(field.from, item.routing.minimumGainDb);
+        compare(field.to, item.routing.maximumGainDb);
+        compare(field.suffix, qsTr("dB"));
+        field.forceActiveFocus();
+        keyClick(Qt.Key_Down);
         tryVerify(() => item.routing.tracks[0].routes[0].gainDb < 0);
         verify(popup.opened);
     }
-    function test_inline_rename_escape_and_removal_confirmation() {
+    function test_inline_rename_escape_and_direct_removal() {
         const item = panel();
         const routing = item.routing;
         const trackId = routing.tracks[0].id;
@@ -132,11 +133,6 @@ TestCase {
         const remove = findChild(menu, "audioRequestRemoveTrack");
         verify(remove.visible && remove.enabled);
         mouseClick(remove, remove.width / 2, remove.height / 2);
-        tryCompare(item, "confirmingRemoval", true);
-        tryCompare(menu, "opened", true);
-        compare(routing.tracks.length, 1);
-        waitForRendering(item);
-        mouseClick(findChild(menu, "audioConfirmRemoveTrack"));
         tryVerify(() => routing.tracks.length === 0);
         compare(routing.sources.length, 2);
     }
@@ -168,20 +164,116 @@ TestCase {
         tryVerify(() => item.routing.tracks[2].id === id);
     }
 
-    function test_source_creation_keeps_assignments_and_returns_to_picker() {
+    function test_flat_source_creation_assigns_in_one_action() {
         const item = panel();
         const trackId = item.routing.tracks[0].id;
         mouseClick(findChild(row(item, trackId), "audioTrackSources"));
         const picker = findChild(item, "audioSourcePopup");
         tryCompare(picker, "opened", true);
-        mouseClick(findChild(picker.contentItem, "audioCreateSource"));
-        const menu = findChild(item, "audioSourceCreationMenu");
-        tryCompare(menu, "opened", true);
-        verify(!picker.opened);
-        mouseClick(findChild(menu, "audioCreateSystemSource"));
+        const create = findChild(picker.contentItem, "audioCreateSystemSource");
+        verify(!!create && create.visible);
+        verify(!findChild(picker.contentItem, "audioCreateIndependentSource"));
+        mouseClick(create);
         tryCompare(picker, "opened", true);
         compare(item.routing.sources.length, 3);
-        compare(item.routing.tracks[0].routes.length, 2);
+        compare(item.routing.tracks[0].routes.length, 3);
+    }
+
+    function test_single_track_has_no_reorder_handle() {
+        const item = panel();
+        const track = item.routing.tracks[0];
+        verify(!findChild(row(item, track.id), "audioTrackGrip").visible);
+        verify(item.routing.addEmptyTrack(item.routing.revision));
+        waitForRendering(item);
+        verify(findChild(row(item, track.id), "audioTrackGrip").visible);
+    }
+
+    function test_number_and_quiet_grip_share_a_vertical_gutter() {
+        const item = panel();
+        const trackId = item.routing.tracks[0].id;
+        verify(item.routing.addEmptyTrack(item.routing.revision));
+        waitForRendering(item);
+        const trackRow = row(item, trackId);
+        const number = visibleText(trackRow, "01");
+        const grip = findChild(trackRow, "audioTrackGrip");
+        const numberCenter = number.mapToItem(trackRow, number.width / 2, number.height / 2);
+        const gripCenter = grip.mapToItem(trackRow, grip.width / 2, grip.height / 2);
+        fuzzyCompare(numberCenter.x, gripCenter.x, 1);
+        verify(numberCenter.y < gripCenter.y);
+        mouseMove(item, item.width - 1, item.height - 1);
+        tryCompare(grip, "hovered", false);
+        const ink = grip.contentItem.color;
+        mouseMove(grip, grip.width / 2, grip.height / 2);
+        tryCompare(grip, "hovered", true);
+        compare(grip.contentItem.color, ink);
+    }
+
+    function test_track_rms_is_measured_active_output_only_data() {
+        return [
+            {
+                tag: "measured",
+                rms: 0.25,
+                available: true
+            },
+            {
+                tag: "measured-silence",
+                rms: 0,
+                available: true
+            },
+            {
+                tag: "unavailable",
+                rms: -1,
+                available: false
+            }
+        ];
+    }
+
+    function test_track_rms_is_measured_active_output_only(data) {
+        recordDriver.seedAudioSources(1, "Measured source ", 1, data.rms);
+        const item = panel();
+        const trackId = item.routing.tracks[0].id;
+        item.editingNext = false;
+        waitForRendering(item);
+        let trackRow = row(item, trackId);
+        let meter = findChild(trackRow, "audioTrackMeter");
+        compare(trackRow.meterAvailable, data.available);
+        compare(meter.visible, data.available);
+        if (data.available) {
+            verify(item.routing.trackMeters[trackId].available);
+            const expectedDbfs = data.rms === 0 ? Number.NEGATIVE_INFINITY : 20 * Math.log10(data.rms);
+            if (data.rms === 0) {
+                compare(item.routing.trackMeters[trackId].rmsDbfs, expectedDbfs);
+                compare(meter.Accessible.description, qsTr("−∞ dBFS"));
+                compare(meter.children[0].width, 0);
+            } else {
+                fuzzyCompare(item.routing.trackMeters[trackId].rmsDbfs, expectedDbfs, 0.000001);
+            }
+        }
+        item.editingNext = true;
+        const routeId = item.routing.tracks[0].routes[0].id;
+        verify(item.routing.setRouteGain(routeId, -12.375, item.routing.revision));
+        waitForRendering(item);
+        trackRow = row(item, trackId);
+        compare(trackRow.track.id, trackId);
+        if (data.available)
+            verify(item.routing.trackMeters[trackId].available);
+        verify(!trackRow.meterAvailable);
+        verify(!findChild(trackRow, "audioTrackMeter").visible);
+    }
+
+    function test_failed_rename_is_reported_on_its_track() {
+        const item = panel();
+        const trackId = item.routing.tracks[0].id;
+        row(item, trackId).beginRename();
+        const field = findChild(row(item, trackId), "audioTrackName");
+        field.text = "";
+        keyClick(Qt.Key_Return);
+        tryVerify(() => item.routing.lastError !== "");
+        const error = findChild(row(item, trackId), "audioTrackError");
+        verify(!!error && error.visible);
+        compare(error.text, item.routing.lastError);
+        compare(item.title, qsTr("Audio tracks"));
+        compare(item.subtitle, "");
     }
 
     function test_visual_states_data() {
@@ -229,22 +321,18 @@ TestCase {
         tryVerify(() => page.revealAutomationTarget("audio") === 1);
         const card = page.automationTargets.audio;
         const track = card.routing.tracks[0];
-        for (const state of ["base", "sources", "gain", "menu", "confirm-remove", "rename", "empty"]) {
+        for (const state of ["base", "sources", "gain", "menu", "rename", "empty"]) {
             card.harnessCollapse();
             const trackRow = row(card, track.id);
             if (state === "sources")
                 mouseClick(findChild(trackRow, "audioTrackSources"));
             else if (state === "gain")
                 mouseClick(findChild(trackRow, "audioRoute-" + track.routes[0].id));
-            else if (state === "menu" || state === "confirm-remove") {
+            else if (state === "menu") {
                 mouseClick(findChild(trackRow, "audioTrackMenu"));
                 const menu = findChild(card, "audioTrackActions");
                 tryCompare(menu, "opened", true);
                 verify(menu.height > 100);
-                if (state === "confirm-remove") {
-                    mouseClick(findChild(menu, "audioRequestRemoveTrack"));
-                    tryCompare(menu, "opened", true);
-                }
             } else if (state === "rename")
                 trackRow.beginRename();
             else if (state === "empty")

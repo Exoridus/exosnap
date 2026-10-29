@@ -39,12 +39,15 @@ ColumnLayout {
             from: 20
             to: 400
             stepSize: 10
+            decimals: 3
+            resetEnabled: true
             suffix: qsTr("Hz")
-            value: Math.round(root.settings.micHpfCutoffHz)
+            value: root.settings.micHpfCutoffHz
             enabled: !root.settings.controlsLocked
             Layout.fillWidth: true
             Accessible.name: qsTr("High-pass cutoff frequency")
             onValueCommitted: value => root.settings.micHpfCutoffHz = value
+            onResetRequested: root.settings.micHpfCutoffHz = root.settings.audioRouting.sourceDetailDefaults.hpfCutoffHz
         }
     }
 
@@ -73,12 +76,15 @@ ColumnLayout {
         ExoNumberField {
             from: -80
             to: 0
+            decimals: 3
+            resetEnabled: true
             suffix: qsTr("dB")
-            value: Math.round(root.settings.micGateThresholdDb)
+            value: root.settings.micGateThresholdDb
             enabled: !root.settings.controlsLocked
             Layout.fillWidth: true
             Accessible.name: qsTr("Noise gate threshold")
             onValueCommitted: value => root.settings.micGateThresholdDb = value
+            onResetRequested: root.settings.micGateThresholdDb = root.settings.audioRouting.sourceDetailDefaults.gateThresholdDb
         }
     }
 
@@ -107,12 +113,15 @@ ColumnLayout {
         ExoNumberField {
             from: -40
             to: 0
+            decimals: 3
+            resetEnabled: true
             suffix: qsTr("dB")
-            value: Math.round(root.settings.micAgcTargetDb)
+            value: root.settings.micAgcTargetDb
             enabled: !root.settings.controlsLocked
             Layout.fillWidth: true
             Accessible.name: qsTr("Automatic gain control target")
             onValueCommitted: value => root.settings.micAgcTargetDb = value
+            onResetRequested: root.settings.micAgcTargetDb = root.settings.audioRouting.sourceDetailDefaults.agcTargetDb
         }
     }
 

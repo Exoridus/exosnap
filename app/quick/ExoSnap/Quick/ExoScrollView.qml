@@ -25,10 +25,8 @@ ScrollView {
     // Same rule as the style this replaces: the reserved strip is exactly the
     // bar's own width and collapses to zero when no bar is drawn. Surfaces that
     // want a wider, unconditional gutter override these.
-    rightPadding: control.reserveScrollBarGutters ? control.ScrollBar.vertical.implicitWidth
-                                                  : control.effectiveScrollBarWidth
-    bottomPadding: control.reserveScrollBarGutters ? control.ScrollBar.horizontal.implicitHeight
-                                                   : control.effectiveScrollBarHeight
+    rightPadding: control.reserveScrollBarGutters ? control.ScrollBar.vertical.implicitWidth : control.effectiveScrollBarWidth
+    bottomPadding: control.reserveScrollBarGutters ? control.ScrollBar.horizontal.implicitHeight : control.effectiveScrollBarHeight
 
     // ── Automation-addressable scrolling (protocol 2) ────────────────────────
     //
@@ -41,6 +39,13 @@ ScrollView {
     // this replaces was a scroll request that silently did nothing while every
     // screenshot taken afterwards claimed to show the end of the page.
     readonly property Flickable flickable: control.contentItem as Flickable
+
+    Binding {
+        target: control.flickable
+        property: "boundsBehavior"
+        value: Flickable.StopAtBounds
+        when: control.flickable !== null
+    }
 
     function scrollToHome(): bool {
         const view = control.flickable;
@@ -123,17 +128,16 @@ ScrollView {
         target: null
         acceptedDevices: PointerDevice.Mouse | PointerDevice.TouchPad
 
-        onWheel: (event) => {
+        onWheel: event => {
             const view = control.flickable;
             if (view === null)
                 return;
             const step = ExoTheme.wheelScrollLines * ExoTheme.bodyLineHeight;
-            const notches = (angle) => angle / 120;
+            const notches = angle => angle / 120;
             // Shift is the standard convention for turning a vertical wheel
             // into horizontal scrolling on a mouse with no tilt wheel; a
             // touchpad or a tilt wheel already reports angleDelta.x directly.
-            const horizontal = (event.modifiers & Qt.ShiftModifier) !== 0 ||
-                               (event.angleDelta.y === 0 && event.angleDelta.x !== 0);
+            const horizontal = (event.modifiers & Qt.ShiftModifier) !== 0 || (event.angleDelta.y === 0 && event.angleDelta.x !== 0);
             if (horizontal) {
                 const angle = event.angleDelta.y !== 0 ? event.angleDelta.y : event.angleDelta.x;
                 const maximum = Math.max(0, view.contentWidth - view.width);

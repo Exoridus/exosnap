@@ -9,6 +9,12 @@ Popup {
     required property AudioRoutingAdapter routing
     property string sourceId: ""
     property var microphoneDeviceOptions: []
+    property string actionError: ""
+    property string errorKey: ""
+    onSourceIdChanged: {
+        actionError = "";
+        errorKey = "";
+    }
     readonly property var source: routing.sources.find(item => item.id === sourceId) || ({})
     width: Math.min(360, parent.width)
     height: Math.min(560, Overlay.overlay ? Overlay.overlay.height - 2 * ExoTheme.pagePadding : 560)
@@ -25,9 +31,14 @@ Popup {
     function patch(key: string, value: var): void {
         const details = {};
         details[key] = value;
-        root.routing.setSourceDetails(root.sourceId, details, root.routing.revision);
+        root.commitDetails(key, details);
     }
-    contentItem: ScrollView {
+    function commitDetails(key: string, details: var): void {
+        const accepted = root.routing.setSourceDetails(root.sourceId, details, root.routing.revision);
+        root.errorKey = accepted ? "" : key;
+        root.actionError = accepted ? "" : root.routing.lastError;
+    }
+    contentItem: ExoScrollView {
         id: scroll
         clip: true
         contentWidth: availableWidth
@@ -49,8 +60,8 @@ Popup {
             }
             Label {
                 Layout.fillWidth: true
-                visible: root.routing.lastError !== ""
-                text: root.routing.lastError
+                visible: root.actionError !== "" && !["gainDb", "hpfCutoffHz", "gateThresholdDb", "agcTargetDb"].includes(root.errorKey)
+                text: root.actionError
                 wrapMode: Text.WordWrap
                 color: ExoTheme.error
                 Accessible.role: Accessible.AlertMessage
@@ -63,10 +74,10 @@ Popup {
                 options: root.microphoneDeviceOptions
                 value: root.source.followDefault ? "" : root.source.endpointId
                 Accessible.name: qsTr("Microphone device")
-                onValueActivated: value => root.routing.setSourceDetails(root.sourceId, {
+                onValueActivated: value => root.commitDetails("device", {
                         endpointId: value,
                         followDefault: value === ""
-                    }, root.routing.revision)
+                    })
             }
             ExoSelect {
                 Layout.fillWidth: true
@@ -106,38 +117,87 @@ Popup {
                 text: qsTr("Mute source on all tracks")
                 checked: root.source.muted || false
                 enabled: !root.routing.readOnly && !root.routing.recordingActive
-                onToggledByUser: value => root.routing.setSourceMute(root.sourceId, value, root.routing.revision)
+                onToggledByUser: value => {
+                    const accepted = root.routing.setSourceMute(root.sourceId, value, root.routing.revision);
+                    root.errorKey = accepted ? "" : "mute";
+                    root.actionError = accepted ? "" : root.routing.lastError;
+                }
             }
             Repeater {
                 model: [
                     {
                         key: "gainDb",
-                        label: qsTr("Source gain in dB")
+                        label: qsTr("Source gain"),
+                        minimum: root.routing.minimumGainDb,
+                        maximum: root.routing.maximumGainDb,
+                        step: 0.5,
+                        unit: qsTr("dB")
                     },
                     {
                         key: "hpfCutoffHz",
-                        label: qsTr("High-pass cutoff in Hz")
+                        label: qsTr("High-pass cutoff"),
+                        minimum: 20,
+                        maximum: 1000,
+                        step: 10,
+                        unit: qsTr("Hz")
                     },
                     {
                         key: "gateThresholdDb",
-                        label: qsTr("Gate threshold in dB")
+                        label: qsTr("Gate threshold"),
+                        minimum: -80,
+                        maximum: 0,
+                        step: 1,
+                        unit: qsTr("dB")
                     },
                     {
                         key: "agcTargetDb",
-                        label: qsTr("Automatic gain target in dB")
+                        label: qsTr("Automatic gain target"),
+                        minimum: -40,
+                        maximum: 0,
+                        step: 1,
+                        unit: qsTr("dB")
                     }
                 ]
                 delegate: ExoSettingRow {
+                    id: parameterRow
                     required property var modelData
+                    readonly property real storedValue: root.source[parameterRow.modelData.key] === undefined ? root.routing.sourceDetailDefaults[parameterRow.modelData.key] : root.source[parameterRow.modelData.key]
+                    readonly property bool withinRange: Number.isFinite(parameterRow.storedValue) && parameterRow.storedValue >= parameterRow.modelData.minimum && parameterRow.storedValue <= parameterRow.modelData.maximum
                     Layout.fillWidth: true
-                    label: modelData.label
+                    label: parameterRow.modelData.label
                     stacked: true
-                    ExoTextField {
+                    ExoNumberField {
+                        objectName: "audioSourceParameter-" + parameterRow.modelData.key
                         Layout.fillWidth: true
+                        visible: parameterRow.withinRange
                         enabled: !root.routing.readOnly
-                        value: String(root.source[modelData.key] === undefined ? "" : root.source[modelData.key])
-                        Accessible.name: modelData.label
-                        onCommitted: value => root.patch(modelData.key, Number(value))
+                        from: parameterRow.modelData.minimum
+                        to: parameterRow.modelData.maximum
+                        decimals: 3
+                        stepSize: parameterRow.modelData.step
+                        suffix: parameterRow.modelData.unit
+                        value: parameterRow.withinRange ? storedValue : root.routing.sourceDetailDefaults[parameterRow.modelData.key]
+                        errorText: root.errorKey === parameterRow.modelData.key ? root.actionError : ""
+                        resetEnabled: true
+                        Accessible.name: parameterRow.modelData.label
+                        onValueCommitted: value => root.patch(parameterRow.modelData.key, value)
+                        onResetRequested: root.patch(parameterRow.modelData.key, root.routing.sourceDetailDefaults[parameterRow.modelData.key])
+                    }
+                    ExoTextField {
+                        objectName: "audioSourceRetainedParameter-" + parameterRow.modelData.key
+                        Layout.fillWidth: true
+                        visible: !parameterRow.withinRange
+                        enabled: !root.routing.readOnly
+                        readOnly: true
+                        errorText: root.errorKey === parameterRow.modelData.key ? root.actionError : ""
+                        value: qsTr("%1 %2").arg(parameterRow.storedValue === Number.NEGATIVE_INFINITY ? "−∞" : Number(parameterRow.storedValue).toLocaleString(locale, 'f', 3)).arg(parameterRow.modelData.unit)
+                        trailingGlyph: ExoGlyph.Refresh
+                        trailingAccessibleName: qsTr("Reset to default")
+                        Accessible.name: parameterRow.modelData.label
+                        Accessible.description: hasError ? errorText : qsTr("Stored value is outside the editable range. Reset to default to edit it.")
+                        ToolTip.visible: hovered || activeFocus
+                        ToolTip.text: Accessible.description
+                        onTrailingClicked: root.patch(parameterRow.modelData.key, root.routing.sourceDetailDefaults[parameterRow.modelData.key])
                     }
                 }
             }

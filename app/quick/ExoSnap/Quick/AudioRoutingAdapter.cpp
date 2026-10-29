@@ -303,6 +303,7 @@ QVariantList AudioRoutingAdapter::sourceRows(const engine::TrackGraph1Intent& gr
     return rows;
 }
 QVariantList AudioRoutingAdapter::trackRows(const engine::TrackGraph1Intent& graph, bool active) const {
+    const auto effective = active ? active_ : resolvedPlan();
     auto tracks = graph.tracks;
     std::stable_sort(tracks.begin(), tracks.end(), [](const auto& a, const auto& b) { return a.order < b.order; });
     QVariantList rows;
@@ -327,21 +328,22 @@ QVariantList AudioRoutingAdapter::trackRows(const engine::TrackGraph1Intent& gra
                             {"enabled", route.enabled}});
             routed = routed || route.enabled;
         }
-        QVariantMap row{{"id", IdText(track.id)},
-                        {"position", int(index + 1)},
-                        {"name", track.name_kind == engine::AudioTrackNameKind::Custom ? Text(track.name)
-                                                                                       : tr("Audio %1").arg(index + 1)},
-                        {"nameKind", static_cast<int>(track.name_kind)},
-                        {"role", static_cast<int>(track.role)},
-                        {"recordEnabled", track.record_enabled},
-                        {"recording", track.record_enabled && routed},
-                        {"empty", !routed},
-                        {"routes", routes},
-                        {"meterAvailable", false},
-                        {"active", active},
-                        {"defaultMonitored",
-                         std::find(graph.default_monitor_track_ids.begin(), graph.default_monitor_track_ids.end(),
-                                   track.id) != graph.default_monitor_track_ids.end()}};
+        QVariantMap row{
+            {"id", IdText(track.id)},
+            {"position", int(index + 1)},
+            {"name",
+             track.name_kind == engine::AudioTrackNameKind::Custom ? Text(track.name) : tr("Audio %1").arg(index + 1)},
+            {"nameKind", static_cast<int>(track.name_kind)},
+            {"role", static_cast<int>(track.role)},
+            {"recordEnabled", track.record_enabled},
+            {"recording", track.record_enabled && routed},
+            {"empty", !routed},
+            {"routes", routes},
+            {"meterAvailable", false},
+            {"active", active},
+            {"defaultMonitored", effective && std::find(effective->default_monitor_track_ids.begin(),
+                                                        effective->default_monitor_track_ids.end(),
+                                                        track.id) != effective->default_monitor_track_ids.end()}};
         const auto meter = std::find_if(track_meters_.begin(), track_meters_.end(),
                                         [&](const auto& item) { return item.track_id == track.id; });
         if (meter != track_meters_.end() && meter->has_measurement) {
@@ -414,6 +416,44 @@ QStringList AudioRoutingAdapter::defaultMonitorTrackIds() const {
         },
         intent_);
     return result;
+}
+QStringList AudioRoutingAdapter::effectiveMonitorTrackIds() const {
+    QStringList result;
+    if (const auto plan = resolvedPlan())
+        for (const auto& id : plan->default_monitor_track_ids)
+            result.push_back(IdText(id));
+    return result;
+}
+QVariantList AudioRoutingAdapter::sourceCreationOptions() const {
+    QVariantList result{QVariantMap{{"kind", int(engine::AudioBindingKind::PlaybackEndpoint)},
+                                    {"name", tr("System audio")},
+                                    {"selectable", true},
+                                    {"reason", QString{}}},
+                        QVariantMap{{"kind", int(engine::AudioBindingKind::MicrophoneEndpoint)},
+                                    {"name", tr("Microphone")},
+                                    {"selectable", true},
+                                    {"reason", QString{}}}};
+    const auto snapshot = environment();
+    if (snapshot.process_loopback_supported) {
+        const bool selected = snapshot.window_target && snapshot.capture_target_process &&
+                              snapshot.capture_target_process->process_id != 0 &&
+                              snapshot.capture_target_process->creation_time != 0 &&
+                              std::find(snapshot.confirmed_processes.begin(), snapshot.confirmed_processes.end(),
+                                        *snapshot.capture_target_process) != snapshot.confirmed_processes.end();
+        result.push_back(
+            QVariantMap{{"kind", int(engine::AudioBindingKind::CaptureTargetProcess)},
+                        {"name", tr("Recorded application")},
+                        {"selectable", selected},
+                        {"reason", selected ? QString{} : tr("Select an application window to record its audio.")}});
+    }
+    return result;
+}
+QVariantMap AudioRoutingAdapter::sourceDetailDefaults() const {
+    const engine::AudioSourceSpec source;
+    return {{"gainDb", Dbfs(source.post_dsp_gain_linear)},
+            {"hpfCutoffHz", source.dsp.hpf_cutoff_hz},
+            {"gateThresholdDb", source.dsp.gate_threshold_db},
+            {"agcTargetDb", source.dsp.agc_target_db}};
 }
 QString AudioRoutingAdapter::monitorSelectionOrigin() const {
     return std::visit(
@@ -925,6 +965,10 @@ bool AudioRoutingAdapter::setSourceDetails(QString sourceId, QVariantMap details
     });
 }
 bool AudioRoutingAdapter::addSource(int bindingKind, const QString& name, qulonglong expectedRevision) {
+    return addSourceToTrack(bindingKind, name, {}, expectedRevision);
+}
+bool AudioRoutingAdapter::addSourceToTrack(int bindingKind, const QString& name, const QString& trackId,
+                                           qulonglong expectedRevision) {
     if (!checkRevision(expectedRevision))
         return false;
     if (bindingKind < int(engine::AudioBindingKind::PlaybackEndpoint) ||
@@ -959,7 +1003,17 @@ bool AudioRoutingAdapter::addSource(int bindingKind, const QString& name, qulong
             source.binding.process = snapshot.capture_target_process;
         }
     }
-    return editGraph(expectedRevision, [source = std::move(source)](auto& graph) {
+    return editGraph(expectedRevision, [this, source = std::move(source), trackId](auto& graph) {
+        if (!trackId.isEmpty()) {
+            const auto track = Find(graph.tracks, trackId);
+            if (track == graph.tracks.end())
+                return fail(tr("Audio track was not found."));
+            engine::AudioRouteSpec route;
+            route.id = engine::NewId<engine::AudioRouteId>();
+            route.source_id = source.id;
+            route.track_id = track->id;
+            graph.routes.push_back(route);
+        }
         graph.sources.push_back(source);
         return true;
     });

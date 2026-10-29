@@ -198,7 +198,8 @@ class RecordPickerTestDriver final : public QObject {
         routing_.refresh(graph);
     }
 
-    Q_INVOKABLE void seedAudioSources(int count, const QString& prefix) {
+    Q_INVOKABLE void seedAudioSources(int count, const QString& prefix, double firstSourceGain = 1.0,
+                                      double trackRms = -1.0) {
         using namespace exosnap::engine;
         TrackGraph1Intent graph;
         AudioTrackSpec track;
@@ -208,6 +209,8 @@ class RecordPickerTestDriver final : public QObject {
             AudioSourceSpec source;
             source.id = NewId<AudioSourceId>();
             source.name = (prefix + QString::number(index)).toStdString();
+            if (index == 0)
+                source.post_dsp_gain_linear = static_cast<float>(firstSourceGain);
             source.binding.follow_default = false;
             source.binding.endpoint_id = "endpoint";
             graph.sources.push_back(source);
@@ -229,6 +232,11 @@ class RecordPickerTestDriver final : public QObject {
             if (resolved.succeeded())
                 routing_.setActivePlan(*resolved.value());
         }
+        TrackMeterSnapshot meter;
+        meter.track_id = track.id;
+        meter.has_measurement = trackRms >= 0.0;
+        meter.rms = meter.has_measurement ? static_cast<float>(trackRms) : 0.0f;
+        routing_.setMeters({}, {meter});
     }
     Q_INVOKABLE void seedWindowTargets(const QVariantList& windows) {
         source_.targets.clear();

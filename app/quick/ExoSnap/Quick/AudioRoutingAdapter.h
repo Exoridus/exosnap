@@ -31,6 +31,7 @@ class AudioRoutingAdapter : public QObject {
     Q_PROPERTY(QStringList warnings READ warnings NOTIFY changed FINAL)
     Q_PROPERTY(bool monitorConfirmationRequired READ monitorConfirmationRequired NOTIFY changed FINAL)
     Q_PROPERTY(QStringList defaultMonitorTrackIds READ defaultMonitorTrackIds NOTIFY changed FINAL)
+    Q_PROPERTY(QStringList effectiveMonitorTrackIds READ effectiveMonitorTrackIds NOTIFY changed FINAL)
     Q_PROPERTY(QString monitorSelectionOrigin READ monitorSelectionOrigin NOTIFY changed FINAL)
     Q_PROPERTY(bool canUndo READ canUndo NOTIFY changed FINAL)
     Q_PROPERTY(QString planLabel READ planLabel NOTIFY changed FINAL)
@@ -39,6 +40,8 @@ class AudioRoutingAdapter : public QObject {
     Q_PROPERTY(QVariantMap trackMeters READ trackMeters NOTIFY metersChanged FINAL)
     Q_PROPERTY(double minimumGainDb READ minimumGainDb CONSTANT FINAL)
     Q_PROPERTY(double maximumGainDb READ maximumGainDb CONSTANT FINAL)
+    Q_PROPERTY(QVariantList sourceCreationOptions READ sourceCreationOptions NOTIFY changed FINAL)
+    Q_PROPERTY(QVariantMap sourceDetailDefaults READ sourceDetailDefaults CONSTANT FINAL)
 
   public:
     enum AssignmentMode { Move, Additional };
@@ -78,6 +81,9 @@ class AudioRoutingAdapter : public QObject {
     QStringList warnings() const;
     bool monitorConfirmationRequired() const;
     QStringList defaultMonitorTrackIds() const;
+    QStringList effectiveMonitorTrackIds() const;
+    QVariantList sourceCreationOptions() const;
+    QVariantMap sourceDetailDefaults() const;
     QString monitorSelectionOrigin() const;
     bool canUndo() const {
         return !undo_.empty();
@@ -99,6 +105,8 @@ class AudioRoutingAdapter : public QObject {
     Q_INVOKABLE bool removeTrack(const QString& trackId, qulonglong expectedRevision);
     Q_INVOKABLE bool moveTrackTo(const QString& trackId, int position, qulonglong expectedRevision);
     Q_INVOKABLE bool addSource(int bindingKind, const QString& name, qulonglong expectedRevision);
+    Q_INVOKABLE bool addSourceToTrack(int bindingKind, const QString& name, const QString& trackId,
+                                      qulonglong expectedRevision);
     Q_INVOKABLE bool setTrackName(QString trackId, QString name, qulonglong expectedRevision);
     Q_INVOKABLE bool reorderTrackById(const QString& trackId, int delta, qulonglong expectedRevision);
     Q_INVOKABLE bool assignSource(const QString& sourceId, const QString& trackId, int mode,
