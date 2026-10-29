@@ -8,16 +8,20 @@ Item {
     required property string sourceText
     required property int sourceGlyph
     required property bool sourceEnabled
+    property bool overlayEnabled: true
+    readonly property real controlsBottom: previewChrome.y + previewChrome.height
     property bool metricsVisible: false
     property string dropsText: ""
     property string driftText: ""
     property string sizeText: ""
     signal sourceRequested()
+    signal overlayRequested()
 
     RowLayout {
         id: previewChrome
         z: 10
         spacing: ExoTheme.spacingSm
+        readonly property real contentWidth: Math.max(0, width - addOverlayButton.width - 3 * spacing)
         anchors {
             top: parent.top
             left: parent.left
@@ -26,7 +30,7 @@ Item {
         }
         Rectangle {
             Layout.preferredWidth: Math.min(contractText.implicitWidth + 2 * ExoTheme.spacingMd,
-                                           previewChrome.width * 0.52)
+                                           previewChrome.contentWidth * 0.52)
             Layout.preferredHeight: ExoTheme.controlHeightCompact
             radius: ExoTheme.radiusSm
             color: ExoTheme.overlaySurface
@@ -53,7 +57,7 @@ Item {
             text: root.sourceText
             enabled: root.sourceEnabled
             focusPolicy: Qt.StrongFocus
-            Layout.preferredWidth: Math.min(implicitWidth, previewChrome.width * 0.43)
+            Layout.preferredWidth: Math.min(implicitWidth, previewChrome.contentWidth * 0.43)
             Layout.minimumWidth: 0
             Layout.preferredHeight: ExoTheme.controlHeightCompact
             leftPadding: ExoTheme.spacingMd
@@ -85,6 +89,31 @@ Item {
                     Layout.minimumWidth: 0
                     font.pixelSize: ExoTheme.fontCaption
                 }
+            }
+            ToolTip.visible: hovered
+            ToolTip.text: text
+        }
+        Button {
+            id: addOverlayButton
+            objectName: "previewAddOverlayButton"
+            text: qsTr("Add overlay")
+            enabled: root.overlayEnabled
+            Layout.preferredWidth: ExoTheme.controlHeightCompact
+            Layout.preferredHeight: ExoTheme.controlHeightCompact
+            Accessible.name: text
+            onClicked: root.overlayRequested()
+            background: Rectangle {
+                radius: ExoTheme.radiusSm
+                color: addOverlayButton.hovered ? ExoTheme.overlaySurfaceRaised : ExoTheme.overlaySurface
+                border.width: addOverlayButton.activeFocus ? 2 : 1
+                border.color: addOverlayButton.activeFocus ? ExoTheme.overlayAccent : ExoTheme.overlayLine
+            }
+            contentItem: ExoGlyph {
+                kind: ExoGlyph.Plus
+                color: ExoTheme.overlayInk
+                width: 18
+                height: 18
+                Accessible.ignored: true
             }
             ToolTip.visible: hovered
             ToolTip.text: text

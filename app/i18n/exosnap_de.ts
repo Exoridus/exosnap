@@ -90,7 +90,7 @@
 <context>
     <name>AppShell</name>
     <message>
-        <location filename="../quick/ExoSnap/Quick/AppShell.qml" line="+264"/>
+        <location filename="../quick/ExoSnap/Quick/AppShell.qml" line="+257"/>
         <source>Record</source>
         <translation>Aufnehmen</translation>
     </message>
@@ -6041,6 +6041,19 @@ Ermittelte SHA-256: %2</translation>
     </message>
 </context>
 <context>
+    <name>ExoSetupHeader</name>
+    <message>
+        <location filename="../quick/ExoSnap/Quick/ExoSetupHeader.qml" line="+11"/>
+        <source>Close</source>
+        <translation>Schließen</translation>
+    </message>
+    <message>
+        <location line="+40"/>
+        <source>Minimize</source>
+        <translation>Minimieren</translation>
+    </message>
+</context>
+<context>
     <name>ExoStatusTile</name>
     <message>
         <location filename="../quick/ExoSnap/Quick/ExoStatusTile.qml" line="+116"/>
@@ -6110,20 +6123,25 @@ Ermittelte SHA-256: %2</translation>
 <context>
     <name>GamepadArtwork</name>
     <message>
-        <location filename="../quick/ExoSnap/Quick/GamepadSprites.cpp" line="+121"/>
+        <location filename="../quick/ExoSnap/Quick/GamepadSprites.cpp" line="+154"/>
         <source>Invalid gamepad artwork or raster size.</source>
         <translation>Ungültige Gamepad-Grafik oder Rastergröße.</translation>
     </message>
     <message>
-        <location line="+49"/>
+        <location line="+54"/>
         <source>Gamepad atlas exceeds the supported texture size.</source>
         <translation>Der Gamepad-Atlas überschreitet die unterstützte Texturgröße.</translation>
+    </message>
+    <message>
+        <location filename="../quick/ExoSnap/Quick/GamepadArtwork.cpp" line="+200"/>
+        <source>Invalid controller source or mapping.</source>
+        <translation>Ungültige Controller-Quelle oder Zuordnung.</translation>
     </message>
 </context>
 <context>
     <name>GamepadOverlayControls</name>
     <message>
-        <location filename="../quick/ExoSnap/Quick/GamepadOverlayControls.qml" line="+15"/>
+        <location filename="../quick/ExoSnap/Quick/GamepadOverlayControls.qml" line="+18"/>
         <source>Gamepad</source>
         <translation>Gamepad</translation>
     </message>
@@ -6144,27 +6162,7 @@ Ermittelte SHA-256: %2</translation>
         <translation>Controllergerät</translation>
     </message>
     <message>
-        <location line="+6"/>
-        <source>Automatic layout</source>
-        <translation>Automatisches Layout</translation>
-    </message>
-    <message>
-        <location line="+1"/>
-        <source>PlayStation 5 DualSense</source>
-        <translation>PlayStation 5 DualSense</translation>
-    </message>
-    <message>
-        <location line="+1"/>
-        <source>Xbox Series</source>
-        <translation>Xbox Series</translation>
-    </message>
-    <message>
-        <location line="+1"/>
-        <source>Generic dual-stick</source>
-        <translation>Generischer Dual-Stick-Controller</translation>
-    </message>
-    <message>
-        <location line="+3"/>
+        <location line="+7"/>
         <source>Controller layout</source>
         <translation>Controllerlayout</translation>
     </message>
@@ -6298,7 +6296,7 @@ Ermittelte SHA-256: %2</translation>
         <translation>Win</translation>
     </message>
     <message>
-        <location filename="../quick/ExoSnap/Quick/QuickApplication.cpp" line="+3448"/>
+        <location filename="../quick/ExoSnap/Quick/QuickApplication.cpp" line="+3460"/>
         <location filename="../services/GlobalHotkeyService.cpp" line="+52"/>
         <source>This shortcut is already used by Windows or another application.</source>
         <translation>Dieser Hotkey wird bereits von Windows oder einer anderen Anwendung verwendet.</translation>
@@ -7047,7 +7045,7 @@ Ermittelte SHA-256: %2</translation>
 <context>
     <name>QuickApplication</name>
     <message>
-        <location filename="../quick/ExoSnap/Quick/QuickApplication.cpp" line="-2672"/>
+        <location filename="../quick/ExoSnap/Quick/QuickApplication.cpp" line="-2684"/>
         <source>Recording is blocked</source>
         <translation>Aufnahme blockiert</translation>
     </message>
@@ -7092,7 +7090,7 @@ Ermittelte SHA-256: %2</translation>
         <translation>Diese Aufnahme hat keinen Eintrag zur Absturzwiederherstellung: %1. Die Aufnahme läuft unverändert, kann bei einer Unterbrechung von ExoSnap aber nicht wiederhergestellt werden.</translation>
     </message>
     <message>
-        <location line="+646"/>
+        <location line="+658"/>
         <source>Start recording and wait for committed media to create a clip.</source>
         <translation>Starte eine Aufnahme und warte, bis genügend Aufnahmedaten für einen Clip vorliegen.</translation>
     </message>
@@ -7298,12 +7296,12 @@ Ermittelte SHA-256: %2</translation>
         <translation>Speicherplatz wird knapp</translation>
     </message>
     <message>
-        <location line="-4992"/>
+        <location line="-5004"/>
         <source>Recording is blocked by the current system configuration.</source>
         <translation>Die aktuelle Systemkonfiguration verhindert eine Aufnahme.</translation>
     </message>
     <message numerus="yes">
-        <location line="+4352"/>
+        <location line="+4364"/>
         <source>Unfinalized recordings from the last session: %n</source>
         <translation>
             <numerusform>Nicht abgeschlossene Aufnahmen der letzten Sitzung: %n</numerusform>
@@ -7359,27 +7357,7 @@ Ermittelte SHA-256: %2</translation>
 <context>
     <name>RecordPage</name>
     <message>
-        <location filename="../quick/ExoSnap/Quick/RecordPage.qml" line="+39"/>
-        <source>Sources</source>
-        <translation>Quellen</translation>
-    </message>
-    <message>
-        <location line="+1"/>
-        <source>Open recording sources</source>
-        <translation>Aufnahmequellen öffnen</translation>
-    </message>
-    <message>
-        <location line="+11"/>
-        <source>Profile</source>
-        <translation>Profil</translation>
-    </message>
-    <message>
-        <location line="+1"/>
-        <source>Open recording profile</source>
-        <translation>Aufnahmeprofil öffnen</translation>
-    </message>
-    <message>
-        <location line="+99"/>
+        <location filename="../quick/ExoSnap/Quick/RecordPage.qml" line="+127"/>
         <source>Preview off</source>
         <translation>Vorschau aus</translation>
     </message>
@@ -7399,9 +7377,29 @@ Ermittelte SHA-256: %2</translation>
         <translation>Quelle wählen</translation>
     </message>
     <message>
-        <location line="+25"/>
+        <location line="+41"/>
         <source>Gamepad overlay</source>
         <translation>Gamepad-Overlay</translation>
+    </message>
+    <message>
+        <location line="+58"/>
+        <source>Webcam settings</source>
+        <translation>Webcam-Einstellungen</translation>
+    </message>
+    <message>
+        <location line="+0"/>
+        <source>Add webcam</source>
+        <translation>Webcam hinzufügen</translation>
+    </message>
+    <message>
+        <location line="+12"/>
+        <source>Controller settings</source>
+        <translation>Controller-Einstellungen</translation>
+    </message>
+    <message>
+        <location line="+0"/>
+        <source>Add controller</source>
+        <translation>Controller hinzufügen</translation>
     </message>
 </context>
 <context>
@@ -7547,7 +7545,7 @@ Ermittelte SHA-256: %2</translation>
 <context>
     <name>RecordPreviewChrome</name>
     <message>
-        <location filename="../quick/ExoSnap/Quick/RecordPreviewChrome.qml" line="+46"/>
+        <location filename="../quick/ExoSnap/Quick/RecordPreviewChrome.qml" line="+49"/>
         <source>Recording format: %1</source>
         <translation>Aufnahmeformat: %1</translation>
     </message>
@@ -7562,7 +7560,12 @@ Ermittelte SHA-256: %2</translation>
         <translation>Quelle während der Aufnahme gesperrt</translation>
     </message>
     <message>
-        <location line="+66"/>
+        <location line="+33"/>
+        <source>Add overlay</source>
+        <translation>Overlay hinzufügen</translation>
+    </message>
+    <message>
+        <location line="+58"/>
         <source>%1 Drops</source>
         <translation>%1 verworfene Frames</translation>
     </message>
@@ -8147,7 +8150,7 @@ Ermittelte SHA-256: %2</translation>
 <context>
     <name>RecordViewModelAdapter</name>
     <message>
-        <location filename="../quick/ExoSnap/Quick/RecordViewModelAdapter.cpp" line="+879"/>
+        <location filename="../quick/ExoSnap/Quick/RecordViewModelAdapter.cpp" line="+881"/>
         <source>No source</source>
         <translation>Keine Quelle</translation>
     </message>
@@ -8200,19 +8203,34 @@ Ermittelte SHA-256: %2</translation>
 <context>
     <name>RecordWebcamOverlay</name>
     <message>
-        <location filename="../quick/ExoSnap/Quick/RecordWebcamOverlay.qml" line="+16"/>
+        <location filename="../quick/ExoSnap/Quick/RecordWebcamOverlay.qml" line="+19"/>
         <source>Webcam overlay</source>
         <translation>Webcam-Overlay</translation>
     </message>
     <message>
-        <location line="+18"/>
+        <location line="+21"/>
         <source>Drag to move. Use arrow keys to move and Shift plus arrow keys to resize.</source>
         <translation>Zum Verschieben ziehen. Pfeiltasten verschieben, Umschalt plus Pfeiltasten ändern die Größe.</translation>
     </message>
     <message>
-        <location line="+41"/>
+        <location line="+50"/>
         <source>Webcam preview unavailable</source>
         <translation>Webcam-Vorschau nicht verfügbar</translation>
+    </message>
+    <message>
+        <location line="+216"/>
+        <source>Hide from recording</source>
+        <translation>Aus Aufnahme ausblenden</translation>
+    </message>
+    <message>
+        <location line="+0"/>
+        <source>Include in recording</source>
+        <translation>In Aufnahme einblenden</translation>
+    </message>
+    <message>
+        <location line="+14"/>
+        <source>Remove overlay</source>
+        <translation>Overlay entfernen</translation>
     </message>
 </context>
 <context>
@@ -8614,228 +8632,6 @@ Ermittelte SHA-256: %2</translation>
         <location line="+3"/>
         <source>ExoSnap couldn&apos;t start this recording. The details below may help identify why.</source>
         <translation>ExoSnap konnte diese Aufnahme nicht starten. Die folgenden Details können bei der Fehlersuche helfen.</translation>
-    </message>
-</context>
-<context>
-    <name>RecordingProfileInspector</name>
-    <message>
-        <location filename="../quick/ExoSnap/Quick/RecordingProfileInspector.qml" line="+16"/>
-        <location line="+81"/>
-        <source>Recording profile</source>
-        <translation>Aufnahmeprofil</translation>
-    </message>
-    <message>
-        <location line="+5"/>
-        <source>Unpin</source>
-        <translation>Lösen</translation>
-    </message>
-    <message>
-        <location line="+0"/>
-        <source>Pin</source>
-        <translation>Anheften</translation>
-    </message>
-    <message>
-        <location line="+2"/>
-        <source> profile panel</source>
-        <translation> Profilbereich</translation>
-    </message>
-    <message>
-        <location line="+4"/>
-        <source>Close</source>
-        <translation>Schließen</translation>
-    </message>
-    <message>
-        <location line="+1"/>
-        <source>Close recording profile</source>
-        <translation>Aufnahmeprofil schließen</translation>
-    </message>
-    <message>
-        <location line="+8"/>
-        <source>Active recording (read-only)</source>
-        <translation>Aktive Aufnahme (schreibgeschützt)</translation>
-    </message>
-    <message>
-        <location line="+0"/>
-        <source>For the next recording</source>
-        <translation>Für die nächste Aufnahme</translation>
-    </message>
-    <message>
-        <location line="+10"/>
-        <source>Active preset: %1</source>
-        <translation>Aktive Voreinstellung: %1</translation>
-    </message>
-    <message>
-        <location line="+4"/>
-        <source>Show active recording</source>
-        <translation>Aktive Aufnahme anzeigen</translation>
-    </message>
-    <message>
-        <location line="+1"/>
-        <source>Edit next recording</source>
-        <translation>Nächste Aufnahme bearbeiten</translation>
-    </message>
-</context>
-<context>
-    <name>RecordingSourcePanel</name>
-    <message>
-        <location filename="../quick/ExoSnap/Quick/RecordingSourcePanel.qml" line="+22"/>
-        <source>Recording sources</source>
-        <translation>Aufnahmequellen</translation>
-    </message>
-    <message>
-        <location line="+10"/>
-        <source>Sources</source>
-        <translation>Quellen</translation>
-    </message>
-    <message>
-        <location line="+5"/>
-        <source>Unpin</source>
-        <translation>Lösen</translation>
-    </message>
-    <message>
-        <location line="+0"/>
-        <source>Pin</source>
-        <translation>Anheften</translation>
-    </message>
-    <message>
-        <location line="+2"/>
-        <source> sources panel</source>
-        <translation> Quellenbereich</translation>
-    </message>
-    <message>
-        <location line="+4"/>
-        <source>Close</source>
-        <translation>Schließen</translation>
-    </message>
-    <message>
-        <location line="+1"/>
-        <source>Close sources panel</source>
-        <translation>Quellenbereich schließen</translation>
-    </message>
-    <message>
-        <location line="+17"/>
-        <source>Capture source</source>
-        <translation>Aufnahmequelle</translation>
-    </message>
-    <message>
-        <location line="+6"/>
-        <source>Current capture source: %1</source>
-        <translation>Aktuelle Aufnahmequelle: %1</translation>
-    </message>
-    <message>
-        <location line="+3"/>
-        <source>Change source</source>
-        <translation>Quelle ändern</translation>
-    </message>
-    <message>
-        <location line="+5"/>
-        <source>Webcam overlay</source>
-        <translation>Webcam-Overlay</translation>
-    </message>
-    <message>
-        <location line="+2"/>
-        <source>No webcam available</source>
-        <translation>Keine Webcam verfügbar</translation>
-    </message>
-    <message>
-        <location line="+2"/>
-        <source>Enabled</source>
-        <translation>Aktiviert</translation>
-    </message>
-    <message>
-        <location line="+0"/>
-        <source>Off</source>
-        <translation>Aus</translation>
-    </message>
-    <message>
-        <location line="+6"/>
-        <source>Change webcam</source>
-        <translation>Webcam ändern</translation>
-    </message>
-    <message>
-        <location line="+0"/>
-        <source>Add webcam</source>
-        <translation>Webcam hinzufügen</translation>
-    </message>
-    <message>
-        <location line="+4"/>
-        <source>Audio sources</source>
-        <translation>Audioquellen</translation>
-    </message>
-    <message>
-        <location line="+10"/>
-        <source>%1: %2</source>
-        <translation>%1: %2</translation>
-    </message>
-    <message>
-        <location line="+2"/>
-        <source>Not participating</source>
-        <translation>Nicht zugeschaltet</translation>
-    </message>
-    <message>
-        <location line="+1"/>
-        <source>Muted</source>
-        <translation>Stumm</translation>
-    </message>
-    <message>
-        <location line="+0"/>
-        <source>Participating</source>
-        <translation>Zugeschaltet</translation>
-    </message>
-    <message>
-        <location line="+8"/>
-        <source>Unmute</source>
-        <translation>Stummschaltung aufheben</translation>
-    </message>
-    <message>
-        <location line="+0"/>
-        <source>Mute</source>
-        <translation>Stummschalten</translation>
-    </message>
-    <message>
-        <location line="+2"/>
-        <source>%1 %2</source>
-        <translation>%1 %2</translation>
-    </message>
-    <message>
-        <location line="+7"/>
-        <source>System audio: participating</source>
-        <translation>Systemaudio: zugeschaltet</translation>
-    </message>
-    <message>
-        <location line="+1"/>
-        <source>System audio: muted</source>
-        <translation>Systemaudio: stummgeschaltet</translation>
-    </message>
-    <message>
-        <location line="+5"/>
-        <source>Application audio: participating</source>
-        <translation>Anwendungsaudio: zugeschaltet</translation>
-    </message>
-    <message>
-        <location line="+1"/>
-        <source>Application audio: muted</source>
-        <translation>Anwendungsaudio: stummgeschaltet</translation>
-    </message>
-    <message>
-        <location line="+5"/>
-        <source>Microphone: unavailable</source>
-        <translation>Mikrofon: nicht verfügbar</translation>
-    </message>
-    <message>
-        <location line="+1"/>
-        <source>Microphone: participating</source>
-        <translation>Mikrofon: zugeschaltet</translation>
-    </message>
-    <message>
-        <location line="+1"/>
-        <source>Microphone: muted</source>
-        <translation>Mikrofon: stummgeschaltet</translation>
-    </message>
-    <message>
-        <location line="+4"/>
-        <source>Add audio source</source>
-        <translation>Audioquelle hinzufügen</translation>
     </message>
 </context>
 <context>
@@ -9931,19 +9727,24 @@ Die Farben für Aufnahme, Vorsicht und Bereitschaft bleiben fest, damit ein Stat
 <context>
     <name>SettingsPage</name>
     <message>
-        <location filename="../quick/ExoSnap/Quick/SettingsPage.qml" line="+111"/>
-        <source>Recording profile</source>
-        <translation>Aufnahmeprofil</translation>
+        <location filename="../quick/ExoSnap/Quick/SettingsPage.qml" line="+334"/>
+        <source>For the next recording</source>
+        <translation>Für die nächste Aufnahme</translation>
     </message>
     <message>
         <location line="+1"/>
-        <source>Preset, format, quality, output, webcam and audio routing</source>
-        <translation>Voreinstellung, Format, Qualität, Ausgabe, Webcam und Audio-Routing</translation>
+        <source>Active recording (read-only): %1</source>
+        <translation>Aktive Aufnahme (schreibgeschützt): %1</translation>
     </message>
     <message>
-        <location line="+3"/>
-        <source>Open recording profile</source>
-        <translation>Aufnahmeprofil öffnen</translation>
+        <location line="+4"/>
+        <source>Show active recording</source>
+        <translation>Aktive Aufnahme anzeigen</translation>
+    </message>
+    <message>
+        <location line="+0"/>
+        <source>Edit next recording</source>
+        <translation>Nächste Aufnahme bearbeiten</translation>
     </message>
 </context>
 <context>
@@ -10484,6 +10285,115 @@ Kleiner Text auf dem Bildschirm verliert früher an Qualität als Videoinhalte. 
     </message>
 </context>
 <context>
+    <name>SetupDecision</name>
+    <message>
+        <location filename="../../apps/setup/quick/SetupDecision.qml" line="+68"/>
+        <source>Create a desktop shortcut</source>
+        <translation>Desktopverknüpfung erstellen</translation>
+    </message>
+    <message>
+        <location line="+18"/>
+        <source>Also delete my ExoSnap data</source>
+        <translation>Auch meine ExoSnap-Daten löschen</translation>
+    </message>
+    <message>
+        <location line="+26"/>
+        <source>Settings, presets, history, caches, recovery data, logs and crash reports. This can&apos;t be undone.</source>
+        <translation>Einstellungen, Voreinstellungen, Verlauf, Caches, Wiederherstellungsdaten, Protokolle und Absturzberichte. Das kann nicht rückgängig gemacht werden.</translation>
+    </message>
+    <message>
+        <location line="+20"/>
+        <source>Repair</source>
+        <translation>Reparieren</translation>
+    </message>
+    <message>
+        <location line="+0"/>
+        <source>Replace missing or damaged program files</source>
+        <translation>Fehlende oder beschädigte Programmdateien ersetzen</translation>
+    </message>
+    <message>
+        <location line="+1"/>
+        <source>Uninstall</source>
+        <translation>Deinstallieren</translation>
+    </message>
+    <message>
+        <location line="+0"/>
+        <source>Remove ExoSnap from this computer</source>
+        <translation>ExoSnap von diesem Computer entfernen</translation>
+    </message>
+</context>
+<context>
+    <name>SetupMain</name>
+    <message>
+        <location filename="../../apps/setup/quick/SetupMain.qml" line="+13"/>
+        <source>ExoSnap Setup</source>
+        <translation>ExoSnap-Setup</translation>
+    </message>
+    <message>
+        <location line="+33"/>
+        <source>Setup</source>
+        <translation>Setup</translation>
+    </message>
+    <message>
+        <location line="+3"/>
+        <source>Close Setup</source>
+        <translation>Setup schließen</translation>
+    </message>
+    <message>
+        <location line="+31"/>
+        <source>View license</source>
+        <translation>Lizenz anzeigen</translation>
+    </message>
+    <message>
+        <location line="+8"/>
+        <source>Details</source>
+        <translation>Details</translation>
+    </message>
+    <message>
+        <location line="+25"/>
+        <source>Open log</source>
+        <translation>Protokoll öffnen</translation>
+    </message>
+    <message>
+        <location line="+64"/>
+        <source>Cancel Setup?</source>
+        <translation>Setup abbrechen?</translation>
+    </message>
+    <message>
+        <location line="+9"/>
+        <source>Keep going</source>
+        <translation>Fortfahren</translation>
+    </message>
+    <message>
+        <location line="+1"/>
+        <source>Cancel Setup</source>
+        <translation>Setup abbrechen</translation>
+    </message>
+    <message>
+        <location line="+30"/>
+        <source>Close</source>
+        <translation>Schließen</translation>
+    </message>
+    <message>
+        <location line="+13"/>
+        <source>License</source>
+        <translation>Lizenz</translation>
+    </message>
+    <message>
+        <location line="+16"/>
+        <source>Back</source>
+        <translation>Zurück</translation>
+    </message>
+</context>
+<context>
+    <name>SetupStatus</name>
+    <message>
+        <location filename="../../apps/setup/quick/SetupStatus.qml" line="+68"/>
+        <source>%1%</source>
+        <translation>%1 %</translation>
+    </message>
+</context>
+<context>
     <name>ShellTray</name>
     <message>
         <location filename="../quick/ExoSnap/Quick/ShellTray.qml" line="+76"/>
@@ -10539,16 +10449,49 @@ Kleiner Text auf dem Bildschirm verliert früher an Qualität als Videoinhalte. 
 </context>
 <context>
     <name>UpdaterController</name>
-    <message><source>Repair ExoSnap</source><translation>ExoSnap reparieren</translation></message>
-    <message><source>Installation state unknown</source><translation>Installationszustand unbekannt</translation></message>
-    <message><source>Windows Installer didn't confirm the result. Repair ExoSnap before you use it.</source><translation>Windows Installer hat das Ergebnis nicht bestätigt. Repariere ExoSnap, bevor du es verwendest.</translation></message>
-    <message><source>Restart Windows before using ExoSnap. The installed files are not verified yet.</source><translation>Starte Windows neu, bevor du ExoSnap verwendest. Die installierten Dateien sind noch nicht geprüft.</translation></message>
-    <message><source>Repair didn't complete</source><translation>Reparatur nicht abgeschlossen</translation></message>
-    <message><source>The installation is still unconfirmed. Repair ExoSnap before you use it.</source><translation>Die Installation ist weiterhin unbestätigt. Repariere ExoSnap, bevor du es verwendest.</translation></message>
-    <message><source>Restart to finish</source><translation>Neustart erforderlich</translation></message>
-    <message><source>Reapplying the verified MSI package.</source><translation>Das geprüfte MSI-Paket wird erneut angewendet.</translation></message>
     <message>
-        <location filename="../../apps/updater/UpdaterController.cpp" line="+34"/>
+        <location filename="../../apps/updater/UpdaterController.cpp" line="+529"/>
+        <location line="+63"/>
+        <source>Repair ExoSnap</source>
+        <translation>ExoSnap reparieren</translation>
+    </message>
+    <message>
+        <location line="-68"/>
+        <source>Installation state unknown</source>
+        <translation>Installationszustand unbekannt</translation>
+    </message>
+    <message>
+        <location line="+3"/>
+        <source>Windows Installer didn&apos;t confirm the result. Repair ExoSnap before you use it.</source>
+        <translation>Windows Installer hat das Ergebnis nicht bestätigt. Repariere ExoSnap, bevor du es verwendest.</translation>
+    </message>
+    <message>
+        <location line="+55"/>
+        <source>Restart Windows before using ExoSnap. The installed files are not verified yet.</source>
+        <translation>Starte Windows neu, bevor du ExoSnap verwendest. Die installierten Dateien sind noch nicht geprüft.</translation>
+    </message>
+    <message>
+        <location line="+4"/>
+        <source>Repair didn&apos;t complete</source>
+        <translation>Reparatur nicht abgeschlossen</translation>
+    </message>
+    <message>
+        <location line="+1"/>
+        <source>The installation is still unconfirmed. Repair ExoSnap before you use it.</source>
+        <translation>Die Installation ist weiterhin unbestätigt. Repariere ExoSnap, bevor du es verwendest.</translation>
+    </message>
+    <message>
+        <location line="-17"/>
+        <source>Restart to finish</source>
+        <translation>Neustart erforderlich</translation>
+    </message>
+    <message>
+        <location line="-257"/>
+        <source>Reapplying the verified MSI package.</source>
+        <translation>Das geprüfte MSI-Paket wird erneut angewendet.</translation>
+    </message>
+    <message>
+        <location line="-279"/>
         <source>Downloading version %1 again…</source>
         <translation>Version %1 wird erneut heruntergeladen…</translation>
     </message>
@@ -10613,7 +10556,7 @@ Kleiner Text auf dem Bildschirm verliert früher an Qualität als Videoinhalte. 
         <translation>Update wird vorbereitet…</translation>
     </message>
     <message>
-        <location line="+43"/>
+        <location line="+48"/>
         <source>Ready to check for updates</source>
         <translation>Bereit zur Suche nach Updates</translation>
     </message>
@@ -10650,12 +10593,12 @@ Kleiner Text auf dem Bildschirm verliert früher an Qualität als Videoinhalte. 
     </message>
     <message>
         <location line="+3"/>
-        <location line="+246"/>
+        <location line="+262"/>
         <source>Nothing was downloaded and nothing was changed.</source>
         <translation>Es wurde nichts heruntergeladen oder geändert.</translation>
     </message>
     <message>
-        <location line="-245"/>
+        <location line="-261"/>
         <source>Check again</source>
         <translation>Erneut prüfen</translation>
     </message>
@@ -10740,7 +10683,7 @@ Kleiner Text auf dem Bildschirm verliert früher an Qualität als Videoinhalte. 
         <translation>Jetzt installieren</translation>
     </message>
     <message>
-        <location line="+74"/>
+        <location line="+90"/>
         <source>Couldn&apos;t download the update</source>
         <translation>Update konnte nicht heruntergeladen werden</translation>
     </message>
@@ -10753,23 +10696,22 @@ Kleiner Text auf dem Bildschirm verliert früher an Qualität als Videoinhalte. 
         <location line="+2"/>
         <location line="+93"/>
         <location line="+11"/>
-        <location line="+64"/>
+        <location line="+62"/>
         <source>Your current version %1 is unchanged and still works.</source>
         <translation>Ihre aktuelle Version %1 ist unverändert und weiterhin nutzbar.</translation>
     </message>
     <message>
-        <location line="-166"/>
+        <location line="-164"/>
         <location line="+93"/>
         <location line="+11"/>
         <location line="+11"/>
         <location line="+12"/>
-        <location line="+18"/>
-        <location line="+23"/>
+        <location line="+39"/>
         <source>Retry</source>
         <translation>Erneut versuchen</translation>
     </message>
     <message>
-        <location line="-163"/>
+        <location line="-161"/>
         <source>Download verification failed</source>
         <translation>Download-Prüfung fehlgeschlagen</translation>
     </message>
@@ -10883,22 +10825,12 @@ Kleiner Text auf dem Bildschirm verliert früher an Qualität als Videoinhalte. 
         <translation>Version %1 liegt im Backup-Ordner, ist aber noch nicht startbereit.</translation>
     </message>
     <message>
-        <location line="+14"/>
-        <source>Couldn&apos;t confirm the installed version</source>
-        <translation>Installierte Version konnte nicht bestätigt werden</translation>
-    </message>
-    <message>
-        <location line="+1"/>
+        <location line="+15"/>
         <source>Windows Installer finished, but ExoSnap couldn&apos;t verify the installed files.</source>
         <translation>Windows Installer wurde abgeschlossen, ExoSnap konnte die installierten Dateien jedoch nicht prüfen.</translation>
     </message>
     <message>
-        <location line="+3"/>
-        <source>Version %1 may still be installed; no rollback is being claimed.</source>
-        <translation>Version %1 ist möglicherweise noch installiert. Eine Wiederherstellung wurde nicht bestätigt.</translation>
-    </message>
-    <message>
-        <location line="+8"/>
+        <location line="+9"/>
         <source>Update complete — version %1 is ready</source>
         <translation>Update abgeschlossen: Version %1 ist bereit</translation>
     </message>
@@ -10949,11 +10881,6 @@ Kleiner Text auf dem Bildschirm verliert früher an Qualität als Videoinhalte. 
     </message>
     <message>
         <location line="+8"/>
-        <source>Update installed — restart Windows to finish</source>
-        <translation>Update installiert: Windows neu starten, um den Vorgang abzuschließen</translation>
-    </message>
-    <message>
-        <location line="+1"/>
         <source>Windows Installer needs a system restart to complete the update.</source>
         <translation>Windows Installer benötigt einen Systemneustart, um das Update abzuschließen.</translation>
     </message>
@@ -10963,7 +10890,7 @@ Kleiner Text auf dem Bildschirm verliert früher an Qualität als Videoinhalte. 
         <translation>Version %1 bleibt bis zum Neustart von Windows verwendbar.</translation>
     </message>
     <message>
-        <location line="-396"/>
+        <location line="-409"/>
         <location line="+34"/>
         <location line="+17"/>
         <location line="+14"/>
@@ -10971,7 +10898,7 @@ Kleiner Text auf dem Bildschirm verliert früher an Qualität als Videoinhalte. 
         <location line="+30"/>
         <location line="+1"/>
         <location line="+18"/>
-        <location line="+80"/>
+        <location line="+96"/>
         <location line="+17"/>
         <location line="+2"/>
         <location line="+18"/>
@@ -11045,18 +10972,28 @@ Kleiner Text auf dem Bildschirm verliert früher an Qualität als Videoinhalte. 
 </context>
 <context>
     <name>UpdaterViewAdapter</name>
-    <message><source>Repair ExoSnap</source><translation>ExoSnap reparieren</translation></message>
-    <message><source>Repairing ExoSnap</source><translation>ExoSnap wird repariert</translation></message>
     <message>
+        <location filename="../../apps/updater/UpdaterViewAdapter.cpp" line="+579"/>
+        <source>Repair ExoSnap</source>
+        <translation>ExoSnap reparieren</translation>
+    </message>
+    <message>
+        <location line="-283"/>
+        <source>Repairing ExoSnap</source>
+        <translation>ExoSnap wird repariert</translation>
+    </message>
+    <message>
+        <location line="-216"/>
         <source>%1 of %2 MB</source>
         <translation>%1 von %2 MB</translation>
     </message>
     <message>
-        <source>This step can't be interrupted.</source>
+        <location line="-3"/>
+        <source>This step can&apos;t be interrupted.</source>
         <translation>Dieser Schritt kann nicht unterbrochen werden.</translation>
     </message>
     <message>
-        <location filename="../../apps/updater/UpdaterViewAdapter.cpp" line="+15"/>
+        <location line="-58"/>
         <source>done</source>
         <translation>abgeschlossen</translation>
     </message>
@@ -11086,7 +11023,7 @@ Kleiner Text auf dem Bildschirm verliert früher an Qualität als Videoinhalte. 
         <translation>%1 → %2</translation>
     </message>
     <message>
-        <location line="+27"/>
+        <location line="+47"/>
         <location line="+182"/>
         <source>Downloading update</source>
         <translation>Update wird heruntergeladen</translation>
@@ -11099,24 +11036,24 @@ Kleiner Text auf dem Bildschirm verliert früher an Qualität als Videoinhalte. 
     </message>
     <message>
         <location line="-188"/>
-        <location line="+197"/>
+        <location line="+198"/>
         <source>Installing new files</source>
         <translation>Neue Dateien werden installiert</translation>
     </message>
     <message>
-        <location line="-196"/>
-        <location line="+203"/>
+        <location line="-197"/>
+        <location line="+204"/>
         <source>Verifying installation</source>
         <translation>Installation wird geprüft</translation>
     </message>
     <message>
-        <location line="-202"/>
-        <location line="+209"/>
+        <location line="-203"/>
+        <location line="+210"/>
         <source>Launching ExoSnap</source>
         <translation>ExoSnap wird gestartet</translation>
     </message>
     <message>
-        <location line="-193"/>
+        <location line="-194"/>
         <source>EXOSNAP WAS NOT REINSTALLED</source>
         <translation>EXOSNAP WURDE NICHT NEU INSTALLIERT</translation>
     </message>
@@ -11229,7 +11166,7 @@ Kleiner Text auf dem Bildschirm verliert früher an Qualität als Videoinhalte. 
         <translation>Das geprüfte Paket liegt bereit, bevor ExoSnap geschlossen wird.</translation>
     </message>
     <message>
-        <location line="+6"/>
+        <location line="+7"/>
         <source>Reinstalling ExoSnap</source>
         <translation>ExoSnap wird erneut installiert</translation>
     </message>
@@ -11279,7 +11216,7 @@ Kleiner Text auf dem Bildschirm verliert früher an Qualität als Videoinhalte. 
         <translation>Ihre installierte Version bleibt unverändert.</translation>
     </message>
     <message>
-        <location line="+23"/>
+        <location line="+24"/>
         <location line="+8"/>
         <location line="+12"/>
         <source>Close</source>
@@ -11332,7 +11269,7 @@ Kleiner Text auf dem Bildschirm verliert früher an Qualität als Videoinhalte. 
         <translation>Erneut herunterladen</translation>
     </message>
     <message>
-        <location line="+2"/>
+        <location line="+3"/>
         <source>Open ExoSnap</source>
         <translation>ExoSnap öffnen</translation>
     </message>
@@ -11360,7 +11297,7 @@ Kleiner Text auf dem Bildschirm verliert früher an Qualität als Videoinhalte. 
 <context>
     <name>UpdaterWorker</name>
     <message>
-        <location filename="../../apps/updater/UpdaterWorker.cpp" line="+342"/>
+        <location filename="../../apps/updater/UpdaterWorker.cpp" line="+355"/>
         <source>This installation is managed by %1. Update it with %2.</source>
         <translation>Diese Installation wird durch %1 verwaltet. Aktualisieren Sie sie mit %2.</translation>
     </message>
@@ -12591,12 +12528,12 @@ Kleiner Text auf dem Bildschirm verliert früher an Qualität als Videoinhalte. 
 <context>
     <name>exosnap::quick::GamepadOverlay</name>
     <message>
-        <location filename="../quick/ExoSnap/Quick/GamepadOverlay.cpp" line="+50"/>
+        <location filename="../quick/ExoSnap/Quick/GamepadOverlay.cpp" line="+87"/>
         <source>GameInput unavailable: %1</source>
         <translation>GameInput nicht verfügbar: %1</translation>
     </message>
     <message>
-        <location line="+153"/>
+        <location line="+158"/>
         <source>Controller connected</source>
         <translation>Controller verbunden</translation>
     </message>
@@ -12616,22 +12553,85 @@ Kleiner Text auf dem Bildschirm verliert früher an Qualität als Videoinhalte. 
         <translation>DualSense</translation>
     </message>
     <message>
-        <location line="+1"/>
+        <location line="-221"/>
+        <location line="+222"/>
         <source>Xbox Series</source>
         <translation>Xbox Series</translation>
     </message>
     <message>
+        <location line="-223"/>
+        <source>PlayStation 5 DualSense</source>
+        <translation>PlayStation 5 DualSense</translation>
+    </message>
+    <message>
+        <location line="+2"/>
+        <source>Generic dual-stick</source>
+        <translation>Generischer Dual-Stick-Controller</translation>
+    </message>
+    <message>
         <location line="+1"/>
+        <source>PlayStation 4 DualShock 4</source>
+        <translation>PlayStation 4 DualShock 4</translation>
+    </message>
+    <message>
+        <location line="+1"/>
+        <location line="+220"/>
         <source>Xbox One</source>
         <translation>Xbox One</translation>
     </message>
     <message>
-        <location line="+1"/>
+        <location line="-219"/>
+        <location line="+220"/>
         <source>Switch Pro</source>
         <translation>Switch Pro</translation>
     </message>
     <message>
+        <location line="-219"/>
+        <source>Joy-Cons in grip</source>
+        <translation>Joy-Cons in Halterung</translation>
+    </message>
+    <message>
         <location line="+1"/>
+        <source>Separate Joy-Cons</source>
+        <translation>Getrennte Joy-Cons</translation>
+    </message>
+    <message>
+        <location line="+1"/>
+        <source>Joy-Con L</source>
+        <translation>Joy-Con L</translation>
+    </message>
+    <message>
+        <location line="+1"/>
+        <source>Joy-Con R</source>
+        <translation>Joy-Con R</translation>
+    </message>
+    <message>
+        <location line="+1"/>
+        <source>Joy-Con L (horizontal)</source>
+        <translation>Joy-Con L (horizontal)</translation>
+    </message>
+    <message>
+        <location line="+1"/>
+        <source>Joy-Con R (horizontal)</source>
+        <translation>Joy-Con R (horizontal)</translation>
+    </message>
+    <message>
+        <location line="+1"/>
+        <source>Steam Controller (2015)</source>
+        <translation>Steam Controller (2015)</translation>
+    </message>
+    <message>
+        <location line="+1"/>
+        <source>Steam Deck</source>
+        <translation>Steam Deck</translation>
+    </message>
+    <message>
+        <location line="+1"/>
+        <source>Automatic layout</source>
+        <translation>Automatisches Layout</translation>
+    </message>
+    <message>
+        <location line="+212"/>
         <source>Gamepad</source>
         <translation>Gamepad</translation>
     </message>
@@ -12690,7 +12690,7 @@ Kleiner Text auf dem Bildschirm verliert früher an Qualität als Videoinhalte. 
 <context>
     <name>exosnap::quick::RecordViewModelAdapter</name>
     <message>
-        <location filename="../quick/ExoSnap/Quick/RecordViewModelAdapter.cpp" line="-799"/>
+        <location filename="../quick/ExoSnap/Quick/RecordViewModelAdapter.cpp" line="-801"/>
         <source>Draw custom</source>
         <translation>Bereich zeichnen</translation>
     </message>
@@ -12767,7 +12767,7 @@ Kleiner Text auf dem Bildschirm verliert früher an Qualität als Videoinhalte. 
         <translation>Kamera aktiv</translation>
     </message>
     <message>
-        <location line="+399"/>
+        <location line="+401"/>
         <source>Window lifetime could not be verified. Refresh the list or choose another source.</source>
         <translation>Die Lebensdauer des Fensters konnte nicht überprüft werden. Aktualisieren Sie die Liste oder wählen Sie eine andere Quelle.</translation>
     </message>
@@ -13751,148 +13751,29 @@ Kleiner Text auf dem Bildschirm verliert früher an Qualität als Videoinhalte. 
     </message>
 </context>
 <context>
-    <name>ExoSetupHeader</name>
-    <message>
-        <location filename="../quick/ExoSnap/Quick/ExoSetupHeader.qml" line="+11"/>
-        <source>Close</source>
-        <translation>Schließen</translation>
-    </message>
-    <message>
-        <location line="+40"/>
-        <source>Minimize</source>
-        <translation>Minimieren</translation>
-    </message>
-</context>
-<context>
-    <name>SetupDecision</name>
-    <message>
-        <location filename="../../apps/setup/quick/SetupDecision.qml" line="+68"/>
-        <source>Create a desktop shortcut</source>
-        <translation>Desktopverknüpfung erstellen</translation>
-    </message>
-    <message>
-        <location line="+19"/>
-        <source>Also delete my ExoSnap data</source>
-        <translation>Auch meine ExoSnap-Daten löschen</translation>
-    </message>
-    <message>
-        <location line="+21"/>
-        <source>Settings, presets, history, caches, recovery data, logs and crash reports. This can&apos;t be undone.</source>
-        <translation>Einstellungen, Voreinstellungen, Verlauf, Caches, Wiederherstellungsdaten, Protokolle und Absturzberichte. Das kann nicht rückgängig gemacht werden.</translation>
-    </message>
-    <message>
-        <location line="+21"/>
-        <source>Repair</source>
-        <translation>Reparieren</translation>
-    </message>
-    <message>
-        <location line="+0"/>
-        <source>Replace missing or damaged program files</source>
-        <translation>Fehlende oder beschädigte Programmdateien ersetzen</translation>
-    </message>
-    <message>
-        <location line="+1"/>
-        <source>Uninstall</source>
-        <translation>Deinstallieren</translation>
-    </message>
-    <message>
-        <location line="+0"/>
-        <source>Remove ExoSnap from this computer</source>
-        <translation>ExoSnap von diesem Computer entfernen</translation>
-    </message>
-</context>
-<context>
-    <name>SetupMain</name>
-    <message>
-        <location filename="../../apps/setup/quick/SetupMain.qml" line="+10"/>
-        <source>ExoSnap Setup</source>
-        <translation>ExoSnap-Setup</translation>
-    </message>
-    <message>
-        <location line="+33"/>
-        <source>Setup</source>
-        <translation>Setup</translation>
-    </message>
-    <message>
-        <location line="+3"/>
-        <source>Close Setup</source>
-        <translation>Setup schließen</translation>
-    </message>
-    <message>
-        <location line="+31"/>
-        <source>View license</source>
-        <translation>Lizenz anzeigen</translation>
-    </message>
-    <message>
-        <location line="+7"/>
-        <source>Details</source>
-        <translation>Details</translation>
-    </message>
-    <message>
-        <location line="+7"/>
-        <source>Open log</source>
-        <translation>Protokoll öffnen</translation>
-    </message>
-    <message>
-        <location line="+65"/>
-        <source>Cancel Setup?</source>
-        <translation>Setup abbrechen?</translation>
-    </message>
-    <message>
-        <location line="+9"/>
-        <source>Keep going</source>
-        <translation>Fortfahren</translation>
-    </message>
-    <message>
-        <location line="+1"/>
-        <source>Cancel Setup</source>
-        <translation>Setup abbrechen</translation>
-    </message>
-    <message>
-        <location line="+29"/>
-        <source>Close</source>
-        <translation>Schließen</translation>
-    </message>
-    <message>
-        <location line="+13"/>
-        <source>License</source>
-        <translation>Lizenz</translation>
-    </message>
-    <message>
-        <location line="+16"/>
-        <source>Back</source>
-        <translation>Zurück</translation>
-    </message>
-</context>
-<context>
-    <name>SetupStatus</name>
-    <message>
-        <location filename="../../apps/setup/quick/SetupStatus.qml" line="+40"/>
-        <source>%1%</source>
-        <translation>%1 %</translation>
-    </message>
-</context>
-<context>
     <name>exosnap::setup::SetupController</name>
     <message>
-        <source>This step can't be interrupted.</source>
+        <location filename="../../apps/setup/SetupController.cpp" line="+174"/>
+        <source>This step can&apos;t be interrupted.</source>
         <translation>Dieser Schritt kann nicht unterbrochen werden.</translation>
     </message>
     <message>
+        <location line="+18"/>
         <source>Close ExoSnap and any apps using its files, then try Setup again.</source>
         <translation>Schließe ExoSnap und alle Apps, die auf seine Dateien zugreifen, und starte Setup erneut.</translation>
     </message>
     <message>
-        <source>ExoSnap is installed but couldn't be started. Launch it from the Start menu.</source>
+        <location line="-11"/>
+        <source>ExoSnap is installed but couldn&apos;t be started. Launch it from the Start menu.</source>
         <translation>ExoSnap ist installiert, konnte aber nicht gestartet werden. Starte es über das Startmenü.</translation>
     </message>
     <message>
-        <location filename="../../apps/setup/SetupController.cpp" line="+87"/>
+        <location line="-78"/>
         <source>Windows Installer returned error %1.</source>
         <translation>Windows Installer hat den Fehler %1 zurückgegeben.</translation>
     </message>
     <message>
-        <location line="+18"/>
+        <location line="+30"/>
         <source>%1 → %2</source>
         <translation>%1 → %2</translation>
     </message>
@@ -13982,7 +13863,7 @@ Kleiner Text auf dem Bildschirm verliert früher an Qualität als Videoinhalte. 
         <translation>Entfernt die App, ihren Startmenüeintrag und ihre Verknüpfung. Aufnahmen und exportierte Dateien bleiben immer erhalten.</translation>
     </message>
     <message>
-        <location line="+3"/>
+        <location line="+4"/>
         <source>Cancelling. Waiting for Windows Installer to finish safely.</source>
         <translation>Abbruch läuft. Es wird gewartet, bis Windows Installer sicher beendet werden kann.</translation>
     </message>
@@ -13992,7 +13873,7 @@ Kleiner Text auf dem Bildschirm verliert früher an Qualität als Videoinhalte. 
         <translation>Wird abgeschlossen. Dieser Schritt kann nicht unterbrochen werden.</translation>
     </message>
     <message>
-        <location line="+2"/>
+        <location line="+3"/>
         <source>Preparing Microsoft Visual C++ Runtime</source>
         <translation>Microsoft Visual C++ Runtime wird vorbereitet</translation>
     </message>
@@ -14002,7 +13883,7 @@ Kleiner Text auf dem Bildschirm verliert früher an Qualität als Videoinhalte. 
         <translation>Programmdateien werden vorbereitet</translation>
     </message>
     <message>
-        <location line="+4"/>
+        <location line="+6"/>
         <source>Your ExoSnap data was deleted. Recordings were kept.</source>
         <translation>Deine ExoSnap-Daten wurden gelöscht. Aufnahmen wurden beibehalten.</translation>
     </message>
@@ -14027,7 +13908,7 @@ Kleiner Text auf dem Bildschirm verliert früher an Qualität als Videoinhalte. 
         <translation>Setup wurde beendet. Aufnahmen und exportierte Dateien wurden beibehalten.</translation>
     </message>
     <message>
-        <location line="+2"/>
+        <location line="+5"/>
         <source>Windows Installer stopped with error %1. Restart Windows before trying again.</source>
         <translation>Windows Installer wurde mit dem Fehler %1 beendet. Starte Windows vor einem erneuten Versuch neu.</translation>
     </message>

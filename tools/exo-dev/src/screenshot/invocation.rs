@@ -95,10 +95,11 @@ pub struct ShotSpec {
     /// `edit-selected-clip`. Defaults to the Edit page.
     #[arg(long)]
     pub edit: Option<String>,
-    /// Recording-profile section (`EXOSNAP_VISUAL_PROFILE_SECTION`).
+    /// Recording settings card (`EXOSNAP_VISUAL_PROFILE_SECTION`).
     #[arg(long)]
     pub profile: Option<String>,
-    /// Recording workspace panel (`EXOSNAP_VISUAL_RECORD_PANEL`).
+    /// Preview overlay fixture: `overlay-menu`, `gamepad`, or `gamepad-hidden`
+    /// (`EXOSNAP_VISUAL_RECORD_PANEL`).
     #[arg(long, conflicts_with = "profile")]
     pub record_panel: Option<String>,
     /// Diagnostics fixture (`EXOSNAP_VISUAL_DIAG_SCENARIO`), for example `issues`.
@@ -125,7 +126,7 @@ pub struct ShotSpec {
     #[arg(long, value_enum)]
     pub popup: Option<Popup>,
     /// Named modal dialog: `close-guard`, `preset-delete`, `preset-rename`,
-    /// `preset-save-as`. Preset dialogs use `--page record`.
+    /// `preset-save-as`. Preset dialogs use `--page settings`.
     #[arg(long)]
     pub dialog: Option<String>,
     /// Expert recording-profile controls.

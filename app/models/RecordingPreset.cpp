@@ -795,6 +795,9 @@ bool NormalizedConfigEquals(const RecordingPresetConfig& a, const RecordingPrese
     if (a.webcam.enabled != b.webcam.enabled) {
         return false;
     }
+    if (a.webcam.output_visible != b.webcam.output_visible) {
+        return false;
+    }
     if (a.webcam.device_id != b.webcam.device_id) {
         return false;
     }
@@ -1090,6 +1093,9 @@ std::string_view ConfigDirtyDifference(const RecordingPresetConfig& a, const Rec
 
     if (a.webcam.enabled != b.webcam.enabled) {
         return "webcam.enabled";
+    }
+    if (a.webcam.output_visible != b.webcam.output_visible) {
+        return "webcam.output_visible";
     }
     if (a.webcam.device_id != b.webcam.device_id) {
         return "webcam.device_id";

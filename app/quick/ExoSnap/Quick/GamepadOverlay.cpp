@@ -52,9 +52,13 @@ QVariantList GamepadOverlay::layouts() const {
                              tr("Joy-Con R (horizontal)"),
                              tr("Steam Controller (2015)"),
                              tr("Steam Deck")};
-    QVariantList result{QVariantMap{{QStringLiteral("value"), -1}, {QStringLiteral("label"), tr("Automatic layout")}}};
+    QVariantList result{QVariantMap{{QStringLiteral("value"), -1},
+                                    {QStringLiteral("label"), tr("Automatic layout")},
+                                    {QStringLiteral("selectable"), true}}};
     for (qsizetype index = 0; index < labels.size(); ++index)
-        result.push_back(QVariantMap{{QStringLiteral("value"), index}, {QStringLiteral("label"), labels[index]}});
+        result.push_back(QVariantMap{{QStringLiteral("value"), index},
+                                     {QStringLiteral("label"), labels[index]},
+                                     {QStringLiteral("selectable"), true}});
     return result;
 }
 
@@ -130,6 +134,11 @@ void GamepadOverlay::Configure(GamepadOverlaySettings settings) {
 void GamepadOverlay::setEnabled(bool value) {
     auto settings = Settings();
     settings.enabled = value;
+    Configure(settings);
+}
+void GamepadOverlay::setOutputVisible(bool value) {
+    auto settings = Settings();
+    settings.output_visible = value;
     Configure(settings);
 }
 void GamepadOverlay::setLayout(int value) {
@@ -269,11 +278,16 @@ void GamepadOverlay::Poll() {
         }))
         options.push_back(QVariantMap{{QStringLiteral("value"), selected},
                                       {QStringLiteral("label"), tr("Selected controller (disconnected)")}});
+    for (auto& option : options) {
+        auto entry = option.toMap();
+        entry.insert(QStringLiteral("selectable"), true);
+        option = entry;
+    }
     if (devices_ != options) {
         devices_ = std::move(options);
         emit devicesChanged();
     }
-    const auto next = Snapshot(gamepad::GameInputSource::NowCapture100ns());
+    const auto next = PreviewSnapshot(gamepad::GameInputSource::NowCapture100ns());
     const bool changed = engine::SpriteLayerChanged(last_notified_.get(), next.get());
     last_notified_ = next;
     if (changed)
@@ -281,8 +295,16 @@ void GamepadOverlay::Poll() {
 }
 
 std::shared_ptr<const engine::SpriteLayerSnapshot> GamepadOverlay::Snapshot(uint64_t timestamp) {
+    return BuildSnapshot(timestamp, false);
+}
+
+std::shared_ptr<const engine::SpriteLayerSnapshot> GamepadOverlay::PreviewSnapshot(uint64_t timestamp) {
+    return BuildSnapshot(timestamp, true);
+}
+
+std::shared_ptr<const engine::SpriteLayerSnapshot> GamepadOverlay::BuildSnapshot(uint64_t timestamp, bool preview) {
     const std::scoped_lock lock(mutex_);
-    if (!settings_.enabled || !sprites_)
+    if (!settings_.enabled || !sprites_ || (!preview && !settings_.output_visible))
         return nullptr;
     const auto reading = input_ ? input_->StateAt(timestamp) : std::nullopt;
     auto state = reading && reading->connected ? reading->state : gamepad::GamepadState{};
@@ -303,7 +325,7 @@ std::shared_ptr<const engine::SpriteLayerSnapshot> GamepadOverlay::Snapshot(uint
     const float height = 320 * scale / content_height_;
     const engine::SpriteContentRect placement{settings_.x + (settings_.width - width) / 2,
                                               settings_.y + (settings_.height - height) / 2, width, height};
-    cached_ = GamepadLayer(*sprites_, state, placement, settings_.opacity);
+    cached_ = GamepadLayer(*sprites_, state, placement, settings_.opacity * (settings_.output_visible ? 1.0F : 0.35F));
     cached_state_ = state;
     cached_revision_ = revision_;
     return cached_;

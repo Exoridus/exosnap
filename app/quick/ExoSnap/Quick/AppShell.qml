@@ -7,30 +7,23 @@ import QtQuick.Layouts
 Item {
     id: root
 
-    RecordingWorkspaceState { id: recordingWorkspaceState }
+    property int pendingSettingsFocus: -1
     Binding {
         target: root.settingsAdapter
         property: "active"
         value: root.displayedPage === ShellAdapter.SettingsPage
-               || (root.displayedPage === ShellAdapter.RecordPage && recordingWorkspaceState.profileState !== "Closed")
     }
     Connections {
         target: root.settingsAdapter
         function onSettingsFocusRequested(target: int): void {
-            if (target === SettingsAdapter.Presence || target === SettingsAdapter.Appearance
-                || target === SettingsAdapter.Hotkeys || target === SettingsAdapter.Updates)
-                return;
-            root.navigateTo(ShellAdapter.RecordPage);
-            recordPage.openProfile(target);
+            root.openRecordingSettings(target);
         }
     }
-    Connections {
-        target: settingsLoader.item
-        ignoreUnknownSignals: true
-        function onRecordingProfileRequested(target: int): void {
-            root.navigateTo(ShellAdapter.RecordPage);
-            recordPage.openProfile(target);
-        }
+    function openRecordingSettings(target: int): void {
+        root.pendingSettingsFocus = target;
+        root.navigateTo(ShellAdapter.SettingsPage);
+        if (settingsLoader.status === Loader.Ready)
+            settingsLoader.item.focusTarget(target);
     }
 
     required property AboutViewModelAdapter aboutViewModel
@@ -146,7 +139,7 @@ Item {
         case ShellAdapter.SettingsPage:
             if (settingsLoader.status === Loader.Null)
                 settingsLoader.setSource(Qt.resolvedUrl("SettingsPage.qml"), {
-                    settings: root.settingsAdapter
+                    settings: root.settingsAdapter, pendingFocusTarget: root.pendingSettingsFocus
                 });
             break;
         case ShellAdapter.DiagnosticsPage:
@@ -717,9 +710,9 @@ Item {
             Layout.fillHeight: true
 
             RecordPage {
+                onSettingsRequested: target => root.openRecordingSettings(target)
                 id: recordPage
                 gamepadOverlay: root.gamepadOverlay
-                workspaceState: recordingWorkspaceState
                 settings: root.settingsAdapter
                 recordViewModel: root.recordViewModel
                 clipAdapter: root.clipAdapter

@@ -1618,6 +1618,17 @@ void QuickApplication::wireRecordCommands() {
                      [this]() { updateMeterServices(); });
     QObject::connect(&record_view_model_adapter_, &RecordViewModelAdapter::webcamOverlayRectRequested,
                      &record_view_model_adapter_, [this](const QRectF& rect) { updateWebcamOverlay(rect); });
+    QObject::connect(&record_view_model_adapter_, &RecordViewModelAdapter::webcamOutputVisibleRequested,
+                     &record_view_model_adapter_, [this](bool visible) {
+                         auto webcam = webcamSettingsForCapture();
+                         webcam.output_visible = visible;
+                         live_config_.webcam.output_visible = visible;
+                         settings_adapter_.updateActiveWebcam(webcam);
+                         recording_coordinator_->SetWebcamSettings(webcamSettingsForCapture());
+                         syncConfigMirrors();
+                         webcam_overlay_persist_timer_.start();
+                         synchronizeRecordState();
+                     });
 }
 
 void QuickApplication::synchronizeRecordState() {
@@ -1659,7 +1670,7 @@ void QuickApplication::synchronizeRecordState() {
     record_view_model_adapter_.setWebcamPresentation(
         QRectF(record_config.webcam.overlay.x_norm, record_config.webcam.overlay.y_norm,
                record_config.webcam.overlay.w_norm, record_config.webcam.overlay.h_norm),
-        record_config.webcam.mirror, record_config.webcam.opacity);
+        record_config.webcam.mirror, record_config.webcam.opacity, record_config.webcam.output_visible);
     const WebcamChromaKeySettings::ActiveRgb key_color = record_config.webcam.chroma_key.active_color();
     exosnap::engine::ChromaKeyParams chroma;
     chroma.enabled = record_config.webcam.chroma_key.enabled;
@@ -1669,7 +1680,9 @@ void QuickApplication::synchronizeRecordState() {
     chroma.tolerance = record_config.webcam.chroma_key.tolerance;
     chroma.softness = record_config.webcam.chroma_key.softness;
     chroma.spill_reduction = record_config.webcam.chroma_key.spill_reduction;
-    record_preview_adapter_.setWebcamStyle(record_config.webcam.mirror, record_config.webcam.opacity, chroma);
+    record_preview_adapter_.setWebcamStyle(
+        record_config.webcam.mirror,
+        record_config.webcam.opacity * (record_config.webcam.output_visible ? 1.0f : 0.35f), chroma);
     webcam_preview_feed_.setStyle(record_config.webcam.mirror, record_config.webcam.opacity, chroma);
     // Latched at the first live state and cleared when the session ends: it lists
     // the sources that were resolved into a track, which is what a live mute can
@@ -2083,10 +2096,10 @@ void QuickApplication::updateCountdown() {
 
 void QuickApplication::toggleSource(const QString& key) {
     if (key == QStringLiteral("webcam")) {
-        if (!webcam_available_)
-            return;
         auto webcam =
             settings_adapter_.recordingActive() ? settings_adapter_.sessionConfig().webcam : live_config_.webcam;
+        if (!webcam_available_ && !webcam.enabled)
+            return;
         webcam.enabled = !webcam.enabled;
         live_config_.webcam.enabled = webcam.enabled;
         settings_adapter_.updateActiveWebcam(webcam);

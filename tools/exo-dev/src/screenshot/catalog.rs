@@ -211,7 +211,7 @@ pub fn set(name: &str, values: &ProductValues) -> anyhow::Result<Vec<(String, Sh
                         profile: Some(section.to_string()),
                         expert,
                         collapse_all: true,
-                        ..page(Page::Record)
+                        ..page(Page::Settings)
                     };
                     let full_pages: &[bool] =
                         if ["preset", "microphone", "audio"].contains(&section) {
@@ -238,25 +238,20 @@ pub fn set(name: &str, values: &ProductValues) -> anyhow::Result<Vec<(String, Sh
             shots
         }
         "workspace" => {
-            let mut shots: Vec<_> = [
-                "sources",
-                "sources-pinned",
-                "profile-pinned",
-                "panels-pinned",
-            ]
-            .into_iter()
-            .map(|panel| {
-                named(ShotSpec {
-                    record_panel: Some(panel.to_string()),
-                    record_state: Some("ready".to_string()),
-                    ..page(Page::Record)
+            let mut shots: Vec<_> = ["overlay-menu", "gamepad", "gamepad-hidden"]
+                .into_iter()
+                .map(|panel| {
+                    named(ShotSpec {
+                        record_panel: Some(panel.to_string()),
+                        record_state: Some("ready".to_string()),
+                        ..page(Page::Record)
+                    })
                 })
-            })
-            .collect();
+                .collect();
             for (state, panel) in [
-                ("recording", "sources"),
-                ("paused", "sources"),
-                ("recording", "profile-pinned"),
+                ("recording", "overlay-menu"),
+                ("paused", "overlay-menu"),
+                ("recording", "gamepad-hidden"),
             ] {
                 shots.push(named(ShotSpec {
                     record_panel: Some(panel.to_string()),
@@ -363,7 +358,7 @@ pub fn set(name: &str, values: &ProductValues) -> anyhow::Result<Vec<(String, Sh
                     .map(|dialog| {
                         named(ShotSpec {
                             dialog: Some(dialog.to_string()),
-                            ..page(Page::Record)
+                            ..page(Page::Settings)
                         })
                     }),
             );
@@ -547,8 +542,20 @@ mod tests {
                 .as_deref()
                 .is_some_and(|dialog| dialog.starts_with("preset-"))
             {
-                assert_eq!(shot.page, Some(Page::Record));
+                assert_eq!(shot.page, Some(Page::Settings));
             }
+        }
+        assert!(
+            set("profile", &values)
+                .unwrap()
+                .iter()
+                .all(|(_, shot)| shot.page == Some(Page::Settings))
+        );
+        for (_, shot) in set("workspace", &values).unwrap() {
+            assert!(matches!(
+                shot.record_panel.as_deref(),
+                Some("overlay-menu" | "gamepad" | "gamepad-hidden")
+            ));
         }
         let diagnostics = set("diagnostics", &values).unwrap();
         assert!(diagnostics.iter().all(|(_, shot)| !shot.expert));

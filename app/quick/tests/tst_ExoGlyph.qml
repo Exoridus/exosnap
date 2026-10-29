@@ -76,7 +76,9 @@ Item {
         "RangeTool": ExoGlyph.RangeTool,
         "Grip": ExoGlyph.Grip,
         "Mixer": ExoGlyph.Mixer,
-        "Shield": ExoGlyph.Shield
+        "Shield": ExoGlyph.Shield,
+        "Eye": ExoGlyph.Eye,
+        "EyeClosed": ExoGlyph.EyeClosed
     })
 
     Component {

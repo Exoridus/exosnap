@@ -27,6 +27,7 @@ ExoCard {
         // problem in the row's warning line.
         ExoTextField {
             id: destinationField
+            implicitWidth: ExoTheme.controlSlotWide
 
             value: root.settings.outputFolder
             enabled: !root.settings.controlsLocked
@@ -55,6 +56,7 @@ ExoCard {
 
         ExoTextField {
             id: patternField
+            implicitWidth: ExoTheme.controlSlot
 
             value: root.settings.namingPattern
             enabled: !root.settings.controlsLocked
@@ -197,6 +199,8 @@ ExoCard {
 
         Label {
             id: savesToLabel
+            Layout.preferredWidth: ExoTheme.controlSlotWide
+            Layout.minimumWidth: 0
 
             text: root.settings.savesToText
             textFormat: Text.PlainText

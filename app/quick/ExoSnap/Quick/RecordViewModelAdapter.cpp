@@ -773,14 +773,17 @@ void RecordViewModelAdapter::setDeviceState(bool microphone_available, bool webc
     emit changed();
 }
 
-void RecordViewModelAdapter::setWebcamPresentation(QRectF overlay_rect, bool mirror, double opacity) {
+void RecordViewModelAdapter::setWebcamPresentation(QRectF overlay_rect, bool mirror, double opacity,
+                                                   bool output_visible) {
     overlay_rect = overlay_rect.normalized().intersected(QRectF(0.0, 0.0, 1.0, 1.0));
     opacity = std::clamp(opacity, 0.0, 1.0);
-    if (webcam_overlay_rect_ == overlay_rect && webcam_mirror_ == mirror && qFuzzyCompare(webcam_opacity_, opacity))
+    if (webcam_overlay_rect_ == overlay_rect && webcam_mirror_ == mirror && qFuzzyCompare(webcam_opacity_, opacity) &&
+        webcam_output_visible_ == output_visible)
         return;
     webcam_overlay_rect_ = overlay_rect;
     webcam_mirror_ = mirror;
     webcam_opacity_ = opacity;
+    webcam_output_visible_ = output_visible;
     emit changed();
 }
 
@@ -1171,6 +1174,10 @@ void RecordViewModelAdapter::requestToggleSource(const QString& key) {
 }
 void RecordViewModelAdapter::requestWebcamOverlayRect(QRectF normalized_rect) {
     emit webcamOverlayRectRequested(normalized_rect);
+}
+void RecordViewModelAdapter::requestWebcamOutputVisible(bool visible) {
+    if (webcamOverlayEditable())
+        emit webcamOutputVisibleRequested(visible);
 }
 void RecordViewModelAdapter::requestCountdownSeconds(int seconds) {
     emit countdownSecondsRequested(seconds);

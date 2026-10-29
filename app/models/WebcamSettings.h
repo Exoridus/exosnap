@@ -73,6 +73,7 @@ struct WebcamChromaKeySettings {
 
 struct WebcamSettings {
     bool enabled = false;
+    bool output_visible = true;
     std::string device_id;
     int width = 1280;
     int height = 720;
