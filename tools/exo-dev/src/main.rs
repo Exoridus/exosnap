@@ -456,6 +456,16 @@ enum PrCommand {
         #[arg(long)]
         auto: bool,
     },
+    /// Validates every member and atomically squash-merges a native stack.
+    /// Without --confirm, prints the exact subjects and merges nothing.
+    MergeStack {
+        /// Native GitHub stack number.
+        #[arg(long)]
+        number: u32,
+        /// Required to actually merge every member of this stack.
+        #[arg(long)]
+        confirm: bool,
+    },
 }
 
 #[derive(Args)]
@@ -1022,6 +1032,9 @@ fn run_cli() -> anyhow::Result<ExitCode> {
                 delete_branch,
                 auto,
             } => pr_merge(&repo_root, number, confirm, delete_branch, auto),
+            PrCommand::MergeStack { number, confirm } => {
+                pr_merge_stack(&repo_root, number, confirm)
+            }
         },
         Command::Privacy { privacy } => match privacy {
             PrivacyCommand::NetworkEgress => privacy_network_egress(&repo_root),
@@ -2133,6 +2146,22 @@ fn pr_merge(
     let outcome = exo_dev::pr::merge(repo_root, &exo_dev::pr::RealGh::new(), &request)?;
     print!("{}", exo_dev::pr::render_merge(&outcome));
     Ok(ExitCode::SUCCESS)
+}
+
+fn pr_merge_stack(
+    repo_root: &std::path::Path,
+    number: u32,
+    confirm: bool,
+) -> anyhow::Result<ExitCode> {
+    let request = exo_dev::pr::MergeStackRequest { number, confirm };
+    let outcome = exo_dev::pr::merge_stack(repo_root, &exo_dev::pr::RealGh::new(), &request)?;
+    print!("{}", exo_dev::pr::render_merge_stack(&outcome));
+    Ok(match outcome {
+        exo_dev::pr::MergeStackOutcome::Preview { .. }
+        | exo_dev::pr::MergeStackOutcome::Merged { .. } => ExitCode::SUCCESS,
+        exo_dev::pr::MergeStackOutcome::Pending { .. }
+        | exo_dev::pr::MergeStackOutcome::Enqueued { .. } => ExitCode::from(2),
+    })
 }
 fn privacy_network_egress(repo_root: &std::path::Path) -> anyhow::Result<ExitCode> {
     let report = exo_dev::privacy::network_egress::check_network_egress(repo_root)?;
