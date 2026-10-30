@@ -38,7 +38,7 @@ Include-cleaner checks direct standard and project dependencies. Its Windows SDK
 
 ## Manual include-cleaner repairs
 
-`cargo exo-dev lint clang-tidy` is read-only and has no `--fix` or `--apply` option. Hooks and CI do not apply clang-tidy replacements. Debug CI runs configure, `all_qmllint`, build, blocking clang-tidy, then the complete CTest suite excluding `live`. The completed build supplies Ninja dependency data for changed-header scope. Blocking analysis failures stop before CTest.
+`cargo exo-dev lint clang-tidy` is read-only and has no `--fix` or `--apply` option. Hooks and CI do not apply clang-tidy replacements. Debug CI runs configure, focused QML contracts, `all_qmllint`, the complete build, blocking clang-tidy, then the complete CTest suite excluding `live`. The completed build supplies Ninja dependency data for changed-header scope. Blocking analysis failures stop before CTest.
 
 For a narrow repair, first run the read-only gate against the configured and built Ninja tree. `--base HEAD` selects uncommitted changes against HEAD. Use another explicit revision when reviewing committed changes:
 
@@ -201,6 +201,8 @@ to a JSON output path, then run cargo test --locked --manifest-path tools/Cargo.
 This measures extraction/parsing, not analysis correctness or reusable cache verdicts.
 
 Compiler caching is distinct. Use `sccache --show-stats` after a build to inspect the active server. Size its cache for the number of build configurations and worktrees in use; a fixed historical hit rate is not a guarantee. A changed absolute source path can change cache identity. Do not enable path rewriting merely for hits until crash symbolication against the resulting PDB has been verified.
+
+`SCCACHE_BASEDIRS` accepts absolute roots separated by `;` on Windows, as described in [sccache's configuration reference](https://github.com/mozilla/sccache/blob/main/docs/Configuration.md). Normalizing cache keys does not establish that the object is independent of its source root. A reused object can retain another checkout's `__FILE__` strings and embedded debug paths. Check observable paths, compiler arguments, generated inputs and symbolication before adopting cross-root normalization. Keep the default unchanged when those identities differ. Measure experiments with a separate server port and cache directory so active builds retain their configuration and statistics.
 
 ```powershell
 [Environment]::SetEnvironmentVariable('SCCACHE_CACHE_SIZE', '20G', 'User')

@@ -65,6 +65,7 @@ pub struct RealExecutor {
     ctx: Context,
     msvc_ready: bool,
     failed_tests: Vec<String>,
+    test_log: Option<PathBuf>,
     /// Inherit marks of the host locks the running step holds.
     lock_env: Vec<(String, String)>,
     /// The locks, MSVC import and environment the test runner uses.
@@ -77,6 +78,7 @@ impl RealExecutor {
             ctx,
             msvc_ready: false,
             failed_tests: Vec::new(),
+            test_log: None,
             lock_env: Vec::new(),
             tests_host: Box::new(crate::test::host::RealHost::default()),
         }
@@ -419,6 +421,8 @@ impl RealExecutor {
                 )
             }
             StepId::DocsSuperpowersRemoved => {
+                let git = crate::git::Git::new(&ctx.repo_root);
+                let index_env: Vec<_> = git.index_file().map(|index| ("GIT_INDEX_FILE".to_string(), index.to_string_lossy().into_owned())).into_iter().collect();
                 let exo_verify = match self.exo_verify("docs-superpowers-removed") {
                     Ok(path) => path,
                     Err(outcome) => return outcome,
@@ -432,7 +436,7 @@ impl RealExecutor {
                         "--repo-root".to_string(),
                         self.ctx.repo_root.display().to_string(),
                     ],
-                    Opts::default(),
+                    Opts { env: &index_env, ..Opts::default() },
                 )
             }
             StepId::CommitPolicy => {
@@ -649,7 +653,7 @@ impl RealExecutor {
                     },
                 )
             }
-            StepId::Tests => {
+            StepId::QmlSmoke | StepId::Tests => {
                 let options = crate::test::runner::Options {
                     build_dir: ctx.tree(),
                     config: ctx.config.clone(),
@@ -659,6 +663,14 @@ impl RealExecutor {
                         .unwrap_or_default()
                         .to_string(),
                     jobs: ctx.jobs,
+                    required_tests: check.evidence.get("requiredTests")
+                        .and_then(serde_json::Value::as_array)
+                        .into_iter().flatten().filter_map(serde_json::Value::as_str)
+                        .map(str::to_string).collect(),
+                    build_targets: check.evidence.get("buildTargets")
+                        .and_then(serde_json::Value::as_array)
+                        .into_iter().flatten().filter_map(serde_json::Value::as_str)
+                        .map(str::to_string).collect(),
                     // The compiler environment an earlier step imported, so
                     // the runner's own build sees the same toolchain.
                     child_env: ctx.runner.env.clone(),
@@ -666,15 +678,26 @@ impl RealExecutor {
                 };
                 let host = self.tests_host.as_ref();
                 let mut failed = Vec::new();
-                let outcome = self.native("tests", || {
+                let mut test_log = None;
+                let outcome = self.native(check.name(), || {
                     let mut console = crate::test::host::Console::captured();
                     let result = crate::test::runner::run(&options, host, &mut console);
+                    test_log = Some(result.log.clone());
                     failed = result.failed_tests.clone();
+                    if check.id == StepId::QmlSmoke {
+                        for (source, name) in [(&result.log, "qml-smoke-ctest.log"),
+                            (&result.receipt_path, "qml-smoke-receipt.json")] {
+                            if source.is_file() {
+                                std::fs::copy(source, ctx.runner.log_dir.join(name))?;
+                            }
+                        }
+                    }
                     Ok((console.text().to_string(), tests_outcome(&result)))
                 });
                 failed.sort();
                 failed.dedup();
                 self.failed_tests = failed;
+                self.test_log = test_log;
                 outcome
             }
             StepId::CppCheck => self.native("cppcheck", || {
@@ -903,46 +926,13 @@ impl Executor for RealExecutor {
         outcome
     }
 
-    /// A failing QML test that reports only an exit code is not a test report.
-    /// Re-run the QuickTest binaries behind the failing names with `-o <file>,txt`
-    /// so the per-function diagnosis exists as evidence.
+    /// Returns retained output from the original test run without starting processes.
     fn diagnose(&mut self, _check: &Check, _outcome: &Outcome) -> Vec<String> {
-        let tree = self.ctx.tree();
-        let registration =
-            evidence::ctest_registration(&tree, &self.ctx.config, &self.ctx.runner.env);
-        if registration.is_empty() && !self.ctx.runner.output_mode().is_silent() {
-            println!();
-            println!(
-                "no CTest registration could be read from {}; the QuickTest re-run is skipped",
-                tree.display()
-            );
-        }
-        let mut produced = Vec::new();
-        for command in evidence::qml_diagnostic_commands(
-            &self.failed_tests,
-            &registration,
-            &self.ctx.runner.log_dir,
-        ) {
-            if !Path::new(&command.file_path).is_file() {
-                continue;
-            }
-            let mut process = crate::process::command(&command.file_path);
-            process.args(&command.arguments);
-            for (key, value) in &self.ctx.runner.env {
-                process.env(key, value);
-            }
-            let _ = crate::process::query(process);
-            if command.output_path.is_file() {
-                self.ctx.runner.print_failure(
-                    &command.test_name,
-                    "QuickTest diagnosis",
-                    &command.output_path,
-                );
-
-                produced.push(command.output_path.display().to_string());
-            }
-        }
-        produced
+        self.test_log
+            .iter()
+            .filter(|path| path.is_file())
+            .map(|path| path.display().to_string())
+            .collect()
     }
 }
 
@@ -971,7 +961,7 @@ impl Executor for DryRunExecutor {
         if self.simulate_fail.iter().any(|name| name == check.name()) {
             // A simulated test failure carries a simulated failing test, or the
             // QML diagnostic contract would look satisfied for the wrong reason.
-            if check.id == StepId::Tests {
+            if matches!(check.id, StepId::Tests | StepId::QmlSmoke) {
                 self.failed_tests = vec![SIMULATED_QUICK_TEST.to_string()];
             }
             return Outcome::fail("simulated failure");
@@ -1102,12 +1092,63 @@ mod tests {
             ["quick.qml.fixture"]
         );
 
-        // The QuickTest diagnosis reads the same names.
-        let registration = evidence::ctest_registration(&build, "Debug", &[]);
-        let commands =
-            evidence::qml_diagnostic_commands(&executor.failed_tests, &registration, logs.path());
-        assert_eq!(commands.len(), 1);
-        assert_eq!(commands[0].test_name, "quick.qml.fixture");
+        assert_eq!(
+            executor.diagnose(plan.check(StepId::Tests).unwrap(), &outcome),
+            [full_log.display().to_string()]
+        );
+    }
+
+    #[test]
+    fn native_diagnosis_never_restarts_missing_qt_log() {
+        use crate::test_support::test_runner::cmake_path;
+
+        let root = tempfile::tempdir().unwrap();
+        let marker = root.path().join("restarted.txt");
+        let source = root.path().join("console_fixture.rs");
+        let binary = root.path().join(if cfg!(windows) {
+            "console_fixture.exe"
+        } else {
+            "console_fixture"
+        });
+        std::fs::write(
+            &source,
+            format!("fn main() {{ std::fs::write({marker:?}, b\"restarted\").unwrap(); }}"),
+        )
+        .unwrap();
+        let built = crate::process::command("rustc")
+            .arg(&source)
+            .arg("-o")
+            .arg(&binary)
+            .output()
+            .unwrap();
+        assert!(
+            built.status.success(),
+            "{}",
+            String::from_utf8_lossy(&built.stderr)
+        );
+        std::fs::write(root.path().join("CTestTestfile.cmake"), format!(
+            "add_test(quick.qml.fixture \"{}\")\nset_tests_properties(quick.qml.fixture PROPERTIES LABELS \"phase.hermetic;quicktest\")\n", cmake_path(&binary)
+        )).unwrap();
+        let original = root.path().join("original-ctest.log");
+        std::fs::write(&original, "Qt platform plugin could not be initialized\n").unwrap();
+        let mut executor = executor(root.path());
+        executor.ctx.build_dir = root.path().display().to_string();
+        executor.failed_tests = vec!["quick.qml.fixture".into()];
+        executor.test_log = Some(original.clone());
+        let scope = Scope::everything();
+        let plan = plan::build(&plan::tests::input_for_spec(
+            plan::tests::full_test_spec(false),
+            &scope,
+        ));
+        let diagnostics = executor.diagnose(
+            plan.check(StepId::Tests).unwrap(),
+            &Outcome::fail("startup failed"),
+        );
+        assert!(
+            !marker.exists(),
+            "diagnosis restarted the registered test executable"
+        );
+        assert_eq!(diagnostics, [original.display().to_string()]);
     }
 
     #[test]
@@ -1137,6 +1178,9 @@ mod tests {
     fn run_result(exit_code: i32, reasons: &[&str]) -> crate::test::runner::RunResult {
         use crate::test::receipt::{Freshness, Receipt};
         let receipt = Receipt {
+            build_targets: Vec::new(),
+            resolved_test_targets: Vec::new(),
+            failure_classification: None,
             run_id: String::new(),
             started_utc: String::new(),
             finished_utc: None,

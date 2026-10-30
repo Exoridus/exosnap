@@ -407,6 +407,147 @@ fn allow_stale_reports_a_result_and_says_which_binaries_it_describes() {
 }
 
 #[test]
+fn targeted_runs_build_the_selected_executable_before_certifying_its_source() {
+    let repo = source_repo();
+    let (root, build) = configured_tree(
+        "find_program(fixture_rustc rustc REQUIRED)\nfile(WRITE \"${CMAKE_CURRENT_SOURCE_DIR}/input.rs\" \"fn main() {}\")\nfile(GLOB fixture_sources CONFIGURE_DEPENDS \"${CMAKE_CURRENT_SOURCE_DIR}/*.rs\")\nadd_custom_command(OUTPUT stale-test.exe COMMAND \"${fixture_rustc}\" \"${CMAKE_CURRENT_SOURCE_DIR}/input.rs\" -o stale-test.exe DEPENDS \"${CMAKE_CURRENT_SOURCE_DIR}/input.rs\")\nadd_custom_target(test_binary DEPENDS stale-test.exe)\nadd_custom_target(unrelated COMMAND \"${CMAKE_COMMAND}\" -E true)\nadd_test(NAME fixture.binary COMMAND \"${CMAKE_CURRENT_BINARY_DIR}/stale-test.exe\")\nset_tests_properties(fixture.binary PROPERTIES LABELS phase.hermetic)\n",
+    );
+    let built = std::process::Command::new("cmake")
+        .arg("--build")
+        .arg(&build)
+        .args(["--target", "test_binary"])
+        .output()
+        .unwrap();
+    assert!(built.status.success());
+    std::thread::sleep(std::time::Duration::from_millis(30));
+    std::fs::write(
+        root.path().join("src/input.rs"),
+        "fn main() { println!(\"changed\"); }",
+    )
+    .unwrap();
+    let outcome = run(&Options {
+        no_build: false,
+        allow_stale: false,
+        build_targets: vec!["unrelated".into()],
+        filter: "^fixture.binary$".into(),
+        ..options(repo.path(), &build)
+    });
+    assert_eq!(outcome.code(), 0, "{}", outcome.output);
+    assert_eq!(outcome.receipt()["reusable"], true);
+    assert_eq!(
+        outcome.receipt()["resolved_test_targets"],
+        serde_json::json!(["stale-test.exe"])
+    );
+    let actual = std::process::Command::new(build.join("stale-test.exe"))
+        .output()
+        .unwrap();
+    assert_eq!(String::from_utf8_lossy(&actual.stdout).trim(), "changed");
+    let no_build = run(&Options {
+        no_build: true,
+        allow_stale: false,
+        build_targets: vec!["stale-test.exe".into()],
+        filter: "^fixture.binary$".into(),
+        ..options(repo.path(), &build)
+    });
+    assert_eq!(no_build.code(), 3, "{}", no_build.output);
+    assert_eq!(no_build.receipt()["reusable"], false);
+}
+
+#[test]
+fn required_tests_cannot_disappear_or_be_disabled_behind_a_broader_filter() {
+    let repo = source_repo();
+    for registration in [
+        passing("fixture.present", "phase.hermetic"),
+        format!(
+            "{}\nset_tests_properties(fixture.required PROPERTIES DISABLED TRUE)\n",
+            passing("fixture.required", "phase.hermetic")
+        ),
+    ] {
+        let tree = hand_written_tree(&registration);
+        let outcome = run(&Options {
+            required_tests: vec!["fixture.required".into()],
+            ..options(repo.path(), tree.path())
+        });
+        assert_eq!(outcome.code(), 4, "{}", outcome.output);
+        assert!(outcome.output.contains("fixture.required"));
+        assert!(outcome.receipt()["ctest_exit_code"].is_null());
+    }
+}
+
+#[test]
+fn selected_build_targets_leave_unrelated_work_pending_and_record_the_scope() {
+    let repo = source_repo();
+    let (_root, build) = configured_tree(
+        "find_program(fixture_rustc rustc REQUIRED)\nfile(WRITE \"${CMAKE_CURRENT_SOURCE_DIR}/input.rs\" \"fn main() {}\")\nadd_custom_command(OUTPUT selected-test.exe COMMAND \"${fixture_rustc}\" \"${CMAKE_CURRENT_SOURCE_DIR}/input.rs\" -o selected-test.exe DEPENDS \"${CMAKE_CURRENT_SOURCE_DIR}/input.rs\")\nadd_custom_target(selected DEPENDS selected-test.exe)\nadd_custom_target(unrelated ALL COMMAND \"${CMAKE_COMMAND}\" -E false)\nadd_test(NAME fixture.selected COMMAND \"${CMAKE_CURRENT_BINARY_DIR}/selected-test.exe\")\nset_tests_properties(fixture.selected PROPERTIES LABELS phase.hermetic)\n",
+    );
+    let targeted = Options {
+        no_build: false,
+        allow_stale: false,
+        build_targets: vec!["selected".into()],
+        filter: "^fixture.selected$".into(),
+        ..options(repo.path(), &build)
+    };
+    let built = run(&targeted);
+    assert_eq!(built.code(), 0, "{}", built.output);
+    assert_eq!(
+        built.receipt()["build_targets"],
+        serde_json::json!(["selected"])
+    );
+    assert!(build.join("selected-test.exe").is_file());
+    let fresh = run(&Options {
+        no_build: true,
+        ..targeted.clone()
+    });
+    assert_eq!(fresh.code(), 0, "{}", fresh.output);
+    assert_eq!(fresh.receipt()["reusable"], true);
+    std::fs::remove_file(build.join("selected-test.exe")).unwrap();
+    let stale = run(&Options {
+        no_build: true,
+        ..targeted.clone()
+    });
+    assert_eq!(stale.code(), 3, "{}", stale.output);
+    let full = run(&Options {
+        no_build: true,
+        build_targets: vec![],
+        ..targeted
+    });
+    assert_eq!(full.code(), 3, "{}", full.output);
+}
+
+#[test]
+fn targeted_builds_still_reject_source_drift_and_failed_targets() {
+    let repo = source_repo();
+    let (_root, build) = configured_tree(
+        "find_program(fixture_rustc rustc REQUIRED)\nfile(WRITE \"${CMAKE_CURRENT_SOURCE_DIR}/input.rs\" \"fn main() {}\")\nadd_custom_command(OUTPUT selected-test.exe COMMAND \"${fixture_rustc}\" \"${CMAKE_CURRENT_SOURCE_DIR}/input.rs\" -o selected-test.exe DEPENDS \"${CMAKE_CURRENT_SOURCE_DIR}/input.rs\")\nadd_custom_target(selected DEPENDS selected-test.exe)\nadd_custom_target(broken COMMAND \"${CMAKE_COMMAND}\" -E false)\nadd_test(NAME fixture.selected COMMAND \"${CMAKE_CURRENT_BINARY_DIR}/selected-test.exe\")\nset_tests_properties(fixture.selected PROPERTIES LABELS phase.hermetic)\n",
+    );
+    let targeted = Options {
+        no_build: false,
+        allow_stale: false,
+        build_targets: vec!["selected".into()],
+        filter: "^fixture.selected$".into(),
+        ..options(repo.path(), &build)
+    };
+    let path = repo.path().join("README.md");
+    let host = RecordingHost::new().on_checkpoint(move |point, _| {
+        if point == Checkpoint::AfterBuild {
+            std::fs::write(&path, "changed during targeted build\n")?;
+        }
+        Ok(())
+    });
+    let drift = run_with(&targeted, &host);
+    assert_eq!(drift.code(), 4, "{}", drift.output);
+    assert_eq!(drift.receipt()["source_drift"], true);
+    let failed = run(&Options {
+        build_targets: vec!["broken".into()],
+        ..targeted
+    });
+    assert_ne!(failed.code(), 0);
+    assert_eq!(failed.receipt()["build_status"], "failed");
+    assert_eq!(failed.receipt()["failure_classification"], "build-failure");
+    assert!(failed.receipt()["ctest_exit_code"].is_null());
+}
+
+#[test]
 fn a_ninja_tree_with_nothing_left_to_build_is_fresh_without_a_build() {
     let repo = source_repo();
     let (_root, build) = configured_tree("");
@@ -925,6 +1066,159 @@ fn a_failing_test_is_named_in_the_summary_even_though_it_carries_labels() {
 }
 
 #[test]
+fn absent_qt_output_keeps_a_real_timeout_but_invalidates_an_apparent_pass() {
+    let repo = source_repo();
+    let scripts = tempfile::tempdir().unwrap();
+    for (name, body, property, expected) in [
+        (
+            "timeout",
+            "execute_process(COMMAND \"${CMAKE_COMMAND}\" -E sleep 2)\n",
+            "TIMEOUT 0.1",
+            "timeout",
+        ),
+        ("pass", "", "", "invalid-evidence"),
+    ] {
+        let tree = tempfile::tempdir().unwrap();
+        let log = tree.path().join("missing-qt.txt");
+        let writer = script(scripts.path(), &format!("{name}.cmake"), body);
+        let mut registration = scripted(
+            "fixture.quicktest",
+            "phase.hermetic;quicktest",
+            &writer,
+            &[],
+        );
+        registration = registration.replacen(
+            &format!("\"{}\")", cmake_path(&writer)),
+            &format!(
+                "\"{}\" \"-o\" \"{},txt\")",
+                cmake_path(&writer),
+                cmake_path(&log)
+            ),
+            1,
+        );
+        if !property.is_empty() {
+            registration.push_str(&format!(
+                "set_tests_properties(fixture.quicktest PROPERTIES {property})\n"
+            ));
+        }
+        std::fs::write(tree.path().join("CTestTestfile.cmake"), registration).unwrap();
+        let outcome = run(&options(repo.path(), tree.path()));
+        assert_ne!(outcome.code(), 0);
+        assert_eq!(
+            outcome.receipt()["failure_classification"],
+            expected,
+            "{}",
+            outcome.output
+        );
+        assert_eq!(outcome.receipt()["reusable"], false);
+        assert!(
+            outcome
+                .reasons()
+                .iter()
+                .any(|reason| reason.contains("first-run QtTest output unavailable"))
+        );
+    }
+}
+
+#[test]
+fn first_run_quicktest_files_replace_stale_output_and_keep_the_failing_function() {
+    let repo = source_repo();
+    let scripts = tempfile::tempdir().unwrap();
+    let tree = tempfile::tempdir().unwrap();
+    let log = tree.path().join("quicktest.txt");
+    std::fs::write(&log, "FAIL! stale diagnostic\n").unwrap();
+    let writer = script(
+        scripts.path(),
+        "quicktest.cmake",
+        &format!(
+            "if(EXISTS \"{}\")\nmessage(FATAL_ERROR \"stale output survived\")\nendif()\nfile(WRITE \"{}\" \"FAIL! : Settings::test_first_run() Expected false\\n   Loc: [qrc:/tst_Settings.qml(9)]\\n\")\nmessage(FATAL_ERROR \"failed once\")\n",
+            cmake_path(&log),
+            cmake_path(&log)
+        ),
+    );
+    let mut registration = scripted(
+        "fixture.quicktest",
+        "phase.hermetic;quicktest",
+        &writer,
+        &[],
+    );
+    registration = registration.replacen(
+        &format!("\"{}\")", cmake_path(&writer)),
+        &format!(
+            "\"{}\" \"-o\" \"{},txt\")",
+            cmake_path(&writer),
+            cmake_path(&log)
+        ),
+        1,
+    );
+    std::fs::write(tree.path().join("CTestTestfile.cmake"), registration).unwrap();
+    let outcome = run(&options(repo.path(), tree.path()));
+    assert_ne!(outcome.code(), 0);
+    assert!(
+        outcome.output.contains("Settings::test_first_run()"),
+        "{}",
+        outcome.output
+    );
+    assert!(!outcome.output.contains("stale diagnostic"));
+    assert_eq!(
+        outcome.receipt()["failure_classification"],
+        "assertion-failure"
+    );
+    assert!(
+        std::fs::read_to_string(&outcome.result.log)
+            .unwrap()
+            .contains("First-run QtTest output")
+    );
+}
+
+#[test]
+fn original_qt_assertions_and_qml_loading_errors_reach_the_summary_and_receipt() {
+    let repo = source_repo();
+    let scripts = tempfile::tempdir().unwrap();
+    for (name, output, kind) in [
+        (
+            "assertion",
+            "FAIL!  : Settings::test_region(row one) Compared values differ\n   Actual: true\n   Expected: false\n   Loc: [qrc:/tst_Settings.qml(42)]",
+            "assertion-failure",
+        ),
+        (
+            "loading",
+            "qrc:/Main.qml:7:3: Type SettingsView unavailable",
+            "qml-load-error",
+        ),
+    ] {
+        let script = script(
+            scripts.path(),
+            &format!("{name}.cmake"),
+            &format!(
+                "execute_process(COMMAND \"${{CMAKE_COMMAND}}\" -E echo \"{output}\")\nmessage(FATAL_ERROR \"failed\")\n"
+            ),
+        );
+        let tree = hand_written_tree(&scripted("fixture.qml", "phase.hermetic", &script, &[]));
+        let outcome = run(&options(repo.path(), tree.path()));
+        assert_ne!(outcome.code(), 0);
+        assert_eq!(outcome.receipt()["failure_classification"], kind);
+        assert!(
+            outcome.output.contains(output.lines().next().unwrap()),
+            "{}",
+            outcome.output
+        );
+        if name == "assertion" {
+            assert!(
+                outcome.output.contains("Settings::test_region(row one)"),
+                "{}",
+                outcome.output
+            );
+            assert!(
+                outcome.output.contains("tst_Settings.qml(42)"),
+                "{}",
+                outcome.output
+            );
+        }
+    }
+}
+
+#[test]
 fn a_failing_gtest_case_is_shown_with_its_assertion() {
     let repo = source_repo();
     let scripts = tempfile::tempdir().unwrap();
@@ -1260,6 +1554,9 @@ fn the_receipt_has_exactly_the_documented_fields_in_order() {
             "freshness_detail",
             "allow_stale",
             "no_build",
+            "build_targets",
+            "resolved_test_targets",
+            "failure_classification",
             "build_status",
             "build_exit_code",
             "ctest_args",

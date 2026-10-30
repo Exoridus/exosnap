@@ -355,6 +355,7 @@ pub(crate) mod tests {
             vec![
                 "sanity",
                 "configure",
+                "qml-smoke",
                 "qmllint",
                 "build",
                 "clang-tidy",

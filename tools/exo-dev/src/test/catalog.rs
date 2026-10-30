@@ -66,6 +66,7 @@ pub fn exclude_pattern(label: &str) -> String {
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct CatalogTest {
     pub name: String,
+    pub command: Vec<String>,
     pub labels: Vec<String>,
     pub disabled: bool,
 }
@@ -97,6 +98,7 @@ pub fn parse_catalog(text: &str) -> Result<Vec<CatalogTest>, String> {
             }
             CatalogTest {
                 name: test["name"].as_str().unwrap_or_default().to_string(),
+                command: strings(&test["command"]),
                 labels,
                 disabled,
             }
@@ -214,6 +216,7 @@ mod tests {
     fn test(name: &str, labels: &[&str]) -> CatalogTest {
         CatalogTest {
             name: name.into(),
+            command: Vec::new(),
             labels: labels.iter().map(|l| l.to_string()).collect(),
             disabled: false,
         }

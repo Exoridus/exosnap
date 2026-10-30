@@ -6,6 +6,18 @@ use crate::profile::{ProfileSpec, TidyScope};
 use crate::scope::Scope;
 use crate::step::StepId;
 
+pub const QML_SMOKE_FILTER: &str = r"^quick\.qml\.(record_controls_contracts|edit_timeline_contracts|record_source_picker_contracts)$";
+pub const QML_SMOKE_TARGETS: &[&str] = &[
+    "record_controls_qml_tests",
+    "edit_timeline_qml_tests",
+    "record_source_picker_qml_tests",
+];
+pub const QML_SMOKE_TESTS: &[&str] = &[
+    "quick.qml.record_controls_contracts",
+    "quick.qml.edit_timeline_contracts",
+    "quick.qml.record_source_picker_contracts",
+];
+
 /// The CI event a profile runs for, as GitHub names it.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum Event {
@@ -125,7 +137,11 @@ pub fn build(input: &PlanInput) -> Plan {
                 }
                 StepId::Rust => skip_unless(
                     &mut check,
-                    want(scope.requires_rust),
+                    if profile.name == "pre-push" {
+                        scope.requires_rust
+                    } else {
+                        want(scope.requires_rust)
+                    },
                     "nothing in the Rust workspace under tools/ changed",
                 ),
                 StepId::Configure => {
@@ -164,7 +180,7 @@ pub fn build(input: &PlanInput) -> Plan {
                         .evidence
                         .insert("config".into(), input.config.clone().into());
                 }
-                StepId::Tests => {
+                StepId::QmlSmoke | StepId::Tests => {
                     skip_unless(
                         &mut check,
                         want(scope.requires_tests),
@@ -176,7 +192,9 @@ pub fn build(input: &PlanInput) -> Plan {
                         "the debug leg carries the test suite on a pull request",
                     );
                     check.qml_diagnostics = true;
-                    let filter = if scoped {
+                    let filter = if id == StepId::QmlSmoke {
+                        QML_SMOKE_FILTER.to_string()
+                    } else if scoped {
                         scope.test_filter.clone()
                     } else {
                         String::new()
@@ -188,6 +206,14 @@ pub fn build(input: &PlanInput) -> Plan {
                         .evidence
                         .insert("config".into(), input.config.clone().into());
                     check.evidence.insert("filter".into(), filter.into());
+                    if id == StepId::QmlSmoke {
+                        check
+                            .evidence
+                            .insert("buildTargets".into(), serde_json::json!(QML_SMOKE_TARGETS));
+                        check
+                            .evidence
+                            .insert("requiredTests".into(), serde_json::json!(QML_SMOKE_TESTS));
+                    }
                     if let Some(label) = profile.exclude_label {
                         check.evidence.insert("excludeLabel".into(), label.into());
                     }
@@ -321,14 +347,69 @@ pub(crate) mod tests {
     }
 
     #[test]
-    fn full_ignores_the_change_set_entirely() {
+    fn local_qml_smoke_is_bounded_and_requires_each_named_contract() {
+        assert_eq!(
+            QML_SMOKE_TARGETS,
+            [
+                "record_controls_qml_tests",
+                "edit_timeline_qml_tests",
+                "record_source_picker_qml_tests",
+            ]
+        );
+        assert_eq!(
+            QML_SMOKE_TESTS,
+            [
+                "quick.qml.record_controls_contracts",
+                "quick.qml.edit_timeline_contracts",
+                "quick.qml.record_source_picker_contracts",
+            ]
+        );
+        let scope = Scope::everything();
+        let plan = build(&input(Profile::QmlSmoke, &scope));
+        assert_eq!(names(&plan), ["sanity", "configure", "qml-smoke"]);
+        let smoke = plan.check(StepId::QmlSmoke).unwrap();
+        assert_eq!(smoke.evidence_str("excludeLabel"), Some("live"));
+        assert_eq!(
+            smoke.evidence["requiredTests"],
+            serde_json::json!(QML_SMOKE_TESTS)
+        );
+        let filter = regex::Regex::new(smoke.evidence_str("filter").unwrap()).unwrap();
+        assert!(QML_SMOKE_TESTS.iter().all(|name| filter.is_match(name)));
+        assert!(!filter.is_match("quick.qml.record_source_picker"));
+        assert!(!filter.is_match("quick.qml.record_controls"));
+        assert!(!filter.is_match("quick.qml.edit_timeline"));
+        assert!(!filter.is_match("quick.qml.about_smoke"));
+        assert!(!filter.is_match("quick.qml.navigation_lifecycle"));
+        assert!(!filter.is_match("updater.test_updater_window_smoke"));
+        assert!(!filter.is_match("quick.qml.record_preview_smoke"));
+    }
+
+    #[test]
+    fn pre_push_scopes_only_rust_and_keeps_all_guardrails() {
         let scope = files(&["README.md"]);
         let plan = build(&input(Profile::PrePush, &scope));
         for check in &plan.checks {
+            if check.id == StepId::Rust {
+                assert!(!check.applicable);
+                continue;
+            }
             assert!(
                 check.applicable,
                 "pre-push skipped {} because of the change set",
                 check.name()
+            );
+        }
+        for path in [
+            "tools/exo-dev/src/main.rs",
+            "tools/Cargo.lock",
+            ".cargo/config.toml",
+        ] {
+            let scope = files(&[path]);
+            assert!(
+                build(&input(Profile::PrePush, &scope))
+                    .check(StepId::Rust)
+                    .unwrap()
+                    .applicable
             );
         }
     }
@@ -372,6 +453,7 @@ pub(crate) mod tests {
                 vec![
                     "sanity",
                     "configure",
+                    "qml-smoke",
                     "qmllint",
                     "build",
                     "clang-tidy",

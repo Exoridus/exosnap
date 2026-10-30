@@ -73,6 +73,9 @@ impl Scope {
 
         for file in changed_files {
             let path = file.replace('\\', "/");
+            if path.starts_with("tools/") {
+                scope.requires_rust = true;
+            }
             let class = classify(&path);
             categories.insert(class.category());
             match class {
@@ -121,6 +124,7 @@ impl Scope {
                 }
                 Class::Workflow | Class::Docs | Class::Data => {}
                 Class::Other => {
+                    scope.requires_rust = true;
                     scope.requires_configure = true;
                     scope.requires_build = true;
                     scope.requires_tests = true;
@@ -197,7 +201,7 @@ fn classify(path: &str) -> Class {
     static RULES: LazyLock<Vec<(Regex, Class)>> = LazyLock::new(|| {
         [
             (
-                r"(?i)^tools/(Cargo\.(toml|lock)|(exo-verify|exo-dev|exo-guest)/(Cargo\.toml|.+\.(rs|toml|json|md)))$|(?i)^\.cargo/config\.toml$",
+                r"(?i)^tools/.*\.(rs|toml|json|md|lock)$|^\.cargo/|(^|/)(Cargo\.(toml|lock)|rust-toolchain(\..*)?|rustfmt\.toml|\.rustfmt\.toml|clippy\.toml|\.clippy\.toml)$|^\.github/|^\.githooks/",
                 Class::Rust,
             ),
             (
@@ -215,7 +219,8 @@ fn classify(path: &str) -> Class {
                 r"(?i)^docs/|(?i)^\.workspace/|(?i)^(README|AGENTS|CLAUDE|PRIVACY|CHANGELOG|LICENSE)",
                 Class::Docs,
             ),
-            (r"(?i)\.(md|txt|png|svg|ico|json|toml|ya?ml|rc)$", Class::Data),
+            (r"(?i)^app/i18n/[^/]+\.ts$", Class::Data),
+            (r"(?i)\.(md|png|svg|ico|rc)$", Class::Data),
         ]
         .into_iter()
         .map(|(pattern, class)| (Regex::new(pattern).expect("scope rule"), class))
@@ -317,6 +322,34 @@ mod tests {
     fn an_undetermined_change_set_verifies_everything_including_rust() {
         let s = scope(&[]);
         assert!(s.requires_build && s.requires_full_tests && s.requires_rust);
+    }
+
+    #[test]
+    fn qt_translation_catalogues_are_native_data_not_rust_inputs() {
+        let catalogue = scope(&["app/i18n/exosnap_de.ts"]);
+        assert!(!catalogue.requires_rust);
+        assert_eq!(catalogue.categories, ["data"]);
+        assert!(scope(&["unknown.ts"]).requires_rust);
+        assert!(scope(&["tools/tool.ts"]).requires_rust);
+    }
+
+    #[test]
+    fn unknown_and_shared_rust_configuration_cannot_skip_rust() {
+        for file in [
+            "mystery.zzz",
+            "Cargo.toml",
+            "Cargo.lock",
+            "rust-toolchain.toml",
+            ".cargo/config",
+            ".cargo/extra.toml",
+            "tools/new-tool/build.rs",
+            "tools/new-tool/config.json",
+            "config.toml",
+            "unknown.json",
+            "unknown.yml",
+        ] {
+            assert!(scope(&[file]).requires_rust, "{file} must run Rust");
+        }
     }
 
     #[test]

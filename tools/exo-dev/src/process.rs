@@ -10,10 +10,9 @@ use std::time::{Duration, Instant};
 
 /// The variables a git hook sets for the repository being committed. Every child
 /// inherits them, and GIT_DIR beats discovery, so `git -C <elsewhere>` would still
-/// act on this repository. A script test that built a fixture repository under a
-/// pre-commit hook once replaced the real index and set core.bare on the shared
-/// config. Nothing started from here needs the hook's view: every git call names
-/// its repository.
+/// act on this repository. Foreign repository queries and child tools must not
+/// inherit this context. Source-repository queries may explicitly rebind only
+/// the candidate index during staged verification.
 pub const HOOK_GIT_VARIABLES: [&str; 10] = [
     "GIT_DIR",
     "GIT_WORK_TREE",

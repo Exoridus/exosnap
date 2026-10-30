@@ -1,21 +1,79 @@
-//! Repository facts. Every call names its repository and runs without the hook's
-//! git environment (see `process::HOOK_GIT_VARIABLES`).
+//! Repository facts. Hook variables are scrubbed. Staged verification may bind
+//! its candidate index only to the canonical source repository on this thread.
 
+use std::cell::RefCell;
 use std::collections::{BTreeSet, HashMap};
 use std::ops::Range;
 use std::path::{Path, PathBuf};
 
 use crate::process;
 
+#[derive(Clone)]
+struct BoundIndex {
+    root: PathBuf,
+    path: PathBuf,
+}
+
+thread_local! {
+    static STAGED_INDEX: RefCell<Option<BoundIndex>> = const { RefCell::new(None) };
+}
+
+struct RestoreIndex(Option<BoundIndex>);
+
+impl Drop for RestoreIndex {
+    fn drop(&mut self) {
+        STAGED_INDEX.with(|index| *index.borrow_mut() = self.0.take());
+    }
+}
+
 pub struct Git {
     root: PathBuf,
+    index: Option<PathBuf>,
 }
 
 impl Git {
     pub fn new(root: &Path) -> Git {
+        let index = STAGED_INDEX.with(|index| {
+            let index = index.borrow();
+            index.as_ref().and_then(|bound| {
+                (root.canonicalize().ok().as_ref() == Some(&bound.root)).then(|| bound.path.clone())
+            })
+        });
         Git {
             root: root.to_path_buf(),
+            index,
         }
+    }
+
+    /// Captures Git's candidate index before subprocess environment scrubbing.
+    /// The binding applies only to this repository and is restored on exit.
+    pub fn with_active_index<T>(root: &Path, action: impl FnOnce() -> T) -> anyhow::Result<T> {
+        match std::env::var_os("GIT_INDEX_FILE") {
+            Some(index) => Self::with_index(root, Path::new(&index), action),
+            None => Ok(action()),
+        }
+    }
+
+    /// Binds an absolute candidate index to the canonical repository for this
+    /// thread. Queries in other repositories retain the scrubbed environment.
+    pub fn with_index<T>(
+        root: &Path,
+        index: &Path,
+        action: impl FnOnce() -> T,
+    ) -> anyhow::Result<T> {
+        let bound = BoundIndex {
+            root: root.canonicalize()?,
+            path: std::path::absolute(index)?,
+        };
+        let previous = STAGED_INDEX.with(|index| index.replace(Some(bound)));
+        let _restore = RestoreIndex(previous);
+        Ok(action())
+    }
+
+    /// The candidate index bound to this repository, if any. Pass it only to a
+    /// child command that reads this same repository.
+    pub fn index_file(&self) -> Option<&Path> {
+        self.index.as_deref()
     }
 
     /// The top level of the work tree containing `start`.
@@ -53,9 +111,16 @@ impl Git {
     }
 
     pub fn run(&self, args: &[&str]) -> (i32, String) {
+        process::query(self.command(args)).unwrap_or((-1, String::new()))
+    }
+
+    fn command(&self, args: &[&str]) -> std::process::Command {
         let mut command = process::command("git");
         command.arg("-C").arg(&self.root).args(args);
-        process::query(command).unwrap_or((-1, String::new()))
+        if let Some(index) = &self.index {
+            command.env("GIT_INDEX_FILE", index);
+        }
+        command
     }
 
     fn first_line(&self, args: &[&str]) -> Option<String> {
@@ -81,6 +146,57 @@ impl Git {
         ["origin/next", "origin/main", "origin/HEAD", "next", "main"]
             .into_iter()
             .find_map(|candidate| self.first_line(&["merge-base", candidate, "HEAD"]))
+    }
+
+    /// Deletion-inclusive paths for verification scope. Missing revisions and
+    /// failed Git queries cannot establish that a check is unnecessary.
+    pub fn scope_files(&self, base: Option<&str>, staged: bool) -> anyhow::Result<Vec<String>> {
+        let mut files = BTreeSet::new();
+        if !staged {
+            let base = base.ok_or_else(|| anyhow::anyhow!("no trustworthy integration base"))?;
+            files.extend(self.revision_scope_files(base, "HEAD")?);
+            files.extend(self.working_scope_files()?);
+        }
+        files.extend(self.scope_paths(&[
+            "diff",
+            "--cached",
+            "--name-only",
+            "--no-renames",
+            "-z",
+        ])?);
+        Ok(files.into_iter().collect())
+    }
+
+    pub fn revision_scope_files(&self, base: &str, head: &str) -> anyhow::Result<Vec<String>> {
+        self.scope_paths(&[
+            "diff",
+            "--name-only",
+            "--no-renames",
+            "-z",
+            base,
+            head,
+            "--",
+        ])
+    }
+
+    pub fn working_scope_files(&self) -> anyhow::Result<Vec<String>> {
+        let mut files = self.scope_paths(&["diff", "--name-only", "--no-renames", "-z"])?;
+        files.extend(self.scope_paths(&["ls-files", "--others", "--exclude-standard", "-z"])?);
+        Ok(files)
+    }
+
+    fn scope_paths(&self, args: &[&str]) -> anyhow::Result<Vec<String>> {
+        let (code, stdout) = self.run(args);
+        anyhow::ensure!(
+            code == 0,
+            "git {} failed while determining verification scope",
+            args.join(" ")
+        );
+        Ok(stdout
+            .split('\0')
+            .filter(|path| !path.is_empty())
+            .map(str::to_string)
+            .collect())
     }
 
     /// The files this invocation is responsible for. Staged is the pre-commit
@@ -190,5 +306,54 @@ mod tests {
             result.is_err(),
             "an unresolvable base must refuse, not silently report zero changed lines"
         );
+    }
+
+    #[test]
+    fn scope_paths_include_deleted_files_and_fail_on_bad_revisions() {
+        let dir = fixture_repo_committed(&[("tools/tool.rs", "fn main() {}\n")]);
+        std::fs::remove_file(dir.path().join("tools/tool.rs")).unwrap();
+        let git = Git::new(dir.path());
+        assert!(
+            git.scope_files(Some("HEAD"), false)
+                .unwrap()
+                .contains(&"tools/tool.rs".into())
+        );
+        assert!(git.scope_files(Some("missing-ref"), false).is_err());
+    }
+
+    #[test]
+    fn candidate_index_is_root_bound_and_context_restores_after_unwind() {
+        let dir = fixture_repo_committed(&[("original.md", "original\n")]);
+        let foreign = fixture_repo_committed(&[("foreign.md", "foreign\n")]);
+        let candidate = dir.path().join(".git/candidate-index");
+        std::fs::copy(dir.path().join(".git/index"), &candidate).unwrap();
+        std::fs::write(dir.path().join("candidate.md"), "candidate\n").unwrap();
+        let mut command = process::command("git");
+        command
+            .arg("-C")
+            .arg(dir.path())
+            .args(["add", "candidate.md"])
+            .env("GIT_INDEX_FILE", &candidate);
+        assert_eq!(process::query(command).unwrap().0, 0);
+        let inherited = std::env::var_os("GIT_INDEX_FILE");
+        let result = std::panic::catch_unwind(|| {
+            Git::with_index(dir.path(), &candidate, || {
+                assert!(
+                    Git::new(dir.path())
+                        .ls_files()
+                        .unwrap()
+                        .contains(&"candidate.md".into())
+                );
+                assert_eq!(Git::new(foreign.path()).ls_files().unwrap(), ["foreign.md"]);
+                let mut command = process::command("git");
+                command.arg("-C").arg(foreign.path()).args(["ls-files"]);
+                assert_eq!(process::query(command).unwrap().1.trim(), "foreign.md");
+                panic!("exercise index context restoration");
+            })
+            .unwrap();
+        });
+        assert!(result.is_err());
+        assert_eq!(Git::new(dir.path()).ls_files().unwrap(), ["original.md"]);
+        assert_eq!(std::env::var_os("GIT_INDEX_FILE"), inherited);
     }
 }

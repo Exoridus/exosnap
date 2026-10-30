@@ -160,6 +160,7 @@ function(exosnap_add_gtest)
     set_target_properties(${_exosnap_stage_target} PROPERTIES FOLDER "exosnap/build-support")
   endif()
   add_dependencies(${ARG_NAME} ${_exosnap_stage_target})
+  set_property(DIRECTORY PROPERTY EXOSNAP_TEST_RUNTIME_TARGET "${_exosnap_stage_target}")
 
   # Register ONE CTest entry per test BINARY (not per gtest case). We deliberately
   # do NOT use gtest_discover_tests here:
