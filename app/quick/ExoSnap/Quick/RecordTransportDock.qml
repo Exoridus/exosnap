@@ -11,6 +11,9 @@ Rectangle {
     required property RecordViewModelAdapter recordViewModel
     required property RecordingClipAdapter clipAdapter
     property AudioRoutingAdapter routing: null
+    property bool reviewAvailable: false
+    property bool reviewCanEdit: false
+    signal reviewEditRequested()
     readonly property bool useRoutedSources: root.routing !== null && !root.routing.legacy
     readonly property var displayedSources: !root.useRoutedSources ? []
                                             : root.routing.recordingActive ? root.routing.activeSources : root.routing.sources
@@ -312,15 +315,6 @@ Rectangle {
             onClicked: root.openClipPanel()
         }
 
-        RecordActionButton {
-            compact: root.compactControls
-            accessibleLabel: qsTr("Edit finalized recording")
-            text: qsTr("Edit")
-            glyph: ExoGlyph.ExternalLink
-            visible: root.width >= 1600 && root.recordViewModel.pendingEditMasterAvailable
-            onClicked: root.recordViewModel.requestEditMaster()
-        }
-
         // Pause is a secondary action DURING a recording — Stop is the one that
         // ends it — so it stays a round peer of the three above.
         RecordActionButton {
@@ -407,6 +401,22 @@ Rectangle {
                      !root.recordViewModel.failed
             Layout.leftMargin: root.actionGap
         }
+        RecordActionButton {
+            compact: root.compactControls
+            accessibleLabel: qsTr("Edit finalized recording")
+            text: qsTr("Edit")
+            glyph: ExoGlyph.ExternalLink
+            visible: root.reviewAvailable || (root.width >= 1600 && root.recordViewModel.pendingEditMasterAvailable)
+            available: !root.reviewAvailable || root.reviewCanEdit
+            unavailableReason: qsTr("The completed recording is unavailable.")
+            onClicked: {
+                if (root.reviewAvailable)
+                    root.reviewEditRequested();
+                else
+                    root.recordViewModel.requestEditMaster();
+            }
+        }
+
     }
 
     Menu {
@@ -444,7 +454,7 @@ Rectangle {
         }
         MenuItem {
             text: qsTr("Edit finalized recording")
-            visible: root.width < 1600 && root.recordViewModel.pendingEditMasterAvailable
+            visible: !root.reviewAvailable && root.width < 1600 && root.recordViewModel.pendingEditMasterAvailable
             onTriggered: root.recordViewModel.requestEditMaster()
         }
         MenuItem {

@@ -17,6 +17,7 @@
 #include "ExoEditPlayerItem.h"
 #include "QuickThemeTokens.h"
 #include "RecordViewModelAdapter.h"
+#include "RecordingReviewAdapter.h"
 #include "ShellAdapter.h"
 
 #include "viewmodels/RecordViewModel.h"
@@ -2025,6 +2026,125 @@ class Setup final : public QObject {
     Q_OBJECT
 
   public slots:
+    bool prepareRecordingReviewVisual() {
+        const auto path = exosnap::quick::test::TransportAmbiguousFixture();
+        exosnap::engine::EditPlayerEngine decoder;
+        std::string error;
+        if (!review_ || path.isEmpty() ||
+            !decoder.OpenVideoStream(std::filesystem::path(path.toStdWString()), 0, error))
+            return false;
+        const auto frame = decoder.DecodeFrameAt(700'000);
+        if (!frame || !frame->bgra)
+            return false;
+        QImage image(frame->bgra.get(), static_cast<int>(frame->width), static_cast<int>(frame->height),
+                     static_cast<int>(frame->stride_bytes), QImage::Format_ARGB32);
+        if (!review_visual_directory_.isValid())
+            return false;
+        const auto still_path = review_visual_directory_.filePath(QStringLiteral("frame.png"));
+        if (!image.save(still_path, "PNG"))
+            return false;
+        auto context = FixtureContext();
+        context.duration_seconds = 2.0;
+        review_->open(context);
+        review_->player()->showStillForHarness(QUrl::fromLocalFile(still_path), 700'000, 2000);
+        // Close notifications must finish before the static monitoring rows are published.
+        QMetaObject::invokeMethod(
+            exosnap::quick::EditPlayerAdapterTestPeer::worker(*review_->player()), [] {}, Qt::BlockingQueuedConnection);
+        QCoreApplication::sendPostedEvents(review_->player(), QEvent::MetaCall);
+        review_->player()->setClipStateForTest(true, 2000);
+        review_->session()->requestSeek(700);
+        review_->setVolume(0.72);
+        review_->setMuted(false);
+        review_->player()->setMonitoringState({QVariantMap{{"id", "first"},
+                                                           {"name", "Audio 1"},
+                                                           {"sources", "Sources unknown"},
+                                                           {"selected", true},
+                                                           {"available", true}},
+                                               QVariantMap{{"id", "second"},
+                                                           {"name", "Audio 2"},
+                                                           {"sources", "Sources unknown"},
+                                                           {"selected", false},
+                                                           {"available", true}}},
+                                              false);
+        return true;
+    }
+
+    bool prepareRecordingReview() {
+        const auto path = exosnap::quick::test::TransportAmbiguousFixture();
+        if (!review_ || path.isEmpty())
+            return false;
+        auto context = FixtureContext();
+        context.mkv_master_path = path;
+        context.output_path = path;
+        context.duration_seconds = 2.0;
+        review_->setMuted(true);
+        review_->open(context);
+        review_->player()->setSurfaceVisible(true);
+        return true;
+    }
+
+    QVariantMap reviewLifecycleProbe() {
+        exosnap::quick::RecordingReviewAdapter review;
+        auto context = FixtureContext();
+        const auto initial = session_->workspace().revision();
+        review.open(context);
+        const bool opened = review.active();
+        review.setVolume(0.72);
+        review.setMuted(true);
+        const bool silent = review.player()->volume() == 0.0 && review.volume() == 0.72;
+        review.setVolume(0.35);
+        const bool held = review.player()->volume() == 0.0;
+        review.setMuted(false);
+        const bool restored = review.player()->volume() == 0.35;
+        review.setVolume(2.0);
+        const bool clamped = review.volume() == 1.0;
+        review.player()->beginScrub();
+        review.close();
+        const bool scrubEnded = !review.player()->scrubbing();
+        EditSessionAdapter editor;
+        editor.setEditContextUs(context, -1, 700'000);
+        const bool positioned = editor.positionMs() == 700;
+        editor.setEditContextUs(context, -1, 300'000);
+        const bool appended = editor.positionMs() == 100'300;
+        EditSessionAdapter async_editor;
+        auto media_context = context;
+        media_context.mkv_master_path = exosnap::quick::test::TransportAmbiguousFixture();
+        media_context.output_path = media_context.mkv_master_path;
+        media_context.duration_seconds = 2.0;
+        async_editor.setEditContextUs(media_context, -1, 700'000);
+        async_editor.close();
+        async_editor.setEditContextUs(media_context, -1, 900'000);
+        QElapsedTimer deadline;
+        deadline.start();
+        while (async_editor.importPending() && deadline.elapsed() < 5000) {
+            QCoreApplication::processEvents(QEventLoop::AllEvents, 5);
+            QThread::msleep(1);
+        }
+        const bool async_positioned = !async_editor.importPending() && async_editor.positionMs() == 900;
+        const bool cancelled_import =
+            async_editor.durationMs() == 2000 && async_editor.workspace().assets().size() == 1;
+        EditPlayerAdapter failed_player;
+        exosnap::quick::ExoEditPlayerItem recovered_surface;
+        recovered_surface.setPlayerAdapter(&failed_player);
+        failed_player.applyPreviewStateForHarness(EditPlayerAdapter::Failed, QStringLiteral("Decode failed"));
+        emit recovered_surface.framePresented(0);
+        const bool recovered =
+            failed_player.previewState() == EditPlayerAdapter::Ready && failed_player.placeholderText().isEmpty();
+        return {{"opened", opened},
+                {"silent", silent},
+                {"held", held},
+                {"restored", restored},
+                {"clamped", clamped},
+                {"scrubEnded", scrubEnded},
+                {"positioned", positioned},
+                {"appended", appended},
+                {"recovered", recovered},
+                {"asyncPositioned", async_positioned},
+                {"cancelledImport", cancelled_import},
+                {"closed", !review.active() && !review.player()->surfaceVisible()},
+                {"residentUnchanged", session_->workspace().revision() == initial}};
+    }
+
     QVariantMap prepareSourceAudioChoice() {
         const auto fixture = exosnap::quick::test::TransportAmbiguousFixture();
         if (!page_session_ || fixture.isEmpty())
@@ -2195,6 +2315,8 @@ class Setup final : public QObject {
         return tokens->appearanceId() == appearance;
     }
     void applicationAvailable() {
+        if (qEnvironmentVariable("QSG_RHI_BACKEND") == QStringLiteral("d3d11"))
+            QQuickWindow::setGraphicsApi(QSGRendererInterface::Direct3D11);
         QCoreApplication::setApplicationName(QStringLiteral("edit-timeline-qml-tests"));
         QQuickStyle::setStyle(QStringLiteral("Basic"));
         if (qEnvironmentVariable("EXOSNAP_EDIT_VISUAL_LANGUAGE") == QStringLiteral("de")) {
@@ -2289,6 +2411,8 @@ class Setup final : public QObject {
         engine->rootContext()->setContextProperty(QStringLiteral("testTimeline"), timeline_);
         engine->rootContext()->setContextProperty(QStringLiteral("testPlayer"), player_);
         engine->rootContext()->setContextProperty(QStringLiteral("testTransportPlayer"), transport_player_);
+        review_ = new exosnap::quick::RecordingReviewAdapter(this);
+        engine->rootContext()->setContextProperty(QStringLiteral("testRecordingReview"), review_);
 
         auto* page_session = new EditSessionAdapter(this);
         page_session_ = page_session;
@@ -2311,6 +2435,8 @@ class Setup final : public QObject {
 
   private:
     QQmlEngine* visual_engine_ = nullptr;
+    exosnap::quick::RecordingReviewAdapter* review_ = nullptr;
+    QTemporaryDir review_visual_directory_;
     exosnap::RecordViewModel record_view_model_;
     EditSessionAdapter* session_ = nullptr;
     EditTimelineAdapter* timeline_ = nullptr;

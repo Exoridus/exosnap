@@ -24,6 +24,7 @@
 #include "RecordViewModelAdapter.h"
 #include "RecordingClipAdapter.h"
 #include "RecordingErrorAdapter.h"
+#include "RecordingReviewAdapter.h"
 #include "RecoveryAdapter.h"
 #include "SettingsAdapter.h"
 #include "ShellAdapter.h"
@@ -772,6 +773,7 @@ class QuickApplication {
     EditSessionAdapter edit_session_adapter_;
     EditTimelineAdapter edit_timeline_adapter_;
     EditPlayerAdapter edit_player_adapter_;
+    RecordingReviewAdapter recording_review_adapter_;
     EditExportAdapter edit_export_adapter_;
     ShellAdapter shell_adapter_;
     NotificationsAdapter notifications_adapter_;

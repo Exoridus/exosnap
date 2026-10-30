@@ -37,6 +37,7 @@ Item {
     required property LogsAdapter logsAdapter
     required property EditSessionAdapter editSession
     required property EditTimelineAdapter editTimeline
+    property RecordingReviewAdapter recordingReview: null
     required property EditPlayerAdapter editPlayer
     required property EditExportAdapter editExport
     required property ShellAdapter shell
@@ -716,6 +717,15 @@ Item {
                 settings: root.settingsAdapter
                 recordViewModel: root.recordViewModel
                 clipAdapter: root.clipAdapter
+                recordingReview: root.recordingReview
+                reviewComponent: Component {
+                    RecordingReview {
+                        session: root.recordingReview.session
+                        player: root.recordingReview.player
+                        audioController: root.recordingReview
+                        onCloseRequested: root.recordingReview.close()
+                    }
+                }
                 previewAdapter: root.previewAdapter
                 shell: root.shell
                 // displayedPage, not currentPage: `active` drives the live preview,

@@ -1977,6 +1977,21 @@ TEST(EditSourceImport, ResolvingAnAmbiguousMixEnablesOnlyTheChosenStreams) {
     EXPECT_EQ(mix.audible(), 2u);
 }
 
+TEST(EditSourceImport, TransientAuditionCanReplaceTheResolvedInputMix) {
+    UndecidedMix mix;
+    const std::vector<exosnap::engine::AudioTrackId> first{kStems.front()};
+    const std::vector<exosnap::engine::AudioTrackId> second{kStems.back()};
+    ASSERT_TRUE(mix.workspace.resolveInputMix(mix.asset, first));
+    EXPECT_EQ(mix.enabled(), (std::vector<bool>{false, true, false}));
+    EXPECT_FALSE(mix.workspace.resolveInputMix(mix.asset, second));
+    ASSERT_TRUE(mix.workspace.resolveInputMix(mix.asset, second, true));
+    EXPECT_EQ(mix.enabled(), (std::vector<bool>{false, false, true}));
+    EXPECT_EQ(mix.audible(), 1u);
+    ASSERT_TRUE(mix.workspace.resolveInputMix(mix.asset, first, true));
+    EXPECT_EQ(mix.enabled(), (std::vector<bool>{false, true, false}));
+    EXPECT_EQ(mix.audible(), 1u);
+}
+
 TEST(EditSourceImport, FirstAudioChoiceIsOneUndoableAuthoredChange) {
     UndecidedMix mix;
     const auto before = mix.workspace.revision();

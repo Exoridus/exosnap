@@ -220,6 +220,10 @@ bool RecordViewModelAdapter::canStart() const noexcept {
     return source_ != nullptr && source_->CanStart() && !region_selection_needed_;
 }
 
+bool RecordViewModelAdapter::completedRecordingAvailable() const {
+    return source_ && source_->last_succeeded && CanOpenInEditor(source_->current_completed_recording);
+}
+
 bool RecordViewModelAdapter::canStop() const noexcept {
     return source_ != nullptr && source_->CanStop();
 }

@@ -1193,8 +1193,20 @@ void EditPlayerWorker::publishMonitoring() {
             const auto& defaults = metadata.manifest->default_monitor_track_ids;
             selected = std::find(defaults.begin(), defaults.end(), actual.track_id) != defaults.end();
         }
+        QString sources = tr("Sources unknown");
+        if (metadata.status == engine::AudioMetadataStatus::Verified && metadata.manifest) {
+            const auto& authored = metadata.manifest->tracks;
+            const auto provenance = std::find_if(authored.begin(), authored.end(), [&](const auto& track) {
+                return track.container.track_id == actual.track_id;
+            });
+            if (provenance != authored.end() && provenance->routes.empty() &&
+                provenance->derived_from_track_ids.empty())
+                sources = tr("No Source");
+        }
         tracks.push_back(QVariantMap{{"id", QString::fromStdString(engine::ToUuid(actual.track_id))},
-                                     {"name", QString::fromStdString(actual.name)},
+                                     {"name", actual.name.empty() ? tr("Audio %1").arg(actual.stream_index.value + 1)
+                                                                  : QString::fromStdString(actual.name)},
+                                     {"sources", sources},
                                      {"role", QString::fromStdString(actual.role)},
                                      {"selected", selected},
                                      {"provenanceVerified", metadata.status == engine::AudioMetadataStatus::Verified},

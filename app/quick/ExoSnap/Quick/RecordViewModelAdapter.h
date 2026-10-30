@@ -52,6 +52,7 @@ class RecordViewModelAdapter : public QObject {
     Q_PROPERTY(bool liveStatsAvailable READ liveStatsAvailable NOTIFY liveStatsAvailableChanged FINAL)
 
     Q_PROPERTY(bool pendingEditMasterAvailable READ pendingEditMasterAvailable NOTIFY changed FINAL)
+    Q_PROPERTY(bool completedRecordingAvailable READ completedRecordingAvailable NOTIFY changed FINAL)
     Q_PROPERTY(bool canStart READ canStart NOTIFY changed FINAL)
     Q_PROPERTY(bool canStop READ canStop NOTIFY changed FINAL)
     Q_PROPERTY(bool canPause READ canPause NOTIFY changed FINAL)
@@ -171,6 +172,7 @@ class RecordViewModelAdapter : public QObject {
     [[nodiscard]] QString driftText() const;
     [[nodiscard]] bool liveStatsAvailable() const noexcept;
     [[nodiscard]] bool canStart() const noexcept;
+    [[nodiscard]] bool completedRecordingAvailable() const;
     [[nodiscard]] bool canStop() const noexcept;
     [[nodiscard]] bool canPause() const noexcept;
     [[nodiscard]] bool canResume() const noexcept;

@@ -15,6 +15,7 @@ ApplicationWindow {
     required property LogsAdapter logsAdapter
     required property EditSessionAdapter editSession
     required property EditTimelineAdapter editTimeline
+    property RecordingReviewAdapter recordingReview: null
     required property EditPlayerAdapter editPlayer
     required property EditExportAdapter editExport
     required property ShellAdapter shell
@@ -450,6 +451,13 @@ ApplicationWindow {
         value: root.visible && root.visibility !== Window.Minimized
     }
 
+    Binding {
+        target: root.recordingReview ? root.recordingReview.player : null
+        property: "surfaceVisible"
+        when: root.recordingReview !== null
+        value: root.visible && root.visibility !== Window.Minimized && root.recordingReview !== null && root.recordingReview.active
+    }
+
     AppShell {
         gamepadOverlay: root.gamepadOverlay
         id: appShell
@@ -480,6 +488,7 @@ ApplicationWindow {
         logsAdapter: root.logsAdapter
         editSession: root.editSession
         editTimeline: root.editTimeline
+        recordingReview: root.recordingReview
         editPlayer: root.editPlayer
         editExport: root.editExport
         benchmarkInteractionActive: root.benchmarkInteractionActive

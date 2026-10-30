@@ -18,7 +18,12 @@ Item {
     // the control channel sends, so automation opens the real picker instead of
     // bypassing the surface the way record.selectTarget does.
     required property ShellAdapter shell
+    property var recordingReview: null
+    property Component reviewComponent: null
+    readonly property bool reviewing: recordingReview !== null && recordingReview.active
     property bool active: false
+    onActiveChanged: if (!active && recordingReview) recordingReview.close()
+    onReviewingChanged: if (reviewing && !active) recordingReview.close()
     property bool benchmarkInteractionActive: false
     property bool showMetricsOverlay: false
     property string selectedOverlay: ""
@@ -33,7 +38,7 @@ Item {
     Binding {
         target: root.previewAdapter
         property: "active"
-        value: root.active
+        value: root.active && !root.reviewing
     }
 
     Binding {
@@ -58,12 +63,18 @@ Item {
         // ── Preview Surface ──────────────────────────────────────────────────
         Item {
             id: previewHost
+            Loader {
+                anchors.fill: parent
+                active: root.reviewing
+                sourceComponent: root.reviewComponent
+            }
             Layout.fillWidth: true
             Layout.fillHeight: true
             Layout.minimumHeight: 280
 
             Item {
                 id: workspaceSurface
+                visible: !root.reviewing
                 anchors.fill: parent
 
                 Rectangle {
@@ -407,10 +418,10 @@ Item {
             }
         }
 
-        // One Preview Surface, 16 px, the transport dock: nothing sits between
-        // them in any state. A finished recording is reached through its Saved
-        // notification and Edit History, not through a row on this page.
         RecordTransportDock {
+            reviewAvailable: root.reviewing
+            reviewCanEdit: root.reviewing && root.recordViewModel.completedRecordingAvailable
+            onReviewEditRequested: root.recordingReview.requestEdit()
             recordViewModel: root.recordViewModel
             clipAdapter: root.clipAdapter
             routing: root.settings.audioRouting

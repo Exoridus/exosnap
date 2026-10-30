@@ -377,6 +377,10 @@ class EditSessionAdapter : public QObject {
         return {{"modelNs", command_model_ns_}, {"publishNs", command_publish_ns_}};
     }
     void setAssetMonitorSelection(edit::Id asset, engine::MonitorSelectionSnapshot selection);
+    // Transient playback workspaces may replace imported stream enablement on every audition.
+    void setMonitoringControlsInputMix(bool enabled) {
+        monitoring_controls_input_mix_ = enabled;
+    }
     [[nodiscard]] QVariantList media() const;
     [[nodiscard]] EditTimelineClipModel* mediaModel() const {
         return media_model_;
@@ -479,7 +483,8 @@ class EditSessionAdapter : public QObject {
     // Adds recording segments to the resident workspace and refreshes the source context.
     // Negative placement resolves against content end after probing.
     void setEditContext(const EditContext& context, qint64 timeline_start_ms = -1);
-    void setEditContextUs(const EditContext& context, qint64 timeline_start_us = -1);
+    // Initial position is relative to the added recording and survives asynchronous probing.
+    void setEditContextUs(const EditContext& context, qint64 timeline_start_us = -1, qint64 initial_position_us = 0);
     [[nodiscard]] bool deliveryPending() const noexcept {
         return context_.delivery_pending;
     }
@@ -761,7 +766,7 @@ class EditSessionAdapter : public QObject {
     void refuseEdit(const QString& message);
     void setInteractionSetting(bool& setting, bool value);
     bool applyCommand(const edit::EditCommand& command, std::function<void()> after_apply = {});
-    void applyEditContextUs(const EditContext& context, qint64 timeline_start_us,
+    void applyEditContextUs(const EditContext& context, qint64 timeline_start_us, qint64 initial_position_us,
                             std::vector<edit::SourceImport> imports, std::vector<SourcePublication> publications = {});
     edit::Id selected_transition_ = 0;
     void publishWorkspace(bool changed, const QString& error = {});
@@ -790,6 +795,7 @@ class EditSessionAdapter : public QObject {
     qint64 position_ms_ = 0;
     quint64 clip_generation_ = 0;
     bool open_ = false;
+    bool monitoring_controls_input_mix_ = false;
     bool trim_snap_ready_ = false;
     bool export_running_ = false;
 

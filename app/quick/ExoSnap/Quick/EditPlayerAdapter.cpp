@@ -509,6 +509,7 @@ void EditPlayerAdapter::attachPlayerItem(ExoEditPlayerItem* item) {
     connect(item, &ExoEditPlayerItem::framePresented, this, [this](qint64 time_us) {
         presented_time_us_ = time_us;
         seek_pending_ = false;
+        setPlaceholderText({});
         setPreviewState(Ready);
         emit previewChanged();
     });

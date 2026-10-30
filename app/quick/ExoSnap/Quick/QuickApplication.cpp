@@ -495,6 +495,8 @@ class QuickConsoleDisplayStateFilter final : public QAbstractNativeEventFilter {
 
 QuickApplication::~QuickApplication() {
     edit_export_adapter_.cancelAndWait();
+    recording_review_adapter_.close();
+    recording_review_adapter_.player()->setSession(nullptr);
     if (console_display_notify_ != nullptr) {
         UnregisterPowerSettingNotification(static_cast<HPOWERNOTIFY>(console_display_notify_));
         console_display_notify_ = nullptr;
@@ -4405,6 +4407,14 @@ void QuickApplication::initializeEditArea() {
     edit_timeline_adapter_.setTileProvider(edit_tile_provider_);
     edit_timeline_adapter_.setSession(&edit_session_adapter_);
     edit_player_adapter_.setSession(&edit_session_adapter_);
+    recording_review_adapter_.session()->setBackgroundIoAdmission(recording_coordinator_->backgroundIoAdmission());
+    QObject::connect(&recording_review_adapter_, &RecordingReviewAdapter::editRequested, &edit_session_adapter_,
+                     [this] { openEditorForCurrentRecording(); });
+    QObject::connect(&record_view_model_adapter_, &RecordViewModelAdapter::changed, &recording_review_adapter_, [this] {
+        if (record_view_model_adapter_.recording() || record_view_model_adapter_.preparing() ||
+            record_view_model_adapter_.finalizing())
+            recording_review_adapter_.close();
+    });
     edit_export_adapter_.setSession(&edit_session_adapter_);
     edit_session_adapter_.setBackgroundIoAdmission(recording_coordinator_->backgroundIoAdmission());
     QObject::connect(&settings_adapter_, &SettingsAdapter::clearMediaCachesRequested, &edit_timeline_adapter_, [this] {
@@ -5746,6 +5756,10 @@ void QuickApplication::requestElevatedRelaunch() {
 void QuickApplication::publishRecordingResultNotification(const UiRecordingResult& result) {
     notifications::NotificationEvent event;
     if (result.succeeded) {
+        recording_review_adapter_.open(
+            MakeEditContextForCurrentSession(record_view_model_.current_completed_recording,
+                                             QString::fromStdWString(record_view_model_.result_mkv_master_path),
+                                             peak_av_drift_ms_, av_drift_ever_available_, last_completed_snapshot_));
         event.type = notifications::NotificationType::Saved;
         event.title = QCoreApplication::translate("QuickApplication", "Recording saved");
         // The name, not the path. A full path is a single unbreakable token --
@@ -6301,10 +6315,11 @@ void QuickApplication::openEditorForCurrentRecording() {
         edit_session_adapter_.setEditContext(context);
         return;
     }
-    edit_session_adapter_.setEditContext(
+    edit_session_adapter_.setEditContextUs(
         MakeEditContextForCurrentSession(record_view_model_.current_completed_recording,
                                          QString::fromStdWString(record_view_model_.result_mkv_master_path),
-                                         peak_av_drift_ms_, av_drift_ever_available_, last_completed_snapshot_));
+                                         peak_av_drift_ms_, av_drift_ever_available_, last_completed_snapshot_),
+        -1, recording_review_adapter_.active() ? recording_review_adapter_.session()->positionMs() * 1000 : 0);
 }
 
 bool QuickApplication::canOpenEditorForCurrentRecording() const {
@@ -6362,6 +6377,7 @@ bool QuickApplication::load(bool no_activate) {
         {QStringLiteral("logsAdapter"), QVariant::fromValue(&logs_adapter_)},
         {QStringLiteral("editSession"), QVariant::fromValue(&edit_session_adapter_)},
         {QStringLiteral("editTimeline"), QVariant::fromValue(&edit_timeline_adapter_)},
+        {QStringLiteral("recordingReview"), QVariant::fromValue(&recording_review_adapter_)},
         {QStringLiteral("editPlayer"), QVariant::fromValue(&edit_player_adapter_)},
         {QStringLiteral("editExport"), QVariant::fromValue(&edit_export_adapter_)},
         {QStringLiteral("shell"), QVariant::fromValue(&shell_adapter_)},

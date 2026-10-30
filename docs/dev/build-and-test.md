@@ -64,6 +64,8 @@ cargo exo-dev verify --fast
 cargo exo-dev verify --full
 ```
 
+The headless `quick.qml.recording_review` suite renders the controls with a decoded still fixture. It does not prove native video presentation. `quick.qml.recording_review_native` uses the Windows platform and Direct3D 11, opens a test window and belongs to the desktop phase. Coordinate desktop availability before running that selection locally. Its native assertions remain part of the full CI suite.
+
 A filter selects a registered test/binary prefix, not necessarily one internal GoogleTest case. Check the printed selection. Hardware exclusions reduce reach and must be reported as such.
 
 `cargo exo-dev` is a Cargo alias defined in `.cargo/config.toml`; run it from the repository root, including the root of a git worktree created inside the checkout. It builds `tools/exo-dev` when its sources changed and runs it. `--fast` is the scoped pre-commit contract: it may check more than a change strictly needs, never less. `--full` is the complete local gate for what still runs locally: missing-tool failures, packaging/privacy/egress guards, source hygiene, format and the Rust workspace (`fmt`, `clippy`, `cargo test`). The git hooks call the same two contracts. `--dry-run` executes nothing and shows the plan a change would get; `--simulate-fail <step>` exercises the failure paths without a compiler.
