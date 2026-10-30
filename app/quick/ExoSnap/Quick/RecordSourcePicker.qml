@@ -746,6 +746,8 @@ Popup {
                 anchors.leftMargin: root.contentPadding
                 anchors.rightMargin: 4
                 clip: true
+                // Software Shape nodes can escape ancestor clips unless rasterized together.
+                layer.enabled: GraphicsInfo.api === GraphicsInfo.Software
                 boundsBehavior: Flickable.StopAtBounds
                 // Replacing an array model resets the viewport and cancels an active flick.
                 model: visibleRows

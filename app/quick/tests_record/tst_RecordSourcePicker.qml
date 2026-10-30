@@ -560,6 +560,39 @@ TestCase {
         }
     }
 
+    function test_partial_card_glyphs_stay_inside_list_viewport() {
+        recordDriver.seedWindowTargets(refreshWindows());
+        const page = makePage();
+        showTab(page, 1);
+        const list = pick(page, "sourceList");
+        list.positionViewAtIndex(3, ListView.Beginning);
+        list.forceLayout();
+        const identity = page.picker.pickerRows[3].cards[0].identity;
+        const card = pick(page, "targetCard-" + identity);
+        const rowY = card.parent.parent.y;
+        list.contentY = rowY - list.height + 12;
+        waitForRendering(page);
+        const scene = page.Window.window.contentItem;
+        const origin = list.mapToItem(scene, 0, list.height);
+        const bottom = page.picker.contentItem.mapToItem(scene, 0, page.picker.contentItem.height).y;
+        const visiblePoint = card.mapToItem(scene, card.width / 2, 6);
+        const before = grabImage(scene);
+        card.visible = false;
+        waitForRendering(page);
+        const after = grabImage(scene);
+        verify(before.pixel(Math.floor(visiblePoint.x), Math.floor(visiblePoint.y))
+                !== after.pixel(Math.floor(visiblePoint.x), Math.floor(visiblePoint.y)),
+                "the visible portion of a partial card must still render");
+        for (let y = Math.ceil(origin.y); y < Math.floor(bottom); ++y) {
+            for (let x = Math.ceil(origin.x); x < Math.floor(origin.x + list.width); ++x) {
+                if (before.pixel(x, y) !== after.pixel(x, y)) {
+                    fail("partially visible card painted below viewport at " + x + "," + y);
+                    return;
+                }
+            }
+        }
+    }
+
     // A single display stays compact and centered in the shared list.
     function test_few_displays_keep_cards_compact_and_centred() {
         let page = makePage();
