@@ -44,6 +44,12 @@ cargo exo-dev test --filter recorder_core.            # one binary
 5. Run `cargo exo-dev verify --fast` while iterating and `cargo exo-dev verify --full` before pushing. The git hooks use the same entry point; CI runs the full gate again.
 6. Open a pull request against `next` with `cargo exo-dev pr open`, or pass `--base main` for a Stable patch. Describe what changed, what validates it, and any product, architecture or workflow updates the change required.
 
+## Visual review evidence for UI changes
+
+For a PR changing visible Qt Quick UI, attach a small, current-head screenshot set directly to the PR: **Dark and Light** of the same affected screen/state, plus regular and narrow sizes when responsive geometry changes. Include relevant interaction states and a before/after pair when the visual design changed. Avoid unrelated full-gallery dumps. Label images with the state, theme and logical viewport size; inspect both the PNG and `manifest.json` before declaring them verified.
+
+Use the existing deterministic Qt Quick harness, not a mockup: `cargo exo-dev screenshot list` discovers fixtures; `cargo exo-dev screenshot shot` captures a selected view; `cargo exo-dev screenshot sweep --set record --size 1600x1000,860x700` captures a scoped Record review in both appearances. See [Deterministic visual capture](docs/dev/harness-and-tracing.md#deterministic-visual-capture) for usage, output and limitations. Generated evidence remains untracked; upload only privacy-safe synthetic fixture images to GitHub. Attach or embed the relevant images in the PR description or conversation so they remain available for later review. CI artifacts expire and must not be the only reference. If the connected tool cannot upload them, mark the visual evidence pending and keep the PR in Draft; a green `qmllint` or CTest result does not replace visual inspection. Nonvisual code changes can state why screenshot evidence is not applicable.
+
 ## Commit subjects and pull request descriptions
 
 A commit is its Conventional Commits subject: `type(scope): summary`, in English and the imperative mood. The accepted types are `feat`, `fix`, `perf`, `refactor`, `docs`, `ci`, `build`, `test`, `chore` and `style`. A breaking change is marked with `!` before the colon — `refactor(engine)!: ...`.
