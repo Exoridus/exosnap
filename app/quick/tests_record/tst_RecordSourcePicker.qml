@@ -569,6 +569,9 @@ TestCase {
         list.forceLayout();
         const identity = page.picker.pickerRows[3].cards[0].identity;
         const card = pick(page, "targetCard-" + identity);
+        recordDriver.deliverStill(identity, "image://capture-target/display-2/1");
+        const thumbnail = findVisual(card, "targetThumbnailImage");
+        tryCompare(thumbnail, "status", Image.Ready);
         const rowY = card.parent.parent.y;
         list.contentY = rowY - list.height + 12;
         waitForRendering(page);
@@ -576,8 +579,11 @@ TestCase {
         const origin = list.mapToItem(scene, 0, list.height);
         const bottom = page.picker.contentItem.mapToItem(scene, 0, page.picker.contentItem.height).y;
         const visiblePoint = card.mapToItem(scene, card.width / 2, 6);
+        tryVerify(() => grabImage(scene).red(Math.floor(visiblePoint.x), Math.floor(visiblePoint.y)) === 72,
+                5000, "the ready preview must remain visible in a partial row");
         const before = grabImage(scene);
-        card.visible = false;
+        // Hiding one card would move its sibling into the same slot.
+        card.parent.visible = false;
         waitForRendering(page);
         const after = grabImage(scene);
         verify(before.pixel(Math.floor(visiblePoint.x), Math.floor(visiblePoint.y))
