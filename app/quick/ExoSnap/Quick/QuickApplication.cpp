@@ -4425,8 +4425,17 @@ void QuickApplication::initializeEditArea() {
     edit_timeline_adapter_.setSession(&edit_session_adapter_);
     edit_player_adapter_.setSession(&edit_session_adapter_);
     recording_review_adapter_.session()->setBackgroundIoAdmission(recording_coordinator_->backgroundIoAdmission());
-    QObject::connect(&recording_review_adapter_, &RecordingReviewAdapter::editRequested, &edit_session_adapter_,
-                     [this] { openEditorForCurrentRecording(); });
+    QObject::connect(&recording_review_adapter_, &RecordingReviewAdapter::editRequested, &record_view_model_adapter_,
+                     [this](const QString& identity) {
+                         recording_review_adapter_.suspend();
+                         if (!record_view_model_adapter_.requestRecordingReveal(identity)) {
+                             recording_review_adapter_.completeEditRequest(identity, false);
+                             return;
+                         }
+                         emit shell_adapter_.navigateToPageRequested(ShellAdapter::EditPage);
+                     });
+    QObject::connect(&record_view_model_adapter_, &RecordViewModelAdapter::recordingRevealFinished,
+                     &recording_review_adapter_, &RecordingReviewAdapter::completeEditRequest);
     QObject::connect(&record_view_model_adapter_, &RecordViewModelAdapter::changed, &recording_review_adapter_, [this] {
         if (record_view_model_adapter_.recording() || record_view_model_adapter_.preparing() ||
             record_view_model_adapter_.finalizing())
@@ -7048,9 +7057,10 @@ bool QuickApplication::applyRecordVisualScenario(const QString& scenario) {
         // The Edit affordance is gated on the recording actually existing on
         // disk, so the scenario writes a placeholder rather than pretending. It
         // goes to a scratch directory, never to the user's output folder.
-        const QString fixture_directory =
-            QStandardPaths::writableLocation(QStandardPaths::TempLocation) + QStringLiteral("/exosnap-visual-fixtures");
-        QDir().mkpath(fixture_directory);
+        record_review_visual_directory_ = std::make_unique<QTemporaryDir>();
+        if (!record_review_visual_directory_->isValid())
+            return false;
+        const QString fixture_directory = record_review_visual_directory_->path();
         const QString fixture_path = fixture_directory + QStringLiteral("/2026-08-12_06-21-07_Desktop_Display 1.mkv");
         if (QFile fixture(fixture_path); fixture.open(QIODevice::WriteOnly))
             fixture.write("visual scenario placeholder");
@@ -7061,6 +7071,8 @@ bool QuickApplication::applyRecordVisualScenario(const QString& scenario) {
         record_view_model_.result_output_file_bytes = 462'000'000;
         record_view_model_.current_completed_recording.succeeded = true;
         record_view_model_.current_completed_recording.file_path = fixture_path;
+        record_view_model_.current_completed_recording.duration_seconds = 754.0;
+        record_view_model_.AddToRecentRecordings(record_view_model_.current_completed_recording);
         record_view_model_.elapsed_text = L"12:34";
         record_view_model_.elapsed_seconds = 754.0;
         record_view_model_.output_size_text = L"440.6 MB";
@@ -7116,14 +7128,12 @@ bool QuickApplication::applyRecordVisualScenario(const QString& scenario) {
     // state has to produce it everywhere the state is visible.
     synchronizeRecordState();
     if (normalized == QLatin1String(visual::record_state::kCompleted)) {
-        record_review_visual_directory_ = std::make_unique<QTemporaryDir>();
         const auto still_path = record_review_visual_directory_->filePath(QStringLiteral("review.png"));
         const auto image = visual_tests::PaintEditSourceFrame(0, 1280, 720, 12'000'000);
         if (!record_review_visual_directory_->isValid() || !image.save(still_path))
             return false;
         auto context = MakeEditContext(record_view_model_.current_completed_recording);
-        context.output_path = record_review_visual_directory_->filePath(QStringLiteral("Synthetic review.mkv"));
-        context.mkv_master_path = context.output_path;
+        context.mkv_master_path = record_review_visual_directory_->filePath(QStringLiteral("Synthetic review.mkv"));
         context.duration_seconds = 754.0;
         context.resolution = QStringLiteral("1920x1080");
         recording_review_adapter_.player()->setSession(nullptr);

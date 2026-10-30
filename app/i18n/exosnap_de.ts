@@ -14003,4 +14003,11 @@ Kleiner Text auf dem Bildschirm verliert früher an Qualität als Videoinhalte. 
         <translation>Schließen</translation>
     </message>
 </context>
+<context>
+    <name>RecordingReviewAdapter</name>
+    <message>
+        <source>The recording is no longer available in Recordings.</source>
+        <translation>Die Aufnahme ist im Bereich Aufnahmen nicht mehr verfügbar.</translation>
+    </message>
+</context>
 </TS>

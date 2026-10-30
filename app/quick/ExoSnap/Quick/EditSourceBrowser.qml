@@ -19,6 +19,35 @@ Item {
     signal pinToggled()
     signal closeRequested(bool keyboardActivation)
     objectName: "editSourceBrowser"
+    function revealPendingRecording(): void {
+        if (root.visible && root.recordings.pendingRecordingIdentity !== "")
+            root.revealRecording(root.recordings.pendingRecordingIdentity);
+    }
+    Component.onCompleted: Qt.callLater(root.revealPendingRecording)
+    onVisibleChanged: if (visible) Qt.callLater(root.revealPendingRecording)
+    Connections {
+        target: root.recordings
+        function onRecordingRevealRequested(): void { Qt.callLater(root.revealPendingRecording); }
+    }
+
+    function revealRecording(identity: string): bool {
+        const rows = root.recordings.recentRecordingOptions;
+        for (let i = 0; i < rows.length; ++i) {
+            if (rows[i].identity === identity && rows[i].available) {
+                root.currentTab = 2;
+                sourceItems.forceLayout();
+                sourceItems.currentIndex = i;
+                sourceItems.positionViewAtIndex(i, ListView.Contain);
+                if (root.recordings.confirmRecordingReveal(identity))
+                    return true;
+                sourceItems.currentIndex = -1;
+                return false;
+            }
+        }
+        sourceItems.currentIndex = -1;
+        root.recordings.confirmRecordingReveal(identity);
+        return false;
+    }
 
     function focusTab(index: int): void {
         root.currentTab = (index + 3) % 3;

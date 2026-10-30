@@ -53,6 +53,26 @@ FocusScope {
     onDetailsPinPreferredChanged: layoutPreferences.detailsPinned = detailsPinPreferred
     onMediaPinnedLastChanged: layoutPreferences.mediaPinnedLast = mediaPinnedLast
     objectName: "quickEditPage"
+
+    function revealRequestedRecording(): void {
+        if (!root.visible || root.recordings.pendingRecordingIdentity === "")
+            return;
+        root.sourceTab = 2;
+        // Revealing media must not commit or destroy an editor draft.
+        if (!root.mediaOpen) {
+            root.mediaInvoker = root.Window.window ? root.Window.window.activeFocusItem : clips;
+            root.mediaOpen = true;
+        }
+    }
+    onVisibleChanged: if (visible) root.revealRequestedRecording()
+    Component.onCompleted: {
+        root.restoreVertical();
+        root.revealRequestedRecording();
+    }
+    Connections {
+        target: root.recordings
+        function onRecordingRevealRequested(): void { root.revealRequestedRecording(); }
+    }
     Keys.priority: Keys.AfterItem
     Keys.forwardTo: [clips]
     Keys.onPressed: event => {
@@ -366,7 +386,6 @@ FocusScope {
         property bool detailsPinned: false
         property bool mediaPinnedLast: true
     }
-    Component.onCompleted: root.restoreVertical()
     SplitView {
         id: zones
         objectName: "editVerticalSplit"
@@ -416,6 +435,7 @@ FocusScope {
             }
             Loader {
                 id: mediaPanel
+                onLoaded: root.revealRequestedRecording()
                 objectName: "editMediaPanelLoader"
                 active: root.mediaOpen
                 width: root.mediaWidth

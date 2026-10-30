@@ -1,8 +1,10 @@
 #include "RecordViewModelAdapter.h"
+#include <QByteArray>
 #include <QCoreApplication>
 
 #include "models/CaptureTargetPresentation.h"
 #include "viewmodels/RecordViewModel.h"
+#include <exosnap/engine/audio_media_manifest.h>
 
 #include <QFileInfo>
 #include <QMetaObject>
@@ -12,6 +14,7 @@
 
 #include <algorithm>
 #include <cmath>
+#include <filesystem>
 #include <utility>
 
 namespace exosnap::quick {
@@ -615,6 +618,57 @@ const QVariantList& RecordViewModelAdapter::recentRecordingOptions() const noexc
     return recent_recording_options_;
 }
 
+QString RecordViewModelAdapter::recordingIdentity(const QString& path) {
+    if (path.isEmpty())
+        return {};
+    const auto access = engine::AcquireMediaReadCapability(std::filesystem::path(path.toStdWString()));
+    if (!access.succeeded())
+        return {};
+    const auto& identity = (*access.value())->Identity();
+    const auto file_id = QByteArray(reinterpret_cast<const char*>(identity.file_identity.file_id.data()), 16).toHex();
+    return QStringLiteral("%1:%2:%3:%4")
+        .arg(identity.file_identity.volume_serial)
+        .arg(QString::fromLatin1(file_id))
+        .arg(identity.file_size)
+        .arg(identity.last_write_time);
+}
+
+bool RecordViewModelAdapter::requestRecordingReveal(const QString& identity) {
+    if (!pending_recording_identity_.isEmpty()) {
+        pending_recording_identity_.clear();
+        emit recordingRevealRequested();
+    }
+    if (identity.isEmpty())
+        return false;
+    rebuildRecentRecordings();
+    const bool found = std::any_of(
+        recent_recording_options_.begin(), recent_recording_options_.end(), [&identity](const QVariant& value) {
+            const auto row = value.toMap();
+            return row.value("identity").toString() == identity && row.value("available").toBool();
+        });
+    if (!found)
+        return false;
+    pending_recording_identity_ = identity;
+    emit recordingRevealRequested();
+    return true;
+}
+
+bool RecordViewModelAdapter::confirmRecordingReveal(const QString& identity) {
+    if (identity.isEmpty() || pending_recording_identity_ != identity)
+        return false;
+    // The panel may have loaded after the file was removed or replaced.
+    rebuildRecentRecordings();
+    const bool selected = std::any_of(
+        recent_recording_options_.begin(), recent_recording_options_.end(), [&identity](const QVariant& value) {
+            const auto row = value.toMap();
+            return row.value("identity").toString() == identity && row.value("available").toBool();
+        });
+    pending_recording_identity_.clear();
+    emit recordingRevealRequested();
+    emit recordingRevealFinished(identity, selected);
+    return selected;
+}
+
 // Exhaustive with no `default:`: a state added later must answer here on
 // purpose, and /W4 /WX turns an unhandled enumerator into a build failure. The
 // permissive answer is the one that lets the region be edited while a capture
@@ -1081,6 +1135,7 @@ void RecordViewModelAdapter::rebuildRecentRecordings() {
                 continue;
             rows.push_back(QVariantMap{
                 {QStringLiteral("path"), recording.file_path},
+                {QStringLiteral("identity"), recordingIdentity(recording.file_path)},
                 {QStringLiteral("label"), recording.fileName()},
                 {QStringLiteral("available"), CanOpenInEditor(recording)},
                 {QStringLiteral("durationMs"), static_cast<qint64>(recording.totalDurationSeconds() * 1000)},

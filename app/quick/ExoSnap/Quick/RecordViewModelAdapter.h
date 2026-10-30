@@ -147,6 +147,7 @@ class RecordViewModelAdapter : public QObject {
     // dropped, so a menu entry never silently changes meaning between the frame
     // the user read it in and the frame they pressed it.
     Q_PROPERTY(QVariantList recentRecordingOptions READ recentRecordingOptions NOTIFY recentRecordingsChanged FINAL)
+    Q_PROPERTY(QString pendingRecordingIdentity READ pendingRecordingIdentity NOTIFY recordingRevealRequested FINAL)
 
     // Harness seam (--visual-test). Replaces the empty stage's instruction block
     // with the brand alone, for the still the README ships. Deliberately not
@@ -231,6 +232,12 @@ class RecordViewModelAdapter : public QObject {
     [[nodiscard]] bool regionSelectionNeeded() const noexcept;
     [[nodiscard]] const QVariantList& regionPresetOptions() const noexcept;
     [[nodiscard]] const QVariantList& recentRecordingOptions() const noexcept;
+    static QString recordingIdentity(const QString& path);
+    QString pendingRecordingIdentity() const {
+        return pending_recording_identity_;
+    }
+    Q_INVOKABLE bool requestRecordingReveal(const QString& identity);
+    Q_INVOKABLE bool confirmRecordingReveal(const QString& identity);
     [[nodiscard]] bool regionEditingLocked() const noexcept;
     [[nodiscard]] bool systemAudioEnabled() const noexcept;
     [[nodiscard]] bool appAudioEnabled() const noexcept;
@@ -348,6 +355,8 @@ class RecordViewModelAdapter : public QObject {
     void countdownSecondsRequested(int seconds);
     void dismissResultRequested();
     void openRecentRequested(QString file_path);
+    void recordingRevealRequested();
+    void recordingRevealFinished(QString identity, bool selected);
     void revealRecentRequested(QString file_path);
 
   private:
@@ -410,6 +419,7 @@ class RecordViewModelAdapter : public QObject {
     bool region_selection_needed_ = false;
     QVariantList region_preset_options_;
     QVariantList recent_recording_options_;
+    QString pending_recording_identity_;
     QStringList live_toggleable_sources_;
     uint32_t degraded_audio_kinds_ = 0;
     bool microphone_available_ = true;

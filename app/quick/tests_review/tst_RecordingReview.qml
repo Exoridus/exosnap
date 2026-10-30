@@ -14,12 +14,20 @@ TestCase {
         target: testRecordingReview
         signalName: "editRequested"
     }
+    SignalSpy {
+        id: closeSpy
+        signalName: "closeRequested"
+    }
 
     function cleanup() {
-        testTransportPlayer.setPlaying(false);
+        testEditHarness.setReviewPlaybackPlaying(false);
         testTransportPlayer.endScrub();
         testRecordingReview.close();
+        testCase.forceActiveFocus(Qt.OtherFocusReason);
+        mouseMove(testCase, 0, 0);
         editSpy.clear();
+        closeSpy.target = null;
+        closeSpy.clear();
         testEditHarness.setVisualAppearance("dark");
     }
 
@@ -48,6 +56,89 @@ TestCase {
         compare(findChild(review, "reviewCenterPlay"), null);
         verify(findChild(review, "reviewSeek"));
         verify(findChild(review, "reviewAudio"));
+    }
+
+    function test_controls_overlay_video_and_close_explicitly() {
+        const review = createTemporaryObject(reviewComponent, testCase);
+        verify(review);
+        const surface = findChild(review, "reviewSurface");
+        const controls = findChild(review, "reviewControls");
+        const close = findChild(review, "reviewClose");
+        compare(surface.height, review.height);
+        compare(controls.y + controls.height, surface.y + surface.height);
+        verify(close.y < controls.y);
+        verify(close.x > review.width / 2);
+        closeSpy.target = review;
+        mouseClick(close);
+        compare(closeSpy.count, 1);
+    }
+
+    function test_idle_hides_playing_controls_and_motion_reveals() {
+        const review = createTemporaryObject(reviewComponent, testCase);
+        verify(review);
+        review.forceActiveFocus();
+        mouseMove(review, 20, 20);
+        const controls = findChild(review, "reviewControls");
+        const close = findChild(review, "reviewClose");
+        wait(2600);
+        compare(controls.opacity, 1, "paused controls stay visible");
+        testEditHarness.setReviewPlaybackPlaying(true);
+        compare(testTransportPlayer.playing, true);
+        compare(review.controlsHeld, false, "idle playback has no focused, seeking or popup controls");
+        compare(controls.opacity, 1);
+        wait(2000);
+        compare(controls.opacity, 1, "controls remain until the idle interval");
+        tryCompare(controls, "opacity", 0, 1500);
+        compare(close.opacity, 0);
+        mouseMove(review, 40, 20);
+        tryCompare(controls, "opacity", 1);
+        compare(close.opacity, 1);
+        testEditHarness.setReviewPlaybackPlaying(false);
+        wait(2600);
+        compare(controls.opacity, 1);
+    }
+
+    function test_keyboard_focus_and_scrubbing_keep_controls_visible() {
+        const review = createTemporaryObject(reviewComponent, testCase);
+        verify(review);
+        review.forceActiveFocus();
+        mouseMove(review, 20, 20);
+        testEditHarness.setReviewPlaybackPlaying(true);
+        const controls = findChild(review, "reviewControls");
+        compare(testTransportPlayer.playing, true);
+        compare(review.controlsHeld, false, "idle playback has no focused, seeking or popup controls");
+        tryCompare(controls, "opacity", 0, 3500);
+        const play = findChild(review, "reviewPlayPause");
+        play.forceActiveFocus(Qt.TabFocusReason);
+        tryCompare(controls, "opacity", 1);
+        wait(2600);
+        compare(controls.opacity, 1, "keyboard focus prevents idle hiding");
+        review.forceActiveFocus();
+        testTransportPlayer.beginScrub();
+        compare(testTransportPlayer.scrubbing, true);
+        wait(2600);
+        compare(controls.opacity, 1, "seeking prevents idle hiding");
+        testTransportPlayer.endScrub();
+    }
+
+    function test_open_audio_panel_keeps_playing_controls_visible() {
+        const review = createTemporaryObject(reviewComponent, testCase);
+        verify(review);
+        review.forceActiveFocus();
+        mouseMove(review, 20, 20);
+        testEditHarness.setReviewPlaybackPlaying(true);
+        const controls = findChild(review, "reviewControls");
+        tryCompare(controls, "opacity", 0, 3500);
+        review.showAudio();
+        const panel = findChild(review, "reviewAudioPanel");
+        tryCompare(panel, "opened", true);
+        mouseMove(panel.background, 2, 2);
+        wait(2600);
+        compare(controls.opacity, 1);
+        verify(panel.opened);
+        panel.close();
+        mouseMove(review, 20, 20);
+        tryCompare(controls, "opacity", 0, 3500);
     }
 
     function test_audio_focus_opens_panel_and_escape_closes() {

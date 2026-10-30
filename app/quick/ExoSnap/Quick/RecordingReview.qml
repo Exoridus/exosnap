@@ -9,11 +9,46 @@ Rectangle {
     required property EditSessionAdapter session
     required property EditPlayerAdapter player
     property RecordingReviewAdapter audioController: null
+    property bool controlsIdle: false
+    readonly property bool controlsHeld: closeButton.visualFocus || playPause.visualFocus || seek.visualFocus || audio.visualFocus || seek.pressed || root.player.scrubbing || audioPanel.visible
+    readonly property bool controlsVisible: !root.player.playing || !controlsIdle || controlsHeld
     signal closeRequested
     objectName: "recordingReview"
     color: ExoTheme.overlaySurface
     radius: ExoTheme.radiusLg
     clip: true
+    onControlsHeldChanged: revealControls()
+    onVisibleChanged: revealControls()
+
+    function revealControls(): void {
+        controlsIdle = false;
+        if (hideControls.running)
+            hideControls.restart();
+    }
+
+    Connections {
+        target: root.player
+        function onPlayingChanged(): void {
+            if (!root.player.playing)
+                root.revealControls();
+        }
+    }
+    Timer {
+        id: hideControls
+        interval: 2500
+        running: root.visible && root.player.playing && !root.controlsHeld && !root.controlsIdle
+        onTriggered: root.controlsIdle = true
+    }
+    HoverHandler {
+        property point lastPosition: Qt.point(-1, -1)
+        onPointChanged: {
+            // Hover can update without motion when the controls change opacity.
+            if (point.position.x !== lastPosition.x || point.position.y !== lastPosition.y) {
+                lastPosition = point.position;
+                root.revealControls();
+            }
+        }
+    }
 
     component OverlayButton: ExoButton {
         id: button
@@ -77,13 +112,15 @@ Rectangle {
         wrapMode: Text.Wrap
     }
     Label {
+        readonly property string editError: root.audioController ? root.audioController.editError : ""
+        objectName: "reviewMessage"
         anchors.top: parent.top
         anchors.horizontalCenter: parent.horizontalCenter
         anchors.topMargin: ExoTheme.spacingSm
         width: parent.width - 96
         padding: ExoTheme.spacingSm
-        visible: surface.hasFrame && root.player.placeholderText.length > 0
-        text: root.player.placeholderText
+        visible: editError.length > 0 || ((surface.hasFrame || still.visible) && root.player.placeholderText.length > 0)
+        text: editError.length > 0 ? editError : root.player.placeholderText
         textFormat: Text.PlainText
         font.family: ExoTheme.sansFamily
         font.pixelSize: ExoTheme.fontBody
@@ -97,7 +134,9 @@ Rectangle {
         }
     }
     OverlayButton {
+        id: closeButton
         objectName: "reviewClose"
+        opacity: root.controlsVisible ? 1 : 0
         anchors.right: parent.right
         anchors.top: parent.top
         anchors.margins: ExoTheme.spacingSm
@@ -112,19 +151,29 @@ Rectangle {
 
     Rectangle {
         id: controls
+        objectName: "reviewControls"
+        // Keep hidden controls in the tab chain so keyboard focus can reveal them.
+        opacity: root.controlsVisible ? 1 : 0
         anchors.left: parent.left
         anchors.right: parent.right
         anchors.bottom: parent.bottom
-        height: 48
+        height: 64
         bottomLeftRadius: root.radius
         bottomRightRadius: root.radius
-        color: ExoTheme.overlaySurface
+        gradient: Gradient {
+            GradientStop { position: 0; color: "transparent" }
+            GradientStop { position: 1; color: ExoTheme.overlaySurface }
+        }
         RowLayout {
-            anchors.fill: parent
+            anchors.left: parent.left
+            anchors.right: parent.right
+            anchors.bottom: parent.bottom
+            height: 48
             anchors.leftMargin: ExoTheme.spacingLg
             anchors.rightMargin: ExoTheme.spacingLg
             spacing: ExoTheme.spacingMd
             OverlayButton {
+                id: playPause
                 objectName: "reviewPlayPause"
                 compact: true
                 quiet: true

@@ -41,6 +41,7 @@
 #include <QDropEvent>
 #include <QElapsedTimer>
 #include <QEventLoop>
+#include <QFile>
 #include <QKeyEvent>
 #include <QLocale>
 #include <QMap>
@@ -52,6 +53,7 @@
 #include <QQuickWindow>
 #include <QSemaphore>
 #include <QTemporaryDir>
+#include <QTemporaryFile>
 #include <QTranslator>
 #include <QUrl>
 #include <QtQuickTest>
@@ -2083,6 +2085,93 @@ class Setup final : public QObject {
         return true;
     }
 
+    void setReviewPlaybackPlaying(bool playing) {
+        exosnap::quick::EditPlayerAdapterTestPeer::acknowledge(*transport_player_, playing);
+    }
+
+    QString prepareReviewHandoff() {
+        if (!page_recordings_ || !review_)
+            return {};
+        review_->close();
+        {
+            QFile source(exosnap::quick::test::TransportAmbiguousFixture());
+            QTemporaryFile output(review_visual_directory_.filePath(QStringLiteral("recording-XXXXXX.mkv")));
+            if (!source.open(QIODevice::ReadOnly) || !output.open())
+                return {};
+            const auto bytes = source.readAll();
+            if (output.write(bytes) != bytes.size() || !output.flush())
+                return {};
+            output.setAutoRemove(false);
+            reviewed_recording_path_ = output.fileName();
+            output.close();
+        }
+        record_view_model_.recent_recordings.clear();
+        for (int i = 0; i < 24; ++i) {
+            exosnap::CompletedRecording other;
+            other.file_path = review_visual_directory_.filePath(QStringLiteral("Other %1.mkv").arg(i));
+            record_view_model_.recent_recordings.push_back(other);
+        }
+        exosnap::CompletedRecording recording;
+        recording.file_path = reviewed_recording_path_;
+        recording.duration_seconds = 2.0;
+        recording.succeeded = true;
+        record_view_model_.recent_recordings.push_back(recording);
+        page_recordings_->synchronize();
+        auto context = FixtureContext();
+        context.output_path = reviewed_recording_path_;
+        context.mkv_master_path = reviewed_recording_path_;
+        context.duration_seconds = 2.0;
+        review_->setMuted(true);
+        review_->open(context);
+        return exosnap::quick::RecordViewModelAdapter::recordingIdentity(reviewed_recording_path_);
+    }
+
+    void removeReviewedHistory() {
+        record_view_model_.recent_recordings.clear();
+        page_recordings_->synchronize();
+    }
+
+    QVariantMap recordingIdentityProbe() {
+        QTemporaryDir directory;
+        const auto path = directory.filePath(QStringLiteral("recording.mkv"));
+        QFile original(path);
+        if (!original.open(QIODevice::WriteOnly) || original.write("first") != 5)
+            return {};
+        original.close();
+        const auto first = exosnap::quick::RecordViewModelAdapter::recordingIdentity(path);
+        if (!original.rename(directory.filePath(QStringLiteral("renamed.mkv"))))
+            return {};
+        const auto renamed = exosnap::quick::RecordViewModelAdapter::recordingIdentity(original.fileName());
+        QFile replacement(path);
+        if (!replacement.open(QIODevice::WriteOnly) || replacement.write("other") != 5)
+            return {};
+        replacement.close();
+        const auto second = exosnap::quick::RecordViewModelAdapter::recordingIdentity(path);
+        if (!replacement.remove())
+            return {};
+        return {{"stable", !first.isEmpty() && first == renamed},
+                {"replaced", !second.isEmpty() && first != second},
+                {"missing", exosnap::quick::RecordViewModelAdapter::recordingIdentity(path).isEmpty()}};
+    }
+
+    void seedReviewEditorWorkspace() {
+        page_session_->close();
+        page_session_->setEditContext(FixtureContext());
+        page_session_->setEditContext(FixtureContext());
+    }
+
+    QVariantMap reviewEditorCheckpoint() const {
+        return {{"revision", QVariant::fromValue<qulonglong>(page_session_->workspace().revision())},
+                {"historyBytes", QVariant::fromValue<qulonglong>(page_session_->workspace().historyBytes())},
+                {"duration", page_session_->durationUs()},
+                {"position", page_session_->positionUs()},
+                {"selected", page_session_->selectedClipIds()},
+                {"selectionMode", page_session_->selectionMode()},
+                {"undo", page_session_->canUndo()},
+                {"redo", page_session_->canRedo()},
+                {"media", page_session_->media()}};
+    }
+
     QVariantMap reviewLifecycleProbe() {
         exosnap::quick::RecordingReviewAdapter review;
         auto context = FixtureContext();
@@ -2430,6 +2519,9 @@ class Setup final : public QObject {
         page_exporter_ = page_exporter;
         engine->rootContext()->setContextProperty(QStringLiteral("testEditHarness"), this);
         auto* page_recordings = new exosnap::quick::RecordViewModelAdapter(&record_view_model_, this);
+        page_recordings_ = page_recordings;
+        QObject::connect(page_recordings, &exosnap::quick::RecordViewModelAdapter::recordingRevealFinished, review_,
+                         &exosnap::quick::RecordingReviewAdapter::completeEditRequest);
         page_exporter->setSession(page_session);
         engine->rootContext()->setContextProperty(QStringLiteral("testPageSession"), page_session);
         engine->rootContext()->setContextProperty(QStringLiteral("testPageTimeline"), page_timeline);
@@ -2445,6 +2537,8 @@ class Setup final : public QObject {
     exosnap::quick::RecordingReviewAdapter* review_ = nullptr;
     QTemporaryDir review_visual_directory_;
     exosnap::RecordViewModel record_view_model_;
+    exosnap::quick::RecordViewModelAdapter* page_recordings_ = nullptr;
+    QString reviewed_recording_path_;
     EditSessionAdapter* session_ = nullptr;
     EditTimelineAdapter* timeline_ = nullptr;
     EditPlayerAdapter* player_ = nullptr;

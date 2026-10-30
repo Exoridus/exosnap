@@ -23,9 +23,134 @@ Item {
         }
     }
 
+    Component {
+        id: pendingDraftComponent
+        QtObject {
+            property bool accept: true
+            property int commits: 0
+            function commitPendingDraft(): bool {
+                ++commits;
+                return accept;
+            }
+        }
+    }
+
     TestCase {
         name: "EditPage"
         when: windowShown
+
+        SignalSpy {
+            id: reviewEditSpy
+            target: testRecordingReview
+            signalName: "editRequested"
+        }
+
+        SignalSpy {
+            id: historyInsertSpy
+            target: testPageSession
+            signalName: "historyRequestedUs"
+        }
+
+        function test_recording_identity_survives_rename_but_not_replacement() {
+            const result = testEditHarness.recordingIdentityProbe();
+            compare(result.stable, true);
+            compare(result.replaced, true);
+            compare(result.missing, true);
+        }
+
+        function test_review_edit_requests_a_stable_recording_identity() {
+            verify(testEditHarness.prepareRecordingReview());
+            tryCompare(testRecordingReview.player, "clipOpen", true, 10000);
+            reviewEditSpy.clear();
+            testRecordingReview.requestEdit();
+            compare(reviewEditSpy.count, 1);
+            compare(typeof reviewEditSpy.signalArguments[0][0], "string");
+            verify(reviewEditSpy.signalArguments[0][0].length > 0);
+            testRecordingReview.close();
+        }
+
+        function test_review_reveal_preserves_existing_editor_work() {
+            historyInsertSpy.clear();
+            testEditHarness.seedReviewEditorWorkspace();
+            const identity = testEditHarness.prepareReviewHandoff();
+            verify(identity.length > 0);
+            const page = make();
+            const before = JSON.stringify(testEditHarness.reviewEditorCheckpoint());
+            verify(testPageSession.durationUs > 0);
+            verify(testPageRecordings.requestRecordingReveal(identity));
+            tryCompare(testPageRecordings, "pendingRecordingIdentity", "");
+            const browser = findChild(page, "editSourceBrowser");
+            verify(browser);
+            compare(browser.currentTab, 2);
+            const list = findChild(browser, "editSourceItems");
+            compare(testPageRecordings.recentRecordingOptions[list.currentIndex].identity, identity);
+            verify(list.contentY > 0, "the requested recording is scrolled into view");
+            compare(JSON.stringify(testEditHarness.reviewEditorCheckpoint()), before);
+            compare(testRecordingReview.active, false);
+            compare(historyInsertSpy.count, 0, "revealing a recording must not insert it");
+            list.currentItem.forceActiveFocus();
+            keyClick(Qt.Key_Return);
+            tryCompare(historyInsertSpy, "count", 1);
+            compare(historyInsertSpy.signalArguments[0][0], testPageRecordings.recentRecordingOptions[list.currentIndex].path);
+        }
+
+        function test_suspending_review_preserves_position_and_editor_selection() {
+            testEditHarness.seedReviewEditorWorkspace();
+            verify(testEditHarness.prepareReviewHandoff().length > 0);
+            tryCompare(testRecordingReview.player, "clipOpen", true, 10000);
+            testRecordingReview.session.requestSeek(700);
+            const page = make({mediaOpen: true});
+            const browser = findChild(page, "editSourceBrowser");
+            const list = findChild(browser, "editSourceItems");
+            list.currentIndex = 1;
+            const before = JSON.stringify(testEditHarness.reviewEditorCheckpoint());
+            {
+                testRecordingReview.suspend();
+                page.visible = false;
+                page.visible = true;
+                compare(testRecordingReview.active, true);
+                compare(testRecordingReview.session.positionMs, 700);
+                compare(testRecordingReview.player.playing, false);
+                compare(list.currentIndex, 1);
+                compare(JSON.stringify(testEditHarness.reviewEditorCheckpoint()), before);
+            }
+            testRecordingReview.close();
+        }
+
+        function test_missing_recording_does_not_close_review_or_change_editor() {
+            testEditHarness.seedReviewEditorWorkspace();
+            const identity = testEditHarness.prepareReviewHandoff();
+            verify(identity.length > 0);
+            const page = make({visible: false});
+            const before = JSON.stringify(testEditHarness.reviewEditorCheckpoint());
+            verify(testPageRecordings.requestRecordingReveal(identity));
+            testEditHarness.removeReviewedHistory();
+            page.visible = true;
+            tryCompare(testPageRecordings, "pendingRecordingIdentity", "");
+            compare(testRecordingReview.active, true);
+            verify(testRecordingReview.editError.length > 0);
+            compare(findChild(page, "editSourceItems").currentIndex, -1);
+            compare(JSON.stringify(testEditHarness.reviewEditorCheckpoint()), before);
+            testRecordingReview.close();
+        }
+
+        function test_reveal_does_not_preflight_editor_drafts_data() {
+            return [{tag: "valid", accept: true}, {tag: "invalid", accept: false}];
+        }
+
+        function test_reveal_does_not_preflight_editor_drafts(data) {
+            testEditHarness.seedReviewEditorWorkspace();
+            const identity = testEditHarness.prepareReviewHandoff();
+            const page = make();
+            const owner = createTemporaryObject(pendingDraftComponent, root, {accept: data.accept});
+            verify(owner);
+            testPageSession.setPendingDraftOwner(owner);
+            verify(testPageRecordings.requestRecordingReveal(identity));
+            tryCompare(testPageRecordings, "pendingRecordingIdentity", "");
+            compare(owner.commits, 0);
+            compare(testRecordingReview.active, false);
+            testPageSession.clearPendingDraftOwner(owner);
+        }
 
         function make(properties) {
             const page = createTemporaryObject(pageComponent, root, Object.assign({mediaPinPreferred: false, detailsPinPreferred: false}, properties || {}));

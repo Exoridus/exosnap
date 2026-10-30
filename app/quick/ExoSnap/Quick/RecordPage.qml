@@ -23,9 +23,9 @@ Item {
     readonly property bool reviewing: recordingReview !== null && recordingReview.active
     property bool active: false
     onActiveChanged: if (!active && recordingReview)
-        recordingReview.close()
+        recordingReview.suspend()
     onReviewingChanged: if (reviewing && !active)
-        recordingReview.close()
+        recordingReview.suspend()
     property bool benchmarkInteractionActive: false
     property bool showMetricsOverlay: false
     property string selectedOverlay: ""
@@ -467,6 +467,11 @@ Item {
     }
 
     function prepareRecordingPanelVisual(name: string): bool {
+        if (name === "review-edit") {
+            if (root.recordingReview && root.recordingReview.active)
+                root.recordingReview.requestEdit();
+            return root.shell.currentPage === ShellAdapter.EditPage && !root.reviewing;
+        }
         if (name === "review-audio") {
             const review = reviewLoader.status === Loader.Ready ? reviewLoader.item as RecordingReview : null;
             if (!review)

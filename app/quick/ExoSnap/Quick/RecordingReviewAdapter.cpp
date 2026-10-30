@@ -1,4 +1,5 @@
 #include "RecordingReviewAdapter.h"
+#include "RecordViewModelAdapter.h"
 
 #include <QTimer>
 #include <algorithm>
@@ -45,21 +46,41 @@ void RecordingReviewAdapter::initializeSelection() {
 void RecordingReviewAdapter::open(const EditContext& context) {
     close();
     active_ = true;
+    recording_identity_ = RecordViewModelAdapter::recordingIdentity(context.output_path);
+    edit_error_.clear();
+    emit editErrorChanged();
     initialized_tracks_.clear();
     session_.setEditContext(context);
     emit activeChanged();
 }
 
 void RecordingReviewAdapter::close() {
-    player_.setPlaying(false);
-    player_.endScrub();
-    player_.setSurfaceVisible(false);
+    suspend();
     session_.close();
     initialized_tracks_.clear();
+    recording_identity_.clear();
     if (active_) {
         active_ = false;
         emit activeChanged();
     }
+}
+
+void RecordingReviewAdapter::suspend() {
+    player_.setPlaying(false);
+    player_.endScrub();
+    player_.setSurfaceVisible(false);
+}
+
+void RecordingReviewAdapter::completeEditRequest(const QString& identity, bool selected) {
+    if (!active_ || identity != recording_identity_)
+        return;
+    if (selected) {
+        close();
+        return;
+    }
+    suspend();
+    edit_error_ = tr("The recording is no longer available in Recordings.");
+    emit editErrorChanged();
 }
 
 void RecordingReviewAdapter::selectTrack(const QString& id) {

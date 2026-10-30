@@ -14,15 +14,21 @@ class RecordingReviewAdapter final : public QObject {
     Q_PROPERTY(EditPlayerAdapter* player READ player CONSTANT FINAL)
     Q_PROPERTY(bool muted READ muted WRITE setMuted NOTIFY audioChanged FINAL)
     Q_PROPERTY(double volume READ volume WRITE setVolume NOTIFY audioChanged FINAL)
+    Q_PROPERTY(QString editError READ editError NOTIFY editErrorChanged FINAL)
 
   public:
     explicit RecordingReviewAdapter(QObject* parent = nullptr);
     void open(const EditContext& context);
     Q_INVOKABLE void close();
+    Q_INVOKABLE void suspend();
     Q_INVOKABLE void selectTrack(const QString& id);
     Q_INVOKABLE void requestEdit() {
         if (active_)
-            emit editRequested(session_.positionMs());
+            emit editRequested(recording_identity_);
+    }
+    void completeEditRequest(const QString& identity, bool selected);
+    QString editError() const {
+        return edit_error_;
     }
     bool active() const {
         return active_;
@@ -45,7 +51,8 @@ class RecordingReviewAdapter final : public QObject {
   signals:
     void activeChanged();
     void audioChanged();
-    void editRequested(qint64 positionMs);
+    void editRequested(QString identity);
+    void editErrorChanged();
 
   private:
     void initializeSelection();
@@ -55,6 +62,8 @@ class RecordingReviewAdapter final : public QObject {
     bool muted_ = false;
     double volume_ = 1.0;
     QStringList initialized_tracks_;
+    QString recording_identity_;
+    QString edit_error_;
 };
 
 } // namespace exosnap::quick
