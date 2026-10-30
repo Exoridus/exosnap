@@ -1104,6 +1104,7 @@ TEST(EditImmediateTimelineActions, RemovingTimeAcrossTracksCommitsAndCanBeUndone
         scope.push_back(QVariant::fromValue<qulonglong>(track.id));
     ASSERT_TRUE(session.setEditRangeUs(1'000'000, 2'000'000, scope));
     const auto original = session.workspace().snapshot();
+    const auto original_duration = session.durationUs();
 
     ASSERT_TRUE(session.removeTimeOnAllTracks());
     EXPECT_FALSE(session.dragActive());
@@ -1111,7 +1112,7 @@ TEST(EditImmediateTimelineActions, RemovingTimeAcrossTracksCommitsAndCanBeUndone
     EXPECT_EQ(session.durationUs(), 9'000'000);
     session.undo();
     EXPECT_EQ(session.workspace().clips(), original->clips);
-    EXPECT_EQ(session.durationUs(), original->duration());
+    EXPECT_EQ(session.durationUs(), original_duration);
     session.redo();
     EXPECT_EQ(session.durationUs(), 9'000'000);
 }
