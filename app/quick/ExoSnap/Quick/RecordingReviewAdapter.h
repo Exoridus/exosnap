@@ -27,7 +27,7 @@ class RecordingReviewAdapter final : public QObject {
             emit editRequested(recording_identity_);
     }
     void completeEditRequest(const QString& identity, bool selected);
-    QString editError() const {
+    const QString& editError() const {
         return edit_error_;
     }
     bool active() const {
