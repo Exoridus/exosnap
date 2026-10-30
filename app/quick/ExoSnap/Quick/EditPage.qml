@@ -550,6 +550,7 @@ FocusScope {
                 objectName: "editLeftRail"
                 width: root.railWidth
                 height: parent.height
+                border.width: 0
                 color: ExoTheme.surface
                 Rectangle {
                     anchors.right: parent.right
@@ -578,6 +579,7 @@ FocusScope {
                 anchors.right: parent.right
                 width: root.railWidth
                 height: parent.height
+                border.width: 0
                 color: ExoTheme.surface
                 Rectangle {
                     width: 1
