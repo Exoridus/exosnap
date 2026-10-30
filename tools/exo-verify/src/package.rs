@@ -18,6 +18,7 @@ use std::time::Duration;
 use crate::pe;
 
 mod dependency_identity;
+mod footprint;
 
 pub const PLATFORM: &str = "windows-x64";
 
@@ -1020,6 +1021,7 @@ pub fn run(args: &PackageArgs) -> Result<PackageResult> {
         out.join("package.json"),
         serde_json::to_vec_pretty(&result)?,
     )?;
+    footprint::write(&out, &result, args.vc_redist.as_deref())?;
     Ok(result)
 }
 

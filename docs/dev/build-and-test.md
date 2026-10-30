@@ -165,6 +165,29 @@ The lockfile is part of the tool input. A locked build must fail if dependencies
 
 A GPU-free unit test does not establish real capture/encode behavior, a generated screenshot does not establish native HWND ownership or overlay desktop composition, and a development build is not a signed downloadable release. Report exactly which layers ran. Native window checks, real playback, endpoint unplug and release installation belong to their named runbooks and acceptance scenarios.
 
+## Release package footprint
+
+The canonical Rust `exo-verify package` operation writes
+`package-size.json` and `package-size.md` alongside its `package.json`.
+It measures the **validated, pruned** runtime staging tree used by both
+packaging formats and reports the compressed Portable ZIP, MSI and offline
+Setup sizes separately. The report lists component-category totals, the largest
+shipped files, the separate Setup UI runtime and the Visual C++ redistributable
+input where present.
+
+Packaging-relevant PRs reuse the Release packaging-smoke operation. The report
+is added to the CI step summary and uploaded with the existing package-smoke
+evidence. Release-candidate jobs also display their report and upload it
+separately from the immutable candidate bundle. Tests for the inventory live
+in the Rust package module and run through the existing Rust workspace gate.
+
+The Qt Widgets and Qt Labs Platform total is an **uncompressed candidate
+footprint**, not a measured compressed saving or permission to remove
+transitively imported libraries. ExoSnap's PE dependency audit, QML import
+checks, package validation and Windows tray smoke remain authoritative for
+correctness. Keep each report's JSON file for direct size comparisons against
+future candidate reports of the same schema.
+
 ## Translation maintenance
 
 English source text is canonical. German is the supported production localization.
