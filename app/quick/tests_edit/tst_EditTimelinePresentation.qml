@@ -432,7 +432,7 @@ TestCase {
             verify(!!header);
             const summary = header.children.find(item => item.text === "L");
             verify(!!summary);
-            const name = header.children.find(item => item.text === track.typeName + " " + track.name);
+            const name = header.children.find(item => item.text === (track.name === track.typeName ? track.typeName : track.typeName + " " + track.name));
             verify(!!name);
             for (const width of [150, 120, 167]) {
                 strip.userHeaderWidth = width;
@@ -463,14 +463,50 @@ TestCase {
         const solo = findChild(strip, "editTrackSolo" + audio.id);
         const lock = findChild(strip, "editTrackLock" + audio.id);
         verify(!!mute && !!solo && !!lock);
+        for (const action of [mute, solo, lock]) {
+            compare(action.width, 30);
+            verify(action.availableWidth >= 18);
+            compare(action.checked, false);
+            compare(action.Accessible.checked, false);
+        }
+        for (const action of [mute, solo]) {
+            const label = action.contentItem.children.find(item => item.text === action.text);
+            verify(!!label);
+            compare(label.truncated, false);
+            verify(label.contentWidth <= label.width);
+        }
+        compare(lock.glyph, ExoGlyph.Unlock);
+        const menu = findChild(strip, "editTrackMenu" + audio.id);
+        compare(menu.glyph, ExoGlyph.Overflow);
+        verify(menu.availableWidth >= 18);
+        const video = testSession.tracks.find(row => row.video);
+        const visibility = findChild(strip, "editTrackEnabled" + video.id);
+        compare(visibility.glyph, ExoGlyph.Eye);
+        compare(visibility.checked, true);
+        mouseClick(visibility);
+        compare(visibility.glyph, ExoGlyph.EyeClosed);
+        compare(visibility.checked, false);
+        testSession.undo();
+        compare(visibility.checked, true);
         mouseClick(mute);
         compare(testSession.tracks.find(row => row.id === audio.id).enabled, false);
+        compare(mute.checked, true);
+        compare(mute.Accessible.checked, true);
         mouseClick(solo);
         verify(testSession.trackSolo(audio.id));
+        compare(solo.checked, true);
         mouseClick(lock);
         verify(testSession.trackLocked(audio.id));
+        compare(lock.checked, true);
+        compare(lock.glyph, ExoGlyph.Lock);
+        verify(!mute.enabled);
         testSession.setTrackLocked(audio.id, false);
         testSession.setTrackSolo(audio.id, false);
+        compare(lock.checked, false);
+        compare(solo.checked, false);
+        verify(mute.enabled);
+        testSession.undo();
+        compare(mute.checked, false);
         const divider = findChild(strip, "editHeaderDivider");
         verify(!!divider);
         mousePress(divider, 3, 80);
@@ -479,6 +515,20 @@ TestCase {
         compare(strip.userHeaderWidth, 208);
         mouseDoubleClickSequence(divider, 3, 80);
         compare(strip.userHeaderWidth, 168);
+    }
+    function test_default_track_names_are_not_repeated_and_custom_names_keep_the_type() {
+        const strip = createTemporaryObject(timelineComponent, tests, {width: 1200});
+        for (const track of testSession.tracks) {
+            const label = findChild(strip, "editTrackName" + track.id);
+            verify(!!label);
+            compare(label.text, track.typeName);
+            compare(label.truncated, false);
+        }
+        const track = testSession.tracks[0];
+        verify(testSession.setTrackName(track.id, "Camera"));
+        compare(findChild(strip, "editTrackName" + track.id).text, track.typeName + " Camera");
+        testSession.undo();
+        compare(findChild(strip, "editTrackName" + track.id).text, track.typeName);
     }
     function test_track_header_body_double_click_collapses_and_restores_height() {
         const strip = createTemporaryObject(timelineComponent, tests);

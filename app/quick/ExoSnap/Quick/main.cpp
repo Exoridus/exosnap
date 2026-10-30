@@ -1807,7 +1807,8 @@ int main(int argc, char* argv[]) {
             return true;
         const bool picker_popup = visual_popup == QLatin1String("source-picker") ||
                                   visual_popup == QLatin1String("source-picker-windows") ||
-                                  visual_popup == QLatin1String("source-picker-search");
+                                  visual_popup == QLatin1String("source-picker-search") ||
+                                  visual_popup == QLatin1String("source-picker-filters");
         if (picker_popup) {
             auto* page =
                 root_window != nullptr ? root_window->findChild<QObject*>(QStringLiteral("quickRecordPage")) : nullptr;
@@ -1821,6 +1822,8 @@ int main(int argc, char* argv[]) {
                 QMetaObject::invokeMethod(picker, "selectTab", Q_ARG(int, 1));
             if (visual_popup == QLatin1String("source-picker-search"))
                 picker->setProperty("windowQuery", QStringLiteral("Task"));
+            if (visual_popup == QLatin1String("source-picker-filters"))
+                QMetaObject::invokeMethod(picker, "openWindowFilters");
             bool ready = false;
             return QMetaObject::invokeMethod(picker, "visibleThumbnailsReady", Q_RETURN_ARG(bool, ready)) && ready;
         }

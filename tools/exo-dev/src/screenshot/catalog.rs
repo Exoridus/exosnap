@@ -287,6 +287,7 @@ pub fn set(name: &str, values: &ProductValues) -> anyhow::Result<Vec<(String, Sh
             ("many-windows", Popup::SourcePicker),
             ("many-windows", Popup::SourcePickerWindows),
             ("many-windows", Popup::SourcePickerSearch),
+            ("many-windows", Popup::SourcePickerFilters),
             ("no-targets", Popup::SourcePicker),
             ("no-targets", Popup::SourcePickerWindows),
         ]

@@ -17,7 +17,7 @@ FocusScope {
     // (details, mix, export) it shows. Pin and width belong to the host.
     property bool detailsOpen: false
     property string rightContext: "details"
-    readonly property real railWidth: 44
+    readonly property real railWidth: 40
     readonly property real stageWidth: stage.width - 2 * railWidth
     readonly property bool exportVisible: detailsOpen && rightContext === "export"
     readonly property bool canOpenExport: session.durationUs > 0 || exporter.state !== EditExportAdapter.Options
@@ -390,7 +390,7 @@ FocusScope {
         id: zones
         objectName: "editVerticalSplit"
         anchors.fill: parent
-        anchors.margins: ExoTheme.spacingMd
+        anchors.margins: ExoTheme.spacingSm
         orientation: Qt.Vertical
         onHeightChanged: root.restoreVertical()
         onResizingChanged: if (!resizing && height > 10)
@@ -546,81 +546,104 @@ FocusScope {
                 x: parent.width - root.railWidth - root.detailsWidth - width / 2
                 z: 2
             }
-            Column {
+            Rectangle {
                 objectName: "editLeftRail"
-                x: 6
-                y: 6
-                spacing: 4
-                RailButton {
-                    objectName: "editMediaAccess"
-                    text: qsTr("Media")
-                    shortcutText: "Ctrl+M"
-                    glyph: ExoGlyph.Folder
-                    expanded: root.mediaOpen
-                    pinned: root.mediaPinned
-                    onActivated: keyboard => root.toggleMedia(keyboard)
+                width: root.railWidth
+                height: parent.height
+                color: ExoTheme.surface
+                Rectangle {
+                    anchors.right: parent.right
+                    width: 1
+                    height: parent.height
+                    color: ExoTheme.line
+                }
+                Column {
+                    id: leftRailActions
+                    x: 4
+                    y: 4
+                    spacing: 4
+                    RailButton {
+                        objectName: "editMediaAccess"
+                        text: qsTr("Media")
+                        shortcutText: "Ctrl+M"
+                        glyph: ExoGlyph.Folder
+                        expanded: root.mediaOpen
+                        pinned: root.mediaPinned
+                        onActivated: keyboard => root.toggleMedia(keyboard)
+                    }
                 }
             }
-            Column {
+            Rectangle {
                 objectName: "editRightRail"
                 anchors.right: parent.right
-                anchors.rightMargin: 6
-                y: 6
-                spacing: 4
-                RailButton {
-                    id: detailsRail
-                    objectName: "editDetailsAccess"
-                    text: qsTr("Details")
-                    shortcutText: "Ctrl+D"
-                    glyph: ExoGlyph.Info
-                    expanded: root.detailsOpen && root.rightContext === "details"
-                    pinned: expanded && root.detailsPinned
-                    onActivated: keyboard => root.toggleRight("details", keyboard)
+                width: root.railWidth
+                height: parent.height
+                color: ExoTheme.surface
+                Rectangle {
+                    width: 1
+                    height: parent.height
+                    color: ExoTheme.line
                 }
-                RailButton {
-                    id: mixRail
-                    objectName: "editMixAccess"
-                    text: qsTr("Audio mix")
-                    glyph: ExoGlyph.Mixer
-                    expanded: root.detailsOpen && root.rightContext === "mix"
-                    pinned: expanded && root.detailsPinned
-                    onActivated: keyboard => root.toggleRight("mix", keyboard)
-                }
-                RailButton {
-                    id: exportButton
-                    readonly property bool failed: root.exporter.state === EditExportAdapter.Failed
-                    objectName: "editExport"
-                    text: root.exporter.running ? qsTr("Export %1%").arg(root.exporter.progressPercent)
-                        : failed ? qsTr("Export failed")
-                        : root.exporter.state === EditExportAdapter.Done && root.exporter.resultUnseen ? qsTr("Export complete")
-                        : qsTr("Export")
-                    shortcutText: "Ctrl+E"
-                    glyph: failed ? ExoGlyph.Warning : ExoGlyph.Send
-                    glyphColor: failed ? ExoTheme.errorText : ""
-                    expanded: root.exportVisible
-                    pinned: expanded && root.detailsPinned
-                    enabled: root.exportVisible || root.canOpenExport
-                    disabledReason: qsTr("The timeline is empty.")
-                    onActivated: keyboard => root.toggleRight("export", keyboard)
-                    Rectangle {
-                        objectName: "editExportRailProgress"
-                        x: 4
-                        y: parent.height - 3
-                        height: 2
-                        radius: 1
-                        width: (parent.width - 8) * root.exporter.progressPercent / 100
-                        visible: root.exporter.running
-                        color: ExoTheme.accent
+                Column {
+                    id: rightRailActions
+                    x: 4
+                    y: 4
+                    spacing: 4
+                    RailButton {
+                        id: detailsRail
+                        objectName: "editDetailsAccess"
+                        text: qsTr("Details")
+                        shortcutText: "Ctrl+D"
+                        glyph: ExoGlyph.Info
+                        expanded: root.detailsOpen && root.rightContext === "details"
+                        pinned: expanded && root.detailsPinned
+                        onActivated: keyboard => root.toggleRight("details", keyboard)
                     }
-                    Rectangle {
-                        objectName: "editExportRailDot"
-                        x: parent.width - 9
-                        y: 3
-                        width: 6
-                        height: 6
-                        radius: 3
-                        visible: root.exporter.resultUnseen
-                        color: exportButton.failed ? ExoTheme.errorText : ExoTheme.accent
+                    RailButton {
+                        id: mixRail
+                        objectName: "editMixAccess"
+                        text: qsTr("Audio mix")
+                        glyph: ExoGlyph.Mixer
+                        expanded: root.detailsOpen && root.rightContext === "mix"
+                        pinned: expanded && root.detailsPinned
+                        onActivated: keyboard => root.toggleRight("mix", keyboard)
+                    }
+                    RailButton {
+                        id: exportButton
+                        readonly property bool failed: root.exporter.state === EditExportAdapter.Failed
+                        objectName: "editExport"
+                        text: root.exporter.running ? qsTr("Export %1%").arg(root.exporter.progressPercent)
+                            : failed ? qsTr("Export failed")
+                            : root.exporter.state === EditExportAdapter.Done && root.exporter.resultUnseen ? qsTr("Export complete")
+                            : qsTr("Export")
+                        shortcutText: "Ctrl+E"
+                        glyph: failed ? ExoGlyph.Warning : ExoGlyph.Send
+                        glyphColor: failed ? ExoTheme.errorText : ""
+                        expanded: root.exportVisible
+                        pinned: expanded && root.detailsPinned
+                        enabled: root.exportVisible || root.canOpenExport
+                        disabledReason: qsTr("The timeline is empty.")
+                        onActivated: keyboard => root.toggleRight("export", keyboard)
+                        Rectangle {
+                            objectName: "editExportRailProgress"
+                            x: 4
+                            y: parent.height - 3
+                            height: 2
+                            radius: 1
+                            width: (parent.width - 8) * root.exporter.progressPercent / 100
+                            visible: root.exporter.running
+                            color: ExoTheme.accent
+                        }
+                        Rectangle {
+                            objectName: "editExportRailDot"
+                            x: parent.width - 9
+                            y: 3
+                            width: 6
+                            height: 6
+                            radius: 3
+                            visible: root.exporter.resultUnseen
+                            color: exportButton.failed ? ExoTheme.errorText : ExoTheme.accent
+                        }
                     }
                 }
             }
@@ -708,7 +731,7 @@ FocusScope {
                             width: 132
                             session: root.session
                             canvasFocusItem: clips
-                            format: 0
+                            format: 3
                             valueUs: root.session.positionUs
                             applyValue: value => root.session.applyTimeValue(0, "playhead", value)
                             Accessible.name: qsTr("Playback position")
@@ -826,7 +849,7 @@ FocusScope {
                         interaction: clips.interaction
                         canvasFocusItem: clips
                     }
-                    EditActionButton { objectName: "editZoomOut"; implicitWidth: 26; implicitHeight: 26; text: qsTr("Zoom out"); glyph: ExoGlyph.Minus; onClicked: clips.zoomTo(clips.pixelsPerSecond / 1.25) }
+                    EditActionButton { objectName: "editZoomOut"; text: qsTr("Zoom out"); glyph: ExoGlyph.Minus; onClicked: clips.zoomTo(clips.pixelsPerSecond / 1.25) }
                     ExoSlider {
                         objectName: "editZoomSlider"
                         Layout.preferredWidth: root.width < 1000 ? 72 : 100
@@ -840,8 +863,8 @@ FocusScope {
                             else clips.view.endViewOperation();
                         }
                     }
-                    EditActionButton { objectName: "editZoomIn"; implicitWidth: 26; implicitHeight: 26; text: qsTr("Zoom in"); glyph: ExoGlyph.Plus; onClicked: clips.zoomTo(clips.pixelsPerSecond * 1.25) }
-                    EditActionButton { objectName: "editZoomFit"; implicitWidth: 26; implicitHeight: 26; text: qsTr("Fit timeline"); glyph: ExoGlyph.AppWindow; onClicked: clips.fitTimeline() }
+                    EditActionButton { objectName: "editZoomIn"; text: qsTr("Zoom in"); glyph: ExoGlyph.Plus; onClicked: clips.zoomTo(clips.pixelsPerSecond * 1.25) }
+                    EditActionButton { objectName: "editZoomFit"; text: qsTr("Fit timeline"); glyph: ExoGlyph.AppWindow; onClicked: clips.fitTimeline() }
                 }
                 EditTimeline {
                     id: clips

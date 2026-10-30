@@ -5289,6 +5289,14 @@ Ermittelte SHA-256: %2</translation>
 <context>
     <name>EditTimeField</name>
     <message>
+        <source>Minutes and seconds with milliseconds</source>
+        <translation>Minuten und Sekunden mit Millisekunden</translation>
+    </message>
+    <message>
+        <source>Minutes and seconds (milliseconds)</source>
+        <translation>Minuten und Sekunden (Millisekunden)</translation>
+    </message>
+    <message>
         <location filename="../quick/ExoSnap/Quick/EditTimeField.qml" line="+11"/>
         <source>Non-drop-frame timecode</source>
         <translation>Zeitcode ohne Drop-Frame</translation>
@@ -7498,6 +7506,10 @@ Ermittelte SHA-256: %2</translation>
 </context>
 <context>
     <name>RecordSourcePicker</name>
+    <message>
+        <source>Window filters</source>
+        <translation>Fensterfilter</translation>
+    </message>
     <message numerus="yes">
         <location filename="../quick/ExoSnap/Quick/RecordSourcePicker.qml" line="+84"/>
         <source>Windows: %n</source>

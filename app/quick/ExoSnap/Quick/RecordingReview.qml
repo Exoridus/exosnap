@@ -352,7 +352,11 @@ Rectangle {
                         required property var modelData
                         objectName: "reviewTrack-" + modelData.id
                         Layout.fillWidth: true
-                        implicitHeight: Math.max(52, contentItem.implicitHeight + topPadding + bottomPadding)
+                        implicitHeight: trackText.implicitHeight + trackButton.topPadding + trackButton.bottomPadding
+                        topPadding: 8
+                        bottomPadding: 8
+                        leftPadding: 12
+                        rightPadding: 12
                         quiet: true
                         selected: modelData.selected
                         enabled: modelData.available && root.audioController !== null && !root.player.transportPending
@@ -363,12 +367,14 @@ Rectangle {
                         Accessible.checked: modelData.selected
                         background: Rectangle {
                             radius: ExoTheme.radiusSm
-                            color: trackButton.checked || trackButton.hovered ? ExoTheme.surfaceHover : "transparent"
+                            readonly property color restingColor: trackButton.selected ? ExoTheme.accentTint(ExoTheme.surfaceRaised, 0.12) : ExoTheme.surfaceRaised
+                            color: !trackButton.enabled ? restingColor : trackButton.down ? ExoTheme.pressTint(restingColor) : trackButton.hovered ? ExoTheme.hoverTint(restingColor) : restingColor
                             border.width: trackButton.visualFocus ? 1 : 0
                             border.color: ExoTheme.accent
                         }
                         contentItem: Column {
-                            spacing: 2
+                            id: trackText
+                            spacing: 4
                             Label {
                                 width: parent.width
                                 text: trackButton.modelData.name
@@ -376,7 +382,7 @@ Rectangle {
                                 font.pixelSize: ExoTheme.fontBody
                                 font.weight: trackButton.checked ? Font.DemiBold : Font.Normal
                                 textFormat: Text.PlainText
-                                color: ExoTheme.text
+                                color: trackButton.enabled ? ExoTheme.text : ExoTheme.textDim
                                 elide: Text.ElideRight
                             }
                             Label {
@@ -384,7 +390,7 @@ Rectangle {
                                 text: trackButton.modelData.sources || qsTr("Sources unknown")
                                 font.family: ExoTheme.sansFamily
                                 textFormat: Text.PlainText
-                                color: ExoTheme.textSecondary
+                                color: trackButton.enabled ? ExoTheme.textSecondary : ExoTheme.textDim
                                 font.pixelSize: ExoTheme.fontCaption
                                 elide: Text.ElideRight
                             }

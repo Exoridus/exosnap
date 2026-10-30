@@ -48,6 +48,50 @@ TestCase {
         for (let index = 0; index < text.length; ++index)
             keyClick(text[index]);
     }
+    function test_clock_display_rounds_with_three_digits_data() {
+        return [
+            {tag: "zero", value: 0, expected: "00:00.000"},
+            {tag: "fraction", value: 1234567, expected: "00:01.235"},
+            {tag: "minute", value: 59999500, expected: "01:00.000"},
+            {tag: "hour", value: 3599999500, expected: "1:00:00.000"},
+            {tag: "hours", value: 3661234567, expected: "1:01:01.235"}
+        ];
+    }
+    function test_clock_display_rounds_with_three_digits(data) {
+        const item = field({format: 3, valueUs: data.value});
+        compare(item.text, data.expected);
+    }
+    function test_unchanged_clock_keeps_exact_microseconds_on_enter_and_blur() {
+        const item = field({format: 3, valueUs: 1234567});
+        compare(item.text, "00:01.235");
+        keyClick(Qt.Key_Return);
+        compare(commits, 0);
+        compare(item.valueUs, 1234567);
+        item.forceActiveFocus(Qt.TabFocusReason);
+        canvas.forceActiveFocus();
+        compare(commits, 0);
+        compare(item.valueUs, 1234567);
+    }
+    function test_clock_edit_and_exact_relative_frame_step() {
+        const item = field({format: 3, valueUs: 1234567});
+        item.selectAll();
+        typeText("1:02:03.456");
+        keyClick(Qt.Key_Return);
+        compare(commits, 1);
+        compare(appliedValue, 3723456000);
+        item.forceActiveFocus(Qt.TabFocusReason);
+        item.selectAll();
+        typeText("+1f");
+        keyClick(Qt.Key_Return);
+        compare(commits, 2);
+        compare(appliedValue, testSession.parseTimeValue("+1f", 1234567).valueUs);
+    }
+    function test_clock_can_switch_to_existing_frame_timecode() {
+        const item = field({format: 3, valueUs: 1000000});
+        item.changeFormat(0);
+        compare(item.text, testSession.formatTimeValue(1000000, 0));
+        compare(commits, 0);
+    }
     function test_unchanged_timecode_does_not_quantize_legacy_microseconds() {
         const item = field({format: 0});
         verify(item.draftActive);

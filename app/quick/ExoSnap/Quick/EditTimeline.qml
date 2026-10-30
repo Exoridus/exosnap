@@ -1031,11 +1031,13 @@ FocusScope {
                     Accessible.ignored: true
                 }
                 Label {
+                    objectName: "editTrackName" + trackLabel.modelData.id
                     x: 18
                     y: 2
                     width: Math.max(0, (trackStateSummary.visible && trackStateSummary.text.length > 0
                         ? trackStateSummary.x - 4 : parent.width - 31) - x)
-                    text: trackLabel.modelData.typeName + " " + trackLabel.modelData.name
+                    text: trackLabel.modelData.name === trackLabel.modelData.typeName ? trackLabel.modelData.typeName
+                        : trackLabel.modelData.typeName + " " + trackLabel.modelData.name
                     color: ExoTheme.text
                     font.pixelSize: ExoTheme.fontCaption
                     elide: Text.ElideRight
@@ -1071,7 +1073,7 @@ FocusScope {
                     width: 24
                     height: 22
                     compact: true
-                    text: "⋮"
+                    glyph: ExoGlyph.Overflow
                     Accessible.name: qsTr("Track actions")
                     onClicked: if (root.session.preflightPendingDraft()) trackMenu.popup()
                 }
@@ -1087,8 +1089,11 @@ FocusScope {
                         width: 30
                         height: 22
                         compact: true
-                        text: trackLabel.modelData.video ? (trackLabel.modelData.enabled ? "V" : "×") : "M"
-                        highlighted: !trackLabel.modelData.enabled
+                        text: "M"
+                        glyph: trackLabel.modelData.video ? (trackLabel.modelData.enabled ? ExoGlyph.Eye : ExoGlyph.EyeClosed) : ExoGlyph.Invalid
+                        leftPadding: 0
+                        rightPadding: 0
+                        checked: trackLabel.modelData.video ? trackLabel.modelData.enabled : !trackLabel.modelData.enabled
                         enabled: !trackLabel.modelData.locked
                         Accessible.name: trackLabel.modelData.video ? qsTr("Video visibility") : qsTr("Track mute")
                         Accessible.checkable: true
@@ -1102,7 +1107,9 @@ FocusScope {
                         height: 22
                         compact: true
                         text: "S"
-                        highlighted: trackLabel.modelData.solo
+                        leftPadding: 0
+                        rightPadding: 0
+                        checked: trackLabel.modelData.solo
                         Accessible.name: qsTr("Track solo")
                         Accessible.checkable: true
                         Accessible.checked: trackLabel.modelData.solo
@@ -1114,8 +1121,8 @@ FocusScope {
                         width: 30
                         height: 22
                         compact: true
-                        text: "L"
-                        highlighted: trackLabel.modelData.locked
+                        glyph: trackLabel.modelData.locked ? ExoGlyph.Lock : ExoGlyph.Unlock
+                        checked: trackLabel.modelData.locked
                         Accessible.name: qsTr("Track lock")
                         Accessible.checkable: true
                         Accessible.checked: trackLabel.modelData.locked

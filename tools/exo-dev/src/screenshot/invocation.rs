@@ -62,6 +62,7 @@ pub enum Popup {
     SourcePicker,
     SourcePickerWindows,
     SourcePickerSearch,
+    SourcePickerFilters,
     NotificationHub,
 }
 
@@ -71,6 +72,7 @@ impl Popup {
             Popup::SourcePicker => "source-picker",
             Popup::SourcePickerWindows => "source-picker-windows",
             Popup::SourcePickerSearch => "source-picker-search",
+            Popup::SourcePickerFilters => "source-picker-filters",
             Popup::NotificationHub => "notification-hub",
         }
     }

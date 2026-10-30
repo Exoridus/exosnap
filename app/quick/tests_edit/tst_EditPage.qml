@@ -368,14 +368,22 @@ Item {
             verify(output.x + output.width <= header.width);
             verify(header.height >= 46);
             if (data.width >= 1000) compare(Math.round(transport.x + transport.width / 2), Math.round(header.width / 2));
-            const minimum = {editExport: 32, editMediaAccess: 32, editDetailsAccess: 32, editMixAccess: 32, editZoomOut: 26, editZoomIn: 26, editZoomFit: 26};
+            for (const railName of ["editLeftRail", "editRightRail"]) {
+                const rail = child(page, railName);
+                compare(rail.width, 40);
+                compare(rail.height, rail.parent.height);
+                compare(rail.radius, 0);
+                compare(rail.border.width, 0);
+                const railPosition = rail.mapToItem(page, 0, 0);
+                verify(railPosition.x >= 0 && railPosition.x + rail.width <= page.width);
+            }
             for (const name of ["editUndo", "editRedo", "editSplit", "editDelete", "editTransportPlay", "editVolume", "editExport", "editMediaAccess", "editDetailsAccess", "editMixAccess", "editSnapping", "editRipple", "editAutoCrossfade", "editLinkedSelection", "editZoomOut", "editZoomIn", "editZoomFit"]) {
                 const control = child(page, name);
                 if (!control.visible)
                     continue;
                 const p = control.mapToItem(page, 0, 0);
-                const size = minimum[name] ?? 34;
-                verify(control.width >= size && control.height >= Math.min(size, 32), name);
+                compare(control.width, 32, name);
+                compare(control.height, 32, name);
                 verify(p.x >= 0 && p.x + control.width <= page.width, name);
                 verify(p.y >= 0 && p.y + control.height <= page.height, name);
             }
@@ -1015,7 +1023,9 @@ Item {
             compare(action.Accessible.name, data.label);
             compare(action.enabled, data.enabled);
             verify(action.glyph !== ExoGlyph.Invalid);
-            verify(action.width >= (data.rail ? 32 : 34) && action.height >= 32);
+            compare(action.width, 32);
+            compare(action.height, 32);
+            verify(action.availableWidth >= 18);
             verify(action.ToolTip.text.indexOf(data.label) >= 0);
             if (data.shortcut.length > 0)
                 verify(action.ToolTip.text.indexOf(data.shortcut) >= 0);

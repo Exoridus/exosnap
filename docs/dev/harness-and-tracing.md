@@ -53,7 +53,7 @@ Both Setup and updater screenshot previews accept `--preview-details` to capture
 | `--visual-shell-appearance dark\|light` | Shell-owned toast appearance, separate from app preference |
 | `--visual-expert` | Expert recording-profile controls |
 | `--visual-scroll F` | Fraction of current page's scrollable range |
-| `--visual-popup source-picker\|notification-hub\|gamepad` | Lazy popup |
+| `--visual-popup source-picker\|source-picker-windows\|source-picker-search\|source-picker-filters\|notification-hub\|gamepad` | Lazy popup |
 | `--visual-dialog <name>` | Named close/preset dialog |
 | `--record-visual-state <name>` | Named Record lifecycle state |
 | `--overlay-visual-state <name>` | Named recovery, error or crash surface, recording HUD variant (`hud-*`) or single desktop toast (`toast-success\|caution\|error\|info`) |
@@ -103,6 +103,7 @@ The overlay windows are saved as separate files because they sit at their own de
 ```powershell
 cargo exo-dev screenshot
 cargo exo-dev screenshot shot --page record --dialog preset-rename
+cargo exo-dev screenshot shot --page record --popup source-picker-filters --sources many-windows --appearance dark,light --size 1120x850
 cargo exo-dev screenshot shot --page record --record-state completed --record-panel review-audio --appearance dark,light --size 1600x1000,860x700
 cargo exo-dev screenshot shot --page record --edit edit-default --record-state completed --record-panel review-edit --appearance dark,light --size 1600x1000,860x700
 cargo exo-dev screenshot sweep --set pages,record --size 1600x1000,860x700

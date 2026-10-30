@@ -8,7 +8,7 @@ EditDraftField {
     property int format: 0
     property bool sampleContext: false
     readonly property int effectiveFormat: root.format === 0 && root.session ? root.session.defaultTimeFormat : root.format
-    readonly property string formatDescription: root.effectiveFormat === 0 ? qsTr("Non-drop-frame timecode") : root.effectiveFormat === 1 ? qsTr("Seconds, up to six decimal places") : qsTr("48 kHz sample count")
+    readonly property string formatDescription: root.effectiveFormat === 0 ? qsTr("Non-drop-frame timecode") : root.effectiveFormat === 1 ? qsTr("Seconds, up to six decimal places") : root.effectiveFormat === 2 ? qsTr("48 kHz sample count") : qsTr("Minutes and seconds with milliseconds")
     context: ({format: root.effectiveFormat, samples: root.sampleContext})
     formatValue: (value, context) => root.session.formatTimeValue(value, context?.format ?? root.effectiveFormat)
     parseValue: (text, base, context) => {
@@ -42,6 +42,7 @@ EditDraftField {
     ContextMenu.menu: ExoMenu {
         onClosed: if (root.visible && root.enabled) root.forceActiveFocus(Qt.PopupFocusReason)
         FormatOption { mode: 0; text: qsTr("Timecode (non-drop-frame)"); enabled: root.session && root.session.defaultTimeFormat === 0 }
+        FormatOption { mode: 3; text: qsTr("Minutes and seconds (milliseconds)") }
         FormatOption { mode: 1; text: qsTr("Seconds") }
         FormatOption { mode: 2; text: qsTr("Samples (48 kHz)"); visible: root.sampleContext }
         ExoMenuItem { text: qsTr("Cut"); enabled: root.selectedText.length > 0; onTriggered: root.cut() }

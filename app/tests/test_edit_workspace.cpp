@@ -1036,6 +1036,29 @@ TEST(EditTimeParser, ExactUnitsLocaleRelativeAndNondropTimecode) {
     EXPECT_EQ(parsed_last.value_us, (std::numeric_limits<Time>::max)());
 }
 
+TEST(EditTimeParser, ClockRoundsOnlyPresentationAndParsesWithoutVideoRate) {
+    const TimeFieldContext context{{0, 1}, 1'234'567, TimeFieldFormat::Clock};
+    EXPECT_EQ(FormatTime(0, context.fps, context.format), "00:00.000");
+    EXPECT_EQ(FormatTime(1'234'567, context.fps, context.format), "00:01.235");
+    EXPECT_EQ(FormatTime(59'999'499, context.fps, context.format), "00:59.999");
+    EXPECT_EQ(FormatTime(59'999'500, context.fps, context.format), "01:00.000");
+    EXPECT_EQ(FormatTime(3'599'999'500, context.fps, context.format), "1:00:00.000");
+    EXPECT_EQ(FormatTime(3'661'234'567, context.fps, context.format), "1:01:01.235");
+    for (const auto& [text, expected] : std::vector<std::pair<std::string, Time>>{
+             {"01:02.345", 62'345'000}, {"1:02:03.456", 3'723'456'000}, {"00:00.000001", 1}, {"+1s", 2'234'567}}) {
+        SCOPED_TRACE(text);
+        const auto parsed = ParseTime(text, context);
+        ASSERT_TRUE(parsed);
+        EXPECT_EQ(parsed.value_us, expected);
+    }
+    for (const auto text : {"00:60.000", "1:60:00.000", ":01.000", "00:01f", "00:01s", "00:+1", "00:00.0000001",
+                            "9223372036854775807:00:00.000", "+00:01.000"}) {
+        SCOPED_TRACE(text);
+        EXPECT_FALSE(ParseTime(text, context));
+    }
+    EXPECT_TRUE(FormatTime((std::numeric_limits<Time>::max)(), context.fps, context.format));
+}
+
 TEST(EditTimeParser, RejectsInvalidFramesSyntaxPrecisionAndOverflow) {
     const TimeFieldContext context{{30000, 1001}, 0, TimeFieldFormat::Seconds};
     for (const auto text : {"", "00:00:00:30", "00:00:60:00", "00:00:00;01", "1,2.3s", "1e3s", "1.5f", "0.0000001s",

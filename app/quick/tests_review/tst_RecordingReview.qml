@@ -204,6 +204,59 @@ TestCase {
         tryCompare(panel, "opened", false);
     }
 
+    function test_audio_track_padding_and_interaction_states_data() {
+        return [{tag: "dark", appearance: "dark"}, {tag: "light", appearance: "light"}];
+    }
+
+    function test_audio_track_padding_and_interaction_states(data) {
+        verify(testEditHarness.setVisualAppearance(data.appearance));
+        const review = createTemporaryObject(reviewComponent, testCase, {
+            session: testRecordingReview.session,
+            player: testRecordingReview.player,
+            audioController: testRecordingReview
+        });
+        verify(review);
+        verify(testEditHarness.prepareRecordingReviewVisual());
+        review.showAudio();
+        const panel = findChild(review, "reviewAudioPanel");
+        tryCompare(panel, "opened", true);
+        mouseMove(panel.background, 2, 2);
+        const tracks = testRecordingReview.player.monitoringTracks;
+        const selected = visualChild(panel.contentItem, "reviewTrack-" + tracks.find(track => track.selected).id);
+        const other = visualChild(panel.contentItem, "reviewTrack-" + tracks.find(track => !track.selected).id);
+        waitForRendering(review);
+        tryVerify(() => selected.contentItem.implicitHeight > 0);
+        compare(selected.topPadding, 8);
+        compare(selected.bottomPadding, 8);
+        compare(selected.leftPadding, 12);
+        compare(selected.rightPadding, 12);
+        tryVerify(() => selected.height === selected.contentItem.implicitHeight + 16);
+        compare(selected.contentItem.y, 8);
+        const restingSelection = selected.background.color.toString();
+        verify(restingSelection !== other.background.color.toString());
+        mouseMove(other, other.width / 2, other.height / 2);
+        tryCompare(other, "hovered", true);
+        verify(restingSelection !== other.background.color.toString(), "hover does not mimic selection");
+        mouseMove(selected, selected.width / 2, selected.height / 2);
+        tryCompare(selected, "hovered", true);
+        verify(restingSelection !== selected.background.color.toString(), "the selected row also responds to hover");
+        selected.forceActiveFocus(Qt.TabFocusReason);
+        tryCompare(selected, "visualFocus", true);
+        compare(selected.background.border.width, 1);
+        if (testVisualDirectory.length > 0) {
+            waitForRendering(review);
+            let saved = false;
+            verify(review.Window.window.contentItem.grabToImage(result => {
+                saved = result.saveToFile(testVisualDirectory + "/audio-selected-hover-focus-" + data.appearance + ".png");
+            }));
+            tryVerify(() => saved);
+        }
+        selected.enabled = false;
+        mouseMove(panel.background, 2, 2);
+        const label = selected.contentItem.children[0];
+        compare(label.color, ExoTheme.textDim);
+    }
+
     function test_appearance_data() {
         return [
             {

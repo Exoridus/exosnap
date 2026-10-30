@@ -113,7 +113,7 @@ Popup {
     //
     // Logical card sizes stay independent of source resolution and search count.
     readonly property int gridGap: ExoTheme.spacingLg
-    readonly property int contentPadding: ExoTheme.spacingXl
+    readonly property int contentPadding: ExoTheme.spacingLg
     readonly property real minCardWidth: 230
     readonly property real maxCardWidth: 260
 
@@ -156,7 +156,7 @@ Popup {
     }
 
     parent: Overlay.overlay
-    padding: root.contentPadding
+    padding: 0
     width: Math.max(320, Math.min(1440, root.safeWidth - 2 * root.outerInset, Math.max(720, root.safeWidth * 0.8)))
     height: Math.max(240, root.safeHeight - 2 * root.outerInset)
 
@@ -191,7 +191,7 @@ Popup {
     focus: true
     closePolicy: Popup.CloseOnEscape | Popup.CloseOnPressOutside
 
-    readonly property real gridContentWidth: Math.max(0, width - 2 * root.contentPadding)
+    readonly property real gridContentWidth: Math.max(0, width - root.contentPadding - sourceScrollBar.width - 10)
     readonly property int pickerColumns: root.columnsForWidth(root.gridContentWidth)
 
     // Fewer displays than the width would allow use fewer columns. Windows
@@ -620,6 +620,10 @@ Popup {
             recordViewModel.hideWindowInstance(root.hideCandidate.identity);
     }
 
+    function openWindowFilters(): void {
+        filtersPopup.open();
+    }
+
     // The display a Region-tab rectangle anchors on: the display the user has
     // pending, else the one already capturing, else the first display.
     function regionAnchorRow(): var {
@@ -653,6 +657,9 @@ Popup {
             id: pickerHeader
             objectName: "pickerHeader"
             Layout.fillWidth: true
+            Layout.leftMargin: root.contentPadding
+            Layout.rightMargin: root.contentPadding
+            Layout.topMargin: root.contentPadding
             Label {
                 objectName: "pickerTitle"
                 Layout.fillWidth: true
@@ -671,74 +678,58 @@ Popup {
                 onClicked: root.close()
             }
         }
-        ExoSegmentedControl {
-            id: tabsControl
-            objectName: "tabs"
-            options: [qsTr("Displays"), qsTr("Windows"), qsTr("Region")]
-            Accessible.name: qsTr("Source type")
-            currentIndex: root.currentTab
-            onSelected: index => root.selectTab(index)
-        }
-        RowLayout {
-            id: searchRow
-
-            objectName: "windowSearchRow"
-            visible: root.currentTab === 1
+        GridLayout {
             Layout.fillWidth: true
-            spacing: ExoTheme.spacingMd
+            Layout.leftMargin: root.contentPadding
+            Layout.rightMargin: root.contentPadding
+            columns: width >= tabsControl.implicitWidth + 450 + ExoTheme.spacingLg ? 2 : 1
+            columnSpacing: ExoTheme.spacingLg
+            rowSpacing: ExoTheme.spacingMd
 
-            ExoSearchField {
-                id: windowSearchField
+            ExoSegmentedControl {
+                id: tabsControl
+                objectName: "tabs"
+                options: [qsTr("Displays"), qsTr("Windows"), qsTr("Region")]
+                Accessible.name: qsTr("Source type")
+                currentIndex: root.currentTab
+                onSelected: index => root.selectTab(index)
+            }
+            RowLayout {
+                id: searchRow
 
-                objectName: "windowSearch"
+                objectName: "windowSearchRow"
+                visible: root.currentTab === 1
                 Layout.fillWidth: true
-                placeholderText: qsTr("Search windows...")
-                onSearchEdited: query => root.windowQuery = query
-            }
+                Layout.minimumWidth: 360
+                spacing: ExoTheme.spacingMd
 
-            Label {
-                objectName: "searchMatchCount"
-                text: qsTr("%1 search matches").arg(root.windowSearchMatchCount)
-                color: ExoTheme.textSecondary
-                font.family: ExoTheme.sansFamily
-                font.pixelSize: ExoTheme.fontCaption
-            }
+                ExoSearchField {
+                    id: windowSearchField
 
-            ExoButton {
-                id: windowOptions
-                property bool expanded: false
-                text: qsTr("Options")
-                quiet: true
-                onClicked: expanded = !expanded
-            }
-        }
-        RowLayout {
-            visible: root.currentTab === 1 && windowOptions.expanded
-            Layout.fillWidth: true
-            ExoCheckBox {
-                objectName: "showHiddenWindows"
-                text: qsTr("Show hidden (%1)").arg(root.hiddenWindowCount)
-                checked: root.recordViewModel.showHiddenWindows
-                onToggledByUser: value => root.recordViewModel.setShowHiddenWindows(value)
-            }
+                    objectName: "windowSearch"
+                    Layout.fillWidth: true
+                    Layout.minimumWidth: 180
+                    placeholderText: qsTr("Search windows...")
+                    onSearchEdited: query => root.windowQuery = query
+                }
 
-            ExoButton {
-                objectName: "hiddenRulesButton"
-                text: qsTr("Hidden rules")
-                quiet: true
-                onClicked: rulesPopup.open()
-            }
-        }
+                Label {
+                    objectName: "searchMatchCount"
+                    visible: searchRow.width >= 490
+                    text: qsTr("%1 search matches").arg(root.windowSearchMatchCount)
+                    color: ExoTheme.textSecondary
+                    font.family: ExoTheme.sansFamily
+                    font.pixelSize: ExoTheme.fontCaption
+                }
 
-        Label {
-            Layout.fillWidth: true
-            visible: root.currentTab === 1 && windowOptions.expanded
-            text: qsTr("Hiding a window here does not hide it from a display recording.")
-            textFormat: Text.PlainText
-            wrapMode: Text.WordWrap
-            color: ExoTheme.textSecondary
-            font.family: ExoTheme.sansFamily
-            font.pixelSize: ExoTheme.fontCaption
+                ExoButton {
+                    id: windowOptions
+                    objectName: "windowFiltersButton"
+                    text: qsTr("Window filters")
+                    quiet: true
+                    onClicked: filtersPopup.opened ? filtersPopup.close() : filtersPopup.open()
+                }
+            }
         }
 
         Item {
@@ -752,6 +743,8 @@ Popup {
                 id: sourceList
                 objectName: "sourceList"
                 anchors.fill: parent
+                anchors.leftMargin: root.contentPadding
+                anchors.rightMargin: 4
                 clip: true
                 boundsBehavior: Flickable.StopAtBounds
                 // Replacing an array model resets the viewport and cancels an active flick.
@@ -779,7 +772,7 @@ Popup {
                         kind: "empty",
                         section: "window"
                     }
-                    width: sourceList.width
+                    width: root.gridContentWidth
                     height: root.pickerRowHeight(rowItem.modelData)
 
                     Label {
@@ -805,7 +798,10 @@ Popup {
                     }
 
                     Row {
-                        x: Math.round((parent.width - implicitWidth) / 2)
+                        readonly property int columns: rowItem.modelData.section === "window" ? root.windowColumns : root.displayColumns
+                        readonly property real cardWidth: rowItem.modelData.section === "window" ? root.windowsCardWidth : root.displaysCardWidth
+                        width: columns * cardWidth + (columns - 1) * root.gridGap
+                        x: Math.round((parent.width - width) / 2)
                         spacing: root.gridGap
                         visible: rowItem.modelData.kind === "cards"
                         Repeater {
@@ -868,6 +864,9 @@ Popup {
 
             objectName: "pickerFooter"
             Layout.fillWidth: true
+            Layout.leftMargin: root.contentPadding
+            Layout.rightMargin: root.contentPadding
+            Layout.bottomMargin: ExoTheme.spacingMd
             spacing: ExoTheme.spacingSm
 
             Label {
@@ -896,6 +895,50 @@ Popup {
                 tone: "primary"
                 enabled: root.confirmEnabled
                 onClicked: root.commit()
+            }
+        }
+    }
+
+    Popup {
+        id: filtersPopup
+        objectName: "windowFiltersPopup"
+        parent: windowOptions
+        x: parent.width - width
+        y: parent.height + ExoTheme.spacingXs
+        width: Math.min(360, root.availableWidth - 2 * root.contentPadding)
+        padding: ExoTheme.spacingMd
+        focus: true
+        closePolicy: Popup.CloseOnEscape | Popup.CloseOnPressOutside
+        background: Rectangle {
+            color: ExoTheme.surfaceRaised
+            border.color: ExoTheme.lineStrong
+            radius: ExoTheme.radiusSm
+        }
+        contentItem: ColumnLayout {
+            spacing: ExoTheme.spacingSm
+            ExoCheckBox {
+                objectName: "showHiddenWindows"
+                text: qsTr("Show hidden (%1)").arg(root.hiddenWindowCount)
+                checked: root.recordViewModel.showHiddenWindows
+                onToggledByUser: value => root.recordViewModel.setShowHiddenWindows(value)
+            }
+            ExoButton {
+                objectName: "hiddenRulesButton"
+                text: qsTr("Hidden rules")
+                quiet: true
+                onClicked: {
+                    filtersPopup.close();
+                    rulesPopup.open();
+                }
+            }
+            Label {
+                Layout.fillWidth: true
+                text: qsTr("Hiding a window here does not hide it from a display recording.")
+                textFormat: Text.PlainText
+                wrapMode: Text.WordWrap
+                color: ExoTheme.textSecondary
+                font.family: ExoTheme.sansFamily
+                font.pixelSize: ExoTheme.fontCaption
             }
         }
     }
@@ -1146,13 +1189,17 @@ Popup {
             }
         }
 
-        ToolButton {
+        ExoButton {
             objectName: "windowHideOptions"
             visible: card.kind === "window"
-            text: "\u22ee"
-            Accessible.name: qsTr("Window hide options")
+            z: 1
+            text: qsTr("Window hide options")
+            glyph: ExoGlyph.Overflow
+            quiet: true
+            compact: true
             anchors.top: parent.top
             anchors.right: parent.right
+            anchors.margins: ExoTheme.spacingXs
             onClicked: {
                 root.hideCandidate = card.modelData;
                 hideMenu.popup();
@@ -1166,7 +1213,8 @@ Popup {
             anchors.top: parent.top
             anchors.left: parent.left
             anchors.right: parent.right
-            height: Math.round(card.width * 9 / 16)
+            anchors.margins: 2
+            height: Math.round(card.width * 9 / 16) - 2
             color: ExoTheme.overlaySurface
             border.width: 0
             radius: ExoTheme.radiusSm
@@ -1185,6 +1233,33 @@ Popup {
                 asynchronous: true
                 retainWhileLoading: true
                 sourceSize: Qt.size(width, height)
+            }
+
+            Canvas {
+                anchors.fill: parent
+                readonly property color maskColor: card.color
+                onMaskColorChanged: requestPaint()
+                onWidthChanged: requestPaint()
+                onHeightChanged: requestPaint()
+                // Shader masks are unavailable in the software renderer.
+                onPaint: {
+                    const context = getContext("2d");
+                    context.reset();
+                    context.fillStyle = maskColor;
+                    const radius = thumbnail.radius;
+                    for (let corner = 0; corner < 4; ++corner) {
+                        context.save();
+                        context.translate(corner % 2 ? width : 0, corner >= 2 ? height : 0);
+                        context.scale(corner % 2 ? -1 : 1, corner >= 2 ? -1 : 1);
+                        context.beginPath();
+                        context.moveTo(0, 0);
+                        context.lineTo(radius, 0);
+                        context.arc(radius, radius, radius, -Math.PI / 2, -Math.PI, true);
+                        context.closePath();
+                        context.fill();
+                        context.restore();
+                    }
+                }
             }
 
             ExoGlyph {

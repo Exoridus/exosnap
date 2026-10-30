@@ -74,6 +74,7 @@ TestCase {
     }
 
     function init() {
+        testCase.width = 860;
         recordDriver.resetPickerState();
         recordDriver.seedTargets(2, ["Claude Design - Brave", "Task Manager"]);
         selectSpy.target = recordDriver.adapter;
@@ -468,6 +469,97 @@ TestCase {
         compare(page.picker.columnsForWidth(4000), 4);
     }
 
+    function test_partial_window_row_keeps_columns_when_appended() {
+        const rows = refreshWindows().slice(0, 4);
+        recordDriver.seedWindowTargets(rows);
+        const page = makePage();
+        page.width = 1050;
+        testCase.width = 1050;
+        waitForRendering(page);
+        compare(page.picker.windowColumns, 3);
+        const first = pick(page, "targetCard-" + page.picker.windowRows[0].identity);
+        const lastName = "targetCard-" + page.picker.windowRows[3].identity;
+        const last = pick(page, lastName);
+        const before = last.mapToItem(page.picker.contentItem, 0, 0).x;
+        compare(before, first.mapToItem(page.picker.contentItem, 0, 0).x);
+        rows.push({ id: 200, label: "Appended - Editor" });
+        recordDriver.seedWindowTargets(rows);
+        waitForRendering(page);
+        compare(pick(page, lastName).mapToItem(page.picker.contentItem, 0, 0).x, before);
+    }
+
+    function test_window_filters_popup_does_not_move_grid() {
+        const page = makePage();
+        showTab(page, 1);
+        const grid = pick(page, "gridArea");
+        const before = grid.mapToItem(page.picker.contentItem, 0, 0);
+        const height = grid.height;
+        pick(page, "windowFiltersButton").clicked();
+        const popup = findChild(page.picker, "windowFiltersPopup");
+        tryCompare(popup, "opened", true);
+        compare(grid.mapToItem(page.picker.contentItem, 0, 0), before);
+        compare(grid.height, height);
+        verify(findVisual(popup.contentItem, "showHiddenWindows").visible);
+        popup.close();
+    }
+
+    function test_window_overflow_is_above_rounded_thumbnail() {
+        const page = makePage();
+        showTab(page, 1);
+        const card = pick(page, "targetCard-" + page.picker.windowRows[0].identity);
+        const button = findVisual(card, "windowHideOptions");
+        const plate = findVisual(card, "targetThumbnail");
+        verify(button.z > plate.z, "overflow must stay above the preview plate");
+        compare(button.glyph, ExoGlyph.Overflow);
+        const point = card.mapToItem(page.Window.window.contentItem, card.width - 2, 2);
+        button.visible = false;
+        waitForRendering(page);
+        const without = grabImage(page.Window.window.contentItem).pixel(Math.floor(point.x), Math.floor(point.y));
+        button.visible = true;
+        waitForRendering(page);
+        compare(grabImage(page.Window.window.contentItem).pixel(Math.floor(point.x), Math.floor(point.y)), without,
+                "overflow must not expose native button chrome at the card corner");
+    }
+
+    function test_ready_thumbnail_keeps_rounded_corners() {
+        const page = makePage();
+        showTab(page, 0);
+        const card = cardAt(page, 1);
+        recordDriver.deliverStill("display:2", "image://capture-target/display-2/1");
+        const image = findVisual(card, "targetThumbnailImage");
+        tryCompare(image, "status", Image.Ready);
+        const plate = findVisual(card, "targetThumbnail");
+        const scene = page.Window.window.contentItem;
+        const corner = plate.mapToItem(scene, 1, 1);
+        const centre = plate.mapToItem(scene, plate.width / 2, plate.height / 2);
+        tryVerify(() => grabImage(scene).red(Math.floor(centre.x), Math.floor(centre.y)) === 72);
+        compare(grabImage(scene).pixel(Math.floor(corner.x), Math.floor(corner.y)), card.color,
+                "image pixels must not fill the rounded corner");
+        mouseMove(card, card.width / 2, card.height - 8);
+        waitForRendering(page);
+        tryVerify(() => grabImage(scene).pixel(Math.floor(corner.x), Math.floor(corner.y)) === card.color,
+                5000, "the rounded mask follows the hover surface");
+    }
+
+    function test_window_toolbar_wide_and_narrow_search_minimum() {
+        const page = makePage();
+        showTab(page, 1);
+        const tabs = pick(page, "tabs");
+        const search = pick(page, "windowSearchRow");
+        for (const width of [1440, 720]) {
+            testCase.width = width;
+            page.width = width;
+            waitForRendering(page);
+            const tabsY = tabs.mapToItem(page.picker.contentItem, 0, 0).y;
+            const searchY = search.mapToItem(page.picker.contentItem, 0, 0).y;
+            if (width === 1440)
+                verify(Math.abs(tabsY - searchY) <= Math.abs(tabs.height - search.height) / 2 + 1);
+            else
+                verify(searchY >= tabsY + tabs.height);
+            verify(pick(page, "windowSearch").width >= 180);
+        }
+    }
+
     // A single display stays compact and centered in the shared list.
     function test_few_displays_keep_cards_compact_and_centred() {
         let page = makePage();
@@ -707,7 +799,10 @@ TestCase {
         const page = makePage();
         recordDriver.adapter.addApplicationRule(recordDriver.adapter.windowTargetOptions[0].identity, true);
         compare(page.picker.hiddenWindowRules.length, 1);
-        pick(page, "hiddenRulesButton").clicked();
+        pick(page, "windowFiltersButton").clicked();
+        const filters = findChild(page.picker, "windowFiltersPopup");
+        tryCompare(filters, "opened", true);
+        findVisual(filters.contentItem, "hiddenRulesButton").clicked();
         const popup = findChild(page.picker, "hiddenRulesPopup");
         tryCompare(popup, "opened", true);
         const id = page.picker.hiddenWindowRules[0].id;

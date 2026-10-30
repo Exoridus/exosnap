@@ -183,7 +183,7 @@ QVariantList EditSessionAdapter::soloTrackIds() const {
 }
 
 QVariantMap EditSessionAdapter::parseTimeValue(const QString& text, qint64 current, bool samples, int format) const {
-    if (format < -1 || format > 2)
+    if (format < -1 || format > 3)
         return {{QStringLiteral("valid"), false},
                 {QStringLiteral("valueUs"), current},
                 {QStringLiteral("error"), tr("Choose a valid time format.")},
@@ -233,7 +233,7 @@ int EditSessionAdapter::defaultTimeFormat() const {
 }
 
 QString EditSessionAdapter::formatTimeValue(qint64 value, int format) const {
-    if (format < 0 || format > 2)
+    if (format < 0 || format > 3)
         return {};
     const auto text = edit::FormatTime(value, workspace_.snapshot()->output_fps,
                                        static_cast<edit::TimeFieldFormat>(format == 0 ? defaultTimeFormat() : format));

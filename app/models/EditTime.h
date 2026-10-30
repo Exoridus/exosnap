@@ -10,7 +10,7 @@
 
 namespace exosnap::edit {
 
-enum class TimeFieldFormat { Timecode, Seconds, Samples };
+enum class TimeFieldFormat { Timecode, Seconds, Samples, Clock };
 struct TimeFieldContext {
     RationalFps fps{60, 1};
     Time base_us = 0;
@@ -77,6 +77,27 @@ inline TimeParseResult ParseTime(std::string_view text, const TimeFieldContext& 
     if (text.find(':') != std::string_view::npos) {
         if (relative)
             return fail(TimeParseError::InvalidSyntax);
+        const auto first_colon = text.find(':');
+        const auto second_colon = text.find(':', first_colon + 1);
+        if (second_colon == std::string_view::npos || text.find(':', second_colon + 1) == std::string_view::npos) {
+            const auto last_colon = text.rfind(':');
+            const auto hours =
+                last_colon == first_colon ? std::optional<Time>{0} : time_detail::Unsigned(text.substr(0, first_colon));
+            const auto minute_start = last_colon == first_colon ? 0 : first_colon + 1;
+            const auto minutes = time_detail::Unsigned(text.substr(minute_start, last_colon - minute_start));
+            const auto seconds_text = text.substr(last_colon + 1);
+            if (!hours || !minutes || *minutes >= 60 ||
+                seconds_text.find_first_not_of("0123456789.,") != std::string_view::npos)
+                return fail(TimeParseError::InvalidSyntax);
+            const auto seconds = ParseTime(seconds_text, {context.fps, 0, TimeFieldFormat::Seconds});
+            if (!seconds)
+                return seconds;
+            if (seconds.value_us >= 60'000'000)
+                return fail(TimeParseError::InvalidSyntax);
+            auto clock = time_detail::MultiplyAdd(*hours, 60, *minutes);
+            clock = clock ? time_detail::MultiplyAdd(*clock, 60'000'000, seconds.value_us) : std::nullopt;
+            return clock ? TimeParseResult{*clock, TimeParseError::None} : fail(TimeParseError::Overflow);
+        }
         if (!context.fps.valid())
             return fail(TimeParseError::InvalidRate);
         std::array<Time, 4> fields{};
@@ -173,6 +194,13 @@ inline TimeParseResult ParseTime(std::string_view text, const TimeFieldContext& 
 inline std::optional<std::string> FormatTime(Time time, RationalFps fps, TimeFieldFormat format) {
     if (time < 0)
         return std::nullopt;
+    if (format == TimeFieldFormat::Clock) {
+        const auto milliseconds = time / 1000 + (time % 1000 >= 500 ? 1 : 0);
+        const auto seconds = milliseconds / 1000;
+        const auto prefix = seconds >= 3600 ? std::to_string(seconds / 3600) + ':' : std::string{};
+        return prefix + time_detail::Padded(seconds / 60 % 60, 2) + ':' + time_detail::Padded(seconds % 60, 2) + '.' +
+               time_detail::Padded(milliseconds % 1000, 3);
+    }
     if (format == TimeFieldFormat::Seconds) {
         auto result = std::to_string(time / 1'000'000);
         if (time % 1'000'000) {
