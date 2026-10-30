@@ -80,6 +80,14 @@ Before retiring a merged or closed worktree, verify desired commits on the inten
 
 Migrate a noncanonical worktree only when inactive and safe, preferably with `git worktree move`. Never silently relocate the primary checkout. Technical exceptions such as isolated cloud filesystems, Windows path limits or incompatible tooling belong in private session notes with their reason. Independently managed clones retain their own ownership.
 
+## Visual evidence for UI pull requests
+
+Every pull request that visibly adds or changes a Qt Quick screen, control, layout, interaction state or theme must include reviewable screenshots of the changed surface in **both Dark and Light**. Use the built-in `cargo exo-dev screenshot` fixtures on the actual PR head, not a design mock or an unrelated prior build. Choose representative before/after images for changed designs and capture material states such as normal, focused, disabled, open or error when relevant. Check a regular and narrow logical window size for responsive layout changes. A tiny isolated change may need only one matched Dark/Light pair; do not create a full-application sweep without a reason.
+
+Run `cargo exo-dev screenshot list` to find the closest named fixture and use `shot` or a narrowly scoped `sweep`; [Harnesses](docs/dev/harness-and-tracing.md#deterministic-visual-capture) owns the commands, manifests, limits and per-shot logs. Check the actual PNGs and the manifest, not just process exit status. Disclose missing scenarios, warnings or test cards, and do not claim that software/offscreen captures prove native D3D11 rendering, capture exclusion, audio output or live device behavior. Never upload actual desktop captures, personal window titles or secrets without explicit authorization and review.
+
+Embed or attach the relevant PNGs directly to the pull request conversation/description with clear **state, appearance and size** labels so reviewers can inspect them without a developer checkout. A local `.workspace` path and an expiring Actions artifact alone are not durable PR references. Keep the original screenshots and the manifest in untracked evidence; do not add generated captures to the source tree. If tooling cannot attach images, state the limitation and leave the PR in Draft until the visual evidence is accessible; do not silently replace it with an unevaluated screenshot claim. If a change provably has no visible UI impact, explicitly state why screenshots are not applicable.
+
 ## Change discipline and validation
 
 Keep work scoped to a subsystem unless a technical dependency requires integration. Record incidental polish separately instead of silently broadening scope. Parallel workers need disjoint file ownership. Do not silently expand product scope or mark a planned control as working.
