@@ -382,7 +382,7 @@ FocusScope {
         objectName: "editGapMenu"
         ExoMenuItem { text: qsTr("Copy blank duration"); onTriggered: root.session.copyBlankDuration() }
         ExoMenuItem { text: qsTr("Paste Spacer"); onTriggered: root.session.pasteSpacer() }
-        ExoMenuItem { text: qsTr("Close Gap (preview)"); onTriggered: root.session.previewCloseGap() }
+        ExoMenuItem { text: qsTr("Close Gap"); onTriggered: root.session.closeGap() }
     }
     ExoConfirmDialog {
         id: trackDeleteConfirmation
@@ -418,7 +418,7 @@ FocusScope {
             text: qsTr("Crossfade to next clip")
             enabled: clipMenu.visible && root.session.selectedClip !== 0 && root.session.canCrossfadeAtCut()
             onTriggered: {
-                root.session.previewCrossfadeAtCut();
+                root.session.crossfadeAtCut();
                 root.forceActiveFocus();
             }
         }
@@ -649,9 +649,9 @@ FocusScope {
                 ExoButton {
                     objectName: "editRemoveOverlap"
                     width: parent.width
-                    text: qsTr("Remove overlap (preview)")
+                    text: qsTr("Remove overlap")
                     onClicked: {
-                        if (root.session.previewRemoveOverlap(transitionDuration.junctionId)) {
+                        if (root.session.removeOverlap(transitionDuration.junctionId)) {
                             transitionDuration.close();
                             root.forceActiveFocus();
                         }
@@ -768,33 +768,6 @@ FocusScope {
             trackLabelModel.setRows(root.trackLayout.rows);
             root.scheduleClipSync();
         }
-    }
-    ExoButton {
-        id: applyPreviewButton
-        objectName: "editApplyGapPreview"
-        anchors.right: parent.right
-        anchors.top: parent.top
-        anchors.margins: ExoTheme.spacingSm
-        z: 20
-        tone: "primary"
-        compact: true
-        visible: root.session.dragActive && (root.session.selectedGap.endMs !== undefined || root.capturedClipId === 0)
-        enabled: root.session.dragValid
-        text: root.session.dragValid ? qsTr("Apply preview (Enter)") : qsTr("Preview unavailable")
-        onClicked: root.session.commitClipDrag()
-        ToolTip.text: qsTr("Review all outlined clips. Enter applies; Escape cancels.")
-        ToolTip.visible: hovered
-    }
-    ExoButton {
-        objectName: "editCancelPreview"
-        anchors.right: applyPreviewButton.left
-        anchors.top: applyPreviewButton.top
-        anchors.rightMargin: ExoTheme.spacingSm
-        z: 20
-        compact: true
-        visible: applyPreviewButton.visible
-        text: qsTr("Cancel")
-        onClicked: root.session.cancelClipDrag()
     }
     Rectangle {
         anchors.fill: parent
