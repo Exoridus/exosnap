@@ -7531,7 +7531,15 @@ Ermittelte SHA-256: %2</translation>
     <message>
         <location line="+344"/>
         <source>Choose capture source</source>
-        <translation>Capture-Quelle wählen</translation>
+        <translation>Aufnahmequelle</translation>
+    </message>
+    <message>
+        <source>Options</source>
+        <translation>Optionen</translation>
+    </message>
+    <message>
+        <source>Close</source>
+        <translation>Schließen</translation>
     </message>
     <message>
         <location line="+11"/>

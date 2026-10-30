@@ -89,6 +89,30 @@ TestCase {
         compare(panel.opened, false);
     }
 
+    function test_audio_panel_padding_keeps_hover_open() {
+        const review = createTemporaryObject(reviewComponent, testCase, {
+            session: testRecordingReview.session,
+            player: testRecordingReview.player,
+            audioController: testRecordingReview
+        });
+        verify(review);
+        verify(testEditHarness.prepareRecordingReviewVisual());
+        review.forceActiveFocus();
+        const speaker = findChild(review, "reviewAudio");
+        const panel = findChild(review, "reviewAudioPanel");
+        mouseMove(speaker, speaker.width / 2, speaker.height / 2);
+        tryCompare(panel, "opened", true);
+        mouseMove(panel.background, 2, 2);
+        wait(350);
+        verify(panel.opened, "popup padding belongs to the hover surface");
+        const volume = findChild(review, "reviewVolume");
+        mouseMove(volume, volume.width / 2, volume.height / 2);
+        wait(350);
+        verify(panel.opened, "hovering the volume control keeps the panel open");
+        mouseMove(review, 20, 20);
+        tryCompare(panel, "opened", false);
+    }
+
     function test_appearance_data() {
         return [
             {
@@ -139,6 +163,14 @@ TestCase {
         tryCompare(panel, "opened", true);
         verify(panel.x >= 0 && panel.x + panel.width <= review.width);
         verify(panel.y >= 0 && panel.y + panel.height <= review.height);
+        const seek = findChild(review, "reviewSeek");
+        compare(seek.background.height, 3);
+        verify(seek.background.color !== ExoTheme.surfaceHover);
+        const tracks = testRecordingReview.player.monitoringTracks;
+        for (const track of tracks) {
+            const button = visualChild(panel.contentItem, "reviewTrack-" + track.id);
+            verify(button.height >= button.contentItem.implicitHeight + button.topPadding + button.bottomPadding);
+        }
         waitForRendering(review);
         if (testVisualDirectory.length > 0) {
             let saved = false;
@@ -148,5 +180,16 @@ TestCase {
             }));
             tryVerify(() => saved, 5000, path);
         }
+    }
+
+    function visualChild(item, name) {
+        if (item.objectName === name)
+            return item;
+        for (const child of item.children) {
+            const found = visualChild(child, name);
+            if (found)
+                return found;
+        }
+        return null;
     }
 }

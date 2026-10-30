@@ -405,7 +405,8 @@ Rectangle {
             compact: root.compactControls
             accessibleLabel: qsTr("Edit finalized recording")
             text: qsTr("Edit")
-            glyph: ExoGlyph.ExternalLink
+            round: !root.reviewAvailable
+            glyph: root.reviewAvailable ? ExoGlyph.Invalid : ExoGlyph.ExternalLink
             visible: root.reviewAvailable || (root.width >= 1600 && root.recordViewModel.pendingEditMasterAvailable)
             available: !root.reviewAvailable || root.reviewCanEdit
             unavailableReason: qsTr("The completed recording is unavailable.")

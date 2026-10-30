@@ -562,6 +562,7 @@ class QuickApplication {
     // window, and never starts a real export.
     void applyEditVisualScenario();
     std::unique_ptr<QTemporaryDir> edit_visual_directory_;
+    std::unique_ptr<QTemporaryDir> record_review_visual_directory_;
     QVariantMap edit_visual_layout_;
     bool edit_visual_layout_applied_ = false;
     QString edit_visual_scenario_;

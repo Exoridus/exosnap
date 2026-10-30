@@ -69,6 +69,7 @@ Item {
             compare(still.seekPending, false);
             compare(still.clipOpen, true);
             compare(still.playing, false);
+            compare(still.monitoringTrackCount, 1);
         }
 
         function test_pointer_panel_close_restores_timeline_transport_data() {

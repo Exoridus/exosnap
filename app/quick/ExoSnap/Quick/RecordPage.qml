@@ -22,8 +22,10 @@ Item {
     property Component reviewComponent: null
     readonly property bool reviewing: recordingReview !== null && recordingReview.active
     property bool active: false
-    onActiveChanged: if (!active && recordingReview) recordingReview.close()
-    onReviewingChanged: if (reviewing && !active) recordingReview.close()
+    onActiveChanged: if (!active && recordingReview)
+        recordingReview.close()
+    onReviewingChanged: if (reviewing && !active)
+        recordingReview.close()
     property bool benchmarkInteractionActive: false
     property bool showMetricsOverlay: false
     property string selectedOverlay: ""
@@ -64,6 +66,7 @@ Item {
         Item {
             id: previewHost
             Loader {
+                id: reviewLoader
                 anchors.fill: parent
                 active: root.reviewing
                 sourceComponent: root.reviewComponent
@@ -464,6 +467,13 @@ Item {
     }
 
     function prepareRecordingPanelVisual(name: string): bool {
+        if (name === "review-audio") {
+            const review = reviewLoader.status === Loader.Ready ? reviewLoader.item as RecordingReview : null;
+            if (!review)
+                return false;
+            review.showAudio();
+            return true;
+        }
         if (name === "overlay-menu") {
             return previewChrome.openOverlayMenu();
         }

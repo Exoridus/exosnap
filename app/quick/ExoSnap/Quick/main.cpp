@@ -1349,7 +1349,8 @@ int main(int argc, char* argv[]) {
     }
     const QString record_panel = qEnvironmentVariable("EXOSNAP_VISUAL_RECORD_PANEL");
     if (!visualOutputPath(arguments).isEmpty() && !record_panel.isEmpty() &&
-        !QStringList{QStringLiteral("overlay-menu"), QStringLiteral("gamepad"), QStringLiteral("gamepad-hidden")}
+        !QStringList{QStringLiteral("overlay-menu"), QStringLiteral("gamepad"), QStringLiteral("gamepad-hidden"),
+                     QStringLiteral("review-audio")}
              .contains(record_panel)) {
         reportStartupError(QStringLiteral("--visual-test: unknown recording panel %1").arg(record_panel));
         return 2;
@@ -1786,10 +1787,11 @@ int main(int argc, char* argv[]) {
             if (picker == nullptr || !picker->property("visible").toBool())
                 return false;
             if (visual_popup != QLatin1String("source-picker"))
-                QMetaObject::invokeMethod(picker, "jumpToSection", Q_ARG(QString, QStringLiteral("window")));
+                QMetaObject::invokeMethod(picker, "selectTab", Q_ARG(int, 1));
             if (visual_popup == QLatin1String("source-picker-search"))
                 picker->setProperty("windowQuery", QStringLiteral("Task"));
-            return true;
+            bool ready = false;
+            return QMetaObject::invokeMethod(picker, "visibleThumbnailsReady", Q_RETURN_ARG(bool, ready)) && ready;
         }
         if (visual_popup == QLatin1String("notification-hub")) {
             auto* notifications = quick_application.notificationsAdapter();

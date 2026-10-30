@@ -54,6 +54,7 @@
 #include <QGuiApplication>
 #include <QIcon>
 #include <QMetaObject>
+#include <QPainter>
 #include <QPixmap>
 #include <QPointer>
 #include <QProcess>
@@ -1113,46 +1114,62 @@ void QuickApplication::initializeRecordWorkflow() {
     // Target stills for the source picker. The service runs only while the
     // picker reports visible cards, and the identities it is handed are resolved
     // here rather than in QML because the capture target is engine state.
-    QObject::connect(&record_view_model_adapter_, &RecordViewModelAdapter::visibleTargetIdentitiesChanged,
-                     &record_view_model_adapter_, [this](const QStringList& identities) {
-                         if (identities.isEmpty()) {
-                             target_still_service_.setVisibleTargets({});
-                             target_still_service_.stop();
-                             return;
-                         }
-                         // Built in the order QML listed them, which is the order the
-                         // cards are laid out in: the first pass after opening then
-                         // fills the grid top down instead of in target-list order.
-                         std::vector<CaptureTargetStillService::Request> requests;
-                         requests.reserve(static_cast<std::size_t>(identities.size()));
-                         for (const QString& identity : identities) {
-                             for (const exosnap::engine::CaptureTarget& target : record_view_model_.targets) {
-                                 if (record_view_model_adapter_.targetIdentity(target) != identity)
-                                     continue;
-                                 std::function<bool()> valid;
-                                 if (target.kind == engine::CaptureTarget::Kind::Window) {
-                                     const auto& facts = capture_target_notifier_.currentSnapshot().window_identities;
-                                     const auto witness =
-                                         std::find_if(facts.begin(), facts.end(), [&identity](const auto& entry) {
-                                             return entry.stableIdentity() == identity;
-                                         });
-                                     if (witness == facts.end())
-                                         continue;
-                                     valid = capture_target_notifier_.windowIdentityValidator(*witness);
-                                     if (!valid())
-                                         continue;
-                                 }
-                                 requests.push_back({identity, target, std::move(valid)});
-                                 break;
-                             }
-                         }
-                         const bool has_requests = !requests.empty();
-                         target_still_service_.setVisibleTargets(std::move(requests));
-                         if (has_requests)
-                             target_still_service_.start();
-                         else
-                             target_still_service_.stop();
-                     });
+    QObject::connect(
+        &record_view_model_adapter_, &RecordViewModelAdapter::visibleTargetIdentitiesChanged,
+        &record_view_model_adapter_, [this](const QStringList& identities) {
+            if (identities.isEmpty()) {
+                target_still_service_.setVisibleTargets({});
+                target_still_service_.stop();
+                return;
+            }
+            if (HarnessCaptureTargets()) {
+                for (const QString& identity : identities) {
+                    QImage image(480, 270, QImage::Format_RGB32);
+                    image.fill(QColor(32, 57, 76));
+                    QPainter painter(&image);
+                    painter.fillRect(16, 16, 448, 28, QColor(62, 100, 123));
+                    painter.fillRect(16, 60, 136, 194, QColor(43, 76, 94));
+                    painter.fillRect(168, 60, 296, 90, QColor(72, 125, 139));
+                    painter.setPen(Qt::white);
+                    painter.drawText(QRect(184, 166, 264, 72), Qt::AlignCenter, QStringLiteral("Synthetic preview"));
+                    painter.end();
+                    record_view_model_adapter_.setTargetStill(
+                        identity, target_still_provider_->submitStill(identity, std::move(image)));
+                }
+                return;
+            }
+            // Built in the order QML listed them, which is the order the
+            // cards are laid out in: the first pass after opening then
+            // fills the grid top down instead of in target-list order.
+            std::vector<CaptureTargetStillService::Request> requests;
+            requests.reserve(static_cast<std::size_t>(identities.size()));
+            for (const QString& identity : identities) {
+                for (const exosnap::engine::CaptureTarget& target : record_view_model_.targets) {
+                    if (record_view_model_adapter_.targetIdentity(target) != identity)
+                        continue;
+                    std::function<bool()> valid;
+                    if (target.kind == engine::CaptureTarget::Kind::Window) {
+                        const auto& facts = capture_target_notifier_.currentSnapshot().window_identities;
+                        const auto witness = std::find_if(facts.begin(), facts.end(), [&identity](const auto& entry) {
+                            return entry.stableIdentity() == identity;
+                        });
+                        if (witness == facts.end())
+                            continue;
+                        valid = capture_target_notifier_.windowIdentityValidator(*witness);
+                        if (!valid())
+                            continue;
+                    }
+                    requests.push_back({identity, target, std::move(valid)});
+                    break;
+                }
+            }
+            const bool has_requests = !requests.empty();
+            target_still_service_.setVisibleTargets(std::move(requests));
+            if (has_requests)
+                target_still_service_.start();
+            else
+                target_still_service_.stop();
+        });
     QObject::connect(&target_still_service_, &CaptureTargetStillService::stillReady, &record_view_model_adapter_,
                      [this](const QString& identity, const QImage& image) {
                          if (target_still_provider_ == nullptr || !record_view_model_adapter_.targetVisible(identity))
@@ -7098,6 +7115,34 @@ bool QuickApplication::applyRecordVisualScenario(const QString& scenario) {
     // under a scenario that called itself `recording`. A scenario that names a
     // state has to produce it everywhere the state is visible.
     synchronizeRecordState();
+    if (normalized == QLatin1String(visual::record_state::kCompleted)) {
+        record_review_visual_directory_ = std::make_unique<QTemporaryDir>();
+        const auto still_path = record_review_visual_directory_->filePath(QStringLiteral("review.png"));
+        const auto image = visual_tests::PaintEditSourceFrame(0, 1280, 720, 12'000'000);
+        if (!record_review_visual_directory_->isValid() || !image.save(still_path))
+            return false;
+        auto context = MakeEditContext(record_view_model_.current_completed_recording);
+        context.output_path = record_review_visual_directory_->filePath(QStringLiteral("Synthetic review.mkv"));
+        context.mkv_master_path = context.output_path;
+        context.duration_seconds = 754.0;
+        context.resolution = QStringLiteral("1920x1080");
+        recording_review_adapter_.player()->setSession(nullptr);
+        recording_review_adapter_.open(context);
+        recording_review_adapter_.player()->showStillForHarness(QUrl::fromLocalFile(still_path), 12'000'000, 754'000);
+        recording_review_adapter_.session()->requestSeek(12'000);
+        recording_review_adapter_.setVolume(0.72);
+        recording_review_adapter_.player()->setMonitoringState({QVariantMap{{"id", "first"},
+                                                                            {"name", "Audio 1"},
+                                                                            {"sources", "Synthetic system audio"},
+                                                                            {"selected", true},
+                                                                            {"available", true}},
+                                                                QVariantMap{{"id", "second"},
+                                                                            {"name", "Audio 2"},
+                                                                            {"sources", "Synthetic microphone"},
+                                                                            {"selected", false},
+                                                                            {"available", true}}},
+                                                               false);
+    }
     return true;
 }
 

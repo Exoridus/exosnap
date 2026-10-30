@@ -116,12 +116,14 @@ Rectangle {
         anchors.right: parent.right
         anchors.bottom: parent.bottom
         height: 48
+        bottomLeftRadius: root.radius
+        bottomRightRadius: root.radius
         color: ExoTheme.overlaySurface
         RowLayout {
             anchors.fill: parent
-            anchors.leftMargin: ExoTheme.spacingSm
-            anchors.rightMargin: ExoTheme.spacingSm
-            spacing: ExoTheme.spacingSm
+            anchors.leftMargin: ExoTheme.spacingLg
+            anchors.rightMargin: ExoTheme.spacingLg
+            spacing: ExoTheme.spacingMd
             OverlayButton {
                 objectName: "reviewPlayPause"
                 compact: true
@@ -143,6 +145,20 @@ Rectangle {
                 enabled: root.player.clipOpen && root.session.durationMs > 0
                 Accessible.name: qsTr("Playback position")
                 value: root.session.positionMs
+                background: Rectangle {
+                    x: seek.leftPadding
+                    y: seek.topPadding + (seek.availableHeight - height) / 2
+                    width: seek.availableWidth
+                    height: 3
+                    radius: height / 2
+                    color: ExoTheme.overlayLine
+                    Rectangle {
+                        width: seek.visualPosition * parent.width
+                        height: parent.height
+                        radius: parent.radius
+                        color: ExoTheme.overlayInk
+                    }
+                }
                 handle: Rectangle {
                     x: seek.leftPadding + seek.visualPosition * (seek.availableWidth - width)
                     y: seek.topPadding + (seek.availableHeight - height) / 2
@@ -243,6 +259,16 @@ Rectangle {
         background: Rectangle {
             color: ExoTheme.surfaceRaised
             radius: ExoTheme.radiusMd
+            HoverHandler {
+                id: panelHover
+                parent: audioPanel.contentItem.parent
+                onHoveredChanged: {
+                    if (hovered)
+                        closeAudio.stop();
+                    else
+                        closeAudio.restart();
+                }
+            }
         }
         contentItem: Flickable {
             Keys.onEscapePressed: event => {
@@ -252,15 +278,6 @@ Rectangle {
             implicitHeight: panelContent.implicitHeight
             contentHeight: panelContent.implicitHeight
             clip: true
-            HoverHandler {
-                id: panelHover
-                onHoveredChanged: {
-                    if (hovered)
-                        closeAudio.stop();
-                    else
-                        closeAudio.restart();
-                }
-            }
             ColumnLayout {
                 id: panelContent
                 width: parent.width
@@ -286,6 +303,7 @@ Rectangle {
                         required property var modelData
                         objectName: "reviewTrack-" + modelData.id
                         Layout.fillWidth: true
+                        implicitHeight: Math.max(52, contentItem.implicitHeight + topPadding + bottomPadding)
                         quiet: true
                         selected: modelData.selected
                         enabled: modelData.available && root.audioController !== null && !root.player.transportPending

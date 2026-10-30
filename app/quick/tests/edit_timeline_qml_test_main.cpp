@@ -2226,15 +2226,22 @@ class Setup final : public QObject {
                                     generation == exosnap::quick::EditPlayerAdapterTestPeer::generation(player)}};
     }
     QVariantMap syntheticStillProbe() const {
+        EditSessionAdapter session;
         EditPlayerAdapter player;
+        player.setSession(&session);
         const QUrl image(QStringLiteral("file:///synthetic-visual-frame.png"));
         player.showStillForHarness(image, 42'500'000, 160'000);
+        player.setMonitoringState({QVariantMap{{"id", "synthetic"}, {"available", true}}}, false);
+        QMetaObject::invokeMethod(
+            exosnap::quick::EditPlayerAdapterTestPeer::worker(player), [] {}, Qt::BlockingQueuedConnection);
+        QCoreApplication::sendPostedEvents(&player, QEvent::MetaCall);
         return {{QStringLiteral("source"), player.harnessStillSource()},
                 {QStringLiteral("requestedTimeUs"), player.requestedTimeUs()},
                 {QStringLiteral("hasPresentedTime"), player.presentedTimeUs().isValid()},
                 {QStringLiteral("seekPending"), player.seekPending()},
                 {QStringLiteral("clipOpen"), player.clipOpen()},
-                {QStringLiteral("playing"), player.playing()}};
+                {QStringLiteral("playing"), player.playing()},
+                {QStringLiteral("monitoringTrackCount"), player.monitoringTracks().size()}};
     }
     bool dropAsset(QQuickItem* item, qulonglong asset, qreal x, qreal y) {
         QMimeData mime;

@@ -98,7 +98,7 @@ pub struct ShotSpec {
     /// Recording settings card (`EXOSNAP_VISUAL_PROFILE_SECTION`).
     #[arg(long)]
     pub profile: Option<String>,
-    /// Preview overlay fixture: `overlay-menu`, `gamepad`, or `gamepad-hidden`
+    /// Recording workspace fixture: `overlay-menu`, `gamepad`, `gamepad-hidden`, or `review-audio`
     /// (`EXOSNAP_VISUAL_RECORD_PANEL`).
     #[arg(long, conflicts_with = "profile")]
     pub record_panel: Option<String>,

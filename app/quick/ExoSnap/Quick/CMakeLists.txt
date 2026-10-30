@@ -1481,6 +1481,8 @@ exosnap_set_test_phase(quick.qml.edit_timeline_contracts desktop)
 # each other's cases.
 qt_add_executable(record_source_picker_qml_tests
     ${EXOSNAP_QUICK_TESTS_DIR}/record_picker_qml_test_main.cpp
+    CaptureTargetStillProvider.cpp
+    CaptureTargetStillProvider.h
     ${PROJECT_SOURCE_DIR}/app/assets/fonts/exosnap_fonts.qrc
 )
 
