@@ -57,7 +57,7 @@ pub fn summary(lines: &[String]) -> Summary {
 pub fn failed_tests(lines: &[String]) -> Vec<String> {
     static FAILED: LazyLock<Regex> = LazyLock::new(|| {
         Regex::new(
-            r"(?i)^\s*\d+\s+-\s+(.+?)\s+\((Failed|Timeout|Not Run|Exception[^)]*|Subprocess aborted|Child aborted|SEGFAULT|Illegal|Numerical|Other)\)",
+            r"(?i)^\s*\d+\s+-\s+(.+?)\s+\((?:Exit code\s+0x[0-9a-f]+|(?:Failed|Timeout|Not Run|Exception[^)]*|Subprocess aborted|Child aborted|SEGFAULT|Illegal|Numerical|Other)\))",
         )
         .unwrap()
     });
@@ -111,6 +111,50 @@ pub fn failure_report(lines: &[String]) -> Vec<String> {
         report.push("Failed test binaries:".to_string());
         report.extend(failed.iter().map(|name| format!("  {name}")));
     }
+    let loading: Vec<_> = lines.iter().filter(|line| qml_load_error(line)).collect();
+    if !loading.is_empty() {
+        report.push("QML loading errors:".into());
+        report.extend(
+            loading
+                .iter()
+                .take(MAX_BLOCK_LINES)
+                .map(|line| format!("  {line}")),
+        );
+    }
+    static PREFIX: LazyLock<Regex> = LazyLock::new(|| Regex::new(r"^\s*\d+:\s?").unwrap());
+    let mut qt_blocks: Vec<Vec<String>> = Vec::new();
+    let mut active = None;
+    for line in lines {
+        let line = PREFIX.replace(line, "");
+        if line.trim_start().starts_with("FAIL!") || line.trim_start().starts_with("QFATAL") {
+            qt_blocks.push(vec![line.into_owned()]);
+            active = Some(qt_blocks.len() - 1);
+        } else if let Some(index) = active {
+            if line.starts_with(char::is_whitespace) && !line.trim().is_empty() {
+                qt_blocks[index].push(line.into_owned());
+            } else {
+                active = None;
+            }
+        }
+    }
+    let failures = qt_blocks;
+    if !failures.is_empty() {
+        report.push(format!("Failing QtTest results ({}):", failures.len()));
+        for block in &failures {
+            report.extend(
+                block
+                    .iter()
+                    .take(MAX_BLOCK_LINES)
+                    .map(|line| format!("  {line}")),
+            );
+            if block.len() > MAX_BLOCK_LINES {
+                report.push(format!(
+                    "  ... ({} more lines in the log)",
+                    block.len() - MAX_BLOCK_LINES
+                ));
+            }
+        }
+    }
     let cases = failed_cases(lines);
     if cases.is_empty() {
         return report;
@@ -141,6 +185,38 @@ pub fn failure_report(lines: &[String]) -> Vec<String> {
     report
 }
 
+fn qml_load_error(line: &str) -> bool {
+    static QML: LazyLock<Regex> = LazyLock::new(|| {
+        Regex::new(
+        r"(?i)(Type .+ unavailable|is not a type|module .+ is not installed|QQmlApplicationEngine failed to load component|Cannot assign to non-existent property|Required property .+ was not initialized)"
+    ).unwrap()
+    });
+    QML.is_match(line)
+}
+
+pub fn failure_classification(lines: &[String]) -> &'static str {
+    if lines.iter().any(|line| qml_load_error(line)) {
+        "qml-load-error"
+    } else if lines.iter().any(|line| line.contains("(Timeout)")) {
+        "timeout"
+    } else if lines
+        .iter()
+        .any(|line| line.to_ascii_lowercase().contains("exit code 0xc0000135"))
+    {
+        "infrastructure-error"
+    } else if lines.iter().any(|line| {
+        ["(Exception", "(Subprocess aborted)", "(SEGFAULT)", "QFATAL"]
+            .iter()
+            .any(|token| line.contains(token))
+    }) {
+        "abnormal-exit"
+    } else if lines.iter().any(|line| line.contains("FAIL!")) || !failed_cases(lines).is_empty() {
+        "assertion-failure"
+    } else {
+        "test-failure"
+    }
+}
+
 fn unique(items: impl Iterator<Item = String>) -> Vec<String> {
     let mut seen = Vec::new();
     for item in items {
@@ -157,6 +233,59 @@ mod tests {
 
     fn lines(text: &str) -> Vec<String> {
         text.lines().map(str::to_string).collect()
+    }
+
+    #[test]
+    fn failure_classification_distinguishes_qml_loading_assertions_and_timeouts() {
+        assert_eq!(
+            failure_classification(&lines("qrc:/Main.qml:7:3: Type SettingsView unavailable\n")),
+            "qml-load-error"
+        );
+        assert_eq!(
+            failure_classification(&lines(
+                "FAIL! : Settings::test_region() Compared values differ\n"
+            )),
+            "assertion-failure"
+        );
+        assert_eq!(
+            failure_classification(&lines("  1 - fixture (Timeout) phase.hermetic\n")),
+            "timeout"
+        );
+        assert_eq!(
+            failure_classification(&lines("  1 - fixture (Exception: SegFault)\n")),
+            "abnormal-exit"
+        );
+        assert_eq!(
+            failure_classification(&lines("  1 - fixture (Failed)\n")),
+            "test-failure"
+        );
+    }
+
+    #[test]
+    fn missing_runtime_dll_preserves_program_names_and_startup_classification() {
+        let log = lines(
+            "The following tests FAILED:\n\t281 - quick.qml.edit_timeline_contracts (Exit code 0xc0000135\n) phase.desktop quick quicktest\n",
+        );
+        assert_eq!(
+            failed_tests(&log),
+            vec!["quick.qml.edit_timeline_contracts"]
+        );
+        assert_eq!(failure_classification(&log), "infrastructure-error");
+    }
+
+    #[test]
+    fn qt_failures_preserve_functions_assertions_and_locations_from_original_output() {
+        let log = lines(
+            "4: FAIL!  : Settings::test_region(row one) Compared values are not the same\n4:    Actual   (visible): true\n4:    Expected (visible): false\n4:    Loc: [qrc:/tests/tst_Settings.qml(42)]\n4: PASS   : Settings::cleanupTestCase()\n",
+        );
+        let report = failure_report(&log).join("\n");
+        assert!(
+            report.contains("Settings::test_region(row one)"),
+            "{report}"
+        );
+        assert!(report.contains("Actual   (visible): true"), "{report}");
+        assert!(report.contains("tst_Settings.qml(42)"), "{report}");
+        assert!(!report.contains("cleanupTestCase"), "{report}");
     }
 
     #[test]

@@ -124,6 +124,34 @@ fn an_all_green_scoped_run_exits_zero_and_says_so() {
 // simulated-failure tests exercise.
 
 #[test]
+fn an_early_qml_failure_stops_build_analysis_and_full_tests() {
+    let dir = tempfile::tempdir().unwrap();
+    let (code, receipt) = exo_dev(
+        &[
+            "verify",
+            "--profile",
+            "ci-build-debug",
+            "--event",
+            "pull_request",
+            "--dry-run",
+            "--simulate-fail",
+            "qml-smoke",
+        ],
+        &dir.path().join("r.json"),
+    );
+    assert_ne!(code, 0);
+    if cfg!(windows) {
+        assert_eq!(check(&receipt, "qml-smoke")["status"], "FAIL");
+        for name in ["build", "clang-tidy", "tests"] {
+            assert!(
+                ["NOT_RUN", "SKIPPED_DEPENDENCY"]
+                    .contains(&check(&receipt, name)["status"].as_str().unwrap())
+            );
+        }
+    }
+}
+
+#[test]
 fn a_simulated_build_failure_exits_non_zero_and_skips_the_tests() {
     let dir = tempfile::tempdir().unwrap();
     let (code, receipt) = exo_dev(

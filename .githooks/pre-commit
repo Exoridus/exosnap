@@ -2,8 +2,7 @@
 # One entry point, no verification logic of its own: the protected-branch refusal,
 # what the pre-commit contract runs and what a failure stops are exo-dev's
 # business. CI remains the authority either way.
-#
-# EXOSNAP_VERIFY_JOBS=<n> in your environment caps the parallelism when the
-# contract escalates to a build.
+# Partially staged files and working tooling that differs from the index are
+# refused because the checks execute tooling and read source from the worktree.
 cd "$(git rev-parse --show-toplevel)" || exit 1
 exec cargo exo-dev hook pre-commit

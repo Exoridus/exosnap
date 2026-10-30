@@ -675,6 +675,14 @@ jobs:
           include-hidden-files: true
           if-no-files-found: warn
 
+      - name: Report pruned package footprint
+        if: ${{ !cancelled() && github.event_name == 'pull_request' && needs.changes.outputs.packaging == 'true' }}
+        shell: pwsh
+        run: |
+          $report = '.workspace/package-smoke/package-size.md'
+          if (-not (Test-Path -LiteralPath $report)) { throw 'missing generated package-size report' }
+          Get-Content -LiteralPath $report -Raw | Out-File -FilePath $env:GITHUB_STEP_SUMMARY -Append -Encoding utf8
+
       - name: Upload packaging validation report
         if: ${{ !cancelled() && github.event_name == 'pull_request' && needs.changes.outputs.packaging == 'true' }}
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
@@ -682,6 +690,8 @@ jobs:
           name: packaging-smoke-report
           path: |
             .workspace/package-smoke/package.json
+            .workspace/package-smoke/package-size.json
+            .workspace/package-smoke/package-size.md
           include-hidden-files: true
           if-no-files-found: warn
 

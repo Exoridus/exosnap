@@ -28,6 +28,10 @@ cmake --build --preset windows-x64-debug-exosnap
 
 Use a branch from the integrated default branch. Configure installs repository Git hooks and the local fast-forward-only pull policy when possible. These are convenience checks, not substitutes for reviewed changes and server-side protection.
 
+Create a local checkout with `git worktree add .worktrees/<name> -b <branch> origin/next`, following [the worktree policy](../../AGENTS.md#worktrees-and-storage). Use `git worktree list --porcelain` to establish ownership and state before storage cleanup. A missing checkout is an administrative-metadata case: inspect `git worktree prune --dry-run`. It does not reclaim a deleted checkout's former build files. For an inactive checkout that must move, prefer `git worktree move <old> <new>` and verify the resulting metadata before resuming work.
+
+CMake/Ninja outputs remain private to their source checkout. Cargo's registry and Git download caches already live outside the checkout by default. The `cargo exo-dev` alias deliberately uses a separate `tools/target/exo-dev-host` so its running executable cannot collide with the Rust test build. Keep target directories isolated across concurrently active worktrees. Compare compatible artifact-cache reuse before changing target locations or Rust incremental settings.
+
 ## Iteration and final gate
 
 `cargo exo-dev test` configures test process isolation: a throwaway configuration directory, offscreen Qt platform and matching Qt/plugin paths. It builds the selected tree first so the verdict describes current binaries.
@@ -68,6 +72,8 @@ The headless `quick.qml.recording_review` suite renders the controls with a deco
 
 A filter selects a registered test/binary prefix, not necessarily one internal GoogleTest case. Check the printed selection. Hardware exclusions reduce reach and must be reported as such.
 
+Use repeatable `--build-target <target>` arguments when a focused run needs only known CMake test targets, for example `cargo exo-dev test --filter '^quick\.qml\.record_source_picker$' --build-target record_source_picker_qml_tests`. Without explicit targets the runner retains the full-build default. A targeted receipt records its targets and proves the selected test executables current through the Ninja graph. Building an unrelated target does not make an existing test binary current. Targeted evidence requires direct build-tree test executables. Opaque script or external wrapper commands need the full-build default. Unsupported or stale targeted evidence is refused rather than described as a successful full build.
+
 `cargo exo-dev` is a Cargo alias defined in `.cargo/config.toml`; run it from the repository root, including the root of a git worktree created inside the checkout. It builds `tools/exo-dev` when its sources changed and runs it. `--fast` is the scoped pre-commit contract: it may check more than a change strictly needs, never less. `--full` is the complete local gate for what still runs locally: missing-tool failures, packaging/privacy/egress guards, source hygiene, format and the Rust workspace (`fmt`, `clippy`, `cargo test`). The git hooks call the same two contracts. `--dry-run` executes nothing and shows the plan a change would get; `--simulate-fail <step>` exercises the failure paths without a compiler.
 
 Each CI job calls one named profile (`--profile ci-lint`, `ci-guardrails`, `ci-build-debug`, `ci-build-release`, ...), so what a job blocks on is defined next to the local contract. A check that blocks in CI either also blocks before a push or declares why it cannot, in `StepId::info` (`tools/exo-dev/src/step.rs`). Every run writes step logs and a receipt under the untracked workspace scratch directory's `verify` subdirectory. The receipt records the profile, HEAD, whether the tree was dirty, each check's status and evidence. Repository automation policy runs in both local modes and CI guardrails. The staged hook validates index contents so unstaged edits cannot conceal a prohibited script.
@@ -92,11 +98,19 @@ Commit and push are not release qualification: they check the change, not the pr
 | Curated blocking clang-tidy set (rules and path scopes: [static analysis](static-analysis.md), `BLOCKING_RULES` in `tools/exo-dev/src/lint/canaries.rs`) | pre-commit (changed-since-base), pre-push (whole-tree) | `ci-build-debug`, scoped to what the pull request changes against its base | Each rule has a measured clean scope and a positive violation canary. A new violation fails within that scope. Re-scanning unrelated files on every local push added cost without new coverage. |
 | cppcheck (`--enable=warning,performance,portability --error-exitcode=1`, whole `libs/`+`app/`) | pre-commit, pre-push | `ci-lint` | Needs no compile database (`cargo exo-dev lint quality --only cppcheck`), so it belongs on the build-free lint leg, not duplicated against every local build. |
 
-`StepId::Rust` runs `fmt`, `clippy` and Cargo tests over the `tools/` workspace locally. Pre-commit scopes this step to staged Rust-tool changes. Pre-push runs the complete Rust workspace. Automation-policy checks always run, including when a new script is outside `tools/`.
+`StepId::Rust` runs `fmt`, `clippy` and Cargo tests over the `tools/` workspace locally. Pre-commit scopes this step to staged Rust-tool changes. Pre-push selects the complete Rust step when branch or working changes affect Rust tooling, shared Rust configuration, hooks or workflows. Known documentation and C++/QML-only changes can omit Rust verification. Unclassified paths, unresolved bases and failed scope queries run Rust conservatively. All other pre-push guardrails remain complete. Automation-policy checks always run, including when a new script is outside `tools/`.
+
+The pre-push hook reads every branch update from Git's stdin. Its scope includes both the integration-base diff and each old-remote-to-new-local diff, including deletions, plus staged, unstaged and untracked working inputs. It verifies only pushed heads equal to the checked-out HEAD. Push another source tree from its own checkout so the executed tools and checked source agree. Tag-only, unchanged and deletion-only pushes retain their existing no-verification behavior. Malformed or unreadable ref input refuses the push.
+
+Staged verification refuses partially staged paths whose working bytes differ from the index. It also refuses unstaged or untracked verification-tooling inputs that could change the executed Rust checks. Stage or separate those changes before committing. Unrelated unstaged native source edits remain allowed. This prevents a working-tree fix from certifying different staged bytes.
 
 `cargo exo-dev verify --full` is not a release qualification and never was: it is the pre-push contract for what still runs locally. `cargo exo-dev verify --profile ci-build-debug --event <event>` (needs a Ninja-preset build tree) and the deep advisory passes in `.github/workflows/advisory-checks.yml` are the whole-tree/deep tier; they are not implied by a green push.
 
-The Debug CI sequence is configure, `all_qmllint`, build, blocking clang-tidy, then the complete CTest suite excluding the `live` label. Clang-tidy needs the compilation database and the completed build's Ninja dependencies, but does not need CTest. A blocking analysis failure stops the run before tests. A successful analysis preserves the complete configured test suite and its receipt.
+The Debug CI sequence is configure, early QML contracts, `all_qmllint`, the complete build, blocking clang-tidy, then the complete CTest suite excluding the `live` label. The early stage builds the three QuickTest targets for shared controls, Edit timeline and Record source picker in the same build tree. Three exact contract registrations select nine representative internal functions and have a 120-second timeout each. They load test components and exercise creation, state restoration, keyboard interaction and settings/source wiring. Production module lint does not establish that filesystem-loaded QuickTest fixtures resolve their types and imports. A missing registration or failing contract stops the full build and analysis. The later build reuses unchanged outputs. All full QuickTest suites, navigation/AOT, About, updater, Debug/Release verification, packaging and required CI contexts retain their existing contracts.
+
+Run `cargo exo-dev verify --profile qml-smoke` for this focused Debug gate locally. It configures the current source, builds its targets incrementally and runs the same bounded contracts with normal locks, isolation, census and receipts. It is an explicit deeper check. Ordinary hooks remain free of CMake/native builds. A build-free QML parser cannot establish the production C++ types, resource registrations and imports, so the staged hook does not claim native QML coverage.
+
+QuickTest registrations retain a separate text log from the original execution, including Windows GUI executables whose stdout is unavailable. The runner clears selected logs before testing and retains their output with CTest evidence. Failure summaries identify internal Qt/QML and GoogleTest cases, locations and assertions where available. Receipts distinguish test failures, QML load errors, build failures, timeouts, abnormal exits and stale or invalid evidence. Early QML receipts and logs are retained separately before the full suite replaces its canonical last-run files.
 
 Pull requests changing only canonical documentation skip both Windows product build legs.
 The existing build-path filter keeps product sources, resources, test fixtures and build machinery eligible.
@@ -107,7 +121,7 @@ This scheduling policy does not weaken test receipts: changing any tracked worki
 
 Build, test and receipt publication share a host lock per build directory. Independent trees do not block each other. Do not run a second unmanaged build into a tree the test runner is currently judging.
 
-Every test run writes `<BuildDir>/Testing/last-run-receipt.json`, including a failing run. `reusable` is true only when build/source identity, phase declarations, census and evidence requirements hold. A clean printed case list does not override an unusable receipt. `-NoBuild` can refuse stale binaries (exit 3); `-AllowStale` deliberately weakens that claim. Exit 4 means no usable verdict, not a passing product. Retain raw build/CTest exit codes when diagnosing the runner.
+Every test run writes `<BuildDir>/Testing/last-run-receipt.json`, including a failing run. `reusable` is true only when build/source identity, phase declarations, census and evidence requirements hold. Targeted runs record requested build targets and the resolved test executable outputs actually built. A clean printed case list does not override an unusable receipt. `--no-build` can refuse stale binaries (exit 3); `--allow-stale` deliberately weakens that claim. Exit 4 means no usable verdict, not a passing product. Retain raw build/CTest exit codes and failure classification when diagnosing the runner. Missing diagnostic evidence does not replace a known timeout or abnormal-exit cause.
 
 ## Documentation gate
 
@@ -152,6 +166,29 @@ The lockfile is part of the tool input. A locked build must fail if dependencies
 ## What a successful local gate does not prove
 
 A GPU-free unit test does not establish real capture/encode behavior, a generated screenshot does not establish native HWND ownership or overlay desktop composition, and a development build is not a signed downloadable release. Report exactly which layers ran. Native window checks, real playback, endpoint unplug and release installation belong to their named runbooks and acceptance scenarios.
+
+## Release package footprint
+
+The canonical Rust `exo-verify package` operation writes
+`package-size.json` and `package-size.md` alongside its `package.json`.
+It measures the **validated, pruned** runtime staging tree used by both
+packaging formats and reports the compressed Portable ZIP, MSI and offline
+Setup sizes separately. The report lists component-category totals, the largest
+shipped files, the separate Setup UI runtime and the Visual C++ redistributable
+input where present.
+
+Packaging-relevant PRs reuse the Release packaging-smoke operation. The report
+is added to the CI step summary and uploaded with the existing package-smoke
+evidence. Release-candidate jobs also display their report and upload it
+separately from the immutable candidate bundle. Tests for the inventory live
+in the Rust package module and run through the existing Rust workspace gate.
+
+The Qt Widgets and Qt Labs Platform total is an **uncompressed candidate
+footprint**, not a measured compressed saving or permission to remove
+transitively imported libraries. ExoSnap's PE dependency audit, QML import
+checks, package validation and Windows tray smoke remain authoritative for
+correctness. Keep each report's JSON file for direct size comparisons against
+future candidate reports of the same schema.
 
 ## Translation maintenance
 

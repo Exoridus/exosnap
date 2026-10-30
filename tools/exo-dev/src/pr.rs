@@ -30,6 +30,9 @@ use crate::commit_policy;
 use crate::git::Git;
 use crate::process;
 
+mod stack;
+pub use stack::{MergeStackOutcome, MergeStackRequest, merge_stack, render_merge_stack};
+
 /// The repository every `gh pr` call targets. Matches the remote this tree is
 /// developed against; a fork would need its own value here, same as the
 /// scripts this module replaces.

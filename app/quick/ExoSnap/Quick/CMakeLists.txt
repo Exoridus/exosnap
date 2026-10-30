@@ -1237,23 +1237,35 @@ target_sources(record_controls_qml_tests
         ${PROJECT_SOURCE_DIR}/app/ui/brand/ShellIconRenderer.cpp
 )
 
-add_test(NAME quick.qml.record_controls COMMAND record_controls_qml_tests)
+add_test(NAME quick.qml.record_controls COMMAND record_controls_qml_tests
+    -o "${CMAKE_CURRENT_BINARY_DIR}/record-controls-test.txt,txt")
 get_filename_component(_exosnap_quick_qt_prefix "${Qt6_DIR}/../../.." ABSOLUTE)
 # QML2_IMPORT_PATH is the Qt 5 name and Qt 6 ignores it, so this test used to run
 # with the Qt install's qml/ tree invisible. Finding the modules is only half of
 # it: a QML plugin DLL there links Qt modules that live in Qt's bin/, and the
 # staged copies next to the test binary do not include them — so the plugin
 # resolves and then fails to load. Qt's bin/ on PATH covers that.
-# `quicktest` marks a Qt QuickTest runner, one that takes `-o <file>,txt`. The
-# verify pipeline reads the label from CTest to know which failing tests it may
-# re-run for a per-function report; the `exosnap --*-test` entry points do not
-# carry it because they do not understand the flag.
+# GUI runners need explicit files to retain QtTest output on Windows.
+# The test runner collects these first-run logs through the quicktest label.
 set_tests_properties(quick.qml.record_controls PROPERTIES
     LABELS "quick;quicktest"
     ENVIRONMENT "QT_QPA_PLATFORM=offscreen;QML_IMPORT_PATH=${_exosnap_quick_qt_prefix}/qml"
     ENVIRONMENT_MODIFICATION "PATH=path_list_prepend:${_exosnap_quick_qt_prefix}/bin"
 )
 exosnap_set_test_phase(quick.qml.record_controls desktop)
+
+add_test(NAME quick.qml.record_controls_contracts COMMAND record_controls_qml_tests
+    ExoSettingRow::test_hint_outranks_readout
+    WindowChromeButton::test_clearing_the_non_client_state_restores_the_resting_button
+    ExoButtonTests::test_selectsFromAuthoritativeState
+    -o "${CMAKE_CURRENT_BINARY_DIR}/record-controls-contracts-test.txt,txt")
+set_tests_properties(quick.qml.record_controls_contracts PROPERTIES
+    LABELS "quick;quicktest"
+    ENVIRONMENT "QT_QPA_PLATFORM=offscreen;QML_IMPORT_PATH=${_exosnap_quick_qt_prefix}/qml"
+    ENVIRONMENT_MODIFICATION "PATH=path_list_prepend:${_exosnap_quick_qt_prefix}/bin"
+    TIMEOUT 120
+)
+exosnap_set_test_phase(quick.qml.record_controls_contracts desktop)
 
 # The Edit surface's keyboard contract (QCR-504). A second QML test executable
 # rather than more files in the one above, because EditTimeline.qml takes three
@@ -1418,7 +1430,8 @@ target_link_libraries(edit_timeline_qml_tests
 
 target_sources(edit_timeline_qml_tests PRIVATE ${PROJECT_SOURCE_DIR}/app/services/AtomicFileOps.cpp)
 
-add_test(NAME quick.qml.edit_timeline COMMAND edit_timeline_qml_tests)
+add_test(NAME quick.qml.edit_timeline COMMAND edit_timeline_qml_tests
+    -o "${CMAKE_CURRENT_BINARY_DIR}/edit-timeline-test.txt,txt")
 set_tests_properties(quick.qml.edit_timeline PROPERTIES
     LABELS "quick;quicktest"
     ENVIRONMENT "QT_QPA_PLATFORM=offscreen;QML_IMPORT_PATH=${_exosnap_quick_qt_prefix}/qml"
@@ -1445,6 +1458,19 @@ set_tests_properties(quick.qml.recording_review_native PROPERTIES
     ENVIRONMENT_MODIFICATION "PATH=path_list_prepend:${_exosnap_quick_qt_prefix}/bin"
 )
 exosnap_set_test_phase(quick.qml.recording_review_native desktop)
+
+add_test(NAME quick.qml.edit_timeline_contracts COMMAND edit_timeline_qml_tests
+    EditPage::test_EmptyViewerStable
+    EditGainField::test_decimal_comma_applies_exact_tenths_then_restores_canvas
+    EditTimeField::test_unchanged_timecode_does_not_quantize_legacy_microseconds
+    -o "${CMAKE_CURRENT_BINARY_DIR}/edit-timeline-contracts-test.txt,txt")
+set_tests_properties(quick.qml.edit_timeline_contracts PROPERTIES
+    LABELS "quick;quicktest"
+    ENVIRONMENT "QT_QPA_PLATFORM=offscreen;QML_IMPORT_PATH=${_exosnap_quick_qt_prefix}/qml"
+    ENVIRONMENT_MODIFICATION "PATH=path_list_prepend:${_exosnap_quick_qt_prefix}/bin"
+    TIMEOUT 120
+)
+exosnap_set_test_phase(quick.qml.edit_timeline_contracts desktop)
 
 # The Record source picker's QML contract. A third QML test executable, for the
 # reason the edit runner states: RecordSourcePicker takes a REQUIRED, C++-typed
@@ -1583,13 +1609,36 @@ target_link_libraries(record_source_picker_qml_tests
         exosnap_engine
 )
 
-add_test(NAME quick.qml.record_source_picker COMMAND record_source_picker_qml_tests -o "${CMAKE_CURRENT_BINARY_DIR}/record-source-picker-test.txt,txt")
+add_test(NAME quick.qml.record_source_picker COMMAND record_source_picker_qml_tests
+    -o "${CMAKE_CURRENT_BINARY_DIR}/record-source-picker-test.txt,txt")
 set_tests_properties(quick.qml.record_source_picker PROPERTIES
     LABELS "quick;quicktest"
     ENVIRONMENT "QT_QPA_PLATFORM=offscreen;QML_IMPORT_PATH=${_exosnap_quick_qt_prefix}/qml"
     ENVIRONMENT_MODIFICATION "PATH=path_list_prepend:${_exosnap_quick_qt_prefix}/bin"
 )
 exosnap_set_test_phase(quick.qml.record_source_picker desktop)
+
+add_test(NAME quick.qml.record_source_picker_contracts COMMAND record_source_picker_qml_tests
+    RecordingProfileReveal::test_empty_audio_details_do_not_create_a_source
+    RecordingWorkspace::test_inspector_active_and_next_use_one_settings_plan
+    RecordSourcePicker::test_zero_windows_keep_display_and_region_sections_available
+    -o "${CMAKE_CURRENT_BINARY_DIR}/record-source-picker-contracts-test.txt,txt")
+set_tests_properties(quick.qml.record_source_picker_contracts PROPERTIES
+    LABELS "quick;quicktest"
+    ENVIRONMENT "QT_QPA_PLATFORM=offscreen;QML_IMPORT_PATH=${_exosnap_quick_qt_prefix}/qml"
+    ENVIRONMENT_MODIFICATION "PATH=path_list_prepend:${_exosnap_quick_qt_prefix}/bin"
+    TIMEOUT 120
+)
+exosnap_set_test_phase(quick.qml.record_source_picker_contracts desktop)
+
+# Focused builds also need the shared runtime staging dependency. Reuse the
+# directory's existing writer so parallel test builds cannot race DLL copies.
+get_property(_exosnap_quick_test_runtime DIRECTORY PROPERTY EXOSNAP_TEST_RUNTIME_TARGET)
+if(NOT _exosnap_quick_test_runtime OR NOT TARGET ${_exosnap_quick_test_runtime})
+    message(FATAL_ERROR "QuickTest runtime staging target is missing")
+endif()
+add_dependencies(edit_timeline_qml_tests ${_exosnap_quick_test_runtime})
+add_dependencies(record_source_picker_qml_tests ${_exosnap_quick_test_runtime})
 
 add_test(NAME quick.qml.record_preview_smoke COMMAND exosnap --preview-smoke-test)
 set_tests_properties(quick.qml.record_preview_smoke PROPERTIES
@@ -2511,7 +2560,8 @@ target_compile_definitions(crash_report_qml_adapter_tests PRIVATE NOMINMAX)
 foreach(_i18n_scale IN ITEMS 1 1.25 1.5 2)
     set(_i18n_test "quick.qml.german_text_geometry_${_i18n_scale}")
     add_test(NAME "${_i18n_test}" COMMAND record_controls_qml_tests
-        -input "${PROJECT_SOURCE_DIR}/app/quick/tests_de")
+        -input "${PROJECT_SOURCE_DIR}/app/quick/tests_de"
+        -o "${CMAKE_CURRENT_BINARY_DIR}/german-text-geometry-${_i18n_scale}.txt,txt")
     set_tests_properties("${_i18n_test}" PROPERTIES
         LABELS "quick;quicktest;i18n"
         ENVIRONMENT "QT_QPA_PLATFORM=offscreen;QML_IMPORT_PATH=${_exosnap_quick_qt_prefix}/qml;EXOSNAP_TEST_UI_LANGUAGE=de;QT_SCALE_FACTOR=${_i18n_scale}"

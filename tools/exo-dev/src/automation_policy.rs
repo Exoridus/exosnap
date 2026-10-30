@@ -201,6 +201,30 @@ mod tests {
     use crate::test_support::fixture_repo;
 
     #[test]
+    fn staged_policy_reads_candidate_inventory_and_contents() {
+        let dir = crate::test_support::fixture_repo_committed(&[("README.md", "original\n")]);
+        let candidate = dir.path().join(".git/candidate-index");
+        std::fs::copy(dir.path().join(".git/index"), &candidate).unwrap();
+        crate::test_support::write_files(
+            dir.path(),
+            &[("tools/opaque", "#!/usr/bin/env python3\nprint('hidden')\n")],
+        );
+        let mut command = crate::process::command("git");
+        command
+            .arg("-C")
+            .arg(dir.path())
+            .args(["add", "tools/opaque"])
+            .env("GIT_INDEX_FILE", &candidate);
+        assert_eq!(crate::process::query(command).unwrap().0, 0);
+        std::fs::write(dir.path().join("tools/opaque"), "ordinary data\n").unwrap();
+        crate::git::Git::with_index(dir.path(), &candidate, || {
+            assert_eq!(check_staged(dir.path()).unwrap().len(), 1);
+        })
+        .unwrap();
+        assert!(check_staged(dir.path()).unwrap().is_empty());
+    }
+
+    #[test]
     fn standalone_automation_extensions_fail() {
         for extension in [
             "ps1", "psm1", "psd1", "ps1xml", "py", "pyw", "sh", "bash", "zsh", "fish", "ksh",
