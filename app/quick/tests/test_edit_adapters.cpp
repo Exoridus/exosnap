@@ -1117,7 +1117,7 @@ TEST(EditImmediateTimelineActions, RemovingTimeAcrossTracksCommitsAndCanBeUndone
     EXPECT_EQ(session.durationUs(), 9'000'000);
 }
 
-TEST(EditCrossfadeAtCutAdapter, DropStagesSameValidatedCandidateWithoutChangingWorkspace) {
+TEST(EditCrossfadeAtCutAdapter, DroppingCrossfadeCommitsOnceAndUndoRestoresTheCut) {
     EnsureApplication();
     EditSessionAdapter session;
     session.setEditContext(MakeContext(10));
@@ -1125,12 +1125,15 @@ TEST(EditCrossfadeAtCutAdapter, DropStagesSameValidatedCandidateWithoutChangingW
     session.splitSelected();
     const auto before = session.workspace().snapshot();
     ASSERT_TRUE(session.dropCrossfadeUs(5'000'000, 0));
-    EXPECT_TRUE(session.dragActive());
-    EXPECT_TRUE(session.dragValid());
-    EXPECT_EQ(session.workspace().clips(), before->clips);
-    EXPECT_EQ(session.workspace().revision(), before->revision);
+    EXPECT_FALSE(session.dragActive());
+    EXPECT_EQ(session.workspace().revision(), before->revision + 1);
+    EXPECT_EQ(session.workspace().transitions().size(), 2U);
     EXPECT_EQ(session.workspace().duration(), 10'000'000);
-    session.cancelClipDrag();
+    session.undo();
+    EXPECT_EQ(session.workspace().clips(), before->clips);
+    EXPECT_EQ(session.workspace().transitions(), before->junctions);
+    session.redo();
+    EXPECT_EQ(session.workspace().transitions().size(), 2U);
 }
 
 TEST(EditRemoveOverlapAdapter, StructuralCandidatePreservesCommittedGeometryAndOriginalSelectionUntilCommit) {
