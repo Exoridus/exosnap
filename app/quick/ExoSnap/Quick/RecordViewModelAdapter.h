@@ -233,7 +233,7 @@ class RecordViewModelAdapter : public QObject {
     [[nodiscard]] const QVariantList& regionPresetOptions() const noexcept;
     [[nodiscard]] const QVariantList& recentRecordingOptions() const noexcept;
     static QString recordingIdentity(const QString& path);
-    QString pendingRecordingIdentity() const {
+    const QString& pendingRecordingIdentity() const {
         return pending_recording_identity_;
     }
     Q_INVOKABLE bool requestRecordingReveal(const QString& identity);
