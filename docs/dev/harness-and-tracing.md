@@ -113,6 +113,18 @@ Use a fresh output directory for a review package so retired scenarios from an o
 
 The run holds the build tree's lock, so a concurrent build cannot relink the binary mid-sweep. Scrolling and dialogs are applied only after the active page's loader is Ready, so the default four parallel jobs do not lose them to a slow page load.
 
+### Attaching screenshots to a pull request
+
+GitHub CLI 2.99 or newer supports image uploads through the repeatable `--attach` flag. Check `gh --version` before reporting that command-line uploads are unavailable. Upgrade an outdated installation or use a verified official portable release without changing the system installation.
+
+Reference the screenshots in `pr-body.md` with ordinary Markdown image links, such as `![Source picker, Dark, 1600x1000](screenshots/picker-dark.png)`. Paths in the body are relative to the body file's directory, with the working directory as a fallback. Attach those same files when updating the current branch's pull request:
+
+```powershell
+gh pr edit --body-file pr-body.md --attach screenshots/picker-dark.png --attach screenshots/picker-light.png
+```
+
+The CLI uploads the files and replaces their local Markdown paths with GitHub attachment URLs. Read the stored PR body back with `gh pr view --json body` and verify that every expected image uses a remote URL. Keep the original PNGs and capture manifest untracked. If upload fails, preserve any successful attachments and keep the PR in Draft until all required images are accessible. See [GitHub's attachment documentation](https://docs.github.com/en/github-cli/github-cli/attaching-files-with-github-cli) for supported formats and limits.
+
 ## Recording harness
 
 `--auto-record` runs the real coordinator inside the normal Quick frontend. `--auto-record-bare` requires it and uses a `QCoreApplication` without a QML engine, window or preview. The bare form measures recorder work without the competing GUI, not the complete user's experience.
