@@ -5361,8 +5361,8 @@ Ermittelte SHA-256: %2</translation>
     </message>
     <message>
         <location line="+1"/>
-        <source>Close Gap (preview)</source>
-        <translation>Lücke schließen (Vorschau)</translation>
+        <source>Close Gap</source>
+        <translation>Lücke schließen</translation>
     </message>
     <message>
         <location line="+5"/>
@@ -5526,8 +5526,8 @@ Ermittelte SHA-256: %2</translation>
     </message>
     <message>
         <location line="+9"/>
-        <source>Remove overlap (preview)</source>
-        <translation>Überlappung entfernen (Vorschau)</translation>
+        <source>Remove overlap</source>
+        <translation>Überlappung entfernen</translation>
     </message>
     <message>
         <location line="+40"/>
