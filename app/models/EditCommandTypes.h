@@ -384,6 +384,9 @@ struct PasteClips {
     Id active_track = 0;
     bool insert = false;
     bool auto_crossfade = true;
+    // Places every copy on the track it was copied from instead of mapping
+    // tracks relative to active_track; those tracks must still exist.
+    bool keep_tracks = false;
 };
 
 enum class EditErrorCode {

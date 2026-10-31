@@ -892,13 +892,13 @@ Item {
             testSession.appendAsset(testSession.media[0].id);
             const page = make({session: testSession, width: 1280, height: 800});
             const timeline = child(page, "editClipTimeline");
-            // Ctrl+D and Ctrl+E from the timeline hand focus back to it, so a
+            // D and Ctrl+E from the timeline hand focus back to it, so a
             // following Space reaches the transport instead of a rail button.
-            for (const key of [Qt.Key_D, Qt.Key_E]) {
+            for (const [key, modifiers] of [[Qt.Key_D, Qt.NoModifier], [Qt.Key_E, Qt.ControlModifier]]) {
                 timeline.forceActiveFocus(Qt.TabFocusReason);
-                keyClick(key, Qt.ControlModifier);
+                keyClick(key, modifiers);
                 tryCompare(page, "detailsOpen", true);
-                keyClick(key, Qt.ControlModifier);
+                keyClick(key, modifiers);
                 compare(page.detailsOpen, false);
                 tryVerify(() => timeline.activeFocus);
                 keyClick(Qt.Key_Space);
@@ -919,7 +919,7 @@ Item {
             page.toggleMedia();
             const browser = child(page, "editSourceBrowser");
             browser.forceActiveFocus(Qt.TabFocusReason);
-            keyClick(Qt.Key_D, Qt.ControlModifier);
+            keyClick(Qt.Key_D);
             tryCompare(page, "detailsOpen", true);
             page.toggleMedia();
             verify(!browser.visible);

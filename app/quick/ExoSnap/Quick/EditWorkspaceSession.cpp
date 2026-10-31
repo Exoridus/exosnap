@@ -9,10 +9,14 @@
 #include "models/EditTimelineModel.h"
 #include "models/EditWorkspace.h"
 
+#include <QClipboard>
+#include <QCoreApplication>
 #include <QElapsedTimer>
 #include <QFileInfo>
+#include <QGuiApplication>
 #include <QList>
 #include <QMetaObject>
+#include <QMimeData>
 #include <QObject>
 #include <QString>
 #include <QStringList>
@@ -503,6 +507,14 @@ bool EditSessionAdapter::copyClips() {
         return false;
     }
     clip_clipboard_ = copied;
+    // Owning the system clipboard lets a later Paste tell whether another
+    // application replaced it in the meantime. QCoreApplication-only hosts have
+    // no clipboard.
+    if (qobject_cast<QGuiApplication*>(QCoreApplication::instance())) {
+        auto* marker = new QMimeData;
+        marker->setData(QString::fromLatin1(kEditClipsMimeType), {});
+        QGuiApplication::clipboard()->setMimeData(marker);
+    }
     workspace_error_.clear();
     emit clipboardChanged();
     emit workspaceChanged();
@@ -515,16 +527,156 @@ bool EditSessionAdapter::cutClips() {
     return applyCommand(edit::LiftClips{selection_.clip_ids, false});
 }
 
+ClipboardPaste ResolveClipboardPaste(const QMimeData* system) {
+    if (!system || system->formats().isEmpty() || system->hasFormat(QString::fromLatin1(kEditClipsMimeType)))
+        return ClipboardPaste::Clips;
+    if (system->hasUrls())
+        return ClipboardPaste::Files;
+    if (system->hasImage())
+        return ClipboardPaste::Image;
+    return ClipboardPaste::Replaced;
+}
+
+bool EditSessionAdapter::pasteFromSystemClipboard(bool insert) {
+    const auto* system = qobject_cast<QGuiApplication*>(QCoreApplication::instance())
+                             ? QGuiApplication::clipboard()->mimeData()
+                             : nullptr;
+    switch (ResolveClipboardPaste(system)) {
+    case ClipboardPaste::Clips:
+        return previewPasteClipsUs(workspace_.playhead(), selection_.active_track, insert);
+    case ClipboardPaste::Files:
+        if (insert) {
+            refuseEdit(tr("Insert paste needs copied clips. Use Ctrl+V to add the copied files."));
+            return false;
+        }
+        if (!preflightPendingDraft())
+            return false;
+        importMediaBatchUs(system->urls(), true, workspace_.playhead());
+        return true;
+    case ClipboardPaste::Image:
+        refuseEdit(tr("Pasting images is not supported. Save the image as a file first."));
+        return false;
+    case ClipboardPaste::Replaced:
+        break;
+    }
+    refuseEdit(tr("The clipboard holds no clips or media files."));
+    return false;
+}
+
 bool EditSessionAdapter::previewPasteClipsUs(qint64 at, qulonglong track, bool insert) {
+    if (!clip_clipboard_) {
+        if (preflightPendingDraft())
+            refuseEdit(tr("Copy clips before pasting."));
+        return false;
+    }
+    return previewPaste(
+        edit::PasteClips{clip_clipboard_, at, track ? track : selection_.active_track, insert, autoCrossfade});
+}
+
+bool EditSessionAdapter::duplicateSelectedClips() {
+    if (!preflightPendingDraft())
+        return false;
+    if (selection_.mode != edit::SelectionMode::Clips || selection_.clip_ids.empty()) {
+        refuseEdit(tr("Select clips to duplicate."));
+        return false;
+    }
+    const auto snapshot = workspace_.snapshot();
+    const auto copied = edit::CopyClips(*snapshot, selection_.clip_ids);
+    if (!copied) {
+        refuseEdit(tr("The selected clips are unavailable for duplicating."));
+        return false;
+    }
+    edit::Time block_end = 0;
+    for (const auto& clip : snapshot->clips)
+        if (std::find(selection_.clip_ids.begin(), selection_.clip_ids.end(), clip.id) != selection_.clip_ids.end())
+            block_end = std::max(block_end, clip.end());
+    // Overlap would silently turn into transitions with neighbors, so occupied
+    // target time refuses instead.
+    for (const auto& copy : copied->clips)
+        for (const auto& clip : snapshot->clips)
+            if (clip.track == copy.track && clip.start < block_end + copy.end() &&
+                clip.end() > block_end + copy.start) {
+                refuseEdit(tr("The time after the selection is occupied. Make room before duplicating."));
+                return false;
+            }
+    const auto before = selection_;
+    if (!previewPaste(edit::PasteClips{copied, block_end, 0, false, false, true}) || !commitClipDrag())
+        return false;
+    undo_selection_ = UndoSelection{workspace_.revision(), before};
+    return true;
+}
+
+bool EditSessionAdapter::selectActiveTrackClips() {
+    if (!preflightPendingDraft())
+        return false;
+    const auto track = selection_.active_track;
+    if (!track) {
+        refuseEdit(tr("Select a track first."));
+        return false;
+    }
+    cancelRangeGesture();
+    selection_.clear();
+    for (const auto id : edit::OrderedClipIds(*workspace_.snapshot()))
+        if (workspace_.clip(id)->track == track)
+            selection_.clip_ids.push_back(id);
+    if (!selection_.clip_ids.empty()) {
+        selection_.mode = edit::SelectionMode::Clips;
+        selection_.primary_clip = selection_.anchor_clip = selection_.clip_ids.front();
+    }
+    workspace_.select(selection_.primary_clip);
+    publishSelection();
+    return true;
+}
+
+bool EditSessionAdapter::liftSelectedAndSelectNext() {
+    if (!preflightPendingDraft())
+        return false;
+    if (selection_.mode != edit::SelectionMode::Clips || selection_.clip_ids.empty()) {
+        deleteSelected(false);
+        return true;
+    }
+    const auto before = selection_;
+    const auto* primary =
+        workspace_.clip(selection_.primary_clip ? selection_.primary_clip : selection_.clip_ids.front());
+    if (!primary)
+        return false;
+    const auto track = primary->track;
+    edit::Time block_start = (std::numeric_limits<edit::Time>::max)();
+    edit::Time block_end = 0;
+    for (const auto id : selection_.clip_ids)
+        if (const auto* clip = workspace_.clip(id); clip && clip->track == track) {
+            block_start = std::min(block_start, clip->start);
+            block_end = std::max(block_end, clip->end());
+        }
+    if (!applyCommand(edit::LiftClips{selection_.clip_ids, linkedSelection}))
+        return false;
+    edit::Id next = 0;
+    edit::Id previous = 0;
+    for (const auto id : edit::OrderedClipIds(*workspace_.snapshot())) {
+        const auto* clip = workspace_.clip(id);
+        if (clip->track != track)
+            continue;
+        if (!next && clip->start >= block_start && clip->end() > block_end)
+            next = id;
+        else if (clip->start < block_start)
+            previous = id;
+    }
+    selection_.clear();
+    workspace_.select(0);
+    if (next || previous)
+        selectClipWithModifiers(next ? next : previous);
+    else
+        publishSelection();
+    undo_selection_ = UndoSelection{workspace_.revision(), before};
+    return true;
+}
+
+bool EditSessionAdapter::previewPaste(edit::PasteClips command) {
     if (!preflightPendingDraft())
         return false;
     cancelClipDrag();
     cancelRangeGesture();
-    if (!clip_clipboard_) {
-        refuseEdit(tr("Copy clips before pasting."));
-        return false;
-    }
-    for (const auto& asset : clip_clipboard_->assets)
+    for (const auto& asset : command.clipboard->assets)
         if (asset && sourceVerificationFailed(asset->id)) {
             refuseEdit(tr("The clipboard source is unavailable or changed. Relink it before pasting."));
             return false;
@@ -532,8 +684,7 @@ bool EditSessionAdapter::previewPasteClipsUs(qint64 at, qulonglong track, bool i
     drag_snapshot_ = workspace_.snapshot();
     drag_selection_ =
         GestureSelection{selection_, selected_transition_, selected_spacer_, selected_gap_track_, selected_gap_};
-    drag_command_ =
-        edit::PasteClips{clip_clipboard_, at, track ? track : selection_.active_track, insert, autoCrossfade};
+    drag_command_ = std::move(command);
     drag_preview_ = edit::PreviewEdit(*drag_snapshot_, *drag_command_);
     emit dragChanged();
     if (!drag_preview_.valid) {
@@ -1311,6 +1462,12 @@ bool EditSessionAdapter::executeTimelineAction(const QString& action) {
         clearEditRange();
     } else if (action == QStringLiteral("select-all")) {
         selectAllClips();
+    } else if (action == QStringLiteral("select-track")) {
+        return selectActiveTrackClips();
+    } else if (action == QStringLiteral("duplicate")) {
+        return duplicateSelectedClips();
+    } else if (action == QStringLiteral("lift-select-next")) {
+        return liftSelectedAndSelectNext();
     } else if (action == QStringLiteral("split")) {
         splitSelected();
     } else if (action == QStringLiteral("split-all")) {
@@ -1322,8 +1479,7 @@ bool EditSessionAdapter::executeTimelineAction(const QString& action) {
     } else if (action == QStringLiteral("cut")) {
         return cutClips();
     } else if (action == QStringLiteral("paste") || action == QStringLiteral("insert-paste")) {
-        return previewPasteClipsUs(workspace_.playhead(), selection_.active_track,
-                                   action == QStringLiteral("insert-paste"));
+        return pasteFromSystemClipboard(action == QStringLiteral("insert-paste"));
     } else if (action == QStringLiteral("undo")) {
         undo();
     } else if (action == QStringLiteral("redo")) {
@@ -2824,8 +2980,15 @@ void EditSessionAdapter::deleteSelected(bool ripple_delete) {
 void EditSessionAdapter::undo() {
     if (!preflightPendingDraft())
         return;
-    if (workspace_.undo())
-        publishWorkspace(true);
+    const auto restore = std::exchange(undo_selection_, std::nullopt);
+    const bool restores_selection = restore && restore->revision == workspace_.revision();
+    if (!workspace_.undo())
+        return;
+    if (restores_selection) {
+        selection_ = restore->selection;
+        workspace_.select(selection_.primary_clip);
+    }
+    publishWorkspace(true);
 }
 void EditSessionAdapter::redo() {
     if (!preflightPendingDraft())

@@ -92,7 +92,7 @@ FocusScope {
         } else if (!event.isAutoRepeat && event.modifiers === Qt.ControlModifier && event.key === Qt.Key_M) {
             root.toggleMedia(true);
             event.accepted = true;
-        } else if (!event.isAutoRepeat && event.modifiers === Qt.ControlModifier && event.key === Qt.Key_D) {
+        } else if (!event.isAutoRepeat && event.modifiers === Qt.NoModifier && event.key === Qt.Key_D) {
             root.toggleDetails(true);
             event.accepted = true;
         } else if (!event.isAutoRepeat && event.modifiers === Qt.ControlModifier && event.key === Qt.Key_E) {
@@ -233,7 +233,7 @@ FocusScope {
     }
     signal rightContextFocusRequested()
     // Keyboard close returns to whatever opened the panel, so Space keeps
-    // driving the transport after Ctrl+D or Ctrl+E from the timeline. Without a
+    // driving the transport after D or Ctrl+E from the timeline. Without a
     // usable invoker the context's rail button takes focus.
     function keyboardCloseTarget(context: string): Item {
         let invoker = root.detailsInvoker;
@@ -595,7 +595,7 @@ FocusScope {
                         id: detailsRail
                         objectName: "editDetailsAccess"
                         text: qsTr("Details")
-                        shortcutText: "Ctrl+D"
+                        shortcutText: "D"
                         glyph: ExoGlyph.Info
                         expanded: root.detailsOpen && root.rightContext === "details"
                         pinned: expanded && root.detailsPinned
@@ -936,10 +936,12 @@ FocusScope {
                     qsTr("Up / Down: Previous or next boundary"),
                     qsTr("I / O: Set range in or out; Alt+X: Clear range"),
                     qsTr("S / Ctrl+B: Split scope; Shift+S: Split all tracks; K: Auto-Key; Delete: Lift; Shift+Delete: Ripple delete"),
-                    qsTr("Ctrl+C / X / V: Copy, cut or paste clips; Ctrl+Shift+V: Insert paste"),
+                    qsTr("Ctrl+Delete: Lift and select the next clip"),
+                    qsTr("Ctrl+C / X / V: Copy, cut or paste clips or copied media files; Ctrl+Shift+V: Insert paste"),
+                    qsTr("Ctrl+D: Duplicate clips; Ctrl+A: Select all clips; Ctrl+Shift+A: Select the active track's clips"),
                     qsTr("Ctrl+Z / Ctrl+Y: Undo or redo"),
                     qsTr("Z: Fit selection; Shift+Z: Fit timeline; Backspace: Previous view"),
-                    qsTr("Ctrl+M / Ctrl+D / Ctrl+E: Media, Inspector or export")
+                    qsTr("Ctrl+M / D / Ctrl+E: Media, Details or export")
                 ]
                 Label {
                     required property string modelData

@@ -237,6 +237,67 @@ TestCase {
         keyClick(Qt.Key_Delete);
         compare(testSession.visibleClips(0, 100000).length, 2);
     }
+    function test_duplicate_track_selection_and_lift_next_from_keys() {
+        const strip = createTemporaryObject(timelineComponent, testCase, {session: testClipboardSession});
+        const session = strip.session;
+        const clips = () => session.visibleClipsUs(0, 1000000000);
+        const source = clips();
+        const before = source.length;
+        const first = source[0];
+        const blockEnd = Math.max(...source.filter(row => row.group === first.group || row.id === first.id)
+                                           .map(row => row.endUs));
+        try {
+            strip.forceActiveFocus();
+            session.clearSelection();
+            session.selectClip(first.id);
+            const selected = session.selectedClipIds.length;
+            verify(selected > 0);
+            const input = createTemporaryObject(textInputComponent, strip);
+            input.forceActiveFocus();
+            keyClick(Qt.Key_D, Qt.ControlModifier);
+            keyClick(Qt.Key_D);
+            compare(clips().length, before);
+            input.focus = false;
+            strip.forceActiveFocus();
+            for (let step = 1; step <= 3; ++step) {
+                keyClick(Qt.Key_D, Qt.ControlModifier);
+                compare(session.workspaceError, "");
+                compare(clips().length, before + selected * step);
+                compare(session.selectedClipIds.length, selected);
+                for (const row of clips())
+                    if (session.selectedClipIds.indexOf(row.id) >= 0)
+                        verify(row.startUs >= blockEnd * step);
+            }
+            keyClick(Qt.Key_Z, Qt.ControlModifier);
+            compare(clips().length, before + selected * 2);
+            compare(session.selectedClipIds.length, selected);
+            keyClick(Qt.Key_Z, Qt.ControlModifier);
+            compare(clips().length, before + selected);
+            session.clearSelection();
+            session.selectClip(first.id);
+            keyClick(Qt.Key_A, Qt.ControlModifier | Qt.ShiftModifier);
+            const track = session.activeTrack;
+            verify(session.selectedClipIds.length >= 2);
+            for (const row of clips())
+                compare(session.selectedClipIds.indexOf(row.id) >= 0, row.trackId === track);
+            session.clearSelection();
+            session.selectClip(first.id);
+            const position = session.positionUs;
+            keyClick(Qt.Key_Delete, Qt.ControlModifier);
+            compare(clips().length, before);
+            compare(session.positionUs, position);
+            compare(session.selectedClipIds.length, selected);
+            verify(session.selectedClipIds.indexOf(first.id) < 0);
+            keyClick(Qt.Key_Z, Qt.ControlModifier);
+            compare(clips().length, before + selected);
+            verify(session.selectedClipIds.indexOf(first.id) >= 0);
+        } finally {
+            session.cancelClipDrag();
+            while (clips().length > before && session.canUndo)
+                session.undo();
+            session.clearSelection();
+        }
+    }
     function test_io_boundaries_preserve_fractional_frame_microseconds() {
         make();
         keyClick(Qt.Key_Right);

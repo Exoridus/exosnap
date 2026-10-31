@@ -32,6 +32,7 @@
 #include <QJsonArray>
 #include <QJsonDocument>
 #include <QJsonObject>
+#include <QMimeData>
 #include <QPersistentModelIndex>
 #include <QPointer>
 #include <QQmlComponent>
@@ -194,6 +195,14 @@ TEST(EditTimelineKeys, RangeClipboardAndViewBindingsAreCentralAndRejectUnlistedC
     EXPECT_TRUE(ResolveTimelineKey(Qt::Key_L, Qt::ControlModifier | Qt::AltModifier, false).isEmpty());
     EXPECT_TRUE(ResolveTimelineKey(Qt::Key_L, Qt::ControlModifier, true).isEmpty());
     EXPECT_EQ(ResolveTimelineKey(Qt::Key_Right, Qt::NoModifier, true), QStringLiteral("frame-next"));
+    EXPECT_EQ(ResolveTimelineKey(Qt::Key_D, Qt::ControlModifier, false), QStringLiteral("duplicate"));
+    EXPECT_EQ(ResolveTimelineKey(Qt::Key_D, Qt::NoModifier, false), QStringLiteral("inspector-dock"));
+    EXPECT_EQ(ResolveTimelineKey(Qt::Key_A, Qt::ControlModifier | Qt::ShiftModifier, false),
+              QStringLiteral("select-track"));
+    EXPECT_EQ(ResolveTimelineKey(Qt::Key_Delete, Qt::ControlModifier, false), QStringLiteral("lift-select-next"));
+    EXPECT_TRUE(ResolveTimelineKey(Qt::Key_D, Qt::ControlModifier, true).isEmpty());
+    EXPECT_TRUE(ResolveTimelineKey(Qt::Key_Delete, Qt::ControlModifier, true).isEmpty());
+    EXPECT_TRUE(ResolveTimelineKey(Qt::Key_A, Qt::ControlModifier | Qt::AltModifier, false).isEmpty());
 }
 
 TEST(EditTimelineWheel, PixelDeltasOwnBothAxesExactlyOnce) {
@@ -2164,6 +2173,104 @@ TEST(EditClipboardAdapter, NonClipCopyKeepsClipboardAndPasteSelectsNewIdsWithout
     EXPECT_EQ(seeks, 0);
     session.undo();
     EXPECT_EQ(session.workspace().clips(), original);
+}
+
+TEST(EditClipboardAdapter, SystemClipboardChoosesClipsFilesImagesOrRefusesReplacedContent) {
+    EXPECT_EQ(ResolveClipboardPaste(nullptr), ClipboardPaste::Clips);
+    QMimeData empty;
+    EXPECT_EQ(ResolveClipboardPaste(&empty), ClipboardPaste::Clips);
+    QMimeData own;
+    own.setData(QString::fromLatin1(kEditClipsMimeType), {});
+    EXPECT_EQ(ResolveClipboardPaste(&own), ClipboardPaste::Clips);
+    QMimeData files;
+    files.setUrls({QUrl::fromLocalFile(QStringLiteral("C:/Videos/clip.mp4"))});
+    EXPECT_EQ(ResolveClipboardPaste(&files), ClipboardPaste::Files);
+    QMimeData image;
+    image.setData(QStringLiteral("application/x-qt-image"), QByteArray("pixels"));
+    EXPECT_EQ(ResolveClipboardPaste(&image), ClipboardPaste::Image);
+    QMimeData text;
+    text.setText(QStringLiteral("copied elsewhere"));
+    EXPECT_EQ(ResolveClipboardPaste(&text), ClipboardPaste::Replaced);
+}
+
+void AddVerifiedLinkedSource(EditSessionAdapter& session) {
+    engine::EditMediaMetadata metadata;
+    metadata.duration_us = 10'000'000;
+    metadata.fps_num = 60;
+    metadata.fps_den = 1;
+    metadata.has_audio = true;
+    metadata.content_identity_valid = true;
+    metadata.content_sha256.fill(29);
+    engine::EditSourceStream video;
+    video.kind = engine::TimelineStreamKind::Video;
+    video.container_index = 0;
+    video.fps_num = 60;
+    video.fps_den = 1;
+    engine::EditSourceStream audio;
+    audio.kind = engine::TimelineStreamKind::Audio;
+    audio.container_index = 1;
+    audio.codec.channels = 2;
+    metadata.streams = {video, audio};
+    session.addProbedMediaForHarness(QStringLiteral("duplicate-source.mkv"), metadata, true);
+}
+
+TEST(EditClipboardAdapter, DuplicatePlacesCopiesOnSourceTracksAndRefusesOccupiedOrLockedTargets) {
+    EnsureApplication();
+    EditSessionAdapter session;
+    AddVerifiedLinkedSource(session);
+    const auto original = session.workspace().clips();
+    ASSERT_EQ(original.size(), 2u);
+    session.selectClip(original.front().id);
+    ASSERT_EQ(session.selectedClipIds().size(), 2);
+    ASSERT_TRUE(session.duplicateSelectedClips());
+    EXPECT_FALSE(session.hasClipClipboard());
+    ASSERT_EQ(session.workspace().clips().size(), 4u);
+    const auto block_end = std::max(original.front().end(), original.back().end());
+    for (const auto& value : session.selectedClipIds()) {
+        const auto* copy = session.workspace().clip(value.toULongLong());
+        ASSERT_NE(copy, nullptr);
+        EXPECT_EQ(copy->start, block_end);
+        EXPECT_TRUE(std::any_of(original.begin(), original.end(), [&](const auto& clip) {
+            return clip.track == copy->track && clip.source_in == copy->source_in && clip.group != copy->group;
+        }));
+    }
+    const auto copies = session.selectedClipIds();
+    const auto revision = session.workspace().revision();
+    session.selectClip(original.front().id);
+    EXPECT_FALSE(session.duplicateSelectedClips());
+    EXPECT_FALSE(session.workspaceError().isEmpty());
+    EXPECT_EQ(session.workspace().revision(), revision);
+    ASSERT_TRUE(session.setTrackLocked(session.workspace().tracks().back().id, true));
+    session.selectClip(copies.front().toULongLong());
+    const auto locked_revision = session.workspace().revision();
+    EXPECT_FALSE(session.duplicateSelectedClips());
+    EXPECT_EQ(session.workspace().clips().size(), 4u);
+    EXPECT_EQ(session.workspace().revision(), locked_revision);
+    EXPECT_EQ(session.selectedClipIds(), copies);
+}
+
+TEST(EditClipboardAdapter, LiftAndSelectNextFallsBackToThePreviousClipAndUndoRestoresTheSelection) {
+    EnsureApplication();
+    EditSessionAdapter session;
+    AddVerifiedLinkedSource(session);
+    session.linkedSelection = false;
+    const auto first = session.workspace().clips().front().id;
+    session.clearSelection();
+    session.selectClip(first);
+    ASSERT_TRUE(session.duplicateSelectedClips());
+    const auto second = session.selectedClipIds().front().toULongLong();
+    ASSERT_TRUE(session.liftSelectedAndSelectNext());
+    ASSERT_EQ(session.selectedClipIds().size(), 1);
+    EXPECT_EQ(session.selectedClipIds().front().toULongLong(), first);
+    session.undo();
+    ASSERT_EQ(session.selectedClipIds().size(), 1);
+    EXPECT_EQ(session.selectedClipIds().front().toULongLong(), second);
+    session.selectClip(first);
+    ASSERT_TRUE(session.liftSelectedAndSelectNext());
+    EXPECT_EQ(session.selectedClipIds().front().toULongLong(), second);
+    session.selectClip(second);
+    ASSERT_TRUE(session.liftSelectedAndSelectNext());
+    EXPECT_TRUE(session.selectedClipIds().isEmpty());
 }
 
 TEST(EditTrackAudition, SoloIsAdditiveResidentAndAvailableOnLockedAudioTracks) {

@@ -2180,7 +2180,18 @@ class Workspace {
         const auto active_id = active ? active->id : Id{0};
         const auto active_kind = active ? active->type : leading_track->type;
         std::map<Id, Id> destination_tracks;
+        if (command.keep_tracks)
+            for (const auto id : used_tracks) {
+                const auto* track = mutableTrack(id);
+                if (!track || track->type != copied_track(id)->type) {
+                    fail(EditErrorCode::InvalidTarget, {id});
+                    return;
+                }
+                destination_tracks[id] = id;
+            }
         for (const auto kind : {TrackType::Video, TrackType::Audio}) {
+            if (command.keep_tracks)
+                break;
             std::vector<Id> original;
             std::vector<Id> destination;
             for (const auto& track : copied.tracks)
