@@ -1,3 +1,4 @@
+#include "EditGainEnvelope.h"
 #include "EditRenderText.h"
 #include "EditSessionAdapter.h"
 #include "EditTimelineModels.h"
@@ -378,6 +379,11 @@ bool EditSessionAdapter::applyTimeValue(qulonglong target, const QString& field,
             return refuse(tr("The edited transition is no longer available."));
         if (field == QStringLiteral("junctionCut"))
             return applyCommand(edit::SetHardCut{target, value});
+        if (field == QStringLiteral("junctionDuration") && value == 0) {
+            if (found->kind != edit::TransitionKind::Crossfade)
+                return refuse(tr("Use Remove overlap to convert an existing hard cut."));
+            return applyCommand(edit::RemoveOverlap{target, true});
+        }
         edit::Span span{found->in_us, found->out_us};
         if (field == QStringLiteral("junctionStart"))
             span.in_us = value;
@@ -889,6 +895,87 @@ bool EditSessionAdapter::setVideoInterpolation(qulonglong id, int property, int 
         edit::SetVideoKey{id, property, workspace_.playhead(), static_cast<engine::KeyInterpolation>(interpolation)});
 }
 
+bool EditSessionAdapter::addGainKey(qulonglong id, qint64 source_us) {
+    const auto* clip = workspace_.clip(id);
+    if (!clip)
+        return false;
+    return applyCommand(edit::SetGainKey{
+        id, source_us, engine::EvaluateGainChannel(clip->gain_envelope.channel, engine::AudioSampleIndex(source_us))});
+}
+
+bool EditSessionAdapter::removeGainKey(qulonglong id, qint64 source_us) {
+    return applyCommand(edit::SetGainKey{id, source_us, 0, source_us, true});
+}
+
+bool EditSessionAdapter::beginGainKeyDrag(qulonglong id, qint64 source_us) {
+    if (!preflightPendingDraft())
+        return false;
+    cancelClipDrag();
+    const auto* clip = workspace_.clip(id);
+    if (!clip)
+        return false;
+    drag_snapshot_ = workspace_.snapshot();
+    drag_clip_ = id;
+    drag_command_ = edit::SetGainKey{
+        id, source_us, engine::EvaluateGainChannel(clip->gain_envelope.channel, engine::AudioSampleIndex(source_us)),
+        source_us};
+    drag_preview_ = edit::PreviewEdit(*drag_snapshot_, *drag_command_);
+    emit dragChanged();
+    return dragValid();
+}
+
+void EditSessionAdapter::updateGainKeyDrag(qint64 source_us, double gain_db) {
+    if (!drag_snapshot_ || !drag_command_ || !std::holds_alternative<edit::SetGainKey>(*drag_command_))
+        return;
+    auto& command = std::get<edit::SetGainKey>(*drag_command_);
+    const auto original = std::find_if(drag_snapshot_->clips.begin(), drag_snapshot_->clips.end(),
+                                       [&](const auto& clip) { return clip.id == command.id; });
+    if (original == drag_snapshot_->clips.end() || !command.original_source_us)
+        return;
+    command.source_us = source_us;
+    double range_gain = 0;
+    for (const auto& range : original->gain_envelope.ranges)
+        range_gain += engine::EvaluateRangeGain(range, engine::AudioSampleIndex(source_us));
+    command.value = gain_db - original->gain_db - range_gain;
+    drag_preview_ = edit::PreviewEdit(*drag_snapshot_, *drag_command_);
+    emit dragChanged();
+}
+
+QVariantList EditSessionAdapter::gainCurve(qulonglong id, qint64 source_in_us, qint64 source_out_us,
+                                           int columns) const {
+    const auto* clip = workspace_.clip(id);
+    if (const auto* preview = renderPreview()) {
+        const auto found =
+            std::find_if(preview->clips.begin(), preview->clips.end(), [&](const auto& item) { return item.id == id; });
+        if (found != preview->clips.end())
+            clip = &*found;
+    }
+    if (!clip || source_in_us < 0 || source_out_us <= source_in_us || columns <= 0)
+        return {};
+    const auto first = engine::AudioSampleIndex(source_in_us), last = engine::AudioSampleIndex(source_out_us);
+    if (first >= last)
+        return {};
+    const auto count = std::clamp(columns, 2, 512);
+    std::set<int64_t> samples{first, last};
+    for (int i = 1; i < count; ++i)
+        samples.insert(first + ((last - first) / count) * i + (((last - first) % count) * i) / count);
+    for (const auto& key : clip->gain_envelope.channel.keys)
+        samples.insert(engine::AudioSampleIndex(key.source_us));
+    for (const auto& range : clip->gain_envelope.ranges)
+        for (const auto at : {range.in_sample, range.in_sample + range.ramp_samples,
+                              range.out_sample - range.ramp_samples, range.out_sample})
+            samples.insert(at);
+    QVariantList result;
+    for (const auto at : samples) {
+        if (at < first || at > last)
+            continue;
+        const auto db = clip->gain_db + engine::EvaluateGainEnvelope(clip->gain_envelope, at);
+        const auto y = db >= 0 ? 0.3 * (1 - db / 24) : 0.3 + 0.7 * (-db / 60);
+        result.push_back(QPointF(static_cast<double>(at - first) / static_cast<double>(last - first), y));
+    }
+    return result;
+}
+
 bool EditSessionAdapter::setClipGain(qulonglong id, double gain_db) {
     return applyCommand(edit::SetGain{edit::GainTarget::Clip, id, gain_db});
 }
@@ -1226,6 +1313,8 @@ bool EditSessionAdapter::executeTimelineAction(const QString& action) {
         selectAllClips();
     } else if (action == QStringLiteral("split")) {
         splitSelected();
+    } else if (action == QStringLiteral("split-all")) {
+        splitAllAtPlayhead();
     } else if (action == QStringLiteral("lift") || action == QStringLiteral("ripple-remove")) {
         deleteSelected(action == QStringLiteral("ripple-remove"));
     } else if (action == QStringLiteral("copy")) {
@@ -1792,6 +1881,23 @@ QVariantMap EditSessionAdapter::projectClipRow(const edit::Clip& clip) const {
         {QStringLiteral("sourceAspect"), source_aspect},
         {QStringLiteral("outputAspect"), output_aspect},
         {QStringLiteral("gainDb"), clip.gain_db},
+        {QStringLiteral("gainEnvelope"), QVariant::fromValue(clip.gain_envelope)},
+        {QStringLiteral("hasGainEnvelope"),
+         !clip.gain_envelope.channel.keys.empty() || !clip.gain_envelope.ranges.empty()},
+        {QStringLiteral("gainKeys"),
+         [&] {
+             QVariantList keys;
+             for (const auto& key : clip.gain_envelope.channel.keys)
+                 if (key.source_us >= clip.source_in && key.source_us < clip.source_out) {
+                     const auto db = clip.gain_db + engine::EvaluateGainEnvelope(
+                                                        clip.gain_envelope, engine::AudioSampleIndex(key.source_us));
+                     const auto y = db >= 0 ? 0.3 * (1 - db / 24) : 0.3 + 0.7 * (-db / 60);
+                     keys.push_back(
+                         QVariantMap{{QStringLiteral("sourceUs"), QVariant::fromValue<qint64>(key.source_us)},
+                                     {QStringLiteral("y"), y}});
+                 }
+             return keys;
+         }()},
         {QStringLiteral("enabled"), clip.enabled},
         {QStringLiteral("fadeInCurve"), static_cast<int>(clip.fade_in.curve.kind)},
         {QStringLiteral("fadeInBias"), clip.fade_in.curve.bias},
@@ -2621,36 +2727,48 @@ void EditSessionAdapter::trimClipUs(qulonglong id, qint64 in_us, qint64 out_us) 
 void EditSessionAdapter::splitSelected() {
     if (!preflightPendingDraft())
         return;
-    if (selection_.mode == edit::SelectionMode::Range && selection_.range) {
-        const auto range = *selection_.range;
-        applyCommand(edit::SplitRange{{range.start_us, range.end_us}, range.track_ids}, [this, range] {
-            selection_.clear();
-            const auto snapshot = workspace_.snapshot();
-            for (const auto id : edit::OrderedClipIds(*snapshot)) {
-                const auto* clip = workspace_.clip(id);
-                if (clip &&
-                    std::find(range.track_ids.begin(), range.track_ids.end(), clip->track) != range.track_ids.end() &&
-                    clip->start >= range.start_us && clip->end() <= range.end_us)
-                    selection_.clip_ids.push_back(id);
-            }
-            if (!selection_.clip_ids.empty()) {
-                selection_.mode = edit::SelectionMode::Clips;
-                selection_.primary_clip = selection_.anchor_clip = selection_.clip_ids.front();
-            }
-            workspace_.select(selection_.primary_clip);
-        });
-        return;
-    }
     auto targets = selection_.mode == edit::SelectionMode::Clips ? selection_.clip_ids : std::vector<edit::Id>{};
-    if (targets.empty())
+    std::vector<edit::Id> tracks;
+    if (targets.empty()) {
+        if (selection_.mode == edit::SelectionMode::Range && selection_.range)
+            tracks = selection_.range->track_ids;
+        else if (selection_.active_track)
+            tracks.push_back(selection_.active_track);
+        if (tracks.empty()) {
+            refuseEdit(tr(
+                "Select clips, a range track scope or an active track before splitting. Shift+S splits all tracks."));
+            return;
+        }
         for (const auto& clip : workspace_.clips())
-            if ((!selection_.active_track || clip.track == selection_.active_track) &&
+            if (std::find(tracks.begin(), tracks.end(), clip.track) != tracks.end() &&
                 clip.start < workspace_.playhead() && workspace_.playhead() < clip.end())
                 targets.push_back(clip.id);
-    if (!targets.empty())
-        applyCommand(edit::Split{targets, workspace_.playhead(), linkedSelection});
+        if (selection_.mode == edit::SelectionMode::Range && linkedSelection) {
+            const auto expanded = edit::ExpandClipTargetIds(workspace_.clips(), targets, true);
+            for (const auto id : expanded) {
+                const auto* clip = workspace_.clip(id);
+                if (clip && std::find(tracks.begin(), tracks.end(), clip->track) == tracks.end()) {
+                    refuseEdit(tr("Include linked tracks in the range scope before splitting."));
+                    return;
+                }
+            }
+        }
+    }
+    if (targets.empty()) {
+        refuseEdit(tr("No scoped clip crosses the playhead."));
+        return;
+    }
+    applyCommand(edit::Split{targets, workspace_.playhead(), linkedSelection});
 }
 
+void EditSessionAdapter::splitAllAtPlayhead() {
+    std::vector<edit::Id> targets;
+    for (const auto& clip : workspace_.clips())
+        if (clip.start < workspace_.playhead() && workspace_.playhead() < clip.end())
+            targets.push_back(clip.id);
+    if (!targets.empty())
+        applyCommand(edit::Split{targets, workspace_.playhead(), true});
+}
 void EditSessionAdapter::deleteSelected(bool ripple_delete) {
     if (!preflightPendingDraft())
         return;
@@ -3251,6 +3369,10 @@ QVariantList EditSessionAdapter::dragClips() const {
                         {QStringLiteral("sourceOutUs"), clip.source_out},
                         {QStringLiteral("endUs"), clip.end()},
                         {QStringLiteral("durationUs"), clip.duration()},
+                        {QStringLiteral("gainDb"), clip.gain_db},
+                        {QStringLiteral("gainEnvelope"), QVariant::fromValue(clip.gain_envelope)},
+                        {QStringLiteral("hasGainEnvelope"),
+                         !clip.gain_envelope.channel.keys.empty() || !clip.gain_envelope.ranges.empty()},
                         {QStringLiteral("fadeInUs"), clip.fade_in.duration_us},
                         {QStringLiteral("fadeOutUs"), clip.fade_out.duration_us},
                         {QStringLiteral("durationMs"), clip.duration() / 1000.0},

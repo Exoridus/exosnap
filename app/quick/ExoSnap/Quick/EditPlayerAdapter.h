@@ -281,6 +281,7 @@ class EditPlayerAdapter : public QObject {
     bool surface_visible_ = true;
     double volume_ = 1.0;
     std::optional<edit::Revision> timeline_revision_;
+    bool effect_preview_ = false;
     std::shared_ptr<const EditPlaybackSnapshot> published_snapshot_;
     std::set<edit::Id> unavailable_sources_;
     uint64_t timeline_monitoring_revision_ = 0;

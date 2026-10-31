@@ -250,6 +250,19 @@ class EditSessionAdapter : public QObject {
                    : nullptr;
     }
     Q_INVOKABLE bool setVideoTransform(qulonglong id, double x, double y, double scale, double rotation);
+    Q_INVOKABLE bool addGainKey(qulonglong id, qint64 source_us);
+    Q_INVOKABLE bool beginGainKeyDrag(qulonglong id, qint64 source_us);
+    Q_INVOKABLE void updateGainKeyDrag(qint64 source_us, double gain_db);
+    Q_INVOKABLE bool removeGainKey(qulonglong id, qint64 source_us);
+    Q_INVOKABLE QVariantList gainCurve(qulonglong id, qint64 source_in_us, qint64 source_out_us, int columns) const;
+    const edit::EditPreview* renderPreview() const {
+        return drag_command_ &&
+                       (std::holds_alternative<edit::SetVideoTransform>(*drag_command_) ||
+                        std::holds_alternative<edit::SetGainKey>(*drag_command_) || drag_gain_) &&
+                       dragValid()
+                   ? &drag_preview_
+                   : nullptr;
+    }
     Q_INVOKABLE bool setClipGain(qulonglong id, double gain_db);
     Q_INVOKABLE bool setClipGains(const QVariantList& ids, double gain_db);
     Q_INVOKABLE bool setTrackGain(qulonglong id, double gain_db);
@@ -496,6 +509,7 @@ class EditSessionAdapter : public QObject {
     Q_INVOKABLE void trimClip(qulonglong id, qint64 in_ms, qint64 out_ms);
     Q_INVOKABLE void trimClipUs(qulonglong id, qint64 in_us, qint64 out_us);
     Q_INVOKABLE void splitSelected();
+    Q_INVOKABLE void splitAllAtPlayhead();
     Q_INVOKABLE void deleteSelected(bool ripple_delete = false);
     Q_INVOKABLE void undo();
     Q_INVOKABLE void redo();

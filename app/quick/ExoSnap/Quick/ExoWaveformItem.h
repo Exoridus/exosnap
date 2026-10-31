@@ -1,10 +1,12 @@
 #pragma once
 
+#include "EditGainEnvelope.h"
 #include <QColor>
 #include <QObject>
 #include <QPointer>
 #include <QQuickItem>
 #include <QString>
+#include <QVariant>
 #include <QtQmlIntegration/qqmlintegration.h>
 
 #include <atomic>
@@ -44,6 +46,7 @@ class ExoWaveformItem : public QQuickItem {
     Q_PROPERTY(int channelCount READ channelCount WRITE setChannelCount NOTIFY channelCountChanged FINAL)
     Q_PROPERTY(QColor color READ color WRITE setColor NOTIFY colorChanged FINAL)
     Q_PROPERTY(qreal gainDb READ gainDb WRITE setGainDb NOTIFY gainDbChanged FINAL)
+    Q_PROPERTY(QVariant gainEnvelope READ gainEnvelope WRITE setGainEnvelope NOTIFY gainEnvelopeChanged FINAL)
 
   public:
     explicit ExoWaveformItem(QQuickItem* parent = nullptr);
@@ -75,6 +78,10 @@ class ExoWaveformItem : public QQuickItem {
         return gain_db_;
     }
     void setGainDb(qreal value);
+    QVariant gainEnvelope() const {
+        return QVariant::fromValue(gain_envelope_);
+    }
+    void setGainEnvelope(const QVariant& value);
 
     // Peak pyramid level used for the current geometry, or -1 for PCM detail
     // or an empty drawing. Exposed for tests.
@@ -89,6 +96,7 @@ class ExoWaveformItem : public QQuickItem {
     void channelCountChanged();
     void colorChanged();
     void gainDbChanged();
+    void gainEnvelopeChanged();
 
   protected:
     QSGNode* updatePaintNode(QSGNode* old_node, UpdatePaintNodeData* data) override;
@@ -110,6 +118,8 @@ class ExoWaveformItem : public QQuickItem {
     int channel_count_ = 2;
     QColor color_{Qt::white};
     qreal gain_db_ = 0;
+    engine::GainEnvelope gain_envelope_;
+    uint64_t envelope_revision_ = 0;
     std::atomic<int> last_level_{-1};
 };
 

@@ -572,7 +572,7 @@ TestCase {
         testSession.undo();
     }
     function test_content_drag_creates_range_without_authored_move() {
-        const strip = createTemporaryObject(timelineComponent, tests, {tool: "range"});
+        const strip = createTemporaryObject(timelineComponent, tests);
         verify(!!strip);
         strip.view.setVisibleInterval(0, 10000000);
         waitForRendering(strip);
@@ -613,9 +613,9 @@ TestCase {
             mouseRelease(clip, 60, 8, Qt.LeftButton);
         }
     }
-    function test_empty_lane_drag_creates_range_and_keeps_initial_seek() {
+    function test_empty_lane_drag_creates_range_and_preserves_playhead() {
         verify(testSession.applyTimeValue(0, "timelineEnd", 300000000));
-        const strip = createTemporaryObject(timelineComponent, tests, {tool: "range"});
+        const strip = createTemporaryObject(timelineComponent, tests);
         verify(!!strip);
         strip.view.setVisibleInterval(0, 300000000);
         waitForRendering(strip);
@@ -635,11 +635,11 @@ TestCase {
         }
         compare(testSession.selectionMode, EditSessionAdapter.RangeSelection);
     }
-    function test_select_tool_marquee_selects_touched_clips_without_history() {
+    function test_ctrl_marquee_selects_touched_clips_without_history() {
         verify(testSession.applyTimeValue(0, "timelineEnd", 300000000));
         const strip = createTemporaryObject(timelineComponent, tests);
         verify(!!strip);
-        compare(strip.tool, "select");
+
         strip.view.setVisibleInterval(0, 300000000);
         waitForRendering(strip);
         const scroll = findChild(strip, "editTimelineScroll");
@@ -649,7 +649,7 @@ TestCase {
         testSession.clearSelection();
         const undoable = testSession.canUndo;
         const position = testSession.positionUs;
-        mousePress(scroll, x, y, Qt.LeftButton);
+        mousePress(scroll, x, y, Qt.LeftButton, Qt.ControlModifier);
         mouseMove(scroll, strip.labelWidth + 4, y, 20);
         verify(marquee.visible);
         verify(!testSession.rangeGestureActive);
@@ -658,10 +658,10 @@ TestCase {
         keyClick(Qt.Key_Escape);
         verify(!marquee.visible);
         compare(testSession.selectedClipIds.length, 0);
-        mouseRelease(scroll, strip.labelWidth + 4, y, Qt.LeftButton);
-        mousePress(scroll, x, y, Qt.LeftButton);
+        mouseRelease(scroll, strip.labelWidth + 4, y, Qt.LeftButton, Qt.ControlModifier);
+        mousePress(scroll, x, y, Qt.LeftButton, Qt.ControlModifier);
         mouseMove(scroll, strip.labelWidth + 4, y, 20);
-        mouseRelease(scroll, strip.labelWidth + 4, y, Qt.LeftButton);
+        mouseRelease(scroll, strip.labelWidth + 4, y, Qt.LeftButton, Qt.ControlModifier);
         verify(!marquee.visible);
         verify(testSession.selectedClipIds.length > 0);
         compare(testSession.selectionMode, EditSessionAdapter.ClipSelection);
@@ -678,13 +678,61 @@ TestCase {
         const original = JSON.stringify(testSession.editRange);
         const scroll = findChild(strip, "editTimelineScroll");
         const y = strip.rulerHeight + 40;
-        mousePress(scroll, strip.labelWidth + 300, y, Qt.LeftButton);
+        mousePress(scroll, strip.labelWidth + 300, y, Qt.LeftButton, Qt.ControlModifier);
         mouseMove(scroll, strip.labelWidth + 4, y, 20);
         verify(findChild(strip, "editMarquee").visible);
         keyClick(Qt.Key_Escape);
         compare(testSession.selectionMode, EditSessionAdapter.RangeSelection);
         compare(JSON.stringify(testSession.editRange), original);
-        mouseRelease(scroll, strip.labelWidth + 4, y, Qt.LeftButton);
+        mouseRelease(scroll, strip.labelWidth + 4, y, Qt.LeftButton, Qt.ControlModifier);
+    }
+    function test_ctrl_content_marquee_preserves_clip_geometry() {
+        const strip = createTemporaryObject(timelineComponent, tests);
+        strip.view.setVisibleInterval(0, 10000000);
+        waitForRendering(strip);
+        const video = testSession.visibleClipsUs(0, 100000000).find(row => row.video);
+        const clip = findChild(strip, "editClip" + video.id);
+        const before = testSession.visibleClipsUs(0, 100000000).map(row => [row.id, row.startUs, row.sourceInUs, row.sourceOutUs]);
+        testSession.clearSelection();
+        mousePress(clip, 130, 40, Qt.LeftButton, Qt.ControlModifier);
+        mouseMove(clip, 220, 44, 20);
+        verify(findChild(strip, "editMarquee").visible);
+        verify(!testSession.dragActive);
+        verify(!testSession.rangeGestureActive);
+        mouseRelease(clip, 220, 44, Qt.LeftButton, Qt.ControlModifier);
+        verify(testSession.selectedClipIds.length > 0);
+        compare(testSession.visibleClipsUs(0, 100000000).map(row => [row.id, row.startUs, row.sourceInUs, row.sourceOutUs]), before);
+    }
+    function test_alt_content_range_stays_on_pressed_track() {
+        const strip = createTemporaryObject(timelineComponent, tests);
+        strip.view.setVisibleInterval(0, 10000000);
+        waitForRendering(strip);
+        const video = testSession.visibleClipsUs(0, 100000000).find(row => row.video);
+        const clip = findChild(strip, "editClip" + video.id);
+        const scroll = findChild(strip, "editTimelineScroll");
+        mousePress(clip, 100, 40, Qt.LeftButton, Qt.AltModifier);
+        mouseMove(scroll, strip.labelWidth + 220, strip.rulerHeight + 100, 20);
+        const scope = testSession.rangeGestureCandidate.trackIds;
+        compare(scope.length, 1);
+        compare(scope[0], video.trackId);
+        mouseRelease(scroll, strip.labelWidth + 220, strip.rulerHeight + 100, Qt.LeftButton, Qt.AltModifier);
+        compare(testSession.editRange.trackIds.length, 1);
+    }
+    function test_alt_gain_click_creates_point_without_unlink_or_split() {
+        const strip = createTemporaryObject(timelineComponent, tests);
+        strip.view.setVisibleInterval(0, 10000000);
+        waitForRendering(strip);
+        const audio = testSession.visibleClipsUs(0, 100000000).find(row => !row.video);
+        const clip = findChild(strip, "editClip" + audio.id);
+        const before = testSession.visibleClipsUs(0, 100000000).map(row => [row.id, row.startUs, row.sourceInUs, row.sourceOutUs, row.group]);
+        const y = strip.interaction.clipGainLineY(audio, clip.height, clip.trackBounds.headerHeight);
+        mouseClick(clip, 130, y, Qt.LeftButton, Qt.AltModifier);
+        const after = testSession.visibleClipsUs(0, 100000000).find(row => row.id === audio.id);
+        verify(after.gainKeys.length >= 2);
+        compare(testSession.visibleClipsUs(0, 100000000).length, 2);
+        compare(after.group, audio.group);
+        testSession.undo();
+        compare(testSession.visibleClipsUs(0, 100000000).map(row => [row.id, row.startUs, row.sourceInUs, row.sourceOutUs, row.group]), before);
     }
     function test_clear_cache_refreshes_unchanged_visible_media_data() {
         return [{tag: "video-combined", audio: false, combined: true},

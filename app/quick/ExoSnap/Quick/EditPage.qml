@@ -673,8 +673,6 @@ FocusScope {
                         anchors.leftMargin: 8
                         anchors.verticalCenter: parent.verticalCenter
                         spacing: 2
-                        EditActionButton { objectName: "editSelectTool"; text: qsTr("Selection tool"); shortcutText: "V"; glyph: ExoGlyph.Pointer; visible: root.width >= 1000; checkable: true; checked: clips.tool === "select"; onClicked: { clips.tool = "select"; checked = Qt.binding(() => clips.tool === "select"); } }
-                        EditActionButton { objectName: "editRangeTool"; text: qsTr("Range tool"); shortcutText: "R"; glyph: ExoGlyph.RangeTool; visible: root.width >= 1000; checkable: true; checked: clips.tool === "range"; onClicked: { clips.tool = "range"; checked = Qt.binding(() => clips.tool === "range"); } }
                         EditActionButton { objectName: "editUndo"; text: qsTr("Undo"); shortcutText: "Ctrl+Z"; glyph: ExoGlyph.Undo; enabled: root.session.canUndo; disabledReason: qsTr("There is no edit to undo."); onClicked: root.session.undo() }
                         EditActionButton { objectName: "editRedo"; text: qsTr("Redo"); shortcutText: "Ctrl+Y"; glyph: ExoGlyph.Redo; enabled: root.session.canRedo; disabledReason: qsTr("There is no edit to redo."); onClicked: root.session.redo() }
                         EditActionButton { objectName: "editSplit"; text: qsTr("Split"); shortcutText: "Ctrl+B"; glyph: ExoGlyph.Scissors; enabled: root.session.durationUs > 0; disabledReason: qsTr("The timeline is empty."); onClicked: root.session.splitSelected() }
@@ -757,8 +755,6 @@ FocusScope {
                             onClicked: editOverflow.popup()
                             ExoMenu {
                                 id: editOverflow
-                                EditingToggle { objectName: "editOverflowSelectTool"; text: qsTr("Selection tool"); visible: root.width < 1000; checked: clips.tool === "select"; onTriggered: clips.tool = "select" }
-                                EditingToggle { objectName: "editOverflowRangeTool"; text: qsTr("Range tool"); visible: root.width < 1000; checked: clips.tool === "range"; onTriggered: clips.tool = "range" }
                                 EditingToggle { text: qsTr("Snapping"); visible: root.width < 1100; checked: root.session.snapping; onTriggered: root.session.snapping = !root.session.snapping }
                                 EditingToggle { text: qsTr("Ripple"); visible: root.width < 1100; checked: root.session.ripple; onTriggered: root.session.ripple = !root.session.ripple }
                                 EditingToggle { text: qsTr("Auto Crossfade"); visible: root.width < 1100; checked: root.session.autoCrossfade; onTriggered: root.session.autoCrossfade = !root.session.autoCrossfade }
@@ -939,7 +935,7 @@ FocusScope {
                     qsTr("Left / Right: Step one frame; Alt: one sample; Shift: one second"),
                     qsTr("Up / Down: Previous or next boundary"),
                     qsTr("I / O: Set range in or out; Alt+X: Clear range"),
-                    qsTr("Ctrl+B: Split; Delete: Lift; Shift+Delete: Ripple delete"),
+                    qsTr("S / Ctrl+B: Split scope; Shift+S: Split all tracks; K: Auto-Key; Delete: Lift; Shift+Delete: Ripple delete"),
                     qsTr("Ctrl+C / X / V: Copy, cut or paste clips; Ctrl+Shift+V: Insert paste"),
                     qsTr("Ctrl+Z / Ctrl+Y: Undo or redo"),
                     qsTr("Z: Fit selection; Shift+Z: Fit timeline; Backspace: Previous view"),

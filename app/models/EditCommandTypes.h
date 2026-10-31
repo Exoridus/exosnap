@@ -3,6 +3,7 @@
 #include "RecordingMarker.h"
 #include <exosnap/engine/audio_media_manifest.h>
 #include <exosnap/engine/edit_automation.h>
+#include <exosnap/engine/edit_gain_envelope.h>
 #include <exosnap/engine/edit_types.h>
 
 #include <algorithm>
@@ -287,6 +288,7 @@ struct Clip {
     engine::PropertyChannel opacity_channel;
     engine::VideoTransform transform;
     engine::TransformChannels transform_channels;
+    engine::GainEnvelope gain_envelope;
     bool operator==(const Clip&) const = default;
 };
 
@@ -550,6 +552,13 @@ struct SetClipEnabled {
     bool enabled = true;
 };
 enum class GainTarget { Track, Clip };
+struct SetGainKey {
+    Id id = 0;
+    Time source_us = 0;
+    double value = 0;
+    std::optional<Time> original_source_us;
+    bool remove = false;
+};
 struct SetGain {
     GainTarget target = GainTarget::Clip;
     Id id = 0;
@@ -615,10 +624,10 @@ struct RemoveOverlap {
 using EditCommand =
     std::variant<AddAssetGroup, Split, LiftClips, RippleRemoveClips, LiftRange, RippleRemoveRange, KeepRange, Trim,
                  Move, CreateTrack, DeleteTrack, ReorderTrack, SetResultRange, Unlink, Relink, SetTrackEnabled,
-                 SetClipEnabled, SetGain, SetVideoKey, SetVideoTransform, SetClipOpacity, SetFade, SetJunctionWindow,
-                 SetJunctionCurve, SetAudioLaw, SetHardCut, CopyJunctionToLinked, SetTimelineEnd, AddSpacer, MoveSpacer,
-                 TrimSpacer, RemoveSpacer, CloseGap, SplitRange, AdjustRangeGain, RenameTrack, PasteClips,
-                 ReplaceAssetSource, CrossfadeAtCut, RemoveOverlap>;
+                 SetClipEnabled, SetGainKey, SetGain, SetVideoKey, SetVideoTransform, SetClipOpacity, SetFade,
+                 SetJunctionWindow, SetJunctionCurve, SetAudioLaw, SetHardCut, CopyJunctionToLinked, SetTimelineEnd,
+                 AddSpacer, MoveSpacer, TrimSpacer, RemoveSpacer, CloseGap, SplitRange, AdjustRangeGain, RenameTrack,
+                 PasteClips, ReplaceAssetSource, CrossfadeAtCut, RemoveOverlap>;
 
 struct EditSnapshot {
     Revision revision = 0;

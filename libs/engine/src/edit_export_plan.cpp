@@ -79,6 +79,7 @@ class PlanDigest {
 
 bool Effect(const TimelineClip& clip) {
     return clip.enabled != clip.original_enabled || clip.gain_db != 0 || clip.opacity != 1 ||
+           !clip.gain_envelope.channel.keys.empty() || !clip.gain_envelope.ranges.empty() ||
            !clip.opacity_channel.keys.empty() || clip.transform != VideoTransform{} ||
            std::any_of(clip.transform_channels.begin(), clip.transform_channels.end(),
                        [](const auto& channel) { return !channel.keys.empty(); }) ||
@@ -191,6 +192,19 @@ EditPlanHash Hash(const EditExportPlan& p) {
         h.number(c.original_enabled);
         h.real(c.gain_db);
         h.real(c.opacity);
+        h.number(c.gain_envelope.channel.keys.size());
+        for (const auto& key : c.gain_envelope.channel.keys) {
+            h.number(key.source_us);
+            h.real(key.value);
+            h.number(static_cast<uint64_t>(key.interpolation));
+        }
+        h.number(c.gain_envelope.ranges.size());
+        for (const auto& range : c.gain_envelope.ranges) {
+            h.number(range.in_sample);
+            h.number(range.out_sample);
+            h.number(range.ramp_samples);
+            h.real(range.delta_db);
+        }
         h.number(c.opacity_channel.keys.size());
         for (const auto& key : c.opacity_channel.keys) {
             h.number(key.source_us);
