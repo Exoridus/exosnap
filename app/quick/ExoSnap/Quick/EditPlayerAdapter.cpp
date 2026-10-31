@@ -509,6 +509,7 @@ void EditPlayerAdapter::attachPlayerItem(ExoEditPlayerItem* item) {
     connect(item, &ExoEditPlayerItem::framePresented, this, [this](qint64 time_us) {
         presented_time_us_ = time_us;
         seek_pending_ = false;
+        setPlaceholderText({});
         setPreviewState(Ready);
         emit previewChanged();
     });
@@ -600,6 +601,8 @@ void EditPlayerAdapter::setClipStateForTest(bool clip_open, qint64 duration_ms) 
 
 void EditPlayerAdapter::showStillForHarness(const QUrl& source, qint64 time_us, qint64 duration_ms) {
     setSession(nullptr);
+    // A queued close must not clear the synthetic monitoring rows.
+    request_generation_ = sink_->invalidate();
     harness_still_source_ = source;
     requested_time_us_ = time_us;
     presented_time_us_.reset();

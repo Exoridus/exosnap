@@ -23,9 +23,134 @@ Item {
         }
     }
 
+    Component {
+        id: pendingDraftComponent
+        QtObject {
+            property bool accept: true
+            property int commits: 0
+            function commitPendingDraft(): bool {
+                ++commits;
+                return accept;
+            }
+        }
+    }
+
     TestCase {
         name: "EditPage"
         when: windowShown
+
+        SignalSpy {
+            id: reviewEditSpy
+            target: testRecordingReview
+            signalName: "editRequested"
+        }
+
+        SignalSpy {
+            id: historyInsertSpy
+            target: testPageSession
+            signalName: "historyRequestedUs"
+        }
+
+        function test_recording_identity_survives_rename_but_not_replacement() {
+            const result = testEditHarness.recordingIdentityProbe();
+            compare(result.stable, true);
+            compare(result.replaced, true);
+            compare(result.missing, true);
+        }
+
+        function test_review_edit_requests_a_stable_recording_identity() {
+            verify(testEditHarness.prepareRecordingReview());
+            tryCompare(testRecordingReview.player, "clipOpen", true, 10000);
+            reviewEditSpy.clear();
+            testRecordingReview.requestEdit();
+            compare(reviewEditSpy.count, 1);
+            compare(typeof reviewEditSpy.signalArguments[0][0], "string");
+            verify(reviewEditSpy.signalArguments[0][0].length > 0);
+            testRecordingReview.close();
+        }
+
+        function test_review_reveal_preserves_existing_editor_work() {
+            historyInsertSpy.clear();
+            testEditHarness.seedReviewEditorWorkspace();
+            const identity = testEditHarness.prepareReviewHandoff();
+            verify(identity.length > 0);
+            const page = make();
+            const before = JSON.stringify(testEditHarness.reviewEditorCheckpoint());
+            verify(testPageSession.durationUs > 0);
+            verify(testPageRecordings.requestRecordingReveal(identity));
+            tryCompare(testPageRecordings, "pendingRecordingIdentity", "");
+            const browser = findChild(page, "editSourceBrowser");
+            verify(browser);
+            compare(browser.currentTab, 2);
+            const list = findChild(browser, "editSourceItems");
+            compare(testPageRecordings.recentRecordingOptions[list.currentIndex].identity, identity);
+            verify(list.contentY > 0, "the requested recording is scrolled into view");
+            compare(JSON.stringify(testEditHarness.reviewEditorCheckpoint()), before);
+            compare(testRecordingReview.active, false);
+            compare(historyInsertSpy.count, 0, "revealing a recording must not insert it");
+            list.currentItem.forceActiveFocus();
+            keyClick(Qt.Key_Return);
+            tryCompare(historyInsertSpy, "count", 1);
+            compare(historyInsertSpy.signalArguments[0][0], testPageRecordings.recentRecordingOptions[list.currentIndex].path);
+        }
+
+        function test_suspending_review_preserves_position_and_editor_selection() {
+            testEditHarness.seedReviewEditorWorkspace();
+            verify(testEditHarness.prepareReviewHandoff().length > 0);
+            tryCompare(testRecordingReview.player, "clipOpen", true, 10000);
+            testRecordingReview.session.requestSeek(700);
+            const page = make({mediaOpen: true});
+            const browser = findChild(page, "editSourceBrowser");
+            const list = findChild(browser, "editSourceItems");
+            list.currentIndex = 1;
+            const before = JSON.stringify(testEditHarness.reviewEditorCheckpoint());
+            {
+                testRecordingReview.suspend();
+                page.visible = false;
+                page.visible = true;
+                compare(testRecordingReview.active, true);
+                compare(testRecordingReview.session.positionMs, 700);
+                compare(testRecordingReview.player.playing, false);
+                compare(list.currentIndex, 1);
+                compare(JSON.stringify(testEditHarness.reviewEditorCheckpoint()), before);
+            }
+            testRecordingReview.close();
+        }
+
+        function test_missing_recording_does_not_close_review_or_change_editor() {
+            testEditHarness.seedReviewEditorWorkspace();
+            const identity = testEditHarness.prepareReviewHandoff();
+            verify(identity.length > 0);
+            const page = make({visible: false});
+            const before = JSON.stringify(testEditHarness.reviewEditorCheckpoint());
+            verify(testPageRecordings.requestRecordingReveal(identity));
+            testEditHarness.removeReviewedHistory();
+            page.visible = true;
+            tryCompare(testPageRecordings, "pendingRecordingIdentity", "");
+            compare(testRecordingReview.active, true);
+            verify(testRecordingReview.editError.length > 0);
+            compare(findChild(page, "editSourceItems").currentIndex, -1);
+            compare(JSON.stringify(testEditHarness.reviewEditorCheckpoint()), before);
+            testRecordingReview.close();
+        }
+
+        function test_reveal_does_not_preflight_editor_drafts_data() {
+            return [{tag: "valid", accept: true}, {tag: "invalid", accept: false}];
+        }
+
+        function test_reveal_does_not_preflight_editor_drafts(data) {
+            testEditHarness.seedReviewEditorWorkspace();
+            const identity = testEditHarness.prepareReviewHandoff();
+            const page = make();
+            const owner = createTemporaryObject(pendingDraftComponent, root, {accept: data.accept});
+            verify(owner);
+            testPageSession.setPendingDraftOwner(owner);
+            verify(testPageRecordings.requestRecordingReveal(identity));
+            tryCompare(testPageRecordings, "pendingRecordingIdentity", "");
+            compare(owner.commits, 0);
+            compare(testRecordingReview.active, false);
+            testPageSession.clearPendingDraftOwner(owner);
+        }
 
         function make(properties) {
             const page = createTemporaryObject(pageComponent, root, Object.assign({mediaPinPreferred: false, detailsPinPreferred: false}, properties || {}));
@@ -69,6 +194,7 @@ Item {
             compare(still.seekPending, false);
             compare(still.clipOpen, true);
             compare(still.playing, false);
+            compare(still.monitoringTrackCount, 1);
         }
 
         function test_pointer_panel_close_restores_timeline_transport_data() {
@@ -242,14 +368,22 @@ Item {
             verify(output.x + output.width <= header.width);
             verify(header.height >= 46);
             if (data.width >= 1000) compare(Math.round(transport.x + transport.width / 2), Math.round(header.width / 2));
-            const minimum = {editExport: 32, editMediaAccess: 32, editDetailsAccess: 32, editMixAccess: 32, editZoomOut: 26, editZoomIn: 26, editZoomFit: 26};
+            for (const railName of ["editLeftRail", "editRightRail"]) {
+                const rail = child(page, railName);
+                compare(rail.width, 40);
+                compare(rail.height, rail.parent.height);
+                compare(rail.radius, 0);
+                compare(rail.border.width, 0);
+                const railPosition = rail.mapToItem(page, 0, 0);
+                verify(railPosition.x >= 0 && railPosition.x + rail.width <= page.width);
+            }
             for (const name of ["editUndo", "editRedo", "editSplit", "editDelete", "editTransportPlay", "editVolume", "editExport", "editMediaAccess", "editDetailsAccess", "editMixAccess", "editSnapping", "editRipple", "editAutoCrossfade", "editLinkedSelection", "editZoomOut", "editZoomIn", "editZoomFit"]) {
                 const control = child(page, name);
                 if (!control.visible)
                     continue;
                 const p = control.mapToItem(page, 0, 0);
-                const size = minimum[name] ?? 34;
-                verify(control.width >= size && control.height >= Math.min(size, 32), name);
+                compare(control.width, 32, name);
+                compare(control.height, 32, name);
                 verify(p.x >= 0 && p.x + control.width <= page.width, name);
                 verify(p.y >= 0 && p.y + control.height <= page.height, name);
             }
@@ -889,7 +1023,9 @@ Item {
             compare(action.Accessible.name, data.label);
             compare(action.enabled, data.enabled);
             verify(action.glyph !== ExoGlyph.Invalid);
-            verify(action.width >= (data.rail ? 32 : 34) && action.height >= 32);
+            compare(action.width, 32);
+            compare(action.height, 32);
+            verify(action.availableWidth >= 18);
             verify(action.ToolTip.text.indexOf(data.label) >= 0);
             if (data.shortcut.length > 0)
                 verify(action.ToolTip.text.indexOf(data.shortcut) >= 0);

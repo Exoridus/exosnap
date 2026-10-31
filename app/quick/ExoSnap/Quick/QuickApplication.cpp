@@ -54,6 +54,7 @@
 #include <QGuiApplication>
 #include <QIcon>
 #include <QMetaObject>
+#include <QPainter>
 #include <QPixmap>
 #include <QPointer>
 #include <QProcess>
@@ -495,6 +496,8 @@ class QuickConsoleDisplayStateFilter final : public QAbstractNativeEventFilter {
 
 QuickApplication::~QuickApplication() {
     edit_export_adapter_.cancelAndWait();
+    recording_review_adapter_.close();
+    recording_review_adapter_.player()->setSession(nullptr);
     if (console_display_notify_ != nullptr) {
         UnregisterPowerSettingNotification(static_cast<HPOWERNOTIFY>(console_display_notify_));
         console_display_notify_ = nullptr;
@@ -1111,46 +1114,62 @@ void QuickApplication::initializeRecordWorkflow() {
     // Target stills for the source picker. The service runs only while the
     // picker reports visible cards, and the identities it is handed are resolved
     // here rather than in QML because the capture target is engine state.
-    QObject::connect(&record_view_model_adapter_, &RecordViewModelAdapter::visibleTargetIdentitiesChanged,
-                     &record_view_model_adapter_, [this](const QStringList& identities) {
-                         if (identities.isEmpty()) {
-                             target_still_service_.setVisibleTargets({});
-                             target_still_service_.stop();
-                             return;
-                         }
-                         // Built in the order QML listed them, which is the order the
-                         // cards are laid out in: the first pass after opening then
-                         // fills the grid top down instead of in target-list order.
-                         std::vector<CaptureTargetStillService::Request> requests;
-                         requests.reserve(static_cast<std::size_t>(identities.size()));
-                         for (const QString& identity : identities) {
-                             for (const exosnap::engine::CaptureTarget& target : record_view_model_.targets) {
-                                 if (record_view_model_adapter_.targetIdentity(target) != identity)
-                                     continue;
-                                 std::function<bool()> valid;
-                                 if (target.kind == engine::CaptureTarget::Kind::Window) {
-                                     const auto& facts = capture_target_notifier_.currentSnapshot().window_identities;
-                                     const auto witness =
-                                         std::find_if(facts.begin(), facts.end(), [&identity](const auto& entry) {
-                                             return entry.stableIdentity() == identity;
-                                         });
-                                     if (witness == facts.end())
-                                         continue;
-                                     valid = capture_target_notifier_.windowIdentityValidator(*witness);
-                                     if (!valid())
-                                         continue;
-                                 }
-                                 requests.push_back({identity, target, std::move(valid)});
-                                 break;
-                             }
-                         }
-                         const bool has_requests = !requests.empty();
-                         target_still_service_.setVisibleTargets(std::move(requests));
-                         if (has_requests)
-                             target_still_service_.start();
-                         else
-                             target_still_service_.stop();
-                     });
+    QObject::connect(
+        &record_view_model_adapter_, &RecordViewModelAdapter::visibleTargetIdentitiesChanged,
+        &record_view_model_adapter_, [this](const QStringList& identities) {
+            if (identities.isEmpty()) {
+                target_still_service_.setVisibleTargets({});
+                target_still_service_.stop();
+                return;
+            }
+            if (HarnessCaptureTargets()) {
+                for (const QString& identity : identities) {
+                    QImage image(480, 270, QImage::Format_RGB32);
+                    image.fill(QColor(32, 57, 76));
+                    QPainter painter(&image);
+                    painter.fillRect(16, 16, 448, 28, QColor(62, 100, 123));
+                    painter.fillRect(16, 60, 136, 194, QColor(43, 76, 94));
+                    painter.fillRect(168, 60, 296, 90, QColor(72, 125, 139));
+                    painter.setPen(Qt::white);
+                    painter.drawText(QRect(184, 166, 264, 72), Qt::AlignCenter, QStringLiteral("Synthetic preview"));
+                    painter.end();
+                    record_view_model_adapter_.setTargetStill(
+                        identity, target_still_provider_->submitStill(identity, std::move(image)));
+                }
+                return;
+            }
+            // Built in the order QML listed them, which is the order the
+            // cards are laid out in: the first pass after opening then
+            // fills the grid top down instead of in target-list order.
+            std::vector<CaptureTargetStillService::Request> requests;
+            requests.reserve(static_cast<std::size_t>(identities.size()));
+            for (const QString& identity : identities) {
+                for (const exosnap::engine::CaptureTarget& target : record_view_model_.targets) {
+                    if (record_view_model_adapter_.targetIdentity(target) != identity)
+                        continue;
+                    std::function<bool()> valid;
+                    if (target.kind == engine::CaptureTarget::Kind::Window) {
+                        const auto& facts = capture_target_notifier_.currentSnapshot().window_identities;
+                        const auto witness = std::find_if(facts.begin(), facts.end(), [&identity](const auto& entry) {
+                            return entry.stableIdentity() == identity;
+                        });
+                        if (witness == facts.end())
+                            continue;
+                        valid = capture_target_notifier_.windowIdentityValidator(*witness);
+                        if (!valid())
+                            continue;
+                    }
+                    requests.push_back({identity, target, std::move(valid)});
+                    break;
+                }
+            }
+            const bool has_requests = !requests.empty();
+            target_still_service_.setVisibleTargets(std::move(requests));
+            if (has_requests)
+                target_still_service_.start();
+            else
+                target_still_service_.stop();
+        });
     QObject::connect(&target_still_service_, &CaptureTargetStillService::stillReady, &record_view_model_adapter_,
                      [this](const QString& identity, const QImage& image) {
                          if (target_still_provider_ == nullptr || !record_view_model_adapter_.targetVisible(identity))
@@ -4405,6 +4424,23 @@ void QuickApplication::initializeEditArea() {
     edit_timeline_adapter_.setTileProvider(edit_tile_provider_);
     edit_timeline_adapter_.setSession(&edit_session_adapter_);
     edit_player_adapter_.setSession(&edit_session_adapter_);
+    recording_review_adapter_.session()->setBackgroundIoAdmission(recording_coordinator_->backgroundIoAdmission());
+    QObject::connect(&recording_review_adapter_, &RecordingReviewAdapter::editRequested, &record_view_model_adapter_,
+                     [this](const QString& identity) {
+                         recording_review_adapter_.suspend();
+                         if (!record_view_model_adapter_.requestRecordingReveal(identity)) {
+                             recording_review_adapter_.completeEditRequest(identity, false);
+                             return;
+                         }
+                         emit shell_adapter_.navigateToPageRequested(ShellAdapter::EditPage);
+                     });
+    QObject::connect(&record_view_model_adapter_, &RecordViewModelAdapter::recordingRevealFinished,
+                     &recording_review_adapter_, &RecordingReviewAdapter::completeEditRequest);
+    QObject::connect(&record_view_model_adapter_, &RecordViewModelAdapter::changed, &recording_review_adapter_, [this] {
+        if (record_view_model_adapter_.recording() || record_view_model_adapter_.preparing() ||
+            record_view_model_adapter_.finalizing())
+            recording_review_adapter_.close();
+    });
     edit_export_adapter_.setSession(&edit_session_adapter_);
     edit_session_adapter_.setBackgroundIoAdmission(recording_coordinator_->backgroundIoAdmission());
     QObject::connect(&settings_adapter_, &SettingsAdapter::clearMediaCachesRequested, &edit_timeline_adapter_, [this] {
@@ -5746,6 +5782,10 @@ void QuickApplication::requestElevatedRelaunch() {
 void QuickApplication::publishRecordingResultNotification(const UiRecordingResult& result) {
     notifications::NotificationEvent event;
     if (result.succeeded) {
+        recording_review_adapter_.open(
+            MakeEditContextForCurrentSession(record_view_model_.current_completed_recording,
+                                             QString::fromStdWString(record_view_model_.result_mkv_master_path),
+                                             peak_av_drift_ms_, av_drift_ever_available_, last_completed_snapshot_));
         event.type = notifications::NotificationType::Saved;
         event.title = QCoreApplication::translate("QuickApplication", "Recording saved");
         // The name, not the path. A full path is a single unbreakable token --
@@ -6301,10 +6341,11 @@ void QuickApplication::openEditorForCurrentRecording() {
         edit_session_adapter_.setEditContext(context);
         return;
     }
-    edit_session_adapter_.setEditContext(
+    edit_session_adapter_.setEditContextUs(
         MakeEditContextForCurrentSession(record_view_model_.current_completed_recording,
                                          QString::fromStdWString(record_view_model_.result_mkv_master_path),
-                                         peak_av_drift_ms_, av_drift_ever_available_, last_completed_snapshot_));
+                                         peak_av_drift_ms_, av_drift_ever_available_, last_completed_snapshot_),
+        -1, recording_review_adapter_.active() ? recording_review_adapter_.session()->positionMs() * 1000 : 0);
 }
 
 bool QuickApplication::canOpenEditorForCurrentRecording() const {
@@ -6362,6 +6403,7 @@ bool QuickApplication::load(bool no_activate) {
         {QStringLiteral("logsAdapter"), QVariant::fromValue(&logs_adapter_)},
         {QStringLiteral("editSession"), QVariant::fromValue(&edit_session_adapter_)},
         {QStringLiteral("editTimeline"), QVariant::fromValue(&edit_timeline_adapter_)},
+        {QStringLiteral("recordingReview"), QVariant::fromValue(&recording_review_adapter_)},
         {QStringLiteral("editPlayer"), QVariant::fromValue(&edit_player_adapter_)},
         {QStringLiteral("editExport"), QVariant::fromValue(&edit_export_adapter_)},
         {QStringLiteral("shell"), QVariant::fromValue(&shell_adapter_)},
@@ -7015,9 +7057,10 @@ bool QuickApplication::applyRecordVisualScenario(const QString& scenario) {
         // The Edit affordance is gated on the recording actually existing on
         // disk, so the scenario writes a placeholder rather than pretending. It
         // goes to a scratch directory, never to the user's output folder.
-        const QString fixture_directory =
-            QStandardPaths::writableLocation(QStandardPaths::TempLocation) + QStringLiteral("/exosnap-visual-fixtures");
-        QDir().mkpath(fixture_directory);
+        record_review_visual_directory_ = std::make_unique<QTemporaryDir>();
+        if (!record_review_visual_directory_->isValid())
+            return false;
+        const QString fixture_directory = record_review_visual_directory_->path();
         const QString fixture_path = fixture_directory + QStringLiteral("/2026-08-12_06-21-07_Desktop_Display 1.mkv");
         if (QFile fixture(fixture_path); fixture.open(QIODevice::WriteOnly))
             fixture.write("visual scenario placeholder");
@@ -7028,6 +7071,8 @@ bool QuickApplication::applyRecordVisualScenario(const QString& scenario) {
         record_view_model_.result_output_file_bytes = 462'000'000;
         record_view_model_.current_completed_recording.succeeded = true;
         record_view_model_.current_completed_recording.file_path = fixture_path;
+        record_view_model_.current_completed_recording.duration_seconds = 754.0;
+        record_view_model_.AddToRecentRecordings(record_view_model_.current_completed_recording);
         record_view_model_.elapsed_text = L"12:34";
         record_view_model_.elapsed_seconds = 754.0;
         record_view_model_.output_size_text = L"440.6 MB";
@@ -7082,6 +7127,32 @@ bool QuickApplication::applyRecordVisualScenario(const QString& scenario) {
     // under a scenario that called itself `recording`. A scenario that names a
     // state has to produce it everywhere the state is visible.
     synchronizeRecordState();
+    if (normalized == QLatin1String(visual::record_state::kCompleted)) {
+        const auto still_path = record_review_visual_directory_->filePath(QStringLiteral("review.png"));
+        const auto image = visual_tests::PaintEditSourceFrame(0, 1280, 720, 12'000'000);
+        if (!record_review_visual_directory_->isValid() || !image.save(still_path))
+            return false;
+        auto context = MakeEditContext(record_view_model_.current_completed_recording);
+        context.mkv_master_path = record_review_visual_directory_->filePath(QStringLiteral("Synthetic review.mkv"));
+        context.duration_seconds = 754.0;
+        context.resolution = QStringLiteral("1920x1080");
+        recording_review_adapter_.player()->setSession(nullptr);
+        recording_review_adapter_.open(context);
+        recording_review_adapter_.player()->showStillForHarness(QUrl::fromLocalFile(still_path), 12'000'000, 754'000);
+        recording_review_adapter_.session()->requestSeek(12'000);
+        recording_review_adapter_.setVolume(0.72);
+        recording_review_adapter_.player()->setMonitoringState({QVariantMap{{"id", "first"},
+                                                                            {"name", "Audio 1"},
+                                                                            {"sources", "Synthetic system audio"},
+                                                                            {"selected", true},
+                                                                            {"available", true}},
+                                                                QVariantMap{{"id", "second"},
+                                                                            {"name", "Audio 2"},
+                                                                            {"sources", "Synthetic microphone"},
+                                                                            {"selected", false},
+                                                                            {"available", true}}},
+                                                               false);
+    }
     return true;
 }
 

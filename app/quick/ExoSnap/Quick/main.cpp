@@ -1159,7 +1159,38 @@ int runNavigationLifecycleTest(QQuickWindow* window, exosnap::quick::QuickApplic
     if (!session->workspace().clips().empty())
         return failNavigationLifecycle("clearing the workspace retained clips");
 
-    shell->setProperty("currentPage", 0);
+    session->setEditContext(navigationTestEditContext());
+    if (session->workspace().clips().empty())
+        return failNavigationLifecycle("review navigation requires an existing editor timeline");
+    if (!invokeNavigateTo(shell, 0) || !waitForDestinationReady(shell, 0, 5000))
+        return failNavigationLifecycle("Record is unavailable for review navigation");
+    auto* record_page = findShellPage(window, "quickRecordPage");
+    auto* review = qobject_cast<exosnap::quick::RecordingReviewAdapter*>(
+        record_page->property("recordingReview").value<QObject*>());
+    if (!review)
+        return failNavigationLifecycle("Record has no review adapter");
+    review->open(navigationTestEditContext());
+    review->session()->requestSeek(1234);
+    const auto editor_revision = session->workspace().revision();
+    const auto editor_selection = session->selectedClipIds();
+    const auto editor_history = session->workspace().historyBytes();
+    for (const auto destination : {exosnap::quick::ShellAdapter::SettingsPage, exosnap::quick::ShellAdapter::EditPage,
+                                   exosnap::quick::ShellAdapter::DiagnosticsPage}) {
+        if (!invokeNavigateTo(shell, destination) || !waitForCurrentPage(shell, destination, 5000) ||
+            !waitForDestinationReady(shell, destination, 5000))
+            return failNavigationLifecycle("review navigation failed");
+        if (!review->active() || review->session()->positionMs() != 1234 || review->player()->playing())
+            return failNavigationLifecycle("navigation lost or resumed the review session");
+        if (session->workspace().revision() != editor_revision || session->selectedClipIds() != editor_selection ||
+            session->workspace().historyBytes() != editor_history)
+            return failNavigationLifecycle("normal navigation modified the editor workspace");
+        if (!invokeNavigateTo(shell, 0) || !waitForCurrentPage(shell, 0, 5000))
+            return failNavigationLifecycle("returning to the review failed");
+        if (!review->active() || review->session()->positionMs() != 1234 || review->player()->playing())
+            return failNavigationLifecycle("returning to Record replaced the paused review");
+    }
+    review->close();
+    session->close();
     return 0;
 }
 
@@ -1349,7 +1380,8 @@ int main(int argc, char* argv[]) {
     }
     const QString record_panel = qEnvironmentVariable("EXOSNAP_VISUAL_RECORD_PANEL");
     if (!visualOutputPath(arguments).isEmpty() && !record_panel.isEmpty() &&
-        !QStringList{QStringLiteral("overlay-menu"), QStringLiteral("gamepad"), QStringLiteral("gamepad-hidden")}
+        !QStringList{QStringLiteral("overlay-menu"), QStringLiteral("gamepad"), QStringLiteral("gamepad-hidden"),
+                     QStringLiteral("review-audio"), QStringLiteral("review-edit")}
              .contains(record_panel)) {
         reportStartupError(QStringLiteral("--visual-test: unknown recording panel %1").arg(record_panel));
         return 2;
@@ -1775,7 +1807,8 @@ int main(int argc, char* argv[]) {
             return true;
         const bool picker_popup = visual_popup == QLatin1String("source-picker") ||
                                   visual_popup == QLatin1String("source-picker-windows") ||
-                                  visual_popup == QLatin1String("source-picker-search");
+                                  visual_popup == QLatin1String("source-picker-search") ||
+                                  visual_popup == QLatin1String("source-picker-filters");
         if (picker_popup) {
             auto* page =
                 root_window != nullptr ? root_window->findChild<QObject*>(QStringLiteral("quickRecordPage")) : nullptr;
@@ -1786,10 +1819,13 @@ int main(int argc, char* argv[]) {
             if (picker == nullptr || !picker->property("visible").toBool())
                 return false;
             if (visual_popup != QLatin1String("source-picker"))
-                QMetaObject::invokeMethod(picker, "jumpToSection", Q_ARG(QString, QStringLiteral("window")));
+                QMetaObject::invokeMethod(picker, "selectTab", Q_ARG(int, 1));
             if (visual_popup == QLatin1String("source-picker-search"))
                 picker->setProperty("windowQuery", QStringLiteral("Task"));
-            return true;
+            if (visual_popup == QLatin1String("source-picker-filters"))
+                QMetaObject::invokeMethod(picker, "openWindowFilters");
+            bool ready = false;
+            return QMetaObject::invokeMethod(picker, "visibleThumbnailsReady", Q_RETURN_ARG(bool, ready)) && ready;
         }
         if (visual_popup == QLatin1String("notification-hub")) {
             auto* notifications = quick_application.notificationsAdapter();

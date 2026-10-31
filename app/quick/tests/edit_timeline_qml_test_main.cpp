@@ -17,6 +17,7 @@
 #include "ExoEditPlayerItem.h"
 #include "QuickThemeTokens.h"
 #include "RecordViewModelAdapter.h"
+#include "RecordingReviewAdapter.h"
 #include "ShellAdapter.h"
 
 #include "viewmodels/RecordViewModel.h"
@@ -40,6 +41,7 @@
 #include <QDropEvent>
 #include <QElapsedTimer>
 #include <QEventLoop>
+#include <QFile>
 #include <QKeyEvent>
 #include <QLocale>
 #include <QMap>
@@ -51,6 +53,7 @@
 #include <QQuickWindow>
 #include <QSemaphore>
 #include <QTemporaryDir>
+#include <QTemporaryFile>
 #include <QTranslator>
 #include <QUrl>
 #include <QtQuickTest>
@@ -2025,6 +2028,217 @@ class Setup final : public QObject {
     Q_OBJECT
 
   public slots:
+    bool prepareRecordingReviewVisual() {
+        const auto path = exosnap::quick::test::TransportAmbiguousFixture();
+        exosnap::engine::EditPlayerEngine decoder;
+        std::string error;
+        if (!review_ || path.isEmpty() ||
+            !decoder.OpenVideoStream(std::filesystem::path(path.toStdWString()), 0, error))
+            return false;
+        const auto frame = decoder.DecodeFrameAt(700'000);
+        if (!frame || !frame->bgra)
+            return false;
+        QImage image(frame->bgra.get(), static_cast<int>(frame->width), static_cast<int>(frame->height),
+                     static_cast<int>(frame->stride_bytes), QImage::Format_ARGB32);
+        if (!review_visual_directory_.isValid())
+            return false;
+        const auto still_path = review_visual_directory_.filePath(QStringLiteral("frame.png"));
+        if (!image.save(still_path, "PNG"))
+            return false;
+        auto context = FixtureContext();
+        context.duration_seconds = 2.0;
+        review_->open(context);
+        review_->player()->showStillForHarness(QUrl::fromLocalFile(still_path), 700'000, 2000);
+        // Close notifications must finish before the static monitoring rows are published.
+        QMetaObject::invokeMethod(
+            exosnap::quick::EditPlayerAdapterTestPeer::worker(*review_->player()), [] {}, Qt::BlockingQueuedConnection);
+        QCoreApplication::sendPostedEvents(review_->player(), QEvent::MetaCall);
+        review_->player()->setClipStateForTest(true, 2000);
+        review_->session()->requestSeek(700);
+        review_->setVolume(0.72);
+        review_->setMuted(false);
+        review_->player()->setMonitoringState({QVariantMap{{"id", "first"},
+                                                           {"name", "Audio 1"},
+                                                           {"sources", "Sources unknown"},
+                                                           {"selected", true},
+                                                           {"available", true}},
+                                               QVariantMap{{"id", "second"},
+                                                           {"name", "Audio 2"},
+                                                           {"sources", "Sources unknown"},
+                                                           {"selected", false},
+                                                           {"available", true}}},
+                                              false);
+        return true;
+    }
+
+    bool prepareRecordingReview() {
+        const auto path = exosnap::quick::test::TransportAmbiguousFixture();
+        if (!review_ || path.isEmpty())
+            return false;
+        auto context = FixtureContext();
+        context.mkv_master_path = path;
+        context.output_path = path;
+        context.duration_seconds = 2.0;
+        review_->setMuted(true);
+        review_->open(context);
+        review_->player()->setSurfaceVisible(true);
+        return true;
+    }
+
+    QString recordingReviewFixtureIdentity() const {
+        return exosnap::quick::RecordViewModelAdapter::recordingIdentity(
+            exosnap::quick::test::TransportAmbiguousFixture());
+    }
+
+    void setReviewPlaybackPlaying(bool playing) {
+        exosnap::quick::EditPlayerAdapterTestPeer::acknowledge(*transport_player_, playing);
+    }
+
+    QString prepareReviewHandoff() {
+        if (!page_recordings_ || !review_)
+            return {};
+        review_->close();
+        {
+            QFile source(exosnap::quick::test::TransportAmbiguousFixture());
+            QTemporaryFile output(review_visual_directory_.filePath(QStringLiteral("recording-XXXXXX.mkv")));
+            if (!source.open(QIODevice::ReadOnly) || !output.open())
+                return {};
+            const auto bytes = source.readAll();
+            if (output.write(bytes) != bytes.size() || !output.flush())
+                return {};
+            output.setAutoRemove(false);
+            reviewed_recording_path_ = output.fileName();
+            output.close();
+        }
+        record_view_model_.recent_recordings.clear();
+        for (int i = 0; i < 24; ++i) {
+            exosnap::CompletedRecording other;
+            other.file_path = review_visual_directory_.filePath(QStringLiteral("Other %1.mkv").arg(i));
+            record_view_model_.recent_recordings.push_back(other);
+        }
+        exosnap::CompletedRecording recording;
+        recording.file_path = reviewed_recording_path_;
+        recording.duration_seconds = 2.0;
+        recording.succeeded = true;
+        record_view_model_.recent_recordings.push_back(recording);
+        page_recordings_->synchronize();
+        auto context = FixtureContext();
+        context.output_path = reviewed_recording_path_;
+        context.mkv_master_path = reviewed_recording_path_;
+        context.duration_seconds = 2.0;
+        review_->setMuted(true);
+        review_->open(context);
+        return exosnap::quick::RecordViewModelAdapter::recordingIdentity(reviewed_recording_path_);
+    }
+
+    void removeReviewedHistory() {
+        record_view_model_.recent_recordings.clear();
+        page_recordings_->synchronize();
+    }
+
+    QVariantMap recordingIdentityProbe() {
+        QTemporaryDir directory;
+        const auto path = directory.filePath(QStringLiteral("recording.mkv"));
+        QFile original(path);
+        if (!original.open(QIODevice::WriteOnly) || original.write("first") != 5)
+            return {};
+        original.close();
+        const auto first = exosnap::quick::RecordViewModelAdapter::recordingIdentity(path);
+        if (!original.rename(directory.filePath(QStringLiteral("renamed.mkv"))))
+            return {};
+        const auto renamed = exosnap::quick::RecordViewModelAdapter::recordingIdentity(original.fileName());
+        QFile replacement(path);
+        if (!replacement.open(QIODevice::WriteOnly) || replacement.write("other") != 5)
+            return {};
+        replacement.close();
+        const auto second = exosnap::quick::RecordViewModelAdapter::recordingIdentity(path);
+        if (!replacement.remove())
+            return {};
+        return {{"stable", !first.isEmpty() && first == renamed},
+                {"replaced", !second.isEmpty() && first != second},
+                {"missing", exosnap::quick::RecordViewModelAdapter::recordingIdentity(path).isEmpty()}};
+    }
+
+    void seedReviewEditorWorkspace() {
+        page_session_->close();
+        page_session_->setEditContext(FixtureContext());
+        page_session_->setEditContext(FixtureContext());
+    }
+
+    QVariantMap reviewEditorCheckpoint() const {
+        return {{"revision", QVariant::fromValue<qulonglong>(page_session_->workspace().revision())},
+                {"historyBytes", QVariant::fromValue<qulonglong>(page_session_->workspace().historyBytes())},
+                {"duration", page_session_->durationUs()},
+                {"position", page_session_->positionUs()},
+                {"selected", page_session_->selectedClipIds()},
+                {"selectionMode", page_session_->selectionMode()},
+                {"undo", page_session_->canUndo()},
+                {"redo", page_session_->canRedo()},
+                {"media", page_session_->media()}};
+    }
+
+    QVariantMap reviewLifecycleProbe() {
+        exosnap::quick::RecordingReviewAdapter review;
+        auto context = FixtureContext();
+        const auto initial = session_->workspace().revision();
+        review.open(context);
+        const bool opened = review.active();
+        review.setVolume(0.72);
+        review.setMuted(true);
+        const bool silent = review.player()->volume() == 0.0 && review.volume() == 0.72;
+        review.setVolume(0.35);
+        const bool held = review.player()->volume() == 0.0;
+        review.setMuted(false);
+        const bool restored = review.player()->volume() == 0.35;
+        review.setVolume(2.0);
+        const bool clamped = review.volume() == 1.0;
+        review.player()->beginScrub();
+        review.close();
+        const bool scrubEnded = !review.player()->scrubbing();
+        EditSessionAdapter editor;
+        editor.setEditContextUs(context, -1, 700'000);
+        const bool positioned = editor.positionMs() == 700;
+        editor.setEditContextUs(context, -1, 300'000);
+        const bool appended = editor.positionMs() == 100'300;
+        EditSessionAdapter async_editor;
+        auto media_context = context;
+        media_context.mkv_master_path = exosnap::quick::test::TransportAmbiguousFixture();
+        media_context.output_path = media_context.mkv_master_path;
+        media_context.duration_seconds = 2.0;
+        async_editor.setEditContextUs(media_context, -1, 700'000);
+        async_editor.close();
+        async_editor.setEditContextUs(media_context, -1, 900'000);
+        QElapsedTimer deadline;
+        deadline.start();
+        while (async_editor.importPending() && deadline.elapsed() < 5000) {
+            QCoreApplication::processEvents(QEventLoop::AllEvents, 5);
+            QThread::msleep(1);
+        }
+        const bool async_positioned = !async_editor.importPending() && async_editor.positionMs() == 900;
+        const bool cancelled_import =
+            async_editor.durationMs() == 2000 && async_editor.workspace().assets().size() == 1;
+        EditPlayerAdapter failed_player;
+        exosnap::quick::ExoEditPlayerItem recovered_surface;
+        recovered_surface.setPlayerAdapter(&failed_player);
+        failed_player.applyPreviewStateForHarness(EditPlayerAdapter::Failed, QStringLiteral("Decode failed"));
+        emit recovered_surface.framePresented(0);
+        const bool recovered =
+            failed_player.previewState() == EditPlayerAdapter::Ready && failed_player.placeholderText().isEmpty();
+        return {{"opened", opened},
+                {"silent", silent},
+                {"held", held},
+                {"restored", restored},
+                {"clamped", clamped},
+                {"scrubEnded", scrubEnded},
+                {"positioned", positioned},
+                {"appended", appended},
+                {"recovered", recovered},
+                {"asyncPositioned", async_positioned},
+                {"cancelledImport", cancelled_import},
+                {"closed", !review.active() && !review.player()->surfaceVisible()},
+                {"residentUnchanged", session_->workspace().revision() == initial}};
+    }
+
     QVariantMap prepareSourceAudioChoice() {
         const auto fixture = exosnap::quick::test::TransportAmbiguousFixture();
         if (!page_session_ || fixture.isEmpty())
@@ -2083,9 +2297,14 @@ class Setup final : public QObject {
         bool states = true;
         bool reasons = true;
         bool silent = true;
+        bool fenced = true;
+        auto previous_generation = generation;
         for (const auto state : {EditPlayerAdapter::Opening, EditPlayerAdapter::Buffering, EditPlayerAdapter::Degraded,
                                  EditPlayerAdapter::Failed}) {
             player.showStillForHarness(image, 42'500'000, 160'000);
+            const auto current_generation = exosnap::quick::EditPlayerAdapterTestPeer::generation(player);
+            fenced = fenced && current_generation > previous_generation;
+            previous_generation = current_generation;
             const auto reason = QStringLiteral("Visual state %1").arg(state);
             player.applyPreviewStateForHarness(state, reason);
             states = states && player.previewState() == state;
@@ -2102,19 +2321,29 @@ class Setup final : public QObject {
                 {"retainedUnmeasuredStill", silent},
                 {"loop", player.loopEnabled() && region.value(QStringLiteral("startUs")).toLongLong() == 10'000'000 &&
                              region.value(QStringLiteral("endUs")).toLongLong() == 20'000'000},
-                {"noTransport", command == exosnap::quick::EditPlayerAdapterTestPeer::command(player) &&
-                                    generation == exosnap::quick::EditPlayerAdapterTestPeer::generation(player)}};
+                // The request generation is a stale-reply fence, not a transport command: every synthetic still
+                // must advance it so a queued close from an earlier open cannot clear the still's monitoring rows.
+                {"staleRepliesFenced", fenced},
+                {"noTransport",
+                 command == exosnap::quick::EditPlayerAdapterTestPeer::command(player) && !player.transportPending()}};
     }
     QVariantMap syntheticStillProbe() const {
+        EditSessionAdapter session;
         EditPlayerAdapter player;
+        player.setSession(&session);
         const QUrl image(QStringLiteral("file:///synthetic-visual-frame.png"));
         player.showStillForHarness(image, 42'500'000, 160'000);
+        player.setMonitoringState({QVariantMap{{"id", "synthetic"}, {"available", true}}}, false);
+        QMetaObject::invokeMethod(
+            exosnap::quick::EditPlayerAdapterTestPeer::worker(player), [] {}, Qt::BlockingQueuedConnection);
+        QCoreApplication::sendPostedEvents(&player, QEvent::MetaCall);
         return {{QStringLiteral("source"), player.harnessStillSource()},
                 {QStringLiteral("requestedTimeUs"), player.requestedTimeUs()},
                 {QStringLiteral("hasPresentedTime"), player.presentedTimeUs().isValid()},
                 {QStringLiteral("seekPending"), player.seekPending()},
                 {QStringLiteral("clipOpen"), player.clipOpen()},
-                {QStringLiteral("playing"), player.playing()}};
+                {QStringLiteral("playing"), player.playing()},
+                {QStringLiteral("monitoringTrackCount"), player.monitoringTracks().size()}};
     }
     bool dropAsset(QQuickItem* item, qulonglong asset, qreal x, qreal y) {
         QMimeData mime;
@@ -2195,6 +2424,8 @@ class Setup final : public QObject {
         return tokens->appearanceId() == appearance;
     }
     void applicationAvailable() {
+        if (qEnvironmentVariable("QSG_RHI_BACKEND") == QStringLiteral("d3d11"))
+            QQuickWindow::setGraphicsApi(QSGRendererInterface::Direct3D11);
         QCoreApplication::setApplicationName(QStringLiteral("edit-timeline-qml-tests"));
         QQuickStyle::setStyle(QStringLiteral("Basic"));
         if (qEnvironmentVariable("EXOSNAP_EDIT_VISUAL_LANGUAGE") == QStringLiteral("de")) {
@@ -2289,6 +2520,8 @@ class Setup final : public QObject {
         engine->rootContext()->setContextProperty(QStringLiteral("testTimeline"), timeline_);
         engine->rootContext()->setContextProperty(QStringLiteral("testPlayer"), player_);
         engine->rootContext()->setContextProperty(QStringLiteral("testTransportPlayer"), transport_player_);
+        review_ = new exosnap::quick::RecordingReviewAdapter(this);
+        engine->rootContext()->setContextProperty(QStringLiteral("testRecordingReview"), review_);
 
         auto* page_session = new EditSessionAdapter(this);
         page_session_ = page_session;
@@ -2299,6 +2532,9 @@ class Setup final : public QObject {
         page_exporter_ = page_exporter;
         engine->rootContext()->setContextProperty(QStringLiteral("testEditHarness"), this);
         auto* page_recordings = new exosnap::quick::RecordViewModelAdapter(&record_view_model_, this);
+        page_recordings_ = page_recordings;
+        QObject::connect(page_recordings, &exosnap::quick::RecordViewModelAdapter::recordingRevealFinished, review_,
+                         &exosnap::quick::RecordingReviewAdapter::completeEditRequest);
         page_exporter->setSession(page_session);
         engine->rootContext()->setContextProperty(QStringLiteral("testPageSession"), page_session);
         engine->rootContext()->setContextProperty(QStringLiteral("testPageTimeline"), page_timeline);
@@ -2311,7 +2547,11 @@ class Setup final : public QObject {
 
   private:
     QQmlEngine* visual_engine_ = nullptr;
+    exosnap::quick::RecordingReviewAdapter* review_ = nullptr;
+    QTemporaryDir review_visual_directory_;
     exosnap::RecordViewModel record_view_model_;
+    exosnap::quick::RecordViewModelAdapter* page_recordings_ = nullptr;
+    QString reviewed_recording_path_;
     EditSessionAdapter* session_ = nullptr;
     EditTimelineAdapter* timeline_ = nullptr;
     EditPlayerAdapter* player_ = nullptr;

@@ -155,7 +155,8 @@ void EditSessionAdapter::setEditContext(const EditContext& context, qint64 timel
     setEditContextUs(context, timeline_start_ms < 0 ? -1 : timeline_start_ms * 1000);
 }
 
-void EditSessionAdapter::setEditContextUs(const EditContext& context, qint64 timeline_start_us) {
+void EditSessionAdapter::setEditContextUs(const EditContext& context, qint64 timeline_start_us,
+                                          qint64 initial_position_us) {
     auto pending = context;
     if (pending.segments.empty())
         pending.segments.push_back({context.mkv_master_path.isEmpty() ? context.output_path : context.mkv_master_path,
@@ -169,8 +170,8 @@ void EditSessionAdapter::setEditContextUs(const EditContext& context, qint64 tim
         const auto session = import_session_;
         beginImport();
         const auto admission = background_io_;
-        metadata_pool_.start([self, pending = std::move(pending), timeline_start_us, needs_probe, cancelled, session,
-                              admission]() mutable {
+        metadata_pool_.start([self, pending = std::move(pending), timeline_start_us, initial_position_us, needs_probe,
+                              cancelled, session, admission]() mutable {
             std::vector<edit::SourceImport> imports(pending.segments.size());
             std::vector<SourcePublication> publications(pending.segments.size());
             for (size_t index = 0; index < pending.segments.size(); ++index) {
@@ -199,13 +200,14 @@ void EditSessionAdapter::setEditContextUs(const EditContext& context, qint64 tim
             if (self)
                 QMetaObject::invokeMethod(
                     self,
-                    [self, pending = std::move(pending), timeline_start_us, imports = std::move(imports),
-                     publications = std::move(publications), cancelled, session]() mutable {
+                    [self, pending = std::move(pending), timeline_start_us, initial_position_us,
+                     imports = std::move(imports), publications = std::move(publications), cancelled,
+                     session]() mutable {
                         if (!self)
                             return;
                         if (!cancelled->load(std::memory_order_relaxed) && session == self->import_session_)
-                            self->applyEditContextUs(pending, timeline_start_us, std::move(imports),
-                                                     std::move(publications));
+                            self->applyEditContextUs(pending, timeline_start_us, initial_position_us,
+                                                     std::move(imports), std::move(publications));
                         self->endImport();
                     },
                     Qt::QueuedConnection);
@@ -213,11 +215,11 @@ void EditSessionAdapter::setEditContextUs(const EditContext& context, qint64 tim
         emit editPageRequested();
         return;
     }
-    applyEditContextUs(pending, timeline_start_us, {});
+    applyEditContextUs(pending, timeline_start_us, initial_position_us, {});
 }
 
 void EditSessionAdapter::applyEditContextUs(const EditContext& context, qint64 timeline_start_us,
-                                            std::vector<edit::SourceImport> imports,
+                                            qint64 initial_position_us, std::vector<edit::SourceImport> imports,
                                             std::vector<SourcePublication> publications) {
     context_ = context;
     const auto previous_duration_us = workspace_.duration();
@@ -280,7 +282,8 @@ void EditSessionAdapter::applyEditContextUs(const EditContext& context, qint64 t
     if (std::any_of(segments.begin(), segments.end(),
                     [](const auto& segment) { return segment.duration_seconds <= 0; }))
         workspace_error_ = tr("Some segments have unknown duration. They remain in Media and cannot be placed yet.");
-    workspace_.seek(append_start);
+    const auto added_duration = std::max<qint64>(0, workspace_.duration() - append_start);
+    workspace_.seek(append_start + std::clamp<qint64>(initial_position_us, 0, added_duration));
     ++clip_generation_;
 
     const qint64 duration = workspace_.duration() / 1000;
@@ -625,7 +628,8 @@ void EditSessionAdapter::setAssetMonitorSelection(edit::Id asset, engine::Monito
     std::vector<engine::AudioTrackId> chosen;
     size_t requested = 0;
     const auto* source = workspace_.asset(asset);
-    const bool decide = source && source->mix_decision_required && source->source_descriptor;
+    const bool decide =
+        source && (source->mix_decision_required || monitoring_controls_input_mix_) && source->source_descriptor;
     if (decide && rangeScopeReviewActive()) {
         refuseEdit(tr("Apply or cancel the track scope review before continuing."));
         return;
@@ -655,7 +659,7 @@ void EditSessionAdapter::setAssetMonitorSelection(edit::Id asset, engine::Monito
     // A selection that names a stream this source does not have leaves the
     // decision open instead of resolving it to fewer streams than were chosen.
     if (decide && chosen.size() == requested)
-        workspace_.resolveInputMix(asset, chosen);
+        workspace_.resolveInputMix(asset, chosen, monitoring_controls_input_mix_);
     emit workspaceChanged();
 }
 

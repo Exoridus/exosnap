@@ -13,8 +13,10 @@ ExoButton {
     compact: true
     focusPolicy: Qt.TabFocus
     quiet: tone !== "primary"
-    implicitWidth: 36
+    implicitWidth: 32
     implicitHeight: 32
+    leftPadding: 0
+    rightPadding: 0
     Accessible.name: text
     Accessible.checkable: root.checkable
     Accessible.checked: root.checked

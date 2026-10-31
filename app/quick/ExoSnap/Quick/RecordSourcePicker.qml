@@ -38,7 +38,29 @@ Popup {
     readonly property var regionPresetRows: recordViewModel.regionPresetOptions
 
     readonly property var displayRows: recordViewModel.displayTargetOptions
-    readonly property var windowRows: recordViewModel.filteredWindowTargetOptions
+    property var sessionWindowOrder: []
+    readonly property var windowRows: {
+        const rows = root.recordViewModel.filteredWindowTargetOptions.slice();
+        return rows.sort((a, b) => {
+            const first = root.sessionWindowOrder.indexOf(a.identity);
+            const second = root.sessionWindowOrder.indexOf(b.identity);
+            return (first < 0 ? root.sessionWindowOrder.length : first) - (second < 0 ? root.sessionWindowOrder.length : second);
+        });
+    }
+    function updateWindowOrder(): void {
+        const order = root.sessionWindowOrder.slice();
+        for (const row of root.recordViewModel.windowTargetOptions)
+            if (!order.includes(row.identity))
+                order.push(row.identity);
+        root.sessionWindowOrder = order;
+    }
+    Connections {
+        target: root.recordViewModel
+        function onTargetOptionsChanged(): void {
+            root.updateWindowOrder();
+        }
+    }
+    property var tabStates: [null, null, null]
     readonly property int windowTotalCount: recordViewModel.windowTargetOptions.length
     readonly property int hiddenWindowCount: recordViewModel.hiddenWindowCount
     readonly property int windowSearchMatchCount: recordViewModel.pickerSearchMatchCount
@@ -68,16 +90,20 @@ Popup {
                     section: kind
                 });
         }
-        appendCards("display", root.displayRows, root.displayColumns);
-        appendCards("window", root.windowRows, root.windowColumns);
-        rows.push({
-            kind: "heading",
-            section: "region"
-        });
-        rows.push({
-            kind: "region",
-            section: "region"
-        });
+        if (root.currentTab === 0)
+            appendCards("display", root.displayRows, root.displayColumns);
+        else if (root.currentTab === 1)
+            appendCards("window", root.windowRows, root.windowColumns);
+        else {
+            rows.push({
+                kind: "heading",
+                section: "region"
+            });
+            rows.push({
+                kind: "region",
+                section: "region"
+            });
+        }
         return rows;
     }
 
@@ -85,14 +111,11 @@ Popup {
 
     // ── Responsive geometry ──────────────────────────────────────────────────
     //
-    // Columns follow the spec's formula: the smallest count whose cards can
-    // stay at the 320 px target, capped at 4. Card width is then clamped at
-    // 420 and the used grid width recomputed so the rows centre instead of the
-    // cards stretching. All of this works in logical QML pixels.
+    // Logical card sizes stay independent of source resolution and search count.
     readonly property int gridGap: ExoTheme.spacingLg
-    readonly property int contentPadding: ExoTheme.spacingXl
-    readonly property real minCardWidth: 320
-    readonly property real maxCardWidth: 420
+    readonly property int contentPadding: ExoTheme.spacingLg
+    readonly property real minCardWidth: 230
+    readonly property real maxCardWidth: 260
 
     // The safe area is the host page, mapped into the window's content item --
     // not the popup's own `parent`, whose overlay can still carry the transient
@@ -118,24 +141,24 @@ Popup {
         const count = Math.max(1, columns);
         if (count === 1)
             return Math.max(1, Math.min(root.maxCardWidth, availableWidth));
-        const perCard = Math.floor((Math.max(0, availableWidth) - count * root.gridGap) / count);
+        const perCard = Math.floor((Math.max(0, availableWidth) - (count - 1) * root.gridGap) / count);
         return Math.max(1, Math.min(root.maxCardWidth, perCard));
     }
 
-    // The card is a 16:9 media plate plus a fixed two-line title block and a
+    // The card is a 16:9 media plate plus a fixed title block and a
     // secondary line. Nothing about the source or its image can change a card's
     // height, so a row of cards always lines up.
     function cardHeightFor(cardWidth: real): real {
         const mediaHeight = Math.round(cardWidth * 9 / 16);
         const titleLine = Math.ceil(ExoTheme.fontBody * 1.3);
         const secondaryLine = Math.ceil(ExoTheme.fontCaption * 1.3);
-        return mediaHeight + ExoTheme.spacingMd + 2 * titleLine + ExoTheme.spacingXs + secondaryLine + ExoTheme.spacingMd;
+        return mediaHeight + ExoTheme.spacingMd + titleLine + ExoTheme.spacingXs + secondaryLine + ExoTheme.spacingMd;
     }
 
     parent: Overlay.overlay
-    padding: root.contentPadding
+    padding: 0
     width: Math.max(320, Math.min(1440, root.safeWidth - 2 * root.outerInset, Math.max(720, root.safeWidth * 0.8)))
-    height: Math.max(240, Math.min(root.safeHeight - 2 * root.outerInset, root.chromeHeight + root.naturalGridHeight))
+    height: Math.max(240, root.safeHeight - 2 * root.outerInset)
 
     // x/y are assigned imperatively rather than bound: a Popup positions itself
     // when it opens, and that internal write breaks a binding on them. The item
@@ -168,7 +191,7 @@ Popup {
     focus: true
     closePolicy: Popup.CloseOnEscape | Popup.CloseOnPressOutside
 
-    readonly property real gridContentWidth: Math.max(0, width - 2 * root.contentPadding)
+    readonly property real gridContentWidth: Math.max(0, width - root.contentPadding - sourceScrollBar.width - 10)
     readonly property int pickerColumns: root.columnsForWidth(root.gridContentWidth)
 
     // Fewer displays than the width would allow use fewer columns. Windows
@@ -183,8 +206,6 @@ Popup {
     readonly property real displaysCellHeight: root.displaysCardHeight + root.gridGap
     readonly property real windowsCellHeight: root.windowsCardHeight + root.gridGap
     // One card plus one gap is a row pitch; a grid on its own is one card tall.
-
-    readonly property real naturalGridHeight: 440
 
     // ── Pending identity contract ────────────────────────────────────────────
 
@@ -211,12 +232,12 @@ Popup {
     }
 
     readonly property var pendingRow: root.resolvePendingRow()
-    readonly property bool pendingMissing: root.pendingKind !== "" && root.pendingKind !== "region" && root.pendingRow === null
+    readonly property bool pendingMissing: root.pendingKind !== "" && root.pendingKind !== "region" && (root.pendingRow === null || root.pendingRow.available === false)
 
     readonly property bool confirmEnabled: {
         if (root.pendingKind === "region")
             return root.pendingPresetKey !== "";
-        return root.pendingKind !== "" && root.pendingRow !== null;
+        return root.pendingKind !== "" && root.pendingRow !== null && root.pendingRow.available !== false;
     }
 
     readonly property bool footerWarning: root.pendingMissing
@@ -239,7 +260,7 @@ Popup {
         }
         if (root.pendingKind === "")
             return qsTr("Select a display, window, or region.");
-        if (root.pendingRow === null)
+        if (root.pendingMissing)
             return qsTr("Selected source is no longer available.");
         return qsTr("Selected: %1").arg(root.targetPrimaryLabel(root.pendingRow));
     }
@@ -249,7 +270,7 @@ Popup {
     function publishVisibleTargets(): void {
         const identities = [];
         if (root.visible) {
-            const top = sourceList.contentY;
+            const top = sourceList.contentY - sourceList.originY;
             const bottom = top + sourceList.height;
             let offset = 0;
             for (const row of root.pickerRows) {
@@ -276,22 +297,89 @@ Popup {
         return row.section === "display" ? root.displaysCellHeight : root.windowsCellHeight;
     }
 
-    function jumpToSection(section: string): void {
+    function visibleThumbnailsReady(): bool {
+        const top = sourceList.contentY - sourceList.originY;
+        let y = 0;
+        for (const row of root.pickerRows) {
+            const height = root.pickerRowHeight(row);
+            if (row.kind === "cards" && y < top + sourceList.height && y + height > top) {
+                for (const target of row.cards) {
+                    const card = root.findPickerItem(sourceList.contentItem, "targetCard-" + target.identity);
+                    const image = (card ? root.findPickerItem(card, "targetThumbnailImage") : null) as Image;
+                    if (!image || image.status !== Image.Ready || image.paintedWidth <= 0 || image.paintedHeight <= 0)
+                        return false;
+                }
+            }
+            y += height;
+        }
+        return true;
+    }
+
+    function selectTab(index: int): void {
+        if (index === root.currentTab)
+            return;
+        const first = Math.max(0, sourceList.indexAt(1, sourceList.contentY + 1));
+        const item = sourceList.itemAtIndex(first);
+        const keys = [];
+        for (let i = first; i < root.pickerRows.length; ++i)
+            keys.push(...root.rowKeys(root.pickerRows[i]));
+        for (let i = first - 1; i >= 0; --i)
+            keys.push(...root.rowKeys(root.pickerRows[i]));
+        root.tabStates[root.currentTab] = {
+            keys: keys,
+            offset: item ? item.y - sourceList.contentY : 0,
+            identity: root.pendingIdentity,
+            kind: root.pendingKind,
+            targetIndex: root.pendingTargetIndex,
+            mode: root.pendingCaptureMode,
+            preset: root.pendingPresetKey
+        };
         ++root.viewportRevision;
         root.pendingViewport = null;
-        let index = 0;
-        for (const row of root.pickerRows) {
-            if (row.kind === "heading" && row.section === section) {
-                sourceList.positionViewAtIndex(index, ListView.Beginning);
-                visiblePublishDelay.restart();
-                return;
-            }
-            ++index;
+        root.currentTab = index;
+        ++root.viewportRevision;
+        root.pendingViewport = null;
+        const state = root.tabStates[index];
+        root.pendingIdentity = state ? state.identity : "";
+        root.pendingKind = state ? state.kind : "";
+        root.pendingTargetIndex = state ? state.targetIndex : -1;
+        root.pendingCaptureMode = state ? state.mode : index;
+        root.pendingPresetKey = state ? state.preset : "";
+        sourceList.forceLayout();
+        const positions = {};
+        for (let i = 0; i < root.pickerRows.length; ++i)
+            for (const key of root.rowKeys(root.pickerRows[i]))
+                positions[key] = i;
+        const anchor = state ? state.keys.find(key => positions[key] !== undefined) : undefined;
+        if (anchor !== undefined) {
+            sourceList.positionViewAtIndex(positions[anchor], ListView.Beginning);
+            sourceList.forceLayout();
+            const row = sourceList.itemAtIndex(positions[anchor]);
+            const end = sourceList.originY + Math.max(0, sourceList.contentHeight - sourceList.height);
+            if (row)
+                sourceList.contentY = Math.max(sourceList.originY, Math.min(row.y - state.offset, end));
+        } else {
+            sourceList.positionViewAtBeginning();
         }
+        visiblePublishDelay.restart();
     }
 
     function rowKeys(row: var): var {
         return row.kind === "cards" ? row.cards.map(card => card.identity).filter(identity => identity !== "") : [row.kind + ":" + row.section];
+    }
+
+    ListModel {
+        id: visibleRows
+    }
+
+    function setPickerRows(rows: var): void {
+        root.pickerRows = rows;
+        while (visibleRows.count > rows.length)
+            visibleRows.remove(visibleRows.count - 1);
+        while (visibleRows.count < rows.length)
+            visibleRows.append({
+                slot: visibleRows.count
+            });
     }
 
     function findPickerItem(item: Item, name: string): Item {
@@ -309,8 +397,13 @@ Popup {
         const next = root.incomingPickerRows;
         const previous = root.pickerRows;
         const sameLayout = previous.length === next.length && previous.every((row, index) => JSON.stringify(root.rowKeys(row)) === JSON.stringify(root.rowKeys(next[index])));
-        if (!root.opened || sameLayout) {
-            root.pickerRows = next;
+        const appended = previous.length <= next.length && previous.every((row, index) => {
+            const keys = root.rowKeys(row);
+            const nextKeys = root.rowKeys(next[index]);
+            return keys.every((key, i) => key === nextKeys[i]);
+        });
+        if (!root.opened || sameLayout || appended || sourceList.moving || sourceScrollBar.pressed) {
+            root.setPickerRows(next);
             return;
         }
         const revision = ++root.viewportRevision;
@@ -338,7 +431,12 @@ Popup {
                 keys.push(...root.rowKeys(previous[i]));
             if (focusedName.startsWith("targetCard-") || focusedName.startsWith("presetCard-"))
                 root.contentItem.forceActiveFocus(Qt.TabFocusReason);
-            viewport = {keys, offset, focusedName, focusOwner: window.activeFocusItem};
+            viewport = {
+                keys,
+                offset,
+                focusedName,
+                focusOwner: window.activeFocusItem
+            };
             root.pendingViewport = viewport;
         }
         const positions = {};
@@ -346,9 +444,9 @@ Popup {
             for (const key of root.rowKeys(next[i]))
                 positions[key] = i;
         const anchor = viewport.keys.find(key => positions[key] !== undefined);
-        root.pickerRows = next;
+        root.setPickerRows(next);
         Qt.callLater(() => {
-            if (!root.opened || root.viewportRevision !== revision)
+            if (!root.opened || root.viewportRevision !== revision || sourceList.moving || sourceScrollBar.pressed)
                 return;
             root.pendingViewport = null;
             if (window.activeFocusItem !== viewport.focusOwner)
@@ -404,7 +502,10 @@ Popup {
     onAboutToShow: {
         ++root.viewportRevision;
         root.pendingViewport = null;
-        root.currentTab = 0;
+        root.sessionWindowOrder = [];
+        root.updateWindowOrder();
+        root.tabStates = [null, null, null];
+        root.currentTab = root.recordViewModel.captureMode;
         sourceList.positionViewAtBeginning();
         root.windowQuery = "";
         root.recordViewModel.setWindowSearchQuery("");
@@ -422,6 +523,8 @@ Popup {
             if (rows[i].targetIndex === root.pendingTargetIndex) {
                 root.pendingIdentity = rows[i].identity;
                 root.pendingKind = rows[i].kind;
+                if (mode !== 2)
+                    root.currentTab = root.pendingKind === "window" ? 1 : 0;
                 break;
             }
         }
@@ -517,14 +620,20 @@ Popup {
             recordViewModel.hideWindowInstance(root.hideCandidate.identity);
     }
 
+    function openWindowFilters(): void {
+        filtersPopup.open();
+    }
+
     // The display a Region-tab rectangle anchors on: the display the user has
     // pending, else the one already capturing, else the first display.
     function regionAnchorRow(): var {
         const rows = recordViewModel.displayTargetOptions;
+        const displayState = root.tabStates[0];
+        const identity = root.currentTab === 2 && displayState ? displayState.identity : root.pendingIdentity;
         let fallback = null;
         for (let i = 0; i < rows.length; ++i) {
             const row = rows[i];
-            if (root.pendingIdentity !== "" && row.identity === root.pendingIdentity)
+            if (identity !== "" && row.identity === identity)
                 return row;
             if (fallback === null && row.targetIndex === recordViewModel.selectedTargetIndex)
                 fallback = row;
@@ -544,136 +653,83 @@ Popup {
 
         spacing: ExoTheme.spacingLg
 
-        Rectangle {
+        RowLayout {
             id: pickerHeader
-
             objectName: "pickerHeader"
             Layout.fillWidth: true
-            implicitHeight: headerFlow.implicitHeight + 2 * ExoTheme.spacingMd
-            color: ExoTheme.accentTint(ExoTheme.surfaceRaised, 0.05)
-            radius: ExoTheme.radiusSm
+            Layout.leftMargin: root.contentPadding
+            Layout.rightMargin: root.contentPadding
+            Layout.topMargin: root.contentPadding
+            Label {
+                objectName: "pickerTitle"
+                Layout.fillWidth: true
+                text: qsTr("Choose capture source")
+                color: ExoTheme.text
+                font.family: ExoTheme.sansFamily
+                font.pixelSize: ExoTheme.fontSectionTitle
+                font.weight: Font.DemiBold
+            }
+            ExoButton {
+                objectName: "pickerClose"
+                glyph: ExoGlyph.Close
+                text: qsTr("Close")
+                compact: true
+                quiet: true
+                onClicked: root.close()
+            }
+        }
+        GridLayout {
+            Layout.fillWidth: true
+            Layout.leftMargin: root.contentPadding
+            Layout.rightMargin: root.contentPadding
+            columns: width >= tabsControl.implicitWidth + 450 + ExoTheme.spacingLg ? 2 : 1
+            columnSpacing: ExoTheme.spacingLg
+            rowSpacing: ExoTheme.spacingMd
 
-            // A Flow rather than a Layout: when the safe width cannot hold the
-            // title and the tabs side by side, the tabs drop to a second line
-            // instead of squeezing the labels.
-            Flow {
-                id: headerFlow
+            ExoSegmentedControl {
+                id: tabsControl
+                objectName: "tabs"
+                options: [qsTr("Displays"), qsTr("Windows"), qsTr("Region")]
+                Accessible.name: qsTr("Source type")
+                currentIndex: root.currentTab
+                onSelected: index => root.selectTab(index)
+            }
+            RowLayout {
+                id: searchRow
 
-                readonly property bool stacked: width > 0 && titleBlock.width + tabsControl.width + 2 * ExoTheme.spacingMd > width
-
-                anchors {
-                    left: parent.left
-                    right: parent.right
-                    top: parent.top
-                    margins: ExoTheme.spacingMd
-                }
+                objectName: "windowSearchRow"
+                visible: root.currentTab === 1
+                Layout.fillWidth: true
+                Layout.minimumWidth: 360
                 spacing: ExoTheme.spacingMd
 
-                Item {
-                    id: titleBlock
+                ExoSearchField {
+                    id: windowSearchField
 
-                    width: Math.min(titleColumn.implicitWidth, headerFlow.width)
-                    height: titleColumn.implicitHeight
-
-                    Column {
-                        id: titleColumn
-
-                        width: titleBlock.width
-                        spacing: ExoTheme.spacingXs
-
-                        Label {
-                            objectName: "pickerTitle"
-                            width: parent.width
-                            text: qsTr("Choose capture source")
-                            textFormat: Text.PlainText
-                            elide: Text.ElideRight
-                            color: ExoTheme.text
-                            font.family: ExoTheme.sansFamily
-                            font.pixelSize: ExoTheme.fontSectionTitle
-                            font.weight: Font.DemiBold
-                        }
-
-                        Label {
-                            width: parent.width
-                            text: qsTr("Choose a display, window, or region.")
-                            textFormat: Text.PlainText
-                            elide: Text.ElideRight
-                            color: ExoTheme.textSecondary
-                            font.family: ExoTheme.sansFamily
-                            font.pixelSize: ExoTheme.fontSecondary
-                        }
-                    }
+                    objectName: "windowSearch"
+                    Layout.fillWidth: true
+                    Layout.minimumWidth: 180
+                    placeholderText: qsTr("Search windows...")
+                    onSearchEdited: query => root.windowQuery = query
                 }
 
-                Item {
-                    id: headerSpacer
-
-                    width: headerFlow.stacked ? 0 : Math.max(0, headerFlow.width - titleBlock.width - tabsControl.width - 2 * ExoTheme.spacingMd)
-                    height: 1
+                Label {
+                    objectName: "searchMatchCount"
+                    visible: searchRow.width >= 490
+                    text: qsTr("%1 search matches").arg(root.windowSearchMatchCount)
+                    color: ExoTheme.textSecondary
+                    font.family: ExoTheme.sansFamily
+                    font.pixelSize: ExoTheme.fontCaption
                 }
 
-                ExoSegmentedControl {
-                    id: tabsControl
-
-                    objectName: "tabs"
-                    options: [qsTr("Displays"), qsTr("Windows"), qsTr("Region")]
-                    Accessible.name: qsTr("Source type")
-                    currentIndex: root.currentTab
-                    onSelected: index => {
-                        root.currentTab = index;
-                        root.jumpToSection(index === 0 ? "display" : index === 1 ? "window" : "region");
-                    }
+                ExoButton {
+                    id: windowOptions
+                    objectName: "windowFiltersButton"
+                    text: qsTr("Window filters")
+                    quiet: true
+                    onClicked: filtersPopup.opened ? filtersPopup.close() : filtersPopup.open()
                 }
             }
-        }
-
-        RowLayout {
-            id: searchRow
-
-            objectName: "windowSearchRow"
-            Layout.fillWidth: true
-            spacing: ExoTheme.spacingMd
-
-            ExoSearchField {
-                id: windowSearchField
-
-                objectName: "windowSearch"
-                Layout.fillWidth: true
-                placeholderText: qsTr("Search windows...")
-                onSearchEdited: query => root.windowQuery = query
-            }
-
-            Label {
-                objectName: "searchMatchCount"
-                text: qsTr("%1 search matches").arg(root.windowSearchMatchCount)
-                color: ExoTheme.textSecondary
-                font.family: ExoTheme.sansFamily
-                font.pixelSize: ExoTheme.fontCaption
-            }
-
-            ExoCheckBox {
-                objectName: "showHiddenWindows"
-                text: qsTr("Show hidden (%1)").arg(root.hiddenWindowCount)
-                checked: root.recordViewModel.showHiddenWindows
-                onToggledByUser: value => root.recordViewModel.setShowHiddenWindows(value)
-            }
-
-            ExoButton {
-                objectName: "hiddenRulesButton"
-                text: qsTr("Hidden rules")
-                quiet: true
-                onClicked: rulesPopup.open()
-            }
-        }
-
-        Label {
-            Layout.fillWidth: true
-            text: qsTr("Hiding a window here does not hide it from a display recording.")
-            textFormat: Text.PlainText
-            wrapMode: Text.WordWrap
-            color: ExoTheme.textSecondary
-            font.family: ExoTheme.sansFamily
-            font.pixelSize: ExoTheme.fontCaption
         }
 
         Item {
@@ -682,22 +738,33 @@ Popup {
             Layout.fillWidth: true
             Layout.fillHeight: true
             Layout.minimumHeight: 0
-            Layout.preferredHeight: root.naturalGridHeight
-            implicitHeight: root.naturalGridHeight
 
             ListView {
                 id: sourceList
                 objectName: "sourceList"
                 anchors.fill: parent
+                anchors.leftMargin: root.contentPadding
+                anchors.rightMargin: 4
                 clip: true
+                // Software Shape nodes can escape ancestor clips unless rasterized together.
+                layer.enabled: GraphicsInfo.api === GraphicsInfo.Software
                 boundsBehavior: Flickable.StopAtBounds
                 // Replacing an array model resets the viewport and cancels an active flick.
-                model: root.pickerRows.length
+                model: visibleRows
                 onContentYChanged: visiblePublishDelay.restart()
                 onHeightChanged: visiblePublishDelay.restart()
                 onWidthChanged: visiblePublishDelay.restart()
+                onMovementStarted: {
+                    ++root.viewportRevision;
+                    root.pendingViewport = null;
+                }
                 ScrollBar.vertical: ExoScrollBar {
+                    id: sourceScrollBar
                     objectName: "sourceScrollBar"
+                    onPressedChanged: if (pressed) {
+                        ++root.viewportRevision;
+                        root.pendingViewport = null;
+                    }
                 }
 
                 delegate: Item {
@@ -707,7 +774,7 @@ Popup {
                         kind: "empty",
                         section: "window"
                     }
-                    width: sourceList.width
+                    width: root.gridContentWidth
                     height: root.pickerRowHeight(rowItem.modelData)
 
                     Label {
@@ -733,7 +800,10 @@ Popup {
                     }
 
                     Row {
-                        x: Math.round((parent.width - implicitWidth) / 2)
+                        readonly property int columns: rowItem.modelData.section === "window" ? root.windowColumns : root.displayColumns
+                        readonly property real cardWidth: rowItem.modelData.section === "window" ? root.windowsCardWidth : root.displaysCardWidth
+                        width: columns * cardWidth + (columns - 1) * root.gridGap
+                        x: Math.round((parent.width - width) / 2)
                         spacing: root.gridGap
                         visible: rowItem.modelData.kind === "cards"
                         Repeater {
@@ -796,6 +866,9 @@ Popup {
 
             objectName: "pickerFooter"
             Layout.fillWidth: true
+            Layout.leftMargin: root.contentPadding
+            Layout.rightMargin: root.contentPadding
+            Layout.bottomMargin: ExoTheme.spacingMd
             spacing: ExoTheme.spacingSm
 
             Label {
@@ -828,10 +901,53 @@ Popup {
         }
     }
 
-    readonly property real chromeHeight: root.contentPadding * 2 + pickerHeader.implicitHeight + searchRow.implicitHeight + ExoTheme.fontCaption * 2 + footerRow.implicitHeight + ExoTheme.spacingLg * 4
+    Popup {
+        id: filtersPopup
+        objectName: "windowFiltersPopup"
+        parent: windowOptions
+        x: parent.width - width
+        y: parent.height + ExoTheme.spacingXs
+        width: Math.min(360, root.availableWidth - 2 * root.contentPadding)
+        padding: ExoTheme.spacingMd
+        focus: true
+        closePolicy: Popup.CloseOnEscape | Popup.CloseOnPressOutside
+        background: Rectangle {
+            color: ExoTheme.surfaceRaised
+            border.color: ExoTheme.lineStrong
+            radius: ExoTheme.radiusSm
+        }
+        contentItem: ColumnLayout {
+            spacing: ExoTheme.spacingSm
+            ExoCheckBox {
+                objectName: "showHiddenWindows"
+                text: qsTr("Show hidden (%1)").arg(root.hiddenWindowCount)
+                checked: root.recordViewModel.showHiddenWindows
+                onToggledByUser: value => root.recordViewModel.setShowHiddenWindows(value)
+            }
+            ExoButton {
+                objectName: "hiddenRulesButton"
+                text: qsTr("Hidden rules")
+                quiet: true
+                onClicked: {
+                    filtersPopup.close();
+                    rulesPopup.open();
+                }
+            }
+            Label {
+                Layout.fillWidth: true
+                text: qsTr("Hiding a window here does not hide it from a display recording.")
+                textFormat: Text.PlainText
+                wrapMode: Text.WordWrap
+                color: ExoTheme.textSecondary
+                font.family: ExoTheme.sansFamily
+                font.pixelSize: ExoTheme.fontCaption
+            }
+        }
+    }
 
     Popup {
         id: rulesPopup
+        objectName: "hiddenRulesPopup"
         parent: Overlay.overlay
         modal: true
         focus: true
@@ -859,6 +975,7 @@ Popup {
                         delegate: RowLayout {
                             id: ruleRow
                             required property var modelData
+                            objectName: "hiddenRule-" + modelData.id
                             Layout.fillWidth: true
                             ExoCheckBox {
                                 checked: ruleRow.modelData.enabled
@@ -967,6 +1084,8 @@ Popup {
 
         readonly property int targetIndex: card.modelData.targetIndex
         readonly property string identity: card.modelData.identity
+        onIdentityChanged: if (card.activeFocus)
+            root.contentItem.forceActiveFocus(Qt.OtherFocusReason)
         readonly property string label: card.modelData.label
         readonly property string kind: card.modelData.kind
         readonly property string appName: card.modelData.appName
@@ -1072,13 +1191,33 @@ Popup {
             }
         }
 
-        ToolButton {
+        ExoButton {
+            id: windowMenuButton
             objectName: "windowHideOptions"
             visible: card.kind === "window"
-            text: "\u22ee"
-            Accessible.name: qsTr("Window hide options")
+            z: 1
+            text: qsTr("Window hide options")
+            glyph: ExoGlyph.Overflow
+            quiet: true
+            compact: true
+            contentItem: Item {
+                ExoGlyph {
+                    anchors.centerIn: parent
+                    width: 18
+                    height: 18
+                    kind: windowMenuButton.glyph
+                    color: ExoTheme.overlayInk
+                }
+            }
+            background: Rectangle {
+                radius: ExoTheme.radiusSm
+                color: windowMenuButton.hovered || windowMenuButton.down ? ExoTheme.overlaySurfaceRaised : ExoTheme.overlaySurface
+                border.width: windowMenuButton.visualFocus ? 2 : 0
+                border.color: ExoTheme.overlayAccent
+            }
             anchors.top: parent.top
             anchors.right: parent.right
+            anchors.margins: ExoTheme.spacingXs
             onClicked: {
                 root.hideCandidate = card.modelData;
                 hideMenu.popup();
@@ -1092,7 +1231,8 @@ Popup {
             anchors.top: parent.top
             anchors.left: parent.left
             anchors.right: parent.right
-            height: Math.round(card.width * 9 / 16)
+            anchors.margins: 2
+            height: Math.round(card.width * 9 / 16) - 2
             color: ExoTheme.overlaySurface
             border.width: 0
             radius: ExoTheme.radiusSm
@@ -1111,6 +1251,33 @@ Popup {
                 asynchronous: true
                 retainWhileLoading: true
                 sourceSize: Qt.size(width, height)
+            }
+
+            Canvas {
+                anchors.fill: parent
+                readonly property color maskColor: card.color
+                onMaskColorChanged: requestPaint()
+                onWidthChanged: requestPaint()
+                onHeightChanged: requestPaint()
+                // Shader masks are unavailable in the software renderer.
+                onPaint: {
+                    const context = getContext("2d");
+                    context.reset();
+                    context.fillStyle = maskColor;
+                    const radius = thumbnail.radius;
+                    for (let corner = 0; corner < 4; ++corner) {
+                        context.save();
+                        context.translate(corner % 2 ? width : 0, corner >= 2 ? height : 0);
+                        context.scale(corner % 2 ? -1 : 1, corner >= 2 ? -1 : 1);
+                        context.beginPath();
+                        context.moveTo(0, 0);
+                        context.lineTo(radius, 0);
+                        context.arc(radius, radius, radius, -Math.PI / 2, -Math.PI, true);
+                        context.closePath();
+                        context.fill();
+                        context.restore();
+                    }
+                }
             }
 
             ExoGlyph {
@@ -1137,19 +1304,6 @@ Popup {
                 font.family: ExoTheme.sansFamily
                 font.pixelSize: ExoTheme.fontCaption
             }
-
-            ExoGlyph {
-                anchors {
-                    top: parent.top
-                    right: parent.right
-                    margins: ExoTheme.spacingXs
-                }
-                kind: ExoGlyph.Check
-                visible: card.pending
-                color: ExoTheme.accent
-                width: 16
-                height: 16
-            }
         }
 
         Item {
@@ -1175,7 +1329,7 @@ Popup {
                     text: card.primaryLabel
                     textFormat: Text.PlainText
                     wrapMode: Text.Wrap
-                    maximumLineCount: 2
+                    maximumLineCount: 1
                     elide: Text.ElideRight
                     color: ExoTheme.text
                     font.family: ExoTheme.sansFamily

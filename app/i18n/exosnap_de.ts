@@ -90,7 +90,7 @@
 <context>
     <name>AppShell</name>
     <message>
-        <location filename="../quick/ExoSnap/Quick/AppShell.qml" line="+257"/>
+        <location filename="../quick/ExoSnap/Quick/AppShell.qml" line="+258"/>
         <source>Record</source>
         <translation>Aufnehmen</translation>
     </message>
@@ -4633,7 +4633,7 @@ Das Original kann danach nicht wiederhergestellt werden.</translation>
     </message>
     <message>
         <location line="+21"/>
-        <location filename="../quick/ExoSnap/Quick/EditPlayerAdapter.cpp" line="+626"/>
+        <location filename="../quick/ExoSnap/Quick/EditPlayerAdapter.cpp" line="+627"/>
         <source>Preview pending</source>
         <translation>Vorschau ausstehend</translation>
     </message>
@@ -4646,20 +4646,20 @@ Das Original kann danach nicht wiederhergestellt werden.</translation>
 <context>
     <name>EditPlayerAdapter</name>
     <message>
-        <location filename="../quick/ExoSnap/Quick/EditPlayerAdapter.cpp" line="-491"/>
+        <location filename="../quick/ExoSnap/Quick/EditPlayerAdapter.cpp" line="-492"/>
         <location line="+31"/>
-        <location line="+462"/>
+        <location line="+463"/>
         <location line="+175"/>
         <source>Preview unavailable</source>
         <translation>Vorschau nicht verfügbar</translation>
     </message>
     <message>
-        <location line="-396"/>
+        <location line="-397"/>
         <source>Select a nonempty time range first.</source>
         <translation>Wählen Sie zuerst einen nicht leeren Zeitbereich aus.</translation>
     </message>
     <message>
-        <location line="+253"/>
+        <location line="+254"/>
         <source>The timeline is empty.</source>
         <translation>Die Zeitleiste ist leer.</translation>
     </message>
@@ -4880,7 +4880,7 @@ Das Original kann danach nicht wiederhergestellt werden.</translation>
 <context>
     <name>EditSessionAdapter</name>
     <message>
-        <location filename="../quick/ExoSnap/Quick/EditSessionAdapter.cpp" line="+674"/>
+        <location filename="../quick/ExoSnap/Quick/EditSessionAdapter.cpp" line="+678"/>
         <source>Frame drops: %1%</source>
         <translation>Verworfene Frames: %1%</translation>
     </message>
@@ -4966,7 +4966,7 @@ Das Original kann danach nicht wiederhergestellt werden.</translation>
         <translation>Container</translation>
     </message>
     <message>
-        <location line="+21"/>
+        <location line="+30"/>
         <source>Skipped %1 marker(s) with an unusable time in %2</source>
         <translation>%1 Marker mit unbrauchbarer Zeit in %2 übersprungen</translation>
     </message>
@@ -5289,6 +5289,14 @@ Ermittelte SHA-256: %2</translation>
 <context>
     <name>EditTimeField</name>
     <message>
+        <source>Minutes and seconds with milliseconds</source>
+        <translation>Minuten und Sekunden mit Millisekunden</translation>
+    </message>
+    <message>
+        <source>Minutes and seconds (milliseconds)</source>
+        <translation>Minuten und Sekunden (Millisekunden)</translation>
+    </message>
+    <message>
         <location filename="../quick/ExoSnap/Quick/EditTimeField.qml" line="+11"/>
         <source>Non-drop-frame timecode</source>
         <translation>Zeitcode ohne Drop-Frame</translation>
@@ -5420,12 +5428,12 @@ Ermittelte SHA-256: %2</translation>
     </message>
     <message>
         <location line="-393"/>
-        <location line="+884"/>
+        <location line="+886"/>
         <source>Delete track</source>
         <translation>Spur löschen</translation>
     </message>
     <message>
-        <location line="-990"/>
+        <location line="-992"/>
         <source>Edit timeline</source>
         <translation>Zeitleiste bearbeiten</translation>
     </message>
@@ -5461,12 +5469,12 @@ Ermittelte SHA-256: %2</translation>
     </message>
     <message>
         <location line="+0"/>
-        <location line="+1617"/>
+        <location line="+1619"/>
         <source>Hard cut</source>
         <translation>Harter Schnitt</translation>
     </message>
     <message>
-        <location line="-1608"/>
+        <location line="-1610"/>
         <source>Duration</source>
         <translation>Dauer</translation>
     </message>
@@ -5523,12 +5531,12 @@ Ermittelte SHA-256: %2</translation>
     </message>
     <message>
         <location line="+40"/>
-        <location line="+559"/>
+        <location line="+561"/>
         <source>Track settings</source>
         <translation>Spureinstellungen</translation>
     </message>
     <message>
-        <location line="-558"/>
+        <location line="-560"/>
         <source>Name</source>
         <translation>Name</translation>
     </message>
@@ -5593,7 +5601,7 @@ Ermittelte SHA-256: %2</translation>
         <translation>Abbrechen</translation>
     </message>
     <message>
-        <location line="+278"/>
+        <location line="+279"/>
         <source>Track actions</source>
         <translation>Spuraktionen</translation>
     </message>
@@ -5618,7 +5626,7 @@ Ermittelte SHA-256: %2</translation>
         <translation>Spur sperren</translation>
     </message>
     <message>
-        <location line="+30"/>
+        <location line="+31"/>
         <source>Reorder %1. Use Up and Down.</source>
         <translation>%1 verschieben. Pfeil hoch und runter verwenden.</translation>
     </message>
@@ -5721,7 +5729,7 @@ Ermittelte SHA-256: %2</translation>
 <context>
     <name>EditTimelineAdapter</name>
     <message>
-        <location filename="../quick/ExoSnap/Quick/EditTimelineAdapter.cpp" line="+366"/>
+        <location filename="../quick/ExoSnap/Quick/EditTimelineAdapter.cpp" line="+367"/>
         <source>Audio %1</source>
         <translation>Audio %1</translation>
     </message>
@@ -6217,7 +6225,7 @@ Ermittelte SHA-256: %2</translation>
         <translation>Win</translation>
     </message>
     <message>
-        <location filename="../quick/ExoSnap/Quick/QuickApplication.cpp" line="+3461"/>
+        <location filename="../quick/ExoSnap/Quick/QuickApplication.cpp" line="+3463"/>
         <location filename="../services/GlobalHotkeyService.cpp" line="+52"/>
         <source>This shortcut is already used by Windows or another application.</source>
         <translation>Dieser Hotkey wird bereits von Windows oder einer anderen Anwendung verwendet.</translation>
@@ -7095,12 +7103,12 @@ Ermittelte SHA-256: %2</translation>
     </message>
     <message>
         <location line="+4"/>
-        <location line="+1752"/>
+        <location line="+1760"/>
         <source>Window capture appears to have stalled</source>
         <translation>Die Fensteraufnahme scheint stillzustehen</translation>
     </message>
     <message>
-        <location line="-1751"/>
+        <location line="-1759"/>
         <source>No new frame has arrived from the captured window for 12 seconds. The recording is still running, but the captured window may be frozen.</source>
         <translation>Seit 12 Sekunden ist kein neuer Frame vom aufgenommenen Fenster angekommen. Die Aufnahme läuft weiter, das Fenster könnte jedoch eingefroren sein.</translation>
     </message>
@@ -7120,7 +7128,7 @@ Ermittelte SHA-256: %2</translation>
         <translation>2026-08-10 21-14-08.mkv - 2:34, 412 MB</translation>
     </message>
     <message>
-        <location line="+994"/>
+        <location line="+1002"/>
         <source>Update checks are paused while a recording is in progress.</source>
         <translation>Während einer Aufnahme wird nicht nach Updates gesucht.</translation>
     </message>
@@ -7171,37 +7179,37 @@ Ermittelte SHA-256: %2</translation>
         <translation>Letzte Session wiederherstellen?</translation>
     </message>
     <message>
-        <location line="-1471"/>
-        <location line="+1624"/>
-        <location line="+466"/>
+        <location line="-1479"/>
+        <location line="+1632"/>
+        <location line="+470"/>
         <source>Recording saved</source>
         <translation>Aufnahme gespeichert</translation>
     </message>
     <message>
-        <location line="-464"/>
+        <location line="-468"/>
         <source>2026-08-10_22-31-22_Desktop_Display 1.mkv · 1.4 GB</source>
         <translation>2026-08-10_22-31-22_Desktop_Display 1.mkv · 1.4 GB</translation>
     </message>
     <message>
-        <location line="-1668"/>
-        <location line="+1673"/>
+        <location line="-1676"/>
+        <location line="+1681"/>
         <source>Frames were dropped</source>
         <translation>Frames wurden verworfen</translation>
     </message>
     <message>
-        <location line="-1672"/>
-        <location line="+1673"/>
+        <location line="-1680"/>
+        <location line="+1681"/>
         <source>122 frames did not reach the encoder during the last recording.</source>
         <translation>122 Frames haben den Encoder während der letzten Aufnahme nicht erreicht.</translation>
     </message>
     <message>
         <location line="+4"/>
-        <location line="+494"/>
+        <location line="+498"/>
         <source>Recording stopped unexpectedly</source>
         <translation>Aufnahme unerwartet beendet</translation>
     </message>
     <message>
-        <location line="-493"/>
+        <location line="-497"/>
         <source>The encoder reported an error. The partial file was kept.</source>
         <translation>Der Encoder meldete einen Fehler. Die Teildatei wurde erhalten.</translation>
     </message>
@@ -7211,18 +7219,18 @@ Ermittelte SHA-256: %2</translation>
         <translation>ExoSnap 0.9.1 ist zur Installation bereit.</translation>
     </message>
     <message>
-        <location line="-1662"/>
-        <location line="+2131"/>
+        <location line="-1670"/>
+        <location line="+2143"/>
         <source>Storage running low</source>
         <translation>Speicherplatz wird knapp</translation>
     </message>
     <message>
-        <location line="-5005"/>
+        <location line="-5017"/>
         <source>Recording is blocked by the current system configuration.</source>
         <translation>Die aktuelle Systemkonfiguration verhindert eine Aufnahme.</translation>
     </message>
     <message numerus="yes">
-        <location line="+4365"/>
+        <location line="+4373"/>
         <source>Unfinalized recordings from the last session: %n</source>
         <translation>
             <numerusform>Nicht abgeschlossene Aufnahmen der letzten Sitzung: %n</numerusform>
@@ -7235,7 +7243,7 @@ Ermittelte SHA-256: %2</translation>
         <translation>Seit 10 Sekunden ist kein neuer Frame angekommen. Die Aufnahme läuft weiter.</translation>
     </message>
     <message>
-        <location line="+374"/>
+        <location line="+378"/>
         <source>Recording stopped — output drive is critically low on disk space.</source>
         <translation>Aufnahme gestoppt: Speicherplatz auf dem Ausgabelaufwerk kritisch niedrig.</translation>
     </message>
@@ -7250,7 +7258,7 @@ Ermittelte SHA-256: %2</translation>
         <translation>Export fehlgeschlagen</translation>
     </message>
     <message>
-        <location line="+391"/>
+        <location line="+393"/>
         <source>Hotkey unavailable</source>
         <translation>Tastenkürzel nicht verfügbar</translation>
     </message>
@@ -7278,7 +7286,7 @@ Ermittelte SHA-256: %2</translation>
 <context>
     <name>RecordPage</name>
     <message>
-        <location filename="../quick/ExoSnap/Quick/RecordPage.qml" line="+122"/>
+        <location filename="../quick/ExoSnap/Quick/RecordPage.qml" line="+133"/>
         <source>Preview off</source>
         <translation>Vorschau aus</translation>
     </message>
@@ -7498,6 +7506,10 @@ Ermittelte SHA-256: %2</translation>
 </context>
 <context>
     <name>RecordSourcePicker</name>
+    <message>
+        <source>Window filters</source>
+        <translation>Fensterfilter</translation>
+    </message>
     <message numerus="yes">
         <location filename="../quick/ExoSnap/Quick/RecordSourcePicker.qml" line="+84"/>
         <source>Windows: %n</source>
@@ -7531,7 +7543,15 @@ Ermittelte SHA-256: %2</translation>
     <message>
         <location line="+344"/>
         <source>Choose capture source</source>
-        <translation>Capture-Quelle wählen</translation>
+        <translation>Aufnahmequelle</translation>
+    </message>
+    <message>
+        <source>Options</source>
+        <translation>Optionen</translation>
+    </message>
+    <message>
+        <source>Close</source>
+        <translation>Schließen</translation>
     </message>
     <message>
         <location line="+11"/>
@@ -7808,7 +7828,7 @@ Ermittelte SHA-256: %2</translation>
 <context>
     <name>RecordTransportDock</name>
     <message>
-        <location filename="../quick/ExoSnap/Quick/RecordTransportDock.qml" line="+53"/>
+        <location filename="../quick/ExoSnap/Quick/RecordTransportDock.qml" line="+56"/>
         <source>Unavailable — the capture setup is locked while a recording runs.</source>
         <translation>Nicht verfügbar: Die Capture-Konfiguration ist während einer Aufnahme gesperrt.</translation>
     </message>
@@ -7948,18 +7968,23 @@ Ermittelte SHA-256: %2</translation>
         <translation>00:00:00</translation>
     </message>
     <message>
-        <location line="+217"/>
+        <location line="+187"/>
+        <source>The completed recording is unavailable.</source>
+        <translation>Die fertige Aufnahme ist nicht verfügbar.</translation>
+    </message>
+    <message>
+        <location line="+37"/>
         <source>Save clip</source>
         <translation>Clip speichern</translation>
     </message>
     <message>
-        <location line="-177"/>
-        <location line="+157"/>
+        <location line="-184"/>
+        <location line="+164"/>
         <source>Capture frame</source>
         <translation>Einzelbild aufnehmen</translation>
     </message>
     <message>
-        <location line="-156"/>
+        <location line="-163"/>
         <source>Frame</source>
         <translation>Frame</translation>
     </message>
@@ -7970,23 +7995,23 @@ Ermittelte SHA-256: %2</translation>
     </message>
     <message>
         <location line="+10"/>
-        <location line="+146"/>
+        <location line="+153"/>
         <source>Add marker</source>
         <translation>Marker setzen</translation>
     </message>
     <message>
-        <location line="-145"/>
+        <location line="-152"/>
         <source>Mark</source>
         <translation>Marker</translation>
     </message>
     <message>
         <location line="+8"/>
-        <location line="+142"/>
+        <location line="+149"/>
         <source>Split recording</source>
         <translation>Aufnahme teilen</translation>
     </message>
     <message>
-        <location line="-141"/>
+        <location line="-148"/>
         <source>Split</source>
         <translation>Teilen</translation>
     </message>
@@ -8006,24 +8031,24 @@ Ermittelte SHA-256: %2</translation>
         <translation>Clip · %1 s</translation>
     </message>
     <message>
-        <location line="+10"/>
-        <location line="+129"/>
+        <location line="+96"/>
+        <location line="+50"/>
         <source>Edit finalized recording</source>
         <translation>Fertiggestellte Aufnahme bearbeiten</translation>
     </message>
     <message>
-        <location line="-128"/>
+        <location line="-49"/>
         <source>Edit</source>
         <translation>Bearbeiten</translation>
     </message>
     <message>
-        <location line="+11"/>
-        <location line="+122"/>
+        <location line="-84"/>
+        <location line="+138"/>
         <source>Pause recording</source>
         <translation>Aufnahme pausieren</translation>
     </message>
     <message>
-        <location line="-121"/>
+        <location line="-137"/>
         <source>Pause</source>
         <translation>Pause</translation>
     </message>
@@ -8071,7 +8096,7 @@ Ermittelte SHA-256: %2</translation>
 <context>
     <name>RecordViewModelAdapter</name>
     <message>
-        <location filename="../quick/ExoSnap/Quick/RecordViewModelAdapter.cpp" line="+882"/>
+        <location filename="../quick/ExoSnap/Quick/RecordViewModelAdapter.cpp" line="+886"/>
         <source>No source</source>
         <translation>Keine Quelle</translation>
     </message>
@@ -8553,6 +8578,71 @@ Ermittelte SHA-256: %2</translation>
         <location line="+3"/>
         <source>ExoSnap couldn&apos;t start this recording. The details below may help identify why.</source>
         <translation>ExoSnap konnte diese Aufnahme nicht starten. Die folgenden Details können bei der Fehlersuche helfen.</translation>
+    </message>
+</context>
+<context>
+    <name>RecordingReview</name>
+    <message>
+        <location filename="../quick/ExoSnap/Quick/RecordingReview.qml" line="+71"/>
+        <source>Opening recording</source>
+        <translation>Aufnahme wird geöffnet</translation>
+    </message>
+    <message>
+        <location line="+36"/>
+        <source>Close review</source>
+        <translation>Wiedergabe schließen</translation>
+    </message>
+    <message>
+        <location line="+23"/>
+        <source>Pause</source>
+        <translation>Pause</translation>
+    </message>
+    <message>
+        <location line="+0"/>
+        <source>Play</source>
+        <translation>Wiedergeben</translation>
+    </message>
+    <message>
+        <location line="+14"/>
+        <source>Playback position</source>
+        <translation>Wiedergabeposition</translation>
+    </message>
+    <message>
+        <location line="+35"/>
+        <source>Unmute playback</source>
+        <translation>Wiedergabeton einschalten</translation>
+    </message>
+    <message>
+        <location line="+0"/>
+        <source>Mute playback</source>
+        <translation>Wiedergabe stummschalten</translation>
+    </message>
+    <message>
+        <location line="+2"/>
+        <source>Focus or hover for playback volume and audio tracks</source>
+        <translation>Für Wiedergabelautstärke und Audiospuren fokussieren oder mit der Maus darüberfahren</translation>
+    </message>
+    <message>
+        <location line="+88"/>
+        <source>Playback audio</source>
+        <translation>Wiedergabe-Audio</translation>
+    </message>
+    <message>
+        <location line="-90"/>
+        <location line="+98"/>
+        <source>No playable audio tracks</source>
+        <translation>Keine abspielbaren Audiospuren</translation>
+    </message>
+    <message>
+        <location line="+16"/>
+        <location line="+24"/>
+        <source>Sources unknown</source>
+        <translation>Quellen unbekannt</translation>
+    </message>
+    <message>
+        <location line="+21"/>
+        <source>Playback volume</source>
+        <translation>Wiedergabelautstärke</translation>
     </message>
 </context>
 <context>
@@ -10814,41 +10904,48 @@ Kleiner Text auf dem Bildschirm verliert früher an Qualität als Videoinhalte. 
         <location line="+11"/>
         <location line="+11"/>
         <location line="+12"/>
-        <location line="+18"/>
-        <location line="+12"/>
+        <location line="+28"/>
         <location line="+11"/>
         <location line="+12"/>
-        <location line="+12"/>
+        <location line="+11"/>
         <source>Close</source>
         <translation>Schließen</translation>
     </message>
 </context>
 <context>
     <name>UpdaterMain</name>
-    <message><source>Close</source><translation>Schließen</translation></message>
-    <message><source>Open log</source><translation>Protokoll öffnen</translation></message>
     <message>
-        <location filename="../../apps/updater/quick/UpdaterMain.qml" line="+9"/>
+        <location filename="../../apps/updater/quick/UpdaterMain.qml" line="+257"/>
+        <source>Close</source>
+        <translation>Schließen</translation>
+    </message>
+    <message>
+        <location line="-67"/>
+        <source>Open log</source>
+        <translation>Protokoll öffnen</translation>
+    </message>
+    <message>
+        <location line="-179"/>
         <source>ExoSnap Updater</source>
         <translation>ExoSnap Updater</translation>
     </message>
     <message>
-        <location line="+22"/>
+        <location line="+36"/>
         <source>Updater</source>
         <translation>Updater</translation>
     </message>
     <message>
-        <location line="+45"/>
+        <location line="+74"/>
         <source>Overall: %1%</source>
         <translation>Gesamt: %1 %</translation>
     </message>
     <message>
-        <location line="+39"/>
+        <location line="+43"/>
         <source>Details</source>
         <translation>Details</translation>
     </message>
     <message>
-        <location line="+79"/>
+        <location line="+117"/>
         <source>Cancel this update?</source>
         <translation>Dieses Update abbrechen?</translation>
     </message>
@@ -12055,7 +12152,22 @@ Kleiner Text auf dem Bildschirm verliert früher an Qualität als Videoinhalte. 
         <translation>Die angeforderte Zeit liegt außerhalb des unterstützten Bereichs.</translation>
     </message>
     <message>
-        <location line="+537"/>
+        <location line="+508"/>
+        <source>Sources unknown</source>
+        <translation>Quellen unbekannt</translation>
+    </message>
+    <message>
+        <location line="+8"/>
+        <source>No Source</source>
+        <translation>Keine Quelle</translation>
+    </message>
+    <message>
+        <location line="+3"/>
+        <source>Audio %1</source>
+        <translation>Audio %1</translation>
+    </message>
+    <message>
+        <location line="+30"/>
         <source>The audio monitoring track identity is invalid.</source>
         <translation>Die Identität der Audioüberwachungsspur ist ungültig.</translation>
     </message>
@@ -12153,7 +12265,7 @@ Kleiner Text auf dem Bildschirm verliert früher an Qualität als Videoinhalte. 
         <location line="+34"/>
         <location line="+3071"/>
         <location line="+457"/>
-        <location filename="../quick/ExoSnap/Quick/EditSessionAdapter.cpp" line="-122"/>
+        <location filename="../quick/ExoSnap/Quick/EditSessionAdapter.cpp" line="-131"/>
         <source>Apply or cancel the track scope review before continuing.</source>
         <translation>Übernehmen oder verwerfen Sie die Spurauswahl, bevor Sie fortfahren.</translation>
     </message>
@@ -12301,7 +12413,7 @@ Kleiner Text auf dem Bildschirm verliert früher an Qualität als Videoinhalte. 
     </message>
     <message>
         <location line="+31"/>
-        <location filename="../quick/ExoSnap/Quick/EditSessionAdapter.cpp" line="-478"/>
+        <location filename="../quick/ExoSnap/Quick/EditSessionAdapter.cpp" line="-482"/>
         <source>The timeline position is out of range.</source>
         <translation>Die Zeitleistenposition liegt außerhalb des gültigen Bereichs.</translation>
     </message>
@@ -12445,7 +12557,7 @@ Kleiner Text auf dem Bildschirm verliert früher an Qualität als Videoinhalte. 
         <translation>Die Ersatzquelle konnte nicht übernommen werden.</translation>
     </message>
     <message>
-        <location filename="../quick/ExoSnap/Quick/EditSessionAdapter.cpp" line="+124"/>
+        <location filename="../quick/ExoSnap/Quick/EditSessionAdapter.cpp" line="+126"/>
         <source>The recording overlaps existing clips.</source>
         <translation>Die Aufnahme überlappt vorhandene Clips.</translation>
     </message>
@@ -12455,7 +12567,7 @@ Kleiner Text auf dem Bildschirm verliert früher an Qualität als Videoinhalte. 
         <translation>Die Dauer einiger Segmente ist unbekannt. Sie bleiben unter Medien und können noch nicht platziert werden.</translation>
     </message>
     <message>
-        <location line="+237"/>
+        <location line="+238"/>
         <source>The editor was closed.</source>
         <translation>Der Editor wurde geschlossen.</translation>
     </message>
@@ -12625,12 +12737,12 @@ Kleiner Text auf dem Bildschirm verliert früher an Qualität als Videoinhalte. 
 <context>
     <name>exosnap::quick::RecordViewModelAdapter</name>
     <message>
-        <location filename="../quick/ExoSnap/Quick/RecordViewModelAdapter.cpp" line="-802"/>
+        <location filename="../quick/ExoSnap/Quick/RecordViewModelAdapter.cpp" line="-806"/>
         <source>Draw custom</source>
         <translation>Bereich zeichnen</translation>
     </message>
     <message>
-        <location line="+471"/>
+        <location line="+475"/>
         <location line="+6"/>
         <location line="+4"/>
         <source>Select source</source>
@@ -13901,6 +14013,13 @@ Kleiner Text auf dem Bildschirm verliert früher an Qualität als Videoinhalte. 
         <location line="+2"/>
         <source>Close</source>
         <translation>Schließen</translation>
+    </message>
+</context>
+<context>
+    <name>RecordingReviewAdapter</name>
+    <message>
+        <source>The recording is no longer available in Recordings.</source>
+        <translation>Die Aufnahme ist im Bereich Aufnahmen nicht mehr verfügbar.</translation>
     </message>
 </context>
 </TS>

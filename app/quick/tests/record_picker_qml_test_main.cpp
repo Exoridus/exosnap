@@ -10,6 +10,7 @@
 
 #include "AudioRoutingAdapter.h"
 #include "CaptureExclusion.h"
+#include "CaptureTargetStillProvider.h"
 #include "QuickThemeTokens.h"
 #include "RecordViewModelAdapter.h"
 #include "RecordingClipAdapter.h"
@@ -282,7 +283,14 @@ class RecordPickerTestDriver final : public QObject {
     // The still service is a C++ collaborator the QML test does not have, so
     // the two edges it drives are reachable from the test instead.
     Q_INVOKABLE void deliverStill(const QString& identity, const QString& source) {
-        adapter_.setTargetStill(identity, source);
+        Q_UNUSED(source);
+        QImage image(320, 180, QImage::Format_RGB32);
+        image.fill(QColor(72, 125, 139));
+        adapter_.setTargetStill(identity, still_provider_->submitStill(identity, std::move(image)));
+    }
+
+    void setStillProvider(exosnap::quick::CaptureTargetStillProvider* provider) {
+        still_provider_ = provider;
     }
 
     Q_INVOKABLE void failStill(const QString& identity) {
@@ -290,6 +298,7 @@ class RecordPickerTestDriver final : public QObject {
     }
 
   private:
+    exosnap::quick::CaptureTargetStillProvider* still_provider_ = nullptr;
     int capture_exclusion_attempts_ = 0;
     quint64 seed_generation_ = 1;
     RecordViewModel source_;
@@ -313,6 +322,9 @@ class Setup final : public QObject {
     }
 
     void qmlEngineAvailable(QQmlEngine* engine) {
+        auto* provider = new exosnap::quick::CaptureTargetStillProvider;
+        engine->addImageProvider(exosnap::quick::CaptureTargetStillProvider::providerId(), provider);
+        driver_->setStillProvider(provider);
         engine->rootContext()->setContextProperty(QStringLiteral("recordDriver"), driver_.get());
     }
 

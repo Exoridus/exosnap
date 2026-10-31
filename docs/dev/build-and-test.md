@@ -68,6 +68,8 @@ cargo exo-dev verify --fast
 cargo exo-dev verify --full
 ```
 
+The headless `quick.qml.recording_review` suite renders the controls with a decoded still fixture. It does not prove native video presentation. `quick.qml.recording_review_native` uses the Windows platform and Direct3D 11, opens a test window and belongs to the desktop phase. Coordinate desktop availability before running that selection locally. Its native assertions remain part of the full CI suite.
+
 A filter selects a registered test/binary prefix, not necessarily one internal GoogleTest case. Check the printed selection. Hardware exclusions reduce reach and must be reported as such.
 
 Use repeatable `--build-target <target>` arguments when a focused run needs only known CMake test targets, for example `cargo exo-dev test --filter '^quick\.qml\.record_source_picker$' --build-target record_source_picker_qml_tests`. Without explicit targets the runner retains the full-build default. A targeted receipt records its targets and proves the selected test executables current through the Ninja graph. Building an unrelated target does not make an existing test binary current. Targeted evidence requires direct build-tree test executables. Opaque script or external wrapper commands need the full-build default. Unsupported or stale targeted evidence is refused rather than described as a successful full build.

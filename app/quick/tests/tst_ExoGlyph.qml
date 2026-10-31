@@ -79,7 +79,9 @@ Item {
             "Shield": ExoGlyph.Shield,
             "Eye": ExoGlyph.Eye,
             "EyeClosed": ExoGlyph.EyeClosed,
-            "Gamepad": ExoGlyph.Gamepad
+            "Gamepad": ExoGlyph.Gamepad,
+            "Lock": ExoGlyph.Lock,
+            "Unlock": ExoGlyph.Unlock
         })
 
     Component {

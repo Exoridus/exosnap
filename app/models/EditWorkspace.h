@@ -325,12 +325,13 @@ class Workspace {
     }
     // Confirms an unresolved source mix and its default audio enablement as one
     // undoable change. Explicit clip enablement is preserved. Empty confirms
-    // silence; an already resolved source refuses another initial choice.
-    bool resolveInputMix(Id asset_id, const std::vector<engine::AudioTrackId>& selected) {
+    // silence. Replacing a resolved choice requires explicit transient audition mode.
+    bool resolveInputMix(Id asset_id, const std::vector<engine::AudioTrackId>& selected,
+                         bool replace_existing = false) {
         const auto found = std::find_if(assets_.begin(), assets_.end(),
                                         [asset_id](const auto& asset) { return asset.id == asset_id; });
-        if (found == assets_.end() || !found->source_descriptor || !found->mix_decision_required ||
-            revision_ == (std::numeric_limits<Revision>::max)())
+        if (found == assets_.end() || !found->source_descriptor ||
+            (!found->mix_decision_required && !replace_existing) || revision_ == (std::numeric_limits<Revision>::max)())
             return false;
         std::set<engine::AudioTrackId> chosen;
         for (const auto identity : selected) {

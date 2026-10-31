@@ -5,7 +5,7 @@ import QtTest
 
 import ExoSnap.Quick.RecordPickerTestControls
 
-// The source picker has one scrollable list with section jumps. Selection stays
+// The source picker separates source types into tabs. Selection stays
 // pending until confirmation, and cards keep their identity across rescans.
 TestCase {
     id: testCase
@@ -74,6 +74,7 @@ TestCase {
     }
 
     function init() {
+        testCase.width = 860;
         recordDriver.resetPickerState();
         recordDriver.seedTargets(2, ["Claude Design - Brave", "Task Manager"]);
         selectSpy.target = recordDriver.adapter;
@@ -90,11 +91,12 @@ TestCase {
 
     function viewportTargets(page) {
         const list = pick(page, "sourceList");
+        const top = list.contentY - list.originY;
         let y = 0;
         const result = [];
         for (const row of page.picker.pickerRows) {
             const height = page.picker.pickerRowHeight(row);
-            if (row.kind === "cards" && y < list.contentY + list.height && y + height > list.contentY)
+            if (row.kind === "cards" && y < top + list.height && y + height > top)
                 for (const card of row.cards)
                     result.push(card.identity);
             y += height;
@@ -143,7 +145,7 @@ TestCase {
         waitForRendering(page);
     }
 
-    function test_section_jumps_keep_one_scrollable_list() {
+    function test_tabs_only_contain_the_selected_source_type() {
         let page = makePage();
         const tabs = pick(page, "tabs");
         compare(tabs.options.length, 3);
@@ -151,7 +153,7 @@ TestCase {
         compare(tabs.options[1], "Windows");
         compare(tabs.options[2], "Region");
         const title = pick(page, "pickerTitle");
-        verify(tabs.mapToItem(page.picker.contentItem, 0, 0).x > title.mapToItem(page.picker.contentItem, title.width, 0).x);
+        verify(tabs.mapToItem(page.picker.contentItem, 0, 0).y >= title.mapToItem(page.picker.contentItem, 0, title.height).y);
         const header = pick(page, "pickerHeader");
         verify(tabs.mapToItem(header, tabs.width, 0).x < header.width);
         verify(header.width > page.picker.contentItem.width * 0.9);
@@ -161,8 +163,10 @@ TestCase {
 
         showTab(page, 1);
         verify(pick(page, "windowSectionLabel").visible);
+        verify(page.picker.pickerRows.every(row => row.section === "window"));
 
         showTab(page, 2);
+        verify(page.picker.pickerRows.every(row => row.section === "region"));
         verify(pick(page, "regionSectionLabel").visible);
         verify(pick(page, "presetCard-custom").visible);
         compare(page.picker.currentTab, 2);
@@ -189,7 +193,7 @@ TestCase {
         compare(page.picker.windowRows.length, 5);
     }
 
-    // Search narrows only the window section; the dialog stays in place.
+    // Search narrows only the window tab; the dialog stays in place.
     function test_window_search_filters_by_title_and_app() {
         let page = makePage();
         recordDriver.seedTargets(1, ["Claude Design - Brave", "Task Manager", "Steam Library"]);
@@ -375,9 +379,8 @@ TestCase {
         compare(selectSpy.count, 0);
     }
 
-    // A section jump changes viewport only. It cannot retarget the pending
-    // display that was selected before the jump.
-    function test_section_jump_preserves_pending_identity() {
+    // Switching tabs restores the pending choice when returning.
+    function test_tab_restores_its_pending_identity() {
         let page = makePage();
         // init() seeded two displays and selected display 1.
         const display = cardAt(page, 0);
@@ -385,6 +388,8 @@ TestCase {
         waitForRendering(page);
         compare(page.picker.pendingIdentity, "display:1");
         showTab(page, 1);
+        compare(page.picker.pendingIdentity, "");
+        showTab(page, 0);
         compare(page.picker.pendingIdentity, "display:1");
         verify(pick(page, "confirmButton").enabled);
         mouseClick(pick(page, "confirmButton"));
@@ -424,12 +429,19 @@ TestCase {
         tryVerify(() => cardAt(page, 1) === card);
         const cardHeight = card.height;
         tryVerify(() => state() === "ready");
+        const image = findVisual(card, "targetThumbnailImage");
+        tryCompare(image, "status", Image.Ready);
+        verify(image.sourceSize.width > 0 && image.sourceSize.height > 0);
+        tryCompare(page.picker, "opened", true);
+        const scene = page.Window.window.contentItem;
+        const point = image.mapToItem(scene, image.width / 2, image.height / 2);
+        tryVerify(() => grabImage(scene).red(Math.floor(point.x), Math.floor(point.y)) === 72);
 
         recordDriver.failStill("display:2");
         tryVerify(() => state() === "stale");
         // The still survives the loss: nothing reverts to the placeholder glyph,
         // and the card does not resize under it.
-        compare(card.thumbnailSource, "image://capture-target/display-2/1");
+        verify(card.thumbnailSource.startsWith("image://capture-target/display-2/"));
         verify(cardAt(page, 1) === card);
         compare(findVisual(card, "targetThumbnailImage").fillMode, Image.PreserveAspectFit);
         compare(card.height, cardHeight);
@@ -445,16 +457,184 @@ TestCase {
         const second = cardAt(page, 1);
         compare(first.width, page.picker.displaysCardWidth);
         compare(second.x - first.x, page.picker.displaysCardWidth + page.picker.gridGap);
-        verify(page.picker.displaysCardWidth <= 420);
+        verify(page.picker.displaysCardWidth <= 260);
 
         compare(page.picker.columnsForWidth(300), 1);
-        compare(page.picker.columnsForWidth(655), 1);
-        compare(page.picker.columnsForWidth(656), 2);
-        compare(page.picker.columnsForWidth(991), 2);
-        compare(page.picker.columnsForWidth(992), 3);
-        compare(page.picker.columnsForWidth(1327), 3);
-        compare(page.picker.columnsForWidth(1328), 4);
+        compare(page.picker.columnsForWidth(475), 1);
+        compare(page.picker.columnsForWidth(476), 2);
+        compare(page.picker.columnsForWidth(721), 2);
+        compare(page.picker.columnsForWidth(722), 3);
+        compare(page.picker.columnsForWidth(967), 3);
+        compare(page.picker.columnsForWidth(968), 4);
         compare(page.picker.columnsForWidth(4000), 4);
+    }
+
+    function test_partial_window_row_keeps_columns_when_appended() {
+        const rows = refreshWindows().slice(0, 4);
+        recordDriver.seedWindowTargets(rows);
+        const page = makePage();
+        page.width = 1050;
+        testCase.width = 1050;
+        waitForRendering(page);
+        compare(page.picker.windowColumns, 3);
+        const first = pick(page, "targetCard-" + page.picker.windowRows[0].identity);
+        const lastName = "targetCard-" + page.picker.windowRows[3].identity;
+        const last = pick(page, lastName);
+        const before = last.mapToItem(page.picker.contentItem, 0, 0).x;
+        compare(before, first.mapToItem(page.picker.contentItem, 0, 0).x);
+        rows.push({ id: 200, label: "Appended - Editor" });
+        recordDriver.seedWindowTargets(rows);
+        waitForRendering(page);
+        compare(pick(page, lastName).mapToItem(page.picker.contentItem, 0, 0).x, before);
+    }
+
+    function test_window_filters_popup_does_not_move_grid() {
+        const page = makePage();
+        showTab(page, 1);
+        const grid = pick(page, "gridArea");
+        const before = grid.mapToItem(page.picker.contentItem, 0, 0);
+        const height = grid.height;
+        pick(page, "windowFiltersButton").clicked();
+        const popup = findChild(page.picker, "windowFiltersPopup");
+        tryCompare(popup, "opened", true);
+        compare(grid.mapToItem(page.picker.contentItem, 0, 0), before);
+        compare(grid.height, height);
+        verify(findVisual(popup.contentItem, "showHiddenWindows").visible);
+        popup.close();
+    }
+
+    function test_window_overflow_is_above_rounded_thumbnail() {
+        const page = makePage();
+        showTab(page, 1);
+        const card = pick(page, "targetCard-" + page.picker.windowRows[0].identity);
+        const button = findVisual(card, "windowHideOptions");
+        const plate = findVisual(card, "targetThumbnail");
+        verify(button.z > plate.z, "overflow must stay above the preview plate");
+        compare(button.glyph, ExoGlyph.Overflow);
+        const point = card.mapToItem(page.Window.window.contentItem, card.width - 2, 2);
+        button.visible = false;
+        waitForRendering(page);
+        const without = grabImage(page.Window.window.contentItem).pixel(Math.floor(point.x), Math.floor(point.y));
+        button.visible = true;
+        waitForRendering(page);
+        compare(grabImage(page.Window.window.contentItem).pixel(Math.floor(point.x), Math.floor(point.y)), without,
+                "overflow must not expose native button chrome at the card corner");
+    }
+
+    function test_window_overflow_contrast_data() {
+        return [{tag: "dark", appearance: "dark"}, {tag: "light", appearance: "light"}];
+    }
+
+    function test_window_overflow_contrast(data) {
+        const previous = ExoTheme.dark ? "dark" : "light";
+        recordDriver.setTestAppearance(QuickThemeTokens, data.appearance);
+        try {
+            const page = makePage();
+            showTab(page, 1);
+            const button = findVisual(cardAt(page, 2), "windowHideOptions");
+            const glyph = button.contentItem.children.find(item => item.kind === ExoGlyph.Overflow);
+            verify(glyph);
+            function luminance(color) {
+                const linear = value => value <= 0.04045 ? value / 12.92 : Math.pow((value + 0.055) / 1.055, 2.4);
+                return 0.2126 * linear(color.r) + 0.7152 * linear(color.g) + 0.0722 * linear(color.b);
+            }
+            function verifyContrast() {
+                verify(button.background.visible, "an arbitrary thumbnail needs a backing behind its menu icon");
+                compare(button.background.color.a, 1);
+                const ink = luminance(glyph.color);
+                const ground = luminance(button.background.color);
+                verify((Math.max(ink, ground) + 0.05) / (Math.min(ink, ground) + 0.05) >= 3,
+                        "the overflow icon must remain legible independently of thumbnail pixels");
+            }
+            mouseMove(page, 0, 0);
+            verifyContrast();
+            mouseMove(button, button.width / 2, button.height / 2);
+            tryCompare(button, "hovered", true);
+            verifyContrast();
+            button.forceActiveFocus(Qt.TabFocusReason);
+            verify(button.background.border.width > 0);
+            verifyContrast();
+        } finally {
+            recordDriver.setTestAppearance(QuickThemeTokens, previous);
+        }
+    }
+
+    function test_ready_thumbnail_keeps_rounded_corners() {
+        const page = makePage();
+        showTab(page, 0);
+        const card = cardAt(page, 1);
+        recordDriver.deliverStill("display:2", "image://capture-target/display-2/1");
+        const image = findVisual(card, "targetThumbnailImage");
+        tryCompare(image, "status", Image.Ready);
+        const plate = findVisual(card, "targetThumbnail");
+        const scene = page.Window.window.contentItem;
+        const corner = plate.mapToItem(scene, 1, 1);
+        const centre = plate.mapToItem(scene, plate.width / 2, plate.height / 2);
+        tryVerify(() => grabImage(scene).red(Math.floor(centre.x), Math.floor(centre.y)) === 72);
+        compare(grabImage(scene).pixel(Math.floor(corner.x), Math.floor(corner.y)), card.color,
+                "image pixels must not fill the rounded corner");
+        mouseMove(card, card.width / 2, card.height - 8);
+        waitForRendering(page);
+        tryVerify(() => grabImage(scene).pixel(Math.floor(corner.x), Math.floor(corner.y)) === card.color,
+                5000, "the rounded mask follows the hover surface");
+    }
+
+    function test_window_toolbar_wide_and_narrow_search_minimum() {
+        const page = makePage();
+        showTab(page, 1);
+        const tabs = pick(page, "tabs");
+        const search = pick(page, "windowSearchRow");
+        for (const width of [1440, 720]) {
+            testCase.width = width;
+            page.width = width;
+            waitForRendering(page);
+            const tabsY = tabs.mapToItem(page.picker.contentItem, 0, 0).y;
+            const searchY = search.mapToItem(page.picker.contentItem, 0, 0).y;
+            if (width === 1440)
+                verify(Math.abs(tabsY - searchY) <= Math.abs(tabs.height - search.height) / 2 + 1);
+            else
+                verify(searchY >= tabsY + tabs.height);
+            verify(pick(page, "windowSearch").width >= 180);
+        }
+    }
+
+    function test_partial_card_glyphs_stay_inside_list_viewport() {
+        recordDriver.seedWindowTargets(refreshWindows());
+        const page = makePage();
+        showTab(page, 1);
+        const list = pick(page, "sourceList");
+        list.positionViewAtIndex(3, ListView.Beginning);
+        list.forceLayout();
+        const identity = page.picker.pickerRows[3].cards[0].identity;
+        const card = pick(page, "targetCard-" + identity);
+        recordDriver.deliverStill(identity, "image://capture-target/display-2/1");
+        const thumbnail = findVisual(card, "targetThumbnailImage");
+        tryCompare(thumbnail, "status", Image.Ready);
+        const rowY = card.parent.parent.y;
+        list.contentY = rowY - list.height + 12;
+        waitForRendering(page);
+        const scene = page.Window.window.contentItem;
+        const origin = list.mapToItem(scene, 0, list.height);
+        const bottom = page.picker.contentItem.mapToItem(scene, 0, page.picker.contentItem.height).y;
+        const visiblePoint = card.mapToItem(scene, card.width / 2, 6);
+        tryVerify(() => grabImage(scene).red(Math.floor(visiblePoint.x), Math.floor(visiblePoint.y)) === 72,
+                5000, "the ready preview must remain visible in a partial row");
+        const before = grabImage(scene);
+        // Hiding one card would move its sibling into the same slot.
+        card.parent.visible = false;
+        waitForRendering(page);
+        const after = grabImage(scene);
+        verify(before.pixel(Math.floor(visiblePoint.x), Math.floor(visiblePoint.y))
+                !== after.pixel(Math.floor(visiblePoint.x), Math.floor(visiblePoint.y)),
+                "the visible portion of a partial card must still render");
+        for (let y = Math.ceil(origin.y); y < Math.floor(bottom); ++y) {
+            for (let x = Math.ceil(origin.x); x < Math.floor(origin.x + list.width); ++x) {
+                if (before.pixel(x, y) !== after.pixel(x, y)) {
+                    fail("partially visible card painted below viewport at " + x + "," + y);
+                    return;
+                }
+            }
+        }
     }
 
     // A single display stays compact and centered in the shared list.
@@ -463,9 +643,9 @@ TestCase {
         recordDriver.seedTargets(1, []);
         waitForRendering(page);
         compare(page.picker.displayColumns, 1);
-        compare(page.picker.displaysCardWidth, 420);
+        compare(page.picker.displaysCardWidth, 260);
         const card = cardAt(page, 0);
-        compare(card.width, 420);
+        compare(card.width, 260);
         verify(card.parent.x + card.x > 0);
         compare(Math.round(card.parent.x + card.width / 2), Math.round(card.parent.parent.width / 2));
         compare(card.primaryLabel, "Display 1");
@@ -613,6 +793,123 @@ TestCase {
         return rows;
     }
 
+    function test_window_tab_restores_scroll_query_and_selection() {
+        recordDriver.seedWindowTargets(refreshWindows());
+        const page = makePage();
+        compare(page.picker.currentTab, 1);
+        page.picker.windowQuery = "Document";
+        const list = pick(page, "sourceList");
+        list.positionViewAtIndex(5, ListView.Beginning);
+        waitForRendering(page);
+        const row = page.picker.pickerRows[5].cards[0];
+        page.picker.selectCard(row, 1);
+        const scroll = list.contentY - list.originY;
+        verify(scroll > 0);
+        showTab(page, 0);
+        verify(!pick(page, "windowSearchRow").visible);
+        showTab(page, 1);
+        compare(page.picker.windowQuery, "Document");
+        compare(page.picker.pendingIdentity, row.identity);
+        compare(list.contentY - list.originY, scroll);
+    }
+
+    function test_region_uses_the_display_tab_pending_choice() {
+        const page = makePage();
+        page.picker.selectCard(recordDriver.adapter.displayTargetOptions[1], 0);
+        showTab(page, 2);
+        compare(page.picker.regionAnchorRow().identity, "display:2");
+        mouseClick(pick(page, "presetCard-16:9"));
+        mouseClick(pick(page, "confirmButton"));
+        tryCompare(selectSpy, "count", 1);
+        compare(selectSpy.signalArguments[0][0], 1);
+    }
+
+    function test_inactive_window_tab_preserves_its_source_anchor() {
+        const rows = refreshWindows();
+        recordDriver.seedWindowTargets(rows);
+        const page = makePage();
+        const list = pick(page, "sourceList");
+        list.positionViewAtIndex(5, ListView.Beginning);
+        waitForRendering(page);
+        const identity = page.picker.pickerRows[5].cards[0].identity;
+        const offset = pick(page, "targetCard-" + identity).mapToItem(list, 0, 0).y;
+        showTab(page, 0);
+        rows.splice(0, 4);
+        recordDriver.seedWindowTargets(rows);
+        showTab(page, 1);
+        compare(pick(page, "targetCard-" + identity).mapToItem(list, 0, 0).y, offset);
+    }
+
+    function test_structural_removal_keeps_an_active_flick_moving() {
+        const rows = refreshWindows();
+        recordDriver.seedWindowTargets(rows);
+        const page = makePage();
+        const list = pick(page, "sourceList");
+        list.positionViewAtIndex(5, ListView.Beginning);
+        waitForRendering(page);
+        list.flick(0, -900);
+        tryCompare(list, "moving", true);
+        rows.splice(0, 2);
+        recordDriver.seedWindowTargets(rows);
+        waitForRendering(page);
+        verify(list.moving, "source removal must not cancel an ongoing flick");
+    }
+
+    function test_structural_removal_during_scrollbar_drag_does_not_restore() {
+        const rows = refreshWindows();
+        recordDriver.seedWindowTargets(rows);
+        const page = makePage();
+        const list = pick(page, "sourceList");
+        const bar = findChild(page.picker, "sourceScrollBar");
+        list.positionViewAtIndex(5, ListView.Beginning);
+        waitForRendering(page);
+        bar.pressed = true;
+        const scroll = list.contentY;
+        rows.splice(0, 2);
+        recordDriver.seedWindowTargets(rows);
+        waitForRendering(page);
+        compare(list.contentY, scroll);
+        bar.pressed = false;
+    }
+
+    function test_saved_hidden_rules_remain_visible() {
+        const page = makePage();
+        recordDriver.adapter.addApplicationRule(recordDriver.adapter.windowTargetOptions[0].identity, true);
+        compare(page.picker.hiddenWindowRules.length, 1);
+        pick(page, "windowFiltersButton").clicked();
+        const filters = findChild(page.picker, "windowFiltersPopup");
+        tryCompare(filters, "opened", true);
+        findVisual(filters.contentItem, "hiddenRulesButton").clicked();
+        const popup = findChild(page.picker, "hiddenRulesPopup");
+        tryCompare(popup, "opened", true);
+        const id = page.picker.hiddenWindowRules[0].id;
+        tryVerify(() => findVisual(popup.contentItem, "hiddenRule-" + id) !== null);
+    }
+
+    function test_scrolling_card_slot_cannot_inherit_focus_after_removal() {
+        const rows = refreshWindows();
+        recordDriver.seedWindowTargets(rows);
+        const page = makePage();
+        const list = pick(page, "sourceList");
+        const bar = findChild(page.picker, "sourceScrollBar");
+        list.positionViewAtIndex(5, ListView.Beginning);
+        waitForRendering(page);
+        const row = page.picker.pickerRows[5].cards[0];
+        const identity = row.identity;
+        const card = pick(page, "targetCard-" + row.identity);
+        page.picker.selectCard(row, 1);
+        card.forceActiveFocus(Qt.TabFocusReason);
+        bar.pressed = true;
+        rows.splice(0, 2);
+        recordDriver.seedWindowTargets(rows);
+        waitForRendering(page);
+        verify(!card.activeFocus);
+        bar.pressed = false;
+        keyClick(Qt.Key_Return);
+        compare(selectSpy.count, 0);
+        compare(page.picker.pendingIdentity, identity);
+    }
+
     function test_refresh_preserves_scrolled_source_and_keyboard_focus() {
         const rows = refreshWindows();
         recordDriver.seedWindowTargets(rows);
@@ -645,6 +942,7 @@ TestCase {
         });
         recordDriver.seedWindowTargets(rows);
         waitForRendering(page);
+        compare(page.picker.windowRows[page.picker.windowRows.length - 1].title, "Inserted window");
         tryVerify(() => findVisual(page.picker.contentItem, "targetCard-" + identity) !== null && findVisual(page.picker.contentItem, "targetCard-" + identity).mapToItem(list, 0, 0).y === offset, 5000, "focused source keeps viewport offset " + offset + "; contentY=" + list.contentY + ", originY=" + list.originY);
         verify(pick(page, "targetCard-" + identity).activeFocus);
         compare(page.picker.pendingIdentity, identity);
@@ -708,14 +1006,26 @@ TestCase {
         list.cancelFlick();
     }
     function test_recycled_focused_window_does_not_receive_keyboard_confirmation() {
-        recordDriver.seedWindowTargets([{id: 100, label: "Document - Editor", generation: 1}]);
+        recordDriver.seedWindowTargets([
+            {
+                id: 100,
+                label: "Document - Editor",
+                generation: 1
+            }
+        ]);
         const page = makePage();
         showTab(page, 1);
         const card = cardAt(page, 0);
         card.forceActiveFocus(Qt.TabFocusReason);
         keyClick(Qt.Key_Space);
         const identity = page.picker.pendingIdentity;
-        recordDriver.seedWindowTargets([{id: 100, label: "Replacement - Editor", generation: 2}]);
+        recordDriver.seedWindowTargets([
+            {
+                id: 100,
+                label: "Replacement - Editor",
+                generation: 2
+            }
+        ]);
         waitForRendering(page);
         verify(!cardAt(page, 0).activeFocus, "a recycled lifetime does not inherit keyboard focus");
         keyClick(Qt.Key_Return);
@@ -734,9 +1044,15 @@ TestCase {
         const card = pick(page, "targetCard-" + identity);
         card.forceActiveFocus(Qt.TabFocusReason);
         const offset = card.mapToItem(list, 0, 0).y;
-        rows.unshift({id: 99, label: "Inserted A - Editor"});
+        rows.unshift({
+            id: 99,
+            label: "Inserted A - Editor"
+        });
         recordDriver.seedWindowTargets(rows);
-        rows.unshift({id: 98, label: "Inserted B - Editor"});
+        rows.unshift({
+            id: 98,
+            label: "Inserted B - Editor"
+        });
         recordDriver.seedWindowTargets(rows);
         waitForRendering(page);
         const refreshed = pick(page, "targetCard-" + identity);
@@ -753,7 +1069,10 @@ TestCase {
         waitForRendering(page);
         const identity = page.picker.pickerRows[5].cards[0].identity;
         pick(page, "targetCard-" + identity).forceActiveFocus(Qt.TabFocusReason);
-        rows.unshift({id: 99, label: "Inserted window - Editor"});
+        rows.unshift({
+            id: 99,
+            label: "Inserted window - Editor"
+        });
         recordDriver.seedWindowTargets(rows);
         const search = pick(page, "windowSearch");
         search.forceActiveFocus(Qt.TabFocusReason);

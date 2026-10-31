@@ -1,8 +1,10 @@
 #include "RecordViewModelAdapter.h"
+#include <QByteArray>
 #include <QCoreApplication>
 
 #include "models/CaptureTargetPresentation.h"
 #include "viewmodels/RecordViewModel.h"
+#include <exosnap/engine/audio_media_manifest.h>
 
 #include <QFileInfo>
 #include <QMetaObject>
@@ -12,6 +14,7 @@
 
 #include <algorithm>
 #include <cmath>
+#include <filesystem>
 #include <utility>
 
 namespace exosnap::quick {
@@ -218,6 +221,10 @@ bool RecordViewModelAdapter::liveStatsAvailable() const noexcept {
 
 bool RecordViewModelAdapter::canStart() const noexcept {
     return source_ != nullptr && source_->CanStart() && !region_selection_needed_;
+}
+
+bool RecordViewModelAdapter::completedRecordingAvailable() const {
+    return source_ && source_->last_succeeded && CanOpenInEditor(source_->current_completed_recording);
 }
 
 bool RecordViewModelAdapter::canStop() const noexcept {
@@ -609,6 +616,57 @@ const QVariantList& RecordViewModelAdapter::regionPresetOptions() const noexcept
 
 const QVariantList& RecordViewModelAdapter::recentRecordingOptions() const noexcept {
     return recent_recording_options_;
+}
+
+QString RecordViewModelAdapter::recordingIdentity(const QString& path) {
+    if (path.isEmpty())
+        return {};
+    const auto access = engine::AcquireMediaReadCapability(std::filesystem::path(path.toStdWString()));
+    if (!access.succeeded())
+        return {};
+    const auto& identity = (*access.value())->Identity();
+    const auto file_id = QByteArray(reinterpret_cast<const char*>(identity.file_identity.file_id.data()), 16).toHex();
+    return QStringLiteral("%1:%2:%3:%4")
+        .arg(identity.file_identity.volume_serial)
+        .arg(QString::fromLatin1(file_id))
+        .arg(identity.file_size)
+        .arg(identity.last_write_time);
+}
+
+bool RecordViewModelAdapter::requestRecordingReveal(const QString& identity) {
+    if (!pending_recording_identity_.isEmpty()) {
+        pending_recording_identity_.clear();
+        emit recordingRevealRequested();
+    }
+    if (identity.isEmpty())
+        return false;
+    rebuildRecentRecordings();
+    const bool found = std::any_of(
+        recent_recording_options_.begin(), recent_recording_options_.end(), [&identity](const QVariant& value) {
+            const auto row = value.toMap();
+            return row.value("identity").toString() == identity && row.value("available").toBool();
+        });
+    if (!found)
+        return false;
+    pending_recording_identity_ = identity;
+    emit recordingRevealRequested();
+    return true;
+}
+
+bool RecordViewModelAdapter::confirmRecordingReveal(const QString& identity) {
+    if (identity.isEmpty() || pending_recording_identity_ != identity)
+        return false;
+    // The panel may have loaded after the file was removed or replaced.
+    rebuildRecentRecordings();
+    const bool selected = std::any_of(
+        recent_recording_options_.begin(), recent_recording_options_.end(), [&identity](const QVariant& value) {
+            const auto row = value.toMap();
+            return row.value("identity").toString() == identity && row.value("available").toBool();
+        });
+    pending_recording_identity_.clear();
+    emit recordingRevealRequested();
+    emit recordingRevealFinished(identity, selected);
+    return selected;
 }
 
 // Exhaustive with no `default:`: a state added later must answer here on
@@ -1077,6 +1135,7 @@ void RecordViewModelAdapter::rebuildRecentRecordings() {
                 continue;
             rows.push_back(QVariantMap{
                 {QStringLiteral("path"), recording.file_path},
+                {QStringLiteral("identity"), recordingIdentity(recording.file_path)},
                 {QStringLiteral("label"), recording.fileName()},
                 {QStringLiteral("available"), CanOpenInEditor(recording)},
                 {QStringLiteral("durationMs"), static_cast<qint64>(recording.totalDurationSeconds() * 1000)},

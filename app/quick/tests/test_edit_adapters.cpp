@@ -6748,8 +6748,8 @@ TEST(EditAudioOnlyTimeFormat, ValidNtscRetainsNondropTimecodeAndStrictFormatVali
     ASSERT_TRUE(session.addProbedMediaForHarness(QStringLiteral("ntsc-video.mkv"), metadata, true));
     EXPECT_EQ(session.property("defaultTimeFormat").toInt(), 0);
     EXPECT_EQ(session.formatTimeValue(1'001'000), QStringLiteral("00:00:01:00"));
-    EXPECT_TRUE(session.formatTimeValue(1'000'000, 3).isEmpty());
-    EXPECT_FALSE(session.parseTimeValue(QStringLiteral("1s"), 0, false, 3).value("valid").toBool());
+    EXPECT_TRUE(session.formatTimeValue(1'000'000, 4).isEmpty());
+    EXPECT_FALSE(session.parseTimeValue(QStringLiteral("1s"), 0, false, 4).value("valid").toBool());
 }
 TEST(EditVerificationPriority, ExportTakesOverPausedOptionalLeaderWithoutResumingAnalysis) {
     EnsureApplication();

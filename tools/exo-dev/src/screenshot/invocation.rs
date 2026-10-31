@@ -62,6 +62,7 @@ pub enum Popup {
     SourcePicker,
     SourcePickerWindows,
     SourcePickerSearch,
+    SourcePickerFilters,
     NotificationHub,
 }
 
@@ -71,6 +72,7 @@ impl Popup {
             Popup::SourcePicker => "source-picker",
             Popup::SourcePickerWindows => "source-picker-windows",
             Popup::SourcePickerSearch => "source-picker-search",
+            Popup::SourcePickerFilters => "source-picker-filters",
             Popup::NotificationHub => "notification-hub",
         }
     }
@@ -98,7 +100,7 @@ pub struct ShotSpec {
     /// Recording settings card (`EXOSNAP_VISUAL_PROFILE_SECTION`).
     #[arg(long)]
     pub profile: Option<String>,
-    /// Preview overlay fixture: `overlay-menu`, `gamepad`, or `gamepad-hidden`
+    /// Recording workspace fixture: `overlay-menu`, `gamepad`, `gamepad-hidden`, `review-audio`, or `review-edit`
     /// (`EXOSNAP_VISUAL_RECORD_PANEL`).
     #[arg(long, conflicts_with = "profile")]
     pub record_panel: Option<String>,

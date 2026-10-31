@@ -116,6 +116,7 @@ qt_add_qml_module(exosnap
         EditMixPanel.qml
         EditExportPanel.qml
         EditPlayer.qml
+        RecordingReview.qml
         EditTimeline.qml
         EditTimeField.qml
         EditDraftField.qml
@@ -249,6 +250,8 @@ qt_add_qml_module(exosnap
         EditExportAdapter.h
         EditPlayerAdapter.cpp
         EditPlayerAdapter.h
+        RecordingReviewAdapter.cpp
+        RecordingReviewAdapter.h
         EditPlayerWorker.cpp
         EditPlayerWorker.h
         EditWorkspaceSession.cpp
@@ -1303,6 +1306,8 @@ qt_add_qml_module(edit_timeline_qml_tests
         RecordingClipAdapter.h
         EditPlayerAdapter.cpp
         EditPlayerAdapter.h
+        RecordingReviewAdapter.cpp
+        RecordingReviewAdapter.h
         EditPlayerWorker.cpp
         EditPlayerWorker.h
         EditWorkspaceSession.cpp
@@ -1366,6 +1371,7 @@ qt_add_qml_module(edit_timeline_qml_tests
         ExoSlider.qml
         ExoChevron.qml
         EditPlayer.qml
+        RecordingReview.qml
         EditTimeline.qml
         EditTimeField.qml
         EditDraftField.qml
@@ -1432,6 +1438,26 @@ set_tests_properties(quick.qml.edit_timeline PROPERTIES
     ENVIRONMENT_MODIFICATION "PATH=path_list_prepend:${_exosnap_quick_qt_prefix}/bin"
 )
 exosnap_set_test_phase(quick.qml.edit_timeline desktop)
+add_test(NAME quick.qml.recording_review COMMAND edit_timeline_qml_tests
+    -input "${PROJECT_SOURCE_DIR}/app/quick/tests_review/tst_RecordingReview.qml"
+    -o "${CMAKE_BINARY_DIR}/Testing/recording-review-test.txt,txt")
+set_tests_properties(quick.qml.recording_review PROPERTIES
+    LABELS "quick;quicktest"
+    TIMEOUT 120
+    ENVIRONMENT "QT_QPA_PLATFORM=offscreen;QML_IMPORT_PATH=${_exosnap_quick_qt_prefix}/qml"
+    ENVIRONMENT_MODIFICATION "PATH=path_list_prepend:${_exosnap_quick_qt_prefix}/bin"
+)
+exosnap_set_test_phase(quick.qml.recording_review desktop)
+add_test(NAME quick.qml.recording_review_native COMMAND edit_timeline_qml_tests
+    -input "${PROJECT_SOURCE_DIR}/app/quick/tests_review_native/tst_RecordingReviewNative.qml"
+    -o "${CMAKE_BINARY_DIR}/Testing/recording-review-native-test.txt,txt")
+set_tests_properties(quick.qml.recording_review_native PROPERTIES
+    LABELS "quick;quicktest"
+    TIMEOUT 120
+    ENVIRONMENT "QSG_RHI_BACKEND=d3d11;QT_QPA_PLATFORM=windows;QML_IMPORT_PATH=${_exosnap_quick_qt_prefix}/qml"
+    ENVIRONMENT_MODIFICATION "PATH=path_list_prepend:${_exosnap_quick_qt_prefix}/bin"
+)
+exosnap_set_test_phase(quick.qml.recording_review_native desktop)
 
 add_test(NAME quick.qml.edit_timeline_contracts COMMAND edit_timeline_qml_tests
     EditPage::test_EmptyViewerStable
@@ -1455,6 +1481,8 @@ exosnap_set_test_phase(quick.qml.edit_timeline_contracts desktop)
 # each other's cases.
 qt_add_executable(record_source_picker_qml_tests
     ${EXOSNAP_QUICK_TESTS_DIR}/record_picker_qml_test_main.cpp
+    CaptureTargetStillProvider.cpp
+    CaptureTargetStillProvider.h
     ${PROJECT_SOURCE_DIR}/app/assets/fonts/exosnap_fonts.qrc
 )
 

@@ -64,6 +64,25 @@ TestCase {
         return null;
     }
 
+    function test_review_edit_is_available_at_narrow_width() {
+        recordDriver.setRecordingState("ready");
+        const dock = createTemporaryObject(dockComponent, testCase, {
+            width: 860, reviewAvailable: true, reviewCanEdit: true
+        });
+        verify(dock);
+        waitForRendering(dock);
+        const edit = findAccessible(dock, qsTr("Edit finalized recording"));
+        const record = findAccessible(dock, qsTr("Start recording"));
+        verify(edit && record);
+        verify(edit.mapToItem(dock, 0, 0).x > record.mapToItem(dock, 0, 0).x);
+        const spy = createTemporaryObject(signalSpyComponent, testCase, {target: dock, signalName: "reviewEditRequested"});
+        verify(spy.valid);
+        mouseClick(edit);
+        compare(spy.count, 1);
+    }
+
+    Component { id: signalSpyComponent; SignalSpy {} }
+
     function test_start_recording_is_named_and_reaches_the_adapter() {
         recordDriver.setRecordingState("ready");
         const dock = createTemporaryObject(dockComponent, testCase);

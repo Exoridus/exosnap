@@ -53,7 +53,7 @@ Both Setup and updater screenshot previews accept `--preview-details` to capture
 | `--visual-shell-appearance dark\|light` | Shell-owned toast appearance, separate from app preference |
 | `--visual-expert` | Expert recording-profile controls |
 | `--visual-scroll F` | Fraction of current page's scrollable range |
-| `--visual-popup source-picker\|notification-hub\|gamepad` | Lazy popup |
+| `--visual-popup source-picker\|source-picker-windows\|source-picker-search\|source-picker-filters\|notification-hub\|gamepad` | Lazy popup |
 | `--visual-dialog <name>` | Named close/preset dialog |
 | `--record-visual-state <name>` | Named Record lifecycle state |
 | `--overlay-visual-state <name>` | Named recovery, error or crash surface, recording HUD variant (`hud-*`) or single desktop toast (`toast-success\|caution\|error\|info`) |
@@ -96,13 +96,16 @@ Synthetic captures from `cargo exo-dev screenshot` use Qt's offscreen platform w
 
 By default, output goes to the local screenshot directory reported by the command, in a `<commit date>_<short hash>` subdirectory, with `-dirty` for a tree with uncommitted changes and `_<label>` for `--label`, unless `--out-dir` is given. Each page has a subdirectory holding `<state>_<appearance>-<accent>_<size>.png` and that shot's overlay grabs. A later run into the same directory replaces the shots it retakes and keeps the others, and `manifest.json` (binary path, build time, SHA-256, HEAD, dirty flag, version, exact invocation per shot) and the `index.html` contact sheet always describe the whole directory. Each shot preserves stdout, stderr and the application log before its temporary configuration is removed. If the application log cannot be preserved, the failed shot keeps its configuration and reports the retained path. A shot whose log shows a harness option that found nothing to act on, an unknown state or a QML runtime error is reported as `warn`, not `ok`. A requested desktop overlay that produces no overlay image is also reported as a warning.
 
-The `settings` set captures the combined recording and application settings in the viewport and as a full page. Diagnostics captures collapsed and expanded disclosures, including issue and live-session fixtures. The `profile` set reveals each current recording-profile section in Simple and Expert mode, with existing Configure/Hide groups collapsed and expanded. It also includes full scroll content for the normal routing, expanded source details and legacy microphone arrangements. The `workspace` set captures the preview overlay menu and selected controller widgets with output included or hidden, including active and paused states. `EXOSNAP_VISUAL_RECORD_PANEL` accepts `overlay-menu`, `gamepad` and `gamepad-hidden`; retired sidebar names are rejected. Hardware-dependent camera controls remain conditional on the declared device fixture. Expert mode reveals details in the recording settings cards. `EXOSNAP_VISUAL_PROFILE_SECTION` reveals these cards on Settings rather than opening a Record sidebar. The full-page capture stitches the window above and below the page's scroller around its complete content, so no card falls between two scroll positions.
+The `settings` set captures the combined recording and application settings in the viewport and as a full page. Diagnostics captures collapsed and expanded disclosures, including issue and live-session fixtures. The `profile` set reveals each current recording-profile section in Simple and Expert mode, with existing Configure/Hide groups collapsed and expanded. It also includes full scroll content for the normal routing, expanded source details and legacy microphone arrangements. The `workspace` set captures the preview overlay menu and selected controller widgets with output included or hidden, including active and paused states. `EXOSNAP_VISUAL_RECORD_PANEL` accepts `overlay-menu`, `gamepad`, `gamepad-hidden`, `review-audio` and `review-edit`; retired sidebar names are rejected. Hardware-dependent camera controls remain conditional on the declared device fixture. Expert mode reveals details in the recording settings cards. `EXOSNAP_VISUAL_PROFILE_SECTION` reveals these cards on Settings rather than opening a Record sidebar. The full-page capture stitches the window above and below the page's scroller around its complete content, so no card falls between two scroll positions.
 
 The overlay windows are saved as separate files because they sit at their own desktop positions. For the `hud` set, the run also composes each theme and scale's overlay grabs into `overlays/sheet_<theme>_<size>.png`, one row per shot on a checkerboard. It compares windows side by side and does not reproduce their desktop placement. Overlays follow the display scale, not the window size, so vary `--scale` for them.
 
 ```powershell
 cargo exo-dev screenshot
 cargo exo-dev screenshot shot --page record --dialog preset-rename
+cargo exo-dev screenshot shot --page record --popup source-picker-filters --sources many-windows --appearance dark,light --size 1120x850
+cargo exo-dev screenshot shot --page record --record-state completed --record-panel review-audio --appearance dark,light --size 1600x1000,860x700
+cargo exo-dev screenshot shot --page edit --edit edit-default --record-state completed --record-panel review-edit --appearance dark,light --size 1600x1000,860x700
 cargo exo-dev screenshot sweep --set pages,record --size 1600x1000,860x700
 cargo exo-dev screenshot sweep --set hud --scale 1,1.5,2
 cargo exo-dev screenshot sweep --set all --appearance dark --accent aqua --scale 1 --size 2560x1440,1920x1080,1280x720 --out-dir "$env:TEMP\exosnap-review"
@@ -111,6 +114,18 @@ cargo exo-dev screenshot sweep --set all --appearance dark --accent aqua --scale
 Use a fresh output directory for a review package so retired scenarios from an older run cannot remain in its manifest. The size axis is the logical application window size, not an observed native maximized desktop or an OS title/taskbar measurement. At scale 1, viewport PNG dimensions match that requested size. Full-page and overlay images have their own dimensions.
 
 The run holds the build tree's lock, so a concurrent build cannot relink the binary mid-sweep. Scrolling and dialogs are applied only after the active page's loader is Ready, so the default four parallel jobs do not lose them to a slow page load.
+
+### Attaching screenshots to a pull request
+
+GitHub CLI 2.99 or newer supports image uploads through the repeatable `--attach` flag. Check `gh --version` before reporting that command-line uploads are unavailable. Upgrade an outdated installation or use a verified official portable release without changing the system installation.
+
+Reference the screenshots in `pr-body.md` with ordinary Markdown image links, such as `![Source picker, Dark, 1600x1000](screenshots/picker-dark.png)`. Paths in the body are relative to the body file's directory, with the working directory as a fallback. Attach those same files when updating the current branch's pull request:
+
+```powershell
+gh pr edit --body-file pr-body.md --attach screenshots/picker-dark.png --attach screenshots/picker-light.png
+```
+
+The CLI uploads the files and replaces their local Markdown paths with GitHub attachment URLs. Read the stored PR body back with `gh pr view --json body` and verify that every expected image uses a remote URL. Keep the original PNGs and capture manifest untracked. If upload fails, preserve any successful attachments and keep the PR in Draft until all required images are accessible. See [GitHub's attachment documentation](https://docs.github.com/en/github-cli/github-cli/attaching-files-with-github-cli) for supported formats and limits.
 
 ## Recording harness
 
