@@ -17,6 +17,18 @@ Rectangle {
     border.color: ExoTheme.overlayLine
     clip: true
 
+    readonly property var clipDetails: session.selectedClipDetails
+    readonly property var videoValues: session.videoProperties(clipDetails.id || 0, session.positionUs)
+    activeFocusOnTab: true
+    Keys.onPressed: event => {
+        if (event.key === Qt.Key_K && event.modifiers === Qt.NoModifier && !event.isAutoRepeat) {
+            root.session.autoKey = !root.session.autoKey;
+            event.accepted = true;
+        } else if (event.key === Qt.Key_Escape && root.session.dragActive) {
+            root.session.cancelClipDrag();
+            event.accepted = true;
+        }
+    }
     ExoEditPlayerItem {
         id: surface
         objectName: "editViewerSurface"
@@ -34,6 +46,71 @@ Rectangle {
         fillMode: Image.PreserveAspectFit
         visible: source.toString().length > 0
         Accessible.ignored: true
+    }
+    Item {
+        id: outputBox
+        anchors.centerIn: parent
+        width: Math.min(root.width, root.height * (root.clipDetails.outputAspect || 1))
+        height: width / (root.clipDetails.outputAspect || 1)
+        visible: (root.clipDetails.video ?? false) && root.session.selectedClipIds.length === 1 && root.session.positionUs >= (root.clipDetails.startUs || 0) && root.session.positionUs < (root.clipDetails.endUs || 0)
+        enabled: !root.session.trackLocked(root.clipDetails.trackId || 0)
+        Item {
+            id: transformBox
+            readonly property real baseWidth: Math.min(outputBox.width, outputBox.height * (root.clipDetails.sourceAspect || 1))
+            readonly property real baseHeight: baseWidth / (root.clipDetails.sourceAspect || 1)
+            property real draftX: 0
+            property real draftY: 0
+            property real draftScale: 1
+            property real draftRotation: 0
+            readonly property bool dragging: transformMouse.pressed && root.session.videoPreviewActive
+            width: baseWidth * (dragging ? draftScale : (root.videoValues[2]?.value ?? 1))
+            height: baseHeight * (dragging ? draftScale : (root.videoValues[2]?.value ?? 1))
+            x: (outputBox.width - width) / 2 + outputBox.width * (dragging ? draftX : (root.videoValues[0]?.value ?? 0))
+            y: (outputBox.height - height) / 2 + outputBox.height * (dragging ? draftY : (root.videoValues[1]?.value ?? 0))
+            rotation: dragging ? draftRotation : (root.videoValues[3]?.value ?? 0)
+            Rectangle { anchors.fill: parent; color: "transparent"; border.color: ExoTheme.accent; border.width: root.activeFocus ? 2 : 1; Accessible.ignored: true }
+            Rectangle { width: 12; height: 12; anchors.right: parent.right; anchors.bottom: parent.bottom; color: ExoTheme.accent; Accessible.ignored: true }
+            Rectangle { width: 12; height: 12; radius: 6; anchors.right: parent.right; anchors.top: parent.top; color: ExoTheme.accent; Accessible.ignored: true }
+            MouseArea {
+                id: transformMouse
+                anchors.fill: parent
+                cursorShape: Qt.SizeAllCursor
+                property point origin
+                property var initial: []
+                property int operation: 0
+                onPressed: mouse => {
+                    root.forceActiveFocus();
+                    root.player.setPlaying(false);
+                    initial = root.videoValues.map(row => row.value);
+                    origin = mapToItem(outputBox, mouse.x, mouse.y);
+                    operation = mouse.x > width - 24 ? (mouse.y < 24 ? 2 : mouse.y > height - 24 ? 1 : 0) : 0;
+                    transformBox.draftX = initial[0];
+                    transformBox.draftY = initial[1];
+                    transformBox.draftScale = initial[2];
+                    transformBox.draftRotation = initial[3];
+                    mouse.accepted = root.session.beginVideoTransformDrag(root.clipDetails.id || 0);
+                }
+                onPositionChanged: mouse => {
+                    if (!pressed || !root.session.dragActive)
+                        return;
+                    const point = mapToItem(outputBox, mouse.x, mouse.y);
+                    if (operation === 0) {
+                        transformBox.draftX = initial[0] + (point.x - origin.x) / outputBox.width;
+                        transformBox.draftY = initial[1] + (point.y - origin.y) / outputBox.height;
+                    } else {
+                        const centerX = outputBox.width * (0.5 + initial[0]);
+                        const centerY = outputBox.height * (0.5 + initial[1]);
+                        if (operation === 1)
+                            transformBox.draftScale = initial[2] * Math.hypot(point.x - centerX, point.y - centerY) / Math.max(1, Math.hypot(origin.x - centerX, origin.y - centerY));
+                        else
+                            transformBox.draftRotation = initial[3] + (Math.atan2(point.y - centerY, point.x - centerX) - Math.atan2(origin.y - centerY, origin.x - centerX)) * 180 / Math.PI;
+                    }
+                    root.session.updateVideoTransformDrag(transformBox.draftX, transformBox.draftY, transformBox.draftScale, transformBox.draftRotation);
+                }
+                onReleased: if (root.session.dragActive) root.session.commitClipDrag()
+                onCanceled: root.session.cancelClipDrag()
+            }
+        }
     }
     ColumnLayout {
         anchors.centerIn: parent

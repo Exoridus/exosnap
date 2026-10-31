@@ -94,6 +94,7 @@ QString ResolveTimelineKey(int key, int modifiers, bool auto_repeat) {
         {Qt::Key_A, Qt::ControlModifier, "select-all"},
         {Qt::Key_B, Qt::ControlModifier, "split"},
         {Qt::Key_S, Qt::NoModifier, "split"},
+        {Qt::Key_K, Qt::NoModifier, "auto-key"},
         {Qt::Key_Delete, Qt::NoModifier, "lift"},
         {Qt::Key_Delete, Qt::ShiftModifier, "ripple-remove"},
         {Qt::Key_Z, Qt::ControlModifier, "undo"},

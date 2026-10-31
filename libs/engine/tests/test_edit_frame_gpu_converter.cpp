@@ -771,6 +771,17 @@ class TimelineLayerComposition : public ::testing::Test {
     exosnap::engine::EditTimelineCompositor compositor_;
 };
 
+TEST_F(TimelineLayerComposition, TransformMovesScaledCoverageAndPreservesIdentity) {
+    const auto lower = Make(blue_, 1, 1, 0);
+    auto upper = Make(red_, 1, 1, 1);
+    upper.transform = {0.25, 0, 0.5, 90};
+    const auto image = Compose({lower, upper});
+    ExpectLinear(image, Reference(red_), (8 * 16 + 12) * 4);
+    ExpectLinear(image, Reference(blue_), (8 * 16 + 2) * 4);
+    upper.transform.scale = 0;
+    std::string error;
+    EXPECT_FALSE(compositor_.Compose(std::vector<Layer>{upper}, error));
+}
 TEST_F(TimelineLayerComposition, OpaqueSingleSourceMatchesTheConverter) {
     const auto composed = Compose({Make(red_, 1, 1, 0)});
     const auto direct = ConvertOnGpu(warp_, Frame420P8(red_, MatrixCoefficients::Bt709, ColorRange::Limited));

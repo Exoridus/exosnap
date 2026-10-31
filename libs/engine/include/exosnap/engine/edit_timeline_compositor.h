@@ -8,6 +8,7 @@
 #include <exosnap/engine/output_geometry.h>
 
 #include <array>
+#include <exosnap/engine/edit_automation.h>
 #include <memory>
 #include <span>
 
@@ -31,6 +32,7 @@ struct TimelineVideoLayer {
     double opacity = 1;
     // Composition order: a higher layer is drawn in front of every lower one.
     uint32_t layer = 0;
+    VideoTransform transform;
 };
 
 struct TimelineVideoFrame {

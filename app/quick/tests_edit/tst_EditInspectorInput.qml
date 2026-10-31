@@ -28,6 +28,60 @@ TestCase {
         while (testSession.canUndo) testSession.undo();
         testSession.linkedSelection = true;
     }
+    function test_auto_key_start_and_midpoint_undo() {
+        testSession.autoKey = true;
+        testSession.requestSeekUs(5000000);
+        const id = testSession.selectedClipDetails.id;
+        verify(testSession.setVideoProperty(id, 0, 0.25));
+        compare(testSession.videoProperties(id, 0)[0].key, true);
+        compare(testSession.videoProperties(id, 0)[0].value, 0);
+        compare(testSession.videoProperties(id, 2500000)[0].value, 0.125);
+        compare(testSession.videoProperties(id, 5000000)[0].key, true);
+        testSession.autoKey = false;
+        verify(testSession.setVideoKeyValue(id, 0, 5000000, 0.4));
+        compare(testSession.videoProperties(id, 0)[0].value, 0);
+        compare(testSession.videoProperties(id, 5000000)[0].value, 0.4);
+        testSession.undo();
+        testSession.undo();
+        compare(testSession.videoProperties(id, 5000000)[0].animated, false);
+        testSession.autoKey = false;
+    }
+    function test_diamond_removes_only_current_key_and_retains_last_value() {
+        testSession.autoKey = true;
+        testSession.requestSeekUs(5000000);
+        const id = testSession.selectedClipDetails.id;
+        verify(testSession.setVideoProperty(id, 4, 0.4));
+        verify(testSession.toggleVideoKey(id, 4));
+        compare(testSession.videoProperties(id, 0)[4].key, true);
+        compare(testSession.videoProperties(id, 5000000)[4].key, false);
+        testSession.requestSeekUs(0);
+        verify(testSession.toggleVideoKey(id, 4));
+        compare(testSession.videoProperties(id, 0)[4].animated, false);
+        compare(testSession.videoProperties(id, 0)[4].value, 1);
+        testSession.autoKey = false;
+    }
+    function test_viewer_candidate_commits_once_or_cancels() {
+        testSession.autoKey = true;
+        testSession.requestSeekUs(5000000);
+        const id = testSession.selectedClipDetails.id;
+        const start = testSession.selectedClipDetails.startUs;
+        verify(testSession.beginVideoTransformDrag(id));
+        testSession.updateVideoTransformDrag(0.1, 0.2, 0.5, 30);
+        testSession.updateVideoTransformDrag(0.25, 0.2, 0.5, 30);
+        compare(testSession.videoPreviewActive, true);
+        compare(testSession.videoProperties(id, 5000000)[0].value, 0);
+        testSession.cancelClipDrag();
+        compare(testSession.videoPreviewActive, false);
+        compare(testSession.videoProperties(id, 5000000)[0].animated, false);
+        verify(testSession.beginVideoTransformDrag(id));
+        testSession.updateVideoTransformDrag(0.25, 0.2, 0.5, 30);
+        verify(testSession.commitClipDrag());
+        compare(testSession.selectedClipDetails.startUs, start);
+        compare(testSession.videoProperties(id, 5000000)[0].value, 0.25);
+        testSession.undo();
+        compare(testSession.videoProperties(id, 5000000)[0].animated, false);
+        testSession.autoKey = false;
+    }
     function test_supported_fade_options_are_enabled_and_activated_by_pointer() {
         const inspector = createTemporaryObject(inspectorComponent, tests);
         const curve = findChild(inspector, "editDetailsFadeInCurve");

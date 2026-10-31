@@ -41,6 +41,22 @@ TestCase {
         verify(strip.activeFocus);
         return strip;
     }
+    function test_auto_key_toggle_does_not_edit_document_and_ignores_text_focus() {
+        const strip = make();
+        testSession.autoKey = false;
+        const undo = testSession.canUndo;
+        keyClick(Qt.Key_K);
+        compare(testSession.autoKey, true);
+        compare(testSession.canUndo, undo);
+        const input = createTemporaryObject(textInputComponent, strip);
+        input.forceActiveFocus();
+        keyClick(Qt.Key_K);
+        compare(testSession.autoKey, true);
+        input.focus = false;
+        strip.forceActiveFocus();
+        keyClick(Qt.Key_K);
+        compare(testSession.autoKey, false);
+    }
     function test_space_toggles_only_on_release() {
         make();
         const before = testEditHarness.transportCommand(testTransportPlayer);

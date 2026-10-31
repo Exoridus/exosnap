@@ -2659,3 +2659,74 @@ TEST(EditLegacyAcceptance, MoveTrimSplitAndFadeKeepUnrelatedLegacyValuesThroughP
         ExpectAuthoredGridState(*workspace.snapshot(), *committed);
     }
 }
+
+TEST(EditAutomation, SourceTimeInterpolationAndHold) {
+    using namespace exosnap::engine;
+    PropertyChannel channel{{{100, 0, KeyInterpolation::Linear}, {200, 1, KeyInterpolation::Smooth}, {300, 0}}};
+    ASSERT_TRUE(ValidChannel(channel, 0, 1));
+    EXPECT_DOUBLE_EQ(EvaluateChannel(channel, 0.7, 0), 0);
+    EXPECT_DOUBLE_EQ(EvaluateChannel(channel, 0.7, 150), 0.5);
+    EXPECT_DOUBLE_EQ(EvaluateChannel(channel, 0.7, 225), 0.84375);
+    channel.keys[0].interpolation = KeyInterpolation::Hold;
+    EXPECT_DOUBLE_EQ(EvaluateChannel(channel, 0.7, 199), 0);
+    EXPECT_DOUBLE_EQ(EvaluateChannel(channel, 0.7, 200), 1);
+    channel.keys[1].source_us = 100;
+    EXPECT_FALSE(ValidChannel(channel, 0, 1));
+}
+
+TEST(EditAutomation, AutoKeyOpacityIsAtomicAndSurvivesMoveSplitUndo) {
+    Workspace w;
+    ASSERT_TRUE(w.insert(source(w)));
+    const auto id = w.selection();
+    EXPECT_EQ(w.apply(SetClipOpacity{id, 1, 5'000'000, true}, w.revision()).status, CommandStatus::NoOp);
+    ASSERT_EQ(w.apply(SetClipOpacity{id, 0.4, 5'000'000, true}, w.revision()).status, CommandStatus::Applied);
+    const auto keys = w.clip(id)->opacity_channel;
+    ASSERT_EQ(keys.keys.size(), 2);
+    EXPECT_EQ(keys.keys.front().source_us, 0);
+    EXPECT_DOUBLE_EQ(keys.keys.front().value, 1);
+    EXPECT_DOUBLE_EQ(exosnap::engine::EvaluateTimeline(w.timeline(), 2'500'000).video.front().opacity, 0.7);
+    ASSERT_TRUE(w.undo());
+    EXPECT_TRUE(w.clip(id)->opacity_channel.keys.empty());
+    ASSERT_TRUE(w.redo());
+    ASSERT_TRUE(w.move(id, 1'000'000));
+    EXPECT_EQ(w.clip(id)->opacity_channel, keys);
+    EXPECT_DOUBLE_EQ(exosnap::engine::EvaluateTimeline(w.timeline(), 3'500'000).video.front().opacity, 0.7);
+    ASSERT_TRUE(w.split(id, 4'000'000));
+    for (const auto& clip : w.clips())
+        if (clip.track == w.clip(id)->track)
+            EXPECT_EQ(clip.opacity_channel, keys);
+    ASSERT_TRUE(w.undo());
+    ASSERT_EQ(w.apply(SetClipOpacity{id, 0.9, 6'000'000, false}, w.revision()).status, CommandStatus::Rejected);
+    EXPECT_EQ(w.clip(id)->opacity_channel, keys);
+    ASSERT_EQ(w.apply(SetClipOpacity{id, 0.3, 6'000'000, false}, w.revision()).status, CommandStatus::Applied);
+    EXPECT_NEAR(w.clip(id)->opacity_channel.keys.front().value, 0.9, 1e-12);
+    ASSERT_TRUE(w.setTrackLocked(w.clip(id)->track, true));
+    EXPECT_EQ(w.apply(SetClipOpacity{id, 0.2, 6'000'000, true}, w.revision()).status, CommandStatus::Rejected);
+}
+TEST(EditAutomation, TransformGestureKeysOnlyChangedChannelsAndScaleUsesRatio) {
+    using namespace exosnap::engine;
+    Workspace w;
+    ASSERT_TRUE(w.insert(source(w)));
+    const auto id = w.selection();
+    ASSERT_EQ(w.apply(SetVideoTransform{id, {0.25, -0.25, 0.5, 45}, 5'000'000, true}, w.revision()).status,
+              CommandStatus::Applied);
+    const auto snapshot = w.timeline();
+    const auto value = EvaluateTimeline(snapshot, 2'500'000).video.front().transform;
+    EXPECT_DOUBLE_EQ(value.x, 0.125);
+    EXPECT_DOUBLE_EQ(value.y, -0.125);
+    EXPECT_DOUBLE_EQ(value.scale, 0.75);
+    EXPECT_DOUBLE_EQ(value.rotation, 22.5);
+    EXPECT_TRUE(w.clip(id)->opacity_channel.keys.empty());
+    ASSERT_TRUE(w.undo());
+    EXPECT_EQ(w.clip(id)->transform, VideoTransform{});
+    ASSERT_TRUE(w.redo());
+    ASSERT_EQ(w.apply(SetVideoTransform{id, {0.25, -0.25, 1, 45}, 5'000'000, false}, w.revision()).status,
+              CommandStatus::Applied);
+    EXPECT_DOUBLE_EQ(w.clip(id)->transform_channels[2].keys.front().value, 2);
+    EXPECT_DOUBLE_EQ(w.clip(id)->transform_channels[2].keys.back().value, 1);
+    EXPECT_EQ(w.clip(id)->transform_channels[0], snapshot.clips.front().transform_channels[0]);
+    ASSERT_EQ(w.apply(SetVideoKey{id, 4, 5'000'000, {}}, w.revision()).status, CommandStatus::Applied);
+    ASSERT_EQ(w.apply(SetVideoKey{id, 4, 5'000'000, {}}, w.revision()).status, CommandStatus::Applied);
+    EXPECT_TRUE(w.clip(id)->opacity_channel.keys.empty());
+    EXPECT_DOUBLE_EQ(w.clip(id)->opacity, 1);
+}

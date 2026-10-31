@@ -786,6 +786,109 @@ QString EditSessionAdapter::rangeGestureReason() const {
     return {};
 }
 
+QVariantList EditSessionAdapter::videoProperties(qulonglong id, qint64 timeline_us) const {
+    const auto* clip = workspace_.clip(id);
+    if (!clip)
+        return {};
+    const auto time = clip->source_in + (std::clamp(timeline_us, clip->start, clip->end() - 1) - clip->start);
+    const std::array<double, 5> constants{clip->transform.x, clip->transform.y, clip->transform.scale,
+                                          clip->transform.rotation, clip->opacity};
+    QVariantList result;
+    for (size_t i = 0; i < constants.size(); ++i) {
+        const auto& channel = i == 4 ? clip->opacity_channel : clip->transform_channels[i];
+        const auto key = std::find_if(channel.keys.begin(), channel.keys.end(),
+                                      [&](const auto& item) { return item.source_us == time; });
+        result.push_back(QVariantMap{
+            {QStringLiteral("value"), engine::EvaluateChannel(channel, constants[i], time)},
+            {QStringLiteral("key"), key != channel.keys.end()},
+            {QStringLiteral("animated"), !channel.keys.empty()},
+            {QStringLiteral("interpolation"), key == channel.keys.end() ? 0 : static_cast<int>(key->interpolation)}});
+    }
+    return result;
+}
+
+bool EditSessionAdapter::beginVideoTransformDrag(qulonglong id) {
+    if (!preflightPendingDraft())
+        return false;
+    cancelClipDrag();
+    const auto values = videoProperties(id, workspace_.playhead());
+    if (values.size() != 5)
+        return false;
+    drag_snapshot_ = workspace_.snapshot();
+    drag_clip_ = id;
+    drag_playhead_ = workspace_.playhead();
+    drag_command_ = edit::SetVideoTransform{id, {}, drag_playhead_, auto_key_};
+    updateVideoTransformDrag(values[0].toMap().value(QStringLiteral("value")).toDouble(),
+                             values[1].toMap().value(QStringLiteral("value")).toDouble(),
+                             values[2].toMap().value(QStringLiteral("value")).toDouble(),
+                             values[3].toMap().value(QStringLiteral("value")).toDouble());
+    return dragValid();
+}
+
+void EditSessionAdapter::updateVideoTransformDrag(double x, double y, double scale, double rotation) {
+    if (!drag_command_ || !std::holds_alternative<edit::SetVideoTransform>(*drag_command_) || !drag_snapshot_)
+        return;
+    auto& command = std::get<edit::SetVideoTransform>(*drag_command_);
+    command.value = {x, y, scale, rotation};
+    drag_preview_ = edit::PreviewEdit(*drag_snapshot_, *drag_command_);
+    emit dragChanged();
+    emit videoPreviewChanged();
+}
+
+bool EditSessionAdapter::setVideoTransform(qulonglong id, double x, double y, double scale, double rotation) {
+    return applyCommand(edit::SetVideoTransform{id, {x, y, scale, rotation}, workspace_.playhead(), auto_key_});
+}
+
+bool EditSessionAdapter::setVideoProperty(qulonglong id, int property, double value) {
+    if (property < 0 || property > 4)
+        return false;
+    if (property == 4)
+        return applyCommand(edit::SetClipOpacity{id, value, workspace_.playhead(), auto_key_});
+    const auto values = videoProperties(id, workspace_.playhead());
+    if (values.size() != 5)
+        return false;
+    engine::VideoTransform transform{values[0].toMap().value(QStringLiteral("value")).toDouble(),
+                                     values[1].toMap().value(QStringLiteral("value")).toDouble(),
+                                     values[2].toMap().value(QStringLiteral("value")).toDouble(),
+                                     values[3].toMap().value(QStringLiteral("value")).toDouble()};
+    std::array<double*, 4> fields{&transform.x, &transform.y, &transform.scale, &transform.rotation};
+    *fields[property] = value;
+    return applyCommand(edit::SetVideoTransform{id, transform, workspace_.playhead(), auto_key_});
+}
+
+QVariantList EditSessionAdapter::videoKeyframes(qulonglong id, int property) const {
+    const auto* clip = workspace_.clip(id);
+    if (!clip || property < 0 || property > 4)
+        return {};
+    const auto& channel = property == 4 ? clip->opacity_channel : clip->transform_channels[property];
+    QVariantList result;
+    for (const auto& key : channel.keys)
+        if (key.source_us >= clip->source_in && key.source_us < clip->source_out)
+            result.push_back(QVariantMap{{QStringLiteral("sourceUs"), QVariant::fromValue<qint64>(key.source_us)},
+                                         {QStringLiteral("timelineUs"),
+                                          QVariant::fromValue<qint64>(clip->start + key.source_us - clip->source_in)},
+                                         {QStringLiteral("value"), key.value}});
+    return result;
+}
+
+bool EditSessionAdapter::setVideoKeyValue(qulonglong id, int property, qint64 source_us, double value) {
+    const auto* clip = workspace_.clip(id);
+    if (!clip || source_us < clip->source_in || source_us >= clip->source_out)
+        return false;
+    return applyCommand(edit::SetVideoKey{id, property, clip->start + source_us - clip->source_in, {}, value});
+}
+
+bool EditSessionAdapter::toggleVideoKey(qulonglong id, int property) {
+    return applyCommand(edit::SetVideoKey{id, property, workspace_.playhead(), {}});
+}
+
+bool EditSessionAdapter::setVideoInterpolation(qulonglong id, int property, int interpolation) {
+    if (interpolation < 0 || interpolation > 2)
+        return false;
+    return applyCommand(
+        edit::SetVideoKey{id, property, workspace_.playhead(), static_cast<engine::KeyInterpolation>(interpolation)});
+}
+
 bool EditSessionAdapter::setClipGain(qulonglong id, double gain_db) {
     return applyCommand(edit::SetGain{edit::GainTarget::Clip, id, gain_db});
 }
@@ -1643,6 +1746,12 @@ QVariantList EditSessionAdapter::visibleClipsOnTracksUs(qint64 from_us, qint64 t
 }
 
 QVariantMap EditSessionAdapter::projectClipRow(const edit::Clip& clip) const {
+    const auto metadata = sourceMetadata(clip.asset);
+    const auto output = workspace_.snapshot();
+    const double source_aspect =
+        metadata && metadata->height ? static_cast<double>(metadata->width) / metadata->height : 1;
+    const double output_aspect =
+        output->output_height ? static_cast<double>(output->output_width) / output->output_height : source_aspect;
     const auto* asset = workspace_.asset(clip.asset);
     const auto track = std::find_if(workspace_.tracks().begin(), workspace_.tracks().end(),
                                     [&clip](const auto& t) { return t.id == clip.track; });
@@ -1680,6 +1789,8 @@ QVariantMap EditSessionAdapter::projectClipRow(const edit::Clip& clip) const {
         {QStringLiteral("durationUs"), QVariant::fromValue<qint64>(clip.duration())},
         {QStringLiteral("inUs"), QVariant::fromValue<qint64>(clip.source_in)},
         {QStringLiteral("outUs"), QVariant::fromValue<qint64>(clip.source_out)},
+        {QStringLiteral("sourceAspect"), source_aspect},
+        {QStringLiteral("outputAspect"), output_aspect},
         {QStringLiteral("gainDb"), clip.gain_db},
         {QStringLiteral("enabled"), clip.enabled},
         {QStringLiteral("fadeInCurve"), static_cast<int>(clip.fade_in.curve.kind)},
@@ -3024,6 +3135,7 @@ QString EditSessionAdapter::dragReason() const {
 }
 
 void EditSessionAdapter::cancelClipDrag() {
+    const bool video = drag_command_ && std::holds_alternative<edit::SetVideoTransform>(*drag_command_);
     drag_snapshot_.reset();
     drag_command_.reset();
     drag_preview_ = {};
@@ -3034,6 +3146,8 @@ void EditSessionAdapter::cancelClipDrag() {
     drag_snap_marker_.reset();
     drag_gain_ = false;
     drag_gain_fine_ = false;
+    if (video)
+        emit videoPreviewChanged();
     if (drag_selection_) {
         auto original = std::move(*drag_selection_);
         drag_selection_.reset();

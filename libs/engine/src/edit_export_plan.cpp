@@ -78,6 +78,9 @@ class PlanDigest {
 
 bool Effect(const TimelineClip& clip) {
     return clip.enabled != clip.original_enabled || clip.gain_db != 0 || clip.opacity != 1 ||
+           !clip.opacity_channel.keys.empty() || clip.transform != VideoTransform{} ||
+           std::any_of(clip.transform_channels.begin(), clip.transform_channels.end(),
+                       [](const auto& channel) { return !channel.keys.empty(); }) ||
            clip.fade_in.duration_us != 0 || clip.fade_out.duration_us != 0;
 }
 
@@ -187,6 +190,24 @@ EditPlanHash Hash(const EditExportPlan& p) {
         h.number(c.original_enabled);
         h.real(c.gain_db);
         h.real(c.opacity);
+        h.number(c.opacity_channel.keys.size());
+        for (const auto& key : c.opacity_channel.keys) {
+            h.number(key.source_us);
+            h.real(key.value);
+            h.number(static_cast<uint64_t>(key.interpolation));
+        }
+        h.real(c.transform.x);
+        h.real(c.transform.y);
+        h.real(c.transform.scale);
+        h.real(c.transform.rotation);
+        for (const auto& channel : c.transform_channels) {
+            h.number(channel.keys.size());
+            for (const auto& key : channel.keys) {
+                h.number(key.source_us);
+                h.real(key.value);
+                h.number(static_cast<uint64_t>(key.interpolation));
+            }
+        }
         h.number(c.stream.has_value());
         if (c.stream)
             h.stream(*c.stream);

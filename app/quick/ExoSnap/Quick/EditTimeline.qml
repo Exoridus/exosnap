@@ -338,6 +338,7 @@ FocusScope {
             break;
         }
         case "previous-view": root.view.restorePreviousView(); break;
+        case "auto-key": root.session.autoKey = !root.session.autoKey; break;
         case "loop": root.player.loopEnabled = !root.player.loopEnabled; break;
         case "media-dock": root.mediaToggleRequested(); break;
         case "inspector-dock": root.inspectorToggleRequested(); break;

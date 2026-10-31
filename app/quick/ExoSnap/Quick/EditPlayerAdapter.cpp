@@ -328,6 +328,10 @@ void EditPlayerAdapter::setSession(EditSessionAdapter* session) {
         closeClip();
     });
     connect(session_, &EditSessionAdapter::workspaceChanged, this, &EditPlayerAdapter::submitTimeline);
+    connect(session_, &EditSessionAdapter::videoPreviewChanged, this, [this] {
+        timeline_revision_ = (std::numeric_limits<edit::Revision>::max)();
+        submitTimeline();
+    });
     connect(session_, &EditSessionAdapter::sourceVerificationChanged, this, [this](qulonglong asset) {
         const bool unavailable = session_->sourceVerificationFailed(asset);
         if (unavailable == unavailable_sources_.contains(asset))
@@ -453,7 +457,8 @@ void EditPlayerAdapter::submitTimeline() {
         sources.push_back({asset.id, std::filesystem::path(asset.path), *metadata, asset.monitor_selection,
                            session_->sourceAccess(asset.id), session_->sourceProof(asset.id)});
     }
-    auto snapshot = std::make_shared<EditPlaybackSnapshot>(current, std::move(sources), unavailable_sources_);
+    auto snapshot = std::make_shared<EditPlaybackSnapshot>(current, std::move(sources), unavailable_sources_,
+                                                           session_->videoPreview());
     const bool retains_media = published_snapshot_ && published_snapshot_->retainsMedia(*snapshot);
     published_snapshot_ = snapshot;
     timeline_revision_ = current.revision();
