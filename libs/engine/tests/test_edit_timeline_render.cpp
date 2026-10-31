@@ -1,7 +1,9 @@
 #include <exosnap/engine/audio_media_manifest.h>
 #include <exosnap/engine/backend_tuning.h>
 #include <exosnap/engine/codec_types.h>
+#include <exosnap/engine/edit_automation.h>
 #include <exosnap/engine/edit_export_plan.h>
+#include <exosnap/engine/edit_gain_envelope.h>
 #include <exosnap/engine/edit_player_engine.h>
 #include <exosnap/engine/edit_timeline.h>
 #include <exosnap/engine/edit_timeline_compositor.h>
@@ -25,6 +27,7 @@
 #include <atomic>
 #include <chrono>
 #include <cmath>
+#include <cstddef>
 #include <cstdint>
 #include <cstdlib>
 #include <cstring>

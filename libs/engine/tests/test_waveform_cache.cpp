@@ -1,5 +1,5 @@
+#include <exosnap/engine/edit_gain_envelope.h>
 #include <exosnap/engine/edit_player_engine.h>
-#include <exosnap/engine/edit_timeline.h>
 #include <exosnap/engine/edit_timeline_export.h>
 #include <exosnap/engine/edit_types.h>
 #include <exosnap/engine/media_cache_store.h>

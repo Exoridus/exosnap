@@ -3,6 +3,7 @@
 #include <cstddef>
 #include <cstdint>
 #include <exception>
+#include <exosnap/engine/edit_gain_envelope.h>
 #include <exosnap/engine/edit_timeline.h>
 #include <exosnap/engine/edit_timeline_audio.h>
 #include <exosnap/engine/edit_timeline_render.h>
