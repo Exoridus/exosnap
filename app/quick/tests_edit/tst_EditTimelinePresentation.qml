@@ -50,7 +50,7 @@ TestCase {
         compare(strip.laneViewportRect.x, strip.laneStart);
         verify(strip.laneViewportRect.width > 0);
     }
-    function test_crossfade_at_cut_menu_keeps_complete_candidate_pending_until_enter_or_escape() {
+    function test_crossfade_at_cut_menu_commits_once_with_undo_and_redo() {
         const strip = createTemporaryObject(timelineComponent, tests);
         testSession.requestSeekUs(50000000);
         testSession.splitSelected();
@@ -65,21 +65,17 @@ TestCase {
         verify(!!action);
         verify(action.enabled);
         const duration = testSession.durationUs;
+        const revision = testEditHarness.timelineCheckpoint().revision;
         mouseClick(action, action.width / 2, action.height / 2);
-        verify(testSession.dragActive);
-        verify(testSession.dragValid);
-        compare(testSession.durationUs, duration);
-        compare(testSession.transitions.length, 0);
-        strip.forceActiveFocus();
-        keyClick(Qt.Key_Escape);
-        verify(!testSession.dragActive);
-        compare(testSession.transitions.length, 0);
-        verify(testSession.previewCrossfadeAtCut(outgoing));
-        strip.forceActiveFocus();
-        keyClick(Qt.Key_Return);
         verify(!testSession.dragActive);
         compare(testSession.transitions.length, 2);
         compare(testSession.durationUs, duration);
+        compare(testEditHarness.timelineCheckpoint().revision, revision + 1);
+        compare(findChild(strip, "editApplyGapPreview"), null);
+        testSession.undo();
+        compare(testSession.transitions.length, 0);
+        testSession.redo();
+        compare(testSession.transitions.length, 2);
     }
     function test_escape_before_threshold_prevents_later_mouse_motion_from_starting_an_edit() {
         const strip = createTemporaryObject(timelineComponent, tests);
@@ -370,7 +366,7 @@ TestCase {
         testSession.undo();
         compare(testSession.transitions.find(row => row.id === junction.id).cutUs, 49500000);
     }
-    function test_remove_overlap_popup_stages_one_complete_structural_candidate() {
+    function test_remove_overlap_popup_commits_once_without_a_second_confirmation() {
         const junction = makeOverlapJunction();
         const strip = createTemporaryObject(timelineComponent, tests);
         strip.view.setVisibleInterval(48000000, 51000000);
@@ -379,25 +375,17 @@ TestCase {
         tryCompare(popup, "opened", true);
         const remove = findChild(strip, "editRemoveOverlap");
         verify(!!remove);
-        const checkpoint = testEditHarness.timelineCheckpoint();
-        const geometry = JSON.stringify(testSession.visibleClipsUs(0, 100000000));
+        const revision = testEditHarness.timelineCheckpoint().revision;
         remove.forceActiveFocus();
         keyClick(Qt.Key_Space);
-        verify(testSession.dragActive && testSession.dragValid, testSession.workspaceError + " / " + testSession.dragReason);
-        compare(JSON.stringify(testSession.visibleClipsUs(0, 100000000)), geometry);
-        compare(testSession.transitions.length, 2);
-        compare(testEditHarness.timelineCheckpoint(), checkpoint);
-        const overlay = findChild(strip, "editJunctionCurves" + junction.id).parent;
-        compare(overlay.opacity, 0.3);
-        strip.forceActiveFocus();
-        keyClick(Qt.Key_Escape);
-        compare(testSession.transitions.length, 2);
-        verify(testSession.previewRemoveOverlap(junction.id));
-        strip.forceActiveFocus();
-        keyClick(Qt.Key_Return);
+        verify(!testSession.dragActive);
         compare(testSession.transitions.length, 0);
-        keyClick(Qt.Key_Z, Qt.ControlModifier);
+        compare(testEditHarness.timelineCheckpoint().revision, revision + 1);
+        compare(findChild(strip, "editApplyGapPreview"), null);
+        testSession.undo();
         compare(testSession.transitions.length, 2);
+        testSession.redo();
+        compare(testSession.transitions.length, 0);
     }
     function test_actual_overlap_body_selects_on_press_and_escape_restores_original_range() {
         const junction = makeOverlapJunction();
@@ -1106,7 +1094,7 @@ TestCase {
         testSession.undo();
         compare(testSession.visibleClips(0, 100000)[0].startMs, 0);
     }
-    function test_gap_selection_copy_paste_and_escape_preview() {
+    function test_gap_shift_delete_commits_directly_and_undo_restores_the_gap() {
         const strip = createTemporaryObject(timelineComponent, tests);
         const id = testSession.visibleClips(0, 100000)[0].id;
         testSession.moveClip(id, 10000, false);
@@ -1116,12 +1104,19 @@ TestCase {
         compare(testSession.selectedGap.endMs, 10000);
         keyClick(Qt.Key_Delete);
         compare(testSession.visibleClips(0, 200000)[0].startMs, 10000);
+        const revision = testEditHarness.timelineCheckpoint().revision;
         keyClick(Qt.Key_Delete, Qt.ShiftModifier);
-        verify(testSession.dragActive && testSession.dragValid);
-        compare(testSession.visibleClips(0, 200000)[0].startMs, 10000);
-        verify(findChild(strip, "editApplyGapPreview").visible);
-        keyClick(Qt.Key_Escape);
         verify(!testSession.dragActive);
+        compare(findChild(strip, "editApplyGapPreview"), null);
+        compare(testSession.visibleClips(0, 200000)[0].startMs, 0);
+        compare(testEditHarness.timelineCheckpoint().revision, revision + 1);
+        testSession.undo();
+        compare(testSession.visibleClips(0, 200000)[0].startMs, 10000);
+        testSession.redo();
+        compare(testSession.visibleClips(0, 200000)[0].startMs, 0);
+        testSession.undo();
+        testSession.selectGap(testSession.tracks[0].id, 5000);
+        strip.forceActiveFocus();
         keyClick(Qt.Key_Menu);
         const blankMenu = findChild(strip, "editGapMenu");
         tryCompare(blankMenu, "opened", true);
@@ -1499,14 +1494,13 @@ TestCase {
         keyClick(Qt.Key_Z, Qt.ControlModifier | Qt.ShiftModifier);
         compareCommitted(candidates);
     }
-    function test_gap_pointer_selection_reviews_all_tracks_before_keyboard_apply_data() {
+    function test_gap_shift_delete_commits_or_rejects_atomically_data() {
         return [
-            {tag: "apply", cancel: false, conflict: false},
-            {tag: "escape", cancel: true, conflict: false},
-            {tag: "other-track-conflict", cancel: false, conflict: true}
+            {tag: "apply", conflict: false},
+            {tag: "other-track-conflict", conflict: true}
         ];
     }
-    function test_gap_pointer_selection_reviews_all_tracks_before_keyboard_apply(data) {
+    function test_gap_shift_delete_commits_or_rejects_atomically(data) {
         testSession.snapping = false;
         const initial = testSession.visibleClips(0, 100000);
         testSession.moveClip(initial[0].id, 10000, false);
@@ -1518,41 +1512,31 @@ TestCase {
         }
         const strip = gestureTimeline();
         const before = clipGeometry();
-        const checkpoint = testEditHarness.timelineCheckpoint();
+        const revision = testEditHarness.timelineCheckpoint().revision;
         mouseClick(strip, strip.positionAt(5000) + 2, 60);
         tryCompare(testSession, "selectedClip", 0);
         compare(testSession.selectedGap.startMs, 0);
         compare(testSession.selectedGap.endMs, 10000);
         keyClick(Qt.Key_Delete);
         compare(clipGeometry(), before);
-        compare(testEditHarness.timelineCheckpoint(), checkpoint);
+        compare(testEditHarness.timelineCheckpoint().revision, revision);
         keyClick(Qt.Key_Delete, Qt.ShiftModifier);
-        tryCompare(testSession, "dragActive", true);
-        tryCompare(testSession, "dragValid", !data.conflict);
-        const apply = findChild(strip, "editApplyGapPreview");
-        verify(!!apply, "Object exists");
-        verify(apply.visible);
-        compare(apply.enabled, !data.conflict);
-        compare(clipGeometry(), before);
-        compare(testEditHarness.timelineCheckpoint(), checkpoint);
-        const candidates = data.conflict ? [] : projectedClips(strip);
-        if (!data.conflict) {
-            compare(candidates.length, 2);
-            for (const row of candidates) compare(row.startMs, 0);
-        }
-        keyClick(data.cancel ? Qt.Key_Escape : Qt.Key_Return);
         tryCompare(testSession, "dragActive", false);
-        if (data.cancel || data.conflict) {
+        compare(findChild(strip, "editApplyGapPreview"), null);
+        if (data.conflict) {
             compare(clipGeometry(), before);
-            compare(testEditHarness.timelineCheckpoint(), checkpoint);
+            compare(testEditHarness.timelineCheckpoint().revision, revision);
+            verify(testSession.workspaceError.length > 0);
             return;
         }
-        compareCommitted(candidates);
-        compare(testEditHarness.timelineCheckpoint().revision, checkpoint.revision + 1);
+        const after = clipGeometry();
+        for (const row of after)
+            compare(row.startMs, 0);
+        compare(testEditHarness.timelineCheckpoint().revision, revision + 1);
         keyClick(Qt.Key_Z, Qt.ControlModifier);
         compare(clipGeometry(), before);
         keyClick(Qt.Key_Y, Qt.ControlModifier);
-        compareCommitted(candidates);
+        compare(clipGeometry(), after);
     }
     function test_spacer_pointer_move_trim_cancel_and_delete_keep_media_fixed() {
         testSession.snapping = false;

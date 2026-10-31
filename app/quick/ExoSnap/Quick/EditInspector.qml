@@ -205,7 +205,7 @@ ExoScrollView {
                 objectName: "editInspectorCrossfadeAtCut"
                 Layout.fillWidth: true
                 text: qsTr("Crossfade to next clip")
-                onClicked: if (root.session.previewCrossfadeAtCut(root.session.selectedClip, root.crossfadeDurationUs)) root.canvasFocusItem.forceActiveFocus()
+                onClicked: if (root.session.crossfadeAtCut(root.session.selectedClip, root.crossfadeDurationUs)) root.canvasFocusItem.forceActiveFocus()
             }
         }
         Section {
@@ -433,7 +433,7 @@ ExoScrollView {
                 Layout.fillWidth: true
                 text: qsTr("Remove time on all tracks")
                 enabled: !root.session.rangeScopeReviewActive
-                onClicked: if (root.session.previewRemoveTimeOnAllTracks()) root.canvasFocusItem.forceActiveFocus()
+                onClicked: if (root.session.removeTimeOnAllTracks()) root.canvasFocusItem.forceActiveFocus()
             }
         }
         Section {
@@ -489,7 +489,7 @@ ExoScrollView {
                 Layout.fillWidth: true
                 visible: root.mode === EditSessionAdapter.GapSelection
                 text: qsTr("Close Gap")
-                onClicked: root.session.previewCloseGap()
+                onClicked: root.session.closeGap()
             }
         }
     }

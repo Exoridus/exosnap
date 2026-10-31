@@ -1044,7 +1044,80 @@ TEST(EditCrossfadeAtCutAdapter, AdjacentCutStagesCompleteCandidateUntilCommitOrC
     EXPECT_EQ(session.workspace().transitions(), before->junctions);
 }
 
-TEST(EditCrossfadeAtCutAdapter, DropStagesSameValidatedCandidateWithoutChangingWorkspace) {
+TEST(EditImmediateTimelineActions, CrossfadeAndOverlapCommitOneStepEachWithUndoRedo) {
+    EnsureApplication();
+    EditSessionAdapter session;
+    session.setEditContext(MakeContext(10));
+    const auto outgoing = session.workspace().clips().front().id;
+    session.selectClip(outgoing);
+    session.setPositionUs(5'000'000);
+    session.splitSelected();
+    const auto original = session.workspace().snapshot();
+
+    ASSERT_TRUE(session.crossfadeAtCut(outgoing));
+    EXPECT_FALSE(session.dragActive());
+    EXPECT_EQ(session.workspace().revision(), original->revision + 1);
+    ASSERT_EQ(session.workspace().transitions().size(), 2U);
+    const auto junction_id = session.workspace().transitions().front().id;
+
+    ASSERT_TRUE(session.removeOverlap(junction_id));
+    EXPECT_FALSE(session.dragActive());
+    EXPECT_EQ(session.workspace().revision(), original->revision + 2);
+    EXPECT_TRUE(session.workspace().transitions().empty());
+
+    session.undo();
+    EXPECT_EQ(session.workspace().transitions().size(), 2U);
+    session.undo();
+    EXPECT_EQ(session.workspace().transitions(), original->junctions);
+    session.redo();
+    EXPECT_EQ(session.workspace().transitions().size(), 2U);
+    session.redo();
+    EXPECT_TRUE(session.workspace().transitions().empty());
+}
+
+TEST(EditImmediateTimelineActions, ClosingGapCommitsAndUndoRestoresIt) {
+    EnsureApplication();
+    EditSessionAdapter session;
+    session.setEditContext(MakeContext(10));
+    const auto id = session.workspace().clips().front().id;
+    const auto track = session.workspace().clips().front().track;
+    session.moveClip(id, 1000, false);
+    session.selectGap(track, 500);
+    const auto original = session.workspace().snapshot();
+
+    ASSERT_TRUE(session.closeGap());
+    EXPECT_FALSE(session.dragActive());
+    EXPECT_EQ(session.workspace().revision(), original->revision + 1);
+    EXPECT_EQ(session.workspace().clip(id)->start, 0);
+    session.undo();
+    EXPECT_EQ(session.workspace().clips(), original->clips);
+    session.redo();
+    EXPECT_EQ(session.workspace().clip(id)->start, 0);
+}
+
+TEST(EditImmediateTimelineActions, RemovingTimeAcrossTracksCommitsAndCanBeUndone) {
+    EnsureApplication();
+    EditSessionAdapter session;
+    session.setEditContext(MakeContext(10));
+    QVariantList scope;
+    for (const auto& track : session.workspace().tracks())
+        scope.push_back(QVariant::fromValue<qulonglong>(track.id));
+    ASSERT_TRUE(session.setEditRangeUs(1'000'000, 2'000'000, scope));
+    const auto original = session.workspace().snapshot();
+    const auto original_duration = session.durationUs();
+
+    ASSERT_TRUE(session.removeTimeOnAllTracks());
+    EXPECT_FALSE(session.dragActive());
+    EXPECT_EQ(session.workspace().revision(), original->revision + 1);
+    EXPECT_EQ(session.durationUs(), 9'000'000);
+    session.undo();
+    EXPECT_EQ(session.workspace().clips(), original->clips);
+    EXPECT_EQ(session.durationUs(), original_duration);
+    session.redo();
+    EXPECT_EQ(session.durationUs(), 9'000'000);
+}
+
+TEST(EditCrossfadeAtCutAdapter, DroppingCrossfadeCommitsOnceAndUndoRestoresTheCut) {
     EnsureApplication();
     EditSessionAdapter session;
     session.setEditContext(MakeContext(10));
@@ -1052,12 +1125,15 @@ TEST(EditCrossfadeAtCutAdapter, DropStagesSameValidatedCandidateWithoutChangingW
     session.splitSelected();
     const auto before = session.workspace().snapshot();
     ASSERT_TRUE(session.dropCrossfadeUs(5'000'000, 0));
-    EXPECT_TRUE(session.dragActive());
-    EXPECT_TRUE(session.dragValid());
-    EXPECT_EQ(session.workspace().clips(), before->clips);
-    EXPECT_EQ(session.workspace().revision(), before->revision);
+    EXPECT_FALSE(session.dragActive());
+    EXPECT_EQ(session.workspace().revision(), before->revision + 1);
+    EXPECT_EQ(session.workspace().transitions().size(), 2U);
     EXPECT_EQ(session.workspace().duration(), 10'000'000);
-    session.cancelClipDrag();
+    session.undo();
+    EXPECT_EQ(session.workspace().clips(), before->clips);
+    EXPECT_EQ(session.workspace().transitions(), before->junctions);
+    session.redo();
+    EXPECT_EQ(session.workspace().transitions().size(), 2U);
 }
 
 TEST(EditRemoveOverlapAdapter, StructuralCandidatePreservesCommittedGeometryAndOriginalSelectionUntilCommit) {

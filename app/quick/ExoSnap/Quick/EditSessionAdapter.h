@@ -332,6 +332,7 @@ class EditSessionAdapter : public QObject {
     Q_INVOKABLE void copyBlankDuration();
     Q_INVOKABLE void pasteSpacer();
     Q_INVOKABLE void previewCloseGap();
+    Q_INVOKABLE bool closeGap();
     Q_INVOKABLE void setFixedTimelineEnd(bool fixed, qint64 time_ms);
     Q_INVOKABLE void beginClipDrag(qulonglong id, int edge = -1, bool unlink_member = false);
     Q_INVOKABLE void beginJunctionDrag(qulonglong outgoing, int edge);
@@ -353,6 +354,7 @@ class EditSessionAdapter : public QObject {
     Q_INVOKABLE bool inspectClip(qulonglong id);
     Q_INVOKABLE QVariantMap occupiedBounds() const;
     Q_INVOKABLE bool previewRemoveTimeOnAllTracks();
+    Q_INVOKABLE bool removeTimeOnAllTracks();
     Q_INVOKABLE bool deleteTrack(qulonglong id, bool confirmed = false);
     // Severity of the post-flight report, as carried by the header badge.
     enum ReportSeverity {
@@ -452,7 +454,9 @@ class EditSessionAdapter : public QObject {
     Q_INVOKABLE bool applyCrossfade(qulonglong outgoing = 0, qint64 duration_ms = 500);
     Q_INVOKABLE bool canCrossfade(qulonglong outgoing = 0) const;
     Q_INVOKABLE bool previewCrossfadeAtCut(qulonglong outgoing = 0, qint64 duration_us = 500000);
+    Q_INVOKABLE bool crossfadeAtCut(qulonglong outgoing = 0, qint64 duration_us = 500000);
     Q_INVOKABLE bool previewRemoveOverlap(qulonglong junction_id = 0);
+    Q_INVOKABLE bool removeOverlap(qulonglong junction_id = 0);
     Q_INVOKABLE bool canCrossfadeAtCut(qulonglong outgoing = 0) const;
     Q_INVOKABLE bool dropCrossfade(qint64 at_ms, qint64 tolerance_ms);
     // Tolerance is limited to 250 ms.

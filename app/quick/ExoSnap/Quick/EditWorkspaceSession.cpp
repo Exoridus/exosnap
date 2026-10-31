@@ -1458,6 +1458,10 @@ bool EditSessionAdapter::previewRemoveTimeOnAllTracks() {
     return true;
 }
 
+bool EditSessionAdapter::removeTimeOnAllTracks() {
+    return previewRemoveTimeOnAllTracks() && commitClipDrag();
+}
+
 bool EditSessionAdapter::setTrackLocked(qulonglong id, bool locked) {
     if (!workspace_.setTrackLocked(id, locked))
         return false;
@@ -1919,6 +1923,10 @@ bool EditSessionAdapter::previewCrossfadeAtCut(qulonglong outgoing, qint64 durat
     return true;
 }
 
+bool EditSessionAdapter::crossfadeAtCut(qulonglong outgoing, qint64 duration) {
+    return previewCrossfadeAtCut(outgoing, duration) && commitClipDrag();
+}
+
 bool EditSessionAdapter::previewRemoveOverlap(qulonglong junction_id) {
     if (!preflightPendingDraft())
         return false;
@@ -1948,6 +1956,10 @@ bool EditSessionAdapter::previewRemoveOverlap(qulonglong junction_id) {
         return false;
     }
     return true;
+}
+
+bool EditSessionAdapter::removeOverlap(qulonglong junction_id) {
+    return previewRemoveOverlap(junction_id) && commitClipDrag();
 }
 
 bool EditSessionAdapter::canCrossfadeAtCut(qulonglong outgoing) const {
@@ -2009,7 +2021,7 @@ bool EditSessionAdapter::dropCrossfadeUs(qint64 at_us, qint64 tolerance_us) {
         }
     }
     if (selected)
-        return previewCrossfadeAtCut(selected);
+        return crossfadeAtCut(selected);
     refuseEdit(tr("Choose an adjacent cut with enough source handles for a crossfade."));
     return false;
 }
@@ -2559,7 +2571,7 @@ void EditSessionAdapter::deleteSelected(bool ripple_delete) {
                 if (spacer.id == selected_spacer_) {
                     selected_gap_ = {spacer.start_us, spacer.end()};
                     selected_gap_track_ = spacer.track;
-                    previewCloseGap();
+                    closeGap();
                     return;
                 }
         } else {
@@ -2570,7 +2582,7 @@ void EditSessionAdapter::deleteSelected(bool ripple_delete) {
     }
     if (selected_gap_track_) {
         if (ripple_delete)
-            previewCloseGap();
+            closeGap();
         return;
     }
     if (selection_.mode != edit::SelectionMode::Clips || selection_.clip_ids.empty())
@@ -3699,6 +3711,13 @@ void EditSessionAdapter::previewCloseGap() {
     drag_command_ = edit::CloseGap{selected_gap_};
     drag_preview_ = edit::PreviewEdit(*drag_snapshot_, *drag_command_);
     emit dragChanged();
+}
+
+bool EditSessionAdapter::closeGap() {
+    if (!selected_gap_track_ || !preflightPendingDraft())
+        return false;
+    previewCloseGap();
+    return dragActive() && commitClipDrag();
 }
 
 void EditSessionAdapter::setFixedTimelineEnd(bool fixed, qint64 time_ms) {
