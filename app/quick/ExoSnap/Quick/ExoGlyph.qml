@@ -93,7 +93,9 @@ Item {
         EyeClosed,
         Gamepad,
         Lock,
-        Unlock
+        Unlock,
+        Keyframe,
+        KeyframeFilled
     }
 
     // An ExoGlyph.Kind value. Declared `int` because a QML-declared enum is not
@@ -247,10 +249,11 @@ Item {
         // Mixer -- three faders at different positions.
         "M4 2V16 M9 2V16 M14 2V16 M2 6H6 M7 12H11 M12 5H16", "M9 2L15 4.5V8.5C15 12 12.5 14.5 9 16C5.5 14.5 3 12 3 8.5V4.5Z", "M1.5 9C5 2.5 13 2.5 16.5 9C13 15.5 5 15.5 1.5 9Z M11.5 9A2.5 2.5 0 1 1 6.5 9A2.5 2.5 0 1 1 11.5 9", "M2 2L16 16 M1.5 9C3 6 5 4.5 7 4 M11 4C13 4.5 15 6 16.5 9C15 12 13 13.5 11 14 M7 14C5 13.5 3 12 1.5 9", "M5 5H13C15 5 15.5 7 16 10L16.5 13C16.8 15 15 15.5 14 14L11.5 11.5H6.5L4 14C3 15.5 1.2 15 1.5 13L2 10C2.5 7 3 5 5 5Z M5.5 7V10 M4 8.5H7 M12 7.5H12.1 M14 9.5H14.1",
         "M4.5 8H13.5V15H4.5Z M6 8V5A3 3 0 0 1 12 5V8 M9 11V12",
-        "M4.5 8H13.5V15H4.5Z M6 8V5A3 3 0 0 1 12 5 M9 11V12"]
+        "M4.5 8H13.5V15H4.5Z M6 8V5A3 3 0 0 1 12 5 M9 11V12",
+        "M9 2L16 9L9 16L2 9Z", "M9 2L16 9L9 16L2 9Z"]
 
     // Kinds drawn as a filled silhouette instead of a stroked outline.
-    readonly property var _filledKinds: [ExoGlyph.Pause, ExoGlyph.Stop, ExoGlyph.Overflow, ExoGlyph.Dot, ExoGlyph.Swatch]
+    readonly property var _filledKinds: [ExoGlyph.KeyframeFilled, ExoGlyph.Pause, ExoGlyph.Stop, ExoGlyph.Overflow, ExoGlyph.Dot, ExoGlyph.Swatch]
 
     // Empty for a kind outside the table. Read by tst_ExoGlyph to prove every
     // declared kind is drawn.

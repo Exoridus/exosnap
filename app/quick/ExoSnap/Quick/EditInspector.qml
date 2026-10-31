@@ -262,7 +262,7 @@ ExoScrollView {
                             Accessible.name: propertyRow.modelData
                         }
                         ExoButton {
-                            text: propertyRow.channel.key ? "\u25c6" : "\u25c7"
+                            glyph: propertyRow.channel.key ? ExoGlyph.KeyframeFilled : ExoGlyph.Keyframe
                             Accessible.name: propertyRow.channel.key ? qsTr("Remove keyframe") : qsTr("Add keyframe")
                             enabled: !root.session.trackLocked(root.clipDetails.trackId || 0)
                             onClicked: root.session.toggleVideoKey(root.clipDetails.id || 0, propertyRow.index)
