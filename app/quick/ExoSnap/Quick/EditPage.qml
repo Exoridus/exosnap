@@ -92,7 +92,8 @@ FocusScope {
         } else if (!event.isAutoRepeat && event.modifiers === Qt.ControlModifier && event.key === Qt.Key_M) {
             root.toggleMedia(true);
             event.accepted = true;
-        } else if (!event.isAutoRepeat && event.modifiers === Qt.NoModifier && event.key === Qt.Key_D) {
+        } else if (!event.isAutoRepeat && event.modifiers === Qt.NoModifier && event.key === Qt.Key_D
+                   && !(focused instanceof ComboBox)) {
             root.toggleDetails(true);
             event.accepted = true;
         } else if (!event.isAutoRepeat && event.modifiers === Qt.ControlModifier && event.key === Qt.Key_E) {

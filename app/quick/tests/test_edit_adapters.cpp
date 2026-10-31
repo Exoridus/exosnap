@@ -2269,8 +2269,12 @@ TEST(EditClipboardAdapter, LiftAndSelectNextFallsBackToThePreviousClipAndUndoRes
     ASSERT_TRUE(session.liftSelectedAndSelectNext());
     EXPECT_EQ(session.selectedClipIds().front().toULongLong(), second);
     session.selectClip(second);
+    const auto emptied = session.workspace().clip(second)->track;
     ASSERT_TRUE(session.liftSelectedAndSelectNext());
     EXPECT_TRUE(session.selectedClipIds().isEmpty());
+    session.setActiveTrack(emptied);
+    EXPECT_FALSE(session.selectActiveTrackClips());
+    EXPECT_FALSE(session.workspaceError().isEmpty());
 }
 
 TEST(EditTrackAudition, SoloIsAdditiveResidentAndAvailableOnLockedAudioTracks) {

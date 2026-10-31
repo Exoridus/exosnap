@@ -565,8 +565,11 @@ bool EditSessionAdapter::pasteFromSystemClipboard(bool insert) {
 
 bool EditSessionAdapter::previewPasteClipsUs(qint64 at, qulonglong track, bool insert) {
     if (!clip_clipboard_) {
-        if (preflightPendingDraft())
+        if (preflightPendingDraft()) {
+            cancelClipDrag();
+            cancelRangeGesture();
             refuseEdit(tr("Copy clips before pasting."));
+        }
         return false;
     }
     return previewPaste(
@@ -614,15 +617,19 @@ bool EditSessionAdapter::selectActiveTrackClips() {
         refuseEdit(tr("Select a track first."));
         return false;
     }
-    cancelRangeGesture();
-    selection_.clear();
+    std::vector<edit::Id> ids;
     for (const auto id : edit::OrderedClipIds(*workspace_.snapshot()))
         if (workspace_.clip(id)->track == track)
-            selection_.clip_ids.push_back(id);
-    if (!selection_.clip_ids.empty()) {
-        selection_.mode = edit::SelectionMode::Clips;
-        selection_.primary_clip = selection_.anchor_clip = selection_.clip_ids.front();
+            ids.push_back(id);
+    if (ids.empty()) {
+        refuseEdit(tr("The active track has no clips."));
+        return false;
     }
+    cancelRangeGesture();
+    selection_.clear();
+    selection_.clip_ids = std::move(ids);
+    selection_.mode = edit::SelectionMode::Clips;
+    selection_.primary_clip = selection_.anchor_clip = selection_.clip_ids.front();
     workspace_.select(selection_.primary_clip);
     publishSelection();
     return true;

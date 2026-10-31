@@ -4312,7 +4312,7 @@ Das Original kann danach nicht wiederhergestellt werden.</translation>
 <context>
     <name>EditPage</name>
     <message>
-        <location filename="../quick/ExoSnap/Quick/EditPage.qml" line="+692"/>
+        <location filename="../quick/ExoSnap/Quick/EditPage.qml" line="+693"/>
         <source>Pause</source>
         <translation>Pause</translation>
     </message>
@@ -12251,12 +12251,12 @@ Kleiner Text auf dem Bildschirm verliert früher an Qualität als Videoinhalte. 
 <context>
     <name>exosnap::quick::EditSessionAdapter</name>
     <message>
-        <location filename="../quick/ExoSnap/Quick/EditWorkspaceSession.cpp" line="+2124"/>
+        <location filename="../quick/ExoSnap/Quick/EditWorkspaceSession.cpp" line="+2133"/>
         <source>The edit would overlap another clip or exceed the source.</source>
         <translation>Die Bearbeitung würde einen anderen Clip überlappen oder die Quelle überschreiten.</translation>
     </message>
     <message>
-        <location line="-1930"/>
+        <location line="-1939"/>
         <source>Choose a valid time format.</source>
         <translation>Wählen Sie ein gültiges Zeitformat aus.</translation>
     </message>
@@ -12303,12 +12303,12 @@ Kleiner Text auf dem Bildschirm verliert früher an Qualität als Videoinhalte. 
     </message>
     <message>
         <location line="+1"/>
-        <location line="+1612"/>
+        <location line="+1621"/>
         <source>%1 fps</source>
         <translation>%1 fps</translation>
     </message>
     <message>
-        <location line="-1611"/>
+        <location line="-1620"/>
         <source>%1/%2 fps</source>
         <translation>%1/%2 fps</translation>
     </message>
@@ -12324,14 +12324,14 @@ Kleiner Text auf dem Bildschirm verliert früher an Qualität als Videoinhalte. 
     </message>
     <message>
         <location line="+34"/>
-        <location line="+3475"/>
+        <location line="+3484"/>
         <location line="+464"/>
         <location filename="../quick/ExoSnap/Quick/EditSessionAdapter.cpp" line="-131"/>
         <source>Apply or cancel the track scope review before continuing.</source>
         <translation>Übernehmen oder verwerfen Sie die Spurauswahl, bevor Sie fortfahren.</translation>
     </message>
     <message>
-        <location line="-3923"/>
+        <location line="-3932"/>
         <source>Correct or cancel the pending value before continuing.</source>
         <translation>Korrigieren oder verwerfen Sie den ausstehenden Wert, bevor Sie fortfahren.</translation>
     </message>
@@ -12426,12 +12426,12 @@ Kleiner Text auf dem Bildschirm verliert früher an Qualität als Videoinhalte. 
         <translation>Die Zwischenablage enthält keine Clips oder Mediendateien.</translation>
     </message>
     <message>
-        <location line="+7"/>
+        <location line="+9"/>
         <source>Copy clips before pasting.</source>
         <translation>Kopieren Sie Clips, bevor Sie sie einfügen.</translation>
     </message>
     <message>
-        <location line="+11"/>
+        <location line="+12"/>
         <source>Select clips to duplicate.</source>
         <translation>Wählen Sie Clips zum Duplizieren aus.</translation>
     </message>
@@ -12441,7 +12441,7 @@ Kleiner Text auf dem Bildschirm verliert früher an Qualität als Videoinhalte. 
         <translation>Die ausgewählten Clips können nicht dupliziert werden.</translation>
     </message>
     <message>
-        <location line="+12"/>
+        <location line="+13"/>
         <source>The time after the selection is occupied. Make room before duplicating.</source>
         <translation>Der Bereich nach der Auswahl ist belegt. Schaffen Sie vor dem Duplizieren Platz.</translation>
     </message>
@@ -12451,7 +12451,12 @@ Kleiner Text auf dem Bildschirm verliert früher an Qualität als Videoinhalte. 
         <translation>Wählen Sie zuerst eine Spur aus.</translation>
     </message>
     <message>
-        <location line="+66"/>
+        <location line="+8"/>
+        <source>The active track has no clips.</source>
+        <translation>Die aktive Spur enthält keine Clips.</translation>
+    </message>
+    <message>
+        <location line="+63"/>
         <source>The clipboard source is unavailable or changed. Relink it before pasting.</source>
         <translation>Die Quelle der Zwischenablage ist nicht verfügbar oder wurde geändert. Verknüpfen Sie sie vor dem Einfügen neu.</translation>
     </message>
