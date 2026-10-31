@@ -54,8 +54,11 @@ TestCase {
         const other = review.player.monitoringTracks.find(track => !track.selected);
         const original = review.player.monitoringTracks.find(track => track.selected);
         findChild(viewer, "reviewAudio").forceActiveFocus();
-        tryCompare(findChild(viewer, "reviewAudioPanel"), "opened", true);
-        const otherButton = findChild(viewer, "reviewTrack-" + other.id);
+        const panel = findChild(viewer, "reviewAudioPanel");
+        tryCompare(panel, "opened", true);
+        // Popup content is reparented into the window overlay, outside the viewer's visual tree.
+        let otherButton = null;
+        tryVerify(() => (otherButton = findChild(panel.contentItem, "reviewTrack-" + other.id)) !== null);
         tryCompare(otherButton, "enabled", true);
         mouseClick(otherButton);
         tryVerify(() => review.player.monitoringTracks.some(track => track.id === other.id && track.selected), 10000);
@@ -85,7 +88,8 @@ TestCase {
         tryCompare(review.player, "playing", false, 10000);
         review.requestEdit();
         compare(editSpy.count, 1);
-        compare(editSpy.signalArguments[0][0], review.session.positionMs);
+        verify(testEditHarness.recordingReviewFixtureIdentity().length > 0);
+        compare(editSpy.signalArguments[0][0], testEditHarness.recordingReviewFixtureIdentity());
         mouseClick(findChild(viewer, "reviewClose"));
         compare(review.active, false);
         compare(review.session.importPending, false);

@@ -16,6 +16,7 @@ TestCase {
         verify(facts.reasons, "Each state must retain its declared visible reason");
         verify(facts.retainedUnmeasuredStill, "Opening/buffering omit the still; degraded/failed retain it without a presentation stamp");
         verify(facts.loop, "The visual loop bounds must be latched without playback");
+        verify(facts.staleRepliesFenced, "Each synthetic still must fence replies queued for an earlier open");
         verify(facts.noTransport, "Composition seeding must not submit native transport commands");
     }
 

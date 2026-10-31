@@ -2085,6 +2085,11 @@ class Setup final : public QObject {
         return true;
     }
 
+    QString recordingReviewFixtureIdentity() const {
+        return exosnap::quick::RecordViewModelAdapter::recordingIdentity(
+            exosnap::quick::test::TransportAmbiguousFixture());
+    }
+
     void setReviewPlaybackPlaying(bool playing) {
         exosnap::quick::EditPlayerAdapterTestPeer::acknowledge(*transport_player_, playing);
     }
@@ -2292,9 +2297,14 @@ class Setup final : public QObject {
         bool states = true;
         bool reasons = true;
         bool silent = true;
+        bool fenced = true;
+        auto previous_generation = generation;
         for (const auto state : {EditPlayerAdapter::Opening, EditPlayerAdapter::Buffering, EditPlayerAdapter::Degraded,
                                  EditPlayerAdapter::Failed}) {
             player.showStillForHarness(image, 42'500'000, 160'000);
+            const auto current_generation = exosnap::quick::EditPlayerAdapterTestPeer::generation(player);
+            fenced = fenced && current_generation > previous_generation;
+            previous_generation = current_generation;
             const auto reason = QStringLiteral("Visual state %1").arg(state);
             player.applyPreviewStateForHarness(state, reason);
             states = states && player.previewState() == state;
@@ -2311,8 +2321,11 @@ class Setup final : public QObject {
                 {"retainedUnmeasuredStill", silent},
                 {"loop", player.loopEnabled() && region.value(QStringLiteral("startUs")).toLongLong() == 10'000'000 &&
                              region.value(QStringLiteral("endUs")).toLongLong() == 20'000'000},
-                {"noTransport", command == exosnap::quick::EditPlayerAdapterTestPeer::command(player) &&
-                                    generation == exosnap::quick::EditPlayerAdapterTestPeer::generation(player)}};
+                // The request generation is a stale-reply fence, not a transport command: every synthetic still
+                // must advance it so a queued close from an earlier open cannot clear the still's monitoring rows.
+                {"staleRepliesFenced", fenced},
+                {"noTransport",
+                 command == exosnap::quick::EditPlayerAdapterTestPeer::command(player) && !player.transportPending()}};
     }
     QVariantMap syntheticStillProbe() const {
         EditSessionAdapter session;
