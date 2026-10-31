@@ -1147,7 +1147,11 @@ TestCase {
         const id = testSession.visibleClips(0, 100000)[0].id;
         testSession.moveClip(id, 10000, false);
         strip.forceActiveFocus();
-        mouseClick(strip, strip.positionAt(5000) + 2, 60);
+        // A plain click on empty lane space seeks; the context click selects the gap.
+        mouseClick(strip, strip.positionAt(5000) + 2, 60, Qt.RightButton);
+        tryCompare(findChild(strip, "editGapMenu"), "opened", true);
+        findChild(strip, "editGapMenu").close();
+        strip.forceActiveFocus();
         compare(testSession.selectedGap.startMs, 0);
         compare(testSession.selectedGap.endMs, 10000);
         keyClick(Qt.Key_Delete);
@@ -1561,7 +1565,11 @@ TestCase {
         const strip = gestureTimeline();
         const before = clipGeometry();
         const revision = testEditHarness.timelineCheckpoint().revision;
-        mouseClick(strip, strip.positionAt(5000) + 2, 60);
+        // A plain click on empty lane space seeks; the context click selects the gap.
+        mouseClick(strip, strip.positionAt(5000) + 2, 60, Qt.RightButton);
+        tryCompare(findChild(strip, "editGapMenu"), "opened", true);
+        findChild(strip, "editGapMenu").close();
+        strip.forceActiveFocus();
         tryCompare(testSession, "selectedClip", 0);
         compare(testSession.selectedGap.startMs, 0);
         compare(testSession.selectedGap.endMs, 10000);
@@ -1592,7 +1600,11 @@ TestCase {
         testSession.moveClip(initial[0].id, 20000, false);
         const strip = gestureTimeline();
         const mediaBefore = clipGeometry();
-        mouseClick(strip, strip.positionAt(10000) + 2, 60);
+        // A plain click on empty lane space seeks; the context click selects the gap.
+        mouseClick(strip, strip.positionAt(10000) + 2, 60, Qt.RightButton);
+        tryCompare(findChild(strip, "editGapMenu"), "opened", true);
+        findChild(strip, "editGapMenu").close();
+        strip.forceActiveFocus();
         tryCompare(testSession, "selectedClip", 0);
         keyClick(Qt.Key_Menu);
         const blankMenu = findChild(strip, "editGapMenu");

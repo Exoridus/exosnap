@@ -49,13 +49,18 @@ TestCase {
         verify(!gain.applyValue(3, 0, {}), "An incomplete linked-track scope is refused atomically");
         compare(testSession.visibleClipsUs(0, 100000000).filter(row => !row.video).length, 1);
         verify(testSession.setEditRangeUs(1000000, 2000000, [ids.audio, ids.video]));
+        const clip = testSession.visibleClipsUs(0, 100000000).find(row => !row.video);
+        const lifted = () => testSession.gainCurve(clip.id, clip.inUs + 1000000, clip.inUs + 2000000, 8)
+                                 .some(point => point.y < 0.299);
+        verify(!lifted());
         verify(gain.applyValue(3, 0, {}));
         const audio = testSession.visibleClipsUs(0, 100000000).filter(row => !row.video);
-        compare(audio.length, 3);
-        compare(audio.find(row => row.startUs === 1000000).gainDb, 3);
-        compare(audio.find(row => row.startUs === 0).gainDb, 0);
+        compare(audio.length, 1, "Range gain shapes the envelope without splitting the clip");
+        compare(audio[0].id, clip.id);
+        compare(audio[0].gainDb, 0);
+        verify(lifted());
         testSession.undo();
-        compare(testSession.visibleClipsUs(0, 100000000).filter(row => !row.video).length, 1);
+        verify(!lifted());
     }
     function test_collapsed_grid_conversion_retains_both_nearest_endpoints() {
         const ids = tracks();
