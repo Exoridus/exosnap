@@ -37,35 +37,32 @@ TestCase {
         while (testSession.canUndo) testSession.undo();
         testSession.linkedSelection = true;
     }
-    function test_inspector_previews_around_cut_without_moving_surrounding_content() {
+    function test_inspector_applies_crossfade_around_cut_immediately_without_moving_surrounding_content() {
         const outgoing = testSession.visibleClipsUs(0, 100000000).find(row => row.video && row.startUs === 0);
         testSession.clearSelection();
         testSession.selectClip(outgoing.id);
         verify(testSession.canCrossfadeAtCut(outgoing.id));
-        const before = testSession.visibleClipsUs(0, 100000000).map(row => [row.id, row.startUs, row.sourceInUs, row.sourceOutUs]);
+        const geometry = () => testSession.visibleClipsUs(0, 100000000).map(row => [row.id, row.startUs, row.sourceInUs, row.sourceOutUs]);
+        const before = geometry();
         const page = createTemporaryObject(pageComponent, tests);
         page.toggleDetails();
         const action = findChild(page, "editInspectorCrossfadeAtCut");
         verify(!!action, "The contextual Inspector exposes the valid around-cut transition action");
         verify(action.visible);
         mouseClick(action);
-        verify(testSession.dragActive && testSession.dragValid);
-        compare(testSession.durationUs, 100000000);
-        compare(testSession.transitions.length, 0);
-        compare(testSession.visibleClipsUs(0, 100000000).map(row => [row.id, row.startUs, row.sourceInUs, row.sourceOutUs]), before);
-        const timeline = findChild(page, "editClipTimeline");
-        timeline.forceActiveFocus();
-        keyClick(Qt.Key_Escape);
-        compare(testSession.dragActive, false);
-        mouseClick(action);
-        verify(testSession.dragActive);
-        timeline.forceActiveFocus();
-        keyClick(Qt.Key_Return);
+        compare(testSession.dragActive, false, "A valid command leaves no pending candidate to confirm");
         compare(testSession.transitions.length, 2);
         compare(testSession.durationUs, 100000000);
+        verify(testSession.canUndo);
+        const after = geometry();
+        verify(JSON.stringify(after) !== JSON.stringify(before));
         testSession.undo();
         compare(testSession.transitions.length, 0);
-        compare(testSession.visibleClipsUs(0, 100000000).map(row => [row.id, row.startUs, row.sourceInUs, row.sourceOutUs]), before);
+        compare(geometry(), before);
+        testSession.redo();
+        compare(testSession.transitions.length, 2);
+        compare(testSession.durationUs, 100000000);
+        compare(geometry(), after);
     }
     function test_keyboard_focus_reveals_offscreen_inspector_field() {
         const page = createTemporaryObject(pageComponent, tests, {height: 600});
