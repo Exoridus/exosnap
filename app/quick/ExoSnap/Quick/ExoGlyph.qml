@@ -296,7 +296,19 @@ Item {
             console.error("ExoGlyph: no geometry declared for kind", root.kind);
     }
 
+    Rectangle {
+        anchors.centerIn: parent
+        width: 10 * root._scale
+        height: width
+        rotation: 45
+        visible: root.kind === ExoGlyph.Keyframe || root.kind === ExoGlyph.KeyframeFilled
+        color: root.filled ? root.color : "transparent"
+        border.color: root.color
+        border.width: root.strokeWidth
+        Accessible.ignored: true
+    }
     Shape {
+        visible: root.kind !== ExoGlyph.Keyframe && root.kind !== ExoGlyph.KeyframeFilled
         width: 18
         height: 18
         anchors.centerIn: parent
