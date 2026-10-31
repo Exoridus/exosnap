@@ -9,6 +9,7 @@ inline constexpr const char* kDefault = "edit-default";
 inline constexpr const char* kMultitrack = "edit-multitrack";
 inline constexpr const char* kMissingMedia = "edit-missing-media";
 inline constexpr const char* kSelectedClip = "edit-selected-clip";
+inline constexpr const char* kVideoAutomation = "edit-video-automation";
 inline constexpr const char* kTransitionSelected = "edit-transition-selected";
 inline constexpr const char* kGap = "edit-gap";
 inline constexpr const char* kMediaPanel = "edit-media-panel";
@@ -50,6 +51,7 @@ inline constexpr std::array kAll{kEmpty,
                                  kMultitrack,
                                  kMissingMedia,
                                  kSelectedClip,
+                                 kVideoAutomation,
                                  kTransitionSelected,
                                  kGap,
                                  kMediaPanel,
