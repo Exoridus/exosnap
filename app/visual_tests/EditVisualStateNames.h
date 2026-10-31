@@ -27,6 +27,7 @@ inline constexpr const char* kFoldersExpanded = "edit-folders-expanded";
 inline constexpr const char* kRecordings = "edit-recordings";
 inline constexpr const char* kMediaEmpty = "edit-media-empty";
 inline constexpr const char* kAudioSelected = "edit-audio-selected";
+inline constexpr const char* kAudioEnvelope = "edit-audio-envelope";
 inline constexpr const char* kMultiselection = "edit-multiselection";
 inline constexpr const char* kRange = "edit-range";
 inline constexpr const char* kLoop = "edit-loop";
@@ -69,6 +70,7 @@ inline constexpr std::array kAll{kEmpty,
                                  kRecordings,
                                  kMediaEmpty,
                                  kAudioSelected,
+                                 kAudioEnvelope,
                                  kMultiselection,
                                  kRange,
                                  kLoop,

@@ -4165,6 +4165,32 @@ void QuickApplication::applyEditVisualScenario() {
         session.setClipGain(id, -4.0);
         session.selectClipWithModifiers(id);
     }
+    if (scenario == QStringLiteral("edit-audio-envelope")) {
+        session.setLinkedSelection(false);
+        const auto id = audio_ids.first().toULongLong();
+        if (!session.setClipGain(id, -3) || !session.addGainKey(id, 5'000'000) ||
+            !session.beginGainKeyDrag(id, 5'000'000)) {
+            edit_visual_error_ = QStringLiteral("The audio envelope visual fixture could not create its point");
+            return;
+        }
+        session.updateGainKeyDrag(5'000'000, -9);
+        if (!session.commitClipDrag()) {
+            edit_visual_error_ = QStringLiteral("The audio envelope visual fixture could not move its point");
+            return;
+        }
+        QVariantList scope;
+        for (const auto& track : session.workspace().tracks()) {
+            scope.push_back(QVariant::fromValue<qulonglong>(track.id));
+            session.trackLayout()->setTrackHeight(track.id, track.type == edit::TrackType::Video ? 48 : 64);
+        }
+        if (!session.setEditRangeUs(10'000'000, 20'000'000, scope) || !session.applyRangeGain(-12)) {
+            edit_visual_error_ = QStringLiteral("The audio envelope visual fixture could not apply its range");
+            return;
+        }
+        session.clearSelection();
+        session.selectClipWithModifiers(id);
+        session.requestSeekUs(16'000'000);
+    }
     if (scenario == QStringLiteral("edit-hard-cut-selected")) {
         const auto outgoing = EditVisualClip(session, 0, 38'000);
         session.selectTransition(outgoing);
@@ -4323,6 +4349,10 @@ void QuickApplication::applyEditVisualScenario() {
     if (scenario == QStringLiteral("edit-clip-fades")) {
         layout.insert(QStringLiteral("viewFromUs"), 0);
         layout.insert(QStringLiteral("viewToUs"), 42'000'000);
+    }
+    if (scenario == QStringLiteral("edit-audio-envelope")) {
+        layout.insert(QStringLiteral("viewFromUs"), 0);
+        layout.insert(QStringLiteral("viewToUs"), 30'000'000);
     }
     edit_visual_layout_ = layout;
 }
