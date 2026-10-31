@@ -521,6 +521,44 @@ TestCase {
                 "overflow must not expose native button chrome at the card corner");
     }
 
+    function test_window_overflow_contrast_data() {
+        return [{tag: "dark", appearance: "dark"}, {tag: "light", appearance: "light"}];
+    }
+
+    function test_window_overflow_contrast(data) {
+        const previous = ExoTheme.dark ? "dark" : "light";
+        recordDriver.setTestAppearance(QuickThemeTokens, data.appearance);
+        try {
+            const page = makePage();
+            showTab(page, 1);
+            const button = findVisual(cardAt(page, 2), "windowHideOptions");
+            const glyph = button.contentItem.children.find(item => item.kind === ExoGlyph.Overflow);
+            verify(glyph);
+            function luminance(color) {
+                const linear = value => value <= 0.04045 ? value / 12.92 : Math.pow((value + 0.055) / 1.055, 2.4);
+                return 0.2126 * linear(color.r) + 0.7152 * linear(color.g) + 0.0722 * linear(color.b);
+            }
+            function verifyContrast() {
+                verify(button.background.visible, "an arbitrary thumbnail needs a backing behind its menu icon");
+                compare(button.background.color.a, 1);
+                const ink = luminance(glyph.color);
+                const ground = luminance(button.background.color);
+                verify((Math.max(ink, ground) + 0.05) / (Math.min(ink, ground) + 0.05) >= 3,
+                        "the overflow icon must remain legible independently of thumbnail pixels");
+            }
+            mouseMove(page, 0, 0);
+            verifyContrast();
+            mouseMove(button, button.width / 2, button.height / 2);
+            tryCompare(button, "hovered", true);
+            verifyContrast();
+            button.forceActiveFocus(Qt.TabFocusReason);
+            verify(button.background.border.width > 0);
+            verifyContrast();
+        } finally {
+            recordDriver.setTestAppearance(QuickThemeTokens, previous);
+        }
+    }
+
     function test_ready_thumbnail_keeps_rounded_corners() {
         const page = makePage();
         showTab(page, 0);

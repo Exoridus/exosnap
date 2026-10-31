@@ -1192,6 +1192,7 @@ Popup {
         }
 
         ExoButton {
+            id: windowMenuButton
             objectName: "windowHideOptions"
             visible: card.kind === "window"
             z: 1
@@ -1199,6 +1200,21 @@ Popup {
             glyph: ExoGlyph.Overflow
             quiet: true
             compact: true
+            contentItem: Item {
+                ExoGlyph {
+                    anchors.centerIn: parent
+                    width: 18
+                    height: 18
+                    kind: windowMenuButton.glyph
+                    color: ExoTheme.overlayInk
+                }
+            }
+            background: Rectangle {
+                radius: ExoTheme.radiusSm
+                color: windowMenuButton.hovered || windowMenuButton.down ? ExoTheme.overlaySurfaceRaised : ExoTheme.overlaySurface
+                border.width: windowMenuButton.visualFocus ? 2 : 0
+                border.color: ExoTheme.overlayAccent
+            }
             anchors.top: parent.top
             anchors.right: parent.right
             anchors.margins: ExoTheme.spacingXs
