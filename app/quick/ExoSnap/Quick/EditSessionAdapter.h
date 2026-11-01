@@ -30,6 +30,8 @@
 #include <utility>
 #include <vector>
 
+class QMimeData;
+
 namespace exosnap {
 class BackgroundStorageBudget;
 }
@@ -50,6 +52,15 @@ inline constexpr int64_t kMarkerSnapWindowUs = 50000;
 // snaps is testable without a clip, a decoder, or a widget.
 [[nodiscard]] int64_t SnapTrimBoundaryUs(int64_t requested_us, const std::vector<int64_t>& keyframes_us,
                                          const std::vector<RecordingMarker>& markers);
+
+// Marks system clipboard content written by an editor clip copy.
+inline constexpr char kEditClipsMimeType[] = "application/x-exosnap-edit-clips";
+
+enum class ClipboardPaste { Clips, Files, Image, Replaced };
+// Decides what Paste takes from the system clipboard. Clips means the internal
+// clip clipboard; an empty or unavailable system clipboard also yields Clips.
+// Replaced means another application took the clipboard after the last clip copy.
+[[nodiscard]] ClipboardPaste ResolveClipboardPaste(const QMimeData* system);
 
 // Owns the app-lifetime C++ workspace and exposes presentation projections.
 // Container probing and keyframe indexing run on a serialized worker pool.
@@ -250,6 +261,19 @@ class EditSessionAdapter : public QObject {
                    : nullptr;
     }
     Q_INVOKABLE bool setVideoTransform(qulonglong id, double x, double y, double scale, double rotation);
+    Q_INVOKABLE bool addGainKey(qulonglong id, qint64 source_us);
+    Q_INVOKABLE bool beginGainKeyDrag(qulonglong id, qint64 source_us);
+    Q_INVOKABLE void updateGainKeyDrag(qint64 source_us, double gain_db);
+    Q_INVOKABLE bool removeGainKey(qulonglong id, qint64 source_us);
+    Q_INVOKABLE QVariantList gainCurve(qulonglong id, qint64 source_in_us, qint64 source_out_us, int columns) const;
+    const edit::EditPreview* renderPreview() const {
+        return drag_command_ &&
+                       (std::holds_alternative<edit::SetVideoTransform>(*drag_command_) ||
+                        std::holds_alternative<edit::SetGainKey>(*drag_command_) || drag_gain_) &&
+                       dragValid()
+                   ? &drag_preview_
+                   : nullptr;
+    }
     Q_INVOKABLE bool setClipGain(qulonglong id, double gain_db);
     Q_INVOKABLE bool setClipGains(const QVariantList& ids, double gain_db);
     Q_INVOKABLE bool setTrackGain(qulonglong id, double gain_db);
@@ -272,6 +296,13 @@ class EditSessionAdapter : public QObject {
     Q_INVOKABLE bool cutClips();
     Q_INVOKABLE bool previewPasteClipsUs(qint64 at_us, qulonglong track = 0, bool insert = false);
     Q_INVOKABLE bool pasteClips(bool insert = false);
+    // Copies the selected clips directly after the selection block, each on its own
+    // track, and selects the copies. Refuses without changes when that time is
+    // occupied. The clip clipboard and the system clipboard stay untouched.
+    Q_INVOKABLE bool duplicateSelectedClips();
+    // Selects the clips of the active track only; linked partners on other tracks
+    // are not added.
+    Q_INVOKABLE bool selectActiveTrackClips();
     bool snappingEnabled() const {
         return snapping;
     }
@@ -496,7 +527,13 @@ class EditSessionAdapter : public QObject {
     Q_INVOKABLE void trimClip(qulonglong id, qint64 in_ms, qint64 out_ms);
     Q_INVOKABLE void trimClipUs(qulonglong id, qint64 in_us, qint64 out_us);
     Q_INVOKABLE void splitSelected();
+    Q_INVOKABLE void splitAllAtPlayhead();
     Q_INVOKABLE void deleteSelected(bool ripple_delete = false);
+    // Lifts the selected clips like Delete, then selects the next remaining clip on
+    // the primary clip's track, or the previous one when none follows. The
+    // playhead does not move. Undo restores the clips and the previous selection.
+    // Without a clip selection it acts like Delete.
+    Q_INVOKABLE bool liftSelectedAndSelectNext();
     Q_INVOKABLE void undo();
     Q_INVOKABLE void redo();
     Q_INVOKABLE void selectAdjacentClip(int direction);
@@ -647,6 +684,13 @@ class EditSessionAdapter : public QObject {
     edit::EditSelection selection_;
     std::set<edit::Id> solo_tracks_;
     std::shared_ptr<const edit::ClipClipboard> clip_clipboard_;
+    bool previewPaste(edit::PasteClips command);
+    bool pasteFromSystemClipboard(bool insert);
+    struct UndoSelection {
+        edit::Revision revision = 0;
+        edit::EditSelection selection;
+    };
+    std::optional<UndoSelection> undo_selection_;
     std::shared_ptr<const edit::EditSnapshot> range_gesture_snapshot_;
     std::optional<edit::EditRange> range_gesture_candidate_;
     std::optional<edit::EditRangePreview> range_gesture_preview_;

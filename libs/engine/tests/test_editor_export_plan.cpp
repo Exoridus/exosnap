@@ -309,5 +309,28 @@ TEST(EditorExportPlan, AutomationForcesRenderAndEveryKeyFieldIsHashed) {
     EXPECT_EQ(moving->snapshot.timeline.clips.front().transform_channels[0].keys.back().source_us, 2'000'000);
 }
 
+TEST(EditorExportPlan, GainEnvelopeForcesMixAndEveryRampFieldIsFrozenInTheHash) {
+    Fixture f;
+    f.snapshot.timeline.clips.resize(2);
+    f.facts.stereo_copy_qualified = true;
+    const auto original = f.prepare();
+    ASSERT_TRUE(original->ready());
+    EXPECT_EQ(original->audio_path, EditAudioPath::CopyStereo);
+    auto& envelope = f.snapshot.timeline.clips.back().gain_envelope;
+    envelope.ranges = {{0, 48000, 3840, -6}};
+    const auto automated = f.prepare();
+    ASSERT_TRUE(automated->ready());
+    EXPECT_EQ(automated->audio_path, EditAudioPath::RenderStereo);
+    EXPECT_EQ(automated->video_path, EditVideoPath::Copy);
+    EXPECT_NE(automated->hash, original->hash);
+    envelope.ranges.front().ramp_samples += 1;
+    EXPECT_NE(automated->hash, f.prepare()->hash);
+    EXPECT_EQ(automated->snapshot.timeline.clips.back().gain_envelope.ranges.front().ramp_samples, 3840);
+    envelope.channel.keys = {{0, 0}, {1'000'000, -3}};
+    const auto keyed = f.prepare();
+    envelope.channel.keys.back().interpolation = KeyInterpolation::Hold;
+    EXPECT_NE(keyed->hash, f.prepare()->hash);
+}
+
 } // namespace
 } // namespace exosnap::engine

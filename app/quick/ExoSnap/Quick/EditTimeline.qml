@@ -2,6 +2,7 @@ pragma ComponentBehavior: Bound
 import QtQuick
 import QtQuick.Controls
 import QtQuick.Layouts
+import QtQuick.Shapes
 
 FocusScope {
     id: root
@@ -38,9 +39,6 @@ FocusScope {
     property alias pixelsPerSecond: viewport.pixelsPerSecond
     readonly property bool snapping: session.snapping
     property real hoveredGroup: 0
-    // Pointer tool for empty lane space: "select" draws a marquee, "range"
-    // draws a time range. Session state, not part of the document.
-    property string tool: "select"
     // Track reorder in progress: the dragged track and its prospective row.
     property var reorderTrackId: 0
     property int reorderIndex: -1
@@ -308,6 +306,8 @@ FocusScope {
             root.session.cancelClipDrag();
             root.session.cancelRangeGesture();
             root.session.finishPointerSelection(true);
+            if (laneMouse.forwarded || laneMouse.marqueeArmed)
+                laneMouse.cancelMarquee();
             event.accepted = true;
             return;
         }
@@ -344,8 +344,6 @@ FocusScope {
         case "inspector-dock": root.inspectorToggleRequested(); break;
         case "export": root.exportRequested(); break;
         case "shortcuts": root.shortcutsRequested(); break;
-        case "tool-select": root.tool = "select"; break;
-        case "tool-range": root.tool = "range"; break;
         case "context-menu":
             if (root.session.selectedClip !== 0)
                 clipMenu.popup();
@@ -830,6 +828,33 @@ FocusScope {
             // can restore it; the playhead too, because a plain press seeks.
             property bool marquee: false
             property bool marqueeArmed: false
+            property bool forwarded: false
+            function beginContentMarquee(point: point, timeUs: real, trackId: var): void {
+                const local = scroll.contentItem.mapFromItem(root, point.x, point.y);
+                forwarded = true;
+                started = false;
+                marquee = false;
+                marqueeArmed = true;
+                pressPolicy = {valid: true, marquee: true, additive: true, range: false, seek: false};
+                pressTrack = trackId;
+                pressTimeUs = timeUs;
+                pressPoint = point;
+                pressPlayheadUs = root.session.positionUs;
+                marqueeOriginal = root.session.selectedClipIds;
+                marqueeStartX = marqueeEndX = local.x;
+                marqueeStartY = marqueeEndY = local.y;
+                root.session.beginLanePointerSelection(trackId, timeUs, false);
+                root.pointerPosition = point;
+                root.pointerScrollVertical = true;
+                root.pointerUpdater = physical => laneMouse.updatePointer(physical);
+            }
+            function finishContentMarquee(): void {
+                root.stopPointerScroll();
+                root.session.finishPointerSelection(false, started);
+                forwarded = false;
+                marquee = false;
+                marqueeArmed = false;
+            }
             property var marqueeOriginal: []
             property real marqueeStartX: 0
             property real marqueeStartY: 0
@@ -837,6 +862,7 @@ FocusScope {
             property real marqueeEndY: 0
             property real pressPlayheadUs: 0
             function cancelMarquee(): void {
+                forwarded = false;
                 marquee = false;
                 marqueeArmed = false;
                 pressPolicy = {valid: false};
@@ -880,19 +906,10 @@ FocusScope {
                 }
                 const hasRange = root.session.selectionMode === EditSessionAdapter.RangeSelection;
                 pressPolicy = root.interaction.clipPointerPolicy(EditInteractionController.PointerContent, mouse.modifiers, hasRange);
-                // The selection tool turns a drag from empty space into a marquee:
-                // Ctrl adds to the selection, Alt ignores link groups. The range
-                // tool keeps the time-range gestures, plain drag included.
-                if (root.tool === "select" && (mouse.modifiers === Qt.ControlModifier || mouse.modifiers === Qt.AltModifier))
-                    pressPolicy = {valid: true, range: false, seek: false, additive: mouse.modifiers === Qt.ControlModifier,
-                        exact: mouse.modifiers === Qt.AltModifier, error: ""};
-                else if (root.tool === "range" && mouse.modifiers === Qt.NoModifier)
-                    pressPolicy = {valid: true, range: true, seek: false, extend: false, anchorAtPlayhead: false,
-                        preserveBounds: false, error: ""};
                 root.inputHint = pressPolicy.error;
                 if (!pressPolicy.valid)
                     return;
-                marqueeArmed = !pressPolicy.range;
+                marqueeArmed = pressPolicy.marquee === true;
                 marqueeOriginal = root.session.selectedClipIds;
                 marqueeStartX = marqueeEndX = mouse.x;
                 marqueeStartY = marqueeEndY = mouse.y;
@@ -910,7 +927,7 @@ FocusScope {
                 root.forceActiveFocus();
             }
             function updatePointer(point: point): void {
-                if (!pressed || !(pressedButtons & Qt.LeftButton) || !pressPolicy.valid ||
+                if ((!pressed && !forwarded) || (!forwarded && !(pressedButtons & Qt.LeftButton)) || !pressPolicy.valid ||
                         (!marqueeArmed && !root.session.hasPointerSelection() && !root.session.rangeGestureActive))
                     return;
                 const local = scroll.contentItem.mapFromItem(root, point.x, point.y);
@@ -933,7 +950,10 @@ FocusScope {
                 } else if (started) {
                     root.pointerScrolling = true;
                     const track = root.trackLayout.trackAtY(local.y - root.rulerHeight);
-                    root.session.updateRangeGestureToTrackUs(root.timeAtUs(local.x), track || pressTrack);
+                    if (pressPolicy.singleTrack)
+                        root.session.updateRangeGestureUs(root.timeAtUs(local.x), [pressTrack]);
+                    else
+                        root.session.updateRangeGestureToTrackUs(root.timeAtUs(local.x), track || pressTrack);
                 }
             }
             onPositionChanged: mouse => {
@@ -951,7 +971,10 @@ FocusScope {
                         root.session.cancelRangeGesture();
                 }
                 root.session.finishPointerSelection(false, started);
-                if (pressPolicy.seek && !marquee)
+                if (pressPolicy.range && !started && !pressPolicy.extend) {
+                    root.session.requestSeekUs(pressTimeUs);
+                    root.session.finishPointerSeek();
+                } else if (pressPolicy.seek && !marquee)
                     root.session.finishPointerSeek();
                 marquee = false;
                 marqueeArmed = false;
@@ -1365,6 +1388,8 @@ FocusScope {
                 readonly property real bodyHeight: Math.max(0, trackBounds.contentHeight - 2)
                 readonly property bool previewVisible: bodyVisible && root.visible && y + clipItem.trackBounds.headerHeight + 1 + bodyHeight > scroll.contentY + root.rulerHeight && y + clipItem.trackBounds.headerHeight + 1 < scroll.contentY + scroll.height
                 readonly property bool cachedVisual: previewVisible && modelData.available && modelData.sourceIdentity.length > 0 && root.thumbnails !== null
+                readonly property var effectRow: root.ghostRows.find(row => row.id === modelData.id && row.gainEnvelope !== undefined) || modelData
+                readonly property var envelopePoints: effectRow && effectRow.hasGainEnvelope && !modelData.video && previewVisible ? root.session.gainCurve(effectRow.id, visibleSourceIn, visibleSourceOut, Math.ceil(visibleWidth / 4)) : []
                 property string waveformKey: ""
                 property string mediaRequest: ""
                 property string mediaRelevance: ""
@@ -1572,9 +1597,66 @@ FocusScope {
                     sourceInUs: clipItem.visibleSourceIn
                     sourceOutUs: clipItem.visibleSourceOut
                     channelCount: clipItem.modelData.sourceChannels === 1 ? 1 : 2
-                    gainDb: clipItem.modelData.gainDb
+                    gainDb: clipItem.effectRow.gainDb
+                    gainEnvelope: clipItem.effectRow.gainEnvelope
                     color: ExoTheme.textMuted
                     Accessible.ignored: true
+                }
+                Shape {
+                    id: envelopeShape
+                    x: clipItem.visibleLeft
+                    y: clipItem.trackBounds.headerHeight + 1
+                    width: clipItem.visibleWidth
+                    height: clipItem.bodyHeight
+                    visible: clipItem.envelopePoints.length > 0
+                    Accessible.ignored: true
+                    ShapePath {
+                        strokeWidth: 1
+                        strokeColor: ExoTheme.accent
+                        fillColor: "transparent"
+                        PathPolyline { path: clipItem.envelopePoints.map(point => Qt.point(point.x * envelopeShape.width, point.y * envelopeShape.height)) }
+                    }
+                }
+                Repeater {
+                    model: !clipItem.modelData.video && clipItem.bodyVisible ? (clipItem.modelData.gainKeys || []).filter(key => key.sourceUs >= clipItem.visibleSourceIn && key.sourceUs <= clipItem.visibleSourceOut) : []
+                    delegate: Rectangle {
+                        id: gainPoint
+                        required property var modelData
+                        width: 10
+                        height: 10
+                        radius: 5
+                        z: 12
+                        color: gainPointMouse.pressed ? ExoTheme.text : ExoTheme.accent
+                        x: (modelData.sourceUs - clipItem.modelData.sourceInUs) * root.pixelsPerUs - Math.max(0, viewport.startUs - clipItem.modelData.startUs) * root.pixelsPerUs - width / 2
+                        y: clipItem.trackBounds.headerHeight + modelData.y * clipItem.bodyHeight - height / 2
+                        visible: x >= 10 && x + width <= clipItem.width - 10
+                        Accessible.role: Accessible.Button
+                        Accessible.name: qsTr("Gain envelope point")
+                        activeFocusOnTab: true
+                        Keys.onDeletePressed: root.session.removeGainKey(clipItem.modelData.id, modelData.sourceUs)
+                        MouseArea {
+                            id: gainPointMouse
+                            anchors.fill: parent
+                            cursorShape: Qt.SizeAllCursor
+                            enabled: !root.session.trackLocked(clipItem.modelData.trackId)
+                            onPressed: mouse => {
+                                gainPoint.forceActiveFocus();
+                                mouse.accepted = root.session.beginGainKeyDrag(clipItem.modelData.id, gainPoint.modelData.sourceUs);
+                            }
+                            onPositionChanged: mouse => {
+                                if (!pressed)
+                                    return;
+                                const point = mapToItem(clipItem, mouse.x, mouse.y);
+                                const scene = mapToItem(root, mouse.x, mouse.y);
+                                const source = clipItem.modelData.sourceInUs + root.timeAtUs(scene.x) - clipItem.modelData.startUs;
+                                const fraction = (point.y - clipItem.trackBounds.headerHeight) / clipItem.bodyHeight;
+                                const db = fraction <= 0.3 ? 24 * (1 - fraction / 0.3) : -60 * (fraction - 0.3) / 0.7;
+                                root.session.updateGainKeyDrag(Math.round(source), db);
+                            }
+                            onReleased: if (root.session.dragActive) root.session.commitClipDrag()
+                            onCanceled: root.session.cancelClipDrag()
+                        }
+                    }
                 }
                 ExoGlyph {
                     id: mediaIcon
@@ -1654,17 +1736,15 @@ FocusScope {
                             root.interaction.clipPointerTarget(clipItem.modelData, authoredWidth,
                                 clipItem.height, clipItem.trackBounds.headerHeight, authoredX, mouse.y, pressJunction !== 0);
                         const hasRange = root.session.selectionMode === EditSessionAdapter.RangeSelection;
-                        // With the selection tool the whole clip body behaves like
-                        // its header: click selects, drag moves the selection. A
-                        // plain click still positions the playhead, on release, so
-                        // a move never drags the playhead along.
-                        clickSeek = root.tool === "select" && pressTarget === EditInteractionController.PointerContent
-                            && mouse.modifiers === Qt.NoModifier;
-                        if (root.tool === "select" && pressTarget === EditInteractionController.PointerContent)
-                            pressTarget = EditInteractionController.PointerHeader;
+                        clickSeek = pressTarget === EditInteractionController.PointerContent && mouse.modifiers !== Qt.ShiftModifier;
                         pressPolicy = root.interaction.clipPointerPolicy(pressTarget, mouse.modifiers, hasRange);
                         root.inputHint = pressPolicy.error;
                         if (!pressPolicy.valid) {
+                            root.forceActiveFocus();
+                            return;
+                        }
+                        if (pressPolicy.marquee) {
+                            laneMouse.beginContentMarquee(point, pressTimeUs, clipItem.modelData.trackId);
                             root.forceActiveFocus();
                             return;
                         }
@@ -1706,7 +1786,8 @@ FocusScope {
                                 if (!rangeIntent)
                                     root.session.beginRangeGestureUs(pressTimeUs, [clipItem.modelData.trackId]);
                             } else if (pressTarget === EditInteractionController.PointerGain) {
-                                root.session.beginClipGainDrag(clipItem.modelData.id, pressPolicy.fine);
+                                if (!pressPolicy.envelope)
+                                    root.session.beginClipGainDrag(clipItem.modelData.id, pressPolicy.fine);
                             } else {
                                 const edge = pressTarget === EditInteractionController.PointerTrimStart ? 0 :
                                     pressTarget === EditInteractionController.PointerTrimEnd ? 1 :
@@ -1720,7 +1801,10 @@ FocusScope {
                         root.pointerScrolling = pressTarget !== EditInteractionController.PointerGain;
                         if (pressTarget === EditInteractionController.PointerContent) {
                             const track = root.trackLayout.trackAtY(point.y - root.rulerHeight);
-                            root.session.updateRangeGestureToTrackUs(root.timeAtUs(point.x), track || clipItem.modelData.trackId);
+                            if (pressPolicy.singleTrack)
+                                root.session.updateRangeGestureUs(root.timeAtUs(point.x), [clipItem.modelData.trackId]);
+                            else
+                                root.session.updateRangeGestureToTrackUs(root.timeAtUs(point.x), track || clipItem.modelData.trackId);
                         } else if (pressTarget === EditInteractionController.PointerGain) {
                             root.session.updateClipGainDrag(dy);
                         } else if (pressTarget === EditInteractionController.PointerFadeIn || pressTarget === EditInteractionController.PointerFadeOut) {
@@ -1735,13 +1819,23 @@ FocusScope {
                     }
                     onPositionChanged: mouse => {
                         root.pointerPosition = mapToItem(root, mouse.x, mouse.y);
-                        updatePointer(root.pointerPosition);
+                        if (pressPolicy.marquee)
+                            laneMouse.updatePointer(root.pointerPosition);
+                        else
+                            updatePointer(root.pointerPosition);
                     }
                     onReleased: mouse => {
                         root.stopPointerScroll();
                         root.capturedClipId = 0;
                         if (mouse.button === Qt.RightButton || !pressPolicy.valid)
                             return;
+                        if (pressPolicy.marquee) {
+                            laneMouse.finishContentMarquee();
+                            return;
+                        }
+                        if (pressPolicy.envelope && !started) {
+                            root.session.addGainKey(clipItem.modelData.id, Math.round(clipItem.modelData.sourceInUs + pressTimeUs - clipItem.modelData.startUs));
+                        }
                         if (root.session.rangeGestureActive) {
                             if (started || (rangeIntent && pressPolicy.extend))
                                 root.session.commitRangeGesture();
@@ -1751,10 +1845,10 @@ FocusScope {
                             root.session.commitClipDrag();
                         }
                         root.session.finishPointerSelection(false, started);
-                        if (pressPolicy.seek)
-                            root.session.finishPointerSeek();
-                        else if (clickSeek && !started) {
+                        if (clickSeek && !started && !pressPolicy.extend) {
                             root.session.requestSeekUs(pressTimeUs);
+                            root.session.finishPointerSeek();
+                        } else if (pressPolicy.seek && !rangeIntent) {
                             root.session.finishPointerSeek();
                         }
                     }
@@ -1764,6 +1858,8 @@ FocusScope {
                         root.session.cancelClipDrag();
                         root.session.cancelRangeGesture();
                         root.session.finishPointerSelection(true);
+                        if (laneMouse.forwarded)
+                            laneMouse.cancelMarquee();
                     }
                     onDoubleClicked: mouse => {
                         if (pressTarget === EditInteractionController.PointerContent) {
@@ -2196,6 +2292,8 @@ FocusScope {
                         root.stopPointerScroll();
                         root.session.cancelClipDrag();
                         root.session.finishPointerSelection(true);
+                        if (laneMouse.forwarded)
+                            laneMouse.cancelMarquee();
                     }
                     onDoubleClicked: transitionOverlay.adjust()
                 }

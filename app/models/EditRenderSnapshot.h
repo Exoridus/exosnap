@@ -45,6 +45,7 @@ namespace exosnap::edit {
         projected.opacity_channel = clip.opacity_channel;
         projected.transform = clip.transform;
         projected.transform_channels = clip.transform_channels;
+        projected.gain_envelope = clip.gain_envelope;
         projected.fade_in = clip.fade_in;
         projected.fade_out = clip.fade_out;
         projected.original_enabled = clip.original_enabled;

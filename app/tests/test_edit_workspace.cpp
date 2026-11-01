@@ -1514,7 +1514,7 @@ TEST(EditWorkspaceGain, AuthoredGainAndRangeDeltaRejectFinerThanTenthsWithoutMut
     }
 }
 
-TEST(EditWorkspaceRange, ScopedAudioGainSplitsAndCommitsAsOneAtomicCommand) {
+TEST(EditWorkspaceRange, ScopedAudioGainPreservesClipsAndCommitsEnvelopeAsOneAtomicCommand) {
     Workspace workspace;
     ASSERT_TRUE(workspace.insert(ContractSource(workspace)));
     const auto audio_track = workspace.tracks().back().id;
@@ -1525,14 +1525,17 @@ TEST(EditWorkspaceRange, ScopedAudioGainSplitsAndCommitsAsOneAtomicCommand) {
     const auto before = workspace.snapshot();
     ASSERT_EQ(workspace.apply(AdjustRangeGain{{2 * Second, 4 * Second}, {audio_track}, 6}, workspace.revision()).status,
               CommandStatus::Applied);
-    EXPECT_EQ(workspace.clips().size(), 4u);
+    ASSERT_EQ(workspace.clips().size(), before->clips.size());
     for (const auto& clip : workspace.clips()) {
-        if (clip.track == audio_track && clip.start == 2 * Second) {
-            EXPECT_EQ(clip.end(), 4 * Second);
-            EXPECT_DOUBLE_EQ(clip.gain_db, 6);
-        } else {
-            EXPECT_DOUBLE_EQ(clip.gain_db, 0);
-        }
+        const auto original = std::find_if(before->clips.begin(), before->clips.end(),
+                                           [&](const auto& item) { return item.id == clip.id; });
+        ASSERT_NE(original, before->clips.end());
+        EXPECT_EQ(clip.start, original->start);
+        EXPECT_EQ(clip.source_in, original->source_in);
+        EXPECT_EQ(clip.source_out, original->source_out);
+        EXPECT_DOUBLE_EQ(clip.gain_db, 0);
+        EXPECT_DOUBLE_EQ(exosnap::engine::EvaluateGainEnvelope(clip.gain_envelope, 3 * 48000),
+                         clip.track == audio_track ? 6 : 0);
     }
     ASSERT_TRUE(workspace.undo());
     EXPECT_EQ(workspace.clips(), before->clips);
@@ -2729,4 +2732,72 @@ TEST(EditAutomation, TransformGestureKeysOnlyChangedChannelsAndScaleUsesRatio) {
     ASSERT_EQ(w.apply(SetVideoKey{id, 4, 5'000'000, {}}, w.revision()).status, CommandStatus::Applied);
     EXPECT_TRUE(w.clip(id)->opacity_channel.keys.empty());
     EXPECT_DOUBLE_EQ(w.clip(id)->opacity, 1);
+}
+TEST(EditGainEnvelope, SampleRampsPreserveSmoothAutomationAndClipTrackGains) {
+    using namespace exosnap::engine;
+    GainEnvelope envelope;
+    envelope.channel.keys = {{0, 0, KeyInterpolation::Smooth}, {2'000'000, -6}};
+    envelope.ranges = {{48000, 96000, 3840, -12}};
+    ASSERT_TRUE(ValidGainEnvelope(envelope, 0));
+    for (const auto sample : {47999LL, 48000LL, 48001LL, 51839LL, 51840LL, 92160LL, 95999LL, 96000LL}) {
+        const auto base = EvaluateGainChannel(envelope.channel, sample);
+        const auto weight = sample < 48000 || sample >= 96000
+                                ? 0
+                                : std::min({1.0, (sample - 48000) / 3840.0, (96000 - sample) / 3840.0});
+        EXPECT_NEAR(EvaluateGainEnvelope(envelope, sample), base - 12 * weight, 1e-12);
+        EXPECT_GE(PeakGainEnvelope(envelope, sample, sample + 100), EvaluateGainEnvelope(envelope, sample));
+    }
+    TimelineSnapshot timeline;
+    timeline.tracks = {{1, true, true, -6}};
+    TimelineClip clip{1, 1, 0, true, 0, 0, 3'000'000};
+    clip.track = 1;
+    clip.gain_db = -3;
+    clip.gain_envelope = envelope;
+    timeline.clips = {clip};
+    const auto intervals = EvaluateAudioIntervals(timeline, 0, 3'000'000);
+    ASSERT_TRUE(intervals.error.empty()) << intervals.error;
+    ASSERT_FALSE(intervals.intervals.empty());
+    const auto gain = EvaluateAudioGain(intervals.intervals.front().contributions.front(), 72000);
+    ASSERT_TRUE(gain);
+    EXPECT_NEAR(*gain, std::pow(10.0, (-9 + EvaluateGainEnvelope(envelope, 72000)) / 20), 1e-12);
+}
+
+TEST(EditGainEnvelope, RangeGainRetainsKeysAndLocksAndUndoAreAtomic) {
+    Workspace w;
+    ASSERT_TRUE(w.insert(source(w)));
+    const auto audio = std::find_if(w.clips().begin(), w.clips().end(),
+                                    [&](const auto& clip) { return clip.track == w.tracks().back().id; });
+    ASSERT_NE(audio, w.clips().end());
+    const auto id = audio->id;
+    ASSERT_EQ(w.apply(SetGainKey{id, 0, -3}, w.revision()).status, CommandStatus::Applied);
+    ASSERT_EQ(w.apply(SetGainKey{id, 5'000'000, -9}, w.revision()).status, CommandStatus::Applied);
+    const auto before = w.snapshot();
+    const auto keys = w.clip(id)->gain_envelope.channel;
+    std::vector<Id> tracks;
+    for (const auto& track : w.tracks())
+        tracks.push_back(track.id);
+    ASSERT_EQ(w.apply(AdjustRangeGain{{1'000'000, 2'000'000}, tracks, -6}, w.revision()).status,
+              CommandStatus::Applied);
+    EXPECT_EQ(w.clips().size(), before->clips.size());
+    EXPECT_EQ(w.clip(id)->gain_envelope.channel, keys);
+    EXPECT_EQ(w.clip(id)->gain_envelope.ranges.front().ramp_samples, 3840);
+    ASSERT_TRUE(w.undo());
+    EXPECT_EQ(w.clips(), before->clips);
+    ASSERT_TRUE(w.redo());
+    ASSERT_TRUE(w.setTrackLocked(w.clip(id)->track, true));
+    const auto locked = w.clips();
+    EXPECT_EQ(w.apply(AdjustRangeGain{{1'000'000, 2'000'000}, tracks, -6}, w.revision()).status,
+              CommandStatus::Rejected);
+    EXPECT_EQ(w.clips(), locked);
+}
+TEST(EditGainEnvelope, SmoothPlusRampInteriorExtremaAndDuplicateSampleKeysAreValidated) {
+    using namespace exosnap::engine;
+    GainEnvelope envelope;
+    envelope.channel.keys = {{0, 0, KeyInterpolation::Smooth}, {1'000'000, 24}};
+    envelope.ranges = {{0, 48000, 12000, 3}};
+    EXPECT_FALSE(ValidGainEnvelope(envelope, 0));
+    envelope.channel.keys.back().value = 23;
+    EXPECT_TRUE(ValidGainEnvelope(envelope, 0));
+    envelope.channel.keys.insert(envelope.channel.keys.begin() + 1, {1, 0});
+    EXPECT_FALSE(ValidGainEnvelope(envelope, 0));
 }

@@ -1459,6 +1459,24 @@ set_tests_properties(quick.qml.recording_review_native PROPERTIES
 )
 exosnap_set_test_phase(quick.qml.recording_review_native desktop)
 
+add_test(NAME quick.qml.edit_audio_timeline COMMAND edit_timeline_qml_tests
+    EditTimelinePresentation::test_header_click_preserves_playhead_and_content_click_seeks
+    EditTimelinePresentation::test_content_drag_creates_range_without_authored_move
+    EditTimelinePresentation::test_empty_lane_drag_creates_range_and_preserves_playhead
+    EditTimelinePresentation::test_ctrl_marquee_selects_touched_clips_without_history
+    EditTimelinePresentation::test_marquee_escape_restores_the_previous_range
+    EditTimelinePresentation::test_ctrl_content_marquee_preserves_clip_geometry
+    EditTimelinePresentation::test_alt_content_range_stays_on_pressed_track
+    EditTimelinePresentation::test_alt_gain_click_creates_point_without_unlink_or_split
+    -o "${CMAKE_CURRENT_BINARY_DIR}/edit-audio-timeline-test.txt,txt")
+set_tests_properties(quick.qml.edit_audio_timeline PROPERTIES
+    LABELS "quick;quicktest"
+    ENVIRONMENT "QT_QPA_PLATFORM=offscreen;QML_IMPORT_PATH=${_exosnap_quick_qt_prefix}/qml"
+    ENVIRONMENT_MODIFICATION "PATH=path_list_prepend:${_exosnap_quick_qt_prefix}/bin"
+    TIMEOUT 120
+)
+exosnap_set_test_phase(quick.qml.edit_audio_timeline desktop)
+
 add_test(NAME quick.qml.edit_video_automation COMMAND edit_timeline_qml_tests
     EditTimelineKeyboard::test_auto_key_toggle_does_not_edit_document_and_ignores_text_focus
     EditInspectorInput::test_auto_key_start_and_midpoint_undo

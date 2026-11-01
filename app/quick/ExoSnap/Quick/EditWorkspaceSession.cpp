@@ -1,3 +1,4 @@
+#include "EditGainEnvelope.h"
 #include "EditRenderText.h"
 #include "EditSessionAdapter.h"
 #include "EditTimelineModels.h"
@@ -8,10 +9,14 @@
 #include "models/EditTimelineModel.h"
 #include "models/EditWorkspace.h"
 
+#include <QClipboard>
+#include <QCoreApplication>
 #include <QElapsedTimer>
 #include <QFileInfo>
+#include <QGuiApplication>
 #include <QList>
 #include <QMetaObject>
+#include <QMimeData>
 #include <QObject>
 #include <QString>
 #include <QStringList>
@@ -378,6 +383,11 @@ bool EditSessionAdapter::applyTimeValue(qulonglong target, const QString& field,
             return refuse(tr("The edited transition is no longer available."));
         if (field == QStringLiteral("junctionCut"))
             return applyCommand(edit::SetHardCut{target, value});
+        if (field == QStringLiteral("junctionDuration") && value == 0) {
+            if (found->kind != edit::TransitionKind::Crossfade)
+                return refuse(tr("Use Remove overlap to convert an existing hard cut."));
+            return applyCommand(edit::RemoveOverlap{target, true});
+        }
         edit::Span span{found->in_us, found->out_us};
         if (field == QStringLiteral("junctionStart"))
             span.in_us = value;
@@ -497,6 +507,14 @@ bool EditSessionAdapter::copyClips() {
         return false;
     }
     clip_clipboard_ = copied;
+    // Owning the system clipboard lets a later Paste tell whether another
+    // application replaced it in the meantime. QCoreApplication-only hosts have
+    // no clipboard.
+    if (qobject_cast<QGuiApplication*>(QCoreApplication::instance())) {
+        auto* marker = new QMimeData;
+        marker->setData(QString::fromLatin1(kEditClipsMimeType), {});
+        QGuiApplication::clipboard()->setMimeData(marker);
+    }
     workspace_error_.clear();
     emit clipboardChanged();
     emit workspaceChanged();
@@ -509,16 +527,163 @@ bool EditSessionAdapter::cutClips() {
     return applyCommand(edit::LiftClips{selection_.clip_ids, false});
 }
 
+ClipboardPaste ResolveClipboardPaste(const QMimeData* system) {
+    if (!system || system->formats().isEmpty() || system->hasFormat(QString::fromLatin1(kEditClipsMimeType)))
+        return ClipboardPaste::Clips;
+    if (system->hasUrls())
+        return ClipboardPaste::Files;
+    if (system->hasImage())
+        return ClipboardPaste::Image;
+    return ClipboardPaste::Replaced;
+}
+
+bool EditSessionAdapter::pasteFromSystemClipboard(bool insert) {
+    const auto* system = qobject_cast<QGuiApplication*>(QCoreApplication::instance())
+                             ? QGuiApplication::clipboard()->mimeData()
+                             : nullptr;
+    switch (ResolveClipboardPaste(system)) {
+    case ClipboardPaste::Clips:
+        return previewPasteClipsUs(workspace_.playhead(), selection_.active_track, insert);
+    case ClipboardPaste::Files:
+        if (insert) {
+            refuseEdit(tr("Insert paste needs copied clips. Use Ctrl+V to add the copied files."));
+            return false;
+        }
+        if (!preflightPendingDraft())
+            return false;
+        importMediaBatchUs(system->urls(), true, workspace_.playhead());
+        return true;
+    case ClipboardPaste::Image:
+        refuseEdit(tr("Pasting images is not supported. Save the image as a file first."));
+        return false;
+    case ClipboardPaste::Replaced:
+        break;
+    }
+    refuseEdit(tr("The clipboard holds no clips or media files."));
+    return false;
+}
+
 bool EditSessionAdapter::previewPasteClipsUs(qint64 at, qulonglong track, bool insert) {
+    if (!clip_clipboard_) {
+        if (preflightPendingDraft()) {
+            cancelClipDrag();
+            cancelRangeGesture();
+            refuseEdit(tr("Copy clips before pasting."));
+        }
+        return false;
+    }
+    return previewPaste(
+        edit::PasteClips{clip_clipboard_, at, track ? track : selection_.active_track, insert, autoCrossfade});
+}
+
+bool EditSessionAdapter::duplicateSelectedClips() {
+    if (!preflightPendingDraft())
+        return false;
+    if (selection_.mode != edit::SelectionMode::Clips || selection_.clip_ids.empty()) {
+        refuseEdit(tr("Select clips to duplicate."));
+        return false;
+    }
+    const auto snapshot = workspace_.snapshot();
+    const auto copied = edit::CopyClips(*snapshot, selection_.clip_ids);
+    if (!copied) {
+        refuseEdit(tr("The selected clips are unavailable for duplicating."));
+        return false;
+    }
+    edit::Time block_end = 0;
+    for (const auto& clip : snapshot->clips)
+        if (std::find(selection_.clip_ids.begin(), selection_.clip_ids.end(), clip.id) != selection_.clip_ids.end())
+            block_end = std::max(block_end, clip.end());
+    // Overlap would silently turn into transitions with neighbors, so occupied
+    // target time refuses instead.
+    for (const auto& copy : copied->clips)
+        for (const auto& clip : snapshot->clips)
+            if (clip.track == copy.track && clip.start < block_end + copy.end() &&
+                clip.end() > block_end + copy.start) {
+                refuseEdit(tr("The time after the selection is occupied. Make room before duplicating."));
+                return false;
+            }
+    const auto before = selection_;
+    if (!previewPaste(edit::PasteClips{copied, block_end, 0, false, false, true}) || !commitClipDrag())
+        return false;
+    undo_selection_ = UndoSelection{workspace_.revision(), before};
+    return true;
+}
+
+bool EditSessionAdapter::selectActiveTrackClips() {
+    if (!preflightPendingDraft())
+        return false;
+    const auto track = selection_.active_track;
+    if (!track) {
+        refuseEdit(tr("Select a track first."));
+        return false;
+    }
+    std::vector<edit::Id> ids;
+    for (const auto id : edit::OrderedClipIds(*workspace_.snapshot()))
+        if (workspace_.clip(id)->track == track)
+            ids.push_back(id);
+    if (ids.empty()) {
+        refuseEdit(tr("The active track has no clips."));
+        return false;
+    }
+    cancelRangeGesture();
+    selection_.clear();
+    selection_.clip_ids = std::move(ids);
+    selection_.mode = edit::SelectionMode::Clips;
+    selection_.primary_clip = selection_.anchor_clip = selection_.clip_ids.front();
+    workspace_.select(selection_.primary_clip);
+    publishSelection();
+    return true;
+}
+
+bool EditSessionAdapter::liftSelectedAndSelectNext() {
+    if (!preflightPendingDraft())
+        return false;
+    if (selection_.mode != edit::SelectionMode::Clips || selection_.clip_ids.empty()) {
+        deleteSelected(false);
+        return true;
+    }
+    const auto before = selection_;
+    const auto* primary =
+        workspace_.clip(selection_.primary_clip ? selection_.primary_clip : selection_.clip_ids.front());
+    if (!primary)
+        return false;
+    const auto track = primary->track;
+    edit::Time block_start = (std::numeric_limits<edit::Time>::max)();
+    edit::Time block_end = 0;
+    for (const auto id : selection_.clip_ids)
+        if (const auto* clip = workspace_.clip(id); clip && clip->track == track) {
+            block_start = std::min(block_start, clip->start);
+            block_end = std::max(block_end, clip->end());
+        }
+    if (!applyCommand(edit::LiftClips{selection_.clip_ids, linkedSelection}))
+        return false;
+    edit::Id next = 0;
+    edit::Id previous = 0;
+    for (const auto id : edit::OrderedClipIds(*workspace_.snapshot())) {
+        const auto* clip = workspace_.clip(id);
+        if (clip->track != track)
+            continue;
+        if (!next && clip->start >= block_start && clip->end() > block_end)
+            next = id;
+        else if (clip->start < block_start)
+            previous = id;
+    }
+    selection_.clear();
+    workspace_.select(0);
+    if (next || previous)
+        selectClipWithModifiers(next ? next : previous);
+    else
+        publishSelection();
+    undo_selection_ = UndoSelection{workspace_.revision(), before};
+    return true;
+}
+
+bool EditSessionAdapter::previewPaste(edit::PasteClips command) {
     if (!preflightPendingDraft())
         return false;
     cancelClipDrag();
     cancelRangeGesture();
-    if (!clip_clipboard_) {
-        refuseEdit(tr("Copy clips before pasting."));
-        return false;
-    }
-    for (const auto& asset : clip_clipboard_->assets)
+    for (const auto& asset : command.clipboard->assets)
         if (asset && sourceVerificationFailed(asset->id)) {
             refuseEdit(tr("The clipboard source is unavailable or changed. Relink it before pasting."));
             return false;
@@ -526,8 +691,7 @@ bool EditSessionAdapter::previewPasteClipsUs(qint64 at, qulonglong track, bool i
     drag_snapshot_ = workspace_.snapshot();
     drag_selection_ =
         GestureSelection{selection_, selected_transition_, selected_spacer_, selected_gap_track_, selected_gap_};
-    drag_command_ =
-        edit::PasteClips{clip_clipboard_, at, track ? track : selection_.active_track, insert, autoCrossfade};
+    drag_command_ = std::move(command);
     drag_preview_ = edit::PreviewEdit(*drag_snapshot_, *drag_command_);
     emit dragChanged();
     if (!drag_preview_.valid) {
@@ -889,6 +1053,87 @@ bool EditSessionAdapter::setVideoInterpolation(qulonglong id, int property, int 
         edit::SetVideoKey{id, property, workspace_.playhead(), static_cast<engine::KeyInterpolation>(interpolation)});
 }
 
+bool EditSessionAdapter::addGainKey(qulonglong id, qint64 source_us) {
+    const auto* clip = workspace_.clip(id);
+    if (!clip)
+        return false;
+    return applyCommand(edit::SetGainKey{
+        id, source_us, engine::EvaluateGainChannel(clip->gain_envelope.channel, engine::AudioSampleIndex(source_us))});
+}
+
+bool EditSessionAdapter::removeGainKey(qulonglong id, qint64 source_us) {
+    return applyCommand(edit::SetGainKey{id, source_us, 0, source_us, true});
+}
+
+bool EditSessionAdapter::beginGainKeyDrag(qulonglong id, qint64 source_us) {
+    if (!preflightPendingDraft())
+        return false;
+    cancelClipDrag();
+    const auto* clip = workspace_.clip(id);
+    if (!clip)
+        return false;
+    drag_snapshot_ = workspace_.snapshot();
+    drag_clip_ = id;
+    drag_command_ = edit::SetGainKey{
+        id, source_us, engine::EvaluateGainChannel(clip->gain_envelope.channel, engine::AudioSampleIndex(source_us)),
+        source_us};
+    drag_preview_ = edit::PreviewEdit(*drag_snapshot_, *drag_command_);
+    emit dragChanged();
+    return dragValid();
+}
+
+void EditSessionAdapter::updateGainKeyDrag(qint64 source_us, double gain_db) {
+    if (!drag_snapshot_ || !drag_command_ || !std::holds_alternative<edit::SetGainKey>(*drag_command_))
+        return;
+    auto& command = std::get<edit::SetGainKey>(*drag_command_);
+    const auto original = std::find_if(drag_snapshot_->clips.begin(), drag_snapshot_->clips.end(),
+                                       [&](const auto& clip) { return clip.id == command.id; });
+    if (original == drag_snapshot_->clips.end() || !command.original_source_us)
+        return;
+    command.source_us = source_us;
+    double range_gain = 0;
+    for (const auto& range : original->gain_envelope.ranges)
+        range_gain += engine::EvaluateRangeGain(range, engine::AudioSampleIndex(source_us));
+    command.value = gain_db - original->gain_db - range_gain;
+    drag_preview_ = edit::PreviewEdit(*drag_snapshot_, *drag_command_);
+    emit dragChanged();
+}
+
+QVariantList EditSessionAdapter::gainCurve(qulonglong id, qint64 source_in_us, qint64 source_out_us,
+                                           int columns) const {
+    const auto* clip = workspace_.clip(id);
+    if (const auto* preview = renderPreview()) {
+        const auto found =
+            std::find_if(preview->clips.begin(), preview->clips.end(), [&](const auto& item) { return item.id == id; });
+        if (found != preview->clips.end())
+            clip = &*found;
+    }
+    if (!clip || source_in_us < 0 || source_out_us <= source_in_us || columns <= 0)
+        return {};
+    const auto first = engine::AudioSampleIndex(source_in_us), last = engine::AudioSampleIndex(source_out_us);
+    if (first >= last)
+        return {};
+    const auto count = std::clamp(columns, 2, 512);
+    std::set<int64_t> samples{first, last};
+    for (int i = 1; i < count; ++i)
+        samples.insert(first + ((last - first) / count) * i + (((last - first) % count) * i) / count);
+    for (const auto& key : clip->gain_envelope.channel.keys)
+        samples.insert(engine::AudioSampleIndex(key.source_us));
+    for (const auto& range : clip->gain_envelope.ranges)
+        for (const auto at : {range.in_sample, range.in_sample + range.ramp_samples,
+                              range.out_sample - range.ramp_samples, range.out_sample})
+            samples.insert(at);
+    QVariantList result;
+    for (const auto at : samples) {
+        if (at < first || at > last)
+            continue;
+        const auto db = clip->gain_db + engine::EvaluateGainEnvelope(clip->gain_envelope, at);
+        const auto y = db >= 0 ? 0.3 * (1 - db / 24) : 0.3 + 0.7 * (-db / 60);
+        result.push_back(QPointF(static_cast<double>(at - first) / static_cast<double>(last - first), y));
+    }
+    return result;
+}
+
 bool EditSessionAdapter::setClipGain(qulonglong id, double gain_db) {
     return applyCommand(edit::SetGain{edit::GainTarget::Clip, id, gain_db});
 }
@@ -1224,8 +1469,16 @@ bool EditSessionAdapter::executeTimelineAction(const QString& action) {
         clearEditRange();
     } else if (action == QStringLiteral("select-all")) {
         selectAllClips();
+    } else if (action == QStringLiteral("select-track")) {
+        return selectActiveTrackClips();
+    } else if (action == QStringLiteral("duplicate")) {
+        return duplicateSelectedClips();
+    } else if (action == QStringLiteral("lift-select-next")) {
+        return liftSelectedAndSelectNext();
     } else if (action == QStringLiteral("split")) {
         splitSelected();
+    } else if (action == QStringLiteral("split-all")) {
+        splitAllAtPlayhead();
     } else if (action == QStringLiteral("lift") || action == QStringLiteral("ripple-remove")) {
         deleteSelected(action == QStringLiteral("ripple-remove"));
     } else if (action == QStringLiteral("copy")) {
@@ -1233,8 +1486,7 @@ bool EditSessionAdapter::executeTimelineAction(const QString& action) {
     } else if (action == QStringLiteral("cut")) {
         return cutClips();
     } else if (action == QStringLiteral("paste") || action == QStringLiteral("insert-paste")) {
-        return previewPasteClipsUs(workspace_.playhead(), selection_.active_track,
-                                   action == QStringLiteral("insert-paste"));
+        return pasteFromSystemClipboard(action == QStringLiteral("insert-paste"));
     } else if (action == QStringLiteral("undo")) {
         undo();
     } else if (action == QStringLiteral("redo")) {
@@ -1792,6 +2044,23 @@ QVariantMap EditSessionAdapter::projectClipRow(const edit::Clip& clip) const {
         {QStringLiteral("sourceAspect"), source_aspect},
         {QStringLiteral("outputAspect"), output_aspect},
         {QStringLiteral("gainDb"), clip.gain_db},
+        {QStringLiteral("gainEnvelope"), QVariant::fromValue(clip.gain_envelope)},
+        {QStringLiteral("hasGainEnvelope"),
+         !clip.gain_envelope.channel.keys.empty() || !clip.gain_envelope.ranges.empty()},
+        {QStringLiteral("gainKeys"),
+         [&] {
+             QVariantList keys;
+             for (const auto& key : clip.gain_envelope.channel.keys)
+                 if (key.source_us >= clip.source_in && key.source_us < clip.source_out) {
+                     const auto db = clip.gain_db + engine::EvaluateGainEnvelope(
+                                                        clip.gain_envelope, engine::AudioSampleIndex(key.source_us));
+                     const auto y = db >= 0 ? 0.3 * (1 - db / 24) : 0.3 + 0.7 * (-db / 60);
+                     keys.push_back(
+                         QVariantMap{{QStringLiteral("sourceUs"), QVariant::fromValue<qint64>(key.source_us)},
+                                     {QStringLiteral("y"), y}});
+                 }
+             return keys;
+         }()},
         {QStringLiteral("enabled"), clip.enabled},
         {QStringLiteral("fadeInCurve"), static_cast<int>(clip.fade_in.curve.kind)},
         {QStringLiteral("fadeInBias"), clip.fade_in.curve.bias},
@@ -2621,36 +2890,48 @@ void EditSessionAdapter::trimClipUs(qulonglong id, qint64 in_us, qint64 out_us) 
 void EditSessionAdapter::splitSelected() {
     if (!preflightPendingDraft())
         return;
-    if (selection_.mode == edit::SelectionMode::Range && selection_.range) {
-        const auto range = *selection_.range;
-        applyCommand(edit::SplitRange{{range.start_us, range.end_us}, range.track_ids}, [this, range] {
-            selection_.clear();
-            const auto snapshot = workspace_.snapshot();
-            for (const auto id : edit::OrderedClipIds(*snapshot)) {
-                const auto* clip = workspace_.clip(id);
-                if (clip &&
-                    std::find(range.track_ids.begin(), range.track_ids.end(), clip->track) != range.track_ids.end() &&
-                    clip->start >= range.start_us && clip->end() <= range.end_us)
-                    selection_.clip_ids.push_back(id);
-            }
-            if (!selection_.clip_ids.empty()) {
-                selection_.mode = edit::SelectionMode::Clips;
-                selection_.primary_clip = selection_.anchor_clip = selection_.clip_ids.front();
-            }
-            workspace_.select(selection_.primary_clip);
-        });
-        return;
-    }
     auto targets = selection_.mode == edit::SelectionMode::Clips ? selection_.clip_ids : std::vector<edit::Id>{};
-    if (targets.empty())
+    std::vector<edit::Id> tracks;
+    if (targets.empty()) {
+        if (selection_.mode == edit::SelectionMode::Range && selection_.range)
+            tracks = selection_.range->track_ids;
+        else if (selection_.active_track)
+            tracks.push_back(selection_.active_track);
+        if (tracks.empty()) {
+            refuseEdit(tr(
+                "Select clips, a range track scope or an active track before splitting. Shift+S splits all tracks."));
+            return;
+        }
         for (const auto& clip : workspace_.clips())
-            if ((!selection_.active_track || clip.track == selection_.active_track) &&
+            if (std::find(tracks.begin(), tracks.end(), clip.track) != tracks.end() &&
                 clip.start < workspace_.playhead() && workspace_.playhead() < clip.end())
                 targets.push_back(clip.id);
-    if (!targets.empty())
-        applyCommand(edit::Split{targets, workspace_.playhead(), linkedSelection});
+        if (selection_.mode == edit::SelectionMode::Range && linkedSelection) {
+            const auto expanded = edit::ExpandClipTargetIds(workspace_.clips(), targets, true);
+            for (const auto id : expanded) {
+                const auto* clip = workspace_.clip(id);
+                if (clip && std::find(tracks.begin(), tracks.end(), clip->track) == tracks.end()) {
+                    refuseEdit(tr("Include linked tracks in the range scope before splitting."));
+                    return;
+                }
+            }
+        }
+    }
+    if (targets.empty()) {
+        refuseEdit(tr("No scoped clip crosses the playhead."));
+        return;
+    }
+    applyCommand(edit::Split{targets, workspace_.playhead(), linkedSelection});
 }
 
+void EditSessionAdapter::splitAllAtPlayhead() {
+    std::vector<edit::Id> targets;
+    for (const auto& clip : workspace_.clips())
+        if (clip.start < workspace_.playhead() && workspace_.playhead() < clip.end())
+            targets.push_back(clip.id);
+    if (!targets.empty())
+        applyCommand(edit::Split{targets, workspace_.playhead(), true});
+}
 void EditSessionAdapter::deleteSelected(bool ripple_delete) {
     if (!preflightPendingDraft())
         return;
@@ -2706,8 +2987,15 @@ void EditSessionAdapter::deleteSelected(bool ripple_delete) {
 void EditSessionAdapter::undo() {
     if (!preflightPendingDraft())
         return;
-    if (workspace_.undo())
-        publishWorkspace(true);
+    const auto restore = std::exchange(undo_selection_, std::nullopt);
+    const bool restores_selection = restore && restore->revision == workspace_.revision();
+    if (!workspace_.undo())
+        return;
+    if (restores_selection) {
+        selection_ = restore->selection;
+        workspace_.select(selection_.primary_clip);
+    }
+    publishWorkspace(true);
 }
 void EditSessionAdapter::redo() {
     if (!preflightPendingDraft())
@@ -3251,6 +3539,10 @@ QVariantList EditSessionAdapter::dragClips() const {
                         {QStringLiteral("sourceOutUs"), clip.source_out},
                         {QStringLiteral("endUs"), clip.end()},
                         {QStringLiteral("durationUs"), clip.duration()},
+                        {QStringLiteral("gainDb"), clip.gain_db},
+                        {QStringLiteral("gainEnvelope"), QVariant::fromValue(clip.gain_envelope)},
+                        {QStringLiteral("hasGainEnvelope"),
+                         !clip.gain_envelope.channel.keys.empty() || !clip.gain_envelope.ranges.empty()},
                         {QStringLiteral("fadeInUs"), clip.fade_in.duration_us},
                         {QStringLiteral("fadeOutUs"), clip.fade_out.duration_us},
                         {QStringLiteral("durationMs"), clip.duration() / 1000.0},

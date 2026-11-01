@@ -22,6 +22,7 @@ inline bool SamePlaybackMediaLayout(const engine::TimelineSnapshot& before, cons
             if (a.audio && b.audio) {
                 a.enabled = b.enabled = true;
                 a.gain_db = b.gain_db = 0;
+                a.gain_envelope = b.gain_envelope = {};
             }
             return a == b;
         });

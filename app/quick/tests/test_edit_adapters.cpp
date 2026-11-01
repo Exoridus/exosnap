@@ -32,6 +32,7 @@
 #include <QJsonArray>
 #include <QJsonDocument>
 #include <QJsonObject>
+#include <QMimeData>
 #include <QPersistentModelIndex>
 #include <QPointer>
 #include <QQmlComponent>
@@ -159,7 +160,14 @@ TEST(EditClipPointer, ModifiersHaveOneCapturedPolicyAndConflictingStructuralChor
     EXPECT_FALSE(shift.value("seek").toBool());
     const auto scope =
         controller.clipPointerPolicy(EditInteractionController::PointerContent, Qt::ControlModifier, true);
-    EXPECT_TRUE(scope.value("preserveBounds").toBool());
+    EXPECT_FALSE(scope.value("preserveBounds").toBool());
+    EXPECT_TRUE(scope.value("marquee").toBool());
+    const auto single = controller.clipPointerPolicy(EditInteractionController::PointerContent, Qt::AltModifier, false);
+    EXPECT_TRUE(single.value("range").toBool());
+    EXPECT_TRUE(single.value("singleTrack").toBool());
+    EXPECT_TRUE(controller.clipPointerPolicy(EditInteractionController::PointerGain, Qt::AltModifier, false)
+                    .value("envelope")
+                    .toBool());
     EXPECT_TRUE(controller.clipPointerPolicy(EditInteractionController::PointerGain, Qt::ControlModifier, false)
                     .value("fine")
                     .toBool());
@@ -175,8 +183,9 @@ TEST(EditClipPointer, ModifiersHaveOneCapturedPolicyAndConflictingStructuralChor
 
 TEST(EditTimelineKeys, RangeClipboardAndViewBindingsAreCentralAndRejectUnlistedChords) {
     EXPECT_EQ(ResolveTimelineKey(Qt::Key_L, Qt::ControlModifier, false), QStringLiteral("loop"));
-    EXPECT_EQ(ResolveTimelineKey(Qt::Key_V, Qt::NoModifier, false), QStringLiteral("tool-select"));
-    EXPECT_EQ(ResolveTimelineKey(Qt::Key_R, Qt::NoModifier, false), QStringLiteral("tool-range"));
+    EXPECT_TRUE(ResolveTimelineKey(Qt::Key_V, Qt::NoModifier, false).isEmpty());
+    EXPECT_TRUE(ResolveTimelineKey(Qt::Key_R, Qt::NoModifier, false).isEmpty());
+    EXPECT_EQ(ResolveTimelineKey(Qt::Key_S, Qt::ShiftModifier, false), QStringLiteral("split-all"));
     EXPECT_EQ(ResolveTimelineKey(Qt::Key_V, Qt::ControlModifier, false), QStringLiteral("paste"));
     EXPECT_EQ(ResolveTimelineKey(Qt::Key_X, Qt::AltModifier, false), QStringLiteral("clear-range"));
     EXPECT_EQ(ResolveTimelineKey(Qt::Key_C, Qt::ControlModifier, false), QStringLiteral("copy"));
@@ -186,6 +195,14 @@ TEST(EditTimelineKeys, RangeClipboardAndViewBindingsAreCentralAndRejectUnlistedC
     EXPECT_TRUE(ResolveTimelineKey(Qt::Key_L, Qt::ControlModifier | Qt::AltModifier, false).isEmpty());
     EXPECT_TRUE(ResolveTimelineKey(Qt::Key_L, Qt::ControlModifier, true).isEmpty());
     EXPECT_EQ(ResolveTimelineKey(Qt::Key_Right, Qt::NoModifier, true), QStringLiteral("frame-next"));
+    EXPECT_EQ(ResolveTimelineKey(Qt::Key_D, Qt::ControlModifier, false), QStringLiteral("duplicate"));
+    EXPECT_EQ(ResolveTimelineKey(Qt::Key_D, Qt::NoModifier, false), QStringLiteral("inspector-dock"));
+    EXPECT_EQ(ResolveTimelineKey(Qt::Key_A, Qt::ControlModifier | Qt::ShiftModifier, false),
+              QStringLiteral("select-track"));
+    EXPECT_EQ(ResolveTimelineKey(Qt::Key_Delete, Qt::ControlModifier, false), QStringLiteral("lift-select-next"));
+    EXPECT_TRUE(ResolveTimelineKey(Qt::Key_D, Qt::ControlModifier, true).isEmpty());
+    EXPECT_TRUE(ResolveTimelineKey(Qt::Key_Delete, Qt::ControlModifier, true).isEmpty());
+    EXPECT_TRUE(ResolveTimelineKey(Qt::Key_A, Qt::ControlModifier | Qt::AltModifier, false).isEmpty());
 }
 
 TEST(EditTimelineWheel, PixelDeltasOwnBothAxesExactlyOnce) {
@@ -929,7 +946,7 @@ TEST(EditSelectionAdapter, ClipAndRangeModesDistinguishSelectionFromExplicitRang
     EXPECT_EQ(explicit_clears, 1);
 }
 
-TEST(EditSelectionAdapter, RangeSplitSelectsInsidePiecesAndKeepsOneUndoTransaction) {
+TEST(EditSelectionAdapter, RangeSplitUsesTrackScopeAtPlayheadAndKeepsOneUndoTransaction) {
     EnsureApplication();
     EditSessionAdapter session;
     session.setEditContext(MakeContext(10));
@@ -938,21 +955,18 @@ TEST(EditSelectionAdapter, RangeSplitSelectsInsidePiecesAndKeepsOneUndoTransacti
     for (const auto& track : session.workspace().tracks())
         tracks.push_back(QVariant::fromValue<qulonglong>(track.id));
     ASSERT_TRUE(session.setEditRangeUs(2'000'000, 4'000'000, tracks));
+    session.requestSeekUs(3'000'000);
     session.splitSelected();
-    ASSERT_EQ(session.workspace().clips().size(), 6u);
-    EXPECT_EQ(session.selectionMode(), EditSessionAdapter::ClipSelection);
-    ASSERT_EQ(session.selectedClipIds().size(), 2);
-    for (const auto& id : session.selectedClipIds()) {
-        const auto* clip = session.workspace().clip(id.toULongLong());
-        ASSERT_NE(clip, nullptr);
-        EXPECT_EQ(clip->start, 2'000'000);
-        EXPECT_EQ(clip->end(), 4'000'000);
-    }
-    EXPECT_TRUE(session.editRange().isEmpty());
+    ASSERT_EQ(session.workspace().clips().size(), 4u);
+    EXPECT_EQ(session.selectionMode(), EditSessionAdapter::RangeSelection);
+    EXPECT_TRUE(session.selectedClipIds().isEmpty());
+    for (const auto& clip : session.workspace().clips())
+        EXPECT_TRUE(clip.start == 3'000'000 || clip.end() == 3'000'000);
+    EXPECT_EQ(session.editRange().value("startUs").toLongLong(), 2'000'000);
+    EXPECT_EQ(session.editRange().value("endUs").toLongLong(), 4'000'000);
     session.undo();
     EXPECT_EQ(session.workspace().clips(), before);
 }
-
 TEST(EditSelectionAdapter, LockedRangeLiftRefusesAtomicallyAndSuccessfulLiftKeepsTheRange) {
     EnsureApplication();
     EditSessionAdapter session;
@@ -2159,6 +2173,108 @@ TEST(EditClipboardAdapter, NonClipCopyKeepsClipboardAndPasteSelectsNewIdsWithout
     EXPECT_EQ(seeks, 0);
     session.undo();
     EXPECT_EQ(session.workspace().clips(), original);
+}
+
+TEST(EditClipboardAdapter, SystemClipboardChoosesClipsFilesImagesOrRefusesReplacedContent) {
+    EXPECT_EQ(ResolveClipboardPaste(nullptr), ClipboardPaste::Clips);
+    QMimeData empty;
+    EXPECT_EQ(ResolveClipboardPaste(&empty), ClipboardPaste::Clips);
+    QMimeData own;
+    own.setData(QString::fromLatin1(kEditClipsMimeType), {});
+    EXPECT_EQ(ResolveClipboardPaste(&own), ClipboardPaste::Clips);
+    QMimeData files;
+    files.setUrls({QUrl::fromLocalFile(QStringLiteral("C:/Videos/clip.mp4"))});
+    EXPECT_EQ(ResolveClipboardPaste(&files), ClipboardPaste::Files);
+    QMimeData image;
+    image.setData(QStringLiteral("application/x-qt-image"), QByteArray("pixels"));
+    EXPECT_EQ(ResolveClipboardPaste(&image), ClipboardPaste::Image);
+    QMimeData text;
+    text.setText(QStringLiteral("copied elsewhere"));
+    EXPECT_EQ(ResolveClipboardPaste(&text), ClipboardPaste::Replaced);
+}
+
+void AddVerifiedLinkedSource(EditSessionAdapter& session) {
+    engine::EditMediaMetadata metadata;
+    metadata.duration_us = 10'000'000;
+    metadata.fps_num = 60;
+    metadata.fps_den = 1;
+    metadata.has_audio = true;
+    metadata.content_identity_valid = true;
+    metadata.content_sha256.fill(29);
+    engine::EditSourceStream video;
+    video.kind = engine::TimelineStreamKind::Video;
+    video.container_index = 0;
+    video.fps_num = 60;
+    video.fps_den = 1;
+    engine::EditSourceStream audio;
+    audio.kind = engine::TimelineStreamKind::Audio;
+    audio.container_index = 1;
+    audio.codec.channels = 2;
+    metadata.streams = {video, audio};
+    session.addProbedMediaForHarness(QStringLiteral("duplicate-source.mkv"), metadata, true);
+}
+
+TEST(EditClipboardAdapter, DuplicatePlacesCopiesOnSourceTracksAndRefusesOccupiedOrLockedTargets) {
+    EnsureApplication();
+    EditSessionAdapter session;
+    AddVerifiedLinkedSource(session);
+    const auto original = session.workspace().clips();
+    ASSERT_EQ(original.size(), 2u);
+    session.selectClip(original.front().id);
+    ASSERT_EQ(session.selectedClipIds().size(), 2);
+    ASSERT_TRUE(session.duplicateSelectedClips());
+    EXPECT_FALSE(session.hasClipClipboard());
+    ASSERT_EQ(session.workspace().clips().size(), 4u);
+    const auto block_end = std::max(original.front().end(), original.back().end());
+    for (const auto& value : session.selectedClipIds()) {
+        const auto* copy = session.workspace().clip(value.toULongLong());
+        ASSERT_NE(copy, nullptr);
+        EXPECT_EQ(copy->start, block_end);
+        EXPECT_TRUE(std::any_of(original.begin(), original.end(), [&](const auto& clip) {
+            return clip.track == copy->track && clip.source_in == copy->source_in && clip.group != copy->group;
+        }));
+    }
+    const auto copies = session.selectedClipIds();
+    const auto revision = session.workspace().revision();
+    session.selectClip(original.front().id);
+    EXPECT_FALSE(session.duplicateSelectedClips());
+    EXPECT_FALSE(session.workspaceError().isEmpty());
+    EXPECT_EQ(session.workspace().revision(), revision);
+    ASSERT_TRUE(session.setTrackLocked(session.workspace().tracks().back().id, true));
+    session.selectClip(copies.front().toULongLong());
+    const auto locked_revision = session.workspace().revision();
+    EXPECT_FALSE(session.duplicateSelectedClips());
+    EXPECT_EQ(session.workspace().clips().size(), 4u);
+    EXPECT_EQ(session.workspace().revision(), locked_revision);
+    EXPECT_EQ(session.selectedClipIds(), copies);
+}
+
+TEST(EditClipboardAdapter, LiftAndSelectNextFallsBackToThePreviousClipAndUndoRestoresTheSelection) {
+    EnsureApplication();
+    EditSessionAdapter session;
+    AddVerifiedLinkedSource(session);
+    session.linkedSelection = false;
+    const auto first = session.workspace().clips().front().id;
+    session.clearSelection();
+    session.selectClip(first);
+    ASSERT_TRUE(session.duplicateSelectedClips());
+    const auto second = session.selectedClipIds().front().toULongLong();
+    ASSERT_TRUE(session.liftSelectedAndSelectNext());
+    ASSERT_EQ(session.selectedClipIds().size(), 1);
+    EXPECT_EQ(session.selectedClipIds().front().toULongLong(), first);
+    session.undo();
+    ASSERT_EQ(session.selectedClipIds().size(), 1);
+    EXPECT_EQ(session.selectedClipIds().front().toULongLong(), second);
+    session.selectClip(first);
+    ASSERT_TRUE(session.liftSelectedAndSelectNext());
+    EXPECT_EQ(session.selectedClipIds().front().toULongLong(), second);
+    session.selectClip(second);
+    const auto emptied = session.workspace().clip(second)->track;
+    ASSERT_TRUE(session.liftSelectedAndSelectNext());
+    EXPECT_TRUE(session.selectedClipIds().isEmpty());
+    session.setActiveTrack(emptied);
+    EXPECT_FALSE(session.selectActiveTrackClips());
+    EXPECT_FALSE(session.workspaceError().isEmpty());
 }
 
 TEST(EditTrackAudition, SoloIsAdditiveResidentAndAvailableOnLockedAudioTracks) {
@@ -7157,5 +7273,89 @@ TEST_P(EditExportReviewSelection, ReviewTracksOnlyItsSelectedClipScope) {
 INSTANTIATE_TEST_SUITE_P(SelectionScope, EditExportReviewSelection,
                          ::testing::Values("changed", "cleared", "confirmation", "entire", "reordered"),
                          [](const ::testing::TestParamInfo<const char*>& info) { return std::string(info.param); });
+TEST(EditAutomationScope, SplitRequiresScopeAndExplicitAllTracksPreflightsLocks) {
+    EnsureApplication();
+    EditSessionAdapter session;
+    session.setEditContext(MakeContext(10));
+    session.clearSelection();
+    session.setActiveTrack(0);
+    session.requestSeekUs(4'000'000);
+    const auto original = session.workspace().clips();
+    session.splitSelected();
+    EXPECT_EQ(session.workspace().clips(), original);
+    EXPECT_FALSE(session.workspaceError().isEmpty());
+    session.splitAllAtPlayhead();
+    EXPECT_EQ(session.workspace().clips().size(), 4u);
+    session.undo();
+    EXPECT_EQ(session.workspace().clips(), original);
+    session.setTrackLocked(session.workspace().tracks().back().id, true);
+    session.splitAllAtPlayhead();
+    EXPECT_EQ(session.workspace().clips(), original);
+}
+
+TEST(EditAutomationScope, EnvelopePointGestureAndRangeGainKeepSourceGeometry) {
+    EnsureApplication();
+    EditSessionAdapter session;
+    session.setEditContext(MakeContext(10));
+    const auto id = session.workspace().clips().back().id;
+    ASSERT_TRUE(session.addGainKey(id, 3'000'000));
+    const auto before = session.workspace().clips();
+    ASSERT_TRUE(session.beginGainKeyDrag(id, 3'000'000));
+    session.updateGainKeyDrag(4'000'000, -6);
+    ASSERT_TRUE(session.renderPreview());
+    EXPECT_EQ(session.workspace().clips(), before);
+    ASSERT_TRUE(session.commitClipDrag());
+    EXPECT_DOUBLE_EQ(engine::EvaluateGainEnvelope(session.workspace().clip(id)->gain_envelope, 4 * 48000), -6);
+    session.undo();
+    EXPECT_EQ(session.workspace().clips(), before);
+    QVariantList tracks;
+    for (const auto& track : session.workspace().tracks())
+        tracks.push_back(QVariant::fromValue<qulonglong>(track.id));
+    ASSERT_TRUE(session.setEditRangeUs(1'000'000, 2'000'000, tracks));
+    ASSERT_TRUE(session.applyRangeGain(-3));
+    ASSERT_EQ(session.workspace().clips().size(), before.size());
+    for (size_t i = 0; i < before.size(); ++i) {
+        const auto& clip = session.workspace().clips()[i];
+        EXPECT_EQ(clip.id, before[i].id);
+        EXPECT_EQ(clip.start, before[i].start);
+        EXPECT_EQ(clip.source_in, before[i].source_in);
+        EXPECT_EQ(clip.source_out, before[i].source_out);
+    }
+    session.undo();
+    EXPECT_EQ(session.workspace().clips(), before);
+}
+
+TEST(EditAutomationScope, ZeroUiTransitionRemovesOverlapAndLeavesLegacyHardCutsExplicit) {
+    EnsureApplication();
+    EditSessionAdapter session;
+    session.setEditContext(MakeContext(10));
+    session.requestSeekUs(4'000'000);
+    session.splitSelected();
+    const auto outgoing = session.workspace().clips().front().id;
+    ASSERT_TRUE(session.applyCrossfade(outgoing, 500));
+    const auto overlapping = session.workspace().clips();
+    ASSERT_FALSE(session.workspace().transitions().empty());
+    const auto junction = session.workspace().transitions().front().id;
+    ASSERT_TRUE(session.applyTimeValue(junction, QStringLiteral("junctionDuration"), 0));
+    EXPECT_TRUE(session.workspace().transitions().empty());
+    for (const auto& track : session.workspace().tracks()) {
+        std::vector<edit::Clip> clips;
+        for (const auto& clip : session.workspace().clips())
+            if (clip.track == track.id)
+                clips.push_back(clip);
+        ASSERT_EQ(clips.size(), 2u);
+        EXPECT_EQ(clips[0].end(), clips[1].start);
+    }
+    session.undo();
+    EXPECT_EQ(session.workspace().clips(), overlapping);
+    session.selectTransition(outgoing);
+    session.removeTransition();
+    ASSERT_FALSE(session.workspace().transitions().empty());
+    const auto hard_cut = session.workspace().transitions().front().id;
+    const auto legacy = session.workspace().clips();
+    EXPECT_FALSE(session.applyTimeValue(hard_cut, QStringLiteral("junctionDuration"), 0));
+    EXPECT_EQ(session.workspace().clips(), legacy);
+}
+
 } // namespace
 } // namespace exosnap::quick

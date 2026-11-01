@@ -1909,29 +1909,24 @@ class Workspace {
             fail(EditErrorCode::NonfiniteValue);
             return;
         }
-        bool has_audio = false;
-        for (const auto& clip : clips_)
-            if (contains(*scope, clip.track) && clip.start < span.out_us && clip.end() > span.in_us) {
-                const auto* track = mutableTrack(clip.track);
-                if (track && track->type == TrackType::Audio) {
-                    has_audio = true;
-                    if (clip.gain_db + command.delta_db < -60 || clip.gain_db + command.delta_db > 24) {
-                        fail(EditErrorCode::NonfiniteValue, {clip.id});
-                        return;
-                    }
-                }
-            }
-        if (!has_audio || command.delta_db == 0)
+        if (command.delta_db == 0)
             return;
-        splitScopedRange(span, *scope);
-        if (last_error_)
-            return;
-        for (auto& clip : clips_)
-            if (contains(*scope, clip.track) && clip.start >= span.in_us && clip.end() <= span.out_us) {
-                const auto* track = mutableTrack(clip.track);
-                if (track && track->type == TrackType::Audio)
-                    clip.gain_db += command.delta_db;
+        const auto first = engine::AudioSampleIndex(span.in_us);
+        const auto last = engine::AudioSampleIndex(span.out_us);
+        const auto ramp = std::min<int64_t>(3840, (last - first) / 4);
+        for (auto& clip : clips_) {
+            if (!contains(*scope, clip.track) || clip.start >= span.out_us || clip.end() <= span.in_us)
+                continue;
+            const auto* track = mutableTrack(clip.track);
+            if (trackLocked(clip.track)) {
+                fail(EditErrorCode::TrackLocked, {clip.track});
+                return;
             }
+            if (!track || track->type != TrackType::Audio)
+                continue;
+            const auto offset = engine::AudioSampleIndex(clip.source_in - clip.start);
+            clip.gain_envelope.ranges.push_back({first + offset, last + offset, ramp, command.delta_db});
+        }
     }
     void execute(const KeepRange& command) {
         if (!checkRange(command.span))
@@ -2185,7 +2180,18 @@ class Workspace {
         const auto active_id = active ? active->id : Id{0};
         const auto active_kind = active ? active->type : leading_track->type;
         std::map<Id, Id> destination_tracks;
+        if (command.keep_tracks)
+            for (const auto id : used_tracks) {
+                const auto* track = mutableTrack(id);
+                if (!track || track->type != copied_track(id)->type) {
+                    fail(EditErrorCode::InvalidTarget, {id});
+                    return;
+                }
+                destination_tracks[id] = id;
+            }
         for (const auto kind : {TrackType::Video, TrackType::Audio}) {
+            if (command.keep_tracks)
+                break;
             std::vector<Id> original;
             std::vector<Id> destination;
             for (const auto& track : copied.tracks)
@@ -2342,6 +2348,49 @@ class Workspace {
             fail(EditErrorCode::InvalidTarget, {command.id});
         else
             track->name = command.name;
+    }
+    void execute(const SetGainKey& command) {
+        auto* clip = mutableClip(command.id);
+        const auto* track = clip ? mutableTrack(clip->track) : nullptr;
+        if (!clip || !track || track->type != TrackType::Audio || command.source_us < clip->source_in ||
+            command.source_us >= clip->source_out || !std::isfinite(command.value)) {
+            fail(EditErrorCode::InvalidTarget, {command.id});
+            return;
+        }
+        auto& channel = clip->gain_envelope.channel;
+        const auto time = engine::AudioSampleTime(engine::AudioSampleIndex(command.source_us));
+        if (time < clip->source_in || time >= clip->source_out) {
+            fail(EditErrorCode::InvalidTime, {command.id});
+            return;
+        }
+        if (command.original_source_us) {
+            const auto key = std::find_if(channel.keys.begin(), channel.keys.end(), [&](const auto& item) {
+                return item.source_us == *command.original_source_us;
+            });
+            if (key == channel.keys.end() || (time != *command.original_source_us &&
+                                              std::any_of(channel.keys.begin(), channel.keys.end(),
+                                                          [&](const auto& item) { return item.source_us == time; }))) {
+                fail(EditErrorCode::InvalidTarget, {command.id});
+                return;
+            }
+            if (command.remove) {
+                channel.keys.erase(key);
+                return;
+            }
+            const auto interpolation = key->interpolation;
+            channel.keys.erase(key);
+            engine::PutKey(channel, time, command.value, interpolation);
+        } else {
+            if (command.remove) {
+                fail(EditErrorCode::InvalidTarget, {command.id});
+                return;
+            }
+            if (channel.keys.empty()) {
+                engine::PutKey(channel, engine::AudioSampleTime(engine::AudioSampleIndex(clip->source_in)), 0);
+                engine::PutKey(channel, engine::AudioSampleTime(engine::AudioSampleIndex(clip->source_out)), 0);
+            }
+            engine::PutKey(channel, time, command.value);
+        }
     }
     void execute(const SetGain& command) {
         if (!std::isfinite(command.gain_db) || command.gain_db < -60 ||
@@ -2896,7 +2945,8 @@ class Workspace {
                 fail(EditErrorCode::WrongTrackKind, {clip.id});
                 return false;
             }
-            if (!engine::ValidTransform(clip.transform, clip.transform_channels) ||
+            if (!engine::ValidGainEnvelope(clip.gain_envelope, clip.gain_db) ||
+                !engine::ValidTransform(clip.transform, clip.transform_channels) ||
                 !engine::ValidChannel(clip.opacity_channel, 0, 1) || !std::isfinite(clip.gain_db) ||
                 !std::isfinite(clip.opacity) || clip.opacity < 0 || clip.opacity > 1) {
                 fail(EditErrorCode::NonfiniteValue, {clip.id});
@@ -2946,7 +2996,9 @@ class Workspace {
         bytes += (command.sources_before.capacity() + command.sources_after.capacity()) *
                  sizeof(std::shared_ptr<const Asset>);
         const auto channelBytes = [](const Clip& clip) {
-            size_t total = clip.opacity_channel.keys.capacity() * sizeof(engine::PropertyKey);
+            size_t total = (clip.opacity_channel.keys.capacity() + clip.gain_envelope.channel.keys.capacity()) *
+                               sizeof(engine::PropertyKey) +
+                           clip.gain_envelope.ranges.capacity() * sizeof(engine::RangeGainRamp);
             for (const auto& channel : clip.transform_channels)
                 total += channel.keys.capacity() * sizeof(engine::PropertyKey);
             return total;

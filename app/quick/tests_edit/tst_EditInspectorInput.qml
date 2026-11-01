@@ -29,10 +29,12 @@ TestCase {
         testSession.linkedSelection = true;
     }
     function test_auto_key_start_and_midpoint_undo() {
+        const inspector = createTemporaryObject(inspectorComponent, tests);
         testSession.autoKey = true;
         testSession.requestSeekUs(5000000);
         const id = testSession.selectedClipDetails.id;
         verify(testSession.setVideoProperty(id, 0, 0.25));
+        compare(inspector.videoValues[0].value, 0.25);
         compare(testSession.videoProperties(id, 0)[0].key, true);
         compare(testSession.videoProperties(id, 0)[0].value, 0);
         compare(testSession.videoProperties(id, 2500000)[0].value, 0.125);

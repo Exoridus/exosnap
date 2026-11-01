@@ -1,6 +1,7 @@
 #pragma once
 
 #include <exosnap/engine/edit_automation.h>
+#include <exosnap/engine/edit_gain_envelope.h>
 #include <exosnap/engine/edit_types.h>
 
 #include <algorithm>
@@ -36,6 +37,7 @@ struct TimelineClip {
     PropertyChannel opacity_channel;
     VideoTransform transform;
     TransformChannels transform_channels;
+    GainEnvelope gain_envelope;
     bool operator==(const TimelineClip&) const = default;
 };
 
@@ -195,6 +197,7 @@ inline bool Validate(const TimelineSnapshot& snapshot, std::vector<TimelineJunct
         if (!clip.id || !ids.insert(clip.id).second || clip.start_us < 0 || clip.source_in_us < 0 ||
             clip.source_out_us <= clip.source_in_us ||
             clip.start_us > (std::numeric_limits<int64_t>::max)() - (clip.source_out_us - clip.source_in_us) ||
+            !ValidGainEnvelope(clip.gain_envelope, clip.gain_db) ||
             !ValidTransform(clip.transform, clip.transform_channels) || !ValidChannel(clip.opacity_channel, 0, 1) ||
             !std::isfinite(clip.opacity) || clip.opacity < 0 || clip.opacity > 1 || !std::isfinite(clip.gain_db) ||
             clip.fade_in.duration_us < 0 || clip.fade_out.duration_us < 0 ||
@@ -344,7 +347,13 @@ inline TimelineEvaluation EvaluateTimeline(const TimelineSnapshot& timeline, int
                 EvaluateChannel(clip.transform_channels[2], clip.transform.scale, contribution.source_us),
                 EvaluateChannel(clip.transform_channels[3], clip.transform.rotation, contribution.source_us)};
             if (clip.audio) {
-                const double gain = weight * *edge * std::pow(10.0, (clip.gain_db + track->gain_db) / 20);
+                const double gain =
+                    weight * *edge *
+                    std::pow(10.0, (clip.gain_db + track->gain_db +
+                                    EvaluateGainEnvelope(clip.gain_envelope,
+                                                         AudioSampleIndex(time_us) +
+                                                             AudioSampleIndex(clip.source_in_us - clip.start_us))) /
+                                       20);
                 if (!std::isfinite(gain)) {
                     result.error = "Audio gain is outside the supported numeric range.";
                     return result;
@@ -386,6 +395,7 @@ struct AudioIntervalContribution {
     EdgeFade fade_in;
     EdgeFade fade_out;
     std::vector<TimelineJunction> junctions;
+    GainEnvelope gain_envelope;
 };
 
 struct AudioInterval {
@@ -398,13 +408,6 @@ struct AudioIntervalEvaluation {
     std::vector<AudioInterval> intervals;
     std::string error;
 };
-
-inline int64_t AudioSampleIndex(int64_t time_us) {
-    const auto whole = (time_us / 1'000'000) * 48000;
-    const auto remainder = time_us % 1'000'000;
-    const auto fraction = ((remainder < 0 ? -remainder : remainder) * 48000 + 500'000) / 1'000'000;
-    return whole + (remainder < 0 ? -fraction : fraction);
-}
 
 inline std::optional<int64_t> AudioSourceSample(const AudioIntervalContribution& contribution,
                                                 int64_t absolute_output_sample) {
@@ -441,7 +444,11 @@ inline std::optional<double> EvaluateAudioGain(const AudioIntervalContribution& 
     if (absolute_output_sample < AudioSampleIndex(contribution.clip_start_us) ||
         absolute_output_sample >= AudioSampleIndex(end))
         return 0;
-    double gain = contribution.gain_linear;
+    const auto source_sample = AudioSourceSample(contribution, absolute_output_sample);
+    if (!source_sample)
+        return std::nullopt;
+    double gain = contribution.gain_linear *
+                  std::pow(10.0, EvaluateGainEnvelope(contribution.gain_envelope, *source_sample) / 20);
     if (contribution.fade_in.duration_us < 0 || contribution.fade_out.duration_us < 0 ||
         contribution.fade_in.duration_us > end - contribution.clip_start_us ||
         contribution.fade_out.duration_us > end - contribution.clip_start_us - contribution.fade_in.duration_us)
@@ -543,6 +550,7 @@ inline AudioIntervalEvaluation EvaluateAudioIntervals(const TimelineSnapshot& ti
             AudioIntervalContribution contribution{
                 clip.id, clip.asset,   clip.track,    clip.stream, clip.start_us, clip.source_in_us, clip.source_out_us,
                 gain,    clip.fade_in, clip.fade_out, {}};
+            contribution.gain_envelope = clip.gain_envelope;
             for (const auto& junction : junctions)
                 if (junction.outgoing == clip.id || junction.incoming == clip.id)
                     contribution.junctions.push_back(junction);

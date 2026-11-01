@@ -2,6 +2,7 @@
 #include <capability/translatable.h>
 #include <exosnap/engine/audio_media_manifest.h>
 #include <exosnap/engine/edit_automation.h>
+#include <exosnap/engine/edit_gain_envelope.h>
 #include <exosnap/engine/edit_player_engine.h>
 #include <exosnap/engine/edit_timeline.h>
 #include <exosnap/engine/edit_timeline_compositor.h>
@@ -76,7 +77,8 @@ EditRenderPlan ClassifyEditExport(const TimelineRenderSnapshot& snapshot,
     EditRenderPlan plan;
     const bool animated =
         std::any_of(snapshot.timeline.clips.begin(), snapshot.timeline.clips.end(), [](const auto& clip) {
-            return !clip.opacity_channel.keys.empty() || clip.transform != VideoTransform{} ||
+            return !clip.gain_envelope.channel.keys.empty() || !clip.gain_envelope.ranges.empty() ||
+                   !clip.opacity_channel.keys.empty() || clip.transform != VideoTransform{} ||
                    std::any_of(clip.transform_channels.begin(), clip.transform_channels.end(),
                                [](const auto& channel) { return !channel.keys.empty(); });
         });
@@ -208,6 +210,7 @@ struct EditTimelineReader::Impl {
             if (clip.audio) {
                 clip.enabled = true;
                 clip.gain_db = 0;
+                clip.gain_envelope = {};
             }
         for (auto& track : source_timeline.tracks)
             if (track.audio) {

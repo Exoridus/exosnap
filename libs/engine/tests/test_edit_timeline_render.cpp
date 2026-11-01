@@ -1,7 +1,9 @@
 #include <exosnap/engine/audio_media_manifest.h>
 #include <exosnap/engine/backend_tuning.h>
 #include <exosnap/engine/codec_types.h>
+#include <exosnap/engine/edit_automation.h>
 #include <exosnap/engine/edit_export_plan.h>
+#include <exosnap/engine/edit_gain_envelope.h>
 #include <exosnap/engine/edit_player_engine.h>
 #include <exosnap/engine/edit_timeline.h>
 #include <exosnap/engine/edit_timeline_compositor.h>
@@ -25,6 +27,7 @@
 #include <atomic>
 #include <chrono>
 #include <cmath>
+#include <cstddef>
 #include <cstdint>
 #include <cstdlib>
 #include <cstring>
@@ -366,11 +369,12 @@ TEST(EditTimelineMedia, SharedReaderSeeksAudioAndRealExportReopens) {
               << " cancel_ms=" << cancel_ms << '\n';
 }
 
-static void CompareLayeredExport(bool animated) {
+static void CompareLayeredExport(bool animated, bool audio_automation = false) {
     wchar_t directory[32768]{};
     if (!GetEnvironmentVariableW(L"EXOSNAP_EDIT_RENDER_FIXTURES", directory, 32768))
         GTEST_SKIP() << "Set EXOSNAP_EDIT_RENDER_FIXTURES to generated red/blue media.";
-    auto snapshot = Fixture(std::filesystem::path(directory));
+    auto snapshot =
+        Fixture(audio_automation ? std::filesystem::path(directory) / L"long" : std::filesystem::path(directory));
     // Red on the lower track for 2 s, half-transparent blue in front of it from
     // 0.5 s to 1.5 s, then one second of blank time before the timeline end.
     snapshot.timeline = {};
@@ -386,19 +390,49 @@ static void CompareLayeredExport(bool animated) {
         blue.transform_channels[0].keys = {{0, 0}, {500000, 0.1}};
         blue.transform_channels[3].keys = {{0, 0}, {500000, 30}};
     }
+    if (audio_automation) {
+        red.source_out_us = 11'000'000;
+        blue.source_out_us = 9'000'000;
+    }
     snapshot.timeline.clips = {red, blue};
-    snapshot.timeline.duration_us = 3'000'000;
+    snapshot.timeline.duration_us = audio_automation ? 12'000'000 : 3'000'000;
+    if (audio_automation) {
+        for (auto& source : snapshot.sources) {
+            const auto& audio = source.metadata.audio_metadata;
+            ASSERT_EQ(audio.actual_tracks.size(), 1u);
+            source.monitor_selection = MonitorSelectionSnapshot{audio.selection_media_id,
+                                                                {1},
+                                                                {{audio.actual_tracks.front().track_id, 1.0f, false}},
+                                                                true,
+                                                                audio.unverified_asset_binding};
+        }
+        const auto& metadata = snapshot.sources.front().metadata;
+        const auto stream = std::find_if(metadata.streams.begin(), metadata.streams.end(),
+                                         [](const auto& value) { return value.kind == TimelineStreamKind::Audio; });
+        ASSERT_NE(stream, metadata.streams.end());
+        snapshot.timeline.tracks.push_back({30, true, true, -3});
+        TimelineClip audio{3, 1, 0, true, 0, 0, 11'000'000};
+        audio.track = 30;
+        audio.stream = TimelineStreamRef{1, metadata.audio_metadata.actual_tracks.front().track_id,
+                                         stream->container_index, TimelineStreamKind::Audio};
+        audio.gain_db = -3;
+        audio.gain_envelope.channel.keys = {{0, 0, KeyInterpolation::Smooth}, {11'000'000, -6}};
+        audio.gain_envelope.ranges = {{48000, 8 * 48000, 3840, -12}};
+        snapshot.timeline.clips.push_back(audio);
+    }
     const auto plan = ClassifyEditExport(snapshot, {TimelineExportEligibility::RenderRequired, {}}, false);
     ASSERT_EQ(plan.path, EditExportPath::Render) << plan.reason;
     RecorderConfig config;
     config.video_codec = VideoCodec::H264;
-    const auto output = std::filesystem::path(directory) / (animated ? L"layered-animated.mkv" : L"layered.mkv");
+    const auto output = std::filesystem::path(directory) / (audio_automation ? L"layered-envelope.mkv"
+                                                            : animated       ? L"layered-animated.mkv"
+                                                                             : L"layered.mkv");
     std::error_code ignored;
     std::filesystem::remove(output, ignored);
     TimelineRenderMeasurements stats;
     const auto result = RenderEditTimeline(snapshot, plan, config, output, false, RemuxNoopCallback(), &stats);
     ASSERT_TRUE(result.success) << result.message;
-    EXPECT_EQ(stats.video_frames, 90u);
+    EXPECT_EQ(stats.video_frames, audio_automation ? 360u : 90u);
 
     // The preview path: the same reader and compositor on a separate device.
     winrt::com_ptr<ID3D11Device> device;
@@ -433,7 +467,9 @@ static void CompareLayeredExport(bool animated) {
     ASSERT_TRUE(exported.Open(output, error)) << error;
     const auto linear = [](uint8_t code) { return Bt709ToLinear(code / 255.0f); };
     std::array<float, 3> red_linear{};
-    for (const int64_t time : {250'000LL, 500'000LL, 750'000LL, 1'000'000LL, 1'400'000LL, 2'500'000LL}) {
+    const int64_t blank_time = audio_automation ? 11'500'000 : 2'500'000;
+    for (const int64_t time :
+         {int64_t{250'000}, int64_t{500'000}, int64_t{750'000}, int64_t{1'000'000}, int64_t{1'400'000}, blank_time}) {
         const auto decoded = exported.DecodeFrameAt(time);
         ASSERT_TRUE(decoded.has_value());
         const auto* pixel = decoded->bgra.get() + decoded->stride_bytes * 90 + 160 * 4;
@@ -461,12 +497,35 @@ static void CompareLayeredExport(bool animated) {
                     LinearToBt709(opacity * linear(blue_pixel[channel]) + (1 - opacity) * red_linear[channel]) * 255, 3)
                     << "channel " << channel;
         }
-        if (time == 2'500'000)
+        if (time == blank_time)
             for (size_t channel = 0; channel < 3; ++channel)
                 EXPECT_LT(pixel[channel], 6) << "blank time renders black";
     }
+    if (audio_automation) {
+        reader.ResetAudio();
+        std::vector<float> continuous_preview;
+        for (int64_t first = 0; first < 12 * 48000; first += 480) {
+            std::vector<float> block;
+            ASSERT_TRUE(reader.AudioAt(first, 480, block, error)) << error;
+            continuous_preview.insert(continuous_preview.end(), block.begin(), block.end());
+        }
+        for (const int64_t sample :
+             {47999LL, 48000LL, 48001LL, 51839LL, 51840LL, 380159LL, 380160LL, 383999LL, 384000LL, 384001LL}) {
+            std::vector<float> preview;
+            std::vector<float> actual;
+            const auto begin = continuous_preview.begin() + static_cast<ptrdiff_t>(sample * 2);
+            preview.assign(begin, begin + 480 * 2);
+            ASSERT_TRUE(exported.DecodeAudioStreamRange(1, sample, 480, actual, error)) << error;
+            ASSERT_EQ(actual.size(), preview.size());
+            for (size_t i = 0; i < actual.size(); ++i)
+                ASSERT_NEAR(actual[i], preview[i], 0.000002f) << "sample " << sample << " component " << i;
+        }
+    }
 }
 
+TEST(EditTimelineMedia, TwelveSecondAnimatedVideoAndGainEnvelopeExportMatchesPreview) {
+    CompareLayeredExport(true, true);
+}
 TEST(EditTimelineMedia, LayeredExportMatchesPreviewCompositionAndRendersBlankTimeBlack) {
     CompareLayeredExport(false);
 }

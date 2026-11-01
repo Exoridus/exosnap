@@ -1,4 +1,5 @@
 #include "EditInteractionController.h"
+#include "EditGainEnvelope.h"
 #include "EditTimelineModels.h"
 #include <exosnap/engine/edit_types.h>
 
@@ -15,15 +16,25 @@ namespace exosnap::quick {
 
 int EditInteractionController::clipPointerTarget(const QVariantMap& row, qreal width, qreal height, qreal header_height,
                                                  qreal x, qreal y, bool junction) const {
-    const edit::ClipPointerGeometry geometry{width,
-                                             height,
-                                             header_height,
-                                             !row.value(QStringLiteral("video")).toBool(),
-                                             row.value(QStringLiteral("gainDb")).toDouble(),
-                                             !row.value(QStringLiteral("fadeInOwned")).toBool(),
-                                             !row.value(QStringLiteral("fadeOutOwned")).toBool(),
-                                             junction};
-    return static_cast<int>(edit::ResolveClipPointerTarget(geometry, x, y));
+    edit::ClipPointerGeometry geometry{width,
+                                       height,
+                                       header_height,
+                                       !row.value(QStringLiteral("video")).toBool(),
+                                       row.value(QStringLiteral("gainDb")).toDouble(),
+                                       !row.value(QStringLiteral("fadeInOwned")).toBool(),
+                                       !row.value(QStringLiteral("fadeOutOwned")).toBool(),
+                                       junction};
+    auto target = edit::ResolveClipPointerTarget(geometry, x, y);
+    if (target == edit::ClipPointerTarget::Content && geometry.audio && width > 0) {
+        const auto source = row.value(QStringLiteral("sourceInUs")).toLongLong() +
+                            static_cast<int64_t>(x / width *
+                                                 (row.value(QStringLiteral("sourceOutUs")).toLongLong() -
+                                                  row.value(QStringLiteral("sourceInUs")).toLongLong()));
+        const auto envelope = row.value(QStringLiteral("gainEnvelope")).value<engine::GainEnvelope>();
+        geometry.gain_db += engine::EvaluateGainEnvelope(envelope, engine::AudioSampleIndex(source));
+        target = edit::ResolveClipPointerTarget(geometry, x, y);
+    }
+    return static_cast<int>(target);
 }
 
 bool EditInteractionController::clipPointerThreshold(int target, qreal dx, qreal dy, qreal threshold) const {
@@ -48,19 +59,23 @@ QVariantMap EditInteractionController::clipPointerPolicy(int target, int modifie
     const bool trim = target == PointerTrimStart || target == PointerTrimEnd;
     const bool fade = target == PointerFadeIn || target == PointerFadeOut;
     const bool gain = target == PointerGain;
-    const bool valid = (header && (plain || control || shift || alt)) || (content && (plain || control || shift)) ||
-                       (trim && (plain || alt)) || ((fade || gain) && (plain || control)) ||
-                       (target == PointerJunction && plain);
+    const bool valid = (header && (plain || control || shift || alt)) ||
+                       (content && (plain || control || shift || alt)) || (trim && (plain || alt)) ||
+                       ((fade || gain) && (plain || control)) || (gain && alt) || (target == PointerJunction && plain);
     return {{QStringLiteral("valid"), valid},
             {QStringLiteral("toggle"), header && control},
             {QStringLiteral("extend"), shift},
             {QStringLiteral("insert"), header && control},
             {QStringLiteral("unlink"), (header || trim) && alt},
             {QStringLiteral("fine"), (fade || gain) && control},
-            {QStringLiteral("range"), content && (shift || control)},
+            {QStringLiteral("envelope"), gain && alt},
+            {QStringLiteral("range"), content && !control},
+            {QStringLiteral("marquee"), content && control},
+            {QStringLiteral("additive"), content && control},
+            {QStringLiteral("singleTrack"), content && alt},
             {QStringLiteral("seek"), content && plain},
             {QStringLiteral("anchorAtPlayhead"), content && shift && !has_range},
-            {QStringLiteral("preserveBounds"), content && control && has_range},
+            {QStringLiteral("preserveBounds"), false},
             {QStringLiteral("preserveSelection"), header},
             {QStringLiteral("error"),
              valid ? QString() : tr("This modifier combination is not available for this gesture.")}};
@@ -92,18 +107,20 @@ QString ResolveTimelineKey(int key, int modifiers, bool auto_repeat) {
         {Qt::Key_X, Qt::AltModifier, "clear-range"},
         {Qt::Key_L, Qt::ControlModifier, "loop"},
         {Qt::Key_A, Qt::ControlModifier, "select-all"},
+        {Qt::Key_A, Qt::ControlModifier | Qt::ShiftModifier, "select-track"},
+        {Qt::Key_D, Qt::ControlModifier, "duplicate"},
         {Qt::Key_B, Qt::ControlModifier, "split"},
         {Qt::Key_S, Qt::NoModifier, "split"},
+        {Qt::Key_S, Qt::ShiftModifier, "split-all"},
         {Qt::Key_K, Qt::NoModifier, "auto-key"},
         {Qt::Key_Delete, Qt::NoModifier, "lift"},
         {Qt::Key_Delete, Qt::ShiftModifier, "ripple-remove"},
+        {Qt::Key_Delete, Qt::ControlModifier, "lift-select-next"},
         {Qt::Key_Z, Qt::ControlModifier, "undo"},
         {Qt::Key_Y, Qt::ControlModifier, "redo"},
         {Qt::Key_Z, Qt::ControlModifier | Qt::ShiftModifier, "redo"},
         {Qt::Key_C, Qt::ControlModifier, "copy"},
         {Qt::Key_X, Qt::ControlModifier, "cut"},
-        {Qt::Key_V, Qt::NoModifier, "tool-select"},
-        {Qt::Key_R, Qt::NoModifier, "tool-range"},
         {Qt::Key_V, Qt::ControlModifier, "paste"},
         {Qt::Key_V, Qt::ControlModifier | Qt::ShiftModifier, "insert-paste"},
         {Qt::Key_Comma, Qt::NoModifier, "nudge-previous", true},
@@ -122,7 +139,7 @@ QString ResolveTimelineKey(int key, int modifiers, bool auto_repeat) {
         {Qt::Key_Backspace, Qt::NoModifier, "previous-view"},
         {Qt::Key_M, Qt::NoModifier, "mute-track"},
         {Qt::Key_M, Qt::ControlModifier, "media-dock"},
-        {Qt::Key_D, Qt::ControlModifier, "inspector-dock"},
+        {Qt::Key_D, Qt::NoModifier, "inspector-dock"},
         {Qt::Key_E, Qt::ControlModifier, "export"},
         {Qt::Key_Menu, Qt::NoModifier, "context-menu"},
         {Qt::Key_F10, Qt::ShiftModifier, "context-menu"},
