@@ -124,11 +124,23 @@ Valve's high-poly model as its basis. The model's license notice is available at
 https://github.com/Khyretos/3dco-plus/blob/9e2e2a4cf8171ba72fd7c1ad97760fabb0d5c99c/assets/models/Steam%20Controller%202026/license.txt
 License terms: https://creativecommons.org/licenses/by-nc-sa/4.0/
 
-The MIT notice above covers the AL2009man components and original contributions
-released under MIT. It does not relicense the referenced model. Whether the
-reworked two-dimensional contours require that model license, and how the full
-layout can be distributed with the application, remain release-review questions.
-The complete layout's license is therefore marked NOASSERTION in its mapping.
-This status does not prohibit uses authorized by the applicable license.
-The layout remains an artwork draft. No model mesh, projection data file or
-model-processing generator is included.
+The Steam Controller 2026 two-dimensional artwork is distributed under
+CC BY-NC-SA 4.0. ExoSnap contributors' modifications include the traced and
+refined wireframe, separate controls, pressure surfaces and knockout geometry.
+Attribution, the license link and modification notices must be retained.
+Noncommercial use, adaptation and redistribution are permitted under those
+terms. Adaptations must retain the same license or a compatible license.
+Commercial use of the licensed artwork requires separate permission from the
+applicable rights holder. The model notice identifies Valve as the contact
+for commercial products based on its materials.
+
+The incorporated AL2009man components retain the MIT copyright and license
+notice above. The SPDX expression MIT AND CC-BY-NC-SA-4.0 records both sets of
+terms for this layout. These artwork terms do not relicense the independent
+application source code or the other controller layouts.
+The referenced model and adapted artwork are provided without warranties,
+subject to Section 5 of the linked Creative Commons license.
+
+The layout's artwork-draft status records pending visual qualification, not a
+prohibition on redistribution under its license. No model mesh, projection data
+file or model-processing generator is included.

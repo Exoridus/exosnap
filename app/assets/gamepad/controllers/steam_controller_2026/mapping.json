@@ -20,8 +20,8 @@
   },
   "orientation": "front",
   "license": {
-    "spdx": "NOASSERTION",
-    "copyright": "Copyright (c) 2024 Al. Lopez; 2026 ExoSnap contributors (2D artwork revisions)",
+    "spdx": "MIT AND CC-BY-NC-SA-4.0",
+    "copyright": "Copyright (c) 2026 Valve Corporation; 2024 Al. Lopez; 2026 ExoSnap contributors (2D artwork revisions)",
     "notice": "../SOURCE-NOTICE.txt"
   },
   "layers": [

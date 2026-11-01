@@ -183,9 +183,12 @@ directory alongside the ExoSnap binary.
 - **Steam Controller 2026 model reference:** Valve Corporation, Copyright 2026,
   distributed by Khyretos/3dco-plus in `assets/models/Steam Controller 2026`.
   The model's own `license.txt` specifies CC BY-NC-SA 4.0, independently of
-  the upstream program's MIT license. Source and license links, the ExoSnap
-  modifications and the pending 2D redistribution assessment are recorded in
-  the bundled controller source notice. The layout remains an artwork draft.
+  the upstream program's MIT license. The adapted Steam Controller 2026 artwork
+  is distributed under CC BY-NC-SA 4.0. Incorporated AL2009man components retain
+  their MIT notices, recorded together as MIT AND CC-BY-NC-SA-4.0. Source links,
+  attribution, modification details and noncommercial/share-alike terms are in
+  the bundled controller source notice. The application source code retains
+  its own license. Artwork-draft status concerns visual qualification.
 - **Additional provenance:** source URLs and modification details for these
   artwork sources are retained in `licenses/gamepad-al2009man-notice.txt`.
 - **Legacy fixtures:** Nicolae (Xelu) Berbece, Free Controller & Key Prompts,
