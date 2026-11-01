@@ -1,4 +1,5 @@
 #include <cstdint>
+#include <exosnap/engine/edit_automation.h>
 #include <exosnap/engine/edit_frame_gpu_converter.h>
 #include <exosnap/engine/edit_timeline_compositor.h>
 #include <exosnap/engine/gpu_surface_inventory.h>
@@ -38,14 +39,19 @@ cbuffer Parameters : register(b0) {
     float4 rectA;
     float4 rectB;
     float4 factors;
+    float4 transformA;
+    float4 transformB;
 };
-float4 contained(Texture2D<float4> source, float2 position, float4 rect, float factor) {
-    float2 uv = (position - rect.xy) / max(rect.zw, 1.0f);
+float4 contained(Texture2D<float4> source, float2 position, float4 rect, float factor, float4 transform) {
+    float2 p = position - rect.xy - rect.zw * 0.5f - transform.xy;
+    float angle = -transform.w;
+    p = float2(cos(angle) * p.x - sin(angle) * p.y, sin(angle) * p.x + cos(angle) * p.y) / transform.z;
+    float2 uv = p / max(rect.zw, 1.0f) + 0.5f;
     if (factor <= 0 || any(uv < 0) || any(uv >= 1)) return float4(0, 0, 0, 0);
     return float4(source.SampleLevel(linearSampler, uv, 0).rgb * factor, factor);
 }
 float4 main(float4 position : SV_POSITION) : SV_TARGET {
-    return contained(A, position.xy, rectA, factors.x) + contained(B, position.xy, rectB, factors.y);
+    return contained(A, position.xy, rectA, factors.x, transformA) + contained(B, position.xy, rectB, factors.y, transformB);
 }
 )";
 // The accumulator holds premultiplied linear light over transparent black.
@@ -60,6 +66,7 @@ float4 main(float4 position : SV_POSITION) : SV_TARGET {
 struct Parameters {
     float rectangles[2][4]{};
     float factors[4]{};
+    float transforms[2][4]{{0, 0, 1, 0}, {0, 0, 1, 0}};
 };
 bool Check(HRESULT status, const char* operation, std::string& error) {
     if (SUCCEEDED(status))
@@ -200,7 +207,7 @@ bool EditTimelineCompositor::Compose(std::span<const TimelineVideoLayer> layers,
         while (end < order.size() && layers[order[end]].layer == layers[order[begin]].layer) {
             const auto& layer = layers[order[end]];
             if (!std::isfinite(layer.weight) || layer.weight < 0 || layer.weight > 1 || !std::isfinite(layer.opacity) ||
-                layer.opacity < 0 || layer.opacity > 1) {
+                layer.opacity < 0 || layer.opacity > 1 || !ValidTransform(layer.transform, {})) {
                 error = "Invalid timeline blend weight or opacity.";
                 return false;
             }
@@ -243,6 +250,10 @@ bool EditTimelineCompositor::Compose(std::span<const TimelineVideoLayer> layers,
             parameters.rectangles[slot][2] = static_cast<float>(rect->width);
             parameters.rectangles[slot][3] = static_cast<float>(rect->height);
             parameters.factors[slot] = static_cast<float>(layer.weight * layer.opacity);
+            parameters.transforms[slot][0] = static_cast<float>(layer.transform.x * size_.width);
+            parameters.transforms[slot][1] = static_cast<float>(layer.transform.y * size_.height);
+            parameters.transforms[slot][2] = static_cast<float>(layer.transform.scale);
+            parameters.transforms[slot][3] = static_cast<float>(layer.transform.rotation * 3.141592653589793 / 180);
             views[slot] = sources_[index].srv.get();
         }
         if (!views[1])

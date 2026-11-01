@@ -60,7 +60,10 @@ bool NeedsComposition(const EditPlaybackSnapshot& workspace) {
         if (track == workspace.tracks().end() || track->type != edit::TrackType::Video || !track->edit_enabled ||
             !clip.enabled)
             continue;
-        if (clip.opacity != 1 || clip.fade_in.duration_us > 0 || clip.fade_out.duration_us > 0)
+        if (clip.opacity != 1 || !clip.opacity_channel.keys.empty() || clip.transform != engine::VideoTransform{} ||
+            std::any_of(clip.transform_channels.begin(), clip.transform_channels.end(),
+                        [](const auto& channel) { return !channel.keys.empty(); }) ||
+            clip.fade_in.duration_us > 0 || clip.fade_out.duration_us > 0)
             return true;
         video.push_back(&clip);
     }

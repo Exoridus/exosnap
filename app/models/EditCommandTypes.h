@@ -2,6 +2,7 @@
 
 #include "RecordingMarker.h"
 #include <exosnap/engine/audio_media_manifest.h>
+#include <exosnap/engine/edit_automation.h>
 #include <exosnap/engine/edit_types.h>
 
 #include <algorithm>
@@ -283,6 +284,9 @@ struct Clip {
     EdgeFade fade_in;
     EdgeFade fade_out;
     bool original_enabled = true;
+    engine::PropertyChannel opacity_channel;
+    engine::VideoTransform transform;
+    engine::TransformChannels transform_channels;
     bool operator==(const Clip&) const = default;
 };
 
@@ -552,9 +556,24 @@ struct SetGain {
     double gain_db = 0;
     std::vector<Id> targets;
 };
+struct SetVideoKey {
+    Id id = 0;
+    int property = 0;
+    Time timeline_us = 0;
+    std::optional<engine::KeyInterpolation> interpolation;
+    std::optional<double> value;
+};
+struct SetVideoTransform {
+    Id id = 0;
+    engine::VideoTransform value;
+    Time timeline_us = 0;
+    bool auto_key = false;
+};
 struct SetClipOpacity {
     Id id = 0;
     double opacity = 1;
+    Time timeline_us = 0;
+    bool auto_key = false;
 };
 enum class FadeEdge { In, Out };
 struct SetFade {
@@ -596,10 +615,10 @@ struct RemoveOverlap {
 using EditCommand =
     std::variant<AddAssetGroup, Split, LiftClips, RippleRemoveClips, LiftRange, RippleRemoveRange, KeepRange, Trim,
                  Move, CreateTrack, DeleteTrack, ReorderTrack, SetResultRange, Unlink, Relink, SetTrackEnabled,
-                 SetClipEnabled, SetGain, SetClipOpacity, SetFade, SetJunctionWindow, SetJunctionCurve, SetAudioLaw,
-                 SetHardCut, CopyJunctionToLinked, SetTimelineEnd, AddSpacer, MoveSpacer, TrimSpacer, RemoveSpacer,
-                 CloseGap, SplitRange, AdjustRangeGain, RenameTrack, PasteClips, ReplaceAssetSource, CrossfadeAtCut,
-                 RemoveOverlap>;
+                 SetClipEnabled, SetGain, SetVideoKey, SetVideoTransform, SetClipOpacity, SetFade, SetJunctionWindow,
+                 SetJunctionCurve, SetAudioLaw, SetHardCut, CopyJunctionToLinked, SetTimelineEnd, AddSpacer, MoveSpacer,
+                 TrimSpacer, RemoveSpacer, CloseGap, SplitRange, AdjustRangeGain, RenameTrack, PasteClips,
+                 ReplaceAssetSource, CrossfadeAtCut, RemoveOverlap>;
 
 struct EditSnapshot {
     Revision revision = 0;

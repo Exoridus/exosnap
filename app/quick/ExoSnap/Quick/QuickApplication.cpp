@@ -4109,6 +4109,16 @@ void QuickApplication::applyEditVisualScenario() {
     else if (scenario != QStringLiteral("edit-gap") && scenario != QStringLiteral("edit-spacer-selected"))
         session.selectClip(0);
 
+    if (scenario == QStringLiteral("edit-video-automation")) {
+        session.setLinkedSelection(false);
+        const auto id = EditVisualClip(session, 0, 38'000);
+        session.selectClipWithModifiers(id);
+        session.setProperty("autoKey", true);
+        session.setVideoProperty(id, 0, 0.1);
+        session.setVideoProperty(id, 2, 0.65);
+        session.setVideoProperty(id, 3, 15);
+        session.setVideoProperty(id, 4, 0.7);
+    }
     const auto first_video = EditVisualClip(session, 0, 0);
     QVariantList audio_ids;
     for (const auto& clip : session.workspace().clips())
@@ -4299,7 +4309,7 @@ void QuickApplication::applyEditVisualScenario() {
         layout.insert({{QStringLiteral("media"), QStringLiteral("pinned")},
                        {QStringLiteral("details"), QStringLiteral("pinned")},
                        {QStringLiteral("sourceTab"), 0}});
-    else if (scenario == QStringLiteral("edit-selected-clip") ||
+    else if (scenario == QStringLiteral("edit-selected-clip") || scenario == QStringLiteral("edit-video-automation") ||
              scenario == QStringLiteral("edit-transition-selected") || scenario == QStringLiteral("edit-monitoring") ||
              scenario == QStringLiteral("edit-gap") || scenario == QStringLiteral("edit-spacer-selected") ||
              scenario == QStringLiteral("edit-audio-selected") || scenario == QStringLiteral("edit-multiselection") ||

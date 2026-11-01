@@ -2392,6 +2392,59 @@ class Workspace {
                 clip->gain_db = command.gain_db;
         }
     }
+    void execute(const SetVideoKey& command) {
+        auto* clip = mutableClip(command.id);
+        const auto* track = clip ? mutableTrack(clip->track) : nullptr;
+        if (!clip || !track || track->type != TrackType::Video || command.property < 0 || command.property > 4 ||
+            command.timeline_us < clip->start || command.timeline_us >= clip->end()) {
+            fail(EditErrorCode::InvalidTarget, {command.id});
+            return;
+        }
+        std::array<double*, 5> constants{&clip->transform.x, &clip->transform.y, &clip->transform.scale,
+                                         &clip->transform.rotation, &clip->opacity};
+        auto& channel = command.property == 4 ? clip->opacity_channel : clip->transform_channels[command.property];
+        const auto time = clip->source_in + (command.timeline_us - clip->start);
+        const auto value = engine::EvaluateChannel(channel, *constants[command.property], time);
+        const auto key = std::find_if(channel.keys.begin(), channel.keys.end(),
+                                      [&](const auto& item) { return item.source_us == time; });
+        if (command.value) {
+            if (key == channel.keys.end()) {
+                fail(EditErrorCode::InvalidTarget, {command.id});
+                return;
+            }
+            key->value = *command.value;
+        } else if (command.interpolation) {
+            if (key == channel.keys.end()) {
+                fail(EditErrorCode::InvalidTarget, {command.id});
+                return;
+            }
+            key->interpolation = *command.interpolation;
+        } else if (key == channel.keys.end()) {
+            engine::PutKey(channel, time, value);
+        } else {
+            channel.keys.erase(key);
+            if (channel.keys.empty())
+                *constants[command.property] = value;
+        }
+    }
+    void execute(const SetVideoTransform& command) {
+        auto* clip = mutableClip(command.id);
+        const auto* track = clip ? mutableTrack(clip->track) : nullptr;
+        if (!clip || !track || track->type != TrackType::Video || command.timeline_us < clip->start ||
+            command.timeline_us >= clip->end()) {
+            fail(EditErrorCode::InvalidTarget, {command.id});
+            return;
+        }
+        const auto time = clip->source_in + (command.timeline_us - clip->start);
+        std::array<double*, 4> constants{&clip->transform.x, &clip->transform.y, &clip->transform.scale,
+                                         &clip->transform.rotation};
+        const std::array<double, 4> values{command.value.x, command.value.y, command.value.scale,
+                                           command.value.rotation};
+        for (size_t i = 0; i < constants.size(); ++i)
+            engine::EditChannel(clip->transform_channels[i], *constants[i], clip->source_in, time, values[i],
+                                command.auto_key, i == 2,
+                                i < 2 ? engine::KeyInterpolation::Smooth : engine::KeyInterpolation::Linear);
+    }
     void execute(const SetClipOpacity& command) {
         auto* clip = mutableClip(command.id);
         const auto* track = clip ? mutableTrack(clip->track) : nullptr;
@@ -2399,8 +2452,13 @@ class Workspace {
             fail(EditErrorCode::NonfiniteValue, {command.id});
         else if (!clip || !track || track->type != TrackType::Video)
             fail(EditErrorCode::WrongTrackKind, {command.id});
-        else
-            clip->opacity = command.opacity;
+        else if (command.timeline_us < clip->start || command.timeline_us >= clip->end())
+            fail(EditErrorCode::InvalidTarget, {command.id});
+        else {
+            const auto time = clip->source_in + (command.timeline_us - clip->start);
+            engine::EditChannel(clip->opacity_channel, clip->opacity, clip->source_in, time, command.opacity,
+                                command.auto_key);
+        }
     }
     void execute(const CreateTrack& command) {
         Track track{nextId(), command.kind, command.name};
@@ -2838,7 +2896,9 @@ class Workspace {
                 fail(EditErrorCode::WrongTrackKind, {clip.id});
                 return false;
             }
-            if (!std::isfinite(clip.gain_db) || !std::isfinite(clip.opacity) || clip.opacity < 0 || clip.opacity > 1) {
+            if (!engine::ValidTransform(clip.transform, clip.transform_channels) ||
+                !engine::ValidChannel(clip.opacity_channel, 0, 1) || !std::isfinite(clip.gain_db) ||
+                !std::isfinite(clip.opacity) || clip.opacity < 0 || clip.opacity > 1) {
                 fail(EditErrorCode::NonfiniteValue, {clip.id});
                 return false;
             }
@@ -2885,6 +2945,16 @@ class Workspace {
             (command.order_before.capacity() + command.order_after.capacity()) * sizeof(Id);
         bytes += (command.sources_before.capacity() + command.sources_after.capacity()) *
                  sizeof(std::shared_ptr<const Asset>);
+        const auto channelBytes = [](const Clip& clip) {
+            size_t total = clip.opacity_channel.keys.capacity() * sizeof(engine::PropertyKey);
+            for (const auto& channel : clip.transform_channels)
+                total += channel.keys.capacity() * sizeof(engine::PropertyKey);
+            return total;
+        };
+        for (const auto& clip : command.before)
+            bytes += channelBytes(clip);
+        for (const auto& clip : command.after)
+            bytes += channelBytes(clip);
         for (const auto& source : command.sources_before)
             bytes += sourceBindingBytes(*source);
         for (const auto& source : command.sources_after)

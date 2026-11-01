@@ -81,6 +81,8 @@ Item {
             "EyeClosed": ExoGlyph.EyeClosed,
             "Gamepad": ExoGlyph.Gamepad,
             "Lock": ExoGlyph.Lock,
+            "Keyframe": ExoGlyph.Keyframe,
+            "KeyframeFilled": ExoGlyph.KeyframeFilled,
             "Unlock": ExoGlyph.Unlock
         })
 

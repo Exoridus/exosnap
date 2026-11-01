@@ -1459,6 +1459,20 @@ set_tests_properties(quick.qml.recording_review_native PROPERTIES
 )
 exosnap_set_test_phase(quick.qml.recording_review_native desktop)
 
+add_test(NAME quick.qml.edit_video_automation COMMAND edit_timeline_qml_tests
+    EditTimelineKeyboard::test_auto_key_toggle_does_not_edit_document_and_ignores_text_focus
+    EditInspectorInput::test_auto_key_start_and_midpoint_undo
+    EditInspectorInput::test_diamond_removes_only_current_key_and_retains_last_value
+    EditInspectorInput::test_viewer_candidate_commits_once_or_cancels
+    -o "${CMAKE_CURRENT_BINARY_DIR}/edit-video-automation-test.txt,txt")
+set_tests_properties(quick.qml.edit_video_automation PROPERTIES
+    LABELS "quick;quicktest"
+    ENVIRONMENT "QT_QPA_PLATFORM=offscreen;QML_IMPORT_PATH=${_exosnap_quick_qt_prefix}/qml"
+    ENVIRONMENT_MODIFICATION "PATH=path_list_prepend:${_exosnap_quick_qt_prefix}/bin"
+    TIMEOUT 120
+)
+exosnap_set_test_phase(quick.qml.edit_video_automation desktop)
+
 add_test(NAME quick.qml.edit_timeline_contracts COMMAND edit_timeline_qml_tests
     EditPage::test_EmptyViewerStable
     EditGainField::test_decimal_comma_applies_exact_tenths_then_restores_canvas

@@ -231,6 +231,25 @@ class EditSessionAdapter : public QObject {
     bool rangeGestureValid() const;
     QVariantMap rangeGestureCandidate() const;
     QString rangeGestureReason() const;
+    Q_PROPERTY(bool videoPreviewActive READ videoPreviewActive NOTIFY videoPreviewChanged FINAL)
+    bool videoPreviewActive() const {
+        return videoPreview() != nullptr;
+    }
+    Q_PROPERTY(bool autoKey MEMBER auto_key_ NOTIFY interactionSettingsChanged FINAL)
+    Q_INVOKABLE QVariantList videoProperties(qulonglong id, qint64 timeline_us) const;
+    Q_INVOKABLE bool setVideoProperty(qulonglong id, int property, double value);
+    Q_INVOKABLE QVariantList videoKeyframes(qulonglong id, int property) const;
+    Q_INVOKABLE bool setVideoKeyValue(qulonglong id, int property, qint64 source_us, double value);
+    Q_INVOKABLE bool toggleVideoKey(qulonglong id, int property);
+    Q_INVOKABLE bool setVideoInterpolation(qulonglong id, int property, int interpolation);
+    Q_INVOKABLE bool beginVideoTransformDrag(qulonglong id);
+    Q_INVOKABLE void updateVideoTransformDrag(double x, double y, double scale, double rotation);
+    const edit::EditPreview* videoPreview() const {
+        return drag_command_ && std::holds_alternative<edit::SetVideoTransform>(*drag_command_) && dragValid()
+                   ? &drag_preview_
+                   : nullptr;
+    }
+    Q_INVOKABLE bool setVideoTransform(qulonglong id, double x, double y, double scale, double rotation);
     Q_INVOKABLE bool setClipGain(qulonglong id, double gain_db);
     Q_INVOKABLE bool setClipGains(const QVariantList& ids, double gain_db);
     Q_INVOKABLE bool setTrackGain(qulonglong id, double gain_db);
@@ -567,6 +586,7 @@ class EditSessionAdapter : public QObject {
     void rangeGestureChanged();
     void interactionSettingsChanged();
     void dragChanged();
+    void videoPreviewChanged();
     void timeSelectionChanged();
     void workspaceChanged();
     void mediaChanged();
@@ -603,6 +623,7 @@ class EditSessionAdapter : public QObject {
     void closeRequested();
 
   private:
+    bool auto_key_ = false;
     friend class EditSessionAdapterTestPeer;
     void scheduleSourceVerification(std::function<void()> task);
     QVariantMap projectClipRow(const edit::Clip& clip) const;

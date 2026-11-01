@@ -1,3 +1,4 @@
+#include <exosnap/engine/edit_automation.h>
 #include <exosnap/engine/edit_export_plan.h>
 #include <exosnap/engine/edit_timeline.h>
 #include <exosnap/engine/edit_timeline_compositor.h>
@@ -280,5 +281,33 @@ TEST(EditorExportPlan, VideoPixelBudgetBoundsLargeSources) {
     EXPECT_EQ(assessed.peak_pixels, uint64_t{2} * 7680 * 4320);
     EXPECT_FALSE(assessed.admitted);
 }
+TEST(EditorExportPlan, AutomationForcesRenderAndEveryKeyFieldIsHashed) {
+    Fixture f;
+    f.facts.video_render_available = true;
+    auto& clip = f.snapshot.timeline.clips.front();
+    const auto original = f.prepare();
+    ASSERT_TRUE(original->ready());
+    clip.opacity_channel.keys = {{0, 1}, {2'000'000, 0.5}};
+    const auto animated = f.prepare();
+    ASSERT_TRUE(animated->ready());
+    EXPECT_EQ(animated->video_path, EditVideoPath::Render);
+    EXPECT_NE(ClassifyEditExport(f.snapshot, {TimelineExportEligibility::StreamCopy, {}}, false).path,
+              EditExportPath::StreamCopy);
+    EXPECT_NE(original->hash, animated->hash);
+    clip.opacity_channel.keys.back().interpolation = KeyInterpolation::Hold;
+    EXPECT_NE(animated->hash, f.prepare()->hash);
+    clip.opacity_channel.keys.clear();
+    clip.transform.x = 0.2;
+    const auto transformed = f.prepare();
+    EXPECT_EQ(transformed->video_path, EditVideoPath::Render);
+    EXPECT_NE(original->hash, transformed->hash);
+    clip.transform_channels[0].keys = {{0, 0}, {2'000'000, 0.5}};
+    const auto moving = f.prepare();
+    EXPECT_EQ(moving->video_path, EditVideoPath::Render);
+    clip.transform_channels[0].keys.back().source_us += 1;
+    EXPECT_NE(moving->hash, f.prepare()->hash);
+    EXPECT_EQ(moving->snapshot.timeline.clips.front().transform_channels[0].keys.back().source_us, 2'000'000);
+}
+
 } // namespace
 } // namespace exosnap::engine

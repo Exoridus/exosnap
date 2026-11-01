@@ -44,9 +44,16 @@ class EditPlaybackSnapshot {
   public:
     explicit EditPlaybackSnapshot(const edit::Workspace& workspace,
                                   std::vector<engine::TimelineMediaSource> sources = {},
-                                  const std::set<edit::Id>& unavailable = {})
+                                  const std::set<edit::Id>& unavailable = {},
+                                  const edit::EditPreview* preview = nullptr)
         : authored_(workspace.snapshot()), assets_(workspace.assets()), timeline_(edit::RenderTimeline(*authored_)),
           sources_(std::move(sources)) {
+        if (preview && preview->valid) {
+            auto provisional = std::make_shared<edit::EditSnapshot>(*authored_);
+            provisional->clips = preview->clips;
+            authored_ = std::move(provisional);
+            timeline_ = edit::RenderTimeline(*authored_);
+        }
         for (auto& asset : assets_)
             if (unavailable.contains(asset.id))
                 asset.state = edit::AssetState::Failed;

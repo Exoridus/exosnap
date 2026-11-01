@@ -1,6 +1,7 @@
 #include <atomic>
 #include <capability/translatable.h>
 #include <exosnap/engine/audio_media_manifest.h>
+#include <exosnap/engine/edit_automation.h>
 #include <exosnap/engine/edit_player_engine.h>
 #include <exosnap/engine/edit_timeline.h>
 #include <exosnap/engine/edit_timeline_compositor.h>
@@ -73,7 +74,14 @@ TimelineVideoAdmission AssessTimelineVideoAdmission(const TimelineRenderSnapshot
 EditRenderPlan ClassifyEditExport(const TimelineRenderSnapshot& snapshot,
                                   const TimelineExportAssessment& copy_assessment, bool to_mp4) {
     EditRenderPlan plan;
-    if (snapshot.timeline.crossfades.empty() && copy_assessment.eligibility == TimelineExportEligibility::StreamCopy) {
+    const bool animated =
+        std::any_of(snapshot.timeline.clips.begin(), snapshot.timeline.clips.end(), [](const auto& clip) {
+            return !clip.opacity_channel.keys.empty() || clip.transform != VideoTransform{} ||
+                   std::any_of(clip.transform_channels.begin(), clip.transform_channels.end(),
+                               [](const auto& channel) { return !channel.keys.empty(); });
+        });
+    if (!animated && snapshot.timeline.crossfades.empty() &&
+        copy_assessment.eligibility == TimelineExportEligibility::StreamCopy) {
         plan.path = EditExportPath::StreamCopy;
         return plan;
     }
@@ -665,7 +673,8 @@ bool EditTimelineReader::VideoAt(int64_t time_us, TimelineVideoFrame& output, st
                 error = "Cannot decode a timeline video frame.";
                 return false;
             }
-            output.layers.push_back({std::move(*frame), contribution.weight, contribution.opacity, layer});
+            output.layers.push_back(
+                {std::move(*frame), contribution.weight, contribution.opacity, layer, contribution.transform});
         }
     return true;
 }

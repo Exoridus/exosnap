@@ -1,5 +1,6 @@
 #pragma once
 
+#include <exosnap/engine/edit_automation.h>
 #include <exosnap/engine/edit_types.h>
 
 #include <algorithm>
@@ -32,6 +33,9 @@ struct TimelineClip {
     EdgeFade fade_in;
     EdgeFade fade_out;
     bool original_enabled = true;
+    PropertyChannel opacity_channel;
+    VideoTransform transform;
+    TransformChannels transform_channels;
     bool operator==(const TimelineClip&) const = default;
 };
 
@@ -87,6 +91,7 @@ struct TimelineContribution {
     uint64_t track = 0;
     std::optional<TimelineStreamRef> stream;
     double opacity = 1;
+    VideoTransform transform;
 };
 
 struct VideoTrackLayer {
@@ -190,6 +195,7 @@ inline bool Validate(const TimelineSnapshot& snapshot, std::vector<TimelineJunct
         if (!clip.id || !ids.insert(clip.id).second || clip.start_us < 0 || clip.source_in_us < 0 ||
             clip.source_out_us <= clip.source_in_us ||
             clip.start_us > (std::numeric_limits<int64_t>::max)() - (clip.source_out_us - clip.source_in_us) ||
+            !ValidTransform(clip.transform, clip.transform_channels) || !ValidChannel(clip.opacity_channel, 0, 1) ||
             !std::isfinite(clip.opacity) || clip.opacity < 0 || clip.opacity > 1 || !std::isfinite(clip.gain_db) ||
             clip.fade_in.duration_us < 0 || clip.fade_out.duration_us < 0 ||
             clip.fade_in.duration_us > clip.source_out_us - clip.source_in_us ||
@@ -324,8 +330,19 @@ inline TimelineEvaluation EvaluateTimeline(const TimelineSnapshot& timeline, int
             if (weight <= 0)
                 continue;
             TimelineContribution contribution{
-                clip.id,     clip.asset,          clip.source_in_us + (time_us - clip.start_us), weight, clip.track,
-                clip.stream, clip.opacity * *edge};
+                clip.id,
+                clip.asset,
+                clip.source_in_us + (time_us - clip.start_us),
+                weight,
+                clip.track,
+                clip.stream,
+                EvaluateChannel(clip.opacity_channel, clip.opacity, clip.source_in_us + (time_us - clip.start_us)) *
+                    *edge};
+            contribution.transform = {
+                EvaluateChannel(clip.transform_channels[0], clip.transform.x, contribution.source_us),
+                EvaluateChannel(clip.transform_channels[1], clip.transform.y, contribution.source_us),
+                EvaluateChannel(clip.transform_channels[2], clip.transform.scale, contribution.source_us),
+                EvaluateChannel(clip.transform_channels[3], clip.transform.rotation, contribution.source_us)};
             if (clip.audio) {
                 const double gain = weight * *edge * std::pow(10.0, (clip.gain_db + track->gain_db) / 20);
                 if (!std::isfinite(gain)) {

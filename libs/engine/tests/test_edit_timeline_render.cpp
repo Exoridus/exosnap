@@ -366,7 +366,7 @@ TEST(EditTimelineMedia, SharedReaderSeeksAudioAndRealExportReopens) {
               << " cancel_ms=" << cancel_ms << '\n';
 }
 
-TEST(EditTimelineMedia, LayeredExportMatchesPreviewCompositionAndRendersBlankTimeBlack) {
+static void CompareLayeredExport(bool animated) {
     wchar_t directory[32768]{};
     if (!GetEnvironmentVariableW(L"EXOSNAP_EDIT_RENDER_FIXTURES", directory, 32768))
         GTEST_SKIP() << "Set EXOSNAP_EDIT_RENDER_FIXTURES to generated red/blue media.";
@@ -380,13 +380,19 @@ TEST(EditTimelineMedia, LayeredExportMatchesPreviewCompositionAndRendersBlankTim
     TimelineClip blue{2, 2, 0, false, 500'000, 0, 1'000'000};
     blue.track = 10;
     blue.opacity = 0.5;
+    if (animated) {
+        blue.opacity_channel.keys = {{0, 0.2}, {500000, 0.8}, {900000, 0.4}};
+        blue.transform = {0.1, 0, 0.5, 30};
+        blue.transform_channels[0].keys = {{0, 0}, {500000, 0.1}};
+        blue.transform_channels[3].keys = {{0, 0}, {500000, 30}};
+    }
     snapshot.timeline.clips = {red, blue};
     snapshot.timeline.duration_us = 3'000'000;
     const auto plan = ClassifyEditExport(snapshot, {TimelineExportEligibility::RenderRequired, {}}, false);
     ASSERT_EQ(plan.path, EditExportPath::Render) << plan.reason;
     RecorderConfig config;
     config.video_codec = VideoCodec::H264;
-    const auto output = std::filesystem::path(directory) / L"layered.mkv";
+    const auto output = std::filesystem::path(directory) / (animated ? L"layered-animated.mkv" : L"layered.mkv");
     std::error_code ignored;
     std::filesystem::remove(output, ignored);
     TimelineRenderMeasurements stats;
@@ -427,7 +433,7 @@ TEST(EditTimelineMedia, LayeredExportMatchesPreviewCompositionAndRendersBlankTim
     ASSERT_TRUE(exported.Open(output, error)) << error;
     const auto linear = [](uint8_t code) { return Bt709ToLinear(code / 255.0f); };
     std::array<float, 3> red_linear{};
-    for (const int64_t time : {250'000LL, 1'000'000LL, 2'500'000LL}) {
+    for (const int64_t time : {250'000LL, 500'000LL, 750'000LL, 1'000'000LL, 1'400'000LL, 2'500'000LL}) {
         const auto decoded = exported.DecodeFrameAt(time);
         ASSERT_TRUE(decoded.has_value());
         const auto* pixel = decoded->bgra.get() + decoded->stride_bytes * 90 + 160 * 4;
@@ -447,15 +453,26 @@ TEST(EditTimelineMedia, LayeredExportMatchesPreviewCompositionAndRendersBlankTim
             const auto blue_frame = source.DecodeFrameAt(0);
             ASSERT_TRUE(blue_frame.has_value());
             const auto* blue_pixel = blue_frame->bgra.get() + blue_frame->stride_bytes * 90 + 160 * 4;
+            const auto evaluated = EvaluateTimeline(snapshot.timeline, decoded->pts_us);
+            const auto opacity = static_cast<float>(evaluated.video_layers.back().contributions.front().opacity);
             for (size_t channel = 0; channel < 3; ++channel)
-                EXPECT_NEAR(preview[channel],
-                            LinearToBt709(0.5f * linear(blue_pixel[channel]) + 0.5f * red_linear[channel]) * 255, 3)
+                EXPECT_NEAR(
+                    preview[channel],
+                    LinearToBt709(opacity * linear(blue_pixel[channel]) + (1 - opacity) * red_linear[channel]) * 255, 3)
                     << "channel " << channel;
         }
         if (time == 2'500'000)
             for (size_t channel = 0; channel < 3; ++channel)
                 EXPECT_LT(pixel[channel], 6) << "blank time renders black";
     }
+}
+
+TEST(EditTimelineMedia, LayeredExportMatchesPreviewCompositionAndRendersBlankTimeBlack) {
+    CompareLayeredExport(false);
+}
+
+TEST(EditTimelineMedia, AnimatedOpacityAndTransformExportMatchesPreviewAtKeysAndBetween) {
+    CompareLayeredExport(true);
 }
 
 TEST(EditTimelineReader, BlankTimeIsBlackSilenceAndAnEmptyUpperTrackRevealsTheLowerOne) {
