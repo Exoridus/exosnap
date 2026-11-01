@@ -61,6 +61,7 @@ foreach(controller IN ITEMS
     steam_controller
     steam_deck_full
     steam_deck_compact
+    steam_controller_2026
     xbox_360
     gamecube
     dualsense_edge

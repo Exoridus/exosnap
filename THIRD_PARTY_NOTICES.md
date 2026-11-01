@@ -152,6 +152,11 @@ directory alongside the ExoSnap binary.
 
 ### Controller artwork
 
+- **2D artwork revisions and additional layouts:** ExoSnap contributors.
+  All controller layouts were substantially reworked, including the Steam
+  Controller and Steam Deck layouts. Contributions include redrawn wireframe
+  contours and controls, consistent line weights, separate moving parts,
+  pressure and knockout surfaces, clipping and additional variants.
 - **Source:** AL2009man / Al. Lopez, Gamepad Asset Pack
 - **License:** MIT, Copyright (c) 2024 Al. Lopez
 - **Bundled license and credits:** `licenses/gamepad-al2009man.txt` and

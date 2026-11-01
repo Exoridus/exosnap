@@ -258,7 +258,7 @@ Automatic device selection prefers the first actively used gamepad and stays wit
 Manual selection pins one device and never borrows another controller's inputs. Disconnect resets the visible inputs.
 Automatic artwork selection recognizes DualSense, Xbox Series, Xbox One and Switch Pro families.
 Manual selection additionally offers DualShock 4, Joy-Cons in a grip or separate, individual Joy-Cons
-in upright or horizontal orientation, the Steam Controller (2015), Steam Deck compact and full views,
+in upright or horizontal orientation, the Steam Controller (2015 and 2026), Steam Deck compact and full views,
 Xbox 360, GameCube, DualSense Edge and Xbox Elite. Compact is the default Steam Deck artwork in the
 asset catalog. Automatic GameInput detection does not yet identify Steam Deck devices.
 Generic uses a vendor-neutral controller silhouette. Selecting a Joy-Con drawing does not combine physical devices.

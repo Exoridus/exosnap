@@ -1,3 +1,16 @@
+# ExoSnap 2D controller artwork
+
+All 2D controller layouts were substantially reworked and extended by ExoSnap
+contributors. Their work includes redrawn wireframe contours, control artwork,
+consistent line weights, separate moving controls, pressure and knockout
+surfaces, clipping and additional controller variants. This includes the
+redesigned Steam Controller and Steam Deck layouts.
+
+These revisions are credited to ExoSnap contributors. Original artwork sources
+and their license notices remain credited below.
+
+---
+
 # Gamepad Asset Pack by AL2009man
 
 This is a collection of image assets originally created for VSCViewhttps://github.com/Nielk1/VSCView/, now expanded for general uses such as custom controller overlay, modding, etc. This also includes WIP or unfinished assets.
@@ -93,3 +106,17 @@ Font license: SIL Open Font License 1.1 (OFL-1.1).
 https://github.com/rsms/inter/blob/master/LICENSE.txt
 No Inter font file is distributed. The OFL's document/artwork exception applies
 to the rendered label. See https://openfontlicense.org/ofl-faq/
+
+## Steam Controller 2026 artwork draft
+
+The supplied two-dimensional artwork was manually traced and refined by ExoSnap
+contributors using rendered model views and physical reference images.
+Standard controls, symbols and stick wells reuse the MIT-licensed AL2009man
+Gamepad Asset Pack credited above. Copyright (c) 2026 ExoSnap contributors
+applies to their original contributions.
+
+The supplied rear-control contours and panel seam include projections from the
+Khyretos/3dco-plus model described in the artwork handoff. Their provenance and
+publication terms remain unresolved. The layout remains an artwork draft and
+must not be released until this is resolved. No model mesh, projection data
+file or model-processing generator is included.

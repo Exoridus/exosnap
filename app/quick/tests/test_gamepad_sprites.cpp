@@ -122,8 +122,6 @@ TEST(GamepadSprites, CatalogRasterSizesAndMovingMaskCost) {
         report.write("layout,width,atlas_bytes,snapshot_mean_us\n");
     }
     for (const auto& id : exosnap::kGamepadOverlayArtworkIds) {
-        if (id == "steam_controller_2026")
-            continue;
         for (const int width : {240, 480, 960}) {
             SCOPED_TRACE(std::string(id) + ":" + std::to_string(width));
             QString error;
@@ -160,12 +158,10 @@ TEST(GamepadSprites, CatalogRasterSizesAndMovingMaskCost) {
 
 TEST(GamepadSprites, MappedResourcesExposeEveryPersistableLayout) {
     GamepadOverlay overlay;
-    EXPECT_EQ(overlay.layouts().size(), exosnap::kGamepadOverlayArtworkIds.size());
+    EXPECT_EQ(overlay.layouts().size(), exosnap::kGamepadOverlayArtworkIds.size() + 1);
     for (const auto& option : overlay.layouts())
         EXPECT_TRUE(option.toMap().value(QStringLiteral("selectable")).toBool());
     for (int index = 0; index < static_cast<int>(exosnap::kGamepadOverlayArtworkIds.size()); ++index) {
-        if (index == exosnap::kGamepadOverlayUnavailableArtworkIndex)
-            continue;
         exosnap::GamepadOverlaySettings settings;
         settings.layout = index;
         EXPECT_EQ(exosnap::SanitizeGamepadOverlaySettings(settings).layout, index);
@@ -215,7 +211,7 @@ TEST(GamepadArtworkSources, ExportedLayersMatchSourceWithoutBakingStickCapsIntoB
     QFile catalog(root.filePath(QStringLiteral("catalog.json")));
     ASSERT_TRUE(catalog.open(QIODevice::ReadOnly));
     const auto controllers = QJsonDocument::fromJson(catalog.readAll()).object().value("controllers").toArray();
-    ASSERT_EQ(controllers.size(), 19);
+    ASSERT_EQ(controllers.size(), 20);
     for (const auto& controller : controllers) {
         const auto entry = controller.toObject();
         const QDir directory(root.filePath(entry.value("id").toString()));
@@ -518,8 +514,6 @@ TEST(GamepadSprites, StickTravelIsRadialAndTriggerFillKeepsItsScale) {
 TEST(GamepadSprites, AllArtworkRendersForVisualReview) {
     const QString output = qEnvironmentVariable("EXOSNAP_GAMEPAD_VISUAL_OUTPUT");
     for (const auto& id : exosnap::kGamepadOverlayArtworkIds) {
-        if (id == "steam_controller_2026")
-            continue;
         const QString name = QString::fromLatin1(id.data());
         for (const bool glass : {false}) {
             QString error;

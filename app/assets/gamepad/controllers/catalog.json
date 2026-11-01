@@ -97,6 +97,12 @@
       "family": "steam"
     },
     {
+      "id": "steam_controller_2026",
+      "name": "Steam Controller (2026)",
+      "mapping": "steam_controller_2026/mapping.json",
+      "family": "steam"
+    },
+    {
       "id": "xbox_360",
       "name": "Xbox 360",
       "mapping": "xbox_360/mapping.json",

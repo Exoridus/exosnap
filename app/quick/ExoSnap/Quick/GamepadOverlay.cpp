@@ -62,8 +62,6 @@ QVariantList GamepadOverlay::layouts() const {
                                     {QStringLiteral("label"), tr("Automatic layout")},
                                     {QStringLiteral("selectable"), true}}};
     for (qsizetype index = 0; index < labels.size(); ++index) {
-        if (index == kGamepadOverlayUnavailableArtworkIndex)
-            continue;
         result.push_back(QVariantMap{{QStringLiteral("value"), index},
                                      {QStringLiteral("label"), labels[index]},
                                      {QStringLiteral("selectable"), true}});
@@ -196,8 +194,7 @@ void GamepadOverlay::Rebuild() {
     const auto settings = Settings();
     if (!settings.enabled)
         return;
-    const int selected_layout = settings.layout < 0 ? automatic_layout_ : settings.layout;
-    const int layout = selected_layout == kGamepadOverlayUnavailableArtworkIndex ? 2 : selected_layout;
+    const int layout = settings.layout < 0 ? automatic_layout_ : settings.layout;
     const QString file = QString::fromLatin1(kGamepadOverlayArtworkIds[layout].data());
     const int width = std::clamp(qRound(content_width_ * settings.width), 96, 2048);
     const QString key = QStringLiteral("%1/%2").arg(file).arg(width);

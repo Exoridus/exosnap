@@ -30,9 +30,6 @@ inline constexpr std::array<std::string_view, 20> kGamepadOverlayArtworkIds{"dua
                                                                             "dualsense_edge",
                                                                             "xbox_elite"};
 
-// Keep the profile index reserved while the artwork cannot be distributed.
-inline constexpr int kGamepadOverlayUnavailableArtworkIndex = 15;
-
 struct GamepadOverlaySettings {
     bool enabled = false;
     bool output_visible = true;
