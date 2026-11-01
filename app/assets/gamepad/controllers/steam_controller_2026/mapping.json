@@ -20,7 +20,7 @@
   },
   "orientation": "front",
   "license": {
-    "spdx": "MIT",
+    "spdx": "NOASSERTION",
     "copyright": "Copyright (c) 2024 Al. Lopez; 2026 ExoSnap contributors (2D artwork revisions)",
     "notice": "../SOURCE-NOTICE.txt"
   },

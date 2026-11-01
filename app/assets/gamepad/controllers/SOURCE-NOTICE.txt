@@ -116,7 +116,19 @@ Gamepad Asset Pack credited above. Copyright (c) 2026 ExoSnap contributors
 applies to their original contributions.
 
 The supplied rear-control contours and panel seam include projections from the
-Khyretos/3dco-plus model described in the artwork handoff. Their provenance and
-publication terms remain unresolved. The layout remains an artwork draft and
-must not be released until this is resolved. No model mesh, projection data
-file or model-processing generator is included.
+Steam Controller 2026 model distributed by Khyretos/3dco-plus:
+https://github.com/Khyretos/3dco-plus/tree/main/assets/models/Steam%20Controller%202026
+The model has its own CC BY-NC-SA 4.0 license, separate from the program's MIT
+license. Its notice credits Copyright 2026 Valve Corporation and identifies
+Valve's high-poly model as its basis. The model's license notice is available at:
+https://github.com/Khyretos/3dco-plus/blob/9e2e2a4cf8171ba72fd7c1ad97760fabb0d5c99c/assets/models/Steam%20Controller%202026/license.txt
+License terms: https://creativecommons.org/licenses/by-nc-sa/4.0/
+
+The MIT notice above covers the AL2009man components and original contributions
+released under MIT. It does not relicense the referenced model. Whether the
+reworked two-dimensional contours require that model license, and how the full
+layout can be distributed with the application, remain release-review questions.
+The complete layout's license is therefore marked NOASSERTION in its mapping.
+This status does not prohibit uses authorized by the applicable license.
+The layout remains an artwork draft. No model mesh, projection data file or
+model-processing generator is included.

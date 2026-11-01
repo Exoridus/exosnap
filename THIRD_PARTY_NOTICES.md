@@ -180,6 +180,12 @@ directory alongside the ExoSnap binary.
   The Inter Project Authors, https://github.com/rsms/inter (OFL-1.1).
   No Inter font file is bundled. Rendered artwork is covered by the OFL's
   document exception: https://openfontlicense.org/ofl-faq/
+- **Steam Controller 2026 model reference:** Valve Corporation, Copyright 2026,
+  distributed by Khyretos/3dco-plus in `assets/models/Steam Controller 2026`.
+  The model's own `license.txt` specifies CC BY-NC-SA 4.0, independently of
+  the upstream program's MIT license. Source and license links, the ExoSnap
+  modifications and the pending 2D redistribution assessment are recorded in
+  the bundled controller source notice. The layout remains an artwork draft.
 - **Additional provenance:** source URLs and modification details for these
   artwork sources are retained in `licenses/gamepad-al2009man-notice.txt`.
 - **Legacy fixtures:** Nicolae (Xelu) Berbece, Free Controller & Key Prompts,
