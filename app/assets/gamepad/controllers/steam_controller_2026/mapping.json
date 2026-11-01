@@ -344,6 +344,7 @@
         "height": 49.4793701171875
       },
       "inputStatus": "unqualified",
+      "pressElement": "btn-quick-access-pressure",
       "preview": {
         "label": "quick-access",
         "key": "quick-access"
