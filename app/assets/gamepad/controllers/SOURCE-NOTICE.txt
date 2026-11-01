@@ -41,3 +41,55 @@ This is the downloaded Version of the pack, for more information; refer to the G
 Open Sans font family (by Steve Matteson) used for certain themes (such as the Compact theme for Steam Controller, Steam Deck and Arcade Controller)
 
 The PlayStation 20th Anniversary Touchpad Symbols was created by GT Planet forums user Maninashed.
+---
+
+# ExoSnap controller artwork provenance
+
+## AL2009man Gamepad Asset Pack
+
+Source: https://github.com/AL2009man/Gamepad-Asset-Pack
+License: MIT, Copyright (c) 2024 Al. Lopez.
+The complete MIT license is retained in LICENSE.txt beside this notice.
+
+The controller artwork, including Xbox 360, Steam Deck compact, DualSense Edge
+and Xbox Elite, is adapted from this pack except for the sources identified
+below. Modifications include transparent line artwork, separated moving
+controls, pressure surfaces, alternate layouts and neutral generic controls.
+
+## Generic controller: Amazon Luna diagram
+
+The body outline, front panel and shoulders are redrawn from
+Others/Amazon Luna/Luna_Diagram_Simple.png in Xelu's Free Controller & Key Prompts.
+The existing controls remain adapted from the MIT-licensed AL2009man pack.
+
+Creator: Nicolae (Xelu) Berbece. Updated by Paul Paun (2021).
+Source: https://thoseawesomeguys.com/prompts/
+Original archive:
+https://thoseawesomeguys.com/prompts/Xelu_Free_Controller%26Key_Prompts.zip
+License: CC0-1.0, https://creativecommons.org/publicdomain/zero/1.0/
+The original source page and the archive's Readme.txt dedicate all pack assets
+to the public domain under CC0, including the Amazon Luna diagrams.
+
+## GameCube controller
+
+Source: datkat21/ControllerOverlays, styles/gcn/gamecube_*.svg
+https://github.com/datkat21/ControllerOverlays/tree/20271b5ca4d7cb5b7d8e9a075d038506b16162d2/styles/gcn
+Upstream license:
+https://github.com/datkat21/ControllerOverlays/blob/20271b5ca4d7cb5b7d8e9a075d038506b16162d2/LICENSE
+License: GPL-3.0-only. The GNU GPL version 3 text is retained in the
+repository's root LICENSE and is included in application distributions.
+The GameCube artwork retains its own GPL version 3 terms independently of
+the application's GPL-3.0-or-later license.
+
+Modified by ExoSnap contributors, 2026-11-01: retraced as transparent line
+artwork, separated controls and pressure surfaces, removed decorative branding,
+and added an original cube motif and outlined START/PAUSE label.
+The editable source is gamecube/source.svg with gamecube/mapping.json.
+
+The START/PAUSE label uses outlined Inter SemiBold glyphs.
+Font source: https://github.com/rsms/inter
+Copyright (c) 2016 The Inter Project Authors.
+Font license: SIL Open Font License 1.1 (OFL-1.1).
+https://github.com/rsms/inter/blob/master/LICENSE.txt
+No Inter font file is distributed. The OFL's document/artwork exception applies
+to the rendered label. See https://openfontlicense.org/ofl-faq/

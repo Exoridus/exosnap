@@ -6165,21 +6165,6 @@ Ermittelte SHA-256: %2</translation>
     </message>
     <message>
         <location line="+5"/>
-        <source>Lines</source>
-        <translation>Linien</translation>
-    </message>
-    <message>
-        <location line="+1"/>
-        <source>Glass</source>
-        <translation>Glas</translation>
-    </message>
-    <message>
-        <location line="+2"/>
-        <source>Controller style</source>
-        <translation>Controllerstil</translation>
-    </message>
-    <message>
-        <location line="+5"/>
         <source>Opacity</source>
         <translation>Deckkraft</translation>
     </message>
@@ -6187,11 +6172,6 @@ Ermittelte SHA-256: %2</translation>
         <location line="+6"/>
         <source>Gamepad opacity</source>
         <translation>Gamepad-Deckkraft</translation>
-    </message>
-    <message>
-        <location line="+5"/>
-        <source>Glow</source>
-        <translation>Leuchten</translation>
     </message>
 </context>
 <context>
@@ -12790,8 +12770,38 @@ Kleiner Text auf dem Bildschirm verliert früher an Qualität als Videoinhalte. 
     </message>
     <message>
         <location line="+1"/>
-        <source>Steam Deck</source>
-        <translation>Steam Deck</translation>
+        <source>Steam Deck (full)</source>
+        <translation>Steam Deck (vollständig)</translation>
+    </message>
+    <message>
+        <location line="+1"/>
+        <source>Steam Deck (compact)</source>
+        <translation>Steam Deck (kompakt)</translation>
+    </message>
+    <message>
+        <location line="+1"/>
+        <source>Steam Controller (2026)</source>
+        <translation>Steam Controller (2026)</translation>
+    </message>
+    <message>
+        <location line="+1"/>
+        <source>Xbox 360</source>
+        <translation>Xbox 360</translation>
+    </message>
+    <message>
+        <location line="+1"/>
+        <source>GameCube</source>
+        <translation>GameCube</translation>
+    </message>
+    <message>
+        <location line="+1"/>
+        <source>PlayStation 5 DualSense Edge</source>
+        <translation>PlayStation 5 DualSense Edge</translation>
+    </message>
+    <message>
+        <location line="+1"/>
+        <source>Xbox Elite</source>
+        <translation>Xbox Elite</translation>
     </message>
     <message>
         <location line="+2"/>

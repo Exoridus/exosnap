@@ -54,11 +54,17 @@ with that same device's state at or before the reading timestamp. Disconnect pub
 The initial GameInput microsecond/QPC-100ns anchor is sampled between two QPC reads. The video thread queries
 history at its actual frame time, without a UI timer in the input-to-recording path.
 
-GamepadOverlay owns input capture and app-side artwork. SVG groups rasterize only when artwork, style or settled
+GamepadOverlay owns input capture and app-side artwork. SVG groups rasterize only when artwork or settled
 recording-content size changes. A resize temporarily transforms existing quads, then debounces rasterization.
 Raster work runs on one joined worker. Stale results are discarded before GUI delivery.
-The atlas stores straight-alpha BGRA8, transparent gutters and edge RGB for bilinear filtering. Stick deadzone
-and travel affect presentation only. Raw captured axis values are retained. The GUI notification snapshot is
+The atlas stores straight-alpha BGRA8, transparent gutters and edge RGB for bilinear filtering. Knockout masks
+are rasterized with the artwork and follow the same radial displacement as the caps. A changed stick position
+copies the atlas and removes body alpha under the current caps, preserving straight RGB and all control tiles.
+The immutable masked atlas is reused for button, trigger and placement changes. This requires an atlas upload
+when a stick moves, but no SVG rasterization or Qt painting in the frame consumer. Mapping schema version 1
+remains shared input policy. Optional preview and touch metadata does not create hardware capabilities.
+Unbound controls remain static artwork. Stick deadzone and travel affect presentation only.
+Raw captured axis values are retained. The GUI notification snapshot is
 separate from the recording consumer's snapshot cache, so consuming a recording frame cannot suppress an idle
 preview update. The Quick scene-graph node draws sprites after the webcam into its clean private copy with
 GpuCompositor. An already-composited recording tap is never composed a second time.

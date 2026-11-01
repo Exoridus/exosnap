@@ -2,6 +2,7 @@
 
 #include <windows.h>
 
+#include <array>
 #include <cmath>
 #include <filesystem>
 #include <limits>
@@ -196,8 +197,6 @@ TEST(RecordingPresetStore, GamepadOverlayRoundTripsInLiveConfig) {
     auto config = MakeDefaultPreset().config;
     config.gamepad.enabled = true;
     config.gamepad.device = std::string(64, 'a');
-    config.gamepad.glass = true;
-    config.gamepad.glow = true;
     config.gamepad.opacity = 0.42F;
     config.gamepad.x = 0.1F;
     config.gamepad.y = 0.2F;
@@ -213,6 +212,52 @@ TEST(RecordingPresetStore, GamepadOverlayRoundTripsInLiveConfig) {
     }
 }
 
+TEST(RecordingPresetStore, GamepadOverlayLayoutIndicesRemainStable) {
+    const std::array<std::string_view, 20> ids{"dualsense",
+                                               "xbox_series",
+                                               "generic",
+                                               "dualshock4",
+                                               "xbox_one",
+                                               "switch_pro",
+                                               "joycon_grip",
+                                               "joycon_pair",
+                                               "joycon_left",
+                                               "joycon_right",
+                                               "joycon_left_horizontal",
+                                               "joycon_right_horizontal",
+                                               "steam_controller",
+                                               "steam_deck_full",
+                                               "steam_deck_compact",
+                                               "steam_controller_2026",
+                                               "xbox_360",
+                                               "gamecube",
+                                               "dualsense_edge",
+                                               "xbox_elite"};
+    EXPECT_EQ(kGamepadOverlayArtworkIds, ids);
+}
+
+TEST(RecordingPresetStore, GamepadOverlayLegacyEffectsAreDisabledInLiveAndUserProfiles) {
+    QTemporaryDir temporary;
+    ASSERT_TRUE(temporary.isValid());
+    RecordingPresetStore store(temporary.filePath(QStringLiteral("presets.toml")));
+    auto preset = MakeDefaultPreset();
+    preset.id = GeneratePresetId();
+    preset.name = "Legacy controller style";
+    preset.config.gamepad.layout = 15;
+    preset.config.gamepad.glass = true;
+    preset.config.gamepad.glow = true;
+    ASSERT_TRUE(store.Save({preset}, preset.id, preset.config));
+
+    const auto restored = store.Load();
+    ASSERT_TRUE(restored.live);
+    ASSERT_EQ(restored.user_presets.size(), 1u);
+    for (const auto* config : {&*restored.live, &restored.user_presets.front().config}) {
+        EXPECT_EQ(config->gamepad.layout, 15);
+        EXPECT_FALSE(config->gamepad.glass);
+        EXPECT_FALSE(config->gamepad.glow);
+    }
+}
+
 TEST(RecordingPresetStore, GamepadOverlaySanitizesInvalidPlacementAndDevice) {
     GamepadOverlaySettings settings;
     settings.device = "invalid";
@@ -222,6 +267,8 @@ TEST(RecordingPresetStore, GamepadOverlaySanitizesInvalidPlacementAndDevice) {
     settings.width = 0;
     settings.height = 2;
     settings.opacity = std::numeric_limits<float>::quiet_NaN();
+    settings.glass = true;
+    settings.glow = true;
     const auto safe = SanitizeGamepadOverlaySettings(settings);
     EXPECT_TRUE(safe.device.empty());
     EXPECT_EQ(safe.layout, 2);
@@ -230,6 +277,8 @@ TEST(RecordingPresetStore, GamepadOverlaySanitizesInvalidPlacementAndDevice) {
     EXPECT_GE(safe.y, 0);
     EXPECT_LE(safe.y + safe.height, 1);
     EXPECT_TRUE(std::isfinite(safe.opacity));
+    EXPECT_FALSE(safe.glass);
+    EXPECT_FALSE(safe.glow);
 }
 
 // ===========================================================================

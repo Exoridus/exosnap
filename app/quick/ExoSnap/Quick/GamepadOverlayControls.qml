@@ -63,14 +63,6 @@ Item {
                 Accessible.name: qsTr("Controller layout")
                 onValueActivated: value => root.overlay.layout = value
             }
-            ExoSelect {
-                Layout.fillWidth: true
-                options: [{ value: false, label: qsTr("Lines"), selectable: true },
-                          { value: true, label: qsTr("Glass"), selectable: true }]
-                value: root.overlay !== null && root.overlay.glass
-                Accessible.name: qsTr("Controller style")
-                onValueActivated: value => root.overlay.glass = value
-            }
             RowLayout {
                 Layout.fillWidth: true
                 Label { text: qsTr("Opacity"); color: ExoTheme.text }
@@ -82,11 +74,6 @@ Item {
                     Accessible.name: qsTr("Gamepad opacity")
                     onMovedByUser: value => root.overlay.opacity = value
                 }
-            }
-            ExoCheckBox {
-                text: qsTr("Glow")
-                checked: root.overlay !== null && root.overlay.glow
-                onToggledByUser: value => root.overlay.glow = value
             }
             Label {
                 Layout.fillWidth: true

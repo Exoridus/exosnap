@@ -20,8 +20,6 @@ class GamepadOverlay final : public QObject, public engine::SpriteSourceProvider
     Q_PROPERTY(bool enabled READ enabled WRITE setEnabled NOTIFY settingsChanged FINAL)
     Q_PROPERTY(bool outputVisible READ outputVisible WRITE setOutputVisible NOTIFY settingsChanged FINAL)
     Q_PROPERTY(int layout READ layout WRITE setLayout NOTIFY settingsChanged FINAL)
-    Q_PROPERTY(bool glass READ glass WRITE setGlass NOTIFY settingsChanged FINAL)
-    Q_PROPERTY(bool glow READ glow WRITE setGlow NOTIFY settingsChanged FINAL)
     Q_PROPERTY(double opacity READ opacity WRITE setOpacity NOTIFY settingsChanged FINAL)
     Q_PROPERTY(QRectF placement READ placement WRITE setPlacement NOTIFY settingsChanged FINAL)
     Q_PROPERTY(QString device READ device WRITE setDevice NOTIFY settingsChanged FINAL)
@@ -45,12 +43,6 @@ class GamepadOverlay final : public QObject, public engine::SpriteSourceProvider
     int layout() const {
         return Settings().layout;
     }
-    bool glass() const {
-        return Settings().glass;
-    }
-    bool glow() const {
-        return Settings().glow;
-    }
     double opacity() const {
         return Settings().opacity;
     }
@@ -69,8 +61,6 @@ class GamepadOverlay final : public QObject, public engine::SpriteSourceProvider
     void setEnabled(bool value);
     void setOutputVisible(bool value);
     void setLayout(int value);
-    void setGlass(bool value);
-    void setGlow(bool value);
     void setOpacity(double value);
     void setPlacement(QRectF value);
     void setDevice(const QString& value);
