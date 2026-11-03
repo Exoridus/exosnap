@@ -203,6 +203,43 @@ TEST(GamepadSprites, MappedResourcesExposeEveryPersistableLayout) {
     }
 }
 
+TEST(GamepadSprites, Steam2026PersistedLayoutUsesGenericResourcesWithoutQualifyingExtraInputs) {
+    using namespace exosnap::gamepad;
+    ASSERT_EQ(exosnap::kGamepadOverlayArtworkIds[15], "steam_controller_2026");
+    const QString root = QStringLiteral(":/gamepad/controllers/");
+    QFile generic(root + "generic/source.svg");
+    QFile fallback(root + "steam_controller_2026/source.svg");
+    ASSERT_TRUE(generic.open(QIODevice::ReadOnly));
+    ASSERT_TRUE(fallback.open(QIODevice::ReadOnly));
+    EXPECT_TRUE(fallback.readAll() == generic.readAll());
+    GamepadOverlay overlay;
+    EXPECT_EQ(overlay.layouts()[16].toMap().value("label").toString(),
+              QStringLiteral("Steam Controller (2026, generic artwork)"));
+    QString error;
+    const auto sprites = RasterizeGamepad(root + "steam_controller_2026/mapping.json", 240, false, false, error);
+    ASSERT_TRUE(sprites) << error.toStdString();
+    GamepadState state;
+    state.controls_normalized = true;
+    const auto idle = GamepadLayer(*sprites, state, {0, 0, 1, 1}, 1);
+    for (const auto control : {Control::Misc1, Control::LeftPaddle1, Control::LeftPaddle2, Control::RightPaddle1,
+                               Control::RightPaddle2, Control::Touchpad})
+        state.controls[static_cast<size_t>(control)] = {ControlStatus::Active, 1, 0};
+    EXPECT_EQ(GamepadLayer(*sprites, state, {0, 0, 1, 1}, 1)->quads, idle->quads);
+    for (const auto control :
+         {Control::South, Control::East, Control::West, Control::North, Control::Back, Control::Guide, Control::Start,
+          Control::LeftShoulder, Control::RightShoulder, Control::DpadUp, Control::DpadDown, Control::DpadLeft,
+          Control::DpadRight, Control::LeftStick, Control::RightStick, Control::LeftTrigger, Control::RightTrigger}) {
+        const auto part = std::find_if(sprites->parts.begin(), sprites->parts.end(),
+                                       [=](const auto& part) { return part.control == control; });
+        EXPECT_NE(part, sprites->parts.end()) << static_cast<int>(control);
+    }
+    for (const auto control : {Control::LeftStickClick, Control::RightStickClick}) {
+        const auto part = std::find_if(sprites->parts.begin(), sprites->parts.end(),
+                                       [=](const auto& part) { return part.click_control == control; });
+        EXPECT_NE(part, sprites->parts.end());
+    }
+}
+
 TEST(GamepadSprites, MappedPressureStaysInsideShouldersAndDpadDirection) {
     for (const auto* name : {"xbox_series", "xbox_one", "generic"}) {
         SCOPED_TRACE(name);

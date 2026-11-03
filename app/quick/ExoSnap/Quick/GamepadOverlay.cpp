@@ -53,7 +53,7 @@ QVariantList GamepadOverlay::layouts() const {
                              tr("Steam Controller (2015)"),
                              tr("Steam Deck (full)"),
                              tr("Steam Deck (compact)"),
-                             tr("Steam Controller (2026)"),
+                             tr("Steam Controller (2026, generic artwork)"),
                              tr("Xbox 360"),
                              tr("GameCube"),
                              tr("PlayStation 5 DualSense Edge"),

@@ -271,6 +271,9 @@ in upright or horizontal orientation, the Steam Controller (2015 and 2026), Stea
 Xbox 360, GameCube, DualSense Edge and Xbox Elite. Compact is the default Steam Deck artwork in the
 asset catalog. Automatic GameInput detection does not yet identify Steam Deck devices.
 Generic uses a vendor-neutral controller silhouette. Selecting a Joy-Con drawing does not combine physical devices.
+Steam Controller (2026, generic artwork) retains its saved layout identity and uses the same silhouette as Generic.
+It does not depict the physical controller's shape or imply qualified hardware support.
+Quick Access remains inactive, including the generic Share symbol. Paddle and touch-surface graphics are absent.
 
 Face controls follow SDL3 positions: south/east/west/north correspond to Xbox A/B/X/Y,
 PlayStation Cross/Circle/Square/Triangle, Switch Pro B/A/Y/X and GameCube A/X/B/Y.
