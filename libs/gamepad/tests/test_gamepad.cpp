@@ -6,6 +6,62 @@
 
 using namespace exosnap::gamepad;
 
+TEST(Controls, CanonicalValuesOverrideLegacyProviderBits) {
+    GamepadState state;
+    state.buttons = 4;
+    EXPECT_EQ(ReadControl(state, Control::South).status, ControlStatus::Active);
+    state.controls_normalized = true;
+    state.controls[static_cast<size_t>(Control::East)] = {ControlStatus::Active, 1, 0};
+    EXPECT_EQ(ReadControl(state, Control::South).status, ControlStatus::Unsupported);
+    EXPECT_EQ(ReadControl(state, Control::East).status, ControlStatus::Active);
+}
+
+TEST(Controls, AvailabilityAndNamesAreIndependentOfArtwork) {
+    GamepadState state;
+    EXPECT_EQ(ReadControl(state, Control::South).status, ControlStatus::Released);
+    EXPECT_EQ(ReadControl(state, Control::Guide).status, ControlStatus::Unavailable);
+    EXPECT_EQ(ReadControl(state, Control::Misc3).status, ControlStatus::Unsupported);
+    for (size_t i = 0; i < static_cast<size_t>(Control::Count); ++i) {
+        const auto control = static_cast<Control>(i);
+        EXPECT_EQ(ControlFromName(ControlName(control)), control);
+    }
+    EXPECT_EQ(ControlFromName("btn-a"), Control::Count);
+}
+
+TEST(Controls, GameInputCapabilitiesGatePaddlesAndTriggerClicks) {
+    GamepadState state;
+    state.buttons = 0x1001000C;
+    state.left_x = -0.5F;
+    state.left_y = 0.75F;
+    state.right_trigger = 0.6F;
+    NormalizeGameInputControls(state, 0x1001000C, true, true);
+    EXPECT_EQ(ReadControl(state, Control::South).status, ControlStatus::Active);
+    EXPECT_EQ(ReadControl(state, Control::East).status, ControlStatus::Active);
+    EXPECT_EQ(ReadControl(state, Control::RightPaddle1).status, ControlStatus::Active);
+    EXPECT_EQ(ReadControl(state, Control::Misc3).status, ControlStatus::Active);
+    EXPECT_EQ(ReadControl(state, Control::Misc4).status, ControlStatus::Unsupported);
+    EXPECT_EQ(ReadControl(state, Control::LeftStickClick).status, ControlStatus::Unsupported);
+    EXPECT_EQ(ReadControl(state, Control::LeftStick), (ControlValue{ControlStatus::Active, -0.5F, 0.75F}));
+    EXPECT_EQ(ReadControl(state, Control::RightTrigger).x, 0.6F);
+    NormalizeGameInputControls(state, 0x1001000C);
+    EXPECT_EQ(ReadControl(state, Control::Misc3).status, ControlStatus::Unsupported);
+    NormalizeGameInputControls(state, 4, false);
+    EXPECT_EQ(ReadControl(state, Control::South).status, ControlStatus::Unavailable);
+}
+
+TEST(Controls, CanonicalAnalogValuesAreClampedAndUnavailableValuesAreEmpty) {
+    GamepadState state;
+    state.controls_normalized = true;
+    state.controls[static_cast<size_t>(Control::LeftStick)] = {ControlStatus::Active, 4, -4};
+    state.controls[static_cast<size_t>(Control::RightTrigger)] = {ControlStatus::Active,
+                                                                  std::numeric_limits<float>::quiet_NaN(), 0};
+    state.controls[static_cast<size_t>(Control::Misc6)] = {ControlStatus::Unavailable, 1, 1};
+    const auto normalized = Normalized(state);
+    EXPECT_EQ(ReadControl(normalized, Control::LeftStick), (ControlValue{ControlStatus::Active, 1, -1}));
+    EXPECT_EQ(ReadControl(normalized, Control::RightTrigger).status, ControlStatus::Released);
+    EXPECT_EQ(ReadControl(normalized, Control::Misc6).x, 0);
+}
+
 namespace {
 
 GamepadReading At(uint64_t capture_100ns, uint32_t buttons = 0) {
@@ -75,6 +131,38 @@ TEST(DeviceHistory, DisconnectRestsAndReconnectDoesNotRestoreOldPress) {
     history.Push(reading);
     EXPECT_TRUE(history.StateAt(300)->connected);
     EXPECT_EQ(history.StateAt(300)->state.buttons, 0U);
+}
+
+TEST(DeviceHistory, DisconnectPreservesCapabilityAbsenceWithoutReportingReleasedControls) {
+    DeviceHistory history;
+    auto reading = At(100, 4);
+    NormalizeGameInputControls(reading.state, 4);
+    history.Push(reading);
+    reading.capture_100ns = 200;
+    reading.connected = false;
+    history.Push(reading);
+    const auto disconnected = history.StateFor(reading.device.id, 200);
+    ASSERT_TRUE(disconnected);
+    EXPECT_EQ(disconnected->state.buttons, 0U);
+    EXPECT_EQ(ReadControl(disconnected->state, Control::South), (ControlValue{ControlStatus::Unavailable}));
+    EXPECT_EQ(ReadControl(disconnected->state, Control::East), (ControlValue{ControlStatus::Unsupported}));
+    EXPECT_EQ(ReadControl(disconnected->state, Control::LeftStick), (ControlValue{ControlStatus::Unavailable}));
+    EXPECT_EQ(ReadControl(disconnected->state, Control::Guide), (ControlValue{ControlStatus::Unavailable}));
+}
+
+TEST(DeviceHistory, DisconnectWithoutPriorCapabilitiesReportsUnknownControls) {
+    DeviceHistory history;
+    auto reading = At(200);
+    NormalizeGameInputControls(reading.state, 0);
+    history.Push(reading);
+    reading.capture_100ns = 100;
+    reading.connected = false;
+    history.Push(reading);
+    const auto disconnected = history.StateFor(reading.device.id, 100);
+    ASSERT_TRUE(disconnected);
+    for (size_t index = 0; index < static_cast<size_t>(Control::Count); ++index)
+        EXPECT_EQ(ReadControl(disconnected->state, static_cast<Control>(index)),
+                  (ControlValue{ControlStatus::Unavailable}));
 }
 
 TEST(DeviceHistory, MissingManualDeviceNeverFallsBackToAnotherPad) {

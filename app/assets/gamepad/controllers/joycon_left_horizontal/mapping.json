@@ -39,6 +39,7 @@
     },
     {
       "id": "btn-sr",
+      "control": "right_shoulder",
       "file": "elements/btn-sr.svg",
       "role": "button",
       "binding": {
@@ -55,6 +56,7 @@
     },
     {
       "id": "btn-sl",
+      "control": "left_shoulder",
       "file": "elements/btn-sl.svg",
       "role": "button",
       "binding": {
@@ -107,6 +109,7 @@
     },
     {
       "id": "btn-share",
+      "control": "misc1",
       "file": "elements/btn-share.svg",
       "role": "button",
       "binding": {
@@ -123,6 +126,7 @@
     },
     {
       "id": "btn-up",
+      "control": "west",
       "file": "elements/btn-up.svg",
       "role": "button",
       "binding": {
@@ -138,6 +142,7 @@
     },
     {
       "id": "btn-left",
+      "control": "south",
       "file": "elements/btn-left.svg",
       "role": "button",
       "binding": {
@@ -153,6 +158,7 @@
     },
     {
       "id": "btn-right",
+      "control": "north",
       "file": "elements/btn-right.svg",
       "role": "button",
       "binding": {
@@ -168,6 +174,7 @@
     },
     {
       "id": "btn-down",
+      "control": "east",
       "file": "elements/btn-down.svg",
       "role": "button",
       "binding": {
@@ -183,6 +190,8 @@
     },
     {
       "id": "stick-l-cap",
+      "control": "left_stick",
+      "clickControl": "left_stick_click",
       "file": "elements/stick-l-cap.svg",
       "role": "stick",
       "binding": {
@@ -213,6 +222,7 @@
     },
     {
       "id": "btn-view",
+      "control": "back",
       "file": "elements/btn-view.svg",
       "role": "button",
       "binding": {

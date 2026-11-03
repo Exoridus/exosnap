@@ -10,6 +10,9 @@
 #include "gpu_yuv_constants.h"
 #include "measured_shader_compile.h"
 
+#include <algorithm>
+#include <array>
+#include <cmath>
 #include <cstdio>
 #include <cstring>
 #include <optional>
@@ -471,8 +474,29 @@ bool GpuCompositor::DrawSpriteLayer(size_t layer_index, const SpriteLayerSnapsho
         if (!draw.IsValid())
             continue;
         const float uv_rect[4] = {draw.u0, draw.v0, draw.u1, draw.v1};
+        std::array<OverlayMaskConstants, 2> masks{};
+        for (size_t index = 0; index < quad.masks.size(); ++index) {
+            const auto& mask = quad.masks[index];
+            const auto mapped = MapSpriteQuad({mask.source, mask.destination}, atlas->width, atlas->height, content.x,
+                                              content.y, content.w, content.h);
+            if (!mapped.IsValid())
+                continue;
+            const auto& source = mask.source;
+            const auto& destination = mask.destination;
+            OverlayMaskConstants candidate{
+                {static_cast<float>(source.x) / atlas->width, static_cast<float>(source.y) / atlas->height,
+                 static_cast<float>(source.x + source.w) / atlas->width,
+                 static_cast<float>(source.y + source.h) / atlas->height},
+                {static_cast<float>(content.x + static_cast<double>(destination.x) * content.w),
+                 static_cast<float>(content.y + static_cast<double>(destination.y) * content.h),
+                 static_cast<float>(static_cast<double>(destination.w) * content.w),
+                 static_cast<float>(static_cast<double>(destination.h) * content.h)}};
+            if (std::all_of(std::begin(candidate.destination), std::end(candidate.destination),
+                            [](float value) { return std::isfinite(value); }))
+                masks[index] = candidate;
+        }
         if (!DrawTexture(cached.texture.srv.get(), draw.destination, false, no_key, false, draw.opacity, err, nullptr,
-                         uv_rect)) {
+                         uv_rect, &masks)) {
             return false;
         }
         ++sprite_quad_draw_count_;
@@ -497,7 +521,8 @@ bool GpuCompositor::UploadTexture(TextureResource& resource, const uint8_t* bgra
 
 bool GpuCompositor::DrawTexture(ID3D11ShaderResourceView* srv, const WebcamPixelRect& rect, bool mirror,
                                 const ChromaKeyParams& chroma, bool force_opaque, float opacity, std::string& err,
-                                ID3D11BlendState* blend, const float* uv_rect) {
+                                ID3D11BlendState* blend, const float* uv_rect,
+                                const std::array<OverlayMaskConstants, 2>* masks) {
     if (srv == nullptr || context_ == nullptr || composite_rtv_ == nullptr || !rect.IsValid()) {
         err = "GpuCompositor::DrawTexture invalid arguments";
         return false;
@@ -516,6 +541,8 @@ bool GpuCompositor::DrawTexture(ID3D11ShaderResourceView* srv, const WebcamPixel
                                                          overlay_ref_white_nits_ / kScrgbReferenceWhiteNits);
     if (uv_rect != nullptr)
         std::memcpy(pc.uv_rect, uv_rect, sizeof(pc.uv_rect));
+    if (masks != nullptr)
+        pc.masks = *masks;
     context_->UpdateSubresource(constants_.get(), 0, nullptr, &pc, 0, 0);
 
     D3D11_VIEWPORT viewport{};

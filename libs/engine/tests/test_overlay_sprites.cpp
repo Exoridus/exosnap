@@ -123,6 +123,13 @@ TEST(SpriteLayerChanged, ComparesWhatIsDrawn) {
     auto faded = quad;
     faded.opacity = 0.5f;
     EXPECT_TRUE(SpriteLayerChanged(base.get(), Layer(atlas, {faded}).get()));
+    auto masked = quad;
+    masked.masks[0] = {{2, 2, 1, 1}, {0, 0, 0.1F, 0.1F}};
+    EXPECT_TRUE(SpriteLayerChanged(base.get(), Layer(atlas, {masked}).get()));
+    const auto mask_base = Layer(atlas, {masked});
+    masked.masks[0].destination.x = 0.01F;
+    EXPECT_TRUE(SpriteLayerChanged(mask_base.get(), Layer(atlas, {masked}).get()));
+    EXPECT_FALSE(SpriteLayerChanged(mask_base.get(), Layer(atlas, mask_base->quads).get()));
 }
 
 namespace {

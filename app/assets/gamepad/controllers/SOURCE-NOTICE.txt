@@ -141,6 +141,9 @@ application source code or the other controller layouts.
 The referenced model and adapted artwork are provided without warranties,
 subject to Section 5 of the linked Creative Commons license.
 
-The layout's artwork-draft status records pending visual qualification, not a
-prohibition on redistribution under its license. No model mesh, projection data
-file or model-processing generator is included.
+Release qualification is blocked for the model-derived rear controls and panel
+seam until suitable rights are documented or independently created replacement
+geometry has documented provenance. Cosmetic modifications do not establish
+independent creation. The license attribution above records the supplied
+materials, not approval to ship this layout in a GPL distribution.
+No model mesh, projection data file or model-processing generator is included.

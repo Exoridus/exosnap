@@ -129,7 +129,8 @@ class GpuCompositor {
     // uv_rect: u0, v0, u1, v1 of the texture the rectangle shows; null = all of it.
     bool DrawTexture(ID3D11ShaderResourceView* srv, const WebcamPixelRect& rect, bool mirror,
                      const ChromaKeyParams& chroma, bool force_opaque, float opacity, std::string& err,
-                     ID3D11BlendState* blend = nullptr, const float* uv_rect = nullptr);
+                     ID3D11BlendState* blend = nullptr, const float* uv_rect = nullptr,
+                     const std::array<OverlayMaskConstants, 2>* masks = nullptr);
 
     ID3D11Device* device_ = nullptr;
     ID3D11DeviceContext* context_ = nullptr;

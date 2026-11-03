@@ -14,6 +14,7 @@
 #include <exosnap/engine/gpu_surface_inventory.h>
 
 #include <d3d11.h>
+#include <limits>
 #include <memory>
 #include <optional>
 #include <winrt/base.h>
@@ -925,6 +926,21 @@ std::shared_ptr<const SpriteAtlas> FourCellAtlas(uint64_t generation) {
     return atlas;
 }
 
+std::shared_ptr<const SpriteAtlas> PaddedFourCellAtlas(uint64_t generation) {
+    const auto cells = FourCellAtlas(generation);
+    auto atlas = std::make_shared<SpriteAtlas>();
+    atlas->width = 12;
+    atlas->height = 3;
+    atlas->generation = generation;
+    for (int y = 0; y < 3; ++y) {
+        for (int x = 0; x < 12; ++x) {
+            const auto offset = static_cast<size_t>(x / 3) * 4;
+            atlas->pixels.insert(atlas->pixels.end(), cells->pixels.begin() + offset,
+                                 cells->pixels.begin() + offset + 4);
+        }
+    }
+    return atlas;
+}
 SpriteQuad CellQuad(int cell, float x, float y, float w, float h, float opacity = 1.0f) {
     SpriteQuad quad;
     quad.source = {cell, 0, 1, 1};
@@ -960,6 +976,75 @@ TEST(GpuCompositorSprites, QuadsSampleTheirAtlasCellWithStraightAlphaAndOpacity)
     EXPECT_EQ(compositor.SpriteQuadDrawCount(), 3u);
 }
 
+TEST(GpuCompositorSprites, TwoMovingMasksPreserveBackgroundAndOtherQuadsWithoutUploads) {
+    auto d3d = CreateWarpDevice();
+    ASSERT_TRUE(d3d.device);
+    GpuCompositor compositor;
+    std::string err;
+    ASSERT_TRUE(compositor.Init(d3d.device.get(), d3d.context.get(), 4, 2, err)) << err;
+    auto background = CreateTexture(d3d.device.get(), 4, 2, SolidBgra(4, 2, 0, 0, 255));
+    SpriteLayerSnapshot layer;
+    layer.atlas = PaddedFourCellAtlas(17);
+    auto body = CellQuad(3, 0, 0, 1, 1);
+    body.masks[0] = {{10, 1, 1, 1}, {0, 0, 0.25F, 1}};
+    body.masks[1] = {{10, 1, 1, 1}, {0.5F, 0, 0.25F, 1}};
+    body.source = {10, 1, 1, 1};
+    auto cap = CellQuad(1, 0, 0, 0.25F, 0.5F);
+    cap.source = {4, 1, 1, 1};
+    layer.quads = {body, cap};
+    for (int step = 0; step < 2; ++step) {
+        ASSERT_TRUE(compositor.BeginFrame(background.get(), err)) << err;
+        ASSERT_TRUE(compositor.DrawSpriteLayer(0, layer, {0, 0, 4, 2}, err)) << err;
+        const auto pixels = ReadTexture(d3d.device.get(), d3d.context.get(), compositor.Result());
+        ExpectPixelNear(pixels, 4, 0, 0, 0, 255, 0, 255);
+        ExpectPixelNear(pixels, 4, step, 1, 0, 0, 255, 255);
+        ExpectPixelNear(pixels, 4, 2 + step, 1, 0, 0, 255, 255);
+        ExpectPixelNear(pixels, 4, 1 - step, 1, 255, 255, 255, 255);
+        layer.quads[0].masks[0].destination.x += 0.25F;
+        layer.quads[0].masks[1].destination.x += 0.25F;
+    }
+    EXPECT_EQ(compositor.SpriteAtlasUploadCount(), 1u);
+}
+
+TEST(GpuCompositorSprites, MaskCoverageMultipliesBeforeOpacityAndClipsWithContent) {
+    auto d3d = CreateWarpDevice();
+    ASSERT_TRUE(d3d.device);
+    GpuCompositor compositor;
+    std::string err;
+    ASSERT_TRUE(compositor.Init(d3d.device.get(), d3d.context.get(), 4, 2, err)) << err;
+    auto background = CreateTexture(d3d.device.get(), 4, 2, SolidBgra(4, 2, 0, 0, 0));
+    ASSERT_TRUE(compositor.BeginFrame(background.get(), err)) << err;
+    SpriteLayerSnapshot layer;
+    layer.atlas = PaddedFourCellAtlas(18);
+    auto body = CellQuad(3, -0.5F, 0, 1.5F, 1, 0.5F);
+    body.masks[0] = {{7, 1, 1, 1}, {-0.5F, 0, 1, 1}};
+    body.masks[1] = {{10, 1, 1, 1}, {0.5F, 0.5F, 0.5F, 0.5F}};
+    body.source = {10, 1, 1, 1};
+    layer.quads = {body};
+    ASSERT_TRUE(compositor.DrawSpriteLayer(0, layer, {1, 0, 2, 2}, err)) << err;
+    const auto pixels = ReadTexture(d3d.device.get(), d3d.context.get(), compositor.Result());
+    ExpectPixelNear(pixels, 4, 0, 0, 0, 0, 0, 255);
+    ExpectPixelNear(pixels, 4, 1, 0, 64, 64, 64, 255);
+    ExpectPixelNear(pixels, 4, 2, 0, 128, 128, 128, 255);
+    ExpectPixelNear(pixels, 4, 2, 1, 0, 0, 0, 255);
+}
+TEST(GpuCompositorSprites, InvalidMaskCannotSampleAnotherAtlasCell) {
+    auto d3d = CreateWarpDevice();
+    ASSERT_TRUE(d3d.device);
+    GpuCompositor compositor;
+    std::string err;
+    ASSERT_TRUE(compositor.Init(d3d.device.get(), d3d.context.get(), 1, 1, err)) << err;
+    auto background = CreateTexture(d3d.device.get(), 1, 1, SolidBgra(1, 1, 0, 0, 0));
+    ASSERT_TRUE(compositor.BeginFrame(background.get(), err)) << err;
+    SpriteLayerSnapshot layer;
+    layer.atlas = FourCellAtlas(19);
+    auto body = CellQuad(3, 0, 0, 1, 1);
+    body.masks[0] = {{4, 0, 1, 1}, {0, 0, 1, 1}};
+    body.masks[1] = {{3, 0, 1, 1}, {0, 0, std::numeric_limits<float>::quiet_NaN(), 1}};
+    layer.quads = {body};
+    ASSERT_TRUE(compositor.DrawSpriteLayer(0, layer, {0, 0, 1, 1}, err)) << err;
+    ExpectPixelNear(ReadTexture(d3d.device.get(), d3d.context.get(), compositor.Result()), 1, 0, 0, 255, 255, 255, 255);
+}
 TEST(GpuCompositorSprites, AnAtlasIsUploadedOncePerGenerationAndLayer) {
     auto d3d = CreateWarpDevice();
     ASSERT_TRUE(d3d.device);

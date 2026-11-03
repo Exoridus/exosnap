@@ -18,6 +18,16 @@ namespace exosnap::gamepad {
 
 namespace {
 
+static_assert(GameInputGamepadMenu == 1 && GameInputGamepadView == 2 && GameInputGamepadA == 4 &&
+              GameInputGamepadB == 8 && GameInputGamepadX == 16 && GameInputGamepadY == 32 &&
+              GameInputGamepadDPadUp == 64 && GameInputGamepadDPadDown == 128 && GameInputGamepadDPadLeft == 256 &&
+              GameInputGamepadDPadRight == 512 && GameInputGamepadLeftShoulder == 1024 &&
+              GameInputGamepadRightShoulder == 2048 && GameInputGamepadLeftThumbstick == 4096 &&
+              GameInputGamepadRightThumbstick == 8192 && GameInputGamepadLeftTriggerButton == 0x00010000 &&
+              GameInputGamepadRightTriggerButton == 0x00020000 && GameInputGamepadPaddleLeft1 == 0x04000000 &&
+              GameInputGamepadPaddleLeft2 == 0x08000000 && GameInputGamepadPaddleRight1 == 0x10000000 &&
+              GameInputGamepadPaddleRight2 == 0x20000000);
+
 HRESULT AcquireRuntime(ComPtr<IGameInput>& input) {
     static std::mutex mutex;
     // shortcut: v4 can deadlock on its final Release after reading callbacks;
@@ -96,6 +106,32 @@ struct GameInputSource::Impl {
                 out.state.touchpad = buttons[13];
             }
         }
+        GameInputGamepadInfo info{};
+        const bool have_info = device->GetGamepadInfo(&info);
+        NormalizeGameInputControls(
+            out.state, have_info ? static_cast<uint32_t>(info.supportedLayout) : 0x3FFF,
+            have_info && ((reading->GetInputKind() & GameInputKindGamepad) != 0 || (previous && previous->connected)));
+        if (have_info) {
+            const auto exclude_missing = [&](Control control, GameInputGamepadButtons mask) {
+                if ((info.supportedLayout & mask) == 0)
+                    out.state.controls[static_cast<size_t>(control)] = {};
+            };
+            exclude_missing(Control::LeftStick, GameInputGamepadLeftThumbstickUp | GameInputGamepadLeftThumbstickDown |
+                                                    GameInputGamepadLeftThumbstickLeft |
+                                                    GameInputGamepadLeftThumbstickRight);
+            exclude_missing(Control::RightStick,
+                            GameInputGamepadRightThumbstickUp | GameInputGamepadRightThumbstickDown |
+                                GameInputGamepadRightThumbstickLeft | GameInputGamepadRightThumbstickRight);
+            exclude_missing(Control::LeftTrigger, GameInputGamepadLeftTriggerButton);
+            exclude_missing(Control::RightTrigger, GameInputGamepadRightTriggerButton);
+        }
+        const auto system_support = device->GetSupportedSystemButtons();
+        if ((system_support & GameInputSystemButtonGuide) == 0 && out.device.layout != LayoutKind::DualSense)
+            out.state.controls[static_cast<size_t>(Control::Guide)] = {};
+        if ((system_support & GameInputSystemButtonShare) == 0 || out.device.layout == LayoutKind::DualSense)
+            out.state.controls[static_cast<size_t>(Control::Misc1)] = {};
+        if (out.device.layout != LayoutKind::DualSense)
+            out.state.controls[static_cast<size_t>(Control::Touchpad)] = {};
         history.Push(out);
     }
 

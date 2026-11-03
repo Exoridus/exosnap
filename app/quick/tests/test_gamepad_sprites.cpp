@@ -1,3 +1,4 @@
+#include "GamepadArtwork.h"
 #include "GamepadOverlay.h"
 #include "GamepadSprites.h"
 #include "models/GamepadOverlaySettings.h"
@@ -28,6 +29,30 @@
 
 using namespace exosnap::quick;
 
+namespace {
+QImage MaskedTile(const exosnap::engine::SpriteLayerSnapshot& layer, const exosnap::engine::SpriteQuad& quad) {
+    const QImage atlas(layer.atlas->pixels.data(), layer.atlas->width, layer.atlas->height, layer.atlas->width * 4,
+                       QImage::Format_ARGB32);
+    const auto& source = quad.source;
+    QImage tile =
+        atlas.copy(source.x, source.y, source.w, source.h).convertToFormat(QImage::Format_ARGB32_Premultiplied);
+    QPainter painter(&tile);
+    painter.setRenderHint(QPainter::SmoothPixmapTransform);
+    painter.setCompositionMode(QPainter::CompositionMode_DestinationOut);
+    for (const auto& mask : quad.masks) {
+        if (mask.source.w <= 0 || mask.source.h <= 0)
+            continue;
+        const auto& d = quad.destination;
+        const auto& m = mask.destination;
+        painter.drawImage(QRectF((m.x - d.x) / d.w * source.w, (m.y - d.y) / d.h * source.h, m.w / d.w * source.w,
+                                 m.h / d.h * source.h),
+                          atlas, QRectF(mask.source.x, mask.source.y, mask.source.w, mask.source.h));
+    }
+    painter.end();
+    return tile;
+}
+} // namespace
+
 TEST(GamepadSprites, MovingKnockoutClearsOnlyTheBodyAtTheCurrentCapPosition) {
     QTemporaryDir directory;
     ASSERT_TRUE(directory.isValid());
@@ -49,12 +74,14 @@ TEST(GamepadSprites, MovingKnockoutClearsOnlyTheBodyAtTheCurrentCapPosition) {
         state.left_x = static_cast<float>(position.x());
         state.left_y = static_cast<float>(position.y());
         const auto layer = GamepadLayer(*sprites, state, {0, 0, 1, 1}, 1);
+        EXPECT_EQ(layer->atlas, sprites->atlas);
         const auto& body = layer->quads.front();
         const auto& cap = layer->quads[1].destination;
+        const auto tile = MaskedTile(*layer, body);
         const auto alpha = [&](float x, float y) {
-            const int px = body.source.x + qRound((x - body.destination.x) / body.destination.w * body.source.w);
-            const int py = body.source.y + qRound((y - body.destination.y) / body.destination.h * body.source.h);
-            return layer->atlas->pixels[(static_cast<size_t>(py) * layer->atlas->width + px) * 4 + 3];
+            const int px = qRound((x - body.destination.x) / body.destination.w * body.source.w);
+            const int py = qRound((y - body.destination.y) / body.destination.h * body.source.h);
+            return qAlpha(tile.pixel(px, py));
         };
         // Body pixels under the moving cap must be transparent.
         EXPECT_EQ(alpha(cap.x + cap.w / 2, cap.y + cap.h / 2), 0);
@@ -94,8 +121,10 @@ TEST(GamepadSprites, MappedCatalogProducesVisiblePressedTilesAndCompleteSnapshot
         for (size_t index = 0; index < sprites->parts.size(); ++index) {
             const auto& part = sprites->parts[index];
             if (index != 0)
-                EXPECT_TRUE(part.button || part.auxiliary != PadAuxiliary::None || part.motion != PadMotion::None);
-            if (part.button || part.auxiliary != PadAuxiliary::None || part.motion != PadMotion::None) {
+                EXPECT_TRUE(part.canonical || part.button || part.auxiliary != PadAuxiliary::None ||
+                            part.motion != PadMotion::None);
+            if (part.canonical || part.button || part.auxiliary != PadAuxiliary::None ||
+                part.motion != PadMotion::None) {
                 EXPECT_EQ(blue_pixels(part.idle), 0);
                 EXPECT_GT(blue_pixels(part.pressed), 0);
             }
@@ -183,14 +212,17 @@ TEST(GamepadSprites, MappedPressureStaysInsideShouldersAndDpadDirection) {
                                               480, false, false, error);
         ASSERT_TRUE(sprites) << error.toStdString();
         for (const auto& part : sprites->parts) {
-            if (part.button != 1024 && part.button != 2048 && part.button != 64)
+            if (part.control != exosnap::gamepad::Control::LeftShoulder &&
+                part.control != exosnap::gamepad::Control::RightShoulder &&
+                part.control != exosnap::gamepad::Control::DpadUp)
                 continue;
             int outside = 0;
             for (int y = 0; y < part.pressed.h; ++y) {
                 for (int x = 0; x < part.pressed.w; ++x) {
                     const float world_x = part.bounds.x + part.bounds.w * (x + 0.5F) / part.pressed.w;
-                    const bool excluded =
-                        part.button == 64 ? y > part.pressed.h * 0.6F : world_x > 0.42F && world_x < 0.58F;
+                    const bool excluded = part.control == exosnap::gamepad::Control::DpadUp
+                                              ? y > part.pressed.h * 0.6F
+                                              : world_x > 0.42F && world_x < 0.58F;
                     if (!excluded)
                         continue;
                     const auto* pixel =
@@ -323,6 +355,9 @@ namespace exosnap::quick {
 
 class GamepadOverlayTest : public ::testing::Test {
   protected:
+    static gamepad::GamepadState DisplayState(gamepad::GamepadState state) {
+        return GamepadOverlay::DisplayState(std::move(state));
+    }
     static void Seed(GamepadOverlay& overlay, std::shared_ptr<const GamepadSpriteSet> sprites) {
         overlay.settings_.enabled = true;
         overlay.sprites_ = std::move(sprites);
@@ -546,11 +581,10 @@ TEST(GamepadSprites, AllArtworkRendersForVisualReview) {
                     const QImage atlas(layer->atlas->pixels.data(), layer->atlas->width, layer->atlas->height,
                                        layer->atlas->width * 4, QImage::Format_ARGB32);
                     for (const auto& quad : layer->quads) {
-                        const auto& s = quad.source;
                         const auto& d = quad.destination;
                         painter.setOpacity(quad.opacity);
                         painter.drawImage(QRectF(column * 480 + d.x * 480, row * 320 + d.y * 320, d.w * 480, d.h * 320),
-                                          atlas, QRectF(s.x, s.y, s.w, s.h));
+                                          MaskedTile(*layer, quad));
                     }
                 }
             }
@@ -595,3 +629,184 @@ TEST(GamepadSprites, ClippedTranslatedBodyUsesItsOwnMaskRegion) {
     EXPECT_EQ(qAlpha(image.pixel(230, 131)), 0);
     EXPECT_EQ(qAlpha(image.pixel(317, 141)), 0);
 }
+
+TEST(GamepadSprites, CanonicalFaceControlsFollowPhysicalArtwork) {
+    using namespace exosnap::gamepad;
+    struct Example {
+        const char* layout;
+        const char* id;
+        Control control;
+    };
+    for (const auto& example :
+         {Example{"xbox_series", "btn-a", Control::South}, Example{"dualsense", "btn-cross", Control::South},
+          Example{"switch_pro", "btn-b", Control::South}, Example{"generic", "btn-a", Control::South},
+          Example{"gamecube", "btn-x", Control::East}, Example{"gamecube", "btn-b", Control::West},
+          Example{"gamecube", "btn-r1", Control::RightShoulder}}) {
+        SCOPED_TRACE(example.layout);
+        QString error;
+        const auto path = QStringLiteral(EXOSNAP_GAMEPAD_ASSET_DIR "/controllers/") + example.layout + "/mapping.json";
+        const auto artwork = PrepareMappedGamepadArtwork(path, error);
+        ASSERT_FALSE(artwork.svg.isEmpty()) << error.toStdString();
+        EXPECT_EQ(artwork.controls.value(example.id).control, example.control);
+        const auto sprites = RasterizeGamepad(path, 240, false, false, error);
+        ASSERT_TRUE(sprites) << error.toStdString();
+        GamepadState state;
+        state.controls_normalized = true;
+        state.controls[static_cast<size_t>(example.control)] = {ControlStatus::Active, 1, 0};
+        const auto layer = GamepadLayer(*sprites, state, {0, 0, 1, 1}, 1);
+        for (size_t i = 1; i < sprites->parts.size(); ++i) {
+            const auto& part = sprites->parts[i];
+            EXPECT_EQ(layer->quads[i].source, part.control == example.control ? part.pressed : part.idle);
+        }
+    }
+}
+
+TEST(GamepadSprites, GameCubeMovesBothSticksWithoutInventingStickClicks) {
+    using namespace exosnap::gamepad;
+    QString error;
+    const auto sprites = RasterizeGamepad(
+        QStringLiteral(EXOSNAP_GAMEPAD_ASSET_DIR "/controllers/gamecube/mapping.json"), 480, false, false, error);
+    ASSERT_TRUE(sprites) << error.toStdString();
+    GamepadState state;
+    state.controls_normalized = true;
+    state.controls[static_cast<size_t>(Control::LeftStick)] = {ControlStatus::Active, -1, 1};
+    state.controls[static_cast<size_t>(Control::RightStick)] = {ControlStatus::Active, 1, -1};
+    state.controls[static_cast<size_t>(Control::LeftStickClick)] = {ControlStatus::Active, 1, 0};
+    state.controls[static_cast<size_t>(Control::RightStickClick)] = {ControlStatus::Active, 1, 0};
+    const auto layer = GamepadLayer(*sprites, state, {0.1F, 0.2F, 0.6F, 0.5F}, 0.7F);
+    ASSERT_EQ(layer->atlas, sprites->atlas);
+    ASSERT_GT(layer->quads.front().masks[0].source.w, 0);
+    ASSERT_GT(layer->quads.front().masks[1].source.w, 0);
+    for (size_t i = 1; i < sprites->parts.size(); ++i) {
+        const auto& part = sprites->parts[i];
+        if (part.motion != PadMotion::LeftStick && part.motion != PadMotion::RightStick)
+            continue;
+        EXPECT_EQ(part.click_control, Control::Count);
+        EXPECT_EQ(layer->quads[i].source, part.idle);
+        EXPECT_NE(layer->quads[i].destination.x, 0.1F + part.bounds.x * 0.6F);
+    }
+    state.controls[static_cast<size_t>(Control::Misc3)] = {ControlStatus::Active, 1, 0};
+    const auto clicked = GamepadLayer(*sprites, state, {0.1F, 0.2F, 0.6F, 0.5F}, 0.7F);
+    EXPECT_NE(layer->quads, clicked->quads);
+}
+namespace {
+class CanonicalArtworkTest : public ::testing::Test {
+  protected:
+    QTemporaryDir directory;
+    QJsonObject mapping;
+    void SetUp() override {
+        ASSERT_TRUE(directory.isValid());
+        const QString root = QStringLiteral(EXOSNAP_GAMEPAD_ASSET_DIR "/controllers/xbox_series/");
+        ASSERT_TRUE(QFile::copy(root + "source.svg", directory.filePath("source.svg")));
+        QFile file(root + "mapping.json");
+        ASSERT_TRUE(file.open(QIODevice::ReadOnly));
+        mapping = QJsonDocument::fromJson(file.readAll()).object();
+    }
+    std::shared_ptr<const GamepadSpriteSet> Rasterize(QString& error) {
+        QFile file(directory.filePath("mapping.json"));
+        if (!file.open(QIODevice::WriteOnly | QIODevice::Truncate))
+            return {};
+        file.write(QJsonDocument(mapping).toJson());
+        file.close();
+        return RasterizeGamepad(file.fileName(), 480, false, false, error);
+    }
+};
+} // namespace
+
+TEST_F(CanonicalArtworkTest, CanonicalOnlyLayersDoNotRequireProviderBindings) {
+    auto layers = mapping.value("layers").toArray();
+    for (int i = 0; i < layers.size(); ++i) {
+        auto layer = layers[i].toObject();
+        if (!layer.value("binding").isNull())
+            layer.remove("binding");
+        layers[i] = layer;
+    }
+    mapping.insert("layers", layers);
+    QString error;
+    const auto sprites = Rasterize(error);
+    ASSERT_TRUE(sprites) << error.toStdString();
+    using namespace exosnap::gamepad;
+    for (const auto control : {Control::South, Control::DpadUp, Control::LeftStick, Control::LeftTrigger}) {
+        const auto part = std::find_if(sprites->parts.begin(), sprites->parts.end(),
+                                       [=](const auto& part) { return part.control == control; });
+        EXPECT_NE(part, sprites->parts.end());
+    }
+}
+
+TEST_F(CanonicalArtworkTest, ExplicitNullBindingRemainsInertWithCanonicalInput) {
+    auto layers = mapping.value("layers").toArray();
+    for (int i = 0; i < layers.size(); ++i) {
+        auto layer = layers[i].toObject();
+        if (layer.value("control") == "south")
+            layer.insert("binding", QJsonValue::Null);
+        layers[i] = layer;
+    }
+    mapping.insert("layers", layers);
+    QString error;
+    const auto sprites = Rasterize(error);
+    ASSERT_TRUE(sprites) << error.toStdString();
+    exosnap::gamepad::GamepadState state;
+    state.controls_normalized = true;
+    const auto idle = GamepadLayer(*sprites, state, {0, 0, 1, 1}, 1);
+    state.controls[static_cast<size_t>(exosnap::gamepad::Control::South)] = {exosnap::gamepad::ControlStatus::Active, 1,
+                                                                             0};
+    const auto pressed = GamepadLayer(*sprites, state, {0, 0, 1, 1}, 1);
+    EXPECT_EQ(idle->quads, pressed->quads);
+}
+
+TEST_F(CanonicalArtworkTest, UnknownCanonicalControlRejectsMapping) {
+    auto layers = mapping.value("layers").toArray();
+    auto layer = layers[1].toObject();
+    layer.insert("control", "button-number-42");
+    layers[1] = layer;
+    mapping.insert("layers", layers);
+    QString error;
+    EXPECT_FALSE(Rasterize(error));
+    EXPECT_FALSE(error.isEmpty());
+}
+
+TEST_F(CanonicalArtworkTest, PressColorChangesFillPixels) {
+    auto layers = mapping.value("layers").toArray();
+    for (int i = 0; i < layers.size(); ++i) {
+        auto layer = layers[i].toObject();
+        if (layer.value("control") == "south")
+            layer.insert("pressColor", "#ff8a3d");
+        layers[i] = layer;
+    }
+    mapping.insert("layers", layers);
+    QString error;
+    const auto sprites = Rasterize(error);
+    ASSERT_TRUE(sprites) << error.toStdString();
+    const auto part = std::find_if(sprites->parts.begin(), sprites->parts.end(),
+                                   [](const auto& part) { return part.control == exosnap::gamepad::Control::South; });
+    ASSERT_NE(part, sprites->parts.end());
+    int orange = 0;
+    for (int y = part->pressed.y; y < part->pressed.y + part->pressed.h; ++y)
+        for (int x = part->pressed.x; x < part->pressed.x + part->pressed.w; ++x) {
+            const auto* pixel = &sprites->atlas->pixels[(static_cast<size_t>(y) * sprites->atlas->width + x) * 4];
+            if (pixel[2] > pixel[1] + 30 && pixel[1] > pixel[0] + 30 && pixel[3] > 15)
+                ++orange;
+        }
+    EXPECT_GT(orange, 0);
+}
+
+namespace exosnap::quick {
+TEST_F(GamepadOverlayTest, CanonicalDeadzoneCoalescesWithoutChangingCapturedInput) {
+    using namespace exosnap::gamepad;
+    GamepadState first;
+    first.controls_normalized = true;
+    first.controls[static_cast<size_t>(Control::LeftStick)] = {ControlStatus::Active, 0.02F, -0.03F};
+    first.left_x = 0.02F;
+    first.left_y = -0.03F;
+    auto second = first;
+    second.controls[static_cast<size_t>(Control::LeftStick)] = {ControlStatus::Active, 0.01F, 0.02F};
+    second.left_x = 0.01F;
+    second.left_y = 0.02F;
+    EXPECT_EQ(DisplayState(first), DisplayState(second));
+    EXPECT_EQ(ReadControl(first, Control::LeftStick).x, 0.02F);
+    second.controls[static_cast<size_t>(Control::LeftStick)] = {ControlStatus::Active, 0.5F, 0};
+    EXPECT_NE(DisplayState(first), DisplayState(second));
+    second.controls[static_cast<size_t>(Control::LeftStick)] = {ControlStatus::Unavailable, 0, 0};
+    EXPECT_EQ(ReadControl(DisplayState(second), Control::LeftStick).status, ControlStatus::Unavailable);
+}
+} // namespace exosnap::quick
