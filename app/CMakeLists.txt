@@ -343,9 +343,12 @@ exosnap_add_gtest(
     SOURCES
         tests/test_visual_registry.cpp
         tests/test_visual_settings.cpp
+        tests/test_visual_preset_migration.cpp
         extensions/CapabilityRegistry.cpp
         extensions/VisualSettings.cpp
+        extensions/VisualPresetMigration.cpp
         models/VisualSceneConfig.cpp
+        ${PROJECT_SOURCE_DIR}/libs/engine/src/recording_media_types.cpp
     LIBRARIES tomlplusplus::tomlplusplus
 )
 target_include_directories(extensions_contract_tests PRIVATE

@@ -16,7 +16,8 @@ engine::Outcome<VisualSceneConfig> ValidateVisualScene(const VisualSceneConfig& 
         if (source.id == engine::VisualSourceId{} || !sources.insert(source.id).second ||
             !IsVisualIdentifier(source.type_id) || source.settings_version == 0)
             return engine::EngineError{.context = "Invalid or duplicate visual source identity"};
-        if (const auto* type = registry.FindVisualSource(source.type_id)) {
+        if (const auto* type = registry.FindVisualSource(source.type_id);
+            type && source.settings_version == type->settings_version) {
             if (++counts[source.type_id] > type->instance_limit)
                 return engine::EngineError{.context = "Visual source instance limit exceeded"};
         }
@@ -42,7 +43,7 @@ engine::Outcome<VisualSceneConfig> ValidateVisualScene(const VisualSceneConfig& 
     auto validated = scene;
     for (auto& source : validated.sources) {
         const auto* type = registry.FindVisualSource(source.type_id);
-        if (!type || source.settings_version > type->settings_version)
+        if (!type || source.settings_version != type->settings_version)
             continue;
         auto settings = type->settings.validate(source.settings);
         if (!settings.succeeded())

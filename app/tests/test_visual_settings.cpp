@@ -112,5 +112,52 @@ TEST(VisualSettings, RetryRejectsUnexpectedChoice) {
     EXPECT_TRUE(ValidateVisualAction(action, type, source, address).succeeded());
 }
 
+TEST(VisualSettings, MalformedAndIncompatibleActionInputsAreNotStale) {
+    const auto type = SettingsType();
+    const engine::VisualAddress address{engine::VisualSourceId{{1}}, engine::VisualRuntimeGeneration{1}};
+    VisualSourceRecord source{address.source, type.id, 1, true, {}};
+    ActionInvocation action{address, engine::CommandId{{2}}, "select-device", "available"};
+    const auto expect_invalid = [&] {
+        auto result = ValidateVisualAction(action, type, source, address);
+        ASSERT_FALSE(result.succeeded());
+        EXPECT_EQ(result.error()->code, engine::EngineErrorCode::InvalidConfig);
+    };
+    action.request = {};
+    expect_invalid();
+    action.request = engine::CommandId{{2}};
+    action.target.runtime = {};
+    expect_invalid();
+    action.target = address;
+    action.action_id.clear();
+    expect_invalid();
+    action.action_id = "select-device";
+    source.type_id = "test/other";
+    expect_invalid();
+    source.type_id = type.id;
+    source.settings_version = 2;
+    expect_invalid();
+    source.settings_version = 1;
+    action.target.runtime.value = 2;
+    auto stale = ValidateVisualAction(action, type, source, address);
+    ASSERT_FALSE(stale.succeeded());
+    EXPECT_EQ(stale.error()->code, engine::EngineErrorCode::StaleRevision);
+}
+
+TEST(VisualSettings, DuplicateCurrentChoicesAreAmbiguousAndDetailsRejectsChoices) {
+    auto type = SettingsType();
+    type.options.front().snapshot = [](const VisualSourceRecord&) {
+        return ChoiceSnapshot{1, {{"available", {"VisualTests", "First"}}, {"available", {"VisualTests", "Second"}}}};
+    };
+    type.actions.push_back({"details", {"VisualTests", "Details"}, ActionOperation::OpenDetails, {}, {}});
+    const engine::VisualAddress address{engine::VisualSourceId{{1}}, engine::VisualRuntimeGeneration{1}};
+    const VisualSourceRecord source{address.source, type.id, 1, true, {}};
+    ActionInvocation action{address, engine::CommandId{{2}}, "select-device", "available"};
+    EXPECT_FALSE(ValidateVisualAction(action, type, source, address).succeeded());
+    action.action_id = "details";
+    EXPECT_FALSE(ValidateVisualAction(action, type, source, address).succeeded());
+    action.choice_id.reset();
+    EXPECT_TRUE(ValidateVisualAction(action, type, source, address).succeeded());
+}
+
 } // namespace
 } // namespace exosnap

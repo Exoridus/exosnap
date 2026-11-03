@@ -209,5 +209,66 @@ TEST(VisualScene, UnknownTypesAndFutureSettingsRemainOpaque) {
     EXPECT_FALSE(ValidateVisualScene(future, registry).succeeded());
 }
 
+TEST(VisualScene, OlderSettingsVersionDoesNotInvokeCurrentValidator) {
+    int validations = 0;
+    auto type = FakeType();
+    type.settings_version = 2;
+    type.settings.validate = [&validations](const toml::table&) -> engine::Outcome<toml::table> {
+        ++validations;
+        return toml::table{{"new_schema", true}};
+    };
+    CapabilityRegistry registry;
+    ASSERT_TRUE(registry.Register({{"test/module"}, {std::move(type)}}).succeeded());
+    auto scene = Scene();
+    scene.sources.front().settings.insert("old_schema", "retained");
+    auto result = ValidateVisualScene(scene, registry);
+    ASSERT_TRUE(result.succeeded());
+    EXPECT_EQ(validations, 0);
+    EXPECT_EQ(result.value()->sources.front().settings_version, 1u);
+    EXPECT_TRUE(result.value()->sources.front().enabled);
+    EXPECT_EQ(result.value()->sources.front().settings, scene.sources.front().settings);
+}
+
+TEST(VisualScene, OpaqueSettingsVersionDoesNotConsumeAnExecutableInstance) {
+    CapabilityRegistry registry;
+    ASSERT_TRUE(registry.Register({{"test/module"}, {FakeType("test/image", 1)}}).succeeded());
+    auto scene = Scene();
+    auto opaque = scene.sources.front();
+    opaque.id = engine::VisualSourceId{{3}};
+    opaque.settings_version = 2;
+    opaque.settings.insert("future", "preserved");
+    scene.sources.push_back(opaque);
+    auto result = ValidateVisualScene(scene, registry);
+    ASSERT_TRUE(result.succeeded());
+    ASSERT_EQ(result.value()->sources.size(), 2u);
+    EXPECT_TRUE(result.value()->sources.back().enabled);
+    EXPECT_EQ(result.value()->sources.back().settings, opaque.settings);
+    scene.sources.back().settings_version = 1;
+    EXPECT_FALSE(ValidateVisualScene(scene, registry).succeeded());
+}
+
+TEST(VisualScene, InvalidItemIdentityPlacementAndChromaAreRejected) {
+    CapabilityRegistry registry;
+    ASSERT_TRUE(registry.Register({{"test/module"}, {FakeType()}}).succeeded());
+    auto scene = Scene();
+    scene.items.front().id = {};
+    EXPECT_FALSE(ValidateVisualScene(scene, registry).succeeded());
+    scene = Scene();
+    scene.items.front().properties.placement.x = std::numeric_limits<float>::infinity();
+    EXPECT_FALSE(ValidateVisualScene(scene, registry).succeeded());
+    scene = Scene();
+    scene.items.front().properties.placement.w = 0.01f;
+    EXPECT_FALSE(ValidateVisualScene(scene, registry).succeeded());
+    scene = Scene();
+    scene.items.front().properties.placement.x = 0.9f;
+    EXPECT_FALSE(ValidateVisualScene(scene, registry).succeeded());
+    scene = Scene();
+    scene.items.front().chroma_key.softness = std::numeric_limits<float>::quiet_NaN();
+    EXPECT_FALSE(ValidateVisualScene(scene, registry).succeeded());
+    scene = Scene();
+    scene.items.front().chroma_key.color_mode = static_cast<WebcamChromaKeyColorMode>(-1);
+    EXPECT_FALSE(ValidateVisualScene(scene, registry).succeeded());
+}
+
 } // namespace
 } // namespace exosnap

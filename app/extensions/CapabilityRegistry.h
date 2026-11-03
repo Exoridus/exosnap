@@ -17,6 +17,7 @@ struct SourceCreateRequest {
     engine::SourceToken token;
     toml::table validated_settings;
     engine::VisualPublicationWriter publication;
+    // Queue to a live receiver on the control thread and recheck the token at dispatch.
     std::function<void(SourceStatus)> post_status;
 };
 

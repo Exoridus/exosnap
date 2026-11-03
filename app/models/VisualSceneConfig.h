@@ -29,6 +29,7 @@ struct VisualSceneConfig {
     std::vector<SceneItemRecord> items;
 };
 
+// Unknown types and nonmatching settings versions retain their intent and settings but must remain inactive.
 [[nodiscard]] engine::Outcome<VisualSceneConfig> ValidateVisualScene(const VisualSceneConfig&,
                                                                      const CapabilityRegistry&);
 
