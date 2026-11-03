@@ -22,6 +22,7 @@ struct CpuFrameSlot;
 struct CpuImagePool;
 struct SceneSlot;
 struct VisualRuntimeStorage;
+struct ConsumerReadState;
 } // namespace detail
 
 struct PreparedSceneItem {
@@ -99,10 +100,13 @@ class VisualReadLease final {
 
   private:
     friend class VisualSceneRuntime;
+    detail::ConsumerReadState* reader_ = nullptr;
     detail::CpuImagePool* pool_ = nullptr;
     detail::CpuFrameSlot* slot_ = nullptr;
 };
 
+// Retain the outer runtime owner until this pin is released. Destruction never
+// reclaims scene resources, even when the source or consumer has stopped.
 class SceneReadLease final {
   public:
     SceneReadLease() noexcept = default;
@@ -118,10 +122,12 @@ class SceneReadLease final {
     [[nodiscard]] std::span<const PreparedSceneItem> Items() const noexcept;
     [[nodiscard]] std::span<const PreparedSceneBinding> Bindings() const noexcept;
     [[nodiscard]] ConfigRevision Revision() const noexcept;
+    [[nodiscard]] uint64_t PublicationSequence() const noexcept;
     void Reset() noexcept;
 
   private:
     friend class VisualSceneRuntime;
+    detail::ConsumerReadState* reader_ = nullptr;
     detail::SceneSlot* slot_ = nullptr;
 };
 
@@ -149,7 +155,7 @@ class VisualPublicationWriter final {
     VisualAddress address_;
 };
 
-using VisualConsumerId = uint32_t;
+using VisualConsumerId = uint32_t; // Host-issued, nonzero and never reused within a runtime.
 
 class VisualSceneRuntime final {
   public:
@@ -161,16 +167,24 @@ class VisualSceneRuntime final {
     Outcome<VisualConsumerId> RegisterConsumer();
     // Call only after the consumer is quiescent and all its leases are empty.
     void UnregisterConsumer(VisualConsumerId);
+    // Runtime generations are host-issued and strictly increase across all sources.
+    // Rejected creations do not consume a generation; admitted generations never recur.
     Outcome<VisualPublicationWriter> CreateSource(VisualAddress);
     void SetRequest(SourceToken, bool publish_allowed, HoldPolicy) noexcept;
     Outcome<ConfigRevision> PublishScene(const PreparedSceneDescription&);
+    // Compare with the held scene before releasing its pin. Notifications can
+    // coalesce or repeat; a changed publication may reuse the same ConfigRevision.
+    [[nodiscard]] uint64_t PublishedSceneSequence() const noexcept;
     // Only Updated populates an empty destination. Busy cannot validate cache reuse.
     ReadResult TryReadScene(VisualConsumerId, SceneReadLease&) noexcept;
     ReadResult TryReadImage(VisualConsumerId, VisualAddress, VisualReadLease&) noexcept;
+    // Unchanged confirms this binding may be used. Every other result means skip it.
+    ReadResult CheckBinding(const PreparedSceneBinding&) noexcept;
     void Revoke(VisualAddress) noexcept;
     void CollectRetired();
 
   private:
+    friend class VisualRuntimeTestAccess;
     friend Outcome<std::monostate> StageGamepadData(VisualSceneRuntime&, SourceToken,
                                                     std::shared_ptr<const GamepadSpriteSet>, gamepad::HistoryReadView);
     std::shared_ptr<detail::VisualRuntimeStorage> storage_;

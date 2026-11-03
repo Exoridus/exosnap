@@ -5,6 +5,7 @@
 
 #include <cstddef>
 #include <cstdint>
+#include <limits>
 #include <optional>
 #include <vector>
 
@@ -13,24 +14,28 @@ namespace exosnap::engine {
 // Camera payload layouts, all tightly packed (no row padding). The YUV layouts
 // reach the GPU unconverted and are converted there once per generation.
 enum class WebcamPixelFormat : uint8_t {
-    Bgra,
-    Nv12,
-    Yuy2,
+    Bgra, // width * 4 bytes per row
+    Nv12, // width * height luma bytes, then height / 2 rows of width interleaved Cb/Cr bytes
+    Yuy2, // width * 2 bytes per row: Y0 Cb Y1 Cr per pixel pair
 };
 
-// Returns zero for invalid dimensions or unsupported format alignment.
+// Returns zero for invalid dimensions, alignment or an unrepresentable payload.
 [[nodiscard]] inline size_t WebcamFramePayloadBytes(WebcamPixelFormat format, int width, int height) noexcept {
     if (width <= 0 || height <= 0)
         return 0;
     const size_t w = static_cast<size_t>(width);
     const size_t h = static_cast<size_t>(height);
+    const size_t maximum = std::numeric_limits<size_t>::max();
+    if (w > maximum / h)
+        return 0;
+    const size_t pixels = w * h;
     switch (format) {
     case WebcamPixelFormat::Bgra:
-        return w * h * 4u;
+        return pixels <= maximum / 4u ? pixels * 4u : 0;
     case WebcamPixelFormat::Nv12:
-        return (width % 2 == 0 && height % 2 == 0) ? w * h * 3u / 2u : 0;
+        return width % 2 == 0 && height % 2 == 0 && pixels / 2 <= maximum - pixels ? pixels + pixels / 2 : 0;
     case WebcamPixelFormat::Yuy2:
-        return width % 2 == 0 ? w * h * 2u : 0;
+        return width % 2 == 0 && pixels <= maximum / 2u ? pixels * 2u : 0;
     }
     return 0;
 }

@@ -24,6 +24,7 @@ exosnap_add_gtest(
     NAME gamepad_sprite_tests
     TEST_PREFIX gamepad.sprites.
     SOURCES "${EXOSNAP_QUICK_TESTS_DIR}/test_gamepad_sprites.cpp" GamepadSprites.cpp GamepadArtwork.cpp GamepadOverlay.cpp GamepadOverlay.h
+        ${PROJECT_SOURCE_DIR}/libs/engine/src/gamepad_frame_sampler.cpp
     LIBRARIES Qt6::Gui Qt6::Svg Qt6::Xml Qt6::Qml exosnap::gamepad
 )
 target_include_directories(gamepad_sprite_tests PRIVATE

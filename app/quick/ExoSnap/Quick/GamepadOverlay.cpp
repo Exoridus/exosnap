@@ -308,24 +308,7 @@ std::optional<gamepad::GamepadReading> GamepadOverlay::ReadingAt(uint64_t timest
 }
 
 gamepad::GamepadState GamepadOverlay::DisplayState(gamepad::GamepadState state) {
-    if (state.controls_normalized) {
-        for (const auto control : {gamepad::Control::LeftStick, gamepad::Control::RightStick}) {
-            auto& value = state.controls[static_cast<size_t>(control)];
-            if ((value.status == gamepad::ControlStatus::Active || value.status == gamepad::ControlStatus::Released) &&
-                std::hypot(value.x, value.y) <= 0.08F)
-                value = {gamepad::ControlStatus::Released, 0, 0};
-        }
-    }
-    state.buttons &= 0x3FFF;
-    if (std::hypot(state.left_x, state.left_y) <= 0.08F) {
-        state.left_x = 0;
-        state.left_y = 0;
-    }
-    if (std::hypot(state.right_x, state.right_y) <= 0.08F) {
-        state.right_x = 0;
-        state.right_y = 0;
-    }
-    return state;
+    return engine::GamepadDisplayState(std::move(state));
 }
 
 std::shared_ptr<const engine::SpriteLayerSnapshot> GamepadOverlay::BuildSnapshot(uint64_t timestamp, bool preview) {

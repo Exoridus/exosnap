@@ -102,20 +102,6 @@ QImage RasterizeElement(QSvgRenderer& renderer, const QString& id, const QRectF&
     return image;
 }
 
-engine::SpriteContentRect Placed(engine::SpriteContentRect local, engine::SpriteContentRect placement) {
-    return {placement.x + local.x * placement.w, placement.y + local.y * placement.h, local.w * placement.w,
-            local.h * placement.h};
-}
-
-void MoveStick(engine::SpriteContentRect& bounds, float x, float y, const GamepadSpritePart& part) {
-    const float length = std::hypot(x, y);
-    if (length <= 0.08F)
-        return;
-    const float travel = std::min(1.0F, (length - 0.08F) / 0.92F);
-    bounds.x += x / length * travel * part.travel_x;
-    bounds.y -= y / length * travel * part.travel_y;
-}
-
 } // namespace
 
 std::shared_ptr<const GamepadSpriteSet> RasterizeGamepad(const QString& path, int width, bool, bool, QString& error) {
@@ -235,61 +221,10 @@ std::shared_ptr<const GamepadSpriteSet> RasterizeGamepad(const QString& path, in
 std::shared_ptr<const engine::SpriteLayerSnapshot> GamepadLayer(const GamepadSpriteSet& sprites,
                                                                 const gamepad::GamepadState& input,
                                                                 engine::SpriteContentRect placement, float opacity) {
-    auto state = gamepad::Normalized(input);
-    const auto left = gamepad::ReadControl(state, gamepad::Control::LeftStick);
-    const auto right = gamepad::ReadControl(state, gamepad::Control::RightStick);
-    state.left_x = left.x;
-    state.left_y = left.y;
-    state.right_x = right.x;
-    state.right_y = right.y;
-    state.left_trigger = gamepad::ReadControl(state, gamepad::Control::LeftTrigger).x;
-    state.right_trigger = gamepad::ReadControl(state, gamepad::Control::RightTrigger).x;
     auto layer = std::make_shared<engine::SpriteLayerSnapshot>();
-    layer->atlas = sprites.atlas;
-    layer->quads.reserve(sprites.parts.size() + 2);
-    for (const auto& part : sprites.parts) {
-        auto bounds = part.bounds;
-        if (part.motion == PadMotion::LeftStick)
-            MoveStick(bounds, state.left_x, state.left_y, part);
-        if (part.motion == PadMotion::RightStick)
-            MoveStick(bounds, state.right_x, state.right_y, part);
-        const auto control = part.motion == PadMotion::None ? part.control : part.click_control;
-        const bool pressed = part.canonical
-                                 ? gamepad::ReadControl(state, control).status == gamepad::ControlStatus::Active
-                                 : (part.button & state.buttons) != 0 ||
-                                       (part.auxiliary == PadAuxiliary::Home && state.home.value_or(false)) ||
-                                       (part.auxiliary == PadAuxiliary::Share && state.share.value_or(false)) ||
-                                       (part.auxiliary == PadAuxiliary::Touchpad && state.touchpad.value_or(false));
-        layer->quads.push_back({pressed ? part.pressed : part.idle, Placed(bounds, placement), opacity});
-        const float trigger = part.motion == PadMotion::LeftTrigger    ? state.left_trigger
-                              : part.motion == PadMotion::RightTrigger ? state.right_trigger
-                                                                       : 0;
-        if (trigger > 0) {
-            auto source = part.pressed;
-            const int fill = static_cast<int>(std::round(source.h * trigger));
-            if (fill <= 0)
-                continue;
-            const float fraction = static_cast<float>(source.h - fill) / source.h;
-            source.y += source.h - fill;
-            source.h = fill;
-            bounds.y += bounds.h * fraction;
-            bounds.h *= 1 - fraction;
-            layer->quads.push_back({source, Placed(bounds, placement), opacity});
-        }
-    }
-    if (!layer->quads.empty()) {
-        size_t index = 0;
-        for (const auto& part : sprites.parts) {
-            if (part.knockout.w <= 0 || index == layer->quads.front().masks.size())
-                continue;
-            auto bounds = part.knockout_bounds;
-            if (part.motion == PadMotion::LeftStick)
-                MoveStick(bounds, state.left_x, state.left_y, part);
-            if (part.motion == PadMotion::RightStick)
-                MoveStick(bounds, state.right_x, state.right_y, part);
-            layer->quads.front().masks[index++] = {part.knockout, Placed(bounds, placement)};
-        }
-    }
+    if (!engine::PrepareGamepadLayer(sprites, *layer).succeeded())
+        return nullptr;
+    engine::FillGamepadLayer(sprites, input, placement, opacity, *layer);
     return layer;
 }
 

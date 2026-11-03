@@ -42,6 +42,8 @@ if(NOT EXISTS "${_nvenc_header}")
     )
 
     target_include_directories(exosnap_engine PUBLIC include)
+    target_sources(exosnap_engine PRIVATE src/visual_scene_runtime.cpp src/gamepad_frame_sampler.cpp)
+    target_link_libraries(exosnap_engine PUBLIC exosnap::gamepad)
 
     set_target_properties(exosnap_engine PROPERTIES
         POSITION_INDEPENDENT_CODE ON
@@ -287,6 +289,8 @@ endif()
 # ---------------------------------------------------------------------------
 
 add_library(exosnap_engine STATIC
+    src/visual_scene_runtime.cpp
+    src/gamepad_frame_sampler.cpp
     src/version.cpp
     src/logging/logging.cpp
 
@@ -459,6 +463,7 @@ set_target_properties(exosnap_engine PROPERTIES
 )
 
 target_link_libraries(exosnap_engine
+    PUBLIC exosnap::gamepad
     PRIVATE
         spdlog::spdlog
         nlohmann_json::nlohmann_json
@@ -2027,3 +2032,13 @@ exosnap_add_gtest(
     LIBRARIES exosnap_engine FFmpeg::mux
 )
 target_include_directories(test_recording_clip PRIVATE src)
+
+exosnap_add_gtest(
+    NAME visual_runtime_tests
+    TEST_PREFIX visual.runtime.
+    SOURCES tests/test_visual_scene_runtime.cpp tests/test_gamepad_frame_sampler.cpp
+        src/visual_scene_runtime.cpp src/gamepad_frame_sampler.cpp
+    LIBRARIES exosnap::gamepad
+)
+target_include_directories(visual_runtime_tests PRIVATE include src)
+target_compile_definitions(visual_runtime_tests PRIVATE NOMINMAX)

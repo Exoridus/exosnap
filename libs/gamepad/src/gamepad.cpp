@@ -196,6 +196,21 @@ void ReadingRing::Push(const GamepadReading& reading) {
 
 std::optional<GamepadReading> ReadingRing::StateAt(uint64_t capture_100ns) const {
     const std::scoped_lock lock(mutex_);
+    return StateAtLocked(capture_100ns);
+}
+
+HistoryReadResult ReadingRing::TryStateAt(uint64_t capture_100ns, GamepadReading& result) const noexcept {
+    const std::unique_lock lock(mutex_, std::try_to_lock);
+    if (!lock.owns_lock())
+        return HistoryReadResult::Busy;
+    const auto reading = StateAtLocked(capture_100ns);
+    if (!reading)
+        return HistoryReadResult::Empty;
+    result = *reading;
+    return HistoryReadResult::Found;
+}
+
+std::optional<GamepadReading> ReadingRing::StateAtLocked(uint64_t capture_100ns) const noexcept {
     const GamepadReading* best = nullptr;
     // Oldest to newest in push order, so an equal timestamp resolves to the later push.
     const std::size_t oldest = (next_ + slots_.size() - count_) % slots_.size();
@@ -214,7 +229,11 @@ std::optional<GamepadReading> ReadingRing::StateAt(uint64_t capture_100ns) const
 
 void DeviceHistory::Push(GamepadReading reading) {
     const std::scoped_lock lock(mutex_);
+    const auto selected_before = manual_ ? manual_ : automatic_;
     auto& entry = devices_[reading.device.id];
+    const bool selected_connection_changed = selected_before == reading.device.id &&
+                                             reading.capture_100ns >= entry.latest_100ns &&
+                                             entry.connected != reading.connected;
     if (!reading.connected) {
         const auto previous = entry.history.StateAt(reading.capture_100ns);
         reading.state = {};
@@ -246,11 +265,50 @@ void DeviceHistory::Push(GamepadReading reading) {
             automatic_engaged_ = active;
         }
     }
+    if (selected_before != (manual_ ? manual_ : automatic_) || selected_connection_changed)
+        AdvanceSelectionGeneration();
 }
 
 void DeviceHistory::Select(std::optional<DeviceId> device) {
     const std::scoped_lock lock(mutex_);
+    const auto previous = manual_ ? manual_ : automatic_;
     manual_ = device;
+    if (previous != (manual_ ? manual_ : automatic_))
+        AdvanceSelectionGeneration();
+}
+
+void DeviceHistory::AdvanceSelectionGeneration() noexcept {
+    const auto generation = selection_generation_.load(std::memory_order_relaxed);
+    if (generation != 0)
+        selection_generation_.store(generation == UINT64_MAX ? 0 : generation + 1, std::memory_order_release);
+}
+
+uint64_t DeviceHistory::SelectionGeneration() const noexcept {
+    return selection_generation_.load(std::memory_order_acquire);
+}
+
+HistoryReadResult DeviceHistory::TryStateAt(uint64_t capture_100ns, GamepadReading& result) const noexcept {
+    const std::unique_lock lock(mutex_, std::try_to_lock);
+    if (!lock.owns_lock())
+        return HistoryReadResult::Busy;
+    if (SelectionGeneration() == 0)
+        return HistoryReadResult::Empty;
+    const auto selected = manual_ ? manual_ : automatic_;
+    if (!selected)
+        return HistoryReadResult::Empty;
+    const auto found = devices_.find(*selected);
+    return found == devices_.end() ? HistoryReadResult::Empty : found->second.history.TryStateAt(capture_100ns, result);
+}
+
+HistoryReadView::HistoryReadView(std::shared_ptr<const DeviceHistory> history) noexcept : history_(std::move(history)) {
+}
+
+HistoryReadResult HistoryReadView::TryStateAt(uint64_t capture_100ns, GamepadReading& reading) const noexcept {
+    return history_ ? history_->TryStateAt(capture_100ns, reading) : HistoryReadResult::Empty;
+}
+
+uint64_t HistoryReadView::SelectionGeneration() const noexcept {
+    return history_ ? history_->SelectionGeneration() : 0;
 }
 
 std::optional<GamepadReading> DeviceHistory::StateFor(const DeviceId& device, uint64_t timestamp) const {

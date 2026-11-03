@@ -1,35 +1,16 @@
 #pragma once
 
-#include <exosnap/engine/overlay_sprites.h>
+#include <exosnap/engine/gamepad_sprite_data.h>
 #include <gamepad/gamepad.h>
 
 #include <QString>
 
 namespace exosnap::quick {
 
-enum class PadMotion { None, LeftStick, RightStick, LeftTrigger, RightTrigger };
-enum class PadAuxiliary { None, Home, Share, Touchpad };
-
-struct GamepadSpritePart {
-    engine::SpriteAtlasRect idle;
-    engine::SpriteAtlasRect pressed;
-    engine::SpriteContentRect bounds;
-    uint32_t button = 0;
-    PadMotion motion = PadMotion::None;
-    PadAuxiliary auxiliary = PadAuxiliary::None;
-    float travel_x = 8.0F / 480.0F;
-    float travel_y = 8.0F / 320.0F;
-    gamepad::Control control = gamepad::Control::Count;
-    gamepad::Control click_control = gamepad::Control::Count;
-    bool canonical = false;
-    engine::SpriteAtlasRect knockout;
-    engine::SpriteContentRect knockout_bounds;
-};
-
-struct GamepadSpriteSet {
-    std::shared_ptr<const engine::SpriteAtlas> atlas;
-    std::vector<GamepadSpritePart> parts;
-};
+using engine::GamepadSpritePart;
+using engine::GamepadSpriteSet;
+using engine::PadAuxiliary;
+using engine::PadMotion;
 
 /// Rasterizes immutable artwork at recording resolution. Call only when the
 /// artwork, style or settled widget size changes, never from the video thread.

@@ -49,7 +49,7 @@ HRESULT AcquireRuntime(ComPtr<IGameInput>& input) {
 struct GameInputSource::Impl {
     ComPtr<IGameInput> input;
     ClockAnchor anchor;
-    DeviceHistory history;
+    std::shared_ptr<DeviceHistory> history = std::make_shared<DeviceHistory>();
     GameInputCallbackToken reading_token = 0;
     GameInputCallbackToken device_token = 0;
 
@@ -77,7 +77,7 @@ struct GameInputSource::Impl {
         GamepadReading out;
         out.capture_100ns = GameInputToCapture100ns(reading->GetTimestamp(), anchor);
         out.device = IdentityOf(device.Get());
-        const auto previous = history.StateFor(out.device.id, out.capture_100ns);
+        const auto previous = history->StateFor(out.device.id, out.capture_100ns);
         if (previous && previous->connected)
             out.state = previous->state;
         GameInputGamepadState raw{};
@@ -132,7 +132,7 @@ struct GameInputSource::Impl {
             out.state.controls[static_cast<size_t>(Control::Misc1)] = {};
         if (out.device.layout != LayoutKind::DualSense)
             out.state.controls[static_cast<size_t>(Control::Touchpad)] = {};
-        history.Push(out);
+        history->Push(out);
     }
 
     void PushCurrent(IGameInputDevice* device) {
@@ -158,7 +158,7 @@ struct GameInputSource::Impl {
             out.capture_100ns = GameInputToCapture100ns(self->input->GetCurrentTimestamp(), self->anchor);
             out.connected = false;
             out.device = IdentityOf(device);
-            self->history.Push(out);
+            self->history->Push(out);
         }
     }
 
@@ -228,15 +228,19 @@ GameInputSource::GameInputSource(std::unique_ptr<Impl> impl) : impl_(std::move(i
 GameInputSource::~GameInputSource() = default;
 
 std::optional<GamepadReading> GameInputSource::StateAt(uint64_t capture_100ns) const {
-    return impl_->history.StateAt(capture_100ns);
+    return impl_->history->StateAt(capture_100ns);
+}
+
+HistoryReadView GameInputSource::HistoryView() const noexcept {
+    return HistoryReadView(impl_->history);
 }
 
 void GameInputSource::SelectDevice(std::optional<DeviceId> device) {
-    impl_->history.Select(device);
+    impl_->history->Select(device);
 }
 
 std::vector<DeviceIdentity> GameInputSource::Devices() const {
-    return impl_->history.Devices();
+    return impl_->history->Devices();
 }
 
 } // namespace exosnap::gamepad
