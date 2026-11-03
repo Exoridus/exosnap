@@ -216,32 +216,58 @@ void SettingsAdapter::requestSettingsFocus(FocusTarget target) {
 // ---------------------------------------------------------------------------
 
 std::optional<std::pair<engine::VisualSourceId, engine::SceneItemId>>
-SettingsAdapter::editableVisualTarget(const QString& source, const QString& item, const QString& edit_revision) const {
-    if (!visual_registry_ || config_.visual_read_only)
+SettingsAdapter::editableVisualTarget(const QString& source, const QString& item, const QString& edit_revision,
+                                      bool record) const {
+    const auto& config = visualConfig(record);
+    if (!visual_registry_ || config.visual_read_only)
+        return std::nullopt;
+    if (record != edit_revision.startsWith(QStringLiteral("record:")))
         return std::nullopt;
     const auto id = engine::FromUuid<engine::VisualSourceId>(source.toStdString());
     const auto item_id = engine::FromUuid<engine::SceneItemId>(item.toStdString());
     bool ok = false;
-    const auto revision = edit_revision.toULongLong(&ok);
-    if (!id || !item_id || !ok || revision == 0 || revision != visual_edit_revision_)
+    const auto revision = (record ? edit_revision.mid(7) : edit_revision).toULongLong(&ok);
+    if (!id || !item_id || !ok || revision == 0 || revision != (record ? record_edit_revision_ : visual_edit_revision_))
         return std::nullopt;
-    const auto address = *id == webcam_address_.source ? webcam_address_ : gamepad_address_;
-    const auto selected_item = *id == webcam_address_.source ? webcam_item_ : gamepad_item_;
+    const auto address =
+        record ? record_gamepad_address_ : (*id == webcam_address_.source ? webcam_address_ : gamepad_address_);
+    const auto selected_item =
+        record ? record_gamepad_item_ : (*id == webcam_address_.source ? webcam_item_ : gamepad_item_);
     if (address.source != *id || *item_id != selected_item)
         return std::nullopt;
-    const auto row = std::find_if(config_.visual_scene.sources.begin(), config_.visual_scene.sources.end(),
+    const auto row = std::find_if(config.visual_scene.sources.begin(), config.visual_scene.sources.end(),
                                   [&](const auto& entry) { return entry.id == *id; });
-    const auto placement = std::find_if(config_.visual_scene.items.begin(), config_.visual_scene.items.end(),
+    const auto placement = std::find_if(config.visual_scene.items.begin(), config.visual_scene.items.end(),
                                         [&](const auto& entry) { return entry.id == *item_id && entry.source == *id; });
-    if (row == config_.visual_scene.sources.end() || placement == config_.visual_scene.items.end())
+    if (row == config.visual_scene.sources.end() || placement == config.visual_scene.items.end())
         return std::nullopt;
     const auto* type = visual_registry_->FindVisualSource(row->type_id);
-    if (!type || row->settings_version != type->settings_version)
+    if (!type || row->settings_version != type->settings_version ||
+        (record && row->type_id != "org.exosnap.gamepad/controller"))
         return std::nullopt;
     return std::pair{*id, *item_id};
 }
 
-bool SettingsAdapter::commitVisualScene(VisualSceneConfig scene, bool live) {
+bool SettingsAdapter::commitVisualScene(VisualSceneConfig scene, bool live, bool record) {
+    if (record && active_config_) {
+        if (!visual_registry_ || active_config_->visual_read_only || !live)
+            return false;
+        auto validated = ValidateVisualScene(scene, *visual_registry_);
+        if (!validated.succeeded())
+            return false;
+        auto candidate = *active_config_;
+        candidate.visual_scene = std::move(*validated.value());
+        if (!NormalizedConfigEquals(*active_config_, candidate)) {
+            *active_config_ = std::move(candidate);
+            if (!editing_next_recording_) {
+                advanceVisualEditRevision();
+                config_ = *active_config_;
+            }
+            emit configChanged();
+            emit activeVisualSceneEdited();
+        }
+        return true;
+    }
     if (!visual_registry_ || config_.visual_read_only || (controlsLocked() && (!live || !active_config_)))
         return false;
     auto validated = ValidateVisualScene(scene, *visual_registry_);
@@ -266,57 +292,108 @@ bool SettingsAdapter::commitVisualScene(VisualSceneConfig scene, bool live) {
     return true;
 }
 
-bool SettingsAdapter::setVisualEnabled(const QString& source, const QString& item, const QString& edit_revision,
-                                       bool enabled) {
-    const auto target = editableVisualTarget(source, item, edit_revision);
+void SettingsAdapter::setRecordGamepadTarget(engine::VisualAddress address, engine::SceneItemId item) {
+    if (record_gamepad_address_ == address && record_gamepad_item_ == item)
+        return;
+    advanceRecordEditRevision();
+    record_gamepad_address_ = address;
+    record_gamepad_item_ = item;
+    emit configChanged();
+}
+
+bool SettingsAdapter::setRecordGamepadOutputVisible(const QString& source, const QString& item, const QString& token,
+                                                    bool visible) {
+    const auto target = editableVisualTarget(source, item, token, true);
     if (!target)
         return false;
-    auto scene = config_.visual_scene;
+    const auto& current = visualConfig(true).visual_scene;
+    auto desired = ProjectSceneGamepad(current, target->first, target->second);
+    if (!desired.succeeded())
+        return false;
+    desired.value()->output_visible = visible;
+    auto edited = EditSceneGamepad(current, target->first, target->second, *desired.value(), *visual_registry_);
+    return edited.succeeded() && commitVisualScene(std::move(*edited.value()), true, true);
+}
+
+bool SettingsAdapter::setRecordGamepadPlacement(const QString& source, const QString& item, const QString& token,
+                                                QRectF placement) {
+    const auto target = editableVisualTarget(source, item, token, true);
+    if (!target || !std::isfinite(placement.x()) || !std::isfinite(placement.y()) ||
+        !std::isfinite(placement.width()) || !std::isfinite(placement.height()) || placement.x() < 0 ||
+        placement.y() < 0 || placement.width() <= 0 || placement.height() <= 0 || placement.right() > 1 ||
+        placement.bottom() > 1)
+        return false;
+    const auto& current = visualConfig(true).visual_scene;
+    auto desired = ProjectSceneGamepad(current, target->first, target->second);
+    if (!desired.succeeded())
+        return false;
+    desired.value()->x = static_cast<float>(placement.x());
+    desired.value()->y = static_cast<float>(placement.y());
+    desired.value()->width = static_cast<float>(placement.width());
+    desired.value()->height = static_cast<float>(placement.height());
+    auto edited = EditSceneGamepad(current, target->first, target->second, *desired.value(), *visual_registry_);
+    return edited.succeeded() && commitVisualScene(std::move(*edited.value()), true, true);
+}
+
+bool SettingsAdapter::setVisualEnabled(const QString& source, const QString& item, const QString& edit_revision,
+                                       bool enabled, bool record) {
+    const auto& config = visualConfig(record);
+    const auto target = editableVisualTarget(source, item, edit_revision, record);
+    if (!target)
+        return false;
+    auto scene = config.visual_scene;
     const auto row = std::find_if(scene.sources.begin(), scene.sources.end(),
                                   [&](const auto& entry) { return entry.id == target->first; });
     row->enabled = enabled;
-    return commitVisualScene(std::move(scene), true);
+    return commitVisualScene(std::move(scene), true, record);
 }
 
 bool SettingsAdapter::setVisualOpacity(const QString& source, const QString& item, const QString& edit_revision,
-                                       double opacity) {
-    const auto target = editableVisualTarget(source, item, edit_revision);
+                                       double opacity, bool record) {
+    const auto& config = visualConfig(record);
+    const auto target = editableVisualTarget(source, item, edit_revision, record);
     if (!target || !std::isfinite(opacity) || opacity < 0 || opacity > 1)
         return false;
-    auto scene = config_.visual_scene;
+    auto scene = config.visual_scene;
     const auto row = std::find_if(scene.items.begin(), scene.items.end(),
                                   [&](const auto& entry) { return entry.id == target->second; });
     row->properties.opacity = static_cast<float>(opacity);
-    return commitVisualScene(std::move(scene), true);
+    return commitVisualScene(std::move(scene), true, record);
 }
 
-QVariantMap SettingsAdapter::visualSourceState(const QString& source_id) const {
+QVariantMap SettingsAdapter::visualSourceState(const QString& source_id, bool record) const {
+    const auto& config = visualConfig(record);
     const auto id = engine::FromUuid<engine::VisualSourceId>(source_id.toStdString());
     if (!id || !visual_registry_)
         return {};
-    const auto address = *id == webcam_address_.source ? webcam_address_ : gamepad_address_;
-    const auto selected_item = *id == webcam_address_.source ? webcam_item_ : gamepad_item_;
-    const auto source = std::find_if(config_.visual_scene.sources.begin(), config_.visual_scene.sources.end(),
+    const auto address =
+        record ? record_gamepad_address_ : (*id == webcam_address_.source ? webcam_address_ : gamepad_address_);
+    const auto selected_item =
+        record ? record_gamepad_item_ : (*id == webcam_address_.source ? webcam_item_ : gamepad_item_);
+    const auto source = std::find_if(config.visual_scene.sources.begin(), config.visual_scene.sources.end(),
                                      [&](const auto& entry) { return entry.id == *id; });
-    const auto item = std::find_if(config_.visual_scene.items.begin(), config_.visual_scene.items.end(),
+    const auto item = std::find_if(config.visual_scene.items.begin(), config.visual_scene.items.end(),
                                    [&](const auto& entry) { return entry.id == selected_item && entry.source == *id; });
-    if (address.source != *id || source == config_.visual_scene.sources.end() ||
-        item == config_.visual_scene.items.end())
+    if (address.source != *id || source == config.visual_scene.sources.end() || item == config.visual_scene.items.end())
         return {};
     const auto* type = visual_registry_->FindVisualSource(source->type_id);
-    const bool editable = !config_.visual_read_only && type && type->settings_version == source->settings_version &&
-                          visual_edit_revision_ != 0;
+    const bool editable = !config.visual_read_only && type && type->settings_version == source->settings_version &&
+                          (record ? record_edit_revision_ : visual_edit_revision_) != 0;
     return {{QStringLiteral("sourceId"), source_id},
             {QStringLiteral("itemId"), QString::fromStdString(engine::ToUuid(selected_item))},
             {QStringLiteral("runtime"), QString::number(address.runtime.value)},
-            {QStringLiteral("editRevision"), QString::number(visual_edit_revision_)},
-            {QStringLiteral("scope"), controlsLocked() ? QStringLiteral("active") : QStringLiteral("editable")},
+            {QStringLiteral("editRevision"), visualEditToken(record)},
+            {QStringLiteral("scope"),
+             (record ? recordingActive() : controlsLocked()) ? QStringLiteral("active") : QStringLiteral("editable")},
             {QStringLiteral("enabled"), source->enabled},
             {QStringLiteral("editable"), editable},
             {QStringLiteral("opacity"), item->properties.opacity},
+            {QStringLiteral("placement"), QRectF(item->properties.placement.x, item->properties.placement.y,
+                                                 item->properties.placement.w, item->properties.placement.h)},
             {QStringLiteral("outputVisible"), item->properties.output_visible}};
 }
 void SettingsAdapter::setVisualRegistry(const CapabilityRegistry* registry) {
+    advanceRecordEditRevision();
     advanceVisualEditRevision();
     visual_registry_ = registry && registry->IsSealed() ? registry : nullptr;
     emit configChanged();
@@ -359,23 +436,25 @@ void SettingsAdapter::commitWebcamEdit(const WebcamSettings& settings) {
     applyConfigEdit();
 }
 
-QVariantList SettingsAdapter::visualSettingsRows(const QString& source_id) const {
+QVariantList SettingsAdapter::visualSettingsRows(const QString& source_id, bool record) const {
+    const auto& config = visualConfig(record);
     QVariantList rows;
     if (!visual_registry_)
         return rows;
     const auto id = engine::FromUuid<engine::VisualSourceId>(source_id.toStdString());
     if (!id)
         return rows;
-    const auto source = std::find_if(config_.visual_scene.sources.begin(), config_.visual_scene.sources.end(),
+    const auto source = std::find_if(config.visual_scene.sources.begin(), config.visual_scene.sources.end(),
                                      [&](const auto& row) { return row.id == *id; });
-    if (source == config_.visual_scene.sources.end())
+    if (source == config.visual_scene.sources.end())
         return rows;
     const auto* type = visual_registry_->FindVisualSource(source->type_id);
     if (!type || type->settings_version != source->settings_version)
         return rows;
-    const auto address = *id == webcam_address_.source ? webcam_address_ : gamepad_address_;
-    const auto item_id = *id == webcam_address_.source ? webcam_item_ : gamepad_item_;
-    if (address.source != *id || visual_edit_revision_ == 0)
+    const auto address =
+        record ? record_gamepad_address_ : (*id == webcam_address_.source ? webcam_address_ : gamepad_address_);
+    const auto item_id = record ? record_gamepad_item_ : (*id == webcam_address_.source ? webcam_item_ : gamepad_item_);
+    if (address.source != *id || (record ? record_edit_revision_ : visual_edit_revision_) == 0)
         return rows;
     for (const auto& field : type->settings.fields) {
         const auto action = std::find_if(type->actions.begin(), type->actions.end(), [&](const auto& entry) {
@@ -405,8 +484,9 @@ QVariantList SettingsAdapter::visualSettingsRows(const QString& source_id) const
             {QStringLiteral("sourceId"), source_id},
             {QStringLiteral("itemId"), QString::fromStdString(engine::ToUuid(item_id))},
             {QStringLiteral("runtime"), QString::number(address.runtime.value)},
-            {QStringLiteral("editRevision"), QString::number(visual_edit_revision_)},
-            {QStringLiteral("scope"), controlsLocked() ? QStringLiteral("active") : QStringLiteral("editable")},
+            {QStringLiteral("editRevision"), visualEditToken(record)},
+            {QStringLiteral("scope"),
+             (record ? recordingActive() : controlsLocked()) ? QStringLiteral("active") : QStringLiteral("editable")},
             {QStringLiteral("kind"), QStringLiteral("select")},
             {QStringLiteral("path"), QString::fromStdString(field.path)},
             {QStringLiteral("label"),
@@ -414,8 +494,8 @@ QVariantList SettingsAdapter::visualSettingsRows(const QString& source_id) const
             {QStringLiteral("action"), QString::fromStdString(action->id)},
             {QStringLiteral("value"), QString::fromStdString(value.value_or(fallback ? *fallback : std::string{}))},
             {QStringLiteral("choices"), choices},
-            {QStringLiteral("enabled"),
-             !config_.visual_read_only && (!controlsLocked() || field.change == ChangePolicy::Live)}});
+            {QStringLiteral("enabled"), !config.visual_read_only && (!(record ? recordingActive() : controlsLocked()) ||
+                                                                     field.change == ChangePolicy::Live)}});
     }
     for (const auto& action : type->actions) {
         if (action.operation == ActionOperation::SelectProperty)
@@ -428,18 +508,19 @@ QVariantList SettingsAdapter::visualSettingsRows(const QString& source_id) const
                         {QStringLiteral("label"),
                          QCoreApplication::translate(action.label.context.c_str(), action.label.source_text.c_str())},
                         {QStringLiteral("action"), QString::fromStdString(action.id)},
-                        {QStringLiteral("enabled"), address.runtime.value != 0}});
+                        {QStringLiteral("enabled"), !config.visual_read_only && address.runtime.value != 0}});
     }
     return rows;
 }
 
 bool SettingsAdapter::selectVisualSetting(const QString& source_id, const QString& item_id,
                                           const QString& edit_revision, const QString& action_id,
-                                          const QString& choice_id) {
-    const auto target = editableVisualTarget(source_id, item_id, edit_revision);
+                                          const QString& choice_id, bool record) {
+    const auto& config = visualConfig(record);
+    const auto target = editableVisualTarget(source_id, item_id, edit_revision, record);
     if (!target)
         return false;
-    const auto source = std::find_if(config_.visual_scene.sources.begin(), config_.visual_scene.sources.end(),
+    const auto source = std::find_if(config.visual_scene.sources.begin(), config.visual_scene.sources.end(),
                                      [&](const auto& row) { return row.id == target->first; });
     const auto* type = visual_registry_->FindVisualSource(source->type_id);
     const auto action = std::find_if(type->actions.begin(), type->actions.end(), [&](const auto& row) {
@@ -450,7 +531,7 @@ bool SettingsAdapter::selectVisualSetting(const QString& source_id, const QStrin
     const auto field = std::find_if(type->settings.fields.begin(), type->settings.fields.end(),
                                     [&](const auto& row) { return row.path == action->property_path; });
     if (field == type->settings.fields.end() || field->control != ControlKind::Select ||
-        (controlsLocked() && field->change != ChangePolicy::Live))
+        ((record ? recordingActive() : controlsLocked()) && field->change != ChangePolicy::Live))
         return false;
     const auto options = std::find_if(type->options.begin(), type->options.end(),
                                       [&](const auto& row) { return row.id == action->options_id; });
@@ -470,25 +551,26 @@ bool SettingsAdapter::selectVisualSetting(const QString& source_id, const QStrin
     const auto current = source->settings[field->path].value<std::string>();
     const auto* fallback = std::get_if<std::string>(&field->default_value);
     if (current.value_or(fallback ? *fallback : std::string{}) == choice_id.toStdString())
-        return ValidateVisualScene(config_.visual_scene, *visual_registry_).succeeded();
+        return ValidateVisualScene(config.visual_scene, *visual_registry_).succeeded();
     if (source->type_id == "org.exosnap.webcam/camera" && action->property_path == "device_id") {
         auto desired = webcamSettings();
         if (desired.device_id != choice_id.toStdString()) {
             desired.device_id = choice_id.toStdString();
             desired.controls.clear();
         }
-        auto scene = EditSceneWebcam(config_.visual_scene, target->first, target->second, desired, *visual_registry_);
+        auto scene = EditSceneWebcam(config.visual_scene, target->first, target->second, desired, *visual_registry_);
         return scene.succeeded() && commitVisualScene(std::move(*scene.value()));
     }
-    auto scene = config_.visual_scene;
+    auto scene = config.visual_scene;
     auto& edited = *std::find_if(scene.sources.begin(), scene.sources.end(),
                                  [&](const auto& row) { return row.id == target->first; });
     edited.settings.insert_or_assign(action->property_path, choice_id.toStdString());
-    return commitVisualScene(std::move(scene), field->change == ChangePolicy::Live);
+    return commitVisualScene(std::move(scene), field->change == ChangePolicy::Live, record);
 }
 bool SettingsAdapter::dispatchVisualAction(const QString& source_id, const QString& item_id, const QString& runtime,
-                                           const QString& action_id, const QString& choice) {
-    if (!visual_registry_)
+                                           const QString& action_id, bool record, const QString& choice) {
+    const auto& config = visualConfig(record);
+    if (!visual_registry_ || config.visual_read_only)
         return false;
     const auto id = engine::FromUuid<engine::VisualSourceId>(source_id.toStdString());
     const auto item = engine::FromUuid<engine::SceneItemId>(item_id.toStdString());
@@ -496,18 +578,20 @@ bool SettingsAdapter::dispatchVisualAction(const QString& source_id, const QStri
     const auto generation = runtime.toULongLong(&runtime_ok);
     if (!id || !item || !runtime_ok)
         return false;
-    const auto address = *id == webcam_address_.source ? webcam_address_ : gamepad_address_;
-    const auto selected_item = *id == webcam_address_.source ? webcam_item_ : gamepad_item_;
+    const auto address =
+        record ? record_gamepad_address_ : (*id == webcam_address_.source ? webcam_address_ : gamepad_address_);
+    const auto selected_item =
+        record ? record_gamepad_item_ : (*id == webcam_address_.source ? webcam_item_ : gamepad_item_);
     if (address.source != *id || selected_item != *item)
         return false;
-    const auto source = std::find_if(config_.visual_scene.sources.begin(), config_.visual_scene.sources.end(),
+    const auto source = std::find_if(config.visual_scene.sources.begin(), config.visual_scene.sources.end(),
                                      [&](const auto& row) { return row.id == *id; });
-    const auto scene_item = std::find_if(config_.visual_scene.items.begin(), config_.visual_scene.items.end(),
+    const auto scene_item = std::find_if(config.visual_scene.items.begin(), config.visual_scene.items.end(),
                                          [&](const auto& row) { return row.id == *item && row.source == *id; });
-    if (source == config_.visual_scene.sources.end() || scene_item == config_.visual_scene.items.end())
+    if (source == config.visual_scene.sources.end() || scene_item == config.visual_scene.items.end())
         return false;
     const auto* type = visual_registry_->FindVisualSource(source->type_id);
-    if (!type)
+    if (!type || source->settings_version != type->settings_version)
         return false;
     const auto action = std::find_if(type->actions.begin(), type->actions.end(),
                                      [&](const auto& row) { return row.id == action_id.toStdString(); });
@@ -527,12 +611,14 @@ bool SettingsAdapter::dispatchVisualAction(const QString& source_id, const QStri
         return true;
     }
     if (action->operation == ActionOperation::Retry) {
-        emit visualRetryRequested(invocation);
+        emit visualRetryRequested(invocation, record);
         return true;
     }
-    return selectVisualSetting(source_id, item_id, QString::number(visual_edit_revision_), action_id, choice);
+    return selectVisualSetting(source_id, item_id, visualEditToken(record), action_id, choice, record);
 }
 void SettingsAdapter::setConfig(RecordingPresetConfig config) {
+    if (!active_config_ && !NormalizedConfigEquals(config_, config))
+        advanceRecordEditRevision();
     advanceVisualEditRevision();
     next_config_ = SanitizePresetConfig(std::move(config));
     config_ = controlsLocked() && active_config_ ? *active_config_ : next_config_;
@@ -690,6 +776,7 @@ void SettingsAdapter::setControlsLocked(bool locked) {
     if (controls_locked_ == locked) {
         return;
     }
+    advanceRecordEditRevision();
     webcam_address_.runtime = {};
     gamepad_address_.runtime = {};
     advanceVisualEditRevision();

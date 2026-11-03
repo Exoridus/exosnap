@@ -29,11 +29,17 @@ TestCase {
         target: recordDriver.settings
         signalName: "visualRetryRequested"
     }
+    SignalSpy {
+        id: activeEditSpy
+        target: recordDriver.settings
+        signalName: "activeVisualSceneEdited"
+    }
 
     function init() {
         recordDriver.resetVisualSettings();
         editSpy.clear();
         retrySpy.clear();
+        activeEditSpy.clear();
     }
     function cleanup() {
         recordDriver.resetVisualSettings();
@@ -136,5 +142,42 @@ TestCase {
         recordDriver.resetVisualSettings();
         verify(!recordDriver.settings.dispatchVisualAction(row.sourceId, row.itemId, row.runtime, row.action));
         compare(retrySpy.count, 1);
+    }
+    function test_record_form_edits_active_gamepad_with_next_settings_open() {
+        recordDriver.setRecordingContext(true);
+        recordDriver.settings.editNextRecording();
+        const next = createForm(true);
+        const record = createTemporaryObject(formComponent, testCase, {
+            sourceId: recordDriver.settings.recordGamepadSourceId,
+            recordScope: true
+        });
+        verify(!!record);
+        waitForRendering(record);
+        compare(record.sourceState.scope, "active");
+        compare(next.sourceState.scope, "editable");
+        const layout = findControl(record, qsTr("Layout"));
+        verify(!!layout);
+        layout.forceActiveFocus();
+        keyClick(Qt.Key_Down);
+        keyClick(Qt.Key_Return);
+        tryCompare(activeEditSpy, "count", 1);
+        compare(editSpy.count, 0);
+        compare(findControl(record, qsTr("Layout")).value, "xbox_elite");
+        compare(findControl(next, qsTr("Layout")).value, "auto");
+        compare(recordDriver.settings.editingNextRecording, true);
+    }
+    function test_record_form_dispatches_runtime_action() {
+        recordDriver.resetVisualSettings(false, true);
+        const form = createTemporaryObject(formComponent, testCase, {
+            sourceId: recordDriver.settings.recordGamepadSourceId,
+            recordScope: true
+        });
+        verify(!!form);
+        waitForRendering(form);
+        const retry = findControl(form, qsTr("Retry"));
+        verify(!!retry);
+        verify(retry.enabled);
+        mouseClick(retry);
+        tryCompare(retrySpy, "count", 1);
     }
 }

@@ -179,6 +179,41 @@ visual_contract = "future.visual"
     EXPECT_TRUE(store.Load().read_only);
 }
 
+TEST_F(VisualPresetStoreCutover, ProtectedDocumentsKeepEveryVisualConfigurationReadOnly) {
+    auto config = MakeDefaultPreset().config;
+    for (auto& source : config.visual_scene.sources)
+        source.enabled = true;
+    const RecordingPreset named{"preset.protected", "Protected", config};
+    ASSERT_TRUE(store.Save({named}, named.id, config));
+    const auto supported = read();
+    for (int discriminator = 0; discriminator < 3; ++discriminator) {
+        SCOPED_TRACE(discriminator);
+        auto document = supported;
+        if (discriminator == 0)
+            document.insert_or_assign("schema_version", kPresetSchemaVersion + 1);
+        else if (discriminator == 1)
+            document.insert_or_assign("visual_contract", "future.visual");
+        else
+            document.insert_or_assign("audio_contract", "future.audio");
+        std::ostringstream text;
+        text << document;
+        write(text.str().c_str());
+        const auto state = store.Load();
+        ASSERT_TRUE(state.read_only);
+        ASSERT_TRUE(state.live);
+        ASSERT_EQ(state.user_presets.size(), 1u);
+        EXPECT_TRUE(state.live->visual_read_only);
+        EXPECT_TRUE(state.user_presets.front().config.visual_read_only);
+        EXPECT_FALSE(state.live->visual_validation_error.empty());
+        EXPECT_FALSE(state.user_presets.front().config.visual_validation_error.empty());
+        EXPECT_TRUE(state.live->visual_scene.sources.front().enabled);
+        EXPECT_TRUE(state.user_presets.front().config.visual_scene.sources.front().enabled);
+        QString error;
+        EXPECT_FALSE(store.Save(state.user_presets, state.selected_id, *state.live, &error));
+        EXPECT_EQ(read(), document);
+    }
+}
+
 TEST_F(VisualPresetStoreCutover, ClearingKnownControlsKeepsUnknownControlsWithoutResurrection) {
     auto config = MakeDefaultPreset().config;
     auto& settings = config.visual_scene.sources.front().settings;

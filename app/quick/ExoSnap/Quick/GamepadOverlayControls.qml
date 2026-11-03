@@ -9,6 +9,7 @@ Item {
     required property GamepadOverlay overlay
     required property SettingsAdapter settings
     property bool showButton: true
+    property bool recordScope: false
     function openOptions(): void { optionsPopup.open(); }
     implicitWidth: openButton.implicitWidth
     implicitHeight: openButton.implicitHeight
@@ -49,13 +50,14 @@ Item {
                     enabled: gamepadSettings.sourceState.editable === true
                     onToggledByUser: value => root.settings.setVisualEnabled(
                         gamepadSettings.sourceState.sourceId, gamepadSettings.sourceState.itemId,
-                        gamepadSettings.sourceState.editRevision, value)
+                        gamepadSettings.sourceState.editRevision, value, root.recordScope)
                 }
             }
             VisualSettingsForm {
                 id: gamepadSettings
                 settings: root.settings
-                sourceId: root.settings.gamepadSourceId
+                sourceId: root.recordScope ? root.settings.recordGamepadSourceId : root.settings.gamepadSourceId
+                recordScope: root.recordScope
                 stacked: true
                 Layout.fillWidth: true
             }
@@ -71,7 +73,7 @@ Item {
                     enabled: gamepadSettings.sourceState.editable === true
                     onMovedByUser: value => root.settings.setVisualOpacity(
                         gamepadSettings.sourceState.sourceId, gamepadSettings.sourceState.itemId,
-                        gamepadSettings.sourceState.editRevision, value)
+                        gamepadSettings.sourceState.editRevision, value, root.recordScope)
                 }
             }
             Label {

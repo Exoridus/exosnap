@@ -12,6 +12,7 @@ Item {
     property bool webcamEnabled: false
     property bool controllerEnabled: false
     property bool controllerAvailable: false
+    property bool controllerEditable: overlayEnabled
     readonly property real controlsBottom: previewChrome.y + previewChrome.height
     property bool metricsVisible: false
     property string dropsText: ""
@@ -69,7 +70,7 @@ Item {
         }
         OverlayMenuItem {
             text: root.controllerEnabled ? qsTr("Controller settings") : qsTr("Add controller")
-            enabled: root.controllerAvailable && root.overlayEnabled
+            enabled: root.controllerAvailable && root.controllerEditable
             glyph: ExoGlyph.Gamepad
             glyphObjectName: "recordOverlayGamepadGlyph"
             onTriggered: root.controllerRequested()
@@ -157,7 +158,7 @@ Item {
             id: addOverlayButton
             objectName: "previewAddOverlayButton"
             text: qsTr("Add overlay")
-            enabled: root.overlayEnabled
+            enabled: root.overlayEnabled || (root.controllerAvailable && root.controllerEditable)
             Layout.preferredWidth: ExoTheme.controlHeightCompact
             Layout.preferredHeight: ExoTheme.controlHeightCompact
             Accessible.name: text

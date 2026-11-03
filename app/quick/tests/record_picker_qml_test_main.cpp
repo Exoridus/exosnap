@@ -109,6 +109,8 @@ class RecordPickerTestDriver final : public QObject {
         settings_.setVisualTargets(
             {scene.sources[0].id, exosnap::engine::VisualRuntimeGeneration{runtime ? 7u : 0u}}, scene.items[0].id,
             {scene.sources[1].id, exosnap::engine::VisualRuntimeGeneration{runtime ? 7u : 0u}}, scene.items[1].id);
+        settings_.setRecordGamepadTarget(
+            {scene.sources[1].id, exosnap::engine::VisualRuntimeGeneration{runtime ? 7u : 0u}}, scene.items[1].id);
     }
     Q_INVOKABLE void resetPickerState() {
         adapter_.setHiddenWindowRules({});

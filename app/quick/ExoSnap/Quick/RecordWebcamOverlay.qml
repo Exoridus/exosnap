@@ -22,6 +22,8 @@ FocusScope {
     property Item stage: parent
 
     signal rectRequested(rect rect)
+    signal gestureStarted()
+    signal gestureFinished()
     signal selectionRequested()
     signal outputVisibilityRequested(bool visible)
     signal removeRequested()
@@ -183,6 +185,7 @@ FocusScope {
         // catches up, without ever losing the grab -- which is
         // what makes it look like lag rather than like a bug.
         onPressed: mouse => {
+            webcamOverlay.gestureStarted()
             webcamOverlay.forceActiveFocus()
             webcamOverlay.selectionRequested()
             pressPoint = webcamDrag.mapToItem(webcamOverlay.stage, mouse.x, mouse.y)
@@ -199,7 +202,11 @@ FocusScope {
                         Math.max(0, Math.min(1 - pressRect.height, pressRect.y + dy)),
                         pressRect.width, pressRect.height)
         }
-        onReleased: webcamOverlay.rectRequested(webcamOverlay.draftRect)
+        onReleased: {
+            webcamOverlay.rectRequested(webcamOverlay.draftRect)
+            webcamOverlay.gestureFinished()
+        }
+        onCanceled: webcamOverlay.gestureFinished()
     }
 
     // Hit areas only; the corner brackets above are what the
@@ -241,6 +248,7 @@ FocusScope {
                 // drag uses them: the grip is anchored to a frame
                 // that moves and grows under it.
                 onPressed: mouse => {
+                    webcamOverlay.gestureStarted()
                     mouse.accepted = true
                     webcamOverlay.forceActiveFocus()
                     webcamOverlay.selectionRequested()
@@ -271,9 +279,13 @@ FocusScope {
                     // Binding that copies the model rect back into
                     // draftRect, which would then send the old size.
                     webcamOverlay.rectRequested(webcamOverlay.draftRect)
+                    webcamOverlay.gestureFinished()
                     webcamOverlay.resizeCorner = -1
                 }
-                onCanceled: webcamOverlay.resizeCorner = -1
+                onCanceled: {
+                    webcamOverlay.resizeCorner = -1
+                    webcamOverlay.gestureFinished()
+                }
             }
         }
     }

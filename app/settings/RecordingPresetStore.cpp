@@ -2002,10 +2002,19 @@ PersistedPresetState RecordingPresetStore::Load() const {
             break;
         }
     }
-    if (protected_document)
+    if (protected_document) {
         state.validation_error =
             backup_error.isEmpty() ? "Unknown preset schema, audio contract or visual contract requires explicit import"
                                    : backup_error.toStdString();
+        const auto protect_visual = [&](RecordingPresetConfig& config) {
+            config.visual_read_only = true;
+            config.visual_validation_error = state.validation_error;
+        };
+        if (state.live)
+            protect_visual(*state.live);
+        for (auto& preset : state.user_presets)
+            protect_visual(preset.config);
+    }
     state.repaired = item_dropped;
     return state;
 }
