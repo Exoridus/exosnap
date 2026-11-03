@@ -106,7 +106,7 @@
       const idle=drawing.querySelector('#'+layer.id);if(!idle)continue;
       if(layer.role==='touch-surface'){touchSurface(layer,idle);continue;}
       const binding=layer.binding;
-      let key=binding?.type==='button'?maskKeys[binding.mask]:binding?.type==='stick'?(binding.clickMask===4096?'l3':'r3'):binding?.type==='axis'?(binding.field==='left_trigger'?'l2':'r2'):binding?.type==='auxiliary'?({home:'home',share:'extra',touchpad:'extra'})[binding.field]:null;
+      let key=binding?.type==='button'?maskKeys[binding.mask]:binding?.type==='stick'?({left_x:'l3',right_x:'r3'})[binding.axes?.[0]]:binding?.type==='axis'?(binding.field==='left_trigger'?'l2':'r2'):binding?.type==='auxiliary'?({home:'home',share:'extra',touchpad:'extra'})[binding.field]:null;
       if(binding?.type==='directional-pad'){
         const matrix=matrixFor(idle),box=layer.bounds,x=(480-vw*scale)/2+(box.x-vx)*scale,y=(320-vh*scale)/2+(box.y-vy)*scale,w=box.width*scale,h=box.height*scale,cx=x+w/2,cy=y+h/2;
         const regions={up:`${cx},${cy} ${x},${y} ${x+w},${y}`,right:`${cx},${cy} ${x+w},${y} ${x+w},${y+h}`,down:`${cx},${cy} ${x+w},${y+h} ${x},${y+h}`,left:`${cx},${cy} ${x},${y+h} ${x},${y}`};
