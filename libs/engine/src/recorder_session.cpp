@@ -665,17 +665,19 @@ void RecorderSession::RequestFrameSnapshot(FrameSnapshotCallback callback, Recor
     st->snapshot_requested.store(true);
 }
 
-std::optional<AppliedWebcamOverlay> RecorderSession::UpdateWebcamOverlay(const WebcamOverlayLive& overlay,
-                                                                         RecordRequestId request_id) {
+std::optional<ConfigRevision> RecorderSession::CompositedVisualSceneRevision(RecordRequestId request_id) const {
     const auto st = m_impl->StateForRequest(request_id);
     if (!st)
         return std::nullopt;
-    if (st->config.webcam.frame_provider == nullptr) {
-        return std::nullopt;
-    }
-    return st->UpdateWebcamOverlay(overlay);
+    return ConfigRevision{st->composited_visual_scene_revision.load(std::memory_order_acquire)};
 }
 
+std::optional<uint64_t> RecorderSession::CompositedVisualSceneSequence(RecordRequestId request_id) const {
+    const auto st = m_impl->StateForRequest(request_id);
+    if (!st)
+        return std::nullopt;
+    return st->composited_visual_scene_sequence.load(std::memory_order_acquire);
+}
 // ---------------------------------------------------------------------------
 // Record  (blocking)
 // ---------------------------------------------------------------------------
@@ -751,7 +753,6 @@ RecorderResult RecorderSession::Record(const RecorderConfig& config, RecordReque
         ResetStopRequestedForNewSession(st, pre_stop);
         st.config = engine_config;
         st.production_runtime = m_impl->runtime;
-        st.SeedWebcamOverlayFromConfig();
         if (!record_audio) {
             st.audio_track_count = 0;
         } else {

@@ -5,9 +5,10 @@ exosnap_add_gtest(
     TEST_PREFIX controller3d.
     SOURCES ../../tests/test_controller3d.cpp ControllerMechanics.cpp ControllerGeometry.cpp ControllerGeometry.h
         ${PROJECT_SOURCE_DIR}/libs/engine/src/gamepad_frame_sampler.cpp
+        ${PROJECT_SOURCE_DIR}/libs/engine/src/visual_scene_runtime.cpp
         ControllerState.cpp ControllerState.h
         ../Quick/GamepadOverlay.cpp ../Quick/GamepadOverlay.h ../Quick/GamepadSprites.cpp ../Quick/GamepadArtwork.cpp
-    LIBRARIES Qt6::Quick3D Qt6::Svg Qt6::Xml exosnap::gamepad
+    LIBRARIES Qt6::Quick3D Qt6::Svg Qt6::Xml exosnap::gamepad tomlplusplus::tomlplusplus
 )
 target_include_directories(controller3d_tests PRIVATE ${CMAKE_CURRENT_SOURCE_DIR} ../Quick
     ${PROJECT_SOURCE_DIR}/app ${PROJECT_SOURCE_DIR}/libs/engine/include)
@@ -23,10 +24,11 @@ qt_add_qml_module(exosnap_controller3d
 )
 target_sources(exosnap_controller3d PRIVATE
     ${PROJECT_SOURCE_DIR}/libs/engine/src/gamepad_frame_sampler.cpp
+    ${PROJECT_SOURCE_DIR}/libs/engine/src/visual_scene_runtime.cpp
     ../Quick/GamepadOverlay.cpp ../Quick/GamepadOverlay.h ../Quick/GamepadSprites.cpp ../Quick/GamepadArtwork.cpp)
 target_include_directories(exosnap_controller3d PRIVATE ../Quick ${PROJECT_SOURCE_DIR}/app
     ${PROJECT_SOURCE_DIR}/libs/engine/include)
-target_link_libraries(exosnap_controller3d PRIVATE Qt6::Quick3D Qt6::QuickControls2 Qt6::Svg Qt6::Xml exosnap::gamepad)
+target_link_libraries(exosnap_controller3d PRIVATE Qt6::Quick3D Qt6::QuickControls2 Qt6::Svg Qt6::Xml exosnap::gamepad tomlplusplus::tomlplusplus)
 set_target_properties(exosnap_controller3d PROPERTIES RUNTIME_OUTPUT_DIRECTORY "${CMAKE_BINARY_DIR}/controller3d")
 qt_add_resources(exosnap_controller3d "pilot_mapping"
     PREFIX "/gamepad"

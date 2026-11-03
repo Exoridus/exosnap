@@ -34,6 +34,7 @@
 #include "TrayAdapter.h"
 #include "WebcamPreviewFeed.h"
 #include "WhatsNewAdapter.h"
+#include "extensions/VisualSourceManager.h"
 #include "services/RecordingArtifactRegistry.h"
 
 #include "diagnostics/AudioSourceDegradation.h"
@@ -592,6 +593,13 @@ class QuickApplication {
     // enumerated camera. Everything that opens a camera goes through this;
     // live_config_ itself keeps the unpinned value.
     [[nodiscard]] WebcamSettings webcamSettingsForCapture() const;
+    [[nodiscard]] WebcamSettings resolveVisualWebcam(WebcamSettings) const;
+    void initializeVisualSources();
+    void updateVisualSources(uint8_t demand);
+    void visualControlSettled();
+    void refreshVisualSettingsPreview(bool allow_busy_retry = true);
+    [[nodiscard]] std::optional<engine::AppliedWebcamOverlay> acceptedWebcamOverlay() const;
+    void refreshVisualGamepadChoices();
     void enumerateWebcamFormats(const std::string& device_id);
     void applyThemeFromSettings();
     // The appearance the WINDOWS SHELL is drawing, for the two marks that are
@@ -793,6 +801,9 @@ class QuickApplication {
     // with that pointer.
     OverlayAdapter overlay_adapter_;
     OverlayTelemetryAdapter overlay_telemetry_adapter_;
+    CapabilityRegistry visual_registry_;
+    // Retain the host storage until the QML engine and all preview adapters have stopped.
+    std::shared_ptr<engine::VisualSceneRuntime> visual_runtime_;
     RecordPreviewAdapter record_preview_adapter_;
     // Declared BEFORE the coordinator so it is destroyed AFTER it: the coordinator
     // holds an evidence provider that reads this probe. Null until a window target
@@ -800,6 +811,28 @@ class QuickApplication {
     std::unique_ptr<WindowEvidenceProbe> window_evidence_probe_;
     GamepadOverlay gamepad_overlay_;
     std::unique_ptr<RecordingCoordinator> recording_coordinator_;
+    std::unique_ptr<VisualSourceManager> visual_sources_;
+    std::optional<VisualSceneConfig> visual_identity_template_;
+    toml::table visual_projection_;
+    std::optional<VisualSceneConfig> accepted_visual_scene_;
+    engine::ConfigRevision accepted_visual_revision_;
+    uint64_t accepted_visual_qpc_100ns_ = 0;
+    engine::ConfigRevision visual_revision_;
+    engine::VisualSourceId visual_camera_source_;
+    engine::SceneItemId visual_camera_item_;
+    engine::VisualConsumerId settings_visual_consumer_ = 0;
+    std::optional<engine::VisualAddress> settings_visual_address_;
+    std::optional<WebcamSettings> admitted_visual_camera_mode_;
+    std::optional<WebcamSettings> visual_effective_camera_mode_;
+    ChoiceSnapshot visual_camera_choices_;
+    ChoiceSnapshot visual_gamepad_choices_;
+    ChoiceSnapshot visual_layout_choices_;
+    uint64_t settings_visual_generation_ = 0;
+    uint8_t visual_demand_ = 0;
+    bool updating_visual_sources_ = false;
+    bool shutting_down_visual_sources_ = false;
+    bool settings_visual_retry_queued_ = false;
+    bool visual_verification_source_ = false;
     CaptureTargetNotifier capture_target_notifier_;
     // Runs only while the source picker has cards on screen. Declared after the
     // notifier because it resolves the identities it is given against the target

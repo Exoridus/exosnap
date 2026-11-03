@@ -116,10 +116,10 @@ gamepad::GamepadState GamepadDisplayState(gamepad::GamepadState state) noexcept 
     return state;
 }
 
-void FillGamepadLayer(const GamepadSpriteSet& sprites, const gamepad::GamepadState& input, SpriteContentRect placement,
+bool FillGamepadLayer(const GamepadSpriteSet& sprites, const gamepad::GamepadState& input, SpriteContentRect placement,
                       float opacity, SpriteLayerSnapshot& layer) noexcept {
     if (layer.atlas.get() != sprites.atlas.get() || layer.quads.capacity() < GamepadLayerQuadCapacity(sprites))
-        return;
+        return false;
     auto state = gamepad::Normalized(input);
     const auto left = gamepad::ReadControl(state, gamepad::Control::LeftStick);
     const auto right = gamepad::ReadControl(state, gamepad::Control::RightStick);
@@ -129,7 +129,32 @@ void FillGamepadLayer(const GamepadSpriteSet& sprites, const gamepad::GamepadSta
     state.right_y = right.y;
     state.left_trigger = gamepad::ReadControl(state, gamepad::Control::LeftTrigger).x;
     state.right_trigger = gamepad::ReadControl(state, gamepad::Control::RightTrigger).x;
-    layer.quads.clear();
+    std::array<SpriteMask, 2> masks{};
+    size_t mask_index = 0;
+    for (const auto& part : sprites.parts) {
+        if (part.knockout.w <= 0 || mask_index == masks.size())
+            continue;
+        auto bounds = part.knockout_bounds;
+        if (part.motion == PadMotion::LeftStick)
+            MoveStick(bounds, state.left_x, state.left_y, part);
+        if (part.motion == PadMotion::RightStick)
+            MoveStick(bounds, state.right_x, state.right_y, part);
+        masks[mask_index++] = {part.knockout, Placed(bounds, placement)};
+    }
+    size_t count = 0;
+    bool changed = false;
+    const auto emit = [&](SpriteQuad quad) {
+        if (count == 0)
+            quad.masks = masks;
+        if (count < layer.quads.size()) {
+            changed |= layer.quads[count] != quad;
+            layer.quads[count] = quad;
+        } else {
+            layer.quads.push_back(quad);
+            changed = true;
+        }
+        ++count;
+    };
     for (const auto& part : sprites.parts) {
         auto bounds = part.bounds;
         if (part.motion == PadMotion::LeftStick)
@@ -143,7 +168,7 @@ void FillGamepadLayer(const GamepadSpriteSet& sprites, const gamepad::GamepadSta
                                        (part.auxiliary == PadAuxiliary::Home && state.home.value_or(false)) ||
                                        (part.auxiliary == PadAuxiliary::Share && state.share.value_or(false)) ||
                                        (part.auxiliary == PadAuxiliary::Touchpad && state.touchpad.value_or(false));
-        layer.quads.push_back({pressed ? part.pressed : part.idle, Placed(bounds, placement), opacity});
+        emit({pressed ? part.pressed : part.idle, Placed(bounds, placement), opacity});
         const float trigger = part.motion == PadMotion::LeftTrigger    ? state.left_trigger
                               : part.motion == PadMotion::RightTrigger ? state.right_trigger
                                                                        : 0;
@@ -157,22 +182,12 @@ void FillGamepadLayer(const GamepadSpriteSet& sprites, const gamepad::GamepadSta
             source.h = fill;
             bounds.y += bounds.h * fraction;
             bounds.h *= 1 - fraction;
-            layer.quads.push_back({source, Placed(bounds, placement), opacity});
+            emit({source, Placed(bounds, placement), opacity});
         }
     }
-    if (!layer.quads.empty()) {
-        size_t index = 0;
-        for (const auto& part : sprites.parts) {
-            if (part.knockout.w <= 0 || index == layer.quads.front().masks.size())
-                continue;
-            auto bounds = part.knockout_bounds;
-            if (part.motion == PadMotion::LeftStick)
-                MoveStick(bounds, state.left_x, state.left_y, part);
-            if (part.motion == PadMotion::RightStick)
-                MoveStick(bounds, state.right_x, state.right_y, part);
-            layer.quads.front().masks[index++] = {part.knockout, Placed(bounds, placement)};
-        }
-    }
+    changed |= layer.quads.size() != count;
+    layer.quads.resize(count);
+    return changed;
 }
 
 GamepadFrameSampler::GamepadFrameSampler(const GamepadSpriteSet& sprites, gamepad::HistoryReadView history)
@@ -200,6 +215,7 @@ ReadResult GamepadFrameSampler::Sample(CaptureTime100ns time, const SceneItemPro
                                        const WebcamPixelRect& content, SpriteLayerSnapshot& output) noexcept {
     if (!content.IsValid() || output.atlas.get() != sprites_.atlas.get() ||
         output.quads.capacity() < GamepadLayerQuadCapacity(sprites_)) {
+        sample_changed_ = !output.quads.empty();
         output.quads.clear();
         return ReadResult::NotReady;
     }
@@ -225,11 +241,16 @@ ReadResult GamepadFrameSampler::Sample(CaptureTime100ns time, const SceneItemPro
         std::min(p.w * static_cast<float>(content.w) / 480.0F, p.h * static_cast<float>(content.h) / 320.0F);
     const float width = 480 * scale / static_cast<float>(content.w);
     const float height = 320 * scale / static_cast<float>(content.h);
-    FillGamepadLayer(sprites_, state, {p.x + (p.w - width) / 2, p.y + (p.h - height) / 2, width, height},
-                     properties.opacity, output);
+    sample_changed_ =
+        FillGamepadLayer(sprites_, state, {p.x + (p.w - width) / 2, p.y + (p.h - height) / 2, width, height},
+                         properties.opacity, output);
     if (result == gamepad::HistoryReadResult::Busy)
         return ReadResult::Busy;
     return result == gamepad::HistoryReadResult::Found ? ReadResult::Updated : ReadResult::NotReady;
+}
+
+bool GamepadFrameSampler::SampleChanged() const noexcept {
+    return sample_changed_;
 }
 
 } // namespace exosnap::engine

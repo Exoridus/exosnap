@@ -1,4 +1,5 @@
 #include "ReadyFrameCaptureService.h"
+#include "visual_scene_consumer.h"
 
 #include <exosnap/engine/gpu_compositor.h>
 
@@ -6,6 +7,7 @@
 #include <exosnap/engine/gpu_hdr_tonemap.h>
 #include <exosnap/engine/preview_shared_texture.h>
 #include <exosnap/engine/webcam_placement.h>
+#include <gamepad/gamepad.h>
 
 #include <QMetaObject>
 #include <QThreadPool>
@@ -190,31 +192,25 @@ bool cropToBgra(ID3D11Device* device, ID3D11DeviceContext* context, ID3D11Textur
     return true;
 }
 
-bool drawWebcam(exosnap::engine::GpuCompositor& compositor, const WebcamSettings& settings,
-                const exosnap::engine::WebcamFrameSnapshot* frame, int width, int height, std::string& error) {
-    if (!settings.enabled || !settings.output_visible || frame == nullptr)
-        return true;
-    exosnap::engine::WebcamPlacement placement;
-    placement.x = settings.overlay.x_norm;
-    placement.y = settings.overlay.y_norm;
-    placement.w = settings.overlay.w_norm;
-    placement.h = settings.overlay.h_norm;
-    placement.mirror = settings.mirror;
-    const exosnap::engine::WebcamPixelRect rect =
-        exosnap::engine::MapWebcamPlacementToContent(placement, 0, 0, width, height);
-    if (!rect.IsValid())
-        return true;
-
-    const auto key = settings.chroma_key.active_color();
-    exosnap::engine::ChromaKeyParams chroma;
-    chroma.enabled = settings.chroma_key.enabled;
-    chroma.r = key.r;
-    chroma.g = key.g;
-    chroma.b = key.b;
-    chroma.tolerance = settings.chroma_key.tolerance;
-    chroma.softness = settings.chroma_key.softness;
-    chroma.spill_reduction = settings.chroma_key.spill_reduction;
-    return compositor.DrawWebcam(*frame, rect, settings.mirror, chroma, error, settings.opacity);
+bool drawVisualScene(exosnap::engine::GpuCompositor& compositor, exosnap::engine::VisualSceneConsumer& consumer,
+                     int width, int height, std::string& error) {
+    const exosnap::engine::WebcamPixelRect content{0, 0, width, height};
+    auto frame = consumer.Sample(exosnap::engine::CaptureTime100ns{gamepad::GameInputSource::NowCapture100ns()},
+                                 content, exosnap::engine::VisualCompositionMode::Recording);
+    size_t index = 0;
+    for (const auto& view : frame.Items()) {
+        if (view.sprites) {
+            if (!compositor.DrawVisualSprite(index, view.token, view.resource_id, *view.sprites, content, error))
+                return false;
+        } else if (view.cache_valid &&
+                   !compositor.DrawVisualImage(view.token, view.resource_id, view.image_sequence, view.image,
+                                               view.image_rect, view.item->properties.placement.mirror,
+                                               view.item->chroma_key, error, view.image_opacity)) {
+            return false;
+        }
+        ++index;
+    }
+    return true;
 }
 
 bool drawCursor(exosnap::engine::GpuCompositor& compositor, const ReadyFrameSource& source, const QRect& crop,
@@ -314,6 +310,16 @@ void captureOnWorker(ReadyFrameSource source, ReadyFrameComposition composition,
         fail("No Ready preview frame is available");
         return;
     }
+    auto prepared = exosnap::engine::VisualSceneConsumer::Prepare(composition.visual_runtime);
+    if (!prepared.succeeded()) {
+        fail(prepared.error()->context);
+        return;
+    }
+    auto consumer = std::move(*prepared.value());
+    if (consumer->NeedsRefresh()) {
+        fail("Ready visual scene is busy");
+        return;
+    }
 
     std::string error;
     ComPtr<ID3D11Device> device;
@@ -394,12 +400,10 @@ void captureOnWorker(ReadyFrameSource source, ReadyFrameComposition composition,
 
     exosnap::engine::GpuCompositor compositor;
     if (!compositor.Init(device.Get(), context.Get(), crop.width(), crop.height(), error) ||
-        !compositor.BeginFrame(bgra.Get(), error) ||
+        !compositor.PrepareVisualImages(consumer->ImageSources(), error) ||
+        !compositor.PrepareVisualSprites(consumer->ItemCount(), error) || !compositor.BeginFrame(bgra.Get(), error) ||
         (composition.video.capture_cursor && !drawCursor(compositor, source, crop, error)) ||
-        !drawWebcam(compositor, composition.webcam, composition.webcam_frame.get(), crop.width(), crop.height(),
-                    error) ||
-        (composition.sprites &&
-         !compositor.DrawSpriteLayer(0, *composition.sprites, {0, 0, crop.width(), crop.height()}, error))) {
+        !drawVisualScene(compositor, *consumer, crop.width(), crop.height(), error)) {
         fail(std::move(error));
         return;
     }

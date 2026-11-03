@@ -25,7 +25,8 @@ exosnap_add_gtest(
     TEST_PREFIX gamepad.sprites.
     SOURCES "${EXOSNAP_QUICK_TESTS_DIR}/test_gamepad_sprites.cpp" GamepadSprites.cpp GamepadArtwork.cpp GamepadOverlay.cpp GamepadOverlay.h
         ${PROJECT_SOURCE_DIR}/libs/engine/src/gamepad_frame_sampler.cpp
-    LIBRARIES Qt6::Gui Qt6::Svg Qt6::Xml Qt6::Qml exosnap::gamepad
+        ${PROJECT_SOURCE_DIR}/libs/engine/src/visual_scene_runtime.cpp
+    LIBRARIES Qt6::Gui Qt6::Svg Qt6::Xml Qt6::Qml exosnap::gamepad tomlplusplus::tomlplusplus
 )
 target_include_directories(gamepad_sprite_tests PRIVATE
     ${CMAKE_CURRENT_SOURCE_DIR} ${PROJECT_SOURCE_DIR}/app ${PROJECT_SOURCE_DIR}/libs/engine/include)
@@ -530,6 +531,14 @@ target_sources(exosnap
         # without it in the shipping target the gate is inert.
         ${PROJECT_SOURCE_DIR}/app/services/WindowEvidenceProbe.cpp
         ${PROJECT_SOURCE_DIR}/app/services/WindowEvidenceProbe.h
+        ${PROJECT_SOURCE_DIR}/app/extensions/CapabilityRegistry.cpp
+        ${PROJECT_SOURCE_DIR}/app/extensions/VisualSettings.cpp
+        ${PROJECT_SOURCE_DIR}/app/extensions/VisualPresetMigration.cpp
+        ${PROJECT_SOURCE_DIR}/app/extensions/BuiltinVisualSettings.cpp
+        ${PROJECT_SOURCE_DIR}/app/extensions/WebcamModule.cpp
+        ${PROJECT_SOURCE_DIR}/app/extensions/GamepadModule.cpp
+        ${PROJECT_SOURCE_DIR}/app/extensions/VisualSourceManager.cpp
+        ${PROJECT_SOURCE_DIR}/app/models/VisualSceneConfig.cpp
         ${PROJECT_SOURCE_DIR}/app/services/RecordingCoordinator.cpp
         ${PROJECT_SOURCE_DIR}/app/services/RecordingCoordinatorClips.cpp
         ${PROJECT_SOURCE_DIR}/app/services/RecordingClipJobs.cpp
@@ -669,6 +678,7 @@ set_target_properties(exosnap PROPERTIES
 
 target_include_directories(exosnap
     PRIVATE
+        ${PROJECT_SOURCE_DIR}/libs/engine/src
         ${PROJECT_SOURCE_DIR}/app
         ${PROJECT_BINARY_DIR}/app
 )
@@ -1923,6 +1933,7 @@ exosnap_add_gtest(
 
 target_include_directories(ready_frame_capture_tests
     PRIVATE
+        ${PROJECT_SOURCE_DIR}/libs/engine/src
         ${CMAKE_CURRENT_SOURCE_DIR}
         ${PROJECT_SOURCE_DIR}/app
 )

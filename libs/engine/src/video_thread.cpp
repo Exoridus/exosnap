@@ -14,8 +14,7 @@
 #include "premux_state.h"
 #include "production_runtime.h"
 #include "qpc_100ns.h"
-#include "sprite_layers_observation.h"
-#include "webcam_frame_observation.h"
+#include "visual_scene_consumer.h"
 #include <atomic>
 #include <cstdint>
 #include <exosnap/engine/gpu_surface_inventory.h>
@@ -178,8 +177,6 @@ constexpr const char* kWgcCursorSummaryLogMessage = "wgc cursor pipeline summary
 
 // The per-session overlay-generation record. Separate from the cursor summary
 // because it answers a different question and applies to both backends.
-constexpr const char* kWebcamOverlaySummaryLogMessage = "webcam overlay pipeline summary";
-constexpr const char* kSpriteOverlaySummaryLogMessage = "sprite overlay pipeline summary";
 
 std::string RectToken(const RECT& r) {
     std::ostringstream out;
@@ -1718,38 +1715,16 @@ void VideoThread::RunAttachment(const std::shared_ptr<NativeState>& native, cons
 
     VisualGenerations visualGenerations{};
 
-    // Whether an overlay edit reached the frame, kept apart from whether it
-    // reached the picture. Those are different failures: a generation that never
-    // advances leaves a still source re-emitting the composite made with the
-    // previous overlay, while one that advances without the composite following
-    // it is a compositing fault. Neither is visible in the encoded frames alone,
-    // and without these counters an overlay measurement could only ever report
-    // the second.
-    //
-    // Counted separately from the webcam's own generation, because a camera
-    // advances that on every delivered sample and would recomposite the frame on
-    // the overlay's behalf. Reported for both backends whenever a webcam provider
-    // is attached.
-    struct OverlayTrace {
+    struct VisualSceneTrace {
         uint64_t samples = 0;
-        uint64_t generation_changes = 0;
-        uint64_t webcam_generation_changes = 0;
-        // Ticks on which an overlay edit met a held screen and no fresh capture
-        // frame -- the only situation in which advancing the frame key has an
-        // observable consequence. Derived from the sampler's own comparison and
-        // from the capture state, never from visualGenerations, so a build whose
-        // frame key no longer advances still counts the same opportunities. A
-        // measurement whose denominator moved with the defect would report every
-        // broken run as having had nothing to find.
-        uint64_t hold_opportunities = 0;
-        uint64_t recomposited_for_overlay = 0;
-        uint64_t composited_with_overlay = 0;
+        uint64_t changes = 0;
+        uint64_t images_updated = 0;
+        uint64_t history_busy = 0;
+        uint64_t history_missing = 0;
+        uint64_t held_recompositions = 0;
+        uint64_t composites = 0;
     };
-    OverlayTrace overlayTrace;
-    // Whether this tick's sample saw the overlay change. Reset per tick by
-    // sampleOverlay so the recomposition site can ask about the tick it is in.
-    bool overlayChangedThisTick = false;
-
+    VisualSceneTrace visualTrace;
     // Why the manually drawn WGC pointer is or is not in a frame. Every exit in
     // sampleWgcCursor below is silent by design -- an absent pointer is a normal
     // state, not a failure -- which leaves an absent pointer and a broken one
@@ -1801,27 +1776,6 @@ void VideoThread::RunAttachment(const std::shared_ptr<NativeState>& native, cons
     };
     VisualFrameKey lastCompositedKey{};
     bool haveLastCompositedKey = false;
-    WebcamOverlayLive lastOverlaySnapshot{};
-    bool haveOverlaySnapshot = false;
-
-    // The PiP geometry, opacity and chroma key are settable while Record() runs
-    // and are part of the frame key, so a change has to advance the overlay
-    // generation BEFORE the key is taken. Read through this rather than calling
-    // SnapshotWebcamOverlay directly: a snapshot that skips the bump lets a still
-    // source keep re-emitting the composite made with the previous overlay.
-    auto sampleOverlay = [&]() -> WebcamOverlayLive {
-        WebcamOverlayLive current = m_state.SnapshotWebcamOverlay();
-        ++overlayTrace.samples;
-        overlayChangedThisTick = !haveOverlaySnapshot || !(current == lastOverlaySnapshot);
-        if (overlayChangedThisTick) {
-            haveOverlaySnapshot = true;
-            lastOverlaySnapshot = current;
-            ++visualGenerations.overlay;
-            ++overlayTrace.generation_changes;
-        }
-        return current;
-    };
-
     // Validate an acquired OD frame; on the FIRST frame, negotiate the session
     // capture format and create odCapturedTex to match it. Cheap on the
     // steady-state path (one CPU-side GetDesc + compare per acquire).
@@ -2046,105 +2000,110 @@ void VideoThread::RunAttachment(const std::shared_ptr<NativeState>& native, cons
     // applies crop, contain-fit scaling, letterbox background, and RGB->NV12/P010.
     // For OD the compositor's render target must match the negotiated capture
     // format, so Init is deferred until after the first frame (see below).
-    const bool webcamProviderAvailable = (m_state.config.webcam.frame_provider != nullptr);
-    const bool spriteSourcesConfigured = !m_state.config.sprite_sources.empty();
-    const bool needsGpuCompositor = webcamProviderAvailable || m_state.config.capture_cursor || spriteSourcesConfigured;
+    const auto visualRuntime = m_state.config.visual_scene;
+    const bool needsGpuCompositor = visualRuntime != nullptr || m_state.config.capture_cursor;
     const uint32_t compositorWidth = sourceWidth;
     const uint32_t compositorHeight = sourceHeight;
 
     GpuCompositor gpuCompositor;
     bool gpuCompositorReady = false;
-
-    WebcamFrameObservation webcamObservation;
-    const auto& webcamFrame = webcamObservation.Frame();
-    auto observeWebcam = [&](const WebcamOverlayLive& overlay) {
-        const auto previous = visualGenerations.webcam;
-        const auto key = webcamObservation.Observe(visualGenerations, m_state.config.webcam.frame_provider,
-                                                   overlay.enabled && webcamProviderAvailable);
-        if (webcamFrame && key.webcam_generation != previous)
-            m_state.diagnostics.OnWebcamGenerationChanged();
-        return key;
-    };
-    // Sprite layers change on their own schedule (a gamepad press on a still
-    // desktop), so they are observed into the frame key exactly like the camera.
-    // generation_changes against recomposited_for_sprites separates a source
-    // that never changed from one whose changes never reached a held screen.
-    SpriteLayersObservation spriteObservation;
-    struct SpriteTrace {
-        uint64_t generation_changes = 0;
-        uint64_t recomposited_for_sprites = 0;
-    };
-    SpriteTrace spriteTrace;
-    // Before the frame key is taken, so a change lands in this frame's key.
-    auto observeSprites = [&](uint64_t frameTimeQpc100ns) {
-        if (spriteSourcesConfigured &&
-            spriteObservation.Observe(visualGenerations, m_state.config.sprite_sources, frameTimeQpc100ns)) {
-            ++spriteTrace.generation_changes;
+    std::unique_ptr<VisualSceneConsumer> visualConsumer;
+    bool visualCachesPending = false;
+    auto maintainVisualScene = [&]() -> bool {
+        if (!visualRuntime)
+            return true;
+        if (!visualConsumer) {
+            auto prepared = VisualSceneConsumer::Prepare(visualRuntime);
+            if (!prepared.succeeded()) {
+                m_state.RecordFailure(E_FAIL, ErrorPhase::Prepare, prepared.error()->context);
+                return false;
+            }
+            visualConsumer = std::move(*prepared.value());
+            visualCachesPending = !visualConsumer->NeedsRefresh();
+        } else if (visualConsumer->NeedsRefresh()) {
+            auto refreshed = visualConsumer->Refresh();
+            if (!refreshed.succeeded()) {
+                m_state.RecordFailure(E_FAIL, ErrorPhase::VideoCapture, refreshed.error()->context);
+                return false;
+            }
+            if (*refreshed.value() == ReadResult::Busy)
+                return true;
+            if (*refreshed.value() == ReadResult::Updated)
+                visualCachesPending = true;
         }
+        if (gpuCompositorReady && visualCachesPending) {
+            std::string error;
+            if (!gpuCompositor.PrepareVisualImages(visualConsumer->ImageSources(), error) ||
+                !gpuCompositor.PrepareVisualSprites(visualConsumer->ItemCount(), error)) {
+                m_state.RecordFailure(E_FAIL, ErrorPhase::VideoCapture, "GPU visual preparation: " + error);
+                return false;
+            }
+            visualCachesPending = false;
+        }
+        return true;
     };
     auto sourceContentRect = [&]() {
-        // Crop is a property of the monitor target, not of the backend that reads
-        // it: the blit and the encode geometry both key on hasCrop alone, and the
-        // overlay has to land in the same content rectangle they produce.
         return WebcamPixelRect{hasCrop ? cropX : 0, hasCrop ? cropY : 0, static_cast<int>(sourceContentWidth),
                                static_cast<int>(sourceContentHeight)};
     };
-    auto drawSpritesGpu = [&]() -> bool {
-        const auto& layers = spriteObservation.Layers();
-        for (size_t i = 0; i < layers.size(); ++i) {
-            if (!layers[i])
-                continue;
-            std::string compErr;
-            if (!gpuCompositor.DrawSpriteLayer(i, *layers[i], sourceContentRect(), compErr)) {
-                m_state.RecordFailure(E_FAIL, ErrorPhase::VideoCapture, "GPU sprite composite: " + compErr);
-                return false;
+    auto sampleVisualScene = [&](uint64_t time100ns) {
+        VisualSceneConsumer::Frame frame;
+        if (visualConsumer) {
+            frame = visualConsumer->Sample(CaptureTime100ns{time100ns}, sourceContentRect(),
+                                           VisualCompositionMode::Recording);
+            ++visualTrace.samples;
+            if (frame.Changed()) {
+                ++visualGenerations.overlay;
+                ++visualTrace.changes;
+            }
+            const auto items = frame.Items();
+            for (size_t index = 0; index < items.size(); ++index) {
+                const auto& item = items[index];
+                if (item.image_result == ReadResult::Updated &&
+                    std::ranges::none_of(items.first(index), [&](const auto& previous) {
+                        return previous.image_result == ReadResult::Updated && previous.token == item.token &&
+                               previous.resource_id == item.resource_id &&
+                               previous.image_sequence == item.image_sequence;
+                    })) {
+                    ++visualTrace.images_updated;
+                    m_state.diagnostics.OnWebcamGenerationChanged();
+                }
+                if (item.sprites && item.sample_result == ReadResult::Busy)
+                    ++visualTrace.history_busy;
+                if (item.sprites && item.sample_result == ReadResult::NotReady)
+                    ++visualTrace.history_missing;
             }
         }
-        return true;
+        return frame;
     };
-
-    auto webcamRectFor = [&](const WebcamOverlayLive& overlay) {
-        WebcamPlacement placement;
-        placement.x = overlay.overlay_x_norm;
-        placement.y = overlay.overlay_y_norm;
-        placement.w = overlay.overlay_w_norm;
-        placement.h = overlay.overlay_h_norm;
-        placement.mirror = overlay.mirror;
-        const WebcamPixelRect content = sourceContentRect();
-        return MapWebcamPlacementToContent(placement, content.x, content.y, content.w, content.h);
-    };
-
-    auto drawWebcamGpu = [&](const WebcamOverlayLive& overlay) -> bool {
-        if (!overlay.enabled || m_state.config.webcam.frame_provider == nullptr) {
-            return true;
-        }
-
-        if (!webcamFrame || !webcamFrame->HasCompletePayload()) {
-            return true;
-        }
-
-        const WebcamPixelRect rect = webcamRectFor(overlay);
-        if (rect.w < 2 || rect.h < 2) {
-            return true;
-        }
-
-        GpuCompositor::ChromaKeyParams chroma;
-        chroma.enabled = overlay.chroma_key_enabled;
-        chroma.r = overlay.chroma_r;
-        chroma.g = overlay.chroma_g;
-        chroma.b = overlay.chroma_b;
-        chroma.tolerance = overlay.chroma_tolerance;
-        chroma.softness = overlay.chroma_softness;
-        chroma.spill_reduction = overlay.chroma_spill_reduction;
-
-        std::string compErr;
-        if (!gpuCompositor.DrawWebcam(*webcamFrame, rect, overlay.mirror, chroma, compErr, overlay.opacity)) {
-            m_state.RecordFailure(E_FAIL, ErrorPhase::VideoCapture, "GPU webcam composite: " + compErr);
-            return false;
+    auto drawVisualScene = [&](const VisualSceneConsumer::Frame& frame) -> bool {
+        size_t index = 0;
+        for (const auto& view : frame.Items()) {
+            std::string error;
+            const bool drawn =
+                view.sprites
+                    ? gpuCompositor.DrawVisualSprite(index, view.token, view.resource_id, *view.sprites,
+                                                     sourceContentRect(), error)
+                    : !view.cache_valid ||
+                          gpuCompositor.DrawVisualImage(view.token, view.resource_id, view.image_sequence, view.image,
+                                                        view.image_rect, view.item->properties.placement.mirror,
+                                                        view.item->chroma_key, error, view.image_opacity);
+            if (!drawn) {
+                m_state.RecordFailure(E_FAIL, ErrorPhase::VideoCapture, "GPU visual composite: " + error);
+                return false;
+            }
+            ++index;
         }
         return true;
     };
-
+    auto noteVisualSceneComposited = [&](const VisualSceneConsumer::Frame& frame) {
+        if (const auto sequence = frame.PublicationSequence(); sequence != 0) {
+            m_state.composited_visual_scene_sequence.store(sequence, std::memory_order_release);
+            m_state.composited_visual_scene_revision.store(frame.Revision().value, std::memory_order_release);
+        }
+        if (!frame.Items().empty())
+            ++visualTrace.composites;
+    };
     // Fill in the pointer state Output Duplication has not reported yet. Runs on
     // every composited frame until DXGI delivers its own pointer update, then
     // never again: DXGI's shape is the authoritative one (it carries masked and
@@ -2484,7 +2443,7 @@ void VideoThread::RunAttachment(const std::shared_ptr<NativeState>& native, cons
         return true;
     };
 
-    auto compositeFrameGpu = [&](ID3D11Texture2D* source, const WebcamOverlayLive& overlay) -> ID3D11Texture2D* {
+    auto compositeFrameGpu = [&](ID3D11Texture2D* source, const VisualSceneConsumer::Frame& frame) -> ID3D11Texture2D* {
         if (source == nullptr)
             return nullptr;
         const bool linearizePq = hdrNativeActive && hdrPqInputIsPq;
@@ -2494,18 +2453,13 @@ void VideoThread::RunAttachment(const std::shared_ptr<NativeState>& native, cons
         // the cursor are exactly the ones nothing else refreshes.
         seedOdCursorFromWin32();
 
-        const bool webcamActive = overlay.enabled && webcamProviderAvailable;
-        if (webcamActive) {
-            ++overlayTrace.composited_with_overlay;
-        }
         const bool cursorActive =
             m_state.config.capture_cursor && (!useOdCapture || (odCursorVisible && odCursorShapeValid));
-        const bool spritesActive = spriteObservation.AnyVisible();
-        const bool drawOverlays = gpuCompositorReady && (webcamActive || cursorActive || spritesActive);
+        const bool drawOverlays = gpuCompositorReady && (cursorActive || !frame.Items().empty());
         if (!linearizePq && !drawOverlays) {
+            noteVisualSceneComposited(frame);
             return source;
         }
-
         std::string compErr;
         // Bracket the whole composite pass for real GPU-execution time. End() is
         // issued on every return path so a failed draw never leaves the query pair
@@ -2527,6 +2481,7 @@ void VideoThread::RunAttachment(const std::shared_ptr<NativeState>& native, cons
             source = hdrLinearTex.get();
         }
         if (!drawOverlays) {
+            noteVisualSceneComposited(frame);
             endCompositeTimer();
             return source;
         }
@@ -2545,14 +2500,11 @@ void VideoThread::RunAttachment(const std::shared_ptr<NativeState>& native, cons
             endCompositeTimer();
             return nullptr;
         }
-        if (!drawWebcamGpu(overlay)) {
+        if (!drawVisualScene(frame)) {
             endCompositeTimer();
             return nullptr;
         }
-        if (!drawSpritesGpu()) {
-            endCompositeTimer();
-            return nullptr;
-        }
+        noteVisualSceneComposited(frame);
         endCompositeTimer();
         return gpuCompositor.Result();
     };
@@ -3294,6 +3246,8 @@ void VideoThread::RunAttachment(const std::shared_ptr<NativeState>& native, cons
         }
         gpuCompositorReady = true;
     }
+    if (!maintainVisualScene())
+        return;
 
     // --- Per-frame luminance analysis init (deferred: the mode and the source
     // format are only known once the capture format is negotiated) ---
@@ -4125,6 +4079,8 @@ void VideoThread::RunAttachment(const std::shared_ptr<NativeState>& native, cons
         }
 
         while (!m_state.stop_requested.load() && (!runtime || !runtime->stopping())) {
+            if (!maintainVisualScene())
+                goto end_encode_loop;
             if (runtime)
                 native->Poll();
             const uint64_t workerWake100ns = Qpc100ns(qpcFreq);
@@ -4589,75 +4545,29 @@ void VideoThread::RunAttachment(const std::shared_ptr<NativeState>& native, cons
                         useOdCapture ? (odCapturedTexValid ? odCapturedTex.get() : nullptr) : pendingWgcTex.get();
                 }
 
-                // A screen capture only yields a frame when the screen changes, but the
-                // webcam does not stop moving with it. Without this, a still desktop
-                // duplicates the last composited frame and the picture-in-picture freezes
-                // inside the recording. Composite the live webcam onto the held screen
-                // instead and encode it as a real frame.
-                //
-                // OD recovery: during a hold the drain is skipped, so rawSourceTex is null
-                // and the CFR duplicate path below re-emits the last frame (frozen) until
-                // Reopen() succeeds. Re-compositing is forbidden there — it touches
-                // display-tied GPU resources while the captured output is gone.
                 ID3D11Texture2D* const heldScreenTex = useOdCapture ? odCapturedTex.get() : heldWgcTex.get();
-                // Sampled before the key is taken, so a pointer move or overlay
-                // edit lands in this tick's key instead of the next one's.
                 sampleWgcCursor();
-                observeSprites(epochQpc100ns + cfr_frame_idx * frame_interval_100ns);
-                const WebcamOverlayLive overlay = sampleOverlay();
-                const VisualFrameKey currentVisualKey = observeWebcam(overlay);
-                const bool cursorOverlayMoved =
+                VisualSceneConsumer::Frame visualFrame;
+                if (!odHolding && (rawSourceTex != nullptr || heldScreenTex != nullptr))
+                    visualFrame = sampleVisualScene(epochQpc100ns + cfr_frame_idx * frame_interval_100ns);
+                const VisualFrameKey currentVisualKey = MakeVisualFrameKey(visualGenerations);
+                const bool dynamicOverlayChanged =
                     !haveLastCompositedKey ||
                     currentVisualKey.cursor_generation != lastCompositedKey.cursor_generation ||
                     currentVisualKey.overlay_generation != lastCompositedKey.overlay_generation;
-                const bool webcamMoved = overlay.enabled && webcamProviderAvailable &&
-                                         (!haveLastCompositedKey ||
-                                          currentVisualKey.webcam_generation != lastCompositedKey.webcam_generation);
-                const bool spritesChanged = spriteSourcesConfigured &&
-                                            (!haveLastCompositedKey ||
-                                             currentVisualKey.sprite_generation != lastCompositedKey.sprite_generation);
-                const bool dynamicOverlayChanged = cursorOverlayMoved || webcamMoved || spritesChanged;
-                // Attributed, not pooled: cursorOverlayMoved is true for a pointer
-                // move as well, and a measurement of the overlay cannot use a
-                // count that a moving cursor also raises.
-                const bool overlayMoved = !haveLastCompositedKey ||
-                                          currentVisualKey.overlay_generation != lastCompositedKey.overlay_generation;
-                // The counter asks whether the camera moved, which the
-                // recomposition decision above does not: that one must also fire
-                // when there is no previous key, and counting the first composite
-                // would report motion on a session that had none.
-                if (GenerationAdvanced(haveLastCompositedKey, currentVisualKey.webcam_generation,
-                                       lastCompositedKey.webcam_generation)) {
-                    ++overlayTrace.webcam_generation_changes;
-                }
-                // The same structural preconditions the decision below uses, with
-                // the overlay term taken from the sampler instead of the frame
-                // key. Without this a run on a source that never holds -- output
-                // duplication on this machine delivers at the encode cadence
-                // whether the desktop changes or not -- reports zero
-                // recompositions and looks identical to one whose edits never
-                // reached the key at all.
-                if (overlayChangedThisTick && rawSourceTex == nullptr && !odHolding && heldScreenTex != nullptr) {
-                    ++overlayTrace.hold_opportunities;
-                }
                 if (ShouldRecompositeHeldScreen(rawSourceTex != nullptr, odHolding, dynamicOverlayChanged,
                                                 heldScreenTex != nullptr)) {
                     ++wgcCursorTrace.recomposited_for_overlay;
-                    if (overlayMoved) {
-                        ++overlayTrace.recomposited_for_overlay;
-                    }
-                    if (GenerationAdvanced(haveLastCompositedKey, currentVisualKey.sprite_generation,
-                                           lastCompositedKey.sprite_generation)) {
-                        ++spriteTrace.recomposited_for_sprites;
-                    }
+                    if (visualFrame.Changed())
+                        ++visualTrace.held_recompositions;
                     rawSourceTex = heldScreenTex;
                 }
-
                 if (rawSourceTex != nullptr && hdrNativeActive) {
                     // Native HDR10: composite webcam/cursor in linear scRGB FP16,
                     // then convert straight into the P010 slot (colour + geometry).
                     const auto comp_t0 = std::chrono::steady_clock::now();
-                    ID3D11Texture2D* nativeSrc = compositeFrameGpu(rawSourceTex, overlay);
+                    ID3D11Texture2D* nativeSrc = compositeFrameGpu(rawSourceTex, visualFrame);
+                    visualFrame = {};
                     const auto comp_t1 = std::chrono::steady_clock::now();
                     m_state.diagnostics.OnCompositorSubmit(
                         comp_t1, std::chrono::duration<double, std::milli>(comp_t1 - comp_t0).count(),
@@ -4717,7 +4627,8 @@ void VideoThread::RunAttachment(const std::shared_ptr<NativeState>& native, cons
                         encoder->ReleaseSlot(slot);
                         goto end_encode_loop;
                     }
-                    ID3D11Texture2D* vpInput = compositeFrameGpu(sdrSourceTex, overlay);
+                    ID3D11Texture2D* vpInput = compositeFrameGpu(sdrSourceTex, visualFrame);
+                    visualFrame = {};
                     const auto comp_t1 = std::chrono::steady_clock::now();
                     m_state.diagnostics.OnCompositorSubmit(
                         comp_t1, std::chrono::duration<double, std::milli>(comp_t1 - comp_t0).count(),
@@ -4818,6 +4729,7 @@ void VideoThread::RunAttachment(const std::shared_ptr<NativeState>& native, cons
                     m_state.diagnostics.OnReusedYuvFrame();
                 }
 
+                visualFrame = {};
                 if (!frameWritten) {
                     // Release the slot and skip the tick. Two very different causes end
                     // up here and must not share a counter: a source frame was available
@@ -4906,6 +4818,10 @@ void VideoThread::RunAttachment(const std::shared_ptr<NativeState>& native, cons
         uint64_t vfrMuxProgressFloorNs = 0;
         winrt::com_ptr<ID3D11Texture2D> vfrCachedPicture;
         bool vfrCachedPictureValid = false;
+        winrt::com_ptr<ID3D11Texture2D> vfrHeldDesktop;
+        int64_t vfrHeldDesktopTicks100ns = 0;
+        bool vfrDesktopPending = false;
+        uint64_t vfrNextVisualSample100ns = 0;
         {
             D3D11_TEXTURE2D_DESC cacheDesc{};
             nv12Textures.front()->GetDesc(&cacheDesc);
@@ -4919,6 +4835,8 @@ void VideoThread::RunAttachment(const std::shared_ptr<NativeState>& native, cons
         }
 
         while (!m_state.stop_requested.load() && (!runtime || !runtime->stopping())) {
+            if (!maintainVisualScene())
+                goto end_encode_loop;
             if (runtime)
                 native->Poll();
             if (!useOdCapture) {
@@ -5208,243 +5126,261 @@ void VideoThread::RunAttachment(const std::shared_ptr<NativeState>& native, cons
             }
 
             if (latestTex != nullptr) {
-                // Establish video epoch (also published for the muxer's A/V
-                // alignment). The epoch is clamped so it never precedes the
-                // session start (plus any pause served before the first frame):
-                // a first DXGI frame can carry a LastPresentTime from before
-                // recording began (static desktop), and an origin in the past
-                // inflates every later frame's PTS by that idle gap — the
-                // published A/V epoch and the internal PTS origin must be the
-                // SAME clamped value, or audio shifts away from the picture by
-                // the gap.
-                if (!videoEpochSet) {
-                    videoEpochTicks100ns = ClampedVfrVideoEpochTicks100ns(latestFrameTicks100ns, vfrEpochFloor100ns);
-                    videoEpochSet = true;
-                    // Publish the epoch the PTS timeline is actually built on,
-                    // not the moment this frame happened to be processed. VFR
-                    // PTS is `frame timestamp - videoEpochTicks100ns`, and both
-                    // WGC SystemRelativeTime and DXGI LastPresentTime are QPC
-                    // readings in 100 ns units — the same axis as
-                    // session_start_qpc_100ns — so publishing "now" instead put
-                    // the A/V alignment out by the capture-to-process latency.
-                    // (The CFR path has no such split: it derives PTS from the
-                    // same epoch value it publishes.)
-                    m_state.video_epoch_qpc_100ns.store(static_cast<uint64_t>(videoEpochTicks100ns));
-                    // Which of the two the clamp produced decides what the epoch is
-                    // worth to a measurement: the frame's own timestamp is an
-                    // instant on the QPC axis, the floor is only a bound below it.
-                    const auto epochFields =
-                        VideoEpochLogFields(static_cast<uint64_t>(videoEpochTicks100ns), qpcFreq,
-                                            VfrVideoEpochSource(videoEpochTicks100ns, latestFrameTicks100ns));
-                    logging::log(logging::LogLevel::Info, "video_thread", kVideoEpochLogMessage, epochFields);
-                }
-
-                int64_t deltaTicks = latestFrameTicks100ns - videoEpochTicks100ns;
-                if (deltaTicks < 0)
-                    deltaTicks = 0;
-                uint64_t framePts_ns = static_cast<uint64_t>(deltaTicks) * 100ULL;
-                if (videoFramesCaptured > 0)
-                    framePts_ns = VfrPicturePts(framePts_ns, lastVideoPts, vfrMuxProgressFloorNs);
-                lastVideoPts = framePts_ns;
-
-                // Whole-tick frame-time bracket (VFR): from slot acquire to after
-                // the packet is routed. Emitted only on the emit paths below.
-                const auto tick_t0 = std::chrono::steady_clock::now();
-
-                // Acquire a free input slot
+                vfrHeldDesktop = latestTex;
+                vfrHeldDesktopTicks100ns = latestFrameTicks100ns;
+                vfrDesktopPending = true;
+            }
+            const uint64_t visualNow100ns = Qpc100ns(qpcFreq);
+            if (vfrHeldDesktop != nullptr && !odHolding && visualNow100ns >= vfrNextVisualSample100ns) {
+                vfrNextVisualSample100ns = visualNow100ns + frame_interval_100ns;
                 int32_t slot = encoder->AcquireFreeSlot();
                 if (slot < 0) {
-                    // No free input slot: give the async encoder a bounded chance to
-                    // reap a completion and free one before counting a drop.
                     if (!reapAndRoute(kSlotWaitMs))
                         goto end_encode_loop;
                     slot = encoder->AcquireFreeSlot();
                 }
-
-                if (slot >= 0 && hdrNativeActive) {
-                    // Native HDR10 (VFR): composite webcam/cursor in linear scRGB
-                    // FP16, then convert straight into the P010 slot.
-                    sampleWgcCursor();
-                    observeSprites(static_cast<uint64_t>(latestFrameTicks100ns));
-                    const WebcamOverlayLive overlay = sampleOverlay();
-                    observeWebcam(overlay);
-                    const auto comp_t0 = std::chrono::steady_clock::now();
-                    ID3D11Texture2D* nativeSrc = compositeFrameGpu(latestTex.get(), overlay);
-                    const auto comp_t1 = std::chrono::steady_clock::now();
-                    m_state.diagnostics.OnCompositorSubmit(
-                        comp_t1, std::chrono::duration<double, std::milli>(comp_t1 - comp_t0).count(),
-                        needsGpuCompositor || hdrPqInputIsPq);
-                    if (nativeSrc == nullptr) {
-                        encoder->ReleaseSlot(slot);
-                        goto end_encode_loop;
-                    }
-                    if (useOdCapture) {
-                        odCapturedTexValid = false;
-                    }
-
-                    // Live WYSIWYG preview tap: share the composited (or raw) FP16
-                    // scRGB frame; the preview tone-maps it for display (see CFR path).
-                    tapPreviewSource(nativeSrc, framePts_ns);
-
-                    const auto conv_t0 = std::chrono::steady_clock::now();
-                    if (!encodeNativeHdrSlot(nativeSrc, slot)) {
-                        encoder->ReleaseSlot(slot);
-                        goto end_encode_loop;
-                    }
-                    const auto conv_t1 = std::chrono::steady_clock::now();
-                    m_state.diagnostics.OnVpbltSubmit(
-                        conv_t1, std::chrono::duration<double, std::milli>(conv_t1 - conv_t0).count());
-                    latestTex = nullptr;
-
-                    d3dContext->CopyResource(vfrCachedPicture.get(), nv12Textures[slot].get());
-                    vfrCachedPictureValid = true;
-                    lastRealFrameSlot = slot;
-                    performSnapshotIfRequested(nv12Textures[static_cast<size_t>(slot)].get());
-                    maybeArmSplit(framePts_ns);
-
-                    std::vector<EncodedVideoPacket> pkts;
-                    std::string encErr;
-                    m_state.diagnostics.OnEncodeSubmitted();
-                    const auto enc_t0 = std::chrono::steady_clock::now();
-                    bool encOk = encoder->EncodeFrame(slot, framePts_ns, encodeWidth, encodeHeight, pkts, encErr);
-                    const auto enc_t1 = std::chrono::steady_clock::now();
-                    m_state.diagnostics.OnEncodeSubmitCost(
-                        enc_t1, std::chrono::duration<double, std::milli>(enc_t1 - enc_t0).count());
-                    for (const EncodedVideoPacket& pkt : pkts)
-                        reportPacketDiagnostics(pkt, enc_t1);
-                    if (!encOk) {
-                        m_state.RecordFailure(E_FAIL, ErrorPhase::VideoEncode, "Video encoder encode: " + encErr);
-                        break;
-                    }
-                    ++videoFramesCaptured;
-                    vfrLastSubmissionNs = framePts_ns;
-                    for (EncodedVideoPacket& pkt : pkts) {
-                        if (!routePacket(std::move(pkt)))
-                            goto end_encode_loop;
-                    }
-                    const auto tick_t1 = std::chrono::steady_clock::now();
-                    m_state.diagnostics.OnVideoTickTime(
-                        tick_t1, std::chrono::duration<double, std::milli>(tick_t1 - tick_t0).count());
-                } else if (slot >= 0) {
-                    sampleWgcCursor();
-                    observeSprites(static_cast<uint64_t>(latestFrameTicks100ns));
-                    const WebcamOverlayLive overlay = sampleOverlay();
-                    observeWebcam(overlay);
-                    const auto comp_t0 = std::chrono::steady_clock::now();
-                    ID3D11Texture2D* sdrSourceTex = toneMapIfHdr(latestTex.get());
-                    if (sdrSourceTex == nullptr) {
-                        encoder->ReleaseSlot(slot);
-                        goto end_encode_loop;
-                    }
-                    ID3D11Texture2D* vpInput = compositeFrameGpu(sdrSourceTex, overlay);
-                    const auto comp_t1 = std::chrono::steady_clock::now();
-                    m_state.diagnostics.OnCompositorSubmit(
-                        comp_t1, std::chrono::duration<double, std::milli>(comp_t1 - comp_t0).count(),
-                        needsGpuCompositor);
-                    if (vpInput == nullptr) {
-                        encoder->ReleaseSlot(slot);
-                        goto end_encode_loop;
-                    }
-                    if (useOdCapture) {
-                        odCapturedTexValid = false;
+                if (slot < 0) {
+                    ++slotStallCount;
+                    m_state.diagnostics.OnSlotStall();
+                    m_state.diagnostics.OnFrameDroppedBackpressure();
+                    continue;
+                }
+                sampleWgcCursor();
+                latestFrameTicks100ns =
+                    vfrDesktopPending ? vfrHeldDesktopTicks100ns : static_cast<int64_t>(visualNow100ns);
+                auto visualFrame = sampleVisualScene(static_cast<uint64_t>(latestFrameTicks100ns));
+                const auto currentVisualKey = MakeVisualFrameKey(visualGenerations);
+                const bool overlayChanged = !haveLastCompositedKey ||
+                                            currentVisualKey.cursor_generation != lastCompositedKey.cursor_generation ||
+                                            currentVisualKey.overlay_generation != lastCompositedKey.overlay_generation;
+                if (!vfrDesktopPending && !overlayChanged) {
+                    visualFrame = {};
+                    encoder->ReleaseSlot(slot);
+                } else {
+                    if (!vfrDesktopPending)
+                        ++visualTrace.held_recompositions;
+                    latestTex = vfrHeldDesktop;
+                    // A static desktop may report a present time before recording began.
+                    // Packet timestamps and A/V alignment must use the same clamped epoch.
+                    if (!videoEpochSet) {
+                        videoEpochTicks100ns =
+                            ClampedVfrVideoEpochTicks100ns(latestFrameTicks100ns, vfrEpochFloor100ns);
+                        videoEpochSet = true;
+                        // Publish the epoch the PTS timeline is actually built on,
+                        // not the moment this frame happened to be processed. VFR
+                        // PTS is `frame timestamp - videoEpochTicks100ns`, and both
+                        // WGC SystemRelativeTime and DXGI LastPresentTime are QPC
+                        // readings in 100 ns units — the same axis as
+                        // session_start_qpc_100ns — so publishing "now" instead put
+                        // the A/V alignment out by the capture-to-process latency.
+                        // (The CFR path has no such split: it derives PTS from the
+                        // same epoch value it publishes.)
+                        m_state.video_epoch_qpc_100ns.store(static_cast<uint64_t>(videoEpochTicks100ns));
+                        // Which of the two the clamp produced decides what the epoch is
+                        // worth to a measurement: the frame's own timestamp is an
+                        // instant on the QPC axis, the floor is only a bound below it.
+                        const auto epochFields =
+                            VideoEpochLogFields(static_cast<uint64_t>(videoEpochTicks100ns), qpcFreq,
+                                                VfrVideoEpochSource(videoEpochTicks100ns, latestFrameTicks100ns));
+                        logging::log(logging::LogLevel::Info, "video_thread", kVideoEpochLogMessage, epochFields);
                     }
 
-                    // Live WYSIWYG preview tap: share the composited pre-encode frame
-                    // (works for 4:4:4 too; non-blocking, never stalls the encode below).
-                    tapPreviewSource(vpInput, framePts_ns);
+                    int64_t deltaTicks = latestFrameTicks100ns - videoEpochTicks100ns;
+                    if (deltaTicks < 0)
+                        deltaTicks = 0;
+                    uint64_t framePts_ns = static_cast<uint64_t>(deltaTicks) * 100ULL;
+                    if (videoFramesCaptured > 0)
+                        framePts_ns = VfrPicturePts(framePts_ns, lastVideoPts, vfrMuxProgressFloorNs);
+                    lastVideoPts = framePts_ns;
 
-                    // RGB -> NV12/P010 via VideoProcessorBlt into the selected slot's
-                    // view, reusing the per-tick-cached input view (see acquireInputView).
-                    ID3D11VideoProcessorInputView* inputView = acquireInputView(vpInput);
+                    // Whole-tick frame-time bracket (VFR): from slot acquire to after
+                    // the packet is routed. Emitted only on the emit paths below.
+                    const auto tick_t0 = std::chrono::steady_clock::now();
 
-                    if (inputView != nullptr) {
-                        D3D11_VIDEO_PROCESSOR_STREAM stream{};
-                        stream.Enable = TRUE;
-                        stream.pInputSurface = inputView;
-
-                        const auto vp_t0 = std::chrono::steady_clock::now();
-                        vpbltGpuTimer.Begin(d3dContext.get());
-                        hr = videoContext->VideoProcessorBlt(videoProcessor.get(), videoOutputViews[slot].get(), 0, 1,
-                                                             &stream);
-                        vpbltGpuTimer.End(d3dContext.get());
-                        const auto vp_t1 = std::chrono::steady_clock::now();
-                        m_state.diagnostics.OnVpbltSubmit(
-                            vp_t1, std::chrono::duration<double, std::milli>(vp_t1 - vp_t0).count());
-                        if (const auto vp_gpu_ms = vpbltGpuTimer.Poll(d3dContext.get())) {
-                            m_state.diagnostics.OnRgbToYuvGpuTime(vp_t1, *vp_gpu_ms);
-                        }
-
-                        latestTex = nullptr;
-
-                        std::string ayuvErr;
-                        if (SUCCEEDED(hr) && !finalizeEncodeSurface(slot, ayuvErr)) {
-                            m_state.RecordFailure(E_FAIL, ErrorPhase::VideoEncode, "RGB->AYUV convert: " + ayuvErr);
+                    if (slot >= 0 && hdrNativeActive) {
+                        // Native HDR10 (VFR): composite webcam/cursor in linear scRGB
+                        // FP16, then convert straight into the P010 slot.
+                        const auto comp_t0 = std::chrono::steady_clock::now();
+                        ID3D11Texture2D* nativeSrc = compositeFrameGpu(latestTex.get(), visualFrame);
+                        visualFrame = {};
+                        const auto comp_t1 = std::chrono::steady_clock::now();
+                        m_state.diagnostics.OnCompositorSubmit(
+                            comp_t1, std::chrono::duration<double, std::milli>(comp_t1 - comp_t0).count(),
+                            needsGpuCompositor || hdrPqInputIsPq);
+                        if (nativeSrc == nullptr) {
                             encoder->ReleaseSlot(slot);
                             goto end_encode_loop;
                         }
-                        if (SUCCEEDED(hr)) {
-                            d3dContext->CopyResource(vfrCachedPicture.get(), nv12Textures[slot].get());
-                            vfrCachedPictureValid = true;
-                            // Capture frame snapshot on real frames (VFR path).
-                            lastRealFrameSlot = slot;
-                            performSnapshotIfRequested(nv12Textures[static_cast<size_t>(slot)].get());
+                        if (useOdCapture) {
+                            odCapturedTexValid = false;
+                        }
 
-                            // Arm a split boundary for this submission (see CFR path).
-                            maybeArmSplit(framePts_ns);
+                        // Live WYSIWYG preview tap: share the composited (or raw) FP16
+                        // scRGB frame; the preview tone-maps it for display (see CFR path).
+                        tapPreviewSource(nativeSrc, framePts_ns);
 
-                            std::vector<EncodedVideoPacket> pkts;
-                            std::string encErr;
-                            m_state.diagnostics.OnEncodeSubmitted();
-                            const auto enc_t0 = std::chrono::steady_clock::now();
-                            bool encOk =
-                                encoder->EncodeFrame(slot, framePts_ns, encodeWidth, encodeHeight, pkts, encErr);
-                            const auto enc_t1 = std::chrono::steady_clock::now();
-                            m_state.diagnostics.OnEncodeSubmitCost(
-                                enc_t1, std::chrono::duration<double, std::milli>(enc_t1 - enc_t0).count());
-                            for (const EncodedVideoPacket& pkt : pkts)
-                                reportPacketDiagnostics(pkt, enc_t1);
+                        const auto conv_t0 = std::chrono::steady_clock::now();
+                        if (!encodeNativeHdrSlot(nativeSrc, slot)) {
+                            encoder->ReleaseSlot(slot);
+                            goto end_encode_loop;
+                        }
+                        const auto conv_t1 = std::chrono::steady_clock::now();
+                        m_state.diagnostics.OnVpbltSubmit(
+                            conv_t1, std::chrono::duration<double, std::milli>(conv_t1 - conv_t0).count());
+                        latestTex = nullptr;
 
-                            if (!encOk) {
-                                m_state.RecordFailure(E_FAIL, ErrorPhase::VideoEncode,
-                                                      "Video encoder encode: " + encErr);
-                                break;
+                        d3dContext->CopyResource(vfrCachedPicture.get(), nv12Textures[slot].get());
+                        vfrCachedPictureValid = true;
+                        lastRealFrameSlot = slot;
+                        performSnapshotIfRequested(nv12Textures[static_cast<size_t>(slot)].get());
+                        maybeArmSplit(framePts_ns);
+
+                        std::vector<EncodedVideoPacket> pkts;
+                        std::string encErr;
+                        m_state.diagnostics.OnEncodeSubmitted();
+                        const auto enc_t0 = std::chrono::steady_clock::now();
+                        bool encOk = encoder->EncodeFrame(slot, framePts_ns, encodeWidth, encodeHeight, pkts, encErr);
+                        const auto enc_t1 = std::chrono::steady_clock::now();
+                        m_state.diagnostics.OnEncodeSubmitCost(
+                            enc_t1, std::chrono::duration<double, std::milli>(enc_t1 - enc_t0).count());
+                        for (const EncodedVideoPacket& pkt : pkts)
+                            reportPacketDiagnostics(pkt, enc_t1);
+                        if (!encOk) {
+                            m_state.RecordFailure(E_FAIL, ErrorPhase::VideoEncode, "Video encoder encode: " + encErr);
+                            break;
+                        }
+                        ++videoFramesCaptured;
+                        vfrLastSubmissionNs = framePts_ns;
+                        for (EncodedVideoPacket& pkt : pkts) {
+                            if (!routePacket(std::move(pkt)))
+                                goto end_encode_loop;
+                        }
+                        const auto tick_t1 = std::chrono::steady_clock::now();
+                        m_state.diagnostics.OnVideoTickTime(
+                            tick_t1, std::chrono::duration<double, std::milli>(tick_t1 - tick_t0).count());
+                    } else if (slot >= 0) {
+
+                        const auto comp_t0 = std::chrono::steady_clock::now();
+                        ID3D11Texture2D* sdrSourceTex = toneMapIfHdr(latestTex.get());
+                        if (sdrSourceTex == nullptr) {
+                            encoder->ReleaseSlot(slot);
+                            goto end_encode_loop;
+                        }
+                        ID3D11Texture2D* vpInput = compositeFrameGpu(sdrSourceTex, visualFrame);
+                        visualFrame = {};
+                        const auto comp_t1 = std::chrono::steady_clock::now();
+                        m_state.diagnostics.OnCompositorSubmit(
+                            comp_t1, std::chrono::duration<double, std::milli>(comp_t1 - comp_t0).count(),
+                            needsGpuCompositor);
+                        if (vpInput == nullptr) {
+                            encoder->ReleaseSlot(slot);
+                            goto end_encode_loop;
+                        }
+                        if (useOdCapture) {
+                            odCapturedTexValid = false;
+                        }
+
+                        // Live WYSIWYG preview tap: share the composited pre-encode frame
+                        // (works for 4:4:4 too; non-blocking, never stalls the encode below).
+                        tapPreviewSource(vpInput, framePts_ns);
+
+                        // RGB -> NV12/P010 via VideoProcessorBlt into the selected slot's
+                        // view, reusing the per-tick-cached input view (see acquireInputView).
+                        ID3D11VideoProcessorInputView* inputView = acquireInputView(vpInput);
+
+                        if (inputView != nullptr) {
+                            D3D11_VIDEO_PROCESSOR_STREAM stream{};
+                            stream.Enable = TRUE;
+                            stream.pInputSurface = inputView;
+
+                            const auto vp_t0 = std::chrono::steady_clock::now();
+                            vpbltGpuTimer.Begin(d3dContext.get());
+                            hr = videoContext->VideoProcessorBlt(videoProcessor.get(), videoOutputViews[slot].get(), 0,
+                                                                 1, &stream);
+                            vpbltGpuTimer.End(d3dContext.get());
+                            const auto vp_t1 = std::chrono::steady_clock::now();
+                            m_state.diagnostics.OnVpbltSubmit(
+                                vp_t1, std::chrono::duration<double, std::milli>(vp_t1 - vp_t0).count());
+                            if (const auto vp_gpu_ms = vpbltGpuTimer.Poll(d3dContext.get())) {
+                                m_state.diagnostics.OnRgbToYuvGpuTime(vp_t1, *vp_gpu_ms);
                             }
 
-                            ++videoFramesCaptured;
-                            vfrLastSubmissionNs = framePts_ns;
+                            latestTex = nullptr;
 
-                            for (EncodedVideoPacket& pkt : pkts) {
-                                if (!routePacket(std::move(pkt)))
-                                    goto end_encode_loop;
+                            std::string ayuvErr;
+                            if (SUCCEEDED(hr) && !finalizeEncodeSurface(slot, ayuvErr)) {
+                                m_state.RecordFailure(E_FAIL, ErrorPhase::VideoEncode, "RGB->AYUV convert: " + ayuvErr);
+                                encoder->ReleaseSlot(slot);
+                                goto end_encode_loop;
                             }
+                            if (SUCCEEDED(hr)) {
+                                d3dContext->CopyResource(vfrCachedPicture.get(), nv12Textures[slot].get());
+                                vfrCachedPictureValid = true;
+                                // Capture frame snapshot on real frames (VFR path).
+                                lastRealFrameSlot = slot;
+                                performSnapshotIfRequested(nv12Textures[static_cast<size_t>(slot)].get());
 
-                            const auto tick_t1 = std::chrono::steady_clock::now();
-                            m_state.diagnostics.OnVideoTickTime(
-                                tick_t1, std::chrono::duration<double, std::milli>(tick_t1 - tick_t0).count());
+                                // Arm a split boundary for this submission (see CFR path).
+                                maybeArmSplit(framePts_ns);
+
+                                std::vector<EncodedVideoPacket> pkts;
+                                std::string encErr;
+                                m_state.diagnostics.OnEncodeSubmitted();
+                                const auto enc_t0 = std::chrono::steady_clock::now();
+                                bool encOk =
+                                    encoder->EncodeFrame(slot, framePts_ns, encodeWidth, encodeHeight, pkts, encErr);
+                                const auto enc_t1 = std::chrono::steady_clock::now();
+                                m_state.diagnostics.OnEncodeSubmitCost(
+                                    enc_t1, std::chrono::duration<double, std::milli>(enc_t1 - enc_t0).count());
+                                for (const EncodedVideoPacket& pkt : pkts)
+                                    reportPacketDiagnostics(pkt, enc_t1);
+
+                                if (!encOk) {
+                                    m_state.RecordFailure(E_FAIL, ErrorPhase::VideoEncode,
+                                                          "Video encoder encode: " + encErr);
+                                    break;
+                                }
+
+                                ++videoFramesCaptured;
+                                vfrLastSubmissionNs = framePts_ns;
+
+                                for (EncodedVideoPacket& pkt : pkts) {
+                                    if (!routePacket(std::move(pkt)))
+                                        goto end_encode_loop;
+                                }
+
+                                const auto tick_t1 = std::chrono::steady_clock::now();
+                                m_state.diagnostics.OnVideoTickTime(
+                                    tick_t1, std::chrono::duration<double, std::milli>(tick_t1 - tick_t0).count());
+                            } else {
+                                // Acquired, never submitted: hand the slot back, or eight
+                                // such ticks leave the encoder with no free slot for the
+                                // rest of the session (the CFR path does the same, see
+                                // ClassifyCfrTickDrop).
+                                encoder->ReleaseSlot(slot);
+                                ++droppedFrames;
+                                m_state.diagnostics.OnFrameDroppedProcessingFailure();
+                            }
                         } else {
-                            // Acquired, never submitted: hand the slot back, or eight
-                            // such ticks leave the encoder with no free slot for the
-                            // rest of the session (the CFR path does the same, see
-                            // ClassifyCfrTickDrop).
+                            latestTex = nullptr;
                             encoder->ReleaseSlot(slot);
                             ++droppedFrames;
                             m_state.diagnostics.OnFrameDroppedProcessingFailure();
                         }
                     } else {
+                        // No free slot — drop the frame and skip
                         latestTex = nullptr;
-                        encoder->ReleaseSlot(slot);
-                        ++droppedFrames;
-                        m_state.diagnostics.OnFrameDroppedProcessingFailure();
+                        ++slotStallCount;
+                        m_state.diagnostics.OnSlotStall();
+                        m_state.diagnostics.OnFrameDroppedBackpressure();
                     }
-                } else {
-                    // No free slot — drop the frame and skip
-                    latestTex = nullptr;
-                    ++slotStallCount;
-                    m_state.diagnostics.OnSlotStall();
-                    m_state.diagnostics.OnFrameDroppedBackpressure();
-                }
 
-                anyWork = true;
+                    visualFrame = {};
+                    lastCompositedKey = currentVisualKey;
+                    haveLastCompositedKey = true;
+                    vfrDesktopPending = false;
+                    anyWork = true;
+                }
             }
 
             if (videoEpochSet && !anyWork) {
@@ -5565,42 +5501,22 @@ end_encode_loop:
         }
     }
 
-    // Emitted for every WGC session with the cursor on, including the ones where
-    // nothing went wrong: the counters are only useful against a baseline, and a
-    // line that appears solely on failure has none. samples==0 means the sampler
-    // never ran, which is itself distinct from every outcome it can report.
-    // Emitted for both backends and for every session with a webcam attached,
-    // including the ones where nothing went wrong: a counter that appeared only on
-    // failure would have no baseline to be read against.
-    if (webcamProviderAvailable) {
+    if (visualRuntime) {
         const logging::LogField fields[] = {
-            {"samples", std::to_string(overlayTrace.samples)},
-            {"generation_changes", std::to_string(overlayTrace.generation_changes)},
-            {"webcam_generation_changes", std::to_string(overlayTrace.webcam_generation_changes)},
-            {"webcam_gpu_uploads", std::to_string(gpuCompositor.WebcamUploadCount())},
-            {"hold_opportunities", std::to_string(overlayTrace.hold_opportunities)},
-            {"recomposited_for_overlay", std::to_string(overlayTrace.recomposited_for_overlay)},
-            {"composited_with_overlay", std::to_string(overlayTrace.composited_with_overlay)},
-            {"backend", useOdCapture ? "od" : "wgc"}};
-        logging::log(logging::LogLevel::Info, "video_thread", kWebcamOverlaySummaryLogMessage,
-                     std::span<const logging::LogField>(fields, std::size(fields)));
-    }
-
-    // Same baseline rule as the webcam line: emitted whenever a sprite source is
-    // configured. A generation change that never meets a held screen is normal
-    // on a busy desktop; uploads above generation changes would be a cache fault.
-    if (spriteSourcesConfigured) {
-        const logging::LogField fields[] = {
-            {"sources", std::to_string(m_state.config.sprite_sources.size())},
-            {"generation_changes", std::to_string(spriteTrace.generation_changes)},
-            {"recomposited_for_sprites", std::to_string(spriteTrace.recomposited_for_sprites)},
+            {"samples", std::to_string(visualTrace.samples)},
+            {"changes", std::to_string(visualTrace.changes)},
+            {"images_updated", std::to_string(visualTrace.images_updated)},
+            {"history_busy", std::to_string(visualTrace.history_busy)},
+            {"history_missing", std::to_string(visualTrace.history_missing)},
+            {"held_recompositions", std::to_string(visualTrace.held_recompositions)},
+            {"composites", std::to_string(visualTrace.composites)},
+            {"image_gpu_uploads", std::to_string(gpuCompositor.WebcamUploadCount())},
             {"atlas_gpu_uploads", std::to_string(gpuCompositor.SpriteAtlasUploadCount())},
             {"quads_drawn", std::to_string(gpuCompositor.SpriteQuadDrawCount())},
             {"backend", useOdCapture ? "od" : "wgc"}};
-        logging::log(logging::LogLevel::Info, "video_thread", kSpriteOverlaySummaryLogMessage,
+        logging::log(logging::LogLevel::Info, "video_thread", "visual scene summary",
                      std::span<const logging::LogField>(fields, std::size(fields)));
     }
-
     if (!useOdCapture && m_state.config.capture_cursor) {
         const logging::LogField fields[] = {
             {"samples", std::to_string(wgcCursorTrace.samples)},

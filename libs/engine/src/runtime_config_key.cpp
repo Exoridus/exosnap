@@ -170,13 +170,7 @@ std::string RuntimeConfigContentKey(const RecorderConfig& v) {
              c.mastering_display_primary_r_y, c.mastering_display_primary_g_x, c.mastering_display_primary_g_y,
              c.mastering_display_primary_b_x, c.mastering_display_primary_b_y, c.mastering_display_white_point_x,
              c.mastering_display_white_point_y, c.mastering_display_max_luminance, c.mastering_display_min_luminance);
-    const auto& w = v.webcam;
-    d.Fields(w.enabled, reinterpret_cast<uintptr_t>(w.frame_provider), w.overlay_x_norm, w.overlay_y_norm,
-             w.overlay_w_norm, w.overlay_h_norm, w.mirror, w.opacity, w.chroma_key_enabled, w.chroma_r, w.chroma_g,
-             w.chroma_b, w.chroma_tolerance, w.chroma_softness, w.chroma_spill_reduction);
-    d.Fields(v.sprite_sources.size());
-    for (const SpriteSourceProvider* source : v.sprite_sources)
-        d.Fields(reinterpret_cast<uintptr_t>(source));
+    d.Fields(reinterpret_cast<uintptr_t>(v.visual_scene.get()));
     return d.Finish();
 }
 

@@ -1,7 +1,10 @@
 #pragma once
 
 #include "GamepadSprites.h"
+#include "extensions/GamepadModule.h"
 #include "models/GamepadOverlaySettings.h"
+
+#include <atomic>
 
 #include <QObject>
 #include <QRectF>
@@ -29,7 +32,10 @@ class GamepadOverlay final : public QObject, public engine::SpriteSourceProvider
 
   public:
     explicit GamepadOverlay(QObject* parent = nullptr);
+    ~GamepadOverlay() override;
+    void WaitForVisualControl();
     void Configure(GamepadOverlaySettings settings);
+    GamepadControlHooks CreateControlHooks(std::shared_ptr<engine::VisualSceneRuntime>);
     [[nodiscard]] GamepadOverlaySettings Settings() const;
     [[nodiscard]] std::shared_ptr<const engine::SpriteLayerSnapshot> Snapshot(uint64_t frame_time_qpc_100ns) override;
     [[nodiscard]] std::shared_ptr<const engine::SpriteLayerSnapshot> PreviewSnapshot(uint64_t frame_time_qpc_100ns);
@@ -74,12 +80,15 @@ class GamepadOverlay final : public QObject, public engine::SpriteSourceProvider
     void devicesChanged();
     void statusChanged();
     void frameChanged();
+    void visualControlSettled();
 
   private:
     friend class GamepadOverlayTest;
     static gamepad::GamepadState DisplayState(gamepad::GamepadState state);
+    void ConfigureBackend(GamepadOverlaySettings);
     void Poll();
     void Rebuild();
+    void PublishVisualData();
     void SetStatus(QString text);
     std::shared_ptr<const engine::SpriteLayerSnapshot> BuildSnapshot(uint64_t timestamp, bool preview);
     mutable std::mutex mutex_;
@@ -102,6 +111,16 @@ class GamepadOverlay final : public QObject, public engine::SpriteSourceProvider
     QTimer raster_;
     // Join workers before their data and QObject delivery context are destroyed.
     QThreadPool raster_pool_;
+    uint64_t raster_requested_serial_ = 0;
+    std::atomic<uint64_t> raster_completed_serial_{0};
+    std::shared_ptr<engine::VisualSceneRuntime> visual_runtime_;
+    engine::SourceToken visual_token_;
+    engine::SourceToken published_token_;
+    const GamepadSpriteSet* published_sprites_ = nullptr;
+    std::function<void(SourceStatus)> visual_status_;
+    bool visual_waiting_ = false;
+    bool source_demand_ = false;
+    bool native_enabled_ = false;
 };
 
 } // namespace exosnap::quick

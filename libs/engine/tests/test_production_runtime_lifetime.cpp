@@ -8,6 +8,7 @@
 #include <exosnap/engine/audio_routing_model.h>
 #include <exosnap/engine/recorder_session.h>
 #include <exosnap/engine/recording_media_types.h>
+#include <exosnap/engine/visual_scene_runtime.h>
 #include <utility>
 
 #include <gtest/gtest.h>
@@ -53,15 +54,23 @@ TEST(RecordingManifest, KeepsSourceAndTrackIdentityAcrossSegmentsWithoutDeviceBi
     EXPECT_EQ(serialized.value()->find("private-endpoint"), std::string::npos);
 }
 
-TEST(RuntimeCommand, ContentIdentityTracksResolvedAudioAndWebcamWithoutObjectAddresses) {
+TEST(RuntimeCommand, ContentIdentityTracksResolvedAudioAndVisualRuntimeIdentity) {
     RecorderConfig config;
     config.output_path = L"test.mkv";
     const auto original = RuntimeConfigContentKey(config);
     EXPECT_EQ(original, RuntimeConfigContentKey(RecorderConfig(config)));
     EXPECT_EQ(original.size(), 64u);
     auto changed = config;
-    changed.webcam.chroma_softness = 0.33f;
+    changed.visual_scene = std::make_shared<VisualSceneRuntime>(VisualBudgetPolicy{});
     EXPECT_NE(original, RuntimeConfigContentKey(changed));
+    const auto runtime_key = RuntimeConfigContentKey(changed);
+    EXPECT_EQ(runtime_key, RuntimeConfigContentKey(RecorderConfig(changed)));
+    PreparedSceneDescription scene;
+    scene.revision = ConfigRevision{7};
+    ASSERT_TRUE(changed.visual_scene->PublishScene(scene).succeeded());
+    EXPECT_EQ(runtime_key, RuntimeConfigContentKey(changed));
+    changed.visual_scene = std::make_shared<VisualSceneRuntime>(VisualBudgetPolicy{});
+    EXPECT_NE(runtime_key, RuntimeConfigContentKey(changed));
     changed = config;
     changed.resolved_audio_plan = ResolvedAudioPlan{};
     EXPECT_NE(original, RuntimeConfigContentKey(changed));

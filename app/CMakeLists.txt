@@ -357,6 +357,45 @@ target_include_directories(extensions_contract_tests PRIVATE
 )
 
 exosnap_add_gtest(
+    NAME visual_provider_tests
+    TEST_PREFIX visual.providers.
+    SOURCES
+        tests/test_visual_webcam_source.cpp
+        tests/test_visual_gamepad_source.cpp
+        tests/test_builtin_visual_settings.cpp
+        extensions/GamepadModule.cpp
+        extensions/BuiltinVisualSettings.cpp
+        extensions/WebcamModule.cpp
+        extensions/CapabilityRegistry.cpp
+        extensions/VisualSettings.cpp
+    LIBRARIES tomlplusplus::tomlplusplus Qt6::Core
+)
+target_include_directories(visual_provider_tests PRIVATE
+    ${CMAKE_CURRENT_SOURCE_DIR}
+    ${PROJECT_SOURCE_DIR}/libs/engine/include
+)
+
+exosnap_add_gtest(
+    NAME visual_manager_tests
+    TEST_PREFIX visual.manager.
+    SOURCES
+        tests/test_visual_source_manager.cpp
+        extensions/VisualSourceManager.cpp
+        extensions/CapabilityRegistry.cpp
+        extensions/VisualSettings.cpp
+        models/VisualSceneConfig.cpp
+        ${PROJECT_SOURCE_DIR}/libs/engine/src/visual_scene_runtime.cpp
+        ${PROJECT_SOURCE_DIR}/libs/engine/src/gamepad_frame_sampler.cpp
+    LIBRARIES tomlplusplus::tomlplusplus exosnap_gamepad
+)
+target_include_directories(visual_manager_tests PRIVATE
+    ${CMAKE_CURRENT_SOURCE_DIR}
+    ${PROJECT_SOURCE_DIR}/libs/engine/include
+    ${PROJECT_SOURCE_DIR}/libs/engine/src
+)
+target_compile_definitions(visual_manager_tests PRIVATE NOMINMAX)
+
+exosnap_add_gtest(
     NAME recording_preset_tests
     TEST_PREFIX preset.
     SOURCES

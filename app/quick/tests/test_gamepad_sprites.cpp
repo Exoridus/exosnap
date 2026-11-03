@@ -4,6 +4,7 @@
 #include "models/GamepadOverlaySettings.h"
 
 #include <exosnap/engine/overlay_sprites.h>
+#include <exosnap/engine/visual_scene_runtime.h>
 #include <gamepad/gamepad.h>
 
 #include <QCoreApplication>
@@ -16,6 +17,7 @@
 #include <QJsonObject>
 #include <QObject>
 #include <QPainter>
+#include <QSemaphore>
 #include <QSize>
 #include <QSvgRenderer>
 #include <QTemporaryDir>
@@ -397,6 +399,7 @@ class GamepadOverlayTest : public ::testing::Test {
     }
     static void Seed(GamepadOverlay& overlay, std::shared_ptr<const GamepadSpriteSet> sprites) {
         overlay.settings_.enabled = true;
+        overlay.native_enabled_ = true;
         overlay.sprites_ = std::move(sprites);
         ++overlay.revision_;
     }
@@ -409,7 +412,130 @@ class GamepadOverlayTest : public ::testing::Test {
     static void WaitRaster(GamepadOverlay& overlay) {
         overlay.raster_pool_.waitForDone();
     }
+    static bool BackendIdle(const GamepadOverlay& overlay) {
+        return !overlay.input_ && !overlay.native_enabled_ && !overlay.poll_.isActive() &&
+               !overlay.raster_.isActive() && overlay.pending_atlas_key_.isEmpty();
+    }
+    static bool BlockRaster(GamepadOverlay& overlay, QSemaphore& entered, QSemaphore& release) {
+        overlay.raster_pool_.start([&entered, &release] {
+            entered.release();
+            EXPECT_TRUE(release.tryAcquire(1, 10000));
+        });
+        return entered.tryAcquire(1, 5000);
+    }
+    static void PrepareQueuedDelivery(GamepadOverlay& overlay, int& statuses) {
+        overlay.settings_.enabled = true;
+        overlay.native_enabled_ = true;
+        overlay.source_demand_ = true;
+        overlay.visual_status_ = [&statuses](SourceStatus) { ++statuses; };
+        overlay.Rebuild();
+        ++overlay.visual_token_.request.value;
+    }
+    static bool HasPublishedSprites(const GamepadOverlay& overlay) {
+        return overlay.published_sprites_ != nullptr;
+    }
 };
+
+TEST_F(GamepadOverlayTest, ManagedConfigurationDefersNativeWorkUntilSourceDemand) {
+    int argc = 1;
+    char name[] = "gamepad-tests";
+    char* argv[]{name, nullptr};
+    QCoreApplication application(argc, argv);
+    GamepadOverlay overlay;
+    const auto hooks =
+        overlay.CreateControlHooks(std::make_shared<engine::VisualSceneRuntime>(engine::VisualBudgetPolicy{}));
+    auto settings = overlay.Settings();
+    settings.enabled = true;
+    settings.layout = 0;
+    overlay.Configure(settings);
+    QCoreApplication::processEvents();
+    EXPECT_TRUE(overlay.enabled());
+    EXPECT_TRUE(BackendIdle(overlay));
+    EXPECT_TRUE(hooks.is_quiescent());
+}
+
+TEST_F(GamepadOverlayTest, StopWaitsForRasterFenceAfterCancellingQueuedArtwork) {
+    int argc = 1;
+    char name[] = "gamepad-tests";
+    char* argv[]{name, nullptr};
+    QCoreApplication application(argc, argv);
+    QSemaphore entered;
+    QSemaphore release;
+    GamepadOverlay overlay;
+    const auto hooks =
+        overlay.CreateControlHooks(std::make_shared<engine::VisualSceneRuntime>(engine::VisualBudgetPolicy{}));
+    int settled = 0;
+    int statuses = 0;
+    QObject::connect(&overlay, &GamepadOverlay::visualControlSettled, [&] { ++settled; });
+    ASSERT_TRUE(BlockRaster(overlay, entered, release));
+    PrepareQueuedDelivery(overlay, statuses);
+    hooks.request_stop();
+    EXPECT_FALSE(hooks.is_quiescent());
+    EXPECT_EQ(settled, 0);
+    release.release();
+    WaitRaster(overlay);
+    EXPECT_TRUE(hooks.is_quiescent());
+    QCoreApplication::processEvents();
+    EXPECT_EQ(settled, 1);
+    EXPECT_EQ(statuses, 0);
+    EXPECT_TRUE(BackendIdle(overlay));
+    EXPECT_FALSE(overlay.Snapshot(0));
+}
+
+TEST_F(GamepadOverlayTest, ShutdownDrainsStaleArtworkWithoutRestartingOrPublishing) {
+    int argc = 1;
+    char name[] = "gamepad-tests";
+    char* argv[]{name, nullptr};
+    QCoreApplication application(argc, argv);
+    GamepadOverlay overlay;
+    const auto hooks =
+        overlay.CreateControlHooks(std::make_shared<engine::VisualSceneRuntime>(engine::VisualBudgetPolicy{}));
+    int settled = 0;
+    int statuses = 0;
+    int frames = 0;
+    QObject::connect(&overlay, &GamepadOverlay::visualControlSettled, [&] { ++settled; });
+    QObject::connect(&overlay, &GamepadOverlay::frameChanged, [&] { ++frames; });
+    PrepareQueuedDelivery(overlay, statuses);
+    overlay.WaitForVisualControl();
+    EXPECT_TRUE(hooks.is_quiescent());
+    EXPECT_EQ(settled, 0);
+    QCoreApplication::processEvents();
+    EXPECT_EQ(settled, 1);
+    EXPECT_EQ(statuses, 0);
+    EXPECT_EQ(frames, 0);
+    EXPECT_TRUE(BackendIdle(overlay));
+    EXPECT_FALSE(HasPublishedSprites(overlay));
+    EXPECT_FALSE(overlay.Snapshot(0));
+}
+
+TEST_F(GamepadOverlayTest, DisableAndReplacementReleaseCachedAndNotifiedAtlas) {
+    int argc = 1;
+    char name[] = "gamepad-tests";
+    char* argv[]{name, nullptr};
+    QCoreApplication application(argc, argv);
+    for (const bool replace : {false, true}) {
+        SCOPED_TRACE(replace);
+        QString error;
+        auto sprites =
+            RasterizeGamepad(QStringLiteral(EXOSNAP_GAMEPAD_ASSET_DIR "/dualsense.svg"), 480, false, false, error);
+        ASSERT_TRUE(sprites) << error.toStdString();
+        std::weak_ptr atlas(sprites->atlas);
+        GamepadOverlay overlay;
+        Seed(overlay, std::move(sprites));
+        ASSERT_TRUE(overlay.Snapshot(0));
+        Poll(overlay);
+        ASSERT_FALSE(atlas.expired());
+        if (replace) {
+            Rebuild(overlay);
+            WaitRaster(overlay);
+            QCoreApplication::processEvents();
+            EXPECT_TRUE(overlay.Snapshot(0));
+        } else {
+            overlay.setEnabled(false);
+        }
+        EXPECT_TRUE(atlas.expired());
+    }
+}
 
 TEST_F(GamepadOverlayTest, RecorderSnapshotDoesNotConsumePreviewNotification) {
     int argc = 1;

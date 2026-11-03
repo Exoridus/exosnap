@@ -1,6 +1,8 @@
 #include "BenchmarkEffectiveConfig.h"
 
+#include <exosnap/engine/gamepad_sprite_data.h>
 #include <exosnap/engine/recorder_session.h>
+#include <exosnap/engine/visual_scene_runtime.h>
 
 #include <QCryptographicHash>
 
@@ -208,6 +210,101 @@ class FieldBuilder {
     QStringList fields_;
 };
 
+bool DescribeVisualScene(FieldBuilder& builder, VisualSceneRuntime& runtime) {
+    const auto registered = runtime.RegisterConsumer();
+    if (!registered.succeeded())
+        return false;
+    struct SceneSample {
+        VisualSceneRuntime& runtime;
+        VisualConsumerId consumer;
+        SceneReadLease scene;
+        ~SceneSample() {
+            scene.Reset();
+            runtime.UnregisterConsumer(consumer);
+        }
+    } sample{runtime, *registered.value(), {}};
+    if (runtime.TryReadScene(sample.consumer, sample.scene) != ReadResult::Updated)
+        return false;
+
+    builder.Add("visual_scene_sample", "available");
+    builder.Add("visual_item_count", static_cast<qint64>(sample.scene.Items().size()));
+    for (const auto& item : sample.scene.Items()) {
+        const auto& properties = item.properties;
+        const auto& placement = properties.placement;
+        builder.Add("visual_item_binding", static_cast<qint64>(item.binding_index));
+        builder.Add("visual_item_visible", properties.output_visible);
+        builder.Add("visual_item_order", static_cast<qint64>(properties.order));
+        builder.AddReal("visual_item_x", placement.x);
+        builder.AddReal("visual_item_y", placement.y);
+        builder.AddReal("visual_item_w", placement.w);
+        builder.AddReal("visual_item_h", placement.h);
+        builder.Add("visual_item_mirror", placement.mirror);
+        builder.AddReal("visual_item_opacity", properties.opacity, 3);
+        builder.Add("visual_item_chroma", item.chroma_key.enabled);
+        if (item.chroma_key.enabled) {
+            builder.Add("visual_item_chroma_rgb", QString::number(item.chroma_key.r) + QLatin1Char(',') +
+                                                      QString::number(item.chroma_key.g) + QLatin1Char(',') +
+                                                      QString::number(item.chroma_key.b));
+            builder.AddReal("visual_item_chroma_tolerance", item.chroma_key.tolerance, 3);
+            builder.AddReal("visual_item_chroma_softness", item.chroma_key.softness, 3);
+            builder.AddReal("visual_item_chroma_spill", item.chroma_key.spill_reduction, 3);
+        }
+    }
+    builder.Add("visual_binding_count", static_cast<qint64>(sample.scene.Bindings().size()));
+    const auto addAtlasRect = [&](const char* key, const SpriteAtlasRect& rect) {
+        builder.Add(key, QString::number(rect.x) + QLatin1Char(',') + QString::number(rect.y) + QLatin1Char(',') +
+                             QString::number(rect.w) + QLatin1Char(',') + QString::number(rect.h));
+    };
+    const auto addContentRect = [&](const char* key, const SpriteContentRect& rect) {
+        builder.Add(key, Real(rect.x) + QLatin1Char(',') + Real(rect.y) + QLatin1Char(',') + Real(rect.w) +
+                             QLatin1Char(',') + Real(rect.h));
+    };
+    for (const auto& binding : sample.scene.Bindings()) {
+        if (const auto* image = std::get_if<CpuImageBinding>(&binding.content)) {
+            builder.Add("visual_binding_type", "cpu-image");
+            builder.Add("visual_image_width", static_cast<qint64>(image->layout.width));
+            builder.Add("visual_image_height", static_cast<qint64>(image->layout.height));
+            builder.Add("visual_image_format", static_cast<qint64>(image->layout.format));
+            builder.Add("visual_image_matrix", static_cast<qint64>(image->layout.matrix));
+            builder.Add("visual_image_range", static_cast<qint64>(image->layout.range));
+        } else {
+            const auto& pad = std::get<GamepadBinding>(binding.content);
+            builder.Add("visual_binding_type", "gamepad");
+            builder.Add("visual_gamepad_sprites", pad.sprites != nullptr);
+            builder.Add("visual_gamepad_history", pad.history != nullptr);
+            if (!pad.sprites)
+                continue;
+            const auto& sprites = *pad.sprites;
+            builder.Add("visual_gamepad_atlas", sprites.atlas != nullptr);
+            if (sprites.atlas) {
+                builder.Add("visual_atlas_width", static_cast<qint64>(sprites.atlas->width));
+                builder.Add("visual_atlas_height", static_cast<qint64>(sprites.atlas->height));
+                const auto pixels = QByteArrayView(reinterpret_cast<const char*>(sprites.atlas->pixels.data()),
+                                                   static_cast<qsizetype>(sprites.atlas->pixels.size()));
+                builder.Add("visual_atlas_sha256",
+                            QString::fromLatin1(QCryptographicHash::hash(pixels, QCryptographicHash::Sha256).toHex()));
+            }
+            builder.Add("visual_gamepad_part_count", static_cast<qint64>(sprites.parts.size()));
+            for (const auto& part : sprites.parts) {
+                addAtlasRect("visual_part_idle", part.idle);
+                addAtlasRect("visual_part_pressed", part.pressed);
+                addContentRect("visual_part_bounds", part.bounds);
+                builder.Add("visual_part_button", static_cast<qint64>(part.button));
+                builder.Add("visual_part_motion", static_cast<qint64>(part.motion));
+                builder.Add("visual_part_auxiliary", static_cast<qint64>(part.auxiliary));
+                builder.AddReal("visual_part_travel_x", part.travel_x);
+                builder.AddReal("visual_part_travel_y", part.travel_y);
+                builder.Add("visual_part_control", static_cast<qint64>(part.control));
+                builder.Add("visual_part_click_control", static_cast<qint64>(part.click_control));
+                builder.Add("visual_part_canonical", part.canonical);
+                addAtlasRect("visual_part_knockout", part.knockout);
+                addContentRect("visual_part_knockout_bounds", part.knockout_bounds);
+            }
+        }
+    }
+    return true;
+}
+
 } // namespace
 
 EffectiveRecordingConfig UnavailableEffectiveConfig() {
@@ -310,45 +407,21 @@ EffectiveRecordingConfig DescribeEffectiveConfig(const exosnap::engine::Recorder
     builder.Add("mic_rnnoise", config.mic_rnnoise_enabled);
     builder.Add("audio_target_pid_bound", config.audio_target_process_id.has_value());
 
-    // ---- Webcam -------------------------------------------------------------
-    // The overlay's geometry and keying only enter the fingerprint when the
-    // overlay is actually composited. A disabled webcam still carries whatever
-    // position the owning frontend last persisted, and those defaults legitimately
-    // differ (a bare coordinator has no settings store at all, so it reports
-    // 0.0/0.0 where an application reports its saved corner). Hashing an inert
-    // value would reject a pair that is recording exactly the same thing — the
-    // fingerprint has to be sensitive to what changes the encode and to nothing
-    // else, or operators learn to override it.
-    //
-    // frame_provider is a pointer and deliberately absent; whether a provider is
-    // attached is what changes the encode, not its address.
-    builder.Add("webcam", config.webcam.enabled);
-    if (config.webcam.enabled) {
-        builder.Add("webcam_provider_attached", config.webcam.frame_provider != nullptr);
-        builder.AddReal("webcam_overlay_x", config.webcam.overlay_x_norm);
-        builder.AddReal("webcam_overlay_y", config.webcam.overlay_y_norm);
-        builder.AddReal("webcam_overlay_w", config.webcam.overlay_w_norm);
-        builder.AddReal("webcam_overlay_h", config.webcam.overlay_h_norm);
-        builder.Add("webcam_mirror", config.webcam.mirror);
-        builder.AddReal("webcam_opacity", config.webcam.opacity, 3);
-        builder.Add("webcam_chroma_key", config.webcam.chroma_key_enabled);
-        if (config.webcam.chroma_key_enabled) {
-            builder.Add("webcam_chroma_rgb", QString::number(config.webcam.chroma_r) + QLatin1Char(',') +
-                                                 QString::number(config.webcam.chroma_g) + QLatin1Char(',') +
-                                                 QString::number(config.webcam.chroma_b));
-            builder.AddReal("webcam_chroma_tolerance", config.webcam.chroma_tolerance, 3);
-            builder.AddReal("webcam_chroma_softness", config.webcam.chroma_softness, 3);
-            builder.AddReal("webcam_chroma_spill", config.webcam.chroma_spill_reduction, 3);
-        }
-    }
+    // This is a control-side scene sample, not acknowledgement of a recorded frame.
+    builder.Add("visual_scene_attached", config.visual_scene != nullptr);
+    const bool scene_available = !config.visual_scene || DescribeVisualScene(builder, *config.visual_scene);
+    if (!scene_available)
+        builder.Add("visual_scene_sample", "unavailable");
 
     // ---- Split --------------------------------------------------------------
     builder.Add("split_duration_ms", static_cast<qint64>(config.split.duration_ms));
     builder.Add("split_size_bytes", static_cast<qint64>(config.split.size_bytes));
 
     EffectiveRecordingConfig result;
-    result.available = true;
+    result.available = scene_available;
     result.fields = builder.Take();
+    if (!result.available)
+        return result;
     const QByteArray digest =
         QCryptographicHash::hash(result.fields.join(QLatin1Char('\n')).toUtf8(), QCryptographicHash::Sha256);
     result.fingerprint = QString::fromLatin1(digest.left(8).toHex());

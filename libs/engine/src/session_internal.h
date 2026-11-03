@@ -240,11 +240,11 @@ struct SessionState {
     // frame instead of polling the keyed mutex at its own render cadence.
     std::function<void()> preview_frame_published_cb;
 
-    // Record config captured at Record() time
+    // Retains host runtime ownership until even delayed workers release this state.
     RecorderConfig config;
 
-    mutable std::mutex webcam_overlay_mutex;
-    WebcamOverlayLive webcam_overlay;
+    std::atomic<uint64_t> composited_visual_scene_sequence{0};
+    std::atomic<uint64_t> composited_visual_scene_revision{0};
 
     // Number of expected output audio tracks for mux readiness/routing.
     uint32_t audio_track_count = 0;
@@ -271,96 +271,6 @@ struct SessionState {
     // ---------------------------------------------------------------------------
     // Helpers
     // ---------------------------------------------------------------------------
-
-    static WebcamOverlayLive SanitizeWebcamOverlay(WebcamOverlayLive overlay) noexcept {
-        WebcamPlacement placement;
-        placement.x = overlay.overlay_x_norm;
-        placement.y = overlay.overlay_y_norm;
-        placement.w = overlay.overlay_w_norm;
-        placement.h = overlay.overlay_h_norm;
-        placement.mirror = overlay.mirror;
-        placement = SanitizeWebcamPlacement(placement);
-
-        overlay.overlay_x_norm = placement.x;
-        overlay.overlay_y_norm = placement.y;
-        overlay.overlay_w_norm = placement.w;
-        overlay.overlay_h_norm = placement.h;
-        overlay.mirror = placement.mirror;
-
-        if (!std::isfinite(static_cast<double>(overlay.chroma_tolerance))) {
-            overlay.chroma_tolerance = 0.40f;
-        }
-        if (!std::isfinite(static_cast<double>(overlay.chroma_softness))) {
-            overlay.chroma_softness = 0.15f;
-        }
-        if (!std::isfinite(static_cast<double>(overlay.chroma_spill_reduction))) {
-            overlay.chroma_spill_reduction = 0.30f;
-        }
-        overlay.chroma_tolerance = std::clamp(overlay.chroma_tolerance, 0.0f, 1.0f);
-        overlay.chroma_softness = std::clamp(overlay.chroma_softness, 0.0f, 1.0f);
-        overlay.chroma_spill_reduction = std::clamp(overlay.chroma_spill_reduction, 0.0f, 1.0f);
-
-        if (!std::isfinite(static_cast<double>(overlay.opacity))) {
-            overlay.opacity = 1.0f;
-        }
-        overlay.opacity = std::clamp(overlay.opacity, 0.0f, 1.0f);
-        return overlay;
-    }
-
-    static WebcamOverlayLive LiveOverlayFromConfig(const WebcamConfig& config) noexcept {
-        WebcamOverlayLive overlay;
-        overlay.enabled = config.enabled;
-        overlay.overlay_x_norm = config.overlay_x_norm;
-        overlay.overlay_y_norm = config.overlay_y_norm;
-        overlay.overlay_w_norm = config.overlay_w_norm;
-        overlay.overlay_h_norm = config.overlay_h_norm;
-        overlay.mirror = config.mirror;
-        overlay.chroma_key_enabled = config.chroma_key_enabled;
-        overlay.chroma_r = config.chroma_r;
-        overlay.chroma_g = config.chroma_g;
-        overlay.chroma_b = config.chroma_b;
-        overlay.chroma_tolerance = config.chroma_tolerance;
-        overlay.chroma_softness = config.chroma_softness;
-        overlay.chroma_spill_reduction = config.chroma_spill_reduction;
-        overlay.opacity = config.opacity;
-        return SanitizeWebcamOverlay(overlay);
-    }
-
-    void SeedWebcamOverlayFromConfig() {
-        const WebcamOverlayLive overlay = LiveOverlayFromConfig(config.webcam);
-        std::lock_guard lk(webcam_overlay_mutex);
-        webcam_overlay = overlay;
-    }
-
-    // The sequence and the read-back happen under the same lock as the store, so
-    // a caller's acknowledgement describes the state that was actually installed
-    // and not one a concurrent update replaced in between.
-    AppliedWebcamOverlay UpdateWebcamOverlay(WebcamOverlayLive overlay) {
-        overlay = SanitizeWebcamOverlay(overlay);
-        AppliedWebcamOverlay result;
-        {
-            std::lock_guard lk(webcam_overlay_mutex);
-            webcam_overlay = overlay;
-            result.sequence = ++webcam_overlay_sequence;
-            result.applied = webcam_overlay;
-        }
-        LARGE_INTEGER counter{};
-        LARGE_INTEGER frequency{};
-        if (QueryPerformanceCounter(&counter) != 0 && QueryPerformanceFrequency(&frequency) != 0 &&
-            frequency.QuadPart != 0) {
-            result.applied_qpc_100ns =
-                QpcTicksTo100ns(static_cast<uint64_t>(counter.QuadPart), static_cast<uint64_t>(frequency.QuadPart));
-        }
-        return result;
-    }
-
-    [[nodiscard]] WebcamOverlayLive SnapshotWebcamOverlay() const {
-        std::lock_guard lk(webcam_overlay_mutex);
-        return webcam_overlay;
-    }
-
-    // Guarded by webcam_overlay_mutex; advanced only by a completed store.
-    uint64_t webcam_overlay_sequence = 0;
 
     // Clear everything the PREVIOUS recording left behind, so a session object
     // reused by the next Record() call starts indistinguishable from a fresh one.
@@ -392,6 +302,8 @@ struct SessionState {
         capture_end_ns.store(0, std::memory_order_relaxed);
         caller_stop_requested.store(false, std::memory_order_relaxed);
         pause_requested.store(false);
+        composited_visual_scene_sequence.store(0, std::memory_order_relaxed);
+        composited_visual_scene_revision.store(0, std::memory_order_relaxed);
         // Live mute is deliberately per-session: a new recording starts from the
         // source rows, so a mute still standing when the last recording stopped
         // must not silently start the next one's microphone muted.

@@ -18,6 +18,14 @@ ExoSnap is a Windows x64 application with a C++20 recording engine and a Qt Quic
 
 The practical dependency direction is presentation → application services/models → capability/engine contracts. Some application services use Qt Core for signals, files and asynchronous work. That does not make them part of the QML layer. Build layering checks and focused tests enforce the distinctions.
 
+## Internal visual sources
+
+`QuickApplication` composes a small typed capability registry, seals it before use and owns the visual source manager. Module registration and factories do not open devices. The manager validates desired source/item records, resolves aggregate consumer demand and delivers token-scoped status on the control thread. Native webcam and gamepad adapters alone request their existing backend work; recording preparation does not independently control those devices.
+
+The webcam service remains owned by `RecordingCoordinator`. Its bounded control pool serializes native work, and the application joins outstanding work before destroying the manager or service. Gamepad artwork work uses its existing joined pool. Stale completions report settlement but cannot publish or restart an old request. Camera device/mode changes remain deferred while a recording is preparing, active, paused or finalizing.
+
+`VisualSceneRuntime` is a separate passive engine owner. Session workers retain host storage and immutable payloads, never application providers or native driver ownership. Source identity, runtime generation and request revision guard publication; a configuration revision identifies accepted scene intent. The last compositor-observed revision is a separate fact from control-side acceptance. Consumers hold bounded leases and prepare caches outside frame processing. [Capture and preview](capture-and-preview.md#overlay-composition) owns sampling, cache and composition rules.
+
 ## Native controller rendering
 
 The developer-only `exosnap_controller3d` target owns a `GamepadOverlay` and borrows one raw, timestamped

@@ -15,6 +15,7 @@
 #include <cmath>
 #include <cstdio>
 #include <cstring>
+#include <new>
 #include <optional>
 #include <string>
 #include <winrt/base.h>
@@ -297,7 +298,7 @@ bool GpuCompositor::DrawWebcam(const WebcamFrameSnapshot& frame, const WebcamPix
                          webcam_tex_.width == static_cast<UINT>(frame.width) &&
                          webcam_tex_.height == static_cast<UINT>(frame.height);
     if (!current) {
-        if (!ConvertWebcamYuv(frame, err))
+        if (!ConvertWebcamYuv(frame, webcam_tex_, err))
             return false;
         webcam_generation_ = frame.generation;
         ++webcam_upload_count_;
@@ -305,7 +306,87 @@ bool GpuCompositor::DrawWebcam(const WebcamFrameSnapshot& frame, const WebcamPix
     return DrawTexture(webcam_tex_.srv.get(), rect, mirror, chroma, true, opacity, err);
 }
 
-bool GpuCompositor::ConvertWebcamYuv(const WebcamFrameSnapshot& frame, std::string& err) {
+bool GpuCompositor::PrepareVisualImages(std::span<const VisualAddress> addresses, std::string& err) {
+    for (size_t i = 0; i < addresses.size(); ++i) {
+        if (std::find(addresses.begin(), addresses.begin() + i, addresses[i]) != addresses.begin() + i) {
+            err = "Visual image source is duplicated";
+            return false;
+        }
+    }
+    std::vector<VisualImageTexture> prepared;
+    try {
+        prepared.reserve(addresses.size());
+    } catch (const std::bad_alloc&) {
+        err = "Visual image cache allocation failed";
+        return false;
+    }
+    for (const auto& address : addresses) {
+        const auto previous = std::find_if(visual_images_.begin(), visual_images_.end(),
+                                           [&](const auto& image) { return image.address == address; });
+        if (previous != visual_images_.end())
+            prepared.push_back(std::move(*previous));
+        else
+            prepared.push_back({address, {}, {}, 0, 0});
+    }
+    visual_images_ = std::move(prepared);
+    return true;
+}
+
+bool GpuCompositor::DrawVisualImage(const SourceToken& token, uint64_t resource_id, uint64_t sequence,
+                                    const WebcamFrameSnapshot* frame, const WebcamPixelRect& rect, bool mirror,
+                                    const ChromaKeyParams& chroma, std::string& err, float opacity) {
+    const auto found = std::find_if(visual_images_.begin(), visual_images_.end(),
+                                    [&](const auto& image) { return image.address == token.address; });
+    if (found == visual_images_.end()) {
+        err = "Visual image source is not prepared";
+        return false;
+    }
+    auto& cached = *found;
+    if (!cached.texture.srv || cached.token != token || cached.resource_id != resource_id ||
+        cached.sequence != sequence) {
+        if (!frame || !frame->HasCompletePayload())
+            return true;
+        const bool uploaded = frame->format == WebcamPixelFormat::Bgra
+                                  ? UploadTexture(cached.texture, frame->pixels.data(), frame->width, frame->height,
+                                                  static_cast<UINT>(frame->width * 4), err)
+                                  : ConvertWebcamYuv(*frame, cached.texture, err);
+        if (!uploaded)
+            return false;
+        cached.token = token;
+        cached.resource_id = resource_id;
+        cached.sequence = sequence;
+        ++webcam_upload_count_;
+    }
+    return DrawTexture(cached.texture.srv.get(), rect, mirror, chroma, true, opacity, err);
+}
+
+bool GpuCompositor::PrepareVisualSprites(size_t item_capacity, std::string& err) {
+    try {
+        sprite_atlases_.resize(item_capacity);
+    } catch (const std::bad_alloc&) {
+        err = "Visual sprite cache allocation failed";
+        return false;
+    }
+    return true;
+}
+
+bool GpuCompositor::DrawVisualSprite(size_t index, const SourceToken& token, uint64_t resource_id,
+                                     const SpriteLayerSnapshot& layer, const WebcamPixelRect& content,
+                                     std::string& err) {
+    if (index >= sprite_atlases_.size()) {
+        err = "Visual sprite source is not prepared";
+        return false;
+    }
+    auto& cached = sprite_atlases_[index];
+    if (cached.token != token || cached.resource_id != resource_id) {
+        cached.generation.reset();
+        cached.token = token;
+        cached.resource_id = resource_id;
+    }
+    return DrawSpriteLayer(index, layer, content, err);
+}
+
+bool GpuCompositor::ConvertWebcamYuv(const WebcamFrameSnapshot& frame, TextureResource& destination, std::string& err) {
     const bool nv12 = frame.format == WebcamPixelFormat::Nv12;
     winrt::com_ptr<ID3D11PixelShader>& shader = nv12 ? nv12_shader_ : yuy2_shader_;
     if (!shader && !CompileWebcamShader(device_, nv12 ? kWebcamNv12PixelShaderSrc : kWebcamYuy2PixelShaderSrc,
@@ -340,7 +421,7 @@ bool GpuCompositor::ConvertWebcamYuv(const WebcamFrameSnapshot& frame, std::stri
             return false;
         context_->UpdateSubresource(webcam_luma_.texture.get(), 0, nullptr, bytes, width * 2, 0);
     }
-    if (!EnsureTexture(webcam_tex_, width, height, DXGI_FORMAT_B8G8R8A8_UNORM, true, err))
+    if (!EnsureTexture(destination, width, height, DXGI_FORMAT_B8G8R8A8_UNORM, true, err))
         return false;
 
     const GpuYuvConstants constants = GpuYuvConstantsFor(frame.matrix, frame.range, false);
@@ -350,7 +431,7 @@ bool GpuCompositor::ConvertWebcamYuv(const WebcamFrameSnapshot& frame, std::stri
     viewport.Width = static_cast<float>(width);
     viewport.Height = static_cast<float>(height);
     viewport.MaxDepth = 1.0f;
-    ID3D11RenderTargetView* rtv = webcam_tex_.rtv.get();
+    ID3D11RenderTargetView* rtv = destination.rtv.get();
     ID3D11Buffer* buffer = yuv_constants_.get();
     ID3D11ShaderResourceView* planes[2] = {webcam_luma_.srv.get(), nv12 ? webcam_chroma_.srv.get() : nullptr};
     context_->OMSetRenderTargets(1, &rtv, nullptr);
@@ -363,7 +444,7 @@ bool GpuCompositor::ConvertWebcamYuv(const WebcamFrameSnapshot& frame, std::stri
     context_->PSSetShaderResources(0, 2, planes);
     context_->Draw(3, 0);
 
-    // webcam_tex_ is sampled by the overlay pass next; leaving it bound as the
+    // The converted image is sampled by the overlay pass next; leaving it bound as the
     // render target would make D3D11 null that shader-resource slot.
     ID3D11ShaderResourceView* null_planes[2] = {nullptr, nullptr};
     ID3D11RenderTargetView* null_rtv = nullptr;

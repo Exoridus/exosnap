@@ -433,6 +433,14 @@ TEST(RankWebcamNativeFormatsTest, TheRequestedRateOutranksTheEncoding) {
     EXPECT_EQ(SelectBestWebcamNativeFormat(formats, 1920, 1080, 30), 1);
 }
 
+TEST(PackWebcamFrameTest, PacksIntoAnExactHostSlotWithoutResizing) {
+    const std::vector<uint8_t> padded = {1, 2, 3, 4, 0, 0, 5, 6, 7, 8, 0, 0, 9, 10, 11, 12, 0, 0};
+    std::vector<uint8_t> slot(12, 0);
+    ASSERT_TRUE(PackWebcamFrame(engine::WebcamPixelFormat::Nv12, 4, 2, padded.data(), 6, std::span<uint8_t>(slot)));
+    EXPECT_EQ(slot, (std::vector<uint8_t>{1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12}));
+    EXPECT_FALSE(
+        PackWebcamFrame(engine::WebcamPixelFormat::Nv12, 4, 2, padded.data(), 6, std::span<uint8_t>(slot).first(11)));
+}
 TEST(PackWebcamFrameTest, Nv12DropsRowPaddingFromBothPlanes) {
     // 4x2 frame with a 6-byte pitch: two luma rows, then one chroma row.
     const std::vector<uint8_t> padded = {1, 2, 3, 4, 0xEE, 0xEE, 5, 6, 7, 8, 0xEE, 0xEE, 9, 10, 11, 12, 0xEE, 0xEE};

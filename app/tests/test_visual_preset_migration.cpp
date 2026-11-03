@@ -140,6 +140,64 @@ TEST(VisualPresetMigration, StableIdsOnSaveRetry) {
     EXPECT_EQ(*first.value(), *retry.value());
 }
 
+TEST(VisualPresetMigration, LegacyProjectionPreservesIdentitiesAcrossEditsAndRetries) {
+    auto migrated = MigrateLegacyVisualConfig({}, {});
+    ASSERT_TRUE(migrated.succeeded());
+    auto identities = *migrated.value();
+    std::reverse(identities.sources.begin(), identities.sources.end());
+    std::reverse(identities.items.begin(), identities.items.end());
+    const auto before = WriteVisualScene(identities);
+    ASSERT_TRUE(before.succeeded());
+    WebcamSettings camera;
+    camera.enabled = true;
+    camera.device_id = "camera-b";
+    camera.controls = {{WebcamControl::Brightness, false, 7}};
+    camera.overlay = {0.1f, 0.2f, 0.3f, 0.4f};
+    GamepadOverlaySettings pad;
+    pad.enabled = true;
+    pad.layout = 1;
+    auto projected = ProjectLegacyVisualConfig(camera, pad, identities);
+    auto retry = ProjectLegacyVisualConfig(camera, pad, identities);
+    ASSERT_TRUE(projected.succeeded());
+    ASSERT_TRUE(retry.succeeded());
+    for (const auto& source : identities.sources) {
+        const auto* actual = Source(*projected.value(), source.type_id);
+        ASSERT_NE(actual, nullptr);
+        EXPECT_EQ(actual->id, source.id);
+        const auto* actual_item = Item(*projected.value(), source.id);
+        const auto* original_item = Item(identities, source.id);
+        ASSERT_NE(actual_item, nullptr);
+        ASSERT_NE(original_item, nullptr);
+        EXPECT_EQ(actual_item->id, original_item->id);
+    }
+    const auto* actual_camera = Source(*projected.value(), "org.exosnap.webcam/camera");
+    ASSERT_NE(actual_camera, nullptr);
+    EXPECT_TRUE(actual_camera->enabled);
+    EXPECT_EQ(actual_camera->settings["device_id"].value<std::string>(), camera.device_id);
+    EXPECT_EQ(actual_camera->settings["controls"]["brightness"]["value"].value<int64_t>(), 7);
+    const auto* actual_item = Item(*projected.value(), actual_camera->id);
+    ASSERT_NE(actual_item, nullptr);
+    EXPECT_FLOAT_EQ(actual_item->properties.placement.x, camera.overlay.x_norm);
+    auto written = WriteVisualScene(*projected.value());
+    auto written_retry = WriteVisualScene(*retry.value());
+    auto unchanged = WriteVisualScene(identities);
+    ASSERT_TRUE(written.succeeded());
+    ASSERT_TRUE(written_retry.succeeded());
+    ASSERT_TRUE(unchanged.succeeded());
+    EXPECT_EQ(*written.value(), *written_retry.value());
+    EXPECT_EQ(*before.value(), *unchanged.value());
+}
+
+TEST(VisualPresetMigration, LegacyProjectionRejectsMissingSourceAndItemIdentities) {
+    const auto identities = MakeDefaultVisualScene();
+    auto missing_source = identities;
+    missing_source.sources.pop_back();
+    EXPECT_FALSE(ProjectLegacyVisualConfig({}, {}, missing_source).succeeded());
+    auto missing_item = identities;
+    missing_item.items.pop_back();
+    EXPECT_FALSE(ProjectLegacyVisualConfig({}, {}, missing_item).succeeded());
+}
+
 TEST(VisualPresetMigration, DefaultHydrationUsesStableDisabledIdentities) {
     const auto first = MakeDefaultVisualScene();
     const auto second = MakeDefaultVisualScene();

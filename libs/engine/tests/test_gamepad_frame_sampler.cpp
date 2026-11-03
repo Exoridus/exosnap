@@ -149,6 +149,9 @@ TEST(GamepadFrameSampler, UsesPreparedScratchAndPreservesAtlasWhenSticksMove) {
     history->Push(Reading(100, 0));
     ASSERT_EQ(sampler.Sample(CaptureTime100ns{150}, properties, {0, 0, 480, 320}, output), ReadResult::Updated);
     ASSERT_EQ(output.quads.size(), 2);
+    EXPECT_TRUE(sampler.SampleChanged());
+    ASSERT_EQ(sampler.Sample(CaptureTime100ns{150}, properties, {0, 0, 480, 320}, output), ReadResult::Updated);
+    EXPECT_FALSE(sampler.SampleChanged());
     const auto resting = output.quads[1].destination;
     const auto mask = output.quads.front().masks[0].destination;
     history->Push(Reading(200, 1));
@@ -159,6 +162,7 @@ TEST(GamepadFrameSampler, UsesPreparedScratchAndPreservesAtlasWhenSticksMove) {
         sample_result = sampler.Sample(CaptureTime100ns{250}, properties, {0, 0, 480, 320}, output);
     }
     ASSERT_EQ(sample_result, ReadResult::Updated);
+    EXPECT_TRUE(sampler.SampleChanged());
     EXPECT_EQ(allocations.allocations, 0);
     EXPECT_EQ(allocations.frees, 0);
     EXPECT_GT(output.quads[1].destination.x, resting.x);
@@ -216,6 +220,12 @@ TEST(GamepadFrameSampler, TriggerScratchBoundCountsEveryTriggerPart) {
     EXPECT_EQ((*prepared.value())->Sample(CaptureTime100ns{150}, {}, {0, 0, 480, 320}, output), ReadResult::Updated);
     EXPECT_EQ(output.quads.size(), sprites.parts.size() + 4);
     EXPECT_EQ(output.quads.capacity(), capacity);
+    history->Push(Reading(200, 0));
+    EXPECT_EQ((*prepared.value())->Sample(CaptureTime100ns{250}, {}, {0, 0, 480, 320}, output), ReadResult::Updated);
+    EXPECT_EQ(output.quads.size(), sprites.parts.size());
+    EXPECT_TRUE((*prepared.value())->SampleChanged());
+    EXPECT_EQ((*prepared.value())->Sample(CaptureTime100ns{250}, {}, {0, 0, 480, 320}, output), ReadResult::Updated);
+    EXPECT_FALSE((*prepared.value())->SampleChanged());
 }
 
 TEST(GamepadFrameSampler, BusyAfterSelectionChangeReplacesPressedFallbackWithNeutral) {
@@ -241,7 +251,32 @@ TEST(GamepadFrameSampler, BusyAfterSelectionChangeReplacesPressedFallbackWithNeu
     lock.unlock();
     EXPECT_EQ(status, std::future_status::ready);
     EXPECT_EQ(attempt.get(), ReadResult::Busy);
+    EXPECT_TRUE(sampler.SampleChanged());
     EXPECT_FLOAT_EQ(output.quads[1].destination.x, sprites.parts[1].bounds.x);
+}
+
+TEST(GamepadFrameSampler, ExactChangeIncludesPlacementOpacityAndBodyMasks) {
+    auto sprites = Sprites();
+    auto history = std::make_shared<gamepad::DeviceHistory>();
+    history->Push(Reading(100, 1));
+    auto prepared = GamepadFrameSampler::Prepare(sprites, gamepad::HistoryReadView(history));
+    ASSERT_TRUE(prepared.succeeded());
+    auto& sampler = **prepared.value();
+    SpriteLayerSnapshot output;
+    ASSERT_TRUE(sampler.PrepareOutput(output).succeeded());
+    SceneItemProperties properties;
+    properties.placement = {0, 0, 1, 1};
+    ASSERT_EQ(sampler.Sample(CaptureTime100ns{150}, properties, {0, 0, 480, 320}, output), ReadResult::Updated);
+    const auto old_mask = output.quads[0].masks[0];
+    properties.placement.x = 0.1F;
+    properties.opacity = 0.4F;
+    ASSERT_EQ(sampler.Sample(CaptureTime100ns{150}, properties, {0, 0, 480, 320}, output), ReadResult::Updated);
+    EXPECT_TRUE(sampler.SampleChanged());
+    EXPECT_NE(output.quads[0].masks[0], old_mask);
+    EXPECT_FLOAT_EQ(output.quads[0].opacity, 0.4F);
+    EXPECT_FLOAT_EQ(output.quads[1].opacity, 0.4F);
+    ASSERT_EQ(sampler.Sample(CaptureTime100ns{150}, properties, {0, 0, 480, 320}, output), ReadResult::Updated);
+    EXPECT_FALSE(sampler.SampleChanged());
 }
 
 TEST(GamepadPublication, ScenePinDefersPayloadDeleterUntilControlCollection) {

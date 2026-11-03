@@ -26,8 +26,8 @@ struct RecorderConfig;
 namespace exosnap::benchmark {
 
 struct EffectiveRecordingConfig {
-    // False when no session was ever prepared (the recording failed before
-    // Validate). Reported as unavailable rather than as an empty match, because
+    // False when no session was prepared or an attached host scene could not
+    // be sampled. Unavailable configurations cannot establish a match, because
     // "no config" must not compare equal to "no config" and license an A/B pair.
     bool available = false;
 
@@ -42,9 +42,9 @@ struct EffectiveRecordingConfig {
     QString fingerprint;
 };
 
-// Excludes everything that legitimately differs between two comparable runs:
-// the output path, the capture target's transient handles, and the webcam frame
-// provider pointer. Everything that changes what is encoded is included.
+// Samples the current host scene on the control side. This does not identify
+// the scene used by any particular recorded frame. Excludes transient handles,
+// source identities, pointers, revisions and publication sequences.
 [[nodiscard]] EffectiveRecordingConfig DescribeEffectiveConfig(const exosnap::engine::RecorderConfig& config);
 
 [[nodiscard]] EffectiveRecordingConfig UnavailableEffectiveConfig();

@@ -33,6 +33,7 @@
 #include "../diagnostics/SessionLedger.h"
 #include "../diagnostics/SessionReport.h"
 #include "../diagnostics/WindowTargetFacts.h"
+#include "../extensions/WebcamModule.h"
 #include "../models/EditContext.h"
 #include "../models/FilenameBuilder.h"
 #include "../models/OutputPathValidator.h"
@@ -92,15 +93,6 @@ class SessionLedgerSink {
 //
 // `webcam.enabled` stays true throughout: the picture-in-picture is exactly what
 // is being measured. Only the device is left closed.
-[[nodiscard]] constexpr bool ShouldRunWebcamDevice(bool has_verification_source, bool webcam_enabled,
-                                                   bool has_device_id, bool recording, bool preparing,
-                                                   bool record_preview_active, bool settings_preview_active) noexcept {
-    if (has_verification_source)
-        return false;
-    return webcam_enabled && has_device_id &&
-           (recording || preparing || record_preview_active || settings_preview_active);
-}
-
 // Whether the idle Record preview asks for the camera. Deliberately independent
 // of the webcam enable flag: ShouldRunWebcamDevice already applies it, and the
 // settings sync that follows every enable toggle re-evaluates the device. Folding
@@ -303,14 +295,21 @@ class RecordingCoordinator {
     // Which source the next recording will composite from, for the evidence
     // record. Empty when the real camera is in use.
     [[nodiscard]] QString VerificationWebcamSourceName() const;
+    // The receiver and coordinator outlive the manager and its queued control work.
+    WebcamControlHooks
+    CreateWebcamControlHooks(QObject* receiver,
+                             std::function<engine::Outcome<WebcamSettings>(const toml::table&)> project_settings,
+                             std::function<void()> on_control_settled);
     void SetWebcamFrameCallback(WebcamService::FrameCallback cb);
     void SetWebcamFrameCallback(QObject* receiver, WebcamService::FrameCallback cb);
     // The camera's latest frame, as the recording would composite it. Null before
     // the first frame. Any thread.
     [[nodiscard]] std::shared_ptr<const exosnap::engine::WebcamFrameSnapshot> WebcamSnapshot();
-    /// Bind before recording starts. The provider must outlive this coordinator.
-    void SetSpriteSourceProvider(exosnap::engine::SpriteSourceProvider* provider) {
-        sprite_source_ = provider;
+    void SetVisualRuntime(std::shared_ptr<engine::VisualSceneRuntime>, std::function<void(uint8_t)> on_demand_changed);
+    [[nodiscard]] bool VisualSessionOwnsDevice() const noexcept;
+    void WaitForVisualControl();
+    void SetVisualOverlayAcknowledgement(std::function<std::optional<engine::AppliedWebcamOverlay>()> callback) {
+        visual_overlay_acknowledgement_ = std::move(callback);
     }
     // Receiver-scoped open-reader status transitions (see WebcamService::
     // SetStatusCallback): forwarded verbatim so the Record dock can flag a webcam
@@ -593,8 +592,11 @@ class RecordingCoordinator {
     // or the capture-lease handshake. Reads only from `ctx`.
     void PrepareAndRecordThreadProc(const PrepareContext& ctx);
     void RecordingThreadProc(const exosnap::engine::RecorderConfig& config, const std::filesystem::path& output_path);
-    // (Re)start or stop the shared webcam capture based on enabled/recording/preview state.
-    void SyncWebcamService(bool force_restart);
+    // Reconcile consumer demand on the control thread. Native work stays in provider hooks.
+    void SyncVisualDemand();
+    void QueueWebcamRequest(QObject*, engine::SourceToken, WebcamSettings, engine::VisualPublicationWriter,
+                            std::function<void(SourceStatus)>, bool restart, std::function<void()> on_control_settled);
+    void QueueWebcamOperation(QObject*, std::function<void()>, std::function<void()> on_control_settled);
     void PostStateChange(UiRecordingState new_state);
     // Stamp the configured container/codecs onto a result before posting it.
     // The error dialog shows this format context; a result that omits it falls
@@ -748,8 +750,15 @@ class RecordingCoordinator {
     exosnap::engine::ResolvedEncoderDevice resolved_encoder_device_;
     std::optional<capability::CapabilitySet> encoder_caps_;
     WebcamSettings webcam_settings_;
-    exosnap::engine::SpriteSourceProvider* sprite_source_ = nullptr;
+    std::shared_ptr<engine::VisualSceneRuntime> visual_runtime_;
+    std::function<void(uint8_t)> on_visual_demand_changed_;
+    std::function<std::optional<engine::AppliedWebcamOverlay>()> visual_overlay_acknowledgement_;
     WebcamService webcam_service_;
+    // One running native operation and at most one superseding queued request.
+    QThreadPool webcam_control_pool_;
+    uint64_t webcam_requested_serial_ = 0;
+    std::atomic<uint64_t> webcam_completed_serial_{0};
+    std::function<void(SourceStatus)> webcam_source_status_;
     // Owned rather than borrowed: it must outlive any session that composites
     // from it, and the session holds a bare pointer.
     std::unique_ptr<exosnap::StaticWebcamFrameSource> static_webcam_source_;
@@ -770,9 +779,6 @@ class RecordingCoordinator {
     // engine opens). Set by the UI-thread gate in StartRecording via a
     // compare-exchange so two starts can never both win; cleared by the worker when
     // it fails, cancels, or commits to recording (is_recording_ then takes over).
-    // Also owns the shared webcam device across the prepare boundary (see
-    // SyncWebcamService) so a queued Preparing state-callback cannot Stop() the
-    // camera the worker is opening.
     std::atomic<bool> prepare_in_flight_{false};
     // Identifies the recording this coordinator is currently starting or running,
     // from the UI-thread gate in StartRecording until Record() returns. Every stop

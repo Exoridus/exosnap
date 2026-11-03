@@ -42,7 +42,8 @@ if(NOT EXISTS "${_nvenc_header}")
     )
 
     target_include_directories(exosnap_engine PUBLIC include)
-    target_sources(exosnap_engine PRIVATE src/visual_scene_runtime.cpp src/gamepad_frame_sampler.cpp)
+    target_sources(exosnap_engine PRIVATE src/visual_scene_runtime.cpp src/gamepad_frame_sampler.cpp
+        src/visual_scene_consumer.cpp)
     target_link_libraries(exosnap_engine PUBLIC exosnap::gamepad)
 
     set_target_properties(exosnap_engine PROPERTIES
@@ -290,6 +291,7 @@ endif()
 
 add_library(exosnap_engine STATIC
     src/visual_scene_runtime.cpp
+    src/visual_scene_consumer.cpp
     src/gamepad_frame_sampler.cpp
     src/version.cpp
     src/logging/logging.cpp
@@ -2037,8 +2039,19 @@ exosnap_add_gtest(
     NAME visual_runtime_tests
     TEST_PREFIX visual.runtime.
     SOURCES tests/test_visual_scene_runtime.cpp tests/test_gamepad_frame_sampler.cpp
-        src/visual_scene_runtime.cpp src/gamepad_frame_sampler.cpp
+        tests/test_visual_scene_consumer.cpp
+        src/visual_scene_runtime.cpp src/gamepad_frame_sampler.cpp src/visual_scene_consumer.cpp
     LIBRARIES exosnap::gamepad
 )
 target_include_directories(visual_runtime_tests PRIVATE include src)
 target_compile_definitions(visual_runtime_tests PRIVATE NOMINMAX)
+
+exosnap_add_gtest(
+    NAME visual_image_cache_tests
+    TEST_PREFIX visual.gpu.
+    PHASE gpu
+    SOURCES tests/test_visual_image_cache.cpp src/gpu_compositor.cpp
+    LIBRARIES d3d11.lib dxgi.lib d3dcompiler.lib runtimeobject.lib
+)
+target_include_directories(visual_image_cache_tests PRIVATE include src ${PROJECT_SOURCE_DIR}/libs/capability/include)
+target_compile_definitions(visual_image_cache_tests PRIVATE NOMINMAX)
