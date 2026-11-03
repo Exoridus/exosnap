@@ -135,6 +135,19 @@ uint64_t ConsumerScratch(const VisualRuntimeStorage& storage) noexcept {
     return bytes;
 }
 
+bool HasGenerationCapacity(const VisualRuntimeStorage& storage, VisualSourceId id) noexcept {
+    uint64_t count = 0;
+    for (const auto& [address, source] : storage.sources) {
+        if (address.source != id)
+            continue;
+        // Each allocation has one owning entry; scene references do not count twice.
+        count += source->pools.size() + source->gamepads.size() + (source->image_preparing ? 1u : 0u);
+        if (count >= storage.policy.max_resource_generations)
+            return false;
+    }
+    return count < storage.policy.max_resource_generations;
+}
+
 bool ValidItem(const PreparedSceneItem& item) noexcept {
     const auto& p = item.properties.placement;
     const auto& c = item.chroma_key;
@@ -367,7 +380,7 @@ Outcome<std::monostate> VisualPublicationWriter::PrepareImage(SourceToken token,
     if (storage_->policy.camera_slots == 0 || storage_->policy.max_resource_generations == 0)
         return Failure(EngineErrorCode::InvalidConfig, "image policy");
     Collect(*storage_);
-    if (source->pools.size() >= storage_->policy.max_resource_generations)
+    if (!HasGenerationCapacity(*storage_, address_.source))
         return Failure(EngineErrorCode::Stalled, "image pools busy");
     uint64_t bytes;
     if (storage_->next_resource_id == 0 || !Multiply(payload, storage_->policy.camera_slots, bytes) ||
@@ -676,7 +689,7 @@ Outcome<std::monostate> StageGamepadData(VisualSceneRuntime& runtime, SourceToke
         return std::monostate{};
     }
     Collect(storage);
-    if (source->gamepads.size() >= storage.policy.max_resource_generations)
+    if (!HasGenerationCapacity(storage, token.address.source))
         return Failure(EngineErrorCode::Stalled, "gamepad busy");
     uint64_t scratch, scratch_total, mapping, bytes;
     if (storage.next_resource_id == 0 || !Multiply(GamepadLayerQuadCapacity(*sprites), sizeof(SpriteQuad), scratch) ||

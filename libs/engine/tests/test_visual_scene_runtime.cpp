@@ -537,3 +537,36 @@ TEST(VisualRuntimeLifetime, FailedSourceAllocationDoesNotConsumeRuntimeGeneratio
     }
     EXPECT_TRUE(runtime.CreateSource(Address()).succeeded());
 }
+
+TEST(VisualRuntimeBudget, ResourceGenerationBoundSpansSourceIncarnations) {
+    VisualSceneRuntime runtime{VisualBudgetPolicy{}};
+    auto first_consumer = runtime.RegisterConsumer();
+    auto second_consumer = runtime.RegisterConsumer();
+    ASSERT_TRUE(first_consumer.succeeded());
+    ASSERT_TRUE(second_consumer.succeeded());
+    std::array<VisualReadLease, 2> held;
+    for (uint64_t generation = 1; generation <= 2; ++generation) {
+        const auto address = Address(1, generation);
+        const SourceToken token{address, SourceRequestRevision{1}};
+        auto writer = runtime.CreateSource(address);
+        ASSERT_TRUE(writer.succeeded());
+        runtime.SetRequest(token, true, HoldPolicy::ClearAccepted);
+        ASSERT_TRUE(writer.value()->PrepareImage(token, {2, 2}).succeeded());
+        auto frame = writer.value()->TryBeginCpuFrame({token, 1, CaptureTime100ns{100}, {}});
+        ASSERT_TRUE(frame);
+        ASSERT_EQ(writer.value()->Publish(std::move(*frame)), PublishResult::Accepted);
+        const auto reader = generation == 1 ? *first_consumer.value() : *second_consumer.value();
+        ASSERT_EQ(runtime.TryReadImage(reader, address, held[generation - 1]), ReadResult::Updated);
+        runtime.Revoke(address);
+    }
+    const SourceToken third{Address(1, 3), SourceRequestRevision{1}};
+    auto writer = runtime.CreateSource(third.address);
+    ASSERT_TRUE(writer.succeeded());
+    runtime.SetRequest(third, true, HoldPolicy::ClearAccepted);
+    const auto blocked = writer.value()->PrepareImage(third, {2, 2});
+    ASSERT_FALSE(blocked.succeeded());
+    EXPECT_EQ(blocked.error()->code, EngineErrorCode::Stalled);
+    held[0].Reset();
+    runtime.CollectRetired();
+    EXPECT_TRUE(writer.value()->PrepareImage(third, {2, 2}).succeeded());
+}
