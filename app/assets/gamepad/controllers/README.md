@@ -16,6 +16,8 @@ artwork; a free application download does not grant commercial artwork rights.
 Original sources, attribution, changes and license terms for each exception
 are documented in [SOURCE-NOTICE.txt](SOURCE-NOTICE.txt).
 The application source code retains its own license.
+Steam Controller 2026 remains release-blocked until suitable rights or documented
+independent replacement geometry resolve its model-derived rear controls and panel seam.
 
 ## Coordinates and layers
 
@@ -35,11 +37,53 @@ source. Their strokes are 50% of the regular width and 40% opaque. Filled contou
 rings retain their geometry at 40% opacity. Outer silhouettes and movable
 controls retain their stronger contrast.
 
-Button masks use `GameInputGamepadButtons`. Face-button bindings follow physical
-position, including Nintendo's different letter arrangement. Auxiliary fields
-are device-dependent. A null binding means no qualified input mapping, not a
-permanently released input. A Joy-Con artwork pair does not imply automatic
-device aggregation. Grouped directional pads name their four independent masks.
+## Logical controls
+
+`mapping.json` is the artwork-to-control authority. SVG `id` values identify graphics only.
+The 30 control IDs below follow the actual [SDL3 gamepad definitions](https://github.com/libsdl-org/SDL/blob/main/include/SDL3/SDL_gamepad.h).
+The symbols specify correspondence, not numeric identity. No SDL library is required.
+
+| Control IDs | SDL3 symbols |
+| --- | --- |
+| `south`, `east`, `west`, `north` | `SDL_GAMEPAD_BUTTON_SOUTH`, `SDL_GAMEPAD_BUTTON_EAST`, `SDL_GAMEPAD_BUTTON_WEST`, `SDL_GAMEPAD_BUTTON_NORTH` |
+| `back`, `guide`, `start` | `SDL_GAMEPAD_BUTTON_BACK`, `SDL_GAMEPAD_BUTTON_GUIDE`, `SDL_GAMEPAD_BUTTON_START` |
+| `left_shoulder`, `right_shoulder` | `SDL_GAMEPAD_BUTTON_LEFT_SHOULDER`, `SDL_GAMEPAD_BUTTON_RIGHT_SHOULDER` |
+| `left_stick_click`, `right_stick_click` | `SDL_GAMEPAD_BUTTON_LEFT_STICK`, `SDL_GAMEPAD_BUTTON_RIGHT_STICK` |
+| `dpad_up`, `dpad_down`, `dpad_left`, `dpad_right` | `SDL_GAMEPAD_BUTTON_DPAD_UP`, `SDL_GAMEPAD_BUTTON_DPAD_DOWN`, `SDL_GAMEPAD_BUTTON_DPAD_LEFT`, `SDL_GAMEPAD_BUTTON_DPAD_RIGHT` |
+| `misc1`, `misc2`, `misc3`, `misc4`, `misc5`, `misc6` | `SDL_GAMEPAD_BUTTON_MISC1`, `SDL_GAMEPAD_BUTTON_MISC2`, `SDL_GAMEPAD_BUTTON_MISC3`, `SDL_GAMEPAD_BUTTON_MISC4`, `SDL_GAMEPAD_BUTTON_MISC5`, `SDL_GAMEPAD_BUTTON_MISC6` |
+| `left_paddle1`, `left_paddle2`, `right_paddle1`, `right_paddle2` | `SDL_GAMEPAD_BUTTON_LEFT_PADDLE1`, `SDL_GAMEPAD_BUTTON_LEFT_PADDLE2`, `SDL_GAMEPAD_BUTTON_RIGHT_PADDLE1`, `SDL_GAMEPAD_BUTTON_RIGHT_PADDLE2` |
+| `touchpad` | `SDL_GAMEPAD_BUTTON_TOUCHPAD` |
+| `left_stick` | Pair `SDL_GAMEPAD_AXIS_LEFTX`, `SDL_GAMEPAD_AXIS_LEFTY` |
+| `right_stick` | Pair `SDL_GAMEPAD_AXIS_RIGHTX`, `SDL_GAMEPAD_AXIS_RIGHTY` |
+| `left_trigger`, `right_trigger` | `SDL_GAMEPAD_AXIS_LEFT_TRIGGER`, `SDL_GAMEPAD_AXIS_RIGHT_TRIGGER` |
+
+Paddle side means the player's hand, with 1 primary/upper and 2 secondary/lower.
+DualSense Edge rear buttons use paddle1 and Fn buttons use paddle2. `misc1` includes device-specific
+Share/Capture, Mute or Quick Access meanings. Pairing has no universal canonical button.
+`touchpad` means the click, not contact or coordinates.
+
+The Qt-free `GamepadState` and `ReadControl` expose these controls to every renderer.
+`ControlValue` carries a status plus x/y. `Released` is a valid zero and `Active` a valid nonzero value.
+`Unavailable` is missing usable data, whereas `Unsupported` means the provider/device has no such capability.
+Only released/active values may drive graphics. Sticks are [-1, 1] with positive y up, triggers [0, 1],
+and buttons 0/1. SDL stick Y increases downwards, so an SDL provider would invert Y while converting its integer
+axis range. GameInput already uses positive y up. No SDL enum or browser index is a GameInput mask.
+
+Schema version 1 adds optional `control` for a layer, `clickControl` for its independent click and
+`controls` for the four keys `up`, `down`, `left`, `right` of a grouped directional pad.
+For example, `btn-cross` can declare `control: "south"` while retaining its old GameInput `binding`.
+A stick's `control` determines its movement, never its click mask. `clickControl: null` disables a click.
+GameCube therefore uses A=south, X=east, B=west, Y=north, Z=right_shoulder, L/R=left/right_trigger,
+with optional L/R clicks misc3/misc4 and no stick clicks.
+
+A canonical field takes precedence over legacy binding interpretation. Explicit `binding: null` keeps a
+layer inert even when a provider supplies the named control. `preview` does not change that rule.
+Older mappings without canonical fields derive their controls from the central GameInput conversion.
+For canonical mappings, omit a redundant binding rather than maintaining a second provider table.
+This omission enables the canonical control, while explicit null remains the unsupported-input safeguard.
+Device support is still determined by the input provider. Old GameInput masks remain compatibility metadata,
+including where physical labels differ from canonical positions. A Joy-Con artwork pair does not aggregate devices.
+The live GameInput provider does not qualify GameCube adapter wiring or separately reported trigger end clicks.
 
 Horizontal single Joy-Cons have their own mappings. SL/SR map to the normalized
 left/right shoulder buttons, face inputs follow their rotated physical positions,
@@ -56,7 +100,7 @@ not enough to define the whole button. `clip` isolates a component in shared SVG
 coordinates. The element export includes the same clip. A renderer must apply
 that region to its highlight and hit area as well as to the idle artwork.
 `pressMode: "tint"` recolors the complete `pressElement` itself while pressed,
-instead of adding a background fill. PlayStation logo buttons use this mode.
+instead of adding a background fill. `pressColor` overrides the default blue pressure color.
 `pressClip` further limits only the pressure fill and hit area, preserving fixed
 contours that continue past the physical button.
 
@@ -67,7 +111,7 @@ The old Steam Controller's pads show a contact marker only while contact is
 reported or explicitly simulated. Stick output does not imply finger contact.
 Steam Deck retains its two physical sticks and does not infer pad contact from
 their values. Different Steam Input configurations can assign different pad
-functions. Rear controls not shown by these front views are not qualified.
+functions. Rear controls with null bindings remain unqualified.
 
 ## Interactive artwork preview
 
@@ -110,6 +154,7 @@ prepares pressure variants and adapts clip paths to Qt-supported masks. It does
 not modify these sources. The native widget uses the same atlas for preview and
 recording.
 
-The contrast shadow is a composition option. It is not baked into these sources
-or the transparent body. Rasterize the settled artwork resolution once and
-reuse the atlas while moving sticks or changing input states.
+`knockout` references an existing SVG geometry prepared as an immutable atlas tile.
+Up to two masks follow their stick caps and subtract only body alpha in the GPU compositor.
+The recording background, other overlays and normally rendered caps are preserved.
+Rasterize the settled artwork resolution once and reuse the atlas while inputs change.

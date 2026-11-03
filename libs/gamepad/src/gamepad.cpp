@@ -17,6 +17,107 @@ float ClampAxis(float value, float low, float high) noexcept {
 
 } // namespace
 
+namespace {
+constexpr std::array<std::string_view, static_cast<size_t>(Control::Count)> kControlNames{"south",
+                                                                                          "east",
+                                                                                          "west",
+                                                                                          "north",
+                                                                                          "back",
+                                                                                          "guide",
+                                                                                          "start",
+                                                                                          "left_stick_click",
+                                                                                          "right_stick_click",
+                                                                                          "left_shoulder",
+                                                                                          "right_shoulder",
+                                                                                          "dpad_up",
+                                                                                          "dpad_down",
+                                                                                          "dpad_left",
+                                                                                          "dpad_right",
+                                                                                          "misc1",
+                                                                                          "right_paddle1",
+                                                                                          "left_paddle1",
+                                                                                          "right_paddle2",
+                                                                                          "left_paddle2",
+                                                                                          "touchpad",
+                                                                                          "misc2",
+                                                                                          "misc3",
+                                                                                          "misc4",
+                                                                                          "misc5",
+                                                                                          "misc6",
+                                                                                          "left_stick",
+                                                                                          "right_stick",
+                                                                                          "left_trigger",
+                                                                                          "right_trigger"};
+
+constexpr std::array<uint32_t, 26> kGameInputButtons{
+    4,   8,   16, 32,         2,          0,          1,          4096, 8192, 1024,       2048,       64, 128,
+    256, 512, 0,  0x10000000, 0x04000000, 0x20000000, 0x08000000, 0,    0,    0x00010000, 0x00020000, 0,  0};
+
+ControlValue Value(float x, float y = 0) {
+    return {x != 0 || y != 0 ? ControlStatus::Active : ControlStatus::Released, x, y};
+}
+} // namespace
+
+std::string_view ControlName(Control control) noexcept {
+    const auto index = static_cast<size_t>(control);
+    return index < kControlNames.size() ? kControlNames[index] : std::string_view{};
+}
+
+Control ControlFromGameInputButton(uint32_t mask) noexcept {
+    if (mask != 0)
+        for (size_t index = 0; index < kGameInputButtons.size(); ++index)
+            if (kGameInputButtons[index] == mask)
+                return static_cast<Control>(index);
+    return Control::Count;
+}
+
+Control ControlFromName(std::string_view name) noexcept {
+    for (size_t index = 0; index < kControlNames.size(); ++index)
+        if (kControlNames[index] == name)
+            return static_cast<Control>(index);
+    return Control::Count;
+}
+
+void NormalizeGameInputControls(GamepadState& state, uint32_t supported_buttons, bool gamepad_available,
+                                bool separately_reported_trigger_clicks) noexcept {
+    state.controls = {};
+    state.controls_normalized = true;
+    for (size_t index = 0; index < kGameInputButtons.size(); ++index) {
+        if (!separately_reported_trigger_clicks &&
+            (index == static_cast<size_t>(Control::Misc3) || index == static_cast<size_t>(Control::Misc4)))
+            continue;
+        const auto mask = kGameInputButtons[index];
+        if ((mask & supported_buttons) != 0)
+            state.controls[index] = gamepad_available ? Value((state.buttons & mask) != 0 ? 1.0F : 0.0F)
+                                                      : ControlValue{ControlStatus::Unavailable};
+    }
+    const auto auxiliary = [&](Control control, std::optional<bool> value) {
+        state.controls[static_cast<size_t>(control)] =
+            value ? Value(*value ? 1.0F : 0.0F) : ControlValue{ControlStatus::Unavailable};
+    };
+    auxiliary(Control::Guide, state.home);
+    auxiliary(Control::Misc1, state.share);
+    auxiliary(Control::Touchpad, state.touchpad);
+    const auto analog = [&](Control control, float x, float y = 0) {
+        state.controls[static_cast<size_t>(control)] =
+            gamepad_available ? Value(x, y) : ControlValue{ControlStatus::Unavailable};
+    };
+    analog(Control::LeftStick, state.left_x, state.left_y);
+    analog(Control::RightStick, state.right_x, state.right_y);
+    analog(Control::LeftTrigger, state.left_trigger);
+    analog(Control::RightTrigger, state.right_trigger);
+}
+
+ControlValue ReadControl(const GamepadState& state, Control control) noexcept {
+    const auto index = static_cast<size_t>(control);
+    if (index >= state.controls.size())
+        return {};
+    if (state.controls_normalized)
+        return state.controls[index];
+    auto legacy = state;
+    NormalizeGameInputControls(legacy, 0x3FFF);
+    return legacy.controls[index];
+}
 LayoutKind LayoutKindFor(uint16_t vendor_id, uint16_t product_id) noexcept {
     switch (vendor_id) {
     case kVendorSony:
@@ -62,6 +163,16 @@ GamepadState Normalized(const GamepadState& state) noexcept {
     out.right_y = ClampAxis(state.right_y, -1.0F, 1.0F);
     out.left_trigger = ClampAxis(state.left_trigger, 0.0F, 1.0F);
     out.right_trigger = ClampAxis(state.right_trigger, 0.0F, 1.0F);
+    for (size_t index = 0; index < out.controls.size(); ++index) {
+        auto& value = out.controls[index];
+        if (value.status == ControlStatus::Unsupported || value.status == ControlStatus::Unavailable) {
+            value.x = value.y = 0;
+            continue;
+        }
+        const auto control = static_cast<Control>(index);
+        const bool stick = control == Control::LeftStick || control == Control::RightStick;
+        value = Value(ClampAxis(value.x, stick ? -1.0F : 0.0F, 1.0F), stick ? ClampAxis(value.y, -1.0F, 1.0F) : 0.0F);
+    }
     return out;
 }
 
@@ -105,7 +216,15 @@ void DeviceHistory::Push(GamepadReading reading) {
     const std::scoped_lock lock(mutex_);
     auto& entry = devices_[reading.device.id];
     if (!reading.connected) {
+        const auto previous = entry.history.StateAt(reading.capture_100ns);
         reading.state = {};
+        reading.state.controls_normalized = true;
+        for (size_t index = 0; index < reading.state.controls.size(); ++index) {
+            const bool unsupported = previous && previous->state.controls_normalized &&
+                                     previous->state.controls[index].status == ControlStatus::Unsupported;
+            reading.state.controls[index].status =
+                unsupported ? ControlStatus::Unsupported : ControlStatus::Unavailable;
+        }
     }
     entry.history.Push(reading);
     if (reading.capture_100ns >= entry.latest_100ns) {

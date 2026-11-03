@@ -8,9 +8,59 @@
 #include <mutex>
 #include <optional>
 #include <string>
+#include <string_view>
 #include <vector>
 
 namespace exosnap::gamepad {
+
+enum class Control : uint8_t {
+    South,
+    East,
+    West,
+    North,
+    Back,
+    Guide,
+    Start,
+    LeftStickClick,
+    RightStickClick,
+    LeftShoulder,
+    RightShoulder,
+    DpadUp,
+    DpadDown,
+    DpadLeft,
+    DpadRight,
+    Misc1,
+    RightPaddle1,
+    LeftPaddle1,
+    RightPaddle2,
+    LeftPaddle2,
+    Touchpad,
+    Misc2,
+    Misc3,
+    Misc4,
+    Misc5,
+    Misc6,
+    LeftStick,
+    RightStick,
+    LeftTrigger,
+    RightTrigger,
+    Count
+};
+
+enum class ControlStatus : uint8_t { Unsupported, Unavailable, Released, Active };
+
+/// Analog sticks use [-1, 1], with positive y up. Triggers use [0, 1].
+/// Values are meaningful only for Released and Active states.
+struct ControlValue {
+    ControlStatus status = ControlStatus::Unsupported;
+    float x = 0;
+    float y = 0;
+    bool operator==(const ControlValue&) const = default;
+};
+
+[[nodiscard]] std::string_view ControlName(Control control) noexcept;
+[[nodiscard]] Control ControlFromName(std::string_view name) noexcept;
+[[nodiscard]] Control ControlFromGameInputButton(uint32_t mask) noexcept;
 
 /// Silhouette family a controller is drawn with.
 enum class LayoutKind : uint8_t { Generic, DualSense, XboxSeries, XboxOne, SwitchPro };
@@ -31,6 +81,10 @@ struct DeviceIdentity {
 /// One gamepad state. `buttons` carries the GameInputGamepadButtons bits
 /// unchanged. Sticks are in [-1, 1] with +y up, triggers in [0, 1].
 struct GamepadState {
+    /// Canonical controls are authoritative when populated by an input provider.
+    /// Raw fields below remain a compatibility input for existing callers.
+    bool controls_normalized = false;
+    std::array<ControlValue, static_cast<size_t>(Control::Count)> controls{};
     uint32_t buttons = 0;
     float left_x = 0.0F;
     float left_y = 0.0F;
@@ -44,6 +98,13 @@ struct GamepadState {
     std::optional<bool> touchpad;
     bool operator==(const GamepadState&) const = default;
 };
+
+[[nodiscard]] ControlValue ReadControl(const GamepadState& state, Control control) noexcept;
+
+/// Converts standard GameInput positions without inferring a physical adapter's wiring.
+/// Unsupported buttons are excluded by the device's reported capability mask.
+void NormalizeGameInputControls(GamepadState& state, uint32_t supported_buttons, bool gamepad_available = true,
+                                bool separately_reported_trigger_clicks = false) noexcept;
 
 /// Clamps every axis into its documented range and replaces NaN with the rest
 /// position, so a misbehaving driver cannot push a stick cap out of its well.

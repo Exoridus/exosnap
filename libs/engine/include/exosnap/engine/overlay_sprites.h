@@ -3,6 +3,7 @@
 #include <exosnap/engine/webcam_placement.h>
 
 #include <algorithm>
+#include <array>
 #include <cmath>
 #include <cstddef>
 #include <cstdint>
@@ -69,11 +70,20 @@ struct SpriteContentRect {
     bool operator==(const SpriteContentRect&) const = default;
 };
 
+// Subtracts coverage from this quad only, using alpha from the same atlas.
+// An empty source disables the mask. Destination uses content coordinates.
+struct SpriteMask {
+    SpriteAtlasRect source;
+    SpriteContentRect destination;
+
+    bool operator==(const SpriteMask&) const = default;
+};
 struct SpriteQuad {
     SpriteAtlasRect source;
     SpriteContentRect destination;
     // Multiplied onto the sprite's alpha, clamped to [0,1]. A quad at 0 is skipped.
     float opacity = 1.0f;
+    std::array<SpriteMask, 2> masks{};
 
     bool operator==(const SpriteQuad&) const = default;
 };

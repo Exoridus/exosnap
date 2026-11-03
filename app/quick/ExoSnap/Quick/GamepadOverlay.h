@@ -74,6 +74,7 @@ class GamepadOverlay final : public QObject, public engine::SpriteSourceProvider
 
   private:
     friend class GamepadOverlayTest;
+    static gamepad::GamepadState DisplayState(gamepad::GamepadState state);
     void Poll();
     void Rebuild();
     void SetStatus(QString text);

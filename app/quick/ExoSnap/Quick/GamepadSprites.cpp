@@ -181,27 +181,39 @@ std::shared_ptr<const GamepadSpriteSet> RasterizeGamepad(const QString& path, in
         if (renderer.elementExists(knockout_id)) {
             const auto mask_bounds =
                 renderer.transformForElement(knockout_id).mapRect(renderer.boundsOnElement(knockout_id));
-            const auto mask = RasterizeElement(renderer, knockout_id, mask_bounds, scale, padding);
-            part.knockout_width = mask.width();
-            part.knockout_height = mask.height();
-            part.knockout.reserve(static_cast<size_t>(mask.width()) * mask.height());
-            for (int row = 0; row < mask.height(); ++row)
-                for (int column = 0; column < mask.width(); ++column)
-                    part.knockout.push_back(static_cast<uint8_t>(qAlpha(mask.pixel(column, row))));
+            part.knockout = add(knockout_id, mask_bounds);
             part.knockout_bounds = {static_cast<float>((mask_bounds.x() - padding / scale) / 480),
                                     static_cast<float>((mask_bounds.y() - padding / scale) / 320),
-                                    static_cast<float>(mask.width() / scale / 480),
-                                    static_cast<float>(mask.height() / scale / 320)};
+                                    static_cast<float>(part.knockout.w / scale / 480),
+                                    static_cast<float>(part.knockout.h / scale / 320)};
         }
         result->parts.push_back(part);
     };
     add_part(QStringLiteral("body"), 0, PadMotion::None, true);
-    for (const auto& element : kElements)
-        if (renderer.elementExists(QString::fromLatin1(element.id)) &&
-            (mapped.svg.isEmpty() || mapped.interactive_ids.contains(QString::fromLatin1(element.id)))) {
-            add_part(QString::fromLatin1(element.id), element.button, element.motion, false);
-            result->parts.back().auxiliary = element.auxiliary;
+    if (!mapped.svg.isEmpty()) {
+        for (const auto& id : mapped.interactive_ids) {
+            const auto binding = mapped.controls.value(id);
+            if (!binding.live)
+                continue;
+            using gamepad::Control;
+            const auto motion = binding.control == Control::LeftStick      ? PadMotion::LeftStick
+                                : binding.control == Control::RightStick   ? PadMotion::RightStick
+                                : binding.control == Control::LeftTrigger  ? PadMotion::LeftTrigger
+                                : binding.control == Control::RightTrigger ? PadMotion::RightTrigger
+                                                                           : PadMotion::None;
+            add_part(id, 0, motion, false);
+            auto& part = result->parts.back();
+            part.control = binding.control;
+            part.click_control = binding.click_control;
+            part.canonical = true;
         }
+    } else {
+        for (const auto& element : kElements)
+            if (renderer.elementExists(QString::fromLatin1(element.id))) {
+                add_part(QString::fromLatin1(element.id), element.button, element.motion, false);
+                result->parts.back().auxiliary = element.auxiliary;
+            }
+    }
     atlas->height = y + row_height + 1;
     if (atlas->width > 4096 || atlas->height > 4096) {
         error = QCoreApplication::translate("GamepadArtwork", "Gamepad atlas exceeds the supported texture size.");
@@ -223,56 +235,17 @@ std::shared_ptr<const GamepadSpriteSet> RasterizeGamepad(const QString& path, in
 std::shared_ptr<const engine::SpriteLayerSnapshot> GamepadLayer(const GamepadSpriteSet& sprites,
                                                                 const gamepad::GamepadState& input,
                                                                 engine::SpriteContentRect placement, float opacity) {
-    const auto state = gamepad::Normalized(input);
+    auto state = gamepad::Normalized(input);
+    const auto left = gamepad::ReadControl(state, gamepad::Control::LeftStick);
+    const auto right = gamepad::ReadControl(state, gamepad::Control::RightStick);
+    state.left_x = left.x;
+    state.left_y = left.y;
+    state.right_x = right.x;
+    state.right_y = right.y;
+    state.left_trigger = gamepad::ReadControl(state, gamepad::Control::LeftTrigger).x;
+    state.right_trigger = gamepad::ReadControl(state, gamepad::Control::RightTrigger).x;
     auto layer = std::make_shared<engine::SpriteLayerSnapshot>();
     layer->atlas = sprites.atlas;
-    if (!sprites.parts.empty() && std::any_of(sprites.parts.begin(), sprites.parts.end(),
-                                              [](const auto& part) { return !part.knockout.empty(); })) {
-        const std::scoped_lock lock(sprites.mask_mutex);
-        const std::array position{state.left_x, state.left_y, state.right_x, state.right_y};
-        if (!sprites.masked_atlas || sprites.masked_position != position) {
-            auto atlas = std::make_shared<engine::SpriteAtlas>(*sprites.atlas);
-            const auto& body = sprites.parts.front();
-            for (const auto& part : sprites.parts) {
-                if (part.knockout.empty())
-                    continue;
-                auto bounds = part.knockout_bounds;
-                if (part.motion == PadMotion::LeftStick)
-                    MoveStick(bounds, state.left_x, state.left_y, part);
-                if (part.motion == PadMotion::RightStick)
-                    MoveStick(bounds, state.right_x, state.right_y, part);
-                const float left = (bounds.x - body.bounds.x) / body.bounds.w * body.idle.w;
-                const float top = (bounds.y - body.bounds.y) / body.bounds.h * body.idle.h;
-                const auto sample = [&](int x, int y) -> float {
-                    if (x < 0 || y < 0 || x >= part.knockout_width || y >= part.knockout_height)
-                        return 0;
-                    return part.knockout[static_cast<size_t>(y) * part.knockout_width + x] / 255.0F;
-                };
-                for (int y = std::max(0, static_cast<int>(std::floor(top)));
-                     y < std::min(body.idle.h, static_cast<int>(std::ceil(top + part.knockout_height))); ++y) {
-                    for (int x = std::max(0, static_cast<int>(std::floor(left)));
-                         x < std::min(body.idle.w, static_cast<int>(std::ceil(left + part.knockout_width))); ++x) {
-                        auto& alpha =
-                            atlas->pixels[(static_cast<size_t>(body.idle.y + y) * atlas->width + body.idle.x + x) * 4 +
-                                          3];
-                        if (alpha == 0)
-                            continue;
-                        const float u = x - left, v = y - top;
-                        const int ix = static_cast<int>(std::floor(u)), iy = static_cast<int>(std::floor(v));
-                        const float fx = u - ix, fy = v - iy;
-                        const float coverage = (sample(ix, iy) * (1 - fx) + sample(ix + 1, iy) * fx) * (1 - fy) +
-                                               (sample(ix, iy + 1) * (1 - fx) + sample(ix + 1, iy + 1) * fx) * fy;
-                        // Destination-out changes alpha only in a straight-alpha atlas.
-                        alpha = static_cast<uint8_t>(std::lround(alpha * (1 - coverage)));
-                    }
-                }
-            }
-            atlas->generation = ++atlas_generation;
-            sprites.masked_atlas = std::move(atlas);
-            sprites.masked_position = position;
-        }
-        layer->atlas = sprites.masked_atlas;
-    }
     layer->quads.reserve(sprites.parts.size() + 2);
     for (const auto& part : sprites.parts) {
         auto bounds = part.bounds;
@@ -280,10 +253,13 @@ std::shared_ptr<const engine::SpriteLayerSnapshot> GamepadLayer(const GamepadSpr
             MoveStick(bounds, state.left_x, state.left_y, part);
         if (part.motion == PadMotion::RightStick)
             MoveStick(bounds, state.right_x, state.right_y, part);
-        const bool pressed = (part.button & state.buttons) != 0 ||
-                             (part.auxiliary == PadAuxiliary::Home && state.home.value_or(false)) ||
-                             (part.auxiliary == PadAuxiliary::Share && state.share.value_or(false)) ||
-                             (part.auxiliary == PadAuxiliary::Touchpad && state.touchpad.value_or(false));
+        const auto control = part.motion == PadMotion::None ? part.control : part.click_control;
+        const bool pressed = part.canonical
+                                 ? gamepad::ReadControl(state, control).status == gamepad::ControlStatus::Active
+                                 : (part.button & state.buttons) != 0 ||
+                                       (part.auxiliary == PadAuxiliary::Home && state.home.value_or(false)) ||
+                                       (part.auxiliary == PadAuxiliary::Share && state.share.value_or(false)) ||
+                                       (part.auxiliary == PadAuxiliary::Touchpad && state.touchpad.value_or(false));
         layer->quads.push_back({pressed ? part.pressed : part.idle, Placed(bounds, placement), opacity});
         const float trigger = part.motion == PadMotion::LeftTrigger    ? state.left_trigger
                               : part.motion == PadMotion::RightTrigger ? state.right_trigger
@@ -299,6 +275,19 @@ std::shared_ptr<const engine::SpriteLayerSnapshot> GamepadLayer(const GamepadSpr
             bounds.y += bounds.h * fraction;
             bounds.h *= 1 - fraction;
             layer->quads.push_back({source, Placed(bounds, placement), opacity});
+        }
+    }
+    if (!layer->quads.empty()) {
+        size_t index = 0;
+        for (const auto& part : sprites.parts) {
+            if (part.knockout.w <= 0 || index == layer->quads.front().masks.size())
+                continue;
+            auto bounds = part.knockout_bounds;
+            if (part.motion == PadMotion::LeftStick)
+                MoveStick(bounds, state.left_x, state.left_y, part);
+            if (part.motion == PadMotion::RightStick)
+                MoveStick(bounds, state.right_x, state.right_y, part);
+            layer->quads.front().masks[index++] = {part.knockout, Placed(bounds, placement)};
         }
     }
     return layer;

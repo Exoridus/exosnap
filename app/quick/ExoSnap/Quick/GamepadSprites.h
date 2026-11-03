@@ -5,9 +5,6 @@
 
 #include <QString>
 
-#include <array>
-#include <mutex>
-
 namespace exosnap::quick {
 
 enum class PadMotion { None, LeftStick, RightStick, LeftTrigger, RightTrigger };
@@ -22,18 +19,16 @@ struct GamepadSpritePart {
     PadAuxiliary auxiliary = PadAuxiliary::None;
     float travel_x = 8.0F / 480.0F;
     float travel_y = 8.0F / 320.0F;
-    std::vector<uint8_t> knockout;
-    int knockout_width = 0;
-    int knockout_height = 0;
+    gamepad::Control control = gamepad::Control::Count;
+    gamepad::Control click_control = gamepad::Control::Count;
+    bool canonical = false;
+    engine::SpriteAtlasRect knockout;
     engine::SpriteContentRect knockout_bounds;
 };
 
 struct GamepadSpriteSet {
     std::shared_ptr<const engine::SpriteAtlas> atlas;
     std::vector<GamepadSpritePart> parts;
-    mutable std::mutex mask_mutex;
-    mutable std::array<float, 4> masked_position{};
-    mutable std::shared_ptr<const engine::SpriteAtlas> masked_atlas;
 };
 
 /// Rasterizes immutable artwork at recording resolution. Call only when the
@@ -41,7 +36,7 @@ struct GamepadSpriteSet {
 [[nodiscard]] std::shared_ptr<const GamepadSpriteSet> RasterizeGamepad(const QString& path, int width, bool glass,
                                                                        bool glow, QString& error);
 
-/// Builds quads and masks a private atlas copy when moving caps cover body lines.
+/// Builds quads with body-only GPU masks while reusing the immutable atlas.
 /// A radial display deadzone leaves the captured input values unchanged.
 [[nodiscard]] std::shared_ptr<const engine::SpriteLayerSnapshot> GamepadLayer(const GamepadSpriteSet& sprites,
                                                                               const gamepad::GamepadState& state,

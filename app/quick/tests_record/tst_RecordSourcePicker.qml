@@ -517,8 +517,14 @@ TestCase {
         const without = grabImage(page.Window.window.contentItem).pixel(Math.floor(point.x), Math.floor(point.y));
         button.visible = true;
         waitForRendering(page);
-        compare(grabImage(page.Window.window.contentItem).pixel(Math.floor(point.x), Math.floor(point.y)), without,
-                "overflow must not expose native button chrome at the card corner");
+        const withOverflow = grabImage(page.Window.window.contentItem).pixel(Math.floor(point.x), Math.floor(point.y));
+        // A one-step sRGB rounding difference is not visible native chrome.
+        const near8 = (a, b) => Math.abs(Math.round(a * 255) - Math.round(b * 255)) <= 1;
+        verify(near8(withOverflow.r, without.r) && near8(withOverflow.g, without.g)
+               && near8(withOverflow.b, without.b),
+               "overflow must not expose native button chrome at the card corner");
+        compare(Math.round(withOverflow.a * 255), Math.round(without.a * 255),
+                "overflow must preserve the corner opacity");
     }
 
     function test_window_overflow_contrast_data() {

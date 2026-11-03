@@ -46,6 +46,8 @@
     },
     {
       "id": "trigger-r2",
+      "control": "right_trigger",
+      "clickControl": "misc4",
       "file": "elements/trigger-r2.svg",
       "role": "trigger",
       "binding": {
@@ -69,6 +71,8 @@
     },
     {
       "id": "trigger-l2",
+      "control": "left_trigger",
+      "clickControl": "misc3",
       "file": "elements/trigger-l2.svg",
       "role": "trigger",
       "binding": {
@@ -92,6 +96,7 @@
     },
     {
       "id": "btn-r1",
+      "control": "right_shoulder",
       "file": "elements/btn-r1.svg",
       "role": "button",
       "binding": {
@@ -108,6 +113,7 @@
     },
     {
       "id": "dpad",
+      "controls": {"up": "dpad_up", "down": "dpad_down", "left": "dpad_left", "right": "dpad_right"},
       "file": "elements/dpad.svg",
       "role": "directional-pad",
       "binding": {
@@ -127,6 +133,7 @@
     },
     {
       "id": "btn-y",
+      "control": "north",
       "file": "elements/btn-y.svg",
       "role": "button",
       "binding": {
@@ -143,6 +150,7 @@
     },
     {
       "id": "btn-x",
+      "control": "east",
       "file": "elements/btn-x.svg",
       "role": "button",
       "binding": {
@@ -159,6 +167,7 @@
     },
     {
       "id": "btn-b",
+      "control": "west",
       "file": "elements/btn-b.svg",
       "role": "button",
       "binding": {
@@ -175,6 +184,7 @@
     },
     {
       "id": "btn-a",
+      "control": "south",
       "file": "elements/btn-a.svg",
       "role": "button",
       "binding": {
@@ -191,6 +201,7 @@
     },
     {
       "id": "btn-menu",
+      "control": "start",
       "file": "elements/btn-menu.svg",
       "role": "button",
       "binding": {
@@ -207,6 +218,8 @@
     },
     {
       "id": "stick-r-cap",
+      "control": "right_stick",
+      "clickControl": null,
       "file": "elements/stick-r-cap.svg",
       "role": "stick",
       "binding": {
@@ -214,8 +227,7 @@
         "axes": [
           "right_x",
           "right_y"
-        ],
-        "clickMask": 8192
+        ]
       },
       "bounds": {
         "x": 2369.4345703125,
@@ -237,6 +249,8 @@
     },
     {
       "id": "stick-l-cap",
+      "control": "left_stick",
+      "clickControl": null,
       "file": "elements/stick-l-cap.svg",
       "role": "stick",
       "binding": {
@@ -244,8 +258,7 @@
         "axes": [
           "left_x",
           "left_y"
-        ],
-        "clickMask": 4096
+        ]
       },
       "bounds": {
         "x": 506.9969177246094,

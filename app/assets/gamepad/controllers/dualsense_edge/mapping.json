@@ -39,6 +39,7 @@
     },
     {
       "id": "btn-l4",
+      "control": "left_paddle1",
       "file": "elements/btn-l4.svg",
       "role": "button",
       "binding": null,
@@ -57,6 +58,7 @@
     },
     {
       "id": "btn-r4",
+      "control": "right_paddle1",
       "file": "elements/btn-r4.svg",
       "role": "button",
       "binding": null,
@@ -75,6 +77,7 @@
     },
     {
       "id": "trigger-r2",
+      "control": "right_trigger",
       "file": "elements/trigger-r2.svg",
       "role": "trigger",
       "binding": {
@@ -98,6 +101,7 @@
     },
     {
       "id": "trigger-l2",
+      "control": "left_trigger",
       "file": "elements/trigger-l2.svg",
       "role": "trigger",
       "binding": {
@@ -121,6 +125,7 @@
     },
     {
       "id": "btn-r1",
+      "control": "right_shoulder",
       "file": "elements/btn-r1.svg",
       "role": "button",
       "binding": {
@@ -137,6 +142,7 @@
     },
     {
       "id": "btn-l1",
+      "control": "left_shoulder",
       "file": "elements/btn-l1.svg",
       "role": "button",
       "binding": {
@@ -153,6 +159,8 @@
     },
     {
       "id": "stick-r-cap",
+      "control": "right_stick",
+      "clickControl": "right_stick_click",
       "file": "elements/stick-r-cap.svg",
       "role": "stick",
       "binding": {
@@ -183,6 +191,8 @@
     },
     {
       "id": "stick-l-cap",
+      "control": "left_stick",
+      "clickControl": "left_stick_click",
       "file": "elements/stick-l-cap.svg",
       "role": "stick",
       "binding": {
@@ -213,6 +223,7 @@
     },
     {
       "id": "btn-home",
+      "control": "guide",
       "file": "elements/btn-home.svg",
       "role": "button",
       "binding": {
@@ -230,6 +241,7 @@
     },
     {
       "id": "btn-mute",
+      "control": "misc1",
       "file": "elements/btn-mute.svg",
       "role": "button",
       "binding": null,
@@ -249,6 +261,7 @@
     },
     {
       "id": "btn-view",
+      "control": "back",
       "file": "elements/btn-view.svg",
       "role": "button",
       "binding": {
@@ -264,6 +277,7 @@
     },
     {
       "id": "btn-menu",
+      "control": "start",
       "file": "elements/btn-menu.svg",
       "role": "button",
       "binding": {
@@ -279,6 +293,7 @@
     },
     {
       "id": "btn-triangle",
+      "control": "north",
       "file": "elements/btn-triangle.svg",
       "role": "button",
       "binding": {
@@ -294,6 +309,7 @@
     },
     {
       "id": "btn-square",
+      "control": "west",
       "file": "elements/btn-square.svg",
       "role": "button",
       "binding": {
@@ -309,6 +325,7 @@
     },
     {
       "id": "btn-cross",
+      "control": "south",
       "file": "elements/btn-cross.svg",
       "role": "button",
       "binding": {
@@ -324,6 +341,7 @@
     },
     {
       "id": "btn-circle",
+      "control": "east",
       "file": "elements/btn-circle.svg",
       "role": "button",
       "binding": {
@@ -339,6 +357,7 @@
     },
     {
       "id": "btn-up",
+      "control": "dpad_up",
       "file": "elements/btn-up.svg",
       "role": "button",
       "binding": {
@@ -354,6 +373,7 @@
     },
     {
       "id": "btn-left",
+      "control": "dpad_left",
       "file": "elements/btn-left.svg",
       "role": "button",
       "binding": {
@@ -369,6 +389,7 @@
     },
     {
       "id": "btn-down",
+      "control": "dpad_down",
       "file": "elements/btn-down.svg",
       "role": "button",
       "binding": {
@@ -384,6 +405,7 @@
     },
     {
       "id": "btn-right",
+      "control": "dpad_right",
       "file": "elements/btn-right.svg",
       "role": "button",
       "binding": {
@@ -399,6 +421,7 @@
     },
     {
       "id": "btn-touchpad",
+      "control": "touchpad",
       "file": "elements/btn-touchpad.svg",
       "role": "button",
       "binding": {
@@ -416,6 +439,7 @@
     },
     {
       "id": "btn-fn-l",
+      "control": "left_paddle2",
       "file": "elements/btn-fn-l.svg",
       "role": "button",
       "binding": null,
@@ -434,6 +458,7 @@
     },
     {
       "id": "btn-fn-r",
+      "control": "right_paddle2",
       "file": "elements/btn-fn-r.svg",
       "role": "button",
       "binding": null,

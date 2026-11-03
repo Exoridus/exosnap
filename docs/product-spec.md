@@ -263,11 +263,21 @@ Xbox 360, GameCube, DualSense Edge and Xbox Elite. Compact is the default Steam 
 asset catalog. Automatic GameInput detection does not yet identify Steam Deck devices.
 Generic uses a vendor-neutral controller silhouette. Selecting a Joy-Con drawing does not combine physical devices.
 
+Face controls follow SDL3 positions: south/east/west/north correspond to Xbox A/B/X/Y,
+PlayStation Cross/Circle/Square/Triangle, Switch Pro B/A/Y/X and GameCube A/X/B/Y.
+Generic uses the same normalized controls. Artwork labels do not redefine the input transport.
+GameCube Z is the right shoulder, L/R are analog triggers, and its sticks have no click action.
+Separate GameCube L/R end clicks require qualified device reporting. Selecting its drawing does not qualify
+an adapter's physical button wiring.
+
 The artwork uses white lines with adjustable opacity. Legacy Glass and Glow profile settings are ignored.
-Controls light blue when pressed while their vector symbols stay white, except the PS logo button itself, which turns blue.
-Stick caps move within circular wells,
-L3/R3 tint the caps, and trigger fills are proportional. PS and touchpad clicks are shown when GameInput exposes them.
-Microphone-button and finger-position visualization is not offered until the input transport is qualified.
+Controls normally light blue when pressed while their vector symbols stay white. A mapped pressure color can
+override blue, and a tint-mode control colors its designated graphic. Stick caps move within their wells,
+qualified stick clicks tint the caps, and trigger fills are proportional.
+PS and touchpad clicks are shown when GameInput exposes them. Touchpad clicks do not imply finger contact.
+Unavailable and unsupported inputs remain visually inactive, without being treated as measured releases.
+Unbound paddles, Quick Access, Mute, Fn, pairing and touch-contact artwork do not acquire live input from
+preview simulations. Microphone-button and finger-position visualization requires a qualified input transport.
 The application never switches a DualSense into an enhanced Bluetooth mode automatically.
 
 The widget is moved and resized directly in the preview while recording settings are editable.
@@ -276,7 +286,7 @@ to the recording profile and survive restart. Inclusion and appearance changes c
 The native widget and HTML artwork viewer use the same editable SVG sources and JSON input mappings.
 Normal and pressed variants are rasterized only when building a settled-size atlas. SVG clip paths are
 adapted to masks for the Qt rasterizer. Moving stick caps erase underlying body lines with alpha masks.
-The masked atlas is cached by stick position. Button and trigger changes reuse it and change sprite quads.
+Both stick masks move on the GPU while the atlas remains immutable. Input changes update sprite quads and mask positions.
 Preview and recording share immutable sprite snapshots and the GPU compositor. The recorded order is desktop,
 cursor, webcam, gamepad. The widget is burned into the existing encoded image, without another track or encoder.
 

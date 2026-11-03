@@ -39,6 +39,7 @@
     },
     {
       "id": "trigger-l2",
+      "control": "left_trigger",
       "file": "elements/trigger-l2.svg",
       "role": "trigger",
       "binding": {
@@ -62,6 +63,7 @@
     },
     {
       "id": "btn-l1",
+      "control": "left_shoulder",
       "file": "elements/btn-l1.svg",
       "role": "button",
       "binding": {
@@ -78,6 +80,7 @@
     },
     {
       "id": "btn-share",
+      "control": "misc1",
       "file": "elements/btn-share.svg",
       "role": "button",
       "binding": {
@@ -94,6 +97,7 @@
     },
     {
       "id": "btn-up",
+      "control": "dpad_up",
       "file": "elements/btn-up.svg",
       "role": "button",
       "binding": {
@@ -109,6 +113,7 @@
     },
     {
       "id": "btn-left",
+      "control": "dpad_left",
       "file": "elements/btn-left.svg",
       "role": "button",
       "binding": {
@@ -124,6 +129,7 @@
     },
     {
       "id": "btn-right",
+      "control": "dpad_right",
       "file": "elements/btn-right.svg",
       "role": "button",
       "binding": {
@@ -139,6 +145,7 @@
     },
     {
       "id": "btn-down",
+      "control": "dpad_down",
       "file": "elements/btn-down.svg",
       "role": "button",
       "binding": {
@@ -154,6 +161,8 @@
     },
     {
       "id": "stick-l-cap",
+      "control": "left_stick",
+      "clickControl": "left_stick_click",
       "file": "elements/stick-l-cap.svg",
       "role": "stick",
       "binding": {
@@ -184,6 +193,7 @@
     },
     {
       "id": "btn-view",
+      "control": "back",
       "file": "elements/btn-view.svg",
       "role": "button",
       "binding": {

@@ -39,6 +39,7 @@
     },
     {
       "id": "trigger-r2",
+      "control": "right_trigger",
       "file": "elements/trigger-r2.svg",
       "role": "trigger",
       "binding": {
@@ -62,6 +63,7 @@
     },
     {
       "id": "trigger-l2",
+      "control": "left_trigger",
       "file": "elements/trigger-l2.svg",
       "role": "trigger",
       "binding": {
@@ -85,6 +87,7 @@
     },
     {
       "id": "btn-r1",
+      "control": "right_shoulder",
       "file": "elements/btn-r1.svg",
       "role": "button",
       "binding": {
@@ -101,6 +104,7 @@
     },
     {
       "id": "btn-l1",
+      "control": "left_shoulder",
       "file": "elements/btn-l1.svg",
       "role": "button",
       "binding": {
@@ -117,6 +121,7 @@
     },
     {
       "id": "dpad",
+      "controls": {"up": "dpad_up", "down": "dpad_down", "left": "dpad_left", "right": "dpad_right"},
       "file": "elements/dpad.svg",
       "role": "directional-pad",
       "binding": {
@@ -185,6 +190,8 @@
     },
     {
       "id": "stick-l-cap",
+      "control": "left_stick",
+      "clickControl": "left_stick_click",
       "file": "elements/stick-l-cap.svg",
       "role": "stick",
       "binding": {
@@ -215,6 +222,7 @@
     },
     {
       "id": "btn-home",
+      "control": "guide",
       "file": "elements/btn-home.svg",
       "role": "button",
       "binding": {
@@ -232,6 +240,7 @@
     },
     {
       "id": "btn-a",
+      "control": "south",
       "file": "elements/btn-a.svg",
       "role": "button",
       "binding": {
@@ -247,6 +256,7 @@
     },
     {
       "id": "btn-b",
+      "control": "east",
       "file": "elements/btn-b.svg",
       "role": "button",
       "binding": {
@@ -262,6 +272,7 @@
     },
     {
       "id": "btn-x",
+      "control": "west",
       "file": "elements/btn-x.svg",
       "role": "button",
       "binding": {
@@ -277,6 +288,7 @@
     },
     {
       "id": "btn-y",
+      "control": "north",
       "file": "elements/btn-y.svg",
       "role": "button",
       "binding": {
@@ -292,6 +304,7 @@
     },
     {
       "id": "btn-view",
+      "control": "back",
       "file": "elements/btn-view.svg",
       "role": "button",
       "binding": {
@@ -307,6 +320,7 @@
     },
     {
       "id": "btn-menu",
+      "control": "start",
       "file": "elements/btn-menu.svg",
       "role": "button",
       "binding": {

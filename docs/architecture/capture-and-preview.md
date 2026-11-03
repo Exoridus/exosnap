@@ -54,20 +54,44 @@ with that same device's state at or before the reading timestamp. Disconnect pub
 The initial GameInput microsecond/QPC-100ns anchor is sampled between two QPC reads. The video thread queries
 history at its actual frame time, without a UI timer in the input-to-recording path.
 
+The Qt-free `GamepadState` exposes 30 canonical controls through `ReadControl`.
+Its populated canonical array is authoritative. Raw GameInput fields remain a compatibility input for older
+callers, converted centrally when `controls_normalized` is false. Renderers consume `ControlValue`, not provider
+bit positions or SVG identifiers. `Released` and `Active` carry valid values. `Unavailable` means no usable
+reading for a potentially supported control, while `Unsupported` means the provider/device does not expose it.
+Buttons use x = 0 or 1, triggers x in [0, 1], and sticks x/y in [-1, 1] with positive y up.
+Unknown values are not evidence of released controls. Presentation deadzones do not alter captured input.
+
+`NormalizeGameInputControls` explicitly translates standard GameInput button positions and its paddle fields.
+The live provider consults `GetGamepadInfo().supportedLayout` and `GetSupportedSystemButtons()` before exposing
+controls. Guide/share use system readings, with the existing DualSense PS/touchpad-click path retained.
+Touchpad click is independent of touch contact. GameInput trigger-button flags do not by themselves prove a
+separate mechanical end click. The live provider does not qualify them as `misc3`/`misc4`.
+A qualified provider can supply these states through the canonical array or explicitly enable separate-click
+normalization. Selecting GameCube artwork does not identify or remap an adapter. Its physical B/X wiring and
+separate end-click reporting remain unqualified.
+
+The SDL3 symbol correspondence and additive mapping schema are documented with the
+[controller artwork contract](../../app/assets/gamepad/controllers/README.md#logical-controls).
+SDL3 supplies the semantic convention only and is not a runtime dependency. SDL enum values, GameInput masks
+and browser indices are separate domains. The same state contract is available to other renderers without
+requiring any artwork identifier or provider mask.
+
 GamepadOverlay owns input capture and app-side artwork. SVG groups rasterize only when artwork or settled
 recording-content size changes. A resize temporarily transforms existing quads, then debounces rasterization.
 Raster work runs on one joined worker. Stale results are discarded before GUI delivery.
-The atlas stores straight-alpha BGRA8, transparent gutters and edge RGB for bilinear filtering. Knockout masks
-are rasterized with the artwork and follow the same radial displacement as the caps. A changed stick position
-copies the atlas and removes body alpha under the current caps, preserving straight RGB and all control tiles.
-The immutable masked atlas is reused for button, trigger and placement changes. This requires an atlas upload
-when a stick moves, but no SVG rasterization or Qt painting in the frame consumer. Mapping schema version 1
-remains shared input policy. Optional preview and touch metadata does not create hardware capabilities.
-Unbound controls remain static artwork. Stick deadzone and travel affect presentation only.
-Raw captured axis values are retained. The GUI notification snapshot is
-separate from the recording consumer's snapshot cache, so consuming a recording frame cannot suppress an idle
-preview update. The Quick scene-graph node draws sprites after the webcam into its clean private copy with
-GpuCompositor. An already-composited recording tap is never composed a second time.
+The immutable atlas stores straight-alpha BGRA8, transparent gutters and edge RGB for bilinear filtering.
+Knockout tiles are prepared with the artwork. The body `SpriteQuad` carries up to two `SpriteMask` entries,
+each referencing the same atlas and a destination in content coordinates. Each mask follows its cap's radial
+movement. The GPU multiplies only the body's alpha by the uncovered fraction of both masks before blending.
+It neither erases the framebuffer background nor masks other control quads. Caps are drawn normally afterward.
+Stick movement changes quad/mask destinations, without copying, rasterizing or uploading atlas pixels.
+Button, trigger, opacity and placement changes also reuse the atlas. Unbound controls remain static artwork.
+
+The GUI notification snapshot is separate from the recording consumer's snapshot cache, so consuming a
+recording frame cannot suppress an idle preview update. The Quick scene-graph node, still-frame capture and
+recording all use `GpuCompositor::DrawSpriteLayer`. The preview draws sprites after the webcam into its clean
+private copy. An already-composited recording tap is never composed a second time.
 
 The x64 GameInputRedist.dll and GameInputRawInputProxy.exe ship beside the executable through the common CMake
 install tree used by both package formats. Runtime terms, Microsoft notices and the MIT loader notice ship together.

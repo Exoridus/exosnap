@@ -1,6 +1,7 @@
 #pragma once
 
 #include <algorithm>
+#include <array>
 #include <cmath>
 #include <cstddef>
 #include <cstdint>
@@ -68,8 +69,13 @@ enum class MaskCursorComposition {
 }
 
 // Mirrors `cbuffer DrawConstants` in kOverlayPixelShaderSrc, register b0.
-// Four float4 rows; HLSL constant buffers round up to 16-byte rows, so the
+// HLSL constant buffers round up to 16-byte rows, so the
 // static_asserts below are the contract between C++ and the shader.
+struct OverlayMaskConstants {
+    float uv_rect[4];
+    // Composite pixel coordinates: x, y, width, height. Zero width disables it.
+    float destination[4];
+};
 struct OverlayPixelConstants {
     float key_color[4]; // r, g, b (0-1) + tolerance
     // x=mirror, y=mode(0=cursor/1=chroma/2=opaque), z=spillReduction, w=softness
@@ -78,13 +84,16 @@ struct OverlayPixelConstants {
     float params2[4];
     // u0, v0, u1, v1: the part of the texture the destination rectangle shows.
     float uv_rect[4];
+    std::array<OverlayMaskConstants, 2> masks;
 };
 
-static_assert(sizeof(OverlayPixelConstants) == 64, "DrawConstants is four float4 rows");
+static_assert(sizeof(OverlayPixelConstants) == 128, "DrawConstants is eight float4 rows");
 static_assert(sizeof(OverlayPixelConstants) % 16 == 0, "D3D11 constant buffers require 16-byte rows");
 static_assert(offsetof(OverlayPixelConstants, params) == 16, "params must start at row 1");
 static_assert(offsetof(OverlayPixelConstants, params2) == 32, "params2 must start at row 2");
 static_assert(offsetof(OverlayPixelConstants, uv_rect) == 48, "uv_rect must start at row 3");
+static_assert(offsetof(OverlayPixelConstants, masks) == 64, "masks must start at row 4");
+static_assert(sizeof(OverlayMaskConstants) == 32, "Each mask occupies two float4 rows");
 
 // ref_white_scale: linear-light scale applied to sRGB-decoded sprites on the FP16
 // native-HDR path (overlay reference white / scRGB reference white). Ignored when
@@ -142,11 +151,17 @@ inline constexpr char kOverlayPixelShaderSrc[] = R"(
 Texture2D frameTex : register(t0);
 SamplerState frameSamp : register(s0);
 
+struct MaskConstants {
+    float4 uvRect;
+    float4 destination;
+};
+
 cbuffer DrawConstants : register(b0) {
     float4 keyColor; // r, g, b, tolerance
     float4 params;   // x=mirror, y=mode(0=cursor/1=chroma/2=opaque), z=spillReduction, w=softness
     float4 params2;  // x=hdrLinear, y=refWhiteScale, z=opacity, w=reserved
     float4 uvRect;   // u0, v0, u1, v1
+    MaskConstants masks[2];
 };
 
 // BT.601 RGB->CbCr. Output range [0,1] with neutral at 0.5.
@@ -222,6 +237,16 @@ float4 main(float4 position : SV_POSITION, float2 texcoord : TEXCOORD0) : SV_TAR
     // opacity is a caller-supplied uniform blend factor applied to alpha.
     if (params2.x > 0.5f) {
         color.rgb = SrgbToLinear(color.rgb) * params2.y;
+    }
+    [unroll]
+    for (int i = 0; i < 2; ++i) {
+        if (masks[i].destination.z > 0.0f && masks[i].destination.w > 0.0f) {
+            const float2 maskPosition = (position.xy - masks[i].destination.xy) / masks[i].destination.zw;
+            if (all(maskPosition >= 0.0f) && all(maskPosition < 1.0f)) {
+                const float2 maskUv = lerp(masks[i].uvRect.xy, masks[i].uvRect.zw, maskPosition);
+                color.a *= 1.0f - frameTex.SampleLevel(frameSamp, maskUv, 0).a;
+            }
+        }
     }
     color.a *= params2.z;
 

@@ -298,12 +298,15 @@ std::shared_ptr<const engine::SpriteLayerSnapshot> GamepadOverlay::PreviewSnapsh
     return BuildSnapshot(timestamp, true);
 }
 
-std::shared_ptr<const engine::SpriteLayerSnapshot> GamepadOverlay::BuildSnapshot(uint64_t timestamp, bool preview) {
-    const std::scoped_lock lock(mutex_);
-    if (!settings_.enabled || !sprites_ || (!preview && !settings_.output_visible))
-        return nullptr;
-    const auto reading = input_ ? input_->StateAt(timestamp) : std::nullopt;
-    auto state = reading && reading->connected ? reading->state : gamepad::GamepadState{};
+gamepad::GamepadState GamepadOverlay::DisplayState(gamepad::GamepadState state) {
+    if (state.controls_normalized) {
+        for (const auto control : {gamepad::Control::LeftStick, gamepad::Control::RightStick}) {
+            auto& value = state.controls[static_cast<size_t>(control)];
+            if ((value.status == gamepad::ControlStatus::Active || value.status == gamepad::ControlStatus::Released) &&
+                std::hypot(value.x, value.y) <= 0.08F)
+                value = {gamepad::ControlStatus::Released, 0, 0};
+        }
+    }
     state.buttons &= 0x3FFF;
     if (std::hypot(state.left_x, state.left_y) <= 0.08F) {
         state.left_x = 0;
@@ -313,6 +316,16 @@ std::shared_ptr<const engine::SpriteLayerSnapshot> GamepadOverlay::BuildSnapshot
         state.right_x = 0;
         state.right_y = 0;
     }
+    return state;
+}
+
+std::shared_ptr<const engine::SpriteLayerSnapshot> GamepadOverlay::BuildSnapshot(uint64_t timestamp, bool preview) {
+    const std::scoped_lock lock(mutex_);
+    if (!settings_.enabled || !sprites_ || (!preview && !settings_.output_visible))
+        return nullptr;
+    const auto reading = input_ ? input_->StateAt(timestamp) : std::nullopt;
+    auto state = reading && reading->connected ? reading->state : gamepad::GamepadState{};
+    state = DisplayState(std::move(state));
     if (cached_ && cached_revision_ == revision_ && state == cached_state_)
         return cached_;
     const float scale =

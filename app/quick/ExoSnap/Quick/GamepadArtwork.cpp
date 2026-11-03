@@ -1,5 +1,6 @@
 #include "GamepadArtwork.h"
 
+#include <QColor>
 #include <QCoreApplication>
 #include <QDir>
 #include <QDomDocument>
@@ -88,59 +89,42 @@ QString FirstContour(QString path) {
     return path;
 }
 
-QString ButtonId(int mask) {
-    switch (mask) {
-    case 1:
-        return QStringLiteral("btn-menu");
-    case 2:
-        return QStringLiteral("btn-view");
-    case 4:
-        return QStringLiteral("btn-a");
-    case 8:
-        return QStringLiteral("btn-b");
-    case 16:
-        return QStringLiteral("btn-x");
-    case 32:
-        return QStringLiteral("btn-y");
-    case 64:
-        return QStringLiteral("btn-up");
-    case 128:
-        return QStringLiteral("btn-down");
-    case 256:
-        return QStringLiteral("btn-left");
-    case 512:
-        return QStringLiteral("btn-right");
-    case 1024:
-        return QStringLiteral("btn-l1");
-    case 2048:
-        return QStringLiteral("btn-r1");
-    default:
-        return {};
-    }
-}
-
-QString BindingId(const QJsonObject& binding) {
+gamepad::Control BindingControl(const QJsonObject& binding) {
+    using gamepad::Control;
     const auto type = binding.value("type").toString();
     if (type == QStringLiteral("button"))
-        return ButtonId(binding.value("mask").toInt());
-    if (type == QStringLiteral("stick"))
-        return binding.value("clickMask").toInt() == 4096 ? QStringLiteral("stick-l-cap")
-                                                          : QStringLiteral("stick-r-cap");
-    if (type == QStringLiteral("axis"))
-        return binding.value("field").toString() == QStringLiteral("left_trigger") ? QStringLiteral("trigger-l2")
-                                                                                   : QStringLiteral("trigger-r2");
-    if (type == QStringLiteral("auxiliary")) {
-        const auto field = binding.value("field").toString();
-        if (field == QStringLiteral("home"))
-            return QStringLiteral("btn-home");
-        if (field == QStringLiteral("share"))
-            return QStringLiteral("btn-share");
-        if (field == QStringLiteral("touchpad"))
-            return QStringLiteral("btn-touchpad");
+        return gamepad::ControlFromGameInputButton(binding.value("mask").toInt());
+    if (type == QStringLiteral("stick")) {
+        if (!binding.contains("axes")) {
+            if (binding.value("clickMask").toInt() == 4096)
+                return Control::LeftStick;
+            if (binding.value("clickMask").toInt() == 8192)
+                return Control::RightStick;
+        }
+        const auto axes = binding.value("axes").toArray();
+        if (axes == QJsonArray{QStringLiteral("left_x"), QStringLiteral("left_y")})
+            return Control::LeftStick;
+        if (axes == QJsonArray{QStringLiteral("right_x"), QStringLiteral("right_y")})
+            return Control::RightStick;
+        return Control::Count;
     }
-    return {};
+    const auto field = binding.value("field").toString();
+    if (type == QStringLiteral("axis")) {
+        if (field == QStringLiteral("left_trigger"))
+            return Control::LeftTrigger;
+        if (field == QStringLiteral("right_trigger"))
+            return Control::RightTrigger;
+    }
+    if (type == QStringLiteral("auxiliary")) {
+        if (field == QStringLiteral("home"))
+            return Control::Guide;
+        if (field == QStringLiteral("share"))
+            return Control::Misc1;
+        if (field == QStringLiteral("touchpad"))
+            return Control::Touchpad;
+    }
+    return Control::Count;
 }
-
 void Clip(QDomDocument& document, QDomElement defs, QDomElement element, const QString& id,
           const QJsonObject& rectangle) {
     if (rectangle.isEmpty())
@@ -249,6 +233,9 @@ MappedGamepadArtwork PrepareMappedGamepadArtwork(const QString& mapping_path, QS
     const auto add = [&](QDomElement source_part, const QJsonObject& layer, const QString& id, const QString& region) {
         if (id.isEmpty())
             return false;
+        const QColor press_color(layer.value("pressColor").toString(QStringLiteral("#4cb8ff")));
+        if (!press_color.isValid())
+            return false;
         const auto explicit_shape = layer.value("pressElement").toString();
         const auto shape =
             explicit_shape.isEmpty() ? LargestGraphic(source_part, renderer) : Find(source_part, explicit_shape);
@@ -257,14 +244,13 @@ MappedGamepadArtwork PrepareMappedGamepadArtwork(const QString& mapping_path, QS
         auto idle = source_part.cloneNode(true).toElement();
         auto pressed = source_part.cloneNode(true).toElement();
         if (layer.value("pressMode").toString() == QStringLiteral("tint")) {
-            Style(Find(pressed, shape.attribute(QStringLiteral("id"))), QStringLiteral("fill"),
-                  QStringLiteral("#4cb8ff"));
+            Style(Find(pressed, shape.attribute(QStringLiteral("id"))), QStringLiteral("fill"), press_color.name());
         } else {
             auto fill = shape.cloneNode(true).toElement();
             StripIds(fill);
             if (fill.tagName() == QStringLiteral("path"))
                 fill.setAttribute(QStringLiteral("d"), FirstContour(fill.attribute(QStringLiteral("d"))));
-            Style(fill, QStringLiteral("fill"), QStringLiteral("#4cb8ff"));
+            Style(fill, QStringLiteral("fill"), press_color.name());
             Style(fill, QStringLiteral("fill-opacity"), QStringLiteral("0.36"));
             Style(fill, QStringLiteral("stroke"), QStringLiteral("none"));
             auto fill_group = document.createElement(QStringLiteral("g"));
@@ -303,7 +289,10 @@ MappedGamepadArtwork PrepareMappedGamepadArtwork(const QString& mapping_path, QS
         if (part.isNull())
             return fail();
         const auto binding = layer.value("binding").toObject();
-        if (binding.value("type").toString() == QStringLiteral("directional-pad")) {
+        const bool explicitly_unbound = layer.contains("binding") && layer.value("binding").isNull();
+        if (!explicitly_unbound &&
+            (binding.value("type").toString() == QStringLiteral("directional-pad") ||
+             (layer.value("role").toString() == QStringLiteral("directional-pad") && layer.contains("controls")))) {
             const auto b = layer.value("bounds").toObject();
             const double x = b.value("x").toDouble(), y = b.value("y").toDouble();
             const double w = b.value("width").toDouble(), h = b.value("height").toDouble();
@@ -314,20 +303,40 @@ MappedGamepadArtwork PrepareMappedGamepadArtwork(const QString& mapping_path, QS
             const QString corners[]{point(x, y), point(x + w, y), point(x + w, y + h), point(x, y + h)};
             const QString directions[]{QStringLiteral("up"), QStringLiteral("right"), QStringLiteral("down"),
                                        QStringLiteral("left")};
-            for (int i = 0; i < 4; ++i)
-                if (!add(part, layer, ButtonId(binding.value(directions[i]).toInt()),
-                         center + ' ' + corners[i] + ' ' + corners[(i + 1) % 4]))
+            for (int i = 0; i < 4; ++i) {
+                const auto control = gamepad::ControlFromGameInputButton(binding.value(directions[i]).toInt());
+                const auto controls = layer.value("controls").toObject();
+                const auto canonical =
+                    controls.contains(directions[i])
+                        ? gamepad::ControlFromName(controls.value(directions[i]).toString().toStdString())
+                        : control;
+                const auto id = source_id + '-' + directions[i];
+                if (canonical == gamepad::Control::Count ||
+                    !add(part, layer, id, center + ' ' + corners[i] + ' ' + corners[(i + 1) % 4]))
                     return fail();
+                result.controls.insert(id, {canonical, gamepad::Control::Count, true});
+            }
             continue;
         }
-        const auto id = BindingId(binding);
-        if (id.isEmpty()) {
+        const auto control = layer.contains("control")
+                                 ? gamepad::ControlFromName(layer.value("control").toString().toStdString())
+                                 : BindingControl(binding);
+        if (layer.contains("control") && control == gamepad::Control::Count)
+            return fail();
+        if (explicitly_unbound || control == gamepad::Control::Count) {
             body.appendChild(part);
             continue;
         }
+        const auto id = source_id;
+        const auto click = layer.contains("clickControl")
+                               ? gamepad::ControlFromName(layer.value("clickControl").toString().toStdString())
+                               : gamepad::ControlFromGameInputButton(binding.value("clickMask").toInt());
+        if (layer.contains("clickControl") && !layer.value("clickControl").isNull() && click == gamepad::Control::Count)
+            return fail();
         if (!add(part, layer, id, {}))
             return fail();
-        if (binding.value("type").toString() == QStringLiteral("stick")) {
+        result.controls.insert(id, {control, click, true});
+        if (control == gamepad::Control::LeftStick || control == gamepad::Control::RightStick) {
             const auto knockout = layer.value("knockout").toString();
             if (!knockout.isEmpty()) {
                 auto shape = Find(part, knockout);
