@@ -87,6 +87,8 @@ Compact process steps emit a heartbeat every 90 seconds while running, including
 CI uploads verification logs on failure. Advisory raw diagnostics, normalized sites and summaries remain artifacts on every run.
 The independent Rust CI job invokes Cargo directly and retains its native console output so the orchestrator does not certify itself.
 
+PR manager tests use injected GitHub responses and isolated Git repositories: `cargo test --locked --manifest-path tools/Cargo.toml -p exo-dev --lib pr:: --jobs 2`. They cover merge identity drift, expected-head submission, current branch refs, duplicate accepted updates, linked-worktree serialization and refusal paths without mutating GitHub. The [contributor workflow](../../CONTRIBUTING.md#opening-and-merging-a-pull-request) defines review prerequisites, branch-update commands and the limits of activation-time SHA guards. These tests do not establish hosted reviewer availability or server-side review enforcement.
+
 ### Developer-loop tiers
 
 Commit and push are not release qualification: they check the change, not the product. Configure, build, ctest, cppcheck and the curated blocking clang-tidy set do not run in either local hook. They ran there once, unconditionally, on every commit and push; that duplicated the pull request's own build/test/analysis legs at several minutes of cost per commit for coverage the PR gate already had. They now run once, on the pull request, scoped to what it actually changed:

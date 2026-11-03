@@ -449,6 +449,9 @@ enum PrCommand {
         /// Required to actually merge.
         #[arg(long)]
         confirm: bool,
+        /// Full SHA of the independently reviewed head.
+        #[arg(long, required_if_eq("confirm", "true"))]
+        expected_head: Option<String>,
         /// Delete the head branch after the merge.
         #[arg(long)]
         delete_branch: bool,
@@ -465,6 +468,25 @@ enum PrCommand {
         /// Required to actually merge every member of this stack.
         #[arg(long)]
         confirm: bool,
+        /// Full SHA of the independently reviewed top member.
+        #[arg(long, required_if_eq("confirm", "true"))]
+        expected_head: Option<String>,
+    },
+    /// Previews or submits one merge update from the pull request's actual base.
+    UpdateBranch {
+        #[arg(long, value_parser = clap::value_parser!(u32).range(1..))]
+        number: u32,
+        #[arg(long)]
+        confirm: bool,
+        /// Full SHA of the head that was approved for this update.
+        #[arg(long, required_if_eq("confirm", "true"))]
+        expected_head: Option<String>,
+        /// Full SHA of the current target branch, rather than cached PR metadata.
+        #[arg(long, required_if_eq("confirm", "true"))]
+        expected_base: Option<String>,
+        /// Explicitly allow an acceptance update on a draft or with active/unknown CI.
+        #[arg(long)]
+        acceptance_update: bool,
     },
 }
 
@@ -1029,11 +1051,46 @@ fn run_cli() -> anyhow::Result<ExitCode> {
             PrCommand::Merge {
                 number,
                 confirm,
+                expected_head,
                 delete_branch,
                 auto,
-            } => pr_merge(&repo_root, number, confirm, delete_branch, auto),
-            PrCommand::MergeStack { number, confirm } => {
-                pr_merge_stack(&repo_root, number, confirm)
+            } => pr_merge(
+                &repo_root,
+                number,
+                expected_head,
+                confirm,
+                delete_branch,
+                auto,
+            ),
+            PrCommand::MergeStack {
+                number,
+                confirm,
+                expected_head,
+            } => pr_merge_stack(&repo_root, number, expected_head, confirm),
+            PrCommand::UpdateBranch {
+                number,
+                confirm,
+                expected_head,
+                expected_base,
+                acceptance_update,
+            } => {
+                let request = exo_dev::pr::UpdateRequest {
+                    number,
+                    confirm,
+                    expected_head,
+                    expected_base,
+                    acceptance_update,
+                };
+                let outcome =
+                    exo_dev::pr::update_branch(&repo_root, &exo_dev::pr::RealGh::new(), &request)?;
+                print!("{}", exo_dev::pr::render_update(&outcome));
+                Ok(
+                    if matches!(outcome, exo_dev::pr::UpdateOutcome::Accepted { .. }) {
+                        ExitCode::from(2)
+                    } else {
+                        ExitCode::SUCCESS
+                    },
+                )
             }
         },
         Command::Privacy { privacy } => match privacy {
@@ -2133,12 +2190,14 @@ fn pr_open(
 fn pr_merge(
     repo_root: &std::path::Path,
     number: Option<u32>,
+    expected_head: Option<String>,
     confirm: bool,
     delete_branch: bool,
     auto: bool,
 ) -> anyhow::Result<ExitCode> {
     let request = exo_dev::pr::MergeRequest {
         number,
+        expected_head,
         confirm,
         delete_branch,
         auto,
@@ -2151,9 +2210,14 @@ fn pr_merge(
 fn pr_merge_stack(
     repo_root: &std::path::Path,
     number: u32,
+    expected_head: Option<String>,
     confirm: bool,
 ) -> anyhow::Result<ExitCode> {
-    let request = exo_dev::pr::MergeStackRequest { number, confirm };
+    let request = exo_dev::pr::MergeStackRequest {
+        number,
+        expected_head,
+        confirm,
+    };
     let outcome = exo_dev::pr::merge_stack(repo_root, &exo_dev::pr::RealGh::new(), &request)?;
     print!("{}", exo_dev::pr::render_merge_stack(&outcome));
     Ok(match outcome {
@@ -2839,6 +2903,62 @@ fn verify_with_scope(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn confirmed_merges_require_a_caller_review_head_but_previews_do_not() {
+        for subcommand in ["merge", "merge-stack"] {
+            assert!(Cli::try_parse_from(["exo-dev", "pr", subcommand, "--number", "400"]).is_ok());
+            assert!(
+                Cli::try_parse_from(["exo-dev", "pr", subcommand, "--number", "400", "--confirm"])
+                    .is_err()
+            );
+            assert!(
+                Cli::try_parse_from([
+                    "exo-dev",
+                    "pr",
+                    subcommand,
+                    "--number",
+                    "400",
+                    "--confirm",
+                    "--expected-head",
+                    &"a".repeat(40)
+                ])
+                .is_ok()
+            );
+        }
+    }
+
+    #[test]
+    fn pr_update_cli_accepts_preview_and_requires_both_confirmation_shas() {
+        assert!(Cli::try_parse_from(["exo-dev", "pr", "update-branch", "--number", "400"]).is_ok());
+        assert!(
+            Cli::try_parse_from([
+                "exo-dev",
+                "pr",
+                "update-branch",
+                "--number",
+                "400",
+                "--confirm"
+            ])
+            .is_err()
+        );
+        assert!(
+            Cli::try_parse_from([
+                "exo-dev",
+                "pr",
+                "update-branch",
+                "--number",
+                "400",
+                "--confirm",
+                "--expected-head",
+                &"a".repeat(40),
+                "--expected-base",
+                &"b".repeat(40),
+                "--acceptance-update"
+            ])
+            .is_ok()
+        );
+    }
 
     #[test]
     fn test_build_targets_are_repeatable() {
