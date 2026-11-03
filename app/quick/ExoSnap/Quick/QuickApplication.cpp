@@ -3616,7 +3616,8 @@ void QuickApplication::refreshVisualSettingsPreview(bool allow_busy_retry) {
         webcam_preview_feed_.setFrame(std::move(copy));
     } else if (result != engine::ReadResult::Unchanged) {
         image.Reset();
-        clear();
+        if (result != engine::ReadResult::Busy)
+            clear();
         if (result == engine::ReadResult::Busy && allow_busy_retry && !settings_visual_retry_queued_) {
             settings_visual_retry_queued_ = true;
             QMetaObject::invokeMethod(

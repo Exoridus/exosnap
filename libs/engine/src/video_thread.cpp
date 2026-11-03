@@ -4051,8 +4051,10 @@ void VideoThread::RunAttachment(const std::shared_ptr<NativeState>& native, cons
         };
         std::vector<CaptureRingEntry> captureRing;
         size_t ringHead = 0;                // next physical slot to overwrite (round-robin)
-        uint64_t lastEmittedPresentQpc = 0; // present-QPC of the last frame handed to the encoder
-        bool phaseRingHasFrame = false;     // true once any live entry exists since last reset
+        uint64_t lastEmittedPresentQpc = 0; // Selection watermark, including a deferred composition.
+        uint64_t lastCompositedPresentQpc = 0;
+        bool selectedDesktopPending = false;
+        bool phaseRingHasFrame = false; // true once any live entry exists since last reset
         // Reused scratch for linearising the round-robin ring into ascending present
         // order each tick — hoisted out of the hot loop so the two vectors are
         // allocated once (reserved to the ring size) and only cleared per tick.
@@ -4524,6 +4526,11 @@ void VideoThread::RunAttachment(const std::shared_ptr<NativeState>& native, cons
                         m_state.diagnostics.OnFrameDroppedCoalesced();
                     freshSelection = dec.emit;
                     if (dec.emit) {
+                        if (selectedDesktopPending) {
+                            ++droppedFrames;
+                            m_state.diagnostics.OnFrameDroppedCoalesced();
+                        }
+                        selectedDesktopPending = true;
                         lastEmittedPresentQpc = presentQpcsAscending[dec.index];
                         // Consume the emitted entry and every skipped/older one so they
                         // are not re-selected or counted again as eviction drops.
@@ -4540,10 +4547,7 @@ void VideoThread::RunAttachment(const std::shared_ptr<NativeState>& native, cons
                         // No fresh frame near this slot -> existing duplicate / CFR-skip path.
                         rawSourceTex = nullptr;
                     }
-                    if (lastEmittedPresentQpc != 0) {
-                        selectedPresentNs = (lastEmittedPresentQpc / qpcFreq) * 1000000000ULL +
-                                            (lastEmittedPresentQpc % qpcFreq) * 1000000000ULL / qpcFreq;
-                    }
+
                     // Seed: until a reference NV12 exists (session start) the
                     // ring may be empty while odCapturedTex already holds the
                     // first frame from the wait loop — use it so a static
@@ -4576,12 +4580,15 @@ void VideoThread::RunAttachment(const std::shared_ptr<NativeState>& native, cons
                     if (useOdCapture)
                         odCapturedTexValid = true;
                 }
-                if (!visualDeferred && ShouldRecompositeHeldScreen(rawSourceTex != nullptr, odHolding,
-                                                                   dynamicOverlayChanged, heldScreenTex != nullptr)) {
-                    ++wgcCursorTrace.recomposited_for_overlay;
+                if (!visualDeferred &&
+                    ShouldRecompositeHeldScreen(rawSourceTex != nullptr, odHolding, dynamicOverlayChanged,
+                                                heldScreenTex != nullptr, selectedDesktopPending)) {
+                    if (dynamicOverlayChanged)
+                        ++wgcCursorTrace.recomposited_for_overlay;
                     if (visualFrame.Changed())
                         ++visualTrace.held_recompositions;
                     rawSourceTex = heldScreenTex;
+                    freshSelection = usePhaseCorrect && selectedDesktopPending;
                 }
                 if (rawSourceTex != nullptr && hdrNativeActive) {
                     // Native HDR10: composite webcam/cursor in linear scRGB FP16,
@@ -4751,6 +4758,16 @@ void VideoThread::RunAttachment(const std::shared_ptr<NativeState>& native, cons
                 }
 
                 visualFrame = {};
+                if (usePhaseCorrect) {
+                    if (frameWritten && rawSourceTex != nullptr) {
+                        lastCompositedPresentQpc = lastEmittedPresentQpc;
+                        selectedDesktopPending = false;
+                    }
+                    if (lastCompositedPresentQpc != 0) {
+                        selectedPresentNs = (lastCompositedPresentQpc / qpcFreq) * 1000000000ULL +
+                                            (lastCompositedPresentQpc % qpcFreq) * 1000000000ULL / qpcFreq;
+                    }
+                }
                 if (!frameWritten) {
                     // Release the slot and skip the tick. Two very different causes end
                     // up here and must not share a counter: a source frame was available
