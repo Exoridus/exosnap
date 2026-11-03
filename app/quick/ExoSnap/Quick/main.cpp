@@ -3174,7 +3174,7 @@ int main(int argc, char* argv[]) {
             });
         };
         QTimer::singleShot(visualCaptureDelayMs(arguments), &app, [&app, root_window, act_on_page]() {
-            waitForActiveDestinationReady(app, root_window, kVisualReadyTimeoutMs, act_on_page);
+            waitForActiveDestinationReady(app, root_window, 20000, act_on_page);
         });
     }
     const int exit_code = app.exec();
