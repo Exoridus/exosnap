@@ -36,6 +36,9 @@ class VisualSceneConsumer final {
         Frame& operator=(const Frame&) = delete;
         [[nodiscard]] std::span<const VisualSceneItemFrame> Items() const noexcept;
         [[nodiscard]] bool Changed() const noexcept;
+        // No item/cache authorization is returned during contention. Preserve the
+        // last completed composition or retry; do not compose a partial new frame.
+        [[nodiscard]] bool Deferred() const noexcept;
         [[nodiscard]] uint64_t PublicationSequence() const noexcept;
         [[nodiscard]] ConfigRevision Revision() const noexcept;
 
@@ -44,6 +47,7 @@ class VisualSceneConsumer final {
         VisualSceneConsumer* owner_ = nullptr;
         size_t count_ = 0;
         bool changed_ = false;
+        bool deferred_ = false;
     };
 
     static Outcome<std::unique_ptr<VisualSceneConsumer>> Prepare(std::shared_ptr<VisualSceneRuntime>);
@@ -79,6 +83,8 @@ class VisualSceneConsumer final {
     uint64_t prepared_sequence_ = 0;
     bool frame_active_ = false;
     bool scene_changed_ = false;
+    bool refresh_deferred_ = false;
+    bool invalidation_pending_ = false;
     bool have_mode_ = false;
     WebcamPixelRect previous_content_;
     VisualCompositionMode previous_mode_ = VisualCompositionMode::Recording;

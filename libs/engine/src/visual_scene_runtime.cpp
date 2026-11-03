@@ -784,6 +784,31 @@ ReadResult VisualSceneRuntime::TryReadScene(VisualConsumerId id, SceneReadLease&
     return ReadResult::Updated;
 }
 
+ReadResult VisualSceneRuntime::TryReplaceScene(VisualConsumerId id, SceneReadLease& result) noexcept {
+    if (!result)
+        return TryReadScene(id, result);
+    const std::unique_lock lock(storage_->mutex, std::try_to_lock);
+    if (!lock.owns_lock()) {
+        storage_->busy_reads.fetch_add(1, std::memory_order_relaxed);
+        return ReadResult::Busy;
+    }
+    const auto consumer = storage_->consumers.find(id);
+    if (consumer == storage_->consumers.end() || result.reader_ != &consumer->second->scene)
+        return ReadResult::Revoked;
+    if (!storage_->scene)
+        return ReadResult::NotReady;
+    if (storage_->scene->sequence > storage_->scene_sequence.load(std::memory_order_acquire))
+        return ReadResult::Busy;
+    if (result.slot_ == storage_->scene)
+        return ReadResult::Unchanged;
+    // The mutex excludes reclamation while the one reader pin changes slots.
+    result.slot_->pins.fetch_sub(1, std::memory_order_release);
+    storage_->scene->pins.fetch_add(1, std::memory_order_acquire);
+    result.slot_ = storage_->scene;
+    result.reader_->sequence = storage_->scene->sequence;
+    return ReadResult::Updated;
+}
+
 ReadResult VisualSceneRuntime::CheckBinding(const PreparedSceneBinding& binding) noexcept {
     const std::unique_lock lock(storage_->mutex, std::try_to_lock);
     if (!lock.owns_lock()) {

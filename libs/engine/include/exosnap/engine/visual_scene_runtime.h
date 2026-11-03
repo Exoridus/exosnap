@@ -185,6 +185,9 @@ class VisualSceneRuntime final {
     // Only Updated populates an empty destination. Busy cannot validate cache reuse.
     // Reacquisition can still be Busy after releasing an old scene; skip that tick.
     ReadResult TryReadScene(VisualConsumerId, SceneReadLease&) noexcept;
+    // Replaces this consumer's existing scene pin atomically. Busy and Unchanged
+    // preserve the old lease. Updated invalidates all views of the previous scene.
+    ReadResult TryReplaceScene(VisualConsumerId, SceneReadLease&) noexcept;
     ReadResult TryReadImage(VisualConsumerId, VisualAddress, VisualReadLease&) noexcept;
     // Control-side cache reset. Requires this consumer's image pin to be empty.
     // The next read returns Updated for otherwise unchanged accepted pixels.

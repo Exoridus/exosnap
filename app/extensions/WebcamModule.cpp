@@ -17,6 +17,14 @@ WebcamSource::WebcamSource(SourceCreateRequest creation, WebcamControlHooks hook
     : creation_(std::move(creation)), hooks_(std::move(hooks)) {
 }
 
+bool WebcamSource::RetainsAccepted(const toml::table& settings) const {
+    if (!applied_ || !running_requested_)
+        return false;
+    const auto previous = ProjectWebcamSettings(applied_->validated_settings);
+    const auto desired = ProjectWebcamSettings(settings);
+    return previous.succeeded() && desired.succeeded() && SameMode(*previous.value(), *desired.value());
+}
+
 engine::Outcome<std::monostate> WebcamSource::Apply(const SourceRequest& request) {
     if (retired_ || request.token.address != creation_.token.address ||
         request.token.request < creation_.token.request ||

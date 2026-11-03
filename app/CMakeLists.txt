@@ -1384,7 +1384,7 @@ if(NOT CMAKE_BUILD_TYPE STREQUAL "Release")
         NOMINMAX EXOSNAP_ENABLE_VISUAL_TEST_HARNESS=1)
     # mfreadwrite.lib removed (MF/SinkWriter path deleted).
     target_link_libraries(capture_frame_tests PRIVATE
-        mfplat.lib mf.lib mfuuid.lib ole32.lib)
+        mfplat.lib mf.lib mfuuid.lib ole32.lib tomlplusplus::tomlplusplus)
     set_target_properties(capture_frame_tests PROPERTIES AUTOMOC ON)
 endif()
 

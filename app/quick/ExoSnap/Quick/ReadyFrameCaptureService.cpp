@@ -192,11 +192,10 @@ bool cropToBgra(ID3D11Device* device, ID3D11DeviceContext* context, ID3D11Textur
     return true;
 }
 
-bool drawVisualScene(exosnap::engine::GpuCompositor& compositor, exosnap::engine::VisualSceneConsumer& consumer,
-                     int width, int height, std::string& error) {
+bool drawVisualScene(exosnap::engine::GpuCompositor& compositor,
+                     const exosnap::engine::VisualSceneConsumer::Frame& frame, int width, int height,
+                     std::string& error) {
     const exosnap::engine::WebcamPixelRect content{0, 0, width, height};
-    auto frame = consumer.Sample(exosnap::engine::CaptureTime100ns{gamepad::GameInputSource::NowCapture100ns()},
-                                 content, exosnap::engine::VisualCompositionMode::Recording);
     size_t index = 0;
     for (const auto& view : frame.Items()) {
         if (view.sprites) {
@@ -310,15 +309,14 @@ void captureOnWorker(ReadyFrameSource source, ReadyFrameComposition composition,
         fail("No Ready preview frame is available");
         return;
     }
-    auto prepared = exosnap::engine::VisualSceneConsumer::Prepare(composition.visual_runtime);
-    if (!prepared.succeeded()) {
-        fail(prepared.error()->context);
-        return;
-    }
-    auto consumer = std::move(*prepared.value());
-    if (consumer->NeedsRefresh()) {
-        fail("Ready visual scene is busy");
-        return;
+    std::unique_ptr<exosnap::engine::VisualSceneConsumer> consumer;
+    if (composition.visual_runtime) {
+        auto prepared = exosnap::engine::VisualSceneConsumer::Prepare(composition.visual_runtime);
+        if (!prepared.succeeded()) {
+            fail(prepared.error()->context);
+            return;
+        }
+        consumer = std::move(*prepared.value());
     }
 
     std::string error;
@@ -398,16 +396,48 @@ void captureOnWorker(ReadyFrameSource source, ReadyFrameComposition composition,
         return;
     }
 
+    exosnap::engine::VisualSceneConsumer::Frame visual_frame;
+    if (consumer) {
+        bool sampled = false;
+        for (int attempt = 0; attempt < 8; ++attempt) {
+            if (consumer->NeedsRefresh()) {
+                auto refreshed = consumer->Refresh();
+                if (!refreshed.succeeded()) {
+                    fail(refreshed.error()->context);
+                    return;
+                }
+                if (*refreshed.value() == exosnap::engine::ReadResult::Busy) {
+                    Sleep(1);
+                    continue;
+                }
+            }
+            visual_frame =
+                consumer->Sample({gamepad::GameInputSource::NowCapture100ns()}, {0, 0, crop.width(), crop.height()},
+                                 exosnap::engine::VisualCompositionMode::Recording);
+            if (!visual_frame.Deferred()) {
+                sampled = true;
+                break;
+            }
+            visual_frame = {};
+            Sleep(1);
+        }
+        if (!sampled) {
+            fail("Ready visual scene remained contended");
+            return;
+        }
+    }
     exosnap::engine::GpuCompositor compositor;
     if (!compositor.Init(device.Get(), context.Get(), crop.width(), crop.height(), error) ||
-        !compositor.PrepareVisualImages(consumer->ImageSources(), error) ||
-        !compositor.PrepareVisualSprites(consumer->ItemCount(), error) || !compositor.BeginFrame(bgra.Get(), error) ||
+        (consumer && (!compositor.PrepareVisualImages(consumer->ImageSources(), error) ||
+                      !compositor.PrepareVisualSprites(consumer->ItemCount(), error))) ||
+        !compositor.BeginFrame(bgra.Get(), error) ||
         (composition.video.capture_cursor && !drawCursor(compositor, source, crop, error)) ||
-        !drawVisualScene(compositor, *consumer, crop.width(), crop.height(), error)) {
+        !drawVisualScene(compositor, visual_frame, crop.width(), crop.height(), error)) {
         fail(std::move(error));
         return;
     }
 
+    visual_frame = {};
     std::vector<uint8_t> pixels;
     if (!readback(device.Get(), context.Get(), compositor.Result(), static_cast<uint32_t>(crop.width()),
                   static_cast<uint32_t>(crop.height()), pixels, error)) {

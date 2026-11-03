@@ -32,6 +32,7 @@ class WebcamSource final : public VisualSource {
   public:
     WebcamSource(SourceCreateRequest, WebcamControlHooks);
     engine::Outcome<std::monostate> Apply(const SourceRequest&) override;
+    bool RetainsAccepted(const toml::table&) const override;
     void RequestStop() noexcept override;
     bool IsQuiescent() const noexcept override;
 

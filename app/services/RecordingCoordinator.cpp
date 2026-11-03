@@ -868,11 +868,19 @@ void RecordingCoordinator::QueueWebcamRequest(QObject* receiver, engine::SourceT
                                                             .context = reason.toStdString()};
                     post_status(std::move(status));
                 });
-            if (!restart && webcam_service_.IsRunning() && webcam_service_.UpdatePublication(writer, token))
+            const bool same_mode = webcam_started_mode_ && webcam_started_mode_->device_id == settings.device_id &&
+                                   webcam_started_mode_->width == settings.width &&
+                                   webcam_started_mode_->height == settings.height &&
+                                   webcam_started_mode_->fps == settings.fps;
+            if (!restart && same_mode && webcam_service_.IsRunning() &&
+                webcam_service_.UpdatePublication(writer, token))
                 return;
             webcam_service_.Stop();
-            if (!webcam_service_.Start(settings.device_id, settings.width, settings.height, settings.fps,
-                                       std::move(writer), token)) {
+            webcam_started_mode_.reset();
+            if (webcam_service_.Start(settings.device_id, settings.width, settings.height, settings.fps,
+                                      std::move(writer), token)) {
+                webcam_started_mode_ = settings;
+            } else {
                 QMetaObject::invokeMethod(
                     receiver,
                     [token, post_status] {
@@ -904,36 +912,67 @@ WebcamControlHooks RecordingCoordinator::CreateWebcamControlHooks(
                            on_control_settled);
     };
     hooks.request_stop = [this, receiver, on_control_settled] {
-        QueueWebcamOperation(receiver, [this] { webcam_service_.Stop(); }, on_control_settled);
+        QueueWebcamOperation(
+            receiver,
+            [this] {
+                webcam_service_.Stop();
+                webcam_started_mode_.reset();
+            },
+            on_control_settled);
     };
     hooks.is_quiescent = [this] {
-        return webcam_completed_serial_.load(std::memory_order_acquire) == webcam_requested_serial_ &&
-               !webcam_service_.IsRunning();
+        return webcam_completed_serial_.load(std::memory_order_acquire) == webcam_requested_serial_;
     };
     hooks.has_verification_source = [this] { return static_webcam_source_ != nullptr; };
     hooks.session_owns_device = [this] { return VisualSessionOwnsDevice(); };
-    hooks.request_verification = [this](engine::SourceToken token, engine::VisualPublicationWriter writer,
-                                        std::function<void(SourceStatus)> post_status) {
+    hooks.request_verification = [this, receiver, on_control_settled](engine::SourceToken token,
+                                                                      engine::VisualPublicationWriter writer,
+                                                                      std::function<void(SourceStatus)> post_status) {
         const auto frame = static_webcam_source_->Snapshot();
-        const engine::CpuImageLayout layout{frame->width, frame->height, frame->format, frame->matrix, frame->range};
-        auto prepared = writer.PrepareImage(token, layout);
-        if (!prepared.succeeded()) {
-            post_status({token, SourcePhase::Failed, *prepared.error()});
-            return;
-        }
-        LARGE_INTEGER counter{}, frequency{};
-        QueryPerformanceCounter(&counter);
-        QueryPerformanceFrequency(&frequency);
-        const engine::CaptureTime100ns received{engine::QpcTicksTo100ns(static_cast<uint64_t>(counter.QuadPart),
-                                                                        static_cast<uint64_t>(frequency.QuadPart))};
-        auto lease = writer.TryBeginCpuFrame({token, frame->generation, received, {}});
-        if (!lease || lease->Layout() != layout) {
-            post_status({token, SourcePhase::Waiting, {}});
-            return;
-        }
-        std::copy(frame->pixels.begin(), frame->pixels.end(), lease->Pixels().begin());
-        const auto result = writer.Publish(std::move(*lease));
-        post_status({token, result == engine::PublishResult::Accepted ? SourcePhase::Ready : SourcePhase::Waiting, {}});
+        QueueWebcamOperation(
+            receiver,
+            [this, receiver, token, writer = std::move(writer), post_status = std::move(post_status), frame]() mutable {
+                // Superseding a queued stop must still release the physical camera.
+                webcam_service_.Stop();
+                webcam_started_mode_.reset();
+                const auto report = [&](SourceStatus status) {
+                    QMetaObject::invokeMethod(
+                        receiver,
+                        [post_status, status = std::move(status)]() mutable { post_status(std::move(status)); },
+                        Qt::QueuedConnection);
+                };
+                const engine::CpuImageLayout layout{frame->width, frame->height, frame->format, frame->matrix,
+                                                    frame->range};
+                const auto prepared = writer.PrepareImage(token, layout);
+                if (!prepared.succeeded()) {
+                    report({token, SourcePhase::Failed, *prepared.error()});
+                    return;
+                }
+                constexpr int kPublishAttempts = 8;
+                for (int attempt = 0; attempt < kPublishAttempts; ++attempt) {
+                    LARGE_INTEGER counter{}, frequency{};
+                    QueryPerformanceCounter(&counter);
+                    QueryPerformanceFrequency(&frequency);
+                    const engine::CaptureTime100ns received{engine::QpcTicksTo100ns(
+                        static_cast<uint64_t>(counter.QuadPart), static_cast<uint64_t>(frequency.QuadPart))};
+                    auto lease = writer.TryBeginCpuFrame({token, frame->generation, received, {}});
+                    if (lease && lease->Layout() == layout) {
+                        std::copy(frame->pixels.begin(), frame->pixels.end(), lease->Pixels().begin());
+                        const auto result = writer.Publish(std::move(*lease));
+                        if (result == engine::PublishResult::Accepted) {
+                            report({token, SourcePhase::Ready, {}});
+                            return;
+                        }
+                        if (result != engine::PublishResult::NoFreeSlot)
+                            break;
+                    }
+                    lease.reset();
+                    if (attempt + 1 < kPublishAttempts)
+                        std::this_thread::sleep_for(std::chrono::milliseconds(1));
+                }
+                report({token, SourcePhase::Waiting, {}});
+            },
+            on_control_settled);
     };
     return hooks;
 }

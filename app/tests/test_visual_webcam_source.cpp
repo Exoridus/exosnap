@@ -92,6 +92,24 @@ TEST_F(WebcamSourceTest, OneCameraForAllDemandAndRepeatedApply) {
     EXPECT_EQ(stops, 0);
 }
 
+TEST_F(WebcamSourceTest, LiveControlsRetainAcceptedPixelsButDeviceAndModeChangesDoNot) {
+    WebcamSource source(Creation(), Hooks());
+    auto request = Request();
+    EXPECT_FALSE(source.RetainsAccepted(request.validated_settings));
+    ASSERT_TRUE(source.Apply(request).succeeded());
+    auto controls = request.validated_settings;
+    controls.insert("controls", toml::table{{"brightness", toml::table{{"auto", false}, {"value", 10}}}});
+    EXPECT_TRUE(source.RetainsAccepted(controls));
+    auto device = controls;
+    device.insert("device_id", "other camera");
+    EXPECT_FALSE(source.RetainsAccepted(device));
+    auto mode = controls;
+    mode.insert("width", 640);
+    EXPECT_FALSE(source.RetainsAccepted(mode));
+    source.RequestStop();
+    EXPECT_FALSE(source.RetainsAccepted(controls));
+}
+
 TEST_F(WebcamSourceTest, ClosingSettingsKeepsRecordingCapture) {
     WebcamSource source(Creation(), Hooks());
     auto request = Request(Consumer(VisualConsumer::Recording) | Consumer(VisualConsumer::SettingsPreview));

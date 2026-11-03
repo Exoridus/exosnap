@@ -15,6 +15,7 @@ struct FakeControl {
     bool stopped = false;
     bool reject = false;
     bool synchronous_ready = false;
+    bool retain_accepted = false;
     int destroyed = 0;
     bool PublishReady() {
         const auto token = requests.back().token;
@@ -48,6 +49,9 @@ class ManagedFake final : public VisualSource {
     }
     void RequestStop() noexcept override {
         control_->stopped = true;
+    }
+    bool RetainsAccepted(const toml::table&) const override {
+        return control_->retain_accepted;
     }
     bool IsQuiescent() const noexcept override {
         return control_->quiescent;
@@ -230,6 +234,37 @@ TEST_F(VisualSourceManagerTest, OneApplyFailureDoesNotRollbackOrDisableAnotherSo
     EXPECT_NE(manager.Status(controls[1]->requests.back().token.address)->phase, SourcePhase::Failed);
     EXPECT_EQ(controls[1]->requests.back().demand.consumers, 4);
     EXPECT_FALSE(controls[1]->stopped);
+}
+
+TEST_F(VisualSourceManagerTest, LiveSourceChangeRetainsOriginalStampedImageUntilReplacementArrives) {
+    Register();
+    VisualSourceManager manager(registry, runtime);
+    auto consumer = runtime.RegisterConsumer();
+    ASSERT_TRUE(consumer.succeeded());
+    auto scene = Scene();
+    manager.SetConsumerDemand(VisualConsumer::Recording, true);
+    ASSERT_TRUE(manager.ApplyDesired(scene, {1}).succeeded());
+    ASSERT_TRUE(controls[0]->PublishReady());
+    const auto old = controls[0]->requests.back().token;
+    controls[0]->retain_accepted = true;
+    scene.sources[0].settings.insert("brightness", 10);
+    ASSERT_TRUE(manager.ApplyDesired(scene, {2}).succeeded());
+    const auto current = controls[0]->requests.back().token;
+    EXPECT_NE(current, old);
+    engine::SceneReadLease prepared;
+    ASSERT_EQ(runtime.TryReadScene(*consumer.value(), prepared), engine::ReadResult::Updated);
+    ASSERT_EQ(prepared.Items().size(), 1u);
+    engine::VisualReadLease image;
+    ASSERT_EQ(runtime.TryReadImage(*consumer.value(), old.address, image), engine::ReadResult::Updated);
+    EXPECT_EQ(image.Stamp().token, old);
+    image.Reset();
+    prepared.Reset();
+    EXPECT_FALSE(controls[0]->publication.TryBeginCpuFrame({old, 99, {2}, {}}));
+    ASSERT_TRUE(controls[0]->PublishReady());
+    ASSERT_EQ(runtime.TryReadImage(*consumer.value(), current.address, image), engine::ReadResult::Updated);
+    EXPECT_EQ(image.Stamp().token, current);
+    image.Reset();
+    runtime.UnregisterConsumer(*consumer.value());
 }
 
 TEST_F(VisualSourceManagerTest, NeverReadySourceDoesNotBlockAnotherAndDisconnectKeepsAcceptedContent) {

@@ -282,6 +282,8 @@ class PreviewTextureNode final : public QSGNode {
         // state is otherwise inherited by the offscreen conversion pass.
         context_->ClearState();
         context_->CopyResource(local_texture_.Get(), shared_texture_.Get());
+        has_background_ = true;
+        visual_retries_ = 0;
         // The frame is already copied, so this pass still presents it. What a failed
         // release costs is every pass AFTER it: the mutex stays on the consumer key,
         // the producer's 0 ms acquire times out forever, and those passes would all
@@ -291,6 +293,8 @@ class PreviewTextureNode final : public QSGNode {
             metrics.release_failures.fetch_add(1, std::memory_order_relaxed);
         const bool converted = composeAndConvert(error);
         window->endExternalCommands();
+        if (visual_deferred_)
+            return ConsumeOutcome::TakenButDeferred;
         if (!converted) {
             metrics.conversion_failures.fetch_add(1, std::memory_order_relaxed);
             return ConsumeOutcome::TakenButFailed;
@@ -324,6 +328,7 @@ class PreviewTextureNode final : public QSGNode {
         if (revision != visual_revision_) {
             visual_revision_ = revision;
             visual_dirty_ = true;
+            visual_retries_ = 0;
         }
         placement_item_ = placement_item;
         draft_visible_ = draft_visible;
@@ -414,7 +419,7 @@ class PreviewTextureNode final : public QSGNode {
         // re-compose the retained copy instead of looking at the transport,
         // which has nothing to give and would book the look as contention.
         const bool desktop_owed = scheduler_ == nullptr || scheduler_->HasUnrenderedPublish();
-        if (visual_dirty_ && has_frame_ && !desktop_owed) {
+        if (visual_dirty_ && has_background_ && !desktop_owed) {
             QString error;
             window_->beginExternalCommands();
             context_->ClearState();
@@ -423,6 +428,13 @@ class PreviewTextureNode final : public QSGNode {
             if (!composed) {
                 conversion_error_active_ = true;
                 ExoPreviewItem::RenderLink::publishRenderState(link_, generation_, has_frame_, sourceSize(), error);
+            } else if (visual_deferred_) {
+                retryVisualComposition();
+            } else if (!has_frame_) {
+                has_frame_ = true;
+                if (image_node_)
+                    image_node_->setRect(target_rect_);
+                ExoPreviewItem::RenderLink::publishRenderState(link_, generation_, true, sourceSize(), {});
             }
             recordSceneFrame(link_->metrics);
             return;
@@ -434,6 +446,8 @@ class PreviewTextureNode final : public QSGNode {
         const bool first_frame = !has_frame_;
         const ConsumeOutcome outcome = consume(window_, link_->metrics, error);
         const bool consumed = outcome == ConsumeOutcome::Presented;
+        if (outcome == ConsumeOutcome::TakenButDeferred)
+            retryVisualComposition();
         if (scheduler_ != nullptr) {
             // Both taken cases settle the generation. A frame that was taken and
             // then failed to convert is gone from the last-value slot for good, so
@@ -504,14 +518,24 @@ class PreviewTextureNode final : public QSGNode {
     }
 
   private:
+    void retryVisualComposition() {
+        if (visual_retries_ < PreviewUpdateScheduler::kRetriesPerMiss) {
+            ++visual_retries_;
+            ExoPreviewItem::RenderLink::requestRetry(link_, generation_);
+        }
+    }
+
     // Caller brackets external commands. Frame pins end after every synchronous upload.
     bool composeAndConvert(QString& error) {
+        visual_deferred_ = false;
         if (composes_) {
             std::string compositor_error;
-            if (!compositor_.BeginFrame(local_texture_.Get(), compositor_error) || !drawVisualScene(compositor_error)) {
+            if (!drawVisualScene(compositor_error)) {
                 error = QString::fromStdString(compositor_error);
                 return false;
             }
+            if (visual_deferred_)
+                return true;
         }
         visual_dirty_ = false;
         if (tone_mapper_ != nullptr) {
@@ -538,6 +562,13 @@ class PreviewTextureNode final : public QSGNode {
             qRound(normalized_source_rect_.width() * width_), qRound(normalized_source_rect_.height() * height_)};
         auto frame = visual_consumer_->Sample(engine::CaptureTime100ns{gamepad::GameInputSource::NowCapture100ns()},
                                               content, composition_mode_);
+        if (frame.Deferred()) {
+            visual_deferred_ = true;
+            visual_dirty_ = true;
+            return true;
+        }
+        if (!compositor_.BeginFrame(local_texture_.Get(), error))
+            return false;
         size_t item_index = 0;
         for (const auto& view : frame.Items()) {
             if (view.sprites) {
@@ -598,6 +629,9 @@ class PreviewTextureNode final : public QSGNode {
         visual_cache_maintenance_ = true;
         valid_ = false;
         has_frame_ = false;
+        has_background_ = false;
+        visual_deferred_ = false;
+        visual_retries_ = 0;
         // setTexture() intentionally has no null state. This helper only runs
         // while adopting into a fresh node; replacement deletes the old node
         // in updatePaintNode before constructing the new transport state.
@@ -641,6 +675,9 @@ class PreviewTextureNode final : public QSGNode {
     std::unique_ptr<QuickPreviewRgbaConverter> rgba_converter_;
     exosnap::engine::GpuCompositor compositor_;
     bool composes_ = false;
+    bool has_background_ = false;
+    bool visual_deferred_ = false;
+    quint64 visual_retries_ = 0;
     bool compositor_initialized_ = false;
     // What the display conversion reads: the composite when this source takes
     // the overlay, else the private copy.

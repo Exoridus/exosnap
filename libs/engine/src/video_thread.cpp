@@ -1624,6 +1624,7 @@ void VideoThread::RunAttachment(const std::shared_ptr<NativeState>& native, cons
     winrt::com_ptr<ID3D11Texture2D> odCapturedTex;
     DXGI_FORMAT odFrameFormat = DXGI_FORMAT_UNKNOWN; // set when odCapturedTex is created
     bool odCapturedTexValid = false;
+    int64_t odCapturedFrameTicks100ns = 0;
 
     // HDR (scRGB FP16) capture: odCapturedTex/ring textures hold the raw FP16
     // frames, and a per-emitted-frame tone-map pass converts them into hdrSdrTex
@@ -2797,6 +2798,8 @@ void VideoThread::RunAttachment(const std::shared_ptr<NativeState>& native, cons
                 if (checkOdFrame(native->held.get()) != OdFrameCheck::Ok)
                     return;
                 d3dContext->CopyResource(odCapturedTex.get(), native->held.get());
+                odCapturedFrameTicks100ns = static_cast<int64_t>(
+                    native->held_lease ? native->held_lease->capture_qpc().value : Qpc100ns(qpcFreq));
                 odCapturedTexValid = true;
             } else {
                 const auto copied = copyWgcFrame(native->held.get(), nullptr);
@@ -2982,6 +2985,10 @@ void VideoThread::RunAttachment(const std::shared_ptr<NativeState>& native, cons
                         odCursorPosY = info.PointerPosition.Position.y;
                     }
                     odSrc.ReleaseFrame();
+                    odCapturedFrameTicks100ns = static_cast<int64_t>(
+                        info.LastPresentTime.QuadPart != 0
+                            ? QpcTicksTo100ns(static_cast<uint64_t>(info.LastPresentTime.QuadPart), qpcFreq)
+                            : Qpc100ns(qpcFreq));
                     odCapturedTexValid = true;
                     gotFirst = true;
                 } else if (odHr == DXGI_ERROR_ACCESS_LOST) {
@@ -4453,6 +4460,8 @@ void VideoThread::RunAttachment(const std::shared_ptr<NativeState>& native, cons
             // burst workload after process suspension.
             uint64_t catchUpFrames = 0;
             while (currentElapsed100ns >= next_tick_100ns && catchUpFrames < kMaxCatchUpFrames) {
+                if (!maintainVisualScene())
+                    goto end_encode_loop;
                 // Whole-tick frame-time bracket (composite + tonemap + VP-Blt +
                 // encode + route). Emitted only on the emit path below, so dropped
                 // ticks are not counted as frame-time samples.
@@ -4558,8 +4567,17 @@ void VideoThread::RunAttachment(const std::shared_ptr<NativeState>& native, cons
                     !haveLastCompositedKey ||
                     currentVisualKey.cursor_generation != lastCompositedKey.cursor_generation ||
                     currentVisualKey.overlay_generation != lastCompositedKey.overlay_generation;
-                if (ShouldRecompositeHeldScreen(rawSourceTex != nullptr, odHolding, dynamicOverlayChanged,
-                                                heldScreenTex != nullptr)) {
+                const bool visualDeferred = visualFrame.Deferred();
+                if (visualDeferred) {
+                    visualFrame = {};
+                    rawSourceTex = nullptr;
+                    freshSelection = false;
+                    selectedPresentNs = 0;
+                    if (useOdCapture)
+                        odCapturedTexValid = true;
+                }
+                if (!visualDeferred && ShouldRecompositeHeldScreen(rawSourceTex != nullptr, odHolding,
+                                                                   dynamicOverlayChanged, heldScreenTex != nullptr)) {
                     ++wgcCursorTrace.recomposited_for_overlay;
                     if (visualFrame.Changed())
                         ++visualTrace.held_recompositions;
@@ -4823,6 +4841,7 @@ void VideoThread::RunAttachment(const std::shared_ptr<NativeState>& native, cons
         bool vfrCachedPictureValid = false;
         winrt::com_ptr<ID3D11Texture2D> vfrHeldDesktop;
         int64_t vfrHeldDesktopTicks100ns = 0;
+        uint64_t vfrHeldDesktopGeneration = 0;
         bool vfrDesktopPending = false;
         uint64_t vfrNextVisualSample100ns = 0;
         {
@@ -4980,8 +4999,8 @@ void VideoThread::RunAttachment(const std::shared_ptr<NativeState>& native, cons
                     // meaningful for a real desktop present.
                     if (acquireKind == OdAcquireKind::DesktopPresent) {
                         const auto lpt = static_cast<uint64_t>(info.LastPresentTime.QuadPart);
-                        latestFrameTicks100ns =
-                            static_cast<int64_t>(lpt / qpcFreq * 10000000ULL + lpt % qpcFreq * 10000000ULL / qpcFreq);
+                        latestFrameTicks100ns = static_cast<int64_t>(QpcTicksTo100ns(lpt, qpcFreq));
+                        odCapturedFrameTicks100ns = latestFrameTicks100ns;
                     }
                     odSrc.ReleaseFrame();
                     if (diag_recording && acquireKind == OdAcquireKind::DesktopPresent)
@@ -5007,9 +5026,8 @@ void VideoThread::RunAttachment(const std::shared_ptr<NativeState>& native, cons
                     }
                 }
                 if (odCapturedTexValid) {
-                    latestTex = odCapturedTex; // borrow — not released in loop
-                    if (latestFrameTicks100ns == 0)
-                        latestFrameTicks100ns = static_cast<int64_t>(Qpc100ns(qpcFreq));
+                    latestTex = odCapturedTex; // Retained engine-owned capture.
+                    latestFrameTicks100ns = odCapturedFrameTicks100ns;
                 }
             } else if (drainStep == CaptureDrainStep::DrainWgc) {
                 // WGC: drain frame pool — keep latest (always drain, even when paused)
@@ -5128,24 +5146,33 @@ void VideoThread::RunAttachment(const std::shared_ptr<NativeState>& native, cons
                 vfr_was_paused = false;
             }
 
-            if (latestTex != nullptr) {
+            const bool desktopArrived = latestTex != nullptr && (vfrHeldDesktop == nullptr ||
+                                                                 visualGenerations.screen != vfrHeldDesktopGeneration);
+            if (desktopArrived) {
                 vfrHeldDesktop = latestTex;
                 vfrHeldDesktopTicks100ns = latestFrameTicks100ns;
+                vfrHeldDesktopGeneration = visualGenerations.screen;
                 vfrDesktopPending = true;
             }
             const uint64_t visualNow100ns = Qpc100ns(qpcFreq);
-            if (vfrHeldDesktop != nullptr && !odHolding && visualNow100ns >= vfrNextVisualSample100ns) {
+            if (vfrHeldDesktop != nullptr && !odHolding &&
+                (desktopArrived || visualNow100ns >= vfrNextVisualSample100ns)) {
                 vfrNextVisualSample100ns = visualNow100ns + frame_interval_100ns;
                 int32_t slot = encoder->AcquireFreeSlot();
-                if (slot < 0) {
+                if (slot < 0 && vfrDesktopPending) {
                     if (!reapAndRoute(kSlotWaitMs))
                         goto end_encode_loop;
                     slot = encoder->AcquireFreeSlot();
                 }
                 if (slot < 0) {
-                    ++slotStallCount;
-                    m_state.diagnostics.OnSlotStall();
-                    m_state.diagnostics.OnFrameDroppedBackpressure();
+                    if (vfrDesktopPending) {
+                        ++slotStallCount;
+                        m_state.diagnostics.OnSlotStall();
+                        m_state.diagnostics.OnFrameDroppedBackpressure();
+                        vfrDesktopPending = false;
+                        odCapturedTexValid = false;
+                    }
+                    Sleep(1);
                     continue;
                 }
                 sampleWgcCursor();
@@ -5156,7 +5183,7 @@ void VideoThread::RunAttachment(const std::shared_ptr<NativeState>& native, cons
                 const bool overlayChanged = !haveLastCompositedKey ||
                                             currentVisualKey.cursor_generation != lastCompositedKey.cursor_generation ||
                                             currentVisualKey.overlay_generation != lastCompositedKey.overlay_generation;
-                if (!vfrDesktopPending && !overlayChanged) {
+                if (visualFrame.Deferred() || (!vfrDesktopPending && !overlayChanged)) {
                     visualFrame = {};
                     encoder->ReleaseSlot(slot);
                 } else {

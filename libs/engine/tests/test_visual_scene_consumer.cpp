@@ -10,6 +10,7 @@
 #include <chrono>
 #include <future>
 #include <mutex>
+#include <tuple>
 
 using namespace exosnap;
 using namespace exosnap::engine;
@@ -270,7 +271,7 @@ TEST_F(SceneConsumer, RecreatedConsumerCanUploadUnchangedPixelsAfterDeviceReset)
     EXPECT_EQ(frame.Items()[0].image_result, ReadResult::Updated);
 }
 
-TEST_F(SceneConsumer, BusyNeverAuthorizesImageCacheAndRecoveryIsChanged) {
+TEST_F(SceneConsumer, BusyDefersCompositionWithoutAuthorizingCacheOrReportingRemoval) {
     {
         auto frame = consumer->Sample(CaptureTime100ns{150}, {0, 0, 480, 320}, VisualCompositionMode::Recording);
         ASSERT_EQ(frame.Items().size(), 1);
@@ -278,17 +279,19 @@ TEST_F(SceneConsumer, BusyNeverAuthorizesImageCacheAndRecoveryIsChanged) {
     std::unique_lock lock(VisualRuntimeTestAccess::Storage(*runtime).mutex);
     auto attempt = std::async(std::launch::async, [&] {
         auto frame = consumer->Sample(CaptureTime100ns{150}, {0, 0, 480, 320}, VisualCompositionMode::Recording);
-        return std::pair(frame.Items().size(), frame.Changed());
+        return std::tuple(frame.Items().size(), frame.Changed(), frame.Deferred());
     });
     const auto status = attempt.wait_for(std::chrono::seconds(1));
     lock.unlock();
     EXPECT_EQ(status, std::future_status::ready);
-    const auto [count, changed] = attempt.get();
+    const auto [count, changed, deferred] = attempt.get();
     EXPECT_EQ(count, 0);
-    EXPECT_TRUE(changed);
+    EXPECT_FALSE(changed);
+    EXPECT_TRUE(deferred);
     auto frame = consumer->Sample(CaptureTime100ns{150}, {0, 0, 480, 320}, VisualCompositionMode::Recording);
     ASSERT_EQ(frame.Items().size(), 1);
-    EXPECT_TRUE(frame.Changed());
+    EXPECT_FALSE(frame.Changed());
+    EXPECT_FALSE(frame.Deferred());
     EXPECT_TRUE(frame.Items()[0].cache_valid);
     EXPECT_EQ(frame.Items()[0].image_result, ReadResult::Unchanged);
 }
@@ -450,11 +453,14 @@ TEST_F(SceneConsumer, ImageSourcesArePreparedAndDeduplicatedOutsideSampling) {
     EXPECT_TRUE(consumer->ImageSources().empty());
 }
 
-TEST_F(SceneConsumer, BusyRefreshClearsTheOldCompositionUntilMaintenanceRecovers) {
+TEST_F(SceneConsumer, BusyRefreshRetainsOneOldScenePinAndDefersComposition) {
     {
         auto frame = consumer->Sample(CaptureTime100ns{150}, {0, 0, 480, 320}, VisualCompositionMode::Recording);
         ASSERT_EQ(frame.Items().size(), 1);
     }
+    auto& storage = VisualRuntimeTestAccess::Storage(*runtime);
+    auto* old_scene = storage.scene;
+    EXPECT_EQ(old_scene->pins.load(), 1u);
     description.revision.value = 2;
     ASSERT_TRUE(runtime->PublishScene(description).succeeded());
     std::unique_lock lock(VisualRuntimeTestAccess::Storage(*runtime).mutex);
@@ -465,15 +471,162 @@ TEST_F(SceneConsumer, BusyRefreshClearsTheOldCompositionUntilMaintenanceRecovers
     const auto result = attempt.get();
     ASSERT_TRUE(result.succeeded());
     EXPECT_EQ(*result.value(), ReadResult::Busy);
+    EXPECT_EQ(old_scene->pins.load(), 1u);
+    EXPECT_EQ(storage.scene->pins.load(), 0u);
     {
         auto frame = consumer->Sample(CaptureTime100ns{200}, {0, 0, 480, 320}, VisualCompositionMode::Recording);
         EXPECT_TRUE(frame.Items().empty());
-        EXPECT_TRUE(frame.Changed());
+        EXPECT_FALSE(frame.Changed());
+        EXPECT_TRUE(frame.Deferred());
+        EXPECT_EQ(frame.Revision().value, 1u);
     }
     ASSERT_TRUE(consumer->Refresh().succeeded());
+    EXPECT_EQ(old_scene->pins.load(), 0u);
+    EXPECT_EQ(storage.scene->pins.load(), 1u);
     auto frame = consumer->Sample(CaptureTime100ns{250}, {0, 0, 480, 320}, VisualCompositionMode::Recording);
     ASSERT_EQ(frame.Items().size(), 1);
     EXPECT_TRUE(frame.Changed());
+    EXPECT_FALSE(frame.Deferred());
+}
+
+TEST_F(SceneConsumer, BusyBindingCheckAndFrameReleaseDoNotAllocateOrFree) {
+    {
+        auto frame =
+            consumer->Sample(CaptureTime100ns{150}, {0, 0, 480, 320}, VisualCompositionMode::CompositedPreview);
+        ASSERT_EQ(frame.Items().size(), 1u);
+    }
+    std::unique_lock lock(VisualRuntimeTestAccess::Storage(*runtime).mutex);
+    auto attempt = std::async(std::launch::async, [&] {
+        visual_allocations::Probe probe;
+        bool deferred;
+        bool changed;
+        size_t count;
+        {
+            visual_allocations::Scope scope(probe);
+            auto frame =
+                consumer->Sample(CaptureTime100ns{200}, {0, 0, 480, 320}, VisualCompositionMode::CompositedPreview);
+            deferred = frame.Deferred();
+            changed = frame.Changed();
+            count = frame.Items().size();
+        }
+        return std::tuple(deferred, changed, count, probe.allocations, probe.frees);
+    });
+    const auto status = attempt.wait_for(std::chrono::seconds(1));
+    lock.unlock();
+    EXPECT_EQ(status, std::future_status::ready);
+    const auto [deferred, changed, count, allocations, frees] = attempt.get();
+    EXPECT_TRUE(deferred);
+    EXPECT_FALSE(changed);
+    EXPECT_EQ(count, 0u);
+    EXPECT_EQ(allocations, 0u);
+    EXPECT_EQ(frees, 0u);
+    auto recovered =
+        consumer->Sample(CaptureTime100ns{250}, {0, 0, 480, 320}, VisualCompositionMode::CompositedPreview);
+    EXPECT_FALSE(recovered.Deferred());
+    EXPECT_FALSE(recovered.Changed());
+    EXPECT_EQ(recovered.Items().size(), 1u);
+}
+
+TEST_F(SceneConsumer, UnadvertisedSceneKeepsTheOldPinUntilReplacementIsVisible) {
+    auto& storage = VisualRuntimeTestAccess::Storage(*runtime);
+    auto* first = storage.scene;
+    description.revision.value = 2;
+    ASSERT_TRUE(runtime->PublishScene(description).succeeded());
+    const auto advertised = runtime->PublishedSceneSequence();
+    description.revision.value = 3;
+    ASSERT_TRUE(runtime->PublishScene(description).succeeded());
+    const auto newest = runtime->PublishedSceneSequence();
+    storage.scene_sequence.store(advertised, std::memory_order_release);
+    const auto refreshed = consumer->Refresh();
+    ASSERT_TRUE(refreshed.succeeded());
+    EXPECT_EQ(*refreshed.value(), ReadResult::Busy);
+    EXPECT_EQ(first->pins.load(), 1u);
+    EXPECT_EQ(storage.scene->pins.load(), 0u);
+    {
+        auto frame = consumer->Sample(CaptureTime100ns{150}, {0, 0, 480, 320}, VisualCompositionMode::Recording);
+        EXPECT_TRUE(frame.Deferred());
+        EXPECT_EQ(frame.Revision().value, 1u);
+    }
+    storage.scene_sequence.store(newest, std::memory_order_release);
+    ASSERT_TRUE(consumer->Refresh().succeeded());
+    EXPECT_EQ(first->pins.load(), 0u);
+    EXPECT_EQ(storage.scene->pins.load(), 1u);
+    auto frame = consumer->Sample(CaptureTime100ns{200}, {0, 0, 480, 320}, VisualCompositionMode::Recording);
+    EXPECT_FALSE(frame.Deferred());
+    EXPECT_EQ(frame.Revision().value, 3u);
+}
+
+TEST_F(SceneConsumer, DeferredFrameRetriesTheImageWhoseUploadWasSkipped) {
+    const SourceToken other{Source(3, 3), SourceRequestRevision{1}};
+    auto created = runtime->CreateSource(other.address);
+    ASSERT_TRUE(created.succeeded());
+    runtime->SetRequest(other, true, HoldPolicy::ClearAccepted);
+    ASSERT_TRUE(created.value()->PrepareImage(other, {2, 2}).succeeded());
+    auto write = created.value()->TryBeginCpuFrame({other, 1, CaptureTime100ns{100}, {}});
+    ASSERT_TRUE(write);
+    ASSERT_EQ(created.value()->Publish(std::move(*write)), PublishResult::Accepted);
+    auto item = description.items.front();
+    item.id.bytes.back() = 3;
+    item.source = other.address;
+    item.binding_index = 2;
+    description.items.push_back(item);
+    description.binding_sources.push_back(other.address);
+    ASSERT_TRUE(runtime->PublishScene(description).succeeded());
+    ASSERT_TRUE(consumer->Refresh().succeeded());
+    auto& storage = VisualRuntimeTestAccess::Storage(*runtime);
+    ASSERT_EQ(storage.consumers.size(), 1u);
+    VisualReadLease competing;
+    ASSERT_EQ(runtime->TryReadImage(storage.consumers.begin()->first, other.address, competing), ReadResult::Updated);
+    visual_allocations::Probe probe;
+    bool deferred;
+    size_t count;
+    {
+        visual_allocations::Scope scope(probe);
+        auto frame = consumer->Sample(CaptureTime100ns{150}, {0, 0, 480, 320}, VisualCompositionMode::Recording);
+        deferred = frame.Deferred();
+        count = frame.Items().size();
+    }
+    EXPECT_TRUE(deferred);
+    EXPECT_EQ(count, 0u);
+    EXPECT_EQ(probe.allocations, 0u);
+    EXPECT_EQ(probe.frees, 0u);
+    competing.Reset();
+    ASSERT_TRUE(runtime->InvalidateImage(storage.consumers.begin()->first, other.address).succeeded());
+    EXPECT_TRUE(consumer->NeedsRefresh());
+    {
+        auto frame = consumer->Sample(CaptureTime100ns{200}, {0, 0, 480, 320}, VisualCompositionMode::Recording);
+        EXPECT_TRUE(frame.Deferred());
+        EXPECT_TRUE(frame.Items().empty());
+    }
+    ASSERT_TRUE(consumer->Refresh().succeeded());
+    auto recovered = consumer->Sample(CaptureTime100ns{250}, {0, 0, 480, 320}, VisualCompositionMode::Recording);
+    EXPECT_FALSE(recovered.Deferred());
+    EXPECT_TRUE(recovered.Changed());
+    ASSERT_EQ(recovered.Items().size(), 2u);
+    EXPECT_EQ(recovered.Items().front().token, camera);
+    EXPECT_EQ(recovered.Items().front().image_result, ReadResult::Updated);
+    EXPECT_NE(recovered.Items().front().image, nullptr);
+}
+
+TEST_F(SceneConsumer, RevocationAfterDeferredReadNeverAuthorizesTheOldImage) {
+    {
+        auto frame = consumer->Sample(CaptureTime100ns{100}, {0, 0, 480, 320}, VisualCompositionMode::Recording);
+        ASSERT_EQ(frame.Items().size(), 1u);
+    }
+    std::unique_lock lock(VisualRuntimeTestAccess::Storage(*runtime).mutex);
+    auto attempt = std::async(std::launch::async, [&] {
+        auto frame = consumer->Sample(CaptureTime100ns{150}, {0, 0, 480, 320}, VisualCompositionMode::Recording);
+        return frame.Deferred() && frame.Items().empty() && !frame.Changed();
+    });
+    const auto status = attempt.wait_for(std::chrono::seconds(1));
+    lock.unlock();
+    EXPECT_EQ(status, std::future_status::ready);
+    EXPECT_TRUE(attempt.get());
+    runtime->Revoke(camera.address);
+    auto frame = consumer->Sample(CaptureTime100ns{200}, {0, 0, 480, 320}, VisualCompositionMode::Recording);
+    EXPECT_FALSE(frame.Deferred());
+    EXPECT_TRUE(frame.Changed());
+    EXPECT_TRUE(frame.Items().empty());
 }
 
 TEST_F(SceneConsumer, FrameReportsPinnedRevisionUntilMaintenanceAcceptsNewScene) {

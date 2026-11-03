@@ -756,11 +756,12 @@ class RecordingCoordinator {
     WebcamService webcam_service_;
     // One running native operation and at most one superseding queued request.
     QThreadPool webcam_control_pool_;
+    // Accessed only by the serial control worker. These are Start inputs, not negotiated hardware facts.
+    std::optional<WebcamSettings> webcam_started_mode_;
     uint64_t webcam_requested_serial_ = 0;
     std::atomic<uint64_t> webcam_completed_serial_{0};
     std::function<void(SourceStatus)> webcam_source_status_;
-    // Owned rather than borrowed: it must outlive any session that composites
-    // from it, and the session holds a bare pointer.
+    // Immutable verification pixels are published into host storage on the control worker.
     std::unique_ptr<exosnap::StaticWebcamFrameSource> static_webcam_source_;
     // Record preview requested the idle webcam capture (Ready-state live PiP).
     bool webcam_preview_active_ = false;

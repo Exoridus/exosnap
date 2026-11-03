@@ -151,7 +151,8 @@ engine::Outcome<engine::ConfigRevision> VisualSourceManager::ApplyDesired(const 
 void VisualSourceManager::Reconcile(Entry& entry, bool content_changed) {
     if (entry.retry_pending)
         return;
-    if (content_changed)
+    const bool clear_accepted = content_changed && !entry.source->RetainsAccepted(entry.record.settings);
+    if (clear_accepted)
         entry.ready = false;
     const uint8_t demand = entry.record.enabled ? demand_ : 0;
     if (entry.pending && Blocked(entry.record.type_id)) {
@@ -181,7 +182,7 @@ void VisualSourceManager::Reconcile(Entry& entry, bool content_changed) {
     else if (entry.status.phase == SourcePhase::Failed)
         return;
     runtime_.SetRequest(entry.token, demand != 0,
-                        content_changed ? engine::HoldPolicy::ClearAccepted : engine::HoldPolicy::KeepAccepted);
+                        clear_accepted ? engine::HoldPolicy::ClearAccepted : engine::HoldPolicy::KeepAccepted);
     auto result = entry.source->Apply({entry.token, revision_, {demand}, entry.record.settings});
     if (!result.succeeded())
         OnSourceStatus({entry.token, SourcePhase::Failed, *result.error()});

@@ -37,6 +37,7 @@ struct VisualSceneConsumer::BindingState {
     VisualReadLease image;
     ReadResult result = ReadResult::NotReady;
     bool sampled = false;
+    bool needs_image_reset = false;
 };
 
 struct VisualSceneConsumer::ItemState {
@@ -44,6 +45,7 @@ struct VisualSceneConsumer::ItemState {
     std::unique_ptr<GamepadFrameSampler> sampler;
     SpriteLayerSnapshot output;
     bool drawn = false;
+    bool sampled_drawn = false;
 };
 
 VisualSceneConsumer::VisualSceneConsumer(std::shared_ptr<VisualSceneRuntime> runtime) : runtime_(std::move(runtime)) {
@@ -74,7 +76,8 @@ VisualSceneConsumer::Prepare(std::shared_ptr<VisualSceneRuntime> runtime) {
 }
 
 bool VisualSceneConsumer::NeedsRefresh() const noexcept {
-    return runtime_ && consumer_ != 0 && (!scene_ || prepared_sequence_ != runtime_->PublishedSceneSequence());
+    return runtime_ && consumer_ != 0 &&
+           (invalidation_pending_ || !scene_ || prepared_sequence_ != runtime_->PublishedSceneSequence());
 }
 
 Outcome<ReadResult> VisualSceneConsumer::Refresh() {
@@ -82,16 +85,30 @@ Outcome<ReadResult> VisualSceneConsumer::Refresh() {
         return ConsumerError(EngineErrorCode::Stalled);
     if (!runtime_ || consumer_ == 0)
         return ReadResult::Revoked;
+    if (invalidation_pending_) {
+        for (auto& binding : bindings_) {
+            if (!binding->needs_image_reset)
+                continue;
+            auto invalidated = runtime_->InvalidateImage(consumer_, binding->address);
+            // A revoked source may have lost its reader metadata during collection.
+            if (!invalidated.succeeded() && invalidated.error()->code != EngineErrorCode::InvalidConfig)
+                return *invalidated.error();
+            binding->needs_image_reset = false;
+        }
+        invalidation_pending_ = false;
+    }
     if (!NeedsRefresh())
         return ReadResult::Unchanged;
     if (!scene_ || scene_.PublicationSequence() != runtime_->PublishedSceneSequence()) {
-        // Borrowed samplers and atlas owners must go before the pin protecting their data.
-        ReleaseItems();
-        scene_.Reset();
-        const auto read = runtime_->TryReadScene(consumer_, scene_);
+        const auto read = runtime_->TryReplaceScene(consumer_, scene_);
+        refresh_deferred_ = read == ReadResult::Busy;
         if (read != ReadResult::Updated)
             return read;
+        // Old borrowed views are invalid after replacement; only destroy their
+        // holders here, without sampling or dereferencing the previous binding.
+        ReleaseItems();
     }
+    refresh_deferred_ = true;
     try {
         items_.clear();
         std::erase_if(bindings_, [&](const auto& binding) {
@@ -147,6 +164,7 @@ Outcome<ReadResult> VisualSceneConsumer::Refresh() {
         }
         prepared_sequence_ = scene_.PublicationSequence();
         scene_changed_ = true;
+        refresh_deferred_ = false;
         return ReadResult::Updated;
     } catch (const std::bad_alloc&) {
         ReleaseItems();
@@ -175,6 +193,10 @@ VisualSceneConsumer::Frame VisualSceneConsumer::Sample(CaptureTime100ns time, co
         return frame;
     frame_active_ = true;
     frame.owner_ = this;
+    if (refresh_deferred_ || invalidation_pending_) {
+        frame.deferred_ = true;
+        return frame;
+    }
     frame.changed_ = std::exchange(scene_changed_, false) || !have_mode_ || previous_mode_ != mode ||
                      !SameRect(previous_content_, content);
     previous_mode_ = mode;
@@ -199,6 +221,10 @@ VisualSceneConsumer::Frame VisualSceneConsumer::Sample(CaptureTime100ns time, co
                     source.accepted_resource = source.image.ResourceId();
                     source.accepted_sequence = source.image.Stamp().sequence;
                 }
+            }
+            if (source.result == ReadResult::Busy) {
+                frame.deferred_ = true;
+                break;
             }
             if (source.result == ReadResult::Updated || source.result == ReadResult::Unchanged) {
                 auto& view = frame_items_[frame.count_];
@@ -232,7 +258,21 @@ VisualSceneConsumer::Frame VisualSceneConsumer::Sample(CaptureTime100ns time, co
             }
         }
         frame.changed_ |= state.drawn != drawn;
-        state.drawn = drawn;
+        state.sampled_drawn = drawn;
+    }
+    if (frame.deferred_) {
+        for (auto& binding : bindings_) {
+            if (binding->image) {
+                binding->needs_image_reset = true;
+                invalidation_pending_ = true;
+            }
+        }
+        scene_changed_ |= frame.changed_;
+        frame.count_ = 0;
+        frame.changed_ = false;
+    } else {
+        for (auto& state : items_)
+            state.drawn = state.sampled_drawn;
     }
     return frame;
 }
@@ -268,7 +308,8 @@ VisualSceneConsumer::Frame::~Frame() {
 }
 
 VisualSceneConsumer::Frame::Frame(Frame&& other) noexcept
-    : owner_(std::exchange(other.owner_, nullptr)), count_(other.count_), changed_(other.changed_) {
+    : owner_(std::exchange(other.owner_, nullptr)), count_(other.count_), changed_(other.changed_),
+      deferred_(other.deferred_) {
 }
 
 VisualSceneConsumer::Frame& VisualSceneConsumer::Frame::operator=(Frame&& other) noexcept {
@@ -278,6 +319,7 @@ VisualSceneConsumer::Frame& VisualSceneConsumer::Frame::operator=(Frame&& other)
         owner_ = std::exchange(other.owner_, nullptr);
         count_ = other.count_;
         changed_ = other.changed_;
+        deferred_ = other.deferred_;
     }
     return *this;
 }
@@ -289,6 +331,10 @@ std::span<const VisualSceneItemFrame> VisualSceneConsumer::Frame::Items() const 
 
 bool VisualSceneConsumer::Frame::Changed() const noexcept {
     return changed_;
+}
+
+bool VisualSceneConsumer::Frame::Deferred() const noexcept {
+    return deferred_;
 }
 
 uint64_t VisualSceneConsumer::Frame::PublicationSequence() const noexcept {
