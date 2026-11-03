@@ -255,6 +255,56 @@ fn validate_export(content: &str, references: &[String]) -> anyhow::Result<()> {
 mod tests {
     use super::*;
 
+    #[test]
+    fn steam_2026_fallback_uses_only_generic_geometry_and_keeps_misc1_inert() {
+        let repo = Path::new(env!("CARGO_MANIFEST_DIR")).join("../..");
+        let root = repo.join(ASSETS);
+        let json = |path: PathBuf| -> serde_json::Value {
+            serde_json::from_str(&std::fs::read_to_string(path).unwrap()).unwrap()
+        };
+        let catalog = json(root.join("catalog.json"));
+        assert_eq!(catalog["controllers"][15]["id"], "steam_controller_2026");
+        let generic = root.join("generic");
+        let fallback = root.join("steam_controller_2026");
+        let original = json(generic.join("mapping.json"));
+        let replacement = json(fallback.join("mapping.json"));
+        assert_eq!(replacement["id"], "steam_controller_2026");
+        assert_eq!(replacement["license"], original["license"]);
+        assert_eq!(replacement["source"], "source.svg");
+        assert!(
+            std::fs::read(fallback.join("source.svg")).unwrap()
+                == std::fs::read(generic.join("source.svg")).unwrap(),
+            "The embedded source must contain only the existing Generic geometry"
+        );
+        let mut expected = original["layers"].clone();
+        let share = expected
+            .as_array_mut()
+            .unwrap()
+            .iter_mut()
+            .find(|layer| layer["control"] == "misc1")
+            .unwrap();
+        share["binding"] = serde_json::Value::Null;
+        assert_eq!(replacement["layers"], expected);
+        let mut expected_files = HashSet::new();
+        for layer in replacement["layers"].as_array().unwrap() {
+            let file = layer["file"].as_str().unwrap();
+            expected_files.insert(PathBuf::from(file));
+            let actual = std::fs::read_to_string(fallback.join(file)).unwrap();
+            let expected = std::fs::read_to_string(generic.join(file))
+                .unwrap()
+                .replace("id=\"asset-generic-", "id=\"asset-steam_controller_2026-");
+            assert_eq!(actual, expected, "{file}");
+        }
+        let actual_files: HashSet<_> = std::fs::read_dir(fallback.join("elements"))
+            .unwrap()
+            .map(|entry| PathBuf::from("elements").join(entry.unwrap().file_name()))
+            .collect();
+        assert_eq!(
+            actual_files, expected_files,
+            "Do not retain model-derived source exports"
+        );
+    }
+
     fn fixture() -> tempfile::TempDir {
         let temp = tempfile::tempdir().unwrap();
         let root = temp.path().join("app/assets/gamepad/controllers");

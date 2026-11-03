@@ -98,7 +98,7 @@
     },
     {
       "id": "steam_controller_2026",
-      "name": "Steam Controller (2026)",
+      "name": "Steam Controller (2026, generic artwork)",
       "mapping": "steam_controller_2026/mapping.json",
       "family": "steam"
     },
