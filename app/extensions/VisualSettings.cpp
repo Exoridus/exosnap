@@ -96,7 +96,8 @@ engine::Outcome<std::monostate> ValidateVisualSettings(const VisualSourceType& t
 }
 
 engine::Outcome<std::monostate> ValidateVisualAction(const ActionInvocation& invocation, const VisualSourceType& type,
-                                                     const VisualSourceRecord& source, engine::VisualAddress current) {
+                                                     const VisualSourceRecord& source,
+                                                     const engine::VisualAddress& current) {
     if (current.runtime.value == 0 || current.source == engine::VisualSourceId{} ||
         invocation.target.runtime.value == 0 || invocation.target.source == engine::VisualSourceId{} ||
         source.id != current.source || source.type_id != type.id || source.settings_version != type.settings_version ||

@@ -48,6 +48,7 @@ struct OptionsRegistration {
 
 struct SettingsDefinition {
     std::vector<SettingDescriptor> fields;
+    // Validate known fields and preserve unknown keys and subtrees in the returned table.
     std::function<engine::Outcome<toml::table>(const toml::table&)> validate;
 };
 
@@ -70,6 +71,7 @@ struct ActionInvocation {
 [[nodiscard]] bool IsVisualIdentifier(std::string_view) noexcept;
 [[nodiscard]] engine::Outcome<std::monostate> ValidateVisualSettings(const VisualSourceType&);
 [[nodiscard]] engine::Outcome<std::monostate> ValidateVisualAction(const ActionInvocation&, const VisualSourceType&,
-                                                                   const VisualSourceRecord&, engine::VisualAddress);
+                                                                   const VisualSourceRecord&,
+                                                                   const engine::VisualAddress&);
 
 } // namespace exosnap

@@ -5,6 +5,7 @@
 #include <array>
 #include <cmath>
 #include <limits>
+#include <type_traits>
 
 namespace exosnap {
 namespace {
@@ -60,7 +61,7 @@ template <typename T> bool ReadOptional(const toml::table& table, std::string_vi
     const auto* node = table.get(key);
     if (!node)
         return true;
-    const auto value = node->value<T>();
+    const auto value = std::is_same_v<T, bool> ? node->value_exact<T>() : node->value<T>();
     if (!value)
         return false;
     destination = *value;
@@ -105,7 +106,7 @@ bool ReadChroma(const toml::table& table, WebcamChromaKeySettings& chroma) {
 bool ReadSource(const toml::table& table, VisualSourceRecord& source) {
     const auto id = table["id"].value<std::string>();
     const auto parsed = id ? engine::FromUuid<engine::VisualSourceId>(*id) : std::nullopt;
-    if (!parsed || !ReadOptional(table, "type_id", source.type_id) ||
+    if (!parsed || !ReadOptional(table, "type_id", source.type_id) || !table.contains("settings_version") ||
         !ReadInteger(table, "settings_version", source.settings_version) ||
         !ReadOptional(table, "enabled", source.enabled))
         return false;

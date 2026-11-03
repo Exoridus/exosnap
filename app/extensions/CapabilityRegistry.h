@@ -43,6 +43,8 @@ class CapabilityRegistry final {
   public:
     engine::Outcome<std::monostate> Register(ModuleRegistration);
     engine::Outcome<std::monostate> Seal();
+    [[nodiscard]] bool IsSealed() const noexcept;
+    // Registration can invalidate returned pointers and spans. After Seal they survive until registry destruction.
     const VisualSourceType* FindVisualSource(std::string_view) const noexcept;
     std::span<const VisualSourceType> VisualSources() const noexcept;
 

@@ -40,6 +40,10 @@ engine::Outcome<std::monostate> CapabilityRegistry::Seal() {
     return std::monostate{};
 }
 
+bool CapabilityRegistry::IsSealed() const noexcept {
+    return sealed_;
+}
+
 const VisualSourceType* CapabilityRegistry::FindVisualSource(std::string_view id) const noexcept {
     const auto found =
         std::find_if(sources_.begin(), sources_.end(), [id](const auto& source) { return source.id == id; });

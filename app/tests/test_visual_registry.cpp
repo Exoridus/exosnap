@@ -69,8 +69,10 @@ TEST(VisualRegistry, DuplicateWithinModuleIsAtomicFailure) {
 
 TEST(VisualRegistry, SealRejectsMutation) {
     CapabilityRegistry registry;
+    EXPECT_FALSE(registry.IsSealed());
     ASSERT_TRUE(registry.Register({{"test/module"}, {FakeType()}}).succeeded());
     ASSERT_TRUE(registry.Seal().succeeded());
+    EXPECT_TRUE(registry.IsSealed());
     EXPECT_TRUE(registry.Seal().succeeded());
     EXPECT_FALSE(registry.Register({{"test/new"}, {FakeType("test/new")}}).succeeded());
     EXPECT_EQ(registry.VisualSources().size(), 1u);

@@ -246,5 +246,30 @@ TEST(VisualPresetMigration, EmptyNativeSceneDoesNotRecreateRemovedSources) {
     EXPECT_FALSE(ReadVisualScene(toml::table{{"sources", "invalid"}}).succeeded());
 }
 
+TEST(VisualPresetMigration, IntegerBooleanFieldsAreRejected) {
+    auto written = WriteVisualScene(MakeDefaultVisualScene());
+    ASSERT_TRUE(written.succeeded());
+    for (const int value : {0, 1, 2}) {
+        auto source = *written.value();
+        source["sources"].as_array()->get(0)->as_table()->insert_or_assign("enabled", value);
+        EXPECT_FALSE(ReadVisualScene(source).succeeded());
+    }
+    auto item = *written.value();
+    item["items"].as_array()->get(0)->as_table()->insert_or_assign("output_visible", 1);
+    EXPECT_FALSE(ReadVisualScene(item).succeeded());
+    auto chroma = *written.value();
+    auto* chroma_table = chroma["items"].as_array()->get(0)->as_table()->get("chroma_key")->as_table();
+    chroma_table->insert_or_assign("enabled", 1);
+    EXPECT_FALSE(ReadVisualScene(chroma).succeeded());
+    EXPECT_TRUE(ReadVisualScene(*written.value()).succeeded());
+}
+
+TEST(VisualPresetMigration, MissingSettingsVersionCannotActivateAsCurrentSchema) {
+    auto written = WriteVisualScene(MakeDefaultVisualScene());
+    ASSERT_TRUE(written.succeeded());
+    written.value()->get("sources")->as_array()->get(0)->as_table()->erase("settings_version");
+    EXPECT_FALSE(ReadVisualScene(*written.value()).succeeded());
+}
+
 } // namespace
 } // namespace exosnap
