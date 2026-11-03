@@ -338,6 +338,22 @@ target_include_directories(recording_history_store_tests PRIVATE ${CMAKE_CURRENT
 target_link_libraries(recording_history_store_tests PRIVATE ole32.lib shell32.lib)
 
 exosnap_add_gtest(
+    NAME extensions_contract_tests
+    TEST_PREFIX extensions.contracts.
+    SOURCES
+        tests/test_visual_registry.cpp
+        tests/test_visual_settings.cpp
+        extensions/CapabilityRegistry.cpp
+        extensions/VisualSettings.cpp
+        models/VisualSceneConfig.cpp
+    LIBRARIES tomlplusplus::tomlplusplus
+)
+target_include_directories(extensions_contract_tests PRIVATE
+    ${CMAKE_CURRENT_SOURCE_DIR}
+    ${PROJECT_SOURCE_DIR}/libs/engine/include
+)
+
+exosnap_add_gtest(
     NAME recording_preset_tests
     TEST_PREFIX preset.
     SOURCES
