@@ -25,7 +25,7 @@ enum class WebcamPixelFormat : uint8_t {
         return 0;
     const size_t w = static_cast<size_t>(width);
     const size_t h = static_cast<size_t>(height);
-    const size_t maximum = std::numeric_limits<size_t>::max();
+    const size_t maximum = (std::numeric_limits<size_t>::max)();
     if (w > maximum / h)
         return 0;
     const size_t pixels = w * h;

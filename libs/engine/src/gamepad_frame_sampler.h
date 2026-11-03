@@ -6,6 +6,8 @@
 namespace exosnap::engine {
 
 // The caller keeps the source's scene pin while using this borrowed sprite data.
+// Recreate on every binding token change, even when resource identity is unchanged,
+// so a busy history read cannot reuse the preceding request's held state.
 class GamepadFrameSampler final {
   public:
     static Outcome<std::unique_ptr<GamepadFrameSampler>> Prepare(const GamepadSpriteSet&, gamepad::HistoryReadView);

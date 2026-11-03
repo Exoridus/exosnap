@@ -69,6 +69,8 @@ class CpuFrameWriteLease final {
         return slot_ != nullptr;
     }
     [[nodiscard]] std::span<uint8_t> Pixels() noexcept;
+    // Compare the full negotiated layout before copying. Valid only while nonempty.
+    [[nodiscard]] const CpuImageLayout& Layout() const noexcept;
     [[nodiscard]] const VisualFrameStamp& Stamp() const noexcept;
     void Reset() noexcept;
 
@@ -145,8 +147,8 @@ class VisualPublicationWriter final {
     [[nodiscard]] explicit operator bool() const noexcept {
         return storage_ != nullptr;
     }
-    Outcome<std::monostate> PrepareImage(SourceToken, CpuImageLayout);
-    std::optional<CpuFrameWriteLease> TryBeginCpuFrame(VisualFrameStamp) noexcept;
+    Outcome<std::monostate> PrepareImage(const SourceToken&, const CpuImageLayout&);
+    std::optional<CpuFrameWriteLease> TryBeginCpuFrame(const VisualFrameStamp&) noexcept;
     PublishResult Publish(CpuFrameWriteLease&&) noexcept;
 
   private:
@@ -170,17 +172,22 @@ class VisualSceneRuntime final {
     // Runtime generations are host-issued and strictly increase across all sources.
     // Rejected creations do not consume a generation; admitted generations never recur.
     Outcome<VisualPublicationWriter> CreateSource(VisualAddress);
-    void SetRequest(SourceToken, bool publish_allowed, HoldPolicy) noexcept;
+    void SetRequest(const SourceToken&, bool publish_allowed, HoldPolicy) noexcept;
+    // Reserves per-item sampler scratch for every registered consumer before acceptance.
     Outcome<ConfigRevision> PublishScene(const PreparedSceneDescription&);
     // Compare with the held scene before releasing its pin. Notifications can
     // coalesce or repeat; a changed publication may reuse the same ConfigRevision.
     [[nodiscard]] uint64_t PublishedSceneSequence() const noexcept;
     // Only Updated populates an empty destination. Busy cannot validate cache reuse.
+    // Reacquisition can still be Busy after releasing an old scene; skip that tick.
     ReadResult TryReadScene(VisualConsumerId, SceneReadLease&) noexcept;
     ReadResult TryReadImage(VisualConsumerId, VisualAddress, VisualReadLease&) noexcept;
+    // Control-side cache reset. Requires this consumer's image pin to be empty.
+    // The next read returns Updated for otherwise unchanged accepted pixels.
+    Outcome<std::monostate> InvalidateImage(VisualConsumerId, VisualAddress);
     // Unchanged confirms this binding may be used. Every other result means skip it.
     ReadResult CheckBinding(const PreparedSceneBinding&) noexcept;
-    void Revoke(VisualAddress) noexcept;
+    void Revoke(const VisualAddress&) noexcept;
     void CollectRetired();
 
   private:

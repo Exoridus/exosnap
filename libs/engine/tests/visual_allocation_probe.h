@@ -12,6 +12,8 @@ struct Probe {
     std::binary_semaphore* entered = nullptr;
     std::binary_semaphore* resume = nullptr;
     bool fail = false;
+    size_t fail_size = 0;
+    const void* pause_free = nullptr;
 };
 
 extern thread_local Probe* active;

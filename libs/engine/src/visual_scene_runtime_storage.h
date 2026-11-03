@@ -21,13 +21,14 @@ struct CpuImagePool {
     uint64_t id = 0;
     uint64_t bytes = 0;
     CpuImageLayout layout;
-    std::vector<std::unique_ptr<CpuFrameSlot>> slots;
+    std::vector<std::unique_ptr<CpuFrameSlot>> frames;
 };
 
 struct GamepadResource {
     uint64_t id = 0;
     uint64_t bytes = 0;
     uint64_t scratch_per_consumer = 0;
+    uint64_t scratch_instances = 1;
     SourceToken token;
     std::shared_ptr<const GamepadSpriteSet> sprites;
     gamepad::HistoryReadView history;
@@ -64,6 +65,7 @@ struct VisualSourceStorage {
     bool publish_allowed = false;
     bool revoked = false;
     bool image_preparing = false;
+    uint64_t retiring_resources = 0;
     std::vector<std::unique_ptr<CpuImagePool>> pools;
     CpuImagePool* active_pool = nullptr;
     CpuImagePool* accepted_pool = nullptr;

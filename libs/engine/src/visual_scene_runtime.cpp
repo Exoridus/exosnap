@@ -63,7 +63,7 @@ VisualSourceStorage* Find(VisualRuntimeStorage& storage, VisualAddress address) 
 }
 
 bool PoolIdle(const CpuImagePool& pool) noexcept {
-    return std::ranges::all_of(pool.slots,
+    return std::ranges::all_of(pool.frames,
                                [](const auto& slot) { return slot->pins.load(std::memory_order_acquire) == 0; });
 }
 
@@ -87,32 +87,19 @@ long HostAtlasOwners(const VisualRuntimeStorage& storage, const SpriteAtlas* atl
     return owners;
 }
 
-void Collect(VisualRuntimeStorage& storage) {
-    for (auto& scene : storage.scenes) {
-        if (scene.get() != storage.scene && scene->pins.load(std::memory_order_acquire) == 0) {
-            scene->gamepads.clear();
-            scene->bindings.clear();
-            scene->items.clear();
-        }
-    }
-    for (auto& [address, source] : storage.sources) {
-        std::erase_if(source->pools, [&](const auto& pool) {
-            if (pool.get() == source->active_pool || pool.get() == source->accepted_pool || !PoolIdle(*pool))
-                return false;
-            storage.reserved_bytes -= pool->bytes;
-            return true;
-        });
-        std::erase_if(source->gamepads, [&](const auto& data) {
-            if (data.get() == source->active_gamepad || data.use_count() != 1 ||
-                data->sprites->atlas.use_count() > HostAtlasOwners(storage, data->sprites->atlas.get()))
-                return false;
-            storage.reserved_bytes -= data->bytes;
-            return true;
-        });
-    }
+uint64_t SceneMultiplicity(const SceneSlot& scene, const GamepadResource& resource) noexcept {
+    uint64_t count = 0;
+    for (const auto& item : scene.items)
+        if (scene.bindings[item.binding_index].resource_id == resource.id)
+            ++count;
+    return count;
+}
+
+void PruneSources(VisualRuntimeStorage& storage) {
     std::erase_if(storage.sources, [&](const auto& entry) {
         const auto& [address, source] = entry;
-        if (!source->revoked || source->image_preparing || !source->pools.empty() || !source->gamepads.empty())
+        if (!source->revoked || source->image_preparing || source->retiring_resources != 0 || !source->pools.empty() ||
+            !source->gamepads.empty())
             return false;
         for (const auto& [id, consumer] : storage.consumers)
             for (const auto& image : consumer->images)
@@ -124,11 +111,91 @@ void Collect(VisualRuntimeStorage& storage) {
     });
 }
 
+void Collect(VisualRuntimeStorage& storage, std::unique_lock<std::mutex>& lock) {
+    std::vector<std::pair<VisualSourceStorage*, std::unique_ptr<CpuImagePool>>> pools;
+    std::vector<std::pair<VisualSourceStorage*, std::shared_ptr<GamepadResource>>> gamepads;
+    size_t pool_count = 0;
+    size_t gamepad_count = 0;
+    for (const auto& [address, source] : storage.sources) {
+        pool_count += source->pools.size();
+        gamepad_count += source->gamepads.size();
+    }
+    try {
+        pools.reserve(pool_count);
+        gamepads.reserve(gamepad_count);
+    } catch (const std::bad_alloc&) {
+        return;
+    }
+    for (auto& scene : storage.scenes) {
+        if (scene.get() != storage.scene && scene->pins.load(std::memory_order_acquire) == 0) {
+            scene->gamepads.clear();
+            scene->bindings.clear();
+            scene->items.clear();
+        }
+    }
+    uint64_t bytes = 0;
+    for (auto& [address, source] : storage.sources) {
+        for (auto& pool : source->pools) {
+            if (pool.get() == source->active_pool || pool.get() == source->accepted_pool || !PoolIdle(*pool))
+                continue;
+            bytes += pool->bytes;
+            ++source->retiring_resources;
+            pools.emplace_back(source.get(), std::move(pool));
+        }
+        std::erase(source->pools, nullptr);
+        for (auto& data : source->gamepads) {
+            const auto host_owners = HostAtlasOwners(storage, data->sprites->atlas.get());
+            bool other_host_resource = false;
+            for (const auto& [other_address, other_source] : storage.sources)
+                other_host_resource =
+                    other_host_resource || std::ranges::any_of(other_source->gamepads, [&](const auto& other) {
+                        return other && other.get() != data.get() &&
+                               other->sprites->atlas.get() == data->sprites->atlas.get();
+                    });
+            if (data.get() == source->active_gamepad || data.use_count() != 1 ||
+                (!other_host_resource && data->sprites->atlas.use_count() > host_owners))
+                continue;
+            bytes += data->bytes;
+            ++source->retiring_resources;
+            gamepads.emplace_back(source.get(), std::move(data));
+        }
+        std::erase(source->gamepads, nullptr);
+        for (auto& data : source->gamepads) {
+            uint64_t instances = 1;
+            for (const auto& scene : storage.scenes)
+                instances = std::max(instances, SceneMultiplicity(*scene, *data));
+            const uint64_t released =
+                (data->scratch_instances - instances) * data->scratch_per_consumer * storage.consumers.size();
+            data->scratch_instances = instances;
+            data->bytes -= released;
+            storage.reserved_bytes -= released;
+        }
+    }
+    if (pools.empty() && gamepads.empty()) {
+        PruneSources(storage);
+        return;
+    }
+    // Retiring generations stay charged until their payload destructors finish.
+    // Their source records cannot be pruned during this unlocked interval.
+    lock.unlock();
+    for (auto& entry : pools)
+        entry.second.reset();
+    for (auto& entry : gamepads)
+        entry.second.reset();
+    lock.lock();
+    storage.reserved_bytes -= bytes;
+    for (const auto& entry : pools)
+        --entry.first->retiring_resources;
+    for (const auto& entry : gamepads)
+        --entry.first->retiring_resources;
+    PruneSources(storage);
+}
 uint64_t ConsumerScratch(const VisualRuntimeStorage& storage) noexcept {
     uint64_t bytes = 0;
     for (const auto& [address, source] : storage.sources) {
         for (const auto& data : source->gamepads) {
-            if (!Add(bytes, data->scratch_per_consumer, bytes))
+            uint64_t scratch;
+            if (!Multiply(data->scratch_per_consumer, data->scratch_instances, scratch) || !Add(bytes, scratch, bytes))
                 return UINT64_MAX;
         }
     }
@@ -141,7 +208,8 @@ bool HasGenerationCapacity(const VisualRuntimeStorage& storage, VisualSourceId i
         if (address.source != id)
             continue;
         // Each allocation has one owning entry; scene references do not count twice.
-        count += source->pools.size() + source->gamepads.size() + (source->image_preparing ? 1u : 0u);
+        count += source->pools.size() + source->gamepads.size() + source->retiring_resources +
+                 (source->image_preparing ? 1u : 0u);
         if (count >= storage.policy.max_resource_generations)
             return false;
     }
@@ -180,6 +248,10 @@ std::span<uint8_t> CpuFrameWriteLease::Pixels() noexcept {
 const VisualFrameStamp& CpuFrameWriteLease::Stamp() const noexcept {
     assert(slot_);
     return slot_->stamp;
+}
+const CpuImageLayout& CpuFrameWriteLease::Layout() const noexcept {
+    assert(pool_);
+    return pool_->layout;
 }
 void CpuFrameWriteLease::Reset() noexcept {
     if (slot_)
@@ -268,7 +340,7 @@ VisualSceneRuntime::VisualSceneRuntime(VisualBudgetPolicy policy) : storage_(std
 VisualSceneRuntime::~VisualSceneRuntime() = default;
 
 Outcome<VisualConsumerId> VisualSceneRuntime::RegisterConsumer() {
-    const std::scoped_lock lock(storage_->mutex);
+    std::unique_lock lock(storage_->mutex);
     if (storage_->next_consumer == 0)
         return Failure(EngineErrorCode::ResourceBudgetExceeded, "consumer IDs");
     const uint64_t scratch = ConsumerScratch(*storage_);
@@ -290,7 +362,7 @@ Outcome<VisualConsumerId> VisualSceneRuntime::RegisterConsumer() {
         storage_->reserved_bytes += scratch;
         for (auto& [address, source] : storage_->sources)
             for (auto& data : source->gamepads)
-                data->bytes += data->scratch_per_consumer;
+                data->bytes += data->scratch_per_consumer * data->scratch_instances;
         return id;
     } catch (const std::bad_alloc&) {
         return Failure(EngineErrorCode::ResourceBudgetExceeded, "reader storage");
@@ -298,7 +370,7 @@ Outcome<VisualConsumerId> VisualSceneRuntime::RegisterConsumer() {
 }
 
 void VisualSceneRuntime::UnregisterConsumer(VisualConsumerId id) {
-    const std::scoped_lock lock(storage_->mutex);
+    std::unique_lock lock(storage_->mutex);
     const auto found = storage_->consumers.find(id);
     if (found == storage_->consumers.end() || found->second->scene.pins.load(std::memory_order_acquire) != 0 ||
         std::ranges::any_of(found->second->images,
@@ -307,18 +379,18 @@ void VisualSceneRuntime::UnregisterConsumer(VisualConsumerId id) {
     storage_->reserved_bytes -= ConsumerScratch(*storage_);
     for (auto& [address, source] : storage_->sources)
         for (auto& data : source->gamepads)
-            data->bytes -= data->scratch_per_consumer;
+            data->bytes -= data->scratch_per_consumer * data->scratch_instances;
     storage_->consumers.erase(found);
     const auto removable = std::ranges::find_if(storage_->scenes, [&](const auto& scene) {
         return scene.get() != storage_->scene && scene->pins.load(std::memory_order_acquire) == 0;
     });
     if (removable != storage_->scenes.end())
         storage_->scenes.erase(removable);
-    Collect(*storage_);
+    Collect(*storage_, lock);
 }
 
 Outcome<VisualPublicationWriter> VisualSceneRuntime::CreateSource(VisualAddress address) {
-    const std::scoped_lock lock(storage_->mutex);
+    std::unique_lock lock(storage_->mutex);
     if (!Valid(address) || address.runtime.value <= storage_->last_runtime_generation)
         return Failure(EngineErrorCode::InvalidConfig, "source address");
     try {
@@ -346,8 +418,8 @@ Outcome<VisualPublicationWriter> VisualSceneRuntime::CreateSource(VisualAddress 
     }
 }
 
-void VisualSceneRuntime::SetRequest(SourceToken token, bool allowed, HoldPolicy hold) noexcept {
-    const std::scoped_lock lock(storage_->mutex);
+void VisualSceneRuntime::SetRequest(const SourceToken& token, bool allowed, HoldPolicy hold) noexcept {
+    std::unique_lock lock(storage_->mutex);
     auto* source = Find(*storage_, token.address);
     if (!source || source->revoked || token.request.value == 0 || token.request < source->token.request ||
         (token == source->token && allowed && !source->publish_allowed))
@@ -360,7 +432,7 @@ void VisualSceneRuntime::SetRequest(SourceToken token, bool allowed, HoldPolicy 
     }
 }
 
-Outcome<std::monostate> VisualPublicationWriter::PrepareImage(SourceToken token, CpuImageLayout layout) {
+Outcome<std::monostate> VisualPublicationWriter::PrepareImage(const SourceToken& token, const CpuImageLayout& layout) {
     if (!storage_ || token.address != address_)
         return Failure(EngineErrorCode::InvalidConfig, "image writer");
     const auto payload = WebcamFramePayloadBytes(layout.format, layout.width, layout.height);
@@ -373,13 +445,32 @@ Outcome<std::monostate> VisualPublicationWriter::PrepareImage(SourceToken token,
         return Failure(EngineErrorCode::StaleRevision, "image request");
     if (!source->gamepads.empty())
         return Failure(EngineErrorCode::InvalidConfig, "source kind");
-    if (source->active_pool && source->active_pool->layout == layout)
-        return std::monostate{};
     if (source->image_preparing)
         return Failure(EngineErrorCode::Stalled, "image preparing");
+    for (const auto& existing : source->pools) {
+        if (existing->layout == layout) {
+            source->active_pool = existing.get();
+            return std::monostate{};
+        }
+    }
     if (storage_->policy.camera_slots == 0 || storage_->policy.max_resource_generations == 0)
         return Failure(EngineErrorCode::InvalidConfig, "image policy");
-    Collect(*storage_);
+    if (source->active_pool != source->accepted_pool && source->active_pool && PoolIdle(*source->active_pool))
+        source->active_pool = source->accepted_pool;
+    Collect(*storage_, lock);
+    source = Find(*storage_, address_);
+    if (!source || source->revoked || token != source->token || !source->publish_allowed)
+        return Failure(EngineErrorCode::StaleRevision, "image request");
+    if (!source->gamepads.empty())
+        return Failure(EngineErrorCode::InvalidConfig, "source kind");
+    if (source->image_preparing)
+        return Failure(EngineErrorCode::Stalled, "image preparing");
+    for (const auto& existing : source->pools) {
+        if (existing->layout == layout) {
+            source->active_pool = existing.get();
+            return std::monostate{};
+        }
+    }
     if (!HasGenerationCapacity(*storage_, address_.source))
         return Failure(EngineErrorCode::Stalled, "image pools busy");
     uint64_t bytes;
@@ -396,14 +487,14 @@ Outcome<std::monostate> VisualPublicationWriter::PrepareImage(SourceToken token,
             reserved = false;
         }
     };
-    const uint32_t slots = storage_->policy.camera_slots;
+    const uint32_t frame_count = storage_->policy.camera_slots;
     lock.unlock();
     try {
         pool = std::make_unique<CpuImagePool>();
         pool->layout = layout;
         pool->bytes = bytes;
-        pool->slots.reserve(slots);
-        for (uint32_t index = 0; index < slots; ++index) {
+        pool->frames.reserve(frame_count);
+        for (uint32_t index = 0; index < frame_count; ++index) {
             auto slot = std::make_unique<CpuFrameSlot>();
             slot->image.width = layout.width;
             slot->image.height = layout.height;
@@ -411,7 +502,7 @@ Outcome<std::monostate> VisualPublicationWriter::PrepareImage(SourceToken token,
             slot->image.matrix = layout.matrix;
             slot->image.range = layout.range;
             slot->image.pixels.resize(payload);
-            pool->slots.push_back(std::move(slot));
+            pool->frames.push_back(std::move(slot));
         }
         lock.lock();
         if (source->revoked || source->token != token || !source->publish_allowed) {
@@ -445,7 +536,7 @@ Outcome<std::monostate> VisualPublicationWriter::PrepareImage(SourceToken token,
     }
 }
 
-std::optional<CpuFrameWriteLease> VisualPublicationWriter::TryBeginCpuFrame(VisualFrameStamp stamp) noexcept {
+std::optional<CpuFrameWriteLease> VisualPublicationWriter::TryBeginCpuFrame(const VisualFrameStamp& stamp) noexcept {
     if (!storage_ || stamp.token.address != address_ || stamp.sequence == 0)
         return std::nullopt;
     const std::unique_lock lock(storage_->mutex, std::try_to_lock);
@@ -456,7 +547,7 @@ std::optional<CpuFrameWriteLease> VisualPublicationWriter::TryBeginCpuFrame(Visu
     auto* source = Find(*storage_, address_);
     if (!source || source->revoked || !source->publish_allowed || source->token != stamp.token || !source->active_pool)
         return std::nullopt;
-    for (const auto& slot : source->active_pool->slots) {
+    for (const auto& slot : source->active_pool->frames) {
         if (slot.get() == source->accepted || slot->pins.load(std::memory_order_acquire) != 0)
             continue;
         slot->pins.store(kWritingSlot, std::memory_order_release);
@@ -533,8 +624,27 @@ ReadResult VisualSceneRuntime::TryReadImage(VisualConsumerId id, VisualAddress a
     return ReadResult::Updated;
 }
 
-Outcome<ConfigRevision> VisualSceneRuntime::PublishScene(const PreparedSceneDescription& description) {
+Outcome<std::monostate> VisualSceneRuntime::InvalidateImage(VisualConsumerId id, VisualAddress address) {
     const std::scoped_lock lock(storage_->mutex);
+    const auto consumer = storage_->consumers.find(id);
+    if (consumer == storage_->consumers.end())
+        return Failure(EngineErrorCode::InvalidConfig, "image consumer");
+    const auto found =
+        std::ranges::find_if(consumer->second->images, [&](const auto& image) { return image->address == address; });
+    if (found == consumer->second->images.end())
+        return Failure(EngineErrorCode::InvalidConfig, "image source");
+    auto& reader = (*found)->read;
+    if (reader.pins.load(std::memory_order_acquire) != 0)
+        return Failure(EngineErrorCode::Stalled, "image reader pinned");
+    reader.sequence = 0;
+    reader.resource_id = 0;
+    reader.token = {};
+    return std::monostate{};
+}
+
+Outcome<ConfigRevision> VisualSceneRuntime::PublishScene(const PreparedSceneDescription& description) {
+    SceneSlot staged;
+    std::unique_lock lock(storage_->mutex);
     if (description.revision.value == 0 || description.revision < storage_->accepted_revision)
         return Failure(EngineErrorCode::StaleRevision, "scene revision");
     if (storage_->next_scene_sequence == 0)
@@ -554,11 +664,10 @@ Outcome<ConfigRevision> VisualSceneRuntime::PublishScene(const PreparedSceneDesc
     if (available == storage_->scenes.end())
         return Failure(EngineErrorCode::Stalled, "scene slots busy");
     try {
-        SceneSlot staged;
         staged.items = description.items;
         staged.bindings.reserve(description.binding_sources.size());
         staged.gamepads.reserve(description.binding_sources.size());
-        for (const auto address : description.binding_sources) {
+        for (const auto& address : description.binding_sources) {
             auto* source = Find(*storage_, address);
             if (!source || source->revoked)
                 return Failure(EngineErrorCode::InvalidConfig, "scene source");
@@ -580,6 +689,28 @@ Outcome<ConfigRevision> VisualSceneRuntime::PublishScene(const PreparedSceneDesc
             }
             staged.bindings.push_back(binding);
         }
+        uint64_t additional_scratch = 0;
+        for (const auto& [address, source] : storage_->sources) {
+            for (const auto& data : source->gamepads) {
+                const auto instances = std::max(data->scratch_instances, SceneMultiplicity(staged, *data));
+                uint64_t bytes;
+                if (!Multiply(instances - data->scratch_instances, data->scratch_per_consumer, bytes) ||
+                    !Multiply(bytes, storage_->consumers.size(), bytes) ||
+                    !Add(additional_scratch, bytes, additional_scratch))
+                    return Failure(EngineErrorCode::ResourceBudgetExceeded, "scene scratch");
+            }
+        }
+        if (!Fits(*storage_, additional_scratch))
+            return Failure(EngineErrorCode::ResourceBudgetExceeded, "scene scratch");
+        for (auto& [address, source] : storage_->sources) {
+            for (auto& data : source->gamepads) {
+                const auto instances = std::max(data->scratch_instances, SceneMultiplicity(staged, *data));
+                data->bytes +=
+                    (instances - data->scratch_instances) * data->scratch_per_consumer * storage_->consumers.size();
+                data->scratch_instances = instances;
+            }
+        }
+        storage_->reserved_bytes += additional_scratch;
         auto& slot = **available;
         slot.items.swap(staged.items);
         slot.bindings.swap(staged.bindings);
@@ -588,7 +719,12 @@ Outcome<ConfigRevision> VisualSceneRuntime::PublishScene(const PreparedSceneDesc
         slot.sequence = Next(storage_->next_scene_sequence);
         storage_->scene = &slot;
         storage_->accepted_revision = description.revision;
-        storage_->scene_sequence.store(slot.sequence, std::memory_order_release);
+        const auto sequence = slot.sequence;
+        lock.unlock();
+        auto published = storage_->scene_sequence.load(std::memory_order_relaxed);
+        while (published < sequence && !storage_->scene_sequence.compare_exchange_weak(
+                                           published, sequence, std::memory_order_release, std::memory_order_relaxed)) {
+        }
         return description.revision;
     } catch (const std::bad_alloc&) {
         return Failure(EngineErrorCode::ResourceBudgetExceeded, "scene storage");
@@ -612,6 +748,10 @@ ReadResult VisualSceneRuntime::TryReadScene(VisualConsumerId id, SceneReadLease&
         return ReadResult::Revoked;
     if (!storage_->scene)
         return ReadResult::NotReady;
+    // The slot becomes visible under the mutex before its serial is advertised.
+    // Returning it early could make a consumer mistake the older serial for an edit.
+    if (storage_->scene->sequence > storage_->scene_sequence.load(std::memory_order_acquire))
+        return ReadResult::Busy;
     auto& reader = consumer->second->scene;
     if (reader.pins.load(std::memory_order_acquire) != 0)
         return ReadResult::Busy;
@@ -648,8 +788,8 @@ ReadResult VisualSceneRuntime::CheckBinding(const PreparedSceneBinding& binding)
                : ReadResult::NotReady;
 }
 
-void VisualSceneRuntime::Revoke(VisualAddress address) noexcept {
-    const std::scoped_lock lock(storage_->mutex);
+void VisualSceneRuntime::Revoke(const VisualAddress& address) noexcept {
+    std::unique_lock lock(storage_->mutex);
     if (auto* source = Find(*storage_, address)) {
         source->revoked = true;
         source->publish_allowed = false;
@@ -661,8 +801,8 @@ void VisualSceneRuntime::Revoke(VisualAddress address) noexcept {
 }
 
 void VisualSceneRuntime::CollectRetired() {
-    const std::scoped_lock lock(storage_->mutex);
-    Collect(*storage_);
+    std::unique_lock lock(storage_->mutex);
+    Collect(*storage_, lock);
 }
 
 Outcome<std::monostate> StageGamepadData(VisualSceneRuntime& runtime, SourceToken token,
@@ -674,7 +814,7 @@ Outcome<std::monostate> StageGamepadData(VisualSceneRuntime& runtime, SourceToke
     if (!validated.succeeded())
         return *validated.error();
     auto& storage = *runtime.storage_;
-    const std::scoped_lock lock(storage.mutex);
+    std::unique_lock lock(storage.mutex);
     auto* source = Find(storage, token.address);
     if (!source || source->revoked || source->token != token || !source->publish_allowed)
         return Failure(EngineErrorCode::StaleRevision, "gamepad request");
@@ -688,7 +828,14 @@ Outcome<std::monostate> StageGamepadData(VisualSceneRuntime& runtime, SourceToke
         source->active_gamepad->token = token;
         return std::monostate{};
     }
-    Collect(storage);
+    Collect(storage, lock);
+    source = Find(storage, token.address);
+    if (!source || source->revoked || source->token != token || !source->publish_allowed)
+        return Failure(EngineErrorCode::StaleRevision, "gamepad request");
+    if (!source->pools.empty())
+        return Failure(EngineErrorCode::InvalidConfig, "source kind");
+    if (source->image_preparing)
+        return Failure(EngineErrorCode::Stalled, "image preparing");
     if (!HasGenerationCapacity(storage, token.address.source))
         return Failure(EngineErrorCode::Stalled, "gamepad busy");
     uint64_t scratch, scratch_total, mapping, bytes;

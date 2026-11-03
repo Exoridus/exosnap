@@ -1,4 +1,16 @@
 #include "visual_allocation_probe.h"
+#undef NOMINMAX
+#include <Windows.h>
+#ifndef max
+#define max(a, b) (((a) > (b)) ? (a) : (b))
+#endif
+#ifndef min
+#define min(a, b) (((a) < (b)) ? (a) : (b))
+#endif
+#include <exosnap/engine/visual_frame.h>
+#undef max
+#undef min
+
 #include "visual_scene_runtime_storage.h"
 #include <exosnap/engine/visual_scene_runtime.h>
 
@@ -23,7 +35,7 @@ thread_local Probe* active = nullptr;
 void* Allocate(size_t size) {
     if (active) {
         ++active->allocations;
-        if (active->fail) {
+        if (active->fail && (active->fail_size == 0 || active->fail_size == size)) {
             active->fail = false;
             throw std::bad_alloc();
         }
@@ -44,8 +56,14 @@ void* Allocate(size_t size) {
 }
 
 void Free(void* pointer) noexcept {
-    if (active && pointer)
+    if (active && pointer) {
         ++active->frees;
+        if (active->pause_free == pointer && active->entered && active->resume) {
+            active->pause_free = nullptr;
+            active->entered->release();
+            active->resume->acquire();
+        }
+    }
     std::free(pointer);
 }
 } // namespace visual_allocations
@@ -230,6 +248,24 @@ TEST_F(VisualRuntime, UnchangedDoesNotReturnAnotherPin) {
     EXPECT_FALSE(read);
 }
 
+TEST_F(VisualRuntime, InvalidatedCacheRereadsUnchangedPixelsAndRejectsPinnedReader) {
+    ASSERT_EQ(Publish(1), PublishResult::Accepted);
+    VisualReadLease image;
+    ASSERT_EQ(runtime.TryReadImage(consumer, address, image), ReadResult::Updated);
+    const auto* pixels = image.Image().pixels.data();
+    const auto blocked = runtime.InvalidateImage(consumer, address);
+    ASSERT_FALSE(blocked.succeeded());
+    EXPECT_EQ(blocked.error()->code, EngineErrorCode::Stalled);
+    image.Reset();
+    EXPECT_EQ(runtime.TryReadImage(consumer, address, image), ReadResult::Unchanged);
+    ASSERT_TRUE(runtime.InvalidateImage(consumer, address).succeeded());
+    EXPECT_EQ(runtime.TryReadImage(consumer, address, image), ReadResult::Updated);
+    EXPECT_EQ(image.Image().pixels.data(), pixels);
+    EXPECT_EQ(image.Stamp().sequence, 1);
+    EXPECT_FALSE(runtime.InvalidateImage(0, address).succeeded());
+    EXPECT_FALSE(runtime.InvalidateImage(consumer, Address(2, 2)).succeeded());
+}
+
 TEST_F(VisualRuntime, BusyReadLeavesDestinationEmptyAndNeverWaitsForProducer) {
     ASSERT_EQ(Publish(1), PublishResult::Accepted);
     std::unique_lock lock(VisualRuntimeTestAccess::Storage(runtime).mutex);
@@ -297,6 +333,76 @@ TEST_F(VisualRuntime, RetiringLayoutBoundDefersThirdPoolUntilPinsDrain) {
     EXPECT_TRUE(writer.PrepareImage(token, {6, 2}).succeeded());
 }
 
+TEST_F(VisualRuntime, LayoutOscillationReusesAcceptedPoolAndDiscardsIdleUnacceptedPool) {
+    ASSERT_EQ(Publish(1), PublishResult::Accepted);
+    ASSERT_TRUE(writer.PrepareImage(token, {4, 4}).succeeded());
+    ASSERT_TRUE(writer.PrepareImage(token, {2, 2}).succeeded());
+    ASSERT_TRUE(writer.PrepareImage(token, {6, 6}).succeeded());
+    EXPECT_EQ(Publish(2), PublishResult::Accepted);
+    VisualReadLease image;
+    ASSERT_EQ(runtime.TryReadImage(consumer, address, image), ReadResult::Updated);
+    EXPECT_EQ(image.Image().width, 6);
+}
+
+TEST_F(VisualRuntime, NeverAcceptedActivePoolCanBeReplacedWhileAcceptedPixelsStayPinned) {
+    ASSERT_EQ(Publish(1), PublishResult::Accepted);
+    VisualReadLease held;
+    ASSERT_EQ(runtime.TryReadImage(consumer, address, held), ReadResult::Updated);
+    ASSERT_TRUE(writer.PrepareImage(token, {4, 4}).succeeded());
+    ASSERT_TRUE(writer.PrepareImage(token, {6, 6}).succeeded());
+    EXPECT_EQ(held.Image().width, 2);
+    EXPECT_EQ(held.Image().pixels.front(), 11);
+}
+
+TEST_F(VisualRuntime, WriterLeaseExposesExactImmutableLayoutIncludingColorMetadata) {
+    const CpuImageLayout original{2, 2};
+    auto old = writer.TryBeginCpuFrame({token, 1, CaptureTime100ns{100}, {}});
+    ASSERT_TRUE(old);
+    EXPECT_EQ(old->Layout(), original);
+    auto changed = original;
+    changed.matrix = MatrixCoefficients::Bt709;
+    changed.range = ColorRange::Full;
+    ASSERT_TRUE(writer.PrepareImage(token, changed).succeeded());
+    auto current = writer.TryBeginCpuFrame({token, 2, CaptureTime100ns{200}, {}});
+    ASSERT_TRUE(current);
+    EXPECT_EQ(current->Layout(), changed);
+    EXPECT_EQ(old->Layout(), original);
+    EXPECT_EQ(old->Pixels().size(), current->Pixels().size());
+    EXPECT_EQ(writer.Publish(std::move(*old)), PublishResult::Superseded);
+    EXPECT_EQ(writer.Publish(std::move(*current)), PublishResult::Accepted);
+}
+
+TEST_F(VisualRuntime, RetiredPixelFreeDoesNotHoldPublicationMutex) {
+    ASSERT_EQ(Publish(1), PublishResult::Accepted);
+    VisualReadLease held;
+    ASSERT_EQ(runtime.TryReadImage(consumer, address, held), ReadResult::Updated);
+    const auto* retired_pixels = held.Image().pixels.data();
+    ASSERT_TRUE(writer.PrepareImage(token, {4, 4}).succeeded());
+    ASSERT_EQ(Publish(2), PublishResult::Accepted);
+    held.Reset();
+    std::binary_semaphore entered{0};
+    std::binary_semaphore resume{0};
+    auto collection = std::async(std::launch::async, [&] {
+        visual_allocations::Probe probe;
+        probe.pause_free = retired_pixels;
+        probe.entered = &entered;
+        probe.resume = &resume;
+        visual_allocations::Scope scope(probe);
+        runtime.CollectRetired();
+    });
+    entered.acquire();
+    VisualReadLease current;
+    const auto read = runtime.TryReadImage(consumer, address, current);
+    const auto pending = writer.PrepareImage(token, {6, 6});
+    resume.release();
+    collection.get();
+    EXPECT_EQ(read, ReadResult::Updated);
+    ASSERT_FALSE(pending.succeeded());
+    EXPECT_EQ(pending.error()->code, EngineErrorCode::Stalled);
+    current.Reset();
+    EXPECT_TRUE(writer.PrepareImage(token, {6, 6}).succeeded());
+}
+
 TEST_F(VisualRuntime, InvalidLayoutDoesNotReplaceAcceptedPool) {
     ASSERT_EQ(Publish(1), PublishResult::Accepted);
     EXPECT_FALSE(writer.PrepareImage(token, {3, 2, WebcamPixelFormat::Nv12}).succeeded());
@@ -332,6 +438,7 @@ TEST_F(VisualRuntime, PoolAllocationFailureRollsBackReservationAndKeepsAcceptedI
     const auto reserved = VisualRuntimeTestAccess::Storage(runtime).reserved_bytes;
     visual_allocations::Probe probe;
     probe.fail = true;
+    probe.fail_size = 4 * 4 * 4;
     Outcome<std::monostate> result{std::monostate{}};
     {
         visual_allocations::Scope scope(probe);
@@ -494,6 +601,21 @@ TEST_F(VisualRuntime, SameRevisionRebindAdvancesPublicationAndInvalidSourceSkips
     EXPECT_EQ(scene.Revision().value, 1);
     EXPECT_EQ(scene.Bindings()[0].token, token);
     EXPECT_EQ(runtime.CheckBinding(scene.Bindings()[0]), ReadResult::Unchanged);
+}
+
+TEST_F(VisualRuntime, SceneCannotBeReadBeforeItsSerialIsAdvertised) {
+    PreparedSceneDescription description;
+    description.revision.value = 1;
+    ASSERT_TRUE(runtime.PublishScene(description).succeeded());
+    auto& storage = VisualRuntimeTestAccess::Storage(runtime);
+    const auto sequence = runtime.PublishedSceneSequence();
+    storage.scene_sequence.store(0, std::memory_order_release);
+    SceneReadLease scene;
+    EXPECT_EQ(runtime.TryReadScene(consumer, scene), ReadResult::Busy);
+    EXPECT_FALSE(scene);
+    storage.scene_sequence.store(sequence, std::memory_order_release);
+    EXPECT_EQ(runtime.TryReadScene(consumer, scene), ReadResult::Updated);
+    EXPECT_EQ(scene.PublicationSequence(), sequence);
 }
 
 TEST(VisualRuntimeLifetime, RevokedGenerationsReclaimSourceAndReaderMetadataWithoutReusingIds) {

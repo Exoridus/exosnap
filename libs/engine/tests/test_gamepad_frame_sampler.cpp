@@ -366,10 +366,8 @@ TEST(GamepadPublication, DistinctMappingsSharingAtlasDoNotBlockRetirement) {
     runtime.SetRequest(token, true, HoldPolicy::ClearAccepted);
     ASSERT_TRUE(StageGamepadData(runtime, token, second, {}).succeeded());
     second.reset();
-    // Keep the third mapping from adding an unregistered atlas owner during collection.
-    third->atlas.reset();
     runtime.CollectRetired();
-    EXPECT_FALSE(first_lifetime.expired());
+    EXPECT_TRUE(first_lifetime.expired());
     consumer_output.atlas.reset();
     runtime.CollectRetired();
     EXPECT_TRUE(first_lifetime.expired());
@@ -386,4 +384,70 @@ TEST(GamepadPublication, DistinctMappingsSharingAtlasDoNotBlockRetirement) {
     token.request.value = 3;
     runtime.SetRequest(token, true, HoldPolicy::ClearAccepted);
     EXPECT_TRUE(StageGamepadData(runtime, token, third, {}).succeeded());
+}
+
+TEST(GamepadPublication, SceneMultiplicityReservesEveryItemUntilOldSceneDrains) {
+    auto sprites = std::make_shared<GamepadSpriteSet>(Sprites());
+    const auto scratch = GamepadLayerQuadCapacity(*sprites) * sizeof(SpriteQuad);
+    VisualBudgetPolicy policy;
+    policy.cpu_payload_limit_bytes =
+        sprites->atlas->pixels.size() + sprites->parts.size() * sizeof(GamepadSpritePart) + 2 * scratch;
+    VisualSceneRuntime runtime{policy};
+    VisualAddress address;
+    address.source.bytes.back() = 1;
+    address.runtime.value = 1;
+    const SourceToken token{address, SourceRequestRevision{1}};
+    ASSERT_TRUE(runtime.CreateSource(address).succeeded());
+    auto consumer = runtime.RegisterConsumer();
+    ASSERT_TRUE(consumer.succeeded());
+    runtime.SetRequest(token, true, HoldPolicy::ClearAccepted);
+    ASSERT_TRUE(StageGamepadData(runtime, token, sprites, {}).succeeded());
+    PreparedSceneDescription description;
+    description.revision.value = 1;
+    description.binding_sources.push_back(address);
+    PreparedSceneItem item;
+    item.source = address;
+    for (uint8_t id = 1; id <= 3; ++id) {
+        item.id.bytes.back() = id;
+        description.items.push_back(item);
+    }
+    const auto rejected = runtime.PublishScene(description);
+    ASSERT_FALSE(rejected.succeeded());
+    EXPECT_EQ(rejected.error()->code, EngineErrorCode::ResourceBudgetExceeded);
+    EXPECT_EQ(runtime.PublishedSceneSequence(), 0);
+    description.items.resize(2);
+    ASSERT_TRUE(runtime.PublishScene(description).succeeded());
+    SceneReadLease held;
+    ASSERT_EQ(runtime.TryReadScene(*consumer.value(), held), ReadResult::Updated);
+    description.items.resize(1);
+    description.revision.value = 2;
+    ASSERT_TRUE(runtime.PublishScene(description).succeeded());
+    runtime.CollectRetired();
+    EXPECT_FALSE(runtime.RegisterConsumer().succeeded());
+    held.Reset();
+    runtime.CollectRetired();
+    EXPECT_TRUE(runtime.RegisterConsumer().succeeded());
+}
+
+TEST(GamepadFrameSampler, RecreationAtRequestChangeClearsBusyFallback) {
+    auto history = std::make_shared<gamepad::DeviceHistory>();
+    history->Push(Reading(100, 1));
+    auto sprites = Sprites();
+    auto first = GamepadFrameSampler::Prepare(sprites, gamepad::HistoryReadView(history));
+    ASSERT_TRUE(first.succeeded());
+    SpriteLayerSnapshot pressed;
+    ASSERT_TRUE((*first.value())->PrepareOutput(pressed).succeeded());
+    SceneItemProperties properties;
+    const WebcamPixelRect content{0, 0, 480, 320};
+    ASSERT_EQ((*first.value())->Sample(CaptureTime100ns{150}, properties, content, pressed), ReadResult::Updated);
+    auto replacement = GamepadFrameSampler::Prepare(sprites, gamepad::HistoryReadView(history));
+    ASSERT_TRUE(replacement.succeeded());
+    SpriteLayerSnapshot neutral;
+    ASSERT_TRUE((*replacement.value())->PrepareOutput(neutral).succeeded());
+    std::scoped_lock lock(gamepad::HistoryReadTestAccess::Mutex(*history));
+    auto sampled = std::async(std::launch::async, [&] {
+        return (*replacement.value())->Sample(CaptureTime100ns{150}, properties, content, neutral);
+    });
+    EXPECT_EQ(sampled.get(), ReadResult::Busy);
+    EXPECT_NE(pressed.quads[1].destination, neutral.quads[1].destination);
 }
