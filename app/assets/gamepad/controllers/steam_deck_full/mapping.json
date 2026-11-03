@@ -38,6 +38,78 @@
       }
     },
     {
+      "id": "btn-l4",
+      "file": "elements/btn-l4.svg",
+      "role": "button",
+      "binding": null,
+      "bounds": {
+        "x": 25.317773818969727,
+        "y": 131.5540771484375,
+        "width": 27.36445426940918,
+        "height": 18.891845703125
+      },
+      "pressElement": "btn-l4-pressure",
+      "inputStatus": "unqualified",
+      "preview": {
+        "key": "l4",
+        "label": "L4 (back button)"
+      }
+    },
+    {
+      "id": "btn-l5",
+      "file": "elements/btn-l5.svg",
+      "role": "button",
+      "binding": null,
+      "bounds": {
+        "x": 33.317771911621094,
+        "y": 149.5540771484375,
+        "width": 27.364456176757812,
+        "height": 18.891845703125
+      },
+      "pressElement": "btn-l5-pressure",
+      "inputStatus": "unqualified",
+      "preview": {
+        "key": "l5",
+        "label": "L5 (back button)"
+      }
+    },
+    {
+      "id": "btn-r4",
+      "file": "elements/btn-r4.svg",
+      "role": "button",
+      "binding": null,
+      "bounds": {
+        "x": 439.98779296875,
+        "y": 131.5540771484375,
+        "width": 27.36444091796875,
+        "height": 18.891845703125
+      },
+      "pressElement": "btn-r4-pressure",
+      "inputStatus": "unqualified",
+      "preview": {
+        "key": "r4",
+        "label": "R4 (back button)"
+      }
+    },
+    {
+      "id": "btn-r5",
+      "file": "elements/btn-r5.svg",
+      "role": "button",
+      "binding": null,
+      "bounds": {
+        "x": 431.98779296875,
+        "y": 149.5540771484375,
+        "width": 27.36444091796875,
+        "height": 18.891845703125
+      },
+      "pressElement": "btn-r5-pressure",
+      "inputStatus": "unqualified",
+      "preview": {
+        "key": "r5",
+        "label": "R5 (back button)"
+      }
+    },
+    {
       "id": "trigger-r2",
       "file": "elements/trigger-r2.svg",
       "role": "trigger",
@@ -51,13 +123,14 @@
       },
       "bounds": {
         "x": 420.5351867675781,
-        "y": 0.4624563157558441,
+        "y": 0.061055734753608704,
         "width": 51.78411865234375,
-        "height": 9.706323623657227
+        "height": 10.176398277282715
       },
       "motion": {
         "fillDirection": "bottom-to-top"
-      }
+      },
+      "pressElement": "trigger-r2-pressure"
     },
     {
       "id": "trigger-l2",
@@ -73,13 +146,14 @@
       },
       "bounds": {
         "x": 19.493040084838867,
-        "y": 0.32768967747688293,
+        "y": 0.061111122369766235,
         "width": 51.784141540527344,
-        "height": 9.706323623657227
+        "height": 9.989561080932617
       },
       "motion": {
         "fillDirection": "bottom-to-top"
-      }
+      },
+      "pressElement": "trigger-l2-pressure"
     },
     {
       "id": "btn-r1",
@@ -90,11 +164,12 @@
         "mask": 2048
       },
       "bounds": {
-        "x": 413.6295471191406,
-        "y": 5.827703475952148,
-        "width": 60.894134521484375,
-        "height": 6.590478897094727
-      }
+        "x": 413.5821533203125,
+        "y": 5.405555725097656,
+        "width": 60.9415283203125,
+        "height": 7.056680679321289
+      },
+      "pressElement": "btn-r1-pressure"
     },
     {
       "id": "btn-l1",
@@ -105,11 +180,12 @@
         "mask": 1024
       },
       "bounds": {
-        "x": 17.2886905670166,
-        "y": 5.692936897277832,
-        "width": 60.894195556640625,
-        "height": 7.004630088806152
-      }
+        "x": 17.272268295288086,
+        "y": 5.405555725097656,
+        "width": 60.910614013671875,
+        "height": 7.443487167358398
+      },
+      "pressElement": "btn-l1-pressure"
     },
     {
       "id": "trackpad-r",
@@ -173,6 +249,7 @@
         "height": 10.5950927734375
       },
       "inputStatus": "unqualified",
+      "pressElement": "btn-quick-access-pressure",
       "preview": {
         "label": "quick-access",
         "key": "quick-access"
@@ -222,7 +299,8 @@
         "y": 138.4175567626953,
         "width": 26.12401580810547,
         "height": 10.5950927734375
-      }
+      },
+      "pressElement": "btn-home-face"
     },
     {
       "id": "dpad",
@@ -251,10 +329,10 @@
         "mask": 32
       },
       "bounds": {
-        "x": 455.4542236328125,
-        "y": 18.069637298583984,
-        "width": 14.68017578125,
-        "height": 14.573055267333984
+        "x": 455.2699890136719,
+        "y": 17.97585678100586,
+        "width": 15.029998779296875,
+        "height": 14.758068084716797
       }
     },
     {
@@ -266,10 +344,10 @@
         "mask": 16
       },
       "bounds": {
-        "x": 440.8031921386719,
-        "y": 32.61479949951172,
-        "width": 14.68017578125,
-        "height": 14.573055267333984
+        "x": 440.5958557128906,
+        "y": 32.465858459472656,
+        "width": 15.090728759765625,
+        "height": 14.83828353881836
       }
     },
     {
@@ -281,10 +359,10 @@
         "mask": 8
       },
       "bounds": {
-        "x": 469.6759033203125,
-        "y": 32.580963134765625,
-        "width": 14.68017578125,
-        "height": 14.573055267333984
+        "x": 469.4700012207031,
+        "y": 32.4660758972168,
+        "width": 15.089996337890625,
+        "height": 14.83392333984375
       }
     },
     {
@@ -296,10 +374,10 @@
         "mask": 4
       },
       "bounds": {
-        "x": 455.4831848144531,
-        "y": 46.97643280029297,
-        "width": 14.68017578125,
-        "height": 14.573051452636719
+        "x": 455.2858581542969,
+        "y": 46.86000061035156,
+        "width": 15.05413818359375,
+        "height": 14.759998321533203
       }
     },
     {
@@ -315,21 +393,22 @@
         "clickMask": 8192
       },
       "bounds": {
-        "x": 398.114990234375,
-        "y": 31.363201141357422,
-        "width": 33.094573974609375,
-        "height": 33.06248092651367
+        "x": 394.0810852050781,
+        "y": 27.323314666748047,
+        "width": 41.06585693359375,
+        "height": 41.04140090942383
       },
       "motion": {
         "center": [
-          414.6622772216797,
-          47.89444160461426
+          414.61401742141584,
+          47.844014584148624
         ],
         "travelRadius": 5.95124656677246,
         "deadzone": 0.08,
         "yPositive": "up"
       },
-      "pressElement": "stick-r-cap-pressure"
+      "pressElement": "stick-r-cap-pressure",
+      "knockout": "stick-r-cap-outline"
     },
     {
       "id": "stick-l-cap",
@@ -344,21 +423,22 @@
         "clickMask": 4096
       },
       "bounds": {
-        "x": 60.99515914916992,
-        "y": 30.994544982910156,
-        "width": 33.09457778930664,
-        "height": 33.062477111816406
+        "x": 60.71290588378906,
+        "y": 30.74820327758789,
+        "width": 33.57817840576172,
+        "height": 33.47758865356445
       },
       "motion": {
         "center": [
-          77.54244804382324,
-          47.52578353881836
+          77.50199892766508,
+          47.486997604551426
         ],
         "travelRadius": 5.951245880126953,
         "deadzone": 0.08,
         "yPositive": "up"
       },
-      "pressElement": "stick-l-cap-pressure"
+      "pressElement": "stick-l-cap-pressure",
+      "knockout": "stick-l-cap-outline"
     }
   ],
   "variant": "device"

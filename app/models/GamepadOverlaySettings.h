@@ -9,7 +9,7 @@
 namespace exosnap {
 
 // Indices are persisted in profiles; append entries without reordering them.
-inline constexpr std::array<std::string_view, 14> kGamepadOverlayArtworkIds{"dualsense",
+inline constexpr std::array<std::string_view, 20> kGamepadOverlayArtworkIds{"dualsense",
                                                                             "xbox_series",
                                                                             "generic",
                                                                             "dualshock4",
@@ -22,7 +22,13 @@ inline constexpr std::array<std::string_view, 14> kGamepadOverlayArtworkIds{"dua
                                                                             "joycon_left_horizontal",
                                                                             "joycon_right_horizontal",
                                                                             "steam_controller",
-                                                                            "steam_deck_full"};
+                                                                            "steam_deck_full",
+                                                                            "steam_deck_compact",
+                                                                            "steam_controller_2026",
+                                                                            "xbox_360",
+                                                                            "gamecube",
+                                                                            "dualsense_edge",
+                                                                            "xbox_elite"};
 
 struct GamepadOverlaySettings {
     bool enabled = false;
@@ -47,6 +53,8 @@ inline GamepadOverlaySettings SanitizeGamepadOverlaySettings(GamepadOverlaySetti
     value.layout = std::max(value.layout, -1);
     if (value.layout >= static_cast<int>(kGamepadOverlayArtworkIds.size()))
         value.layout = 2;
+    value.glass = false;
+    value.glow = false;
     value.opacity = finite(value.opacity, 1, 0, 1);
     value.width = finite(value.width, 0.25F, 0.05F, 1);
     value.height = finite(value.height, 0.30F, 0.05F, 1);

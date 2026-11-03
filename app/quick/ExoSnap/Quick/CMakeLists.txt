@@ -60,6 +60,12 @@ foreach(controller IN ITEMS
     joycon_right_horizontal
     steam_controller
     steam_deck_full
+    steam_deck_compact
+    steam_controller_2026
+    xbox_360
+    gamecube
+    dualsense_edge
+    xbox_elite
 )
     list(APPEND EXOSNAP_GAMEPAD_MAPPED_ASSETS
         "${PROJECT_SOURCE_DIR}/app/assets/gamepad/controllers/${controller}/source.svg"

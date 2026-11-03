@@ -1,3 +1,16 @@
+# ExoSnap 2D controller artwork
+
+All 2D controller layouts were substantially reworked and extended by ExoSnap
+contributors. Their work includes redrawn wireframe contours, control artwork,
+consistent line weights, separate moving controls, pressure and knockout
+surfaces, clipping and additional controller variants. This includes the
+redesigned Steam Controller and Steam Deck layouts.
+
+These revisions are credited to ExoSnap contributors. Original artwork sources
+and their license notices remain credited below.
+
+---
+
 # Gamepad Asset Pack by AL2009man
 
 This is a collection of image assets originally created for VSCViewhttps://github.com/Nielk1/VSCView/, now expanded for general uses such as custom controller overlay, modding, etc. This also includes WIP or unfinished assets.
@@ -41,3 +54,93 @@ This is the downloaded Version of the pack, for more information; refer to the G
 Open Sans font family (by Steve Matteson) used for certain themes (such as the Compact theme for Steam Controller, Steam Deck and Arcade Controller)
 
 The PlayStation 20th Anniversary Touchpad Symbols was created by GT Planet forums user Maninashed.
+---
+
+# ExoSnap controller artwork provenance
+
+## AL2009man Gamepad Asset Pack
+
+Source: https://github.com/AL2009man/Gamepad-Asset-Pack
+License: MIT, Copyright (c) 2024 Al. Lopez.
+The complete MIT license is retained in LICENSE.txt beside this notice.
+
+The controller artwork, including Xbox 360, Steam Deck compact, DualSense Edge
+and Xbox Elite, is adapted from this pack except for the sources identified
+below. Modifications include transparent line artwork, separated moving
+controls, pressure surfaces, alternate layouts and neutral generic controls.
+
+## Generic controller: Amazon Luna diagram
+
+The body outline, front panel and shoulders are redrawn from
+Others/Amazon Luna/Luna_Diagram_Simple.png in Xelu's Free Controller & Key Prompts.
+The existing controls remain adapted from the MIT-licensed AL2009man pack.
+
+Creator: Nicolae (Xelu) Berbece. Updated by Paul Paun (2021).
+Source: https://thoseawesomeguys.com/prompts/
+Original archive:
+https://thoseawesomeguys.com/prompts/Xelu_Free_Controller%26Key_Prompts.zip
+License: CC0-1.0, https://creativecommons.org/publicdomain/zero/1.0/
+The original source page and the archive's Readme.txt dedicate all pack assets
+to the public domain under CC0, including the Amazon Luna diagrams.
+
+## GameCube controller
+
+Source: datkat21/ControllerOverlays, styles/gcn/gamecube_*.svg
+https://github.com/datkat21/ControllerOverlays/tree/20271b5ca4d7cb5b7d8e9a075d038506b16162d2/styles/gcn
+Upstream license:
+https://github.com/datkat21/ControllerOverlays/blob/20271b5ca4d7cb5b7d8e9a075d038506b16162d2/LICENSE
+License: GPL-3.0-only. The GNU GPL version 3 text is retained in the
+repository's root LICENSE and is included in application distributions.
+The GameCube artwork retains its own GPL version 3 terms independently of
+the application's GPL-3.0-or-later license.
+
+Modified by ExoSnap contributors, 2026-11-01: retraced as transparent line
+artwork, separated controls and pressure surfaces, removed decorative branding,
+and added an original cube motif and outlined START/PAUSE label.
+The editable source is gamecube/source.svg with gamecube/mapping.json.
+
+The START/PAUSE label uses outlined Inter SemiBold glyphs.
+Font source: https://github.com/rsms/inter
+Copyright (c) 2016 The Inter Project Authors.
+Font license: SIL Open Font License 1.1 (OFL-1.1).
+https://github.com/rsms/inter/blob/master/LICENSE.txt
+No Inter font file is distributed. The OFL's document/artwork exception applies
+to the rendered label. See https://openfontlicense.org/ofl-faq/
+
+## Steam Controller 2026 artwork draft
+
+The supplied two-dimensional artwork was manually traced and refined by ExoSnap
+contributors using rendered model views and physical reference images.
+Standard controls, symbols and stick wells reuse the MIT-licensed AL2009man
+Gamepad Asset Pack credited above. Copyright (c) 2026 ExoSnap contributors
+applies to their original contributions.
+
+The supplied rear-control contours and panel seam include projections from the
+Steam Controller 2026 model distributed by Khyretos/3dco-plus:
+https://github.com/Khyretos/3dco-plus/tree/main/assets/models/Steam%20Controller%202026
+The model has its own CC BY-NC-SA 4.0 license, separate from the program's MIT
+license. Its notice credits Copyright 2026 Valve Corporation and identifies
+Valve's high-poly model as its basis. The model's license notice is available at:
+https://github.com/Khyretos/3dco-plus/blob/9e2e2a4cf8171ba72fd7c1ad97760fabb0d5c99c/assets/models/Steam%20Controller%202026/license.txt
+License terms: https://creativecommons.org/licenses/by-nc-sa/4.0/
+
+The Steam Controller 2026 two-dimensional artwork is distributed under
+CC BY-NC-SA 4.0. ExoSnap contributors' modifications include the traced and
+refined wireframe, separate controls, pressure surfaces and knockout geometry.
+Attribution, the license link and modification notices must be retained.
+Noncommercial use, adaptation and redistribution are permitted under those
+terms. Adaptations must retain the same license or a compatible license.
+Commercial use of the licensed artwork requires separate permission from the
+applicable rights holder. The model notice identifies Valve as the contact
+for commercial products based on its materials.
+
+The incorporated AL2009man components retain the MIT copyright and license
+notice above. The SPDX expression MIT AND CC-BY-NC-SA-4.0 records both sets of
+terms for this layout. These artwork terms do not relicense the independent
+application source code or the other controller layouts.
+The referenced model and adapted artwork are provided without warranties,
+subject to Section 5 of the linked Creative Commons license.
+
+The layout's artwork-draft status records pending visual qualification, not a
+prohibition on redistribution under its license. No model mesh, projection data
+file or model-processing generator is included.

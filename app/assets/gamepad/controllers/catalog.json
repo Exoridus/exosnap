@@ -1,7 +1,7 @@
 {
   "schemaVersion": 1,
   "defaultLayouts": {
-    "steam_deck": "steam_deck_full",
+    "steam_deck": "steam_deck_compact",
     "steam_controller": "steam_controller",
     "unknown": "generic"
   },
@@ -89,6 +89,42 @@
       "name": "Steam Deck",
       "mapping": "steam_deck_full/mapping.json",
       "family": "steam"
+    },
+    {
+      "id": "steam_deck_compact",
+      "name": "Steam Deck (kompakt)",
+      "mapping": "steam_deck_compact/mapping.json",
+      "family": "steam"
+    },
+    {
+      "id": "steam_controller_2026",
+      "name": "Steam Controller (2026)",
+      "mapping": "steam_controller_2026/mapping.json",
+      "family": "steam"
+    },
+    {
+      "id": "xbox_360",
+      "name": "Xbox 360",
+      "mapping": "xbox_360/mapping.json",
+      "family": "xbox"
+    },
+    {
+      "id": "gamecube",
+      "name": "GameCube",
+      "mapping": "gamecube/mapping.json",
+      "family": "nintendo"
+    },
+    {
+      "id": "dualsense_edge",
+      "name": "DualSense Edge",
+      "mapping": "dualsense_edge/mapping.json",
+      "family": "playstation"
+    },
+    {
+      "id": "xbox_elite",
+      "name": "Xbox Elite",
+      "mapping": "xbox_elite/mapping.json",
+      "family": "xbox"
     }
   ]
 }

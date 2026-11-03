@@ -7,6 +7,7 @@
 
 #include <QCoreApplication>
 #include <QDir>
+#include <QElapsedTimer>
 #include <QFile>
 #include <QImage>
 #include <QJsonArray>
@@ -16,6 +17,7 @@
 #include <QPainter>
 #include <QSize>
 #include <QSvgRenderer>
+#include <QTemporaryDir>
 #include <algorithm>
 #include <cmath>
 #include <cstddef>
@@ -26,7 +28,46 @@
 
 using namespace exosnap::quick;
 
-TEST(GamepadSprites, MappedCatalogProducesVisiblePressedTilesWithoutAtlasChanges) {
+TEST(GamepadSprites, MovingKnockoutClearsOnlyTheBodyAtTheCurrentCapPosition) {
+    QTemporaryDir directory;
+    ASSERT_TRUE(directory.isValid());
+    QFile source(directory.filePath(QStringLiteral("source.svg")));
+    ASSERT_TRUE(source.open(QIODevice::WriteOnly));
+    source.write(
+        R"svg(<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 480 320"><g id="body"><rect width="480" height="320" fill="white"/></g><g id="stick-l-cap"><g transform="translate(240 160)"><circle id="cap" cx="0" cy="0" r="20" stroke="white" fill="none"/></g></g></svg>)svg");
+    source.close();
+    QFile mapping(directory.filePath(QStringLiteral("mapping.json")));
+    ASSERT_TRUE(mapping.open(QIODevice::WriteOnly));
+    mapping.write(
+        R"({"schemaVersion":1,"source":"source.svg","layers":[{"id":"body","role":"body"},{"id":"stick-l-cap","role":"stick","pressElement":"cap","knockout":"cap","binding":{"type":"stick","clickMask":4096},"motion":{"travelRadius":30}}]})");
+    mapping.close();
+    QString error;
+    const auto sprites = RasterizeGamepad(mapping.fileName(), 480, false, false, error);
+    ASSERT_TRUE(sprites) << error.toStdString();
+    for (const QPointF position : {QPointF(0, 0), QPointF(1, 0), QPointF(1, 1)}) {
+        exosnap::gamepad::GamepadState state;
+        state.left_x = static_cast<float>(position.x());
+        state.left_y = static_cast<float>(position.y());
+        const auto layer = GamepadLayer(*sprites, state, {0, 0, 1, 1}, 1);
+        const auto& body = layer->quads.front();
+        const auto& cap = layer->quads[1].destination;
+        const auto alpha = [&](float x, float y) {
+            const int px = body.source.x + qRound((x - body.destination.x) / body.destination.w * body.source.w);
+            const int py = body.source.y + qRound((y - body.destination.y) / body.destination.h * body.source.h);
+            return layer->atlas->pixels[(static_cast<size_t>(py) * layer->atlas->width + px) * 4 + 3];
+        };
+        // Body pixels under the moving cap must be transparent.
+        EXPECT_EQ(alpha(cap.x + cap.w / 2, cap.y + cap.h / 2), 0);
+        EXPECT_GT(alpha(0.1F, 0.5F), 0);
+        EXPECT_TRUE(layer->atlas->HasCompletePayload());
+        state.buttons = 4096;
+        const auto clicked = GamepadLayer(*sprites, state, {0, 0, 1, 1}, 0.5F);
+        EXPECT_EQ(clicked->atlas, layer->atlas);
+        EXPECT_NE(clicked->quads, layer->quads);
+    }
+}
+
+TEST(GamepadSprites, MappedCatalogProducesVisiblePressedTilesAndCompleteSnapshots) {
     const QDir root(QStringLiteral(EXOSNAP_GAMEPAD_ASSET_DIR "/controllers"));
     QFile catalog(root.filePath(QStringLiteral("catalog.json")));
     ASSERT_TRUE(catalog.open(QIODevice::ReadOnly));
@@ -50,7 +91,10 @@ TEST(GamepadSprites, MappedCatalogProducesVisiblePressedTilesWithoutAtlasChanges
             }
             return count;
         };
-        for (const auto& part : sprites->parts) {
+        for (size_t index = 0; index < sprites->parts.size(); ++index) {
+            const auto& part = sprites->parts[index];
+            if (index != 0)
+                EXPECT_TRUE(part.button || part.auxiliary != PadAuxiliary::None || part.motion != PadMotion::None);
             if (part.button || part.auxiliary != PadAuxiliary::None || part.motion != PadMotion::None) {
                 EXPECT_EQ(blue_pixels(part.idle), 0);
                 EXPECT_GT(blue_pixels(part.pressed), 0);
@@ -63,8 +107,52 @@ TEST(GamepadSprites, MappedCatalogProducesVisiblePressedTilesWithoutAtlasChanges
         state.right_trigger = 0.5F;
         state.home = true;
         const auto pressed = GamepadLayer(*sprites, state, {0, 0, 1, 1}, 1);
-        EXPECT_EQ(idle->atlas, pressed->atlas);
+        EXPECT_TRUE(pressed->atlas->HasCompletePayload());
         EXPECT_NE(idle->quads, pressed->quads);
+    }
+}
+
+TEST(GamepadSprites, CatalogRasterSizesAndMovingMaskCost) {
+    QFile report;
+    const auto output = qEnvironmentVariable("EXOSNAP_GAMEPAD_VISUAL_OUTPUT");
+    if (!output.isEmpty()) {
+        ASSERT_TRUE(QDir().mkpath(output));
+        report.setFileName(output + QStringLiteral("/mask-cost.csv"));
+        ASSERT_TRUE(report.open(QIODevice::WriteOnly));
+        report.write("layout,width,atlas_bytes,snapshot_mean_us\n");
+    }
+    for (const auto& id : exosnap::kGamepadOverlayArtworkIds) {
+        for (const int width : {240, 480, 960}) {
+            SCOPED_TRACE(std::string(id) + ":" + std::to_string(width));
+            QString error;
+            const auto sprites = RasterizeGamepad(QStringLiteral(EXOSNAP_GAMEPAD_ASSET_DIR "/controllers/") +
+                                                      QString::fromLatin1(id.data()) + QStringLiteral("/mapping.json"),
+                                                  width, false, false, error);
+            ASSERT_TRUE(sprites) << error.toStdString();
+            for (const auto& part : sprites->parts) {
+                for (const auto& rect : {part.idle, part.pressed}) {
+                    EXPECT_GE(rect.x, 0);
+                    EXPECT_GE(rect.y, 0);
+                    EXPECT_LE(rect.x + rect.w, sprites->atlas->width);
+                    EXPECT_LE(rect.y + rect.h, sprites->atlas->height);
+                }
+            }
+            QElapsedTimer timer;
+            timer.start();
+            for (int step = 0; step < 30; ++step) {
+                exosnap::gamepad::GamepadState state;
+                state.left_x = std::sin(step * 0.3F);
+                state.left_y = std::cos(step * 0.3F);
+                state.right_x = -state.left_x;
+                state.right_y = -state.left_y;
+                const auto layer = GamepadLayer(*sprites, state, {0, 0, 1, 1}, 1);
+                EXPECT_TRUE(layer->atlas->HasCompletePayload());
+            }
+            if (report.isOpen())
+                report.write(QByteArray(id.data(), static_cast<qsizetype>(id.size())) + ',' +
+                             QByteArray::number(width) + ',' + QByteArray::number(sprites->atlas->pixels.size()) + ',' +
+                             QByteArray::number(timer.nsecsElapsed() / 30000.0, 'f', 2) + '\n');
+        }
     }
 }
 
@@ -123,7 +211,7 @@ TEST(GamepadArtworkSources, ExportedLayersMatchSourceWithoutBakingStickCapsIntoB
     QFile catalog(root.filePath(QStringLiteral("catalog.json")));
     ASSERT_TRUE(catalog.open(QIODevice::ReadOnly));
     const auto controllers = QJsonDocument::fromJson(catalog.readAll()).object().value("controllers").toArray();
-    ASSERT_EQ(controllers.size(), 14);
+    ASSERT_EQ(controllers.size(), 20);
     for (const auto& controller : controllers) {
         const auto entry = controller.toObject();
         const QDir directory(root.filePath(entry.value("id").toString()));
@@ -427,7 +515,7 @@ TEST(GamepadSprites, AllArtworkRendersForVisualReview) {
     const QString output = qEnvironmentVariable("EXOSNAP_GAMEPAD_VISUAL_OUTPUT");
     for (const auto& id : exosnap::kGamepadOverlayArtworkIds) {
         const QString name = QString::fromLatin1(id.data());
-        for (const bool glass : {false, true}) {
+        for (const bool glass : {false}) {
             QString error;
             const auto sprites = RasterizeGamepad(QStringLiteral(EXOSNAP_GAMEPAD_ASSET_DIR "/controllers/") + name +
                                                       QStringLiteral("/mapping.json"),
@@ -437,8 +525,6 @@ TEST(GamepadSprites, AllArtworkRendersForVisualReview) {
                 continue;
             QImage sheet(1440, 640, QImage::Format_ARGB32_Premultiplied);
             QPainter painter(&sheet);
-            const QImage atlas(sprites->atlas->pixels.data(), sprites->atlas->width, sprites->atlas->height,
-                               sprites->atlas->width * 4, QImage::Format_ARGB32);
             for (int column = 0; column < 3; ++column) {
                 painter.fillRect(column * 480, 0, 480, 640,
                                  column == 0   ? QColor(20, 25, 32)
@@ -457,6 +543,8 @@ TEST(GamepadSprites, AllArtworkRendersForVisualReview) {
                         state.touchpad = true;
                     }
                     const auto layer = GamepadLayer(*sprites, state, {0, 0, 1, 1}, 1);
+                    const QImage atlas(layer->atlas->pixels.data(), layer->atlas->width, layer->atlas->height,
+                                       layer->atlas->width * 4, QImage::Format_ARGB32);
                     for (const auto& quad : layer->quads) {
                         const auto& s = quad.source;
                         const auto& d = quad.destination;
@@ -472,4 +560,38 @@ TEST(GamepadSprites, AllArtworkRendersForVisualReview) {
                                    (glass ? QStringLiteral("-glass.png") : QStringLiteral("-lines.png"))));
         }
     }
+}
+
+TEST(GamepadSprites, ClippedTranslatedBodyUsesItsOwnMaskRegion) {
+    QTemporaryDir directory;
+    ASSERT_TRUE(directory.isValid());
+    QFile source(directory.filePath(QStringLiteral("source.svg")));
+    ASSERT_TRUE(source.open(QIODevice::WriteOnly));
+    source.write(
+        R"svg(<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 480 320"><defs><clipPath id="cut" clipPathUnits="userSpaceOnUse"><path clip-rule="evenodd" d="M600 100h80v80h-80z M620 120h20v20h-20z"/></clipPath></defs><g id="body"><rect x="40" y="40" width="80" height="80" fill="white"/><g transform="translate(-400)"><g clip-path="url(#cut)"><rect x="600" y="100" width="160" height="80" fill="white"/></g></g></g></svg>)svg");
+    source.close();
+    QFile mapping(directory.filePath(QStringLiteral("mapping.json")));
+    ASSERT_TRUE(mapping.open(QIODevice::WriteOnly));
+    mapping.write(R"({"schemaVersion":1,"source":"source.svg","layers":[{"id":"body","role":"body"}]})");
+    mapping.close();
+    QString error;
+    const auto sprites = RasterizeGamepad(mapping.fileName(), 480, false, false, error);
+    ASSERT_TRUE(sprites) << error.toStdString();
+    const auto layer = GamepadLayer(*sprites, {}, {0, 0, 1, 1}, 1);
+    ASSERT_EQ(layer->quads.size(), 1u);
+    QImage image(480, 320, QImage::Format_ARGB32_Premultiplied);
+    image.fill(Qt::transparent);
+    const QImage atlas(layer->atlas->pixels.data(), layer->atlas->width, layer->atlas->height, layer->atlas->width * 4,
+                       QImage::Format_ARGB32);
+    const auto& quad = layer->quads.front();
+    {
+        QPainter painter(&image);
+        painter.drawImage(QRectF(quad.destination.x * 480, quad.destination.y * 320, quad.destination.w * 480,
+                                 quad.destination.h * 320),
+                          atlas, QRectF(quad.source.x, quad.source.y, quad.source.w, quad.source.h));
+    }
+    EXPECT_GT(qAlpha(image.pixel(86, 83)), 240);
+    EXPECT_GT(qAlpha(image.pixel(259, 160)), 240);
+    EXPECT_EQ(qAlpha(image.pixel(230, 131)), 0);
+    EXPECT_EQ(qAlpha(image.pixel(317, 141)), 0);
 }

@@ -152,6 +152,11 @@ directory alongside the ExoSnap binary.
 
 ### Controller artwork
 
+- **2D artwork revisions and additional layouts:** ExoSnap contributors.
+  All controller layouts were substantially reworked, including the Steam
+  Controller and Steam Deck layouts. Contributions include redrawn wireframe
+  contours and controls, consistent line weights, separate moving parts,
+  pressure and knockout surfaces, clipping and additional variants.
 - **Source:** AL2009man / Al. Lopez, Gamepad Asset Pack
 - **License:** MIT, Copyright (c) 2024 Al. Lopez
 - **Bundled license and credits:** `licenses/gamepad-al2009man.txt` and
@@ -159,7 +164,33 @@ directory alongside the ExoSnap binary.
 - **Role:** editable SVG sources and JSON mappings compiled into the native
   controller widget's resources, also used by the HTML artwork viewer.
 - **Modifications:** transparent line artwork, separate moving controls, pressure
-  surfaces and vendor-neutral generic controls.
+  surfaces, alternate layouts and vendor-neutral generic controls.
+- **Generic controller body:** redrawn from `Others/Amazon Luna/Luna_Diagram_Simple.png`
+  in Nicolae (Xelu) Berbece's Free Controller & Key Prompts, updated by Paul Paun
+  (2021), https://thoseawesomeguys.com/prompts/ (CC0-1.0). The controls remain
+  adapted from the MIT-licensed AL2009man pack.
+- **GameCube artwork:** retraced from `styles/gcn/gamecube_*.svg` in
+  https://github.com/datkat21/ControllerOverlays (GPL-3.0-only). Modified as
+  transparent line artwork with separate controls and pressure surfaces,
+  without decorative branding. Its GPL version 3 terms are retained separately
+  from the application's GPL-3.0-or-later license. The GPL text is included in
+  the root `LICENSE`. Editable sources are `gamecube/source.svg` and `mapping.json`
+  in the repository's controller artwork directory.
+- **GameCube label:** START/PAUSE is outlined Inter SemiBold, Copyright (c) 2016
+  The Inter Project Authors, https://github.com/rsms/inter (OFL-1.1).
+  No Inter font file is bundled. Rendered artwork is covered by the OFL's
+  document exception: https://openfontlicense.org/ofl-faq/
+- **Steam Controller 2026 model reference:** Valve Corporation, Copyright 2026,
+  distributed by Khyretos/3dco-plus in `assets/models/Steam Controller 2026`.
+  The model's own `license.txt` specifies CC BY-NC-SA 4.0, independently of
+  the upstream program's MIT license. The adapted Steam Controller 2026 artwork
+  is distributed under CC BY-NC-SA 4.0. Incorporated AL2009man components retain
+  their MIT notices, recorded together as MIT AND CC-BY-NC-SA-4.0. Source links,
+  attribution, modification details and noncommercial/share-alike terms are in
+  the bundled controller source notice. The application source code retains
+  its own license. Artwork-draft status concerns visual qualification.
+- **Additional provenance:** source URLs and modification details for these
+  artwork sources are retained in `licenses/gamepad-al2009man-notice.txt`.
 - **Legacy fixtures:** Nicolae (Xelu) Berbece, Free Controller & Key Prompts,
   https://thoseawesomeguys.com/prompts/ (CC0), remain in compatibility tests.
   Their original notice is retained as `licenses/gamepad-artwork.txt`.

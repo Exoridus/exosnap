@@ -51,14 +51,21 @@ QVariantList GamepadOverlay::layouts() const {
                              tr("Joy-Con L (horizontal)"),
                              tr("Joy-Con R (horizontal)"),
                              tr("Steam Controller (2015)"),
-                             tr("Steam Deck")};
+                             tr("Steam Deck (full)"),
+                             tr("Steam Deck (compact)"),
+                             tr("Steam Controller (2026)"),
+                             tr("Xbox 360"),
+                             tr("GameCube"),
+                             tr("PlayStation 5 DualSense Edge"),
+                             tr("Xbox Elite")};
     QVariantList result{QVariantMap{{QStringLiteral("value"), -1},
                                     {QStringLiteral("label"), tr("Automatic layout")},
                                     {QStringLiteral("selectable"), true}}};
-    for (qsizetype index = 0; index < labels.size(); ++index)
+    for (qsizetype index = 0; index < labels.size(); ++index) {
         result.push_back(QVariantMap{{QStringLiteral("value"), index},
                                      {QStringLiteral("label"), labels[index]},
                                      {QStringLiteral("selectable"), true}});
+    }
     return result;
 }
 
@@ -110,9 +117,8 @@ void GamepadOverlay::Configure(GamepadOverlaySettings settings) {
     }
     if (settings.enabled) {
         poll_.start();
-        if (!previous.enabled || previous.layout != settings.layout || previous.glass != settings.glass ||
-            previous.glow != settings.glow || previous.width != settings.width || previous.height != settings.height ||
-            !sprites_) {
+        if (!previous.enabled || previous.layout != settings.layout || previous.width != settings.width ||
+            previous.height != settings.height || !sprites_) {
             pending_atlas_key_.clear();
             raster_pool_.clear();
             raster_.start();
@@ -144,16 +150,6 @@ void GamepadOverlay::setOutputVisible(bool value) {
 void GamepadOverlay::setLayout(int value) {
     auto settings = Settings();
     settings.layout = value;
-    Configure(settings);
-}
-void GamepadOverlay::setGlass(bool value) {
-    auto settings = Settings();
-    settings.glass = value;
-    Configure(settings);
-}
-void GamepadOverlay::setGlow(bool value) {
-    auto settings = Settings();
-    settings.glow = value;
     Configure(settings);
 }
 void GamepadOverlay::setOpacity(double value) {
@@ -201,15 +197,15 @@ void GamepadOverlay::Rebuild() {
     const int layout = settings.layout < 0 ? automatic_layout_ : settings.layout;
     const QString file = QString::fromLatin1(kGamepadOverlayArtworkIds[layout].data());
     const int width = std::clamp(qRound(content_width_ * settings.width), 96, 2048);
-    const QString key = QStringLiteral("%1/%2/%3/%4").arg(file).arg(width).arg(settings.glass).arg(settings.glow);
+    const QString key = QStringLiteral("%1/%2").arg(file).arg(width);
     if (atlas_key_ == key || pending_atlas_key_ == key)
         return;
     pending_atlas_key_ = key;
     raster_pool_.clear();
     const QString path = QStringLiteral(":/gamepad/controllers/") + file + QStringLiteral("/mapping.json");
-    raster_pool_.start([this, key, path, width, glass = settings.glass, glow = settings.glow]() {
+    raster_pool_.start([this, key, path, width]() {
         QString error;
-        auto sprites = RasterizeGamepad(path, width, glass, glow, error);
+        auto sprites = RasterizeGamepad(path, width, false, false, error);
         QMetaObject::invokeMethod(
             this,
             [this, key, sprites = std::move(sprites), error = std::move(error)]() mutable {

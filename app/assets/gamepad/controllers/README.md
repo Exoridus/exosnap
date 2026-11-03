@@ -3,14 +3,19 @@
 Each controller directory contains an editable `source.svg`, separately renderable
 `elements/*.svg`, and a `mapping.json`. The catalog lists the available layouts.
 The native widget and HTML viewer use the same SVG sources and JSON mappings.
-Available artwork does not imply qualified support for a physical input device. Steam Deck uses its full device view. The Steam Controller artwork represents
-the 2015 model, not the separate 2026 hardware.
+Available artwork does not imply qualified support for a physical input device.
+Steam Deck has full and compact views, with compact as the catalog default.
+Steam Controller (2015) and Steam Controller (2026) are separate layouts.
 
-The source artwork is adapted from AL2009man's Gamepad Asset Pack, under the MIT
-license in [LICENSE.txt](LICENSE.txt). The pack's additional credits are retained
-in [SOURCE-NOTICE.txt](SOURCE-NOTICE.txt). All catalogued layouts use this pack.
-Generic derives from its Xbox Series geometry with blank button surfaces and no
-vendor logo. Other artwork outside this catalog has separate provenance.
+Most artwork is adapted from AL2009man's Gamepad Asset Pack, under the MIT
+license in [LICENSE.txt](LICENSE.txt), with ExoSnap contributors' revisions.
+Generic uses a CC0 Xelu/Luna body with MIT controls. GameCube artwork retains
+GPL-3.0-only terms. Steam Controller 2026 artwork uses CC BY-NC-SA 4.0 with
+retained MIT component notices. Its noncommercial restriction applies to that
+artwork; a free application download does not grant commercial artwork rights.
+Original sources, attribution, changes and license terms for each exception
+are documented in [SOURCE-NOTICE.txt](SOURCE-NOTICE.txt).
+The application source code retains its own license.
 
 ## Coordinates and layers
 

@@ -1,3 +1,4 @@
+use std::collections::HashSet;
 use std::path::{Path, PathBuf};
 use std::process::Command;
 
@@ -28,7 +29,9 @@ struct Mapping {
 struct Layer {
     id: String,
     file: String,
-    visible: Option<bool>,
+    #[serde(rename = "pressElement")]
+    press_element: Option<String>,
+    knockout: Option<String>,
 }
 
 pub struct Report {
@@ -43,8 +46,13 @@ pub fn generate(repo: &Path, check: bool, svgo: Option<&Path>) -> anyhow::Result
     let catalog: Catalog =
         serde_json::from_str(&std::fs::read_to_string(root.join("catalog.json"))?)?;
     let mut outputs = Vec::new();
+    let mut controllers = HashSet::new();
     for controller in catalog.controllers {
         ensure!(identifier(&controller.id), "Invalid controller identifier");
+        ensure!(
+            controllers.insert(controller.id.clone()),
+            "Duplicate controller identifier"
+        );
         ensure!(
             controller.mapping == format!("{}/mapping.json", controller.id),
             "Invalid mapping path"
@@ -57,10 +65,15 @@ pub fn generate(repo: &Path, check: bool, svgo: Option<&Path>) -> anyhow::Result
         let document = roxmltree::Document::parse(&source).context("Invalid controller SVG")?;
         let svg = document.root_element();
         ensure!(svg.has_tag_name("svg"), "Expected an SVG root");
+        let mut layers = HashSet::new();
         for layer in mapping.layers {
             ensure!(
                 identifier(&layer.id) && layer.file == format!("elements/{}.svg", layer.id),
                 "Invalid element path"
+            );
+            ensure!(
+                layers.insert(layer.id.clone()),
+                "Duplicate layer identifier"
             );
             let target = directory.join(&layer.file);
             for candidate in [&directory, &directory.join("elements"), &target] {
@@ -81,6 +94,27 @@ pub fn generate(repo: &Path, check: bool, svgo: Option<&Path>) -> anyhow::Result
                 layer.id,
                 controller.id
             );
+            ensure!(
+                groups[0].has_tag_name("g") && groups[0].attribute("transform").is_none(),
+                "Mapped layer {} must be an untransformed group",
+                layer.id
+            );
+            let references: Vec<_> = std::iter::once(layer.id.clone())
+                .chain(layer.press_element)
+                .chain(layer.knockout)
+                .collect();
+            for reference in &references {
+                ensure!(
+                    groups[0]
+                        .descendants()
+                        .filter(|node| node.attribute("id") == Some(reference.as_str()))
+                        .count()
+                        == 1,
+                    "Missing or duplicate reference {reference} in {} / {}",
+                    controller.id,
+                    layer.id
+                );
+            }
             let mut export = String::from("<svg");
             for namespace in svg.namespaces() {
                 let name = namespace
@@ -111,7 +145,7 @@ pub fn generate(repo: &Path, check: bool, svgo: Option<&Path>) -> anyhow::Result
                 export.push_str(&source[node.range()]);
             }
             export.push_str("</svg>\n");
-            outputs.push((target, export, layer.visible != Some(false)));
+            outputs.push((target, export, references));
         }
     }
     if let Some(svgo) = svgo {
@@ -154,7 +188,7 @@ fn escape(value: &str) -> String {
 fn optimize(
     root: &Path,
     svgo: &Path,
-    outputs: &mut [(PathBuf, String, bool)],
+    outputs: &mut [(PathBuf, String, Vec<String>)],
 ) -> anyhow::Result<()> {
     let version = Command::new("node")
         .arg(svgo)
@@ -187,24 +221,32 @@ fn optimize(
     if !result.status.success() {
         bail!("SVGO failed: {}", String::from_utf8_lossy(&result.stderr));
     }
-    for (path, content, visible) in outputs.iter_mut() {
+    for (path, content, references) in outputs.iter_mut() {
         *content = std::fs::read_to_string(output.join(path.strip_prefix(root)?))?;
-        let document = roxmltree::Document::parse(content).context("SVGO produced invalid SVG")?;
-        let id = path
-            .file_stem()
-            .and_then(|name| name.to_str())
-            .context("Invalid export name")?;
-        ensure!(
-            document.root_element().has_tag_name("svg")
-                && (!*visible
-                    || document
-                        .descendants()
-                        .any(|node| node.attribute("id") == Some(id))),
-            "SVGO removed the mapped element {id}"
-        );
+        validate_export(content, references)
+            .with_context(|| format!("Optimizing {}", path.display()))?;
         if !content.ends_with('\n') {
             content.push('\n');
         }
+    }
+    Ok(())
+}
+
+fn validate_export(content: &str, references: &[String]) -> anyhow::Result<()> {
+    let document = roxmltree::Document::parse(content).context("SVGO produced invalid SVG")?;
+    ensure!(
+        document.root_element().has_tag_name("svg"),
+        "Expected an SVG root"
+    );
+    for reference in references {
+        ensure!(
+            document
+                .descendants()
+                .filter(|node| node.attribute("id") == Some(reference.as_str()))
+                .count()
+                == 1,
+            "SVGO removed or duplicated mapped reference {reference}"
+        );
     }
     Ok(())
 }
@@ -293,6 +335,65 @@ mod tests {
         let root = temp.path().join("app/assets/gamepad/controllers/pad");
         std::fs::write(root.join("mapping.json"), r#"{"source":"source.svg","layers":[{"id":"body","file":"elements/body.svg"},{"id":"missing","file":"elements/missing.svg"}]}"#).unwrap();
         assert!(generate(temp.path(), false, None).is_err());
+        assert!(!root.join("elements/body.svg").exists());
+    }
+
+    #[test]
+    fn rejects_missing_or_duplicate_optional_references_before_writing() {
+        for field in ["pressElement", "knockout"] {
+            for shapes in ["", "<path id=\"pressure\"/><path id=\"pressure\"/>"] {
+                let temp = fixture();
+                let root = temp.path().join("app/assets/gamepad/controllers/pad");
+                std::fs::write(root.join("mapping.json"), format!(r#"{{"source":"source.svg","layers":[{{"id":"body","file":"elements/body.svg","{field}":"pressure"}}]}}"#)).unwrap();
+                std::fs::write(
+                    root.join("source.svg"),
+                    format!(
+                        r#"<svg xmlns="http://www.w3.org/2000/svg"><g id="body">{shapes}</g></svg>"#
+                    ),
+                )
+                .unwrap();
+                let error = generate(temp.path(), false, None).err().unwrap();
+                assert!(error.to_string().contains("reference pressure"), "{error}");
+                assert!(!root.join("elements/body.svg").exists());
+            }
+        }
+    }
+
+    #[test]
+    fn optimized_exports_must_preserve_hidden_mapping_references() {
+        let references = vec!["body".into(), "pressure".into(), "cap".into()];
+        let intact = r#"<svg><g id="body"><path id="pressure" fill="none" stroke="none"/><circle id="cap"/></g></svg>"#;
+        validate_export(intact, &references).unwrap();
+        for removed in ["body", "pressure", "cap"] {
+            let stripped = intact.replace(&format!("id=\"{removed}\""), "");
+            assert!(validate_export(&stripped, &references).is_err());
+        }
+    }
+
+    #[test]
+    fn rejects_duplicate_layers_and_transformed_groups() {
+        let temp = fixture();
+        let root = temp.path().join("app/assets/gamepad/controllers/pad");
+        let mapping = std::fs::read_to_string(root.join("mapping.json")).unwrap();
+        std::fs::write(
+            root.join("mapping.json"),
+            mapping.replace("stick-l-cap", "body"),
+        )
+        .unwrap();
+        let error = generate(temp.path(), false, None).err().unwrap();
+        assert!(error.to_string().contains("Duplicate layer"), "{error}");
+        std::fs::write(root.join("mapping.json"), mapping).unwrap();
+        let source = std::fs::read_to_string(root.join("source.svg")).unwrap();
+        std::fs::write(
+            root.join("source.svg"),
+            source.replace(
+                "<g id=\"body\">",
+                "<g id=\"body\" transform=\"translate(1 2)\">",
+            ),
+        )
+        .unwrap();
+        let error = generate(temp.path(), false, None).err().unwrap();
+        assert!(error.to_string().contains("untransformed group"), "{error}");
         assert!(!root.join("elements/body.svg").exists());
     }
 }

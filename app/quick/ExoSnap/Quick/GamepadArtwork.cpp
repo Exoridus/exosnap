@@ -157,7 +157,7 @@ void Clip(QDomDocument& document, QDomElement defs, QDomElement element, const Q
     element.setAttribute(QStringLiteral("clip-path"), QStringLiteral("url(#%1)").arg(id));
 }
 
-void RasterizerMasks(QDomElement root, const QRectF& view) {
+void RasterizerMasks(QDomElement root) {
     // Qt SVG ignores clipPath. Equivalent white user-space masks preserve the
     // source geometry's clipping when rasterizing individual atlas elements.
     const auto clips = root.elementsByTagName(QStringLiteral("clipPath"));
@@ -165,21 +165,18 @@ void RasterizerMasks(QDomElement root, const QRectF& view) {
         auto mask = clips.at(index).toElement();
         mask.setTagName(QStringLiteral("mask"));
         mask.removeAttribute(QStringLiteral("clipPathUnits"));
-        mask.setAttribute(QStringLiteral("maskUnits"), QStringLiteral("userSpaceOnUse"));
+        mask.setAttribute(QStringLiteral("maskUnits"), QStringLiteral("objectBoundingBox"));
         mask.setAttribute(QStringLiteral("maskContentUnits"), QStringLiteral("userSpaceOnUse"));
-        mask.setAttribute(QStringLiteral("x"), view.x());
-        mask.setAttribute(QStringLiteral("y"), view.y());
-        mask.setAttribute(QStringLiteral("width"), view.width());
-        mask.setAttribute(QStringLiteral("height"), view.height());
         const auto paint = [&](auto&& self, QDomElement node) -> void {
             Style(node, QStringLiteral("fill"), QStringLiteral("#ffffff"));
             Style(node, QStringLiteral("fill-opacity"), QStringLiteral("1"));
             Style(node, QStringLiteral("stroke"), QStringLiteral("none"));
+            if (node.hasAttribute(QStringLiteral("clip-rule")))
+                Style(node, QStringLiteral("fill-rule"), node.attribute(QStringLiteral("clip-rule")));
             for (auto child = node.firstChildElement(); !child.isNull(); child = child.nextSiblingElement())
                 self(self, child);
         };
-        for (auto child = mask.firstChildElement(); !child.isNull(); child = child.nextSiblingElement())
-            paint(paint, child);
+        paint(paint, mask);
     }
     const auto references = [&](auto&& self, QDomElement node) -> void {
         if (node.hasAttribute(QStringLiteral("clip-path"))) {
@@ -293,6 +290,7 @@ MappedGamepadArtwork PrepareMappedGamepadArtwork(const QString& mapping_path, QS
         }
         canvas.appendChild(idle);
         canvas.appendChild(pressed);
+        result.interactive_ids.push_back(id);
         return true;
     };
 
@@ -330,27 +328,35 @@ MappedGamepadArtwork PrepareMappedGamepadArtwork(const QString& mapping_path, QS
         if (!add(part, layer, id, {}))
             return fail();
         if (binding.value("type").toString() == QStringLiteral("stick")) {
+            const auto knockout = layer.value("knockout").toString();
+            if (!knockout.isEmpty()) {
+                auto shape = Find(part, knockout);
+                if (shape.isNull())
+                    return fail();
+                auto mask = shape.cloneNode(true).toElement();
+                if (mask.tagName() == QStringLiteral("path"))
+                    mask.setAttribute(QStringLiteral("d"), FirstContour(mask.attribute(QStringLiteral("d"))));
+                Style(mask, QStringLiteral("fill"), QStringLiteral("#ffffff"));
+                Style(mask, QStringLiteral("fill-opacity"), QStringLiteral("1"));
+                Style(mask, QStringLiteral("opacity"), QStringLiteral("1"));
+                Style(mask, QStringLiteral("stroke"), QStringLiteral("none"));
+                for (auto parent = shape.parentNode().toElement(); !parent.isNull() && parent != part;
+                     parent = parent.parentNode().toElement()) {
+                    auto wrapper = parent.cloneNode(false).toElement();
+                    wrapper.appendChild(mask);
+                    mask = wrapper;
+                }
+                StripIds(mask);
+                mask.setAttribute(QStringLiteral("id"), id + QStringLiteral("-knockout"));
+                canvas.appendChild(mask);
+            }
             const double travel = layer.value("motion").toObject().value("travelRadius").toDouble();
             if (!std::isfinite(travel) || travel <= 0 || travel > view.width())
                 return fail();
             result.stick_travel.insert(id, QPointF(travel * scale / 480, travel * scale / 320));
         }
     }
-    auto glass = body.cloneNode(true).toElement();
-    const auto outer = LargestGraphic(body, renderer);
-    if (!outer.isNull()) {
-        auto surface = outer.cloneNode(true).toElement();
-        if (surface.tagName() == QStringLiteral("path"))
-            surface.setAttribute(QStringLiteral("d"), FirstContour(surface.attribute(QStringLiteral("d"))));
-        Style(surface, QStringLiteral("fill"), QStringLiteral("#ffffff"));
-        Style(surface, QStringLiteral("fill-opacity"), QStringLiteral("0.025"));
-        Style(surface, QStringLiteral("stroke"), QStringLiteral("none"));
-        glass.insertBefore(surface, glass.firstChild());
-    }
-    StripIds(glass);
-    glass.setAttribute(QStringLiteral("id"), QStringLiteral("body-glass"));
-    canvas.insertAfter(glass, body);
-    RasterizerMasks(root, view);
+    RasterizerMasks(root);
     result.svg = document.toByteArray(-1);
     return result;
 }

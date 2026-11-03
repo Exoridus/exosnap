@@ -5,9 +5,9 @@ export default {
     name: 'preset-default',
     params: {
       overrides: {
-        cleanupIds: {
-          preservePrefixes: ['body', 'btn-', 'stick-', 'trigger-', 'trackpad-', 'dpad', 'home-', 'touchpad-'],
-        },
+        // Mapping references include invisible pressure and knockout shapes.
+        cleanupIds: false,
+        removeHiddenElems: false,
       },
     },
   }],
