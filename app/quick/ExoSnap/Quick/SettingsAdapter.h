@@ -451,6 +451,7 @@ class SettingsAdapter : public QObject {
         return QString::fromStdString(engine::ToUuid(record_gamepad_address_.source));
     }
     void setRecordGamepadTarget(engine::VisualAddress address, engine::SceneItemId item);
+    void setRecordVisualEditingAllowed(bool allowed);
     Q_INVOKABLE bool setRecordGamepadOutputVisible(const QString& source, const QString& item, const QString& token,
                                                    bool visible);
     Q_INVOKABLE bool setRecordGamepadPlacement(const QString& source, const QString& item, const QString& token,
@@ -1037,6 +1038,7 @@ class SettingsAdapter : public QObject {
     }
     engine::VisualAddress record_gamepad_address_;
     engine::SceneItemId record_gamepad_item_;
+    bool record_visual_editing_allowed_ = false;
     uint64_t record_edit_revision_ = 1;
     void advanceRecordEditRevision() noexcept {
         if (record_edit_revision_ != 0)

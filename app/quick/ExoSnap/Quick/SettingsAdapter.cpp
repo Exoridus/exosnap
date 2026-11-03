@@ -219,7 +219,7 @@ std::optional<std::pair<engine::VisualSourceId, engine::SceneItemId>>
 SettingsAdapter::editableVisualTarget(const QString& source, const QString& item, const QString& edit_revision,
                                       bool record) const {
     const auto& config = visualConfig(record);
-    if (!visual_registry_ || config.visual_read_only)
+    if (!visual_registry_ || config.visual_read_only || (record && !record_visual_editing_allowed_))
         return std::nullopt;
     if (record != edit_revision.startsWith(QStringLiteral("record:")))
         return std::nullopt;
@@ -290,6 +290,14 @@ bool SettingsAdapter::commitVisualScene(VisualSceneConfig scene, bool live, bool
         }
     }
     return true;
+}
+
+void SettingsAdapter::setRecordVisualEditingAllowed(bool allowed) {
+    if (record_visual_editing_allowed_ == allowed)
+        return;
+    record_visual_editing_allowed_ = allowed;
+    advanceRecordEditRevision();
+    emit configChanged();
 }
 
 void SettingsAdapter::setRecordGamepadTarget(engine::VisualAddress address, engine::SceneItemId item) {
@@ -377,7 +385,8 @@ QVariantMap SettingsAdapter::visualSourceState(const QString& source_id, bool re
     if (address.source != *id || source == config.visual_scene.sources.end() || item == config.visual_scene.items.end())
         return {};
     const auto* type = visual_registry_->FindVisualSource(source->type_id);
-    const bool editable = !config.visual_read_only && type && type->settings_version == source->settings_version &&
+    const bool editable = (!record || record_visual_editing_allowed_) && !config.visual_read_only && type &&
+                          type->settings_version == source->settings_version &&
                           (record ? record_edit_revision_ : visual_edit_revision_) != 0;
     return {{QStringLiteral("sourceId"), source_id},
             {QStringLiteral("itemId"), QString::fromStdString(engine::ToUuid(selected_item))},
@@ -494,8 +503,9 @@ QVariantList SettingsAdapter::visualSettingsRows(const QString& source_id, bool 
             {QStringLiteral("action"), QString::fromStdString(action->id)},
             {QStringLiteral("value"), QString::fromStdString(value.value_or(fallback ? *fallback : std::string{}))},
             {QStringLiteral("choices"), choices},
-            {QStringLiteral("enabled"), !config.visual_read_only && (!(record ? recordingActive() : controlsLocked()) ||
-                                                                     field.change == ChangePolicy::Live)}});
+            {QStringLiteral("enabled"),
+             (!record || record_visual_editing_allowed_) && !config.visual_read_only &&
+                 (!(record ? recordingActive() : controlsLocked()) || field.change == ChangePolicy::Live)}});
     }
     for (const auto& action : type->actions) {
         if (action.operation == ActionOperation::SelectProperty)
@@ -508,7 +518,8 @@ QVariantList SettingsAdapter::visualSettingsRows(const QString& source_id, bool 
                         {QStringLiteral("label"),
                          QCoreApplication::translate(action.label.context.c_str(), action.label.source_text.c_str())},
                         {QStringLiteral("action"), QString::fromStdString(action.id)},
-                        {QStringLiteral("enabled"), !config.visual_read_only && address.runtime.value != 0}});
+                        {QStringLiteral("enabled"), (!record || record_visual_editing_allowed_) &&
+                                                        !config.visual_read_only && address.runtime.value != 0}});
     }
     return rows;
 }
@@ -570,7 +581,7 @@ bool SettingsAdapter::selectVisualSetting(const QString& source_id, const QStrin
 bool SettingsAdapter::dispatchVisualAction(const QString& source_id, const QString& item_id, const QString& runtime,
                                            const QString& action_id, bool record, const QString& choice) {
     const auto& config = visualConfig(record);
-    if (!visual_registry_ || config.visual_read_only)
+    if (!visual_registry_ || config.visual_read_only || (record && !record_visual_editing_allowed_))
         return false;
     const auto id = engine::FromUuid<engine::VisualSourceId>(source_id.toStdString());
     const auto item = engine::FromUuid<engine::SceneItemId>(item_id.toStdString());

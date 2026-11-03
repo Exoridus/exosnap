@@ -1,4 +1,5 @@
 #include "SettingsAdapter.h"
+#include "viewmodels/RecordViewModel.h"
 
 #include <QGuiApplication>
 
@@ -52,6 +53,7 @@ class SettingsVisualCutover : public ::testing::Test {
         adapter.setVisualRegistry(&registry);
         adapter.setVisualTargets({engine::VisualSourceId{{1}}, {}}, engine::SceneItemId{{2}},
                                  {engine::VisualSourceId{{3}}, {}}, engine::SceneItemId{{4}});
+        adapter.setRecordVisualEditingAllowed(true);
         adapter.setRecordGamepadTarget({engine::VisualSourceId{{3}}, {}}, engine::SceneItemId{{4}});
         adapter.setConfig(config);
         QObject::connect(&adapter, &SettingsAdapter::configEdited, &adapter, [this] { ++edits; });
@@ -289,6 +291,84 @@ TEST_F(SettingsVisualCutover, RecordGamepadRejectsFutureSettingsAndMissingPlacem
                                                        state["editRevision"].toString(), {0, 0, 0.4, 0.4}));
     }
     EXPECT_EQ(edits, 0);
+}
+
+TEST_F(SettingsVisualCutover, RecordEditingDefaultsToDeniedUntilCompositionProvidesLifecycle) {
+    SettingsAdapter fresh;
+    fresh.setVisualRegistry(&registry);
+    fresh.setConfig(config);
+    fresh.setRecordGamepadTarget({engine::VisualSourceId{{3}}, {}}, engine::SceneItemId{{4}});
+    const auto state = fresh.visualSourceState(fresh.recordGamepadSourceId(), true);
+    EXPECT_FALSE(state["editable"].toBool());
+    EXPECT_FALSE(fresh.setVisualEnabled(state["sourceId"].toString(), state["itemId"].toString(),
+                                        state["editRevision"].toString(), false, true));
+}
+
+TEST_F(SettingsVisualCutover, RecordLifecycleGatesEveryRecordingStateAndCommand) {
+    struct Case {
+        UiRecordingState state;
+        bool editable;
+    };
+    const Case cases[] = {{UiRecordingState::LoadingCapabilities, false},
+                          {UiRecordingState::Ready, true},
+                          {UiRecordingState::Blocked, false},
+                          {UiRecordingState::Countdown, true},
+                          {UiRecordingState::Preparing, false},
+                          {UiRecordingState::RegionSelecting, false},
+                          {UiRecordingState::Recording, true},
+                          {UiRecordingState::Paused, true},
+                          {UiRecordingState::ArmedFromRecovery, true},
+                          {UiRecordingState::Stopping, false},
+                          {UiRecordingState::Saving, false},
+                          {UiRecordingState::Completed, true},
+                          {UiRecordingState::Failed, false}};
+    adapter.setRecordGamepadTarget({engine::VisualSourceId{{3}}, engine::VisualRuntimeGeneration{7}},
+                                   engine::SceneItemId{{4}});
+    for (const auto& entry : cases) {
+        SCOPED_TRACE(static_cast<int>(entry.state));
+        EXPECT_EQ(IsWebcamOverlayEditable(entry.state), entry.editable);
+        adapter.setRecordVisualEditingAllowed(IsWebcamOverlayEditable(entry.state));
+        const auto state = adapter.visualSourceState(adapter.recordGamepadSourceId(), true);
+        const auto source = state["sourceId"].toString();
+        const auto item = state["itemId"].toString();
+        const auto token = state["editRevision"].toString();
+        EXPECT_EQ(state["editable"].toBool(), entry.editable);
+        for (const auto& row : adapter.visualSettingsRows(source, true))
+            EXPECT_EQ(row.toMap()["enabled"].toBool(), entry.editable);
+        EXPECT_EQ(adapter.setVisualEnabled(source, item, token, true, true), entry.editable);
+        EXPECT_EQ(adapter.setVisualOpacity(source, item, token, 1, true), entry.editable);
+        EXPECT_EQ(adapter.setRecordGamepadOutputVisible(source, item, token, true), entry.editable);
+        EXPECT_EQ(adapter.setRecordGamepadPlacement(source, item, token, {0.2, 0.3, 0.4, 0.4}), entry.editable);
+        EXPECT_EQ(adapter.selectVisualSetting(source, item, token, "select-layout", "auto", true), entry.editable);
+        EXPECT_EQ(adapter.dispatchVisualAction(source, item, "7", "retry", true), entry.editable);
+    }
+}
+
+TEST_F(SettingsVisualCutover, LifecycleRevokesGestureWithoutLockingNextSettings) {
+    adapter.setControlsLocked(true);
+    adapter.editNextRecording();
+    const auto captured = adapter.visualSourceState(adapter.recordGamepadSourceId(), true);
+    int changed = 0;
+    QObject::connect(&adapter, &SettingsAdapter::configChanged, &adapter, [&] { ++changed; });
+    adapter.setRecordVisualEditingAllowed(true);
+    EXPECT_EQ(changed, 0);
+    adapter.setRecordVisualEditingAllowed(false);
+    EXPECT_EQ(changed, 1);
+    adapter.setRecordVisualEditingAllowed(false);
+    EXPECT_EQ(changed, 1);
+    EXPECT_FALSE(adapter.setRecordGamepadPlacement(captured["sourceId"].toString(), captured["itemId"].toString(),
+                                                   captured["editRevision"].toString(), {0.2, 0.3, 0.4, 0.4}));
+    EXPECT_TRUE(Select(State(true), "select-layout", "xbox_elite"));
+    EXPECT_TRUE(adapter.editingNextRecording());
+    EXPECT_EQ(edits, 1);
+    EXPECT_EQ(active_edits, 0);
+    adapter.setRecordVisualEditingAllowed(true);
+    EXPECT_FALSE(adapter.setRecordGamepadPlacement(captured["sourceId"].toString(), captured["itemId"].toString(),
+                                                   captured["editRevision"].toString(), {0.2, 0.3, 0.4, 0.4}));
+    const auto fresh = adapter.visualSourceState(adapter.recordGamepadSourceId(), true);
+    EXPECT_TRUE(adapter.setRecordGamepadPlacement(fresh["sourceId"].toString(), fresh["itemId"].toString(),
+                                                  fresh["editRevision"].toString(), {0.2, 0.3, 0.4, 0.4}));
+    EXPECT_EQ(active_edits, 1);
 }
 
 } // namespace

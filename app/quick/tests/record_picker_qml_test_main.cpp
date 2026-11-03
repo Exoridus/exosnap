@@ -101,6 +101,7 @@ class RecordPickerTestDriver final : public QObject {
     }
 
     Q_INVOKABLE void resetVisualSettings(bool read_only = false, bool runtime = false) {
+        settings_.setRecordVisualEditingAllowed(exosnap::IsWebcamOverlayEditable(exosnap::UiRecordingState::Ready));
         settings_.setControlsLocked(false);
         auto config = exosnap::MakeDefaultPreset().config;
         config.visual_read_only = read_only;
@@ -180,6 +181,8 @@ class RecordPickerTestDriver final : public QObject {
     // so a test can prove the pending selection follows its identity through an
     // insert or a reorder instead of the index it happened to have.
     Q_INVOKABLE void setRecordingContext(bool active) {
+        settings_.setRecordVisualEditingAllowed(exosnap::IsWebcamOverlayEditable(
+            active ? exosnap::UiRecordingState::Recording : exosnap::UiRecordingState::Ready));
         settings_.setControlsLocked(active);
     }
 

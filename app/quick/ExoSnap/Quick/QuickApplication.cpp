@@ -1742,8 +1742,10 @@ void QuickApplication::wireRecordCommands() {
 }
 
 void QuickApplication::synchronizeRecordState() {
-    const bool busy = locksCaptureTargets(pending_record_visual_state_.isEmpty() ? recording_coordinator_->State()
-                                                                                 : record_view_model_.state);
+    const auto state =
+        pending_record_visual_state_.isEmpty() ? recording_coordinator_->State() : record_view_model_.state;
+    settings_adapter_.setRecordVisualEditingAllowed(IsWebcamOverlayEditable(state));
+    const bool busy = locksCaptureTargets(state);
     if (settings_adapter_.recordingActive() != busy)
         settings_adapter_.setVisualTargets({}, {}, {}, {});
     settings_adapter_.setControlsLocked(busy);
