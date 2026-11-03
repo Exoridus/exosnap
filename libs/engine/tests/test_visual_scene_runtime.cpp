@@ -31,10 +31,9 @@ using namespace exosnap::engine;
 
 namespace visual_allocations {
 thread_local Probe* active = nullptr;
-thread_local bool match_allocation_overhead = false;
 
 bool MatchesAllocation(size_t actual, size_t requested) noexcept {
-    return actual == requested || (match_allocation_overhead && requested != 0 && actual > requested);
+    return requested != 0 && actual >= requested && actual - requested <= active->allocation_overhead;
 }
 
 void* Allocate(size_t size) {
@@ -413,12 +412,13 @@ TEST_F(VisualRuntime, RetiredPixelFreeDoesNotHoldPublicationMutex) {
         visual_allocations::Scope scope(probe);
         runtime.CollectRetired();
     });
-    entered.acquire();
+    const bool paused = entered.try_acquire_for(std::chrono::seconds(1));
     VisualReadLease current;
     const auto read = runtime.TryReadImage(consumer, address, current);
     const auto pending = writer.PrepareImage(token, {6, 6});
     resume.release();
     collection.get();
+    EXPECT_TRUE(paused);
     EXPECT_EQ(read, ReadResult::Updated);
     ASSERT_FALSE(pending.succeeded());
     EXPECT_EQ(pending.error()->code, EngineErrorCode::Stalled);
@@ -555,11 +555,9 @@ TEST(VisualRuntimeBudget, LargeSupportedLayoutPassesAdmissionAbove256MiB) {
         probe.entered = &entered;
         probe.resume = &resume;
         // Large STL allocations can include alignment bookkeeping before the payload.
-        visual_allocations::match_allocation_overhead = true;
+        probe.allocation_overhead = 64;
         visual_allocations::Scope scope(probe);
-        const auto result = writer.value()->PrepareImage(token, {7680, 4320});
-        visual_allocations::match_allocation_overhead = false;
-        return result;
+        return writer.value()->PrepareImage(token, {7680, 4320});
     });
     const bool admitted = entered.try_acquire_for(std::chrono::seconds(1));
     uint64_t reserved = 0;

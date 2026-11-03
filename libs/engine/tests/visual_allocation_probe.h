@@ -13,6 +13,7 @@ struct Probe {
     std::binary_semaphore* resume = nullptr;
     bool fail = false;
     size_t fail_size = 0;
+    size_t allocation_overhead = 0;
     const void* pause_free = nullptr;
 };
 
