@@ -102,6 +102,7 @@ fn accents_from(text: &str) -> Vec<String> {
 }
 
 pub const SET_NAMES: &[&str] = &[
+    "controller3d",
     "pages",
     "settings",
     "profile",
@@ -174,6 +175,32 @@ pub fn set(name: &str, values: &ProductValues) -> anyhow::Result<Vec<(String, Sh
     let named = |spec: ShotSpec| (spec.derived_name(), spec);
 
     let shots = match name {
+        "controller3d" => [
+            "normal-neutral",
+            "normal-half",
+            "normal-full",
+            "normal-diagonal",
+            "normal-click",
+            "normal-diagonal-click",
+            "normal-unavailable",
+            "normal-unsupported",
+            "normal-side",
+            "ghost-neutral",
+            "ghost-full",
+            "ghost-pattern",
+            "ghost-side",
+            "normal-closeup-neutral",
+            "normal-closeup-half",
+            "normal-closeup-full",
+        ]
+        .into_iter()
+        .map(|scenario| {
+            named(ShotSpec {
+                controller3d: Some(scenario.into()),
+                ..ShotSpec::default()
+            })
+        })
+        .collect(),
         "pages" => [
             Page::Record,
             Page::Edit,
@@ -398,7 +425,10 @@ pub fn set(name: &str, values: &ProductValues) -> anyhow::Result<Vec<(String, Sh
             // Sets overlap (the bare Settings page is in `pages` and in
             // `settings`), and a repeated name would overwrite its own file.
             let mut shots: Vec<(String, ShotSpec)> = Vec::new();
-            for name in SET_NAMES.iter().filter(|n| **n != "all") {
+            for name in SET_NAMES
+                .iter()
+                .filter(|n| **n != "all" && **n != "controller3d")
+            {
                 for shot in set(name, values)? {
                     if !shots.iter().any(|(existing, _)| *existing == shot.0) {
                         shots.push(shot);

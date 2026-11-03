@@ -34,6 +34,9 @@ class GamepadOverlay final : public QObject, public engine::SpriteSourceProvider
     [[nodiscard]] std::shared_ptr<const engine::SpriteLayerSnapshot> Snapshot(uint64_t frame_time_qpc_100ns) override;
     [[nodiscard]] std::shared_ptr<const engine::SpriteLayerSnapshot> PreviewSnapshot(uint64_t frame_time_qpc_100ns);
 
+    /// Selected raw reading at or before the frame time, without the 2D display deadzone.
+    [[nodiscard]] std::optional<gamepad::GamepadReading> ReadingAt(uint64_t frame_time_qpc_100ns) const;
+
     bool enabled() const {
         return Settings().enabled;
     }

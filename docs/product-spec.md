@@ -251,6 +251,15 @@ Device and resolution are fixed during recording. Supported mirror/opacity/chrom
 
 Media Foundation is a webcam dependency, not an AAC/recording dependency. Windows N/KN without the Media Feature Pack can still launch and record without webcam; webcam UI and Diagnostics explain the missing runtime.
 
+### Native Controller3D pilot
+
+A separate developer executable previews an original procedural DualSense rig in Normal 3D or Ghost 3D.
+It is not an overlay choice in the recording application and does not feed the recording compositor.
+The pilot shares the existing GameInput owner and canonical control mapping. Its radial stick response
+uses a 5% inner deadzone and 5% outer saturation, independently of the 2D display filter.
+Ghost retains physical depth occlusion with transparent shell surfaces. Rear hints, final licensed models,
+other controller families, motion tracking and recording output remain outside this pilot.
+
 ### Gamepad overlay
 
 The Record preview's Add overlay menu adds one controller widget and provides access to its device, layout and appearance settings. It is off by default.

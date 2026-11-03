@@ -18,6 +18,21 @@ ExoSnap is a Windows x64 application with a C++20 recording engine and a Qt Quic
 
 The practical dependency direction is presentation → application services/models → capability/engine contracts. Some application services use Qt Core for signals, files and asynchronous work. That does not make them part of the QML layer. Build layering checks and focused tests enforce the distinctions.
 
+## Native controller rendering
+
+The developer-only `exosnap_controller3d` target owns a `GamepadOverlay` and borrows one raw, timestamped
+reading per frame through `ReadingAt`. Device selection, normalization and history stay in the existing
+GameInput source. `ControllerState` uses `ReadControl` and the existing mapping's live/null permissions.
+Unavailable input and disconnect clear transforms and highlights. The 2D `DisplayState` filter is not part
+of this path. The engine's Qt-free sprite snapshot and immutable CPU atlas contract are unchanged.
+
+C++ owns the radial response, local press geometry and parameter validation. A `QQuick3DGeometry` lathe
+builds the cap, rim, stem and well only when dimensions change. The static well is a sibling of the
+quaternion-tilted assembly, and click translation is beneath that rotation. Only cap/rim materials indicate
+stick clicks. The procedural shell is original geometry, not an imported controller mesh.
+Normal and Ghost use depth testing. Ghost shell transparency retains depth writes; colored controls stay opaque.
+No rear-hint or recording texture handoff is implemented. Qt owns its rendering device and resources.
+
 ## Main data flows
 
 A settings gesture reaches `SettingsAdapter`, then the existing reconciliation and sanitization functions. The composition root persists the resulting live configuration and supplies it to the recording coordinator. The recording inspector and global Settings share one adapter. A recording freezes the active configuration while explicit next-recording editing changes the persisted draft without reconfiguring active resources. On return to idle the draft is applied to coordinator preparation. Panel state and minimum preview geometry are reduced in C++, while QML presents overlays and explicit pinned insets. A start snapshots its inputs before crossing into a worker. The worker validates the destination and resolved configuration, acquires resources, and enters `RecorderSession`. Engine workers produce packets and measurements. The mux worker owns file serialization, while queued application callbacks update the presentation models.

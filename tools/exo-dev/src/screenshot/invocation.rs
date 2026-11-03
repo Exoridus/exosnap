@@ -82,6 +82,9 @@ impl Popup {
 /// (appearance, accent, window size, scale) lives here.
 #[derive(Args, Clone, Debug, Default, PartialEq)]
 pub struct ShotSpec {
+    /// Native Controller3D pilot fixture. Requires --exe pointing to the pilot.
+    #[arg(long)]
+    pub controller3d: Option<String>,
     /// Navigation destination. The app's landing page when omitted.
     #[arg(long, value_enum)]
     pub page: Option<Page>,
@@ -295,6 +298,9 @@ impl ShotSpec {
     /// The page part of a file name. Edit fixtures default to Edit; other
     /// selections without a page flag use the app's Record landing page.
     pub fn page_id(&self) -> &'static str {
+        if self.controller3d.is_some() {
+            return "controller3d";
+        }
         self.effective_page().unwrap_or(Page::Record).id()
     }
 
@@ -309,6 +315,7 @@ impl ShotSpec {
                 parts.push(format!("{prefix}{value}"));
             }
         };
+        push("", &self.controller3d);
         push("", &self.record_state);
         push("", &self.overlay_state);
         push("", &self.edit);
@@ -418,6 +425,7 @@ impl ShotSpec {
                 env.push((name.to_string(), value.clone()));
             }
         };
+        seed("EXOSNAP_VISUAL_CONTROLLER3D", &self.controller3d);
         seed("EXOSNAP_VISUAL_EDIT_SCENARIO", &self.edit);
         seed("EXOSNAP_VISUAL_PROFILE_SECTION", &self.profile);
         seed("EXOSNAP_VISUAL_RECORD_PANEL", &self.record_panel);
@@ -453,6 +461,17 @@ pub fn sanitize(name: &str) -> String {
 mod tests {
     use super::*;
 
+    #[test]
+    fn controller3d_fixture_has_its_own_namespace_and_seed() {
+        let spec = ShotSpec {
+            controller3d: Some("ghost-full".into()),
+            ..ShotSpec::default()
+        };
+        let (_, env) = spec.invocation(&variant(), "out.png");
+        assert_eq!(spec.page_id(), "controller3d");
+        assert_eq!(spec.derived_name(), "controller3d_ghost-full");
+        assert!(env.contains(&("EXOSNAP_VISUAL_CONTROLLER3D".into(), "ghost-full".into())));
+    }
     fn variant() -> Variant {
         Variant {
             appearance: Appearance::Light,

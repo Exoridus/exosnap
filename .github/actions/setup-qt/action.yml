@@ -16,7 +16,7 @@ inputs:
     description: >-
       Which Qt components to install.
 
-      quick — qtbase, qtsvg, qtdeclarative plus the qtshadertools module. Every
+      quick: qtbase, qtsvg, qtdeclarative plus qtshadertools, qtquick3d and qtquicktimeline. Every
               job that has to produce or analyse the shipping application: the
               ExoSnap frontend IS a Qt Quick program, so without
               these find_package(Qt6 ... Quick) fails and the requested
@@ -76,7 +76,7 @@ runs:
             archives='qtbase qtsvg qtdeclarative qttools'
             # Qt 6.12 packages ShaderTools as a module. Requesting it under
             # archives silently omits a required Qt Quick dependency.
-            modules='qtshadertools'
+            modules='qtshadertools qtquick3d qtquicktimeline'
             ;;
           base)
             archives='qtbase qtsvg'

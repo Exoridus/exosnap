@@ -1515,6 +1515,7 @@ endif()
 #
 # Unconditional: this subdirectory defines `exosnap`, the shipped application.
 add_subdirectory(quick/ExoSnap/Quick)
+add_subdirectory(quick/ExoSnap/Controller3D)
 
 exosnap_add_gtest(
     NAME gpu_telemetry_tests
