@@ -14,7 +14,7 @@ struct ControllerButton {
     QVector3D position;
     QVector3D size;
     QVector3D press_axis;
-    float travel;
+    float travel = 0;
     float hinge_degrees = 0;
     bool round = false;
 };

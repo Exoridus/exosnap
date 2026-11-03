@@ -216,7 +216,7 @@ bool DescribeVisualScene(FieldBuilder& builder, VisualSceneRuntime& runtime) {
         return false;
     struct SceneSample {
         VisualSceneRuntime& runtime;
-        VisualConsumerId consumer;
+        VisualConsumerId consumer{};
         SceneReadLease scene;
         ~SceneSample() {
             scene.Reset();
