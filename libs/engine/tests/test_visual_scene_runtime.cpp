@@ -31,18 +31,23 @@ using namespace exosnap::engine;
 
 namespace visual_allocations {
 thread_local Probe* active = nullptr;
+thread_local bool match_allocation_overhead = false;
+
+bool MatchesAllocation(size_t actual, size_t requested) noexcept {
+    return actual == requested || (match_allocation_overhead && requested != 0 && actual > requested);
+}
 
 void* Allocate(size_t size) {
     if (active) {
         ++active->allocations;
-        if (active->fail && (active->fail_size == 0 || active->fail_size == size)) {
-            active->fail = false;
-            throw std::bad_alloc();
-        }
-        if (active->pause_size == size && active->entered && active->resume) {
+        if (MatchesAllocation(size, active->pause_size) && active->entered && active->resume) {
             active->pause_size = 0;
             active->entered->release();
             active->resume->acquire();
+        }
+        if (active->fail && (active->fail_size == 0 || MatchesAllocation(size, active->fail_size))) {
+            active->fail = false;
+            throw std::bad_alloc();
         }
     }
     void* pointer = nullptr;
@@ -202,6 +207,24 @@ TEST_F(VisualRuntime, OldRequestCannotPublishAfterDemandReopens) {
     runtime.SetRequest(token, true, HoldPolicy::KeepAccepted);
     EXPECT_EQ(writer.Publish(std::move(*old_frame)), PublishResult::Superseded);
     EXPECT_EQ(Publish(2), PublishResult::Accepted);
+}
+
+TEST_F(VisualRuntime, DemandReopenRejectsSameToken) {
+    ASSERT_EQ(Publish(1), PublishResult::Accepted);
+    auto old_frame = writer.TryBeginCpuFrame({token, 2, CaptureTime100ns{200}, {}});
+    ASSERT_TRUE(old_frame);
+    runtime.SetRequest(token, false, HoldPolicy::KeepAccepted);
+    runtime.SetRequest(token, true, HoldPolicy::KeepAccepted);
+    EXPECT_FALSE(writer.TryBeginCpuFrame({token, 3, CaptureTime100ns{300}, {}}));
+    EXPECT_EQ(writer.Publish(std::move(*old_frame)), PublishResult::Superseded);
+    VisualReadLease image;
+    EXPECT_EQ(runtime.TryReadImage(consumer, address, image), ReadResult::NotReady);
+    EXPECT_FALSE(image);
+    ++token.request.value;
+    runtime.SetRequest(token, true, HoldPolicy::KeepAccepted);
+    EXPECT_EQ(Publish(1), PublishResult::Accepted);
+    ASSERT_EQ(runtime.TryReadImage(consumer, address, image), ReadResult::Updated);
+    EXPECT_EQ(image.Stamp().token, token);
 }
 
 TEST_F(VisualRuntime, IdentitySwitchClearsAcceptedImageWithoutChangingHeldBytes) {
@@ -464,6 +487,19 @@ TEST_F(VisualRuntime, RequestChangeDuringPoolAllocationRejectsStagedPool) {
         return writer.PrepareImage(token, {16, 16});
     });
     const bool paused = entered.try_acquire_for(std::chrono::seconds(1));
+    if (paused) {
+        for (const int dimension : {20, 24, 28}) {
+            const auto coalesced = writer.PrepareImage(token, {dimension, dimension});
+            EXPECT_FALSE(coalesced.succeeded());
+            if (!coalesced.succeeded())
+                EXPECT_EQ(coalesced.error()->code, EngineErrorCode::Stalled);
+            auto& storage = VisualRuntimeTestAccess::Storage(runtime);
+            const std::scoped_lock lock(storage.mutex);
+            EXPECT_EQ(storage.reserved_bytes, reserved + 3 * 16 * 16 * 4);
+            EXPECT_EQ(storage.sources.at(address)->pools.size(), 1);
+            EXPECT_TRUE(storage.sources.at(address)->image_preparing);
+        }
+    }
     auto invalidate = std::async(std::launch::async, [&] {
         runtime.SetRequest({address, SourceRequestRevision{2}}, true, HoldPolicy::ClearAccepted);
     });
@@ -476,6 +512,12 @@ TEST_F(VisualRuntime, RequestChangeDuringPoolAllocationRejectsStagedPool) {
     ASSERT_FALSE(result.succeeded());
     EXPECT_EQ(result.error()->code, EngineErrorCode::StaleRevision);
     EXPECT_EQ(VisualRuntimeTestAccess::Storage(runtime).reserved_bytes, reserved);
+    token.request.value = 2;
+    ASSERT_TRUE(writer.PrepareImage(token, {28, 28}).succeeded());
+    const auto& storage = VisualRuntimeTestAccess::Storage(runtime);
+    EXPECT_EQ(storage.sources.at(address)->pools.size(), 1);
+    EXPECT_EQ(storage.sources.at(address)->active_pool->layout, (CpuImageLayout{28, 28}));
+    EXPECT_EQ(storage.reserved_bytes, 3 * 28 * 28 * 4);
 }
 
 TEST_F(VisualRuntime, FramePublicationAndReaderReleaseDoNotAllocateOrFree) {
@@ -494,6 +536,111 @@ TEST_F(VisualRuntime, FramePublicationAndReaderReleaseDoNotAllocateOrFree) {
     EXPECT_EQ(read_result, ReadResult::Updated);
     EXPECT_EQ(probe.allocations, 0);
     EXPECT_EQ(probe.frees, 0);
+}
+
+TEST(VisualRuntimeBudget, LargeSupportedLayoutPassesAdmissionAbove256MiB) {
+    VisualSceneRuntime runtime{VisualBudgetPolicy{}};
+    const SourceToken token{Address(), SourceRequestRevision{1}};
+    auto writer = runtime.CreateSource(token.address);
+    ASSERT_TRUE(writer.succeeded());
+    runtime.SetRequest(token, true, HoldPolicy::ClearAccepted);
+    constexpr size_t payload = 7680u * 4320u * 4u;
+    std::binary_semaphore entered{0};
+    std::binary_semaphore resume{0};
+    auto preparation = std::async(std::launch::async, [&] {
+        visual_allocations::Probe probe;
+        probe.pause_size = payload;
+        probe.fail_size = payload;
+        probe.fail = true;
+        probe.entered = &entered;
+        probe.resume = &resume;
+        // Large STL allocations can include alignment bookkeeping before the payload.
+        visual_allocations::match_allocation_overhead = true;
+        visual_allocations::Scope scope(probe);
+        const auto result = writer.value()->PrepareImage(token, {7680, 4320});
+        visual_allocations::match_allocation_overhead = false;
+        return result;
+    });
+    const bool admitted = entered.try_acquire_for(std::chrono::seconds(1));
+    uint64_t reserved = 0;
+    bool preparing = false;
+    bool ledger_available = false;
+    {
+        auto& storage = VisualRuntimeTestAccess::Storage(runtime);
+        const std::unique_lock lock(storage.mutex, std::try_to_lock);
+        ledger_available = lock.owns_lock();
+        if (ledger_available) {
+            reserved = storage.reserved_bytes;
+            preparing = storage.sources.at(token.address)->image_preparing;
+        }
+    }
+    // Abort at the first pixel allocation after inspecting successful admission.
+    resume.release();
+    const auto result = preparation.get();
+    EXPECT_TRUE(admitted);
+    EXPECT_TRUE(ledger_available);
+    EXPECT_TRUE(preparing);
+    EXPECT_EQ(reserved, 398131200u);
+    EXPECT_GT(reserved, 256u * 1024u * 1024u);
+    ASSERT_FALSE(result.succeeded());
+    EXPECT_EQ(result.error()->code, EngineErrorCode::ResourceBudgetExceeded);
+    const auto& storage = VisualRuntimeTestAccess::Storage(runtime);
+    EXPECT_EQ(storage.reserved_bytes, 0);
+    EXPECT_FALSE(storage.sources.at(token.address)->image_preparing);
+    EXPECT_TRUE(storage.sources.at(token.address)->pools.empty());
+}
+
+TEST(VisualRuntimeBudget, ExplicitBudgetCountsRetiringBytesUntilPayloadFreeFinishes) {
+    VisualBudgetPolicy policy;
+    policy.max_resource_generations = 3;
+    policy.cpu_payload_limit_bytes = 624;
+    VisualSceneRuntime runtime{policy};
+    const SourceToken token{Address(), SourceRequestRevision{1}};
+    auto writer = runtime.CreateSource(token.address);
+    ASSERT_TRUE(writer.succeeded());
+    runtime.SetRequest(token, true, HoldPolicy::ClearAccepted);
+    ASSERT_TRUE(writer.value()->PrepareImage(token, {2, 2}).succeeded());
+    auto first = writer.value()->TryBeginCpuFrame({token, 1, CaptureTime100ns{100}, {}});
+    ASSERT_TRUE(first);
+    const auto* retired_pixels = first->Pixels().data();
+    ASSERT_EQ(writer.value()->Publish(std::move(*first)), PublishResult::Accepted);
+    ASSERT_TRUE(writer.value()->PrepareImage(token, {4, 4}).succeeded());
+    auto second = writer.value()->TryBeginCpuFrame({token, 2, CaptureTime100ns{200}, {}});
+    ASSERT_TRUE(second);
+    ASSERT_EQ(writer.value()->Publish(std::move(*second)), PublishResult::Accepted);
+    std::binary_semaphore entered{0};
+    std::binary_semaphore resume{0};
+    auto collection = std::async(std::launch::async, [&] {
+        visual_allocations::Probe probe;
+        probe.pause_free = retired_pixels;
+        probe.entered = &entered;
+        probe.resume = &resume;
+        visual_allocations::Scope scope(probe);
+        runtime.CollectRetired();
+    });
+    const bool paused = entered.try_acquire_for(std::chrono::seconds(1));
+    uint64_t reserved = 0;
+    bool ledger_available = false;
+    {
+        auto& storage = VisualRuntimeTestAccess::Storage(runtime);
+        const std::unique_lock lock(storage.mutex, std::try_to_lock);
+        ledger_available = lock.owns_lock();
+        if (ledger_available)
+            reserved = storage.reserved_bytes;
+    }
+    Outcome<std::monostate> blocked{std::monostate{}};
+    if (ledger_available)
+        blocked = writer.value()->PrepareImage(token, {6, 6});
+    resume.release();
+    collection.get();
+    EXPECT_TRUE(paused);
+    EXPECT_TRUE(ledger_available);
+    EXPECT_EQ(reserved, 240);
+    ASSERT_FALSE(blocked.succeeded());
+    EXPECT_EQ(blocked.error()->code, EngineErrorCode::ResourceBudgetExceeded);
+    EXPECT_EQ(VisualRuntimeTestAccess::Storage(runtime).reserved_bytes, 192);
+    ASSERT_TRUE(writer.value()->PrepareImage(token, {6, 6}).succeeded());
+    EXPECT_EQ(VisualRuntimeTestAccess::Storage(runtime).reserved_bytes, 624);
 }
 
 TEST(VisualRuntimeBudget, LargeValidLayoutHitsExplicitBudgetInsteadOfUnsupportedFormat) {
