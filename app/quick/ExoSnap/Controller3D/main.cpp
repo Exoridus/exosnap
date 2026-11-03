@@ -126,7 +126,7 @@ int main(int argc, char** argv) {
          {QStringLiteral("closeup"), scenario.contains("closeup")},
          {QStringLiteral("viewRotation"),
           QVariant::fromValue(scenario.endsWith("side") ? QVector3D(0, -65, 0) : QVector3D())}});
-    engine.loadFromModule("ExoSnap.Controller3D", "PilotWindow");
+    engine.loadFromModule("ExoSnap.Controller3DPilot", "PilotWindow");
     if (engine.rootObjects().isEmpty())
         return 2;
     auto* window = qobject_cast<QQuickWindow*>(engine.rootObjects().first());
@@ -135,7 +135,7 @@ int main(int argc, char** argv) {
     QQmlComponent depth_component(&engine);
     std::unique_ptr<QObject> depth_probe;
     if (capture && scenario.endsWith("depth")) {
-        depth_component.loadUrl(QUrl(QStringLiteral("qrc:/qt/qml/ExoSnap/Controller3D/ControllerDepthProbe.qml")));
+        depth_component.loadUrl(QUrl(QStringLiteral("qrc:/qt/qml/ExoSnap/Controller3DPilot/ControllerDepthProbe.qml")));
         depth_probe.reset(depth_component.createWithInitialProperties(
             {{QStringLiteral("parent"), QVariant::fromValue(window->findChild<QObject*>("controllerRig"))}}));
         if (!depth_probe)

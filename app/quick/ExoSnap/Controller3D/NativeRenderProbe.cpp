@@ -1,3 +1,4 @@
+#include "NativeGamepadProducerChecks.h"
 #include "NativeRenderTarget.h"
 
 #include "ControllerState.h"
@@ -278,6 +279,7 @@ int main(int argc, char** argv) {
         const auto mapping =
             PrepareMappedGamepadArtwork(QStringLiteral(":/gamepad/controllers/dualsense/mapping.json"), error);
         Require(error.isEmpty(), error);
+        Require(CheckNativeGamepadProducer(device.get(), context.get(), error), error);
         ControllerState state(mapping);
         QJsonArray scenarios;
         uint64_t measured_pixel_readbacks = 0;
@@ -396,7 +398,7 @@ int main(int argc, char** argv) {
             Save(shared_active, directory, name + QStringLiteral("-shared-active"));
 
             QQmlComponent probe(qmlEngine(target.Scene()),
-                                QUrl(QStringLiteral("qrc:/qt/qml/ExoSnap/Controller3D/ControllerDepthProbe.qml")));
+                                QUrl(QStringLiteral("qrc:/qt/qml/ExoSnap/Controller3DProbe/ControllerDepthProbe.qml")));
             auto* rig = target.Scene()->findChild<QObject*>(QStringLiteral("controllerRig"));
             Require(rig != nullptr, QStringLiteral("Controller rig was not found."));
             std::unique_ptr<QObject> marker(

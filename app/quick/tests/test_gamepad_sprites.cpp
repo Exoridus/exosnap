@@ -434,7 +434,39 @@ class GamepadOverlayTest : public ::testing::Test {
     static bool HasPublishedSprites(const GamepadOverlay& overlay) {
         return overlay.published_sprites_ != nullptr;
     }
+    static void PrepareNativeWithoutEndpoint(GamepadOverlay& overlay, std::vector<SourceStatus>& statuses) {
+        overlay.visual_runtime_ = std::make_shared<engine::VisualSceneRuntime>(engine::VisualBudgetPolicy{});
+        overlay.visual_token_ = {{engine::VisualSourceId{{1}}, engine::VisualRuntimeGeneration{1}},
+                                 engine::SourceRequestRevision{1}};
+        ASSERT_TRUE(overlay.visual_runtime_->CreateSource(overlay.visual_token_.address).succeeded());
+        overlay.visual_runtime_->SetRequest(overlay.visual_token_, true, engine::HoldPolicy::ClearAccepted);
+        overlay.settings_.view = GamepadView::NativeNormal;
+        overlay.source_demand_ = true;
+        overlay.visual_status_ = [&statuses](SourceStatus status) { statuses.push_back(std::move(status)); };
+        gamepad::GamepadReading reading;
+        reading.device.vendor_id = 0x054C;
+        reading.device.product_id = 0x0CE6;
+        reading.device.layout = gamepad::LayoutKind::DualSense;
+        for (uint64_t tick = 1; tick <= 3; ++tick)
+            overlay.UpdateNative(reading, tick);
+        EXPECT_FALSE(overlay.native_);
+        EXPECT_FALSE(overlay.input_);
+    }
 };
+
+TEST_F(GamepadOverlayTest, NativeAdmissionWaitsWithoutAllocatingRendererOrOpeningInput) {
+    int argc = 1;
+    char name[] = "gamepad-tests";
+    char* argv[]{name, nullptr};
+    QCoreApplication application(argc, argv);
+    GamepadOverlay overlay;
+    std::vector<SourceStatus> statuses;
+    PrepareNativeWithoutEndpoint(overlay, statuses);
+    ASSERT_EQ(statuses.size(), 1u);
+    EXPECT_EQ(statuses.front().phase, SourcePhase::Waiting);
+    EXPECT_FALSE(overlay.views().at(1).toMap().value(QStringLiteral("selectable")).toBool());
+    EXPECT_TRUE(overlay.views().at(0).toMap().value(QStringLiteral("selectable")).toBool());
+}
 
 TEST_F(GamepadOverlayTest, ManagedConfigurationDefersNativeWorkUntilSourceDemand) {
     int argc = 1;

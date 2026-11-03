@@ -29,6 +29,8 @@ class VisualSourceManager final {
     void RequestShutdown() noexcept;
     bool IsQuiescent() const noexcept;
     void CollectRetired();
+    // Republish resource bindings without reapplying source configuration.
+    void RepublishScene();
 
   private:
     struct Entry {

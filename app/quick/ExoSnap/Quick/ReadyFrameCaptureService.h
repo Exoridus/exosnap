@@ -33,6 +33,7 @@ struct ReadyFrameComposition {
     QRectF normalized_source_rect{0.0, 0.0, 1.0, 1.0};
     VideoSettingsModel video;
     std::shared_ptr<exosnap::engine::VisualSceneRuntime> visual_runtime;
+    std::vector<exosnap::engine::SourceToken> required_gpu_tokens;
 };
 
 class ReadyFrameCaptureService final {

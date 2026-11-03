@@ -1,34 +1,61 @@
 find_package(Qt6 6.12 REQUIRED COMPONENTS Quick3D)
 
+qt_add_qml_module(exosnap_controller3d_scene
+    STATIC
+    URI ExoSnap.Controller3D
+    PLUGIN_TARGET exosnap_controller3d_sceneplugin
+    CLASS_NAME ExoSnapController3DPlugin
+    OUTPUT_DIRECTORY "${CMAKE_CURRENT_BINARY_DIR}/ExoSnap/Controller3D"
+    DEPENDENCIES QtQuick QtQuick3D
+    QML_FILES ControllerScene.qml ControllerStick.qml
+    SOURCES ControllerMechanics.cpp ControllerMechanics.h ControllerGeometry.cpp ControllerGeometry.h
+        ControllerState.cpp ControllerState.h NativeRenderTarget.cpp NativeRenderTarget.h
+        NativeGamepadProducer.cpp NativeGamepadProducer.h
+)
+target_include_directories(exosnap_controller3d_scene PUBLIC
+    ${CMAKE_CURRENT_SOURCE_DIR} ${CMAKE_CURRENT_SOURCE_DIR}/../Quick
+    ${PROJECT_SOURCE_DIR}/app ${PROJECT_SOURCE_DIR}/libs/engine/include)
+target_link_libraries(exosnap_controller3d_scene
+    PUBLIC Qt6::Quick3D exosnap::gamepad
+    PRIVATE tomlplusplus::tomlplusplus exosnap::warnings d3d11.lib dxgi.lib runtimeobject.lib)
+target_compile_definitions(exosnap_controller3d_scene PUBLIC NOMINMAX)
+
 exosnap_add_gtest(
     NAME controller3d_tests
     TEST_PREFIX controller3d.
-    SOURCES ../../tests/test_controller3d.cpp ControllerMechanics.cpp ControllerGeometry.cpp ControllerGeometry.h
+    SOURCES ../../tests/test_controller3d.cpp Controller3DPluginImport.cpp
+        ${PROJECT_SOURCE_DIR}/libs/engine/src/device_generation.cpp
         ${PROJECT_SOURCE_DIR}/libs/engine/src/gamepad_frame_sampler.cpp
         ${PROJECT_SOURCE_DIR}/libs/engine/src/visual_scene_runtime.cpp
-        ControllerState.cpp ControllerState.h
+        ${PROJECT_SOURCE_DIR}/libs/engine/src/visual_gpu_lane.cpp
+        ${PROJECT_SOURCE_DIR}/libs/engine/src/preview_shared_texture.cpp
         ../Quick/GamepadOverlay.cpp ../Quick/GamepadOverlay.h ../Quick/GamepadSprites.cpp ../Quick/GamepadArtwork.cpp
-    LIBRARIES Qt6::Quick3D Qt6::Svg Qt6::Xml exosnap::gamepad tomlplusplus::tomlplusplus
+    LIBRARIES exosnap_controller3d_sceneplugin Qt6::Quick3D Qt6::Svg Qt6::Xml exosnap::gamepad tomlplusplus::tomlplusplus
+        d3d11.lib dxgi.lib runtimeobject.lib
 )
 target_include_directories(controller3d_tests PRIVATE ${CMAKE_CURRENT_SOURCE_DIR} ../Quick
     ${PROJECT_SOURCE_DIR}/app ${PROJECT_SOURCE_DIR}/libs/engine/include)
 
-qt_add_executable(exosnap_controller3d WIN32 main.cpp)
+qt_add_executable(exosnap_controller3d WIN32 main.cpp Controller3DPluginImport.cpp)
 set_source_files_properties(../../tests/ControllerDepthProbe.qml PROPERTIES QT_RESOURCE_ALIAS ControllerDepthProbe.qml)
 qt_add_qml_module(exosnap_controller3d
-    URI ExoSnap.Controller3D
-    DEPENDENCIES QtQuick QtQuick3D
-    QML_FILES PilotWindow.qml ControllerScene.qml ControllerStick.qml ../../tests/ControllerDepthProbe.qml
-    SOURCES ControllerMechanics.cpp ControllerMechanics.h ControllerGeometry.cpp ControllerGeometry.h
-        ControllerState.cpp ControllerState.h
+    URI ExoSnap.Controller3DPilot
+    OUTPUT_DIRECTORY "${CMAKE_CURRENT_BINARY_DIR}/pilot/ExoSnap/Controller3DPilot"
+    DEPENDENCIES QtQuick QtQuick3D TARGET exosnap_controller3d_scene
+    QML_FILES PilotWindow.qml ../../tests/ControllerDepthProbe.qml
 )
 target_sources(exosnap_controller3d PRIVATE
+    ${PROJECT_SOURCE_DIR}/libs/engine/src/device_generation.cpp
     ${PROJECT_SOURCE_DIR}/libs/engine/src/gamepad_frame_sampler.cpp
     ${PROJECT_SOURCE_DIR}/libs/engine/src/visual_scene_runtime.cpp
+    ${PROJECT_SOURCE_DIR}/libs/engine/src/visual_gpu_lane.cpp
+    ${PROJECT_SOURCE_DIR}/libs/engine/src/preview_shared_texture.cpp
     ../Quick/GamepadOverlay.cpp ../Quick/GamepadOverlay.h ../Quick/GamepadSprites.cpp ../Quick/GamepadArtwork.cpp)
 target_include_directories(exosnap_controller3d PRIVATE ../Quick ${PROJECT_SOURCE_DIR}/app
     ${PROJECT_SOURCE_DIR}/libs/engine/include)
-target_link_libraries(exosnap_controller3d PRIVATE Qt6::Quick3D Qt6::QuickControls2 Qt6::Svg Qt6::Xml exosnap::gamepad tomlplusplus::tomlplusplus)
+target_link_libraries(exosnap_controller3d PRIVATE exosnap_controller3d_sceneplugin
+    Qt6::Quick3D Qt6::QuickControls2 Qt6::Svg Qt6::Xml exosnap::gamepad tomlplusplus::tomlplusplus
+    d3d11.lib dxgi.lib runtimeobject.lib)
 set_target_properties(exosnap_controller3d PROPERTIES RUNTIME_OUTPUT_DIRECTORY "${CMAKE_BINARY_DIR}/controller3d")
 qt_add_resources(exosnap_controller3d "pilot_mapping"
     PREFIX "/gamepad"
@@ -61,25 +88,27 @@ foreach(mode IN ITEMS normal ghost)
     exosnap_set_test_phase(controller3d.depth.${mode} gpu)
 endforeach()
 
-qt_add_executable(exosnap_controller3d_native NativeRenderProbe.cpp)
+qt_add_executable(exosnap_controller3d_native NativeRenderProbe.cpp NativeGamepadProducerChecks.cpp
+    Controller3DPluginImport.cpp)
 qt_add_qml_module(exosnap_controller3d_native
-    URI ExoSnap.Controller3D
-    OUTPUT_DIRECTORY "${CMAKE_CURRENT_BINARY_DIR}/native/ExoSnap/Controller3D"
-    DEPENDENCIES QtQuick QtQuick3D
-    QML_FILES ControllerScene.qml ControllerStick.qml ../../tests/ControllerDepthProbe.qml
-    SOURCES NativeRenderTarget.cpp NativeRenderTarget.h
-        ControllerMechanics.cpp ControllerMechanics.h ControllerGeometry.cpp ControllerGeometry.h
-        ControllerState.cpp ControllerState.h
+    URI ExoSnap.Controller3DProbe
+    OUTPUT_DIRECTORY "${CMAKE_CURRENT_BINARY_DIR}/native/ExoSnap/Controller3DProbe"
+    DEPENDENCIES QtQuick QtQuick3D TARGET exosnap_controller3d_scene
+    QML_FILES ../../tests/ControllerDepthProbe.qml
 )
 target_sources(exosnap_controller3d_native PRIVATE
     ../Quick/GamepadOverlay.cpp ../Quick/GamepadOverlay.h ../Quick/GamepadSprites.cpp ../Quick/GamepadArtwork.cpp
+    ${PROJECT_SOURCE_DIR}/libs/engine/src/device_generation.cpp
+    ${PROJECT_SOURCE_DIR}/libs/engine/src/gamepad_frame_sampler.cpp
+    ${PROJECT_SOURCE_DIR}/libs/engine/src/visual_scene_runtime.cpp
+    ${PROJECT_SOURCE_DIR}/libs/engine/src/visual_gpu_lane.cpp
     ${PROJECT_SOURCE_DIR}/libs/engine/src/gpu_timestamp_profiler.cpp
     ${PROJECT_SOURCE_DIR}/libs/engine/src/preview_shared_texture.cpp)
 target_include_directories(exosnap_controller3d_native PRIVATE ../Quick ${PROJECT_SOURCE_DIR}/app
     ${PROJECT_SOURCE_DIR}/libs/engine/include)
 target_compile_definitions(exosnap_controller3d_native PRIVATE NOMINMAX)
-target_link_libraries(exosnap_controller3d_native PRIVATE Qt6::Quick3D Qt6::Svg Qt6::Xml
-    exosnap::gamepad exosnap::warnings d3d11.lib dxgi.lib runtimeobject.lib)
+target_link_libraries(exosnap_controller3d_native PRIVATE exosnap_controller3d_sceneplugin Qt6::Quick3D Qt6::Svg Qt6::Xml
+    exosnap::gamepad tomlplusplus::tomlplusplus exosnap::warnings d3d11.lib dxgi.lib runtimeobject.lib)
 qt_add_resources(exosnap_controller3d_native "native_mapping"
     PREFIX "/gamepad"
     BASE "${PROJECT_SOURCE_DIR}/app/assets/gamepad"

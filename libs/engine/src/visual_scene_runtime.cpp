@@ -113,7 +113,7 @@ void PruneSources(VisualRuntimeStorage& storage) {
     std::erase_if(storage.sources, [&](const auto& entry) {
         const auto& [address, source] = entry;
         if (!source->revoked || source->image_preparing || source->retiring_resources != 0 || !source->pools.empty() ||
-            !source->gamepads.empty())
+            !source->gamepads.empty() || !source->gpus.empty())
             return false;
         for (const auto& [id, consumer] : storage.consumers)
             for (const auto& image : consumer->images)
@@ -128,27 +128,45 @@ void PruneSources(VisualRuntimeStorage& storage) {
 void Collect(VisualRuntimeStorage& storage, std::unique_lock<std::mutex>& lock) {
     std::vector<std::pair<VisualSourceStorage*, std::unique_ptr<CpuImagePool>>> pools;
     std::vector<std::pair<VisualSourceStorage*, std::shared_ptr<GamepadResource>>> gamepads;
+    std::vector<std::pair<VisualSourceStorage*, std::shared_ptr<GpuResource>>> gpus;
     size_t pool_count = 0;
     size_t gamepad_count = 0;
+    size_t gpu_count = 0;
     for (const auto& [address, source] : storage.sources) {
         pool_count += source->pools.size();
         gamepad_count += source->gamepads.size();
+        gpu_count += source->gpus.size();
     }
     try {
         pools.reserve(pool_count);
         gamepads.reserve(gamepad_count);
+        gpus.reserve(gpu_count);
     } catch (const std::bad_alloc&) {
         return;
     }
     for (auto& scene : storage.scenes) {
         if (scene.get() != storage.scene && scene->pins.load(std::memory_order_acquire) == 0) {
             scene->gamepads.clear();
+            scene->gpus.clear();
             scene->bindings.clear();
             scene->items.clear();
         }
     }
     uint64_t bytes = 0;
+    uint64_t gpu_bytes = 0;
     for (auto& [address, source] : storage.sources) {
+        for (auto& data : source->gpus) {
+            if (data.get() == source->active_gpu && !data->retired.load(std::memory_order_acquire))
+                continue;
+            if (data.use_count() != 1 || data->pins.load(std::memory_order_acquire) != 0)
+                continue;
+            if (data.get() == source->active_gpu)
+                source->active_gpu = nullptr;
+            gpu_bytes += data->bytes;
+            ++source->retiring_resources;
+            gpus.emplace_back(source.get(), std::move(data));
+        }
+        std::erase(source->gpus, nullptr);
         for (auto& pool : source->pools) {
             if (pool.get() == source->active_pool || pool.get() == source->accepted_pool || !PoolIdle(*pool))
                 continue;
@@ -177,7 +195,7 @@ void Collect(VisualRuntimeStorage& storage, std::unique_lock<std::mutex>& lock) 
         for (auto& data : source->gamepads) {
             uint64_t instances = 1;
             for (const auto& scene : storage.scenes)
-                instances = std::max(instances, SceneMultiplicity(*scene, *data));
+                instances = (std::max)(instances, SceneMultiplicity(*scene, *data));
             const uint64_t released =
                 (data->scratch_instances - instances) * data->scratch_per_consumer * storage.consumers.size();
             data->scratch_instances = instances;
@@ -185,7 +203,7 @@ void Collect(VisualRuntimeStorage& storage, std::unique_lock<std::mutex>& lock) 
             storage.reserved_bytes -= released;
         }
     }
-    if (pools.empty() && gamepads.empty()) {
+    if (pools.empty() && gamepads.empty() && gpus.empty()) {
         PruneSources(storage);
         return;
     }
@@ -196,11 +214,16 @@ void Collect(VisualRuntimeStorage& storage, std::unique_lock<std::mutex>& lock) 
         entry.second.reset();
     for (auto& entry : gamepads)
         entry.second.reset();
+    for (auto& entry : gpus)
+        entry.second.reset();
     lock.lock();
     storage.reserved_bytes -= bytes;
+    storage.reserved_gpu_bytes -= gpu_bytes;
     for (const auto& entry : pools)
         --entry.first->retiring_resources;
     for (const auto& entry : gamepads)
+        --entry.first->retiring_resources;
+    for (const auto& entry : gpus)
         --entry.first->retiring_resources;
     PruneSources(storage);
 }
@@ -222,7 +245,7 @@ bool HasGenerationCapacity(const VisualRuntimeStorage& storage, VisualSourceId i
         if (address.source != id)
             continue;
         // Each allocation has one owning entry; scene references do not count twice.
-        count += source->pools.size() + source->gamepads.size() + source->retiring_resources +
+        count += source->pools.size() + source->gamepads.size() + source->gpus.size() + source->retiring_resources +
                  (source->image_preparing ? 1u : 0u);
         if (count >= storage.policy.max_resource_generations)
             return false;
@@ -353,7 +376,23 @@ VisualSceneRuntime::VisualSceneRuntime(VisualBudgetPolicy policy) : storage_(std
 }
 VisualSceneRuntime::~VisualSceneRuntime() = default;
 
-Outcome<VisualConsumerId> VisualSceneRuntime::RegisterConsumer() {
+Outcome<VisualConsumerId> VisualSceneRuntime::RegisterConsumer(VisualGpuConsumerDevice gpu) {
+    if ((gpu.context != nullptr) != gpu.generation.Valid() ||
+        (gpu.context && gpu.context->GetType() != D3D11_DEVICE_CONTEXT_IMMEDIATE))
+        return Failure(EngineErrorCode::InvalidConfig, "GPU consumer device");
+    winrt::com_ptr<ID3D11Device> gpu_device;
+    LUID gpu_adapter_luid{};
+    if (gpu.context) {
+        gpu.context->GetDevice(gpu_device.put());
+        winrt::com_ptr<IDXGIDevice> dxgi;
+        winrt::com_ptr<IDXGIAdapter> adapter;
+        DXGI_ADAPTER_DESC description{};
+        if (!gpu_device || (gpu_device->GetCreationFlags() & D3D11_CREATE_DEVICE_SINGLETHREADED) ||
+            FAILED(gpu_device->QueryInterface(IID_PPV_ARGS(dxgi.put()))) || FAILED(dxgi->GetAdapter(adapter.put())) ||
+            FAILED(adapter->GetDesc(&description)))
+            return Failure(EngineErrorCode::InvalidConfig, "GPU consumer adapter");
+        gpu_adapter_luid = description.AdapterLuid;
+    }
     std::unique_lock lock(storage_->mutex);
     if (storage_->next_consumer == 0)
         return Failure(EngineErrorCode::ResourceBudgetExceeded, "consumer IDs");
@@ -362,6 +401,10 @@ Outcome<VisualConsumerId> VisualSceneRuntime::RegisterConsumer() {
         return Failure(EngineErrorCode::ResourceBudgetExceeded, "reader scratch");
     try {
         auto consumer = std::make_unique<VisualConsumerState>();
+        consumer->gpu_context.copy_from(gpu.context);
+        consumer->gpu_device = std::move(gpu_device);
+        consumer->gpu_adapter_luid = gpu_adapter_luid;
+        consumer->gpu_generation = gpu.generation;
         for (const auto& [address, source] : storage_->sources) {
             auto image = std::make_unique<ImageConsumerState>();
             image->address = address;
@@ -372,6 +415,13 @@ Outcome<VisualConsumerId> VisualSceneRuntime::RegisterConsumer() {
         const auto id = storage_->next_consumer;
         storage_->consumers.emplace(id, std::move(consumer));
         storage_->scenes.push_back(std::move(scene));
+        if (gpu.context) {
+            for (auto& [address, source] : storage_->sources) {
+                for (auto& resource : source->gpus)
+                    resource->Retire();
+                source->active_gpu = nullptr;
+            }
+        }
         storage_->next_consumer = id == UINT32_MAX ? 0 : id + 1;
         storage_->reserved_bytes += scratch;
         for (auto& [address, source] : storage_->sources)
@@ -391,6 +441,13 @@ void VisualSceneRuntime::UnregisterConsumer(VisualConsumerId id) {
                             [](const auto& image) { return image->read.pins.load(std::memory_order_acquire) != 0; }))
         return;
     storage_->reserved_bytes -= ConsumerScratch(*storage_);
+    if (found->second->gpu_context) {
+        for (auto& [address, source] : storage_->sources) {
+            for (auto& resource : source->gpus)
+                resource->Retire();
+            source->active_gpu = nullptr;
+        }
+    }
     for (auto& [address, source] : storage_->sources)
         for (auto& data : source->gamepads)
             data->bytes -= data->scratch_per_consumer * data->scratch_instances;
@@ -438,6 +495,11 @@ void VisualSceneRuntime::SetRequest(const SourceToken& token, bool allowed, Hold
     if (!source || source->revoked || token.request.value == 0 || token.request < source->token.request ||
         (token == source->token && allowed && !source->publish_allowed))
         return;
+    if (source->token != token || !allowed || hold == HoldPolicy::ClearAccepted) {
+        for (auto& resource : source->gpus)
+            resource->Retire();
+        source->active_gpu = nullptr;
+    }
     source->token = token;
     source->publish_allowed = allowed;
     if (hold == HoldPolicy::ClearAccepted) {
@@ -457,7 +519,7 @@ Outcome<std::monostate> VisualPublicationWriter::PrepareImage(const SourceToken&
     auto* source = Find(*storage_, address_);
     if (!source || source->revoked || token != source->token || !source->publish_allowed)
         return Failure(EngineErrorCode::StaleRevision, "image request");
-    if (!source->gamepads.empty())
+    if (!source->gamepads.empty() || !source->gpus.empty())
         return Failure(EngineErrorCode::InvalidConfig, "source kind");
     if (source->image_preparing)
         return Failure(EngineErrorCode::Stalled, "image preparing");
@@ -475,7 +537,7 @@ Outcome<std::monostate> VisualPublicationWriter::PrepareImage(const SourceToken&
     source = Find(*storage_, address_);
     if (!source || source->revoked || token != source->token || !source->publish_allowed)
         return Failure(EngineErrorCode::StaleRevision, "image request");
-    if (!source->gamepads.empty())
+    if (!source->gamepads.empty() || !source->gpus.empty())
         return Failure(EngineErrorCode::InvalidConfig, "source kind");
     if (source->image_preparing)
         return Failure(EngineErrorCode::Stalled, "image preparing");
@@ -681,13 +743,22 @@ Outcome<ConfigRevision> VisualSceneRuntime::PublishScene(const PreparedSceneDesc
         staged.items = description.items;
         staged.bindings.reserve(description.binding_sources.size());
         staged.gamepads.reserve(description.binding_sources.size());
+        staged.gpus.reserve(description.binding_sources.size());
         for (const auto& address : description.binding_sources) {
             auto* source = Find(*storage_, address);
             if (!source || source->revoked)
                 return Failure(EngineErrorCode::InvalidConfig, "scene source");
             PreparedSceneBinding binding;
             binding.token = source->token;
-            if (source->active_gamepad) {
+            if (source->active_gpu && !source->active_gpu->retired.load(std::memory_order_acquire)) {
+                const auto& data = *source->active_gpu;
+                binding.token = data.token;
+                binding.resource_id = data.id;
+                binding.content = GpuImageBinding{data.width, data.height};
+                const auto owner =
+                    std::ranges::find_if(source->gpus, [&](const auto& candidate) { return candidate.get() == &data; });
+                staged.gpus.push_back(*owner);
+            } else if (source->active_gamepad) {
                 const auto& data = *source->active_gamepad;
                 binding.token = data.token;
                 binding.resource_id = data.id;
@@ -706,7 +777,7 @@ Outcome<ConfigRevision> VisualSceneRuntime::PublishScene(const PreparedSceneDesc
         uint64_t additional_scratch = 0;
         for (const auto& [address, source] : storage_->sources) {
             for (const auto& data : source->gamepads) {
-                const auto instances = std::max(data->scratch_instances, SceneMultiplicity(staged, *data));
+                const auto instances = (std::max)(data->scratch_instances, SceneMultiplicity(staged, *data));
                 uint64_t bytes;
                 if (!Multiply(instances - data->scratch_instances, data->scratch_per_consumer, bytes) ||
                     !Multiply(bytes, storage_->consumers.size(), bytes) ||
@@ -718,7 +789,7 @@ Outcome<ConfigRevision> VisualSceneRuntime::PublishScene(const PreparedSceneDesc
             return Failure(EngineErrorCode::ResourceBudgetExceeded, "scene scratch");
         for (auto& [address, source] : storage_->sources) {
             for (auto& data : source->gamepads) {
-                const auto instances = std::max(data->scratch_instances, SceneMultiplicity(staged, *data));
+                const auto instances = (std::max)(data->scratch_instances, SceneMultiplicity(staged, *data));
                 data->bytes +=
                     (instances - data->scratch_instances) * data->scratch_per_consumer * storage_->consumers.size();
                 data->scratch_instances = instances;
@@ -729,6 +800,7 @@ Outcome<ConfigRevision> VisualSceneRuntime::PublishScene(const PreparedSceneDesc
         slot.items.swap(staged.items);
         slot.bindings.swap(staged.bindings);
         slot.gamepads.swap(staged.gamepads);
+        slot.gpus.swap(staged.gpus);
         slot.revision = description.revision;
         slot.sequence = Next(storage_->next_scene_sequence);
         storage_->scene = &slot;
@@ -821,6 +893,12 @@ ReadResult VisualSceneRuntime::CheckBinding(const PreparedSceneBinding& binding)
         return ReadResult::Revoked;
     if (!source->publish_allowed || binding.resource_id == 0)
         return ReadResult::NotReady;
+    if (std::holds_alternative<GpuImageBinding>(binding.content))
+        return source->active_gpu && source->active_gpu->id == binding.resource_id &&
+                       source->active_gpu->token == binding.token && source->token == binding.token &&
+                       !source->active_gpu->retired.load(std::memory_order_acquire)
+                   ? ReadResult::Unchanged
+                   : ReadResult::NotReady;
     if (std::holds_alternative<CpuImageBinding>(binding.content)) {
         return source->accepted && source->accepted_pool->id == binding.resource_id &&
                        source->accepted->stamp.token == binding.token
@@ -842,6 +920,9 @@ void VisualSceneRuntime::Revoke(const VisualAddress& address) noexcept {
         source->accepted_pool = nullptr;
         source->active_pool = nullptr;
         source->active_gamepad = nullptr;
+        for (auto& resource : source->gpus)
+            resource->Retire();
+        source->active_gpu = nullptr;
     }
 }
 
@@ -865,6 +946,8 @@ Outcome<std::monostate> StageGamepadData(VisualSceneRuntime& runtime, SourceToke
         return Failure(EngineErrorCode::StaleRevision, "gamepad request");
     if (!source->pools.empty())
         return Failure(EngineErrorCode::InvalidConfig, "source kind");
+    if (source->active_gpu)
+        return Failure(EngineErrorCode::Stalled, "GPU generation active");
     if (source->image_preparing)
         return Failure(EngineErrorCode::Stalled, "image preparing");
     if (source->active_gamepad && source->active_gamepad->sprites == sprites &&
@@ -879,6 +962,8 @@ Outcome<std::monostate> StageGamepadData(VisualSceneRuntime& runtime, SourceToke
         return Failure(EngineErrorCode::StaleRevision, "gamepad request");
     if (!source->pools.empty())
         return Failure(EngineErrorCode::InvalidConfig, "source kind");
+    if (source->active_gpu)
+        return Failure(EngineErrorCode::Stalled, "GPU generation active");
     if (source->image_preparing)
         return Failure(EngineErrorCode::Stalled, "image preparing");
     if (!HasGenerationCapacity(storage, token.address.source))
@@ -906,6 +991,248 @@ Outcome<std::monostate> StageGamepadData(VisualSceneRuntime& runtime, SourceToke
     } catch (const std::bad_alloc&) {
         return Failure(EngineErrorCode::ResourceBudgetExceeded, "gamepad storage");
     }
+}
+
+GpuReadLease::~GpuReadLease() {
+    Reset();
+}
+GpuReadLease::GpuReadLease(GpuReadLease&& other) noexcept {
+    *this = std::move(other);
+}
+GpuReadLease& GpuReadLease::operator=(GpuReadLease&& other) noexcept {
+    if (this != &other) {
+        Reset();
+        resource_ = std::exchange(other.resource_, nullptr);
+        reader_ = std::exchange(other.reader_, nullptr);
+        frame_ = other.frame_;
+    }
+    return *this;
+}
+void GpuReadLease::Reset() noexcept {
+    if (reader_)
+        reader_->pins.fetch_sub(1, std::memory_order_release);
+    if (resource_)
+        resource_->pins.fetch_sub(1, std::memory_order_release);
+    resource_ = nullptr;
+    reader_ = nullptr;
+    frame_ = {};
+}
+
+GpuPublicationLease::~GpuPublicationLease() {
+    Reset();
+}
+GpuPublicationLease::GpuPublicationLease(GpuPublicationLease&& other) noexcept {
+    *this = std::move(other);
+}
+GpuPublicationLease& GpuPublicationLease::operator=(GpuPublicationLease&& other) noexcept {
+    if (this != &other) {
+        Reset();
+        resource_ = std::exchange(other.resource_, nullptr);
+    }
+    return *this;
+}
+uint64_t GpuPublicationLease::ResourceId() const noexcept {
+    return resource_ ? resource_->id : 0;
+}
+bool GpuPublicationLease::Retired() const noexcept {
+    return !resource_ || resource_->retired.load(std::memory_order_acquire);
+}
+bool GpuPublicationLease::AdapterLuid(LUID& luid) const noexcept {
+    if (Retired())
+        return false;
+    luid = resource_->adapter_luid;
+    return true;
+}
+void GpuPublicationLease::Retire() noexcept {
+    if (resource_)
+        resource_->Retire();
+}
+void GpuPublicationLease::Reset() noexcept {
+    if (resource_) {
+        resource_->Retire();
+        resource_->pins.fetch_sub(1, std::memory_order_release);
+        resource_ = nullptr;
+    }
+}
+PublishResult GpuPublicationLease::TryPublish(const VisualFrameStamp& stamp) noexcept {
+    if (Retired())
+        return PublishResult::Revoked;
+    if (!resource_->ready.load(std::memory_order_acquire))
+        return PublishResult::Invalid;
+    if (stamp.token != resource_->token || stamp.sequence == 0)
+        return PublishResult::Invalid;
+    auto result = PublishResult::NoFreeSlot;
+    for (auto& entry : resource_->lanes) {
+        if (Retired())
+            return PublishResult::Revoked;
+        const auto published = entry.lane->TryPublish(stamp);
+        if (published == PublishResult::Revoked) {
+            Retire();
+            return published;
+        }
+        if (published == PublishResult::Accepted)
+            result = published;
+    }
+    return Retired() ? PublishResult::Revoked : result;
+}
+
+ReadResult VisualSceneRuntime::TryReadGpu(VisualConsumerId id, const PreparedSceneBinding& binding,
+                                          GpuReadLease& result) noexcept {
+    if (result)
+        return ReadResult::Busy;
+    const std::unique_lock lock(storage_->mutex, std::try_to_lock);
+    if (!lock.owns_lock()) {
+        storage_->busy_reads.fetch_add(1, std::memory_order_relaxed);
+        return ReadResult::Busy;
+    }
+    auto* source = Find(*storage_, binding.token.address);
+    const auto consumer = storage_->consumers.find(id);
+    if (!source || source->revoked || consumer == storage_->consumers.end())
+        return ReadResult::Revoked;
+    auto* resource = source->active_gpu;
+    if (!std::holds_alternative<GpuImageBinding>(binding.content) || !source->publish_allowed || !resource ||
+        resource->retired.load(std::memory_order_acquire) || source->token != binding.token ||
+        resource->token != binding.token || resource->id != binding.resource_id)
+        return ReadResult::NotReady;
+    const auto lane = std::ranges::find_if(resource->lanes, [&](const auto& entry) { return entry.consumer == id; });
+    if (lane == resource->lanes.end())
+        return ReadResult::NotReady;
+    const auto found = std::ranges::find_if(consumer->second->images,
+                                            [&](const auto& image) { return image->address == binding.token.address; });
+    if (found == consumer->second->images.end())
+        return ReadResult::Revoked;
+    auto& reader = (*found)->read;
+    if (reader.pins.load(std::memory_order_acquire) != 0)
+        return ReadResult::Busy;
+    VisualGpuFrame frame;
+    const auto read = lane->lane->TryRead(frame);
+    if (read == ReadResult::Revoked)
+        resource->Retire();
+    if (read != ReadResult::Updated && read != ReadResult::Unchanged)
+        return read;
+    if (resource->retired.load(std::memory_order_acquire))
+        return ReadResult::NotReady;
+    resource->pins.fetch_add(1, std::memory_order_acquire);
+    reader.pins.store(1, std::memory_order_release);
+    result.resource_ = resource;
+    result.reader_ = &reader;
+    result.frame_ = frame;
+    return read;
+}
+
+Outcome<GpuPublicationLease> ReserveGpuData(VisualSceneRuntime& runtime, SourceToken token, uint32_t width,
+                                            uint32_t height) {
+    if (!width || !height || width > D3D11_REQ_TEXTURE2D_U_OR_V_DIMENSION ||
+        height > D3D11_REQ_TEXTURE2D_U_OR_V_DIMENSION)
+        return Failure(EngineErrorCode::InvalidConfig, "GPU dimensions");
+    auto& storage = *runtime.storage_;
+    const std::unique_lock lock(storage.mutex);
+    auto* source = Find(storage, token.address);
+    if (!source || source->revoked || source->token != token || !source->publish_allowed)
+        return Failure(EngineErrorCode::StaleRevision, "GPU request");
+    if (!source->pools.empty() || source->image_preparing)
+        return Failure(EngineErrorCode::Stalled, "GPU source busy");
+    if (!HasGenerationCapacity(storage, token.address.source))
+        return Failure(EngineErrorCode::Stalled, "GPU generations busy");
+    try {
+        auto resource = std::make_shared<GpuResource>();
+        for (const auto& [id, consumer] : storage.consumers) {
+            if (!consumer->gpu_context)
+                continue;
+            if (!resource->lanes.empty() && (resource->adapter_luid.LowPart != consumer->gpu_adapter_luid.LowPart ||
+                                             resource->adapter_luid.HighPart != consumer->gpu_adapter_luid.HighPart))
+                return Failure(EngineErrorCode::InvalidConfig, "GPU consumer adapter mismatch");
+            resource->adapter_luid = consumer->gpu_adapter_luid;
+            resource->lanes.push_back({id, consumer->gpu_context, consumer->gpu_device, consumer->gpu_generation, {}});
+        }
+        if (resource->lanes.empty())
+            return Failure(EngineErrorCode::Stalled, "GPU consumer unavailable");
+        uint64_t count, bytes, total;
+        if (storage.next_resource_id == 0 || !Multiply(resource->lanes.size(), 2, count) || !Add(count, 1, count) ||
+            !Multiply(uint64_t{width} * height * 4, count, bytes) || !Add(storage.reserved_gpu_bytes, bytes, total) ||
+            (storage.policy.gpu_payload_limit_bytes && total > *storage.policy.gpu_payload_limit_bytes))
+            return Failure(EngineErrorCode::ResourceBudgetExceeded, "GPU storage");
+        source->gpus.reserve(source->gpus.size() + 1);
+        resource->id = Next(storage.next_resource_id);
+        resource->bytes = bytes;
+        resource->token = token;
+        resource->width = width;
+        resource->height = height;
+        resource->pins.store(1, std::memory_order_release);
+        source->gpus.push_back(resource);
+        storage.reserved_gpu_bytes = total;
+        GpuPublicationLease lease;
+        lease.resource_ = resource.get();
+        return lease;
+    } catch (const std::bad_alloc&) {
+        return Failure(EngineErrorCode::ResourceBudgetExceeded, "GPU admission");
+    }
+}
+
+Outcome<std::monostate> StageGpuData(VisualSceneRuntime& runtime, GpuPublicationLease& reservation,
+                                     ID3D11Texture2D* texture, ID3D11DeviceContext* context,
+                                     DeviceGeneration generation) {
+    auto* resource = reservation.resource_;
+    if (!resource || !texture || !context || !generation.Valid() || reservation.Retired() ||
+        resource->ready.load(std::memory_order_acquire))
+        return Failure(EngineErrorCode::InvalidConfig, "GPU producer reservation");
+    D3D11_TEXTURE2D_DESC description{};
+    texture->GetDesc(&description);
+    if (description.Width != resource->width || description.Height != resource->height)
+        return Failure(EngineErrorCode::InvalidConfig, "GPU reserved dimensions");
+    auto& storage = *runtime.storage_;
+    {
+        const std::scoped_lock lock(storage.mutex);
+        auto* source = Find(storage, resource->token.address);
+        if (!source || source->revoked || source->token != resource->token || !source->publish_allowed ||
+            std::ranges::none_of(source->gpus, [&](const auto& entry) { return entry.get() == resource; }))
+            return Failure(EngineErrorCode::StaleRevision, "GPU reservation owner");
+    }
+    try {
+        std::string error;
+        for (auto& endpoint : resource->lanes) {
+            if (reservation.Retired())
+                return Failure(EngineErrorCode::StaleRevision, "GPU topology changed");
+            endpoint.lane = VisualGpuLane::CreateForRegisteredConsumer(
+                {resource->token, resource->id, generation, endpoint.generation}, texture, context,
+                endpoint.context.get(), endpoint.device.get(), error);
+            if (!endpoint.lane) {
+                reservation.Retire();
+                return Failure(EngineErrorCode::Stalled, "GPU lane preparation failed");
+            }
+        }
+    } catch (const std::bad_alloc&) {
+        reservation.Retire();
+        return Failure(EngineErrorCode::ResourceBudgetExceeded, "GPU lane allocation");
+    }
+    const std::scoped_lock lock(storage.mutex);
+    auto* source = Find(storage, resource->token.address);
+    if (!source || source->revoked || source->token != resource->token || !source->publish_allowed ||
+        reservation.Retired() || (source->active_gpu && source->active_gpu->id > resource->id)) {
+        reservation.Retire();
+        return Failure(EngineErrorCode::StaleRevision, "GPU preparation changed");
+    }
+    if (source->active_gpu)
+        source->active_gpu->Retire();
+    source->active_gamepad = nullptr;
+    source->active_gpu = resource;
+    resource->ready.store(true, std::memory_order_release);
+    return std::monostate{};
+}
+
+Outcome<GpuPublicationLease> StageGpuData(VisualSceneRuntime& runtime, SourceToken token, ID3D11Texture2D* texture,
+                                          ID3D11DeviceContext* context, DeviceGeneration generation) {
+    if (!texture)
+        return Failure(EngineErrorCode::InvalidConfig, "GPU texture");
+    D3D11_TEXTURE2D_DESC description{};
+    texture->GetDesc(&description);
+    auto reserved = ReserveGpuData(runtime, token, description.Width, description.Height);
+    if (!reserved.succeeded())
+        return *reserved.error();
+    auto staged = StageGpuData(runtime, *reserved.value(), texture, context, generation);
+    if (!staged.succeeded())
+        return *staged.error();
+    return std::move(*reserved.value());
 }
 
 } // namespace exosnap::engine

@@ -2,6 +2,7 @@
 
 #include "CaptureExclusion.h"
 #include "EditThumbnailImageProvider.h"
+#include "extensions/BuiltinVisualSettings.h"
 #include "models/VisualSceneEdits.h"
 
 #include <QScopedValueRollback>
@@ -765,6 +766,27 @@ void QuickApplication::initializeRecordWorkflow() {
         composition.normalized_source_rect = record_view_model_adapter_.normalizedSourceRect();
         composition.video = live_config_.video;
         composition.visual_runtime = visual_runtime_;
+        if (accepted_visual_scene_ && visual_sources_) {
+            for (const auto& source : accepted_visual_scene_->sources) {
+                if (!source.enabled || source.type_id != "org.exosnap.gamepad/controller" ||
+                    std::ranges::none_of(accepted_visual_scene_->items, [&](const auto& item) {
+                        return item.source == source.id && item.properties.output_visible;
+                    }))
+                    continue;
+                const auto settings = ProjectGamepadSettings(source.settings);
+                if (!settings.succeeded() || settings.value()->view == GamepadView::TwoDimensional)
+                    continue;
+                const auto address = visual_sources_->CurrentAddress(source.id);
+                const auto status = address ? visual_sources_->Status(*address) : std::nullopt;
+                if (!status || status->token.address != *address) {
+                    callback(
+                        false, 0, 0, {},
+                        QCoreApplication::translate("QuickApplication", "The requested 3D source is unavailable."));
+                    return;
+                }
+                composition.required_gpu_tokens.push_back(status->token);
+            }
+        }
         record_preview_adapter_.requestReadyFrame(std::move(composition), std::move(callback));
     });
     wireRecordCommands();
@@ -3537,6 +3559,12 @@ void QuickApplication::initializeVisualSources() {
         });
     QObject::connect(&gamepad_overlay_, &GamepadOverlay::devicesChanged, &record_view_model_adapter_,
                      [this] { refreshVisualGamepadChoices(); });
+    QObject::connect(&gamepad_overlay_, &GamepadOverlay::visualBindingInvalidated, &record_view_model_adapter_, [this] {
+        if (!shutting_down_visual_sources_ && visual_sources_) {
+            visual_sources_->RepublishScene();
+            record_preview_adapter_.visualContentChanged();
+        }
+    });
     QObject::connect(&gamepad_overlay_, &GamepadOverlay::frameChanged, &record_view_model_adapter_, [this] {
         if (!shutting_down_visual_sources_)
             record_preview_adapter_.visualContentChanged();

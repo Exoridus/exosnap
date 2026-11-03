@@ -80,7 +80,7 @@ struct OverlayPixelConstants {
     float key_color[4]; // r, g, b (0-1) + tolerance
     // x=mirror, y=mode(0=cursor/1=chroma/2=opaque), z=spillReduction, w=softness
     float params[4];
-    // x=hdrLinear (0/1), y=refWhiteScale, z=opacity, w=reserved
+    // x=hdrLinear (0/1), y=refWhiteScale, z=opacity, w=premultiplied input
     float params2[4];
     // u0, v0, u1, v1: the part of the texture the destination rectangle shows.
     float uv_rect[4];
@@ -159,7 +159,7 @@ struct MaskConstants {
 cbuffer DrawConstants : register(b0) {
     float4 keyColor; // r, g, b, tolerance
     float4 params;   // x=mirror, y=mode(0=cursor/1=chroma/2=opaque), z=spillReduction, w=softness
-    float4 params2;  // x=hdrLinear, y=refWhiteScale, z=opacity, w=reserved
+    float4 params2;  // x=hdrLinear, y=refWhiteScale, z=opacity, w=premultiplied input
     float4 uvRect;   // u0, v0, u1, v1
     MaskConstants masks[2];
 };
@@ -185,6 +185,9 @@ float4 main(float4 position : SV_POSITION, float2 texcoord : TEXCOORD0) : SV_TAR
     uv = lerp(uvRect.xy, uvRect.zw, uv);
 
     float4 color = frameTex.Sample(frameSamp, uv);
+    // Decode the straight color before HDR transfer; alpha is applied once by blending.
+    if (params2.w > 0.5f)
+        color.rgb = color.a > 0.0f ? color.rgb / color.a : float3(0.0f, 0.0f, 0.0f);
     const float mode = params.y;
 
     if (mode > 1.5f) {

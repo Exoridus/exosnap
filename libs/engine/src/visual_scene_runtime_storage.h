@@ -41,6 +41,31 @@ struct ConsumerReadState {
     SourceToken token;
 };
 
+struct GpuConsumerLane {
+    VisualConsumerId consumer = 0;
+    winrt::com_ptr<ID3D11DeviceContext> context;
+    winrt::com_ptr<ID3D11Device> device;
+    DeviceGeneration generation;
+    std::unique_ptr<VisualGpuLane> lane;
+};
+
+struct GpuResource {
+    uint64_t id = 0;
+    uint64_t bytes = 0;
+    SourceToken token;
+    uint32_t width = 0;
+    uint32_t height = 0;
+    LUID adapter_luid{};
+    std::atomic<uint32_t> pins{0};
+    std::atomic<bool> retired{false};
+    std::atomic<bool> ready{false};
+    std::vector<GpuConsumerLane> lanes;
+
+    void Retire() noexcept {
+        retired.store(true, std::memory_order_release);
+    }
+};
+
 struct ImageConsumerState {
     VisualAddress address;
     ConsumerReadState read;
@@ -48,6 +73,10 @@ struct ImageConsumerState {
 
 struct VisualConsumerState {
     ConsumerReadState scene;
+    winrt::com_ptr<ID3D11DeviceContext> gpu_context;
+    winrt::com_ptr<ID3D11Device> gpu_device;
+    LUID gpu_adapter_luid{};
+    DeviceGeneration gpu_generation;
     std::vector<std::unique_ptr<ImageConsumerState>> images;
 };
 
@@ -58,6 +87,7 @@ struct SceneSlot {
     std::vector<PreparedSceneItem> items;
     std::vector<PreparedSceneBinding> bindings;
     std::vector<std::shared_ptr<const GamepadResource>> gamepads;
+    std::vector<std::shared_ptr<GpuResource>> gpus;
 };
 
 struct VisualSourceStorage {
@@ -72,6 +102,8 @@ struct VisualSourceStorage {
     CpuFrameSlot* accepted = nullptr;
     std::vector<std::shared_ptr<GamepadResource>> gamepads;
     GamepadResource* active_gamepad = nullptr;
+    std::vector<std::shared_ptr<GpuResource>> gpus;
+    GpuResource* active_gpu = nullptr;
 };
 
 struct VisualRuntimeStorage {
@@ -88,6 +120,7 @@ struct VisualRuntimeStorage {
     uint64_t last_runtime_generation = 0;
     VisualConsumerId next_consumer = 1;
     uint64_t reserved_bytes = 0;
+    uint64_t reserved_gpu_bytes = 0;
     std::atomic<uint64_t> accepted_publications{0};
     std::atomic<uint64_t> dropped_publications{0};
     std::atomic<uint64_t> busy_reads{0};

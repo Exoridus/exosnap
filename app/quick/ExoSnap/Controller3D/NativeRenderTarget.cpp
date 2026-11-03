@@ -11,6 +11,7 @@
 #include <QQuickWindow>
 #include <QSGRendererInterface>
 #include <QThread>
+#include <exosnap/engine/gpu_surface_inventory.h>
 
 namespace exosnap::quick {
 namespace {
@@ -108,7 +109,8 @@ bool NativeRenderTarget::Resize(QSize size, QString& error) {
     description.Usage = D3D11_USAGE_DEFAULT;
     description.BindFlags = D3D11_BIND_RENDER_TARGET | D3D11_BIND_SHADER_RESOURCE;
     winrt::com_ptr<ID3D11Texture2D> next_texture;
-    HRESULT result = device_->CreateTexture2D(&description, nullptr, next_texture.put());
+    HRESULT result = engine::CreateTrackedTexture2D(device_.get(), &description, nullptr, next_texture.put(),
+                                                    engine::GpuSurfaceOwner::Compositor);
     if (FAILED(result)) {
         error = NativeError("CreateTexture2D", result);
         return false;

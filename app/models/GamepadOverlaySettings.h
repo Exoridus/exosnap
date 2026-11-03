@@ -30,11 +30,14 @@ inline constexpr std::array<std::string_view, 20> kGamepadOverlayArtworkIds{"dua
                                                                             "dualsense_edge",
                                                                             "xbox_elite"};
 
+enum class GamepadView { TwoDimensional, NativeNormal, NativeGhost };
+
 struct GamepadOverlaySettings {
     bool enabled = false;
     bool output_visible = true;
     std::string device;
     int layout = -1;
+    GamepadView view = GamepadView::TwoDimensional;
     bool glass = false;
     bool glow = false;
     float opacity = 1;
@@ -54,6 +57,8 @@ inline GamepadOverlaySettings SanitizeGamepadOverlaySettings(GamepadOverlaySetti
     if (value.layout >= static_cast<int>(kGamepadOverlayArtworkIds.size()))
         value.layout = 2;
     value.glass = false;
+    if (value.view != GamepadView::NativeNormal && value.view != GamepadView::NativeGhost)
+        value.view = GamepadView::TwoDimensional;
     value.glow = false;
     value.opacity = finite(value.opacity, 1, 0, 1);
     value.width = finite(value.width, 0.25F, 0.05F, 1);

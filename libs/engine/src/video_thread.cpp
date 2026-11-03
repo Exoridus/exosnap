@@ -273,6 +273,7 @@ struct VideoThread::NativeState {
     };
     winrt::com_ptr<ID3D11Device> device;
     winrt::com_ptr<ID3D11DeviceContext> context;
+    DeviceGeneration device_generation;
     winrt::com_ptr<ID3D11VideoDevice> video_device;
     winrt::com_ptr<ID3D11VideoContext> video_context;
     winrt::com_ptr<ID3D11VideoContext1> video_context1;
@@ -766,6 +767,7 @@ void VideoThread::RunAttachment(const std::shared_ptr<NativeState>& native, cons
             m_state.RecordFailure(hr, ErrorPhase::Prepare, buf);
             return;
         }
+        native->device_generation = NextDeviceGeneration();
     }
 
     if (monitorAdapter) {
@@ -2016,7 +2018,7 @@ void VideoThread::RunAttachment(const std::shared_ptr<NativeState>& native, cons
         if (!visualRuntime)
             return true;
         if (!visualConsumer) {
-            auto prepared = VisualSceneConsumer::Prepare(visualRuntime);
+            auto prepared = VisualSceneConsumer::Prepare(visualRuntime, {d3dContext.get(), native->device_generation});
             if (!prepared.succeeded()) {
                 m_state.RecordFailure(E_FAIL, ErrorPhase::Prepare, prepared.error()->context);
                 return false;
@@ -2087,9 +2089,11 @@ void VideoThread::RunAttachment(const std::shared_ptr<NativeState>& native, cons
         for (const auto& view : frame.Items()) {
             std::string error;
             const bool drawn =
-                view.sprites
-                    ? gpuCompositor.DrawVisualSprite(index, view.token, view.resource_id, *view.sprites,
-                                                     sourceContentRect(), error)
+                view.sprites ? gpuCompositor.DrawVisualSprite(index, view.token, view.resource_id, *view.sprites,
+                                                              sourceContentRect(), error)
+                : view.gpu
+                    ? gpuCompositor.DrawVisualGpu(view.gpu->view, view.image_rect,
+                                                  view.item->properties.placement.mirror, error, view.image_opacity)
                     : !view.cache_valid ||
                           gpuCompositor.DrawVisualImage(view.token, view.resource_id, view.image_sequence, view.image,
                                                         view.image_rect, view.item->properties.placement.mirror,

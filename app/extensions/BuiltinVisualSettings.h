@@ -13,7 +13,7 @@ using CachedVisualOptions = std::function<ChoiceSnapshot(const VisualSourceRecor
 [[nodiscard]] engine::Outcome<GamepadOverlaySettings> ProjectGamepadSettings(const toml::table&);
 [[nodiscard]] engine::Outcome<WebcamSettings> ProjectWebcamSettings(const toml::table&);
 [[nodiscard]] VisualSourceType MakeGamepadVisualSourceType(SourceFactory, CachedVisualOptions devices,
-                                                           CachedVisualOptions layouts);
+                                                           CachedVisualOptions layouts, CachedVisualOptions views = {});
 [[nodiscard]] VisualSourceType MakeWebcamVisualSourceType(SourceFactory, CachedVisualOptions devices);
 
 } // namespace exosnap

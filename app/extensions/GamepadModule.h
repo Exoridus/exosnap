@@ -29,6 +29,7 @@ class GamepadSource final : public VisualSource {
 };
 
 engine::Outcome<std::monostate> RegisterGamepadModule(CapabilityRegistry&, GamepadControlHooks,
-                                                      CachedVisualOptions devices, CachedVisualOptions layouts);
+                                                      CachedVisualOptions devices, CachedVisualOptions layouts,
+                                                      CachedVisualOptions views = {});
 
 } // namespace exosnap

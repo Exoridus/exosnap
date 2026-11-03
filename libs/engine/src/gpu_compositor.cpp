@@ -604,10 +604,15 @@ bool GpuCompositor::UploadTexture(TextureResource& resource, const uint8_t* bgra
     return true;
 }
 
+bool GpuCompositor::DrawVisualGpu(ID3D11ShaderResourceView* view, const WebcamPixelRect& rect, bool mirror,
+                                  std::string& err, float opacity) {
+    return DrawTexture(view, rect, mirror, {}, false, opacity, err, nullptr, nullptr, nullptr, true);
+}
+
 bool GpuCompositor::DrawTexture(ID3D11ShaderResourceView* srv, const WebcamPixelRect& rect, bool mirror,
                                 const ChromaKeyParams& chroma, bool force_opaque, float opacity, std::string& err,
                                 ID3D11BlendState* blend, const float* uv_rect,
-                                const std::array<OverlayMaskConstants, 2>* masks) {
+                                const std::array<OverlayMaskConstants, 2>* masks, bool premultiplied) {
     if (srv == nullptr || context_ == nullptr || composite_rtv_ == nullptr || !rect.IsValid()) {
         err = "GpuCompositor::DrawTexture invalid arguments";
         return false;
@@ -624,6 +629,7 @@ bool GpuCompositor::DrawTexture(ID3D11ShaderResourceView* srv, const WebcamPixel
     // cd/m^2 fallback (see GpuCompositor::Init / EffectiveOverlayReferenceWhiteNits).
     OverlayPixelConstants pc = MakeOverlayPixelConstants(chroma, mirror, force_opaque, opacity, hdr_linear_,
                                                          overlay_ref_white_nits_ / kScrgbReferenceWhiteNits);
+    pc.params2[3] = premultiplied ? 1.0f : 0.0f;
     if (uv_rect != nullptr)
         std::memcpy(pc.uv_rect, uv_rect, sizeof(pc.uv_rect));
     if (masks != nullptr)
