@@ -1,5 +1,6 @@
 #include "NativeGamepadProducer.h"
 
+#include <QElapsedTimer>
 #include <QGuiApplication>
 #include <QQuickItem>
 #include <QThread>
@@ -39,6 +40,8 @@ std::unique_ptr<NativeGamepadProducer> NativeGamepadProducer::Create(const Mappe
             error = QStringLiteral("Native controller appearance could not be prepared.");
         return {};
     }
+    producer->context_ = context;
+    producer->render_timer_.Init(device);
     return producer;
 }
 
@@ -47,6 +50,8 @@ NativeGamepadSampleResult NativeGamepadProducer::RenderSample(engine::CaptureTim
         error = QStringLiteral("Native controller sampling requires its owner thread and an available frame serial.");
         return NativeGamepadSampleResult::Failed;
     }
+    if (const auto span = render_timer_.Poll(context_))
+        diagnostics_.render_gpu_span.Add(*span);
     const uint64_t before = history_.SelectionGeneration();
     gamepad::GamepadReading reading;
     const auto result = history_.TryStateAt(sample.value, reading);
@@ -59,8 +64,17 @@ NativeGamepadSampleResult NativeGamepadProducer::RenderSample(engine::CaptureTim
         return NativeGamepadSampleResult::Failed;
     }
     const auto selected = result == gamepad::HistoryReadResult::Found ? std::optional{reading} : std::nullopt;
+    QElapsedTimer cpu;
+    cpu.start();
     state_.ApplyReading(selected, sample.value);
-    if (!target_.Render(error))
+    // Qt has adopted this immediate context. The timestamp interval includes
+    // submission gaps while Qt prepares commands, not just GPU execution.
+    render_timer_.Begin(context_);
+    const bool rendered = target_.Render(error);
+    render_timer_.End(context_);
+    diagnostics_.render_cpu.Add(static_cast<double>(cpu.nsecsElapsed()) / 1e6);
+    diagnostics_.latest_sample_100ns = sample.value;
+    if (!rendered)
         return NativeGamepadSampleResult::Failed;
     if (before != history_.SelectionGeneration())
         return NativeGamepadSampleResult::Busy;
@@ -75,6 +89,10 @@ const engine::VisualFrameStamp& NativeGamepadProducer::Stamp() const noexcept {
 
 std::optional<engine::CaptureTime100ns> NativeGamepadProducer::InputTime() const noexcept {
     return input_time_;
+}
+
+const engine::NativeGamepadDiagnostics& NativeGamepadProducer::Diagnostics() const noexcept {
+    return diagnostics_;
 }
 
 ID3D11Texture2D* NativeGamepadProducer::Texture() const noexcept {

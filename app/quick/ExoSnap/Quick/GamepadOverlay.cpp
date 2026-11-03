@@ -3,10 +3,12 @@
 #include "GamepadSprites.h"
 #include "models/GamepadOverlaySettings.h"
 
+#include <exosnap/engine/gpu_timestamp_profiler.h>
 #include <exosnap/engine/overlay_sprites.h>
 #include <gamepad/gamepad.h>
 
 #include <QByteArray>
+#include <QElapsedTimer>
 #include <QMetaObject>
 #include <QScopeGuard>
 #include <QSize>
@@ -32,6 +34,8 @@ struct GamepadOverlay::NativeState {
     winrt::com_ptr<ID3D11Device> device;
     winrt::com_ptr<ID3D11DeviceContext> context;
     std::unique_ptr<NativeGamepadProducer> producer;
+    engine::GpuStageTimer publish_timer;
+    engine::NativeGamepadDiagnostics diagnostics;
     QSize size;
     GamepadView view = GamepadView::TwoDimensional;
     bool published = false;
@@ -292,6 +296,18 @@ void GamepadOverlay::PublishVisualData() {
     }
 }
 
+std::optional<engine::NativeGamepadDiagnostics> GamepadOverlay::NativeDiagnostics(engine::SourceToken token) const {
+    Q_ASSERT(QThread::currentThread() == thread());
+    if (!native_ || !native_->producer || token != visual_token_)
+        return std::nullopt;
+    auto result = native_->diagnostics;
+    const auto& rendered = native_->producer->Diagnostics();
+    result.render_cpu = rendered.render_cpu;
+    result.render_gpu_span = rendered.render_gpu_span;
+    result.latest_sample_100ns = rendered.latest_sample_100ns;
+    return result;
+}
+
 void GamepadOverlay::RetireNative() {
     Q_ASSERT(QThread::currentThread() == thread());
     if (!native_)
@@ -349,6 +365,7 @@ void GamepadOverlay::UpdateNative(const std::optional<gamepad::GamepadReading>& 
         native_->lease = std::move(*reservation.value());
         native_->size = size;
         native_->view = settings.view;
+        native_->diagnostics.generation = ++native_generation_;
         LUID luid{};
         QString error;
         if (native_->lease.AdapterLuid(luid) && CreateNativeDevice(luid, native_->device, native_->context)) {
@@ -369,6 +386,7 @@ void GamepadOverlay::UpdateNative(const std::optional<gamepad::GamepadReading>& 
                                                                    : error.toStdString()});
             return;
         }
+        native_->publish_timer.Init(native_->device.get());
         auto staged = engine::StageGpuData(*visual_runtime_, native_->lease, native_->producer->Texture(),
                                            native_->context.get(), engine::NextDeviceGeneration());
         if (!staged.succeeded()) {
@@ -379,6 +397,8 @@ void GamepadOverlay::UpdateNative(const std::optional<gamepad::GamepadReading>& 
             return;
         }
     }
+    if (const auto span = native_->publish_timer.Poll(native_->context.get()))
+        native_->diagnostics.publish_gpu_span.Add(*span);
     QString error;
     const auto sampled = native_->producer->RenderSample(engine::CaptureTime100ns{timestamp}, error);
     if (sampled == NativeGamepadSampleResult::Busy)
@@ -392,7 +412,16 @@ void GamepadOverlay::UpdateNative(const std::optional<gamepad::GamepadReading>& 
                                         error.isEmpty() ? "Unsupported native controller model" : error.toStdString()});
         return;
     }
+    QElapsedTimer cpu;
+    cpu.start();
+    native_->publish_timer.Begin(native_->context.get());
     const auto published = native_->lease.TryPublish(native_->producer->Stamp());
+    native_->publish_timer.End(native_->context.get());
+    native_->diagnostics.publish_cpu.Add(static_cast<double>(cpu.nsecsElapsed()) / 1e6);
+    if (published == engine::PublishResult::Accepted)
+        ++native_->diagnostics.accepted_publications;
+    if (published == engine::PublishResult::NoFreeSlot)
+        ++native_->diagnostics.no_free_slot_publications;
     if (published == engine::PublishResult::Revoked || published == engine::PublishResult::Invalid) {
         RetireNative();
         waiting(tr("Preparing 3D view"));

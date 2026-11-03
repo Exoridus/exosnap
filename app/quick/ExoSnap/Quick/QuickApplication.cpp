@@ -947,6 +947,7 @@ void QuickApplication::initializeRecordWorkflow() {
                         if (const auto status = visual_sources_->Status(*address);
                             status && status->token.address == *address) {
                             row.request_revision = status->token.request.value;
+                            row.native_gamepad = gamepad_overlay_.NativeDiagnostics(status->token);
                             switch (status->phase) {
                             case SourcePhase::Dormant:
                                 row.provider_phase = "dormant";
@@ -3538,6 +3539,18 @@ void QuickApplication::initializeVisualSources() {
             [this](const VisualSourceRecord& source) {
                 return RetainVisualChoice(visual_layout_choices_,
                                           source.settings["layout"].value_or(std::string{"auto"}));
+            },
+            [this](const VisualSourceRecord& source) {
+                ChoiceSnapshot choices{visual_gamepad_choices_.revision, {}};
+                const auto device = source.settings["device"].value_or(std::string{});
+                for (const auto& option : gamepad_overlay_.viewsForDevice(QString::fromStdString(device))) {
+                    const auto row = option.toMap();
+                    choices.choices.push_back({row.value(QStringLiteral("value")).toString().toStdString(),
+                                               {"", row.value(QStringLiteral("label")).toString().toStdString()},
+                                               row.value(QStringLiteral("selectable")).toBool(),
+                                               {}});
+                }
+                return RetainVisualChoice(choices, source.settings["view"].value_or(std::string{"2d"}));
             })) ||
         !accept(visual_registry_.Seal()))
         return;
@@ -3558,6 +3571,8 @@ void QuickApplication::initializeVisualSources() {
             synchronizeRecordState();
         });
     QObject::connect(&gamepad_overlay_, &GamepadOverlay::devicesChanged, &record_view_model_adapter_,
+                     [this] { refreshVisualGamepadChoices(); });
+    QObject::connect(&gamepad_overlay_, &GamepadOverlay::viewsChanged, &record_view_model_adapter_,
                      [this] { refreshVisualGamepadChoices(); });
     QObject::connect(&gamepad_overlay_, &GamepadOverlay::visualBindingInvalidated, &record_view_model_adapter_, [this] {
         if (!shutting_down_visual_sources_ && visual_sources_) {

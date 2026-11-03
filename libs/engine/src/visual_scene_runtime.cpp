@@ -818,9 +818,13 @@ Outcome<ConfigRevision> VisualSceneRuntime::PublishScene(const PreparedSceneDesc
 }
 
 VisualRuntimeCounters VisualSceneRuntime::Counters() const noexcept {
-    return {storage_->accepted_publications.load(std::memory_order_relaxed),
-            storage_->dropped_publications.load(std::memory_order_relaxed),
-            storage_->busy_reads.load(std::memory_order_relaxed)};
+    VisualRuntimeCounters counters{storage_->accepted_publications.load(std::memory_order_relaxed),
+                                   storage_->dropped_publications.load(std::memory_order_relaxed),
+                                   storage_->busy_reads.load(std::memory_order_relaxed)};
+    const std::unique_lock lock(storage_->mutex, std::try_to_lock);
+    if (lock.owns_lock())
+        counters.reserved_gpu_bytes = storage_->reserved_gpu_bytes;
+    return counters;
 }
 
 uint64_t VisualSceneRuntime::PublishedSceneSequence() const noexcept {

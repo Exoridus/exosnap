@@ -810,3 +810,28 @@ TEST_F(VisualRuntime, PublicCountersReportAcceptedAndContendedAttemptsWithoutTak
     EXPECT_EQ(runtime.Counters().accepted_publications, 2U);
     EXPECT_EQ(initial.accepted_publications, 0U);
 }
+
+TEST(VisualRuntimeDiagnostics, ReservationSampleIsUnavailableWhileStorageIsBusy) {
+    VisualSceneRuntime runtime{VisualBudgetPolicy{}};
+    auto& storage = VisualRuntimeTestAccess::Storage(runtime);
+    storage.reserved_gpu_bytes = 4096;
+    ASSERT_EQ(runtime.Counters().reserved_gpu_bytes, 4096u);
+    std::promise<void> locked;
+    std::promise<void> release;
+    auto released = release.get_future();
+    auto holder = std::async(std::launch::async, [&] {
+        const std::scoped_lock lock(storage.mutex);
+        locked.set_value();
+        released.wait();
+    });
+    locked.get_future().wait();
+    auto sample = std::async(std::launch::async, [&] { return runtime.Counters(); });
+    const auto ready = sample.wait_for(std::chrono::seconds{1});
+    release.set_value();
+    holder.get();
+    EXPECT_EQ(ready, std::future_status::ready);
+    EXPECT_FALSE(sample.get().reserved_gpu_bytes.has_value());
+    storage.reserved_gpu_bytes = 0;
+    ASSERT_TRUE(runtime.Counters().reserved_gpu_bytes.has_value());
+    EXPECT_EQ(*runtime.Counters().reserved_gpu_bytes, 0u);
+}

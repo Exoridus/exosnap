@@ -29,6 +29,7 @@ exosnap_add_gtest(
         ${PROJECT_SOURCE_DIR}/libs/engine/src/gamepad_frame_sampler.cpp
         ${PROJECT_SOURCE_DIR}/libs/engine/src/visual_scene_runtime.cpp
         ${PROJECT_SOURCE_DIR}/libs/engine/src/visual_gpu_lane.cpp
+        ${PROJECT_SOURCE_DIR}/libs/engine/src/gpu_timestamp_profiler.cpp
         ${PROJECT_SOURCE_DIR}/libs/engine/src/preview_shared_texture.cpp
     LIBRARIES Qt6::Gui Qt6::Svg Qt6::Xml Qt6::Qml exosnap::gamepad tomlplusplus::tomlplusplus
 )

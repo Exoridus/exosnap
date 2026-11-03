@@ -28,6 +28,7 @@ exosnap_add_gtest(
         ${PROJECT_SOURCE_DIR}/libs/engine/src/gamepad_frame_sampler.cpp
         ${PROJECT_SOURCE_DIR}/libs/engine/src/visual_scene_runtime.cpp
         ${PROJECT_SOURCE_DIR}/libs/engine/src/visual_gpu_lane.cpp
+        ${PROJECT_SOURCE_DIR}/libs/engine/src/gpu_timestamp_profiler.cpp
         ${PROJECT_SOURCE_DIR}/libs/engine/src/preview_shared_texture.cpp
         ../Quick/GamepadOverlay.cpp ../Quick/GamepadOverlay.h ../Quick/GamepadSprites.cpp ../Quick/GamepadArtwork.cpp
     LIBRARIES exosnap_controller3d_sceneplugin Qt6::Quick3D Qt6::Svg Qt6::Xml exosnap::gamepad tomlplusplus::tomlplusplus
@@ -49,6 +50,7 @@ target_sources(exosnap_controller3d PRIVATE
     ${PROJECT_SOURCE_DIR}/libs/engine/src/gamepad_frame_sampler.cpp
     ${PROJECT_SOURCE_DIR}/libs/engine/src/visual_scene_runtime.cpp
     ${PROJECT_SOURCE_DIR}/libs/engine/src/visual_gpu_lane.cpp
+    ${PROJECT_SOURCE_DIR}/libs/engine/src/gpu_timestamp_profiler.cpp
     ${PROJECT_SOURCE_DIR}/libs/engine/src/preview_shared_texture.cpp
     ../Quick/GamepadOverlay.cpp ../Quick/GamepadOverlay.h ../Quick/GamepadSprites.cpp ../Quick/GamepadArtwork.cpp)
 target_include_directories(exosnap_controller3d PRIVATE ../Quick ${PROJECT_SOURCE_DIR}/app

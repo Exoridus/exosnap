@@ -3,6 +3,7 @@
 #include "GamepadSprites.h"
 #include "extensions/GamepadModule.h"
 #include "models/GamepadOverlaySettings.h"
+#include <exosnap/engine/visual_diagnostics.h>
 
 #include <atomic>
 
@@ -39,6 +40,8 @@ class GamepadOverlay final : public QObject, public engine::SpriteSourceProvider
     void Configure(GamepadOverlaySettings settings);
     GamepadControlHooks CreateControlHooks(std::shared_ptr<engine::VisualSceneRuntime>);
     [[nodiscard]] GamepadOverlaySettings Settings() const;
+    // GUI-thread snapshot of the matching active native generation.
+    [[nodiscard]] std::optional<engine::NativeGamepadDiagnostics> NativeDiagnostics(engine::SourceToken) const;
     [[nodiscard]] std::shared_ptr<const engine::SpriteLayerSnapshot> Snapshot(uint64_t frame_time_qpc_100ns) override;
     [[nodiscard]] std::shared_ptr<const engine::SpriteLayerSnapshot> PreviewSnapshot(uint64_t frame_time_qpc_100ns);
 
@@ -131,6 +134,7 @@ class GamepadOverlay final : public QObject, public engine::SpriteSourceProvider
     bool native_enabled_ = false;
     struct NativeState;
     std::unique_ptr<NativeState> native_;
+    uint64_t native_generation_ = 0;
     bool native_failed_ = false;
     bool selected_native_supported_ = false;
     QStringList native_devices_;

@@ -33,11 +33,20 @@ bool CheckNativeGamepadProducer(ID3D11Device* device, ID3D11DeviceContext* conte
                                                       context, QSize(480, 320), ghost, false, error);
         if (!producer)
             return false;
+        if (producer->Diagnostics().render_cpu.samples != 0 || producer->Diagnostics().render_gpu_span.samples != 0) {
+            error = QStringLiteral("A new native producer reported measurements before rendering.");
+            return false;
+        }
         if (producer->RenderSample(engine::CaptureTime100ns{1500}, error) != NativeGamepadSampleResult::Ready ||
             producer->Stamp().token != token || producer->Stamp().sequence != 1 ||
             producer->Stamp().captured_at != engine::CaptureTime100ns{1500} ||
             producer->InputTime() != engine::CaptureTime100ns{1000} || !producer->Texture()) {
             error = QStringLiteral("Native producer did not preserve its existing history sample identity.");
+            return false;
+        }
+        if (producer->Diagnostics().render_cpu.samples != 1 || producer->Diagnostics().latest_sample_100ns != 1500 ||
+            producer->Diagnostics().render_cpu.latest_ms < 0) {
+            error = QStringLiteral("Native render diagnostics did not preserve the measured sample.");
             return false;
         }
         reading.capture_100ns = 2000;
@@ -47,6 +56,10 @@ bool CheckNativeGamepadProducer(ID3D11Device* device, ID3D11DeviceContext* conte
                 NativeGamepadSampleResult::UnsupportedModel ||
             producer->Stamp().sequence != 1) {
             error = QStringLiteral("Native producer accepted an unsupported model or published its stale pose.");
+            return false;
+        }
+        if (producer->Diagnostics().render_cpu.samples != 1) {
+            error = QStringLiteral("An unsupported model was counted as a render attempt.");
             return false;
         }
         reading.capture_100ns = 3000;
