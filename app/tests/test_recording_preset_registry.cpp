@@ -244,14 +244,14 @@ TEST(RecordingPresetRegistry, IsSelectedDirty_MutatingVideo_IsDirty) {
 TEST(RecordingPresetRegistry, IsSelectedDirty_MutatingWebcam_IsDirty) {
     RecordingPresetRegistry reg;
     RecordingPresetConfig live = reg.SelectedSavedConfig();
-    live.webcam.mirror = !live.webcam.mirror;
+    live.visual_scene.items[0].properties.placement.mirror = !live.visual_scene.items[0].properties.placement.mirror;
     EXPECT_TRUE(reg.IsSelectedDirty(live));
 }
 
 TEST(RecordingPresetRegistry, IsSelectedDirty_MutatingWebcamOpacity_IsDirty) {
     RecordingPresetRegistry reg;
     RecordingPresetConfig live = reg.SelectedSavedConfig();
-    live.webcam.opacity = 0.5f;
+    live.visual_scene.items[0].properties.opacity = 0.5f;
     EXPECT_TRUE(reg.IsSelectedDirty(live));
 }
 

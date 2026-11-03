@@ -7,6 +7,7 @@ import QtQuick.Layouts
 Item {
     id: root
     required property GamepadOverlay overlay
+    required property SettingsAdapter settings
     property bool showButton: true
     function openOptions(): void { optionsPopup.open(); }
     implicitWidth: openButton.implicitWidth
@@ -16,7 +17,7 @@ Item {
         id: openButton
         visible: root.showButton
         text: qsTr("Gamepad")
-        selected: root.overlay !== null && root.overlay.enabled
+        selected: gamepadSettings.sourceState.enabled === true
         onClicked: optionsPopup.open()
     }
 
@@ -43,25 +44,20 @@ Item {
                     Layout.fillWidth: true
                 }
                 ExoSwitch {
-                    checked: root.overlay !== null && root.overlay.enabled
+                    checked: gamepadSettings.sourceState.enabled === true
                     Accessible.name: qsTr("Gamepad overlay")
-                    onToggledByUser: value => root.overlay.enabled = value
+                    enabled: gamepadSettings.sourceState.editable === true
+                    onToggledByUser: value => root.settings.setVisualEnabled(
+                        gamepadSettings.sourceState.sourceId, gamepadSettings.sourceState.itemId,
+                        gamepadSettings.sourceState.editRevision, value)
                 }
             }
-            ExoSelect {
+            VisualSettingsForm {
+                id: gamepadSettings
+                settings: root.settings
+                sourceId: root.settings.gamepadSourceId
+                stacked: true
                 Layout.fillWidth: true
-                options: root.overlay ? root.overlay.devices : []
-                value: root.overlay ? root.overlay.device : ""
-                placeholderText: qsTr("Automatic controller")
-                Accessible.name: qsTr("Controller device")
-                onValueActivated: value => root.overlay.device = value
-            }
-            ExoSelect {
-                Layout.fillWidth: true
-                options: root.overlay ? root.overlay.layouts : []
-                value: root.overlay ? root.overlay.layout : -1
-                Accessible.name: qsTr("Controller layout")
-                onValueActivated: value => root.overlay.layout = value
             }
             RowLayout {
                 Layout.fillWidth: true
@@ -70,9 +66,12 @@ Item {
                     Layout.fillWidth: true
                     from: 0
                     to: 1
-                    value: root.overlay ? root.overlay.opacity : 1
+                    value: gamepadSettings.sourceState.opacity ?? 1
                     Accessible.name: qsTr("Gamepad opacity")
-                    onMovedByUser: value => root.overlay.opacity = value
+                    enabled: gamepadSettings.sourceState.editable === true
+                    onMovedByUser: value => root.settings.setVisualOpacity(
+                        gamepadSettings.sourceState.sourceId, gamepadSettings.sourceState.itemId,
+                        gamepadSettings.sourceState.editRevision, value)
                 }
             }
             Label {

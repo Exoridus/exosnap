@@ -20,6 +20,16 @@ Atomic save uses a temporary sibling and commit/rename. A failed save is a repor
 
 `settings.ini` load distinguishes absence, successful read and an existing unreadable file. Automatic housekeeping must not overwrite an unreadable file with defaults. The first explicit user change may move the unreadable file aside to `settings.ini.corrupt` and write a fresh state. Window geometry or a one-time startup flag is not such consent.
 
+## Visual configuration
+
+`RecordingPresetConfig::visual_scene` is the sole editable authority for visual sources and ordered scene items. Webcam and gamepad settings are typed projections for existing callers. Descriptor edits update the scene through pure codecs; provider state and availability never become a second saved configuration. Source and item IDs survive save/load and native imports. Legacy conversion chooses one identity mapping per document or import transaction so an unchanged selected preset still matches live state.
+
+Schema 27 stores the visual contract alongside the existing recording fields. Supported legacy webcam and gamepad fields migrate into source settings and item properties. Unknown types, settings versions and fields remain round-trippable but inactive. An unsupported whole visual contract is read-only and starts no visual providers. Invalid supported settings fail validation instead of being silently replaced. Read-only documents retain their original data.
+
+Settings actions carry the current source/item identity and edit scope. Device choices are cached discovery snapshots; stale or unavailable choices cannot be submitted as new selections. Runtime actions also require the current incarnation. Switching between active-recording and next-recording editing invalidates old controls before rebinding them.
+
+Save validates before replacement, holds the store lock and verifies that the existing bytes have not changed before committing the atomic write. A migration backup preserves the previous document. Unknown data is merged into the serialized supported fields without restoring deliberately removed known controls or sources.
+
 ## Display identity
 
 Saved displays carry a composite `StableDisplayId`: device path, EDID vendor/product, optional serial, and fallback/display labels. Resolution is ranked: exact device path, matching nonempty serial with model identity, an unambiguous model match, and only for a degraded identity lacking a path, the runtime GDI-name fallback.

@@ -27,6 +27,7 @@
 #include <array>
 #include <cmath>
 #include <ctime>
+#include <set>
 
 namespace exosnap::quick {
 namespace {
@@ -214,7 +215,325 @@ void SettingsAdapter::requestSettingsFocus(FocusTarget target) {
 // Composition-root seams
 // ---------------------------------------------------------------------------
 
+std::optional<std::pair<engine::VisualSourceId, engine::SceneItemId>>
+SettingsAdapter::editableVisualTarget(const QString& source, const QString& item, const QString& edit_revision) const {
+    if (!visual_registry_ || config_.visual_read_only)
+        return std::nullopt;
+    const auto id = engine::FromUuid<engine::VisualSourceId>(source.toStdString());
+    const auto item_id = engine::FromUuid<engine::SceneItemId>(item.toStdString());
+    bool ok = false;
+    const auto revision = edit_revision.toULongLong(&ok);
+    if (!id || !item_id || !ok || revision == 0 || revision != visual_edit_revision_)
+        return std::nullopt;
+    const auto address = *id == webcam_address_.source ? webcam_address_ : gamepad_address_;
+    const auto selected_item = *id == webcam_address_.source ? webcam_item_ : gamepad_item_;
+    if (address.source != *id || *item_id != selected_item)
+        return std::nullopt;
+    const auto row = std::find_if(config_.visual_scene.sources.begin(), config_.visual_scene.sources.end(),
+                                  [&](const auto& entry) { return entry.id == *id; });
+    const auto placement = std::find_if(config_.visual_scene.items.begin(), config_.visual_scene.items.end(),
+                                        [&](const auto& entry) { return entry.id == *item_id && entry.source == *id; });
+    if (row == config_.visual_scene.sources.end() || placement == config_.visual_scene.items.end())
+        return std::nullopt;
+    const auto* type = visual_registry_->FindVisualSource(row->type_id);
+    if (!type || row->settings_version != type->settings_version)
+        return std::nullopt;
+    return std::pair{*id, *item_id};
+}
+
+bool SettingsAdapter::commitVisualScene(VisualSceneConfig scene, bool live) {
+    if (!visual_registry_ || config_.visual_read_only || (controlsLocked() && (!live || !active_config_)))
+        return false;
+    auto validated = ValidateVisualScene(scene, *visual_registry_);
+    if (!validated.succeeded())
+        return false;
+    auto candidate = config_;
+    candidate.visual_scene = std::move(*validated.value());
+    if (!NormalizedConfigEquals(config_, candidate)) {
+        if (controlsLocked()) {
+            advanceVisualEditRevision();
+            active_config_->visual_scene = candidate.visual_scene;
+            config_ = std::move(candidate);
+            rebuildOptions();
+            emit optionsChanged();
+            emit configChanged();
+            emit activeVisualSceneEdited();
+        } else {
+            config_ = std::move(candidate);
+            applyConfigEdit();
+        }
+    }
+    return true;
+}
+
+bool SettingsAdapter::setVisualEnabled(const QString& source, const QString& item, const QString& edit_revision,
+                                       bool enabled) {
+    const auto target = editableVisualTarget(source, item, edit_revision);
+    if (!target)
+        return false;
+    auto scene = config_.visual_scene;
+    const auto row = std::find_if(scene.sources.begin(), scene.sources.end(),
+                                  [&](const auto& entry) { return entry.id == target->first; });
+    row->enabled = enabled;
+    return commitVisualScene(std::move(scene), true);
+}
+
+bool SettingsAdapter::setVisualOpacity(const QString& source, const QString& item, const QString& edit_revision,
+                                       double opacity) {
+    const auto target = editableVisualTarget(source, item, edit_revision);
+    if (!target || !std::isfinite(opacity) || opacity < 0 || opacity > 1)
+        return false;
+    auto scene = config_.visual_scene;
+    const auto row = std::find_if(scene.items.begin(), scene.items.end(),
+                                  [&](const auto& entry) { return entry.id == target->second; });
+    row->properties.opacity = static_cast<float>(opacity);
+    return commitVisualScene(std::move(scene), true);
+}
+
+QVariantMap SettingsAdapter::visualSourceState(const QString& source_id) const {
+    const auto id = engine::FromUuid<engine::VisualSourceId>(source_id.toStdString());
+    if (!id || !visual_registry_)
+        return {};
+    const auto address = *id == webcam_address_.source ? webcam_address_ : gamepad_address_;
+    const auto selected_item = *id == webcam_address_.source ? webcam_item_ : gamepad_item_;
+    const auto source = std::find_if(config_.visual_scene.sources.begin(), config_.visual_scene.sources.end(),
+                                     [&](const auto& entry) { return entry.id == *id; });
+    const auto item = std::find_if(config_.visual_scene.items.begin(), config_.visual_scene.items.end(),
+                                   [&](const auto& entry) { return entry.id == selected_item && entry.source == *id; });
+    if (address.source != *id || source == config_.visual_scene.sources.end() ||
+        item == config_.visual_scene.items.end())
+        return {};
+    const auto* type = visual_registry_->FindVisualSource(source->type_id);
+    const bool editable = !config_.visual_read_only && type && type->settings_version == source->settings_version &&
+                          visual_edit_revision_ != 0;
+    return {{QStringLiteral("sourceId"), source_id},
+            {QStringLiteral("itemId"), QString::fromStdString(engine::ToUuid(selected_item))},
+            {QStringLiteral("runtime"), QString::number(address.runtime.value)},
+            {QStringLiteral("editRevision"), QString::number(visual_edit_revision_)},
+            {QStringLiteral("scope"), controlsLocked() ? QStringLiteral("active") : QStringLiteral("editable")},
+            {QStringLiteral("enabled"), source->enabled},
+            {QStringLiteral("editable"), editable},
+            {QStringLiteral("opacity"), item->properties.opacity},
+            {QStringLiteral("outputVisible"), item->properties.output_visible}};
+}
+void SettingsAdapter::setVisualRegistry(const CapabilityRegistry* registry) {
+    advanceVisualEditRevision();
+    visual_registry_ = registry && registry->IsSealed() ? registry : nullptr;
+    emit configChanged();
+}
+
+void SettingsAdapter::refreshVisualOptions() {
+    advanceVisualEditRevision();
+    emit optionsChanged();
+}
+
+void SettingsAdapter::setVisualTargets(engine::VisualAddress webcam, engine::SceneItemId webcam_item,
+                                       engine::VisualAddress gamepad, engine::SceneItemId gamepad_item) {
+    advanceVisualEditRevision();
+    webcam_address_ = webcam;
+    webcam_item_ = webcam_item;
+    gamepad_address_ = gamepad;
+    gamepad_item_ = gamepad_item;
+    rebuildOptions();
+    emit optionsChanged();
+    emit configChanged();
+}
+
+WebcamSettings SettingsAdapter::webcamSettings() const {
+    auto projected = ProjectSceneWebcam(config_.visual_scene, webcam_address_.source, webcam_item_);
+    return projected.succeeded() ? std::move(*projected.value()) : WebcamSettings{};
+}
+
+void SettingsAdapter::commitWebcamEdit(const WebcamSettings& settings) {
+    if (controlsLocked() || !visual_registry_ || config_.visual_read_only)
+        return;
+    auto edited =
+        EditSceneWebcam(config_.visual_scene, webcam_address_.source, webcam_item_, settings, *visual_registry_);
+    if (!edited.succeeded())
+        return;
+    auto candidate = config_;
+    candidate.visual_scene = std::move(*edited.value());
+    if (NormalizedConfigEquals(config_, candidate))
+        return;
+    config_ = std::move(candidate);
+    applyConfigEdit();
+}
+
+QVariantList SettingsAdapter::visualSettingsRows(const QString& source_id) const {
+    QVariantList rows;
+    if (!visual_registry_)
+        return rows;
+    const auto id = engine::FromUuid<engine::VisualSourceId>(source_id.toStdString());
+    if (!id)
+        return rows;
+    const auto source = std::find_if(config_.visual_scene.sources.begin(), config_.visual_scene.sources.end(),
+                                     [&](const auto& row) { return row.id == *id; });
+    if (source == config_.visual_scene.sources.end())
+        return rows;
+    const auto* type = visual_registry_->FindVisualSource(source->type_id);
+    if (!type || type->settings_version != source->settings_version)
+        return rows;
+    const auto address = *id == webcam_address_.source ? webcam_address_ : gamepad_address_;
+    const auto item_id = *id == webcam_address_.source ? webcam_item_ : gamepad_item_;
+    if (address.source != *id || visual_edit_revision_ == 0)
+        return rows;
+    for (const auto& field : type->settings.fields) {
+        const auto action = std::find_if(type->actions.begin(), type->actions.end(), [&](const auto& entry) {
+            return entry.operation == ActionOperation::SelectProperty && entry.property_path == field.path;
+        });
+        if (action == type->actions.end())
+            continue;
+        const auto options = std::find_if(type->options.begin(), type->options.end(),
+                                          [&](const auto& entry) { return entry.id == field.options_id; });
+        if (options == type->options.end() || !options->snapshot)
+            continue;
+        QVariantList choices;
+        for (const auto& choice : options->snapshot(*source).choices) {
+            choices.append(QVariantMap{
+                {QStringLiteral("value"), QString::fromStdString(choice.id)},
+                {QStringLiteral("label"),
+                 QCoreApplication::translate(choice.label.context.c_str(), choice.label.source_text.c_str())},
+                {QStringLiteral("selectable"), choice.selectable},
+                {QStringLiteral("reason"),
+                 choice.reason
+                     ? QCoreApplication::translate(choice.reason->context.c_str(), choice.reason->source_text.c_str())
+                     : QString{}}});
+        }
+        const auto value = source->settings[field.path].value<std::string>();
+        const auto* fallback = std::get_if<std::string>(&field.default_value);
+        rows.append(QVariantMap{
+            {QStringLiteral("sourceId"), source_id},
+            {QStringLiteral("itemId"), QString::fromStdString(engine::ToUuid(item_id))},
+            {QStringLiteral("runtime"), QString::number(address.runtime.value)},
+            {QStringLiteral("editRevision"), QString::number(visual_edit_revision_)},
+            {QStringLiteral("scope"), controlsLocked() ? QStringLiteral("active") : QStringLiteral("editable")},
+            {QStringLiteral("kind"), QStringLiteral("select")},
+            {QStringLiteral("path"), QString::fromStdString(field.path)},
+            {QStringLiteral("label"),
+             QCoreApplication::translate(field.label.context.c_str(), field.label.source_text.c_str())},
+            {QStringLiteral("action"), QString::fromStdString(action->id)},
+            {QStringLiteral("value"), QString::fromStdString(value.value_or(fallback ? *fallback : std::string{}))},
+            {QStringLiteral("choices"), choices},
+            {QStringLiteral("enabled"),
+             !config_.visual_read_only && (!controlsLocked() || field.change == ChangePolicy::Live)}});
+    }
+    for (const auto& action : type->actions) {
+        if (action.operation == ActionOperation::SelectProperty)
+            continue;
+        rows.append(
+            QVariantMap{{QStringLiteral("kind"), QStringLiteral("action")},
+                        {QStringLiteral("sourceId"), source_id},
+                        {QStringLiteral("itemId"), QString::fromStdString(engine::ToUuid(item_id))},
+                        {QStringLiteral("runtime"), QString::number(address.runtime.value)},
+                        {QStringLiteral("label"),
+                         QCoreApplication::translate(action.label.context.c_str(), action.label.source_text.c_str())},
+                        {QStringLiteral("action"), QString::fromStdString(action.id)},
+                        {QStringLiteral("enabled"), address.runtime.value != 0}});
+    }
+    return rows;
+}
+
+bool SettingsAdapter::selectVisualSetting(const QString& source_id, const QString& item_id,
+                                          const QString& edit_revision, const QString& action_id,
+                                          const QString& choice_id) {
+    const auto target = editableVisualTarget(source_id, item_id, edit_revision);
+    if (!target)
+        return false;
+    const auto source = std::find_if(config_.visual_scene.sources.begin(), config_.visual_scene.sources.end(),
+                                     [&](const auto& row) { return row.id == target->first; });
+    const auto* type = visual_registry_->FindVisualSource(source->type_id);
+    const auto action = std::find_if(type->actions.begin(), type->actions.end(), [&](const auto& row) {
+        return row.id == action_id.toStdString() && row.operation == ActionOperation::SelectProperty;
+    });
+    if (action == type->actions.end())
+        return false;
+    const auto field = std::find_if(type->settings.fields.begin(), type->settings.fields.end(),
+                                    [&](const auto& row) { return row.path == action->property_path; });
+    if (field == type->settings.fields.end() || field->control != ControlKind::Select ||
+        (controlsLocked() && field->change != ChangePolicy::Live))
+        return false;
+    const auto options = std::find_if(type->options.begin(), type->options.end(),
+                                      [&](const auto& row) { return row.id == action->options_id; });
+    if (options == type->options.end() || !options->snapshot)
+        return false;
+    const auto snapshot = options->snapshot(*source);
+    std::set<std::string> seen;
+    bool selectable = false;
+    for (const auto& choice : snapshot.choices) {
+        if (!seen.insert(choice.id).second)
+            return false;
+        if (choice.id == choice_id.toStdString())
+            selectable = choice.selectable;
+    }
+    if (!selectable)
+        return false;
+    const auto current = source->settings[field->path].value<std::string>();
+    const auto* fallback = std::get_if<std::string>(&field->default_value);
+    if (current.value_or(fallback ? *fallback : std::string{}) == choice_id.toStdString())
+        return ValidateVisualScene(config_.visual_scene, *visual_registry_).succeeded();
+    if (source->type_id == "org.exosnap.webcam/camera" && action->property_path == "device_id") {
+        auto desired = webcamSettings();
+        if (desired.device_id != choice_id.toStdString()) {
+            desired.device_id = choice_id.toStdString();
+            desired.controls.clear();
+        }
+        auto scene = EditSceneWebcam(config_.visual_scene, target->first, target->second, desired, *visual_registry_);
+        return scene.succeeded() && commitVisualScene(std::move(*scene.value()));
+    }
+    auto scene = config_.visual_scene;
+    auto& edited = *std::find_if(scene.sources.begin(), scene.sources.end(),
+                                 [&](const auto& row) { return row.id == target->first; });
+    edited.settings.insert_or_assign(action->property_path, choice_id.toStdString());
+    return commitVisualScene(std::move(scene), field->change == ChangePolicy::Live);
+}
+bool SettingsAdapter::dispatchVisualAction(const QString& source_id, const QString& item_id, const QString& runtime,
+                                           const QString& action_id, const QString& choice) {
+    if (!visual_registry_)
+        return false;
+    const auto id = engine::FromUuid<engine::VisualSourceId>(source_id.toStdString());
+    const auto item = engine::FromUuid<engine::SceneItemId>(item_id.toStdString());
+    bool runtime_ok = false;
+    const auto generation = runtime.toULongLong(&runtime_ok);
+    if (!id || !item || !runtime_ok)
+        return false;
+    const auto address = *id == webcam_address_.source ? webcam_address_ : gamepad_address_;
+    const auto selected_item = *id == webcam_address_.source ? webcam_item_ : gamepad_item_;
+    if (address.source != *id || selected_item != *item)
+        return false;
+    const auto source = std::find_if(config_.visual_scene.sources.begin(), config_.visual_scene.sources.end(),
+                                     [&](const auto& row) { return row.id == *id; });
+    const auto scene_item = std::find_if(config_.visual_scene.items.begin(), config_.visual_scene.items.end(),
+                                         [&](const auto& row) { return row.id == *item && row.source == *id; });
+    if (source == config_.visual_scene.sources.end() || scene_item == config_.visual_scene.items.end())
+        return false;
+    const auto* type = visual_registry_->FindVisualSource(source->type_id);
+    if (!type)
+        return false;
+    const auto action = std::find_if(type->actions.begin(), type->actions.end(),
+                                     [&](const auto& row) { return row.id == action_id.toStdString(); });
+    if (action == type->actions.end())
+        return false;
+    ActionInvocation invocation{.target = {*id, engine::VisualRuntimeGeneration{generation}},
+                                .request = engine::NewId<engine::CommandId>(),
+                                .action_id = action_id.toStdString()};
+    if (action->operation == ActionOperation::SelectProperty)
+        invocation.choice_id = choice.toStdString();
+    else if (!choice.isNull())
+        return false;
+    if (!ValidateVisualAction(invocation, *type, *source, address).succeeded())
+        return false;
+    if (action->operation == ActionOperation::OpenDetails) {
+        emit visualDetailsRequested(address, *item);
+        return true;
+    }
+    if (action->operation == ActionOperation::Retry) {
+        emit visualRetryRequested(invocation);
+        return true;
+    }
+    return selectVisualSetting(source_id, item_id, QString::number(visual_edit_revision_), action_id, choice);
+}
 void SettingsAdapter::setConfig(RecordingPresetConfig config) {
+    advanceVisualEditRevision();
     next_config_ = SanitizePresetConfig(std::move(config));
     config_ = controlsLocked() && active_config_ ? *active_config_ : next_config_;
     custom_resolution_pending_ = config_.output.resolution.mode == OutputResolutionMode::Custom;
@@ -371,6 +690,9 @@ void SettingsAdapter::setControlsLocked(bool locked) {
     if (controls_locked_ == locked) {
         return;
     }
+    webcam_address_.runtime = {};
+    gamepad_address_.runtime = {};
+    advanceVisualEditRevision();
     if (locked) {
         next_config_ = config_;
         active_config_ = config_;
@@ -395,6 +717,8 @@ void SettingsAdapter::setControlsLocked(bool locked) {
 void SettingsAdapter::editNextRecording() {
     if (!controls_locked_ || editing_next_recording_)
         return;
+    webcam_address_.runtime = {};
+    gamepad_address_.runtime = {};
     editing_next_recording_ = true;
     setConfig(next_config_);
     emit controlsLockedChanged();
@@ -404,6 +728,8 @@ void SettingsAdapter::editNextRecording() {
 void SettingsAdapter::showActiveRecording() {
     if (!controls_locked_ || !editing_next_recording_)
         return;
+    webcam_address_.runtime = {};
+    gamepad_address_.runtime = {};
     next_config_ = config_;
     editing_next_recording_ = false;
     setConfig(next_config_);
@@ -411,10 +737,14 @@ void SettingsAdapter::showActiveRecording() {
     emit recordingContextChanged();
 }
 
-void SettingsAdapter::updateActiveWebcam(const WebcamSettings& settings) {
-    if (!active_config_)
+void SettingsAdapter::updateActiveWebcam(engine::VisualSourceId source, engine::SceneItemId item,
+                                         const WebcamSettings& settings) {
+    if (!active_config_ || !visual_registry_)
         return;
-    active_config_->webcam = settings;
+    auto edited = EditSceneWebcam(active_config_->visual_scene, source, item, settings, *visual_registry_);
+    if (!edited.succeeded())
+        return;
+    active_config_->visual_scene = std::move(*edited.value());
     if (controlsLocked())
         setConfig(next_config_);
 }
@@ -474,6 +804,7 @@ void SettingsAdapter::setMicrophoneDevices(QVariantList devices) {
 }
 
 void SettingsAdapter::setWebcamDevices(QVariantList devices) {
+    advanceVisualEditRevision();
     // Windows has no default camera an application can ask for. An unpinned
     // webcam takes the first camera found, which this entry says outright
     // instead of showing that camera as if it had been chosen.
@@ -526,7 +857,8 @@ const WebcamControlRange* SettingsAdapter::selectedWebcamControlRange(int contro
 }
 
 void SettingsAdapter::storeWebcamControl(const WebcamControlSetting& setting) {
-    auto& controls = config_.webcam.controls;
+    auto webcam = webcamSettings();
+    auto& controls = webcam.controls;
     const auto existing = std::find_if(controls.begin(), controls.end(), [&](const WebcamControlSetting& item) {
         return item.control == setting.control;
     });
@@ -537,7 +869,7 @@ void SettingsAdapter::storeWebcamControl(const WebcamControlSetting& setting) {
     } else {
         controls.push_back(setting);
     }
-    applyConfigEdit();
+    commitWebcamEdit(webcam);
 }
 
 void SettingsAdapter::setWebcamControlValue(int control, int value) {
@@ -548,23 +880,25 @@ void SettingsAdapter::setWebcamControlValue(int control, int value) {
 }
 
 void SettingsAdapter::setWebcamControlAutomatic(int control, bool automatic) {
+    const auto webcam = webcamSettings();
     const WebcamControlRange* range = selectedWebcamControlRange(control);
     if (range == nullptr || (automatic && !range->can_automatic))
         return;
     // Leaving automatic keeps the value the camera was showing, rather than
     // jumping to wherever the slider last stood.
-    const WebcamControlSetting* stored = FindWebcamControlSetting(config_.webcam.controls, range->control);
+    const WebcamControlSetting* stored = FindWebcamControlSetting(webcam.controls, range->control);
     const long value = stored != nullptr ? stored->value : range->current;
     storeWebcamControl({range->control, automatic, ClampWebcamControlValue(*range, value)});
 }
 
 QVariantMap SettingsAdapter::webcamControlStates() const {
+    const auto webcam = webcamSettings();
     QVariantMap states;
     const auto ranges = webcam_control_ranges_.constFind(resolvedWebcamDeviceId());
     if (ranges == webcam_control_ranges_.cend())
         return states;
     for (const WebcamControlRange& range : *ranges) {
-        const WebcamControlSetting* stored = FindWebcamControlSetting(config_.webcam.controls, range.control);
+        const WebcamControlSetting* stored = FindWebcamControlSetting(webcam.controls, range.control);
         QVariantMap state;
         state.insert(QStringLiteral("value"), static_cast<int>(ClampWebcamControlValue(
                                                   range, stored != nullptr ? stored->value : range.current)));
@@ -576,15 +910,16 @@ QVariantMap SettingsAdapter::webcamControlStates() const {
 }
 
 void SettingsAdapter::resetWebcamControls() {
-    if (config_.webcam.controls.empty())
+    auto webcam = webcamSettings();
+    if (webcam.controls.empty())
         return;
-    config_.webcam.controls.clear();
-    applyConfigEdit();
+    webcam.controls.clear();
+    commitWebcamEdit(webcam);
 }
 
 WebcamCaptureMode SettingsAdapter::effectiveWebcamMode() const {
     const auto formats = webcam_formats_.constFind(resolvedWebcamDeviceId());
-    const WebcamSettings& webcam = config_.webcam;
+    const WebcamSettings& webcam = webcamSettings();
     if (formats == webcam_formats_.cend())
         return {webcam.width, webcam.height, webcam.fps};
     return ResolveWebcamCaptureMode(*formats, webcam.width, webcam.height, webcam.fps);
@@ -719,7 +1054,7 @@ void SettingsAdapter::resetHotkey(int action) {
 // ---------------------------------------------------------------------------
 
 bool SettingsAdapter::webcamEnabled() const noexcept {
-    return config_.webcam.enabled;
+    return webcamSettings().enabled;
 }
 const QVariantList& SettingsAdapter::webcamDeviceOptions() const noexcept {
     return webcam_devices_;
@@ -729,12 +1064,12 @@ QString SettingsAdapter::webcamDeviceId() const {
     // configuration stays unpinned -- writing the resolved camera back would
     // make a freshly seeded profile differ from the built-in Default it was
     // seeded from.
-    return QString::fromStdString(config_.webcam.device_id);
+    return QString::fromStdString(webcamSettings().device_id);
 }
 
 QString SettingsAdapter::resolvedWebcamDeviceId() const {
-    if (!config_.webcam.device_id.empty())
-        return QString::fromStdString(config_.webcam.device_id);
+    if (!webcamSettings().device_id.empty())
+        return QString::fromStdString(webcamSettings().device_id);
     // The capture path resolves an unpinned camera to the first enumerated one,
     // which follows the Automatic entry in the list.
     if (webcam_devices_.size() < 2)
@@ -755,47 +1090,57 @@ int SettingsAdapter::webcamFrameRate() const {
     return effectiveWebcamMode().fps;
 }
 bool SettingsAdapter::webcamMirror() const noexcept {
-    return config_.webcam.mirror;
+    return webcamSettings().mirror;
 }
 double SettingsAdapter::webcamOpacity() const noexcept {
-    return static_cast<double>(config_.webcam.opacity);
+    return static_cast<double>(webcamSettings().opacity);
 }
 bool SettingsAdapter::webcamAvailable() const noexcept {
     return !webcam_devices_.isEmpty();
 }
 bool SettingsAdapter::chromaKeyEnabled() const noexcept {
-    return config_.webcam.chroma_key.enabled;
+    return webcamSettings().chroma_key.enabled;
 }
 int SettingsAdapter::chromaKeyTolerance() const noexcept {
-    return qRound(config_.webcam.chroma_key.tolerance * 100.0f);
+    return qRound(webcamSettings().chroma_key.tolerance * 100.0f);
 }
 int SettingsAdapter::chromaKeySoftness() const noexcept {
-    return qRound(config_.webcam.chroma_key.softness * 100.0f);
+    return qRound(webcamSettings().chroma_key.softness * 100.0f);
 }
 int SettingsAdapter::chromaKeySpill() const noexcept {
-    return qRound(config_.webcam.chroma_key.spill_reduction * 100.0f);
+    return qRound(webcamSettings().chroma_key.spill_reduction * 100.0f);
 }
 
 void SettingsAdapter::setWebcamEnabled(bool value) {
-    if (config_.webcam.enabled == value) {
+    auto webcam = webcamSettings();
+    if (webcam.enabled == value) {
         return;
     }
-    config_.webcam.enabled = value;
-    applyConfigEdit();
+    webcam.enabled = value;
+    commitWebcamEdit(webcam);
 }
 
 void SettingsAdapter::setWebcamDeviceId(const QString& value) {
+    auto webcam = webcamSettings();
+    const auto offered = std::find_if(webcam_devices_.begin(), webcam_devices_.end(), [&](const auto& entry) {
+        const auto option = entry.toMap();
+        return option.value(QStringLiteral("value")).toString() == value &&
+               option.value(QStringLiteral("selectable"), true).toBool();
+    });
+    if (offered == webcam_devices_.end())
+        return;
     const std::string device_id = value.toStdString();
-    if (config_.webcam.device_id == device_id) {
+    if (webcam.device_id == device_id) {
         return;
     }
-    config_.webcam.device_id = device_id;
+    webcam.device_id = device_id;
     // Control values are on one camera's scale; another camera starts from its own.
-    config_.webcam.controls.clear();
-    applyConfigEdit();
+    webcam.controls.clear();
+    commitWebcamEdit(webcam);
 }
 
 void SettingsAdapter::setWebcamResolution(const QString& value) {
+    auto webcam = webcamSettings();
     const QStringList parts = value.split(QLatin1Char('x'));
     bool width_ok = false;
     bool height_ok = false;
@@ -806,62 +1151,83 @@ void SettingsAdapter::setWebcamResolution(const QString& value) {
     // The rate moves with the size: the one picked before may not exist at the
     // new size, and the stored request should name a mode the camera has.
     const auto formats = webcam_formats_.constFind(resolvedWebcamDeviceId());
+    if (formats != webcam_formats_.cend() && !formats->empty()) {
+        const auto offered = OfferedWebcamResolutions(*formats);
+        if (std::none_of(offered.begin(), offered.end(),
+                         [&](const auto& mode) { return mode.width == width && mode.height == height; }))
+            return;
+    }
     const int fps = formats == webcam_formats_.cend()
-                        ? config_.webcam.fps
-                        : ResolveWebcamCaptureMode(*formats, width, height, config_.webcam.fps).fps;
-    if (config_.webcam.width == width && config_.webcam.height == height && config_.webcam.fps == fps)
+                        ? webcam.fps
+                        : ResolveWebcamCaptureMode(*formats, width, height, webcam.fps).fps;
+    if (webcam.width == width && webcam.height == height && webcam.fps == fps)
         return;
-    config_.webcam.width = width;
-    config_.webcam.height = height;
-    config_.webcam.fps = fps;
-    applyConfigEdit();
+    webcam.width = width;
+    webcam.height = height;
+    webcam.fps = fps;
+    commitWebcamEdit(webcam);
 }
 
 void SettingsAdapter::setWebcamFrameRate(int value) {
+    auto webcam = webcamSettings();
     // Pins the size the user is looking at, so a request the camera lacks is
     // replaced by the mode shown rather than kept beside a new rate.
     const WebcamCaptureMode shown = effectiveWebcamMode();
-    if (config_.webcam.width == shown.width && config_.webcam.height == shown.height && config_.webcam.fps == value)
+    if (value <= 0)
         return;
-    config_.webcam.width = shown.width;
-    config_.webcam.height = shown.height;
-    config_.webcam.fps = value;
-    applyConfigEdit();
+    const auto formats = webcam_formats_.constFind(resolvedWebcamDeviceId());
+    if (formats != webcam_formats_.cend() && !formats->empty()) {
+        const auto rates = OfferedWebcamFrameRates(*formats, shown.width, shown.height);
+        if (std::find(rates.begin(), rates.end(), value) == rates.end())
+            return;
+    }
+    if (webcam.width == shown.width && webcam.height == shown.height && webcam.fps == value)
+        return;
+    webcam.width = shown.width;
+    webcam.height = shown.height;
+    webcam.fps = value;
+    commitWebcamEdit(webcam);
 }
 
 void SettingsAdapter::setWebcamMirror(bool value) {
-    if (config_.webcam.mirror == value) {
+    auto webcam = webcamSettings();
+    if (webcam.mirror == value) {
         return;
     }
-    config_.webcam.mirror = value;
-    applyConfigEdit();
+    webcam.mirror = value;
+    commitWebcamEdit(webcam);
 }
 
 void SettingsAdapter::setWebcamOpacity(double value) {
+    auto webcam = webcamSettings();
+    if (!std::isfinite(value))
+        return;
     const auto opacity = static_cast<float>(std::clamp(value, 0.0, 1.0));
-    if (std::abs(config_.webcam.opacity - opacity) < 1e-4f) {
+    if (std::abs(webcam.opacity - opacity) < 1e-4f) {
         return;
     }
-    config_.webcam.opacity = opacity;
-    applyConfigEdit();
+    webcam.opacity = opacity;
+    commitWebcamEdit(webcam);
 }
 
 void SettingsAdapter::setChromaKeyEnabled(bool value) {
-    if (config_.webcam.chroma_key.enabled == value) {
+    auto webcam = webcamSettings();
+    if (webcam.chroma_key.enabled == value) {
         return;
     }
-    config_.webcam.chroma_key.enabled = value;
-    applyConfigEdit();
+    webcam.chroma_key.enabled = value;
+    commitWebcamEdit(webcam);
 }
 
 QString SettingsAdapter::chromaKeyHex() const {
     // The colour in effect, which for a profile from before the single key
     // colour can still be one of the named presets.
-    const auto key = config_.webcam.chroma_key.active_color();
+    const auto key = webcamSettings().chroma_key.active_color();
     return QString::fromStdString(FormatHexColor(key.r, key.g, key.b));
 }
 
 void SettingsAdapter::setChromaKeyHex(const QString& value) {
+    auto webcam = webcamSettings();
     const auto rgb = ParseHexColor(value.toStdString());
     if (!rgb) {
         chroma_key_hex_error_ = tr("Enter 3 or 6 hex digits, such as 00ff00 or 0f0");
@@ -870,7 +1236,7 @@ void SettingsAdapter::setChromaKeyHex(const QString& value) {
     }
     const bool error_cleared = !chroma_key_hex_error_.isEmpty();
     chroma_key_hex_error_.clear();
-    auto& key = config_.webcam.chroma_key;
+    auto& key = webcam.chroma_key;
     // Every colour is stored as the custom one; the named presets are only a
     // way older profiles may still state theirs.
     if (key.color_mode == WebcamChromaKeyColorMode::Custom && key.custom_r == (*rgb)[0] && key.custom_g == (*rgb)[1] &&
@@ -883,11 +1249,11 @@ void SettingsAdapter::setChromaKeyHex(const QString& value) {
     key.custom_r = (*rgb)[0];
     key.custom_g = (*rgb)[1];
     key.custom_b = (*rgb)[2];
-    applyConfigEdit();
+    commitWebcamEdit(webcam);
 }
 
 QColor SettingsAdapter::chromaKeyColor() const {
-    const auto key = config_.webcam.chroma_key.active_color();
+    const auto key = webcamSettings().chroma_key.active_color();
     return QColor(key.r, key.g, key.b);
 }
 
@@ -899,30 +1265,33 @@ void SettingsAdapter::setChromaKeyColor(const QColor& color) {
 }
 
 void SettingsAdapter::setChromaKeyTolerance(int value) {
+    auto webcam = webcamSettings();
     const auto tolerance = static_cast<float>(std::clamp(value, 0, 100)) / 100.0f;
-    if (std::abs(config_.webcam.chroma_key.tolerance - tolerance) < 1e-4f) {
+    if (std::abs(webcam.chroma_key.tolerance - tolerance) < 1e-4f) {
         return;
     }
-    config_.webcam.chroma_key.tolerance = tolerance;
-    applyConfigEdit();
+    webcam.chroma_key.tolerance = tolerance;
+    commitWebcamEdit(webcam);
 }
 
 void SettingsAdapter::setChromaKeySoftness(int value) {
+    auto webcam = webcamSettings();
     const auto softness = static_cast<float>(std::clamp(value, 0, 100)) / 100.0f;
-    if (std::abs(config_.webcam.chroma_key.softness - softness) < 1e-4f) {
+    if (std::abs(webcam.chroma_key.softness - softness) < 1e-4f) {
         return;
     }
-    config_.webcam.chroma_key.softness = softness;
-    applyConfigEdit();
+    webcam.chroma_key.softness = softness;
+    commitWebcamEdit(webcam);
 }
 
 void SettingsAdapter::setChromaKeySpill(int value) {
+    auto webcam = webcamSettings();
     const auto spill = static_cast<float>(std::clamp(value, 0, 100)) / 100.0f;
-    if (std::abs(config_.webcam.chroma_key.spill_reduction - spill) < 1e-4f) {
+    if (std::abs(webcam.chroma_key.spill_reduction - spill) < 1e-4f) {
         return;
     }
-    config_.webcam.chroma_key.spill_reduction = spill;
-    applyConfigEdit();
+    webcam.chroma_key.spill_reduction = spill;
+    commitWebcamEdit(webcam);
 }
 
 const QVariantList& SettingsAdapter::hotkeyRows() const noexcept {
@@ -1044,6 +1413,7 @@ void SettingsAdapter::setUpdateStatus(const QString& requested_state, const QStr
 // ---------------------------------------------------------------------------
 
 void SettingsAdapter::applyConfigEdit() {
+    advanceVisualEditRevision();
     if (controlsLocked()) {
         setConfig(next_config_);
         return;

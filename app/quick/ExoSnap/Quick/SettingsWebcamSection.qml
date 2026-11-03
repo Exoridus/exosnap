@@ -117,19 +117,12 @@ ExoCard {
         }
     }
 
-    ExoSettingRow {
-        label: qsTr("Camera")
+    VisualSettingsForm {
+        settings: root.settings
+        sourceId: root.settings.webcamSourceId
         stacked: root.stacked
+        enabled: root.webcamEditable
         Layout.fillWidth: true
-
-        ExoSelect {
-            options: root.settings.webcamDeviceOptions
-            value: root.settings.webcamDeviceId
-            enabled: root.webcamEditable
-            Layout.fillWidth: true
-            Accessible.name: qsTr("Webcam device")
-            onValueActivated: value => root.settings.webcamDeviceId = value
-        }
     }
 
     ExoSettingRow {

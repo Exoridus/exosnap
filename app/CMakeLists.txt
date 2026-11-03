@@ -237,6 +237,16 @@ exosnap_add_app_test_support(exosnap_observability
     observability/WindowIdentity.cpp
 )
 
+exosnap_add_app_test_support(exosnap_visual_config
+    extensions/CapabilityRegistry.cpp
+    extensions/VisualSettings.cpp
+    extensions/VisualPresetMigration.cpp
+    extensions/BuiltinVisualSettings.cpp
+    models/VisualSceneConfig.cpp
+    models/VisualSceneEdits.cpp
+)
+target_link_libraries(exosnap_visual_config PUBLIC Qt6::Core tomlplusplus::tomlplusplus exosnap_engine)
+
 exosnap_add_app_test_support(exosnap_output_model_test_support
     models/FilenameBuilder.cpp
     models/OutputPathPolicy.cpp
@@ -246,7 +256,7 @@ exosnap_add_app_test_support(exosnap_output_model_test_support
     models/AudioRoutingMigration.cpp
 )
 target_link_libraries(exosnap_output_model_test_support PUBLIC
-    Qt6::Core Qt6::Gui exosnap_capability exosnap_engine ole32.lib shell32.lib
+    Qt6::Core Qt6::Gui exosnap_capability exosnap_engine exosnap_visual_config ole32.lib shell32.lib
 )
 
 # Linked after both, because the serializers read the models (SplitDurationMs,
@@ -363,6 +373,7 @@ exosnap_add_gtest(
         tests/test_visual_webcam_source.cpp
         tests/test_visual_gamepad_source.cpp
         tests/test_builtin_visual_settings.cpp
+        tests/test_visual_scene_edits.cpp
         extensions/GamepadModule.cpp
         extensions/BuiltinVisualSettings.cpp
         extensions/WebcamModule.cpp
@@ -370,6 +381,7 @@ exosnap_add_gtest(
         extensions/VisualSettings.cpp
     LIBRARIES tomlplusplus::tomlplusplus Qt6::Core
 )
+target_link_libraries(visual_provider_tests PRIVATE exosnap_visual_config)
 target_include_directories(visual_provider_tests PRIVATE
     ${CMAKE_CURRENT_SOURCE_DIR}
     ${PROJECT_SOURCE_DIR}/libs/engine/include
@@ -405,6 +417,7 @@ exosnap_add_gtest(
         models/OutputSettingsModel.cpp
     LIBRARIES exosnap_capability exosnap_engine
 )
+target_link_libraries(recording_preset_tests PRIVATE exosnap_visual_config)
 target_include_directories(recording_preset_tests PRIVATE ${CMAKE_CURRENT_SOURCE_DIR})
 target_link_libraries(recording_preset_tests PRIVATE ole32.lib shell32.lib)
 
@@ -479,6 +492,7 @@ exosnap_add_gtest(
         models/OutputSettingsModel.cpp
     LIBRARIES exosnap_capability exosnap_engine
 )
+target_link_libraries(video_rate_control_tests PRIVATE exosnap_visual_config)
 target_include_directories(video_rate_control_tests PRIVATE ${CMAKE_CURRENT_SOURCE_DIR})
 target_link_libraries(video_rate_control_tests PRIVATE ole32.lib shell32.lib)
 
@@ -494,6 +508,7 @@ exosnap_add_gtest(
         models/OutputSettingsModel.cpp
     LIBRARIES exosnap_capability exosnap_engine Qt6::Core
 )
+target_link_libraries(audio_encoding_preset_tests PRIVATE exosnap_visual_config)
 target_include_directories(audio_encoding_preset_tests PRIVATE ${CMAKE_CURRENT_SOURCE_DIR})
 target_link_libraries(audio_encoding_preset_tests PRIVATE ole32.lib shell32.lib tomlplusplus::tomlplusplus)
 
@@ -1099,6 +1114,7 @@ exosnap_add_gtest(
             models/AudioRoutingMigration.cpp
             models/OutputSettingsModel.cpp
     LIBRARIES exosnap_capability exosnap_engine)
+target_link_libraries(recording_preset_registry_tests PRIVATE exosnap_visual_config)
 target_include_directories(recording_preset_registry_tests PRIVATE ${CMAKE_CURRENT_SOURCE_DIR})
 target_link_libraries(recording_preset_registry_tests PRIVATE ole32.lib shell32.lib)
 
@@ -1106,11 +1122,15 @@ exosnap_add_gtest(
     NAME recording_preset_store_tests
     TEST_PREFIX preset.
     SOURCES tests/test_recording_preset_store.cpp
+            tests/test_visual_preset_store_cutover.cpp
+            tests/test_visual_persistence_identity.cpp
+            models/RecordingPresetRegistry.cpp
             settings/RecordingPresetStore.cpp
             models/RecordingPreset.cpp
             models/AudioRoutingMigration.cpp
             models/OutputSettingsModel.cpp
     LIBRARIES exosnap_capability exosnap_engine Qt6::Core)
+target_link_libraries(recording_preset_store_tests PRIVATE exosnap_visual_config)
 target_include_directories(recording_preset_store_tests PRIVATE ${CMAKE_CURRENT_SOURCE_DIR})
 target_link_libraries(recording_preset_store_tests PRIVATE ole32.lib shell32.lib tomlplusplus::tomlplusplus)
 
@@ -1125,6 +1145,7 @@ exosnap_add_gtest(
             models/AudioRoutingMigration.cpp
             models/OutputSettingsModel.cpp
     LIBRARIES exosnap_capability exosnap_engine Qt6::Core Qt6::Qml)
+target_link_libraries(audio_routing_adapter_tests PRIVATE exosnap_visual_config)
 target_include_directories(audio_routing_adapter_tests PRIVATE ${CMAKE_CURRENT_SOURCE_DIR})
 target_link_libraries(audio_routing_adapter_tests PRIVATE ole32.lib shell32.lib tomlplusplus::tomlplusplus)
 
@@ -1139,6 +1160,7 @@ exosnap_add_gtest(
             models/RecordingPresetRegistry.cpp
             models/OutputSettingsModel.cpp
     LIBRARIES exosnap_capability exosnap_engine Qt6::Core)
+target_link_libraries(preset_export_import_tests PRIVATE exosnap_visual_config)
 target_include_directories(preset_export_import_tests PRIVATE ${CMAKE_CURRENT_SOURCE_DIR})
 target_link_libraries(preset_export_import_tests PRIVATE ole32.lib shell32.lib tomlplusplus::tomlplusplus)
 
@@ -1152,6 +1174,7 @@ exosnap_add_gtest(
             models/AudioRoutingMigration.cpp
             models/OutputSettingsModel.cpp
     LIBRARIES exosnap_capability exosnap_engine Qt6::Core)
+target_link_libraries(audio_gain_preset_tests PRIVATE exosnap_visual_config)
 target_include_directories(audio_gain_preset_tests PRIVATE ${CMAKE_CURRENT_SOURCE_DIR})
 target_link_libraries(audio_gain_preset_tests PRIVATE ole32.lib shell32.lib tomlplusplus::tomlplusplus)
 

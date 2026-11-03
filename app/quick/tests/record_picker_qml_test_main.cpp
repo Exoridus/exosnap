@@ -59,8 +59,30 @@ class RecordPickerTestDriver final : public QObject {
             }
             return false;
         });
+        exosnap::SourceFactory unused =
+            [](exosnap::SourceCreateRequest) -> exosnap::engine::Outcome<std::unique_ptr<exosnap::VisualSource>> {
+            return exosnap::engine::EngineError{.context = "No native source in QML tests"};
+        };
+        exosnap::CachedVisualOptions devices = [](const exosnap::VisualSourceRecord&) {
+            return exosnap::ChoiceSnapshot{1,
+                                           {{"", {"VisualTests", "Automatic"}},
+                                            {"camera", {"VisualTests", "Camera"}},
+                                            {"blocked", {"VisualTests", "Blocked"}, false}}};
+        };
+        exosnap::CachedVisualOptions layouts = [](const exosnap::VisualSourceRecord&) {
+            return exosnap::ChoiceSnapshot{
+                1, {{"auto", {"VisualTests", "Automatic"}}, {"xbox_elite", {"VisualTests", "Xbox Elite"}}}};
+        };
+        if (!visual_registry_.Register({{"org.exosnap.webcam"}, {exosnap::MakeWebcamVisualSourceType(unused, devices)}})
+                 .succeeded() ||
+            !visual_registry_
+                 .Register({{"org.exosnap.gamepad"}, {exosnap::MakeGamepadVisualSourceType(unused, devices, layouts)}})
+                 .succeeded() ||
+            !visual_registry_.Seal().succeeded())
+            qFatal("Cannot register visual QML test fixtures");
+        settings_.setVisualRegistry(&visual_registry_);
         settings_.setAudioRouting(&routing_);
-        settings_.setConfig(exosnap::MakeDefaultPreset().config);
+        resetVisualSettings();
         seedTargets(2, {QStringLiteral("Claude Design - Brave"), QStringLiteral("Task Manager")});
     }
 
@@ -78,6 +100,16 @@ class RecordPickerTestDriver final : public QObject {
         return &settings_;
     }
 
+    Q_INVOKABLE void resetVisualSettings(bool read_only = false, bool runtime = false) {
+        settings_.setControlsLocked(false);
+        auto config = exosnap::MakeDefaultPreset().config;
+        config.visual_read_only = read_only;
+        settings_.setConfig(config);
+        const auto& scene = config.visual_scene;
+        settings_.setVisualTargets(
+            {scene.sources[0].id, exosnap::engine::VisualRuntimeGeneration{runtime ? 7u : 0u}}, scene.items[0].id,
+            {scene.sources[1].id, exosnap::engine::VisualRuntimeGeneration{runtime ? 7u : 0u}}, scene.items[1].id);
+    }
     Q_INVOKABLE void resetPickerState() {
         adapter_.setHiddenWindowRules({});
         adapter_.setShowHiddenWindows(false);
@@ -305,6 +337,7 @@ class RecordPickerTestDriver final : public QObject {
     RecordViewModelAdapter adapter_;
     RecordingClipAdapter clip_adapter_;
     exosnap::quick::RecordingWorkspaceState workspace_state_;
+    exosnap::CapabilityRegistry visual_registry_;
     exosnap::quick::SettingsAdapter settings_;
     exosnap::quick::AudioRoutingAdapter routing_;
 };

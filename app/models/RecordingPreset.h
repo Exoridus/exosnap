@@ -4,7 +4,7 @@
 #include "OutputSettingsModel.h"
 #include "StableDisplayId.h"
 #include "VideoSettingsModel.h"
-#include "WebcamSettings.h"
+#include "extensions/VisualPresetMigration.h"
 
 #include <capability/audio_ui_state.h>
 #include <exosnap/engine/audio_track_model.h>
@@ -61,7 +61,8 @@ namespace exosnap {
 // with explicit "full" is a deliberate post-flip opt-in and is respected.
 //
 // ---------------------------------------------------------------------------
-inline constexpr int kPresetSchemaVersion = 26;
+inline constexpr int kPresetSchemaVersion = 27;
+inline constexpr std::string_view kVisualContract = "exosnap.visual.v1";
 inline constexpr std::string_view kAudioContract = "exosnap.audio.v1.3-final.1";
 
 // Files at or below this schema get the targeted color_range full->limited
@@ -130,8 +131,9 @@ struct RecordingPresetConfig {
     std::shared_ptr<const PresetRawDocument> raw_document;
     bool audio_read_only = false;
     std::string audio_validation_error;
-    WebcamSettings webcam;
-    GamepadOverlaySettings gamepad;
+    VisualSceneConfig visual_scene = MakeDefaultVisualScene();
+    bool visual_read_only = false;
+    std::string visual_validation_error;
     int countdown_seconds = 0; // One of {0, 3, 5, 10}
 };
 

@@ -270,6 +270,7 @@ Item {
                             id: gamepadControls
                             visible: root.gamepadOverlay !== null
                             overlay: root.gamepadOverlay
+                            settings: root.settings
                             showButton: false
                             anchors.right: parent.right
                             anchors.bottom: parent.bottom

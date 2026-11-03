@@ -125,7 +125,7 @@ TEST(PresetExportImport, MultiItemFile_ImportAll_ReturnsBothPresets) {
                                         "[[presets]]\n"
                                         "id = \"preset.hand-b\"\n"
                                         "name = \"Preset B\"\n")
-                             .arg(kPresetSchemaVersion)
+                             .arg(26)
                              .arg(QString::fromUtf8(kAudioContract));
     ASSERT_TRUE(WriteTomlString(path, toml));
 

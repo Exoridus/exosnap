@@ -271,7 +271,8 @@ class RecordViewModelAdapter : public QObject {
     void setFormatText(QString text);
     void setDeviceState(bool microphone_available, bool webcam_available, bool webcam_enabled,
                         QString webcam_error = {});
-    void setWebcamPresentation(QRectF overlay_rect, bool mirror, double opacity, bool output_visible = true);
+    void setWebcamPresentation(QRectF overlay_rect, bool mirror, double opacity, bool output_visible = true,
+                               bool editing_allowed = true);
     void setCountdownState(int configured_seconds, int remaining_seconds, double progress);
     void setRegionState(QRectF normalized_rect, bool selection_needed);
     void setPreviewFrameReady(bool ready);
@@ -430,6 +431,7 @@ class RecordViewModelAdapter : public QObject {
     bool webcam_mirror_ = false;
     double webcam_opacity_ = 1.0;
     bool webcam_output_visible_ = true;
+    bool webcam_editing_allowed_ = true;
     double system_meter_ = 0.0;
     double app_meter_ = 0.0;
     double microphone_meter_ = 0.0;

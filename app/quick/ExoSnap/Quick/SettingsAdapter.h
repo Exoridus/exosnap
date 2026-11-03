@@ -2,11 +2,13 @@
 #include <update/update_types.h>
 
 #include "AudioRoutingAdapter.h"
+#include "extensions/CapabilityRegistry.h"
 #include "models/AudioMeterScale.h"
 #include "models/CrashReportPolicy.h"
 #include "models/OutputPathValidator.h"
 #include "models/OverlayContentPolicy.h"
 #include "models/RecordingPreset.h"
+#include "models/VisualSceneEdits.h"
 #include "models/WebcamControls.h"
 #include "models/WebcamFormatPolicy.h"
 #include "settings/AppSettingsStore.h"
@@ -109,7 +111,7 @@ class SettingsAdapter : public QObject {
     const RecordingPresetConfig& sessionConfig() const {
         return active_config_ ? *active_config_ : config_;
     }
-    void updateActiveWebcam(const WebcamSettings& settings);
+    void updateActiveWebcam(engine::VisualSourceId source, engine::SceneItemId item, const WebcamSettings& settings);
     Q_INVOKABLE void editNextRecording();
     Q_INVOKABLE void showActiveRecording();
     // The adapter the encode is running on, as a fact rather than as a choice.
@@ -440,6 +442,33 @@ class SettingsAdapter : public QObject {
     void requestSettingsFocus(FocusTarget target);
 
     // ---- Composition-root seams (never called from QML) ---------------------
+    // Registry outlives the adapter. Targets identify the currently displayed editable scope.
+    Q_PROPERTY(QString webcamSourceId READ webcamSourceId NOTIFY configChanged FINAL)
+    Q_PROPERTY(QString gamepadSourceId READ gamepadSourceId NOTIFY configChanged FINAL)
+    [[nodiscard]] QString webcamSourceId() const {
+        return QString::fromStdString(engine::ToUuid(webcam_address_.source));
+    }
+    [[nodiscard]] QString gamepadSourceId() const {
+        return QString::fromStdString(engine::ToUuid(gamepad_address_.source));
+    }
+    Q_INVOKABLE QVariantMap visualSourceState(const QString& source_id) const;
+    Q_INVOKABLE bool setVisualEnabled(const QString& source, const QString& item, const QString& edit_revision,
+                                      bool enabled);
+    Q_INVOKABLE bool setVisualOpacity(const QString& source, const QString& item, const QString& edit_revision,
+                                      double opacity);
+    void setVisualRegistry(const CapabilityRegistry* registry);
+    void refreshVisualOptions();
+    void setVisualTargets(engine::VisualAddress webcam, engine::SceneItemId webcam_item, engine::VisualAddress gamepad,
+                          engine::SceneItemId gamepad_item);
+    [[nodiscard]] WebcamSettings webcamSettings() const;
+    [[nodiscard]] const VisualSceneConfig* activeVisualScene() const noexcept {
+        return active_config_ ? &active_config_->visual_scene : nullptr;
+    }
+    Q_INVOKABLE bool selectVisualSetting(const QString& source, const QString& item, const QString& edit_revision,
+                                         const QString& action, const QString& choice);
+    Q_INVOKABLE QVariantList visualSettingsRows(const QString& source_id) const;
+    Q_INVOKABLE bool dispatchVisualAction(const QString& source_id, const QString& item_id, const QString& runtime,
+                                          const QString& action, const QString& choice = QString());
     void setConfig(RecordingPresetConfig config);
     [[nodiscard]] const RecordingPresetConfig& config() const noexcept;
     void setCapabilities(const capability::CapabilitySet& caps);
@@ -468,7 +497,7 @@ class SettingsAdapter : public QObject {
     }
     [[nodiscard]] QVariantMap webcamControlStates() const;
     [[nodiscard]] bool webcamControlsAdjusted() const noexcept {
-        return !config_.webcam.controls.empty();
+        return !webcamSettings().controls.empty();
     }
     // A manual value, snapped to the camera's range and step.
     Q_INVOKABLE void setWebcamControlValue(int control, int value);
@@ -898,6 +927,9 @@ class SettingsAdapter : public QObject {
     Q_INVOKABLE bool presetNameRejected(const QString& name, const QString& exclude_id) const;
 
   signals:
+    void visualDetailsRequested(exosnap::engine::VisualAddress target, exosnap::engine::SceneItemId item);
+    void visualRetryRequested(exosnap::ActionInvocation invocation);
+    void activeVisualSceneEdited();
     void clearMediaCachesRequested();
     void mediaCachesCleared();
     void recordingContextChanged();
@@ -972,6 +1004,18 @@ class SettingsAdapter : public QObject {
     [[nodiscard]] int rowGainDb(exosnap::engine::AudioSourceKind kind) const noexcept;
     void setRowSeparate(exosnap::engine::AudioSourceKind kind, bool separate);
 
+    uint64_t visual_edit_revision_ = 1;
+    void advanceVisualEditRevision() noexcept {
+        if (visual_edit_revision_ != 0)
+            ++visual_edit_revision_;
+    }
+    const CapabilityRegistry* visual_registry_ = nullptr;
+    engine::VisualAddress webcam_address_, gamepad_address_;
+    engine::SceneItemId webcam_item_, gamepad_item_;
+    void commitWebcamEdit(const WebcamSettings& settings);
+    [[nodiscard]] std::optional<std::pair<engine::VisualSourceId, engine::SceneItemId>>
+    editableVisualTarget(const QString& source, const QString& item, const QString& edit_revision) const;
+    bool commitVisualScene(VisualSceneConfig scene, bool live = false);
     RecordingPresetConfig config_;
     RecordingPresetConfig next_config_;
     std::optional<RecordingPresetConfig> active_config_;
