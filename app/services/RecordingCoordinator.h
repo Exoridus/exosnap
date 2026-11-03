@@ -574,7 +574,7 @@ class RecordingCoordinator {
         exosnap::engine::RecordingSplitSettings split_settings;
         VideoSettingsModel video_settings;
         exosnap::engine::ResolvedEncoderDevice resolved_encoder_device;
-        WebcamSettings webcam_settings;
+        std::shared_ptr<engine::VisualSceneRuntime> visual_scene;
         capability::UserRecorderConfig resolved_user_config;
         FilenameTargetContext output_target_context;
         bool has_output_target_context = false;

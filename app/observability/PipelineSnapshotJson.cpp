@@ -357,6 +357,69 @@ QJsonObject SplitJson(const exosnap::engine::SplitDiagnostics& sp) {
     return json;
 }
 
+QJsonObject VisualJson(const RecordingDiagnosticsSnapshot& s) {
+    QJsonObject host;
+    host.insert(QStringLiteral("availability"),
+                QString::fromLatin1(s.visual_runtime ? availability::kAvailable : availability::kUnavailable));
+    host.insert(QStringLiteral("scope"), QStringLiteral("runtimeLifetimeAllSourcesAndConsumers"));
+    host.insert(QStringLiteral("acceptedCpuImages"),
+                s.visual_runtime ? Count(s.visual_runtime->accepted_publications) : QJsonValue());
+    host.insert(QStringLiteral("droppedCpuImageAttempts"),
+                s.visual_runtime ? Count(s.visual_runtime->dropped_publications) : QJsonValue());
+    host.insert(QStringLiteral("busyHostReads"), s.visual_runtime ? Count(s.visual_runtime->busy_reads) : QJsonValue());
+
+    QJsonObject sampler;
+    sampler.insert(QStringLiteral("availability"),
+                   QString::fromLatin1(s.visual_sampler ? availability::kAvailable : availability::kUnavailable));
+    sampler.insert(QStringLiteral("scope"), QStringLiteral("recordingSessionVisibleItems"));
+    sampler.insert(QStringLiteral("historySamples"),
+                   s.visual_sampler ? Count(s.visual_sampler->history_samples) : QJsonValue());
+    sampler.insert(QStringLiteral("busyHistoryReads"),
+                   s.visual_sampler ? Count(s.visual_sampler->history_busy_reads) : QJsonValue());
+    sampler.insert(QStringLiteral("missingHistoryReads"),
+                   s.visual_sampler ? Count(s.visual_sampler->history_missing_reads) : QJsonValue());
+
+    QJsonObject sources;
+    sources.insert(QStringLiteral("availability"),
+                   QString::fromLatin1(s.visual_sources ? availability::kAvailable : availability::kUnavailable));
+    sources.insert(QStringLiteral("scope"), QStringLiteral("currentAcceptedScene"));
+    QJsonValue rows;
+    if (s.visual_sources) {
+        QJsonArray entries;
+        for (const auto& source : *s.visual_sources) {
+            QJsonObject entry;
+            entry.insert(QStringLiteral("sourceId"), TextOrNull(source.source_id));
+            entry.insert(QStringLiteral("typeId"), TextOrNull(source.type_id));
+            QJsonArray items;
+            for (const auto& id : source.item_ids)
+                items.push_back(QString::fromStdString(id));
+            entry.insert(QStringLiteral("itemIds"), items);
+            entry.insert(QStringLiteral("runtimeGeneration"),
+                         source.runtime_generation ? Count(*source.runtime_generation) : QJsonValue());
+            entry.insert(QStringLiteral("requestRevision"),
+                         source.request_revision ? Count(*source.request_revision) : QJsonValue());
+            QJsonObject provider;
+            provider.insert(
+                QStringLiteral("availability"),
+                QString::fromLatin1(source.provider_phase ? availability::kAvailable : availability::kUnavailable));
+            provider.insert(QStringLiteral("phase"),
+                            source.provider_phase ? TextOrNull(*source.provider_phase) : QJsonValue());
+            provider.insert(QStringLiteral("errorCode"),
+                            source.provider_error_code ? Count(*source.provider_error_code) : QJsonValue());
+            entry.insert(QStringLiteral("provider"), provider);
+            entries.push_back(entry);
+        }
+        rows = entries;
+    }
+    sources.insert(QStringLiteral("rows"), rows);
+
+    QJsonObject json;
+    json.insert(QStringLiteral("host"), host);
+    json.insert(QStringLiteral("recordingSampler"), sampler);
+    json.insert(QStringLiteral("providerSources"), sources);
+    return json;
+}
+
 QJsonObject RetainedFramesJson(const exosnap::engine::RecordingDiagnosticsSnapshot& s) {
     QJsonObject json;
     json.insert(QStringLiteral("screenGenerationChanges"), Count(s.screen_generation_changes));
@@ -425,6 +488,7 @@ QJsonObject PipelineSnapshotToJson(const RecordingDiagnosticsSnapshot& snapshot)
     const auto& producer = snapshot.video_queue.producer_wait;
     json.insert(QStringLiteral("muxProducerWaitP99Ms"), Metric(producer.p99_ms, producer.samples > 0));
     json.insert(QStringLiteral("retainedFrames"), RetainedFramesJson(snapshot));
+    json.insert(QStringLiteral("visual"), VisualJson(snapshot));
     return json;
 }
 

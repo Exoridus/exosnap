@@ -1336,8 +1336,10 @@ RecorderResult RecorderSession::Record(const RecorderConfig& config, RecordReque
         const auto diag_now = std::chrono::steady_clock::now();
         const DiagnosticsLifecycle lifecycle =
             result.succeeded ? DiagnosticsLifecycle::Completed : DiagnosticsLifecycle::Failed;
-        const RecordingDiagnosticsSnapshot snapshot =
+        RecordingDiagnosticsSnapshot snapshot =
             state_ptr->diagnostics.BuildSnapshot(diag_now, result.stats, lifecycle, result.stats.elapsed_seconds);
+        if (state_ptr->config.visual_scene)
+            snapshot.visual_runtime = state_ptr->config.visual_scene->Counters();
         m_impl->diagnostics_callback(snapshot);
     }
 

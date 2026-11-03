@@ -48,6 +48,8 @@ CPU image storage admits three frame slots and at most two resource generations 
 
 A sprite layer is an immutable atlas plus prepared quads, defined in [overlay sprites](../../libs/engine/include/exosnap/engine/overlay_sprites.h). Each item has independent scratch and sampler fallback state, even when items share the same source. Changes to atlas identity, quads, masks, placement or opacity dirty the existing visual key. Stick movement does not copy or re-upload atlas pixels.
 
+The existing recording diagnostics cadence samples runtime-lifetime CPU publication and host try-lock counters. Recording-session history counters distinguish attempted samples, busy reads and missing input. The GUI copies provider status and exact source/request identities from the accepted scene into diagnostics without exposing provider ownership to the engine. Missing observations remain unavailable; an observed zero is reported as zero. The final session snapshot retains sampled runtime totals.
+
 ### Gamepad source and artwork
 
 The Qt-free gamepad library uses GameInput v4 reading and device callbacks. Each application-local device ID has

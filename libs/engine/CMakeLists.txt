@@ -374,6 +374,7 @@ add_library(exosnap_engine STATIC
     src/pipeline_diagnostics_aggregator.cpp
     src/pipeline_diagnostics_aggregator.h
     include/exosnap/engine/pipeline_diagnostics.h
+    include/exosnap/engine/visual_diagnostics.h
     include/exosnap/engine/pipeline_health.h
     src/pipeline_health.cpp
     src/video_thread.cpp

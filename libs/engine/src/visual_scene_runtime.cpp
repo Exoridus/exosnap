@@ -744,6 +744,12 @@ Outcome<ConfigRevision> VisualSceneRuntime::PublishScene(const PreparedSceneDesc
     }
 }
 
+VisualRuntimeCounters VisualSceneRuntime::Counters() const noexcept {
+    return {storage_->accepted_publications.load(std::memory_order_relaxed),
+            storage_->dropped_publications.load(std::memory_order_relaxed),
+            storage_->busy_reads.load(std::memory_order_relaxed)};
+}
+
 uint64_t VisualSceneRuntime::PublishedSceneSequence() const noexcept {
     return storage_->scene_sequence.load(std::memory_order_acquire);
 }

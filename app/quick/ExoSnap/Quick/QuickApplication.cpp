@@ -877,6 +877,49 @@ void QuickApplication::initializeRecordWorkflow() {
             // This runs on the GUI thread (PostDiagnostics queues it onto the application
             // object), which is the thread PresentMonEtwSession::Latest() requires.
             exosnap::engine::RecordingDiagnosticsSnapshot snapshot = measured;
+            if (visual_sources_ && accepted_visual_scene_) {
+                auto& rows = snapshot.visual_sources.emplace();
+                rows.reserve(accepted_visual_scene_->sources.size());
+                for (const auto& source : accepted_visual_scene_->sources) {
+                    engine::VisualSourceDiagnostics row;
+                    row.source_id = engine::ToUuid(source.id);
+                    row.type_id = source.type_id;
+                    for (const auto& item : accepted_visual_scene_->items) {
+                        if (item.source == source.id)
+                            row.item_ids.push_back(engine::ToUuid(item.id));
+                    }
+                    if (const auto address = visual_sources_->CurrentAddress(source.id)) {
+                        row.runtime_generation = address->runtime.value;
+                        if (const auto status = visual_sources_->Status(*address);
+                            status && status->token.address == *address) {
+                            row.request_revision = status->token.request.value;
+                            switch (status->phase) {
+                            case SourcePhase::Dormant:
+                                row.provider_phase = "dormant";
+                                break;
+                            case SourcePhase::Preparing:
+                                row.provider_phase = "preparing";
+                                break;
+                            case SourcePhase::Ready:
+                                row.provider_phase = "ready";
+                                break;
+                            case SourcePhase::Waiting:
+                                row.provider_phase = "waiting";
+                                break;
+                            case SourcePhase::Failed:
+                                row.provider_phase = "failed";
+                                break;
+                            case SourcePhase::Stopping:
+                                row.provider_phase = "stopping";
+                                break;
+                            }
+                            if (status->reason)
+                                row.provider_error_code = static_cast<uint32_t>(status->reason->code);
+                        }
+                    }
+                    rows.push_back(std::move(row));
+                }
+            }
             if (present_provider_ != nullptr) {
                 const diagnostics::PresentSample sample = present_provider_->Sample();
                 diagnostics::ApplyPresentSample(snapshot.capture, sample);

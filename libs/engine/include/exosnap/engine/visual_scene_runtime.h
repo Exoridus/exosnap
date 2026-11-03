@@ -1,6 +1,7 @@
 #pragma once
 
 #include <exosnap/engine/overlay_shader.h>
+#include <exosnap/engine/visual_diagnostics.h>
 #include <exosnap/engine/visual_frame.h>
 
 #include <memory>
@@ -166,6 +167,9 @@ class VisualSceneRuntime final {
     VisualSceneRuntime(const VisualSceneRuntime&) = delete;
     VisualSceneRuntime& operator=(const VisualSceneRuntime&) = delete;
 
+    // Counts successful CPU image publications, producer lock/full-pool drops
+    // and host image/scene/binding try-lock misses. Not per source or per session.
+    [[nodiscard]] VisualRuntimeCounters Counters() const noexcept;
     Outcome<VisualConsumerId> RegisterConsumer();
     // Call only after the consumer is quiescent and all its leases are empty.
     void UnregisterConsumer(VisualConsumerId);

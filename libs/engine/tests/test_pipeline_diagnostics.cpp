@@ -1783,3 +1783,29 @@ TEST(PipelineDiagnostics, MaterialWriteAndDurabilityTimingRemainSeparate) {
     EXPECT_EQ(s.disk.durability_flush_failures, 1u);
     EXPECT_EQ(s.disk.write_failures, 0u);
 }
+
+TEST(PipelineDiagnosticsAggregator, VisualHistoryAvailabilityStartsWithTheFirstSampleAndResetsPerSession) {
+    PipelineDiagnosticsAggregator agg;
+    agg.Reset(1, MakeConfig());
+    EXPECT_FALSE(agg.BuildSnapshot(At(0), MakeStats(), DiagnosticsLifecycle::Recording, 0).visual_sampler);
+
+    agg.OnVisualHistorySample(false, false);
+    const auto measured_zero = agg.BuildSnapshot(At(0), MakeStats(), DiagnosticsLifecycle::Recording, 0);
+    ASSERT_TRUE(measured_zero.visual_sampler);
+    EXPECT_EQ(measured_zero.visual_sampler->history_samples, 1U);
+    EXPECT_EQ(measured_zero.visual_sampler->history_busy_reads, 0U);
+    EXPECT_EQ(measured_zero.visual_sampler->history_missing_reads, 0U);
+
+    agg.OnVisualHistorySample(true, false);
+    agg.OnVisualHistorySample(false, true);
+    const auto failures = agg.BuildSnapshot(At(1), MakeStats(), DiagnosticsLifecycle::Recording, 1);
+    ASSERT_TRUE(failures.visual_sampler);
+    EXPECT_EQ(failures.visual_sampler->history_samples, 3U);
+    EXPECT_EQ(failures.visual_sampler->history_busy_reads, 1U);
+    EXPECT_EQ(failures.visual_sampler->history_missing_reads, 1U);
+    EXPECT_FALSE(failures.visual_runtime);
+    EXPECT_FALSE(failures.visual_sources);
+
+    agg.Reset(2, MakeConfig());
+    EXPECT_FALSE(agg.BuildSnapshot(At(2), MakeStats(), DiagnosticsLifecycle::Recording, 0).visual_sampler);
+}

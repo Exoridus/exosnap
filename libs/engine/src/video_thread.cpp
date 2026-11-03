@@ -2068,6 +2068,9 @@ void VideoThread::RunAttachment(const std::shared_ptr<NativeState>& native, cons
                     ++visualTrace.images_updated;
                     m_state.diagnostics.OnWebcamGenerationChanged();
                 }
+                if (item.sprites)
+                    m_state.diagnostics.OnVisualHistorySample(item.sample_result == ReadResult::Busy,
+                                                              item.sample_result == ReadResult::NotReady);
                 if (item.sprites && item.sample_result == ReadResult::Busy)
                     ++visualTrace.history_busy;
                 if (item.sprites && item.sample_result == ReadResult::NotReady)

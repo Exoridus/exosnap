@@ -1054,7 +1054,7 @@ bool RecordingCoordinator::StartRecording(const exosnap::engine::CaptureTarget& 
     ctx.split_settings = split_settings_;
     ctx.video_settings = video_settings_;
     ctx.resolved_encoder_device = resolved_encoder_device_;
-    ctx.webcam_settings = webcam_settings_;
+    ctx.visual_scene = visual_runtime_;
     ctx.resolved_user_config = resolved_user_config_;
     ctx.caps = caps_;
     ctx.encoder_caps = encoder_caps_;
@@ -1408,7 +1408,7 @@ void RecordingCoordinator::PrepareAndRecordThreadProc(const PrepareContext& ctx)
     config.output_path_pre_reserved = true;
     config.split = ctx.split_settings;
 
-    config.visual_scene = visual_runtime_;
+    config.visual_scene = ctx.visual_scene;
 
     // Cancellation checkpoint 2 — after the DXGI display-facts refresh / config build.
     if (prepare_cancel_requested_.load()) {

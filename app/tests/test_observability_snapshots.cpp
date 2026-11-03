@@ -1022,3 +1022,75 @@ TEST_F(EventQueryTest, TheQueryIsBoundedByTheRingAndNeverUnbounded) {
 }
 
 } // namespace
+
+TEST(PipelineSnapshotJson, VisualObservationsDistinguishUnavailableFromMeasuredZero) {
+    auto snapshot = HealthyRecording();
+    const auto missing = PipelineSnapshotToJson(snapshot);
+    EXPECT_EQ(At(missing, {"visual", "host", "availability"}).toString(), QStringLiteral("unavailable"));
+    EXPECT_TRUE(At(missing, {"visual", "host", "acceptedCpuImages"}).isNull());
+    EXPECT_TRUE(At(missing, {"visual", "host", "droppedCpuImageAttempts"}).isNull());
+    EXPECT_TRUE(At(missing, {"visual", "host", "busyHostReads"}).isNull());
+    EXPECT_EQ(At(missing, {"visual", "recordingSampler", "availability"}).toString(), QStringLiteral("unavailable"));
+    EXPECT_TRUE(At(missing, {"visual", "recordingSampler", "historySamples"}).isNull());
+    EXPECT_TRUE(At(missing, {"visual", "recordingSampler", "busyHistoryReads"}).isNull());
+    EXPECT_TRUE(At(missing, {"visual", "recordingSampler", "missingHistoryReads"}).isNull());
+    EXPECT_EQ(At(missing, {"visual", "providerSources", "availability"}).toString(), QStringLiteral("unavailable"));
+    EXPECT_TRUE(At(missing, {"visual", "providerSources", "rows"}).isNull());
+
+    snapshot.visual_runtime.emplace();
+    snapshot.visual_sampler = exosnap::engine::VisualSamplerCounters{1, 0, 0};
+    snapshot.visual_sources.emplace();
+    const auto measured = PipelineSnapshotToJson(snapshot);
+    EXPECT_EQ(At(measured, {"visual", "host", "availability"}).toString(), QStringLiteral("available"));
+    EXPECT_EQ(At(measured, {"visual", "host", "scope"}).toString(),
+              QStringLiteral("runtimeLifetimeAllSourcesAndConsumers"));
+    EXPECT_EQ(At(measured, {"visual", "host", "acceptedCpuImages"}).toDouble(-1), 0);
+    EXPECT_EQ(At(measured, {"visual", "host", "droppedCpuImageAttempts"}).toDouble(-1), 0);
+    EXPECT_EQ(At(measured, {"visual", "host", "busyHostReads"}).toDouble(-1), 0);
+    EXPECT_EQ(At(measured, {"visual", "recordingSampler", "availability"}).toString(), QStringLiteral("available"));
+    EXPECT_EQ(At(measured, {"visual", "recordingSampler", "scope"}).toString(),
+              QStringLiteral("recordingSessionVisibleItems"));
+    EXPECT_EQ(At(measured, {"visual", "recordingSampler", "historySamples"}).toDouble(-1), 1);
+    EXPECT_EQ(At(measured, {"visual", "recordingSampler", "busyHistoryReads"}).toDouble(-1), 0);
+    EXPECT_EQ(At(measured, {"visual", "recordingSampler", "missingHistoryReads"}).toDouble(-1), 0);
+    EXPECT_EQ(At(measured, {"visual", "providerSources", "availability"}).toString(), QStringLiteral("available"));
+    EXPECT_TRUE(At(measured, {"visual", "providerSources", "rows"}).toArray().isEmpty());
+    EXPECT_FALSE(
+        PipelineSnapshotToJson(exosnap::engine::RecordingDiagnosticsSnapshot{}).contains(QStringLiteral("visual")));
+}
+
+TEST(PipelineSnapshotJson, VisualSourceSelfReportDoesNotInventAHostObservation) {
+    auto snapshot = HealthyRecording();
+    exosnap::engine::VisualSourceDiagnostics reported;
+    reported.source_id = "source-a";
+    reported.type_id = "builtin.webcam";
+    reported.item_ids = {"item-a", "item-b"};
+    reported.runtime_generation = 4;
+    reported.request_revision = 7;
+    reported.provider_phase = "waiting";
+    reported.provider_error_code = 4;
+    exosnap::engine::VisualSourceDiagnostics unreported;
+    unreported.source_id = "source-b";
+    snapshot.visual_sources = std::vector{reported, unreported};
+    const auto json = PipelineSnapshotToJson(snapshot);
+    EXPECT_EQ(At(json, {"visual", "providerSources", "scope"}).toString(), QStringLiteral("currentAcceptedScene"));
+    const auto rows = At(json, {"visual", "providerSources", "rows"}).toArray();
+    ASSERT_EQ(rows.size(), 2);
+    const auto first = rows[0].toObject();
+    EXPECT_EQ(first.value(QStringLiteral("sourceId")).toString(), QStringLiteral("source-a"));
+    EXPECT_EQ(first.value(QStringLiteral("itemIds")).toArray().size(), 2);
+    EXPECT_EQ(first.value(QStringLiteral("runtimeGeneration")).toDouble(), 4);
+    EXPECT_EQ(first.value(QStringLiteral("requestRevision")).toDouble(), 7);
+    EXPECT_EQ(At(first, {"provider", "availability"}).toString(), QStringLiteral("available"));
+    EXPECT_EQ(At(first, {"provider", "phase"}).toString(), QStringLiteral("waiting"));
+    EXPECT_EQ(At(first, {"provider", "errorCode"}).toDouble(), 4);
+    const auto second = rows[1].toObject();
+    EXPECT_TRUE(second.value(QStringLiteral("runtimeGeneration")).isNull());
+    EXPECT_TRUE(second.value(QStringLiteral("requestRevision")).isNull());
+    EXPECT_EQ(At(second, {"provider", "availability"}).toString(), QStringLiteral("unavailable"));
+    EXPECT_TRUE(At(second, {"provider", "phase"}).isNull());
+    EXPECT_TRUE(At(second, {"provider", "errorCode"}).isNull());
+    EXPECT_TRUE(At(json, {"visual", "host", "acceptedCpuImages"}).isNull());
+    EXPECT_FALSE(first.contains(QStringLiteral("latestArrival")));
+    EXPECT_FALSE(first.contains(QStringLiteral("imageGeneration")));
+}
