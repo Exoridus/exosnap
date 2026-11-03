@@ -107,43 +107,21 @@ https://github.com/rsms/inter/blob/master/LICENSE.txt
 No Inter font file is distributed. The OFL's document/artwork exception applies
 to the rendered label. See https://openfontlicense.org/ofl-faq/
 
-## Steam Controller 2026 artwork draft
+## Steam Controller 2026 generic fallback
 
-The supplied two-dimensional artwork was manually traced and refined by ExoSnap
-contributors using rendered model views and physical reference images.
-Standard controls, symbols and stick wells reuse the MIT-licensed AL2009man
-Gamepad Asset Pack credited above. Copyright (c) 2026 ExoSnap contributors
-applies to their original contributions.
+The steam_controller_2026 layout contains exact copies of generic/source.svg
+and its exported element geometry. The Xelu/Luna body and shoulders retain the
+CC0-1.0 dedication, and the AL2009man controls retain the MIT notice, credited
+in the Generic controller section above. The SPDX expression is
+MIT AND CC0-1.0. Export root IDs identify this layout without changing geometry.
 
-The supplied rear-control contours and panel seam include projections from the
-Steam Controller 2026 model distributed by Khyretos/3dco-plus:
-https://github.com/Khyretos/3dco-plus/tree/main/assets/models/Steam%20Controller%202026
-The model has its own CC BY-NC-SA 4.0 license, separate from the program's MIT
-license. Its notice credits Copyright 2026 Valve Corporation and identifies
-Valve's high-poly model as its basis. The model's license notice is available at:
-https://github.com/Khyretos/3dco-plus/blob/9e2e2a4cf8171ba72fd7c1ad97760fabb0d5c99c/assets/models/Steam%20Controller%202026/license.txt
-License terms: https://creativecommons.org/licenses/by-nc-sa/4.0/
+This is generic artwork, not an exact Steam Controller 2026 silhouette or a
+claim of qualified hardware support. Its mapping retains the saved layout ID,
+standard controls and independent stick clicks. Quick Access remains inert,
+including the generic Share symbol. No paddle or touch-surface graphics are
+supplied. No Steam Controller 2026 model-derived geometry is included in the
+editable source or element exports.
 
-The Steam Controller 2026 two-dimensional artwork is distributed under
-CC BY-NC-SA 4.0. ExoSnap contributors' modifications include the traced and
-refined wireframe, separate controls, pressure surfaces and knockout geometry.
-Attribution, the license link and modification notices must be retained.
-Noncommercial use, adaptation and redistribution are permitted under those
-terms. Adaptations must retain the same license or a compatible license.
-Commercial use of the licensed artwork requires separate permission from the
-applicable rights holder. The model notice identifies Valve as the contact
-for commercial products based on its materials.
-
-The incorporated AL2009man components retain the MIT copyright and license
-notice above. The SPDX expression MIT AND CC-BY-NC-SA-4.0 records both sets of
-terms for this layout. These artwork terms do not relicense the independent
-application source code or the other controller layouts.
-The referenced model and adapted artwork are provided without warranties,
-subject to Section 5 of the linked Creative Commons license.
-
-Release qualification is blocked for the model-derived rear controls and panel
-seam until suitable rights are documented or independently created replacement
-geometry has documented provenance. Cosmetic modifications do not establish
-independent creation. The license attribution above records the supplied
-materials, not approval to ship this layout in a GPL distribution.
-No model mesh, projection data file or model-processing generator is included.
+Exact-model artwork requires documented sufficient rights or reviewed
+independent replacement provenance before inclusion. These notices describe
+the supplied replacement materials, not a legal clearance of the application.

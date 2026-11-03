@@ -12780,8 +12780,8 @@ Kleiner Text auf dem Bildschirm verliert früher an Qualität als Videoinhalte. 
     </message>
     <message>
         <location line="+1"/>
-        <source>Steam Controller (2026)</source>
-        <translation>Steam Controller (2026)</translation>
+        <source>Steam Controller (2026, generic artwork)</source>
+        <translation>Steam Controller (2026, generische Grafik)</translation>
     </message>
     <message>
         <location line="+1"/>

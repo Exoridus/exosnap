@@ -180,15 +180,13 @@ directory alongside the ExoSnap binary.
   The Inter Project Authors, https://github.com/rsms/inter (OFL-1.1).
   No Inter font file is bundled. Rendered artwork is covered by the OFL's
   document exception: https://openfontlicense.org/ofl-faq/
-- **Steam Controller 2026 model reference:** Valve Corporation, Copyright 2026,
-  distributed by Khyretos/3dco-plus in `assets/models/Steam Controller 2026`.
-  The model's own `license.txt` specifies CC BY-NC-SA 4.0, independently of
-  the upstream program's MIT license. The adapted Steam Controller 2026 artwork
-  is distributed under CC BY-NC-SA 4.0. Incorporated AL2009man components retain
-  their MIT notices, recorded together as MIT AND CC-BY-NC-SA-4.0. Source links,
-  attribution, modification details and noncommercial/share-alike terms are in
-  the bundled controller source notice. The application source code retains
-  its own license. Artwork-draft status concerns visual qualification.
+- **Steam Controller 2026 fallback:** exact copies of the Generic controller's
+  CC0 Xelu/Luna geometry and MIT AL2009man controls credited above, recorded as
+  MIT AND CC0-1.0. The editable source and all element exports use this generic
+  geometry. No Steam Controller 2026 model-derived geometry is bundled in this
+  layout. The drawing does not claim the physical controller's silhouette or
+  qualified hardware support. Source links and attribution are retained in the
+  bundled controller source notice.
 - **Additional provenance:** source URLs and modification details for these
   artwork sources are retained in `licenses/gamepad-al2009man-notice.txt`.
 - **Legacy fixtures:** Nicolae (Xelu) Berbece, Free Controller & Key Prompts,
