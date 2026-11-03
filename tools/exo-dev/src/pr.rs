@@ -1,9 +1,8 @@
 //! Opens and merges a pull request with the title grammar `commit_policy` owns.
 //!
 //! `open` creates the pull request as a draft, reads its stored metadata back
-//! and re-validates it before marking it ready. A draft does not start the
-//! heavy Windows legs, so a title this module somehow got wrong costs
-//! nothing but the draft.
+//! and re-validates it before marking it ready. Draft status protects this
+//! metadata transition; the CI workflow can still build draft pull requests.
 //!
 //! `merge` never merges without `confirm`: without it, the constructed
 //! subject is only previewed. Nothing checks or refuses anything less than
@@ -31,12 +30,20 @@ use crate::git::Git;
 use crate::process;
 
 mod stack;
+mod update;
 pub use stack::{MergeStackOutcome, MergeStackRequest, merge_stack, render_merge_stack};
+pub use update::{UpdateOutcome, UpdateRequest, render_update, update_branch};
 
 /// The repository every `gh pr` call targets. Matches the remote this tree is
 /// developed against; a fork would need its own value here, same as the
 /// scripts this module replaces.
 const REPO: &str = "Exoridus/exosnap";
+
+fn valid_sha(sha: &str) -> bool {
+    sha.len() == 40
+        && sha.bytes().all(|byte| byte.is_ascii_hexdigit())
+        && sha.bytes().any(|byte| byte != b'0')
+}
 
 static TRAILING_CITATION: LazyLock<Regex> = LazyLock::new(|| Regex::new(r"\(#[0-9]+\)$").unwrap());
 
@@ -333,6 +340,8 @@ pub fn render_open(outcome: &OpenOutcome) -> String {
 pub struct MergeRequest {
     /// The pull request to merge. Defaults to the one for the current branch.
     pub number: Option<u32>,
+    /// Reviewed head to bind to confirmation. Required when `confirm` is set.
+    pub expected_head: Option<String>,
     /// Required to actually merge. Without it, `merge` only previews.
     pub confirm: bool,
     /// Delete the head branch after the merge.
@@ -344,6 +353,7 @@ pub struct MergeRequest {
 #[derive(Debug)]
 pub struct MergePreview {
     pub number: u32,
+    pub head: String,
     pub subject: String,
     pub section: Option<&'static str>,
     pub merge_state: String,
@@ -355,6 +365,7 @@ pub struct Merged {
     pub subject: String,
     pub section: Option<&'static str>,
     pub auto: bool,
+    pub head: String,
     pub merge_state: String,
     /// `gh pr merge`'s own stdout, for the caller to show the way the
     /// script's `| Write-Host` showed it.
@@ -384,13 +395,17 @@ pub fn merge(
         }
     };
 
-    let view = view_json(gh, &selector, "number,title,state,isDraft,mergeStateStatus")?;
+    const FIELDS: &str =
+        "number,title,state,isDraft,mergeStateStatus,headRefName,headRefOid,baseRefName,baseRefOid";
+    let view = view_json(gh, &selector, FIELDS)?;
     let number = view["number"]
         .as_u64()
         .context("gh pr view returned no number")? as u32;
     let title = view["title"].as_str().unwrap_or_default().to_string();
     let state = view["state"].as_str().unwrap_or_default().to_string();
-    let is_draft = view["isDraft"].as_bool().unwrap_or(false);
+    let is_draft = view["isDraft"]
+        .as_bool()
+        .context("pull request draft state is missing")?;
     let merge_state = view["mergeStateStatus"]
         .as_str()
         .unwrap_or_default()
@@ -402,6 +417,10 @@ pub fn merge(
     if is_draft {
         bail!("pull request #{number} is a draft");
     }
+    anyhow::ensure!(
+        request.number.is_none_or(|expected| expected == number),
+        "pull request identity differs from the requested number"
+    );
 
     let parsed_title = commit_policy::parse(&title, false, Some(number));
     if !parsed_title.valid {
@@ -440,11 +459,50 @@ pub fn merge(
     if !request.confirm {
         return Ok(MergeOutcome::Preview(MergePreview {
             number,
+            head: view["headRefOid"].as_str().unwrap_or_default().to_string(),
             subject,
             section: merged.section,
             merge_state,
         }));
     }
+
+    let head = view["headRefOid"]
+        .as_str()
+        .filter(|sha| valid_sha(sha))
+        .context("pull request has no valid head SHA")?;
+    anyhow::ensure!(
+        request
+            .expected_head
+            .as_deref()
+            .filter(|sha| valid_sha(sha))
+            == Some(head),
+        "confirmation requires --expected-head matching the reviewed current head"
+    );
+    anyhow::ensure!(
+        view["baseRefOid"].as_str().is_some_and(valid_sha)
+            && ["headRefName", "baseRefName"].iter().all(|field| {
+                view[field]
+                    .as_str()
+                    .is_some_and(|reference| !reference.is_empty())
+            }),
+        "pull request has no valid base SHA or branch identity"
+    );
+    let current = view_json(gh, &number.to_string(), FIELDS)?;
+    anyhow::ensure!(
+        [
+            "number",
+            "title",
+            "state",
+            "isDraft",
+            "headRefName",
+            "headRefOid",
+            "baseRefName",
+            "baseRefOid"
+        ]
+        .iter()
+        .all(|field| current[field] == view[field]),
+        "pull request identity changed before merge; nothing submitted"
+    );
 
     let number_str = number.to_string();
     let mut merge_args: Vec<String> = vec![
@@ -458,6 +516,8 @@ pub fn merge(
         subject.clone(),
         "--body".into(),
         String::new(),
+        "--match-head-commit".into(),
+        head.to_string(),
     ];
     if request.auto {
         merge_args.push("--auto".into());
@@ -473,6 +533,7 @@ pub fn merge(
         subject,
         section: merged.section,
         auto: request.auto,
+        head: head.to_string(),
         merge_state,
         merge_output,
     }))
@@ -481,9 +542,10 @@ pub fn merge(
 pub fn render_merge(outcome: &MergeOutcome) -> String {
     match outcome {
         MergeOutcome::Preview(preview) => format!(
-            "  #{}  merge state {}\n  subject  {}\n  files under {}\n\nNothing merged: --confirm was not given.\n",
+            "  #{}  merge state {}\n  head {}\n  subject  {}\n  files under {}\n\nNothing merged: --confirm was not given.\n",
             preview.number,
             preview.merge_state,
+            preview.head,
             preview.subject,
             preview.section.unwrap_or("no changelog section")
         ),
@@ -496,15 +558,17 @@ pub fn render_merge(outcome: &MergeOutcome) -> String {
                 merged.section.unwrap_or("no changelog section")
             );
             push_gh_output(&mut out, &merged.merge_output);
-            out.push_str(&format!(
-                "pull request #{} {}\n",
-                merged.number,
-                if merged.auto {
-                    "queued for auto-merge"
-                } else {
-                    "merged"
-                }
-            ));
+            if merged.auto {
+                out.push_str(&format!(
+                    "pull request #{} auto-merge enabled for head {}; completion is not verified\n",
+                    merged.number, merged.head
+                ));
+            } else {
+                out.push_str(&format!(
+                    "pull request #{} merged from head {}\n",
+                    merged.number, merged.head
+                ));
+            }
             out
         }
     }
@@ -519,11 +583,11 @@ mod tests {
     use super::*;
     use crate::test_support::fixture_repo_committed;
     use std::cell::RefCell;
-    use std::collections::HashMap;
+    use std::collections::{HashMap, VecDeque};
 
     struct FakeGh {
         calls: RefCell<Vec<Vec<String>>>,
-        view_json: String,
+        views: RefCell<VecDeque<String>>,
         /// Canned stdout for calls other than `pr view`, keyed by `"<verb>
         /// <noun>"` (e.g. `"pr create"`). Unset combinations return "".
         outputs: RefCell<HashMap<String, String>>,
@@ -533,7 +597,7 @@ mod tests {
         fn new(view_json: &str) -> FakeGh {
             FakeGh {
                 calls: RefCell::new(Vec::new()),
-                view_json: view_json.to_string(),
+                views: RefCell::new(VecDeque::from([view_json.to_string()])),
                 outputs: RefCell::new(HashMap::new()),
             }
         }
@@ -561,7 +625,12 @@ mod tests {
                 .borrow_mut()
                 .push(args.iter().map(|s| s.to_string()).collect());
             if args.first() == Some(&"pr") && args.get(1) == Some(&"view") {
-                return Ok(self.view_json.clone());
+                let mut views = self.views.borrow_mut();
+                return Ok(if views.len() > 1 {
+                    views.pop_front().unwrap()
+                } else {
+                    views.front().unwrap().clone()
+                });
             }
             if let (Some(verb), Some(noun)) = (args.first(), args.get(1)) {
                 let key = format!("{verb} {noun}");
@@ -841,9 +910,10 @@ mod tests {
     // -- merge ----------------------------------------------------------------
 
     fn merge_view(title: &str, state: &str, is_draft: bool, merge_state: &str) -> String {
-        format!(
-            r#"{{"number":400,"title":"{title}","state":"{state}","isDraft":{is_draft},"mergeStateStatus":"{merge_state}"}}"#
-        )
+        serde_json::json!({"number":400,"title":title,"state":state,"isDraft":is_draft,
+            "mergeStateStatus":merge_state,"headRefName":"topic","headRefOid":"a".repeat(40),
+            "baseRefName":"next","baseRefOid":"b".repeat(40)})
+        .to_string()
     }
 
     #[test]
@@ -858,6 +928,7 @@ mod tests {
         let request = MergeRequest {
             number: Some(400),
             confirm: false,
+            expected_head: None,
             delete_branch: false,
             auto: false,
         };
@@ -891,6 +962,7 @@ mod tests {
         let request = MergeRequest {
             number: Some(400),
             confirm: true,
+            expected_head: Some("a".repeat(40)),
             delete_branch: false,
             auto: false,
         };
@@ -915,6 +987,7 @@ mod tests {
         let request = MergeRequest {
             number: Some(400),
             confirm: true,
+            expected_head: Some("a".repeat(40)),
             delete_branch: false,
             auto: false,
         };
@@ -934,6 +1007,7 @@ mod tests {
         let request = MergeRequest {
             number: Some(400),
             confirm: true,
+            expected_head: Some("a".repeat(40)),
             delete_branch: false,
             auto: false,
         };
@@ -950,7 +1024,7 @@ mod tests {
     }
 
     #[test]
-    fn merge_confirm_merges_and_passes_delete_branch_and_auto_through() {
+    fn merge_confirm_pins_the_head_and_rereads_identity() {
         let dir = tempfile::tempdir().unwrap();
         let gh = FakeGh::new(&merge_view(
             "feat(engine): add device enumeration",
@@ -961,8 +1035,9 @@ mod tests {
         let request = MergeRequest {
             number: Some(400),
             confirm: true,
+            expected_head: Some("a".repeat(40)),
             delete_branch: true,
-            auto: true,
+            auto: false,
         };
         let outcome = merge(dir.path(), &gh, &request).unwrap();
         match outcome {
@@ -971,7 +1046,7 @@ mod tests {
                     merged.subject,
                     "feat(engine): add device enumeration (#400)"
                 );
-                assert!(merged.auto);
+                assert!(!merged.auto);
             }
             MergeOutcome::Preview(_) => panic!("must merge when --confirm is set"),
         }
@@ -986,9 +1061,156 @@ mod tests {
             "feat(engine): add device enumeration (#400)",
             "--body",
             "",
-            "--auto",
+            "--match-head-commit",
+            &"a".repeat(40),
             "--delete-branch",
         ]));
+        assert_eq!(
+            gh.calls().iter().filter(|call| call[1] == "view").count(),
+            2
+        );
+    }
+
+    #[test]
+    fn merge_refuses_identity_drift_before_action() {
+        for field in [
+            "title",
+            "headRefOid",
+            "baseRefOid",
+            "headRefName",
+            "baseRefName",
+            "state",
+            "isDraft",
+        ] {
+            let original = merge_view(
+                "feat(engine): add device enumeration",
+                "OPEN",
+                false,
+                "CLEAN",
+            );
+            let gh = FakeGh::new(&original);
+            let mut changed: Value = serde_json::from_str(&original).unwrap();
+            changed[field] = if field == "isDraft" {
+                true.into()
+            } else {
+                "changed".into()
+            };
+            gh.views.borrow_mut().push_back(changed.to_string());
+            let request = MergeRequest {
+                number: Some(400),
+                confirm: true,
+                expected_head: Some("a".repeat(40)),
+                delete_branch: false,
+                auto: false,
+            };
+            let error = merge(Path::new("."), &gh, &request).unwrap_err();
+            assert!(
+                error.to_string().contains("identity changed"),
+                "{field}: {error}"
+            );
+            assert!(!gh.calls().iter().any(|call| call[1] == "merge"));
+        }
+    }
+
+    #[test]
+    fn merge_refuses_missing_or_invalid_head_and_base_shas() {
+        for field in ["headRefOid", "baseRefOid"] {
+            for invalid in [Value::Null, "".into(), "0".repeat(40).into(), "bad".into()] {
+                let mut view: Value = serde_json::from_str(&merge_view(
+                    "fix(engine): bound capture",
+                    "OPEN",
+                    false,
+                    "CLEAN",
+                ))
+                .unwrap();
+                view[field] = invalid;
+                let gh = FakeGh::new(&view.to_string());
+                let request = MergeRequest {
+                    number: Some(400),
+                    confirm: true,
+                    expected_head: Some("a".repeat(40)),
+                    delete_branch: false,
+                    auto: false,
+                };
+                assert!(merge(Path::new("."), &gh, &request).is_err(), "{field}");
+                assert!(!gh.calls().iter().any(|call| call[1] == "merge"));
+            }
+        }
+    }
+
+    #[test]
+    fn merge_refuses_an_unknown_draft_state() {
+        let mut view: Value = serde_json::from_str(&merge_view(
+            "fix(engine): bound capture",
+            "OPEN",
+            false,
+            "CLEAN",
+        ))
+        .unwrap();
+        view["isDraft"] = Value::Null;
+        let gh = FakeGh::new(&view.to_string());
+        let request = MergeRequest {
+            number: Some(400),
+            confirm: true,
+            expected_head: Some("a".repeat(40)),
+            delete_branch: false,
+            auto: false,
+        };
+        assert!(merge(Path::new("."), &gh, &request).is_err());
+        assert!(!gh.calls().iter().any(|call| call[1] == "merge"));
+    }
+
+    #[test]
+    fn merge_confirmation_requires_the_caller_review_head() {
+        for expected_head in [None, Some("c".repeat(40))] {
+            let gh = FakeGh::new(&merge_view(
+                "fix(engine): bound capture",
+                "OPEN",
+                false,
+                "BLOCKED",
+            ));
+            let request = MergeRequest {
+                number: Some(400),
+                expected_head,
+                confirm: true,
+                delete_branch: false,
+                auto: true,
+            };
+            assert!(merge(Path::new("."), &gh, &request).is_err());
+            assert!(!gh.calls().iter().any(|call| call[1] == "merge"));
+        }
+    }
+
+    #[test]
+    fn pending_auto_merge_reports_the_exact_head_without_claiming_completion() {
+        let gh = FakeGh::new(&merge_view(
+            "fix(engine): bound capture",
+            "OPEN",
+            false,
+            "BLOCKED",
+        ));
+        let request = MergeRequest {
+            number: Some(400),
+            confirm: true,
+            expected_head: Some("a".repeat(40)),
+            delete_branch: false,
+            auto: true,
+        };
+        let outcome = merge(Path::new("."), &gh, &request).unwrap();
+        let rendered = render_merge(&outcome);
+        assert!(
+            rendered.contains(&format!("auto-merge enabled for head {}", "a".repeat(40))),
+            "{rendered}"
+        );
+        assert!(
+            rendered.contains("completion is not verified"),
+            "{rendered}"
+        );
+        assert!(
+            gh.calls()
+                .iter()
+                .any(|args| args.iter().any(|arg| arg == "--auto"))
+        );
     }
 
     #[test]
@@ -1012,6 +1234,7 @@ mod tests {
             &MergeRequest {
                 number: Some(400),
                 confirm: false,
+                expected_head: None,
                 delete_branch: false,
                 auto: false,
             },
@@ -1025,6 +1248,7 @@ mod tests {
             &MergeRequest {
                 number: Some(400),
                 confirm: true,
+                expected_head: Some("a".repeat(40)),
                 delete_branch: false,
                 auto: false,
             },
@@ -1055,6 +1279,7 @@ mod tests {
         let request = MergeRequest {
             number: None,
             confirm: false,
+            expected_head: None,
             delete_branch: false,
             auto: false,
         };

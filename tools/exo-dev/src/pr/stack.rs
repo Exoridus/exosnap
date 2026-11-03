@@ -6,11 +6,15 @@ use anyhow::{Context as _, bail, ensure};
 use serde::Deserialize;
 use serde_json::Value;
 
-use super::{GhRunner, MergeOutcome, MergePreview, MergeRequest, REPO, merge, view_json};
+use super::{
+    GhRunner, MergeOutcome, MergePreview, MergeRequest, REPO, merge, valid_sha, view_json,
+};
 
 pub struct MergeStackRequest {
     /// The native stack number, rather than a member pull request number.
     pub number: u32,
+    /// Reviewed top head to bind to confirmation.
+    pub expected_head: Option<String>,
     /// Required to submit the atomic stack merge.
     pub confirm: bool,
 }
@@ -56,12 +60,6 @@ struct Stack {
 
 fn api(gh: &dyn GhRunner, endpoint: &str) -> anyhow::Result<Value> {
     serde_json::from_str(&gh.run(&["api", endpoint])?).context("invalid GitHub API JSON")
-}
-
-fn valid_sha(sha: &str) -> bool {
-    sha.len() == 40
-        && sha.bytes().all(|byte| byte.is_ascii_hexdigit())
-        && sha.bytes().any(|byte| byte != b'0')
 }
 
 fn snapshot(gh: &dyn GhRunner, number: u32) -> anyhow::Result<Stack> {
@@ -202,6 +200,7 @@ fn merge_stack_with_poll(
             &StoredView(view.to_string()),
             &MergeRequest {
                 number: Some(member.number),
+                expected_head: None,
                 confirm: false,
                 delete_branch: false,
                 auto: false,
@@ -230,6 +229,14 @@ fn merge_stack_with_poll(
         .pull_requests
         .last()
         .context("stack has no top member")?;
+    ensure!(
+        request
+            .expected_head
+            .as_deref()
+            .filter(|sha| valid_sha(sha))
+            == Some(&top.head.sha),
+        "confirmation requires --expected-head matching the reviewed current top head"
+    );
     let endpoint = format!("repos/{REPO}/pulls/{}/merge-async", top.number);
     let sha = format!("sha={}", top.head.sha);
     let mut response: Value = serde_json::from_str(&gh.run(&[
@@ -333,7 +340,10 @@ pub fn render_merge_stack(outcome: &MergeStackOutcome) -> String {
         MergeStackOutcome::Preview { members } => {
             let mut out = String::new();
             for member in members {
-                out.push_str(&format!("  #{}  {}\n", member.number, member.subject));
+                out.push_str(&format!(
+                    "  #{}  {}\n  head {}\n",
+                    member.number, member.subject, member.head
+                ));
             }
             out.push_str("Nothing merged: --confirm was not given.\n");
             out
@@ -445,11 +455,31 @@ mod tests {
             gh,
             &MergeStackRequest {
                 number: 492,
+                expected_head: Some("b".repeat(40)),
                 confirm,
             },
             2,
             &|| {},
         )
+    }
+
+    #[test]
+    fn confirmed_stack_requires_the_caller_review_top_head() {
+        for expected_head in [None, Some("c".repeat(40))] {
+            let gh = FakeGh::valid();
+            let request = MergeStackRequest {
+                number: 492,
+                expected_head,
+                confirm: true,
+            };
+            assert!(merge_stack_with_poll(Path::new("."), &gh, &request, 0, &|| {}).is_err());
+            assert!(
+                gh.calls
+                    .borrow()
+                    .iter()
+                    .all(|args| !args.iter().any(|arg| arg == "PUT"))
+            );
+        }
     }
 
     #[test]
