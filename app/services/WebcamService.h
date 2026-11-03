@@ -234,7 +234,7 @@ class WebcamService : public exosnap::engine::WebcamFrameProvider {
                engine::VisualPublicationWriter publication, engine::SourceToken token);
 
     // Updates only the current capture incarnation. Older requests cannot relabel frames.
-    bool UpdatePublication(engine::VisualPublicationWriter publication, engine::SourceToken token);
+    bool UpdatePublication(engine::VisualPublicationWriter publication, const engine::SourceToken& token);
 
     void Stop();
 

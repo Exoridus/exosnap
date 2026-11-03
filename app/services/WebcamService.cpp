@@ -902,7 +902,7 @@ bool WebcamService::Start(const std::string& device_id, int width, int height, i
     return true;
 }
 
-bool WebcamService::UpdatePublication(engine::VisualPublicationWriter publication, engine::SourceToken token) {
+bool WebcamService::UpdatePublication(engine::VisualPublicationWriter publication, const engine::SourceToken& token) {
     std::lock_guard lock(frame_mutex_);
     if (!publication || !publication_binding_ || !publication_binding_->writer ||
         token.address != publication_binding_->token.address || token.request < publication_binding_->token.request)

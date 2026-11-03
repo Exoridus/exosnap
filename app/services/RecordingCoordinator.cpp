@@ -861,7 +861,7 @@ void RecordingCoordinator::QueueWebcamRequest(QObject* receiver, engine::SourceT
          post_status = std::move(post_status), restart]() mutable {
             webcam_service_.SetControls(settings.controls);
             webcam_service_.SetPublicationStatusCallback(
-                receiver, [post_status](engine::SourceToken event_token, bool ok, QString reason) {
+                receiver, [post_status](engine::SourceToken event_token, bool ok, const QString& reason) {
                     SourceStatus status{event_token, ok ? SourcePhase::Ready : SourcePhase::Waiting, {}};
                     if (!ok)
                         status.reason = engine::EngineError{.code = engine::EngineErrorCode::UnavailableSource,
@@ -899,14 +899,15 @@ WebcamControlHooks RecordingCoordinator::CreateWebcamControlHooks(
     std::function<void()> on_control_settled) {
     WebcamControlHooks hooks;
     hooks.project_settings = std::move(project_settings);
-    hooks.request_start = [this, receiver, on_control_settled](engine::SourceToken token, WebcamSettings settings,
-                                                               engine::VisualPublicationWriter writer,
-                                                               std::function<void(SourceStatus)> post_status) {
+    hooks.request_start = [this, receiver, on_control_settled](
+                              const engine::SourceToken& token, WebcamSettings settings,
+                              engine::VisualPublicationWriter writer, std::function<void(SourceStatus)> post_status) {
         webcam_source_status_ = post_status;
         QueueWebcamRequest(receiver, token, std::move(settings), std::move(writer), std::move(post_status), true,
                            on_control_settled);
     };
-    hooks.request_update = [this, receiver, on_control_settled](engine::SourceToken token, WebcamSettings settings,
+    hooks.request_update = [this, receiver, on_control_settled](const engine::SourceToken& token,
+                                                                WebcamSettings settings,
                                                                 engine::VisualPublicationWriter writer) {
         QueueWebcamRequest(receiver, token, std::move(settings), std::move(writer), webcam_source_status_, false,
                            on_control_settled);
