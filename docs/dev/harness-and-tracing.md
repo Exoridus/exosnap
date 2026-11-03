@@ -115,6 +115,45 @@ Use a fresh output directory for a review package so retired scenarios from an o
 
 The run holds the build tree's lock, so a concurrent build cannot relink the binary mid-sweep. Scrolling and dialogs are applied only after the active page's loader is Ready, so the default four parallel jobs do not lose them to a slow page load.
 
+### Native Controller3D pilot
+
+Build `exosnap_controller3d` with the canonical Qt SDK and its `qtquick3d`, `qtquicktimeline` and
+`qtshadertools` modules. The developer executable is not installed in the recording package.
+Its post-build deployment includes the Quick3D runtime and QML plugins. Start
+`build/windows-x64-ninja-debug/controller3d/exosnap_controller3d.exe` for live GameInput and the Normal/Ghost selector.
+`EXOSNAP_CONTROLLER3D_DEVICE` optionally pins the same hexadecimal device identity accepted by the existing overlay.
+No other process or input provider is opened by the 3D view.
+
+```powershell
+cargo exo-dev test --build-target controller3d_tests --build-target exosnap_controller3d --filter '^controller3d\.' --jobs 1
+cargo exo-dev screenshot sweep --set controller3d --exe build/windows-x64-ninja-debug/controller3d/exosnap_controller3d.exe --appearance dark,light --size 240x160,320x214,480x320 --jobs 1
+```
+
+Pilot fixtures require `--exe`; they are excluded from the main application's `all` screenshot set.
+They cover neutral, half/full presses, cardinal/diagonal sticks, clicks, disconnected/unsupported input,
+side views, Create/Options close-ups and Ghost on a patterned background. Captures use native D3D11
+with WARP by default. Override `QSG_RHI_PREFER_SOFTWARE_RENDERER=0` for the hardware adapter and retain
+`QSG_INFO=1` logs to identify the selected adapter. These are scene captures, not desktop captures.
+The capture window is fully transparent, non-focusable and input-transparent. The Qt offscreen platform
+cannot supply this D3D11 swapchain readback. VSync is disabled in the standalone pilot for timed sampling.
+
+Each PNG has a CSV trace and JSON receipt with capture/input/pose timestamps, pose/frame/ROI hashes,
+actual geometry generation, frame count, elapsed time and requested cadence. No dynamic external texture
+exists in this pilot, so texture generation is unavailable. Camera, light and pose remain fixed.
+Capture time is the requested sample time, input time belongs to the source reading, and pose time is
+sampled after applying that reading. All use the existing 100-nanosecond capture clock, not GPU timestamps.
+Geometry generation counts successful mesh rebuilds. Each trace row describes one completed frame readback.
+`EXOSNAP_CONTROLLER3D_FPS` accepts 30, 60 or 120. `EXOSNAP_CONTROLLER3D_SECONDS` accepts 1 through 30.
+Thirty-second runs also require the requested frame census; stable frames at a lower achieved cadence
+are not a passing hold test. Read both `stable` and `cadence_met`. The synchronous readback is a test
+cost and does not establish recording-compositor throughput. Run timing checks serially.
+
+The normal/ghost depth tests alternate a magenta probe entirely behind the shell and require identical
+images. They then hide the shell and require the probe to become visible. This establishes the tested
+occlusion path, not rear-hint exclusion, arbitrary translucent layering or final model acceptance.
+The shell is a deliberately simple procedural approximation. Hardware input, physical button mechanics,
+rear hints, outlines, Xbox geometry, HDR and recording integration require separate qualification.
+
 ### Attaching screenshots to a pull request
 
 GitHub CLI 2.99 or newer supports image uploads through the repeatable `--attach` flag. Check `gh --version` before reporting that command-line uploads are unavailable. Upgrade an outdated installation or use a verified official portable release without changing the system installation.

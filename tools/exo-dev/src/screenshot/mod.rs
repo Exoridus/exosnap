@@ -183,6 +183,9 @@ pub fn run(repo_root: &Path, args: ScreenshotArgs) -> anyhow::Result<ExitCode> {
         }
     };
 
+    if shots.iter().any(|(_, spec)| spec.controller3d.is_some()) && options.exe.is_none() {
+        bail!("Controller3D fixtures require --exe pointing to exosnap_controller3d.exe");
+    }
     for (_, spec) in &shots {
         values.check(spec, &axes.accent)?;
     }
@@ -337,7 +340,16 @@ fn resolve_binary(repo_root: &Path, explicit: Option<&Path>) -> anyhow::Result<B
         Some(path) => {
             let metadata = std::fs::metadata(path)
                 .with_context(|| format!("--exe {} does not exist", path.display()))?;
-            (std::path::absolute(path)?, None, metadata.modified().ok())
+            let path = std::path::absolute(path)?;
+            let canonical = std::fs::canonicalize(&path)?;
+            let root = std::fs::canonicalize(repo_root)?;
+            let tree = canonical
+                .ancestors()
+                .take_while(|ancestor| ancestor.starts_with(&root))
+                .find(|ancestor| ancestor.join("CMakeCache.txt").is_file())
+                .and_then(|ancestor| ancestor.strip_prefix(&root).ok())
+                .map(|ancestor| ancestor.to_string_lossy().replace('\\', "/"));
+            (path, tree, metadata.modified().ok())
         }
         None => {
             let artifact = resolve_built_artifact(repo_root, Path::new("app/exosnap.exe"))?
@@ -584,7 +596,18 @@ fn take(context: &RunContext, index: usize, job: &Job) -> ShotResult {
     result
 }
 
-fn configure_render_platform(command: &mut Command, args: &[String]) {
+fn configure_render_platform(command: &mut Command, args: &[String], controller3d: bool) {
+    if controller3d {
+        command.env("QT_QPA_PLATFORM", "windows");
+        command.env("QT_QUICK_BACKEND", "rhi");
+        command.env("QSG_RHI_BACKEND", "d3d11");
+        command.env(
+            "QSG_RHI_PREFER_SOFTWARE_RENDERER",
+            std::env::var_os("QSG_RHI_PREFER_SOFTWARE_RENDERER").unwrap_or_else(|| "1".into()),
+        );
+        command.env("QSG_RENDER_LOOP", "basic");
+        return;
+    }
     if !args
         .iter()
         .any(|arg| arg == "--visual-live-preview" || arg == "--desktop-pattern")
@@ -615,7 +638,12 @@ fn spawn_and_wait(
         }
     }
     context.child_env.apply(&mut command);
-    configure_render_platform(&mut command, args);
+    configure_render_platform(
+        &mut command,
+        args,
+        env.iter()
+            .any(|(name, _)| name == "EXOSNAP_VISUAL_CONTROLLER3D"),
+    );
     // Fresh per shot: a crash report or recovery entry left by an earlier
     // shot would otherwise cover every later one.
     configure_shot_isolation(&mut command, &config_dir)?;
@@ -795,6 +823,43 @@ mod tests {
     use super::*;
 
     #[test]
+    fn explicit_pilot_binary_retains_its_build_tree_lock() {
+        let directory = tempfile::tempdir().unwrap();
+        for (tree, binary) in [
+            (
+                "build/windows-x64-ninja-debug",
+                "controller3d/exosnap_controller3d.exe",
+            ),
+            (
+                "build/windows-x64-release",
+                "controller3d/Release/exosnap_controller3d.exe",
+            ),
+        ] {
+            let build = directory.path().join(tree);
+            let executable = build.join(binary);
+            std::fs::create_dir_all(executable.parent().unwrap()).unwrap();
+            std::fs::write(build.join("CMakeCache.txt"), "").unwrap();
+            std::fs::write(&executable, "fixture").unwrap();
+            let resolved = resolve_binary(directory.path(), Some(&executable)).unwrap();
+            assert_eq!(resolved.tree.as_deref(), Some(tree));
+            #[cfg(windows)]
+            {
+                let differently_cased = PathBuf::from(executable.to_string_lossy().to_uppercase());
+                let resolved = resolve_binary(directory.path(), Some(&differently_cased)).unwrap();
+                assert_eq!(resolved.tree.as_deref(), Some(tree));
+            }
+        }
+        let standalone = directory.path().join("standalone.exe");
+        std::fs::write(&standalone, "fixture").unwrap();
+        assert!(
+            resolve_binary(directory.path(), Some(&standalone))
+                .unwrap()
+                .tree
+                .is_none()
+        );
+    }
+
+    #[test]
     fn unpreserved_application_log_survives_final_scratch_cleanup() {
         let directory = tempfile::tempdir().unwrap();
         let scratch = directory.path().join("scratch");
@@ -855,7 +920,7 @@ mod tests {
     #[test]
     fn synthetic_shots_are_offscreen_and_live_preview_keeps_native_rendering() {
         let mut synthetic = Command::new("exosnap");
-        configure_render_platform(&mut synthetic, &[]);
+        configure_render_platform(&mut synthetic, &[], false);
         assert!(
             synthetic
                 .get_envs()
@@ -864,11 +929,33 @@ mod tests {
         );
         for flag in ["--visual-live-preview", "--desktop-pattern"] {
             let mut live = Command::new("exosnap");
-            configure_render_platform(&mut live, &[flag.into()]);
+            configure_render_platform(&mut live, &[flag.into()], false);
             assert_eq!(live.get_envs().count(), 0);
         }
     }
 
+    #[test]
+    fn controller3d_uses_native_rhi_instead_of_the_2d_software_backend() {
+        let mut command = Command::new("exosnap_controller3d");
+        configure_render_platform(&mut command, &[], true);
+        let env: std::collections::BTreeMap<_, _> = command.get_envs().collect();
+        for (name, expected) in [
+            ("QT_QPA_PLATFORM", "windows"),
+            ("QT_QUICK_BACKEND", "rhi"),
+            ("QSG_RHI_BACKEND", "d3d11"),
+        ] {
+            assert_eq!(
+                env.get(std::ffi::OsStr::new(name)),
+                Some(&Some(std::ffi::OsStr::new(expected)))
+            );
+        }
+        let preference =
+            std::env::var_os("QSG_RHI_PREFER_SOFTWARE_RENDERER").unwrap_or_else(|| "1".into());
+        assert_eq!(
+            env.get(std::ffi::OsStr::new("QSG_RHI_PREFER_SOFTWARE_RENDERER")),
+            Some(&Some(preference.as_os_str()))
+        );
+    }
     #[test]
     fn the_user_theme_comes_from_the_settings_file() {
         let text = "[General]

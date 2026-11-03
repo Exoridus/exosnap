@@ -211,7 +211,7 @@ directory alongside the ExoSnap binary.
 
 ### Qt
 
-- **Version:** 6.11.2 (open source edition)
+- **Version:** 6.12.0 (open source edition)
 - **Project:** https://www.qt.io
 - **License:** Available under LGPLv3, GPLv2, GPLv3, or Qt Commercial License.
   This distribution uses the open source edition.
@@ -220,6 +220,7 @@ directory alongside the ExoSnap binary.
   - added by `windeployqt` because the above need them: the remaining Qml, Quick and Basic Controls style libraries, Network, OpenGL, and the platform, image format, icon engine, network information and style plugins
 
   The shipped tree carries only the Basic Quick Controls style ExoSnap selects, and no QML debugger/profiler/preview (`qmltooling`) plugins. `exo-verify package` prunes other styles and the tooling plugins and refuses their return. The package manifest is the authoritative list: it names every deployed file with its SHA-256.
+- **Developer pilot:** Qt Quick 3D is used under GPLv3 in the separate Controller3D executable. It is not deployed with the recording application. No third-party controller model is bundled.
 - **Bundled license:** `licenses/qt.txt` (canonical LGPLv3 text from the Free
   Software Foundation)
 - **Note:** Qt DLLs are deployed alongside the ExoSnap binary by `windeployqt`.

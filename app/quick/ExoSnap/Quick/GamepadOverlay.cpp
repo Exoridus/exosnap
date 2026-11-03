@@ -298,6 +298,15 @@ std::shared_ptr<const engine::SpriteLayerSnapshot> GamepadOverlay::PreviewSnapsh
     return BuildSnapshot(timestamp, true);
 }
 
+std::optional<gamepad::GamepadReading> GamepadOverlay::ReadingAt(uint64_t timestamp) const {
+    std::shared_ptr<gamepad::GameInputSource> input;
+    {
+        const std::scoped_lock lock(mutex_);
+        input = input_;
+    }
+    return input ? input->StateAt(timestamp) : std::nullopt;
+}
+
 gamepad::GamepadState GamepadOverlay::DisplayState(gamepad::GamepadState state) {
     if (state.controls_normalized) {
         for (const auto control : {gamepad::Control::LeftStick, gamepad::Control::RightStick}) {
