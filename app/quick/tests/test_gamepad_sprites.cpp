@@ -434,6 +434,26 @@ class GamepadOverlayTest : public ::testing::Test {
     static bool HasPublishedSprites(const GamepadOverlay& overlay) {
         return overlay.published_sprites_ != nullptr;
     }
+    static void RecordInputFailure(GamepadOverlay& overlay, std::string error) {
+        overlay.RecordInputStartFailure(std::move(error));
+    }
+    static bool HasInputFailure(const GamepadOverlay& overlay) {
+        return overlay.input_start_error_.has_value();
+    }
+    static bool StartupWorkStopped(const GamepadOverlay& overlay) {
+        return !overlay.input_ && !overlay.native_ && !overlay.poll_.isActive() && !overlay.raster_.isActive();
+    }
+    static void ExerciseUnavailableBackend(GamepadOverlay& overlay) {
+        for (uint64_t tick = 1; tick <= 3; ++tick) {
+            overlay.Poll();
+            const auto before_native = overlay.status();
+            overlay.UpdateNative(std::nullopt, tick);
+            if (overlay.input_start_error_)
+                EXPECT_EQ(overlay.status(), before_native);
+            overlay.PublishVisualData();
+            overlay.Rebuild();
+        }
+    }
     static void PrepareNativeWithoutEndpoint(GamepadOverlay& overlay, std::vector<SourceStatus>& statuses) {
         overlay.visual_runtime_ = std::make_shared<engine::VisualSceneRuntime>(engine::VisualBudgetPolicy{});
         overlay.visual_token_ = {{engine::VisualSourceId{{1}}, engine::VisualRuntimeGeneration{1}},
@@ -453,6 +473,93 @@ class GamepadOverlayTest : public ::testing::Test {
         EXPECT_FALSE(overlay.input_);
     }
 };
+
+TEST_F(GamepadOverlayTest, StartupFailureSurvivesPollingAndNewRequestsInBothViews) {
+    int argc = 1;
+    char name[] = "gamepad-tests";
+    char* argv[]{name, nullptr};
+    QCoreApplication application(argc, argv);
+    for (const auto view : {GamepadView::TwoDimensional, GamepadView::NativeNormal}) {
+        for (const auto* error :
+             {"GameInputCreate failed (0x80004005)", "GameInput callback registration failed (0x80070005)"}) {
+            SCOPED_TRACE(error);
+            GamepadOverlay overlay;
+            const auto hooks =
+                overlay.CreateControlHooks(std::make_shared<engine::VisualSceneRuntime>(engine::VisualBudgetPolicy{}));
+            auto settings = overlay.Settings();
+            settings.enabled = true;
+            settings.view = view;
+            overlay.Configure(settings);
+            RecordInputFailure(overlay, error);
+            std::vector<SourceStatus> statuses;
+            engine::SourceToken token{{engine::VisualSourceId{{1}}, engine::VisualRuntimeGeneration{1}},
+                                      engine::SourceRequestRevision{1}};
+            const auto status = [&statuses](SourceStatus value) { statuses.push_back(std::move(value)); };
+            hooks.request_prepare(token, settings, status);
+            ExerciseUnavailableBackend(overlay);
+            ASSERT_EQ(statuses.size(), 1u);
+            ++token.request.value;
+            hooks.request_prepare(token, settings, status);
+            ExerciseUnavailableBackend(overlay);
+            ASSERT_EQ(statuses.size(), 2u);
+            EXPECT_EQ(statuses.back().token, token);
+            EXPECT_EQ(overlay.status(), QStringLiteral("GameInput unavailable: %1").arg(QString::fromLatin1(error)));
+            EXPECT_TRUE(StartupWorkStopped(overlay));
+            for (const auto& published : statuses) {
+                EXPECT_EQ(published.phase, SourcePhase::Failed);
+                ASSERT_TRUE(published.reason);
+                EXPECT_EQ(published.reason->code, engine::EngineErrorCode::UnavailableSource);
+                EXPECT_EQ(published.reason->owner, engine::EngineModule::Runtime);
+                EXPECT_EQ(published.reason->retryability, engine::Retryability::AfterUserAction);
+                EXPECT_EQ(published.reason->context, error);
+                EXPECT_FALSE(published.reason->hresult);
+            }
+        }
+    }
+}
+
+TEST_F(GamepadOverlayTest, StopClearsStartupFailureAndDrainsExistingRasterFence) {
+    int argc = 1;
+    char name[] = "gamepad-tests";
+    char* argv[]{name, nullptr};
+    QCoreApplication application(argc, argv);
+    GamepadOverlay overlay;
+    const auto hooks =
+        overlay.CreateControlHooks(std::make_shared<engine::VisualSceneRuntime>(engine::VisualBudgetPolicy{}));
+    auto settings = overlay.Settings();
+    settings.enabled = true;
+    overlay.Configure(settings);
+    RecordInputFailure(overlay, "GameInputCreate failed (0x80004005)");
+    const engine::SourceToken token{{engine::VisualSourceId{{1}}, engine::VisualRuntimeGeneration{1}},
+                                    engine::SourceRequestRevision{1}};
+    int statuses = 0;
+    hooks.request_prepare(token, settings, [&statuses](SourceStatus) { ++statuses; });
+    ASSERT_TRUE(HasInputFailure(overlay));
+    hooks.request_stop();
+    WaitRaster(overlay);
+    QCoreApplication::processEvents();
+    EXPECT_FALSE(HasInputFailure(overlay));
+    EXPECT_TRUE(BackendIdle(overlay));
+    EXPECT_TRUE(hooks.is_quiescent());
+    EXPECT_TRUE(overlay.status().isEmpty());
+    EXPECT_EQ(statuses, 1);
+}
+
+TEST_F(GamepadOverlayTest, MissingControllerWithoutStartupFailureRemainsWaiting) {
+    int argc = 1;
+    char name[] = "gamepad-tests";
+    char* argv[]{name, nullptr};
+    QCoreApplication application(argc, argv);
+    GamepadOverlay overlay;
+    std::vector<SourceStatus> statuses;
+    PrepareNativeWithoutEndpoint(overlay, statuses);
+    ExerciseUnavailableBackend(overlay);
+    EXPECT_FALSE(HasInputFailure(overlay));
+    EXPECT_EQ(overlay.status(), QStringLiteral("3D view requires a connected DualSense controller"));
+    ASSERT_EQ(statuses.size(), 1u);
+    EXPECT_EQ(statuses.front().phase, SourcePhase::Waiting);
+    EXPECT_FALSE(statuses.front().reason);
+}
 
 TEST_F(GamepadOverlayTest, NativeAdmissionWaitsWithoutAllocatingRendererOrOpeningInput) {
     int argc = 1;

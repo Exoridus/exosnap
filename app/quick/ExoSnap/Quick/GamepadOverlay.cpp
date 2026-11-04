@@ -181,11 +181,11 @@ void GamepadOverlay::ConfigureBackend(GamepadOverlaySettings settings) {
         const std::scoped_lock lock(mutex_);
         input = input_;
     }
-    if (wanted && !input) {
+    if (wanted && !input && !input_start_error_) {
         std::string error;
         input = gamepad::GameInputSource::Start(error);
         if (!input)
-            SetStatus(tr("GameInput unavailable: %1").arg(QString::fromStdString(error)));
+            RecordInputStartFailure(std::move(error));
     }
     if (!wanted)
         input.reset();
@@ -207,7 +207,10 @@ void GamepadOverlay::ConfigureBackend(GamepadOverlaySettings settings) {
     }
     const bool was_running = native_enabled_;
     native_enabled_ = wanted;
-    if (wanted) {
+    if (wanted && ReportInputStartFailure()) {
+        poll_.stop();
+        raster_.stop();
+    } else if (wanted) {
         poll_.start();
         if (!was_running || previous.layout != settings.layout || previous.width != settings.width ||
             previous.height != settings.height || !sprites_) {
@@ -229,11 +232,30 @@ void GamepadOverlay::ConfigureBackend(GamepadOverlaySettings settings) {
             sprites_.reset();
         }
         atlas_key_.clear();
+        input_start_error_.reset();
         SetStatus({});
         emit frameChanged();
     }
     if (previous != settings)
         emit settingsChanged();
+}
+
+void GamepadOverlay::RecordInputStartFailure(std::string error) {
+    input_start_error_ = engine::EngineError{.code = engine::EngineErrorCode::UnavailableSource,
+                                             .owner = engine::EngineModule::Runtime,
+                                             .context = std::move(error),
+                                             .retryability = engine::Retryability::AfterUserAction};
+}
+
+bool GamepadOverlay::ReportInputStartFailure() {
+    if (!input_start_error_)
+        return false;
+    SetStatus(tr("GameInput unavailable: %1").arg(QString::fromStdString(input_start_error_->context)));
+    if (visual_runtime_ && source_demand_ && visual_status_ && !visual_waiting_) {
+        visual_waiting_ = true;
+        visual_status_({visual_token_, SourcePhase::Failed, *input_start_error_});
+    }
+    return true;
 }
 
 GamepadControlHooks GamepadOverlay::CreateControlHooks(std::shared_ptr<engine::VisualSceneRuntime> runtime) {
@@ -273,7 +295,7 @@ GamepadControlHooks GamepadOverlay::CreateControlHooks(std::shared_ptr<engine::V
 void GamepadOverlay::PublishVisualData() {
     if (!visual_runtime_ || !source_demand_ || !visual_status_)
         return;
-    if (Settings().view != GamepadView::TwoDimensional)
+    if (ReportInputStartFailure() || Settings().view != GamepadView::TwoDimensional)
         return;
     if (published_token_ == visual_token_ && published_sprites_ == sprites_.get())
         return;
@@ -331,6 +353,8 @@ void GamepadOverlay::UpdateNative(const std::optional<gamepad::GamepadReading>& 
         RetireNative();
         return;
     }
+    if (ReportInputStartFailure())
+        return;
     const auto waiting = [this](QString message, std::optional<engine::EngineError> error = {}) {
         SetStatus(std::move(message));
         if (!visual_waiting_) {
@@ -493,7 +517,7 @@ void GamepadOverlay::setContentSize(QSize size) {
 
 void GamepadOverlay::Rebuild() {
     const auto settings = Settings();
-    if (!native_enabled_ || (visual_runtime_ && settings.view != GamepadView::TwoDimensional))
+    if (!native_enabled_ || input_start_error_ || (visual_runtime_ && settings.view != GamepadView::TwoDimensional))
         return;
     const int layout = settings.layout < 0 ? automatic_layout_ : settings.layout;
     const QString file = QString::fromLatin1(kGamepadOverlayArtworkIds[layout].data());
@@ -544,6 +568,8 @@ void GamepadOverlay::Rebuild() {
 }
 
 void GamepadOverlay::Poll() {
+    if (ReportInputStartFailure())
+        return;
     std::shared_ptr<gamepad::GameInputSource> input;
     {
         const std::scoped_lock lock(mutex_);

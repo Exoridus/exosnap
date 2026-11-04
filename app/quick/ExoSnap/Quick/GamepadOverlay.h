@@ -3,9 +3,12 @@
 #include "GamepadSprites.h"
 #include "extensions/GamepadModule.h"
 #include "models/GamepadOverlaySettings.h"
+#include <exosnap/engine/error_types.h>
 #include <exosnap/engine/visual_diagnostics.h>
 
 #include <atomic>
+#include <optional>
+#include <string>
 
 #include <QObject>
 #include <QRectF>
@@ -95,6 +98,8 @@ class GamepadOverlay final : public QObject, public engine::SpriteSourceProvider
     friend class GamepadOverlayTest;
     static gamepad::GamepadState DisplayState(gamepad::GamepadState state);
     void ConfigureBackend(GamepadOverlaySettings);
+    void RecordInputStartFailure(std::string error);
+    bool ReportInputStartFailure();
     void Poll();
     void Rebuild();
     void PublishVisualData();
@@ -107,6 +112,7 @@ class GamepadOverlay final : public QObject, public engine::SpriteSourceProvider
     int content_width_ = 1920;
     int content_height_ = 1080;
     std::shared_ptr<gamepad::GameInputSource> input_;
+    std::optional<engine::EngineError> input_start_error_;
     std::shared_ptr<const GamepadSpriteSet> sprites_;
     std::shared_ptr<const engine::SpriteLayerSnapshot> cached_;
     std::shared_ptr<const engine::SpriteLayerSnapshot> last_notified_;
