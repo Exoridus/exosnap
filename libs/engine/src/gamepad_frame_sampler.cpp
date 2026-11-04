@@ -2,10 +2,21 @@
 
 #include <algorithm>
 #include <cmath>
+#include <cstddef>
+#include <cstdint>
+#include <exception>
+#include <exosnap/engine/gamepad_sprite_data.h>
+#include <exosnap/engine/overlay_sprites.h>
+#include <exosnap/engine/recording_media_types.h>
+#include <exosnap/engine/visual_frame.h>
+#include <exosnap/engine/visual_scene.h>
+#include <exosnap/engine/webcam_placement.h>
+#include <gamepad/gamepad.h>
 #include <limits>
+#include <memory>
 #include <new>
-#include <stdexcept>
 #include <utility>
+#include <variant>
 
 namespace exosnap::engine {
 namespace {

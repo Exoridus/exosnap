@@ -2,14 +2,27 @@
 
 #include "gamepad_frame_sampler.h"
 #include "visual_scene_runtime_storage.h"
+#include <atomic>
+#include <cstddef>
+#include <cstdint>
+#include <exception>
+#include <exosnap/engine/gamepad_sprite_data.h>
+#include <exosnap/engine/overlay_sprites.h>
+#include <exosnap/engine/recording_media_types.h>
+#include <exosnap/engine/visual_frame.h>
+#include <exosnap/engine/visual_scene.h>
+#include <memory>
+#include <mutex>
+#include <optional>
+#include <span>
+#include <variant>
+#include <vector>
 
 #include <algorithm>
 #include <cassert>
 #include <cmath>
 #include <functional>
-#include <limits>
 #include <new>
-#include <stdexcept>
 #include <utility>
 
 namespace exosnap::engine {

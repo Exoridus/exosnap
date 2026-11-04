@@ -1,9 +1,18 @@
 #include "gamepad_frame_sampler.h"
 #include "visual_allocation_probe.h"
 
+#include <cstddef>
+#include <cstdint>
 #include <exosnap/engine/gamepad_sprite_data.h>
+#include <exosnap/engine/overlay_sprites.h>
+#include <exosnap/engine/recording_media_types.h>
+#include <exosnap/engine/visual_frame.h>
+#include <exosnap/engine/visual_scene.h>
 #include <exosnap/engine/visual_scene_runtime.h>
+#include <exosnap/engine/webcam_placement.h>
 #include <gamepad/gamepad.h>
+#include <utility>
+#include <variant>
 
 #include <gtest/gtest.h>
 

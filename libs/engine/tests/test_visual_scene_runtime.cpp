@@ -12,7 +12,14 @@
 #undef min
 
 #include "visual_scene_runtime_storage.h"
+#include <atomic>
+#include <cstdint>
+#include <exosnap/engine/color_metadata.h>
+#include <exosnap/engine/recording_media_types.h>
+#include <exosnap/engine/visual_scene.h>
 #include <exosnap/engine/visual_scene_runtime.h>
+#include <mutex>
+#include <variant>
 
 #include <gtest/gtest.h>
 
@@ -21,7 +28,6 @@
 #include <chrono>
 #include <cstdlib>
 #include <future>
-#include <limits>
 #include <new>
 #include <thread>
 #include <tuple>
