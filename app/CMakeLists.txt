@@ -683,7 +683,7 @@ exosnap_add_gtest(
 )
 target_include_directories(output_settings_tests PRIVATE ${CMAKE_CURRENT_SOURCE_DIR})
 # mfreadwrite.lib removed (MF/SinkWriter path deleted).
-target_link_libraries(output_settings_tests PRIVATE mfplat.lib mf.lib mfuuid.lib ole32.lib)
+target_link_libraries(output_settings_tests PRIVATE tomlplusplus::tomlplusplus mfplat.lib mf.lib mfuuid.lib ole32.lib)
 set_target_properties(output_settings_tests PROPERTIES AUTOMOC ON)
 
 # Observability: the serialization boundary's honesty contract. Fixture-driven,
