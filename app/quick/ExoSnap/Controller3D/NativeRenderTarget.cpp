@@ -75,7 +75,7 @@ bool NativeRenderTarget::Initialize(ID3D11Device* device, ID3D11DeviceContext* c
             error = QStringLiteral("ControllerScene did not create a Quick item.");
         return false;
     }
-    object.release();
+    static_cast<void>(object.release());
     scene_.reset(item);
     scene_->setParentItem(window_->contentItem());
     if (!control_->initialize()) {

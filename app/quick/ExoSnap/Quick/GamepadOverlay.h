@@ -44,7 +44,7 @@ class GamepadOverlay final : public QObject, public engine::SpriteSourceProvider
     GamepadControlHooks CreateControlHooks(std::shared_ptr<engine::VisualSceneRuntime>);
     [[nodiscard]] GamepadOverlaySettings Settings() const;
     // GUI-thread snapshot of the matching active native generation.
-    [[nodiscard]] std::optional<engine::NativeGamepadDiagnostics> NativeDiagnostics(engine::SourceToken) const;
+    [[nodiscard]] std::optional<engine::NativeGamepadDiagnostics> NativeDiagnostics(const engine::SourceToken&) const;
     [[nodiscard]] std::shared_ptr<const engine::SpriteLayerSnapshot> Snapshot(uint64_t frame_time_qpc_100ns) override;
     [[nodiscard]] std::shared_ptr<const engine::SpriteLayerSnapshot> PreviewSnapshot(uint64_t frame_time_qpc_100ns);
 

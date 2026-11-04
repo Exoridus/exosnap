@@ -460,7 +460,7 @@ void captureOnWorker(ReadyFrameSource source, ReadyFrameComposition composition,
 } // namespace
 
 void ReadyFrameCaptureService::Capture(QThreadPool& pool, const ReadyFrameSource& source,
-                                       ReadyFrameComposition composition, Callback callback) {
+                                       const ReadyFrameComposition& composition, Callback callback) {
     // The payload is captured by copy, not moved into a mutable lambda: only a
     // const-callable closure converts to the std::function overload of
     // QThreadPool::start. Nothing here is expensive to copy: the camera frame

@@ -119,7 +119,7 @@ class GpuPublicationLease final {
     friend Outcome<GpuPublicationLease> ReserveGpuData(VisualSceneRuntime&, SourceToken, uint32_t, uint32_t);
     friend Outcome<std::monostate> StageGpuData(VisualSceneRuntime&, GpuPublicationLease&, ID3D11Texture2D*,
                                                 ID3D11DeviceContext*, DeviceGeneration);
-    friend Outcome<GpuPublicationLease> StageGpuData(VisualSceneRuntime&, SourceToken, ID3D11Texture2D*,
+    friend Outcome<GpuPublicationLease> StageGpuData(VisualSceneRuntime&, const SourceToken&, ID3D11Texture2D*,
                                                      ID3D11DeviceContext*, DeviceGeneration);
     detail::GpuResource* resource_ = nullptr;
 };
@@ -272,7 +272,7 @@ class VisualSceneRuntime final {
     friend Outcome<GpuPublicationLease> ReserveGpuData(VisualSceneRuntime&, SourceToken, uint32_t, uint32_t);
     friend Outcome<std::monostate> StageGpuData(VisualSceneRuntime&, GpuPublicationLease&, ID3D11Texture2D*,
                                                 ID3D11DeviceContext*, DeviceGeneration);
-    friend Outcome<GpuPublicationLease> StageGpuData(VisualSceneRuntime&, SourceToken, ID3D11Texture2D*,
+    friend Outcome<GpuPublicationLease> StageGpuData(VisualSceneRuntime&, const SourceToken&, ID3D11Texture2D*,
                                                      ID3D11DeviceContext*, DeviceGeneration);
     friend Outcome<std::monostate> StageGamepadData(VisualSceneRuntime&, SourceToken,
                                                     std::shared_ptr<const GamepadSpriteSet>, gamepad::HistoryReadView);
@@ -291,7 +291,7 @@ Outcome<GpuPublicationLease> ReserveGpuData(VisualSceneRuntime&, SourceToken, ui
 Outcome<std::monostate> StageGpuData(VisualSceneRuntime&, GpuPublicationLease&, ID3D11Texture2D*, ID3D11DeviceContext*,
                                      DeviceGeneration);
 // Convenience for an already-owned texture whose allocation is accounted elsewhere.
-Outcome<GpuPublicationLease> StageGpuData(VisualSceneRuntime&, SourceToken, ID3D11Texture2D*, ID3D11DeviceContext*,
-                                          DeviceGeneration);
+Outcome<GpuPublicationLease> StageGpuData(VisualSceneRuntime&, const SourceToken&, ID3D11Texture2D*,
+                                          ID3D11DeviceContext*, DeviceGeneration);
 
 } // namespace exosnap::engine

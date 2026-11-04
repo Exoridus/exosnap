@@ -18,8 +18,9 @@ class NativeGamepadProducer final {
   public:
     [[nodiscard]] static bool Supports(const gamepad::DeviceIdentity&) noexcept;
     static std::unique_ptr<NativeGamepadProducer> Create(const MappedGamepadArtwork&, gamepad::HistoryReadView,
-                                                         engine::SourceToken, ID3D11Device*, ID3D11DeviceContext*,
-                                                         QSize, bool ghost, bool light, QString& error);
+                                                         const engine::SourceToken&, ID3D11Device*,
+                                                         ID3D11DeviceContext*, QSize, bool ghost, bool light,
+                                                         QString& error);
     ~NativeGamepadProducer() = default;
     NativeGamepadProducer(const NativeGamepadProducer&) = delete;
     NativeGamepadProducer& operator=(const NativeGamepadProducer&) = delete;

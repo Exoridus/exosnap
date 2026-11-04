@@ -261,7 +261,8 @@ bool GamepadOverlay::ReportInputStartFailure() {
 GamepadControlHooks GamepadOverlay::CreateControlHooks(std::shared_ptr<engine::VisualSceneRuntime> runtime) {
     visual_runtime_ = std::move(runtime);
     ConfigureBackend(Settings());
-    return {[this](engine::SourceToken token, GamepadOverlaySettings source, std::function<void(SourceStatus)> status) {
+    return {[this](const engine::SourceToken& token, GamepadOverlaySettings source,
+                   std::function<void(SourceStatus)> status) {
                 RetireNative();
                 native_failed_ = false;
                 visual_token_ = token;
@@ -318,7 +319,8 @@ void GamepadOverlay::PublishVisualData() {
     }
 }
 
-std::optional<engine::NativeGamepadDiagnostics> GamepadOverlay::NativeDiagnostics(engine::SourceToken token) const {
+std::optional<engine::NativeGamepadDiagnostics>
+GamepadOverlay::NativeDiagnostics(const engine::SourceToken& token) const {
     Q_ASSERT(QThread::currentThread() == thread());
     if (!native_ || !native_->producer || token != visual_token_)
         return std::nullopt;

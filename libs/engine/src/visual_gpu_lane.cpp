@@ -19,7 +19,7 @@ bool AdapterLuid(ID3D11Device* device, LUID& luid) {
 
 } // namespace
 
-std::unique_ptr<VisualGpuLane> VisualGpuLane::Create(VisualGpuIdentity identity, ID3D11Texture2D* source,
+std::unique_ptr<VisualGpuLane> VisualGpuLane::Create(const VisualGpuIdentity& identity, ID3D11Texture2D* source,
                                                      ID3D11DeviceContext* producer, ID3D11DeviceContext* consumer,
                                                      std::string& error) {
     if (!consumer || consumer->GetType() != D3D11_DEVICE_CONTEXT_IMMEDIATE) {
@@ -32,7 +32,7 @@ std::unique_ptr<VisualGpuLane> VisualGpuLane::Create(VisualGpuIdentity identity,
 }
 
 std::unique_ptr<VisualGpuLane>
-VisualGpuLane::CreateForRegisteredConsumer(VisualGpuIdentity identity, ID3D11Texture2D* source,
+VisualGpuLane::CreateForRegisteredConsumer(const VisualGpuIdentity& identity, ID3D11Texture2D* source,
                                            ID3D11DeviceContext* producer, ID3D11DeviceContext* consumer,
                                            ID3D11Device* consumer_device, std::string& error) {
     if (!source || !producer || !consumer || !consumer_device || !identity.resource_id || !identity.producer.Valid() ||

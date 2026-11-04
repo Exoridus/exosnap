@@ -474,7 +474,11 @@ int main(int argc, char** argv) {
             {QStringLiteral("probe_pixel_readbacks_in_measured_loop"), static_cast<qint64>(measured_pixel_readbacks)},
             {QStringLiteral("probe_pixel_readbacks_total"), static_cast<qint64>(probe_pixel_readbacks)},
             {QStringLiteral("pixel_readback_counter_scope"),
-             QStringLiteral("Successful pixel Maps in this probe's Capture helper; excludes Qt/driver internals.")},
+             QStringLiteral("Successful pixel Maps in this probe's Capture helper; excludes the separately logged "
+                            "real-provider HDR evidence reads and Qt/driver internals.")},
+            {QStringLiteral("real_provider_hdr_evidence"),
+             QStringLiteral("Normal/Ghost RGBA8 publication to a distinct consumer and FP16 compositor; "
+                            "linear alpha oracle, reference white, opacity, backgrounds and mirror.")},
             {QStringLiteral("cpu_timing_scope"), QStringLiteral("Render submission only; excludes ApplyReading.")},
             {QStringLiteral("gpu_timing_scope"),
              QStringLiteral("Queue timestamp spans include submission gaps; publish/consume attempts include misses.")},
@@ -485,7 +489,8 @@ int main(int argc, char** argv) {
             {QStringLiteral("target_bytes"), 480 * 320 * 4},
             {QStringLiteral("scenarios"), scenarios},
             {QStringLiteral("scope"), QStringLiteral("Native producer correctness and unpaced submission; "
-                                                     "not compositor, recording, HDR, or device-loss qualification.")}};
+                                                     "real-provider HDR shader composition, not physical HDR capture, "
+                                                     "recording, display, or device-loss qualification.")}};
         QFile receipt(directory.filePath(QStringLiteral("native-render.json")));
         Require(receipt.open(QIODevice::WriteOnly), receipt.errorString());
         const auto json = QJsonDocument(report).toJson();

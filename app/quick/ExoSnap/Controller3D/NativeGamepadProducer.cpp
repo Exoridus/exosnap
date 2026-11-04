@@ -19,11 +19,10 @@ NativeGamepadProducer::NativeGamepadProducer(const MappedGamepadArtwork& mapping
     : history_(std::move(history)), token_(token), state_(mapping) {
 }
 
-std::unique_ptr<NativeGamepadProducer> NativeGamepadProducer::Create(const MappedGamepadArtwork& mapping,
-                                                                     gamepad::HistoryReadView history,
-                                                                     engine::SourceToken token, ID3D11Device* device,
-                                                                     ID3D11DeviceContext* context, QSize size,
-                                                                     bool ghost, bool light, QString& error) {
+std::unique_ptr<NativeGamepadProducer>
+NativeGamepadProducer::Create(const MappedGamepadArtwork& mapping, gamepad::HistoryReadView history,
+                              const engine::SourceToken& token, ID3D11Device* device, ID3D11DeviceContext* context,
+                              QSize size, bool ghost, bool light, QString& error) {
     if (!qGuiApp || QThread::currentThread() != qGuiApp->thread() || token.address.source == engine::VisualSourceId{} ||
         token.address.runtime.value == 0 || token.request.value == 0 || history.SelectionGeneration() == 0 ||
         size.width() < 1 || size.height() < 1 || size.width() > 2048 || size.height() > 2048) {

@@ -1224,8 +1224,9 @@ Outcome<std::monostate> StageGpuData(VisualSceneRuntime& runtime, GpuPublication
     return std::monostate{};
 }
 
-Outcome<GpuPublicationLease> StageGpuData(VisualSceneRuntime& runtime, SourceToken token, ID3D11Texture2D* texture,
-                                          ID3D11DeviceContext* context, DeviceGeneration generation) {
+Outcome<GpuPublicationLease> StageGpuData(VisualSceneRuntime& runtime, const SourceToken& token,
+                                          ID3D11Texture2D* texture, ID3D11DeviceContext* context,
+                                          DeviceGeneration generation) {
     if (!texture)
         return Failure(EngineErrorCode::InvalidConfig, "GPU texture");
     D3D11_TEXTURE2D_DESC description{};

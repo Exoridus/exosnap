@@ -37,7 +37,7 @@ struct VisualGpuFrame {
 // Create and destruction occur outside frame processing after both ends quiesce.
 class VisualGpuLane final {
   public:
-    static std::unique_ptr<VisualGpuLane> Create(VisualGpuIdentity, ID3D11Texture2D* source,
+    static std::unique_ptr<VisualGpuLane> Create(const VisualGpuIdentity&, ID3D11Texture2D* source,
                                                  ID3D11DeviceContext* producer, ID3D11DeviceContext* consumer,
                                                  std::string& error);
     ~VisualGpuLane() = default;
@@ -57,7 +57,7 @@ class VisualGpuLane final {
     friend Outcome<std::monostate> StageGpuData(VisualSceneRuntime&, GpuPublicationLease&, ID3D11Texture2D*,
                                                 ID3D11DeviceContext*, DeviceGeneration);
     // The runtime captured this pair on the consumer context's owner thread.
-    static std::unique_ptr<VisualGpuLane> CreateForRegisteredConsumer(VisualGpuIdentity, ID3D11Texture2D*,
+    static std::unique_ptr<VisualGpuLane> CreateForRegisteredConsumer(const VisualGpuIdentity&, ID3D11Texture2D*,
                                                                       ID3D11DeviceContext*, ID3D11DeviceContext*,
                                                                       ID3D11Device*, std::string&);
     VisualGpuLane() = default;

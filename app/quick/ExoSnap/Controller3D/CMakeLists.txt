@@ -102,15 +102,16 @@ target_sources(exosnap_controller3d_native PRIVATE
     ../Quick/GamepadOverlay.cpp ../Quick/GamepadOverlay.h ../Quick/GamepadSprites.cpp ../Quick/GamepadArtwork.cpp
     ${PROJECT_SOURCE_DIR}/libs/engine/src/device_generation.cpp
     ${PROJECT_SOURCE_DIR}/libs/engine/src/gamepad_frame_sampler.cpp
+    ${PROJECT_SOURCE_DIR}/libs/engine/src/gpu_compositor.cpp
     ${PROJECT_SOURCE_DIR}/libs/engine/src/visual_scene_runtime.cpp
     ${PROJECT_SOURCE_DIR}/libs/engine/src/visual_gpu_lane.cpp
     ${PROJECT_SOURCE_DIR}/libs/engine/src/gpu_timestamp_profiler.cpp
     ${PROJECT_SOURCE_DIR}/libs/engine/src/preview_shared_texture.cpp)
 target_include_directories(exosnap_controller3d_native PRIVATE ../Quick ${PROJECT_SOURCE_DIR}/app
-    ${PROJECT_SOURCE_DIR}/libs/engine/include)
+    ${PROJECT_SOURCE_DIR}/libs/engine/include ${PROJECT_SOURCE_DIR}/libs/capability/include)
 target_compile_definitions(exosnap_controller3d_native PRIVATE NOMINMAX)
 target_link_libraries(exosnap_controller3d_native PRIVATE exosnap_controller3d_sceneplugin Qt6::Quick3D Qt6::Svg Qt6::Xml
-    exosnap::gamepad tomlplusplus::tomlplusplus exosnap::warnings d3d11.lib dxgi.lib runtimeobject.lib)
+    exosnap::gamepad tomlplusplus::tomlplusplus exosnap::warnings d3d11.lib dxgi.lib d3dcompiler.lib runtimeobject.lib)
 qt_add_resources(exosnap_controller3d_native "native_mapping"
     PREFIX "/gamepad"
     BASE "${PROJECT_SOURCE_DIR}/app/assets/gamepad"
