@@ -1,6 +1,7 @@
 #include "gamepad_frame_sampler.h"
 
 #include <algorithm>
+#include <array>
 #include <cmath>
 #include <cstddef>
 #include <cstdint>

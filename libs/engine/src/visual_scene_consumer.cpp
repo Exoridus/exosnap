@@ -1,6 +1,19 @@
 #include "visual_scene_consumer.h"
 
 #include "gamepad_frame_sampler.h"
+#include <cstddef>
+#include <cstdint>
+#include <exosnap/engine/overlay_sprites.h>
+#include <exosnap/engine/recording_media_types.h>
+#include <exosnap/engine/visual_frame.h>
+#include <exosnap/engine/visual_scene.h>
+#include <exosnap/engine/visual_scene_runtime.h>
+#include <exosnap/engine/webcam_placement.h>
+#include <iterator>
+#include <memory>
+#include <span>
+#include <variant>
+#include <vector>
 
 #include <algorithm>
 #include <cassert>

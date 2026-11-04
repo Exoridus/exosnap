@@ -2,7 +2,18 @@
 #include "visual_scene_consumer.h"
 #include "visual_scene_runtime_storage.h"
 
+#include <atomic>
+#include <cstddef>
+#include <cstdint>
 #include <exosnap/engine/gamepad_sprite_data.h>
+#include <exosnap/engine/overlay_sprites.h>
+#include <exosnap/engine/recording_media_types.h>
+#include <exosnap/engine/visual_frame.h>
+#include <exosnap/engine/visual_scene.h>
+#include <exosnap/engine/visual_scene_runtime.h>
+#include <gamepad/gamepad.h>
+#include <memory>
+#include <utility>
 
 #include <gtest/gtest.h>
 

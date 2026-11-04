@@ -9,6 +9,10 @@
 #include "exosnap/engine/webcam_placement.h"
 #include "gpu_yuv_constants.h"
 #include "measured_shader_compile.h"
+#include <exosnap/engine/visual_scene.h>
+#include <span>
+#include <utility>
+#include <vector>
 
 #include <algorithm>
 #include <array>

@@ -11,6 +11,7 @@
 #include <exosnap/engine/visual_scene_runtime.h>
 #include <utility>
 
+#include <exosnap/engine/visual_frame.h>
 #include <gtest/gtest.h>
 
 #include <memory>

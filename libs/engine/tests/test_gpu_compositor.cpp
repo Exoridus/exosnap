@@ -21,7 +21,6 @@
 #include <optional>
 #include <winrt/base.h>
 
-#include <cmath>
 #include <cstdint>
 #include <cstring>
 #include <iterator>

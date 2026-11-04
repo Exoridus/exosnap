@@ -37,6 +37,8 @@
 #include <exosnap/engine/display_color_watch.h>
 #include <exosnap/engine/dxgi_od_capture_src.h>
 #include <exosnap/engine/gpu_compositor.h>
+#include <exosnap/engine/visual_frame.h>
+#include <exosnap/engine/visual_scene.h>
 
 #include "preview_publish_gate.h"
 #include "session_internal.h"

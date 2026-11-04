@@ -9,6 +9,7 @@
 #include <exosnap/engine/gamepad_sprite_data.h>
 #include <exosnap/engine/overlay_sprites.h>
 #include <exosnap/engine/recording_media_types.h>
+#include <exosnap/engine/visual_diagnostics.h>
 #include <exosnap/engine/visual_frame.h>
 #include <exosnap/engine/visual_scene.h>
 #include <memory>

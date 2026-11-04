@@ -1,6 +1,13 @@
 #include <exosnap/engine/gpu_compositor.h>
 
+#include <algorithm>
+#include <cstdint>
+#include <exosnap/engine/overlay_sprites.h>
+#include <exosnap/engine/visual_scene.h>
 #include <gtest/gtest.h>
+#include <memory>
+#include <string>
+#include <winrt/base.h>
 
 #include <array>
 
