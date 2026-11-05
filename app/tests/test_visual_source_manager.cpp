@@ -371,6 +371,25 @@ TEST_F(VisualSourceManagerTest, DeferredRetryWaitsForProducerAndThenUsesANewInca
     EXPECT_NE(manager.Status(controls[1]->requests.back().token.address)->phase, SourcePhase::Failed);
 }
 
+TEST_F(VisualSourceManagerTest, ResourceRepublishPreservesTheSourceRequestAndStopsAtShutdown) {
+    Register();
+    VisualSourceManager manager(registry, runtime);
+    manager.SetConsumerDemand(VisualConsumer::Recording, true);
+    ASSERT_TRUE(manager.ApplyDesired(Scene(), {1}).succeeded());
+    ASSERT_TRUE(controls[0]->PublishReady());
+    const auto count = controls[0]->requests.size();
+    const auto token = controls[0]->requests.back().token;
+    const auto before = runtime.PublishedSceneSequence();
+    manager.RepublishScene();
+    EXPECT_GT(runtime.PublishedSceneSequence(), before);
+    EXPECT_EQ(controls[0]->requests.size(), count);
+    EXPECT_EQ(controls[0]->requests.back().token, token);
+    manager.RequestShutdown();
+    const auto stopped = runtime.PublishedSceneSequence();
+    manager.RepublishScene();
+    EXPECT_EQ(runtime.PublishedSceneSequence(), stopped);
+}
+
 TEST_F(VisualSourceManagerTest, SynchronousCompletionObservesCoherentStateAndAllowsObserverReentry) {
     Register();
     VisualSourceManager* current = nullptr;

@@ -77,6 +77,9 @@ class GpuCompositor {
                          const WebcamPixelRect&, bool mirror, const ChromaKeyParams&, std::string& err,
                          float opacity = 1.0f);
     bool DrawCursor(const uint8_t* bgra, int width, int height, const WebcamPixelRect& rect, std::string& err);
+    // The caller pins a consumer-local premultiplied sRGB view through draw submission.
+    bool DrawVisualGpu(ID3D11ShaderResourceView*, const WebcamPixelRect&, bool mirror, std::string& err,
+                       float opacity = 1.0f);
 
     // The inverting plane of a mask cursor, drawn after DrawCursor and over the
     // same rectangle. `bgra` is opaque white where the pixel inverts and zero
@@ -142,7 +145,7 @@ class GpuCompositor {
     bool DrawTexture(ID3D11ShaderResourceView* srv, const WebcamPixelRect& rect, bool mirror,
                      const ChromaKeyParams& chroma, bool force_opaque, float opacity, std::string& err,
                      ID3D11BlendState* blend = nullptr, const float* uv_rect = nullptr,
-                     const std::array<OverlayMaskConstants, 2>* masks = nullptr);
+                     const std::array<OverlayMaskConstants, 2>* masks = nullptr, bool premultiplied = false);
 
     ID3D11Device* device_ = nullptr;
     ID3D11DeviceContext* context_ = nullptr;

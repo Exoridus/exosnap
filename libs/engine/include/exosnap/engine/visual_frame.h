@@ -76,6 +76,7 @@ struct VisualBudgetPolicy {
     uint32_t camera_slots = 3;
     uint32_t max_resource_generations = 2;
     std::optional<uint64_t> cpu_payload_limit_bytes;
+    std::optional<uint64_t> gpu_payload_limit_bytes;
 };
 
 enum class PublishResult { Accepted, Superseded, Revoked, NoFreeSlot, Invalid };

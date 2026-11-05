@@ -116,13 +116,16 @@ TEST(BuiltinVisualSettings, MetadataUsesScopedCachedOptionsAndExistingChangePoli
     EXPECT_EQ(webcam.id, "org.exosnap.webcam/camera");
     EXPECT_EQ(gamepad.instance_limit, 1u);
     EXPECT_EQ(webcam.instance_limit, 1u);
-    ASSERT_EQ(gamepad.settings.fields.size(), 2u);
+    ASSERT_EQ(gamepad.settings.fields.size(), 3u);
     ASSERT_EQ(webcam.settings.fields.size(), 1u);
     EXPECT_EQ(gamepad.settings.fields[0].change, ChangePolicy::Live);
     EXPECT_EQ(gamepad.settings.fields[1].change, ChangePolicy::Live);
+    EXPECT_EQ(gamepad.settings.fields[1].path, "view");
+    EXPECT_EQ(gamepad.settings.fields[2].change, ChangePolicy::Live);
+    EXPECT_EQ(gamepad.settings.fields[1].options_id, "views");
     EXPECT_EQ(webcam.settings.fields[0].path, "device_id");
     EXPECT_EQ(webcam.settings.fields[0].change, ChangePolicy::NextSession);
-    ASSERT_EQ(gamepad.options.size(), 2u);
+    ASSERT_EQ(gamepad.options.size(), 3u);
     const VisualSourceRecord source{engine::VisualSourceId{{1}}, gamepad.id, 1, true, {}};
     EXPECT_EQ(gamepad.options[0].snapshot(source).choices.size(), 1u);
     EXPECT_EQ(reads, 1);

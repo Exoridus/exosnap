@@ -106,6 +106,18 @@ callbacks before freeing its context and releases its own interface reference. T
 runtime instance, rather than leaking one instance per recording. Omitting the final release is a workaround,
 not a documented GameInput requirement. Clean final runtime release remains unqualified.
 
+### Native gamepad GPU frames
+
+The shared Controller3D QML module contains the existing rig and mechanics. The GUI-owned provider samples the same timestamped GameInput history and renders through QQuickRenderControl into an RGBA8 target. Qt Quick 3D's linear tone mapping returns SDR sRGB; the Qt surface is premultiplied. The host shader recovers straight color before its existing SDR/HDR transfer and applies alpha and item opacity once. The developer pilot and probe have separate window resources; production loads only the scene.
+
+Each GPU consumer registers its immediate context and device generation on the context's owner thread. Registration captures device and adapter identity; control work never queries a foreign immediate context. Native output requires compatible adapter LUIDs and multithread-capable D3D11 devices. The producer creates its own device on that adapter. Incompatible or absent endpoints leave the source waiting instead of introducing a CPU fallback.
+
+A reservation accounts for the producer target and one shared plus one consumer-local texture per endpoint before Qt allocates its target. The runtime bounds resource generations and logical texel bytes. Keyed-mutex acquisition in publication and sampling is nonblocking. GPU copies transfer ownership into fixed lanes; no product frame performs a GPU-to-CPU readback. Duplicate scene items share one source read. Exact source token, resource and device generations protect cached views from reuse across replacement.
+
+Adding or removing an endpoint retires its resource generation. The provider republishes bindingless intent, allowing old scene pins to drain, then destroys its Qt target and releases the producer lease before collection and readmission. Frame leases only release pins; native resource reclamation belongs to control maintenance. A contended GPU read defers the entire composition and preserves change/upload work for the retry.
+
+Ready-frame capture registers its own endpoint and waits on its worker for the exact requested native source tokens, bounded to five seconds. It releases all frame pins between retries and keeps the GUI available for renderer admission. A changed or unavailable request fails explicitly instead of saving a still without requested 3D. The eventual PNG readback is the existing one-shot screenshot boundary. Qt internal MSAA surfaces and driver residency are not included in the logical texture reservation.
+
 ## Exclusive fullscreen and stalls
 
 Window shape alone cannot distinguish borderless content from legacy exclusive fullscreen. Pre-flight classification combines shape, WGC evidence and corroborating fullscreen signals. No-frame evidence is not a pixel analysis of whether a picture is black. A failed evidence probe supplies no evidence, never proof of a blocked capture.

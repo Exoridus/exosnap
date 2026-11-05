@@ -33,6 +33,7 @@ struct ReadyFrameComposition {
     QRectF normalized_source_rect{0.0, 0.0, 1.0, 1.0};
     VideoSettingsModel video;
     std::shared_ptr<exosnap::engine::VisualSceneRuntime> visual_runtime;
+    std::vector<exosnap::engine::SourceToken> required_gpu_tokens;
 };
 
 class ReadyFrameCaptureService final {
@@ -46,7 +47,7 @@ class ReadyFrameCaptureService final {
     // application-owned state. Detaching the worker instead left nobody to wait
     // for it and no cancel path, so process teardown could free that state (and
     // Qt's own statics) while the worker was still touching COM/DXGI.
-    static void Capture(QThreadPool& pool, const ReadyFrameSource& source, ReadyFrameComposition composition,
+    static void Capture(QThreadPool& pool, const ReadyFrameSource& source, const ReadyFrameComposition& composition,
                         Callback callback);
 
     [[nodiscard]] static QRect SourceCropPixels(uint32_t width, uint32_t height, const QRectF& normalized_rect);

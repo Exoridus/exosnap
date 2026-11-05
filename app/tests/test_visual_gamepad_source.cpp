@@ -64,6 +64,41 @@ TEST(VisualGamepadSource, FactoryIsInertAndFirstDemandPreparesUsingExactToken) {
     EXPECT_EQ(harness.statuses.front().token, request.token);
 }
 
+TEST(VisualGamepadSource, ViewProjectionPreservesLegacyLayoutAndRejectsMalformedIntent) {
+    const toml::table legacy{{"layout", "xbox_elite"}};
+    const auto projected = ProjectGamepadSettings(legacy);
+    ASSERT_TRUE(projected.succeeded());
+    EXPECT_EQ(projected.value()->view, GamepadView::TwoDimensional);
+    EXPECT_EQ(projected.value()->layout, 19);
+    for (const auto& [value, expected] :
+         {std::pair{"3d-normal", GamepadView::NativeNormal}, std::pair{"3d-ghost", GamepadView::NativeGhost}}) {
+        auto settings = legacy;
+        settings.insert_or_assign("view", value);
+        const auto native = ProjectGamepadSettings(settings);
+        ASSERT_TRUE(native.succeeded());
+        EXPECT_EQ(native.value()->view, expected);
+        EXPECT_EQ(native.value()->layout, 19);
+    }
+    EXPECT_FALSE(ProjectGamepadSettings(toml::table{{"view", true}}).succeeded());
+    EXPECT_FALSE(ProjectGamepadSettings(toml::table{{"view", "unknown"}}).succeeded());
+}
+
+TEST(VisualGamepadSource, ViewChangeRequiresNewTokenAndReachesExistingOwner) {
+    GamepadHarness harness;
+    GamepadSource source(harness.Creation(), harness.Hooks());
+    ASSERT_TRUE(source.Apply(harness.Request()).succeeded());
+    auto changed = harness.Request();
+    changed.validated_settings.insert_or_assign("view", "3d-ghost");
+    EXPECT_FALSE(source.Apply(changed).succeeded());
+    EXPECT_EQ(harness.prepares, 1);
+    changed.token.request = engine::SourceRequestRevision{2};
+    changed.configuration = engine::ConfigRevision{2};
+    ASSERT_TRUE(source.Apply(changed).succeeded());
+    EXPECT_EQ(harness.prepares, 2);
+    EXPECT_EQ(harness.settings.view, GamepadView::NativeGhost);
+    EXPECT_EQ(harness.last_token, changed.token);
+}
+
 TEST(VisualGamepadSource, RepeatedApplyAndAdditionalConsumersDoNotReprepare) {
     GamepadHarness harness;
     GamepadSource source(harness.Creation(), harness.Hooks());

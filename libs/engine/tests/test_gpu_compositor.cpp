@@ -15,6 +15,7 @@
 #include <exosnap/engine/gpu_compositor.h>
 #include <exosnap/engine/gpu_surface_inventory.h>
 
+#include <cmath>
 #include <d3d11.h>
 #include <limits>
 #include <memory>
@@ -1106,4 +1107,56 @@ TEST(GpuCompositorSprites, HdrLinearScalesSpritesToTheOverlayReferenceWhite) {
     EXPECT_NEAR(left_r, 0.0f, 0.001f);
     EXPECT_NEAR(right_r, 3.0f, 0.03f);
     EXPECT_NEAR(right_b, 3.0f, 0.03f);
+}
+
+TEST(GpuCompositorSprites, NativeGpuEdgesDecodeStraightColorBeforeHdrBlend) {
+    auto d3d = CreateWarpDevice();
+    ASSERT_TRUE(d3d.device);
+    GpuCompositor compositor;
+    std::string err;
+    ASSERT_TRUE(compositor.Init(d3d.device.get(), d3d.context.get(), 2, 1, err, DXGI_FORMAT_R16G16B16A16_FLOAT, 240.0f))
+        << err;
+    D3D11_TEXTURE2D_DESC desc{};
+    desc.Width = 2;
+    desc.Height = 1;
+    desc.MipLevels = desc.ArraySize = 1;
+    desc.SampleDesc.Count = 1;
+    desc.Format = DXGI_FORMAT_R16G16B16A16_FLOAT;
+    const uint16_t black[8]{};
+    const D3D11_SUBRESOURCE_DATA clear{black, sizeof(black), 0};
+    winrt::com_ptr<ID3D11Texture2D> background;
+    ASSERT_TRUE(SUCCEEDED(d3d.device->CreateTexture2D(&desc, &clear, background.put())));
+    ASSERT_TRUE(compositor.BeginFrame(background.get(), err)) << err;
+
+    desc.Format = DXGI_FORMAT_R8G8B8A8_UNORM;
+    desc.BindFlags = D3D11_BIND_SHADER_RESOURCE;
+    const uint8_t pixels[]{64, 32, 0, 128, 255, 255, 255, 0};
+    const D3D11_SUBRESOURCE_DATA initial{pixels, sizeof(pixels), 0};
+    winrt::com_ptr<ID3D11Texture2D> texture;
+    winrt::com_ptr<ID3D11ShaderResourceView> view;
+    ASSERT_TRUE(SUCCEEDED(d3d.device->CreateTexture2D(&desc, &initial, texture.put())));
+    ASSERT_TRUE(SUCCEEDED(d3d.device->CreateShaderResourceView(texture.get(), nullptr, view.put())));
+    ASSERT_TRUE(compositor.DrawVisualGpu(view.get(), {0, 0, 2, 1}, true, err, 0.5f)) << err;
+
+    compositor.Result()->GetDesc(&desc);
+    desc.Usage = D3D11_USAGE_STAGING;
+    desc.BindFlags = 0;
+    desc.CPUAccessFlags = D3D11_CPU_ACCESS_READ;
+    winrt::com_ptr<ID3D11Texture2D> staging;
+    ASSERT_TRUE(SUCCEEDED(d3d.device->CreateTexture2D(&desc, nullptr, staging.put())));
+    d3d.context->CopyResource(staging.get(), compositor.Result());
+    D3D11_MAPPED_SUBRESOURCE mapped{};
+    ASSERT_TRUE(SUCCEEDED(d3d.context->Map(staging.get(), 0, D3D11_MAP_READ, 0, &mapped)));
+    const auto* result = static_cast<const uint16_t*>(mapped.pData);
+    const float transparent_r = HalfToFloat(result[0]);
+    const float red = HalfToFloat(result[4]);
+    const float green = HalfToFloat(result[5]);
+    d3d.context->Unmap(staging.get(), 0);
+    const auto expected = [](float straight) {
+        return std::pow((straight + 0.055f) / 1.055f, 2.4f) * 3.0f * (128.0f / 255.0f) * 0.5f;
+    };
+    EXPECT_NEAR(transparent_r, 0.0f, 0.001f);
+    EXPECT_NEAR(red, expected(0.5f), 0.002f);
+    EXPECT_NEAR(green, expected(0.25f), 0.002f);
+    EXPECT_EQ(compositor.WebcamUploadCount(), 0u);
 }

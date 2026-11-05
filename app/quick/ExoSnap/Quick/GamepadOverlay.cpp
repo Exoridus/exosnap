@@ -1,16 +1,21 @@
 #include "GamepadOverlay.h"
+#include "../Controller3D/NativeGamepadProducer.h"
 #include "GamepadSprites.h"
 #include "models/GamepadOverlaySettings.h"
 
+#include <exosnap/engine/gpu_timestamp_profiler.h>
 #include <exosnap/engine/overlay_sprites.h>
 #include <gamepad/gamepad.h>
 
 #include <QByteArray>
+#include <QElapsedTimer>
 #include <QMetaObject>
 #include <QScopeGuard>
 #include <QSize>
 #include <QStringList>
+#include <QThread>
 #include <QVariantList>
+#include <dxgi1_4.h>
 
 #include <algorithm>
 #include <cmath>
@@ -23,6 +28,33 @@
 #include <vector>
 
 namespace exosnap::quick {
+
+struct GamepadOverlay::NativeState {
+    engine::GpuPublicationLease lease;
+    winrt::com_ptr<ID3D11Device> device;
+    winrt::com_ptr<ID3D11DeviceContext> context;
+    std::unique_ptr<NativeGamepadProducer> producer;
+    engine::GpuStageTimer publish_timer;
+    engine::NativeGamepadDiagnostics diagnostics;
+    QSize size;
+    GamepadView view = GamepadView::TwoDimensional;
+    bool published = false;
+};
+
+namespace {
+bool CreateNativeDevice(const LUID& luid, winrt::com_ptr<ID3D11Device>& device,
+                        winrt::com_ptr<ID3D11DeviceContext>& context) {
+    winrt::com_ptr<IDXGIFactory4> factory;
+    winrt::com_ptr<IDXGIAdapter1> adapter;
+    if (FAILED(CreateDXGIFactory1(IID_PPV_ARGS(factory.put()))))
+        return false;
+    if (FAILED(factory->EnumAdapterByLuid(luid, IID_PPV_ARGS(adapter.put()))))
+        return false;
+    return SUCCEEDED(D3D11CreateDevice(adapter.get(), D3D_DRIVER_TYPE_UNKNOWN, nullptr,
+                                       D3D11_CREATE_DEVICE_BGRA_SUPPORT, nullptr, 0, D3D11_SDK_VERSION, device.put(),
+                                       nullptr, context.put()));
+}
+} // namespace
 
 GamepadOverlay::GamepadOverlay(QObject* parent) : QObject(parent) {
     raster_pool_.setMaxThreadCount(1);
@@ -41,6 +73,7 @@ void GamepadOverlay::WaitForVisualControl() {
     source_demand_ = false;
     native_enabled_ = false;
     poll_.stop();
+    RetireNative();
     raster_.stop();
     pending_atlas_key_.clear();
     visual_status_ = {};
@@ -83,6 +116,24 @@ QVariantList GamepadOverlay::layouts() const {
                                      {QStringLiteral("selectable"), true}});
     }
     return result;
+}
+
+QVariantList GamepadOverlay::viewsForDevice(const QString& device) const {
+    const bool supported =
+        device.isEmpty() ? Settings().device.empty() && selected_native_supported_ : native_devices_.contains(device);
+    return {QVariantMap{{QStringLiteral("value"), QStringLiteral("2d")},
+                        {QStringLiteral("label"), tr("2D")},
+                        {QStringLiteral("selectable"), true}},
+            QVariantMap{{QStringLiteral("value"), QStringLiteral("3d-normal")},
+                        {QStringLiteral("label"), tr("3D Normal")},
+                        {QStringLiteral("selectable"), supported}},
+            QVariantMap{{QStringLiteral("value"), QStringLiteral("3d-ghost")},
+                        {QStringLiteral("label"), tr("3D Ghost")},
+                        {QStringLiteral("selectable"), supported}}};
+}
+
+QVariantList GamepadOverlay::views() const {
+    return viewsForDevice(device());
 }
 
 QRectF GamepadOverlay::placement() const {
@@ -130,11 +181,11 @@ void GamepadOverlay::ConfigureBackend(GamepadOverlaySettings settings) {
         const std::scoped_lock lock(mutex_);
         input = input_;
     }
-    if (wanted && !input) {
+    if (wanted && !input && !input_start_error_) {
         std::string error;
         input = gamepad::GameInputSource::Start(error);
         if (!input)
-            SetStatus(tr("GameInput unavailable: %1").arg(QString::fromStdString(error)));
+            RecordInputStartFailure(std::move(error));
     }
     if (!wanted)
         input.reset();
@@ -156,7 +207,10 @@ void GamepadOverlay::ConfigureBackend(GamepadOverlaySettings settings) {
     }
     const bool was_running = native_enabled_;
     native_enabled_ = wanted;
-    if (wanted) {
+    if (wanted && ReportInputStartFailure()) {
+        poll_.stop();
+        raster_.stop();
+    } else if (wanted) {
         poll_.start();
         if (!was_running || previous.layout != settings.layout || previous.width != settings.width ||
             previous.height != settings.height || !sprites_) {
@@ -166,6 +220,7 @@ void GamepadOverlay::ConfigureBackend(GamepadOverlaySettings settings) {
         }
         Poll();
     } else {
+        RetireNative();
         poll_.stop();
         raster_.stop();
         pending_atlas_key_.clear();
@@ -177,6 +232,7 @@ void GamepadOverlay::ConfigureBackend(GamepadOverlaySettings settings) {
             sprites_.reset();
         }
         atlas_key_.clear();
+        input_start_error_.reset();
         SetStatus({});
         emit frameChanged();
     }
@@ -184,10 +240,31 @@ void GamepadOverlay::ConfigureBackend(GamepadOverlaySettings settings) {
         emit settingsChanged();
 }
 
+void GamepadOverlay::RecordInputStartFailure(std::string error) {
+    input_start_error_ = engine::EngineError{.code = engine::EngineErrorCode::UnavailableSource,
+                                             .owner = engine::EngineModule::Runtime,
+                                             .context = std::move(error),
+                                             .retryability = engine::Retryability::AfterUserAction};
+}
+
+bool GamepadOverlay::ReportInputStartFailure() {
+    if (!input_start_error_)
+        return false;
+    SetStatus(tr("GameInput unavailable: %1").arg(QString::fromStdString(input_start_error_->context)));
+    if (visual_runtime_ && source_demand_ && visual_status_ && !visual_waiting_) {
+        visual_waiting_ = true;
+        visual_status_({visual_token_, SourcePhase::Failed, *input_start_error_});
+    }
+    return true;
+}
+
 GamepadControlHooks GamepadOverlay::CreateControlHooks(std::shared_ptr<engine::VisualSceneRuntime> runtime) {
     visual_runtime_ = std::move(runtime);
     ConfigureBackend(Settings());
-    return {[this](engine::SourceToken token, GamepadOverlaySettings source, std::function<void(SourceStatus)> status) {
+    return {[this](const engine::SourceToken& token, GamepadOverlaySettings source,
+                   std::function<void(SourceStatus)> status) {
+                RetireNative();
+                native_failed_ = false;
                 visual_token_ = token;
                 visual_status_ = std::move(status);
                 visual_waiting_ = false;
@@ -195,6 +272,7 @@ GamepadControlHooks GamepadOverlay::CreateControlHooks(std::shared_ptr<engine::V
                 auto desired = Settings();
                 desired.device = std::move(source.device);
                 desired.layout = source.layout;
+                desired.view = source.view;
                 ConfigureBackend(std::move(desired));
                 PublishVisualData();
             },
@@ -218,6 +296,8 @@ GamepadControlHooks GamepadOverlay::CreateControlHooks(std::shared_ptr<engine::V
 void GamepadOverlay::PublishVisualData() {
     if (!visual_runtime_ || !source_demand_ || !visual_status_)
         return;
+    if (ReportInputStartFailure() || Settings().view != GamepadView::TwoDimensional)
+        return;
     if (published_token_ == visual_token_ && published_sprites_ == sprites_.get())
         return;
     if (!input_ || !sprites_ || !pending_atlas_key_.isEmpty() || raster_.isActive()) {
@@ -237,6 +317,151 @@ void GamepadOverlay::PublishVisualData() {
         visual_waiting_ = true;
         visual_status_({visual_token_, SourcePhase::Waiting, *staged.error()});
     }
+}
+
+std::optional<engine::NativeGamepadDiagnostics>
+GamepadOverlay::NativeDiagnostics(const engine::SourceToken& token) const {
+    Q_ASSERT(QThread::currentThread() == thread());
+    if (!native_ || !native_->producer || token != visual_token_)
+        return std::nullopt;
+    auto result = native_->diagnostics;
+    const auto& rendered = native_->producer->Diagnostics();
+    result.render_cpu = rendered.render_cpu;
+    result.render_gpu_span = rendered.render_gpu_span;
+    result.latest_sample_100ns = rendered.latest_sample_100ns;
+    return result;
+}
+
+void GamepadOverlay::RetireNative() {
+    Q_ASSERT(QThread::currentThread() == thread());
+    if (!native_)
+        return;
+    native_->lease.Retire();
+    published_token_ = {};
+    visual_waiting_ = false;
+    // Consumers must see the bindingless scene before admission waits on their old scene pins.
+    emit visualBindingInvalidated();
+    native_->producer.reset();
+    native_->lease.Reset();
+    native_.reset();
+    if (visual_runtime_)
+        visual_runtime_->CollectRetired();
+}
+
+void GamepadOverlay::UpdateNative(const std::optional<gamepad::GamepadReading>& reading, uint64_t timestamp) {
+    Q_ASSERT(QThread::currentThread() == thread());
+    const auto settings = Settings();
+    if (!visual_runtime_ || !source_demand_ || !visual_status_ || settings.view == GamepadView::TwoDimensional) {
+        RetireNative();
+        return;
+    }
+    if (ReportInputStartFailure())
+        return;
+    const auto waiting = [this](QString message, std::optional<engine::EngineError> error = {}) {
+        SetStatus(std::move(message));
+        if (!visual_waiting_) {
+            visual_waiting_ = true;
+            visual_status_({visual_token_, SourcePhase::Waiting, std::move(error)});
+        }
+    };
+    if (!reading || !reading->connected || !NativeGamepadProducer::Supports(reading->device)) {
+        RetireNative();
+        waiting(tr("3D view requires a connected DualSense controller"));
+        return;
+    }
+    if (native_failed_) {
+        waiting(tr("3D view unavailable. Retry or select 2D."));
+        return;
+    }
+    const QSize size(qRound(std::clamp(static_cast<double>(content_width_) * settings.width, 96.0, 2048.0)),
+                     qRound(std::clamp(static_cast<double>(content_height_) * settings.height, 64.0, 2048.0)));
+    if (native_ && (native_->lease.Retired() || native_->size != size || native_->view != settings.view)) {
+        RetireNative();
+        waiting(tr("Preparing 3D view"));
+        return;
+    }
+    if (!native_) {
+        visual_runtime_->CollectRetired();
+        auto reservation = engine::ReserveGpuData(*visual_runtime_, visual_token_, size.width(), size.height());
+        if (!reservation.succeeded()) {
+            waiting(tr("Waiting for a compatible 3D output"));
+            return;
+        }
+        native_ = std::make_unique<NativeState>();
+        native_->lease = std::move(*reservation.value());
+        native_->size = size;
+        native_->view = settings.view;
+        native_->diagnostics.generation = ++native_generation_;
+        LUID luid{};
+        QString error;
+        if (native_->lease.AdapterLuid(luid) && CreateNativeDevice(luid, native_->device, native_->context)) {
+            const auto mapping =
+                PrepareMappedGamepadArtwork(QStringLiteral(":/gamepad/controllers/dualsense/mapping.json"), error);
+            if (error.isEmpty())
+                native_->producer = NativeGamepadProducer::Create(
+                    mapping, input_->HistoryView(), visual_token_, native_->device.get(), native_->context.get(), size,
+                    settings.view == GamepadView::NativeGhost, false, error);
+        }
+        if (!native_->producer) {
+            const bool retired = native_->lease.Retired();
+            RetireNative();
+            native_failed_ = !retired;
+            waiting(tr("3D view unavailable. Retry or select 2D."),
+                    engine::EngineError{.code = engine::EngineErrorCode::UnavailableSource,
+                                        .context = error.isEmpty() ? "Native controller device unavailable"
+                                                                   : error.toStdString()});
+            return;
+        }
+        native_->publish_timer.Init(native_->device.get());
+        auto staged = engine::StageGpuData(*visual_runtime_, native_->lease, native_->producer->Texture(),
+                                           native_->context.get(), engine::NextDeviceGeneration());
+        if (!staged.succeeded()) {
+            const bool changed = staged.error()->code == engine::EngineErrorCode::StaleRevision;
+            RetireNative();
+            native_failed_ = !changed;
+            waiting(tr("3D view unavailable. Retry or select 2D."), *staged.error());
+            return;
+        }
+    }
+    if (const auto span = native_->publish_timer.Poll(native_->context.get()))
+        native_->diagnostics.publish_gpu_span.Add(*span);
+    QString error;
+    const auto sampled = native_->producer->RenderSample(engine::CaptureTime100ns{timestamp}, error);
+    if (sampled == NativeGamepadSampleResult::Busy)
+        return;
+    if (sampled != NativeGamepadSampleResult::Ready) {
+        RetireNative();
+        native_failed_ = sampled == NativeGamepadSampleResult::Failed;
+        waiting(tr("3D view unavailable. Retry or select 2D."),
+                engine::EngineError{.code = engine::EngineErrorCode::UnavailableSource,
+                                    .context =
+                                        error.isEmpty() ? "Unsupported native controller model" : error.toStdString()});
+        return;
+    }
+    QElapsedTimer cpu;
+    cpu.start();
+    native_->publish_timer.Begin(native_->context.get());
+    const auto published = native_->lease.TryPublish(native_->producer->Stamp());
+    native_->publish_timer.End(native_->context.get());
+    native_->diagnostics.publish_cpu.Add(static_cast<double>(cpu.nsecsElapsed()) / 1e6);
+    if (published == engine::PublishResult::Accepted)
+        ++native_->diagnostics.accepted_publications;
+    if (published == engine::PublishResult::NoFreeSlot)
+        ++native_->diagnostics.no_free_slot_publications;
+    if (published == engine::PublishResult::Revoked || published == engine::PublishResult::Invalid) {
+        RetireNative();
+        waiting(tr("Preparing 3D view"));
+        return;
+    }
+    if (published == engine::PublishResult::Accepted && !native_->published) {
+        native_->published = true;
+        published_token_ = visual_token_;
+        visual_waiting_ = false;
+        visual_status_({visual_token_, SourcePhase::Ready, {}});
+    }
+    if (published == engine::PublishResult::Accepted)
+        emit frameChanged();
+    SetStatus(tr("Controller connected"));
 }
 
 void GamepadOverlay::setEnabled(bool value) {
@@ -294,7 +519,7 @@ void GamepadOverlay::setContentSize(QSize size) {
 
 void GamepadOverlay::Rebuild() {
     const auto settings = Settings();
-    if (!native_enabled_)
+    if (!native_enabled_ || input_start_error_ || (visual_runtime_ && settings.view != GamepadView::TwoDimensional))
         return;
     const int layout = settings.layout < 0 ? automatic_layout_ : settings.layout;
     const QString file = QString::fromLatin1(kGamepadOverlayArtworkIds[layout].data());
@@ -345,13 +570,15 @@ void GamepadOverlay::Rebuild() {
 }
 
 void GamepadOverlay::Poll() {
-    PublishVisualData();
+    if (ReportInputStartFailure())
+        return;
     std::shared_ptr<gamepad::GameInputSource> input;
     {
         const std::scoped_lock lock(mutex_);
         input = input_;
     }
-    const auto reading = input ? input->StateAt(gamepad::GameInputSource::NowCapture100ns()) : std::nullopt;
+    const auto timestamp = gamepad::GameInputSource::NowCapture100ns();
+    const auto reading = input ? input->StateAt(timestamp) : std::nullopt;
     int detected = automatic_layout_;
     if (reading && reading->connected) {
         detected = reading->device.layout == gamepad::LayoutKind::DualSense    ? 0
@@ -359,9 +586,11 @@ void GamepadOverlay::Poll() {
                    : reading->device.layout == gamepad::LayoutKind::XboxOne    ? 4
                    : reading->device.layout == gamepad::LayoutKind::SwitchPro  ? 5
                                                                                : 2;
-        SetStatus(tr("Controller connected"));
+        if (Settings().view == GamepadView::TwoDimensional)
+            SetStatus(tr("Controller connected"));
     } else if (input) {
-        SetStatus(tr("Waiting for controller"));
+        if (Settings().view == GamepadView::TwoDimensional)
+            SetStatus(tr("Waiting for controller"));
     }
     if (detected != automatic_layout_) {
         automatic_layout_ = detected;
@@ -373,10 +602,13 @@ void GamepadOverlay::Poll() {
     }
     QVariantList options{
         {QVariantMap{{QStringLiteral("value"), QString()}, {QStringLiteral("label"), tr("Automatic")}}}};
+    QStringList native_devices;
     for (const auto& device : input ? input->Devices() : std::vector<gamepad::DeviceIdentity>{}) {
         const QByteArray bytes(reinterpret_cast<const char*>(device.id.data()),
                                static_cast<qsizetype>(device.id.size()));
         const QString id = QString::fromLatin1(bytes.toHex());
+        if (NativeGamepadProducer::Supports(device))
+            native_devices.push_back(id);
         const QString family = device.layout == gamepad::LayoutKind::DualSense    ? tr("DualSense")
                                : device.layout == gamepad::LayoutKind::XboxSeries ? tr("Xbox Series")
                                : device.layout == gamepad::LayoutKind::XboxOne    ? tr("Xbox One")
@@ -400,6 +632,14 @@ void GamepadOverlay::Poll() {
         devices_ = std::move(options);
         emit devicesChanged();
     }
+    const bool supported = reading && reading->connected && NativeGamepadProducer::Supports(reading->device);
+    if (selected_native_supported_ != supported || native_devices_ != native_devices) {
+        selected_native_supported_ = supported;
+        native_devices_ = std::move(native_devices);
+        emit viewsChanged();
+    }
+    UpdateNative(reading, timestamp);
+    PublishVisualData();
     if (visual_runtime_) {
         const auto state = reading && reading->connected ? DisplayState(reading->state) : gamepad::GamepadState{};
         if (state != cached_state_ || cached_revision_ != revision_) {

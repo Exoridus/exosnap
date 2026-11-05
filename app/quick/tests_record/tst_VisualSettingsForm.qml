@@ -64,7 +64,7 @@ TestCase {
         return form;
     }
     function test_cached_choices_render_without_editing_data() {
-        return [{tag: "webcam", gamepad: false, rows: 3}, {tag: "gamepad", gamepad: true, rows: 4}];
+        return [{tag: "webcam", gamepad: false, rows: 3}, {tag: "gamepad", gamepad: true, rows: 5}];
     }
     function test_cached_choices_render_without_editing(data) {
         const form = createForm(data.gamepad);
@@ -89,7 +89,7 @@ TestCase {
         keyClick(Qt.Key_Down);
         keyClick(Qt.Key_Return);
         tryCompare(editSpy, "count", 1);
-        const expectedRow = data.gamepad ? 1 : 0;
+        const expectedRow = data.gamepad ? 2 : 0;
         compare(recordDriver.settings.visualSettingsRows(form.sourceId)[expectedRow].value, data.value);
         const updated = findControl(form, data.label);
         verify(!!updated);
