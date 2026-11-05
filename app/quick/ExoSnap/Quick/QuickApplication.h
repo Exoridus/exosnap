@@ -589,9 +589,10 @@ class QuickApplication {
     bool persistAppSettings(SettingsWriteIntent intent);
     void applyPresetConfig(RecordingPresetConfig config);
     void refreshPresetState();
-    // live_config_.webcam with an unpinned device_id resolved to the first
-    // enumerated camera. Everything that opens a camera goes through this;
-    // live_config_ itself keeps the unpinned value.
+    // Native device/mode fallback is derived without writing it into scene intent.
+    [[nodiscard]] engine::Outcome<WebcamSettings> webcamSettingsForEdit() const;
+    bool commitRecordWebcamEdit(const WebcamSettings&);
+    void bindVisualSettingsTargets();
     [[nodiscard]] WebcamSettings webcamSettingsForCapture() const;
     [[nodiscard]] WebcamSettings resolveVisualWebcam(WebcamSettings) const;
     void initializeVisualSources();
@@ -747,6 +748,8 @@ class QuickApplication {
     // Declared after the store it borrows: RecoveryService holds a reference.
     RecoveryService recovery_service_;
     AboutViewModelAdapter about_view_model_;
+    // SettingsAdapter borrows the sealed registry for its whole lifetime.
+    CapabilityRegistry visual_registry_;
     SettingsAdapter settings_adapter_;
     AudioRoutingAdapter audio_routing_adapter_;
     QTimer audio_routing_meter_timer_;
@@ -801,7 +804,6 @@ class QuickApplication {
     // with that pointer.
     OverlayAdapter overlay_adapter_;
     OverlayTelemetryAdapter overlay_telemetry_adapter_;
-    CapabilityRegistry visual_registry_;
     // Retain the host storage until the QML engine and all preview adapters have stopped.
     std::shared_ptr<engine::VisualSceneRuntime> visual_runtime_;
     RecordPreviewAdapter record_preview_adapter_;
@@ -812,14 +814,19 @@ class QuickApplication {
     GamepadOverlay gamepad_overlay_;
     std::unique_ptr<RecordingCoordinator> recording_coordinator_;
     std::unique_ptr<VisualSourceManager> visual_sources_;
-    std::optional<VisualSceneConfig> visual_identity_template_;
-    toml::table visual_projection_;
+
     std::optional<VisualSceneConfig> accepted_visual_scene_;
     engine::ConfigRevision accepted_visual_revision_;
     uint64_t accepted_visual_qpc_100ns_ = 0;
     engine::ConfigRevision visual_revision_;
     engine::VisualSourceId visual_camera_source_;
     engine::SceneItemId visual_camera_item_;
+    engine::VisualSourceId visual_gamepad_source_;
+    engine::SceneItemId visual_gamepad_item_;
+    engine::VisualAddress settings_camera_target_;
+    engine::SceneItemId settings_camera_item_;
+    engine::VisualAddress settings_gamepad_target_;
+    engine::SceneItemId settings_gamepad_item_;
     engine::VisualConsumerId settings_visual_consumer_ = 0;
     std::optional<engine::VisualAddress> settings_visual_address_;
     std::optional<WebcamSettings> admitted_visual_camera_mode_;

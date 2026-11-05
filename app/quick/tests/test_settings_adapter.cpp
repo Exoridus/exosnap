@@ -61,6 +61,20 @@ class SettingsAdapterTest : public ::testing::Test {
         }
     }
     void SetUp() override {
+        SourceFactory unused = [](SourceCreateRequest) -> engine::Outcome<std::unique_ptr<VisualSource>> {
+            return engine::EngineError{.context = "No native source in adapter tests"};
+        };
+        CachedVisualOptions no_choices = [](const VisualSourceRecord&) { return ChoiceSnapshot{}; };
+        ASSERT_TRUE(
+            registry.Register({{"org.exosnap.webcam"}, {MakeWebcamVisualSourceType(unused, no_choices)}}).succeeded());
+        ASSERT_TRUE(
+            registry.Register({{"org.exosnap.gamepad"}, {MakeGamepadVisualSourceType(unused, no_choices, no_choices)}})
+                .succeeded());
+        ASSERT_TRUE(registry.Seal().succeeded());
+        const auto scene = MakeDefaultVisualScene();
+        adapter.setVisualRegistry(&registry);
+        adapter.setVisualTargets({scene.sources[0].id, {}}, scene.items[0].id, {scene.sources[1].id, {}},
+                                 scene.items[1].id);
         adapter.setCapabilities(capability::CapabilityBuilder::BuildStaticValidatedBaseline());
         adapter.setConfig(MakeDefaultPreset().config);
     }
@@ -75,6 +89,7 @@ class SettingsAdapterTest : public ::testing::Test {
         QThreadPool::globalInstance()->waitForDone();
     }
 
+    CapabilityRegistry registry;
     SettingsAdapter adapter;
 };
 
@@ -742,11 +757,11 @@ QStringList OptionValues(const QVariantList& options) {
 TEST_F(SettingsAdapterTest, WebcamResolutionIsStoredAsWidthAndHeight) {
     adapter.setWebcamResolution(QStringLiteral("1920x1080"));
     EXPECT_EQ(adapter.webcamResolution(), QStringLiteral("1920x1080"));
-    EXPECT_EQ(adapter.config().webcam.width, 1920);
-    EXPECT_EQ(adapter.config().webcam.height, 1080);
+    EXPECT_EQ(adapter.webcamSettings().width, 1920);
+    EXPECT_EQ(adapter.webcamSettings().height, 1080);
 
     adapter.setWebcamResolution(QStringLiteral("not a size"));
-    EXPECT_EQ(adapter.config().webcam.height, 1080);
+    EXPECT_EQ(adapter.webcamSettings().height, 1080);
 }
 
 TEST_F(SettingsAdapterTest, WebcamChoicesListOnlyWhatTheCameraOffers) {
@@ -870,7 +885,7 @@ TEST_F(SettingsAdapterTest, CameraImageControlEditsAreSnappedStoredAndReset) {
     EXPECT_EQ(ControlState(adapter, WebcamControl::Brightness).value(QStringLiteral("value")).toInt(), 64);
     // Leaving automatic keeps the value the camera was showing.
     adapter.setWebcamControlAutomatic(static_cast<int>(WebcamControl::WhiteBalance), false);
-    EXPECT_EQ(adapter.config().webcam.controls,
+    EXPECT_EQ(adapter.webcamSettings().controls,
               (std::vector<WebcamControlSetting>{{WebcamControl::Brightness, false, 64},
                                                  {WebcamControl::WhiteBalance, false, 4600}}));
     // A control the camera cannot run automatically stays manual.
@@ -879,17 +894,21 @@ TEST_F(SettingsAdapterTest, CameraImageControlEditsAreSnappedStoredAndReset) {
     EXPECT_TRUE(adapter.webcamControlsAdjusted());
 
     adapter.resetWebcamControls();
-    EXPECT_TRUE(adapter.config().webcam.controls.empty());
+    EXPECT_TRUE(adapter.webcamSettings().controls.empty());
     EXPECT_EQ(ControlState(adapter, WebcamControl::Brightness).value(QStringLiteral("value")).toInt(), 8);
 }
 
 TEST_F(SettingsAdapterTest, ChoosingAnotherCameraDropsTheControlValues) {
     const QString id = QStringLiteral("cam");
-    adapter.setWebcamDevices(OneWebcam(id));
+    auto devices = OneWebcam(id);
+    devices.append(OneWebcam(QStringLiteral("other")));
+    adapter.setWebcamDevices(devices);
     adapter.setWebcamControlRanges(id, CameraControls());
     adapter.setWebcamControlValue(static_cast<int>(WebcamControl::Brightness), 20);
+    ASSERT_FALSE(adapter.webcamSettings().controls.empty());
     adapter.setWebcamDeviceId(QStringLiteral("other"));
-    EXPECT_TRUE(adapter.config().webcam.controls.empty());
+    EXPECT_EQ(adapter.webcamDeviceId(), QStringLiteral("other"));
+    EXPECT_TRUE(adapter.webcamSettings().controls.empty());
 }
 
 TEST_F(SettingsAdapterTest, AModeTheCameraLacksIsShownAsTheModeCaptureGets) {
@@ -903,7 +922,7 @@ TEST_F(SettingsAdapterTest, AModeTheCameraLacksIsShownAsTheModeCaptureGets) {
 
     EXPECT_EQ(adapter.webcamResolution(), QStringLiteral("2560x1440"));
     EXPECT_EQ(adapter.webcamFrameRate(), 30);
-    EXPECT_EQ(adapter.config().webcam.width, 1280) << "displaying the mode does not rewrite the request";
+    EXPECT_EQ(adapter.webcamSettings().width, 1280) << "displaying the mode does not rewrite the request";
 }
 
 TEST_F(SettingsAdapterTest, ChromaKeyParametersRoundTripThroughPercent) {
@@ -914,7 +933,7 @@ TEST_F(SettingsAdapterTest, ChromaKeyParametersRoundTripThroughPercent) {
     EXPECT_EQ(adapter.chromaKeyTolerance(), 65);
     EXPECT_EQ(adapter.chromaKeySoftness(), 0);
     EXPECT_EQ(adapter.chromaKeySpill(), 100);
-    EXPECT_FLOAT_EQ(adapter.config().webcam.chroma_key.tolerance, 0.65f);
+    EXPECT_FLOAT_EQ(adapter.webcamSettings().chroma_key.tolerance, 0.65f);
 }
 
 TEST_F(SettingsAdapterTest, WebcamAvailabilityFollowsDiscoveredDevices) {

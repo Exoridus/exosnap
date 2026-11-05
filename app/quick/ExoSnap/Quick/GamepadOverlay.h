@@ -20,12 +20,12 @@ class GamepadOverlay final : public QObject, public engine::SpriteSourceProvider
     Q_OBJECT
     QML_ELEMENT
     QML_UNCREATABLE("GamepadOverlay is provided by the application")
-    Q_PROPERTY(bool enabled READ enabled WRITE setEnabled NOTIFY settingsChanged FINAL)
-    Q_PROPERTY(bool outputVisible READ outputVisible WRITE setOutputVisible NOTIFY settingsChanged FINAL)
-    Q_PROPERTY(int layout READ layout WRITE setLayout NOTIFY settingsChanged FINAL)
-    Q_PROPERTY(double opacity READ opacity WRITE setOpacity NOTIFY settingsChanged FINAL)
-    Q_PROPERTY(QRectF placement READ placement WRITE setPlacement NOTIFY settingsChanged FINAL)
-    Q_PROPERTY(QString device READ device WRITE setDevice NOTIFY settingsChanged FINAL)
+    Q_PROPERTY(bool enabled READ enabled NOTIFY settingsChanged FINAL)
+    Q_PROPERTY(bool outputVisible READ outputVisible NOTIFY settingsChanged FINAL)
+    Q_PROPERTY(int layout READ layout NOTIFY settingsChanged FINAL)
+    Q_PROPERTY(double opacity READ opacity NOTIFY settingsChanged FINAL)
+    Q_PROPERTY(QRectF placement READ placement NOTIFY settingsChanged FINAL)
+    Q_PROPERTY(QString device READ device NOTIFY settingsChanged FINAL)
     Q_PROPERTY(QVariantList devices READ devices NOTIFY devicesChanged FINAL)
     Q_PROPERTY(QVariantList layouts READ layouts CONSTANT FINAL)
     Q_PROPERTY(QString status READ status NOTIFY statusChanged FINAL)

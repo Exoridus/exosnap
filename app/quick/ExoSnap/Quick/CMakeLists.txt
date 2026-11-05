@@ -233,6 +233,7 @@ qt_add_qml_module(exosnap
         SettingsQualitySection.qml
         SettingsUpdatesSection.qml
         SettingsWebcamSection.qml
+        VisualSettingsForm.qml
         WhatsNewOverlay.qml
         WindowChromeButton.qml
     SOURCES
@@ -531,14 +532,9 @@ target_sources(exosnap
         # without it in the shipping target the gate is inert.
         ${PROJECT_SOURCE_DIR}/app/services/WindowEvidenceProbe.cpp
         ${PROJECT_SOURCE_DIR}/app/services/WindowEvidenceProbe.h
-        ${PROJECT_SOURCE_DIR}/app/extensions/CapabilityRegistry.cpp
-        ${PROJECT_SOURCE_DIR}/app/extensions/VisualSettings.cpp
-        ${PROJECT_SOURCE_DIR}/app/extensions/VisualPresetMigration.cpp
-        ${PROJECT_SOURCE_DIR}/app/extensions/BuiltinVisualSettings.cpp
         ${PROJECT_SOURCE_DIR}/app/extensions/WebcamModule.cpp
         ${PROJECT_SOURCE_DIR}/app/extensions/GamepadModule.cpp
         ${PROJECT_SOURCE_DIR}/app/extensions/VisualSourceManager.cpp
-        ${PROJECT_SOURCE_DIR}/app/models/VisualSceneConfig.cpp
         ${PROJECT_SOURCE_DIR}/app/services/RecordingCoordinator.cpp
         ${PROJECT_SOURCE_DIR}/app/services/RecordingCoordinatorClips.cpp
         ${PROJECT_SOURCE_DIR}/app/services/RecordingClipJobs.cpp
@@ -1607,6 +1603,7 @@ qt_add_qml_module(record_source_picker_qml_tests
         SettingsPresetNameDialog.qml
         SettingsQualitySection.qml
         SettingsWebcamSection.qml
+        VisualSettingsForm.qml
         ExoButton.qml
         ExoChevron.qml
         ExoFieldErrorMark.qml
@@ -1813,6 +1810,7 @@ exosnap_add_gtest(
         RecordingWorkspaceState.cpp
         RecordingWorkspaceState.h
         ${EXOSNAP_QUICK_TESTS_DIR}/test_settings_adapter.cpp
+        ${EXOSNAP_QUICK_TESTS_DIR}/test_settings_visual_cutover.cpp
         AudioRoutingAdapter.cpp
         AudioRoutingAdapter.h
         # The automation key table lives with the adapter it binds to, so a

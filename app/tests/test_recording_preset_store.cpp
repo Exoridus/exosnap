@@ -7,6 +7,7 @@
 #include <filesystem>
 #include <limits>
 #include <string>
+#include <utility>
 #include <vector>
 
 #include <QCryptographicHash>
@@ -26,12 +27,27 @@
 
 #include "models/AudioRoutingMigration.h"
 #include "models/RecordingPreset.h"
+#include "models/VisualSceneEdits.h"
 #include "settings/RecordingPresetStore.h"
 
 #include <toml++/toml.hpp>
 
 namespace exosnap {
 namespace {
+
+WebcamSettings ProjectedWebcam(const RecordingPresetConfig& config) {
+    const auto& scene = config.visual_scene;
+    auto projected = ProjectSceneWebcam(scene, scene.sources.front().id, scene.items.front().id);
+    EXPECT_TRUE(projected.succeeded());
+    return projected.succeeded() ? std::move(*projected.value()) : WebcamSettings{};
+}
+
+GamepadOverlaySettings ProjectedGamepad(const RecordingPresetConfig& config) {
+    const auto& scene = config.visual_scene;
+    auto projected = ProjectSceneGamepad(scene, scene.sources[1].id, scene.items[1].id);
+    EXPECT_TRUE(projected.succeeded());
+    return projected.succeeded() ? std::move(*projected.value()) : GamepadOverlaySettings{};
+}
 
 // ===========================================================================
 // Helpers
@@ -104,28 +120,30 @@ RecordingPreset MakeWebcamPreset() {
     p.name = "Webcam Preset";
     p.config = MakeDefaultPreset().config;
     p.config.audio_intent.reset();
-    p.config.webcam.enabled = true;
-    p.config.webcam.device_id = "\\\\?\\usb#vid_046d";
-    p.config.webcam.width = 1920;
-    p.config.webcam.height = 1080;
-    p.config.webcam.fps = 60;
-    p.config.webcam.overlay.x_norm = 0.1f;
-    p.config.webcam.overlay.y_norm = 0.2f;
-    p.config.webcam.overlay.w_norm = 0.3f;
-    p.config.webcam.overlay.h_norm = 0.3f;
-    p.config.webcam.overlay_user_placed = true;
-    p.config.webcam.aspect_ratio_locked = false;
-    p.config.webcam.mirror = true;
-    p.config.webcam.chroma_key.enabled = true;
-    p.config.webcam.chroma_key.color_mode = WebcamChromaKeyColorMode::Custom;
-    p.config.webcam.chroma_key.custom_r = 10;
-    p.config.webcam.chroma_key.custom_g = 200;
-    p.config.webcam.chroma_key.custom_b = 30;
-    p.config.webcam.chroma_key.tolerance = 0.40f;
-    p.config.webcam.chroma_key.softness = 0.10f;
-    p.config.webcam.chroma_key.spill_reduction = 0.25f;
-    p.config.webcam.opacity = 0.35f;
-    p.config.webcam.controls = {{WebcamControl::Brightness, false, -12}, {WebcamControl::WhiteBalance, true, 4600}};
+    p.config.visual_scene.sources[0].enabled = true;
+    p.config.visual_scene.sources[0].settings.insert_or_assign("device_id", "\\\\?\\usb#vid_046d");
+    p.config.visual_scene.sources[0].settings.insert_or_assign("width", 1920);
+    p.config.visual_scene.sources[0].settings.insert_or_assign("height", 1080);
+    p.config.visual_scene.sources[0].settings.insert_or_assign("fps", 60);
+    p.config.visual_scene.items[0].properties.placement.x = 0.1f;
+    p.config.visual_scene.items[0].properties.placement.y = 0.2f;
+    p.config.visual_scene.items[0].properties.placement.w = 0.3f;
+    p.config.visual_scene.items[0].properties.placement.h = 0.3f;
+    p.config.visual_scene.items[0].properties.user_placed = true;
+    p.config.visual_scene.items[0].properties.aspect_ratio_locked = false;
+    p.config.visual_scene.items[0].properties.placement.mirror = true;
+    p.config.visual_scene.items[0].chroma_key.enabled = true;
+    p.config.visual_scene.items[0].chroma_key.color_mode = WebcamChromaKeyColorMode::Custom;
+    p.config.visual_scene.items[0].chroma_key.custom_r = 10;
+    p.config.visual_scene.items[0].chroma_key.custom_g = 200;
+    p.config.visual_scene.items[0].chroma_key.custom_b = 30;
+    p.config.visual_scene.items[0].chroma_key.tolerance = 0.40f;
+    p.config.visual_scene.items[0].chroma_key.softness = 0.10f;
+    p.config.visual_scene.items[0].chroma_key.spill_reduction = 0.25f;
+    p.config.visual_scene.items[0].properties.opacity = 0.35f;
+    p.config.visual_scene.sources[0].settings.insert_or_assign(
+        "controls", toml::table{{"brightness", toml::table{{"auto", false}, {"value", -12}}},
+                                {"white_balance", toml::table{{"auto", true}, {"value", 4600}}}});
     return p;
 }
 
@@ -180,11 +198,11 @@ TEST(RecordingPresetStore, RoundTrip_3Presets_AllFieldsPreserved) {
 
         // Webcam PiP opacity — persisted explicitly since NormalizedConfigEquals
         // is not the target of this proof; check the round-tripped value directly.
-        EXPECT_FLOAT_EQ(loaded_r3->config.webcam.opacity, 0.35f);
+        EXPECT_FLOAT_EQ(loaded_r3->config.visual_scene.items[0].properties.opacity, 0.35f);
         // Negative values and the automatic flag survive, and only the set
         // controls come back.
-        EXPECT_EQ(loaded_r3->config.webcam.controls, r3.config.webcam.controls);
-        EXPECT_TRUE(loaded_r1->config.webcam.controls.empty());
+        EXPECT_EQ(ProjectedWebcam(loaded_r3->config).controls, ProjectedWebcam(r3.config).controls);
+        EXPECT_TRUE(ProjectedWebcam(loaded_r1->config).controls.empty());
     }
 
     CleanupFile(path);
@@ -195,19 +213,20 @@ TEST(RecordingPresetStore, GamepadOverlayRoundTripsInLiveConfig) {
     ASSERT_TRUE(temporary.isValid());
     RecordingPresetStore store(temporary.filePath(QStringLiteral("presets.toml")));
     auto config = MakeDefaultPreset().config;
-    config.gamepad.enabled = true;
-    config.gamepad.device = std::string(64, 'a');
-    config.gamepad.opacity = 0.42F;
-    config.gamepad.x = 0.1F;
-    config.gamepad.y = 0.2F;
-    config.gamepad.width = 0.4F;
-    config.gamepad.height = 0.5F;
-    for (int layout = 0; layout < static_cast<int>(kGamepadOverlayArtworkIds.size()); ++layout) {
-        config.gamepad.layout = layout;
+    config.visual_scene.sources[1].enabled = true;
+    config.visual_scene.sources[1].settings.insert_or_assign("device", std::string(64, 'a'));
+    config.visual_scene.items[1].properties.opacity = 0.42F;
+    config.visual_scene.items[1].properties.placement.x = 0.1F;
+    config.visual_scene.items[1].properties.placement.y = 0.2F;
+    config.visual_scene.items[1].properties.placement.w = 0.4F;
+    config.visual_scene.items[1].properties.placement.h = 0.5F;
+    for (int layout = -1; layout < static_cast<int>(kGamepadOverlayArtworkIds.size()); ++layout) {
+        config.visual_scene.sources[1].settings.insert_or_assign(
+            "layout", layout < 0 ? std::string_view("auto") : kGamepadOverlayArtworkIds[layout]);
         ASSERT_TRUE(store.Save({}, MakeDefaultPreset().id, config));
         const auto restored = store.Load();
         ASSERT_TRUE(restored.live);
-        EXPECT_EQ(restored.live->gamepad, config.gamepad);
+        EXPECT_EQ(ProjectedGamepad(*restored.live), ProjectedGamepad(config));
         EXPECT_FALSE(ConfigDirtyDifference(config, *restored.live).size());
     }
 }
@@ -237,25 +256,32 @@ TEST(RecordingPresetStore, GamepadOverlayLayoutIndicesRemainStable) {
 }
 
 TEST(RecordingPresetStore, GamepadOverlayLegacyEffectsAreDisabledInLiveAndUserProfiles) {
-    QTemporaryDir temporary;
-    ASSERT_TRUE(temporary.isValid());
-    RecordingPresetStore store(temporary.filePath(QStringLiteral("presets.toml")));
-    auto preset = MakeDefaultPreset();
-    preset.id = GeneratePresetId();
-    preset.name = "Legacy controller style";
-    preset.config.gamepad.layout = 15;
-    preset.config.gamepad.glass = true;
-    preset.config.gamepad.glow = true;
-    ASSERT_TRUE(store.Save({preset}, preset.id, preset.config));
-
+    const QString path = UniqueTempPath();
+    ASSERT_TRUE(
+        WriteTomlString(path, QStringLiteral("schema_version = 26\n"
+                                             "audio_contract = \"exosnap.audio.v1.3-final.1\"\n"
+                                             "selected_id = \"preset.legacy\"\n"
+                                             "[live.gamepad]\nlayout = 15\nglass = true\nglow = true\n"
+                                             "[[presets]]\nid = \"preset.legacy\"\nname = \"Legacy controller style\"\n"
+                                             "[presets.gamepad]\nlayout = 15\nglass = true\nglow = true\n")));
+    RecordingPresetStore store(path);
     const auto restored = store.Load();
     ASSERT_TRUE(restored.live);
     ASSERT_EQ(restored.user_presets.size(), 1u);
     for (const auto* config : {&*restored.live, &restored.user_presets.front().config}) {
-        EXPECT_EQ(config->gamepad.layout, 15);
-        EXPECT_FALSE(config->gamepad.glass);
-        EXPECT_FALSE(config->gamepad.glow);
+        const auto settings = ProjectedGamepad(*config);
+        EXPECT_EQ(settings.layout, 15);
+        EXPECT_FALSE(settings.glass);
+        EXPECT_FALSE(settings.glow);
     }
+    ASSERT_TRUE(store.Save(restored.user_presets, restored.selected_id, *restored.live));
+    const auto saved = toml::parse_file(path.toStdString());
+    EXPECT_FALSE(saved["live"]["gamepad"]["glass"]);
+    EXPECT_FALSE(saved["live"]["gamepad"]["glow"]);
+    const auto& named = *(*saved["presets"].as_array())[0].as_table();
+    EXPECT_FALSE(named["gamepad"]["glass"]);
+    EXPECT_FALSE(named["gamepad"]["glow"]);
+    CleanupFile(path);
 }
 
 TEST(RecordingPresetStore, GamepadOverlaySanitizesInvalidPlacementAndDevice) {
@@ -866,7 +892,7 @@ TEST(RecordingPresetStore, WebcamOpacityMissingKey_DefaultsTo1) {
     const PersistedPresetState state = store.Load();
     EXPECT_FALSE(state.repaired);
     ASSERT_EQ(state.user_presets.size(), 1u);
-    EXPECT_FLOAT_EQ(state.user_presets[0].config.webcam.opacity, 1.0f);
+    EXPECT_FLOAT_EQ(state.user_presets[0].config.visual_scene.items[0].properties.opacity, 1.0f);
 
     CleanupFile(path);
 }
@@ -1729,7 +1755,7 @@ TEST(RecordingPresetStore, TomlOnDisk_IsValidTomlWithExpectedKeys) {
     EXPECT_TRUE(content.contains(QStringLiteral("schema_version")));
     EXPECT_TRUE(content.contains(QStringLiteral("[live]")));
     EXPECT_TRUE(content.contains(QStringLiteral("[live.audio]")));
-    EXPECT_TRUE(content.contains(QStringLiteral("[live.webcam]")));
+    EXPECT_TRUE(content.contains(QStringLiteral("[[live.visual.sources]]")));
     EXPECT_FALSE(content.contains(QStringLiteral("default_id")));
 
     CleanupFile(path);
@@ -1788,26 +1814,26 @@ TEST(RecordingPresetStore, OldSchemaVersion_Load_KeepsData_NotRepaired) {
 TEST(RecordingPresetStore, OverlayOutputVisibilityDefaultsAndRoundtrips) {
     const QString path = UniqueTempPath();
     RecordingPreset preset = MakeDefaultPreset();
-    EXPECT_TRUE(preset.config.webcam.output_visible);
-    EXPECT_TRUE(preset.config.gamepad.output_visible);
+    EXPECT_TRUE(preset.config.visual_scene.items[0].properties.output_visible);
+    EXPECT_TRUE(preset.config.visual_scene.items[1].properties.output_visible);
     preset.id = GeneratePresetId();
     preset.name = "Preview-only overlays";
     preset.config.audio_intent.reset();
-    preset.config.webcam.enabled = true;
-    preset.config.webcam.output_visible = false;
-    preset.config.gamepad.enabled = true;
-    preset.config.gamepad.output_visible = false;
+    preset.config.visual_scene.sources[0].enabled = true;
+    preset.config.visual_scene.items[0].properties.output_visible = false;
+    preset.config.visual_scene.sources[1].enabled = true;
+    preset.config.visual_scene.items[1].properties.output_visible = false;
     RecordingPresetStore store(path);
     store.Save({preset}, preset.id, preset.config);
     const auto loaded = store.Load();
     ASSERT_EQ(loaded.user_presets.size(), 1u);
-    EXPECT_TRUE(loaded.user_presets[0].config.webcam.enabled);
-    EXPECT_FALSE(loaded.user_presets[0].config.webcam.output_visible);
-    EXPECT_TRUE(loaded.user_presets[0].config.gamepad.enabled);
-    EXPECT_FALSE(loaded.user_presets[0].config.gamepad.output_visible);
+    EXPECT_TRUE(loaded.user_presets[0].config.visual_scene.sources[0].enabled);
+    EXPECT_FALSE(loaded.user_presets[0].config.visual_scene.items[0].properties.output_visible);
+    EXPECT_TRUE(loaded.user_presets[0].config.visual_scene.sources[1].enabled);
+    EXPECT_FALSE(loaded.user_presets[0].config.visual_scene.items[1].properties.output_visible);
     ASSERT_TRUE(loaded.live);
-    EXPECT_FALSE(loaded.live->webcam.output_visible);
-    EXPECT_FALSE(loaded.live->gamepad.output_visible);
+    EXPECT_FALSE(loaded.live->visual_scene.items[0].properties.output_visible);
+    EXPECT_FALSE(loaded.live->visual_scene.items[1].properties.output_visible);
     QFile saved(path);
     ASSERT_TRUE(saved.open(QIODevice::ReadOnly | QIODevice::Text));
     QString legacy = QString::fromUtf8(saved.readAll());
@@ -1817,8 +1843,8 @@ TEST(RecordingPresetStore, OverlayOutputVisibilityDefaultsAndRoundtrips) {
     ASSERT_TRUE(WriteTomlString(path, legacy));
     const auto old_profile = store.Load();
     ASSERT_EQ(old_profile.user_presets.size(), 1u);
-    EXPECT_TRUE(old_profile.user_presets[0].config.webcam.output_visible);
-    EXPECT_TRUE(old_profile.user_presets[0].config.gamepad.output_visible);
+    EXPECT_TRUE(old_profile.user_presets[0].config.visual_scene.items[0].properties.output_visible);
+    EXPECT_TRUE(old_profile.user_presets[0].config.visual_scene.items[1].properties.output_visible);
     CleanupFile(path);
 }
 
@@ -1866,14 +1892,14 @@ TEST(RecordingPresetStore, ChromaColorMode_RoundTrip_Custom) {
     p.name = "Chroma Custom";
     p.config = MakeDefaultPreset().config;
     p.config.audio_intent.reset();
-    p.config.webcam.chroma_key.enabled = true;
-    p.config.webcam.chroma_key.color_mode = WebcamChromaKeyColorMode::Custom;
-    p.config.webcam.chroma_key.custom_r = 128;
-    p.config.webcam.chroma_key.custom_g = 64;
-    p.config.webcam.chroma_key.custom_b = 200;
-    p.config.webcam.chroma_key.tolerance = 0.35f;
-    p.config.webcam.chroma_key.softness = 0.12f;
-    p.config.webcam.chroma_key.spill_reduction = 0.45f;
+    p.config.visual_scene.items[0].chroma_key.enabled = true;
+    p.config.visual_scene.items[0].chroma_key.color_mode = WebcamChromaKeyColorMode::Custom;
+    p.config.visual_scene.items[0].chroma_key.custom_r = 128;
+    p.config.visual_scene.items[0].chroma_key.custom_g = 64;
+    p.config.visual_scene.items[0].chroma_key.custom_b = 200;
+    p.config.visual_scene.items[0].chroma_key.tolerance = 0.35f;
+    p.config.visual_scene.items[0].chroma_key.softness = 0.12f;
+    p.config.visual_scene.items[0].chroma_key.spill_reduction = 0.45f;
 
     {
         RecordingPresetStore store(path);
@@ -1885,7 +1911,7 @@ TEST(RecordingPresetStore, ChromaColorMode_RoundTrip_Custom) {
         const PersistedPresetState state = store.Load();
         ASSERT_FALSE(state.repaired);
         ASSERT_EQ(state.user_presets.size(), 1u);
-        const auto& ck = state.user_presets[0].config.webcam.chroma_key;
+        const auto& ck = state.user_presets[0].config.visual_scene.items[0].chroma_key;
         EXPECT_TRUE(ck.enabled);
         EXPECT_EQ(ck.color_mode, WebcamChromaKeyColorMode::Custom);
         EXPECT_EQ(ck.custom_r, 128u);
@@ -1907,8 +1933,8 @@ TEST(RecordingPresetStore, ChromaColorMode_RoundTrip_Magenta) {
     p.name = "Chroma Magenta";
     p.config = MakeDefaultPreset().config;
     p.config.audio_intent.reset();
-    p.config.webcam.chroma_key.color_mode = WebcamChromaKeyColorMode::Magenta;
-    p.config.webcam.chroma_key.spill_reduction = 0.20f;
+    p.config.visual_scene.items[0].chroma_key.color_mode = WebcamChromaKeyColorMode::Magenta;
+    p.config.visual_scene.items[0].chroma_key.spill_reduction = 0.20f;
 
     {
         RecordingPresetStore store(path);
@@ -1920,7 +1946,7 @@ TEST(RecordingPresetStore, ChromaColorMode_RoundTrip_Magenta) {
         const PersistedPresetState state = store.Load();
         ASSERT_FALSE(state.repaired);
         ASSERT_EQ(state.user_presets.size(), 1u);
-        const auto& ck = state.user_presets[0].config.webcam.chroma_key;
+        const auto& ck = state.user_presets[0].config.visual_scene.items[0].chroma_key;
         EXPECT_EQ(ck.color_mode, WebcamChromaKeyColorMode::Magenta);
         EXPECT_NEAR(ck.spill_reduction, 0.20f, 1e-4f);
     }
@@ -2050,7 +2076,7 @@ TEST(RecordingPresetStore, TomlOnDisk_HasLiveTable_NoDefaultId) {
     ASSERT_TRUE(f.open(QIODevice::ReadOnly | QIODevice::Text));
     const QString text = QString::fromUtf8(f.readAll());
     EXPECT_TRUE(text.contains(QStringLiteral("[live]")));
-    EXPECT_TRUE(text.contains(QStringLiteral("schema_version = 26")));
+    EXPECT_TRUE(text.contains(QStringLiteral("schema_version = 27")));
     EXPECT_FALSE(text.contains(QStringLiteral("default_id")));
     CleanupFile(path);
 }
@@ -2074,7 +2100,7 @@ TEST(RecordingPresetStore, SchemaMismatch_KeepsData_NotRepaired) {
     ASSERT_TRUE(f.open(QIODevice::ReadOnly | QIODevice::Text));
     QString text = QString::fromUtf8(f.readAll());
     f.close();
-    text.replace(QStringLiteral("schema_version = 26"), QStringLiteral("schema_version = 22"));
+    text.replace(QStringLiteral("schema_version = 27"), QStringLiteral("schema_version = 22"));
     ASSERT_TRUE(WriteTomlString(path, text));
 
     const PersistedPresetState state = store.Load();
@@ -2593,16 +2619,42 @@ TEST(RecordingPresetStore, ClearingWebcamControlsSurvivesSaveReload) {
     const QString path = UniqueTempPath();
     RecordingPresetStore store(path);
     auto live = MakeDefaultPreset().config;
-    live.webcam.controls = {{WebcamControl::Brightness, false, -12}};
+    live.visual_scene.sources[0].settings.insert_or_assign(
+        "controls", toml::table{{"brightness", toml::table{{"auto", false}, {"value", -12}}},
+                                {"future_control", toml::table{{"vendor", "keep"}}}});
     ASSERT_TRUE(store.Save({}, std::string(kDefaultPresetId), live));
     auto loaded = store.Load();
     ASSERT_TRUE(loaded.live.has_value());
-    ASSERT_EQ(loaded.live->webcam.controls.size(), 1u);
-    loaded.live->webcam.controls.clear();
+    ASSERT_EQ(ProjectedWebcam(*loaded.live).controls.size(), 1u);
+    loaded.live->visual_scene.sources[0].settings["controls"].as_table()->erase("brightness");
     ASSERT_TRUE(store.Save({}, std::string(kDefaultPresetId), *loaded.live));
     const auto reloaded = store.Load();
     ASSERT_TRUE(reloaded.live.has_value());
-    EXPECT_TRUE(reloaded.live->webcam.controls.empty());
+    EXPECT_TRUE(ProjectedWebcam(*reloaded.live).controls.empty());
+    EXPECT_EQ(
+        reloaded.live->visual_scene.sources[0].settings["controls"]["future_control"]["vendor"].value<std::string>(),
+        "keep");
+}
+
+TEST(RecordingPresetStore, InvalidNativeSceneDoesNotOverwriteSavedConfiguration) {
+    const QString path = UniqueTempPath();
+    RecordingPresetStore store(path);
+    auto live = MakeDefaultPreset().config;
+    ASSERT_TRUE(store.Save({}, std::string(kDefaultPresetId), live));
+    QFile file(path);
+    ASSERT_TRUE(file.open(QIODevice::ReadOnly));
+    const auto original = file.readAll();
+    file.close();
+    for (const auto opacity : {std::numeric_limits<float>::quiet_NaN(), -0.5f, 3.0f}) {
+        live.visual_scene.items.front().properties.opacity = opacity;
+        QString error;
+        EXPECT_FALSE(store.Save({}, std::string(kDefaultPresetId), live, &error));
+        EXPECT_FALSE(error.isEmpty());
+        ASSERT_TRUE(file.open(QIODevice::ReadOnly));
+        EXPECT_EQ(file.readAll(), original);
+        file.close();
+    }
+    CleanupFile(path);
 }
 
 TEST(RecordingPresetStore, LegacyLimiterProjectsBeforeUnrelatedSettingsEdits) {

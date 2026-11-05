@@ -9,6 +9,25 @@ Item {
 
     required property RecordViewModelAdapter recordViewModel
     property GamepadOverlay gamepadOverlay: null
+    property var gamepadState: ({})
+    function refreshGamepad(): void {
+        root.gamepadState = root.settings ? root.settings.visualSourceState(root.settings.recordGamepadSourceId, true) : ({});
+    }
+    function setGamepadEnabled(value: bool): bool {
+        return settings.setVisualEnabled(gamepadState.sourceId, gamepadState.itemId,
+                                         gamepadState.editRevision, value, true);
+    }
+    function setGamepadOutputVisible(value: bool): bool {
+        return settings.setRecordGamepadOutputVisible(gamepadState.sourceId, gamepadState.itemId,
+                                                       gamepadState.editRevision, value);
+    }
+    onSettingsChanged: refreshGamepad()
+    Component.onCompleted: refreshGamepad()
+    Connections {
+        target: root.settings
+        function onConfigChanged(): void { root.refreshGamepad(); }
+        function onControlsLockedChanged(): void { root.refreshGamepad(); }
+    }
     required property RecordingClipAdapter clipAdapter
     required property RecordPreviewAdapter previewAdapter
     required property SettingsAdapter settings
@@ -241,35 +260,43 @@ Item {
 
                         RecordWebcamOverlay {
                             id: gamepadPlacement
+                            objectName: "recordGamepadPlacement"
+                            property var gestureTarget: null
+                            onGestureStarted: gestureTarget = root.gamepadState
+                            onGestureFinished: gestureTarget = null
                             stage: previewStage
                             overlayName: qsTr("Gamepad overlay")
-                            visible: root.gamepadOverlay !== null && root.gamepadOverlay.enabled
+                            visible: root.gamepadOverlay !== null && root.gamepadState.enabled === true
                             idlePreview: false
-                            modelRect: root.gamepadOverlay ? root.gamepadOverlay.placement : Qt.rect(0, 0, 1, 1)
-                            editable: root.recordViewModel.webcamOverlayEditable
+                            modelRect: root.gamepadState.placement ?? Qt.rect(0, 0, 1, 1)
+                            editable: root.gamepadState.editable === true
                             selected: root.selectedOverlay === "gamepad"
                             toolbarTopInset: Math.max(0, previewChrome.controlsBottom - previewStage.y + 4)
-                            outputVisible: root.gamepadOverlay === null || root.gamepadOverlay.outputVisible
+                            outputVisible: root.gamepadState.outputVisible !== false
                             onSelectionRequested: root.selectedOverlay = "gamepad"
-                            onOutputVisibilityRequested: value => root.gamepadOverlay.outputVisible = value
+                            onOutputVisibilityRequested: value => root.setGamepadOutputVisible(value)
                             onRemoveRequested: {
-                                root.gamepadOverlay.enabled = false;
+                                root.setGamepadEnabled(false);
                                 root.selectedOverlay = "";
                             }
+                            function requestPlacement(rect: rect): void {
+                                const target = gestureTarget ?? root.gamepadState;
+                                root.settings.setRecordGamepadPlacement(target.sourceId, target.itemId,
+                                                                         target.editRevision, rect);
+                            }
                             onDraftRectChanged: {
-                                if (root.gamepadOverlay && editable)
-                                    root.gamepadOverlay.placement = draftRect;
+                                if (gestureTarget && editable)
+                                    requestPlacement(draftRect);
                             }
-                            onRectRequested: rect => {
-                                if (root.gamepadOverlay)
-                                    root.gamepadOverlay.placement = rect;
-                            }
+                            onRectRequested: rect => requestPlacement(rect)
                         }
 
                         GamepadOverlayControls {
                             id: gamepadControls
+                            recordScope: true
                             visible: root.gamepadOverlay !== null
                             overlay: root.gamepadOverlay
+                            settings: root.settings
                             showButton: false
                             anchors.right: parent.right
                             anchors.bottom: parent.bottom
@@ -287,8 +314,9 @@ Item {
                             sourceEnabled: root.recordViewModel.canSelectSource
                             overlayEnabled: root.recordViewModel.webcamOverlayEditable
                             webcamEnabled: root.recordViewModel.webcamEnabled
-                            controllerEnabled: root.gamepadOverlay !== null && root.gamepadOverlay.enabled
+                            controllerEnabled: root.gamepadOverlay !== null && root.gamepadState.enabled === true
                             controllerAvailable: root.gamepadOverlay !== null
+                            controllerEditable: root.gamepadState.editable === true
                             metricsVisible: (root.recordViewModel.recording || root.recordViewModel.paused) && root.recordViewModel.liveStatsAvailable
                             dropsText: root.recordViewModel.droppedFramesText
                             driftText: root.recordViewModel.driftText
@@ -308,11 +336,11 @@ Item {
                                 }
                             }
                             onControllerRequested: {
-                                if (root.gamepadOverlay.enabled)
+                                if (root.gamepadState.enabled === true)
                                     gamepadControls.openOptions();
                                 else {
-                                    root.gamepadOverlay.outputVisible = true;
-                                    root.gamepadOverlay.enabled = true;
+                                    root.setGamepadOutputVisible(true);
+                                    root.setGamepadEnabled(true);
                                     root.selectedOverlay = "gamepad";
                                     Qt.callLater(() => {
                                         if (root.active && gamepadPlacement.visible)
@@ -483,8 +511,8 @@ Item {
             return previewChrome.openOverlayMenu();
         }
         if ((name === "gamepad" || name === "gamepad-hidden") && root.gamepadOverlay) {
-            root.gamepadOverlay.enabled = true;
-            root.gamepadOverlay.outputVisible = name !== "gamepad-hidden";
+            root.setGamepadEnabled(true);
+            root.setGamepadOutputVisible(name !== "gamepad-hidden");
             root.selectedOverlay = "gamepad";
             return gamepadPlacement.visible;
         }

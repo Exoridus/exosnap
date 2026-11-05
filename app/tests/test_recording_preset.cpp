@@ -5,24 +5,33 @@
 #include <set>
 #include <string>
 #include <unordered_set>
+#include <utility>
 
 #include <capability/audio_ui_state.h>
 #include <exosnap/engine/audio_track_model.h>
 #include <exosnap/engine/recorder_session.h>
 
 #include "models/RecordingPreset.h"
+#include "models/VisualSceneEdits.h"
 
 TEST(GamepadPreset, ChangesAffectPersistenceEqualityAndProfileDirtyState) {
     const auto original = exosnap::MakeDefaultPreset().config;
     auto edited = original;
-    edited.gamepad.enabled = true;
+    edited.visual_scene.sources[1].enabled = true;
     EXPECT_FALSE(exosnap::NormalizedConfigEquals(original, edited));
     EXPECT_FALSE(exosnap::ConfigDirtyEquivalent(original, edited));
-    EXPECT_EQ(exosnap::ConfigDirtyDifference(original, edited), "gamepad");
+    EXPECT_EQ(exosnap::ConfigDirtyDifference(original, edited), "visual_scene");
 }
 
 namespace exosnap {
 namespace {
+
+WebcamSettings ProjectedWebcam(const RecordingPresetConfig& config) {
+    const auto& scene = config.visual_scene;
+    auto projected = ProjectSceneWebcam(scene, scene.sources.front().id, scene.items.front().id);
+    EXPECT_TRUE(projected.succeeded());
+    return projected.succeeded() ? std::move(*projected.value()) : WebcamSettings{};
+}
 
 // ===========================================================================
 // Helpers
@@ -30,8 +39,8 @@ namespace {
 
 // Returns a copy of `cfg` with the PiP overlay shifted by `delta` on x and y.
 RecordingPresetConfig WithPipDelta(RecordingPresetConfig cfg, float delta) {
-    cfg.webcam.overlay.x_norm += delta;
-    cfg.webcam.overlay.y_norm += delta;
+    cfg.visual_scene.items[0].properties.placement.x += delta;
+    cfg.visual_scene.items[0].properties.placement.y += delta;
     return cfg;
 }
 
@@ -159,13 +168,13 @@ TEST(RecordingPreset, DefaultPreset_CaptureKind) {
 
 TEST(RecordingPreset, DefaultPreset_Webcam) {
     const RecordingPreset p = MakeDefaultPreset();
-    EXPECT_FALSE(p.config.webcam.enabled);
-    EXPECT_FALSE(p.config.webcam.mirror);
-    EXPECT_EQ(p.config.webcam.width, 1280);
-    EXPECT_EQ(p.config.webcam.height, 720);
-    EXPECT_EQ(p.config.webcam.fps, 30);
-    EXPECT_TRUE(p.config.webcam.aspect_ratio_locked);
-    EXPECT_FALSE(p.config.webcam.overlay_user_placed);
+    EXPECT_FALSE(p.config.visual_scene.sources[0].enabled);
+    EXPECT_FALSE(p.config.visual_scene.items[0].properties.placement.mirror);
+    EXPECT_EQ(ProjectedWebcam(p.config).width, 1280);
+    EXPECT_EQ(ProjectedWebcam(p.config).height, 720);
+    EXPECT_EQ(ProjectedWebcam(p.config).fps, 30);
+    EXPECT_TRUE(p.config.visual_scene.items[0].properties.aspect_ratio_locked);
+    EXPECT_FALSE(p.config.visual_scene.items[0].properties.user_placed);
 }
 
 TEST(RecordingPreset, DefaultPreset_WebcamPip_BottomRight) {
@@ -174,10 +183,10 @@ TEST(RecordingPreset, DefaultPreset_WebcamPip_BottomRight) {
     const float expected_x = 1.0f - kPipSize - kDefaultPipInsetNorm;
     const float expected_y = 1.0f - kPipSize - kDefaultPipInsetNorm;
 
-    EXPECT_FLOAT_EQ(p.config.webcam.overlay.w_norm, kPipSize);
-    EXPECT_FLOAT_EQ(p.config.webcam.overlay.h_norm, kPipSize);
-    EXPECT_FLOAT_EQ(p.config.webcam.overlay.x_norm, expected_x);
-    EXPECT_FLOAT_EQ(p.config.webcam.overlay.y_norm, expected_y);
+    EXPECT_FLOAT_EQ(p.config.visual_scene.items[0].properties.placement.w, kPipSize);
+    EXPECT_FLOAT_EQ(p.config.visual_scene.items[0].properties.placement.h, kPipSize);
+    EXPECT_FLOAT_EQ(p.config.visual_scene.items[0].properties.placement.x, expected_x);
+    EXPECT_FLOAT_EQ(p.config.visual_scene.items[0].properties.placement.y, expected_y);
 }
 
 TEST(RecordingPreset, DefaultPreset_AudioRows) {
@@ -202,14 +211,14 @@ TEST(RecordingPreset, DefaultPreset_AudioMiscFields) {
 
 TEST(RecordingPreset, DefaultPreset_ChromaKey) {
     const RecordingPreset p = MakeDefaultPreset();
-    EXPECT_FALSE(p.config.webcam.chroma_key.enabled);
-    EXPECT_EQ(p.config.webcam.chroma_key.color_mode, WebcamChromaKeyColorMode::Green);
-    EXPECT_EQ(p.config.webcam.chroma_key.custom_r, 0u);
-    EXPECT_EQ(p.config.webcam.chroma_key.custom_g, 255u);
-    EXPECT_EQ(p.config.webcam.chroma_key.custom_b, 0u);
-    EXPECT_FLOAT_EQ(p.config.webcam.chroma_key.tolerance, 0.40f);
-    EXPECT_FLOAT_EQ(p.config.webcam.chroma_key.softness, 0.15f);
-    EXPECT_FLOAT_EQ(p.config.webcam.chroma_key.spill_reduction, 0.30f);
+    EXPECT_FALSE(p.config.visual_scene.items[0].chroma_key.enabled);
+    EXPECT_EQ(p.config.visual_scene.items[0].chroma_key.color_mode, WebcamChromaKeyColorMode::Green);
+    EXPECT_EQ(p.config.visual_scene.items[0].chroma_key.custom_r, 0u);
+    EXPECT_EQ(p.config.visual_scene.items[0].chroma_key.custom_g, 255u);
+    EXPECT_EQ(p.config.visual_scene.items[0].chroma_key.custom_b, 0u);
+    EXPECT_FLOAT_EQ(p.config.visual_scene.items[0].chroma_key.tolerance, 0.40f);
+    EXPECT_FLOAT_EQ(p.config.visual_scene.items[0].chroma_key.softness, 0.15f);
+    EXPECT_FLOAT_EQ(p.config.visual_scene.items[0].chroma_key.spill_reduction, 0.30f);
 }
 
 // ===========================================================================
@@ -480,13 +489,15 @@ TEST(RecordingPreset, AdvancedNvencPreferencesAreDirtyAndPreservedAcrossCodecRes
 TEST(RecordingPreset, AdjustedCameraImageControlsMakeThePresetDirty) {
     const RecordingPresetConfig before = MakeDefaultPreset().config;
     auto after = before;
-    after.webcam.controls = {
-        {WebcamControl::PowerLineFrequency, false, static_cast<long>(WebcamPowerLineFrequency::Hz50)}};
+    after.visual_scene.sources[0].settings.insert_or_assign(
+        "controls",
+        toml::table{{"power_line_frequency",
+                     toml::table{{"auto", false}, {"value", static_cast<int64_t>(WebcamPowerLineFrequency::Hz50)}}}});
     const auto sanitized = SanitizePresetConfig(after);
-    EXPECT_EQ(sanitized.webcam.controls, after.webcam.controls);
+    EXPECT_EQ(ProjectedWebcam(sanitized).controls, ProjectedWebcam(after).controls);
     EXPECT_FALSE(NormalizedConfigEquals(before, sanitized));
     EXPECT_FALSE(ConfigDirtyEquivalent(before, sanitized));
-    EXPECT_EQ(ConfigDirtyDifference(before, sanitized), "webcam.controls");
+    EXPECT_EQ(ConfigDirtyDifference(before, sanitized), "visual_scene");
 }
 
 TEST(RecordingPreset, BuiltInsKeepAdvancedNvencDefaultsConservative) {
@@ -697,52 +708,43 @@ TEST(RecordingPreset, Sanitize_MicGain_Negative_ResetTo1) {
 }
 
 // ===========================================================================
-// SanitizePresetConfig — webcam (NaN/Inf PiP and chroma delegated)
+// Native visual validation rejects nonfinite geometry and invalid presentation values.
 // ===========================================================================
 
-TEST(RecordingPreset, Sanitize_Webcam_NanOverlay_BecomesFinite) {
+TEST(RecordingPreset, VisualScene_NonfiniteOverlay_IsRejected) {
     RecordingPresetConfig cfg = MakeDefaultPreset().config;
-    cfg.webcam.overlay.x_norm = std::numeric_limits<float>::quiet_NaN();
-    cfg.webcam.overlay.y_norm = std::numeric_limits<float>::infinity();
-    cfg.webcam.overlay.w_norm = std::numeric_limits<float>::quiet_NaN();
-    cfg.webcam.overlay.h_norm = -std::numeric_limits<float>::infinity();
+    cfg.visual_scene.items[0].properties.placement.x = std::numeric_limits<float>::quiet_NaN();
+    cfg.visual_scene.items[0].properties.placement.y = std::numeric_limits<float>::infinity();
+    cfg.visual_scene.items[0].properties.placement.w = std::numeric_limits<float>::quiet_NaN();
+    cfg.visual_scene.items[0].properties.placement.h = -std::numeric_limits<float>::infinity();
 
-    const RecordingPresetConfig s = SanitizePresetConfig(cfg);
-    EXPECT_TRUE(std::isfinite(s.webcam.overlay.x_norm));
-    EXPECT_TRUE(std::isfinite(s.webcam.overlay.y_norm));
-    EXPECT_TRUE(std::isfinite(s.webcam.overlay.w_norm));
-    EXPECT_TRUE(std::isfinite(s.webcam.overlay.h_norm));
+    EXPECT_FALSE(ValidateVisualScene(cfg.visual_scene, CapabilityRegistry{}).succeeded());
 }
 
-TEST(RecordingPreset, Sanitize_Webcam_NanChroma_BecomesFinite) {
+TEST(RecordingPreset, VisualScene_NonfiniteChroma_IsRejected) {
     RecordingPresetConfig cfg = MakeDefaultPreset().config;
-    cfg.webcam.chroma_key.tolerance = std::numeric_limits<float>::quiet_NaN();
-    cfg.webcam.chroma_key.softness = std::numeric_limits<float>::infinity();
+    cfg.visual_scene.items[0].chroma_key.tolerance = std::numeric_limits<float>::quiet_NaN();
+    cfg.visual_scene.items[0].chroma_key.softness = std::numeric_limits<float>::infinity();
 
-    const RecordingPresetConfig s = SanitizePresetConfig(cfg);
-    EXPECT_TRUE(std::isfinite(s.webcam.chroma_key.tolerance));
-    EXPECT_TRUE(std::isfinite(s.webcam.chroma_key.softness));
+    EXPECT_FALSE(ValidateVisualScene(cfg.visual_scene, CapabilityRegistry{}).succeeded());
 }
 
-TEST(RecordingPreset, Sanitize_Webcam_Opacity_AboveOne_ClampsToOne) {
+TEST(RecordingPreset, VisualScene_OpacityAboveOne_IsRejected) {
     RecordingPresetConfig cfg = MakeDefaultPreset().config;
-    cfg.webcam.opacity = 3.0f;
-    const RecordingPresetConfig s = SanitizePresetConfig(cfg);
-    EXPECT_FLOAT_EQ(s.webcam.opacity, 1.0f);
+    cfg.visual_scene.items[0].properties.opacity = 3.0f;
+    EXPECT_FALSE(ValidateVisualScene(cfg.visual_scene, CapabilityRegistry{}).succeeded());
 }
 
-TEST(RecordingPreset, Sanitize_Webcam_Opacity_Negative_ClampsToZero) {
+TEST(RecordingPreset, VisualScene_NegativeOpacity_IsRejected) {
     RecordingPresetConfig cfg = MakeDefaultPreset().config;
-    cfg.webcam.opacity = -0.5f;
-    const RecordingPresetConfig s = SanitizePresetConfig(cfg);
-    EXPECT_FLOAT_EQ(s.webcam.opacity, 0.0f);
+    cfg.visual_scene.items[0].properties.opacity = -0.5f;
+    EXPECT_FALSE(ValidateVisualScene(cfg.visual_scene, CapabilityRegistry{}).succeeded());
 }
 
-TEST(RecordingPreset, Sanitize_Webcam_Opacity_Nan_ResetToOne) {
+TEST(RecordingPreset, VisualScene_NonfiniteOpacity_IsRejected) {
     RecordingPresetConfig cfg = MakeDefaultPreset().config;
-    cfg.webcam.opacity = std::numeric_limits<float>::quiet_NaN();
-    const RecordingPresetConfig s = SanitizePresetConfig(cfg);
-    EXPECT_FLOAT_EQ(s.webcam.opacity, 1.0f);
+    cfg.visual_scene.items[0].properties.opacity = std::numeric_limits<float>::quiet_NaN();
+    EXPECT_FALSE(ValidateVisualScene(cfg.visual_scene, CapabilityRegistry{}).succeeded());
 }
 
 // ===========================================================================
@@ -984,7 +986,7 @@ TEST(RecordingPreset, NormalizedEquals_CountdownChange_NotEqual) {
 TEST(RecordingPreset, NormalizedEquals_WebcamMirrorChange_NotEqual) {
     RecordingPresetConfig a = MakeDefaultPreset().config;
     RecordingPresetConfig b = a;
-    b.webcam.mirror = true;
+    b.visual_scene.items[0].properties.placement.mirror = true;
     EXPECT_FALSE(NormalizedConfigEquals(a, b));
 }
 
@@ -1148,7 +1150,7 @@ TEST(RecordingPreset, DirtyEquivalent_CountdownChange_NotEquivalent) {
 TEST(RecordingPreset, DirtyEquivalent_WebcamMirrorChange_NotEquivalent) {
     RecordingPresetConfig a = MakeDefaultPreset().config;
     RecordingPresetConfig b = a;
-    b.webcam.mirror = true;
+    b.visual_scene.items[0].properties.placement.mirror = true;
     EXPECT_FALSE(ConfigDirtyEquivalent(a, b));
 }
 
@@ -1243,47 +1245,43 @@ TEST(RecordingPreset, ChromaKey_Equality_SpillReductionChange_NotEqual) {
     EXPECT_NE(a, b);
 }
 
-TEST(RecordingPreset, Sanitize_Chroma_ColorModeOutOfRange_ResetToGreen) {
+TEST(RecordingPreset, VisualScene_InvalidChromaColorMode_IsRejected) {
     RecordingPresetConfig cfg = MakeDefaultPreset().config;
-    cfg.webcam.chroma_key.color_mode = static_cast<WebcamChromaKeyColorMode>(99);
-    const RecordingPresetConfig s = SanitizePresetConfig(cfg);
-    EXPECT_EQ(s.webcam.chroma_key.color_mode, WebcamChromaKeyColorMode::Green);
+    cfg.visual_scene.items[0].chroma_key.color_mode = static_cast<WebcamChromaKeyColorMode>(99);
+    EXPECT_FALSE(ValidateVisualScene(cfg.visual_scene, CapabilityRegistry{}).succeeded());
 }
 
-TEST(RecordingPreset, Sanitize_Chroma_SpillReductionNaN_BecomesDefault) {
+TEST(RecordingPreset, VisualScene_NonfiniteSpillReduction_IsRejected) {
     RecordingPresetConfig cfg = MakeDefaultPreset().config;
-    cfg.webcam.chroma_key.spill_reduction = std::numeric_limits<float>::quiet_NaN();
-    const RecordingPresetConfig s = SanitizePresetConfig(cfg);
-    EXPECT_TRUE(std::isfinite(s.webcam.chroma_key.spill_reduction));
-    EXPECT_GE(s.webcam.chroma_key.spill_reduction, 0.0f);
-    EXPECT_LE(s.webcam.chroma_key.spill_reduction, 1.0f);
+    cfg.visual_scene.items[0].chroma_key.spill_reduction = std::numeric_limits<float>::quiet_NaN();
+    EXPECT_FALSE(ValidateVisualScene(cfg.visual_scene, CapabilityRegistry{}).succeeded());
 }
 
 TEST(RecordingPreset, NormalizedEquals_ChromaColorModeChange_NotEqual) {
     RecordingPresetConfig a = MakeDefaultPreset().config;
     RecordingPresetConfig b = a;
-    b.webcam.chroma_key.color_mode = WebcamChromaKeyColorMode::Blue;
+    b.visual_scene.items[0].chroma_key.color_mode = WebcamChromaKeyColorMode::Blue;
     EXPECT_FALSE(NormalizedConfigEquals(a, b));
 }
 
 TEST(RecordingPreset, NormalizedEquals_ChromaSpillChange_NotEqual) {
     RecordingPresetConfig a = MakeDefaultPreset().config;
     RecordingPresetConfig b = a;
-    b.webcam.chroma_key.spill_reduction = 0.0f;
+    b.visual_scene.items[0].chroma_key.spill_reduction = 0.0f;
     EXPECT_FALSE(NormalizedConfigEquals(a, b));
 }
 
 TEST(RecordingPreset, DirtyEquivalent_ChromaColorModeChange_NotEquivalent) {
     RecordingPresetConfig a = MakeDefaultPreset().config;
     RecordingPresetConfig b = a;
-    b.webcam.chroma_key.color_mode = WebcamChromaKeyColorMode::Magenta;
+    b.visual_scene.items[0].chroma_key.color_mode = WebcamChromaKeyColorMode::Magenta;
     EXPECT_FALSE(ConfigDirtyEquivalent(a, b));
 }
 
 TEST(RecordingPreset, DirtyEquivalent_ChromaSpillChange_NotEquivalent) {
     RecordingPresetConfig a = MakeDefaultPreset().config;
     RecordingPresetConfig b = a;
-    b.webcam.chroma_key.spill_reduction = 0.0f;
+    b.visual_scene.items[0].chroma_key.spill_reduction = 0.0f;
     EXPECT_FALSE(ConfigDirtyEquivalent(a, b));
 }
 

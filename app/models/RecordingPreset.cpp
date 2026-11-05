@@ -22,6 +22,36 @@ namespace exosnap {
 
 namespace {
 
+bool VisualConfigsEqual(const VisualSceneConfig& a, const VisualSceneConfig& b) {
+    const auto left = WriteVisualScene(a);
+    auto right = WriteVisualScene(b);
+    if (!left.succeeded() || !right.succeeded())
+        return false;
+    const auto* left_items = (*left.value())["items"].as_array();
+    auto* right_items = (*right.value())["items"].as_array();
+    if (left_items->size() != right_items->size())
+        return false;
+    for (size_t index = 0; index < left_items->size(); ++index) {
+        const auto source = std::find_if(a.sources.begin(), a.sources.end(),
+                                         [&](const auto& record) { return record.id == a.items[index].source; });
+        if (source == a.sources.end() || source->type_id != "org.exosnap.webcam/camera")
+            continue;
+        const auto& first = *(*left_items)[index].as_table();
+        auto& second = *(*right_items)[index].as_table();
+        for (const auto key : {"x", "y", "width", "height", "opacity"}) {
+            if (std::abs(*first[key].value<double>() - *second[key].value<double>()) <= 1e-3)
+                second.insert_or_assign(key, *first.get(key));
+        }
+        const auto& first_chroma = *first["chroma_key"].as_table();
+        auto& second_chroma = *second["chroma_key"].as_table();
+        for (const auto key : {"tolerance", "softness", "spill"}) {
+            if (std::abs(*first_chroma[key].value<double>() - *second_chroma[key].value<double>()) <= 1e-3)
+                second_chroma.insert_or_assign(key, *first_chroma.get(key));
+        }
+    }
+    return *left.value() == *right.value();
+}
+
 // Trim leading and trailing ASCII whitespace from a string_view.
 [[nodiscard]] std::string TrimWhitespace(std::string_view s) {
     const auto first = s.find_first_not_of(" \t\n\r\f\v");
@@ -158,33 +188,9 @@ RecordingPreset MakeDefaultPreset() {
     preset.config.audio.selected_window_pid = std::nullopt;
     preset.config.audio_intent = MakeDefaultAudioIntent();
 
-    // Webcam — bottom-right PiP at 25 % of frame width/height, with inset.
-    preset.config.webcam.enabled = false;
-    preset.config.webcam.device_id = "";
-    preset.config.webcam.width = 1280;
-    preset.config.webcam.height = 720;
-    preset.config.webcam.fps = 30;
-    preset.config.webcam.mirror = false;
-    preset.config.webcam.aspect_ratio_locked = true;
-    preset.config.webcam.overlay_user_placed = false;
-
-    // Bottom-right placement: x = 1.0 - 0.25 - inset, y = 1.0 - 0.25 - inset
-    constexpr float kPipSize = 0.25f;
-    preset.config.webcam.overlay.w_norm = kPipSize;
-    preset.config.webcam.overlay.h_norm = kPipSize;
-    preset.config.webcam.overlay.x_norm = 1.0f - kPipSize - kDefaultPipInsetNorm;
-    preset.config.webcam.overlay.y_norm = 1.0f - kPipSize - kDefaultPipInsetNorm;
-
-    // Chroma key — default (disabled; conservative green-screen values)
-    preset.config.webcam.chroma_key.enabled = false;
-    preset.config.webcam.chroma_key.color_mode = WebcamChromaKeyColorMode::Green;
-    preset.config.webcam.chroma_key.custom_r = 0;
-    preset.config.webcam.chroma_key.custom_g = 255;
-    preset.config.webcam.chroma_key.custom_b = 0;
-    preset.config.webcam.chroma_key.tolerance = 0.40f;
-    preset.config.webcam.chroma_key.softness = 0.15f;
-    preset.config.webcam.chroma_key.spill_reduction = 0.30f;
-
+    auto& camera_item = preset.config.visual_scene.items.front();
+    camera_item.properties.placement.x = 1.0f - 0.25f - kDefaultPipInsetNorm;
+    camera_item.properties.placement.y = 1.0f - 0.25f - kDefaultPipInsetNorm;
     // Countdown
     preset.config.countdown_seconds = 0;
 
@@ -510,10 +516,6 @@ RecordingPresetConfig SanitizePresetConfig(RecordingPresetConfig config) {
         config.audio.mic_agc_target_db = 0.0f;
     }
 
-    // Webcam: delegate to the provided sanitizer (handles NaN/Inf + clamping).
-    config.webcam = SanitizeWebcamSettings(config.webcam);
-    config.gamepad = SanitizeGamepadOverlaySettings(config.gamepad);
-
     // Capture: if kind is Region but the normalized region has no area, clear it.
     if (config.capture.kind == PresetCaptureKind::Region &&
         (config.capture.region_w_norm <= 0.0f || config.capture.region_h_norm <= 0.0f)) {
@@ -788,87 +790,8 @@ bool NormalizedConfigEquals(const RecordingPresetConfig& a, const RecordingPrese
         }
     }
 
-    // --- Webcam ---
-    constexpr float kPipTol = 1e-3f;
-    constexpr float kChromaTol = 1e-3f;
-
-    if (a.webcam.enabled != b.webcam.enabled) {
+    if (!VisualConfigsEqual(a.visual_scene, b.visual_scene))
         return false;
-    }
-    if (a.webcam.output_visible != b.webcam.output_visible) {
-        return false;
-    }
-    if (a.webcam.device_id != b.webcam.device_id) {
-        return false;
-    }
-    if (a.webcam.width != b.webcam.width) {
-        return false;
-    }
-    if (a.webcam.height != b.webcam.height) {
-        return false;
-    }
-    if (a.webcam.fps != b.webcam.fps) {
-        return false;
-    }
-    if (a.webcam.mirror != b.webcam.mirror) {
-        return false;
-    }
-    if (a.webcam.aspect_ratio_locked != b.webcam.aspect_ratio_locked) {
-        return false;
-    }
-    if (a.webcam.overlay_user_placed != b.webcam.overlay_user_placed) {
-        return false;
-    }
-
-    // PiP overlay — float tolerance
-    if (std::abs(a.webcam.overlay.x_norm - b.webcam.overlay.x_norm) > kPipTol) {
-        return false;
-    }
-    if (std::abs(a.webcam.overlay.y_norm - b.webcam.overlay.y_norm) > kPipTol) {
-        return false;
-    }
-    if (std::abs(a.webcam.overlay.w_norm - b.webcam.overlay.w_norm) > kPipTol) {
-        return false;
-    }
-    if (std::abs(a.webcam.overlay.h_norm - b.webcam.overlay.h_norm) > kPipTol) {
-        return false;
-    }
-    if (std::abs(a.webcam.opacity - b.webcam.opacity) > kPipTol) {
-        return false;
-    }
-
-    // Chroma key
-    if (a.webcam.chroma_key.enabled != b.webcam.chroma_key.enabled) {
-        return false;
-    }
-    if (a.webcam.chroma_key.color_mode != b.webcam.chroma_key.color_mode) {
-        return false;
-    }
-    if (a.webcam.chroma_key.custom_r != b.webcam.chroma_key.custom_r) {
-        return false;
-    }
-    if (a.webcam.chroma_key.custom_g != b.webcam.chroma_key.custom_g) {
-        return false;
-    }
-    if (a.webcam.chroma_key.custom_b != b.webcam.chroma_key.custom_b) {
-        return false;
-    }
-    if (std::abs(a.webcam.chroma_key.tolerance - b.webcam.chroma_key.tolerance) > kChromaTol) {
-        return false;
-    }
-    if (std::abs(a.webcam.chroma_key.softness - b.webcam.chroma_key.softness) > kChromaTol) {
-        return false;
-    }
-    if (std::abs(a.webcam.chroma_key.spill_reduction - b.webcam.chroma_key.spill_reduction) > kChromaTol) {
-        return false;
-    }
-    if (a.webcam.controls != b.webcam.controls) {
-        return false;
-    }
-    if (a.gamepad != b.gamepad) {
-        return false;
-    }
-
     return true;
 }
 
@@ -1087,87 +1010,8 @@ std::string_view ConfigDirtyDifference(const RecordingPresetConfig& a, const Rec
         }
     }
 
-    // --- Webcam ---
-    constexpr float kPipTol = 1e-3f;
-    constexpr float kChromaTol = 1e-3f;
-
-    if (a.webcam.enabled != b.webcam.enabled) {
-        return "webcam.enabled";
-    }
-    if (a.webcam.output_visible != b.webcam.output_visible) {
-        return "webcam.output_visible";
-    }
-    if (a.webcam.device_id != b.webcam.device_id) {
-        return "webcam.device_id";
-    }
-    if (a.webcam.width != b.webcam.width) {
-        return "webcam.width";
-    }
-    if (a.webcam.height != b.webcam.height) {
-        return "webcam.height";
-    }
-    if (a.webcam.fps != b.webcam.fps) {
-        return "webcam.fps";
-    }
-    if (a.webcam.mirror != b.webcam.mirror) {
-        return "webcam.mirror";
-    }
-    if (a.webcam.aspect_ratio_locked != b.webcam.aspect_ratio_locked) {
-        return "webcam.aspect_ratio_locked";
-    }
-    if (a.webcam.overlay_user_placed != b.webcam.overlay_user_placed) {
-        return "webcam.overlay_user_placed";
-    }
-
-    // PiP overlay — float tolerance
-    if (std::abs(a.webcam.overlay.x_norm - b.webcam.overlay.x_norm) > kPipTol) {
-        return "webcam.overlay.x_norm";
-    }
-    if (std::abs(a.webcam.overlay.y_norm - b.webcam.overlay.y_norm) > kPipTol) {
-        return "webcam.overlay.y_norm";
-    }
-    if (std::abs(a.webcam.overlay.w_norm - b.webcam.overlay.w_norm) > kPipTol) {
-        return "webcam.overlay.w_norm";
-    }
-    if (std::abs(a.webcam.overlay.h_norm - b.webcam.overlay.h_norm) > kPipTol) {
-        return "webcam.overlay.h_norm";
-    }
-    if (std::abs(a.webcam.opacity - b.webcam.opacity) > kPipTol) {
-        return "webcam.opacity";
-    }
-
-    // Chroma key
-    if (a.webcam.chroma_key.enabled != b.webcam.chroma_key.enabled) {
-        return "webcam.chroma_key.enabled";
-    }
-    if (a.webcam.chroma_key.color_mode != b.webcam.chroma_key.color_mode) {
-        return "webcam.chroma_key.color_mode";
-    }
-    if (a.webcam.chroma_key.custom_r != b.webcam.chroma_key.custom_r) {
-        return "webcam.chroma_key.custom_r";
-    }
-    if (a.webcam.chroma_key.custom_g != b.webcam.chroma_key.custom_g) {
-        return "webcam.chroma_key.custom_g";
-    }
-    if (a.webcam.chroma_key.custom_b != b.webcam.chroma_key.custom_b) {
-        return "webcam.chroma_key.custom_b";
-    }
-    if (std::abs(a.webcam.chroma_key.tolerance - b.webcam.chroma_key.tolerance) > kChromaTol) {
-        return "webcam.chroma_key.tolerance";
-    }
-    if (std::abs(a.webcam.chroma_key.softness - b.webcam.chroma_key.softness) > kChromaTol) {
-        return "webcam.chroma_key.softness";
-    }
-    if (std::abs(a.webcam.chroma_key.spill_reduction - b.webcam.chroma_key.spill_reduction) > kChromaTol) {
-        return "webcam.chroma_key.spill_reduction";
-    }
-    if (a.webcam.controls != b.webcam.controls) {
-        return "webcam.controls";
-    }
-    if (a.gamepad != b.gamepad) {
-        return "gamepad";
-    }
-
+    if (!VisualConfigsEqual(a.visual_scene, b.visual_scene))
+        return "visual_scene";
     return {};
 }
 

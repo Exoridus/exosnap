@@ -33,6 +33,19 @@ TestCase {
         signalName: "closed"
     }
 
+    function test_gamepad_menu_remains_available_without_editable_webcam() {
+        const chrome = createTemporaryObject(chromeComponent, root, {
+            overlayEnabled: false, controllerAvailable: true, controllerEditable: true
+        });
+        const button = findChild(chrome, "previewAddOverlayButton");
+        const menu = findChild(chrome, "recordOverlayMenu");
+        verify(button.enabled);
+        mouseClick(button);
+        tryCompare(menu, "opened", true);
+        compare(menu.itemAt(0).enabled, false);
+        compare(menu.itemAt(1).enabled, true);
+    }
+
     function test_overlay_button_toggles_without_press_reopen() {
         const chrome = createTemporaryObject(chromeComponent, root);
         const button = findChild(chrome, "previewAddOverlayButton");

@@ -766,6 +766,7 @@ TEST(RecordViewModelAdapterTest, FormatsLiveDiagnosticsAtAdapterCadence) {
 
 TEST(RecordViewModelAdapterTest, RoutesNarrowCommandsWithoutServiceExposure) {
     RecordViewModel source;
+    source.SetState(UiRecordingState::Ready);
     RecordViewModelAdapter adapter(&source);
     SeedWindowIdentities(adapter, source);
     int starts = 0;
@@ -955,4 +956,37 @@ TEST(SourceConfidencePolicy, ExpectedLossAndIntentionalMuteRemainDistinct) {
     EXPECT_EQ(adapter.confidenceIndicators()[2].toMap().value("tone").toString(), "error");
     adapter.setDeviceState(true, false, false, QStringLiteral("Camera unavailable"));
     EXPECT_EQ(adapter.confidenceIndicators()[2].toMap().value("tone").toString(), "neutral");
+}
+
+TEST(RecordViewModelAdapterTest, ReadOnlyOrUnboundVisualPresentationRejectsOverlayCommands) {
+    using namespace exosnap;
+    using quick::RecordViewModelAdapter;
+    RecordViewModel source;
+    source.SetState(UiRecordingState::Ready);
+    RecordViewModelAdapter adapter(&source);
+    int rectangles = 0;
+    int visibility = 0;
+    QObject::connect(&adapter, &RecordViewModelAdapter::webcamOverlayRectRequested,
+                     [&](const QRectF&) { ++rectangles; });
+    QObject::connect(&adapter, &RecordViewModelAdapter::webcamOutputVisibleRequested, [&](bool) { ++visibility; });
+    adapter.setWebcamPresentation({0.1, 0.2, 0.25, 0.25}, false, 1.0, true, false);
+    EXPECT_FALSE(adapter.webcamOverlayEditable());
+    adapter.requestWebcamOverlayRect({0.2, 0.3, 0.25, 0.25});
+    adapter.requestWebcamOutputVisible(false);
+    EXPECT_EQ(rectangles, 0);
+    EXPECT_EQ(visibility, 0);
+
+    adapter.setWebcamPresentation({0.1, 0.2, 0.25, 0.25}, false, 1.0, true, true);
+    EXPECT_TRUE(adapter.webcamOverlayEditable());
+    adapter.requestWebcamOverlayRect({0.2, 0.3, 0.25, 0.25});
+    adapter.requestWebcamOutputVisible(false);
+    EXPECT_EQ(rectangles, 1);
+    EXPECT_EQ(visibility, 1);
+
+    source.SetState(UiRecordingState::Stopping);
+    EXPECT_FALSE(adapter.webcamOverlayEditable());
+    adapter.requestWebcamOverlayRect({0.2, 0.3, 0.25, 0.25});
+    adapter.requestWebcamOutputVisible(false);
+    EXPECT_EQ(rectangles, 1);
+    EXPECT_EQ(visibility, 1);
 }

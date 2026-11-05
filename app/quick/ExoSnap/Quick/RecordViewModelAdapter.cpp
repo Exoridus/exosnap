@@ -750,7 +750,7 @@ QRectF RecordViewModelAdapter::webcamOverlayRect() const noexcept {
 }
 
 bool RecordViewModelAdapter::webcamOverlayEditable() const noexcept {
-    return source_ != nullptr && IsWebcamOverlayEditable(source_->state);
+    return webcam_editing_allowed_ && source_ != nullptr && IsWebcamOverlayEditable(source_->state);
 }
 
 bool RecordViewModelAdapter::webcamMirror() const noexcept {
@@ -832,16 +832,17 @@ void RecordViewModelAdapter::setDeviceState(bool microphone_available, bool webc
 }
 
 void RecordViewModelAdapter::setWebcamPresentation(QRectF overlay_rect, bool mirror, double opacity,
-                                                   bool output_visible) {
+                                                   bool output_visible, bool editing_allowed) {
     overlay_rect = overlay_rect.normalized().intersected(QRectF(0.0, 0.0, 1.0, 1.0));
     opacity = std::clamp(opacity, 0.0, 1.0);
     if (webcam_overlay_rect_ == overlay_rect && webcam_mirror_ == mirror && qFuzzyCompare(webcam_opacity_, opacity) &&
-        webcam_output_visible_ == output_visible)
+        webcam_output_visible_ == output_visible && webcam_editing_allowed_ == editing_allowed)
         return;
     webcam_overlay_rect_ = overlay_rect;
     webcam_mirror_ = mirror;
     webcam_opacity_ = opacity;
     webcam_output_visible_ = output_visible;
+    webcam_editing_allowed_ = editing_allowed;
     emit changed();
 }
 
@@ -1232,7 +1233,8 @@ void RecordViewModelAdapter::requestToggleSource(const QString& key) {
     emit toggleSourceRequested(key);
 }
 void RecordViewModelAdapter::requestWebcamOverlayRect(QRectF normalized_rect) {
-    emit webcamOverlayRectRequested(normalized_rect);
+    if (webcamOverlayEditable())
+        emit webcamOverlayRectRequested(normalized_rect);
 }
 void RecordViewModelAdapter::requestWebcamOutputVisible(bool visible) {
     if (webcamOverlayEditable())

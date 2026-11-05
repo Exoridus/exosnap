@@ -1,5 +1,6 @@
 #include "observability/SettingsSnapshot.h"
 
+#include "models/VisualSceneEdits.h"
 #include "observability/ObservabilityJson.h"
 #include "observability/ProtocolNames.h"
 
@@ -386,7 +387,41 @@ QJsonObject RecordingConfigToJson(const RecordingPresetConfig& config) {
     json.insert(QStringLiteral("audio"), AudioConfigJson(config.audio));
     json.insert(QStringLiteral("split"), SplitConfigJson(config.output.split));
     json.insert(QStringLiteral("output"), OutputConfigJson(config.output));
-    json.insert(QStringLiteral("webcam"), WebcamConfigJson(config.webcam));
+    QJsonValue webcam;
+    QJsonArray sources;
+    for (const auto& source : config.visual_scene.sources) {
+        sources.append(QJsonObject{{QStringLiteral("sourceId"), QString::fromStdString(engine::ToUuid(source.id))},
+                                   {QStringLiteral("typeId"), QString::fromStdString(source.type_id)},
+                                   {QStringLiteral("settingsVersion"), static_cast<int>(source.settings_version)},
+                                   {QStringLiteral("enabled"), source.enabled}});
+        if (!webcam.isNull() || source.type_id != "org.exosnap.webcam/camera")
+            continue;
+        for (const auto& item : config.visual_scene.items) {
+            if (item.source != source.id)
+                continue;
+            const auto projected = ProjectSceneWebcam(config.visual_scene, source.id, item.id);
+            if (projected.succeeded())
+                webcam = WebcamConfigJson(*projected.value());
+            break;
+        }
+    }
+    QJsonArray items;
+    for (const auto& item : config.visual_scene.items) {
+        const auto& placement = item.properties.placement;
+        items.append(QJsonObject{{QStringLiteral("itemId"), QString::fromStdString(engine::ToUuid(item.id))},
+                                 {QStringLiteral("sourceId"), QString::fromStdString(engine::ToUuid(item.source))},
+                                 {QStringLiteral("x"), placement.x},
+                                 {QStringLiteral("y"), placement.y},
+                                 {QStringLiteral("width"), placement.w},
+                                 {QStringLiteral("height"), placement.h},
+                                 {QStringLiteral("mirror"), placement.mirror},
+                                 {QStringLiteral("opacity"), item.properties.opacity},
+                                 {QStringLiteral("outputVisible"), item.properties.output_visible}});
+    }
+    json.insert(QStringLiteral("visual"), QJsonObject{{QStringLiteral("sources"), sources},
+                                                      {QStringLiteral("items"), items},
+                                                      {QStringLiteral("readOnly"), config.visual_read_only}});
+    json.insert(QStringLiteral("webcam"), webcam);
     json.insert(QStringLiteral("countdownSeconds"), config.countdown_seconds);
     return json;
 }

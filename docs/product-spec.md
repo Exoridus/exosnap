@@ -239,6 +239,8 @@ A fullscreen-shaped, alive, visible window with no capture-frame progress for te
 
 ### Webcam
 
+Visual source settings belong to the same live configuration and preset as recording settings. Device and layout selections validate the current choices; an unavailable saved choice remains visible without changing the preset. Retry targets the current source instance. Unsupported future visual data remains preserved and read-only, with its providers inactive.
+
 Webcam is an optional recorded PiP, not a fourth target. Device/resolution selection lives in Settings. The preview's Add overlay menu adds it, and its selected frame offers output visibility and removal. Off is the default, and opening Settings with the webcam off does not open the camera. The first available camera can be preselected without recording it.
 
 Resolution and frame-rate choices list only the modes the selected camera offers. A stored mode the camera lacks shows, and is captured as, the smallest offered size at least as large, else the largest; then the closest offered rate. Enabling the camera on an idle Record page shows it in the preview immediately.

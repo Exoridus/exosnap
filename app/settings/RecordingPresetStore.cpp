@@ -1,10 +1,12 @@
 #include "RecordingPresetStore.h"
+#include "extensions/BuiltinVisualSettings.h"
 #include "models/GamepadOverlaySettings.h"
 
 #include <QCryptographicHash>
 #include <QDir>
 #include <QFile>
 #include <QFileInfo>
+#include <QLockFile>
 #include <QSaveFile>
 #include <QStandardPaths>
 #include <QStringView>
@@ -941,8 +943,97 @@ void MergeKnown(toml::table& destination, const toml::table& replacement, const 
     }
 }
 
+toml::table LegacyVisualKnownFields(const WebcamSettings& wc, const GamepadOverlaySettings& pad) {
+    toml::table tbl;
+
+    tbl.emplace("gamepad", toml::table{{"enabled", pad.enabled},
+                                       {"output_visible", pad.output_visible},
+                                       {"device", pad.device},
+                                       {"layout", pad.layout},
+                                       {"glass", pad.glass},
+                                       {"glow", pad.glow},
+                                       {"opacity", static_cast<double>(pad.opacity)},
+                                       {"x", static_cast<double>(pad.x)},
+                                       {"y", static_cast<double>(pad.y)},
+                                       {"width", static_cast<double>(pad.width)},
+                                       {"height", static_cast<double>(pad.height)}});
+
+    // --- Webcam ---
+
+    toml::table wc_tbl;
+    wc_tbl.emplace("enabled", wc.enabled);
+    wc_tbl.emplace("output_visible", wc.output_visible);
+    wc_tbl.emplace("device_id", wc.device_id);
+    wc_tbl.emplace("width", static_cast<int64_t>(wc.width));
+    wc_tbl.emplace("height", static_cast<int64_t>(wc.height));
+    wc_tbl.emplace("fps", static_cast<int64_t>(wc.fps));
+    wc_tbl.emplace("overlay_x", static_cast<double>(wc.overlay.x_norm));
+    wc_tbl.emplace("overlay_y", static_cast<double>(wc.overlay.y_norm));
+    wc_tbl.emplace("overlay_w", static_cast<double>(wc.overlay.w_norm));
+    wc_tbl.emplace("overlay_h", static_cast<double>(wc.overlay.h_norm));
+    wc_tbl.emplace("overlay_user_placed", wc.overlay_user_placed);
+    wc_tbl.emplace("aspect_ratio_locked", wc.aspect_ratio_locked);
+    wc_tbl.emplace("mirror", wc.mirror);
+    wc_tbl.emplace("opacity", static_cast<double>(wc.opacity));
+
+    toml::table ck_tbl;
+    ck_tbl.emplace("enabled", wc.chroma_key.enabled);
+    ck_tbl.emplace("color_mode", WebcamChromaKeyColorModeToString(wc.chroma_key.color_mode).toStdString());
+    ck_tbl.emplace("custom_r", static_cast<int64_t>(wc.chroma_key.custom_r));
+    ck_tbl.emplace("custom_g", static_cast<int64_t>(wc.chroma_key.custom_g));
+    ck_tbl.emplace("custom_b", static_cast<int64_t>(wc.chroma_key.custom_b));
+    ck_tbl.emplace("tolerance", static_cast<double>(wc.chroma_key.tolerance));
+    ck_tbl.emplace("softness", static_cast<double>(wc.chroma_key.softness));
+    ck_tbl.emplace("spill", static_cast<double>(wc.chroma_key.spill_reduction));
+    wc_tbl.emplace("chroma_key", std::move(ck_tbl));
+
+    // Only the controls the user set; a missing key means "as the camera has it".
+    toml::table controls_tbl;
+    for (const WebcamControlSetting& control : wc.controls) {
+        toml::table control_tbl;
+        control_tbl.emplace("auto", control.automatic);
+        control_tbl.emplace("value", static_cast<int64_t>(control.value));
+        controls_tbl.emplace(std::string(WebcamControlKey(control.control)), std::move(control_tbl));
+    }
+    wc_tbl.emplace("controls", std::move(controls_tbl));
+
+    tbl.emplace("webcam", std::move(wc_tbl));
+
+    return tbl;
+}
+
+void RemoveKnownFields(toml::table& original, const toml::table& known) {
+    for (const auto& [key, value] : known) {
+        auto* current = original.get(key);
+        if (current && current->is_table() && value.is_table()) {
+            RemoveKnownFields(*current->as_table(), *value.as_table());
+            if (current->as_table()->empty())
+                original.erase(key);
+        } else {
+            original.erase(key);
+        }
+    }
+}
+
+std::optional<engine::EngineError> InvalidKnownVisualSettings(const VisualSceneConfig& scene) {
+    for (const auto& source : scene.sources) {
+        if (source.settings_version != 1)
+            continue;
+        if (source.type_id == "org.exosnap.webcam/camera") {
+            const auto projected = ProjectWebcamSettings(source.settings);
+            if (!projected.succeeded())
+                return *projected.error();
+        } else if (source.type_id == "org.exosnap.gamepad/controller") {
+            const auto projected = ProjectGamepadSettings(source.settings);
+            if (!projected.succeeded())
+                return *projected.error();
+        }
+    }
+    return std::nullopt;
+}
+
 toml::table ConfigToToml(const RecordingPresetConfig& config) {
-    if (config.audio_read_only && config.raw_document)
+    if ((config.audio_read_only || config.visual_read_only) && config.raw_document)
         return config.raw_document->original;
     toml::table tbl;
 
@@ -1062,60 +1153,10 @@ toml::table ConfigToToml(const RecordingPresetConfig& config) {
     aud_tbl.emplace("intent", IntentToToml(intent));
     tbl.emplace("audio", std::move(aud_tbl));
 
-    const auto& pad = config.gamepad;
-    tbl.emplace("gamepad", toml::table{{"enabled", pad.enabled},
-                                       {"output_visible", pad.output_visible},
-                                       {"device", pad.device},
-                                       {"layout", pad.layout},
-                                       {"glass", pad.glass},
-                                       {"glow", pad.glow},
-                                       {"opacity", static_cast<double>(pad.opacity)},
-                                       {"x", static_cast<double>(pad.x)},
-                                       {"y", static_cast<double>(pad.y)},
-                                       {"width", static_cast<double>(pad.width)},
-                                       {"height", static_cast<double>(pad.height)}});
-
-    // --- Webcam ---
-    const auto& wc = config.webcam;
-    toml::table wc_tbl;
-    wc_tbl.emplace("enabled", wc.enabled);
-    wc_tbl.emplace("output_visible", wc.output_visible);
-    wc_tbl.emplace("device_id", wc.device_id);
-    wc_tbl.emplace("width", static_cast<int64_t>(wc.width));
-    wc_tbl.emplace("height", static_cast<int64_t>(wc.height));
-    wc_tbl.emplace("fps", static_cast<int64_t>(wc.fps));
-    wc_tbl.emplace("overlay_x", static_cast<double>(wc.overlay.x_norm));
-    wc_tbl.emplace("overlay_y", static_cast<double>(wc.overlay.y_norm));
-    wc_tbl.emplace("overlay_w", static_cast<double>(wc.overlay.w_norm));
-    wc_tbl.emplace("overlay_h", static_cast<double>(wc.overlay.h_norm));
-    wc_tbl.emplace("overlay_user_placed", wc.overlay_user_placed);
-    wc_tbl.emplace("aspect_ratio_locked", wc.aspect_ratio_locked);
-    wc_tbl.emplace("mirror", wc.mirror);
-    wc_tbl.emplace("opacity", static_cast<double>(wc.opacity));
-
-    toml::table ck_tbl;
-    ck_tbl.emplace("enabled", wc.chroma_key.enabled);
-    ck_tbl.emplace("color_mode", WebcamChromaKeyColorModeToString(wc.chroma_key.color_mode).toStdString());
-    ck_tbl.emplace("custom_r", static_cast<int64_t>(wc.chroma_key.custom_r));
-    ck_tbl.emplace("custom_g", static_cast<int64_t>(wc.chroma_key.custom_g));
-    ck_tbl.emplace("custom_b", static_cast<int64_t>(wc.chroma_key.custom_b));
-    ck_tbl.emplace("tolerance", static_cast<double>(wc.chroma_key.tolerance));
-    ck_tbl.emplace("softness", static_cast<double>(wc.chroma_key.softness));
-    ck_tbl.emplace("spill", static_cast<double>(wc.chroma_key.spill_reduction));
-    wc_tbl.emplace("chroma_key", std::move(ck_tbl));
-
-    // Only the controls the user set; a missing key means "as the camera has it".
-    toml::table controls_tbl;
-    for (const WebcamControlSetting& control : wc.controls) {
-        toml::table control_tbl;
-        control_tbl.emplace("auto", control.automatic);
-        control_tbl.emplace("value", static_cast<int64_t>(control.value));
-        controls_tbl.emplace(std::string(WebcamControlKey(control.control)), std::move(control_tbl));
-    }
-    wc_tbl.emplace("controls", std::move(controls_tbl));
-
-    tbl.emplace("webcam", std::move(wc_tbl));
-
+    const auto visual = WriteVisualScene(config.visual_scene);
+    if (!visual.succeeded())
+        throw std::invalid_argument(visual.error()->context);
+    tbl.emplace("visual", *visual.value());
     // --- Countdown ---
     tbl.emplace("countdown_seconds", static_cast<int64_t>(config.countdown_seconds));
 
@@ -1144,7 +1185,47 @@ toml::table PresetToToml(const RecordingPreset& preset) {
 // Parses the config body shared by every stored preset AND the [live] table.
 // Field-wise: a missing or wrong-typed key leaves that field at its model
 // default instead of failing the whole parse.
-RecordingPresetConfig ConfigFromToml(const toml::table& tbl) {
+bool HasLegacyPilotShape(const VisualSceneConfig& scene) {
+    if (scene.sources.size() != 2 || scene.items.size() != 2)
+        return false;
+    for (const auto type : {"org.exosnap.webcam/camera", "org.exosnap.gamepad/controller"}) {
+        const auto source = std::find_if(scene.sources.begin(), scene.sources.end(),
+                                         [&](const auto& entry) { return entry.type_id == type; });
+        if (source == scene.sources.end() || source->settings_version != 1 ||
+            std::count_if(scene.items.begin(), scene.items.end(),
+                          [&](const auto& item) { return item.source == source->id; }) != 1)
+            return false;
+    }
+    return true;
+}
+
+// Legacy snapshots need one shared identity template so equal saved/live values remain equal.
+engine::Outcome<VisualSceneConfig> LoadLegacyVisualIdentities(const toml::table& doc) {
+    const auto selected = TomlStr(doc["selected_id"]);
+    if (selected.empty())
+        return MakeDefaultPreset().config.visual_scene;
+    for (const auto& preset : MakeBuiltInPresets()) {
+        if (preset.id == selected)
+            return preset.config.visual_scene;
+    }
+    if (const auto* presets = doc["presets"].as_array()) {
+        for (const auto& entry : *presets) {
+            const auto* table = entry.as_table();
+            if (!table || QString::fromStdString(TomlStr((*table)["id"])).trimmed().toStdString() != selected)
+                continue;
+            if (const auto* visual = (*table)["visual"].as_table()) {
+                auto scene = ReadVisualScene(*visual);
+                if (scene.succeeded() && HasLegacyPilotShape(*scene.value()))
+                    return std::move(*scene.value());
+            }
+            return MigrateLegacyVisualConfig({}, {});
+        }
+    }
+    return MakeDefaultPreset().config.visual_scene;
+}
+
+RecordingPresetConfig ConfigFromToml(const toml::table& tbl,
+                                     const VisualSceneConfig* legacy_visual_identities = nullptr) {
     RecordingPresetConfig config;
 
     // --- Capture ---
@@ -1469,7 +1550,7 @@ RecordingPresetConfig ConfigFromToml(const toml::table& tbl) {
     }
 
     // --- Webcam ---
-    auto& pad = config.gamepad;
+    GamepadOverlaySettings pad;
     pad.enabled = TomlBool(tbl["gamepad"]["enabled"], false);
     pad.output_visible = TomlBool(tbl["gamepad"]["output_visible"], true);
     pad.device = TomlStr(tbl["gamepad"]["device"]);
@@ -1485,7 +1566,7 @@ RecordingPresetConfig ConfigFromToml(const toml::table& tbl) {
     pad.height = static_cast<float>(TomlFloat(tbl["gamepad"]["height"], 0.30));
     pad = SanitizeGamepadOverlaySettings(std::move(pad));
 
-    auto& wc = config.webcam;
+    WebcamSettings wc;
     wc.enabled = TomlBool(tbl["webcam"]["enabled"], false);
     wc.output_visible = TomlBool(tbl["webcam"]["output_visible"], true);
     wc.device_id = TomlStr(tbl["webcam"]["device_id"]);
@@ -1562,8 +1643,40 @@ RecordingPresetConfig ConfigFromToml(const toml::table& tbl) {
         config.audio_read_only = true;
         config.audio_validation_error = error.what();
     }
+    const bool legacy_visual = !tbl.contains("visual");
+    if (legacy_visual || tbl["visual"].is_table()) {
+        auto visual = legacy_visual
+                          ? (legacy_visual_identities ? ProjectLegacyVisualConfig(wc, pad, *legacy_visual_identities)
+                                                      : MigrateLegacyVisualConfig(wc, pad))
+                          : ReadVisualScene(*tbl["visual"].as_table());
+        if (visual.succeeded()) {
+            if (const auto invalid = InvalidKnownVisualSettings(*visual.value()))
+                visual = *invalid;
+        }
+        if (visual.succeeded()) {
+            config.visual_scene = std::move(*visual.value());
+            if (legacy_visual) {
+                if (const auto* controls = tbl["webcam"]["controls"].as_table()) {
+                    auto preserved = *controls;
+                    MergeKnown(preserved, *config.visual_scene.sources[0].settings["controls"].as_table());
+                    config.visual_scene.sources[0].settings.insert_or_assign("controls", std::move(preserved));
+                }
+            }
+        } else {
+            config.visual_read_only = true;
+            config.visual_validation_error = visual.error()->context;
+        }
+    } else {
+        config.visual_read_only = true;
+        config.visual_validation_error = "Visual configuration must be a table";
+    }
     auto raw = std::make_shared<PresetRawDocument>();
     raw->original = tbl;
+    if (!config.visual_read_only) {
+        RemoveKnownFields(raw->original, LegacyVisualKnownFields(wc, pad));
+        if (legacy_visual)
+            raw->original.insert_or_assign("visual", *WriteVisualScene(config.visual_scene).value());
+    }
     if (!tbl["audio"]["intent"] && config.audio_intent && !config.audio_read_only) {
         auto intent_table = IntentToToml(*config.audio_intent);
         if (auto* old_rows = tbl["audio"]["sources"].as_array()) {
@@ -1579,7 +1692,7 @@ RecordingPresetConfig ConfigFromToml(const toml::table& tbl) {
         if (auto* original_audio = raw->original["audio"].as_table())
             original_audio->insert_or_assign("intent", std::move(intent_table));
     }
-    if (!config.audio_read_only)
+    if (!config.audio_read_only && !config.visual_read_only)
         raw->known = ConfigToToml(config);
     config.raw_document = std::move(raw);
     return config;
@@ -1587,7 +1700,8 @@ RecordingPresetConfig ConfigFromToml(const toml::table& tbl) {
 
 // Parse a single TOML preset table into a RecordingPreset.
 // Returns nullopt if the item is malformed (empty id).
-std::optional<RecordingPreset> PresetFromToml(const toml::table& tbl) {
+std::optional<RecordingPreset> PresetFromToml(const toml::table& tbl,
+                                              const VisualSceneConfig* legacy_visual_identities = nullptr) {
     RecordingPreset preset;
 
     preset.id = QString::fromStdString(TomlStr(tbl["id"])).trimmed().toStdString();
@@ -1595,7 +1709,7 @@ std::optional<RecordingPreset> PresetFromToml(const toml::table& tbl) {
         return std::nullopt; // Malformed — skip.
     }
     preset.name = TomlStr(tbl["name"]);
-    preset.config = ConfigFromToml(tbl);
+    preset.config = ConfigFromToml(tbl, legacy_visual_identities);
 
     return preset;
 }
@@ -1615,7 +1729,8 @@ std::string TomlDocToString(const toml::table& doc) {
 // Returns true on success; on failure sets *err (if non-null) and returns false.
 // ---------------------------------------------------------------------------
 
-bool WriteTomlAtomic(const toml::table& doc, const QString& path, QString* err) {
+bool WriteTomlAtomic(const toml::table& doc, const QString& path, QString* err,
+                     const std::optional<QByteArray>* original = nullptr) {
     const std::string toml_str = TomlDocToString(doc);
 
     QSaveFile file(path);
@@ -1630,6 +1745,19 @@ bool WriteTomlAtomic(const toml::table& doc, const QString& path, QString* err) 
             *err = QStringLiteral("Failed to write preset data to: %1").arg(path);
         file.cancelWriting();
         return false;
+    }
+    if (original) {
+        QFile current(path);
+        const bool exists = QFileInfo::exists(path);
+        if (exists != original->has_value() ||
+            (exists && (!current.open(QIODevice::ReadOnly) || current.readAll() != **original ||
+                        current.error() != QFileDevice::NoError))) {
+            if (err)
+                *err = QStringLiteral("Preset file changed before commit. Reload before saving.");
+            file.cancelWriting();
+            return false;
+        }
+        current.close();
     }
     if (!file.commit()) {
         if (err)
@@ -1666,8 +1794,8 @@ bool IsProtectedDocument(const toml::table& doc) {
     if (doc["schema_version"] && (!doc["schema_version"].is_integer() || TomlInt(doc["schema_version"], -1) < 0))
         return true;
     const auto version = TomlInt(doc["schema_version"], -1);
-    return version > kPresetSchemaVersion ||
-           (version == kPresetSchemaVersion && TomlStr(doc["audio_contract"]) != kAudioContract);
+    return version > kPresetSchemaVersion || (version >= 26 && TomlStr(doc["audio_contract"]) != kAudioContract) ||
+           (version == kPresetSchemaVersion && TomlStr(doc["visual_contract"]) != kVisualContract);
 }
 
 bool EnsureOriginalBackup(const QString& path, int64_t version, QString* error) {
@@ -1765,6 +1893,15 @@ PersistedPresetState RecordingPresetStore::Load() const {
     // rewrite on top of the ordinary field-wise repair (see RecordingPreset.h).
     const bool migrate_color_range = (schema_version >= 0 && schema_version <= kPresetSchemaColorRangeMigratedThrough);
 
+    const auto legacy_visual_identities = LoadLegacyVisualIdentities(doc);
+    if (!legacy_visual_identities.succeeded()) {
+        PersistedPresetState state;
+        state.selected_id = std::string(kDefaultPresetId);
+        state.read_only = true;
+        state.validation_error = legacy_visual_identities.error()->context;
+        return state;
+    }
+
     bool item_dropped = false;
     std::vector<RecordingPreset> accepted;
     std::set<std::string> seen_ids;
@@ -1784,7 +1921,7 @@ PersistedPresetState RecordingPresetStore::Load() const {
                 item_dropped = true; // Malformed item — not even a table.
                 continue;
             }
-            const auto maybe = PresetFromToml(*item_tbl);
+            const auto maybe = PresetFromToml(*item_tbl, &*legacy_visual_identities.value());
             if (!maybe.has_value()) {
                 item_dropped = true; // Malformed item — skip.
                 continue;
@@ -1830,7 +1967,7 @@ PersistedPresetState RecordingPresetStore::Load() const {
 
     std::optional<RecordingPresetConfig> live;
     if (const toml::table* live_tbl = doc["live"].as_table()) {
-        live = migrate_and_sanitize_live(ConfigFromToml(*live_tbl));
+        live = migrate_and_sanitize_live(ConfigFromToml(*live_tbl, &*legacy_visual_identities.value()));
     } else if (carried_over_default_config.has_value()) {
         // No [live] table: this is a pre-rework file. Its preset.default entry
         // (captured above) becomes the live config, once — the entry itself
@@ -1855,11 +1992,29 @@ PersistedPresetState RecordingPresetStore::Load() const {
     state.user_presets = std::move(accepted);
     state.selected_id = std::move(selected_id);
     state.live = std::move(live);
-    state.read_only = protected_document;
-    if (protected_document)
-        state.validation_error = backup_error.isEmpty()
-                                     ? "Unknown preset schema or audio contract requires explicit import"
-                                     : backup_error.toStdString();
+    state.read_only = protected_document || (state.live && state.live->visual_read_only);
+    if (state.live && state.live->visual_read_only)
+        state.validation_error = state.live->visual_validation_error;
+    for (const auto& preset : state.user_presets) {
+        if (preset.config.visual_read_only) {
+            state.read_only = true;
+            state.validation_error = preset.config.visual_validation_error;
+            break;
+        }
+    }
+    if (protected_document) {
+        state.validation_error =
+            backup_error.isEmpty() ? "Unknown preset schema, audio contract or visual contract requires explicit import"
+                                   : backup_error.toStdString();
+        const auto protect_visual = [&](RecordingPresetConfig& config) {
+            config.visual_read_only = true;
+            config.visual_validation_error = state.validation_error;
+        };
+        if (state.live)
+            protect_visual(*state.live);
+        for (auto& preset : state.user_presets)
+            protect_visual(preset.config);
+    }
     state.repaired = item_dropped;
     return state;
 }
@@ -1881,14 +2036,62 @@ bool RecordingPresetStore::Save(const std::vector<RecordingPreset>& presets, con
         return false;
     }
 
-    std::optional<toml::table> existing;
+    QLockFile lock(file_path_ + QStringLiteral(".lock"));
+    if (!lock.tryLock(0)) {
+        if (err)
+            *err = QStringLiteral("Preset file is being updated by another writer.");
+        return false;
+    }
+    std::optional<QByteArray> original_bytes;
     if (QFileInfo::exists(file_path_)) {
-        bool failed = false;
-        existing = ParseTomlFile(file_path_, &failed);
+        QFile file(file_path_);
+        if (!file.open(QIODevice::ReadOnly)) {
+            if (err)
+                *err = file.errorString();
+            return false;
+        }
+        original_bytes = file.readAll();
+        if (file.error() != QFileDevice::NoError) {
+            if (err)
+                *err = file.errorString();
+            return false;
+        }
+    }
+    const auto validate_visual = [&](const RecordingPresetConfig& config) {
+        if (config.visual_read_only) {
+            if (err)
+                *err = QString::fromStdString(config.visual_validation_error);
+            return false;
+        }
+        if (const auto invalid = InvalidKnownVisualSettings(config.visual_scene)) {
+            if (err)
+                *err = QString::fromStdString(invalid->context);
+            return false;
+        }
+        const auto written = WriteVisualScene(config.visual_scene);
+        if (!written.succeeded() && err)
+            *err = QString::fromStdString(written.error()->context);
+        return written.succeeded();
+    };
+    if (!validate_visual(live))
+        return false;
+    for (const auto& preset : presets)
+        if (!IsBuiltInPresetId(preset.id) && !validate_visual(preset.config))
+            return false;
+
+    std::optional<toml::table> existing;
+    if (original_bytes) {
+        try {
+            existing = toml::parse(original_bytes->toStdString());
+        } catch (const toml::parse_error&) {
+            if (err)
+                *err = QStringLiteral("Preset file contains unsupported syntax.");
+            return false;
+        }
         if (!existing || IsProtectedDocument(*existing)) {
             if (err)
-                *err =
-                    QStringLiteral("Preset file is read-only: unknown schema, audio contract or unsupported syntax.");
+                *err = QStringLiteral(
+                    "Preset file is read-only: unknown schema, audio contract, visual contract or unsupported syntax.");
             return false;
         }
         const auto version = TomlInt(std::as_const(*existing)["schema_version"], -1);
@@ -1901,6 +2104,7 @@ bool RecordingPresetStore::Save(const std::vector<RecordingPreset>& presets, con
         return false;
     }
     toml::table doc;
+    doc.emplace("visual_contract", std::string(kVisualContract));
     doc.emplace("audio_contract", std::string(kAudioContract));
     doc.emplace("schema_version", static_cast<int64_t>(kPresetSchemaVersion));
     doc.emplace("selected_id", selected_id);
@@ -1925,7 +2129,8 @@ bool RecordingPresetStore::Save(const std::vector<RecordingPreset>& presets, con
                     presets_arr.push_back(original);
                     continue;
                 }
-                const auto parsed = PresetFromToml(*table);
+                const auto legacy_visual_identities = MakeDefaultVisualScene();
+                const auto parsed = PresetFromToml(*table, &legacy_visual_identities);
                 const size_t ordinal = parsed ? ++original_ids[parsed->id] : 0;
                 const bool duplicate = ordinal > 1;
                 if (!parsed || ((parsed->config.audio_read_only || duplicate) && written_ids[parsed->id] < ordinal)) {
@@ -1944,7 +2149,7 @@ bool RecordingPresetStore::Save(const std::vector<RecordingPreset>& presets, con
             merged.insert_or_assign(key, value);
         doc = std::move(merged);
     }
-    return WriteTomlAtomic(doc, file_path_, err);
+    return WriteTomlAtomic(doc, file_path_, err, &original_bytes);
 }
 
 // ---------------------------------------------------------------------------
@@ -1974,8 +2179,25 @@ bool RecordingPresetStore::ExportPresetToFile(const RecordingPreset& preset, con
     }
 
     toml::table doc;
+    doc.emplace("visual_contract", std::string(kVisualContract));
     doc.emplace("audio_contract", std::string(kAudioContract));
     doc.emplace("schema_version", static_cast<int64_t>(kPresetSchemaVersion));
+    if (preset.config.visual_read_only) {
+        if (err)
+            *err = QString::fromStdString(preset.config.visual_validation_error);
+        return false;
+    }
+    if (const auto invalid = InvalidKnownVisualSettings(preset.config.visual_scene)) {
+        if (err)
+            *err = QString::fromStdString(invalid->context);
+        return false;
+    }
+    const auto visual = WriteVisualScene(preset.config.visual_scene);
+    if (!visual.succeeded()) {
+        if (err)
+            *err = QString::fromStdString(visual.error()->context);
+        return false;
+    }
     doc.emplace("export_kind", std::string("single"));
 
     toml::array presets_arr;
@@ -2014,7 +2236,7 @@ QVector<RecordingPreset> RecordingPresetStore::ImportPresetsFromFile(const QStri
     const toml::table& doc = *maybe_doc;
     if (IsProtectedDocument(doc)) {
         if (err)
-            *err = QStringLiteral("Unknown preset schema or audio contract requires explicit import.");
+            *err = QStringLiteral("Unknown preset schema, audio contract or visual contract requires explicit import.");
         return {};
     }
 
@@ -2044,11 +2266,18 @@ QVector<RecordingPreset> RecordingPresetStore::ImportPresetsFromFile(const QStri
     QVector<RecordingPreset> result;
     result.reserve(static_cast<qsizetype>(presets_arr->size()));
 
+    const auto legacy_visual_identities = MigrateLegacyVisualConfig({}, {});
+    if (!legacy_visual_identities.succeeded()) {
+        if (err)
+            *err = QString::fromStdString(legacy_visual_identities.error()->context);
+        return {};
+    }
+
     for (const auto& elem : *presets_arr) {
         const auto* item_tbl = elem.as_table();
         if (!item_tbl)
             continue;
-        const auto maybe = PresetFromToml(*item_tbl);
+        const auto maybe = PresetFromToml(*item_tbl, &*legacy_visual_identities.value());
         if (!maybe.has_value())
             continue; // Malformed — skip.
 
