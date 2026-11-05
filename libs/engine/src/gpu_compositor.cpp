@@ -4,8 +4,8 @@
 
 #include "exosnap/engine/overlay_shader.h"
 #include "exosnap/engine/overlay_sprites.h"
-#include "exosnap/engine/recorder_session.h"
 #include "exosnap/engine/sdr_white_level.h"
+#include "exosnap/engine/visual_frame.h"
 #include "exosnap/engine/webcam_placement.h"
 #include "gpu_yuv_constants.h"
 #include "measured_shader_compile.h"
