@@ -15,8 +15,8 @@
 #include <exosnap/engine/gpu_compositor.h>
 #include <exosnap/engine/gpu_surface_inventory.h>
 
-#include <d3d11.h>
 #include <cmath>
+#include <d3d11.h>
 #include <limits>
 #include <memory>
 #include <optional>
