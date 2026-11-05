@@ -1,5 +1,5 @@
-#include <exosnap/engine/visual_gpu_lane.h>
 #include <exosnap/engine/visual_frame.h>
+#include <exosnap/engine/visual_gpu_lane.h>
 #include <exosnap/engine/visual_scene.h>
 #include <exosnap/engine/visual_scene_runtime.h>
 
@@ -10,17 +10,17 @@
 #include <gtest/gtest.h>
 
 #include <atomic>
-#include <cstdint>
 #include <chrono>
+#include <cstdint>
 #include <cstring>
-#include <memory>
 #include <iterator>
+#include <memory>
 #include <string>
 #include <thread>
-#include <variant>
 #include <utility>
-#include <winrt/base.h>
+#include <variant>
 #include <vector>
+#include <winrt/base.h>
 
 using namespace exosnap::engine;
 

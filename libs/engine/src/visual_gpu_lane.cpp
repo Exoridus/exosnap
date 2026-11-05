@@ -6,11 +6,11 @@
 
 #include <atomic>
 #include <cstdint>
+#include <d3d11_1.h>
 #include <memory>
 #include <mutex>
 #include <string>
 #include <winrt/base.h>
-#include <d3d11_1.h>
 
 namespace exosnap::engine {
 namespace {
