@@ -4,6 +4,7 @@
 #include <exosnap/engine/overlay_sprites.h>
 #include <exosnap/engine/recorder_session.h>
 #include <exosnap/engine/sdr_white_level.h>
+#include <exosnap/engine/visual_scene.h>
 #include <exosnap/engine/webcam_placement.h>
 
 #include <d3d11.h>
@@ -12,6 +13,7 @@
 #include <cstddef>
 #include <cstdint>
 #include <optional>
+#include <span>
 #include <string>
 #include <vector>
 
@@ -67,6 +69,13 @@ class GpuCompositor {
     // draws nothing and is not an error, matching a provider with no frame yet.
     bool DrawWebcam(const WebcamFrameSnapshot& frame, const WebcamPixelRect& rect, bool mirror,
                     const ChromaKeyParams& chroma, std::string& err, float opacity = 1.0f);
+    // Maintenance only. Retains matching uploads and releases absent source caches.
+    bool PrepareVisualImages(std::span<const VisualAddress>, std::string& err);
+    // A null frame reuses only this exact accepted image identity. The caller has
+    // already validated the live binding; a busy runtime read must skip this call.
+    bool DrawVisualImage(const SourceToken&, uint64_t resource_id, uint64_t sequence, const WebcamFrameSnapshot*,
+                         const WebcamPixelRect&, bool mirror, const ChromaKeyParams&, std::string& err,
+                         float opacity = 1.0f);
     bool DrawCursor(const uint8_t* bgra, int width, int height, const WebcamPixelRect& rect, std::string& err);
 
     // The inverting plane of a mask cursor, drawn after DrawCursor and over the
@@ -88,6 +97,9 @@ class GpuCompositor {
     // there. A layer without a complete atlas draws nothing and is not an error.
     bool DrawSpriteLayer(size_t layer_index, const SpriteLayerSnapshot& layer, const WebcamPixelRect& content,
                          std::string& err);
+    bool PrepareVisualSprites(size_t item_capacity, std::string& err);
+    bool DrawVisualSprite(size_t index, const SourceToken&, uint64_t resource_id, const SpriteLayerSnapshot&,
+                          const WebcamPixelRect& content, std::string& err);
 
     // Which inversion semantics this compositor's render format allows.
     [[nodiscard]] MaskCursorComposition MaskComposition() const noexcept {
@@ -123,7 +135,7 @@ class GpuCompositor {
     // Recreates `resource` only when its size or format changes.
     bool EnsureTexture(TextureResource& resource, UINT width, UINT height, DXGI_FORMAT format, bool render_target,
                        std::string& err);
-    bool ConvertWebcamYuv(const WebcamFrameSnapshot& frame, std::string& err);
+    bool ConvertWebcamYuv(const WebcamFrameSnapshot& frame, TextureResource& destination, std::string& err);
     bool UploadTexture(TextureResource& resource, const uint8_t* bgra, int width, int height, UINT row_pitch,
                        std::string& err);
     // uv_rect: u0, v0, u1, v1 of the texture the rectangle shows; null = all of it.
@@ -150,6 +162,14 @@ class GpuCompositor {
     winrt::com_ptr<ID3D11Buffer> constants_;
 
     TextureResource webcam_tex_;
+    struct VisualImageTexture {
+        VisualAddress address;
+        TextureResource texture;
+        SourceToken token;
+        uint64_t resource_id = 0;
+        uint64_t sequence = 0;
+    };
+    std::vector<VisualImageTexture> visual_images_;
     // YUV webcam path: the raw planes as uploaded, and the shaders that turn
     // them into webcam_tex_. Compiled on the first YUV frame, so a BGRA-only
     // session never pays for them.
@@ -166,6 +186,8 @@ class GpuCompositor {
     struct SpriteAtlasTexture {
         TextureResource texture;
         std::optional<uint64_t> generation;
+        SourceToken token;
+        uint64_t resource_id = 0;
     };
     std::vector<SpriteAtlasTexture> sprite_atlases_;
     uint64_t sprite_atlas_upload_count_ = 0;

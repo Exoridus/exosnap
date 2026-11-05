@@ -6,6 +6,7 @@
 #include "exosnap/engine/recorder_session.h"
 #include "exosnap/engine/visual_frame.h"
 #include "exosnap/engine/visual_generations.h"
+#include "exosnap/engine/visual_scene_runtime.h"
 #include "exosnap/engine/webcam_placement.h"
 #include "session_internal.h"
 #include "webcam_frame_observation.h"
@@ -20,7 +21,6 @@
 #include <optional>
 #include <winrt/base.h>
 
-#include <cmath>
 #include <cstdint>
 #include <cstring>
 #include <iterator>
@@ -32,7 +32,6 @@ namespace {
 using exosnap::engine::GpuCompositor;
 using exosnap::engine::MaskCursorComposition;
 using exosnap::engine::SessionState;
-using exosnap::engine::WebcamOverlayLive;
 using exosnap::engine::WebcamPixelRect;
 
 struct D3DTestDevice {
@@ -665,49 +664,30 @@ TEST(GpuCompositorTest, OpacityCombinesWithChromaKey) {
     ExpectPixelNear(pixels, 2, 1, 0, 5, 10, 143, 255, 3); // 0.5*{0,0,255} + 0.5*{10,20,30}
 }
 
-TEST(SessionStateWebcamOverlayLiveTest, SeedUpdateAndSnapshotSanitizeLiveOverlay) {
+TEST(SessionStateVisualSceneTest, RetainsHostRuntimeWithoutTreatingPublicationAsComposition) {
+    using namespace exosnap::engine;
     SessionState state;
-    state.config.webcam.enabled = true;
-    state.config.webcam.overlay_x_norm = 0.90f;
-    state.config.webcam.overlay_y_norm = 0.25f;
-    state.config.webcam.overlay_w_norm = 0.50f;
-    state.config.webcam.overlay_h_norm = 0.25f;
-    state.config.webcam.mirror = true;
-    state.config.webcam.opacity = 0.4f;
-    state.SeedWebcamOverlayFromConfig();
+    auto runtime = std::make_shared<VisualSceneRuntime>(VisualBudgetPolicy{});
+    std::weak_ptr<VisualSceneRuntime> retained = runtime;
+    state.config.visual_scene = runtime;
+    runtime.reset();
+    ASSERT_FALSE(retained.expired());
 
-    WebcamOverlayLive seeded = state.SnapshotWebcamOverlay();
-    EXPECT_TRUE(seeded.enabled);
-    EXPECT_TRUE(seeded.mirror);
-    EXPECT_LE(seeded.overlay_x_norm + seeded.overlay_w_norm, 1.0f);
-    EXPECT_FLOAT_EQ(seeded.opacity, 0.4f);
+    PreparedSceneDescription scene;
+    scene.revision = ConfigRevision{7};
+    ASSERT_TRUE(state.config.visual_scene->PublishScene(scene).succeeded());
+    EXPECT_GT(state.config.visual_scene->PublishedSceneSequence(), 0u);
+    EXPECT_EQ(state.composited_visual_scene_sequence.load(), 0u);
+    EXPECT_EQ(state.composited_visual_scene_revision.load(), 0u);
 
-    WebcamOverlayLive live;
-    live.enabled = false;
-    live.overlay_x_norm = std::nanf("");
-    live.overlay_y_norm = -1.0f;
-    live.overlay_w_norm = 2.0f;
-    live.overlay_h_norm = 0.0f;
-    live.chroma_tolerance = std::nanf("");
-    live.chroma_softness = 2.0f;
-    live.opacity = 7.0f;
-    state.UpdateWebcamOverlay(live);
-
-    const WebcamOverlayLive updated = state.SnapshotWebcamOverlay();
-    EXPECT_FALSE(updated.enabled);
-    EXPECT_FLOAT_EQ(updated.overlay_x_norm, 0.0f);
-    EXPECT_FLOAT_EQ(updated.overlay_y_norm, 0.0f);
-    EXPECT_FLOAT_EQ(updated.overlay_w_norm, 1.0f);
-    EXPECT_FLOAT_EQ(updated.overlay_h_norm, exosnap::engine::WebcamPlacement::kMinSize);
-    EXPECT_FLOAT_EQ(updated.chroma_tolerance, 0.40f); // NaN → fallback default
-    EXPECT_FLOAT_EQ(updated.chroma_softness, 1.0f);   // 2.0 clamped to 1.0
-    EXPECT_FLOAT_EQ(updated.chroma_spill_reduction, 0.30f);
-    EXPECT_FLOAT_EQ(updated.opacity, 1.0f); // 7.0 clamped to 1.0
-
-    live.opacity = std::nanf("");
-    state.UpdateWebcamOverlay(live);
-    const WebcamOverlayLive nanUpdated = state.SnapshotWebcamOverlay();
-    EXPECT_FLOAT_EQ(nanUpdated.opacity, 1.0f); // NaN → fallback default
+    state.composited_visual_scene_sequence.store(state.config.visual_scene->PublishedSceneSequence());
+    state.composited_visual_scene_revision.store(scene.revision.value);
+    state.ResetForNewRecording();
+    EXPECT_EQ(state.composited_visual_scene_sequence.load(), 0u);
+    EXPECT_EQ(state.composited_visual_scene_revision.load(), 0u);
+    EXPECT_FALSE(retained.expired());
+    state.config.visual_scene.reset();
+    EXPECT_TRUE(retained.expired());
 }
 
 } // namespace

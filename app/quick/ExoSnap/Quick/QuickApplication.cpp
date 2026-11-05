@@ -2,6 +2,9 @@
 
 #include "CaptureExclusion.h"
 #include "EditThumbnailImageProvider.h"
+#include "extensions/VisualPresetMigration.h"
+
+#include <QScopedValueRollback>
 
 #include "services/SystemAppearance.h"
 
@@ -495,6 +498,7 @@ class QuickConsoleDisplayStateFilter final : public QAbstractNativeEventFilter {
 } // namespace
 
 QuickApplication::~QuickApplication() {
+    shutting_down_visual_sources_ = true;
     edit_export_adapter_.cancelAndWait();
     recording_review_adapter_.close();
     recording_review_adapter_.player()->setSession(nullptr);
@@ -532,17 +536,21 @@ QuickApplication::~QuickApplication() {
     // and the coordinator is destroyed before record_preview_adapter_ -- so the
     // join has to happen here, not in the adapter's own destructor.
     record_preview_adapter_.waitForPendingReadyFrames();
-    // Stop the camera before dropping the callback. This is no longer a safety
-    // requirement -- WebcamService publishes its registration as an immutable
-    // snapshot, so clearing it can no longer destroy a closure a live reader is
-    // holding -- but it stays the right order: a camera nobody listens to has no
-    // reason to keep running for the rest of teardown.
-    recording_coordinator_->SetWebcamPreviewActive(false);
-    // QML previews unregister as the engine tears down, possibly after the
-    // coordinator is gone; nothing may act on their last viewer change.
     QObject::disconnect(&webcam_preview_feed_, nullptr, nullptr, nullptr);
-    recording_coordinator_->SetWebcamSettingsPreviewActive(false);
     recording_coordinator_->SetWebcamFrameCallback({});
+    recording_coordinator_->SetVisualOverlayAcknowledgement({});
+    recording_coordinator_->SetVisualRuntime(visual_runtime_, {});
+    if (visual_sources_)
+        visual_sources_->RequestShutdown();
+    recording_coordinator_->WaitForVisualControl();
+    gamepad_overlay_.WaitForVisualControl();
+    webcam_preview_feed_.setFrame({});
+    if (visual_runtime_ && settings_visual_consumer_ != 0)
+        visual_runtime_->UnregisterConsumer(settings_visual_consumer_);
+    if (visual_sources_) {
+        visual_sources_->CollectRetired();
+        visual_sources_.reset();
+    }
     if (webcam_overlay_persist_timer_.isActive())
         persistLiveConfig();
     // A plain close never reaches closeApproved -- ShellAdapter::requestClose
@@ -705,10 +713,10 @@ void QuickApplication::initializeRecordWorkflow() {
     });
 
     recording_coordinator_->SetRecoveryManifestStore(&recovery_manifest_store_);
-    recording_coordinator_->SetSpriteSourceProvider(&gamepad_overlay_);
-    gamepad_overlay_.Configure(live_config_.gamepad);
+    initializeVisualSources();
     QObject::connect(&gamepad_overlay_, &GamepadOverlay::settingsChanged, &record_view_model_adapter_, [this]() {
         live_config_.gamepad = gamepad_overlay_.Settings();
+        updateVisualSources(visual_demand_);
         webcam_overlay_persist_timer_.start();
         refreshPresetState();
     });
@@ -724,9 +732,7 @@ void QuickApplication::initializeRecordWorkflow() {
         ReadyFrameComposition composition;
         composition.normalized_source_rect = record_view_model_adapter_.normalizedSourceRect();
         composition.video = live_config_.video;
-        composition.webcam = webcamSettingsForCapture();
-        composition.webcam_frame = recording_coordinator_->WebcamSnapshot();
-        composition.sprites = gamepad_overlay_.Snapshot(gamepad::GameInputSource::NowCapture100ns());
+        composition.visual_runtime = visual_runtime_;
         record_preview_adapter_.requestReadyFrame(std::move(composition), std::move(callback));
     });
     wireRecordCommands();
@@ -840,6 +846,13 @@ void QuickApplication::initializeRecordWorkflow() {
             countdown_progress_ = 0.0;
         }
         updateMeterServices();
+        uint8_t demand = visual_demand_;
+        const auto recording = static_cast<uint8_t>(VisualConsumer::Recording);
+        if (recording_coordinator_->VisualSessionOwnsDevice())
+            demand |= recording;
+        else
+            demand &= static_cast<uint8_t>(~recording);
+        updateVisualSources(demand);
         synchronizeRecordState();
         if (!locksCaptureTargets(state) && capture_target_refresh_pending_) {
             capture_target_refresh_pending_ = false;
@@ -864,6 +877,49 @@ void QuickApplication::initializeRecordWorkflow() {
             // This runs on the GUI thread (PostDiagnostics queues it onto the application
             // object), which is the thread PresentMonEtwSession::Latest() requires.
             exosnap::engine::RecordingDiagnosticsSnapshot snapshot = measured;
+            if (visual_sources_ && accepted_visual_scene_) {
+                auto& rows = snapshot.visual_sources.emplace();
+                rows.reserve(accepted_visual_scene_->sources.size());
+                for (const auto& source : accepted_visual_scene_->sources) {
+                    engine::VisualSourceDiagnostics row;
+                    row.source_id = engine::ToUuid(source.id);
+                    row.type_id = source.type_id;
+                    for (const auto& item : accepted_visual_scene_->items) {
+                        if (item.source == source.id)
+                            row.item_ids.push_back(engine::ToUuid(item.id));
+                    }
+                    if (const auto address = visual_sources_->CurrentAddress(source.id)) {
+                        row.runtime_generation = address->runtime.value;
+                        if (const auto status = visual_sources_->Status(*address);
+                            status && status->token.address == *address) {
+                            row.request_revision = status->token.request.value;
+                            switch (status->phase) {
+                            case SourcePhase::Dormant:
+                                row.provider_phase = "dormant";
+                                break;
+                            case SourcePhase::Preparing:
+                                row.provider_phase = "preparing";
+                                break;
+                            case SourcePhase::Ready:
+                                row.provider_phase = "ready";
+                                break;
+                            case SourcePhase::Waiting:
+                                row.provider_phase = "waiting";
+                                break;
+                            case SourcePhase::Failed:
+                                row.provider_phase = "failed";
+                                break;
+                            case SourcePhase::Stopping:
+                                row.provider_phase = "stopping";
+                                break;
+                            }
+                            if (status->reason)
+                                row.provider_error_code = static_cast<uint32_t>(status->reason->code);
+                        }
+                    }
+                    rows.push_back(std::move(row));
+                }
+            }
             if (present_provider_ != nullptr) {
                 const diagnostics::PresentSample sample = present_provider_->Sample();
                 diagnostics::ApplyPresentSample(snapshot.capture, sample);
@@ -1079,17 +1135,11 @@ void QuickApplication::initializeRecordWorkflow() {
             record_view_model_.UpdateMeterRms(rms);
             scheduleMeterUpdate();
         });
-    recording_coordinator_->SetWebcamStatusCallback(&record_view_model_adapter_,
-                                                    [this](bool ok, const QString& reason) {
-                                                        webcam_error_ = ok ? QString{} : reason;
-                                                        synchronizeRecordState();
-                                                    });
-    // One camera frame, one preview recomposition: the item takes the immutable
-    // snapshot and draws it on the GPU at the camera's own cadence.
     recording_coordinator_->SetWebcamFrameCallback(&record_view_model_adapter_, [this](uint64_t) {
-        auto snapshot = recording_coordinator_->WebcamSnapshot();
-        webcam_preview_feed_.setFrame(snapshot);
-        record_preview_adapter_.setWebcamFrame(std::move(snapshot));
+        if (shutting_down_visual_sources_)
+            return;
+        refreshVisualSettingsPreview();
+        record_preview_adapter_.visualContentChanged();
     });
     // The Settings card's preview keeps the camera open only while it is on
     // screen; the device rule still requires the webcam to be enabled.
@@ -1333,22 +1383,28 @@ void QuickApplication::initializeRecordWorkflow() {
                          synchronizeRecordState();
                          updateMeterServices();
                      });
-    QObject::connect(&webcam_notifier_, &WebcamDeviceNotifier::snapshotChanged, &record_view_model_adapter_,
-                     [this](const WebcamDeviceSnapshot& snapshot, DiscoveryReason) {
-                         webcam_available_ = !snapshot.devices.isEmpty();
-                         // The discovered device is never written into the
-                         // configuration: an empty device_id means "not pinned to
-                         // a camera", and resolving it in place made a freshly
-                         // seeded profile differ from the built-in Default it was
-                         // seeded from, so the preset bar opened on (changed).
-                         default_webcam_device_id_ = webcam_available_ ? snapshot.devices.front().id : std::string{};
-                         if (webcam_available_) {
-                             recording_coordinator_->SetWebcamSettings(webcamSettingsForCapture());
-                         }
-                         synchronizeRecordState();
-                         for (const auto& device : snapshot.devices)
-                             enumerateWebcamFormats(device.id);
-                     });
+    QObject::connect(
+        &webcam_notifier_, &WebcamDeviceNotifier::snapshotChanged, &record_view_model_adapter_,
+        [this](const WebcamDeviceSnapshot& snapshot, DiscoveryReason) {
+            visual_camera_choices_.choices.clear();
+            visual_camera_choices_.choices.push_back(
+                {"", {"", QCoreApplication::translate("QuickApplication", "Automatic").toStdString()}, true, {}});
+            if (visual_camera_choices_.revision != UINT64_MAX)
+                ++visual_camera_choices_.revision;
+            for (const auto& device : snapshot.devices)
+                visual_camera_choices_.choices.push_back({device.id, {"", device.name}, true, {}});
+            webcam_available_ = !snapshot.devices.isEmpty();
+            // The discovered device is never written into the
+            // configuration: an empty device_id means "not pinned to
+            // a camera", and resolving it in place made a freshly
+            // seeded profile differ from the built-in Default it was
+            // seeded from, so the preset bar opened on (changed).
+            default_webcam_device_id_ = webcam_available_ ? snapshot.devices.front().id : std::string{};
+            recording_coordinator_->SetWebcamSettings(webcamSettingsForCapture());
+            synchronizeRecordState();
+            for (const auto& device : snapshot.devices)
+                enumerateWebcamFormats(device.id);
+        });
     audio_notifier_.start();
     webcam_notifier_.start();
     audio_notifier_.rescan();
@@ -1699,9 +1755,6 @@ void QuickApplication::synchronizeRecordState() {
     chroma.tolerance = record_config.webcam.chroma_key.tolerance;
     chroma.softness = record_config.webcam.chroma_key.softness;
     chroma.spill_reduction = record_config.webcam.chroma_key.spill_reduction;
-    record_preview_adapter_.setWebcamStyle(
-        record_config.webcam.mirror,
-        record_config.webcam.opacity * (record_config.webcam.output_visible ? 1.0f : 0.35f), chroma);
     webcam_preview_feed_.setStyle(record_config.webcam.mirror, record_config.webcam.opacity, chroma);
     // Latched at the first live state and cleared when the session ends: it lists
     // the sources that were resolved into a track, which is what a live mute can
@@ -3294,9 +3347,296 @@ void QuickApplication::applyPresetConfig(RecordingPresetConfig config) {
     synchronizeRecordState();
 }
 
+void QuickApplication::initializeVisualSources() {
+    const auto accept = [this](const auto& result) {
+        if (result.succeeded())
+            return true;
+        diagnostics::AppLog::error(QStringLiteral("visual"), QString::fromStdString(result.error()->context));
+        webcam_error_ = QCoreApplication::translate("QuickApplication", "Visual sources could not be prepared.");
+        return false;
+    };
+    auto migrated = MigrateLegacyVisualConfig(live_config_.webcam, live_config_.gamepad);
+    if (!accept(migrated))
+        return;
+    visual_identity_template_ = std::move(*migrated.value());
+    visual_camera_source_ = visual_identity_template_->sources.front().id;
+    visual_camera_item_ = visual_identity_template_->items.front().id;
+    visual_runtime_ = std::make_shared<engine::VisualSceneRuntime>(engine::VisualBudgetPolicy{});
+    auto consumer = visual_runtime_->RegisterConsumer();
+    if (!accept(consumer))
+        return;
+    settings_visual_consumer_ = *consumer.value();
+
+    auto camera_hooks = recording_coordinator_->CreateWebcamControlHooks(
+        &record_view_model_adapter_,
+        [this](const toml::table& table) -> engine::Outcome<WebcamSettings> {
+            auto camera = ProjectWebcamSettings(table);
+            if (!camera.succeeded())
+                return *camera.error();
+            return resolveVisualWebcam(std::move(*camera.value()));
+        },
+        [this] { visualControlSettled(); });
+    const auto start = std::move(camera_hooks.request_start);
+    camera_hooks.request_start = [this, start](engine::SourceToken token, WebcamSettings camera,
+                                               engine::VisualPublicationWriter writer,
+                                               std::function<void(SourceStatus)> status) {
+        admitted_visual_camera_mode_ = camera;
+        start(token, std::move(camera), std::move(writer), std::move(status));
+    };
+    const auto update = std::move(camera_hooks.request_update);
+    camera_hooks.request_update = [this, update](engine::SourceToken token, WebcamSettings camera,
+                                                 engine::VisualPublicationWriter writer) {
+        admitted_visual_camera_mode_ = camera;
+        update(token, std::move(camera), std::move(writer));
+    };
+    const auto stop = std::move(camera_hooks.request_stop);
+    camera_hooks.request_stop = [this, stop] {
+        if (!recording_coordinator_->VisualSessionOwnsDevice())
+            admitted_visual_camera_mode_.reset();
+        stop();
+    };
+    auto gamepad_hooks = gamepad_overlay_.CreateControlHooks(visual_runtime_);
+    gamepad_overlay_.Configure(live_config_.gamepad);
+    refreshVisualGamepadChoices();
+    visual_camera_choices_.revision = 1;
+    visual_camera_choices_.choices.push_back(
+        {"", {"", QCoreApplication::translate("QuickApplication", "Automatic").toStdString()}, true, {}});
+    if (!accept(RegisterWebcamModule(visual_registry_, std::move(camera_hooks),
+                                     [this](const VisualSourceRecord&) { return visual_camera_choices_; })) ||
+        !accept(RegisterGamepadModule(
+            visual_registry_, std::move(gamepad_hooks),
+            [this](const VisualSourceRecord&) { return visual_gamepad_choices_; },
+            [this](const VisualSourceRecord&) { return visual_layout_choices_; })) ||
+        !accept(visual_registry_.Seal()))
+        return;
+    visual_sources_ =
+        std::make_unique<VisualSourceManager>(visual_registry_, *visual_runtime_, [this](SourceStatus status) {
+            if (shutting_down_visual_sources_)
+                return;
+            if (status.token.address.source == visual_camera_source_) {
+                webcam_error_ =
+                    status.reason && (status.phase == SourcePhase::Failed || status.phase == SourcePhase::Waiting)
+                        ? QCoreApplication::translate("QuickApplication", "Camera unavailable: %1")
+                              .arg(QString::fromStdString(status.reason->context))
+                        : QString{};
+                refreshVisualSettingsPreview();
+            }
+            record_preview_adapter_.visualContentChanged();
+            synchronizeRecordState();
+        });
+    QObject::connect(&gamepad_overlay_, &GamepadOverlay::devicesChanged, &record_view_model_adapter_,
+                     [this] { refreshVisualGamepadChoices(); });
+    QObject::connect(&gamepad_overlay_, &GamepadOverlay::frameChanged, &record_view_model_adapter_, [this] {
+        if (!shutting_down_visual_sources_)
+            record_preview_adapter_.visualContentChanged();
+    });
+    QObject::connect(
+        &gamepad_overlay_, &GamepadOverlay::visualControlSettled, &record_view_model_adapter_,
+        [this] { visualControlSettled(); }, Qt::QueuedConnection);
+    record_preview_adapter_.setVisualRuntime(visual_runtime_, visual_camera_item_);
+    recording_coordinator_->SetVisualRuntime(visual_runtime_, [this](uint8_t demand) { updateVisualSources(demand); });
+    recording_coordinator_->SetVisualOverlayAcknowledgement([this] { return acceptedWebcamOverlay(); });
+}
+
+void QuickApplication::refreshVisualGamepadChoices() {
+    const auto update = [](ChoiceSnapshot& destination, const QVariantList& options, bool layouts) {
+        destination.choices.clear();
+        if (destination.revision != UINT64_MAX)
+            ++destination.revision;
+        for (const auto& option : options) {
+            const auto row = option.toMap();
+            std::string id;
+            if (layouts) {
+                const int index = row.value(QStringLiteral("value")).toInt();
+                id = index < 0 ? "auto" : std::string(kGamepadOverlayArtworkIds.at(static_cast<size_t>(index)));
+            } else {
+                id = row.value(QStringLiteral("value")).toString().toStdString();
+            }
+            destination.choices.push_back({std::move(id),
+                                           {"", row.value(QStringLiteral("label")).toString().toStdString()},
+                                           row.value(QStringLiteral("selectable"), true).toBool(),
+                                           {}});
+        }
+    };
+    update(visual_gamepad_choices_, gamepad_overlay_.devices(), false);
+    update(visual_layout_choices_, gamepad_overlay_.layouts(), true);
+}
+
+void QuickApplication::updateVisualSources(uint8_t demand) {
+    visual_demand_ = isolated_edit_harness_ ? 0 : demand;
+    if (!visual_sources_ || shutting_down_visual_sources_ || updating_visual_sources_)
+        return;
+    const QScopedValueRollback guard(updating_visual_sources_, true);
+    auto camera = settings_adapter_.recordingActive() ? settings_adapter_.sessionConfig().webcam : live_config_.webcam;
+    const bool verification = !recording_coordinator_->VerificationWebcamSourceName().isEmpty();
+    camera.enabled = camera.enabled || verification;
+    const auto resolved = resolveVisualWebcam(camera);
+    const bool restart_camera = visual_effective_camera_mode_ && !recording_coordinator_->VisualSessionOwnsDevice() &&
+                                (resolved.device_id != visual_effective_camera_mode_->device_id ||
+                                 resolved.width != visual_effective_camera_mode_->width ||
+                                 resolved.height != visual_effective_camera_mode_->height ||
+                                 resolved.fps != visual_effective_camera_mode_->fps);
+    auto projected = ProjectLegacyVisualConfig(camera, live_config_.gamepad, *visual_identity_template_);
+    if (!projected.succeeded()) {
+        diagnostics::AppLog::error(QStringLiteral("visual"), QString::fromStdString(projected.error()->context));
+        return;
+    }
+    auto validated = ValidateVisualScene(*projected.value(), visual_registry_);
+    if (!validated.succeeded()) {
+        diagnostics::AppLog::error(QStringLiteral("visual"), QString::fromStdString(validated.error()->context));
+        return;
+    }
+    auto serialized = WriteVisualScene(*validated.value());
+    if (!serialized.succeeded()) {
+        diagnostics::AppLog::error(QStringLiteral("visual"), QString::fromStdString(serialized.error()->context));
+        return;
+    }
+    const auto camera_record_changed = [&] {
+        if (!accepted_visual_scene_)
+            return true;
+        const auto find = [this](const VisualSceneConfig& scene) {
+            return std::ranges::find_if(scene.sources,
+                                        [this](const auto& source) { return source.id == visual_camera_source_; });
+        };
+        const auto before = find(*accepted_visual_scene_);
+        const auto after = find(*validated.value());
+        return before == accepted_visual_scene_->sources.end() || after == validated.value()->sources.end() ||
+               before->settings != after->settings || before->enabled != after->enabled;
+    }();
+    if ((restart_camera || verification != visual_verification_source_) && !camera_record_changed) {
+        if (const auto address = visual_sources_->CurrentAddress(visual_camera_source_)) {
+            const auto retried = visual_sources_->Retry(*address);
+            if (!retried.succeeded())
+                diagnostics::AppLog::warning(QStringLiteral("visual"),
+                                             QString::fromStdString(retried.error()->context));
+            else
+                visual_effective_camera_mode_ = resolved;
+        }
+    } else {
+        visual_effective_camera_mode_ = resolved;
+    }
+    visual_verification_source_ = verification;
+    if (visual_revision_.value == 0 || *serialized.value() != visual_projection_) {
+        if (visual_revision_.value == UINT64_MAX)
+            return;
+        const auto applied = visual_sources_->ApplyDesired(*validated.value(), {++visual_revision_.value});
+        if (!applied.succeeded()) {
+            diagnostics::AppLog::warning(QStringLiteral("visual"), QString::fromStdString(applied.error()->context));
+        } else {
+            const auto accepted_at = gamepad::GameInputSource::NowCapture100ns();
+            accepted_visual_scene_ = std::move(*validated.value());
+            accepted_visual_revision_ = *applied.value();
+            accepted_visual_qpc_100ns_ = accepted_at;
+            visual_projection_ = std::move(*serialized.value());
+        }
+    }
+    // Add new owners before removing old ones so ownership handoff never creates zero demand.
+    for (const auto consumer :
+         {VisualConsumer::RecordPreview, VisualConsumer::SettingsPreview, VisualConsumer::Recording})
+        if ((visual_demand_ & static_cast<uint8_t>(consumer)) != 0)
+            visual_sources_->SetConsumerDemand(consumer, true);
+    for (const auto consumer :
+         {VisualConsumer::RecordPreview, VisualConsumer::SettingsPreview, VisualConsumer::Recording})
+        if ((visual_demand_ & static_cast<uint8_t>(consumer)) == 0)
+            visual_sources_->SetConsumerDemand(consumer, false);
+    refreshVisualSettingsPreview();
+    record_preview_adapter_.visualContentChanged();
+}
+
+std::optional<engine::AppliedWebcamOverlay> QuickApplication::acceptedWebcamOverlay() const {
+    if (!accepted_visual_scene_ || accepted_visual_revision_.value == 0)
+        return std::nullopt;
+    const auto& scene = *accepted_visual_scene_;
+    const auto camera = std::ranges::find_if(scene.sources, [this](const auto& source) {
+        return source.id == visual_camera_source_ && source.type_id == "org.exosnap.webcam/camera";
+    });
+    const auto item = std::ranges::find_if(scene.items, [this](const auto& item) {
+        return item.id == visual_camera_item_ && item.source == visual_camera_source_;
+    });
+    if (camera == scene.sources.end() || item == scene.items.end())
+        return std::nullopt;
+    const auto& properties = item->properties;
+    const auto& placement = properties.placement;
+    const auto& key = item->chroma_key;
+    const auto rgb = key.active_color();
+    engine::AppliedWebcamOverlay acknowledgement;
+    acknowledgement.sequence = accepted_visual_revision_.value;
+    acknowledgement.applied_qpc_100ns = accepted_visual_qpc_100ns_;
+    acknowledgement.applied = {.enabled = camera->enabled && properties.output_visible,
+                               .overlay_x_norm = placement.x,
+                               .overlay_y_norm = placement.y,
+                               .overlay_w_norm = placement.w,
+                               .overlay_h_norm = placement.h,
+                               .mirror = placement.mirror,
+                               .opacity = properties.opacity,
+                               .chroma_key_enabled = key.enabled,
+                               .chroma_r = rgb.r,
+                               .chroma_g = rgb.g,
+                               .chroma_b = rgb.b,
+                               .chroma_tolerance = key.tolerance,
+                               .chroma_softness = key.softness,
+                               .chroma_spill_reduction = key.spill_reduction};
+    return acknowledgement;
+}
+
+void QuickApplication::visualControlSettled() {
+    if (!visual_sources_ || shutting_down_visual_sources_ || updating_visual_sources_)
+        return;
+    const QScopedValueRollback guard(updating_visual_sources_, true);
+    visual_sources_->CollectRetired();
+    refreshVisualSettingsPreview();
+    record_preview_adapter_.visualContentChanged();
+}
+
+void QuickApplication::refreshVisualSettingsPreview(bool allow_busy_retry) {
+    if (!visual_runtime_ || !visual_sources_ || settings_visual_consumer_ == 0 || shutting_down_visual_sources_)
+        return;
+    const auto address = visual_sources_->CurrentAddress(visual_camera_source_);
+    const auto clear = [this] {
+        webcam_preview_feed_.setFrame({});
+        if (settings_visual_address_)
+            visual_runtime_->InvalidateImage(settings_visual_consumer_, *settings_visual_address_);
+        settings_visual_address_.reset();
+    };
+    if (!webcam_preview_feed_.hasViewers() || !address) {
+        clear();
+        return;
+    }
+    if (settings_visual_address_ != address) {
+        clear();
+        settings_visual_address_ = address;
+    }
+    engine::VisualReadLease image;
+    const auto result = visual_runtime_->TryReadImage(settings_visual_consumer_, *address, image);
+    if (result == engine::ReadResult::Updated && settings_visual_generation_ != UINT64_MAX) {
+        // Only the Settings surface crosses this copy boundary; recording reads host pins directly.
+        auto copy = std::make_shared<engine::WebcamFrameSnapshot>(image.Image());
+        copy->generation = ++settings_visual_generation_;
+        image.Reset();
+        webcam_preview_feed_.setFrame(std::move(copy));
+    } else if (result != engine::ReadResult::Unchanged) {
+        image.Reset();
+        if (result != engine::ReadResult::Busy)
+            clear();
+        if (result == engine::ReadResult::Busy && allow_busy_retry && !settings_visual_retry_queued_) {
+            settings_visual_retry_queued_ = true;
+            QMetaObject::invokeMethod(
+                &record_view_model_adapter_,
+                [this] {
+                    settings_visual_retry_queued_ = false;
+                    refreshVisualSettingsPreview(false);
+                },
+                Qt::QueuedConnection);
+        }
+    }
+}
+
 WebcamSettings QuickApplication::webcamSettingsForCapture() const {
-    WebcamSettings resolved =
-        settings_adapter_.recordingActive() ? settings_adapter_.sessionConfig().webcam : live_config_.webcam;
+    return resolveVisualWebcam(settings_adapter_.recordingActive() ? settings_adapter_.sessionConfig().webcam
+                                                                   : live_config_.webcam);
+}
+
+WebcamSettings QuickApplication::resolveVisualWebcam(WebcamSettings resolved) const {
     if (resolved.device_id.empty()) {
         resolved.device_id = default_webcam_device_id_;
     }
@@ -3309,6 +3649,12 @@ WebcamSettings QuickApplication::webcamSettingsForCapture() const {
         resolved.width = mode.width;
         resolved.height = mode.height;
         resolved.fps = mode.fps;
+    }
+    if (recording_coordinator_->VisualSessionOwnsDevice() && admitted_visual_camera_mode_) {
+        resolved.device_id = admitted_visual_camera_mode_->device_id;
+        resolved.width = admitted_visual_camera_mode_->width;
+        resolved.height = admitted_visual_camera_mode_->height;
+        resolved.fps = admitted_visual_camera_mode_->fps;
     }
     return resolved;
 }

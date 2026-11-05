@@ -7,13 +7,7 @@
 namespace exosnap {
 
 // Everything about a published frame except its bytes and generation.
-struct WebcamFrameLayout {
-    int width = 0;
-    int height = 0;
-    engine::WebcamPixelFormat format = engine::WebcamPixelFormat::Bgra;
-    engine::MatrixCoefficients matrix = engine::MatrixCoefficients::Bt601;
-    engine::ColorRange range = engine::ColorRange::Limited;
-};
+using WebcamFrameLayout = engine::CpuImageLayout;
 
 // The owner serializes Publish, Snapshot and Reset. Published payloads are immutable.
 class WebcamFrameMailbox {

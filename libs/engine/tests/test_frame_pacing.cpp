@@ -255,3 +255,59 @@ TEST(HeldScreen, ConsecutiveEmitsRotateWithoutAliasingTheHeldTexture) {
 
     EXPECT_EQ(held, 2); // the capture emitted last, not the session's first frame
 }
+
+TEST(HeldScreen, DeferredSelectedDesktopReachesTheOutputWithoutAnotherVisualChange) {
+    RingSlot ring[]{{2, 200}};
+    int held = 1;
+    int completed = held;
+    uint64_t completed_present = 100;
+    const uint64_t arrivals[]{ring[0].present_qpc};
+    const auto selected = SelectFrameForSlot(arrivals, 200, completed_present, FramePacingMode::Smooth);
+    ASSERT_TRUE(selected.emit);
+    const uint64_t selected_present = arrivals[selected.index];
+    ring[selected.index].present_qpc = 0;
+    AdoptEmittedAsHeldScreen(ring[selected.index].tex, held);
+
+    // Busy defers the composition, so the selected texture and completed output differ.
+    bool selected_pending = true;
+    EXPECT_EQ(completed, 1);
+    EXPECT_EQ(completed_present, 100U);
+    EXPECT_EQ(held, 2);
+    const auto quiet_slot = SelectFrameForSlot({}, 300, selected_present, FramePacingMode::Smooth);
+    EXPECT_FALSE(quiet_slot.emit);
+    if (ShouldRecompositeHeldScreen(false, false, false, true, selected_pending)) {
+        completed = held;
+        completed_present = selected_present;
+        selected_pending = false;
+    }
+    EXPECT_EQ(completed, 2);
+    EXPECT_EQ(completed_present, 200U);
+    EXPECT_FALSE(ShouldRecompositeHeldScreen(false, false, false, true, selected_pending));
+}
+
+TEST(HeldScreen, DeferredRetryKeepsTheSmoothSelectionSeparateFromUnselectedArrivals) {
+    RingSlot ring[]{{2, 200}, {3, 260}};
+    int held = 1;
+    const uint64_t arrivals[]{ring[0].present_qpc, ring[1].present_qpc};
+    const auto selected = SelectFrameForSlot(arrivals, 205, 100, FramePacingMode::Smooth);
+    ASSERT_TRUE(selected.emit);
+    ASSERT_EQ(selected.index, 0U);
+    ring[selected.index].present_qpc = 0;
+    AdoptEmittedAsHeldScreen(ring[selected.index].tex, held);
+
+    EXPECT_EQ(held, 2);
+    EXPECT_EQ(ring[1].tex, 3);
+    EXPECT_EQ(ring[1].present_qpc, 260U);
+    EXPECT_TRUE(ShouldRecompositeHeldScreen(false, false, false, true, true));
+    EXPECT_FALSE(ShouldRecompositeHeldScreen(false, true, false, true, true));
+    EXPECT_FALSE(ShouldRecompositeHeldScreen(false, false, false, false, true));
+
+    // A later pacing decision may replace pending work; the drain alone cannot.
+    const uint64_t later_arrivals[]{ring[1].present_qpc};
+    const auto replacement = SelectFrameForSlot(later_arrivals, 260, arrivals[selected.index], FramePacingMode::Smooth);
+    ASSERT_TRUE(replacement.emit);
+    ring[1].present_qpc = 0;
+    AdoptEmittedAsHeldScreen(ring[1].tex, held);
+    EXPECT_EQ(held, 3);
+    EXPECT_EQ(later_arrivals[replacement.index], 260U);
+}

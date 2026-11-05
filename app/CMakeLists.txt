@@ -357,6 +357,45 @@ target_include_directories(extensions_contract_tests PRIVATE
 )
 
 exosnap_add_gtest(
+    NAME visual_provider_tests
+    TEST_PREFIX visual.providers.
+    SOURCES
+        tests/test_visual_webcam_source.cpp
+        tests/test_visual_gamepad_source.cpp
+        tests/test_builtin_visual_settings.cpp
+        extensions/GamepadModule.cpp
+        extensions/BuiltinVisualSettings.cpp
+        extensions/WebcamModule.cpp
+        extensions/CapabilityRegistry.cpp
+        extensions/VisualSettings.cpp
+    LIBRARIES tomlplusplus::tomlplusplus Qt6::Core
+)
+target_include_directories(visual_provider_tests PRIVATE
+    ${CMAKE_CURRENT_SOURCE_DIR}
+    ${PROJECT_SOURCE_DIR}/libs/engine/include
+)
+
+exosnap_add_gtest(
+    NAME visual_manager_tests
+    TEST_PREFIX visual.manager.
+    SOURCES
+        tests/test_visual_source_manager.cpp
+        extensions/VisualSourceManager.cpp
+        extensions/CapabilityRegistry.cpp
+        extensions/VisualSettings.cpp
+        models/VisualSceneConfig.cpp
+        ${PROJECT_SOURCE_DIR}/libs/engine/src/visual_scene_runtime.cpp
+        ${PROJECT_SOURCE_DIR}/libs/engine/src/gamepad_frame_sampler.cpp
+    LIBRARIES tomlplusplus::tomlplusplus exosnap_gamepad
+)
+target_include_directories(visual_manager_tests PRIVATE
+    ${CMAKE_CURRENT_SOURCE_DIR}
+    ${PROJECT_SOURCE_DIR}/libs/engine/include
+    ${PROJECT_SOURCE_DIR}/libs/engine/src
+)
+target_compile_definitions(visual_manager_tests PRIVATE NOMINMAX)
+
+exosnap_add_gtest(
     NAME recording_preset_tests
     TEST_PREFIX preset.
     SOURCES
@@ -644,7 +683,7 @@ exosnap_add_gtest(
 )
 target_include_directories(output_settings_tests PRIVATE ${CMAKE_CURRENT_SOURCE_DIR})
 # mfreadwrite.lib removed (MF/SinkWriter path deleted).
-target_link_libraries(output_settings_tests PRIVATE mfplat.lib mf.lib mfuuid.lib ole32.lib)
+target_link_libraries(output_settings_tests PRIVATE tomlplusplus::tomlplusplus mfplat.lib mf.lib mfuuid.lib ole32.lib)
 set_target_properties(output_settings_tests PROPERTIES AUTOMOC ON)
 
 # Observability: the serialization boundary's honesty contract. Fixture-driven,
@@ -759,7 +798,7 @@ exosnap_add_gtest(
         Qt6::Core Qt6::Gui Qt6::Qml exosnap_capability exosnap_engine
 )
 target_include_directories(recording_admission_tests PRIVATE ${CMAKE_CURRENT_SOURCE_DIR})
-target_link_libraries(recording_admission_tests PRIVATE mfplat.lib mf.lib mfuuid.lib ole32.lib user32.lib)
+target_link_libraries(recording_admission_tests PRIVATE tomlplusplus::tomlplusplus mfplat.lib mf.lib mfuuid.lib ole32.lib user32.lib)
 set_target_properties(recording_admission_tests PROPERTIES AUTOMOC ON)
 
 # The session-ledger to session-report handoff: the report is gathered on the
@@ -786,7 +825,7 @@ exosnap_add_gtest(
         Qt6::Core Qt6::Gui exosnap_capability exosnap_engine
 )
 target_include_directories(session_report_handoff_tests PRIVATE ${CMAKE_CURRENT_SOURCE_DIR})
-target_link_libraries(session_report_handoff_tests PRIVATE mfplat.lib mf.lib mfuuid.lib ole32.lib user32.lib)
+target_link_libraries(session_report_handoff_tests PRIVATE tomlplusplus::tomlplusplus mfplat.lib mf.lib mfuuid.lib ole32.lib user32.lib)
 set_target_properties(session_report_handoff_tests PROPERTIES AUTOMOC ON)
 
 # MP4-SPLIT-REMUX-R1: per-segment manifest lifecycle, disk reserve, split settings.
@@ -811,7 +850,7 @@ exosnap_add_gtest(
         Qt6::Core Qt6::Gui exosnap_capability exosnap_engine
 )
 target_include_directories(mp4_split_remux_tests PRIVATE ${CMAKE_CURRENT_SOURCE_DIR})
-target_link_libraries(mp4_split_remux_tests PRIVATE mfplat.lib mf.lib mfuuid.lib ole32.lib)
+target_link_libraries(mp4_split_remux_tests PRIVATE tomlplusplus::tomlplusplus mfplat.lib mf.lib mfuuid.lib ole32.lib)
 set_target_properties(mp4_split_remux_tests PROPERTIES AUTOMOC ON)
 
 exosnap_add_gtest(
@@ -1345,7 +1384,7 @@ if(NOT CMAKE_BUILD_TYPE STREQUAL "Release")
         NOMINMAX EXOSNAP_ENABLE_VISUAL_TEST_HARNESS=1)
     # mfreadwrite.lib removed (MF/SinkWriter path deleted).
     target_link_libraries(capture_frame_tests PRIVATE
-        mfplat.lib mf.lib mfuuid.lib ole32.lib)
+        mfplat.lib mf.lib mfuuid.lib ole32.lib tomlplusplus::tomlplusplus)
     set_target_properties(capture_frame_tests PROPERTIES AUTOMOC ON)
 endif()
 
@@ -1399,7 +1438,7 @@ if(NOT CMAKE_BUILD_TYPE STREQUAL "Release")
     target_include_directories(recording_marker_tests PRIVATE ${CMAKE_CURRENT_SOURCE_DIR})
     target_compile_definitions(recording_marker_tests PRIVATE
         NOMINMAX EXOSNAP_ENABLE_VISUAL_TEST_HARNESS=1)
-    target_link_libraries(recording_marker_tests PRIVATE mfplat.lib mf.lib mfuuid.lib ole32.lib)
+    target_link_libraries(recording_marker_tests PRIVATE tomlplusplus::tomlplusplus mfplat.lib mf.lib mfuuid.lib ole32.lib)
     set_target_properties(recording_marker_tests PROPERTIES AUTOMOC ON)
 endif()
 
@@ -1573,7 +1612,7 @@ exosnap_add_gtest(
 target_include_directories(update_service_distribution_tests PRIVATE
     ${CMAKE_CURRENT_SOURCE_DIR} ${CMAKE_CURRENT_BINARY_DIR})
 target_compile_definitions(update_service_distribution_tests PRIVATE NOMINMAX)
-target_link_libraries(update_service_distribution_tests PRIVATE
+target_link_libraries(update_service_distribution_tests PRIVATE tomlplusplus::tomlplusplus
     mfplat.lib mf.lib mfuuid.lib ole32.lib user32.lib shell32.lib)
 add_dependencies(update_service_distribution_tests exosnap_build_info)
 

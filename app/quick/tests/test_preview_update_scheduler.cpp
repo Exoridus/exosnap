@@ -226,6 +226,7 @@ TEST(PreviewUpdateSchedulerTest, MissRetriesAreBoundedPerPublish) {
 TEST(PreviewUpdateSchedulerTest, OnlyAMissLeavesTheDebtStanding) {
     EXPECT_FALSE(exosnap::quick::SettlesPresentationDebt(exosnap::quick::PreviewConsumeOutcome::Missed));
     EXPECT_TRUE(exosnap::quick::SettlesPresentationDebt(exosnap::quick::PreviewConsumeOutcome::TakenButFailed));
+    EXPECT_TRUE(exosnap::quick::SettlesPresentationDebt(exosnap::quick::PreviewConsumeOutcome::TakenButDeferred));
     EXPECT_TRUE(exosnap::quick::SettlesPresentationDebt(exosnap::quick::PreviewConsumeOutcome::Presented));
 }
 

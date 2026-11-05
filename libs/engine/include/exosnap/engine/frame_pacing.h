@@ -71,18 +71,22 @@ struct PacingDecision {
 // picture-in-picture that moves at the encode cadence rather than at the
 // desktop's change rate.
 //
+// A selected capture whose composition was deferred is also pending work,
+// even when overlays are unchanged. Unselected ring arrivals do not qualify.
+//
 // Two conditions forbid it. Without a held screen there is nothing to composite
 // onto. And while the OD source is holding (mid-reopen after a display loss) the
 // capture's display-tied GPU resources are gone, so the frame must stay frozen
 // until Reopen() succeeds.
 // ---------------------------------------------------------------------------
 [[nodiscard]] constexpr bool ShouldRecompositeHeldScreen(bool has_fresh_source, bool od_holding,
-                                                         bool dynamic_overlay_changed, bool has_held_screen) noexcept {
+                                                         bool dynamic_overlay_changed, bool has_held_screen,
+                                                         bool selected_source_pending = false) noexcept {
     if (has_fresh_source)
         return false; // a real frame is available; composite that instead
     if (od_holding || !has_held_screen)
         return false;
-    return dynamic_overlay_changed;
+    return dynamic_overlay_changed || selected_source_pending;
 }
 
 // ---------------------------------------------------------------------------

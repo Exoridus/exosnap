@@ -16,6 +16,7 @@ class GamepadFrameSampler final {
     // this output, not an older pressed-state cache. Invalid scratch is cleared.
     ReadResult Sample(CaptureTime100ns, const SceneItemProperties&, const WebcamPixelRect& content,
                       SpriteLayerSnapshot& prepared_output) noexcept;
+    [[nodiscard]] bool SampleChanged() const noexcept;
 
   private:
     GamepadFrameSampler(const GamepadSpriteSet&, gamepad::HistoryReadView);
@@ -23,6 +24,7 @@ class GamepadFrameSampler final {
     gamepad::HistoryReadView history_;
     std::optional<gamepad::GamepadReading> previous_;
     uint64_t selection_generation_ = 0;
+    bool sample_changed_ = false;
 };
 
 } // namespace exosnap::engine

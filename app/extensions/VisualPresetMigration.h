@@ -10,6 +10,10 @@ namespace exosnap {
 // Creates new identities. Stage the result once and reuse it for validation, comparison and save retries.
 [[nodiscard]] engine::Outcome<VisualSceneConfig> MigrateLegacyVisualConfig(const WebcamSettings&,
                                                                            const GamepadOverlaySettings&);
+// Re-projects legacy controls while retaining the migrated source and item identities.
+[[nodiscard]] engine::Outcome<VisualSceneConfig> ProjectLegacyVisualConfig(const WebcamSettings&,
+                                                                           const GamepadOverlaySettings&,
+                                                                           const VisualSceneConfig& identity_template);
 // These codecs read and write the visual table. Callers must preserve unknown fields outside source settings.
 [[nodiscard]] engine::Outcome<VisualSceneConfig> ReadVisualScene(const toml::table&);
 [[nodiscard]] engine::Outcome<toml::table> WriteVisualScene(const VisualSceneConfig&);

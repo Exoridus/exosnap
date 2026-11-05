@@ -8,6 +8,7 @@
 #include <exosnap/engine/recording_media_types.h>
 #include <exosnap/engine/split_trigger_source.h>
 #include <exosnap/engine/visual_frame.h>
+#include <exosnap/engine/visual_scene_runtime.h>
 
 #include "backend_tuning.h"
 #include "codec_types.h"
@@ -34,10 +35,10 @@ namespace exosnap::engine {
 struct AudioManifest1;
 
 // ---------------------------------------------------------------------------
-// WebcamFrameProvider — injected into RecorderConfig for compositing
+// Compatibility frame adapter for non-recording callers.
 // ---------------------------------------------------------------------------
 
-// Called by VideoThread to pull the latest webcam frame.
+// Supplies snapshots to compatibility adapters outside recorder composition.
 // Implementations must be thread-safe: TryGetFrame is called from VideoThread.
 // The provider must remain alive for the duration of Record().
 
@@ -68,44 +69,6 @@ struct WebcamFrameProvider {
     virtual ~WebcamFrameProvider() = default;
 };
 
-// ---------------------------------------------------------------------------
-// WebcamConfig
-// ---------------------------------------------------------------------------
-
-struct WebcamConfig {
-    bool enabled = false;
-
-    // Not owned — must outlive the recording session.  nullptr = disabled.
-    WebcamFrameProvider* frame_provider = nullptr;
-
-    // Overlay placement as fraction [0,1] of encode frame dimensions.
-    float overlay_x_norm = 0.0f;
-    float overlay_y_norm = 0.0f;
-    float overlay_w_norm = 0.25f;
-    float overlay_h_norm = 0.25f;
-
-    // Horizontal mirror (left/right flip) of the webcam image before compositing.
-    // No vertical flip is performed.  Must match the Record-preview mirror state.
-    bool mirror = false;
-
-    // Uniform overlay opacity [0,1]; 1.0 = fully opaque. Applied to the sprite's
-    // alpha after chroma keying, so keyed edges and overall fade compose correctly.
-    float opacity = 1.0f;
-
-    // Chroma key. chroma_r/g/b hold the resolved active key color (caller
-    // computes this from WebcamChromaKeySettings::active_color() before handing
-    // config to the engine; the engine never needs to know the color mode).
-    bool chroma_key_enabled = false;
-    uint8_t chroma_r = 0;
-    uint8_t chroma_g = 255;
-    uint8_t chroma_b = 0;
-    float chroma_tolerance = 0.40f;
-    float chroma_softness = 0.15f;
-    float chroma_spill_reduction = 0.30f;
-};
-
-// Live-mutable subset of WebcamConfig, updatable while Record() runs.
-// Device/resolution/fps are not here: changing those requires a capture restart.
 struct WebcamOverlayLive {
     bool enabled = false; // allows mid-recording show/hide of the PiP
     float overlay_x_norm = 0.0f;
@@ -128,21 +91,10 @@ struct WebcamOverlayLive {
     bool operator==(const WebcamOverlayLive&) const = default;
 };
 
-// What an overlay update actually put into effect. Returned rather than assumed,
-// because a caller cannot tell the three outcomes apart from the request alone:
-// the session may not be recording, the values may have been clamped on the way
-// in, and only an update that reached the state advances the sequence.
-//
-// `applied` is read back from the session after the store, not copied from the
-// request. A measurement that compared a recording against what was asked for
-// would report a clamp as a defect.
+// Accepted scene projection for legacy automation. The sequence is the accepted
+// ConfigRevision. Repeating unchanged settings can retain the same revision.
 struct AppliedWebcamOverlay {
-    // Advances only on an update that reached the session state. A caller can
-    // therefore tell a second identical request from a dropped one.
     uint64_t sequence = 0;
-    // The performance counter read immediately after the store, in the same
-    // 100 ns units the engine's timestamps use. A lower bound on when the state
-    // was in effect -- not the timestamp of any frame.
     uint64_t applied_qpc_100ns = 0;
     WebcamOverlayLive applied;
 };
@@ -593,13 +545,8 @@ struct RecorderConfig {
     // (coordinates in virtual screen space). Target.kind must be Kind::Monitor.
     std::optional<CaptureRegion> crop_region;
 
-    // Optional webcam overlay composited into the recorded video.
-    WebcamConfig webcam;
-
-    // Sprite overlay layers composited above the webcam, first entry lowest.
-    // Not owned; each must outlive Record(). Null entries are ignored. See
-    // SpriteSourceProvider for the threading contract.
-    std::vector<SpriteSourceProvider*> sprite_sources;
+    // Host data retained by the session until all workers have ended.
+    std::shared_ptr<VisualSceneRuntime> visual_scene;
 
     // Automatic/manual segment splitting. Default Off == single-file recording.
     RecordingSplitSettings split;
@@ -812,15 +759,11 @@ class RecorderSession {
     // The caller owns background journal/media reads and must recheck source identity.
     Outcome<MediaIndexSnapshot> FreezeRecordingMediaIndex(RecordRequestId request_id = kUnscopedRecordRequest);
 
-    // Thread-safe live webcam overlay update. Honoured from the moment
-    // Record(request_id) has taken over the session state. No-op if request_id is
-    // not that recording (as for Stop()) or if the session was started without a
-    // webcam frame provider.
-    // Returns what was put into effect, or nothing when there is no live session
-    // to apply it to. See AppliedWebcamOverlay: the reported state is read back
-    // from the session, so a clamped request reports the clamped value.
-    std::optional<AppliedWebcamOverlay> UpdateWebcamOverlay(const WebcamOverlayLive& overlay,
-                                                            RecordRequestId request_id = kUnscopedRecordRequest);
+    // The host scene last submitted by the compositor. Zero means no scene has reached it.
+    [[nodiscard]] std::optional<ConfigRevision>
+    CompositedVisualSceneRevision(RecordRequestId request_id = kUnscopedRecordRequest) const;
+    [[nodiscard]] std::optional<uint64_t>
+    CompositedVisualSceneSequence(RecordRequestId request_id = kUnscopedRecordRequest) const;
 
     // Register a stats callback invoked approximately every 264 ms from an
     // internal worker thread.  Must be set before calling Record().

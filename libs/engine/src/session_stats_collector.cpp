@@ -229,8 +229,10 @@ void SessionStatsCollector::Run() {
             const DiagnosticsLifecycle lifecycle = m_state.stop_requested.load()    ? DiagnosticsLifecycle::Stopping
                                                    : m_state.pause_requested.load() ? DiagnosticsLifecycle::Paused
                                                                                     : DiagnosticsLifecycle::Recording;
-            const RecordingDiagnosticsSnapshot diagnostics =
+            RecordingDiagnosticsSnapshot diagnostics =
                 m_state.diagnostics.BuildSnapshot(now, stats_copy, lifecycle, elapsed);
+            if (m_state.config.visual_scene)
+                diagnostics.visual_runtime = m_state.config.visual_scene->Counters();
             if (m_state.diagnostics_callback && diag_tick) {
                 m_state.diagnostics_callback(diagnostics);
             }

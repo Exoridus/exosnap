@@ -1,7 +1,6 @@
 #pragma once
 
 #include "models/VideoSettingsModel.h"
-#include "models/WebcamSettings.h"
 
 #include <QRect>
 #include <QRectF>
@@ -10,6 +9,7 @@
 
 #include <exosnap/engine/preview_tap.h>
 #include <exosnap/engine/recorder_session.h>
+#include <exosnap/engine/visual_scene_runtime.h>
 
 #include <cstdint>
 #include <functional>
@@ -32,9 +32,7 @@ struct ReadyFrameSource {
 struct ReadyFrameComposition {
     QRectF normalized_source_rect{0.0, 0.0, 1.0, 1.0};
     VideoSettingsModel video;
-    WebcamSettings webcam;
-    std::shared_ptr<const exosnap::engine::WebcamFrameSnapshot> webcam_frame;
-    std::shared_ptr<const exosnap::engine::SpriteLayerSnapshot> sprites;
+    std::shared_ptr<exosnap::engine::VisualSceneRuntime> visual_runtime;
 };
 
 class ReadyFrameCaptureService final {

@@ -1,8 +1,9 @@
 #pragma once
 
 #include <exosnap/engine/audio_limits.h>
+#include <exosnap/engine/visual_diagnostics.h>
 
-// Live recording-pipeline diagnostics (DIAGNOSTICS-LIVE-PIPELINE-R1).
+// Live recording-pipeline diagnostics.
 //
 // Immutable, UI-free typed telemetry snapshot for the active recording pipeline.
 // Produced by SessionStatsCollector on a worker thread from the per-session
@@ -10,8 +11,7 @@
 // is sourced from the subsystem that owns it; metrics that cannot be measured are
 // marked Unavailable rather than reported as a fake zero.
 //
-// This header intentionally depends only on codec_types.h so that recorder_session.h
-// can include it to declare SetDiagnosticsCallback without creating an include cycle.
+// Transport declarations contain no UI or provider ownership.
 
 #include "codec_types.h"
 
@@ -527,6 +527,12 @@ struct RecordingDiagnosticsSnapshot {
     DiskDiagnostics disk;
     SplitDiagnostics split;
     PreviewTapDiagnostics preview_tap;
+
+    // Host totals are sampled at the existing diagnostics cadence, or at final
+    // freeze. Provider rows are copied separately on the app control thread.
+    std::optional<VisualRuntimeCounters> visual_runtime;
+    std::optional<VisualSamplerCounters> visual_sampler;
+    std::optional<std::vector<VisualSourceDiagnostics>> visual_sources;
 
     // Retained-frame reuse counters (spec section 13)
     uint64_t screen_generation_changes = 0;

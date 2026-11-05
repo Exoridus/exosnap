@@ -7,6 +7,7 @@
 #include <QPointer>
 #include <QString>
 #include <exosnap/engine/recorder_session.h>
+#include <exosnap/engine/visual_scene_runtime.h>
 
 #include <windows.h> // HRESULT / DWORD for ClassifyWebcamReadResult
 
@@ -148,6 +149,9 @@ struct WebcamNativeFormat {
 [[nodiscard]] bool PackWebcamFrame(exosnap::engine::WebcamPixelFormat format, int width, int height,
                                    const uint8_t* scan0, long pitch, std::vector<uint8_t>& out);
 
+[[nodiscard]] bool PackWebcamFrame(engine::WebcamPixelFormat format, int width, int height, const uint8_t* scan0,
+                                   long pitch, std::span<uint8_t> out);
+
 // What one camera offers: its native capture modes and the UVC controls it
 // reports, with their ranges and the state they were in when probed.
 struct WebcamDeviceProbe {
@@ -217,11 +221,20 @@ class WebcamService : public exosnap::engine::WebcamFrameProvider {
     // SetFrameCallback(receiver, cb). Stop() resets the streak state without
     // firing.
     void SetStatusCallback(QObject* receiver, StatusCallback cb);
+    using PublicationStatusCallback = std::function<void(engine::SourceToken, bool ok, QString reason)>;
+    // Carries the token captured before the native operation, even if registration changes meanwhile.
+    void SetPublicationStatusCallback(QObject* receiver, PublicationStatusCallback cb);
 
     // Start capture; stops any existing capture first.
     // device_id: MF symbolic link (from EnumerateDevices). Empty opens no device
     // (see ResolveWebcamDeviceId — callers must resolve a concrete id first).
     bool Start(const std::string& device_id, int width, int height, int fps);
+
+    bool Start(const std::string& device_id, int width, int height, int fps,
+               engine::VisualPublicationWriter publication, engine::SourceToken token);
+
+    // Updates only the current capture incarnation. Older requests cannot relabel frames.
+    bool UpdatePublication(engine::VisualPublicationWriter publication, const engine::SourceToken& token);
 
     void Stop();
 
@@ -241,9 +254,15 @@ class WebcamService : public exosnap::engine::WebcamFrameProvider {
     // Marshals an open-reader status transition to the status callback. Same
     // snapshot-and-post delivery as PostFrame.
     void PostStatus(bool ok, QString reason);
+    void PostStatus(engine::SourceToken, bool ok, QString reason);
 
   private:
-    void ThreadMain(const std::string& device_id, int width, int height, int fps, std::stop_token stop);
+    struct PublicationBinding {
+        engine::VisualPublicationWriter writer;
+        engine::SourceToken token;
+    };
+    void ThreadMain(const std::string& device_id, int width, int height, int fps, std::stop_token stop,
+                    std::shared_ptr<PublicationBinding> binding);
     // Returns the generation the frame was published under.
     uint64_t StoreFrame(const WebcamFrameLayout& layout, const uint8_t* data, size_t size);
     // Body of Stop(); caller must hold control_mutex_.
@@ -267,6 +286,7 @@ class WebcamService : public exosnap::engine::WebcamFrameProvider {
     // Status delivery is always receiver-scoped (no legacy unbound path).
     struct StatusDelivery {
         StatusCallback callback;
+        PublicationStatusCallback publication_callback;
         QPointer<QObject> receiver;
     };
 
@@ -290,6 +310,7 @@ class WebcamService : public exosnap::engine::WebcamFrameProvider {
     std::atomic<uint64_t> controls_generation_{1};
 
     mutable std::mutex frame_mutex_;
+    std::shared_ptr<PublicationBinding> publication_binding_; // guarded by frame_mutex_
     WebcamFrameMailbox frame_mailbox_;
     uint64_t frame_generation_ = 0;
 };

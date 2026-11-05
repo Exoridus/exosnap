@@ -1,4 +1,5 @@
 #include "WebcamService.h"
+#include "../../libs/engine/src/qpc_100ns.h"
 #include "WebcamReadCallback.h"
 
 #include "../diagnostics/StructuredLog.h"
@@ -570,9 +571,22 @@ std::vector<int> RankWebcamNativeFormats(const std::vector<WebcamNativeFormat>& 
 
 bool PackWebcamFrame(exosnap::engine::WebcamPixelFormat format, int width, int height, const uint8_t* scan0, long pitch,
                      std::vector<uint8_t>& out) {
+    const size_t total = engine::WebcamFramePayloadBytes(format, width, height);
+    if (total == 0 || !scan0 || (pitch < 0 && format != engine::WebcamPixelFormat::Bgra))
+        return false;
+    const size_t rows = static_cast<size_t>(height) * (format == engine::WebcamPixelFormat::Nv12 ? 3u : 2u) / 2u;
+    const auto abs_pitch = pitch < 0 ? -static_cast<long long>(pitch) : pitch;
+    if (static_cast<unsigned long long>(abs_pitch) < total / rows)
+        return false;
+    out.resize(total);
+    return PackWebcamFrame(format, width, height, scan0, pitch, std::span<uint8_t>(out));
+}
+
+bool PackWebcamFrame(engine::WebcamPixelFormat format, int width, int height, const uint8_t* scan0, long pitch,
+                     std::span<uint8_t> out) {
     using exosnap::engine::WebcamPixelFormat;
     const size_t total = exosnap::engine::WebcamFramePayloadBytes(format, width, height);
-    if (total == 0 || scan0 == nullptr)
+    if (total == 0 || scan0 == nullptr || out.size() != total)
         return false;
     const size_t row_bytes = static_cast<size_t>(width) * (format == WebcamPixelFormat::Bgra   ? 4u
                                                            : format == WebcamPixelFormat::Yuy2 ? 2u
@@ -583,9 +597,8 @@ bool PackWebcamFrame(exosnap::engine::WebcamPixelFormat format, int width, int h
     if (pitch < 0 && format != WebcamPixelFormat::Bgra)
         return false;
     // NV12's chroma plane: height / 2 rows of `width` interleaved bytes.
-    const int rows = format == WebcamPixelFormat::Nv12 ? height + height / 2 : height;
-    out.resize(total);
-    for (int row = 0; row < rows; ++row) {
+    const size_t rows = static_cast<size_t>(height) * (format == WebcamPixelFormat::Nv12 ? 3u : 2u) / 2u;
+    for (size_t row = 0; row < rows; ++row) {
         std::memcpy(out.data() + static_cast<size_t>(row) * row_bytes, scan0 + static_cast<long long>(row) * pitch,
                     row_bytes);
     }
@@ -861,16 +874,43 @@ void WebcamService::SetStatusCallback(QObject* receiver, StatusCallback cb) {
     status_delivery_ = std::move(delivery);
 }
 
+void WebcamService::SetPublicationStatusCallback(QObject* receiver, PublicationStatusCallback cb) {
+    auto delivery = std::make_shared<StatusDelivery>();
+    delivery->publication_callback = std::move(cb);
+    delivery->receiver = receiver;
+    std::lock_guard lk(delivery_mutex_);
+    status_delivery_ = std::move(delivery);
+}
+
 bool WebcamService::Start(const std::string& device_id, int width, int height, int fps) {
+    return Start(device_id, width, height, fps, {}, {});
+}
+
+bool WebcamService::Start(const std::string& device_id, int width, int height, int fps,
+                          engine::VisualPublicationWriter publication, engine::SourceToken token) {
     std::lock_guard lk(control_mutex_);
     StopLocked();
     running_.store(true);
-    thread_ = std::jthread([this, device_id, width, height, fps](std::stop_token st) {
-        ThreadMain(device_id, width, height, fps, std::move(st));
+    auto binding = std::make_shared<PublicationBinding>(PublicationBinding{std::move(publication), token});
+    {
+        std::lock_guard frame_lock(frame_mutex_);
+        publication_binding_ = binding;
+    }
+    thread_ = std::jthread([this, device_id, width, height, fps, binding](std::stop_token st) {
+        ThreadMain(device_id, width, height, fps, std::move(st), binding);
     });
     return true;
 }
 
+bool WebcamService::UpdatePublication(engine::VisualPublicationWriter publication, const engine::SourceToken& token) {
+    std::lock_guard lock(frame_mutex_);
+    if (!publication || !publication_binding_ || !publication_binding_->writer ||
+        token.address != publication_binding_->token.address || token.request < publication_binding_->token.request)
+        return false;
+    publication_binding_->writer = std::move(publication);
+    publication_binding_->token = token;
+    return true;
+}
 void WebcamService::Stop() {
     std::lock_guard lk(control_mutex_);
     StopLocked();
@@ -894,6 +934,7 @@ void WebcamService::StopLocked() {
                                    {"buffers_created", std::to_string(metrics.buffers_created)}});
         }
         frame_mailbox_.Reset();
+        publication_binding_.reset();
     }
 }
 
@@ -912,10 +953,17 @@ std::shared_ptr<const exosnap::engine::WebcamFrameSnapshot> WebcamService::Snaps
     return frame_mailbox_.Snapshot();
 }
 
-void WebcamService::ThreadMain(const std::string& device_id, int width, int height, int fps, std::stop_token stop) {
+void WebcamService::ThreadMain(const std::string& device_id, int width, int height, int fps, std::stop_token stop,
+                               std::shared_ptr<PublicationBinding> binding) {
+    engine::SourceToken initial_token;
+    {
+        std::lock_guard lock(frame_mutex_);
+        initial_token = binding->token;
+    }
     if (!IsMfPresent()) {
         diagnostics::logEvent(diagnostics::LogSeverity::Warning, "webcam", "webcam.mf_not_present");
         running_.store(false);
+        PostStatus(initial_token, false, QStringLiteral("mf_unavailable"));
         return;
     }
     // Both guards release in reverse declaration order at every exit path of
@@ -927,12 +975,14 @@ void WebcamService::ThreadMain(const std::string& device_id, int width, int heig
     if (!comApartment.usable()) {
         diagnostics::logEvent(diagnostics::LogSeverity::Warning, "webcam", "webcam.com_init_failed");
         running_.store(false);
+        PostStatus(initial_token, false, QStringLiteral("com_init_failed"));
         return;
     }
     exosnap::engine::MfSession mfSession;
     if (!mfSession.usable()) {
         diagnostics::logEvent(diagnostics::LogSeverity::Warning, "webcam", "webcam.mf_startup_failed");
         running_.store(false);
+        PostStatus(initial_token, false, QStringLiteral("mf_startup_failed"));
         return;
     }
 
@@ -955,12 +1005,18 @@ void WebcamService::ThreadMain(const std::string& device_id, int width, int heig
     // 500ms retry, which would spam engine.jsonl. first_open makes the very first
     // successful open of a run a recovery transition too (a harmless ok=true).
     bool open_failure_logged = false;
+    std::optional<engine::SourceToken> failed_token;
     bool first_open = true;
 
     // Outer loop: (re)open the device and drain it; on loss, fall back here to poll
     // a reopen. The last stored frame is NEVER cleared here, so it stays frozen for
     // the whole gap; has_frame_ is reset only by Stop().
     while (!stop.stop_requested()) {
+        engine::SourceToken open_token;
+        {
+            std::lock_guard lock(frame_mutex_);
+            open_token = binding->token;
+        }
         std::string fail_reason;
         auto ctx = OpenReader(device_id, width, height, fps, &fail_reason);
         if (!ctx) {
@@ -969,7 +1025,10 @@ void WebcamService::ThreadMain(const std::string& device_id, int width, int heig
                     diagnostics::LogSeverity::Warning, "webcam", "webcam.open_reader.failed",
                     {{"device_id_empty", device_id.empty() ? "true" : "false"}, {"reason", fail_reason}});
                 open_failure_logged = true;
-                PostStatus(false, QString::fromStdString(fail_reason));
+            }
+            if (failed_token != open_token) {
+                PostStatus(open_token, false, QString::fromStdString(fail_reason));
+                failed_token = open_token;
             }
             // Device not (yet) available: hold whatever frame we have and retry.
             WaitForWebcamReconnect(stop, kReconnectDelay);
@@ -977,6 +1036,7 @@ void WebcamService::ThreadMain(const std::string& device_id, int width, int heig
         }
         const bool recovered = open_failure_logged || first_open;
         open_failure_logged = false;
+        failed_token.reset();
         first_open = false;
         diagnostics::logEvent(
             diagnostics::LogSeverity::Info, "webcam", "webcam.open_reader.succeeded",
@@ -993,6 +1053,49 @@ void WebcamService::ThreadMain(const std::string& device_id, int width, int heig
 
         const WebcamFrameLayout layout{ctx->width, ctx->height, ctx->format, ctx->matrix, ctx->range};
         const size_t expected = exosnap::engine::WebcamFramePayloadBytes(layout.format, layout.width, layout.height);
+        engine::VisualPublicationWriter publication;
+        engine::SourceToken token;
+        {
+            std::lock_guard lock(frame_mutex_);
+            publication = binding->writer;
+            token = binding->token;
+        }
+        bool prepared = !publication || publication.PrepareImage(token, layout).succeeded();
+        if (!prepared)
+            PostStatus(token, false, QStringLiteral("Visual frame storage unavailable"));
+        std::optional<engine::SourceToken> announced_token;
+        const auto publish = [&](const uint8_t* pixels, std::optional<long> pitch) -> uint64_t {
+            if (!prepared)
+                return 0;
+            static const auto frequency = [] {
+                LARGE_INTEGER value{};
+                QueryPerformanceFrequency(&value);
+                return static_cast<uint64_t>(value.QuadPart);
+            }();
+            LARGE_INTEGER now{};
+            QueryPerformanceCounter(&now);
+            engine::VisualFrameStamp stamp{
+                token,
+                ++frame_generation_,
+                engine::CaptureTime100ns{engine::QpcTicksTo100ns(static_cast<uint64_t>(now.QuadPart), frequency)},
+                {}};
+            auto lease = publication.TryBeginCpuFrame(stamp);
+            if (!lease || lease->Layout() != layout)
+                return 0;
+            if (pitch) {
+                if (!PackWebcamFrame(layout.format, layout.width, layout.height, pixels, *pitch, lease->Pixels()))
+                    return 0;
+            } else {
+                std::memcpy(lease->Pixels().data(), pixels, lease->Pixels().size());
+            }
+            if (publication.Publish(std::move(*lease)) != engine::PublishResult::Accepted)
+                return 0;
+            if (announced_token != stamp.token) {
+                announced_token = stamp.token;
+                PostStatus(stamp.token, true, {});
+            }
+            return stamp.sequence;
+        };
         // Only for buffers whose rows are padded; a tightly packed buffer is
         // published straight from the locked memory.
         std::vector<uint8_t> repacked;
@@ -1015,6 +1118,20 @@ void WebcamService::ThreadMain(const std::string& device_id, int width, int heig
         // Inner loop: drain frames until the reader dies or a stop is requested.
         bool reader_lost = false;
         while (!stop.stop_requested() && !reader_lost) {
+            engine::SourceToken current_token;
+            engine::VisualPublicationWriter current_writer;
+            {
+                std::lock_guard lock(frame_mutex_);
+                current_token = binding->token;
+                current_writer = binding->writer;
+            }
+            if (current_token != token || !prepared) {
+                prepared = current_writer.PrepareImage(current_token, layout).succeeded();
+                if (prepared) {
+                    token = current_token;
+                    publication = std::move(current_writer);
+                }
+            }
             // Between reads, on the thread that owns the source, so a control
             // change never races the reader.
             if (const uint64_t wanted = controls_generation_.load(); wanted != applied_controls_generation) {
@@ -1088,7 +1205,9 @@ void WebcamService::ThreadMain(const std::string& device_id, int width, int heig
                                         : static_cast<size_t>(layout.height);
                 const long long abs_pitch = pitch < 0 ? -static_cast<long long>(pitch) : pitch;
                 const bool fits = static_cast<unsigned long long>(abs_pitch) * rows <= length;
-                if (fits && static_cast<size_t>(pitch) * rows == expected && pitch > 0) {
+                if (fits && publication) {
+                    generation = publish(scan0, pitch);
+                } else if (fits && static_cast<size_t>(pitch) * rows == expected && pitch > 0) {
                     generation = StoreFrame(layout, scan0, expected);
                 } else if (fits &&
                            PackWebcamFrame(layout.format, layout.width, layout.height, scan0, pitch, repacked)) {
@@ -1102,7 +1221,7 @@ void WebcamService::ThreadMain(const std::string& device_id, int width, int heig
                 if (FAILED(buf->Lock(&src, &max_length, &current_length)))
                     continue;
                 if (current_length >= expected)
-                    generation = StoreFrame(layout, src, expected);
+                    generation = publication ? publish(src, std::nullopt) : StoreFrame(layout, src, expected);
                 buf->Unlock();
             }
             if (generation != 0)
@@ -1168,12 +1287,18 @@ void WebcamService::PostFrame(uint64_t generation) {
 }
 
 void WebcamService::PostStatus(bool ok, QString reason) {
+    PostStatus({}, ok, std::move(reason));
+}
+
+void WebcamService::PostStatus(engine::SourceToken token, bool ok, QString reason) {
     std::shared_ptr<const StatusDelivery> delivery;
     {
         std::lock_guard lk(delivery_mutex_);
         delivery = status_delivery_;
     }
-    if (!delivery || !delivery->callback)
+    if (!delivery || (!delivery->callback && !delivery->publication_callback))
+        return;
+    if (delivery->publication_callback && token == engine::SourceToken{})
         return;
 
     QObject* target = QCoreApplication::instance();
@@ -1181,12 +1306,15 @@ void WebcamService::PostStatus(bool ok, QString reason) {
         return;
     QMetaObject::invokeMethod(
         target,
-        [delivery, ok, reason = std::move(reason)]() mutable {
+        [delivery, token, ok, reason = std::move(reason)]() mutable {
             // Status delivery is always receiver-scoped: a receiver already gone
             // means there is nothing to deliver to, so drop the transition.
             if (delivery->receiver.isNull())
                 return;
-            delivery->callback(ok, std::move(reason));
+            if (delivery->publication_callback)
+                delivery->publication_callback(token, ok, std::move(reason));
+            else
+                delivery->callback(ok, std::move(reason));
         },
         Qt::QueuedConnection);
 }

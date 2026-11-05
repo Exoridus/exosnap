@@ -32,8 +32,8 @@ struct GamepadSpriteSet {
 
 [[nodiscard]] size_t GamepadLayerQuadCapacity(const GamepadSpriteSet&) noexcept;
 Outcome<std::monostate> PrepareGamepadLayer(const GamepadSpriteSet&, SpriteLayerSnapshot&);
-// Output must have been prepared for these sprites outside the frame loop.
-void FillGamepadLayer(const GamepadSpriteSet&, const gamepad::GamepadState&, SpriteContentRect, float opacity,
+// Output must have been prepared outside the frame loop. Returns whether its quads changed.
+bool FillGamepadLayer(const GamepadSpriteSet&, const gamepad::GamepadState&, SpriteContentRect, float opacity,
                       SpriteLayerSnapshot&) noexcept;
 [[nodiscard]] gamepad::GamepadState GamepadDisplayState(gamepad::GamepadState) noexcept;
 

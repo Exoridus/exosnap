@@ -7,6 +7,7 @@
 
 #include <QByteArray>
 #include <QMetaObject>
+#include <QScopeGuard>
 #include <QSize>
 #include <QStringList>
 #include <QVariantList>
@@ -32,6 +33,21 @@ GamepadOverlay::GamepadOverlay(QObject* parent) : QObject(parent) {
     connect(&raster_, &QTimer::timeout, this, &GamepadOverlay::Rebuild);
 }
 
+GamepadOverlay::~GamepadOverlay() {
+    WaitForVisualControl();
+}
+
+void GamepadOverlay::WaitForVisualControl() {
+    source_demand_ = false;
+    native_enabled_ = false;
+    poll_.stop();
+    raster_.stop();
+    pending_atlas_key_.clear();
+    visual_status_ = {};
+    raster_pool_.clear();
+    raster_pool_.waitForDone();
+    raster_completed_serial_.store(raster_requested_serial_, std::memory_order_release);
+}
 GamepadOverlaySettings GamepadOverlay::Settings() const {
     const std::scoped_lock lock(mutex_);
     return settings_;
@@ -82,22 +98,45 @@ void GamepadOverlay::SetStatus(QString text) {
 }
 
 void GamepadOverlay::Configure(GamepadOverlaySettings settings) {
+    if (!visual_runtime_) {
+        ConfigureBackend(std::move(settings));
+        return;
+    }
     settings = SanitizeGamepadOverlaySettings(std::move(settings));
     const auto previous = Settings();
     if (previous == settings)
+        return;
+    {
+        const std::scoped_lock lock(mutex_);
+        settings_ = settings;
+        ++revision_;
+    }
+    if (native_enabled_ && (previous.width != settings.width || previous.height != settings.height)) {
+        pending_atlas_key_.clear();
+        raster_pool_.clear();
+        raster_.start();
+    }
+    emit settingsChanged();
+}
+
+void GamepadOverlay::ConfigureBackend(GamepadOverlaySettings settings) {
+    settings = SanitizeGamepadOverlaySettings(std::move(settings));
+    const auto previous = Settings();
+    const bool wanted = settings.enabled && (!visual_runtime_ || source_demand_);
+    if (!visual_runtime_ && previous == settings && wanted == native_enabled_)
         return;
     std::shared_ptr<gamepad::GameInputSource> input;
     {
         const std::scoped_lock lock(mutex_);
         input = input_;
     }
-    if (settings.enabled && !input) {
+    if (wanted && !input) {
         std::string error;
         input = gamepad::GameInputSource::Start(error);
         if (!input)
             SetStatus(tr("GameInput unavailable: %1").arg(QString::fromStdString(error)));
     }
-    if (!settings.enabled)
+    if (!wanted)
         input.reset();
     if (input) {
         std::optional<gamepad::DeviceId> id;
@@ -115,9 +154,11 @@ void GamepadOverlay::Configure(GamepadOverlaySettings settings) {
         input_.swap(input);
         ++revision_;
     }
-    if (settings.enabled) {
+    const bool was_running = native_enabled_;
+    native_enabled_ = wanted;
+    if (wanted) {
         poll_.start();
-        if (!previous.enabled || previous.layout != settings.layout || previous.width != settings.width ||
+        if (!was_running || previous.layout != settings.layout || previous.width != settings.width ||
             previous.height != settings.height || !sprites_) {
             pending_atlas_key_.clear();
             raster_pool_.clear();
@@ -129,12 +170,73 @@ void GamepadOverlay::Configure(GamepadOverlaySettings settings) {
         raster_.stop();
         pending_atlas_key_.clear();
         raster_pool_.clear();
-        last_notified_.reset();
+        {
+            const std::scoped_lock lock(mutex_);
+            cached_.reset();
+            last_notified_.reset();
+            sprites_.reset();
+        }
+        atlas_key_.clear();
         SetStatus({});
         emit frameChanged();
     }
     if (previous != settings)
         emit settingsChanged();
+}
+
+GamepadControlHooks GamepadOverlay::CreateControlHooks(std::shared_ptr<engine::VisualSceneRuntime> runtime) {
+    visual_runtime_ = std::move(runtime);
+    ConfigureBackend(Settings());
+    return {[this](engine::SourceToken token, GamepadOverlaySettings source, std::function<void(SourceStatus)> status) {
+                visual_token_ = token;
+                visual_status_ = std::move(status);
+                visual_waiting_ = false;
+                source_demand_ = true;
+                auto desired = Settings();
+                desired.device = std::move(source.device);
+                desired.layout = source.layout;
+                ConfigureBackend(std::move(desired));
+                PublishVisualData();
+            },
+            [this] {
+                source_demand_ = false;
+                ConfigureBackend(Settings());
+                visual_status_ = {};
+                published_sprites_ = nullptr;
+                const auto serial = ++raster_requested_serial_;
+                raster_pool_.start([this, serial] {
+                    raster_completed_serial_.store(serial, std::memory_order_release);
+                    QMetaObject::invokeMethod(this, [this] { emit visualControlSettled(); }, Qt::QueuedConnection);
+                });
+            },
+            [this] {
+                return !native_enabled_ &&
+                       raster_completed_serial_.load(std::memory_order_acquire) == raster_requested_serial_;
+            }};
+}
+
+void GamepadOverlay::PublishVisualData() {
+    if (!visual_runtime_ || !source_demand_ || !visual_status_)
+        return;
+    if (published_token_ == visual_token_ && published_sprites_ == sprites_.get())
+        return;
+    if (!input_ || !sprites_ || !pending_atlas_key_.isEmpty() || raster_.isActive()) {
+        if (!visual_waiting_) {
+            visual_waiting_ = true;
+            visual_status_({visual_token_, SourcePhase::Waiting, {}});
+        }
+        return;
+    }
+    auto staged = engine::StageGamepadData(*visual_runtime_, visual_token_, sprites_, input_->HistoryView());
+    if (staged.succeeded()) {
+        published_token_ = visual_token_;
+        published_sprites_ = sprites_.get();
+        visual_waiting_ = false;
+        visual_status_({visual_token_, SourcePhase::Ready, {}});
+    } else if (!visual_waiting_) {
+        visual_waiting_ = true;
+        visual_status_({visual_token_, SourcePhase::Waiting, *staged.error()});
+    }
 }
 
 void GamepadOverlay::setEnabled(bool value) {
@@ -183,7 +285,7 @@ void GamepadOverlay::setContentSize(QSize size) {
         content_height_ = size.height();
         ++revision_;
     }
-    if (enabled()) {
+    if (native_enabled_) {
         pending_atlas_key_.clear();
         raster_pool_.clear();
         raster_.start();
@@ -192,7 +294,7 @@ void GamepadOverlay::setContentSize(QSize size) {
 
 void GamepadOverlay::Rebuild() {
     const auto settings = Settings();
-    if (!settings.enabled)
+    if (!native_enabled_)
         return;
     const int layout = settings.layout < 0 ? automatic_layout_ : settings.layout;
     const QString file = QString::fromLatin1(kGamepadOverlayArtworkIds[layout].data());
@@ -203,25 +305,39 @@ void GamepadOverlay::Rebuild() {
     pending_atlas_key_ = key;
     raster_pool_.clear();
     const QString path = QStringLiteral(":/gamepad/controllers/") + file + QStringLiteral("/mapping.json");
-    raster_pool_.start([this, key, path, width]() {
+    const auto token = visual_token_;
+    const auto serial = ++raster_requested_serial_;
+    raster_pool_.start([this, key, path, width, token, serial]() {
+        const auto settled = qScopeGuard([this, serial] {
+            raster_completed_serial_.store(serial, std::memory_order_release);
+            QMetaObject::invokeMethod(this, [this] { emit visualControlSettled(); }, Qt::QueuedConnection);
+        });
         QString error;
         auto sprites = RasterizeGamepad(path, width, false, false, error);
         QMetaObject::invokeMethod(
             this,
-            [this, key, sprites = std::move(sprites), error = std::move(error)]() mutable {
-                if (pending_atlas_key_ != key)
+            [this, key, token, sprites = std::move(sprites), error = std::move(error)]() mutable {
+                if (!native_enabled_ || pending_atlas_key_ != key)
                     return;
                 pending_atlas_key_.clear();
+                if (visual_runtime_ && token != visual_token_) {
+                    if (native_enabled_)
+                        raster_.start(0);
+                    return;
+                }
                 if (!sprites) {
                     SetStatus(error);
                     return;
                 }
                 {
                     const std::scoped_lock lock(mutex_);
+                    cached_.reset();
+                    last_notified_.reset();
                     sprites_ = std::move(sprites);
                     ++revision_;
                 }
                 atlas_key_ = key;
+                PublishVisualData();
                 emit frameChanged();
             },
             Qt::QueuedConnection);
@@ -229,6 +345,7 @@ void GamepadOverlay::Rebuild() {
 }
 
 void GamepadOverlay::Poll() {
+    PublishVisualData();
     std::shared_ptr<gamepad::GameInputSource> input;
     {
         const std::scoped_lock lock(mutex_);
@@ -282,6 +399,15 @@ void GamepadOverlay::Poll() {
     if (devices_ != options) {
         devices_ = std::move(options);
         emit devicesChanged();
+    }
+    if (visual_runtime_) {
+        const auto state = reading && reading->connected ? DisplayState(reading->state) : gamepad::GamepadState{};
+        if (state != cached_state_ || cached_revision_ != revision_) {
+            cached_state_ = state;
+            cached_revision_ = revision_;
+            emit frameChanged();
+        }
+        return;
     }
     const auto next = PreviewSnapshot(gamepad::GameInputSource::NowCapture100ns());
     const bool changed = engine::SpriteLayerChanged(last_notified_.get(), next.get());

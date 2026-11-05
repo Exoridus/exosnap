@@ -7,6 +7,7 @@
 
 #include <QCoreApplication>
 #include <QDir>
+#include <QEvent>
 #include <QFileInfo>
 #include <QImage>
 #include <QKeySequence>
@@ -341,3 +342,51 @@ TEST(CaptureFrameVisualTest, ScenariosDoNotPersistFiles) {
 } // namespace
 } // namespace exosnap::visual
 #endif
+
+namespace exosnap {
+namespace {
+
+TEST_F(CaptureFrameTest, StaticVisualPublicationUsesQueuedControlWorkAndPublishesTheLatestToken) {
+    RecordingCoordinator coordinator;
+    QObject receiver;
+    coordinator.UseStaticVerificationWebcam(2, 2);
+    engine::VisualSceneRuntime runtime{engine::VisualBudgetPolicy{}};
+    engine::VisualAddress address;
+    address.source.bytes.back() = 1;
+    address.runtime.value = 1;
+    const engine::SourceToken first{address, engine::SourceRequestRevision{1}};
+    const engine::SourceToken latest{address, engine::SourceRequestRevision{2}};
+    auto created = runtime.CreateSource(address);
+    ASSERT_TRUE(created.succeeded());
+    auto writer = *created.value();
+    auto registered = runtime.RegisterConsumer();
+    ASSERT_TRUE(registered.succeeded());
+    std::vector<SourceStatus> statuses;
+    auto hooks = coordinator.CreateWebcamControlHooks(
+        &receiver, [](const toml::table&) -> engine::Outcome<WebcamSettings> { return WebcamSettings{}; }, [] {});
+    const auto observe = [&](SourceStatus status) { statuses.push_back(std::move(status)); };
+
+    runtime.SetRequest(first, true, engine::HoldPolicy::ClearAccepted);
+    hooks.request_verification(first, writer, observe);
+    runtime.SetRequest(latest, true, engine::HoldPolicy::ClearAccepted);
+    hooks.request_verification(latest, writer, observe);
+    EXPECT_TRUE(statuses.empty());
+    coordinator.WaitForVisualControl();
+    EXPECT_TRUE(statuses.empty());
+    QCoreApplication::sendPostedEvents(&receiver, QEvent::MetaCall);
+
+    ASSERT_FALSE(statuses.empty());
+    EXPECT_EQ(statuses.back().token, latest);
+    EXPECT_EQ(statuses.back().phase, SourcePhase::Ready);
+    EXPECT_TRUE(hooks.is_quiescent());
+    engine::VisualReadLease image;
+    ASSERT_EQ(runtime.TryReadImage(*registered.value(), address, image), engine::ReadResult::Updated);
+    EXPECT_EQ(image.Stamp().token, latest);
+    EXPECT_EQ(image.Image().width, 2);
+    EXPECT_EQ(image.Image().height, 2);
+    image.Reset();
+    runtime.UnregisterConsumer(*registered.value());
+}
+
+} // namespace
+} // namespace exosnap

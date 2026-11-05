@@ -36,15 +36,21 @@ Keeping duplication open can affect desktop presentation paths on some systems. 
 
 The normal mid-session duplication reopen has no give-up deadline. Waiting does not recover lost pictures, but it permits audio and a stable held picture to continue. Runtime reopening uses its runtime display identifier. The stronger persisted display matcher described in [configuration](configuration-and-persistence.md#display-identity) is a separate concern; it must not be advertised as an absolute guarantee of physical identity during every topology mutation.
 
-During capture-loss recovery, hold the composed picture. On a static healthy display or window, observe the immutable webcam snapshot before comparing visual keys. Recompose only when a visual generation changes. Upload camera pixels only for a new generation or a replaced texture. The camera mailbox reuses unreferenced payload buffers and preserves snapshots still held by a consumer.
+During capture-loss recovery, hold the composed picture. On a healthy static display or window, sample the host visual scene before comparing visual keys. Both CFR and VFR can recompose an overlay change over the retained desktop at the existing output cadence. PTS remains monotonic. A capture-recovery hold never touches invalidated display resources to update an overlay.
 
 ## Overlay composition
 
-The recording compositor draws in source coordinates, bottom to top: desktop, cursor, webcam, then sprite layers in the order of `RecorderConfig::sprite_sources`. All overlays share one overlay shader, so they receive the same sRGB handling, straight-alpha blend and, on the native HDR path, the same overlay reference white.
+The recording compositor draws in source coordinates: desktop, cursor, then the accepted host scene items in their declared order. CPU images and gamepad atlases use the existing overlay shader, sRGB handling, straight-alpha blending and HDR overlay reference white. Shared placement, opacity, output visibility and chroma properties apply once at the item boundary.
 
-A sprite layer is an atlas plus quads, defined in [overlay sprites](../../libs/engine/include/exosnap/engine/overlay_sprites.h). Adding an overlay of this kind needs a new source, not new compositor logic. The video thread asks every source for a snapshot once per composed frame, passing that frame's time on the QPC clock in 100 ns units. A source answers from its own published state without blocking, Qt or D3D. The snapshot carries an immutable straight-alpha BGRA atlas with a generation, and quads with an atlas source rectangle, a destination normalized to the content rectangle and an opacity. Destinations are clipped at the content edge. The atlas is uploaded only when its generation changes.
+`RecorderConfig::visual_scene` retains passive host data through worker shutdown. The recording thread never calls an application provider or QObject to obtain frame content. Each consumer prepares its own scene lease, image cursors and gamepad scratch outside frame acquisition and composition. Sampling makes one try-lock attempt at each data boundary. A busy scene/image boundary defers the whole new composition and retains the last completed output. A revoked binding removes that contribution after a successful read; contention never authorizes an old GPU cache. Frame release drops pins without reclaiming payloads. Control-side collection owns reclamation and resource-budget release.
 
-A changed sprite snapshot (atlas generation or size, or the quad list) advances the sprite generation in the visual frame key. On a static desktop it recomposes the held screen exactly like a camera or cursor change. A sprite overlay therefore keeps moving over a still picture instead of freezing in the duplicated frame.
+A same-camera live control change retains the previously accepted image with its original request stamp until a new image arrives. Device or capture-mode changes clear accepted content. New requests never relabel old pixels or admit old producer callbacks.
+
+CPU image storage admits three frame slots and at most two resource generations by default. A configured byte ceiling includes staged, active and retiring payloads and sampler scratch. Image upload caches identify the source incarnation, request, resource and accepted publication sequence. A repeated sequence from a different incarnation is a new image. Cache maintenance removes absent sources outside the frame path and invalidates the corresponding reader cursor before an image can be reused.
+
+A sprite layer is an immutable atlas plus prepared quads, defined in [overlay sprites](../../libs/engine/include/exosnap/engine/overlay_sprites.h). Each item has independent scratch and sampler fallback state, even when items share the same source. Changes to atlas identity, quads, masks, placement or opacity dirty the existing visual key. Stick movement does not copy or re-upload atlas pixels.
+
+The existing recording diagnostics cadence samples runtime-lifetime CPU publication and host try-lock counters. Recording-session history counters distinguish attempted samples, busy reads and missing input. The GUI copies provider status and exact source/request identities from the accepted scene into diagnostics without exposing provider ownership to the engine. Missing observations remain unavailable; an observed zero is reported as zero. The final session snapshot retains sampled runtime totals.
 
 ### Gamepad source and artwork
 
@@ -88,10 +94,7 @@ It neither erases the framebuffer background nor masks other control quads. Caps
 Stick movement changes quad/mask destinations, without copying, rasterizing or uploading atlas pixels.
 Button, trigger, opacity and placement changes also reuse the atlas. Unbound controls remain static artwork.
 
-The GUI notification snapshot is separate from the recording consumer's snapshot cache, so consuming a
-recording frame cannot suppress an idle preview update. The Quick scene-graph node, still-frame capture and
-recording all use `GpuCompositor::DrawSpriteLayer`. The preview draws sprites after the webcam into its clean
-private copy. An already-composited recording tap is never composed a second time.
+The GUI compares input state only to request preview updates. Recording and preview consumers sample retained `HistoryReadView` data with the existing Qt-free gamepad math and canonical masks. A history view owns data independently of the GameInput driver. The sample point is the CFR output slot or the existing VFR timestamp. A new request recreates sampler fallback state, preventing a prior device's pose from surviving an identity change. Busy or missing history uses only the current binding's safe historical or neutral output.
 
 The x64 GameInputRedist.dll and GameInputRawInputProxy.exe ship beside the executable through the common CMake
 install tree used by both package formats. Runtime terms, Microsoft notices and the MIT loader notice ship together.
@@ -119,7 +122,7 @@ An NT shared handle and a keyed mutex transfer access between D3D11 devices. The
 
 The scene-graph node allocates on source adoption or replacement, not on every frame. Native D3D commands are bracketed by `beginExternalCommands()` and `endExternalCommands()`. Conversion establishes the state it needs rather than inheriting Qt scissor or blend state. The imported display texture uses the public, platform-specific Qt D3D11 native interface. Qt upgrades require focused bridge verification.
 
-An idle hub source carries no overlay. The Quick render node composites the webcam into a composite of its private copy with the recording's GpuCompositor, using the same placement mapping into the content rectangle, so the idle picture is the pre-encode picture. The private copy stays clean: a camera-only update re-composes from it without a new desktop frame and without touching the transport or its presentation debt. A recording-tap source is marked as already composited and is presented as delivered.
+An idle hub source carries no overlay. The Quick render node consumes the host scene and composites over its retained clean desktop copy using the recording compositor and content mapping. A source-only update can recompose without acquiring another desktop frame or consuming transport presentation debt. Idle preview includes output-hidden editing items at reduced opacity. A recording tap already contains output-visible items, so preview samples only hidden editing items and otherwise bypasses the extra compositor pass. A camera drag supplies a preview-only draft rectangle until the existing release gesture commits the item edit. Ready-frame capture uses recording visibility and the accepted item geometry, excluding the uncommitted draft.
 
 Source generations reject stale queued callbacks after replacement or stop. The GUI-side adapter retains a duplicate-capable handle; scene-graph reinitialization can rebuild consumers without requiring the capture source to recreate its texture. Readiness follows successful conversion/presentation, not just receipt of a handle. A cross-adapter open failure does not falsely switch preview to the recording tap; independent preview may remain, and must not be described as unconditional WYSIWYG.
 

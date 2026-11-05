@@ -449,6 +449,7 @@ class PipelineDiagnosticsAggregator {
     // Retained-frame reuse (CV-RETAIN-001..004, CV-CURSOR-001..003, CV-PACING-001).
     void OnScreenGenerationChanged() noexcept;
     void OnWebcamGenerationChanged() noexcept;
+    void OnVisualHistorySample(bool busy, bool missing) noexcept;
     void OnCursorOnlyCaptureEventIgnored() noexcept;   // Ignorable-classified OD acquire
     void OnPhaseRingCursorOnlyEventIgnored() noexcept; // CursorOnly-classified: no ring entry made
     void OnFullComposition() noexcept;                 // a real composite+convert ran
@@ -629,6 +630,7 @@ class PipelineDiagnosticsAggregator {
     // Retained-frame reuse counters
     uint64_t screen_generation_changes_ = 0;
     uint64_t webcam_generation_changes_ = 0;
+    std::optional<VisualSamplerCounters> visual_sampler_;
     uint64_t cursor_only_capture_events_ignored_ = 0;
     uint64_t phase_ring_cursor_only_events_ignored_ = 0;
     uint64_t full_compositions_ = 0;

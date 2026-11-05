@@ -90,9 +90,10 @@ namespace exosnap::quick {
 // last-value slot, so a frame that was taken and then failed downstream is just
 // as unavailable to any later render as one that was presented.
 enum class PreviewConsumeOutcome {
-    Missed,         // the acquire did not succeed; the frame is still in the slot
-    TakenButFailed, // acquired and released, but the frame could not be converted
-    Presented,      // acquired, converted, on screen
+    Missed,           // the acquire did not succeed; the frame is still in the slot
+    TakenButFailed,   // acquired and released, but the frame could not be converted
+    TakenButDeferred, // retained locally while visual composition is contended
+    Presented,        // acquired, converted, on screen
 };
 
 [[nodiscard]] constexpr bool SettlesPresentationDebt(PreviewConsumeOutcome outcome) noexcept {

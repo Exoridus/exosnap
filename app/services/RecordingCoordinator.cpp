@@ -8,6 +8,7 @@
 
 #include "../../libs/engine/src/loopback_meter_service.h"
 #include "../../libs/engine/src/mic_meter_service.h"
+#include "../../libs/engine/src/qpc_100ns.h"
 
 #include <exosnap/engine/audio_input_device.h>
 #include <exosnap/engine/audio_media_manifest.h>
@@ -35,6 +36,7 @@
 #include <QMetaObject>
 #include <QRegularExpression>
 #include <QSaveFile>
+#include <QScopeGuard>
 #include <QUuid>
 
 #include <algorithm>
@@ -129,29 +131,6 @@ static std::optional<std::filesystem::path> DeriveSegmentPathLogged(const std::f
         return std::nullopt;
     }
     return result.path;
-}
-
-static exosnap::engine::WebcamOverlayLive ToLiveWebcamOverlay(const WebcamSettings& settings) {
-    const WebcamSettings sanitized = SanitizeWebcamSettings(settings);
-    exosnap::engine::WebcamOverlayLive overlay;
-    overlay.enabled = sanitized.enabled;
-    overlay.overlay_x_norm = sanitized.overlay.x_norm;
-    overlay.overlay_y_norm = sanitized.overlay.y_norm;
-    overlay.overlay_w_norm = sanitized.overlay.w_norm;
-    overlay.overlay_h_norm = sanitized.overlay.h_norm;
-    overlay.mirror = sanitized.mirror;
-    overlay.opacity = sanitized.output_visible ? sanitized.opacity : 0.0f;
-    overlay.chroma_key_enabled = sanitized.chroma_key.enabled;
-    {
-        const auto ac = sanitized.chroma_key.active_color();
-        overlay.chroma_r = ac.r;
-        overlay.chroma_g = ac.g;
-        overlay.chroma_b = ac.b;
-    }
-    overlay.chroma_tolerance = sanitized.chroma_key.tolerance;
-    overlay.chroma_softness = sanitized.chroma_key.softness;
-    overlay.chroma_spill_reduction = sanitized.chroma_key.spill_reduction;
-    return overlay;
 }
 
 static FilenameTargetContext BuildFilenameContextFromTarget(const exosnap::engine::CaptureTarget& target) {
@@ -343,6 +322,7 @@ RecordingCoordinator::RecordingCoordinator()
       app_meter_service_(std::make_unique<exosnap::engine::LoopbackMeterService>()) {
     // One screenshot write at a time — see the snapshot_pool_ declaration.
     snapshot_pool_.setMaxThreadCount(1);
+    webcam_control_pool_.setMaxThreadCount(1);
     if constexpr (product::kRecordingClipsAvailable)
         clip_jobs_ = std::make_unique<RecordingClipJobs>(
             recording_artifacts_, [this](const RecordingClipJobSnapshot&) { PostClipJobsChanged(); },
@@ -443,6 +423,11 @@ RecordingCoordinator::~RecordingCoordinator() {
     if (clip_jobs_)
         clip_jobs_->Shutdown();
     snapshot_pool_.waitForDone();
+    webcam_control_pool_.clear();
+    webcam_control_pool_.waitForDone();
+    webcam_service_.SetStatusCallback(nullptr, {});
+    webcam_service_.SetPublicationStatusCallback(nullptr, {});
+    webcam_service_.Stop();
 }
 
 void RecordingCoordinator::SetRecoveryManifestStore(RecoveryManifestStore* store) {
@@ -843,75 +828,202 @@ void RecordingCoordinator::UseStaticVerificationWebcam(int width, int height) {
     // Applied at once, not at the next state change: whatever asked for the
     // device before this call must not keep it open alongside the source that
     // replaced it.
-    SyncWebcamService(/*force_restart=*/false);
+    SyncVisualDemand();
 }
 
 QString RecordingCoordinator::VerificationWebcamSourceName() const {
     return static_webcam_source_ ? QStringLiteral("static-verification") : QString();
 }
 
-std::optional<exosnap::engine::AppliedWebcamOverlay>
-RecordingCoordinator::SetWebcamSettings(const WebcamSettings& settings) {
-    const WebcamSettings sanitized = SanitizeWebcamSettings(settings);
-    const bool device_changed = sanitized.device_id != webcam_settings_.device_id;
-    const bool res_changed = sanitized.width != webcam_settings_.width || sanitized.height != webcam_settings_.height;
-    const bool fps_changed = sanitized.fps != webcam_settings_.fps;
-    webcam_settings_ = sanitized;
-    // Image controls change live, recording or not; they need no reopen.
-    webcam_service_.SetControls(webcam_settings_.controls);
-
-    const bool recording = is_recording_.load();
-    std::optional<exosnap::engine::AppliedWebcamOverlay> applied;
-    if (recording) {
-        applied = session_.UpdateWebcamOverlay(ToLiveWebcamOverlay(webcam_settings_), record_request_.load());
-    }
-
-    // A device/resolution/fps change requires re-opening the capture, so do not
-    // restart the webcam device mid-recording — nor mid-prepare, where the worker
-    // owns the device and SyncWebcamService early-returns anyway. Live overlay
-    // fields are pushed above and enable/disable is handled by SyncWebcamService.
-    const bool session_owns_device = recording || prepare_in_flight_.load();
-    SyncWebcamService((device_changed || res_changed || fps_changed) && !session_owns_device);
-    return applied;
+void RecordingCoordinator::QueueWebcamOperation(QObject* receiver, std::function<void()> operation,
+                                                std::function<void()> on_control_settled) {
+    const auto serial = ++webcam_requested_serial_;
+    webcam_control_pool_.clear();
+    webcam_control_pool_.start(
+        [this, receiver, serial, operation = std::move(operation), settled = std::move(on_control_settled)] {
+            const auto completion = qScopeGuard([this, receiver, serial, &settled] {
+                webcam_completed_serial_.store(serial, std::memory_order_release);
+                if (settled)
+                    QMetaObject::invokeMethod(receiver, settled, Qt::QueuedConnection);
+            });
+            operation();
+        });
 }
 
+void RecordingCoordinator::QueueWebcamRequest(QObject* receiver, engine::SourceToken token, WebcamSettings settings,
+                                              engine::VisualPublicationWriter writer,
+                                              std::function<void(SourceStatus)> post_status, bool restart,
+                                              std::function<void()> on_control_settled) {
+    // The destructor joins this pool before destroying the native service.
+    QueueWebcamOperation(
+        receiver,
+        [this, receiver, token, settings = std::move(settings), writer = std::move(writer),
+         post_status = std::move(post_status), restart]() mutable {
+            webcam_service_.SetControls(settings.controls);
+            webcam_service_.SetPublicationStatusCallback(
+                receiver, [post_status](engine::SourceToken event_token, bool ok, const QString& reason) {
+                    SourceStatus status{event_token, ok ? SourcePhase::Ready : SourcePhase::Waiting, {}};
+                    if (!ok)
+                        status.reason = engine::EngineError{.code = engine::EngineErrorCode::UnavailableSource,
+                                                            .context = reason.toStdString()};
+                    post_status(std::move(status));
+                });
+            const bool same_mode = webcam_started_mode_ && webcam_started_mode_->device_id == settings.device_id &&
+                                   webcam_started_mode_->width == settings.width &&
+                                   webcam_started_mode_->height == settings.height &&
+                                   webcam_started_mode_->fps == settings.fps;
+            if (!restart && same_mode && webcam_service_.IsRunning() &&
+                webcam_service_.UpdatePublication(writer, token))
+                return;
+            webcam_service_.Stop();
+            webcam_started_mode_.reset();
+            if (webcam_service_.Start(settings.device_id, settings.width, settings.height, settings.fps,
+                                      std::move(writer), token)) {
+                webcam_started_mode_ = settings;
+            } else {
+                QMetaObject::invokeMethod(
+                    receiver,
+                    [token, post_status] {
+                        post_status({token, SourcePhase::Failed,
+                                     engine::EngineError{.code = engine::EngineErrorCode::UnavailableSource,
+                                                         .context = "Webcam capture could not start"}});
+                    },
+                    Qt::QueuedConnection);
+            }
+        },
+        std::move(on_control_settled));
+}
+
+WebcamControlHooks RecordingCoordinator::CreateWebcamControlHooks(
+    QObject* receiver, std::function<engine::Outcome<WebcamSettings>(const toml::table&)> project_settings,
+    std::function<void()> on_control_settled) {
+    WebcamControlHooks hooks;
+    hooks.project_settings = std::move(project_settings);
+    hooks.request_start = [this, receiver, on_control_settled](
+                              const engine::SourceToken& token, WebcamSettings settings,
+                              engine::VisualPublicationWriter writer, std::function<void(SourceStatus)> post_status) {
+        webcam_source_status_ = post_status;
+        QueueWebcamRequest(receiver, token, std::move(settings), std::move(writer), std::move(post_status), true,
+                           on_control_settled);
+    };
+    hooks.request_update = [this, receiver, on_control_settled](const engine::SourceToken& token,
+                                                                WebcamSettings settings,
+                                                                engine::VisualPublicationWriter writer) {
+        QueueWebcamRequest(receiver, token, std::move(settings), std::move(writer), webcam_source_status_, false,
+                           on_control_settled);
+    };
+    hooks.request_stop = [this, receiver, on_control_settled] {
+        QueueWebcamOperation(
+            receiver,
+            [this] {
+                webcam_service_.Stop();
+                webcam_started_mode_.reset();
+            },
+            on_control_settled);
+    };
+    hooks.is_quiescent = [this] {
+        return webcam_completed_serial_.load(std::memory_order_acquire) == webcam_requested_serial_;
+    };
+    hooks.has_verification_source = [this] { return static_webcam_source_ != nullptr; };
+    hooks.session_owns_device = [this] { return VisualSessionOwnsDevice(); };
+    hooks.request_verification = [this, receiver, on_control_settled](engine::SourceToken token,
+                                                                      engine::VisualPublicationWriter writer,
+                                                                      std::function<void(SourceStatus)> post_status) {
+        const auto frame = static_webcam_source_->Snapshot();
+        QueueWebcamOperation(
+            receiver,
+            [this, receiver, token, writer = std::move(writer), post_status = std::move(post_status), frame]() mutable {
+                // Superseding a queued stop must still release the physical camera.
+                webcam_service_.Stop();
+                webcam_started_mode_.reset();
+                const auto report = [&](SourceStatus status) {
+                    QMetaObject::invokeMethod(
+                        receiver,
+                        [post_status, status = std::move(status)]() mutable { post_status(std::move(status)); },
+                        Qt::QueuedConnection);
+                };
+                const engine::CpuImageLayout layout{frame->width, frame->height, frame->format, frame->matrix,
+                                                    frame->range};
+                const auto prepared = writer.PrepareImage(token, layout);
+                if (!prepared.succeeded()) {
+                    report({token, SourcePhase::Failed, *prepared.error()});
+                    return;
+                }
+                constexpr int kPublishAttempts = 8;
+                for (int attempt = 0; attempt < kPublishAttempts; ++attempt) {
+                    LARGE_INTEGER counter{}, frequency{};
+                    QueryPerformanceCounter(&counter);
+                    QueryPerformanceFrequency(&frequency);
+                    const engine::CaptureTime100ns received{engine::QpcTicksTo100ns(
+                        static_cast<uint64_t>(counter.QuadPart), static_cast<uint64_t>(frequency.QuadPart))};
+                    auto lease = writer.TryBeginCpuFrame({token, frame->generation, received, {}});
+                    if (lease && lease->Layout() == layout) {
+                        std::copy(frame->pixels.begin(), frame->pixels.end(), lease->Pixels().begin());
+                        const auto result = writer.Publish(std::move(*lease));
+                        if (result == engine::PublishResult::Accepted) {
+                            report({token, SourcePhase::Ready, {}});
+                            return;
+                        }
+                        if (result != engine::PublishResult::NoFreeSlot)
+                            break;
+                    }
+                    lease.reset();
+                    if (attempt + 1 < kPublishAttempts)
+                        std::this_thread::sleep_for(std::chrono::milliseconds(1));
+                }
+                report({token, SourcePhase::Waiting, {}});
+            },
+            on_control_settled);
+    };
+    return hooks;
+}
+
+std::optional<exosnap::engine::AppliedWebcamOverlay>
+RecordingCoordinator::SetWebcamSettings(const WebcamSettings& settings) {
+    webcam_settings_ = SanitizeWebcamSettings(settings);
+    SyncVisualDemand();
+    return is_recording_.load() && visual_overlay_acknowledgement_ ? visual_overlay_acknowledgement_() : std::nullopt;
+}
 void RecordingCoordinator::SetWebcamPreviewActive(bool active) {
     webcam_preview_active_ = active;
-    SyncWebcamService(false);
+    SyncVisualDemand();
 }
 
 void RecordingCoordinator::SetWebcamSettingsPreviewActive(bool active) {
     webcam_settings_preview_active_ = active;
-    SyncWebcamService(false);
+    SyncVisualDemand();
 }
 
-void RecordingCoordinator::SyncWebcamService(bool force_restart) {
-    // Device ownership across the prepare boundary: while a prepare is in flight the
-    // worker is opening/holding the shared webcam device (RecordingCoordinator's
-    // preparation worker). The UI thread must not touch webcam_service_ in that
-    // window — a queued Preparing state-callback would otherwise Stop() the device
-    // the worker just opened (is_recording_ is still false at that instant). The
-    // worker itself calls webcam_service_ directly, never through this method.
-    if (prepare_in_flight_.load())
-        return;
-    // Recording (or an in-flight prepare) always owns the device; while idle the
-    // capture runs only when the Record preview asked for it (live Ready PiP) and
-    // webcam is enabled. The verification source, when present, replaces the
-    // device outright -- see ShouldRunWebcamDevice.
-    const bool want_running = ShouldRunWebcamDevice(
-        static_webcam_source_ != nullptr, webcam_settings_.enabled, !webcam_settings_.device_id.empty(),
-        is_recording_.load(), prepare_in_flight_.load(), webcam_preview_active_, webcam_settings_preview_active_);
-    if (!want_running) {
-        webcam_service_.Stop();
-        return;
-    }
-    if (force_restart || !webcam_service_.IsRunning()) {
-        webcam_service_.Stop();
-        webcam_service_.Start(webcam_settings_.device_id, webcam_settings_.width, webcam_settings_.height,
-                              webcam_settings_.fps);
-    }
+void RecordingCoordinator::SetVisualRuntime(std::shared_ptr<engine::VisualSceneRuntime> runtime,
+                                            std::function<void(uint8_t)> on_demand_changed) {
+    visual_runtime_ = std::move(runtime);
+    on_visual_demand_changed_ = std::move(on_demand_changed);
+    SyncVisualDemand();
 }
 
+bool RecordingCoordinator::VisualSessionOwnsDevice() const noexcept {
+    const auto state = state_.load();
+    return prepare_in_flight_.load() || is_recording_.load() || state == UiRecordingState::Preparing ||
+           state == UiRecordingState::Recording || state == UiRecordingState::Paused ||
+           state == UiRecordingState::Stopping || state == UiRecordingState::Saving;
+}
+
+void RecordingCoordinator::WaitForVisualControl() {
+    webcam_control_pool_.waitForDone();
+}
+
+void RecordingCoordinator::SyncVisualDemand() {
+    if (!on_visual_demand_changed_)
+        return;
+    uint8_t demand = 0;
+    if (webcam_preview_active_)
+        demand |= static_cast<uint8_t>(VisualConsumer::RecordPreview);
+    if (webcam_settings_preview_active_)
+        demand |= static_cast<uint8_t>(VisualConsumer::SettingsPreview);
+    if (VisualSessionOwnsDevice())
+        demand |= static_cast<uint8_t>(VisualConsumer::Recording);
+    on_visual_demand_changed_(demand);
+}
 void RecordingCoordinator::SetWebcamFrameCallback(WebcamService::FrameCallback cb) {
     webcam_service_.SetFrameCallback(std::move(cb));
 }
@@ -982,7 +1094,7 @@ bool RecordingCoordinator::StartRecording(const exosnap::engine::CaptureTarget& 
     ctx.split_settings = split_settings_;
     ctx.video_settings = video_settings_;
     ctx.resolved_encoder_device = resolved_encoder_device_;
-    ctx.webcam_settings = webcam_settings_;
+    ctx.visual_scene = visual_runtime_;
     ctx.resolved_user_config = resolved_user_config_;
     ctx.caps = caps_;
     ctx.encoder_caps = encoder_caps_;
@@ -1009,23 +1121,8 @@ void RecordingCoordinator::PrepareAndRecordThreadProc(const PrepareContext& ctx)
     const exosnap::engine::CaptureTarget& target = ctx.target;
     const std::filesystem::path effective_folder = EffectiveOutputFolderFor(ctx.output_settings);
 
-    // Whether this prepare opened the shared webcam device (vs. an idle PiP preview
-    // that was already running). Only a device we opened is torn down on cancel.
-    bool webcam_started_by_us = false;
-
-    // Cooperative-cancel unwind, run at each checkpoint below: consume the request,
-    // stop only the webcam we opened, drop any recovery-manifest entry we wrote,
-    // release the in-flight flag, and post Ready (still + log; no toast — "calm, not
-    // alarmist"). The capture lease is acquired as the very last step before
-    // Record(), so a cancelled prepare never holds it, and the page-side revert
-    // (ShouldRevertPreviewFromPushedMode → ReturnEngineLease) is a no-op when nothing
-    // was leased. The queued Ready state-callback restores the idle preview capture
-    // on the UI thread once prepare_in_flight_ is clear.
     auto cancel_unwind = [&]() {
         prepare_cancel_requested_.store(false);
-        if (webcam_started_by_us) {
-            webcam_service_.Stop();
-        }
         const QString cancelled_manifest_id = TakeCurrentManifestId();
         if (recovery_manifest_store_ != nullptr && !cancelled_manifest_id.isEmpty()) {
             // A failed removal is not a loss of protection — it leaves a stale entry
@@ -1351,33 +1448,7 @@ void RecordingCoordinator::PrepareAndRecordThreadProc(const PrepareContext& ctx)
     config.output_path_pre_reserved = true;
     config.split = ctx.split_settings;
 
-    // The unchanging source, when this process was started for a verification run,
-    // needs no device id: it is not a device. Every other field below stays the
-    // product's own, so the overlay and compositing paths under measurement are
-    // the shipping ones.
-    const bool static_webcam = static_webcam_source_ != nullptr;
-    if (sprite_source_ != nullptr)
-        config.sprite_sources.push_back(sprite_source_);
-    config.webcam.enabled = static_webcam || (ctx.webcam_settings.enabled && !ctx.webcam_settings.device_id.empty());
-    config.webcam.frame_provider = static_webcam
-                                       ? static_cast<exosnap::engine::WebcamFrameProvider*>(static_webcam_source_.get())
-                                       : static_cast<exosnap::engine::WebcamFrameProvider*>(&webcam_service_);
-    config.webcam.overlay_x_norm = ctx.webcam_settings.overlay.x_norm;
-    config.webcam.overlay_y_norm = ctx.webcam_settings.overlay.y_norm;
-    config.webcam.overlay_w_norm = ctx.webcam_settings.overlay.w_norm;
-    config.webcam.overlay_h_norm = ctx.webcam_settings.overlay.h_norm;
-    config.webcam.mirror = ctx.webcam_settings.mirror;
-    config.webcam.opacity = ctx.webcam_settings.output_visible ? ctx.webcam_settings.opacity : 0.0f;
-    config.webcam.chroma_key_enabled = ctx.webcam_settings.chroma_key.enabled;
-    {
-        const auto ac = ctx.webcam_settings.chroma_key.active_color();
-        config.webcam.chroma_r = ac.r;
-        config.webcam.chroma_g = ac.g;
-        config.webcam.chroma_b = ac.b;
-    }
-    config.webcam.chroma_tolerance = ctx.webcam_settings.chroma_key.tolerance;
-    config.webcam.chroma_softness = ctx.webcam_settings.chroma_key.softness;
-    config.webcam.chroma_spill_reduction = ctx.webcam_settings.chroma_key.spill_reduction;
+    config.visual_scene = ctx.visual_scene;
 
     // Cancellation checkpoint 2 — after the DXGI display-facts refresh / config build.
     if (prepare_cancel_requested_.load()) {
@@ -1535,35 +1606,7 @@ void RecordingCoordinator::PrepareAndRecordThreadProc(const PrepareContext& ctx)
     split_pending_.store(false);
     session_.SetSegmentCallback([this](const exosnap::engine::CompletedSegment& seg) { OnSegmentCompleted(seg); });
 
-    // Webcam device open (documented up to several hundred ms). While
-    // prepare_in_flight_ is set the worker is the sole accessor of webcam_service_:
-    // SyncWebcamService early-returns on the UI thread and its want_running includes
-    // prepare_in_flight_, so a queued Preparing state-callback cannot Stop() the
-    // device we are opening here.
-    // The same rule the UI thread applies, so the worker cannot open a device the
-    // UI side has just decided to keep closed. It is the verification source that
-    // makes the two disagree: `config.webcam.enabled` is true for it as well --
-    // the overlay is composited either way -- but the pixels come from the
-    // synthetic source, and a camera opened here would deliver samples nothing
-    // reads.
-    if (ShouldRunWebcamDevice(static_webcam_source_ != nullptr, ctx.webcam_settings.enabled,
-                              !ctx.webcam_settings.device_id.empty(), /*recording=*/false, /*preparing=*/true,
-                              /*record_preview_active=*/false, /*settings_preview_active=*/false)) {
-        // Keep the already-running shared capture (the live PiP preview) instead of
-        // stopping and restarting it, which blanks the webcam for a moment right as
-        // recording begins. Settings changes before this point already restarted the
-        // capture via SyncWebcamService, so a running reader is current; only start one
-        // if none is running.
-        if (!webcam_service_.IsRunning()) {
-            webcam_service_.Start(ctx.webcam_settings.device_id, ctx.webcam_settings.width, ctx.webcam_settings.height,
-                                  ctx.webcam_settings.fps);
-            webcam_started_by_us = true;
-        }
-    } else {
-        webcam_service_.Stop();
-    }
-
-    // Cancellation checkpoint 3 — after the webcam open.
+    // Check cancellation before acquiring the recording lease.
     if (prepare_cancel_requested_.load()) {
         cancel_unwind();
         return;
@@ -2332,7 +2375,6 @@ void RecordingCoordinator::RecordingThreadProc(const exosnap::engine::RecorderCo
                     QStringLiteral("could not mark this recording as finalized in the recovery manifest"));
             }
             PostStateChange(UiRecordingState::Saving);
-            SyncWebcamService(false);
             RunRemuxJob(transient_mkv, output_path, std::move(ui_result));
             return;
         }
@@ -2394,7 +2436,6 @@ void RecordingCoordinator::RecordingThreadProc(const exosnap::engine::RecorderCo
         }
 
         PostStateChange(UiRecordingState::Saving);
-        SyncWebcamService(false);
 
         // Drain: join all segment remux jobs (intermediate + final).
         const bool all_ok = DrainSegmentRemuxJobs(/*cancel=*/false);
@@ -2442,7 +2483,6 @@ void RecordingCoordinator::RecordingThreadProc(const exosnap::engine::RecorderCo
             PostResult(std::move(ui_result));
             PostStateChange(UiRecordingState::Failed);
         }
-        SyncWebcamService(false);
         return;
     }
 
@@ -2550,9 +2590,6 @@ void RecordingCoordinator::RecordingThreadProc(const exosnap::engine::RecorderCo
     const bool published = ui_result.succeeded;
     PostResult(std::move(ui_result));
     PostStateChange(published ? UiRecordingState::Completed : UiRecordingState::Failed);
-    // is_recording_ is already false here; restore the idle preview capture if the
-    // Record page still wants a live PiP, otherwise release the device.
-    SyncWebcamService(false);
 }
 
 void RecordingCoordinator::RunRemuxJob(const std::filesystem::path& transient_mkv,
@@ -2701,8 +2738,6 @@ void RecordingCoordinator::RunRemuxJob(const std::filesystem::path& transient_mk
             PostResult(std::move(final_result));
             PostStateChange(UiRecordingState::Failed);
         }
-
-        SyncWebcamService(false);
     });
 }
 

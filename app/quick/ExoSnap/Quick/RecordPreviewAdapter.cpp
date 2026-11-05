@@ -393,7 +393,8 @@ void RecordPreviewAdapter::attachPreviewItem(ExoPreviewItem* item) {
         connect(item_, &ExoPreviewItem::errorTextChanged, this, &RecordPreviewAdapter::synchronizeItemState,
                 Qt::UniqueConnection);
     }
-    forwardWebcamOverlay();
+    if (item_ != nullptr)
+        item_->setVisualRuntime(visual_runtime_, placement_item_);
     // A newly attached item has no texture, so the subscription is restarted even
     // when it was already running — hence the reset before the gate is asked.
     preview_running_ = false;
@@ -403,24 +404,17 @@ void RecordPreviewAdapter::attachPreviewItem(ExoPreviewItem* item) {
     applyPreviewRunState();
 }
 
-void RecordPreviewAdapter::setWebcamStyle(bool mirror, float opacity, const exosnap::engine::ChromaKeyParams& chroma) {
-    webcam_mirror_ = mirror;
-    webcam_opacity_ = opacity;
-    webcam_chroma_ = chroma;
-    forwardWebcamOverlay();
-}
-
-void RecordPreviewAdapter::setWebcamFrame(std::shared_ptr<const exosnap::engine::WebcamFrameSnapshot> frame) {
-    webcam_frame_ = std::move(frame);
+void RecordPreviewAdapter::setVisualRuntime(std::shared_ptr<engine::VisualSceneRuntime> runtime,
+                                            engine::SceneItemId placement_item) {
+    visual_runtime_ = std::move(runtime);
+    placement_item_ = placement_item;
     if (item_ != nullptr)
-        item_->setWebcamFrame(webcam_frame_);
+        item_->setVisualRuntime(visual_runtime_, placement_item_);
 }
 
-void RecordPreviewAdapter::forwardWebcamOverlay() {
-    if (item_ == nullptr)
-        return;
-    item_->setWebcamStyle(webcam_mirror_, webcam_opacity_, webcam_chroma_);
-    item_->setWebcamFrame(webcam_frame_);
+void RecordPreviewAdapter::visualContentChanged() {
+    if (item_ != nullptr)
+        item_->visualContentChanged();
 }
 
 void RecordPreviewAdapter::detachPreviewItem(ExoPreviewItem* item) {

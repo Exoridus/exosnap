@@ -29,6 +29,10 @@ class VisualSource {
   public:
     virtual ~VisualSource() = default;
     virtual engine::Outcome<std::monostate> Apply(const SourceRequest&) = 0;
+    // Only same-identity live changes may retain pixels stamped with the previous request.
+    virtual bool RetainsAccepted(const toml::table&) const {
+        return false;
+    }
     virtual void RequestStop() noexcept = 0;
     virtual bool IsQuiescent() const noexcept = 0;
 };

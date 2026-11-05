@@ -156,6 +156,7 @@ void PipelineDiagnosticsAggregator::Reset(uint64_t generation, const Diagnostics
     // Retained-frame reuse counters
     screen_generation_changes_ = 0;
     webcam_generation_changes_ = 0;
+    visual_sampler_.reset();
     cursor_only_capture_events_ignored_ = 0;
     phase_ring_cursor_only_events_ignored_ = 0;
     full_compositions_ = 0;
@@ -528,6 +529,15 @@ void PipelineDiagnosticsAggregator::OnScreenGenerationChanged() noexcept {
 void PipelineDiagnosticsAggregator::OnWebcamGenerationChanged() noexcept {
     std::lock_guard lk(mutex_);
     ++webcam_generation_changes_;
+}
+
+void PipelineDiagnosticsAggregator::OnVisualHistorySample(bool busy, bool missing) noexcept {
+    std::lock_guard lk(mutex_);
+    if (!visual_sampler_)
+        visual_sampler_.emplace();
+    ++visual_sampler_->history_samples;
+    visual_sampler_->history_busy_reads += busy;
+    visual_sampler_->history_missing_reads += missing;
 }
 
 void PipelineDiagnosticsAggregator::OnCursorOnlyCaptureEventIgnored() noexcept {
@@ -1181,6 +1191,7 @@ RecordingDiagnosticsSnapshot PipelineDiagnosticsAggregator::BuildSnapshot(time_p
     // ---- Retained-frame reuse counters (spec section 13) ----
     s.screen_generation_changes = screen_generation_changes_;
     s.webcam_generation_changes = webcam_generation_changes_;
+    s.visual_sampler = visual_sampler_;
     s.cursor_only_capture_events_ignored = cursor_only_capture_events_ignored_;
     s.phase_ring_cursor_only_events_ignored = phase_ring_cursor_only_events_ignored_;
     s.full_compositions = full_compositions_;

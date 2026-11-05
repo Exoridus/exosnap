@@ -114,6 +114,29 @@ TEST(WebcamDelivery, StatusReachesALiveReceiver) {
     EXPECT_TRUE(reasons[1].isEmpty());
 }
 
+TEST(WebcamDelivery, ReplacingRegistrationCannotRelabelAnOldOpenCompletion) {
+    EnsureApplication();
+    TestableWebcamService service;
+    QObject receiver;
+    const engine::SourceToken old{{engine::VisualSourceId{{1}}, {1}}, {1}};
+    auto current = old;
+    current.request.value++;
+    std::vector<engine::SourceToken> delivered;
+    service.SetPublicationStatusCallback(&receiver,
+                                         [&](engine::SourceToken token, bool, QString) { delivered.push_back(token); });
+    service.PostStatus(true, {});
+    service.PostStatus(old, false, QStringLiteral("old open"));
+    service.SetPublicationStatusCallback(&receiver,
+                                         [&](engine::SourceToken token, bool, QString) { delivered.push_back(token); });
+    service.PostStatus(old, true, {});
+    service.PostStatus(current, true, {});
+    DrainEvents();
+    ASSERT_EQ(delivered.size(), 3u);
+    EXPECT_EQ(delivered[0], old);
+    EXPECT_EQ(delivered[1], old);
+    EXPECT_EQ(delivered[2], current);
+}
+
 TEST(WebcamDelivery, ClearingTheCallbackStopsDelivery) {
     EnsureApplication();
     TestableWebcamService service;

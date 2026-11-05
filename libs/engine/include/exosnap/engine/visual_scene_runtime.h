@@ -1,6 +1,7 @@
 #pragma once
 
 #include <exosnap/engine/overlay_shader.h>
+#include <exosnap/engine/visual_diagnostics.h>
 #include <exosnap/engine/visual_frame.h>
 
 #include <memory>
@@ -166,6 +167,9 @@ class VisualSceneRuntime final {
     VisualSceneRuntime(const VisualSceneRuntime&) = delete;
     VisualSceneRuntime& operator=(const VisualSceneRuntime&) = delete;
 
+    // Counts successful CPU image publications, producer lock/full-pool drops
+    // and host image/scene/binding try-lock misses. Not per source or per session.
+    [[nodiscard]] VisualRuntimeCounters Counters() const noexcept;
     Outcome<VisualConsumerId> RegisterConsumer();
     // Call only after the consumer is quiescent and all its leases are empty.
     void UnregisterConsumer(VisualConsumerId);
@@ -181,6 +185,9 @@ class VisualSceneRuntime final {
     // Only Updated populates an empty destination. Busy cannot validate cache reuse.
     // Reacquisition can still be Busy after releasing an old scene; skip that tick.
     ReadResult TryReadScene(VisualConsumerId, SceneReadLease&) noexcept;
+    // Replaces this consumer's existing scene pin atomically. Busy and Unchanged
+    // preserve the old lease. Updated invalidates all views of the previous scene.
+    ReadResult TryReplaceScene(VisualConsumerId, SceneReadLease&) noexcept;
     ReadResult TryReadImage(VisualConsumerId, VisualAddress, VisualReadLease&) noexcept;
     // Control-side cache reset. Requires this consumer's image pin to be empty.
     // The next read returns Updated for otherwise unchanged accepted pixels.

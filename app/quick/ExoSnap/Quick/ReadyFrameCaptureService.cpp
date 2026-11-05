@@ -1,4 +1,5 @@
 #include "ReadyFrameCaptureService.h"
+#include "visual_scene_consumer.h"
 
 #include <exosnap/engine/gpu_compositor.h>
 
@@ -6,6 +7,7 @@
 #include <exosnap/engine/gpu_hdr_tonemap.h>
 #include <exosnap/engine/preview_shared_texture.h>
 #include <exosnap/engine/webcam_placement.h>
+#include <gamepad/gamepad.h>
 
 #include <QMetaObject>
 #include <QThreadPool>
@@ -190,31 +192,24 @@ bool cropToBgra(ID3D11Device* device, ID3D11DeviceContext* context, ID3D11Textur
     return true;
 }
 
-bool drawWebcam(exosnap::engine::GpuCompositor& compositor, const WebcamSettings& settings,
-                const exosnap::engine::WebcamFrameSnapshot* frame, int width, int height, std::string& error) {
-    if (!settings.enabled || !settings.output_visible || frame == nullptr)
-        return true;
-    exosnap::engine::WebcamPlacement placement;
-    placement.x = settings.overlay.x_norm;
-    placement.y = settings.overlay.y_norm;
-    placement.w = settings.overlay.w_norm;
-    placement.h = settings.overlay.h_norm;
-    placement.mirror = settings.mirror;
-    const exosnap::engine::WebcamPixelRect rect =
-        exosnap::engine::MapWebcamPlacementToContent(placement, 0, 0, width, height);
-    if (!rect.IsValid())
-        return true;
-
-    const auto key = settings.chroma_key.active_color();
-    exosnap::engine::ChromaKeyParams chroma;
-    chroma.enabled = settings.chroma_key.enabled;
-    chroma.r = key.r;
-    chroma.g = key.g;
-    chroma.b = key.b;
-    chroma.tolerance = settings.chroma_key.tolerance;
-    chroma.softness = settings.chroma_key.softness;
-    chroma.spill_reduction = settings.chroma_key.spill_reduction;
-    return compositor.DrawWebcam(*frame, rect, settings.mirror, chroma, error, settings.opacity);
+bool drawVisualScene(exosnap::engine::GpuCompositor& compositor,
+                     const exosnap::engine::VisualSceneConsumer::Frame& frame, int width, int height,
+                     std::string& error) {
+    const exosnap::engine::WebcamPixelRect content{0, 0, width, height};
+    size_t index = 0;
+    for (const auto& view : frame.Items()) {
+        if (view.sprites) {
+            if (!compositor.DrawVisualSprite(index, view.token, view.resource_id, *view.sprites, content, error))
+                return false;
+        } else if (view.cache_valid &&
+                   !compositor.DrawVisualImage(view.token, view.resource_id, view.image_sequence, view.image,
+                                               view.image_rect, view.item->properties.placement.mirror,
+                                               view.item->chroma_key, error, view.image_opacity)) {
+            return false;
+        }
+        ++index;
+    }
+    return true;
 }
 
 bool drawCursor(exosnap::engine::GpuCompositor& compositor, const ReadyFrameSource& source, const QRect& crop,
@@ -314,6 +309,15 @@ void captureOnWorker(ReadyFrameSource source, ReadyFrameComposition composition,
         fail("No Ready preview frame is available");
         return;
     }
+    std::unique_ptr<exosnap::engine::VisualSceneConsumer> consumer;
+    if (composition.visual_runtime) {
+        auto prepared = exosnap::engine::VisualSceneConsumer::Prepare(composition.visual_runtime);
+        if (!prepared.succeeded()) {
+            fail(prepared.error()->context);
+            return;
+        }
+        consumer = std::move(*prepared.value());
+    }
 
     std::string error;
     ComPtr<ID3D11Device> device;
@@ -392,18 +396,48 @@ void captureOnWorker(ReadyFrameSource source, ReadyFrameComposition composition,
         return;
     }
 
+    exosnap::engine::VisualSceneConsumer::Frame visual_frame;
+    if (consumer) {
+        bool sampled = false;
+        for (int attempt = 0; attempt < 8; ++attempt) {
+            if (consumer->NeedsRefresh()) {
+                auto refreshed = consumer->Refresh();
+                if (!refreshed.succeeded()) {
+                    fail(refreshed.error()->context);
+                    return;
+                }
+                if (*refreshed.value() == exosnap::engine::ReadResult::Busy) {
+                    Sleep(1);
+                    continue;
+                }
+            }
+            visual_frame =
+                consumer->Sample({gamepad::GameInputSource::NowCapture100ns()}, {0, 0, crop.width(), crop.height()},
+                                 exosnap::engine::VisualCompositionMode::Recording);
+            if (!visual_frame.Deferred()) {
+                sampled = true;
+                break;
+            }
+            visual_frame = {};
+            Sleep(1);
+        }
+        if (!sampled) {
+            fail("Ready visual scene remained contended");
+            return;
+        }
+    }
     exosnap::engine::GpuCompositor compositor;
     if (!compositor.Init(device.Get(), context.Get(), crop.width(), crop.height(), error) ||
+        (consumer && (!compositor.PrepareVisualImages(consumer->ImageSources(), error) ||
+                      !compositor.PrepareVisualSprites(consumer->ItemCount(), error))) ||
         !compositor.BeginFrame(bgra.Get(), error) ||
         (composition.video.capture_cursor && !drawCursor(compositor, source, crop, error)) ||
-        !drawWebcam(compositor, composition.webcam, composition.webcam_frame.get(), crop.width(), crop.height(),
-                    error) ||
-        (composition.sprites &&
-         !compositor.DrawSpriteLayer(0, *composition.sprites, {0, 0, crop.width(), crop.height()}, error))) {
+        !drawVisualScene(compositor, visual_frame, crop.width(), crop.height(), error)) {
         fail(std::move(error));
         return;
     }
 
+    visual_frame = {};
     std::vector<uint8_t> pixels;
     if (!readback(device.Get(), context.Get(), compositor.Result(), static_cast<uint32_t>(crop.width()),
                   static_cast<uint32_t>(crop.height()), pixels, error)) {

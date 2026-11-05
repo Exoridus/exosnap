@@ -843,3 +843,28 @@ TEST(VisualRuntimeBudget, ResourceGenerationBoundSpansSourceIncarnations) {
     runtime.CollectRetired();
     EXPECT_TRUE(writer.value()->PrepareImage(third, {2, 2}).succeeded());
 }
+
+TEST_F(VisualRuntime, PublicCountersReportAcceptedAndContendedAttemptsWithoutTakingTheRuntimeLock) {
+    const auto initial = runtime.Counters();
+    EXPECT_EQ(initial.accepted_publications, 0U);
+    EXPECT_EQ(initial.dropped_publications, 0U);
+    EXPECT_EQ(initial.busy_reads, 0U);
+    ASSERT_EQ(Publish(1), PublishResult::Accepted);
+    {
+        std::lock_guard lock(VisualRuntimeTestAccess::Storage(runtime).mutex);
+        auto contended = std::async(std::launch::async, [&] {
+            const auto write = writer.TryBeginCpuFrame({token, 2, CaptureTime100ns{200}, {}});
+            EXPECT_FALSE(write);
+            VisualReadLease image;
+            EXPECT_EQ(runtime.TryReadImage(consumer, address, image), ReadResult::Busy);
+            return runtime.Counters();
+        });
+        const auto sampled = contended.get();
+        EXPECT_EQ(sampled.accepted_publications, 1U);
+        EXPECT_EQ(sampled.dropped_publications, 1U);
+        EXPECT_EQ(sampled.busy_reads, 1U);
+    }
+    ASSERT_EQ(Publish(2), PublishResult::Accepted);
+    EXPECT_EQ(runtime.Counters().accepted_publications, 2U);
+    EXPECT_EQ(initial.accepted_publications, 0U);
+}

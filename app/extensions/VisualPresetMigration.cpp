@@ -161,6 +161,26 @@ engine::Outcome<VisualSceneConfig> MigrateLegacyVisualConfig(const WebcamSetting
     return ValidateVisualScene(BuildScene(camera, pad, ids), CapabilityRegistry{});
 }
 
+engine::Outcome<VisualSceneConfig> ProjectLegacyVisualConfig(const WebcamSettings& camera,
+                                                             const GamepadOverlaySettings& pad,
+                                                             const VisualSceneConfig& identity_template) {
+    const auto camera_source = std::ranges::find_if(
+        identity_template.sources, [](const auto& source) { return source.type_id == "org.exosnap.webcam/camera"; });
+    const auto pad_source = std::ranges::find_if(identity_template.sources, [](const auto& source) {
+        return source.type_id == "org.exosnap.gamepad/controller";
+    });
+    if (camera_source == identity_template.sources.end() || pad_source == identity_template.sources.end())
+        return engine::EngineError{.context = "Legacy visual source identities are missing"};
+    const auto camera_item = std::ranges::find_if(identity_template.items,
+                                                  [&](const auto& item) { return item.source == camera_source->id; });
+    const auto pad_item =
+        std::ranges::find_if(identity_template.items, [&](const auto& item) { return item.source == pad_source->id; });
+    if (camera_item == identity_template.items.end() || pad_item == identity_template.items.end())
+        return engine::EngineError{.context = "Legacy visual item identities are missing"};
+    const Identities ids{camera_source->id.bytes, pad_source->id.bytes, camera_item->id.bytes, pad_item->id.bytes};
+    return ValidateVisualScene(BuildScene(camera, pad, ids), CapabilityRegistry{});
+}
+
 engine::Outcome<VisualSceneConfig> ReadVisualScene(const toml::table& table) {
     VisualSceneConfig scene;
     if (const auto* sources = table.get("sources")) {
