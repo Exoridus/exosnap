@@ -1,6 +1,7 @@
 #pragma once
 
 #include <array>
+#include <atomic>
 #include <cstddef>
 #include <cstdint>
 #include <map>
@@ -126,6 +127,22 @@ struct ClockAnchor {
     uint64_t capture_100ns = 0;
 };
 
+enum class HistoryReadResult { Found, Empty, Busy };
+class DeviceHistory;
+
+// Retains only history data, independently of native input and callback owners.
+class HistoryReadView {
+  public:
+    HistoryReadView() noexcept = default;
+    explicit HistoryReadView(std::shared_ptr<const DeviceHistory>) noexcept;
+    [[nodiscard]] HistoryReadResult TryStateAt(uint64_t capture_100ns, GamepadReading&) const noexcept;
+    [[nodiscard]] uint64_t SelectionGeneration() const noexcept;
+    bool operator==(const HistoryReadView&) const noexcept = default;
+
+  private:
+    std::shared_ptr<const DeviceHistory> history_;
+};
+
 /// Converts a GameInput timestamp (microseconds) to the capture clock through
 /// `anchor`. Results that would be negative on the capture clock saturate to
 /// zero.
@@ -143,8 +160,11 @@ class ReadingRing {
     /// The newest reading stamped at or before `capture_100ns`, or nothing when
     /// no retained reading is that old. Readings may be pushed out of order.
     [[nodiscard]] std::optional<GamepadReading> StateAt(uint64_t capture_100ns) const;
+    [[nodiscard]] HistoryReadResult TryStateAt(uint64_t capture_100ns, GamepadReading&) const noexcept;
 
   private:
+    friend class HistoryReadTestAccess;
+    [[nodiscard]] std::optional<GamepadReading> StateAtLocked(uint64_t capture_100ns) const noexcept;
     mutable std::mutex mutex_;
     std::vector<GamepadReading> slots_;
     std::size_t next_ = 0;
@@ -160,8 +180,12 @@ class DeviceHistory {
     [[nodiscard]] std::vector<DeviceIdentity> Devices() const;
     [[nodiscard]] std::optional<GamepadReading> StateAt(uint64_t capture_100ns) const;
     [[nodiscard]] std::optional<GamepadReading> StateFor(const DeviceId& device, uint64_t capture_100ns) const;
+    [[nodiscard]] HistoryReadResult TryStateAt(uint64_t capture_100ns, GamepadReading&) const noexcept;
+    [[nodiscard]] uint64_t SelectionGeneration() const noexcept;
 
   private:
+    friend class HistoryReadTestAccess;
+    void AdvanceSelectionGeneration() noexcept;
     struct Entry {
         ReadingRing history;
         DeviceIdentity identity;
@@ -174,6 +198,7 @@ class DeviceHistory {
     std::optional<DeviceId> automatic_;
     uint64_t automatic_since_ = 0;
     bool automatic_engaged_ = false;
+    std::atomic<uint64_t> selection_generation_{1};
 };
 
 /// Live gamepad input through Microsoft GameInput, including background input
@@ -191,6 +216,7 @@ class GameInputSource {
     GameInputSource& operator=(const GameInputSource&) = delete;
 
     [[nodiscard]] std::optional<GamepadReading> StateAt(uint64_t capture_100ns) const;
+    [[nodiscard]] HistoryReadView HistoryView() const noexcept;
     void SelectDevice(std::optional<DeviceId> device);
     [[nodiscard]] std::vector<DeviceIdentity> Devices() const;
 

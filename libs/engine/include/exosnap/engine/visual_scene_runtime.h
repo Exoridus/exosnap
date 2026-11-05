@@ -22,6 +22,7 @@ struct CpuFrameSlot;
 struct CpuImagePool;
 struct SceneSlot;
 struct VisualRuntimeStorage;
+struct ConsumerReadState;
 } // namespace detail
 
 struct PreparedSceneItem {
@@ -68,6 +69,8 @@ class CpuFrameWriteLease final {
         return slot_ != nullptr;
     }
     [[nodiscard]] std::span<uint8_t> Pixels() noexcept;
+    // Compare the full negotiated layout before copying. Valid only while nonempty.
+    [[nodiscard]] const CpuImageLayout& Layout() const noexcept;
     [[nodiscard]] const VisualFrameStamp& Stamp() const noexcept;
     void Reset() noexcept;
 
@@ -99,10 +102,13 @@ class VisualReadLease final {
 
   private:
     friend class VisualSceneRuntime;
+    detail::ConsumerReadState* reader_ = nullptr;
     detail::CpuImagePool* pool_ = nullptr;
     detail::CpuFrameSlot* slot_ = nullptr;
 };
 
+// Retain the outer runtime owner until this pin is released. Destruction never
+// reclaims scene resources, even when the source or consumer has stopped.
 class SceneReadLease final {
   public:
     SceneReadLease() noexcept = default;
@@ -118,10 +124,12 @@ class SceneReadLease final {
     [[nodiscard]] std::span<const PreparedSceneItem> Items() const noexcept;
     [[nodiscard]] std::span<const PreparedSceneBinding> Bindings() const noexcept;
     [[nodiscard]] ConfigRevision Revision() const noexcept;
+    [[nodiscard]] uint64_t PublicationSequence() const noexcept;
     void Reset() noexcept;
 
   private:
     friend class VisualSceneRuntime;
+    detail::ConsumerReadState* reader_ = nullptr;
     detail::SceneSlot* slot_ = nullptr;
 };
 
@@ -139,8 +147,8 @@ class VisualPublicationWriter final {
     [[nodiscard]] explicit operator bool() const noexcept {
         return storage_ != nullptr;
     }
-    Outcome<std::monostate> PrepareImage(SourceToken, CpuImageLayout);
-    std::optional<CpuFrameWriteLease> TryBeginCpuFrame(VisualFrameStamp) noexcept;
+    Outcome<std::monostate> PrepareImage(const SourceToken&, const CpuImageLayout&);
+    std::optional<CpuFrameWriteLease> TryBeginCpuFrame(const VisualFrameStamp&) noexcept;
     PublishResult Publish(CpuFrameWriteLease&&) noexcept;
 
   private:
@@ -149,7 +157,7 @@ class VisualPublicationWriter final {
     VisualAddress address_;
 };
 
-using VisualConsumerId = uint32_t;
+using VisualConsumerId = uint32_t; // Host-issued, nonzero and never reused within a runtime.
 
 class VisualSceneRuntime final {
   public:
@@ -161,16 +169,29 @@ class VisualSceneRuntime final {
     Outcome<VisualConsumerId> RegisterConsumer();
     // Call only after the consumer is quiescent and all its leases are empty.
     void UnregisterConsumer(VisualConsumerId);
+    // Runtime generations are host-issued and strictly increase across all sources.
+    // Rejected creations do not consume a generation; admitted generations never recur.
     Outcome<VisualPublicationWriter> CreateSource(VisualAddress);
-    void SetRequest(SourceToken, bool publish_allowed, HoldPolicy) noexcept;
+    void SetRequest(const SourceToken&, bool publish_allowed, HoldPolicy) noexcept;
+    // Reserves per-item sampler scratch for every registered consumer before acceptance.
     Outcome<ConfigRevision> PublishScene(const PreparedSceneDescription&);
+    // Compare with the held scene before releasing its pin. Notifications can
+    // coalesce or repeat; a changed publication may reuse the same ConfigRevision.
+    [[nodiscard]] uint64_t PublishedSceneSequence() const noexcept;
     // Only Updated populates an empty destination. Busy cannot validate cache reuse.
+    // Reacquisition can still be Busy after releasing an old scene; skip that tick.
     ReadResult TryReadScene(VisualConsumerId, SceneReadLease&) noexcept;
     ReadResult TryReadImage(VisualConsumerId, VisualAddress, VisualReadLease&) noexcept;
-    void Revoke(VisualAddress) noexcept;
+    // Control-side cache reset. Requires this consumer's image pin to be empty.
+    // The next read returns Updated for otherwise unchanged accepted pixels.
+    Outcome<std::monostate> InvalidateImage(VisualConsumerId, VisualAddress);
+    // Unchanged confirms this binding may be used. Every other result means skip it.
+    ReadResult CheckBinding(const PreparedSceneBinding&) noexcept;
+    void Revoke(const VisualAddress&) noexcept;
     void CollectRetired();
 
   private:
+    friend class VisualRuntimeTestAccess;
     friend Outcome<std::monostate> StageGamepadData(VisualSceneRuntime&, SourceToken,
                                                     std::shared_ptr<const GamepadSpriteSet>, gamepad::HistoryReadView);
     std::shared_ptr<detail::VisualRuntimeStorage> storage_;
