@@ -1,6 +1,15 @@
 #include <exosnap/engine/gpu_surface_inventory.h>
+#include <exosnap/engine/pipeline_diagnostics.h>
+#include <exosnap/engine/preview_shared_texture.h>
+#include <exosnap/engine/visual_frame.h>
 #include <exosnap/engine/visual_gpu_lane.h>
 
+#include <atomic>
+#include <cstdint>
+#include <memory>
+#include <mutex>
+#include <string>
+#include <winrt/base.h>
 #include <d3d11_1.h>
 
 namespace exosnap::engine {

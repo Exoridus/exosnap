@@ -1,4 +1,6 @@
 #include <exosnap/engine/visual_gpu_lane.h>
+#include <exosnap/engine/visual_frame.h>
+#include <exosnap/engine/visual_scene.h>
 #include <exosnap/engine/visual_scene_runtime.h>
 
 #include "visual_allocation_probe.h"
@@ -7,11 +9,17 @@
 
 #include <gtest/gtest.h>
 
+#include <atomic>
+#include <cstdint>
 #include <chrono>
 #include <cstring>
+#include <memory>
 #include <iterator>
+#include <string>
 #include <thread>
+#include <variant>
 #include <utility>
+#include <winrt/base.h>
 #include <vector>
 
 using namespace exosnap::engine;

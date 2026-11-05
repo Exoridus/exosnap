@@ -16,6 +16,7 @@
 #include <exosnap/engine/gpu_surface_inventory.h>
 
 #include <d3d11.h>
+#include <cmath>
 #include <limits>
 #include <memory>
 #include <optional>

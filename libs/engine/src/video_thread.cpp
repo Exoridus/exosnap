@@ -33,6 +33,7 @@
 #include "hdr_session_dynamic.h"
 #include "hdr_tonemap.h"
 #include "thread_dpi_scope.h"
+#include <exosnap/engine/device_generation.h>
 #include <exosnap/engine/display_color_recheck.h>
 #include <exosnap/engine/display_color_watch.h>
 #include <exosnap/engine/dxgi_od_capture_src.h>

@@ -13,6 +13,7 @@
 
 #include "visual_scene_runtime_storage.h"
 #include <atomic>
+#include <cstddef>
 #include <cstdint>
 #include <exosnap/engine/color_metadata.h>
 #include <exosnap/engine/recording_media_types.h>
@@ -27,6 +28,7 @@
 #include <array>
 #include <chrono>
 #include <future>
+#include <semaphore>
 #include <thread>
 #include <tuple>
 #include <utility>

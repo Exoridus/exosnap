@@ -17,6 +17,7 @@
 #include <optional>
 #include <span>
 #include <variant>
+#include <winrt/base.h>
 #include <vector>
 
 #include <algorithm>
