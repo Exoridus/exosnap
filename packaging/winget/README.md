@@ -2,7 +2,13 @@
 
 Source-of-truth WinGet manifests for ExoSnap, mirroring the `microsoft/winget-pkgs` layout under [`manifests/c/Codexo/ExoSnap/<version>/`](manifests/c/Codexo/ExoSnap).
 
-Each version directory holds the standard multi-file manifest set (schema 1.10.0):
+Each version directory holds the standard multi-file manifest set (schema 1.28.0):
+
+> **Submission compatibility:** `winget validate` and `wingetcreate submit` are separate
+> tools. Both must support schema 1.28.0. The pinned WingetCreate release in
+> `.github/workflows/distribution.yml` must be upgraded to a compatible official
+> release (or replaced by a verified submission path) before this migration
+> can be used to publish a new WinGet package.
 
 - `Codexo.ExoSnap.yaml`: version manifest
 - `Codexo.ExoSnap.installer.yaml`: `wix` MSI installer (machine scope), with the release `InstallerSha256`, `ProductCode`, and the permanent `UpgradeCode`
