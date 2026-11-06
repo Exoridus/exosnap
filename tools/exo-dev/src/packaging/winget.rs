@@ -4,7 +4,7 @@
 //! Checked over packaging/winget/manifests/c/Codexo/ExoSnap/<version>/: all
 //! three manifest files exist (version, installer, locale en-US);
 //! `PackageIdentifier` is `Codexo.ExoSnap` and `PackageVersion` is identical
-//! in all three; `ManifestVersion` is `1.10.0` in all three; the installer's
+//! in all three; `ManifestVersion` is `1.28.0` in all three; the installer's
 //! `InstallerSha256` is 64 uppercase hex characters; `ProductCode` and
 //! `UpgradeCode` are well-formed braced GUIDs; the installer declares
 //! `Microsoft.VCRedist.2015+.x64` under `Dependencies/PackageDependencies`
@@ -169,10 +169,10 @@ pub fn validate_winget(repo_root: &Path, version: &str) -> anyhow::Result<Valida
         (&locale_text, "locale manifest"),
     ] {
         if let Some(mv) = get_yaml_value(&mut report, text, "ManifestVersion", label) {
-            if mv != "1.10.0" {
+            if mv != "1.28.0" {
                 report
                     .errors
-                    .push(format!("{label}: ManifestVersion '{mv}' != '1.10.0'"));
+                    .push(format!("{label}: ManifestVersion '{mv}' != '1.28.0'"));
             }
         }
     }
@@ -328,7 +328,7 @@ mod tests {
         "PackageVersion: 0.10.0\n",
         "DefaultLocale: en-US\n",
         "ManifestType: version\n",
-        "ManifestVersion: 1.10.0\n",
+        "ManifestVersion: 1.28.0\n",
     );
 
     const INSTALLER_MANIFEST: &str = concat!(
@@ -351,7 +351,7 @@ mod tests {
         "        ProductCode: '{00000000-0000-0000-0000-000000000000}'\n",
         "        UpgradeCode: '{8988DAFC-3AE4-4788-BA6D-62E3F73C7A7D}'\n",
         "ManifestType: installer\n",
-        "ManifestVersion: 1.10.0\n",
+        "ManifestVersion: 1.28.0\n",
     );
 
     const LOCALE_MANIFEST: &str = concat!(
@@ -360,7 +360,7 @@ mod tests {
         "PackageLocale: en-US\n",
         "ReleaseNotesUrl: https://github.com/Exoridus/exosnap/releases/tag/v0.10.0\n",
         "ManifestType: defaultLocale\n",
-        "ManifestVersion: 1.10.0\n",
+        "ManifestVersion: 1.28.0\n",
     );
 
     fn fixture() -> tempfile::TempDir {
@@ -388,6 +388,22 @@ mod tests {
         let dir = fixture();
         let report = validate_winget(dir.path(), VERSION).unwrap();
         assert!(report.ok(), "{:?}", report.errors);
+    }
+
+    #[test]
+    fn an_outdated_manifest_schema_is_rejected() {
+        let dir = fixture();
+        let version_path = dir.path().join(
+            "packaging/winget/manifests/c/Codexo/ExoSnap/0.10.0/Codexo.ExoSnap.yaml",
+        );
+        std::fs::write(
+            &version_path,
+            VERSION_MANIFEST.replace("ManifestVersion: 1.28.0", "ManifestVersion: 1.10.0"),
+        )
+        .unwrap();
+        let report = validate_winget(dir.path(), VERSION).unwrap();
+        assert!(!report.ok());
+        assert!(report.errors.iter().any(|e| e.contains("ManifestVersion")));
     }
 
     #[test]
