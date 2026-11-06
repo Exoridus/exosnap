@@ -393,9 +393,9 @@ mod tests {
     #[test]
     fn an_outdated_manifest_schema_is_rejected() {
         let dir = fixture();
-        let version_path = dir.path().join(
-            "packaging/winget/manifests/c/Codexo/ExoSnap/0.10.0/Codexo.ExoSnap.yaml",
-        );
+        let version_path = dir
+            .path()
+            .join("packaging/winget/manifests/c/Codexo/ExoSnap/0.10.0/Codexo.ExoSnap.yaml");
         std::fs::write(
             &version_path,
             VERSION_MANIFEST.replace("ManifestVersion: 1.28.0", "ManifestVersion: 1.10.0"),
