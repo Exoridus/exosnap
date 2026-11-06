@@ -1,4 +1,4 @@
-# yaml-language-server: $schema=https://aka.ms/winget-manifest.installer.1.10.0.schema.json
+# yaml-language-server: $schema=https://aka.ms/winget-manifest.installer.1.28.0.schema.json
 PackageIdentifier: Codexo.ExoSnap
 PackageVersion: 0.10.1
 InstallerType: wix
@@ -27,4 +27,4 @@ Installers:
         UpgradeCode: '{8988DAFC-3AE4-4788-BA6D-62E3F73C7A7D}'
         InstallerType: wix
 ManifestType: installer
-ManifestVersion: 1.10.0
+ManifestVersion: 1.28.0
