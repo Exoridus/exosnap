@@ -1,4 +1,4 @@
-# yaml-language-server: $schema=https://aka.ms/winget-manifest.defaultLocale.1.10.0.schema.json
+# yaml-language-server: $schema=https://aka.ms/winget-manifest.defaultLocale.1.28.0.schema.json
 PackageIdentifier: Codexo.ExoSnap
 PackageVersion: 0.10.1
 PackageLocale: en-US
@@ -33,4 +33,4 @@ Tags:
   - overlay
 ReleaseNotesUrl: https://github.com/Exoridus/exosnap/releases/tag/v0.10.1
 ManifestType: defaultLocale
-ManifestVersion: 1.10.0
+ManifestVersion: 1.28.0
