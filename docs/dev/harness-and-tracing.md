@@ -111,7 +111,7 @@ cargo exo-dev screenshot sweep --set hud --scale 1,1.5,2
 cargo exo-dev screenshot sweep --set all --appearance dark --accent aqua --scale 1 --size 2560x1440,1920x1080,1280x720 --out-dir "$env:TEMP\exosnap-review"
 ```
 
-Use a fresh output directory for each capture run so retired scenarios from an older run cannot remain in its manifest. Capture only states that need new evidence; a run does not replace the cumulative PR collection. Retained captures keep their original manifests and source identities. The size axis is the logical application window size, not an observed native maximized desktop or an OS title/taskbar measurement. At scale 1, viewport PNG dimensions match that requested size. Full-page and overlay images have their own dimensions.
+Prefer a unique directory under system temp, separated by PR and capture run, passed through `--out-dir`. Use a fresh output directory for each capture run so retired scenarios from an older run cannot remain in its manifest. Capture only states that need new evidence; a run does not replace the cumulative PR collection. Until cleanup, retained captures keep their original manifests and source identities. Preserve required provenance in the PR before removing temporary originals. The size axis is the logical application window size, not an observed native maximized desktop or an OS title/taskbar measurement. At scale 1, viewport PNG dimensions match that requested size. Full-page and overlay images have their own dimensions.
 
 The run holds the build tree's lock, so a concurrent build cannot relink the binary mid-sweep. Scrolling and dialogs are applied only after the active page's loader is Ready, so the default four parallel jobs do not lose them to a slow page load.
 
@@ -154,6 +154,12 @@ occlusion path, not rear-hint exclusion, arbitrary translucent layering or final
 The shell is a deliberately simple procedural approximation. Hardware input, physical button mechanics,
 rear hints, outlines, Xbox geometry, HDR and recording integration require separate qualification.
 
+### Push first, evidence second
+
+Implement and run relevant local checks, then commit and push the change and create or update a Draft PR. Screenshots and clips may be created afterward. Evidence is not a pre-push gate, and CI starts independently under its existing event rules. Keep the PR Draft while evidence is missing or awaiting review.
+
+After pushing, identify only affected states, retain valid evidence, capture missing or changed states and inspect the media and metadata. Update the central **Visual evidence** section using selective uploads below. Uploading evidence requires no source commit. Verify the saved URLs and rendered images or playable clips, then clean up disposable capture files. Prepare the PR for review only after visual checks are complete, required CI is green and existing review/approval requirements are met. This does not authorize merging or auto-merge.
+
 ### Incremental PR evidence
 
 The PR description's **Visual evidence** section is the cumulative collection of relevant, currently valid evidence. Update it selectively throughout review:
@@ -164,12 +170,12 @@ The PR description's **Visual evidence** section is the cumulative collection of
 | Documented state visibly changes | Recapture only affected views and replace their references in the PR. Remove superseded references, including any in earlier comments. |
 | State remains unchanged | Keep its captures and attachment URLs without recapturing or uploading them again. |
 | Purely technical revision with no relevant visible change | No new capture is required. |
-| Small local UI correction | A targeted crop is sufficient if enough surrounding context remains to identify and judge the change. Keep the original capture and identify the crop. |
+| Small local UI correction | A targeted crop is sufficient if enough surrounding context remains to identify and judge the change. Identify the crop and retain the original only while review or retry needs it. |
 | Animation, transition or moving UI | Add a short GIF, MP4 or WebM when a still cannot convey the change. Replace only changed clips and retain unchanged ones. |
 
 Preserve **Dark and Light** coverage for changed Qt Quick surfaces. Check regular and narrow logical window sizes when responsive geometry changes, and capture interaction states such as focused, disabled, open or error when affected. Use the closest named fixture and the smallest sufficient `shot` or scoped `sweep`, without an unrelated gallery or full-screen sweep. A clip shows visible motion, not frame-exact timing, native presentation or audio correctness. Follow the desktop-coordination and privacy rules above for any capture outside synthetic offscreen fixtures.
 
-Organize entries by **surface, state, theme and logical window size**, with one current entry for each relevant combination. Each entry identifies its actual capture revision, any dirty-tree status, the fixture or interaction and whether it is a crop, still or clip. Different relevant states remain side by side. A deliberate before/after comparison labels its baseline and source separately from current-state evidence, so an old design is not presented as current. Keep original media, manifests and clip capture details untracked, including the source build/revision, scenario, theme, size and any crop or conversion applied.
+Organize entries by **surface, state, theme and logical window size**, with one current entry for each relevant combination. Each entry identifies its actual capture revision, any dirty-tree status, the fixture or interaction and whether it is a crop, still or clip. Different relevant states remain side by side. A deliberate before/after comparison labels its baseline and source separately from current-state evidence, so an old design is not presented as current. Keep temporary media, manifests and clip capture details untracked until upload and review complete. Before cleanup, record the source build/revision, dirty-tree status, scenario, theme, logical size, rendering backend, any crop/conversion and relevant warnings or capture limitations in the PR entry. Full media and verbose logs need no permanent local archive.
 
 Unchanged evidence need not come from the latest commit. Check whether each revision affects the depicted state, preserve the original source metadata, and never relabel an earlier capture as taken from the latest head. If validity is uncertain, verify the state again or recapture it. A newer technical commit alone does not invalidate an image or clip.
 
@@ -205,7 +211,15 @@ Read the stored PR body back after each update and save that resolved body for t
 gh pr view --json body --jq .body | Set-Content -LiteralPath pr-body.md -Encoding utf8NoBOM
 ```
 
-Inspect it to confirm that new media uses remote URLs, unchanged URLs remain, superseded references are gone and each relevant surface/state/theme/size combination has one current entry. Open the rendered PR, inspect images and play clips. Do not reuse a body file containing already-uploaded local paths as the next upload list. If an upload fails, read back the stored description, preserve any successful remote references and retry only missing media. Keep the PR in Draft until required evidence is accessible and reviewed. Original media and capture metadata remain untracked. See [GitHub's attachment documentation](https://docs.github.com/en/github-cli/github-cli/attaching-files-with-github-cli) for supported formats and limits.
+Inspect it to confirm that new media uses remote URLs, unchanged URLs remain, superseded references are gone and each relevant surface/state/theme/size combination has one current entry. Open the rendered PR, inspect images and play clips. Do not reuse a body file containing already-uploaded local paths as the next upload list. If an upload fails, read back the stored description, preserve any successful remote references and retry only missing media. Keep the PR in Draft until required evidence is accessible and reviewed. Temporary media and logs follow the cleanup contract below. See [GitHub's attachment documentation](https://docs.github.com/en/github-cli/github-cli/attaching-files-with-github-cli) for supported formats and limits.
+
+### Temporary capture cleanup
+
+The screenshot runner already accepts `--out-dir`; its default workspace output is not an automatic upload or cleanup service. Prefer a newly created, unique system-temp directory named for the PR and capture run. Do not reuse an older directory. Record the exact resolved root and files created by this run so cleanup ownership is explicit. Existing fixtures, manifests and output structure remain usable without a new capture pipeline.
+
+After uploads succeed, read back the PR body and verify remote URLs, rendered images and clip playback. Transfer provenance and limitations needed after cleanup into the relevant PR entries. When no review or retry still needs the files, the contributor or agent automatically removes its own temporary media, PNG frames, contact sheets and capture logs as part of completing the workflow, without waiting for a separate cleanup request. No permanent local originals are required. This is workflow cleanup, not a claim that `screenshot` or `gh` deletes files automatically.
+
+Before deletion, verify that the resolved run root is the exact directory created for this run beneath system temp. Remove only an explicit inventory of this run's files and empty owned directories, without following reparse points or using unbounded recursive deletion. Never sweep the workspace scratch tree, system temp, another run or pre-existing files. Retain files needed for review or re-upload. On failed, partial or unverified uploads, preserve affected files, report what remains and retry only missing media. Do not treat a successful command exit as completed visual review. A successful cleanup leaves only remote media references in the PR, never local paths.
 
 ## Recording harness
 
