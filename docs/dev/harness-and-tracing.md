@@ -111,7 +111,7 @@ cargo exo-dev screenshot sweep --set hud --scale 1,1.5,2
 cargo exo-dev screenshot sweep --set all --appearance dark --accent aqua --scale 1 --size 2560x1440,1920x1080,1280x720 --out-dir "$env:TEMP\exosnap-review"
 ```
 
-Use a fresh output directory for a review package so retired scenarios from an older run cannot remain in its manifest. The size axis is the logical application window size, not an observed native maximized desktop or an OS title/taskbar measurement. At scale 1, viewport PNG dimensions match that requested size. Full-page and overlay images have their own dimensions.
+Use a fresh output directory for each capture run so retired scenarios from an older run cannot remain in its manifest. Capture only states that need new evidence; a run does not replace the cumulative PR collection. Retained captures keep their original manifests and source identities. The size axis is the logical application window size, not an observed native maximized desktop or an OS title/taskbar measurement. At scale 1, viewport PNG dimensions match that requested size. Full-page and overlay images have their own dimensions.
 
 The run holds the build tree's lock, so a concurrent build cannot relink the binary mid-sweep. Scrolling and dialogs are applied only after the active page's loader is Ready, so the default four parallel jobs do not lose them to a slow page load.
 
@@ -154,17 +154,58 @@ occlusion path, not rear-hint exclusion, arbitrary translucent layering or final
 The shell is a deliberately simple procedural approximation. Hardware input, physical button mechanics,
 rear hints, outlines, Xbox geometry, HDR and recording integration require separate qualification.
 
+### Incremental PR evidence
+
+The PR description's **Visual evidence** section is the cumulative collection of relevant, currently valid evidence. Update it selectively throughout review:
+
+| Revision | Evidence update |
+|---|---|
+| New visible state | Add the relevant screenshots or clips alongside existing valid states. |
+| Documented state visibly changes | Recapture only affected views and replace their references in the PR. Remove superseded references, including any in earlier comments. |
+| State remains unchanged | Keep its captures and attachment URLs without recapturing or uploading them again. |
+| Purely technical revision with no relevant visible change | No new capture is required. |
+| Small local UI correction | A targeted crop is sufficient if enough surrounding context remains to identify and judge the change. Keep the original capture and identify the crop. |
+| Animation, transition or moving UI | Add a short GIF, MP4 or WebM when a still cannot convey the change. Replace only changed clips and retain unchanged ones. |
+
+Preserve **Dark and Light** coverage for changed Qt Quick surfaces. Check regular and narrow logical window sizes when responsive geometry changes, and capture interaction states such as focused, disabled, open or error when affected. Use the closest named fixture and the smallest sufficient `shot` or scoped `sweep`, without an unrelated gallery or full-screen sweep. A clip shows visible motion, not frame-exact timing, native presentation or audio correctness. Follow the desktop-coordination and privacy rules above for any capture outside synthetic offscreen fixtures.
+
+Organize entries by **surface, state, theme and logical window size**, with one current entry for each relevant combination. Each entry identifies its actual capture revision, any dirty-tree status, the fixture or interaction and whether it is a crop, still or clip. Different relevant states remain side by side. A deliberate before/after comparison labels its baseline and source separately from current-state evidence, so an old design is not presented as current. Keep original media, manifests and clip capture details untracked, including the source build/revision, scenario, theme, size and any crop or conversion applied.
+
+Unchanged evidence need not come from the latest commit. Check whether each revision affects the depicted state, preserve the original source metadata, and never relabel an earlier capture as taken from the latest head. If validity is uncertain, verify the state again or recapture it. A newer technical commit alone does not invalidate an image or clip.
+
+Keep the description current instead of appending comments or image collections for each commit. Remove superseded evidence references from the PR, retaining unrelated discussion and still-valid states. Historical captures may remain locally untracked. Required evidence must be reviewable directly in the PR. If an upload is unavailable or a required state remains unverified, disclose the gap and keep the PR in Draft.
+
 ### Attaching screenshots to a pull request
 
-GitHub CLI 2.99 or newer supports image uploads through the repeatable `--attach` flag. Check `gh --version` before reporting that command-line uploads are unavailable. Upgrade an outdated installation or use a verified official portable release without changing the system installation.
+GitHub CLI 2.99 or newer supports image and video uploads through the repeatable `--attach` flag. Check `gh --version` before reporting that command-line uploads are unavailable. Upgrade an outdated installation or use a verified official portable release without changing the system installation.
 
-Reference the screenshots in `pr-body.md` with ordinary Markdown image links, such as `![Source picker, Dark, 1600x1000](screenshots/picker-dark.png)`. Paths in the body are relative to the body file's directory, with the working directory as a fallback. Attach those same files when updating the current branch's pull request:
+Before editing an existing PR, read its stored description into an untracked body file. The following commands use the current branch's PR and assume an untracked working directory for `pr-body.md` and media:
+
+```powershell
+gh pr view --json body --jq .body | Set-Content -LiteralPath pr-body.md -Encoding utf8NoBOM
+```
+
+Edit only the affected entries in its **Visual evidence** section, preserving the rest of the description and every still-valid GitHub attachment URL. For each new or replacement screenshot, use a local Markdown image reference such as `![Source picker, filters open, Dark, 1600x1000](screenshots/picker-dark.png)`. Include the capture revision in the entry. Paths are relative to the body file's directory, with the working directory as a fallback. Remove the old reference for a replaced capture, then attach **only the new or replacement files**:
 
 ```powershell
 gh pr edit --body-file pr-body.md --attach screenshots/picker-dark.png --attach screenshots/picker-light.png
 ```
 
-The CLI uploads the files and replaces their local Markdown paths with GitHub attachment URLs. Read the stored PR body back with `gh pr view --json body` and verify that every expected image uses a remote URL. Keep the original PNGs and capture manifest untracked. If upload fails, preserve any successful attachments and keep the PR in Draft until all required images are accessible. See [GitHub's attachment documentation](https://docs.github.com/en/github-cli/github-cli/attaching-files-with-github-cli) for supported formats and limits.
+In this example only the source-picker Dark/Light pair is new or replaced. Other entries retain their remote URLs and need no `--attach` flag. The CLI uploads the supplied files and rewrites their local references in place. Every attached file must have its intended reference in the section, otherwise the CLI appends it to the body. For a video, put `![](clips/picker-transition.mp4)` alone in its paragraph beneath the entry's labels and attach that file. GIFs use ordinary image references.
+
+If only labels or other text change, keep the remote URLs and omit attachments entirely:
+
+```powershell
+gh pr edit --body-file pr-body.md
+```
+
+Read the stored PR body back after each update and save that resolved body for the next edit:
+
+```powershell
+gh pr view --json body --jq .body | Set-Content -LiteralPath pr-body.md -Encoding utf8NoBOM
+```
+
+Inspect it to confirm that new media uses remote URLs, unchanged URLs remain, superseded references are gone and each relevant surface/state/theme/size combination has one current entry. Open the rendered PR, inspect images and play clips. Do not reuse a body file containing already-uploaded local paths as the next upload list. If an upload fails, read back the stored description, preserve any successful remote references and retry only missing media. Keep the PR in Draft until required evidence is accessible and reviewed. Original media and capture metadata remain untracked. See [GitHub's attachment documentation](https://docs.github.com/en/github-cli/github-cli/attaching-files-with-github-cli) for supported formats and limits.
 
 ## Recording harness
 
