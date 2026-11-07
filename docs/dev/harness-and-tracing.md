@@ -162,7 +162,7 @@ After pushing, identify only affected states, retain valid evidence, capture mis
 
 ### Incremental PR evidence
 
-The PR description's **Visual evidence** section is the cumulative collection of relevant, currently valid evidence. Update it selectively throughout review:
+The PR description's **Visual evidence** section is the cumulative collection of relevant, currently valid evidence. PNG is the default for visual changes. Use a short GIF only for animation-critical changes when actual motion is essential and stills are insufficient. MP4 or WebM is an exception when GIF is unsuitable. An animated component does not automatically require a clip. For frame-critical defects, prefer targeted stills with a frame index or timestamp when available. Update it selectively throughout review:
 
 | Revision | Evidence update |
 |---|---|
@@ -171,7 +171,7 @@ The PR description's **Visual evidence** section is the cumulative collection of
 | State remains unchanged | Keep its captures and attachment URLs without recapturing or uploading them again. |
 | Purely technical revision with no relevant visible change | No new capture is required. |
 | Small local UI correction | A targeted crop is sufficient if enough surrounding context remains to identify and judge the change. Identify the crop and retain the original only while review or retry needs it. |
-| Animation, transition or moving UI | Add a short GIF, MP4 or WebM when a still cannot convey the change. Replace only changed clips and retain unchanged ones. |
+| Animation, transition or moving UI | Keep PNG as the default. Add a short GIF only when actual motion is essential and stills are insufficient, using MP4/WebM only if GIF is unsuitable. Replace only changed clips and retain unchanged ones. |
 
 Preserve **Dark and Light** coverage for changed Qt Quick surfaces. Check regular and narrow logical window sizes when responsive geometry changes, and capture interaction states such as focused, disabled, open or error when affected. Use the closest named fixture and the smallest sufficient `shot` or scoped `sweep`, without an unrelated gallery or full-screen sweep. A clip shows visible motion, not frame-exact timing, native presentation or audio correctness. Follow the desktop-coordination and privacy rules above for any capture outside synthetic offscreen fixtures.
 
