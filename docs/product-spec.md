@@ -257,7 +257,7 @@ Media Foundation is a webcam dependency, not an AAC/recording dependency. Window
 
 A separate developer executable previews an original procedural DualSense rig in Normal 3D or Ghost 3D.
 It is not an overlay choice in the recording application and does not feed the recording compositor.
-The pilot shares the existing GameInput owner and canonical control mapping. Its radial stick response
+The pilot shares the existing SDL3 owner and canonical control mapping. Its radial stick response
 uses a 5% inner deadzone and 5% outer saturation, independently of the 2D display filter.
 Ghost retains physical depth occlusion with transparent shell surfaces. Rear hints, final licensed models,
 other controller families, motion tracking and recording output remain outside this pilot.
@@ -265,13 +265,14 @@ other controller families, motion tracking and recording output remain outside t
 ### Gamepad overlay
 
 The Record preview's Add overlay menu adds one controller widget and provides access to its device, layout and appearance settings. It is off by default.
-Automatic device selection prefers the first actively used gamepad and stays with it until disconnect.
-Manual selection pins one device and never borrows another controller's inputs. Disconnect resets the visible inputs.
-Automatic artwork selection recognizes DualSense, Xbox Series, Xbox One and Switch Pro families.
+Automatic device selection prefers the first actively used gamepad and stays with it until disconnect. It may then select another available controller.
+Manual selection persists the ExoSnap device identity, never an SDL instance ID or discovery index. Disconnect resets the visible inputs and reports Controller disconnected. Other connected controllers do not take over. The same reliably identified controller resumes the selection on reconnect, independently of discovery order.
+Persistent device identities require both a reported serial number and a native HID path. A serial number alone can be duplicated, while a serialless USB path can identify a port rather than a physical controller. A changed path requires explicit reselection. Devices without this identity information, including XInput slot-only identities, are marked as session-only. They can be selected while connected, but require explicit reselection after an uncertain reconnect. Saved identities from a different input provider remain waiting until the user selects a current device.
+Automatic artwork selection follows the active controller using SDL device types and known device identities. It selects matching catalog artwork when the device can be distinguished, and Generic otherwise. Manual artwork selection remains fixed when automatic device selection changes controllers.
 Manual selection additionally offers DualShock 4, Joy-Cons in a grip or separate, individual Joy-Cons
 in upright or horizontal orientation, the Steam Controller (2015 and 2026), Steam Deck compact and full views,
 Xbox 360, GameCube, DualSense Edge and Xbox Elite. Compact is the default Steam Deck artwork in the
-asset catalog. Automatic GameInput detection does not yet identify Steam Deck devices.
+asset catalog. Artwork availability does not establish physical device support.
 Generic uses a vendor-neutral controller silhouette. Selecting a Joy-Con drawing does not combine physical devices.
 Steam Controller (2026, generic artwork) retains its saved layout identity and uses the same silhouette as Generic.
 It does not depict the physical controller's shape or imply qualified hardware support.
@@ -288,7 +289,7 @@ The artwork uses white lines with adjustable opacity. Legacy Glass and Glow prof
 Controls normally light blue when pressed while their vector symbols stay white. A mapped pressure color can
 override blue, and a tint-mode control colors its designated graphic. Stick caps move within their wells,
 qualified stick clicks tint the caps, and trigger fills are proportional.
-PS and touchpad clicks are shown when GameInput exposes them. Touchpad clicks do not imply finger contact.
+PS and touchpad clicks are shown when SDL3 exposes them. Touchpad clicks do not imply finger contact.
 Unavailable and unsupported inputs remain visually inactive, without being treated as measured releases.
 Unbound paddles, Quick Access, Mute, Fn, pairing and touch-contact artwork do not acquire live input from
 preview simulations. Microphone-button and finger-position visualization requires a qualified input transport.

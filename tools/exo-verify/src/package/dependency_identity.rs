@@ -213,7 +213,7 @@ pub fn derive(repo_root: &Path) -> Result<DependencyInventory> {
     entries.push(ffmpeg_entry(&ffmpeg_text)?);
 
     let third_party_text = std::fs::read_to_string(&third_party_path)?;
-    entries.push(gameinput_entry(&third_party_text)?);
+    entries.push(sdl_entry(&third_party_text)?);
     for (name, linkage) in EXPECTED_FETCH_CONTENT {
         let Some(pin) = fetch_content_pin(&third_party_text, name) else {
             bail!(
@@ -243,20 +243,20 @@ pub fn derive(repo_root: &Path) -> Result<DependencyInventory> {
     Ok(DependencyInventory { entries })
 }
 
-fn gameinput_entry(text: &str) -> Result<DependencyEntry> {
+fn sdl_entry(text: &str) -> Result<DependencyEntry> {
     static PIN: LazyLock<Regex> = LazyLock::new(|| {
         Regex::new(
-        r"(?is)FetchContent_Declare\(\s*gameinput\s+URL\s+(https://api\.nuget\.org/v3-flatcontainer/microsoft\.gameinput/([0-9.]+)/microsoft\.gameinput\.[0-9.]+\.nupkg)\s+URL_HASH\s+SHA256=([0-9a-f]{64})\s"
+        r"(?is)FetchContent_Declare\(\s*sdl3\s+URL\s+(https://github\.com/libsdl-org/SDL/releases/download/release-([0-9.]+)/SDL3-devel-[0-9.]+-VC\.zip)\s+URL_HASH\s+SHA256=([0-9a-f]{64})\s"
     ).unwrap()
     });
     let Some(pin) = PIN.captures(text) else {
-        bail!("dependency identity: no readable GameInput NuGet URL, version and SHA-256 pin");
+        bail!("dependency identity: no readable SDL3 SDK URL, version and SHA-256 pin");
     };
     Ok(DependencyEntry {
         version: Some(pin[2].to_string()),
         source: Some(pin[1].to_string()),
         archive_sha256: Some(pin[3].to_ascii_lowercase()),
-        ..DependencyEntry::named("GameInput", "static loader, application-local runtime")
+        ..DependencyEntry::named("SDL3", "dynamic, application-local runtime")
     })
 }
 
@@ -393,7 +393,7 @@ mod tests {
         })
         .collect();
         let declarations = format!(
-            "{declarations}\nFetchContent_Declare(\n gameinput\n URL https://api.nuget.org/v3-flatcontainer/microsoft.gameinput/4.0.302/microsoft.gameinput.4.0.302.nupkg\n URL_HASH SHA256=A4F000C3A41385819B51E5CDD7DAE66D7DDE85C6DE0BFD823CFE617D4BAAAC33\n)\n"
+            "{declarations}\nFetchContent_Declare(\n sdl3\n URL https://github.com/libsdl-org/SDL/releases/download/release-3.4.20/SDL3-devel-3.4.20-VC.zip\n URL_HASH SHA256=1EC3009655EE37B1F73E52B3B120ACC5AFD8ABAF9532F3303B1Bf1DFE91B5969\n)\n"
         );
         write(root, "third_party/CMakeLists.txt", &declarations);
         dir
@@ -425,22 +425,21 @@ mod tests {
     }
 
     #[test]
-    fn gameinput_records_the_runtime_archive_pin() {
+    fn sdl_records_the_runtime_archive_pin_without_gameinput() {
         let inventory = derive(&repo_root()).unwrap();
-        let entry = inventory
-            .find("GameInput")
-            .expect("GameInput runtime missing");
-        assert_eq!(entry.version.as_deref(), Some("4.0.302"));
+        let entry = inventory.find("SDL3").expect("SDL3 runtime missing");
+        assert!(inventory.find("GameInput").is_none());
+        assert_eq!(entry.version.as_deref(), Some("3.4.20"));
         assert_eq!(
             entry.archive_sha256.as_deref(),
-            Some("a4f000c3a41385819b51e5cdd7dae66d7dde85c6de0bfd823cfe617d4baaac33")
+            Some("1ec3009655ee37b1f73e52b3b120acc5afd8abaf9532f3303b1bf1dfe91b5969")
         );
         assert!(
             entry
                 .source
                 .as_deref()
                 .unwrap()
-                .ends_with("microsoft.gameinput.4.0.302.nupkg")
+                .ends_with("SDL3-devel-3.4.20-VC.zip")
         );
     }
 

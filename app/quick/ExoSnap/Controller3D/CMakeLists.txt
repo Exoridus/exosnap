@@ -36,6 +36,11 @@ qt_add_resources(exosnap_controller3d "pilot_mapping"
     FILES "${PROJECT_SOURCE_DIR}/app/assets/gamepad/controllers/dualsense/mapping.json"
         "${PROJECT_SOURCE_DIR}/app/assets/gamepad/controllers/dualsense/source.svg"
 )
+add_custom_command(TARGET exosnap_controller3d POST_BUILD
+    COMMAND ${CMAKE_COMMAND} -E copy_if_different
+        "$<TARGET_FILE:SDL3::SDL3>" "$<TARGET_FILE_DIR:exosnap_controller3d>"
+    VERBATIM
+)
 if(WIN32 AND EXOSNAP_WINDEPLOYQT)
     add_custom_command(TARGET exosnap_controller3d POST_BUILD
         COMMAND "${EXOSNAP_WINDEPLOYQT}" --no-translations --no-compiler-runtime --skip-plugin-types qmltooling

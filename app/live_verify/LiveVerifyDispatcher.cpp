@@ -135,6 +135,8 @@ Outcome ExecuteReadOnly(const QString& command, const QJsonObject& params, LiveV
     }
     if (command == QLatin1String("clip.snapshot"))
         return Succeeded(source.ClipSnapshot());
+    if (command == QLatin1String("gamepad.snapshot"))
+        return Succeeded(source.GamepadSnapshot());
     if (command == QLatin1String("audio.routing.snapshot"))
         return Succeeded(source.AudioRoutingSnapshot());
     if (command == QLatin1String("profiles.list"))
@@ -824,6 +826,23 @@ Outcome ExecuteMutating(const CommandDescriptor& command, const ParsedRequest& r
         return Succeeded(result);
     }
 
+    if (command.name == QLatin1String("gamepad.selectDevice") ||
+        command.name == QLatin1String("gamepad.selectLayout")) {
+        if (params.size() != 4 || !params.value(QStringLiteral("choice")).isString())
+            return Failed(
+                error_code::kInvalidParams,
+                QStringLiteral("Gamepad selection requires only sourceId, itemId, editRevision and a string choice"));
+        const auto source_id = ParamString(params, "sourceId");
+        const auto item_id = ParamString(params, "itemId");
+        const auto edit_revision = ParamString(params, "editRevision");
+        const auto choice = ParamString(params, "choice");
+        const bool accepted = command.name == QLatin1String("gamepad.selectDevice")
+                                  ? source.SelectGamepadDevice(source_id, item_id, edit_revision, choice, &error)
+                                  : source.SelectGamepadLayout(source_id, item_id, edit_revision, choice, &error);
+        if (!accepted)
+            return IntentRefused(command, source, error);
+        return Succeeded(source.GamepadSnapshot());
+    }
     if (command.name == QLatin1String("clip.request")) {
         if (!source.ClipRequest(ParamString(params, "durationSeconds"), &error))
             return IntentRefused(command, source, error);

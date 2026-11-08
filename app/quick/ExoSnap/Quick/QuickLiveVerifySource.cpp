@@ -1420,6 +1420,87 @@ bool QuickLiveVerifySource::SettingsSet(const QString& key, const QJsonValue& va
     return settings_automation::WriteKey(*settings, key, value, error);
 }
 
+QJsonObject QuickLiveVerifySource::GamepadSnapshot() const {
+    const auto* overlay = application_.gamepadOverlay();
+    const auto* settings = application_.settingsAdapter();
+    QJsonObject result{{QStringLiteral("available"), overlay != nullptr && settings != nullptr},
+                       {QStringLiteral("reading"), QJsonValue::Null}};
+    if (!overlay || !settings)
+        return result;
+    result.insert(QStringLiteral("enabled"), overlay->enabled());
+    result.insert(QStringLiteral("status"), overlay->status());
+    result.insert(QStringLiteral("selectedDevice"), overlay->device());
+    result.insert(QStringLiteral("devices"), QJsonArray::fromVariantList(overlay->devices()));
+    result.insert(QStringLiteral("source"),
+                  QJsonObject::fromVariantMap(settings->visualSourceState(settings->gamepadSourceId())));
+    result.insert(QStringLiteral("recordSource"),
+                  QJsonObject::fromVariantMap(settings->visualSourceState(settings->recordGamepadSourceId(), true)));
+    result.insert(QStringLiteral("options"),
+                  QJsonArray::fromVariantList(settings->visualSettingsRows(settings->gamepadSourceId())));
+    const auto observed_at = gamepad::NowCapture100ns();
+    result.insert(QStringLiteral("observedCapture100ns"), QString::number(observed_at));
+    const auto reading = overlay->ReadingAt(observed_at);
+    if (!reading)
+        return result;
+    const QByteArray device_id(reinterpret_cast<const char*>(reading->device.id.data()),
+                               static_cast<qsizetype>(reading->device.id.size()));
+    QJsonObject controls;
+    for (size_t index = 0; index < static_cast<size_t>(gamepad::Control::Count); ++index) {
+        const auto control = static_cast<gamepad::Control>(index);
+        const auto value = gamepad::ReadControl(reading->state, control);
+        const char* status = "unsupported";
+        switch (value.status) {
+        case gamepad::ControlStatus::Unsupported:
+            break;
+        case gamepad::ControlStatus::Unavailable:
+            status = "unavailable";
+            break;
+        case gamepad::ControlStatus::Released:
+            status = "released";
+            break;
+        case gamepad::ControlStatus::Active:
+            status = "active";
+            break;
+        }
+        QJsonObject entry{{QStringLiteral("status"), QString::fromLatin1(status)}};
+        if (value.status == gamepad::ControlStatus::Released || value.status == gamepad::ControlStatus::Active) {
+            entry.insert(QStringLiteral("x"), value.x);
+            entry.insert(QStringLiteral("y"), value.y);
+        }
+        const auto name = gamepad::ControlName(control);
+        controls.insert(QString::fromLatin1(name.data(), static_cast<qsizetype>(name.size())), entry);
+    }
+    result.insert(QStringLiteral("reading"),
+                  QJsonObject{{QStringLiteral("capture100ns"), QString::number(reading->capture_100ns)},
+                              {QStringLiteral("connected"), reading->connected},
+                              {QStringLiteral("deviceId"), QString::fromLatin1(device_id.toHex())},
+                              {QStringLiteral("vendorId"), reading->device.vendor_id},
+                              {QStringLiteral("productId"), reading->device.product_id},
+                              {QStringLiteral("persistentIdentity"), reading->device.persistent},
+                              {QStringLiteral("controls"), controls}});
+    return result;
+}
+
+bool QuickLiveVerifySource::SelectGamepadDevice(const QString& source_id, const QString& item_id,
+                                                const QString& edit_revision, const QString& choice, QString* error) {
+    auto* settings = application_.settingsAdapter();
+    if (settings && source_id == settings->gamepadSourceId() &&
+        settings->selectVisualSetting(source_id, item_id, edit_revision, QStringLiteral("select-device"), choice))
+        return true;
+    *error = QStringLiteral("The gamepad device choice, source or edit revision is no longer available");
+    return false;
+}
+
+bool QuickLiveVerifySource::SelectGamepadLayout(const QString& source_id, const QString& item_id,
+                                                const QString& edit_revision, const QString& choice, QString* error) {
+    auto* settings = application_.settingsAdapter();
+    if (settings && source_id == settings->gamepadSourceId() &&
+        settings->selectVisualSetting(source_id, item_id, edit_revision, QStringLiteral("select-layout"), choice))
+        return true;
+    *error = QStringLiteral("The gamepad layout choice, source or edit revision is no longer available");
+    return false;
+}
+
 QJsonObject QuickLiveVerifySource::AudioRoutingSnapshot() const {
     const auto* routing = application_.audioRoutingAdapter();
     return {{QStringLiteral("revision"), static_cast<qint64>(routing->revision())},

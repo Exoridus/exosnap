@@ -561,8 +561,8 @@ class PreviewTextureNode final : public QSGNode {
         const engine::WebcamPixelRect content{
             qRound(normalized_source_rect_.x() * width_), qRound(normalized_source_rect_.y() * height_),
             qRound(normalized_source_rect_.width() * width_), qRound(normalized_source_rect_.height() * height_)};
-        auto frame = visual_consumer_->Sample(engine::CaptureTime100ns{gamepad::GameInputSource::NowCapture100ns()},
-                                              content, composition_mode_);
+        auto frame =
+            visual_consumer_->Sample(engine::CaptureTime100ns{gamepad::NowCapture100ns()}, content, composition_mode_);
         if (frame.Deferred()) {
             visual_deferred_ = true;
             visual_dirty_ = true;
