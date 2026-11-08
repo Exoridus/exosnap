@@ -27,6 +27,10 @@ class GamepadOverlay final : public QObject, public engine::SpriteSourceProvider
     Q_PROPERTY(QRectF placement READ placement NOTIFY settingsChanged FINAL)
     Q_PROPERTY(QString device READ device NOTIFY settingsChanged FINAL)
     Q_PROPERTY(QVariantList devices READ devices NOTIFY devicesChanged FINAL)
+    Q_PROPERTY(int playerIndex READ playerIndex NOTIFY playerIndexChanged FINAL)
+    Q_PROPERTY(bool playerConnected READ playerConnected NOTIFY playerIndexChanged FINAL)
+    Q_PROPERTY(bool playerLedSupported READ playerLedSupported NOTIFY playerIndexChanged FINAL)
+    Q_PROPERTY(QString playerIndexStatus READ playerIndexStatus NOTIFY playerIndexChanged FINAL)
     Q_PROPERTY(QVariantList layouts READ layouts CONSTANT FINAL)
     Q_PROPERTY(QString status READ status NOTIFY statusChanged FINAL)
 
@@ -63,6 +67,10 @@ class GamepadOverlay final : public QObject, public engine::SpriteSourceProvider
         return devices_;
     }
     QVariantList layouts() const;
+    int playerIndex() const noexcept { return player_index_; }
+    bool playerConnected() const noexcept { return player_connected_; }
+    bool playerLedSupported() const noexcept { return player_led_supported_; }
+    const QString& playerIndexStatus() const noexcept { return player_index_status_; }
     const QString& status() const {
         return status_;
     }
@@ -73,11 +81,14 @@ class GamepadOverlay final : public QObject, public engine::SpriteSourceProvider
     void setOpacity(double value);
     void setPlacement(QRectF value);
     void setDevice(const QString& value);
+    // Invoked by the future per-overlay context menu; no automatic hardware writes.
+    Q_INVOKABLE void setPlayerIndex(int index);
     Q_INVOKABLE void setContentSize(QSize size);
 
   signals:
     void settingsChanged();
     void devicesChanged();
+    void playerIndexChanged();
     void statusChanged();
     void frameChanged();
     void visualControlSettled();
@@ -115,6 +126,10 @@ class GamepadOverlay final : public QObject, public engine::SpriteSourceProvider
     QString atlas_key_;
     QString pending_atlas_key_;
     QVariantList devices_;
+    int player_index_ = -1;
+    bool player_connected_ = false;
+    bool player_led_supported_ = false;
+    QString player_index_status_;
     QString status_;
     QTimer poll_;
     QTimer raster_;

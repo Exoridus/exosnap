@@ -90,6 +90,10 @@ struct DeviceIdentity {
     uint16_t product_id = 0;
     LayoutKind layout = LayoutKind::Generic;
     bool persistent = true;
+    // SDL's logical assignment, not a readback of the physical LED pattern.
+    // -1 means unknown/unassigned; indices are zero-based.
+    int player_index = -1;
+    bool player_led_supported = false;
 };
 
 /// One gamepad state. `buttons` carries the legacy overlay button-mask bits
@@ -222,6 +226,20 @@ void RegisterInputMainThread() noexcept;
 
 [[nodiscard]] uint64_t NowCapture100ns() noexcept;
 
+// Result of an explicit player-index request. Other controllers can be
+// reassigned by SDL when the requested slot is already occupied.
+struct PlayerIndexSetResult {
+    DeviceId device{};
+    int requested = -1;
+    int observed = -1;
+    bool success = false;
+    std::string error;
+};
+
+[[nodiscard]] constexpr bool SelectablePlayerIndex(int index) noexcept {
+    return index >= -1 && index <= 3;
+}
+
 enum class InputSourceState { Starting, Ready, Failed, Stopping, Stopped };
 
 /// Owns SDL gamepad input. Start, destruction and WaitForStop require the bound
@@ -242,6 +260,10 @@ class SdlGamepadSource {
     [[nodiscard]] HistoryReadView HistoryView() const noexcept;
     void SelectDevice(std::optional<DeviceId> device);
     [[nodiscard]] std::vector<DeviceIdentity> Devices() const;
+    // Explicit user action only; queued on the existing SDL input worker.
+    // A true return means queued, NOT that the hardware accepted the change.
+    [[nodiscard]] bool RequestPlayerIndex(DeviceId device, int index);
+    [[nodiscard]] std::optional<PlayerIndexSetResult> TakePlayerIndexResult();
 
     struct Impl;
 

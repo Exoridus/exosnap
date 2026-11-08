@@ -10,6 +10,7 @@
 #include <SDL3/SDL_main.h>
 #include <SDL3/SDL_timer.h>
 
+#include <algorithm>
 #include <atomic>
 #include <chrono>
 #include <cstring>
@@ -497,4 +498,70 @@ TEST_F(SdlProvider, DeviceLimitFailsVisiblyAndRetiresExistingReadings) {
     GamepadReading reading;
     if (view.TryStateAt(std::numeric_limits<uint64_t>::max(), reading) == HistoryReadResult::Found)
         EXPECT_FALSE(reading.connected);
+}
+
+
+TEST(SdlPlayerIndex, OnlyFourPlayersAndUnassignedAreSelectable) {
+    EXPECT_TRUE(SelectablePlayerIndex(-1));
+    for (int index = 0; index < 4; ++index)
+        EXPECT_TRUE(SelectablePlayerIndex(index));
+    EXPECT_FALSE(SelectablePlayerIndex(-2));
+    EXPECT_FALSE(SelectablePlayerIndex(4));
+}
+
+TEST_F(SdlProvider, PlayerIndexReadsOnConnectAndSetsOnlyOnExplicitRequest) {
+    auto source = Start();
+    ASSERT_TRUE(source);
+    VirtualPad pad;
+    ASSERT_NE(pad.id, 0U) << SDL_GetError();
+    ASSERT_TRUE(WaitFor([&] { return source->Devices().size() == 1; }));
+    const auto device = source->Devices().front();
+    EXPECT_EQ(device.player_index, SDL_GetGamepadPlayerIndexForID(pad.id));
+    EXPECT_FALSE(source->RequestPlayerIndex(device.id, 4));
+    EXPECT_FALSE(source->RequestPlayerIndex(device.id, -2));
+
+    ASSERT_TRUE(source->RequestPlayerIndex(device.id, 2));
+    std::optional<PlayerIndexSetResult> assigned;
+    ASSERT_TRUE(WaitFor([&] { assigned = source->TakePlayerIndexResult(); return assigned.has_value(); }));
+    ASSERT_TRUE(assigned->success) << assigned->error;
+    EXPECT_EQ(assigned->observed, 2);
+    ASSERT_TRUE(WaitFor([&] { return source->Devices().front().player_index == 2; }));
+
+    ASSERT_TRUE(source->RequestPlayerIndex(device.id, -1));
+    std::optional<PlayerIndexSetResult> cleared;
+    ASSERT_TRUE(WaitFor([&] { cleared = source->TakePlayerIndexResult(); return cleared.has_value(); }));
+    ASSERT_TRUE(cleared->success) << cleared->error;
+    EXPECT_EQ(cleared->observed, -1);
+    ASSERT_TRUE(WaitFor([&] { return source->Devices().front().player_index == -1; }));
+}
+
+TEST_F(SdlProvider, PlayerIndexWritesUseStableDeviceIdentityAndReportMissingDevices) {
+    auto source = Start();
+    ASSERT_TRUE(source);
+    VirtualPad first;
+    VirtualPad second;
+    ASSERT_NE(first.id, 0U);
+    ASSERT_NE(second.id, 0U);
+    ASSERT_TRUE(WaitFor([&] { return source->Devices().size() == 2; }));
+    const auto devices = source->Devices();
+    ASSERT_NE(devices[0].id, devices[1].id);
+
+    ASSERT_TRUE(source->RequestPlayerIndex(devices[0].id, 1));
+    std::optional<PlayerIndexSetResult> result;
+    ASSERT_TRUE(WaitFor([&] { result = source->TakePlayerIndexResult(); return result.has_value(); }));
+    ASSERT_TRUE(result->success) << result->error;
+    ASSERT_TRUE(WaitFor([&] {
+        const auto latest = source->Devices();
+        return std::any_of(latest.begin(), latest.end(), [&](const auto& dev) {
+            return dev.id == devices[0].id && dev.player_index == 1;
+        });
+    }));
+
+    DeviceId unknown{};
+    unknown.fill(0xff);
+    ASSERT_TRUE(source->RequestPlayerIndex(unknown, 0));
+    std::optional<PlayerIndexSetResult> missing;
+    ASSERT_TRUE(WaitFor([&] { missing = source->TakePlayerIndexResult(); return missing.has_value(); }));
+    EXPECT_FALSE(missing->success);
+    EXPECT_NE(missing->error.find("disconnected"), std::string::npos);
 }
