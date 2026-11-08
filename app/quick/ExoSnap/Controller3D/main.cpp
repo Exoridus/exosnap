@@ -68,6 +68,7 @@ QByteArray Hash(const QImage& image) {
 } // namespace
 
 int main(int argc, char** argv) {
+    RegisterInputMainThread();
     QCoreApplication::setAttribute(Qt::AA_DisableShaderDiskCache);
     QSurfaceFormat format;
     format.setSwapInterval(0);
@@ -103,7 +104,7 @@ int main(int argc, char** argv) {
         settings.device = qEnvironmentVariable("EXOSNAP_CONTROLLER3D_DEVICE").toStdString();
         owner.Configure(settings);
     }
-    const auto reading = Fixture(scenario, GameInputSource::NowCapture100ns());
+    const auto reading = Fixture(scenario, NowCapture100ns());
     if (capture)
         state.ApplyReading(reading, reading.capture_100ns);
 
@@ -143,8 +144,7 @@ int main(int argc, char** argv) {
     }
     QTimer live;
     if (!capture) {
-        QObject::connect(&live, &QTimer::timeout, &state,
-                         [&] { state.Sample(owner, GameInputSource::NowCapture100ns()); });
+        QObject::connect(&live, &QTimer::timeout, &state, [&] { state.Sample(owner, NowCapture100ns()); });
         live.start(8);
         return app.exec();
     }
@@ -177,9 +177,9 @@ int main(int argc, char** argv) {
     QObject::connect(&timer, &QTimer::timeout, &app, [&] {
         if (!elapsed.isValid())
             elapsed.start();
-        const auto now = GameInputSource::NowCapture100ns();
+        const auto now = NowCapture100ns();
         state.ApplyReading(reading, now);
-        const auto pose_time = GameInputSource::NowCapture100ns();
+        const auto pose_time = NowCapture100ns();
         if (depth_probe)
             depth_probe->setProperty("visible", frames % 2 == 0);
         const QImage image = window->grabWindow().convertToFormat(QImage::Format_RGBA8888);

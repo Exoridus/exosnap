@@ -1,4 +1,5 @@
 #include <exosnap/engine/performance_measurements.h>
+#include <gamepad/gamepad.h>
 // Not inside the EXOSNAP_ENABLE_AUTO_RECORD_HARNESS block below, and that is
 // the whole contract: --pseudo-localize is armed by argv and by nothing else
 // (see PseudoLocalization.h), so its translator has to exist in every
@@ -1302,6 +1303,7 @@ int main(int argc, char* argv[]) {
     }
 #endif
     QApplication app(argc, argv);
+    exosnap::gamepad::RegisterInputMainThread();
 #if defined(EXOSNAP_ENABLE_AUTO_RECORD_HARNESS) && !defined(QT_NO_DEBUG)
     if (qEnvironmentVariableIntValue("EXOSNAP_QML_PREVIEW") == 1) {
         // Qt snapshots debugger arguments on the first service-list assignment.

@@ -90,6 +90,11 @@ class QuickLiveVerifySource final : public QObject, public live_verify::LiveVeri
     [[nodiscard]] QJsonObject SettingsDescribe() const override;
     [[nodiscard]] QJsonObject SettingsGet(const QString& key, QString* error) const override;
     bool SettingsSet(const QString& key, const QJsonValue& value, QString* error) override;
+    [[nodiscard]] QJsonObject GamepadSnapshot() const override;
+    bool SelectGamepadDevice(const QString& source_id, const QString& item_id, const QString& edit_revision,
+                             const QString& choice, QString* error) override;
+    bool SelectGamepadLayout(const QString& source_id, const QString& item_id, const QString& edit_revision,
+                             const QString& choice, QString* error) override;
     [[nodiscard]] QJsonObject AudioRoutingSnapshot() const override;
     bool AddAudioTrack(quint64 expected_revision, QString* error) override;
     bool AssignAudioSource(const QString& source_id, const QString& track_id, int mode, quint64 expected_revision,

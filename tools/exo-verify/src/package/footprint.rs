@@ -85,7 +85,7 @@ fn category(path: &str) -> &'static str {
     .any(|prefix| name.starts_with(prefix))
     {
         "FFmpeg libraries"
-    } else if name.starts_with("gameinput") || name.starts_with("xinput") {
+    } else if name.starts_with("sdl3") || name.starts_with("xinput") {
         "Controller runtime"
     } else if name.starts_with("crashpad") || name.starts_with("sentry") {
         "Crash reporting"

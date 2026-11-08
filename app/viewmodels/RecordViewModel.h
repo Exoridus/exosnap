@@ -327,7 +327,8 @@ class RecordViewModel {
     void ClearRecentRecordings();
     [[nodiscard]] bool HasRecentRecordings() const noexcept;
     void ApplyTargetKind(capability::CaptureTargetKind kind);
-    void ApplyTargetKindPreservingAudio(capability::CaptureTargetKind kind);
+    void ApplyTargetKindPreservingAudio(capability::CaptureTargetKind kind,
+                                        const engine::AudioIntent* intent = nullptr);
     void RebuildAudioPlan();
 
     // Formatting helpers

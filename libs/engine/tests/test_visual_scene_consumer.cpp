@@ -413,7 +413,7 @@ TEST_F(SceneConsumer, NewRequestResetsGamepadFallbackEvenWithTheSameResource) {
     reading.capture_100ns = 100;
     reading.device.id.back() = 1;
     reading.state.left_x = 1;
-    gamepad::NormalizeGameInputControls(reading.state, 0x3FFF);
+    gamepad::NormalizeLegacyControls(reading.state, 0x3FFF);
     history->Push(reading);
     ASSERT_TRUE(StageGamepadData(*runtime, pad, sprites, gamepad::HistoryReadView(history)).succeeded());
     ASSERT_TRUE(runtime->PublishScene(description).succeeded());

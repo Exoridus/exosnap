@@ -61,10 +61,22 @@ struct ControlValue {
 
 [[nodiscard]] std::string_view ControlName(Control control) noexcept;
 [[nodiscard]] Control ControlFromName(std::string_view name) noexcept;
-[[nodiscard]] Control ControlFromGameInputButton(uint32_t mask) noexcept;
+[[nodiscard]] Control ControlFromLegacyButton(uint32_t mask) noexcept;
 
 /// Silhouette family a controller is drawn with.
-enum class LayoutKind : uint8_t { Generic, DualSense, XboxSeries, XboxOne, SwitchPro };
+enum class LayoutKind : uint8_t {
+    Generic,
+    DualSense,
+    XboxSeries,
+    XboxOne,
+    SwitchPro,
+    DualShock4,
+    Xbox360,
+    JoyConLeft,
+    JoyConRight,
+    JoyConPair,
+    GameCube
+};
 
 /// Maps a USB/Bluetooth vendor and product id to a layout. Unknown devices are
 /// `Generic`.
@@ -77,9 +89,10 @@ struct DeviceIdentity {
     uint16_t vendor_id = 0;
     uint16_t product_id = 0;
     LayoutKind layout = LayoutKind::Generic;
+    bool persistent = true;
 };
 
-/// One gamepad state. `buttons` carries the GameInputGamepadButtons bits
+/// One gamepad state. `buttons` carries the legacy overlay button-mask bits
 /// unchanged. Sticks are in [-1, 1] with +y up, triggers in [0, 1].
 struct GamepadState {
     /// Canonical controls are authoritative when populated by an input provider.
@@ -102,10 +115,10 @@ struct GamepadState {
 
 [[nodiscard]] ControlValue ReadControl(const GamepadState& state, Control control) noexcept;
 
-/// Converts standard GameInput positions without inferring a physical adapter's wiring.
+/// Converts legacy overlay positions without inferring a physical adapter's wiring.
 /// Unsupported buttons are excluded by the device's reported capability mask.
-void NormalizeGameInputControls(GamepadState& state, uint32_t supported_buttons, bool gamepad_available = true,
-                                bool separately_reported_trigger_clicks = false) noexcept;
+void NormalizeLegacyControls(GamepadState& state, uint32_t supported_buttons, bool gamepad_available = true,
+                             bool separately_reported_trigger_clicks = false) noexcept;
 
 /// Clamps every axis into its documented range and replaces NaN with the rest
 /// position, so a misbehaving driver cannot push a stick cap out of its well.
@@ -123,7 +136,7 @@ struct GamepadReading {
 
 /// The same instant read on both clocks.
 struct ClockAnchor {
-    uint64_t gameinput_us = 0;
+    uint64_t input_us = 0;
     uint64_t capture_100ns = 0;
 };
 
@@ -143,10 +156,10 @@ class HistoryReadView {
     std::shared_ptr<const DeviceHistory> history_;
 };
 
-/// Converts a GameInput timestamp (microseconds) to the capture clock through
+/// Converts an input timestamp (microseconds) to the capture clock through
 /// `anchor`. Results that would be negative on the capture clock saturate to
 /// zero.
-[[nodiscard]] uint64_t GameInputToCapture100ns(uint64_t gameinput_us, const ClockAnchor& anchor) noexcept;
+[[nodiscard]] uint64_t InputToCapture100ns(uint64_t input_us, const ClockAnchor& anchor) noexcept;
 
 /// Fixed-capacity history of readings. Thread-safe: one short critical section
 /// per call, never held across a callback. When full, the oldest pushed reading
@@ -173,6 +186,8 @@ class ReadingRing {
 
 /// Independent bounded histories for each physical device. Automatic selection
 /// stays on one connected device. A manual selection never falls back.
+/// Retains at most 64 device histories, evicting only disconnected, unselected
+/// entries. A new device is ignored when all retained entries are protected.
 class DeviceHistory {
   public:
     void Push(GamepadReading reading);
@@ -201,33 +216,37 @@ class DeviceHistory {
     std::atomic<uint64_t> selection_generation_{1};
 };
 
-/// Live gamepad input through Microsoft GameInput, including background input
-/// while another application has focus. Readings arrive on GameInput's own
-/// threads and are queried from any thread.
-class GameInputSource {
+/// Binds provider initialization and retirement to the real application main thread.
+/// Call once from the application's entry point before starting input.
+void RegisterInputMainThread() noexcept;
+
+[[nodiscard]] uint64_t NowCapture100ns() noexcept;
+
+enum class InputSourceState { Starting, Ready, Failed, Stopping, Stopped };
+
+/// Owns SDL gamepad input. Start, destruction and WaitForStop require the bound
+/// main thread. Consumers retain HistoryReadView instead of native ownership.
+class SdlGamepadSource {
   public:
-    /// Returns nullptr and fills `error` when the GameInput v4 runtime is not
-    /// available (the in-box Windows DLL only implements v0; the
-    /// GameInputRedist runtime is required).
-    [[nodiscard]] static std::unique_ptr<GameInputSource> Start(std::string& error);
+    [[nodiscard]] static std::unique_ptr<SdlGamepadSource> Start(std::string& error);
+    ~SdlGamepadSource();
+    SdlGamepadSource(const SdlGamepadSource&) = delete;
+    SdlGamepadSource& operator=(const SdlGamepadSource&) = delete;
 
-    ~GameInputSource();
-    GameInputSource(const GameInputSource&) = delete;
-    GameInputSource& operator=(const GameInputSource&) = delete;
-
+    [[nodiscard]] InputSourceState State() const noexcept;
+    [[nodiscard]] std::string Error() const;
+    void RequestStop() noexcept;
+    [[nodiscard]] bool Stopped() const noexcept;
+    void WaitForStop();
     [[nodiscard]] std::optional<GamepadReading> StateAt(uint64_t capture_100ns) const;
     [[nodiscard]] HistoryReadView HistoryView() const noexcept;
     void SelectDevice(std::optional<DeviceId> device);
     [[nodiscard]] std::vector<DeviceIdentity> Devices() const;
 
-    /// The capture clock's current time.
-    [[nodiscard]] static uint64_t NowCapture100ns() noexcept;
-
     struct Impl;
 
   private:
-    explicit GameInputSource(std::unique_ptr<Impl> impl);
+    explicit SdlGamepadSource(std::unique_ptr<Impl> impl);
     std::unique_ptr<Impl> impl_;
 };
-
 } // namespace exosnap::gamepad

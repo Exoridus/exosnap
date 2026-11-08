@@ -745,3 +745,25 @@ TEST(LiveVerifyPolicy, RecordingClipCreationIsUnavailableEvenWithStalePositiveSt
         }
     }
 }
+
+TEST(LiveVerifyPolicy, GamepadObservationIsReadOnlyAndSelectionsKeepSettingsGuards) {
+    const auto* snapshot = FindCommand(QStringLiteral("gamepad.snapshot"));
+    ASSERT_NE(snapshot, nullptr);
+    EXPECT_FALSE(snapshot->mutating);
+    for (const auto& state : InterestingStates())
+        EXPECT_TRUE(Evaluate(*snapshot, state).allowed());
+    for (const auto* name : {"gamepad.selectDevice", "gamepad.selectLayout"}) {
+        const auto* command = FindCommand(QString::fromLatin1(name));
+        ASSERT_NE(command, nullptr);
+        EXPECT_TRUE(command->mutating);
+        EXPECT_TRUE(Evaluate(*command, Ready()).allowed());
+        for (const auto* transport : {"Preparing", "Countdown", "Recording", "Paused", "Stopping", "Saving"}) {
+            auto state = Ready();
+            state.recording_state = QString::fromLatin1(transport);
+            EXPECT_FALSE(Evaluate(*command, state).allowed()) << transport;
+        }
+        auto blocked = Ready();
+        blocked.blocking_surface = QString::fromLatin1(blocking_surface_name::kRecovery);
+        EXPECT_FALSE(Evaluate(*command, blocked).allowed());
+    }
+}

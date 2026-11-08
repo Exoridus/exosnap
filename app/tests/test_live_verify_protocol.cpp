@@ -203,6 +203,19 @@ class FakeSource final : public LiveVerifySource {
         last_settings_value = value;
         return Outcome(error);
     }
+    [[nodiscard]] QJsonObject GamepadSnapshot() const override {
+        return Marker(QStringLiteral("gamepad.snapshot"));
+    }
+    bool SelectGamepadDevice(const QString& source, const QString& item, const QString& edit_revision,
+                             const QString& choice, QString* error) override {
+        calls.append(QStringLiteral("gamepad.selectDevice:%1:%2:%3:%4").arg(source, item, edit_revision, choice));
+        return Outcome(error);
+    }
+    bool SelectGamepadLayout(const QString& source, const QString& item, const QString& edit_revision,
+                             const QString& choice, QString* error) override {
+        calls.append(QStringLiteral("gamepad.selectLayout:%1:%2:%3:%4").arg(source, item, edit_revision, choice));
+        return Outcome(error);
+    }
     [[nodiscard]] QJsonObject AudioRoutingSnapshot() const override {
         return Marker(QStringLiteral("audio.routing.snapshot"));
     }
@@ -1145,6 +1158,7 @@ TEST(LiveVerifyDispatcher, EveryListedCommandIsActuallyImplemented) {
         // is in flight, the way the Settings controls are.
         if (command.name.startsWith(QStringLiteral("settings.")) ||
             command.name.startsWith(QStringLiteral("audio.routing.")) ||
+            command.name.startsWith(QStringLiteral("gamepad.")) ||
             command.name.startsWith(QStringLiteral("profiles.")) ||
             command.name == QStringLiteral("diagnostics.setInDepth")) {
             source.state.recording_state = QStringLiteral("Ready");
@@ -2773,7 +2787,8 @@ TEST(LiveVerifyDescribe, IdempotencyIsDeclaredAndPlayPauseIsTheExceptionThatIsNo
     // split, delete, closeGap and deleteTrack (the next target), undo and redo
     // (the next history step), applyCrossfade and removeTransition (the next
     // cut), and frameStep (the next frame).
-    EXPECT_EQ(non_idempotent, 24);
+    // Controller selections consume the observed edit token when the choice changes.
+    EXPECT_EQ(non_idempotent, 26);
 }
 
 // ---------------------------------------------------------------------------
@@ -2901,4 +2916,75 @@ TEST(LiveVerifyDispatcher, AudioRoutingEditsRequireNonnegativeObservedRevision) 
                                                                  {QStringLiteral("expectedRevision"), 18}}));
     ASSERT_TRUE(Ok(assigned));
     EXPECT_TRUE(source.calls.contains(QStringLiteral("audio.routing.assignSource:source:track:1:18")));
+}
+
+TEST(LiveVerifyDispatcher, GamepadSelectionRequiresOpaqueStringRevisionAndExactParameters) {
+    FakeSource source;
+    source.state.recording_state = QStringLiteral("Ready");
+    LiveVerifyDispatcher dispatcher(&source, QString::fromLatin1(kRunId));
+    ASSERT_TRUE(Ok(Hello(dispatcher, QString::fromLatin1(kRunId), 2)));
+    for (const auto* name : {"gamepad.selectDevice", "gamepad.selectLayout"}) {
+        const auto command = QString::fromLatin1(name);
+        ASSERT_NE(FindCommand(command), nullptr);
+        const QJsonObject valid{{"sourceId", "source"},
+                                {"itemId", "item"},
+                                {"editRevision", "revision:9007199254740993"},
+                                {"choice", "choice"}};
+        for (const auto* field : {"sourceId", "itemId", "editRevision", "choice"}) {
+            auto missing = valid;
+            missing.remove(QString::fromLatin1(field));
+            EXPECT_EQ(ErrorCode(dispatcher.Dispatch(RequestV2(command, missing))),
+                      QString::fromLatin1(error_code::kInvalidParams));
+        }
+        for (const QJsonValue& bad : {QJsonValue(1), QJsonValue(1.5), QJsonValue(false), QJsonValue()}) {
+            auto invalid = valid;
+            invalid.insert(QStringLiteral("editRevision"), bad);
+            EXPECT_EQ(ErrorCode(dispatcher.Dispatch(RequestV2(command, invalid))),
+                      QString::fromLatin1(error_code::kInvalidParams));
+            invalid = valid;
+            invalid.insert(QStringLiteral("choice"), bad);
+            EXPECT_EQ(ErrorCode(dispatcher.Dispatch(RequestV2(command, invalid))),
+                      QString::fromLatin1(error_code::kInvalidParams));
+        }
+        auto arbitrary = valid;
+        arbitrary.insert(QStringLiteral("action"), QStringLiteral("retry"));
+        EXPECT_EQ(ErrorCode(dispatcher.Dispatch(RequestV2(command, arbitrary))),
+                  QString::fromLatin1(error_code::kInvalidParams));
+        EXPECT_TRUE(source.calls.isEmpty());
+    }
+}
+
+TEST(LiveVerifyDispatcher, GamepadSelectionsPreserveTokensAndReturnObservedState) {
+    FakeSource source;
+    source.state.recording_state = QStringLiteral("Ready");
+    LiveVerifyDispatcher dispatcher(&source, QString::fromLatin1(kRunId));
+    ASSERT_TRUE(Ok(Hello(dispatcher, QString::fromLatin1(kRunId), 2)));
+    const auto observed = dispatcher.Dispatch(RequestV2(QStringLiteral("gamepad.snapshot")));
+    ASSERT_TRUE(Ok(observed));
+    EXPECT_EQ(observed.value(QStringLiteral("result")).toObject().value(QStringLiteral("marker")).toString(),
+              QStringLiteral("gamepad.snapshot"));
+    EXPECT_TRUE(source.calls.isEmpty());
+    for (const auto* name : {"gamepad.selectDevice", "gamepad.selectLayout"}) {
+        const auto command = QString::fromLatin1(name);
+        const auto choice = command.endsWith(QStringLiteral("Device")) ? QString{} : QStringLiteral("switch_pro");
+        const QJsonObject params{{"sourceId", "source"},
+                                 {"itemId", "item"},
+                                 {"editRevision", "revision:9007199254740993"},
+                                 {"choice", choice}};
+        const auto response = dispatcher.Dispatch(RequestV2(command, params));
+        ASSERT_TRUE(Ok(response));
+        EXPECT_EQ(source.calls.last(), command + QStringLiteral(":source:item:revision:9007199254740993:") + choice);
+        EXPECT_EQ(response.value(QStringLiteral("result")).toObject().value(QStringLiteral("marker")).toString(),
+                  QStringLiteral("gamepad.snapshot"));
+        source.allow_intents = false;
+        EXPECT_EQ(ErrorCode(dispatcher.Dispatch(RequestV2(command, params))),
+                  QString::fromLatin1(error_code::kOperationFailed));
+        source.allow_intents = true;
+        source.calls.clear();
+        source.state.recording_state = QStringLiteral("Recording");
+        EXPECT_EQ(ErrorCode(dispatcher.Dispatch(RequestV2(command, params))),
+                  QString::fromLatin1(error_code::kBlocked));
+        EXPECT_TRUE(source.calls.isEmpty());
+        source.state.recording_state = QStringLiteral("Ready");
+    }
 }

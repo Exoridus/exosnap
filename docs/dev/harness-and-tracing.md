@@ -120,7 +120,7 @@ The run holds the build tree's lock, so a concurrent build cannot relink the bin
 Build `exosnap_controller3d` with the canonical Qt SDK and its `qtquick3d`, `qtquicktimeline` and
 `qtshadertools` modules. The developer executable is not installed in the recording package.
 Its post-build deployment includes the Quick3D runtime and QML plugins. Start
-`build/windows-x64-ninja-debug/controller3d/exosnap_controller3d.exe` for live GameInput and the Normal/Ghost selector.
+`build/windows-x64-ninja-debug/controller3d/exosnap_controller3d.exe` for live SDL3 input and the Normal/Ghost selector.
 `EXOSNAP_CONTROLLER3D_DEVICE` optionally pins the same hexadecimal device identity accepted by the existing overlay.
 No other process or input provider is opened by the 3D view.
 

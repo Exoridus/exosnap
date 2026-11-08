@@ -95,10 +95,11 @@ TEST_F(InstallTreeTest, ExosnapExeExists) {
     EXPECT_TRUE(file_exists(_root, "exosnap.exe")) << "Missing exosnap.exe in install tree";
 }
 
-TEST_F(InstallTreeTest, GameInputRuntimeAtRoot) {
+TEST_F(InstallTreeTest, SdlRuntimeReplacesGameInput) {
     SKIP_IF_NO_TREE();
-    EXPECT_TRUE(file_exists(_root, "GameInputRedist.dll"));
-    EXPECT_TRUE(file_exists(_root, "GameInputRawInputProxy.exe"));
+    EXPECT_TRUE(file_exists(_root, "SDL3.dll"));
+    EXPECT_FALSE(file_exists(_root, "GameInputRedist.dll"));
+    EXPECT_FALSE(file_exists(_root, "GameInputRawInputProxy.exe"));
 }
 
 TEST_F(InstallTreeTest, QtConfAtRoot) {
@@ -167,9 +168,7 @@ TEST_F(InstallTreeTest, AllExpectedLicensesPresent) {
         "licenses/presentmon.txt",
         "licenses/miniz.txt",
         "licenses/monocypher.txt",
-        "licenses/gameinput.txt",
-        "licenses/gameinput-notice.txt",
-        "licenses/gameinput-mit.txt",
+        "licenses/sdl3.txt",
         "licenses/gamepad-artwork.txt",
         "licenses/gamepad-al2009man.txt",
         "licenses/gamepad-al2009man-notice.txt",

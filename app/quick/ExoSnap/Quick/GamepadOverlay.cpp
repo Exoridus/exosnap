@@ -40,6 +40,11 @@ GamepadOverlay::~GamepadOverlay() {
 void GamepadOverlay::WaitForVisualControl() {
     source_demand_ = false;
     native_enabled_ = false;
+    RetireInput();
+    if (retiring_input_) {
+        retiring_input_->WaitForStop();
+        retiring_input_.reset();
+    }
     poll_.stop();
     raster_.stop();
     pending_atlas_key_.clear();
@@ -119,39 +124,65 @@ void GamepadOverlay::Configure(GamepadOverlaySettings settings) {
     emit settingsChanged();
 }
 
+void GamepadOverlay::RetireInput() {
+    {
+        const std::scoped_lock lock(mutex_);
+        if (!input_)
+            return;
+        Q_ASSERT(!retiring_input_);
+        retiring_input_ = std::move(input_);
+        input_history_ = {};
+        cached_.reset();
+        last_notified_.reset();
+    }
+    retiring_input_->RequestStop();
+    published_sprites_ = nullptr;
+    poll_.start();
+}
+
+void GamepadOverlay::FinishInputRetirement() {
+    if (retiring_input_ && retiring_input_->Stopped()) {
+        retiring_input_->WaitForStop();
+        retiring_input_.reset();
+        emit visualControlSettled();
+    }
+}
+
 void GamepadOverlay::ConfigureBackend(GamepadOverlaySettings settings) {
     settings = SanitizeGamepadOverlaySettings(std::move(settings));
     const auto previous = Settings();
     const bool wanted = settings.enabled && (!visual_runtime_ || source_demand_);
-    if (!visual_runtime_ && previous == settings && wanted == native_enabled_)
+    if (!visual_runtime_ && previous == settings && wanted == native_enabled_ &&
+        (!wanted || input_ || !input_start_error_.isEmpty()))
         return;
-    std::shared_ptr<gamepad::GameInputSource> input;
-    {
-        const std::scoped_lock lock(mutex_);
-        input = input_;
-    }
-    if (wanted && !input) {
+    if (!wanted) {
+        RetireInput();
+        input_start_error_.clear();
+    } else if (!input_ && !retiring_input_ && input_start_error_.isEmpty()) {
         std::string error;
-        input = gamepad::GameInputSource::Start(error);
-        if (!input)
-            SetStatus(tr("GameInput unavailable: %1").arg(QString::fromStdString(error)));
+        auto input = gamepad::SdlGamepadSource::Start(error);
+        if (!input) {
+            input_start_error_ = QString::fromStdString(error);
+            SetStatus(tr("Controller input unavailable: %1").arg(input_start_error_));
+        } else {
+            const std::scoped_lock lock(mutex_);
+            input_history_ = input->HistoryView();
+            input_ = std::move(input);
+        }
     }
-    if (!wanted)
-        input.reset();
-    if (input) {
+    if (input_) {
         std::optional<gamepad::DeviceId> id;
         if (!settings.device.empty()) {
             const QByteArray bytes = QByteArray::fromHex(QByteArray::fromStdString(settings.device));
             gamepad::DeviceId decoded{};
-            std::copy(bytes.begin(), bytes.end(), decoded.begin());
+            std::copy_n(bytes.begin(), std::min(static_cast<size_t>(bytes.size()), decoded.size()), decoded.begin());
             id = decoded;
         }
-        input->SelectDevice(id);
+        input_->SelectDevice(id);
     }
     {
         const std::scoped_lock lock(mutex_);
         settings_ = settings;
-        input_.swap(input);
         ++revision_;
     }
     const bool was_running = native_enabled_;
@@ -166,7 +197,8 @@ void GamepadOverlay::ConfigureBackend(GamepadOverlaySettings settings) {
         }
         Poll();
     } else {
-        poll_.stop();
+        if (!retiring_input_)
+            poll_.stop();
         raster_.stop();
         pending_atlas_key_.clear();
         raster_pool_.clear();
@@ -183,7 +215,6 @@ void GamepadOverlay::ConfigureBackend(GamepadOverlaySettings settings) {
     if (previous != settings)
         emit settingsChanged();
 }
-
 GamepadControlHooks GamepadOverlay::CreateControlHooks(std::shared_ptr<engine::VisualSceneRuntime> runtime) {
     visual_runtime_ = std::move(runtime);
     ConfigureBackend(Settings());
@@ -191,6 +222,11 @@ GamepadControlHooks GamepadOverlay::CreateControlHooks(std::shared_ptr<engine::V
                 visual_token_ = token;
                 visual_status_ = std::move(status);
                 visual_waiting_ = false;
+                reported_phase_.reset();
+                reported_error_.clear();
+                input_start_error_.clear();
+                if (input_ && input_->State() == gamepad::InputSourceState::Failed)
+                    RetireInput();
                 source_demand_ = true;
                 auto desired = Settings();
                 desired.device = std::move(source.device);
@@ -210,35 +246,52 @@ GamepadControlHooks GamepadOverlay::CreateControlHooks(std::shared_ptr<engine::V
                 });
             },
             [this] {
-                return !native_enabled_ &&
+                return !native_enabled_ && !input_ && !retiring_input_ &&
                        raster_completed_serial_.load(std::memory_order_acquire) == raster_requested_serial_;
             }};
+}
+
+void GamepadOverlay::ReportVisualStatus(SourcePhase phase, std::optional<engine::EngineError> error) {
+    const auto context = error ? error->context : std::string{};
+    if (!visual_status_ || (reported_phase_ == phase && reported_error_ == context))
+        return;
+    reported_phase_ = phase;
+    reported_error_ = context;
+    visual_status_({visual_token_, phase, std::move(error)});
 }
 
 void GamepadOverlay::PublishVisualData() {
     if (!visual_runtime_ || !source_demand_ || !visual_status_)
         return;
-    if (published_token_ == visual_token_ && published_sprites_ == sprites_.get())
-        return;
-    if (!input_ || !sprites_ || !pending_atlas_key_.isEmpty() || raster_.isActive()) {
-        if (!visual_waiting_) {
-            visual_waiting_ = true;
-            visual_status_({visual_token_, SourcePhase::Waiting, {}});
-        }
+    if (!input_start_error_.isEmpty()) {
+        engine::EngineError error;
+        error.code = engine::EngineErrorCode::UnavailableSource;
+        error.owner = engine::EngineModule::Runtime;
+        error.context = input_start_error_.toStdString();
+        error.retryability = engine::Retryability::AfterUserAction;
+        ReportVisualStatus(SourcePhase::Failed, std::move(error));
         return;
     }
-    auto staged = engine::StageGamepadData(*visual_runtime_, visual_token_, sprites_, input_->HistoryView());
-    if (staged.succeeded()) {
+    if (!input_ || input_->State() == gamepad::InputSourceState::Starting) {
+        ReportVisualStatus(SourcePhase::Preparing);
+        return;
+    }
+    if (!sprites_ || !pending_atlas_key_.isEmpty() || raster_.isActive()) {
+        ReportVisualStatus(SourcePhase::Waiting);
+        return;
+    }
+    if (published_token_ != visual_token_ || published_sprites_ != sprites_.get()) {
+        auto staged = engine::StageGamepadData(*visual_runtime_, visual_token_, sprites_, input_history_);
+        if (!staged.succeeded()) {
+            ReportVisualStatus(SourcePhase::Waiting, *staged.error());
+            return;
+        }
         published_token_ = visual_token_;
         published_sprites_ = sprites_.get();
-        visual_waiting_ = false;
-        visual_status_({visual_token_, SourcePhase::Ready, {}});
-    } else if (!visual_waiting_) {
-        visual_waiting_ = true;
-        visual_status_({visual_token_, SourcePhase::Waiting, *staged.error()});
     }
+    const auto reading = ReadingAt(gamepad::NowCapture100ns());
+    ReportVisualStatus(reading && reading->connected ? SourcePhase::Ready : SourcePhase::Waiting);
 }
-
 void GamepadOverlay::setEnabled(bool value) {
     auto settings = Settings();
     settings.enabled = value;
@@ -344,24 +397,67 @@ void GamepadOverlay::Rebuild() {
     });
 }
 
-void GamepadOverlay::Poll() {
-    PublishVisualData();
-    std::shared_ptr<gamepad::GameInputSource> input;
-    {
-        const std::scoped_lock lock(mutex_);
-        input = input_;
+int GamepadOverlay::DetectedLayout(const gamepad::DeviceIdentity& device) {
+    if (device.vendor_id == 0x054C && device.product_id == 0x0DF2)
+        return 18;
+    if (device.vendor_id == 0x045E && (device.product_id == 0x02E3 || device.product_id == 0x0B00 ||
+                                       device.product_id == 0x0B05 || device.product_id == 0x0B22))
+        return 19;
+    switch (device.layout) {
+    case gamepad::LayoutKind::DualSense:
+        return 0;
+    case gamepad::LayoutKind::XboxSeries:
+        return 1;
+    case gamepad::LayoutKind::DualShock4:
+        return 3;
+    case gamepad::LayoutKind::XboxOne:
+        return 4;
+    case gamepad::LayoutKind::SwitchPro:
+        return 5;
+    case gamepad::LayoutKind::JoyConPair:
+        return 7;
+    case gamepad::LayoutKind::JoyConLeft:
+        return 8;
+    case gamepad::LayoutKind::JoyConRight:
+        return 9;
+    case gamepad::LayoutKind::Xbox360:
+        return 16;
+    case gamepad::LayoutKind::GameCube:
+        return 17;
+    default:
+        return 2;
     }
-    const auto reading = input ? input->StateAt(gamepad::GameInputSource::NowCapture100ns()) : std::nullopt;
+}
+
+void GamepadOverlay::Poll() {
+    FinishInputRetirement();
+    if (native_enabled_ && !input_ && !retiring_input_ && input_start_error_.isEmpty()) {
+        ConfigureBackend(Settings());
+        return;
+    }
+    if (input_ && input_->State() == gamepad::InputSourceState::Failed) {
+        input_start_error_ = QString::fromStdString(input_->Error());
+        RetireInput();
+    }
+    PublishVisualData();
+    if (!native_enabled_ && !retiring_input_) {
+        poll_.stop();
+        return;
+    }
+    const auto reading = ReadingAt(gamepad::NowCapture100ns());
     int detected = automatic_layout_;
     if (reading && reading->connected) {
-        detected = reading->device.layout == gamepad::LayoutKind::DualSense    ? 0
-                   : reading->device.layout == gamepad::LayoutKind::XboxSeries ? 1
-                   : reading->device.layout == gamepad::LayoutKind::XboxOne    ? 4
-                   : reading->device.layout == gamepad::LayoutKind::SwitchPro  ? 5
-                                                                               : 2;
-        SetStatus(tr("Controller connected"));
-    } else if (input) {
-        SetStatus(tr("Waiting for controller"));
+        detected = DetectedLayout(reading->device);
+        SetStatus(reading->device.persistent ? tr("Controller connected")
+                                             : tr("Controller connected (session-only identity)"));
+    } else if (!input_start_error_.isEmpty()) {
+        SetStatus(tr("Controller input unavailable: %1").arg(input_start_error_));
+        if (!retiring_input_)
+            poll_.stop();
+    } else if (input_ && input_->State() == gamepad::InputSourceState::Starting) {
+        SetStatus(tr("Preparing controller input"));
+    } else if (input_) {
+        SetStatus(device().isEmpty() ? tr("Waiting for controller") : tr("Controller disconnected"));
     }
     if (detected != automatic_layout_) {
         automatic_layout_ = detected;
@@ -373,16 +469,23 @@ void GamepadOverlay::Poll() {
     }
     QVariantList options{
         {QVariantMap{{QStringLiteral("value"), QString()}, {QStringLiteral("label"), tr("Automatic")}}}};
-    for (const auto& device : input ? input->Devices() : std::vector<gamepad::DeviceIdentity>{}) {
+    for (const auto& device : input_ ? input_->Devices() : std::vector<gamepad::DeviceIdentity>{}) {
         const QByteArray bytes(reinterpret_cast<const char*>(device.id.data()),
                                static_cast<qsizetype>(device.id.size()));
         const QString id = QString::fromLatin1(bytes.toHex());
-        const QString family = device.layout == gamepad::LayoutKind::DualSense    ? tr("DualSense")
-                               : device.layout == gamepad::LayoutKind::XboxSeries ? tr("Xbox Series")
-                               : device.layout == gamepad::LayoutKind::XboxOne    ? tr("Xbox One")
-                               : device.layout == gamepad::LayoutKind::SwitchPro  ? tr("Switch Pro")
-                                                                                  : tr("Gamepad");
-        const QString label = QStringLiteral("%1 (%2)").arg(family, id.right(6));
+        const QString family = device.layout == gamepad::LayoutKind::DualSense     ? tr("DualSense")
+                               : device.layout == gamepad::LayoutKind::XboxSeries  ? tr("Xbox Series")
+                               : device.layout == gamepad::LayoutKind::XboxOne     ? tr("Xbox One")
+                               : device.layout == gamepad::LayoutKind::SwitchPro   ? tr("Switch Pro")
+                               : device.layout == gamepad::LayoutKind::DualShock4  ? tr("DualShock 4")
+                               : device.layout == gamepad::LayoutKind::Xbox360     ? tr("Xbox 360")
+                               : device.layout == gamepad::LayoutKind::JoyConLeft  ? tr("Joy-Con L")
+                               : device.layout == gamepad::LayoutKind::JoyConRight ? tr("Joy-Con R")
+                               : device.layout == gamepad::LayoutKind::JoyConPair  ? tr("Joy-Con pair")
+                               : device.layout == gamepad::LayoutKind::GameCube    ? tr("GameCube")
+                                                                                   : tr("Gamepad");
+        const QString label = device.persistent ? QStringLiteral("%1 (%2)").arg(family, id.right(6))
+                                                : tr("%1 (%2, session only)").arg(family, id.right(6));
         options.push_back(QVariantMap{{QStringLiteral("value"), id}, {QStringLiteral("label"), label}});
     }
     const auto selected = device();
@@ -409,7 +512,7 @@ void GamepadOverlay::Poll() {
         }
         return;
     }
-    const auto next = PreviewSnapshot(gamepad::GameInputSource::NowCapture100ns());
+    const auto next = PreviewSnapshot(gamepad::NowCapture100ns());
     const bool changed = engine::SpriteLayerChanged(last_notified_.get(), next.get());
     last_notified_ = next;
     if (changed)
@@ -425,14 +528,16 @@ std::shared_ptr<const engine::SpriteLayerSnapshot> GamepadOverlay::PreviewSnapsh
 }
 
 std::optional<gamepad::GamepadReading> GamepadOverlay::ReadingAt(uint64_t timestamp) const {
-    std::shared_ptr<gamepad::GameInputSource> input;
+    gamepad::HistoryReadView history;
     {
         const std::scoped_lock lock(mutex_);
-        input = input_;
+        history = input_history_;
     }
-    return input ? input->StateAt(timestamp) : std::nullopt;
+    gamepad::GamepadReading reading;
+    return history.TryStateAt(timestamp, reading) == gamepad::HistoryReadResult::Found
+               ? std::optional<gamepad::GamepadReading>(std::move(reading))
+               : std::nullopt;
 }
-
 gamepad::GamepadState GamepadOverlay::DisplayState(gamepad::GamepadState state) {
     return engine::GamepadDisplayState(std::move(state));
 }
@@ -441,7 +546,13 @@ std::shared_ptr<const engine::SpriteLayerSnapshot> GamepadOverlay::BuildSnapshot
     const std::scoped_lock lock(mutex_);
     if (!settings_.enabled || !sprites_ || (!preview && !settings_.output_visible))
         return nullptr;
-    const auto reading = input_ ? input_->StateAt(timestamp) : std::nullopt;
+    gamepad::GamepadReading sampled;
+    const auto result = input_history_.TryStateAt(timestamp, sampled);
+    if (result == gamepad::HistoryReadResult::Busy)
+        return cached_;
+    const auto reading = result == gamepad::HistoryReadResult::Found
+                             ? std::optional<gamepad::GamepadReading>(std::move(sampled))
+                             : std::nullopt;
     auto state = reading && reading->connected ? reading->state : gamepad::GamepadState{};
     state = DisplayState(std::move(state));
     if (cached_ && cached_revision_ == revision_ && state == cached_state_)

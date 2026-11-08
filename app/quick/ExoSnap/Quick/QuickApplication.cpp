@@ -1905,7 +1905,8 @@ void QuickApplication::selectTarget(int target_index, CaptureMode mode) {
     record_view_model_.capture_mode = mode;
     const capability::CaptureTargetKind target_kind =
         mode == CaptureMode::Window ? capability::CaptureTargetKind::Window : capability::CaptureTargetKind::Display;
-    record_view_model_.ApplyTargetKindPreservingAudio(target_kind);
+    record_view_model_.ApplyTargetKindPreservingAudio(
+        target_kind, live_config_.audio_intent ? &*live_config_.audio_intent : nullptr);
     if (mode == CaptureMode::Window) {
         DWORD process_id = 0;
         GetWindowThreadProcessId(reinterpret_cast<HWND>(target.native_id), &process_id);
@@ -3663,7 +3664,7 @@ void QuickApplication::updateVisualSources(uint8_t demand) {
         if (!applied.succeeded()) {
             diagnostics::AppLog::warning(QStringLiteral("visual"), QString::fromStdString(applied.error()->context));
         } else {
-            const auto accepted_at = gamepad::GameInputSource::NowCapture100ns();
+            const auto accepted_at = gamepad::NowCapture100ns();
             accepted_visual_scene_ = std::move(*validated.value());
             accepted_visual_revision_ = *applied.value();
             accepted_visual_qpc_100ns_ = accepted_at;
@@ -7242,6 +7243,10 @@ OverlayTelemetryAdapter* QuickApplication::overlayTelemetryAdapter() noexcept {
 }
 SettingsAdapter* QuickApplication::settingsAdapter() noexcept {
     return &settings_adapter_;
+}
+
+const GamepadOverlay* QuickApplication::gamepadOverlay() const noexcept {
+    return &gamepad_overlay_;
 }
 AudioRoutingAdapter* QuickApplication::audioRoutingAdapter() noexcept {
     return &audio_routing_adapter_;

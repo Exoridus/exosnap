@@ -846,7 +846,7 @@ endforeach()
 exosnap_stage_asan_runtime(exosnap)
 add_custom_command(TARGET exosnap POST_BUILD
     COMMAND ${CMAKE_COMMAND} -E copy_if_different
-        ${EXOSNAP_GAMEINPUT_RUNTIME_FILES} "$<TARGET_FILE_DIR:exosnap>"
+        "$<TARGET_FILE:SDL3::SDL3>" "$<TARGET_FILE_DIR:exosnap>"
     VERBATIM
 )
 
