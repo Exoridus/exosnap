@@ -293,7 +293,6 @@ TEST(DeviceHistory, RetiredDeviceChurnIsBoundedWithoutEvictingLiveOrSelectedHist
     EXPECT_GT(history.SelectionGeneration(), generation);
 }
 
-
 TEST_F(SdlProvider, HidapiDriverHintsAreNotToggledDuringStartup) {
     // Our virtual-controller fixture disables HIDAPI before joystick initialization.
     // The production provider must not flip a device driver on/off during startup:
