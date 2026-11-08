@@ -10,7 +10,9 @@
 #include <SDL3/SDL_main.h>
 #include <SDL3/SDL_timer.h>
 
+#include <atomic>
 #include <chrono>
+#include <cstring>
 #include <thread>
 
 using namespace exosnap::gamepad;
@@ -289,6 +291,27 @@ TEST(DeviceHistory, RetiredDeviceChurnIsBoundedWithoutEvictingLiveOrSelectedHist
     EXPECT_TRUE(history.StateAt(last)->connected);
     EXPECT_EQ(history.StateAt(last)->state.buttons, 0U);
     EXPECT_GT(history.SelectionGeneration(), generation);
+}
+
+
+TEST_F(SdlProvider, HidapiDriverHintsAreNotToggledDuringStartup) {
+    // Our virtual-controller fixture disables HIDAPI before joystick initialization.
+    // The production provider must not flip a device driver on/off during startup:
+    // doing so can expose the same physical device via two SDL backend paths.
+    std::atomic<unsigned> unexpected_changes{0};
+    const auto callback = [](void* userdata, const char*, const char* previous, const char* current) {
+        if (current && (!previous || std::strcmp(previous, current) != 0))
+            static_cast<std::atomic<unsigned>*>(userdata)->fetch_add(1, std::memory_order_relaxed);
+    };
+    SDL_AddHintCallback(SDL_HINT_JOYSTICK_HIDAPI_SWITCH, callback, &unexpected_changes);
+    auto source = Start();
+    if (source) {
+        source->RequestStop();
+        source->WaitForStop();
+    }
+    SDL_RemoveHintCallback(SDL_HINT_JOYSTICK_HIDAPI_SWITCH, callback, &unexpected_changes);
+    ASSERT_TRUE(source);
+    EXPECT_EQ(unexpected_changes.load(), 0U);
 }
 
 TEST_F(SdlProvider, StartsAndRetiresOnMainThreadWithRetainedHistory) {

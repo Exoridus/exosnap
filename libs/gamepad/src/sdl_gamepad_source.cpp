@@ -100,33 +100,6 @@ struct JoystickLock {
     }
 };
 
-constexpr const char* hid_driver_hints[]{SDL_HINT_JOYSTICK_HIDAPI,
-                                         SDL_HINT_JOYSTICK_HIDAPI_GAMECUBE,
-                                         SDL_HINT_JOYSTICK_HIDAPI_JOY_CONS,
-                                         SDL_HINT_JOYSTICK_HIDAPI_LUNA,
-                                         SDL_HINT_JOYSTICK_HIDAPI_NINTENDO_CLASSIC,
-                                         SDL_HINT_JOYSTICK_HIDAPI_PS3,
-                                         SDL_HINT_JOYSTICK_HIDAPI_PS3_SIXAXIS_DRIVER,
-                                         SDL_HINT_JOYSTICK_HIDAPI_PS4,
-                                         SDL_HINT_JOYSTICK_HIDAPI_PS5,
-                                         SDL_HINT_JOYSTICK_HIDAPI_SHIELD,
-                                         SDL_HINT_JOYSTICK_HIDAPI_STADIA,
-                                         SDL_HINT_JOYSTICK_HIDAPI_STEAM,
-                                         SDL_HINT_JOYSTICK_HIDAPI_STEAMDECK,
-                                         SDL_HINT_JOYSTICK_HIDAPI_STEAM_HORI,
-                                         SDL_HINT_JOYSTICK_HIDAPI_LG4FF,
-                                         SDL_HINT_JOYSTICK_HIDAPI_8BITDO,
-                                         SDL_HINT_JOYSTICK_HIDAPI_SINPUT,
-                                         SDL_HINT_JOYSTICK_HIDAPI_ZUIKI,
-                                         SDL_HINT_JOYSTICK_HIDAPI_FLYDIGI,
-                                         SDL_HINT_JOYSTICK_HIDAPI_SWITCH,
-                                         SDL_HINT_JOYSTICK_HIDAPI_SWITCH2,
-                                         SDL_HINT_JOYSTICK_HIDAPI_WII,
-                                         SDL_HINT_JOYSTICK_HIDAPI_XBOX,
-                                         SDL_HINT_JOYSTICK_HIDAPI_XBOX_360,
-                                         SDL_HINT_JOYSTICK_HIDAPI_XBOX_360_WIRELESS,
-                                         SDL_HINT_JOYSTICK_HIDAPI_XBOX_ONE};
-
 DeviceId SessionIdentity() {
     DeviceId id{};
     if (BCryptGenRandom(nullptr, id.data(), static_cast<ULONG>(id.size()), BCRYPT_USE_SYSTEM_PREFERRED_RNG) < 0)
@@ -147,7 +120,6 @@ struct SdlGamepadSource::Impl {
 
     std::shared_ptr<DeviceHistory> history = std::make_shared<DeviceHistory>();
     std::map<SDL_JoystickID, Device> devices;
-    std::vector<SavedHint> hid_hints;
     std::vector<SavedHint> policy_hints;
     SdlClockAnchor anchor;
     std::atomic<InputSourceState> state{InputSourceState::Starting};
@@ -170,13 +142,10 @@ struct SdlGamepadSource::Impl {
     }
 
     bool Initialize(std::string& failure) {
-        for (const auto* hint : hid_driver_hints) {
-            hid_hints.emplace_back(hint);
-            if (!SDL_SetHintWithPriority(hint, "0", SDL_HINT_OVERRIDE)) {
-                failure = "Cannot disable HID discovery during main-thread initialization";
-                return false;
-            }
-        }
+        // Leave HIDAPI driver discovery at its configured startup policy (normally enabled).
+        // SDL requires these hints before joystick/gamepad initialization. Disabling them
+        // for Init and restoring them on a worker can enumerate the same Bluetooth
+        // controller through two backends before SDL's normal duplicate suppression.
         for (const auto* hint :
              {SDL_HINT_JOYSTICK_GAMEINPUT, SDL_HINT_JOYSTICK_GAMEINPUT_RAW, SDL_HINT_JOYSTICK_WGI,
               SDL_HINT_JOYSTICK_HIDAPI_COMBINE_JOY_CONS, SDL_HINT_JOYSTICK_ALLOW_BACKGROUND_EVENTS}) {
@@ -354,8 +323,6 @@ struct SdlGamepadSource::Impl {
 
     void Run() noexcept {
         try {
-            for (const auto& hint : hid_hints)
-                hint.Restore();
             SDL_SetGamepadEventsEnabled(true);
             auto next_reconcile = std::chrono::steady_clock::now();
             while (!stop_requested.load(std::memory_order_acquire)) {
@@ -415,11 +382,8 @@ struct SdlGamepadSource::Impl {
             SDL_QuitSubSystem(SDL_INIT_GAMEPAD);
             initialized = false;
         }
-        for (const auto& hint : hid_hints)
-            hint.Restore();
         for (const auto& hint : policy_hints)
             hint.Restore();
-        hid_hints.clear();
         policy_hints.clear();
         if (owns_gate) {
             input_owner_active.store(false, std::memory_order_release);
