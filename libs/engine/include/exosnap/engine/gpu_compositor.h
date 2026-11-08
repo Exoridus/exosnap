@@ -125,6 +125,13 @@ class GpuCompositor {
         return sprite_quad_draw_count_;
     }
 
+    [[nodiscard]] uint64_t PipelineBindCount() const noexcept {
+        return pipeline_bind_count_;
+    }
+    [[nodiscard]] uint64_t PipelineReuseCount() const noexcept {
+        return pipeline_reuse_count_;
+    }
+
   private:
     struct TextureResource {
         winrt::com_ptr<ID3D11Texture2D> texture;
@@ -145,7 +152,7 @@ class GpuCompositor {
     bool DrawTexture(ID3D11ShaderResourceView* srv, const WebcamPixelRect& rect, bool mirror,
                      const ChromaKeyParams& chroma, bool force_opaque, float opacity, std::string& err,
                      ID3D11BlendState* blend = nullptr, const float* uv_rect = nullptr,
-                     const std::array<OverlayMaskConstants, 2>* masks = nullptr);
+                     const std::array<OverlayMaskConstants, 2>* masks = nullptr, bool pipeline_ready = false);
 
     ID3D11Device* device_ = nullptr;
     ID3D11DeviceContext* context_ = nullptr;
@@ -198,6 +205,9 @@ class GpuCompositor {
     std::vector<SpriteAtlasTexture> sprite_atlases_;
     uint64_t sprite_atlas_upload_count_ = 0;
     uint64_t sprite_quad_draw_count_ = 0;
+    uint64_t pipeline_bind_count_ = 0;
+    uint64_t pipeline_reuse_count_ = 0;
+    bool stage_a_cache_enabled_ = false;
 };
 
 } // namespace exosnap::engine

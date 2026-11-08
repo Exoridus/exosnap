@@ -19,8 +19,11 @@
 
 #include <algorithm>
 #include <chrono>
+#include <cstdlib>
 #include <future>
 #include <mutex>
+#include <optional>
+#include <string>
 #include <tuple>
 
 using namespace exosnap;
@@ -661,4 +664,62 @@ TEST_F(SceneConsumer, FrameReportsPinnedRevisionUntilMaintenanceAcceptsNewScene)
         EXPECT_EQ(frame.Revision().value, 0U);
         EXPECT_EQ(frame.PublicationSequence(), 0U);
     }
+}
+
+TEST_F(SceneConsumer, PropertyPublicationReusesPreparedPlanWhenEnabled) {
+    char* old = nullptr;
+    size_t old_size = 0;
+    ASSERT_EQ(_dupenv_s(&old, &old_size, "EXOSNAP_STAGE_A_CACHE"), 0);
+    const std::optional<std::string> previous = old ? std::optional<std::string>(old) : std::nullopt;
+    struct Restore {
+        std::optional<std::string> value;
+        ~Restore() {
+            _putenv_s("EXOSNAP_STAGE_A_CACHE", value ? value->c_str() : "");
+        }
+    } restore{previous};
+    std::free(old);
+    ASSERT_EQ(_putenv_s("EXOSNAP_STAGE_A_CACHE", "1"), 0);
+    consumer.reset();
+    auto prepared = VisualSceneConsumer::Prepare(runtime);
+    ASSERT_TRUE(prepared.succeeded());
+    consumer = std::move(*prepared.value());
+    description.items[0].properties.opacity = 0.25F;
+    description.items[0].properties.placement.x = 0.2F;
+    ++description.revision.value;
+    ASSERT_TRUE(runtime->PublishScene(description).succeeded());
+    visual_allocations::Probe allocations;
+    bool refreshed = false;
+    {
+        visual_allocations::Scope scope(allocations);
+        refreshed = consumer->Refresh().succeeded();
+    }
+    ASSERT_TRUE(refreshed);
+    EXPECT_EQ(allocations.allocations, 0);
+    EXPECT_EQ(allocations.frees, 0);
+    auto frame = consumer->Sample(CaptureTime100ns{150}, {0, 0, 480, 320}, VisualCompositionMode::IdlePreview);
+    ASSERT_EQ(frame.Items().size(), 2);
+    EXPECT_FLOAT_EQ(frame.Items()[0].image_opacity, 0.25F);
+    EXPECT_EQ(frame.Items()[0].image_rect.x, 96);
+    EXPECT_EQ(frame.Revision(), description.revision);
+    EXPECT_TRUE(frame.Changed());
+    EXPECT_EQ(consumer->PlanRebuildCount(), 1U);
+    EXPECT_EQ(consumer->PlanReuseCount(), 1U);
+    frame = {};
+
+    std::swap(description.items[0], description.items[1]);
+    ASSERT_TRUE(runtime->PublishScene(description).succeeded());
+    ASSERT_TRUE(consumer->Refresh().succeeded());
+    EXPECT_EQ(consumer->PlanRebuildCount(), 2U);
+    EXPECT_EQ(consumer->PlanReuseCount(), 1U);
+    {
+        auto reordered = consumer->Sample(CaptureTime100ns{150}, {0, 0, 480, 320}, VisualCompositionMode::IdlePreview);
+        ASSERT_EQ(reordered.Items().size(), 2);
+        EXPECT_EQ(reordered.Items()[0].item->id, description.items[0].id);
+    }
+    ASSERT_TRUE(writer.PrepareImage(camera, {4, 4}).succeeded());
+    ASSERT_EQ(PublishImage(2), PublishResult::Accepted);
+    ASSERT_TRUE(runtime->PublishScene(description).succeeded());
+    ASSERT_TRUE(consumer->Refresh().succeeded());
+    EXPECT_EQ(consumer->PlanRebuildCount(), 3U);
+    EXPECT_EQ(consumer->PlanReuseCount(), 1U);
 }

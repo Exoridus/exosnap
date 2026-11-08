@@ -10,6 +10,8 @@
 #include <winrt/base.h>
 
 #include <array>
+#include <cstdlib>
+#include <optional>
 
 using namespace exosnap::engine;
 
@@ -133,6 +135,43 @@ TEST_F(VisualImageCache, SpriteIdentityPreventsCrossSourceReuseWithoutStickUploa
     ASSERT_TRUE(compositor.DrawVisualSprite(0, second, 2, layer, {0, 0, 2, 2}, error));
     EXPECT_EQ(compositor.SpriteAtlasUploadCount(), 2u);
     EXPECT_EQ(Pixel()[0], 0u);
+}
+
+TEST_F(VisualImageCache, SpritePipelineReusePreservesPixelsAndRebindsAfterExternalState) {
+    char* old = nullptr;
+    size_t old_size = 0;
+    ASSERT_EQ(_dupenv_s(&old, &old_size, "EXOSNAP_STAGE_A_CACHE"), 0);
+    struct Restore {
+        std::optional<std::string> value;
+        ~Restore() {
+            _putenv_s("EXOSNAP_STAGE_A_CACHE", value ? value->c_str() : "");
+        }
+    } restore{old ? std::optional<std::string>(old) : std::nullopt};
+    std::free(old);
+    auto atlas = std::make_shared<SpriteAtlas>();
+    atlas->width = atlas->height = 1;
+    atlas->generation = 1;
+    atlas->pixels = {80, 160, 240, 128};
+    SpriteLayerSnapshot layer{atlas, {{{0, 0, 1, 1}, {0, 0, 1, 1}, .5F}, {{0, 0, 1, 1}, {0, 0, 1, 1}, .25F}}};
+    std::array<uint8_t, 4> reference{};
+    for (const bool enabled : {false, true}) {
+        ASSERT_EQ(_putenv_s("EXOSNAP_STAGE_A_CACHE", enabled ? "1" : "0"), 0);
+        compositor = GpuCompositor{};
+        ASSERT_TRUE(compositor.Init(device.get(), context.get(), 2, 2, error)) << error;
+        for (int frame_index = 0; frame_index != 2; ++frame_index) {
+            context->ClearState();
+            ASSERT_TRUE(compositor.BeginFrame(background.get(), error)) << error;
+            ASSERT_TRUE(compositor.DrawSpriteLayer(0, layer, {0, 0, 2, 2}, error)) << error;
+            const auto pixel = Pixel();
+            if (!enabled)
+                reference = pixel;
+            else
+                EXPECT_EQ(pixel, reference);
+        }
+        EXPECT_EQ(compositor.PipelineBindCount(), enabled ? 2u : 4u);
+        EXPECT_EQ(compositor.PipelineReuseCount(), enabled ? 2u : 0u);
+        EXPECT_EQ(compositor.SpriteAtlasUploadCount(), 1u);
+    }
 }
 
 } // namespace
