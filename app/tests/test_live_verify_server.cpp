@@ -95,6 +95,9 @@ class StubSource final : public LiveVerifySource {
     [[nodiscard]] QJsonObject EditorSnapshot() const override {
         return {};
     }
+    [[nodiscard]] QJsonObject ReviewSnapshot() const override {
+        return {};
+    }
     [[nodiscard]] QJsonObject DiagnosticsSnapshot() const override {
         return {};
     }
@@ -395,6 +398,15 @@ class StubSource final : public LiveVerifySource {
         return true;
     }
     bool ClearNotifications(QString*) override {
+        return true;
+    }
+    bool ReviewPlayPause(QString*) override {
+        return true;
+    }
+    bool ReviewSeek(qint64, QString*) override {
+        return true;
+    }
+    bool ReviewEdit(QString*) override {
         return true;
     }
     bool EditOpen(QString*) override {

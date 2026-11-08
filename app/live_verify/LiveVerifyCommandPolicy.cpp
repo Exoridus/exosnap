@@ -186,6 +186,45 @@ PreconditionVerdict CanOpenEdit(const AutomationState& state) {
                   QStringLiteral("canOpenEdit"), true, false);
 }
 
+PreconditionVerdict CanUseReview(const AutomationState& state) {
+    if (const auto blocked = RefuseUnderBlockingSurface(state); !blocked.allowed())
+        return blocked;
+    if (state.page != QLatin1String(page_name::kRecord))
+        return Refuse(error_code::kInvalidState, QStringLiteral("Recording Review belongs to the Record page"),
+                      QStringLiteral("page"), Text(page_name::kRecord), state.page);
+    if (state.review_active)
+        return Allowed();
+    return Refuse(error_code::kInvalidState, QStringLiteral("No recording is open in Review"),
+                  QStringLiteral("reviewActive"), true, false);
+}
+
+PreconditionVerdict CanPlayReview(const AutomationState& state) {
+    if (const auto review = CanUseReview(state); !review.allowed())
+        return review;
+    if (state.review_can_play)
+        return Allowed();
+    return Refuse(error_code::kInvalidState, QStringLiteral("Review playback is not available"),
+                  QStringLiteral("reviewCanPlay"), true, false);
+}
+
+PreconditionVerdict CanEditReview(const AutomationState& state) {
+    if (const auto review = CanUseReview(state); !review.allowed())
+        return review;
+    if (state.review_can_edit)
+        return Allowed();
+    return Refuse(error_code::kInvalidState, QStringLiteral("The completed recording is not available"),
+                  QStringLiteral("reviewCanEdit"), true, false);
+}
+
+PreconditionVerdict CanSeekReview(const AutomationState& state) {
+    if (const auto review = CanUseReview(state); !review.allowed())
+        return review;
+    if (state.review_can_seek)
+        return Allowed();
+    return Refuse(error_code::kInvalidState, QStringLiteral("Review seeking is not available"),
+                  QStringLiteral("reviewCanSeek"), true, false);
+}
+
 PreconditionVerdict CanPlayPause(const AutomationState& state) {
     return RequireEditSession(state, "edit.playPause");
 }
@@ -598,6 +637,16 @@ const QVector<CommandDescriptor>& AllCommands() {
         {QStringLiteral("preview.snapshot"), 1, false, true, Settle::NotApplicable, {}, &NoPrecondition},
         {QStringLiteral("record.snapshot"), 1, false, true, Settle::NotApplicable, {}, &NoPrecondition},
         {QStringLiteral("record.result"), 1, false, true, Settle::NotApplicable, {}, &NoPrecondition},
+        {QStringLiteral("review.snapshot"), 2, false, true, Settle::NotApplicable, {}, &NoPrecondition},
+        {QStringLiteral("review.playPause"), 2, true, false, Settle::Asynchronous, {}, &CanPlayReview},
+        {QStringLiteral("review.seek"),
+         2,
+         true,
+         true,
+         Settle::Synchronous,
+         {Param("positionMs", "int", true)},
+         &CanSeekReview},
+        {QStringLiteral("review.edit"), 2, true, true, Settle::Asynchronous, {}, &CanEditReview},
         {QStringLiteral("overlay.snapshot"), 1, false, true, Settle::NotApplicable, {}, &NoPrecondition},
         // Idempotent in effect but not in its answer: the applied sequence advances
         // on every accepted call, which is what lets a caller tell a second
@@ -1190,6 +1239,10 @@ QJsonObject StateToJson(const AutomationState& state, std::uint64_t state_revisi
     json.insert(QStringLiteral("page"), state.page);
     json.insert(QStringLiteral("diagnosticsSection"), state.diagnostics_section);
     json.insert(QStringLiteral("recordingState"), state.recording_state);
+    json.insert(QStringLiteral("reviewActive"), state.review_active);
+    json.insert(QStringLiteral("reviewCanPlay"), state.review_can_play);
+    json.insert(QStringLiteral("reviewCanSeek"), state.review_can_seek);
+    json.insert(QStringLiteral("reviewCanEdit"), state.review_can_edit);
     json.insert(QStringLiteral("editSession"),
                 state.edit_session_open ? QStringLiteral("open") : QStringLiteral("closed"));
     json.insert(QStringLiteral("editVisible"), state.edit_visible);

@@ -234,6 +234,34 @@ TEST(LiveVerifyPolicy, AnOpenEditSessionOffersTheWholeEditSurface) {
     }
 }
 
+TEST(LiveVerifyPolicy, ReviewActionsRequireTheirVisibleLoadedSurface) {
+    auto state = Ready();
+    EXPECT_FALSE(AvailableActions(state).contains(QStringLiteral("review.edit")));
+    state.review_active = true;
+    auto actions = AvailableActions(state);
+    EXPECT_FALSE(actions.contains(QStringLiteral("review.edit")));
+    EXPECT_FALSE(actions.contains(QStringLiteral("review.playPause")));
+    EXPECT_FALSE(actions.contains(QStringLiteral("review.seek")));
+    state.review_can_play = true;
+    state.review_can_seek = true;
+    state.review_can_edit = true;
+    actions = AvailableActions(state);
+    EXPECT_TRUE(actions.contains(QStringLiteral("review.edit")));
+    EXPECT_TRUE(actions.contains(QStringLiteral("review.playPause")));
+    EXPECT_TRUE(actions.contains(QStringLiteral("review.seek")));
+    const auto snapshot = StateToJson(state, 1);
+    EXPECT_TRUE(snapshot.value(QStringLiteral("reviewActive")).toBool());
+    EXPECT_TRUE(snapshot.value(QStringLiteral("reviewCanPlay")).toBool());
+    EXPECT_TRUE(snapshot.value(QStringLiteral("reviewCanSeek")).toBool());
+    state.page = QString::fromLatin1(page_name::kEdit);
+    EXPECT_FALSE(AvailableActions(state).contains(QStringLiteral("review.edit")));
+    state.page = QString::fromLatin1(page_name::kRecord);
+    state.blocking_surface = QString::fromLatin1(blocking_surface_name::kRecordingError);
+    EXPECT_FALSE(AvailableActions(state).contains(QStringLiteral("review.playPause")));
+    EXPECT_FALSE(AvailableActions(state).contains(QStringLiteral("review.seek")));
+    EXPECT_FALSE(AvailableActions(state).contains(QStringLiteral("review.edit")));
+}
+
 TEST(LiveVerifyPolicy, ABlockingSurfaceShrinksTheListWithoutEmptyingTheTransport) {
     AutomationState state = Recording();
     state.blocking_surface = QString::fromLatin1(blocking_surface_name::kRecordingError);

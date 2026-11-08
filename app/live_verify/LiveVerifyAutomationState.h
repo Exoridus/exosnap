@@ -86,6 +86,11 @@ struct AutomationState {
     // would be a second spelling of the state machine.
     bool countdown_active = false;
 
+    bool review_active = false;
+    bool review_can_play = false;
+    bool review_can_seek = false;
+    bool review_can_edit = false;
+
     // --- Edit ----------------------------------------------------------------
     // QCR-001: an open session is state of the Record destination, so "open" and
     // "on screen" are two facts and both are reported. `edit_visible` is false

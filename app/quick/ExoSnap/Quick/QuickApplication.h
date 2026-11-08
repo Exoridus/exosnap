@@ -113,6 +113,7 @@ class QuickApplication {
     [[nodiscard]] DiagnosticsAdapter* diagnosticsAdapter() noexcept;
     [[nodiscard]] LogsAdapter* logsAdapter() noexcept;
     [[nodiscard]] EditSessionAdapter* editSessionAdapter() noexcept;
+    [[nodiscard]] RecordingReviewAdapter* recordingReviewAdapter() noexcept;
     [[nodiscard]] EditTimelineAdapter* editTimelineAdapter() noexcept;
     [[nodiscard]] EditPlayerAdapter* editPlayerAdapter() noexcept;
     [[nodiscard]] EditExportAdapter* editExportAdapter() noexcept;
