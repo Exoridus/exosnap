@@ -52,6 +52,26 @@ pub fn scenarios() -> Vec<Scenario> {
             run: wgc_hevc_mp4,
         },
         Scenario {
+            id: "record.edit-export",
+            revision: 1,
+            title: "A paused recording opens in Edit and exports the same frame timeline",
+            class: ScenarioClass::Contract,
+            contract: "an isolated WGC recording pauses and resumes, opens its completed result through the product editor handoff, seeks, exports after review, and preserves decoded frame identities and timestamps",
+            lane: Lane::Preflight,
+            also: &[],
+            tier: Tier::Recommended,
+            requires: &[
+                Capability::InteractiveDesktop,
+                Capability::Wgc,
+                Capability::D3d11,
+                Capability::Nvenc,
+                Capability::Ffprobe,
+                Capability::Ffmpeg,
+            ],
+            timeout: secs(360.0),
+            run: recording_edit_export,
+        },
+        Scenario {
             id: "record.pause-resume",
             revision: 1,
             title: "Pause removes time and frames from a finished recording",
@@ -194,6 +214,14 @@ fn latest_stimulus_id(stimulus: &Stimulus) -> Step<u32> {
 }
 
 fn pause_resume(ctx: &mut Context) -> Step {
+    recording_workflow(ctx, false)
+}
+
+fn recording_edit_export(ctx: &mut Context) -> Step {
+    recording_workflow(ctx, true)
+}
+
+fn recording_workflow(ctx: &mut Context, export: bool) -> Step {
     let mut app = ctx.launch(&[])?;
     common::configure_exact(
         &mut app,
@@ -251,12 +279,170 @@ fn pause_resume(ctx: &mut Context) -> Step {
     ctx.evidence
         .put("idTimeline", serde_json::to_value(&timeline)?);
     ctx.evidence.put("recordResult", result);
+    ctx.keep(&file);
+    if export {
+        completed_recording_export(ctx, &mut app, &file, &timeline)?;
+    }
     Ok(())
+}
+
+fn completed_recording_export(
+    ctx: &mut Context,
+    app: &mut crate::context::App,
+    source: &std::path::Path,
+    expected: &crate::media::IdTimeline,
+) -> Step {
+    let request = |app: &mut crate::context::App, command, params| {
+        app.client
+            .request(command, params, secs(30.0))?
+            .map_err(|refusal| Stop::fail(format!("{command} refused: {refusal}")))
+    };
+    request(app, "edit.open", json!({}))?;
+    let opened = app
+        .client
+        .poll("editor.snapshot", json!({}), secs(60.0), |s| {
+            s["open"] == true && s["clipOpen"] == true
+        })?
+        .ok_or_else(|| Stop::fail("the completed recording did not open in Edit"))?;
+    product_ensure!(
+        opened["clipPath"]
+            .as_str()
+            .is_some_and(|p| std::path::Path::new(p) == source),
+        "the completed recording handoff opened a different file"
+    );
+    let position = opened["durationMs"]
+        .as_f64()
+        .filter(|d| d.is_finite() && *d > 0.0)
+        .ok_or_else(|| Stop::fail("Edit has no positive media duration"))?
+        / 2.0;
+    let sought = request(app, "edit.seek", json!({"positionMs": position as i64}))?;
+    product_ensure!(
+        sought["positionMs"]
+            .as_f64()
+            .is_some_and(|p| (p - position).abs() <= 1.0),
+        "Edit did not seek within the completed recording"
+    );
+    ctx.evidence.put("recordingEditor", sought);
+    request(
+        app,
+        "export.setOptions",
+        json!({"span": "entire", "container": "mkv", "mode": "finishedStereo"}),
+    )?;
+    request(app, "export.start", json!({}))?;
+    let review = app
+        .client
+        .poll("ui.getState", json!({}), secs(60.0), |s| {
+            matches!(s["exportState"].as_str(), Some("review" | "failed"))
+        })?
+        .ok_or_else(|| Stop::fail("recording export did not reach review"))?;
+    product_ensure!(
+        review["exportState"] == "review",
+        "recording export planning failed"
+    );
+    request(app, "export.confirm", json!({}))?;
+    let finished = app
+        .client
+        .poll("ui.getState", json!({}), secs(180.0), |s| {
+            matches!(s["exportState"].as_str(), Some("completed" | "failed"))
+        })?
+        .ok_or_else(|| Stop::fail("recording export did not finish"))?;
+    product_ensure!(
+        finished["exportState"] == "completed",
+        "recording export failed"
+    );
+    let exported = request(app, "editor.snapshot", json!({}))?["export"].clone();
+    let output = std::path::PathBuf::from(exported["outputPath"].as_str().unwrap_or_default());
+    product_ensure!(
+        output.parent() == Some(app.output.as_path()) && output.is_file() && output != source,
+        "recording export did not create a distinct isolated output"
+    );
+    ctx.keep(&output);
+    let probe = crate::media::probe(&output)?;
+    let source_probe = crate::media::probe(source)?;
+    let source_video = crate::media::streams(&source_probe, "video");
+    let output_video = crate::media::streams(&probe, "video");
+    product_ensure!(
+        source_video.len() == 1 && output_video.len() == 1,
+        "recording and export must each contain one video stream"
+    );
+    product_ensure!(
+        probe["format"]["format_name"]
+            .as_str()
+            .is_some_and(|name| name.split(',').any(|part| part == "matroska"))
+            && output_video[0]["codec_name"] == "h264"
+            && output_video[0]["width"] == source_video[0]["width"]
+            && output_video[0]["height"] == source_video[0]["height"],
+        "recording export changed the requested MKV/H.264 format or recording dimensions"
+    );
+    let frames = crate::media::luma_frames(&output, 480)?;
+    let actual = crate::media::id_timeline(&frames);
+    product_ensure!(
+        actual.corrupt == 0 && actual.absent == 0 && actual.reorders == 0,
+        "recording export contains damaged, absent or reordered frame identities"
+    );
+    product_ensure!(
+        same_frame_timeline(&expected.samples, &actual.samples),
+        "recording export changed frame identities, frame count or relative timestamps"
+    );
+    ctx.evidence.put("exportResult", exported);
+    ctx.evidence.put("exportProbe", probe);
+    ctx.evidence
+        .put("exportTimeline", serde_json::to_value(actual)?);
+    request(app, "export.reset", json!({}))?;
+    request(app, "edit.close", json!({}))?;
+    request(
+        app,
+        "edit.importMedia",
+        json!({"path": output, "append": false}),
+    )?;
+    let reopened = app
+        .client
+        .poll("editor.snapshot", json!({}), secs(60.0), |s| {
+            s["open"] == true && s["clipOpen"] == true
+        })?
+        .ok_or_else(|| Stop::fail("the finished export did not reopen in Edit"))?;
+    product_ensure!(
+        reopened["clipPath"]
+            .as_str()
+            .is_some_and(|p| std::path::Path::new(p) == output),
+        "reopening the export selected a different media file"
+    );
+    ctx.evidence.put("reopenedExport", reopened);
+    Ok(())
+}
+
+fn same_frame_timeline(expected: &[(f64, u32)], actual: &[(f64, u32)]) -> bool {
+    let (Some(first_expected), Some(first_actual)) = (expected.first(), actual.first()) else {
+        return false;
+    };
+    expected.len() == actual.len()
+        && expected.iter().zip(actual).all(|(a, b)| {
+            a.1 == b.1 && ((a.0 - first_expected.0) - (b.0 - first_actual.0)).abs() <= 0.002
+        })
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn export_oracle_rejects_missing_changed_and_retimed_frames() {
+        let source = [(1.0, 10), (1.033, 11), (1.067, 12)];
+        assert!(same_frame_timeline(
+            &source,
+            &[(0.0, 10), (0.033, 11), (0.067, 12)]
+        ));
+        assert!(!same_frame_timeline(&source, &source[..2]));
+        assert!(!same_frame_timeline(
+            &source,
+            &[(1.0, 10), (1.033, 99), (1.067, 12)]
+        ));
+        assert!(!same_frame_timeline(
+            &source,
+            &[(1.0, 10), (1.040, 11), (1.067, 12)]
+        ));
+        assert!(!same_frame_timeline(&[], &[]));
+    }
 
     #[test]
     fn pause_oracle_requires_both_sides_and_no_middle_frames() {
