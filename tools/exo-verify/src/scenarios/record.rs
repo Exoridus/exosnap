@@ -6,8 +6,8 @@ use super::common::{self, Stimulus, StimulusOptions, VideoExpectation, secs};
 use crate::capability::Capability;
 use crate::context::Context;
 use crate::plan::Tier;
-use crate::product_ensure;
 use crate::scenario::{Lane, Scenario, ScenarioClass, Step, Stop};
+use crate::{infra_ensure, product_ensure};
 
 pub fn scenarios() -> Vec<Scenario> {
     vec![
@@ -53,10 +53,10 @@ pub fn scenarios() -> Vec<Scenario> {
         },
         Scenario {
             id: "record.edit-export",
-            revision: 1,
-            title: "A paused recording opens in Edit and exports the same frame timeline",
+            revision: 2,
+            title: "A paused recording passes through Review and Edit with the same exported frame timeline",
             class: ScenarioClass::Contract,
-            contract: "an isolated WGC recording pauses and resumes, opens its completed result through the product editor handoff, seeks, exports after review, and preserves decoded frame identities and timestamps",
+            contract: "an isolated WGC recording pauses and resumes, plays and seeks in Recording Review, reveals its registered identity in Edit, adds it from History, exports after review, and preserves decoded frame identities and timestamps",
             lane: Lane::Preflight,
             also: &[],
             tier: Tier::Recommended,
@@ -223,6 +223,31 @@ fn recording_edit_export(ctx: &mut Context) -> Step {
 
 fn recording_workflow(ctx: &mut Context, export: bool) -> Step {
     let mut app = ctx.launch(&[])?;
+    if export && let Some(monitor) = common::target_monitor() {
+        let environment = app.call("environment.snapshot", json!({}))?;
+        let screens = environment["displays"]["screens"]
+            .as_array()
+            .ok_or_else(|| Stop::infra("the product reported no screen inventory"))?;
+        let screen = screens
+            .iter()
+            .find(|screen| screen["device"] == monitor)
+            .and_then(|screen| screen["name"].as_str())
+            .ok_or_else(|| Stop::infra(format!("the product has no screen for {monitor}")))?;
+        infra_ensure!(
+            screens.iter().filter(|s| s["name"] == screen).count() == 1,
+            "the requested display has an ambiguous Qt screen name: {screen}"
+        );
+        app.call("window.moveToScreen", json!({"screen": screen}))?;
+        let window = app
+            .client
+            .poll("window.snapshot", json!({}), secs(10.0), |s| {
+                s["screen"]["name"] == screen
+            })?
+            .ok_or_else(|| {
+                Stop::fail("the application did not move to the requested test display")
+            })?;
+        ctx.evidence.put("testWindow", window);
+    }
     common::configure_exact(
         &mut app,
         &[
@@ -232,9 +257,9 @@ fn recording_workflow(ctx: &mut Context, export: bool) -> Step {
             ("video.cfr", json!(true)),
         ],
     )?;
-    common::disable_recording_audio(&mut app)?;
     let mut stimulus = Stimulus::start(ctx, StimulusOptions::default())?;
     common::select_window(&mut app, &stimulus.title)?;
+    common::disable_recording_audio(&mut app)?;
     common::start_recording(&mut app)?;
     std::thread::sleep(secs(3.0));
     common::pause(&mut app)?;
@@ -282,6 +307,8 @@ fn recording_workflow(ctx: &mut Context, export: bool) -> Step {
     ctx.keep(&file);
     if export {
         completed_recording_export(ctx, &mut app, &file, &timeline)?;
+        let exit = app.close_gracefully(secs(60.0))?;
+        ctx.evidence.put("cleanExitCode", exit.code);
     }
     Ok(())
 }
@@ -297,7 +324,88 @@ fn completed_recording_export(
             .request(command, params, secs(30.0))?
             .map_err(|refusal| Stop::fail(format!("{command} refused: {refusal}")))
     };
-    request(app, "edit.open", json!({}))?;
+    let review = app
+        .client
+        .poll("review.snapshot", json!({}), secs(60.0), |s| {
+            s["active"] == true && s["clipOpen"] == true
+        })?;
+    let review = match review {
+        Some(review) => review,
+        None => {
+            let review = request(app, "review.snapshot", json!({}))?;
+            let message = format!(
+                "the completed recording did not open in Review: active={}, clipOpen={}, error={}, preview={}",
+                review["active"], review["clipOpen"], review["error"], review["placeholderText"]
+            );
+            ctx.evidence.put("recordingReview", review);
+            return Err(Stop::fail(message));
+        }
+    };
+    product_ensure!(
+        review["clipPath"]
+            .as_str()
+            .is_some_and(|p| std::path::Path::new(p) == source)
+            && review["recordingIdentity"]
+                .as_str()
+                .is_some_and(|id| !id.is_empty()),
+        "Recording Review lost the completed recording identity"
+    );
+    if review["playing"] == true {
+        request(app, "review.playPause", json!({}))?;
+        app.client
+            .poll("review.snapshot", json!({}), secs(30.0), |s| {
+                s["playing"] == false && s["transportPending"] == false
+            })?
+            .ok_or_else(|| Stop::fail("Review did not pause its initial playback"))?;
+    }
+    request(app, "review.playPause", json!({}))?;
+    app.client
+        .poll("review.snapshot", json!({}), secs(30.0), |s| {
+            s["playing"] == true && s["transportPending"] == false
+        })?
+        .ok_or_else(|| Stop::fail("Review playback did not start"))?;
+    request(app, "review.playPause", json!({}))?;
+    app.client
+        .poll("review.snapshot", json!({}), secs(30.0), |s| {
+            s["playing"] == false && s["transportPending"] == false
+        })?
+        .ok_or_else(|| Stop::fail("Review playback did not pause"))?;
+    let review_position = review["durationMs"]
+        .as_f64()
+        .filter(|d| d.is_finite() && *d > 0.0)
+        .ok_or_else(|| Stop::fail("Review has no positive media duration"))?
+        / 2.0;
+    request(
+        app,
+        "review.seek",
+        json!({"positionMs": review_position as i64}),
+    )?;
+    let sought_review = app
+        .client
+        .poll("review.snapshot", json!({}), secs(30.0), |s| {
+            s["transportPending"] == false
+                && s["positionMs"]
+                    .as_f64()
+                    .is_some_and(|p| (p - review_position).abs() <= 1.0)
+        })?
+        .ok_or_else(|| Stop::fail("Review did not seek within the completed recording"))?;
+    product_ensure!(
+        sought_review["recordingIdentity"] == review["recordingIdentity"]
+            && sought_review["media"] == review["media"],
+        "Review transport changed source metadata"
+    );
+    ctx.evidence.put("recordingReview", sought_review);
+    request(app, "review.edit", json!({}))?;
+    app.client
+        .poll("review.snapshot", json!({}), secs(60.0), |s| {
+            s["active"] == false && s["pendingRecordingIdentity"] == ""
+        })?
+        .ok_or_else(|| Stop::fail("Review did not complete its identity-based library handoff"))?;
+    product_ensure!(
+        request(app, "ui.getState", json!({}))?["page"] == "edit",
+        "Review handoff did not navigate to Edit"
+    );
+    request(app, "edit.appendRecording", json!({"path": source}))?;
     let opened = app
         .client
         .poll("editor.snapshot", json!({}), secs(60.0), |s| {
@@ -362,8 +470,11 @@ fn completed_recording_export(
     let source_video = crate::media::streams(&source_probe, "video");
     let output_video = crate::media::streams(&probe, "video");
     product_ensure!(
-        source_video.len() == 1 && output_video.len() == 1,
-        "recording and export must each contain one video stream"
+        source_video.len() == 1
+            && output_video.len() == 1
+            && crate::media::streams(&source_probe, "audio").is_empty()
+            && crate::media::streams(&probe, "audio").is_empty(),
+        "the video-only recording and export must each contain one video stream and no audio"
     );
     product_ensure!(
         probe["format"]["format_name"]
@@ -393,7 +504,7 @@ fn completed_recording_export(
     request(
         app,
         "edit.importMedia",
-        json!({"path": output, "append": false}),
+        json!({"path": output, "append": true}),
     )?;
     let reopened = app
         .client
@@ -402,9 +513,14 @@ fn completed_recording_export(
         })?
         .ok_or_else(|| Stop::fail("the finished export did not reopen in Edit"))?;
     product_ensure!(
-        reopened["clipPath"]
-            .as_str()
-            .is_some_and(|p| std::path::Path::new(p) == output),
+        reopened["clips"].as_array().is_some_and(|clips| {
+            clips.len() == 1
+                && clips[0]["available"] == true
+                && clips[0]["video"] == true
+                && clips[0]["path"]
+                    .as_str()
+                    .is_some_and(|p| std::path::Path::new(p) == output)
+        }),
         "reopening the export selected a different media file"
     );
     ctx.evidence.put("reopenedExport", reopened);

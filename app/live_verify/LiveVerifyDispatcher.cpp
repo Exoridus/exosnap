@@ -85,6 +85,8 @@ Outcome ExecuteReadOnly(const QString& command, const QJsonObject& params, LiveV
         return Succeeded(source.WindowSnapshot());
     if (command == QLatin1String("preview.snapshot"))
         return Succeeded(source.PreviewSnapshot());
+    if (command == QLatin1String("review.snapshot"))
+        return Succeeded(source.ReviewSnapshot());
     if (command == QLatin1String("record.snapshot"))
         return Succeeded(source.RecordSnapshot());
     if (command == QLatin1String("record.result"))
@@ -696,6 +698,18 @@ Outcome ExecuteMutating(const CommandDescriptor& command, const ParsedRequest& r
         return Succeeded(result);
     }
 
+    if (command.name == QLatin1String("review.seek")) {
+        if (!source.ReviewSeek(ParamInt(params, "positionMs"), &error))
+            return IntentRefused(command, source, error);
+        return Succeeded(source.ReviewSnapshot());
+    }
+    if (command.name == QLatin1String("review.playPause") || command.name == QLatin1String("review.edit")) {
+        const bool accepted = command.name == QLatin1String("review.playPause") ? source.ReviewPlayPause(&error)
+                                                                                : source.ReviewEdit(&error);
+        if (!accepted)
+            return IntentRefused(command, source, error);
+        return Succeeded(source.ReviewSnapshot(), false);
+    }
     if (command.name == QLatin1String("edit.open")) {
         if (!source.EditOpen(&error))
             return IntentRefused(command, source, error);
