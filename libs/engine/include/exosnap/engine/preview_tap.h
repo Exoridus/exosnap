@@ -42,6 +42,9 @@ struct PreviewTapDesc {
     // for ScrgbHdr only -- an SDR Advanced-Color desktop is display-referred and
     // needs no correction -- and 1.0 everywhere else.
     float paper_white_scale = 1.0f;
+    // Zero retains texture-sized geometry for existing capture producers.
+    uint32_t logical_width = 0;
+    uint32_t logical_height = 0;
 };
 
 struct PreviewTapPlan {

@@ -32,7 +32,7 @@ class GpuCompositor {
     using ChromaKeyParams = exosnap::engine::ChromaKeyParams;
 
     // render_format: format of the composite render target. Must match the
-    // capture source's frame format (BeginFrame copies the background via
+    // capture source's frame format (the normal path copies the background via
     // CopyResource, which requires identical formats). BGRA8 for WGC and
     // 8-bit SDR OD capture; R8G8B8A8 for a preview source already in Qt's
     // texture layout; R10G10B10A2 for a 10 bpc SDR desktop;
@@ -43,9 +43,12 @@ class GpuCompositor {
     // stay BGRA8 regardless.
     // overlay_reference_white_nits: the linear-light level SDR overlay sprites
     // are scaled to on the FP16 native-HDR path (ignored for SDR formats).
+    // Explicit logical dimensions permit same-aspect BGRA8 downsampling while
+    // retaining source-pixel overlay coordinates. Zero uses the target dimensions.
     bool Init(ID3D11Device* device, ID3D11DeviceContext* context, UINT width, UINT height, std::string& err,
               DXGI_FORMAT render_format = DXGI_FORMAT_B8G8R8A8_UNORM,
-              float overlay_reference_white_nits = kDefaultSdrWhiteLevelNits);
+              float overlay_reference_white_nits = kDefaultSdrWhiteLevelNits, UINT logical_width = 0,
+              UINT logical_height = 0);
     // Replace the overlay reference white on an initialised compositor, with the
     // same bounds Init applies (EffectiveOverlayReferenceWhiteNits) and the same
     // FP16-only meaning.
@@ -148,6 +151,9 @@ class GpuCompositor {
     ID3D11DeviceContext* context_ = nullptr;
     UINT width_ = 0;
     UINT height_ = 0;
+    UINT logical_width_ = 0;
+    UINT logical_height_ = 0;
+    TextureResource background_tex_;
     DXGI_FORMAT render_format_ = DXGI_FORMAT_B8G8R8A8_UNORM;
     bool hdr_linear_ = false; // true for the FP16 native-HDR path (linear-light compositing)
     float overlay_ref_white_nits_ = kDefaultSdrWhiteLevelNits;

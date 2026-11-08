@@ -107,7 +107,8 @@ bool CompileWebcamShader(ID3D11Device* device, const char* body, const char* nam
 } // namespace
 
 bool GpuCompositor::Init(ID3D11Device* device, ID3D11DeviceContext* context, UINT width, UINT height, std::string& err,
-                         DXGI_FORMAT render_format, float overlay_reference_white_nits) {
+                         DXGI_FORMAT render_format, float overlay_reference_white_nits, UINT logical_width,
+                         UINT logical_height) {
     if (device == nullptr || context == nullptr || width == 0 || height == 0) {
         err = "GpuCompositor::Init invalid arguments";
         return false;
@@ -118,6 +119,16 @@ bool GpuCompositor::Init(ID3D11Device* device, ID3D11DeviceContext* context, UIN
         return false;
     }
 
+    logical_width = logical_width == 0 ? width : logical_width;
+    logical_height = logical_height == 0 ? height : logical_height;
+    if (logical_width < width || logical_height < height ||
+        uint64_t{logical_width} * height != uint64_t{logical_height} * width ||
+        ((logical_width != width || logical_height != height) && render_format != DXGI_FORMAT_B8G8R8A8_UNORM)) {
+        err = "GpuCompositor::Init unsupported logical geometry";
+        return false;
+    }
+    logical_width_ = logical_width;
+    logical_height_ = logical_height;
     device_ = device;
     context_ = context;
     width_ = width;
@@ -251,6 +262,9 @@ bool GpuCompositor::Init(ID3D11Device* device, ID3D11DeviceContext* context, UIN
         return false;
     }
 
+    if ((logical_width_ != width_ || logical_height_ != height_) &&
+        !EnsureTexture(background_tex_, logical_width_, logical_height_, render_format_, false, err))
+        return false;
     return true;
 }
 
@@ -268,11 +282,17 @@ bool GpuCompositor::BeginFrame(ID3D11Texture2D* background, std::string& err) {
 
     D3D11_TEXTURE2D_DESC desc{};
     background->GetDesc(&desc);
-    if (desc.Width != width_ || desc.Height != height_ || desc.Format != render_format_) {
+    if (desc.Width != logical_width_ || desc.Height != logical_height_ || desc.Format != render_format_) {
         err = "GpuCompositor::BeginFrame background dimensions/format mismatch";
         return false;
     }
 
+    if (logical_width_ != width_ || logical_height_ != height_) {
+        context_->CopyResource(background_tex_.texture.get(), background);
+        return DrawTexture(background_tex_.srv.get(),
+                           {0, 0, static_cast<int>(logical_width_), static_cast<int>(logical_height_)}, false, {}, true,
+                           1.0f, err);
+    }
     context_->CopyResource(composite_tex_.get(), background);
     return true;
 }
@@ -612,8 +632,8 @@ bool GpuCompositor::DrawTexture(ID3D11ShaderResourceView* srv, const WebcamPixel
         err = "GpuCompositor::DrawTexture invalid arguments";
         return false;
     }
-    if (rect.x < 0 || rect.y < 0 || rect.x + rect.w > static_cast<int>(width_) ||
-        rect.y + rect.h > static_cast<int>(height_)) {
+    if (rect.x < 0 || rect.y < 0 || rect.x + rect.w > static_cast<int>(logical_width_) ||
+        rect.y + rect.h > static_cast<int>(logical_height_)) {
         err = "GpuCompositor::DrawTexture rect outside target";
         return false;
     }
@@ -635,6 +655,14 @@ bool GpuCompositor::DrawTexture(ID3D11ShaderResourceView* srv, const WebcamPixel
     viewport.TopLeftY = static_cast<float>(rect.y);
     viewport.Width = static_cast<float>(rect.w);
     viewport.Height = static_cast<float>(rect.h);
+    if (logical_width_ != width_ || logical_height_ != height_) {
+        const float x_scale = static_cast<float>(width_) / logical_width_;
+        const float y_scale = static_cast<float>(height_) / logical_height_;
+        viewport.TopLeftX *= x_scale;
+        viewport.TopLeftY *= y_scale;
+        viewport.Width *= x_scale;
+        viewport.Height *= y_scale;
+    }
     viewport.MinDepth = 0.0f;
     viewport.MaxDepth = 1.0f;
 

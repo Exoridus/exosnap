@@ -214,6 +214,7 @@ class ExoPreviewItem : public QQuickItem {
     // QWindow emits no signal, but it is the transition that ends the window's
     // non-renderable stretch — so it is where an owed frame becomes payable.
     bool eventFilter(QObject* watched, QEvent* event) override;
+    void publishPixelDemand();
 
   private:
     friend class RecordPreviewAdapter;

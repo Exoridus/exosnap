@@ -1107,3 +1107,36 @@ TEST(GpuCompositorSprites, HdrLinearScalesSpritesToTheOverlayReferenceWhite) {
     EXPECT_NEAR(right_r, 3.0f, 0.03f);
     EXPECT_NEAR(right_b, 3.0f, 0.03f);
 }
+
+TEST(GpuCompositorDemand, ScalesBackgroundAndKeepsLogicalOverlayPlacement) {
+    const auto d3d = CreateWarpDevice();
+    ASSERT_TRUE(d3d.device);
+    GpuCompositor compositor;
+    std::string error;
+    ASSERT_TRUE(
+        compositor.Init(d3d.device.get(), d3d.context.get(), 4, 2, error, DXGI_FORMAT_B8G8R8A8_UNORM, 203.0f, 8, 4))
+        << error;
+    auto background = CreateTexture(d3d.device.get(), 8, 4, SolidBgra(8, 4, 10, 20, 30));
+    ASSERT_TRUE(compositor.BeginFrame(background.get(), error)) << error;
+    auto overlay = SolidBgra(1, 1, 100, 110, 120);
+    ASSERT_TRUE(compositor.DrawCursor(overlay.data(), 1, 1, {4, 0, 4, 4}, error)) << error;
+    const auto pixels = ReadTexture(d3d.device.get(), d3d.context.get(), compositor.Result());
+    ExpectPixelNear(pixels, 4, 0, 0, 10, 20, 30, 255);
+    ExpectPixelNear(pixels, 4, 3, 1, 100, 110, 120, 255);
+    ASSERT_TRUE(compositor.BeginFrame(background.get(), error)) << error;
+    const auto translucent = SolidBgra(1, 1, 100, 120, 140, 128);
+    ASSERT_TRUE(compositor.DrawCursor(translucent.data(), 1, 1, {4, 0, 4, 4}, error)) << error;
+    const auto blended = ReadTexture(d3d.device.get(), d3d.context.get(), compositor.Result());
+    ExpectPixelNear(blended, 4, 3, 1, 55, 70, 85, 255);
+}
+
+TEST(GpuCompositorDemand, RejectsHdrAndDistortedLogicalGeometry) {
+    const auto d3d = CreateWarpDevice();
+    ASSERT_TRUE(d3d.device);
+    GpuCompositor compositor;
+    std::string error;
+    EXPECT_FALSE(compositor.Init(d3d.device.get(), d3d.context.get(), 4, 2, error, DXGI_FORMAT_R16G16B16A16_FLOAT,
+                                 203.0f, 8, 4));
+    EXPECT_FALSE(
+        compositor.Init(d3d.device.get(), d3d.context.get(), 4, 2, error, DXGI_FORMAT_B8G8R8A8_UNORM, 203.0f, 8, 8));
+}

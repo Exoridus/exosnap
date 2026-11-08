@@ -548,7 +548,7 @@ exosnap_add_gtest(
 exosnap_add_gtest(
     NAME test_preview_tap_plan
     TEST_PREFIX engine.
-    SOURCES tests/test_preview_tap_plan.cpp
+    SOURCES tests/test_preview_tap_plan.cpp tests/test_render_demand.cpp
     LIBRARIES exosnap_engine
 )
 

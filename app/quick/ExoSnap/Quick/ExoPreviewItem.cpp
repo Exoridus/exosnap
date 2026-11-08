@@ -511,7 +511,8 @@ class PreviewTextureNode final : public QSGNode {
         return valid_;
     }
     [[nodiscard]] QSize sourceSize() const {
-        return QSize(static_cast<int>(width_), static_cast<int>(height_));
+        return QSize(static_cast<int>(tap_.logical_width ? tap_.logical_width : width_),
+                     static_cast<int>(tap_.logical_height ? tap_.logical_height : height_));
     }
     [[nodiscard]] quint64 generation() const noexcept {
         return generation_;
@@ -707,6 +708,10 @@ ExoPreviewItem::ExoPreviewItem(QQuickItem* parent) : QQuickItem(parent) {
     setFlag(ItemHasContents, true);
     setAcceptedMouseButtons(Qt::NoButton);
     render_link_->item = this;
+    connect(this, &QQuickItem::widthChanged, this, &ExoPreviewItem::publishPixelDemand);
+    connect(this, &QQuickItem::heightChanged, this, &ExoPreviewItem::publishPixelDemand);
+    connect(this, &QQuickItem::visibleChanged, this, &ExoPreviewItem::publishPixelDemand);
+    connect(this, &ExoPreviewItem::normalizedSourceRectChanged, this, &ExoPreviewItem::publishPixelDemand);
 }
 
 ExoPreviewItem::~ExoPreviewItem() {
@@ -714,6 +719,8 @@ ExoPreviewItem::~ExoPreviewItem() {
     // to a synchronization stage). Cutting the item out of it here is what makes
     // a publication that lands after this point a no-op rather than a
     // use-after-free; the render thread's half of the link stays valid.
+    if (visual_runtime_)
+        visual_runtime_->SetPreviewPixelDemand(std::nullopt);
     render_link_->item = nullptr;
     setPreviewAdapter(nullptr);
     QMutexLocker lock(&pending_mutex_);
@@ -861,7 +868,10 @@ void ExoPreviewItem::setVisualRuntime(std::shared_ptr<engine::VisualSceneRuntime
     Q_ASSERT(QThread::currentThread() == thread());
     if (visual_runtime_ == runtime && placement_item_ == placement_item)
         return;
+    if (visual_runtime_)
+        visual_runtime_->SetPreviewPixelDemand(std::nullopt);
     visual_runtime_ = std::move(runtime);
+    publishPixelDemand();
     placement_item_ = placement_item;
     visualContentChanged();
 }
@@ -920,7 +930,19 @@ const std::shared_ptr<PreviewUpdateScheduler>& ExoPreviewItem::updateScheduler()
     return update_scheduler_;
 }
 
+void ExoPreviewItem::publishPixelDemand() {
+    if (!visual_runtime_)
+        return;
+    visual_runtime_->SetPreviewPixelDemand(engine::ResolvePreviewPixelDemand(
+        width(), height(), window() ? window()->devicePixelRatio() : 0, normalized_source_rect_.width(),
+        normalized_source_rect_.height(), isVisible() && window() && window()->isExposed()));
+}
+
 bool ExoPreviewItem::eventFilter(QObject* watched, QEvent* event) {
+    if (watched == connected_window_ && event &&
+        (event->type() == QEvent::Expose || event->type() == QEvent::DevicePixelRatioChange ||
+         event->type() == QEvent::WindowStateChange))
+        publishPixelDemand();
     if (event != nullptr && event->type() == QEvent::Expose && watched == connected_window_)
         reissuePendingPresentation("expose");
     return QQuickItem::eventFilter(watched, event);
@@ -1069,6 +1091,7 @@ QSGNode* ExoPreviewItem::updatePaintNode(QSGNode* old_node, UpdatePaintNodeData*
 
 void ExoPreviewItem::itemChange(ItemChange change, const ItemChangeData& value) {
     QQuickItem::itemChange(change, value);
+    publishPixelDemand();
     if (change == ItemVisibleHasChanged) {
         renderLoopFlag().store(value.boolValue, std::memory_order_release);
         if (value.boolValue)
@@ -1094,8 +1117,10 @@ void ExoPreviewItem::itemChange(ItemChange change, const ItemChangeData& value) 
             // is genuinely still owed a render, so this adds no steady-state
             // work whatsoever.
             value.window->installEventFilter(this);
-            screen_changed_connection_ = connect(value.window, &QWindow::screenChanged, this,
-                                                 [this](QScreen*) { reissuePendingPresentation("screen-changed"); });
+            screen_changed_connection_ = connect(value.window, &QWindow::screenChanged, this, [this](QScreen*) {
+                publishPixelDemand();
+                reissuePendingPresentation("screen-changed");
+            });
             // Direct, and deliberately not bound to `this`: frameSwapped is
             // emitted on the render thread, and a queued hop would count the
             // swap whenever the GUI thread next ran rather than when it
