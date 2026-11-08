@@ -115,6 +115,10 @@ struct DecoderControl {
     std::atomic<int> opens{0};
     std::atomic<int> calls{0};
     std::atomic<int> closes{0};
+    bool measure_decode = false;
+    std::atomic<std::int64_t> decode_microseconds{0};
+    std::atomic<std::int64_t> max_decode_gap_microseconds{0};
+    std::chrono::steady_clock::time_point last_decode_start;
     std::mutex mutex;
     std::condition_variable cv;
     bool gated = false;
@@ -160,6 +164,18 @@ class SyntheticDecoder final : public engine::WaveformAudioDecoder {
             if (control_->gated)
                 --control_->permits;
         }
+        const auto started =
+            control_->measure_decode ? std::chrono::steady_clock::now() : std::chrono::steady_clock::time_point{};
+        if (control_->measure_decode) {
+            if (control_->last_decode_start.time_since_epoch().count()) {
+                const auto gap =
+                    std::chrono::duration_cast<std::chrono::microseconds>(started - control_->last_decode_start)
+                        .count();
+                control_->max_decode_gap_microseconds.store(
+                    std::max(control_->max_decode_gap_microseconds.load(), gap));
+            }
+            control_->last_decode_start = started;
+        }
         if (control_->before_decode)
             control_->before_decode(frames);
         control_->calls.fetch_add(1);
@@ -179,6 +195,10 @@ class SyntheticDecoder final : public engine::WaveformAudioDecoder {
             coverage_ = control_->sample_coverage(first, frames);
         if (control_->omit_coverage)
             coverage_.clear();
+        if (control_->measure_decode)
+            control_->decode_microseconds.fetch_add(
+                std::chrono::duration_cast<std::chrono::microseconds>(std::chrono::steady_clock::now() - started)
+                    .count());
         if (control_->nonfinite && !out.empty())
             out[0] = std::numeric_limits<float>::quiet_NaN();
         return true;
@@ -345,6 +365,7 @@ TEST(WaveformCacheService, AnotherVisibleSourceReceivesAnOverviewBeforeTheFirstF
     const bool first_opened = WaitFor([&] {
         return first_control->opens.load() > 0 || service.state(first) == WaveformCacheService::State::Analyzing;
     });
+    const bool first_decoding = WaitFor([&] { return std::string(service.overviewPhaseForTest()) == "decoding"; });
     auto second_source = SourceKey(122);
     second_source.container_index = 2;
     const auto second = service.request(second_source, fixture.source_path, kThreeSecondsUs);
@@ -353,6 +374,7 @@ TEST(WaveformCacheService, AnotherVisibleSourceReceivesAnOverviewBeforeTheFirstF
     const auto first_completed = service.completedSamples(first);
     first_control->Open();
     EXPECT_TRUE(first_opened);
+    EXPECT_TRUE(first_decoding);
     EXPECT_TRUE(second_progress);
     EXPECT_LT(first_completed, service.totalSamples(first));
     EXPECT_TRUE(WaitFor([&] {
@@ -369,13 +391,33 @@ TEST(WaveformCacheService, LongSourceUsesBoundedAnalysisWorkingSet) {
     config.analysis_budget_bytes = 2u << 20;
     config.chunk_frames = 48000;
     WaveformCacheService service(config, Factory(fixture.control));
+    fixture.control->measure_decode = true;
+    QElapsedTimer elapsed;
+    elapsed.start();
+    qint64 next_report = 10000;
     const auto key = service.request(SourceKey(77), fixture.source_path, 42ll * 60 * 1'000'000);
-    ASSERT_TRUE(WaitFor(
+    const auto report = [&] {
+        std::cout << "waveform elapsed_ms=" << elapsed.elapsed() << " phase=" << service.overviewPhaseForTest()
+                  << " opens=" << fixture.control->opens.load() << " calls=" << fixture.control->calls.load()
+                  << " decode_us=" << fixture.control->decode_microseconds.load()
+                  << " max_decode_start_gap_us=" << fixture.control->max_decode_gap_microseconds.load() << std::endl;
+        std::cout << "waveform state=" << static_cast<int>(service.state(key))
+                  << " completed_samples=" << service.completedSamples(key)
+                  << " analysis_bytes=" << service.analysisMemoryBytesForTest()
+                  << " cache_bytes=" << service.memoryBytesForTest() << std::endl;
+    };
+    const bool terminal = WaitFor(
         [&]() {
+            if (elapsed.elapsed() >= next_report) {
+                report();
+                next_report = elapsed.elapsed() + 10000;
+            }
             return service.state(key) == WaveformCacheService::State::Ready ||
                    service.state(key) == WaveformCacheService::State::Failed;
         },
-        120000));
+        120000);
+    report();
+    ASSERT_TRUE(terminal);
     ASSERT_EQ(service.state(key), WaveformCacheService::State::Ready);
     EXPECT_EQ(service.completedSamples(key), 42ll * 60 * 48000);
     EXPECT_EQ(fixture.control->opens.load(), 1);
