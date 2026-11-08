@@ -25,10 +25,10 @@ use crate::{infra_ensure, product_ensure};
 pub fn scenarios() -> Vec<Scenario> {
     vec![Scenario {
         id: "edit.timeline-semantic",
-        revision: 1,
+        revision: 2,
         title: "The editor imports, edits, undoes and exports through semantic control",
         class: ScenarioClass::Regression,
-        contract: "imported media arrives as linked clips, a split and a ripple delete change the timeline exactly once each and report the revision they moved, undo and redo restore it, a crossfade and its junction settings round-trip, an overlap the model refuses is reported in the timeline's own words without a change, panels and options settle on what the page shows, a stale revision is refused before any edit, and the reviewed export writes the composed frames and tones into the isolated output folder",
+        contract: "imports recover from a missing-file refusal without losing linked clips; split, trim, ripple delete, undo and redo preserve the expected timeline; stale revisions and invalid overlap are refused; crossfade settings round-trip; discarding an export review writes nothing and retry exports the expected source frames, tones and audio fades",
         lane: Lane::Preflight,
         also: &[],
         tier: Tier::Recommended,
@@ -198,6 +198,20 @@ fn timeline_semantic(ctx: &mut Context) -> Step {
 
     // --- Import: one linked group per source, appended in order --------------
     import(&mut app, &source_a, 2)?;
+    let before_missing = editor(&mut app)?;
+    let missing = refused(
+        &mut app,
+        "edit.importMedia",
+        json!({"path": sources.join("missing.mkv"), "append": true}),
+    )?;
+    let after_missing = editor(&mut app)?;
+    product_ensure!(
+        missing.code == "invalid_params"
+            && after_missing["workspaceRevision"] == before_missing["workspaceRevision"]
+            && after_missing["clips"] == before_missing["clips"],
+        "a missing import did not preserve the existing timeline: {missing}"
+    );
+    ctx.evidence.put("missingImportRefusal", missing.message);
     let after_b = import(&mut app, &source_b, 4)?;
     ctx.evidence.put("importedState", after_b["editor"].clone());
     let imported = editor(&mut app)?;
@@ -437,6 +451,44 @@ fn timeline_semantic(ctx: &mut Context) -> Step {
         json!({ "panel": "media", "open": false }),
     )?;
 
+    accepted(
+        &mut app,
+        "edit.selectClip",
+        json!({"clipId": kept[1]["id"]}),
+    )?;
+    let trimmed = accepted(
+        &mut app,
+        "edit.trimClip",
+        json!({"clipId": kept[1]["id"], "inMs": 0, "outMs": 2000}),
+    )?;
+    judge_one_step(&trimmed, "linked trim")?;
+    let linked: Vec<_> = trimmed["clips"]
+        .as_array()
+        .into_iter()
+        .flatten()
+        .filter(|clip| clip["group"] == kept[1]["group"])
+        .collect();
+    product_ensure!(
+        linked.len() == 2
+            && linked.iter().all(|clip| near(&clip["durationMs"], 2000.0))
+            && near(&trimmed["durationMs"], 3000.0),
+        "trimming the second source did not preserve its linked AV duration"
+    );
+    let audio_clip = linked
+        .iter()
+        .find(|clip| clip["video"] == false)
+        .ok_or_else(|| Stop::fail("the trimmed source has no linked audio clip"))?["id"]
+        .clone();
+    for edge in ["in", "out"] {
+        let faded = accepted(
+            &mut app,
+            "edit.setClipFade",
+            json!({"clipId": audio_clip, "edge": edge, "durationMs": 500}),
+        )?;
+        judge_one_step(&faded, "audio edge fade")?;
+    }
+    let before_discard = editor(&mut app)?;
+
     // --- The reviewed export ------------------------------------------------------
     accepted(
         &mut app,
@@ -462,6 +514,24 @@ fn timeline_semantic(ctx: &mut Context) -> Step {
         "the review does not describe a rendered stereo result: {}",
         plan["review"]
     );
+    let discarded = accepted(&mut app, "export.discard", json!({}))?;
+    product_ensure!(
+        discarded["export"]["state"] == "idle"
+            && discarded["workspaceRevision"] == before_discard["workspaceRevision"]
+            && discarded["clips"] == before_discard["clips"]
+            && std::fs::read_dir(&app.output)?.next().is_none(),
+        "discarding export review changed the timeline or wrote output"
+    );
+    ctx.evidence
+        .put("discardedExport", discarded["export"].clone());
+    accepted(&mut app, "export.start", json!({}))?;
+    let retried = app
+        .client
+        .poll("ui.getState", json!({}), secs(60.0), |s| {
+            matches!(s["exportState"].as_str(), Some("review" | "failed"))
+        })?
+        .ok_or_else(|| Stop::fail("export retry did not reach review"))?;
+    product_ensure!(retried["exportState"] == "review", "export retry failed");
     accepted(&mut app, "export.confirm", json!({}))?;
     let finished = app
         .client
@@ -506,8 +576,8 @@ fn judge_export(ctx: &mut Context, output: &Path) -> Step {
     let probe = media::probe(output)?;
     let duration = media::f64_field(&probe["format"], "duration").unwrap_or(0.0);
     product_ensure!(
-        (duration - 4.0).abs() <= 2.0 / FPS as f64,
-        "the export lasts {duration} s, the timeline 4 s"
+        (duration - 3.0).abs() <= 2.0 / FPS as f64,
+        "the export lasts {duration} s, the trimmed timeline 3 s"
     );
     let audio = media::streams(&probe, "audio");
     product_ensure!(
@@ -535,7 +605,7 @@ fn judge_export(ctx: &mut Context, output: &Path) -> Step {
     ctx.evidence.put("exportIds", json!(timeline));
     ctx.evidence.put("exportWrongFrames", json!(wrong));
     product_ensure!(
-        timeline.decoded * 100 >= timeline.frames * 95 && timeline.frames >= 110,
+        timeline.decoded * 100 >= timeline.frames * 95 && timeline.frames == 90,
         "only {} of {} exported frames carry a readable id",
         timeline.decoded,
         timeline.frames
@@ -549,13 +619,13 @@ fn judge_export(ctx: &mut Context, output: &Path) -> Step {
 
     let samples = media::audio_samples(output, 0, 48000)?;
     product_ensure!(
-        samples.len() >= (3.8 * 48000.0) as usize,
+        samples.len() >= (2.95 * 48000.0) as usize,
         "the exported audio ends before the last tone window: {} samples",
         samples.len()
     );
     let head = dominant_hz(&samples[..(0.9 * 48000.0) as usize], 48000);
     let tail = dominant_hz(
-        &samples[(1.2 * 48000.0) as usize..(3.8 * 48000.0) as usize],
+        &samples[(1.2 * 48000.0) as usize..(2.8 * 48000.0) as usize],
         48000,
     );
     ctx.evidence
@@ -564,7 +634,35 @@ fn judge_export(ctx: &mut Context, output: &Path) -> Step {
         (head - TONE_A as f64).abs() < 15.0 && (tail - TONE_B as f64).abs() < 15.0,
         "the mixed audio does not follow the cut: {head:.0} Hz then {tail:.0} Hz"
     );
+    product_ensure!(
+        audio_fades_match(&samples),
+        "exported PCM does not contain the requested audio fades"
+    );
     Ok(())
+}
+
+fn audio_fades_match(samples: &[f32]) -> bool {
+    let rms = |start: usize, end: usize| -> Option<f64> {
+        let window = samples.get(start * 48..end * 48)?;
+        Some(
+            (window.iter().map(|&s| f64::from(s).powi(2)).sum::<f64>() / window.len() as f64)
+                .sqrt(),
+        )
+    };
+    let Some(plateau) = rms(1700, 2300).filter(|r| r.is_finite() && *r > 0.001) else {
+        return false;
+    };
+    // Linear ramps have RMS gains sqrt(mean(t^2)); compare away from codec edges.
+    [
+        (1100, 1200, 0.306),
+        (1300, 1400, 0.702),
+        (2600, 2700, 0.702),
+        (2800, 2900, 0.306),
+    ]
+    .into_iter()
+    .all(|(start, end, expected)| {
+        rms(start, end).is_some_and(|level| (level / plateau - expected).abs() < 0.06)
+    })
 }
 
 /// The frequency of a pure tone from its zero crossings.
@@ -591,6 +689,29 @@ mod tests {
             .collect();
         assert!((dominant_hz(&tone, rate) - 440.0).abs() < 2.0);
         assert_eq!(dominant_hz(&[], rate), 0.0);
+    }
+
+    #[test]
+    fn exported_fade_oracle_rejects_missing_reversed_truncated_and_nonfinite_audio() {
+        let tone = |gain: &dyn Fn(f64) -> f64| -> Vec<f32> {
+            (0..3 * 48000)
+                .map(|n| {
+                    let time = f64::from(n) / 48000.0;
+                    (0.1 * (2.0 * std::f64::consts::PI * 880.0 * time).sin() * gain(time)) as f32
+                })
+                .collect()
+        };
+        let fade =
+            |time: f64| ((time - 1.0) / 0.5).clamp(0.0, 1.0) * ((3.0 - time) / 0.5).clamp(0.0, 1.0);
+        assert!(audio_fades_match(&tone(&fade)));
+        assert!(!audio_fades_match(&tone(&|_| 1.0)));
+        assert!(!audio_fades_match(&tone(&|time| 1.0 - fade(time))));
+        assert!(!audio_fades_match(&tone(
+            &|time| ((time - 1.0) / 0.5).clamp(0.0, 1.0)
+        )));
+        assert!(!audio_fades_match(&tone(&fade)[..2 * 48000]));
+        assert!(!audio_fades_match(&vec![0.0; 3 * 48000]));
+        assert!(!audio_fades_match(&vec![f32::NAN; 3 * 48000]));
     }
 
     #[test]
