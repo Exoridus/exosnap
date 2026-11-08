@@ -1169,3 +1169,27 @@ TEST(GpuCompositorDemand, PromotionRetainsAcceptedImageWithoutNewCpuPayload) {
     EXPECT_EQ(full.WebcamUploadCount(), 0u);
     EXPECT_EQ(reduced.WebcamUploadCount(), 1u);
 }
+
+TEST(GpuCompositorDemand, MaskDestinationsFollowPhysicalTargetPixels) {
+    const auto d3d = CreateWarpDevice();
+    ASSERT_TRUE(d3d.device);
+    GpuCompositor compositor;
+    std::string error;
+    ASSERT_TRUE(
+        compositor.Init(d3d.device.get(), d3d.context.get(), 4, 2, error, DXGI_FORMAT_B8G8R8A8_UNORM, 203.0f, 8, 4));
+    auto background = CreateTexture(d3d.device.get(), 8, 4, SolidBgra(8, 4, 0, 0, 255));
+    SpriteLayerSnapshot layer;
+    layer.atlas = PaddedFourCellAtlas(21);
+    auto body = CellQuad(3, 0, 0, 1, 1);
+    body.source = {10, 1, 1, 1};
+    body.masks[0] = {{10, 1, 1, 1}, {0, 0, 0.25F, 0.5F}};
+    body.masks[1] = {{10, 1, 1, 1}, {0.5F, 0.5F, 0.25F, 0.5F}};
+    layer.quads = {body};
+    ASSERT_TRUE(compositor.BeginFrame(background.get(), error));
+    ASSERT_TRUE(compositor.DrawSpriteLayer(0, layer, {0, 0, 8, 4}, error));
+    const auto pixels = ReadTexture(d3d.device.get(), d3d.context.get(), compositor.Result());
+    ExpectPixelNear(pixels, 4, 0, 0, 0, 0, 255, 255);
+    ExpectPixelNear(pixels, 4, 0, 1, 255, 255, 255, 255);
+    ExpectPixelNear(pixels, 4, 2, 1, 0, 0, 255, 255);
+    ExpectPixelNear(pixels, 4, 2, 0, 255, 255, 255, 255);
+}

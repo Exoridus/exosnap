@@ -663,7 +663,6 @@ bool GpuCompositor::DrawTexture(ID3D11ShaderResourceView* srv, const WebcamPixel
         std::memcpy(pc.uv_rect, uv_rect, sizeof(pc.uv_rect));
     if (masks != nullptr)
         pc.masks = *masks;
-    context_->UpdateSubresource(constants_.get(), 0, nullptr, &pc, 0, 0);
 
     D3D11_VIEWPORT viewport{};
     viewport.TopLeftX = static_cast<float>(rect.x);
@@ -677,7 +676,14 @@ bool GpuCompositor::DrawTexture(ID3D11ShaderResourceView* srv, const WebcamPixel
         viewport.TopLeftY *= y_scale;
         viewport.Width *= x_scale;
         viewport.Height *= y_scale;
+        for (auto& mask : pc.masks) {
+            mask.destination[0] *= x_scale;
+            mask.destination[1] *= y_scale;
+            mask.destination[2] *= x_scale;
+            mask.destination[3] *= y_scale;
+        }
     }
+    context_->UpdateSubresource(constants_.get(), 0, nullptr, &pc, 0, 0);
     viewport.MinDepth = 0.0f;
     viewport.MaxDepth = 1.0f;
 
