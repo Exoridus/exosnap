@@ -53,7 +53,7 @@ pub fn scenarios() -> Vec<Scenario> {
         },
         Scenario {
             id: "record.edit-export",
-            revision: 2,
+            revision: 3,
             title: "A paused recording passes through Review and Edit with the same exported frame timeline",
             class: ScenarioClass::Contract,
             contract: "an isolated WGC recording pauses and resumes, plays and seeks in Recording Review, reveals its registered identity in Edit, adds it from History, exports after review, and preserves decoded frame identities and timestamps",
@@ -383,7 +383,7 @@ fn completed_recording_export(
     let sought_review = app
         .client
         .poll("review.snapshot", json!({}), secs(30.0), |s| {
-            s["transportPending"] == false
+            seek_frame_ready(s)
                 && s["positionMs"]
                     .as_f64()
                     .is_some_and(|p| (p - review_position).abs() <= 1.0)
@@ -423,13 +423,16 @@ fn completed_recording_export(
         .filter(|d| d.is_finite() && *d > 0.0)
         .ok_or_else(|| Stop::fail("Edit has no positive media duration"))?
         / 2.0;
-    let sought = request(app, "edit.seek", json!({"positionMs": position as i64}))?;
-    product_ensure!(
-        sought["positionMs"]
-            .as_f64()
-            .is_some_and(|p| (p - position).abs() <= 1.0),
-        "Edit did not seek within the completed recording"
-    );
+    request(app, "edit.seek", json!({"positionMs": position as i64}))?;
+    let sought = app
+        .client
+        .poll("editor.snapshot", json!({}), secs(30.0), |s| {
+            seek_frame_ready(&s["playback"])
+                && s["positionMs"]
+                    .as_f64()
+                    .is_some_and(|p| (p - position).abs() <= 1.0)
+        })?
+        .ok_or_else(|| Stop::fail("Edit did not seek within the completed recording"))?;
     ctx.evidence.put("recordingEditor", sought);
     request(
         app,
@@ -527,6 +530,10 @@ fn completed_recording_export(
     Ok(())
 }
 
+fn seek_frame_ready(playback: &serde_json::Value) -> bool {
+    playback["previewState"] == "ready" && playback["transportPending"] == false
+}
+
 fn same_frame_timeline(expected: &[(f64, u32)], actual: &[(f64, u32)]) -> bool {
     let (Some(first_expected), Some(first_actual)) = (expected.first(), actual.first()) else {
         return false;
@@ -540,6 +547,17 @@ fn same_frame_timeline(expected: &[(f64, u32)], actual: &[(f64, u32)]) -> bool {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn seek_waiter_requires_a_presented_frame_after_transport_completion() {
+        let mut snapshot = json!({"previewState": "seekPending", "transportPending": false});
+        assert!(!seek_frame_ready(&snapshot));
+        snapshot["previewState"] = json!("ready");
+        assert!(seek_frame_ready(&snapshot));
+        snapshot["transportPending"] = json!(true);
+        assert!(!seek_frame_ready(&snapshot));
+        assert!(!seek_frame_ready(&json!({})));
+    }
 
     #[test]
     fn export_oracle_rejects_missing_changed_and_retimed_frames() {
