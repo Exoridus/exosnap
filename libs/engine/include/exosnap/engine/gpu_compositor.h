@@ -59,6 +59,10 @@ class GpuCompositor {
     // frame that did not move with it.
     void SetOverlayReferenceWhiteNits(float overlay_reference_white_nits) noexcept;
 
+    // Maintenance only, with no active scene frame. Preserves accepted image identities
+    // when changing target resolution on the same device and logical scene geometry.
+    bool TransferVisualCachesFrom(GpuCompositor& source) noexcept;
+
     bool BeginFrame(ID3D11Texture2D* background, std::string& err);
 
     // opacity: uniform overlay opacity [0,1] multiplied onto the sprite's alpha

@@ -2025,9 +2025,11 @@ void VideoThread::RunAttachment(const std::shared_ptr<NativeState>& native, cons
         if (reducedCompositor && activeGpuCompositor == reducedCompositor.get() && !previewAllowsReduced()) {
             // Promote once per session before sampling; later shrinking is deferred
             // to avoid resize oscillation and repeated GPU resource replacement.
+            if (!gpuCompositor.TransferVisualCachesFrom(*reducedCompositor)) {
+                m_state.RecordFailure(E_FAIL, ErrorPhase::VideoCapture, "Composition demand cache transfer failed");
+                return false;
+            }
             activeGpuCompositor = &gpuCompositor;
-            visualConsumer.reset();
-            visualCachesPending = false;
             ++visualGenerations.overlay;
             const logging::LogField fields[] = {{"width", std::to_string(sourceWidth)},
                                                 {"height", std::to_string(sourceHeight)}};
@@ -5647,9 +5649,13 @@ end_encode_loop:
             {"history_missing", std::to_string(visualTrace.history_missing)},
             {"held_recompositions", std::to_string(visualTrace.held_recompositions)},
             {"composites", std::to_string(visualTrace.composites)},
-            {"image_gpu_uploads", std::to_string(activeGpuCompositor->WebcamUploadCount())},
-            {"atlas_gpu_uploads", std::to_string(activeGpuCompositor->SpriteAtlasUploadCount())},
-            {"quads_drawn", std::to_string(activeGpuCompositor->SpriteQuadDrawCount())},
+            {"image_gpu_uploads", std::to_string(gpuCompositor.WebcamUploadCount() +
+                                                 (reducedCompositor ? reducedCompositor->WebcamUploadCount() : 0))},
+            {"atlas_gpu_uploads",
+             std::to_string(gpuCompositor.SpriteAtlasUploadCount() +
+                            (reducedCompositor ? reducedCompositor->SpriteAtlasUploadCount() : 0))},
+            {"quads_drawn", std::to_string(gpuCompositor.SpriteQuadDrawCount() +
+                                           (reducedCompositor ? reducedCompositor->SpriteQuadDrawCount() : 0))},
             {"backend", useOdCapture ? "od" : "wgc"}};
         logging::log(logging::LogLevel::Info, "video_thread", "visual scene summary",
                      std::span<const logging::LogField>(fields, std::size(fields)));

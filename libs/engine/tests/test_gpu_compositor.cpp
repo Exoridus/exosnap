@@ -1140,3 +1140,32 @@ TEST(GpuCompositorDemand, RejectsHdrAndDistortedLogicalGeometry) {
     EXPECT_FALSE(
         compositor.Init(d3d.device.get(), d3d.context.get(), 4, 2, error, DXGI_FORMAT_B8G8R8A8_UNORM, 203.0f, 8, 8));
 }
+
+TEST(GpuCompositorDemand, PromotionRetainsAcceptedImageWithoutNewCpuPayload) {
+    using namespace exosnap::engine;
+    const auto d3d = CreateWarpDevice();
+    ASSERT_TRUE(d3d.device);
+    GpuCompositor reduced;
+    GpuCompositor full;
+    std::string error;
+    ASSERT_TRUE(
+        reduced.Init(d3d.device.get(), d3d.context.get(), 4, 2, error, DXGI_FORMAT_B8G8R8A8_UNORM, 203.0f, 8, 4));
+    ASSERT_TRUE(full.Init(d3d.device.get(), d3d.context.get(), 8, 4, error));
+    const SourceToken token{{VisualSourceId{{1}}, VisualRuntimeGeneration{1}}, SourceRequestRevision{1}};
+    const std::array addresses{token.address};
+    ASSERT_TRUE(reduced.PrepareVisualImages(addresses, error));
+    WebcamFrameSnapshot frame;
+    frame.width = frame.height = 1;
+    frame.generation = 1;
+    frame.pixels = SolidBgra(1, 1, 100, 110, 120);
+    auto background = CreateTexture(d3d.device.get(), 8, 4, SolidBgra(8, 4, 10, 20, 30));
+    ASSERT_TRUE(reduced.BeginFrame(background.get(), error));
+    ASSERT_TRUE(reduced.DrawVisualImage(token, 1, 1, &frame, {4, 0, 4, 4}, false, {}, error));
+    ASSERT_TRUE(full.TransferVisualCachesFrom(reduced));
+    ASSERT_TRUE(full.BeginFrame(background.get(), error));
+    ASSERT_TRUE(full.DrawVisualImage(token, 1, 1, nullptr, {4, 0, 4, 4}, false, {}, error));
+    const auto pixels = ReadTexture(d3d.device.get(), d3d.context.get(), full.Result());
+    ExpectPixelNear(pixels, 8, 7, 3, 100, 110, 120, 255);
+    EXPECT_EQ(full.WebcamUploadCount(), 0u);
+    EXPECT_EQ(reduced.WebcamUploadCount(), 1u);
+}

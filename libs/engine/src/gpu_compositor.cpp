@@ -277,6 +277,16 @@ void GpuCompositor::SetOverlayReferenceWhiteNits(float overlay_reference_white_n
     overlay_ref_white_nits_ = EffectiveOverlayReferenceWhiteNits(overlay_reference_white_nits);
 }
 
+bool GpuCompositor::TransferVisualCachesFrom(GpuCompositor& source) noexcept {
+    if (&source == this || device_ == nullptr || device_ != source.device_ || context_ != source.context_ ||
+        render_format_ != source.render_format_ || logical_width_ != source.logical_width_ ||
+        logical_height_ != source.logical_height_ || !visual_images_.empty() || !sprite_atlases_.empty())
+        return false;
+    visual_images_ = std::move(source.visual_images_);
+    sprite_atlases_ = std::move(source.sprite_atlases_);
+    return true;
+}
+
 bool GpuCompositor::BeginFrame(ID3D11Texture2D* background, std::string& err) {
     if (background == nullptr || composite_tex_ == nullptr || context_ == nullptr) {
         err = "GpuCompositor::BeginFrame called before Init or without background";
