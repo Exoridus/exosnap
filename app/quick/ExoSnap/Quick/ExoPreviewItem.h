@@ -83,8 +83,8 @@ class ExoPreviewItem : public QQuickItem {
     // GUI-thread handoff. Ownership of nt_handle transfers to this item. The
     // handle is opened and closed on the scene-graph render thread.
     // Already-composited sources receive only hidden editing overlays.
-    void presentSharedTexture(void* nt_handle, uint32_t width, uint32_t height, exosnap::engine::PreviewTapDesc tap,
-                              bool overlays_composited = false);
+    void presentSharedTexture(void* nt_handle, uint32_t width, uint32_t height,
+                              const exosnap::engine::PreviewTapDesc& tap, bool overlays_composited = false);
     void clearSharedTexture();
 
     // GUI thread. One scene update because something the preview shows may have

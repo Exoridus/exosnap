@@ -803,7 +803,7 @@ const QString& ExoPreviewItem::errorText() const noexcept {
 }
 
 void ExoPreviewItem::presentSharedTexture(void* nt_handle, uint32_t width, uint32_t height,
-                                          exosnap::engine::PreviewTapDesc tap, bool overlays_composited) {
+                                          const exosnap::engine::PreviewTapDesc& tap, bool overlays_composited) {
     Q_ASSERT(QThread::currentThread() == thread());
     const quint64 generation = next_generation_++;
     void* pending_handle = duplicateHandle(nt_handle);
