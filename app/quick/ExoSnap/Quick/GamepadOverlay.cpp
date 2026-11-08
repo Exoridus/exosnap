@@ -318,6 +318,22 @@ void GamepadOverlay::setDevice(const QString& value) {
     Configure(settings);
 }
 
+void GamepadOverlay::setPlayerIndex(int index) {
+    const auto reading = ReadingAt(gamepad::NowCapture100ns());
+    if (!input_ || !reading || !reading->connected || !gamepad::SelectablePlayerIndex(index)) {
+        player_index_status_ = tr("Select a connected controller and a valid player P1-P4 or Unassigned");
+        emit playerIndexChanged();
+        return;
+    }
+    if (!input_->RequestPlayerIndex(reading->device.id, index)) {
+        player_index_status_ = tr("Controller player-index change is unavailable");
+        emit playerIndexChanged();
+        return;
+    }
+    player_index_status_ = tr("Updating player index...");
+    emit playerIndexChanged();
+}
+
 void GamepadOverlay::setPlacement(QRectF value) {
     auto settings = Settings();
     settings.x = static_cast<float>(value.x());
@@ -445,6 +461,22 @@ void GamepadOverlay::Poll() {
         return;
     }
     const auto reading = ReadingAt(gamepad::NowCapture100ns());
+    if (input_) {
+        if (const auto result = input_->TakePlayerIndexResult()) {
+            player_index_status_ = result->success ? QString() : QString::fromStdString(result->error);
+            emit playerIndexChanged();
+        }
+    }
+    const bool player_connected = reading && reading->connected;
+    const int player_index = player_connected ? reading->device.player_index : -1;
+    const bool player_led_supported = player_connected && reading->device.player_led_supported;
+    if (player_connected_ != player_connected || player_index_ != player_index ||
+        player_led_supported_ != player_led_supported) {
+        player_connected_ = player_connected;
+        player_index_ = player_index;
+        player_led_supported_ = player_led_supported;
+        emit playerIndexChanged();
+    }
     int detected = automatic_layout_;
     if (reading && reading->connected) {
         detected = DetectedLayout(reading->device);
@@ -484,8 +516,13 @@ void GamepadOverlay::Poll() {
                                : device.layout == gamepad::LayoutKind::JoyConPair  ? tr("Joy-Con pair")
                                : device.layout == gamepad::LayoutKind::GameCube    ? tr("GameCube")
                                                                                    : tr("Gamepad");
-        const QString label = device.persistent ? QStringLiteral("%1 (%2)").arg(family, id.right(6))
-                                                : tr("%1 (%2, session only)").arg(family, id.right(6));
+        const QString player = device.player_index < 0 ? tr("Unassigned")
+                               : device.player_index < 4 ? QStringLiteral("P%1").arg(device.player_index + 1)
+                                                         : tr("SDL player %1").arg(device.player_index + 1);
+        const QString label =
+            (device.persistent ? QStringLiteral("%1 (%2)").arg(family, id.right(6))
+                               : tr("%1 (%2, session only)").arg(family, id.right(6))) +
+            QStringLiteral(" · ") + player;
         options.push_back(QVariantMap{{QStringLiteral("value"), id}, {QStringLiteral("label"), label}});
     }
     const auto selected = device();
