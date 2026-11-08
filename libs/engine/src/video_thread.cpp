@@ -5656,6 +5656,12 @@ end_encode_loop:
                             (reducedCompositor ? reducedCompositor->SpriteAtlasUploadCount() : 0))},
             {"quads_drawn", std::to_string(gpuCompositor.SpriteQuadDrawCount() +
                                            (reducedCompositor ? reducedCompositor->SpriteQuadDrawCount() : 0))},
+            {"plan_rebuilds", std::to_string(visualConsumer ? visualConsumer->PlanRebuildCount() : 0)},
+            {"plan_reuses", std::to_string(visualConsumer ? visualConsumer->PlanReuseCount() : 0)},
+            {"pipeline_binds", std::to_string(gpuCompositor.PipelineBindCount() +
+                                              (reducedCompositor ? reducedCompositor->PipelineBindCount() : 0))},
+            {"pipeline_reuses", std::to_string(gpuCompositor.PipelineReuseCount() +
+                                               (reducedCompositor ? reducedCompositor->PipelineReuseCount() : 0))},
             {"backend", useOdCapture ? "od" : "wgc"}};
         logging::log(logging::LogLevel::Info, "video_thread", "visual scene summary",
                      std::span<const logging::LogField>(fields, std::size(fields)));
