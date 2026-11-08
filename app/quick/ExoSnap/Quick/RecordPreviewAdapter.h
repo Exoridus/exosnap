@@ -167,7 +167,8 @@ class RecordPreviewAdapter : public QObject {
     void updateMetrics();
     void setStatus(QString status);
     void setError(QString error);
-    void acceptRecordingTexture(void* handle, uint32_t width, uint32_t height, exosnap::engine::PreviewTapDesc tap);
+    void acceptRecordingTexture(void* handle, uint32_t width, uint32_t height,
+                                const exosnap::engine::PreviewTapDesc& tap);
     // Hands the current engine source to the item as a duplicate handle, or
     // records that it is being held until one is available. Idempotent, so every
     // event that can make a consumer appear may simply call it.

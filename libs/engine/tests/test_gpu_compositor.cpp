@@ -1107,3 +1107,89 @@ TEST(GpuCompositorSprites, HdrLinearScalesSpritesToTheOverlayReferenceWhite) {
     EXPECT_NEAR(right_r, 3.0f, 0.03f);
     EXPECT_NEAR(right_b, 3.0f, 0.03f);
 }
+
+TEST(GpuCompositorDemand, ScalesBackgroundAndKeepsLogicalOverlayPlacement) {
+    const auto d3d = CreateWarpDevice();
+    ASSERT_TRUE(d3d.device);
+    GpuCompositor compositor;
+    std::string error;
+    ASSERT_TRUE(
+        compositor.Init(d3d.device.get(), d3d.context.get(), 4, 2, error, DXGI_FORMAT_B8G8R8A8_UNORM, 203.0f, 8, 4))
+        << error;
+    auto background = CreateTexture(d3d.device.get(), 8, 4, SolidBgra(8, 4, 10, 20, 30));
+    ASSERT_TRUE(compositor.BeginFrame(background.get(), error)) << error;
+    auto overlay = SolidBgra(1, 1, 100, 110, 120);
+    ASSERT_TRUE(compositor.DrawCursor(overlay.data(), 1, 1, {4, 0, 4, 4}, error)) << error;
+    const auto pixels = ReadTexture(d3d.device.get(), d3d.context.get(), compositor.Result());
+    ExpectPixelNear(pixels, 4, 0, 0, 10, 20, 30, 255);
+    ExpectPixelNear(pixels, 4, 3, 1, 100, 110, 120, 255);
+    ASSERT_TRUE(compositor.BeginFrame(background.get(), error)) << error;
+    const auto translucent = SolidBgra(1, 1, 100, 120, 140, 128);
+    ASSERT_TRUE(compositor.DrawCursor(translucent.data(), 1, 1, {4, 0, 4, 4}, error)) << error;
+    const auto blended = ReadTexture(d3d.device.get(), d3d.context.get(), compositor.Result());
+    ExpectPixelNear(blended, 4, 3, 1, 55, 70, 85, 255);
+}
+
+TEST(GpuCompositorDemand, RejectsHdrAndDistortedLogicalGeometry) {
+    const auto d3d = CreateWarpDevice();
+    ASSERT_TRUE(d3d.device);
+    GpuCompositor compositor;
+    std::string error;
+    EXPECT_FALSE(compositor.Init(d3d.device.get(), d3d.context.get(), 4, 2, error, DXGI_FORMAT_R16G16B16A16_FLOAT,
+                                 203.0f, 8, 4));
+    EXPECT_FALSE(
+        compositor.Init(d3d.device.get(), d3d.context.get(), 4, 2, error, DXGI_FORMAT_B8G8R8A8_UNORM, 203.0f, 8, 8));
+}
+
+TEST(GpuCompositorDemand, PromotionRetainsAcceptedImageWithoutNewCpuPayload) {
+    using namespace exosnap::engine;
+    const auto d3d = CreateWarpDevice();
+    ASSERT_TRUE(d3d.device);
+    GpuCompositor reduced;
+    GpuCompositor full;
+    std::string error;
+    ASSERT_TRUE(
+        reduced.Init(d3d.device.get(), d3d.context.get(), 4, 2, error, DXGI_FORMAT_B8G8R8A8_UNORM, 203.0f, 8, 4));
+    ASSERT_TRUE(full.Init(d3d.device.get(), d3d.context.get(), 8, 4, error));
+    const SourceToken token{{VisualSourceId{{1}}, VisualRuntimeGeneration{1}}, SourceRequestRevision{1}};
+    const std::array addresses{token.address};
+    ASSERT_TRUE(reduced.PrepareVisualImages(addresses, error));
+    WebcamFrameSnapshot frame;
+    frame.width = frame.height = 1;
+    frame.generation = 1;
+    frame.pixels = SolidBgra(1, 1, 100, 110, 120);
+    auto background = CreateTexture(d3d.device.get(), 8, 4, SolidBgra(8, 4, 10, 20, 30));
+    ASSERT_TRUE(reduced.BeginFrame(background.get(), error));
+    ASSERT_TRUE(reduced.DrawVisualImage(token, 1, 1, &frame, {4, 0, 4, 4}, false, {}, error));
+    ASSERT_TRUE(full.TransferVisualCachesFrom(reduced));
+    ASSERT_TRUE(full.BeginFrame(background.get(), error));
+    ASSERT_TRUE(full.DrawVisualImage(token, 1, 1, nullptr, {4, 0, 4, 4}, false, {}, error));
+    const auto pixels = ReadTexture(d3d.device.get(), d3d.context.get(), full.Result());
+    ExpectPixelNear(pixels, 8, 7, 3, 100, 110, 120, 255);
+    EXPECT_EQ(full.WebcamUploadCount(), 0u);
+    EXPECT_EQ(reduced.WebcamUploadCount(), 1u);
+}
+
+TEST(GpuCompositorDemand, MaskDestinationsFollowPhysicalTargetPixels) {
+    const auto d3d = CreateWarpDevice();
+    ASSERT_TRUE(d3d.device);
+    GpuCompositor compositor;
+    std::string error;
+    ASSERT_TRUE(
+        compositor.Init(d3d.device.get(), d3d.context.get(), 4, 2, error, DXGI_FORMAT_B8G8R8A8_UNORM, 203.0f, 8, 4));
+    auto background = CreateTexture(d3d.device.get(), 8, 4, SolidBgra(8, 4, 0, 0, 255));
+    SpriteLayerSnapshot layer;
+    layer.atlas = PaddedFourCellAtlas(21);
+    auto body = CellQuad(3, 0, 0, 1, 1);
+    body.source = {10, 1, 1, 1};
+    body.masks[0] = {{10, 1, 1, 1}, {0, 0, 0.25F, 0.5F}};
+    body.masks[1] = {{10, 1, 1, 1}, {0.5F, 0.5F, 0.25F, 0.5F}};
+    layer.quads = {body};
+    ASSERT_TRUE(compositor.BeginFrame(background.get(), error));
+    ASSERT_TRUE(compositor.DrawSpriteLayer(0, layer, {0, 0, 8, 4}, error));
+    const auto pixels = ReadTexture(d3d.device.get(), d3d.context.get(), compositor.Result());
+    ExpectPixelNear(pixels, 4, 0, 0, 0, 0, 255, 255);
+    ExpectPixelNear(pixels, 4, 0, 1, 255, 255, 255, 255);
+    ExpectPixelNear(pixels, 4, 2, 1, 0, 0, 255, 255);
+    ExpectPixelNear(pixels, 4, 2, 0, 255, 255, 255, 255);
+}

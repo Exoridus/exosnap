@@ -4,7 +4,10 @@
 #include <exosnap/engine/visual_diagnostics.h>
 #include <exosnap/engine/visual_frame.h>
 
+#include <atomic>
+#include <exosnap/engine/render_demand.h>
 #include <memory>
+#include <optional>
 #include <span>
 #include <variant>
 #include <vector>
@@ -170,6 +173,18 @@ class VisualSceneRuntime final {
     // Counts successful CPU image publications, producer lock/full-pool drops
     // and host image/scene/binding try-lock misses. Not per source or per session.
     [[nodiscard]] VisualRuntimeCounters Counters() const noexcept;
+    // The host's single Preview publishes full-scene physical pixels, including zoom.
+    // Null is unknown; zero dimensions mean hidden. This does not own GPU resources.
+    void SetPreviewPixelDemand(std::optional<CompositionSize> pixels) noexcept {
+        preview_pixels_.store(pixels ? (uint64_t{pixels->width} << 32) | pixels->height : UINT64_MAX,
+                              std::memory_order_release);
+    }
+    [[nodiscard]] std::optional<CompositionSize> PreviewPixelDemand() const noexcept {
+        const auto pixels = preview_pixels_.load(std::memory_order_acquire);
+        if (pixels == UINT64_MAX)
+            return std::nullopt;
+        return CompositionSize{static_cast<uint32_t>(pixels >> 32), static_cast<uint32_t>(pixels)};
+    }
     Outcome<VisualConsumerId> RegisterConsumer();
     // Call only after the consumer is quiescent and all its leases are empty.
     void UnregisterConsumer(VisualConsumerId);
@@ -202,6 +217,7 @@ class VisualSceneRuntime final {
     friend Outcome<std::monostate> StageGamepadData(VisualSceneRuntime&, SourceToken,
                                                     std::shared_ptr<const GamepadSpriteSet>, gamepad::HistoryReadView);
     std::shared_ptr<detail::VisualRuntimeStorage> storage_;
+    std::atomic<uint64_t> preview_pixels_{UINT64_MAX};
 };
 
 // Control-side built-in integration; adopts immutable data without copying pixels.

@@ -442,7 +442,7 @@ void RecordPreviewAdapter::bindRecordingCoordinator(RecordingCoordinator* coordi
     });
     coordinator->SetPreviewFramePublishedCallback(makeFramePublishedSink());
     coordinator->SetPreviewSharedHandleReadyCallback(
-        [safe_self](void* handle, uint32_t width, uint32_t height, exosnap::engine::PreviewTapDesc tap) {
+        [safe_self](void* handle, uint32_t width, uint32_t height, const exosnap::engine::PreviewTapDesc& tap) {
             auto handle_owner = std::make_shared<QueuedSharedHandle>(handle);
             QMetaObject::invokeMethod(
                 QCoreApplication::instance(),
@@ -590,7 +590,7 @@ std::function<void()> RecordPreviewAdapter::makeFramePublishedSink() {
 }
 
 void RecordPreviewAdapter::acceptRecordingTexture(void* handle, uint32_t width, uint32_t height,
-                                                  exosnap::engine::PreviewTapDesc tap) {
+                                                  const exosnap::engine::PreviewTapDesc& tap) {
     if (handle == nullptr)
         return;
     ++engine_source_announcements_;
@@ -711,7 +711,7 @@ void RecordPreviewAdapter::startPreview() {
     QPointer<ExoPreviewItem> safe_item(item_);
     const auto cursor_composited = std::make_shared<std::atomic_bool>(false);
     const auto sink = [safe_self, safe_item, epoch, target, cursor_composited](
-                          void* handle, uint32_t width, uint32_t height, exosnap::engine::PreviewTapDesc tap) {
+                          void* handle, uint32_t width, uint32_t height, const exosnap::engine::PreviewTapDesc& tap) {
         auto handle_owner = std::make_shared<QueuedSharedHandle>(handle);
         // The receiver is unconditionally the application object, never the item.
         // This lambda runs on the capture pump thread, and Unsubscribe() is
