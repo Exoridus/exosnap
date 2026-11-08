@@ -25,10 +25,10 @@ use crate::{infra_ensure, product_ensure};
 pub fn scenarios() -> Vec<Scenario> {
     vec![Scenario {
         id: "edit.timeline-semantic",
-        revision: 2,
+        revision: 3,
         title: "The editor imports, edits, undoes and exports through semantic control",
         class: ScenarioClass::Regression,
-        contract: "imports recover from a missing-file refusal without losing linked clips; split, trim, ripple delete, undo and redo preserve the expected timeline; stale revisions and invalid overlap are refused; crossfade settings round-trip; discarding an export review writes nothing and retry exports the expected source frames, tones and audio fades",
+        contract: "imports recover from a missing-file refusal without losing linked clips; split, trim, ripple delete, undo and redo preserve the expected timeline; stale revisions and invalid overlap are refused; crossfade settings round-trip; review discard, destination conflict and observed in-flight cancellation preserve the timeline and leave no partial output; retry exports the expected source frames, tones and audio fades",
         lane: Lane::Preflight,
         also: &[],
         tier: Tier::Recommended,
@@ -524,14 +524,7 @@ fn timeline_semantic(ctx: &mut Context) -> Step {
     );
     ctx.evidence
         .put("discardedExport", discarded["export"].clone());
-    accepted(&mut app, "export.start", json!({}))?;
-    let retried = app
-        .client
-        .poll("ui.getState", json!({}), secs(60.0), |s| {
-            matches!(s["exportState"].as_str(), Some("review" | "failed"))
-        })?
-        .ok_or_else(|| Stop::fail("export retry did not reach review"))?;
-    product_ensure!(retried["exportState"] == "review", "export retry failed");
+    verify_export_failure_recovery(ctx, &mut app)?;
     accepted(&mut app, "export.confirm", json!({}))?;
     let finished = app
         .client
@@ -566,6 +559,145 @@ fn timeline_semantic(ctx: &mut Context) -> Step {
     );
     let exit = app.close_gracefully(secs(60.0))?;
     ctx.evidence.put("exitCode", exit.code);
+    Ok(())
+}
+
+fn review_export(app: &mut App) -> Step<Value> {
+    accepted(app, "export.start", json!({}))?;
+    let snapshot = app
+        .client
+        .poll("editor.snapshot", json!({}), secs(60.0), |s| {
+            matches!(s["export"]["state"].as_str(), Some("review" | "failed"))
+        })?
+        .ok_or_else(|| Stop::fail("export retry did not reach review"))?;
+    product_ensure!(
+        snapshot["export"]["state"] == "review",
+        "export retry failed: {}",
+        snapshot["export"]["errorText"]
+    );
+    Ok(snapshot)
+}
+
+fn owned_export_path(root: &Path, output: &Path) -> bool {
+    output.is_absolute() && output.parent() == Some(root) && output.file_name().is_some()
+}
+
+fn encoding_observed(export: &Value) -> bool {
+    export["state"] == "exporting"
+        && export["running"] == true
+        && export["progressPercent"]
+            .as_u64()
+            .is_some_and(|progress| progress > 0 && progress < 100)
+}
+
+fn verify_export_failure_recovery(ctx: &mut Context, app: &mut App) -> Step {
+    let original = editor(app)?;
+    let review = review_export(app)?;
+    let conflict = PathBuf::from(review["export"]["outputPath"].as_str().unwrap_or_default());
+    infra_ensure!(
+        owned_export_path(&app.output, &conflict) && !conflict.exists(),
+        "the reviewed destination is not an absent direct child of the isolated output directory"
+    );
+    // The destination becomes unavailable after review, without changing global permissions.
+    std::fs::create_dir(&conflict)?;
+    accepted(app, "export.confirm", json!({}))?;
+    let failed = app
+        .client
+        .poll("editor.snapshot", json!({}), secs(60.0), |s| {
+            matches!(s["export"]["state"].as_str(), Some("failed" | "completed"))
+        })?
+        .ok_or_else(|| Stop::fail("the conflicting destination did not settle"))?;
+    ctx.evidence
+        .put("destinationConflict", failed["export"].clone());
+    product_ensure!(
+        failed["export"]["state"] == "failed"
+            && failed["export"]["destinationFailure"] == true
+            && failed["workspaceRevision"] == original["workspaceRevision"]
+            && failed["clips"] == original["clips"]
+            && conflict.is_dir()
+            && std::fs::read_dir(&conflict)?.next().is_none(),
+        "destination conflict changed the timeline, occupied directory or failure classification"
+    );
+    let entries = std::fs::read_dir(&app.output)?.collect::<Result<Vec<_>, _>>()?;
+    product_ensure!(
+        entries.len() == 1 && entries[0].path() == conflict,
+        "failed publication left a partial output beside the owned conflict directory"
+    );
+    std::fs::remove_dir(&conflict)?;
+    accepted(app, "export.reset", json!({}))?;
+
+    let extended = accepted(
+        app,
+        "edit.setFixedTimelineEnd",
+        json!({"fixed": true, "endMs": 120_000}),
+    )?;
+    judge_one_step(&extended, "temporary export duration")?;
+    product_ensure!(
+        extended["fixedTimelineEnd"] == true && near(&extended["durationMs"], 120_000.0),
+        "the cancellation workload did not extend to 120 seconds"
+    );
+    ctx.evidence.put(
+        "cancellationTimelineDurationMs",
+        extended["durationMs"].clone(),
+    );
+    review_export(app)?;
+    accepted(app, "export.confirm", json!({}))?;
+    let started = app
+        .client
+        .poll("editor.snapshot", json!({}), secs(60.0), |s| {
+            encoding_observed(&s["export"])
+                || matches!(s["export"]["state"].as_str(), Some("completed" | "failed"))
+        })?
+        .ok_or_else(|| Stop::fail("the export did not publish in-flight progress"))?;
+    ctx.evidence
+        .put("exportBeforeCancel", started["export"].clone());
+    product_ensure!(
+        started["export"]["state"] != "failed",
+        "the cancellation workload failed before cancellation: {}",
+        started["export"]["errorText"]
+    );
+    if !encoding_observed(&started["export"]) {
+        return Err(Stop::unavailable(
+            "the export completed before in-flight cancellation could be observed",
+        ));
+    }
+    if let Err(refusal) = app.client.request("export.cancel", json!({}), secs(30.0))? {
+        if refusal.code == "invalid_state" && editor(app)?["export"]["state"] == "completed" {
+            return Err(Stop::unavailable(
+                "the export completed between progress observation and cancellation",
+            ));
+        }
+        return Err(Stop::fail(format!("export.cancel refused: {refusal}")));
+    }
+    let cancelled = app
+        .client
+        .poll("editor.snapshot", json!({}), secs(60.0), |s| {
+            s["export"]["running"] == false
+        })?
+        .ok_or_else(|| Stop::fail("export cancellation did not finish"))?;
+    ctx.evidence
+        .put("cancelledExport", cancelled["export"].clone());
+    if cancelled["export"]["state"] == "completed" {
+        return Err(Stop::unavailable(
+            "the export completed while cancellation was being delivered",
+        ));
+    }
+    product_ensure!(
+        cancelled["export"]["state"] == "idle"
+            && cancelled["workspaceRevision"] == extended["workspaceRevision"]
+            && cancelled["clips"] == extended["clips"]
+            && std::fs::read_dir(&app.output)?.next().is_none(),
+        "in-flight cancellation changed the timeline or retained output"
+    );
+    let restored = accepted(app, "edit.undo", json!({}))?;
+    judge_one_step(&restored, "undo temporary export duration")?;
+    product_ensure!(
+        restored["fixedTimelineEnd"] == original["fixedTimelineEnd"]
+            && restored["durationMs"] == original["durationMs"]
+            && restored["clips"] == original["clips"],
+        "undo after cancellation did not restore the original export timeline"
+    );
+    review_export(app)?;
     Ok(())
 }
 
@@ -680,6 +812,37 @@ fn dominant_hz(samples: &[f32], rate: u32) -> f64 {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn destination_conflicts_are_limited_to_direct_owned_output_children() {
+        let root = std::env::temp_dir().join("exosnap-owned-output");
+        assert!(owned_export_path(&root, &root.join("export.mkv")));
+        assert!(!owned_export_path(&root, &root));
+        assert!(!owned_export_path(&root, &root.join("nested/export.mkv")));
+        assert!(!owned_export_path(&root, &root.join("../export.mkv")));
+        assert!(!owned_export_path(&root, Path::new("export.mkv")));
+        assert!(!owned_export_path(
+            &root,
+            &std::env::temp_dir().join("unowned-output/export.mkv")
+        ));
+    }
+
+    #[test]
+    fn cancellation_requires_observed_work_before_completion() {
+        let progress = json!({"state": "exporting", "running": true, "progressPercent": 1});
+        assert!(encoding_observed(&progress));
+        for invalid in [
+            json!({"state": "running", "running": true, "progressPercent": 1}),
+            json!({"state": "preparing", "running": true, "progressPercent": 1}),
+            json!({"state": "exporting", "running": true, "progressPercent": 0}),
+            json!({"state": "exporting", "running": true, "progressPercent": 100}),
+            json!({"state": "exporting", "running": false, "progressPercent": 1}),
+            json!({"state": "completed", "running": false, "progressPercent": 100}),
+            json!({"state": "exporting", "running": true}),
+        ] {
+            assert!(!encoding_observed(&invalid));
+        }
+    }
 
     #[test]
     fn a_pure_tone_reads_back_at_its_frequency() {
