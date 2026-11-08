@@ -8,6 +8,7 @@
 #include <SDL3/SDL_hints.h>
 #include <SDL3/SDL_init.h>
 #include <SDL3/SDL_main.h>
+#include <SDL3/SDL_properties.h>
 #include <SDL3/SDL_timer.h>
 #include <SDL3/SDL_version.h>
 #include <windows.h>
@@ -130,6 +131,13 @@ struct SdlGamepadSource::Impl {
     std::mutex wake_mutex;
     std::condition_variable wake;
     std::thread worker;
+    struct PendingPlayerIndex {
+        DeviceId device{};
+        int index = -1;
+    };
+    std::mutex player_mutex;
+    std::optional<PendingPlayerIndex> pending_player_index;
+    std::optional<PlayerIndexSetResult> player_index_result;
     bool initialized = false;
     bool owns_gate = true;
 
@@ -170,6 +178,54 @@ struct SdlGamepadSource::Impl {
 
     void Publish(Device& device, uint64_t timestamp) {
         history->Push({timestamp, true, device.identity, NormalizeSdlControls(device.sample)});
+    }
+
+    // SDL may move another controller to a free slot when a player assignment
+    // changes. Refresh *all* device metadata, not only the requested controller.
+    void RefreshPlayerIndices() {
+        for (auto& [instance, device] : devices) {
+            (void)instance;
+            if (!SDL_GamepadConnected(device.handle))
+                continue;
+            const int index = SDL_GetGamepadPlayerIndex(device.handle);
+            if (index != device.identity.player_index) {
+                device.identity.player_index = index;
+                Publish(device, NowCapture100ns());
+            }
+        }
+    }
+
+    void ApplyPlayerIndexRequest() {
+        std::optional<PendingPlayerIndex> pending;
+        {
+            const std::scoped_lock lock(player_mutex);
+            pending.swap(pending_player_index);
+        }
+        if (!pending)
+            return;
+        PlayerIndexSetResult result;
+        result.device = pending->device;
+        result.requested = pending->index;
+        const auto found = std::find_if(devices.begin(), devices.end(), [&](const auto& entry) {
+            return entry.second.identity.id == pending->device && SDL_GamepadConnected(entry.second.handle);
+        });
+        if (found == devices.end()) {
+            result.error = "Selected controller is disconnected";
+        } else if (!SDL_SetGamepadPlayerIndex(found->second.handle, pending->index)) {
+            result.error = SDL_GetError();
+            if (result.error.empty())
+                result.error = "SDL refused the player-index change";
+        } else {
+            result.observed = SDL_GetGamepadPlayerIndex(found->second.handle);
+            result.success = result.observed == pending->index;
+            if (!result.success)
+                result.error = "SDL did not retain the requested player index";
+        }
+        RefreshPlayerIndices();
+        {
+            const std::scoped_lock lock(player_mutex);
+            player_index_result = std::move(result);
+        }
     }
 
     void Snapshot(Device& device) {
@@ -227,6 +283,10 @@ struct SdlGamepadSource::Impl {
             device.identity.product_id = SDL_GetGamepadProduct(handle);
             device.identity.layout =
                 SdlLayoutKindFor(SDL_GetGamepadType(handle), device.identity.vendor_id, device.identity.product_id);
+            device.identity.player_index = SDL_GetGamepadPlayerIndex(handle);
+            device.identity.player_led_supported =
+                SDL_GetBooleanProperty(SDL_GetGamepadProperties(handle), SDL_PROP_GAMEPAD_CAP_PLAYER_LED_BOOLEAN,
+                                       false);
             const char* serial = SDL_GetGamepadSerial(handle);
             const char* path = SDL_GetGamepadPath(handle);
             device.physical_id = PersistentSdlDeviceId(device.identity.vendor_id, device.identity.product_id,
@@ -247,6 +307,7 @@ struct SdlGamepadSource::Impl {
             auto [position, inserted] = devices.emplace(instance, std::move(device));
             (void)inserted;
             Snapshot(position->second);
+            RefreshPlayerIndices();
         } catch (...) {
             if (!devices.contains(instance))
                 SDL_CloseGamepad(handle);
@@ -344,8 +405,10 @@ struct SdlGamepadSource::Impl {
                     throw std::runtime_error("Controller event queue exceeded its bounded processing budget");
                 if (std::chrono::steady_clock::now() >= next_reconcile) {
                     Reconcile();
+                    RefreshPlayerIndices();
                     next_reconcile = std::chrono::steady_clock::now() + std::chrono::milliseconds(500);
                 }
+                ApplyPlayerIndexRequest();
                 auto starting = InputSourceState::Starting;
                 state.compare_exchange_strong(starting, InputSourceState::Ready, std::memory_order_acq_rel);
                 std::unique_lock lock(wake_mutex);
@@ -478,6 +541,25 @@ void SdlGamepadSource::SelectDevice(std::optional<DeviceId> device) {
 }
 std::vector<DeviceIdentity> SdlGamepadSource::Devices() const {
     return impl_->history->Devices();
+}
+
+bool SdlGamepadSource::RequestPlayerIndex(DeviceId device, int index) {
+    if (!SelectablePlayerIndex(index) || State() != InputSourceState::Ready ||
+        impl_->stop_requested.load(std::memory_order_acquire))
+        return false;
+    {
+        const std::scoped_lock lock(impl_->player_mutex);
+        // Last explicit selection wins until the worker processes it.
+        impl_->pending_player_index = Impl::PendingPlayerIndex{device, index};
+        impl_->player_index_result.reset();
+    }
+    impl_->wake.notify_all();
+    return true;
+}
+
+std::optional<PlayerIndexSetResult> SdlGamepadSource::TakePlayerIndexResult() {
+    const std::scoped_lock lock(impl_->player_mutex);
+    return std::exchange(impl_->player_index_result, std::nullopt);
 }
 
 } // namespace exosnap::gamepad
