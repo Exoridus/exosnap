@@ -136,6 +136,15 @@ class StubSource final : public LiveVerifySource {
     bool SettingsSet(const QString&, const QJsonValue&, QString*) override {
         return true;
     }
+    [[nodiscard]] QJsonObject GamepadSnapshot() const override {
+        return {};
+    }
+    bool SelectGamepadDevice(const QString&, const QString&, const QString&, const QString&, QString*) override {
+        return true;
+    }
+    bool SelectGamepadLayout(const QString&, const QString&, const QString&, const QString&, QString*) override {
+        return true;
+    }
     [[nodiscard]] QJsonObject AudioRoutingSnapshot() const override {
         return {};
     }

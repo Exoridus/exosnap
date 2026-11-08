@@ -411,9 +411,8 @@ void captureOnWorker(ReadyFrameSource source, ReadyFrameComposition composition,
                     continue;
                 }
             }
-            visual_frame =
-                consumer->Sample({gamepad::GameInputSource::NowCapture100ns()}, {0, 0, crop.width(), crop.height()},
-                                 exosnap::engine::VisualCompositionMode::Recording);
+            visual_frame = consumer->Sample({gamepad::NowCapture100ns()}, {0, 0, crop.width(), crop.height()},
+                                            exosnap::engine::VisualCompositionMode::Recording);
             if (!visual_frame.Deferred()) {
                 sampled = true;
                 break;

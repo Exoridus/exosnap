@@ -316,13 +316,9 @@ pub(crate) mod tests {
     }
 
     #[test]
-    fn gameinput_hid_import_is_supplied_by_windows() {
+    fn sdl_hid_import_is_supplied_by_windows() {
         let dir = tempfile::tempdir().unwrap();
-        std::fs::write(
-            dir.path().join("GameInputRedist.dll"),
-            synthetic_pe(&["HID.DLL"]),
-        )
-        .unwrap();
+        std::fs::write(dir.path().join("SDL3.dll"), synthetic_pe(&["HID.DLL"])).unwrap();
         let audit = audit_tree(dir.path()).unwrap();
         assert_eq!(audit.system, 1);
         assert!(audit.unresolved.is_empty(), "{:?}", audit.unresolved);

@@ -118,8 +118,7 @@ fn external_path(path: &Path) -> PathBuf {
 const REQUIRED_FILES: &[&str] = &[
     "exosnap.exe",
     "exosnap-updater.exe",
-    "GameInputRedist.dll",
-    "GameInputRawInputProxy.exe",
+    "SDL3.dll",
     "qt.conf",
     "Qt6Core.dll",
     "Qt6Gui.dll",
@@ -179,9 +178,7 @@ const REQUIRED_LICENSES: &[&str] = &[
     "presentmon.txt",
     "miniz.txt",
     "monocypher.txt",
-    "gameinput.txt",
-    "gameinput-notice.txt",
-    "gameinput-mit.txt",
+    "sdl3.txt",
     "gamepad-artwork.txt",
     "gamepad-al2009man.txt",
     "gamepad-al2009man-notice.txt",
@@ -239,6 +236,8 @@ const FORBIDDEN_DIRS: &[&str] = &[
 /// [`FORBIDDEN_DIRS`]: a future Qt layout that flattens a style plugin next to
 /// the executables is caught here instead of shipping silently.
 const FORBIDDEN_NAME_FRAGMENTS: &[&str] = &[
+    "gameinputredist",
+    "gameinputrawinputproxy",
     "vc_redist",
     "qmldbg_",
     "qtquickcontrols2fusion",
@@ -1121,6 +1120,24 @@ mod tests {
                 .any(|e| e.contains("qml/QtQuick/Controls/Basic"))
         );
         assert!(errors.iter().any(|e| e.contains("licenses/ffmpeg.txt")));
+    }
+
+    #[test]
+    fn retired_gameinput_payloads_are_rejected_even_beside_sdl() {
+        let dir = tempfile::tempdir().unwrap();
+        fs::write(dir.path().join("SDL3.dll"), []).unwrap();
+        fs::write(dir.path().join("GameInputRedist.dll"), []).unwrap();
+        fs::create_dir(dir.path().join("nested")).unwrap();
+        fs::write(dir.path().join("nested/GAMEINPUTRAWINPUTPROXY.EXE"), []).unwrap();
+        let errors = validate_tree(dir.path(), "0.10.0", &[]).unwrap();
+        for name in ["GameInputRedist.dll", "GAMEINPUTRAWINPUTPROXY.EXE"] {
+            assert!(
+                errors.iter().any(
+                    |error| error.contains("forbidden runtime payload") && error.contains(name)
+                ),
+                "retired runtime was accepted: {name}"
+            );
+        }
     }
 
     #[test]

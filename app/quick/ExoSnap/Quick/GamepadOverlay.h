@@ -85,17 +85,26 @@ class GamepadOverlay final : public QObject, public engine::SpriteSourceProvider
   private:
     friend class GamepadOverlayTest;
     static gamepad::GamepadState DisplayState(gamepad::GamepadState state);
+    static int DetectedLayout(const gamepad::DeviceIdentity& device);
     void ConfigureBackend(GamepadOverlaySettings);
     void Poll();
     void Rebuild();
     void PublishVisualData();
+    void RetireInput();
+    void FinishInputRetirement();
+    void ReportVisualStatus(SourcePhase, std::optional<engine::EngineError> error = std::nullopt);
     void SetStatus(QString text);
     std::shared_ptr<const engine::SpriteLayerSnapshot> BuildSnapshot(uint64_t timestamp, bool preview);
     mutable std::mutex mutex_;
     GamepadOverlaySettings settings_;
     int content_width_ = 1920;
     int content_height_ = 1080;
-    std::shared_ptr<gamepad::GameInputSource> input_;
+    std::unique_ptr<gamepad::SdlGamepadSource> input_;
+    std::unique_ptr<gamepad::SdlGamepadSource> retiring_input_;
+    gamepad::HistoryReadView input_history_;
+    QString input_start_error_;
+    std::optional<SourcePhase> reported_phase_;
+    std::string reported_error_;
     std::shared_ptr<const GamepadSpriteSet> sprites_;
     std::shared_ptr<const engine::SpriteLayerSnapshot> cached_;
     std::shared_ptr<const engine::SpriteLayerSnapshot> last_notified_;

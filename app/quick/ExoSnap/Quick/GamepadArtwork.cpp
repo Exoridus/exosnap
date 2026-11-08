@@ -93,7 +93,7 @@ gamepad::Control BindingControl(const QJsonObject& binding) {
     using gamepad::Control;
     const auto type = binding.value("type").toString();
     if (type == QStringLiteral("button"))
-        return gamepad::ControlFromGameInputButton(binding.value("mask").toInt());
+        return gamepad::ControlFromLegacyButton(binding.value("mask").toInt());
     if (type == QStringLiteral("stick")) {
         if (!binding.contains("axes")) {
             if (binding.value("clickMask").toInt() == 4096)
@@ -304,7 +304,7 @@ MappedGamepadArtwork PrepareMappedGamepadArtwork(const QString& mapping_path, QS
             const QString directions[]{QStringLiteral("up"), QStringLiteral("right"), QStringLiteral("down"),
                                        QStringLiteral("left")};
             for (int i = 0; i < 4; ++i) {
-                const auto control = gamepad::ControlFromGameInputButton(binding.value(directions[i]).toInt());
+                const auto control = gamepad::ControlFromLegacyButton(binding.value(directions[i]).toInt());
                 const auto controls = layer.value("controls").toObject();
                 const auto canonical =
                     controls.contains(directions[i])
@@ -330,7 +330,7 @@ MappedGamepadArtwork PrepareMappedGamepadArtwork(const QString& mapping_path, QS
         const auto id = source_id;
         const auto click = layer.contains("clickControl")
                                ? gamepad::ControlFromName(layer.value("clickControl").toString().toStdString())
-                               : gamepad::ControlFromGameInputButton(binding.value("clickMask").toInt());
+                               : gamepad::ControlFromLegacyButton(binding.value("clickMask").toInt());
         if (layer.contains("clickControl") && !layer.value("clickControl").isNull() && click == gamepad::Control::Count)
             return fail();
         if (!add(part, layer, id, {}))

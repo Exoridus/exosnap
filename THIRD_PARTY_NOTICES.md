@@ -131,23 +131,15 @@ directory alongside the ExoSnap binary.
   vendored unmodified; provenance and per-file hashes are in
   `libs/update/third_party/monocypher/NOTICE.md`.
 
-### Microsoft GameInput
+### SDL3
 
-- **Version:** 4.0.302 (NuGet package `Microsoft.GameInput`, pinned by SHA-256)
-- **Project:** https://aka.ms/gameinput
-- **License:** the public header and the loader source (`native/src/GameInput.cpp`)
-  are MIT-licensed, Copyright (c) Microsoft Corporation, as stated in each file.
-  The GameInput redistributable runtime is licensed under the Microsoft Software
-  License Terms for the Microsoft GameInput Redistributable.
-- **Linkage:** static (the loader is compiled from the package source); the
-  runtime is resolved at run time from the in-box `GameInput.dll` or an
-  installed or application-local `GameInputRedist.dll`
-- **Bundled files:** `GameInputRedist.dll` and `GameInputRawInputProxy.exe`,
-  from `native/bin/x64`, next to `exosnap.exe` in MSI and portable packages.
-  No system-wide GameInput installation is performed.
-- **Bundled licenses:** `licenses/gameinput.txt` (the package's `LICENSE.txt`),
-  `licenses/gameinput-notice.txt` (the package's `NOTICE.txt`) and
-  `licenses/gameinput-mit.txt` (the header/loader MIT notice).
+- **Version:** 3.4.20 (official Visual C++ development archive, pinned by SHA-256)
+- **Project:** https://github.com/libsdl-org/SDL
+- **License:** zlib, Copyright (C) 1997-2026 Sam Lantinga.
+- **Linkage:** dynamic; the Windows x64 runtime is loaded from the application directory.
+- **Bundled files:** `SDL3.dll` from the official archive's `lib/x64` directory,
+  next to `exosnap.exe` in MSI and portable packages.
+- **Bundled licenses:** `licenses/sdl3.txt` (the archive's `LICENSE.txt`).
 - **Role:** gamepad input for the recording overlay.
 
 ### Controller artwork

@@ -2,11 +2,52 @@
 
 #include <algorithm>
 
+#include "models/AudioRoutingMigration.h"
 #include "models/CaptureTargetPresentation.h"
 #include "viewmodels/RecordViewModel.h"
 
 namespace exosnap {
 namespace {
+
+TEST(RecordViewModelAudioTest, WindowSelectionPreservesSilentLegacyIntentForSubsequentSettingsEdits) {
+    RecordViewModel vm;
+    vm.audio_ui_state.source_rows.clear();
+    const engine::AudioIntent intent =
+        CreateLegacyAudioIntent(vm.audio_ui_state, engine::NewId<engine::PresetNamespaceId>());
+    const auto original = intent;
+    vm.audio_ui_state.selected_window_pid = 123;
+    vm.ApplyTargetKindPreservingAudio(capability::CaptureTargetKind::Window, &intent);
+    EXPECT_TRUE(vm.audio_ui_state.source_rows.empty());
+    EXPECT_EQ(vm.audio_ui_state.selected_window_pid, 123u);
+    EXPECT_EQ(vm.audio_ui_state.target_kind, capability::CaptureTargetKind::Window);
+    const auto synchronized =
+        SynchronizeLegacyAudioRows(std::get<engine::LegacyRows25Intent>(intent), vm.audio_ui_state);
+    ASSERT_TRUE(synchronized.succeeded());
+    EXPECT_EQ(*synchronized.value(), std::get<engine::LegacyRows25Intent>(original));
+    EXPECT_EQ(intent, original);
+    vm.ApplyTargetKindPreservingAudio(capability::CaptureTargetKind::Display, &intent);
+    EXPECT_FALSE(vm.audio_ui_state.selected_window_pid.has_value());
+    EXPECT_TRUE(vm.audio_ui_state.source_rows.empty());
+}
+
+TEST(RecordViewModelAudioTest, WindowSelectionPreservesNativeGraphRowsAndRoutePolicy) {
+    RecordViewModel vm;
+    auto graph = MakeDefaultAudioIntent();
+    for (auto& source : graph.sources)
+        source.participation = false;
+    graph.routes.front().muted = true;
+    graph.routes.front().gain_db = -6;
+    const engine::AudioIntent intent = graph;
+    ProjectNativeAudioIntent(graph, vm.audio_ui_state);
+    const auto expected_rows = vm.audio_ui_state.source_rows;
+    for (const auto kind : {capability::CaptureTargetKind::Window, capability::CaptureTargetKind::Display,
+                            capability::CaptureTargetKind::Window}) {
+        vm.ApplyTargetKindPreservingAudio(kind, &intent);
+        EXPECT_EQ(vm.audio_ui_state.source_rows, expected_rows);
+        EXPECT_EQ(vm.audio_ui_state.target_kind, kind);
+        EXPECT_EQ(std::get<engine::TrackGraph1Intent>(intent), graph);
+    }
+}
 
 // Helper: find a source row by kind.
 const exosnap::engine::AudioSourceRow* FindRow(const capability::AudioUiState& s, exosnap::engine::AudioSourceKind k) {
