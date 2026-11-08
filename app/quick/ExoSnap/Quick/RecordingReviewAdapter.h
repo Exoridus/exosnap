@@ -30,6 +30,9 @@ class RecordingReviewAdapter final : public QObject {
     const QString& editError() const {
         return edit_error_;
     }
+    const QString& recordingIdentity() const {
+        return recording_identity_;
+    }
     bool active() const {
         return active_;
     }

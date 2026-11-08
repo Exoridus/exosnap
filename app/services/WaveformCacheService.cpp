@@ -748,6 +748,7 @@ void WaveformCacheService::workerLoop() {
                 return stop_ || cleanup_overviews_ || !retired_writers_.empty() || !pending_blocks_.empty() ||
                        !availability_checks_.empty() || std::any_of(queue_.begin(), queue_.end(), eligible);
             };
+            overview_phase_.store("waiting", std::memory_order_relaxed);
             if (deferred_overviews_.empty())
                 cv_.wait(lock, work_ready);
             else
@@ -818,6 +819,7 @@ void WaveformCacheService::workerLoop() {
             loadPendingBlocks();
             continue;
         }
+        overview_phase_.store("preparing", std::memory_order_relaxed);
         runJob(*job);
         bool retired_job = false;
         {
@@ -1220,6 +1222,7 @@ void WaveformCacheService::runJob(const Job& job) {
         }
         if (active_decoders >= 2 && oldest != overview_cursors_.end())
             oldest->second->decoder.reset();
+        overview_phase_.store("opening-decoder", std::memory_order_relaxed);
         auto decoder = openDecoder(job, error, &cancel_running_);
         {
             std::lock_guard lock(mutex_);
@@ -1249,6 +1252,7 @@ void WaveformCacheService::runJob(const Job& job) {
     std::vector<float> samples;
     const auto before_seeks = cursor.decoder->Seeks();
     const auto before_frames = cursor.decoder->DecodedFrames();
+    overview_phase_.store("decoding", std::memory_order_relaxed);
     const bool decoded =
         cursor.consumed_samples <= static_cast<std::uint64_t>((std::numeric_limits<std::int64_t>::max)()) &&
         cursor.decoder->Decode(static_cast<std::int64_t>(cursor.consumed_samples), frames, samples, error);
@@ -1259,6 +1263,7 @@ void WaveformCacheService::runJob(const Job& job) {
         if (generation != generation_ || cancel_running_)
             return;
     }
+    overview_phase_.store("appending", std::memory_order_relaxed);
     if (!decoded || samples.size() < static_cast<std::size_t>(frames) * engine::kWaveformChannels ||
         !cursor.builder->Append(samples.data(), frames)) {
         fail(QString::fromStdString(error.empty() ? "Cannot decode waveform analysis samples." : error));
@@ -1266,6 +1271,7 @@ void WaveformCacheService::runJob(const Job& job) {
     }
     cursor.consumed_samples += frames;
     const auto completed = cursor.builder->CompletedSamples();
+    overview_phase_.store("publishing-blocks", std::memory_order_relaxed);
     publishProgressBlocks(job, *cursor.builder, previous, completed, generation);
     {
         std::lock_guard lock(mutex_);
@@ -1285,9 +1291,11 @@ void WaveformCacheService::runJob(const Job& job) {
         return;
     }
     auto builder = cursor.builder;
+    overview_phase_.store("finishing", std::memory_order_relaxed);
     const bool finished = builder->Finish();
     if (finished)
         publishProgressBlocks(job, *builder, completed, builder->CompletedSamples(), generation, true);
+    overview_phase_.store("persisting", std::memory_order_relaxed);
     const bool published = finished && (!job.persistent || builder->Publish(error, [this] {
                                return !cancel_running_.load(std::memory_order_relaxed);
                            }));
@@ -1315,6 +1323,7 @@ void WaveformCacheService::runJob(const Job& job) {
         }
     }
     discardOverview(job.key);
+    overview_phase_.store("publishing-ready", std::memory_order_relaxed);
     if (!setStatus(job.key, Status{State::Ready, true, job.sample_count, job.sample_count}, generation))
         return;
     postProgress(job.key, job.sample_count, job.sample_count, generation);

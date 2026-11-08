@@ -178,6 +178,10 @@ class WaveformCacheService : public QObject {
     void cancelPcmWindow(std::uint64_t ticket);
 
     // ---- Test observation ----
+    // Lock-free worker phase sample, independent of per-source status snapshots.
+    [[nodiscard]] const char* overviewPhaseForTest() const {
+        return overview_phase_.load(std::memory_order_relaxed);
+    }
     [[nodiscard]] std::uint64_t decoderOpensForTest() const;
     [[nodiscard]] std::uint64_t decodeCallsForTest() const;
     [[nodiscard]] std::size_t memoryBytesForTest() const;
@@ -355,6 +359,7 @@ class WaveformCacheService : public QObject {
     std::size_t analysis_peak_bytes_ = 0;
     std::uint64_t decoder_seeks_ = 0;
     std::uint64_t decoded_frames_ = 0;
+    std::atomic<const char*> overview_phase_{"starting"};
     std::uint64_t decoder_opens_ = 0;
     std::atomic<std::uint64_t> decode_calls_{0};
 

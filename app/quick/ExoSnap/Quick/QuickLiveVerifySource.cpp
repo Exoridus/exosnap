@@ -327,6 +327,11 @@ QuickLiveVerifySource::QuickLiveVerifySource(QuickApplication& application, QQui
     // would change without the revision moving, and a runner waiting on the
     // revision would wait forever.
     const auto refresh = [this]() { refreshObservableState(); };
+    auto* review = application_.recordingReviewAdapter();
+    connect(review, &RecordingReviewAdapter::activeChanged, this, refresh);
+    connect(review->session(), &EditSessionAdapter::durationChanged, this, refresh);
+    connect(review->player(), &EditPlayerAdapter::clipOpenChanged, this, refresh);
+    connect(review->player(), &EditPlayerAdapter::previewChanged, this, refresh);
     if (auto* record = application_.recordViewModelAdapter())
         connect(record, &RecordViewModelAdapter::changed, this, refresh);
     connect(application_.recordingClipAdapter(), &RecordingClipAdapter::availabilityChanged, this, refresh);
@@ -402,6 +407,12 @@ std::uint64_t QuickLiveVerifySource::StateRevision() const {
 
 live_verify::AutomationState QuickLiveVerifySource::State() const {
     AutomationState state;
+    auto* review = application_.recordingReviewAdapter();
+    state.review_active = review->active();
+    state.review_can_play = review->active() && review->player()->clipOpen() &&
+                            review->player()->previewState() != EditPlayerAdapter::Failed;
+    state.review_can_seek = review->active() && review->player()->clipOpen() && review->session()->durationMs() > 0;
+    state.review_can_edit = review->active() && application_.recordViewModelAdapter()->completedRecordingAvailable();
 
     if (const auto* shell = application_.shellAdapter()) {
         state.page = PageName(static_cast<ShellAdapter::Page>(shell->currentPage()));
@@ -792,6 +803,29 @@ QJsonObject QuickLiveVerifySource::OverlaySnapshot() const {
     json.insert(QStringLiteral("overlays"), overlays);
     json.insert(QStringLiteral("count"), overlays.size());
     return json;
+}
+
+QJsonObject QuickLiveVerifySource::ReviewSnapshot() const {
+    auto* review = application_.recordingReviewAdapter();
+    auto* session = review->session();
+    auto* player = review->player();
+    return {{QStringLiteral("active"), review->active()},
+            {QStringLiteral("recordingIdentity"), review->recordingIdentity()},
+            {QStringLiteral("clipPath"), session->clipPath()},
+            {QStringLiteral("durationMs"), static_cast<double>(session->durationMs())},
+            {QStringLiteral("positionMs"), static_cast<double>(session->positionMs())},
+            {QStringLiteral("clipOpen"), player->clipOpen()},
+            {QStringLiteral("playing"), player->playing()},
+            {QStringLiteral("transportPending"), player->transportPending()},
+            {QStringLiteral("previewState"), PreviewStateName(player->previewState())},
+            {QStringLiteral("placeholderText"), player->placeholderText()},
+            {QStringLiteral("importPending"), session->importPending()},
+            {QStringLiteral("workspaceError"), session->workspaceError()},
+            {QStringLiteral("error"), review->editError()},
+            {QStringLiteral("media"), RowsJson(session->media())},
+            {QStringLiteral("monitoringTracks"), QJsonArray::fromVariantList(player->monitoringTracks())},
+            {QStringLiteral("pendingRecordingIdentity"),
+             application_.recordViewModelAdapter()->pendingRecordingIdentity()}};
 }
 
 QJsonObject QuickLiveVerifySource::EditorSnapshot() const {
@@ -2184,6 +2218,27 @@ bool QuickLiveVerifySource::ClearNotifications(QString* error) {
 // a second trim model, and the check it powers would prove that model rather
 // than the product's.
 
+bool QuickLiveVerifySource::ReviewPlayPause(QString*) {
+    application_.recordingReviewAdapter()->player()->togglePlay();
+    return true;
+}
+
+bool QuickLiveVerifySource::ReviewSeek(qint64 position_ms, QString*) {
+    application_.recordingReviewAdapter()->session()->requestSeek(position_ms);
+    return true;
+}
+
+bool QuickLiveVerifySource::ReviewEdit(QString* error) {
+    auto* review = application_.recordingReviewAdapter();
+    const QString identity = review->recordingIdentity();
+    review->requestEdit();
+    if (!review->active() || application_.recordViewModelAdapter()->pendingRecordingIdentity() == identity)
+        return true;
+    *error =
+        review->editError().isEmpty() ? QStringLiteral("The recording was not revealed in Edit") : review->editError();
+    return false;
+}
+
 bool QuickLiveVerifySource::EditOpen(QString* error) {
     if (!application_.openEditorForAutomation()) {
         *error = QStringLiteral("There is no completed recording to open in the editor");
@@ -2490,15 +2545,7 @@ QuickLiveVerifySource::EditIntent QuickLiveVerifySource::EditDelete(bool ripple,
     auto* session = application_.editSessionAdapter();
     if (session == nullptr)
         return Unavailable(error, "edit session");
-    const bool closes_gap = ripple && (session->selectedSpacer() != 0 || !session->selectedGap().isEmpty());
-    if (closes_gap)
-        session->cancelClipDrag();
     session->deleteSelected(ripple);
-    if (closes_gap) {
-        if (!session->dragActive())
-            return NoSuch(error, QStringLiteral("The selected blank time is no longer available"));
-        session->commitClipDrag();
-    }
     return EditIntent::Delivered;
 }
 

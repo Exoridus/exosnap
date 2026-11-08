@@ -801,6 +801,11 @@ void QuickApplication::initializeRecordWorkflow() {
         // only what the capture is supposed to show.
         if (!visualScenarioLatched())
             record_view_model_.SetState(state);
+        // Preview teardown also publishes presentation changes after a result opens Review.
+        // Only a recording lifecycle transition may retire that completed result.
+        if (record_view_model_adapter_.recording() || record_view_model_adapter_.preparing() ||
+            record_view_model_adapter_.finalizing())
+            recording_review_adapter_.close();
         record_view_model_.capability_status_text = recording_coordinator_->CapabilityStatusText();
         if (state == UiRecordingState::Blocked) {
             QString reason = QString::fromStdWString(record_view_model_.capability_status_text);
@@ -5037,11 +5042,6 @@ void QuickApplication::initializeEditArea() {
                      });
     QObject::connect(&record_view_model_adapter_, &RecordViewModelAdapter::recordingRevealFinished,
                      &recording_review_adapter_, &RecordingReviewAdapter::completeEditRequest);
-    QObject::connect(&record_view_model_adapter_, &RecordViewModelAdapter::changed, &recording_review_adapter_, [this] {
-        if (record_view_model_adapter_.recording() || record_view_model_adapter_.preparing() ||
-            record_view_model_adapter_.finalizing())
-            recording_review_adapter_.close();
-    });
     edit_export_adapter_.setSession(&edit_session_adapter_);
     edit_session_adapter_.setBackgroundIoAdmission(recording_coordinator_->backgroundIoAdmission());
     QObject::connect(&settings_adapter_, &SettingsAdapter::clearMediaCachesRequested, &edit_timeline_adapter_, [this] {
@@ -7265,6 +7265,9 @@ LogsAdapter* QuickApplication::logsAdapter() noexcept {
 }
 EditSessionAdapter* QuickApplication::editSessionAdapter() noexcept {
     return &edit_session_adapter_;
+}
+RecordingReviewAdapter* QuickApplication::recordingReviewAdapter() noexcept {
+    return &recording_review_adapter_;
 }
 EditTimelineAdapter* QuickApplication::editTimelineAdapter() noexcept {
     return &edit_timeline_adapter_;

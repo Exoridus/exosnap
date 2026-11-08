@@ -63,6 +63,7 @@ class QuickLiveVerifySource final : public QObject, public live_verify::LiveVeri
     [[nodiscard]] QJsonObject RecordResult() const override;
     [[nodiscard]] QJsonObject OverlaySnapshot() const override;
     [[nodiscard]] QJsonObject EditorSnapshot() const override;
+    [[nodiscard]] QJsonObject ReviewSnapshot() const override;
     [[nodiscard]] QJsonObject DiagnosticsSnapshot() const override;
 
     [[nodiscard]] QJsonObject PipelineSnapshot() const override;
@@ -182,6 +183,9 @@ class QuickLiveVerifySource final : public QObject, public live_verify::LiveVeri
     bool ClearNotifications(QString* error) override;
 
     bool EditOpen(QString* error) override;
+    bool ReviewPlayPause(QString* error) override;
+    bool ReviewSeek(qint64 position_ms, QString* error) override;
+    bool ReviewEdit(QString* error) override;
     bool EditPlayPause(QString* error) override;
     bool EditSeek(qint64 position_ms, QString* error) override;
     bool EditSetTrimIn(qint64 position_ms, QString* error) override;

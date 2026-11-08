@@ -67,6 +67,7 @@ class LiveVerifySource {
     [[nodiscard]] virtual QJsonObject RecordResult() const = 0;
     [[nodiscard]] virtual QJsonObject OverlaySnapshot() const = 0;
     [[nodiscard]] virtual QJsonObject EditorSnapshot() const = 0;
+    [[nodiscard]] virtual QJsonObject ReviewSnapshot() const = 0;
     [[nodiscard]] virtual QJsonObject DiagnosticsSnapshot() const = 0;
 
     // --- Observability surfaces (Wave C) -------------------------------------
@@ -293,6 +294,9 @@ class LiveVerifySource {
     // where they are: these call the same Q_INVOKABLE seams the Edit surface's
     // own controls and keys call.
     virtual bool EditOpen(QString* error) = 0;
+    virtual bool ReviewPlayPause(QString* error) = 0;
+    virtual bool ReviewSeek(qint64 position_ms, QString* error) = 0;
+    virtual bool ReviewEdit(QString* error) = 0;
     virtual bool EditPlayPause(QString* error) = 0;
     virtual bool EditSeek(qint64 position_ms, QString* error) = 0;
     virtual bool EditSetTrimIn(qint64 position_ms, QString* error) = 0;
