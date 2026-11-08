@@ -13,6 +13,37 @@ use serde::{Deserialize, Serialize};
 use std::io::Write;
 use std::path::PathBuf;
 
+#[cfg(any(windows, test))]
+fn oversized_rect(
+    width: u32,
+    height: u32,
+    monitor: [i32; 4],
+    others: &[[i32; 4]],
+) -> Option<[i32; 4]> {
+    let width = i32::try_from(width).ok()?;
+    let height = i32::try_from(height).ok()?;
+    if width <= 0 || height <= 0 || monitor[0] >= monitor[2] || monitor[1] >= monitor[3] {
+        return None;
+    }
+    let rect = [
+        monitor[2].checked_sub(width)?,
+        monitor[1],
+        monitor[2],
+        monitor[1].checked_add(height)?,
+    ];
+    if others.iter().any(|other| {
+        other[0] >= other[2]
+            || other[1] >= other[3]
+            || (rect[0] < other[2]
+                && rect[2] > other[0]
+                && rect[1] < other[3]
+                && rect[3] > other[1])
+    }) {
+        return None;
+    }
+    Some(rect)
+}
+
 #[derive(clap::Args, Debug, Clone)]
 pub struct StimulusArgs {
     /// Ground-truth log (JSON lines).
@@ -27,6 +58,9 @@ pub struct StimulusArgs {
     /// Cover the whole monitor with a borderless topmost window.
     #[arg(long)]
     pub fullscreen: bool,
+    /// Fixed borderless size, aligned top-right on the monitor without covering another display.
+    #[arg(long, conflicts_with = "fullscreen")]
+    pub oversized: bool,
     /// Client size in physical pixels when not fullscreen.
     #[arg(long, default_value_t = 1280)]
     pub width: u32,
@@ -315,7 +349,7 @@ mod imp {
         }
     }
 
-    fn monitor_rect(selector: Option<&str>) -> Result<(String, RECT)> {
+    fn monitor_rect(selector: Option<&str>) -> Result<(String, RECT, Vec<[i32; 4]>)> {
         unsafe extern "system" fn cb(
             m: HMONITOR,
             _: HDC,
@@ -357,7 +391,12 @@ mod imp {
                 }
             }
         };
-        Ok(pick)
+        let others = list
+            .iter()
+            .filter(|(name, _)| name != &pick.0)
+            .map(|(_, rect)| [rect.left, rect.top, rect.right, rect.bottom])
+            .collect();
+        Ok((pick.0, pick.1, others))
     }
 
     fn invert_cursor() -> Result<HCURSOR> {
@@ -391,8 +430,29 @@ mod imp {
             let _ = SetProcessDpiAwarenessContext(DPI_AWARENESS_CONTEXT_PER_MONITOR_AWARE_V2);
         }
         let mut log = Log::create(&args.log)?;
-        let (monitor, mrect) = monitor_rect(args.monitor.as_deref())?;
-        let (x, y, w, h) = if args.fullscreen {
+        let (monitor, mrect, others) = monitor_rect(args.monitor.as_deref())?;
+        let oversized = if args.oversized {
+            anyhow::ensure!(
+                args.cursor == CursorMode::None,
+                "oversized stimulus does not support cursor motion"
+            );
+            Some(
+                oversized_rect(
+                    args.width,
+                    args.height,
+                    [mrect.left, mrect.top, mrect.right, mrect.bottom],
+                    &others,
+                )
+                .context(
+                    "oversized stimulus would overlap another display or has invalid geometry",
+                )?,
+            )
+        } else {
+            None
+        };
+        let (x, y, w, h) = if let Some(rect) = oversized {
+            (rect[0], rect[1], args.width, args.height)
+        } else if args.fullscreen {
             (
                 mrect.left,
                 mrect.top,
@@ -419,7 +479,12 @@ mod imp {
             ..Default::default()
         };
         unsafe { RegisterClassW(&wc) };
-        let (style, ex) = if args.fullscreen {
+        let (style, ex) = if args.oversized {
+            (
+                WS_POPUP,
+                WS_EX_TOPMOST | WS_EX_TOOLWINDOW | WS_EX_NOACTIVATE,
+            )
+        } else if args.fullscreen {
             (WS_POPUP | WS_VISIBLE, WS_EX_TOPMOST | WS_EX_TOOLWINDOW)
         } else {
             (WS_OVERLAPPED | WS_CAPTION | WS_VISIBLE, WS_EX_TOPMOST)
@@ -430,7 +495,7 @@ mod imp {
             right: w as i32,
             bottom: h as i32,
         };
-        if !args.fullscreen {
+        if !args.fullscreen && !args.oversized {
             unsafe {
                 let _ = AdjustWindowRectEx(&mut frame, style, false, ex);
             }
@@ -452,6 +517,40 @@ mod imp {
                 None,
             )?
         };
+        if let Some(expected) = oversized {
+            // Validate the OS-adjusted rectangle while hidden, before it can cover another display.
+            let mut actual = RECT::default();
+            let actual_valid = unsafe { GetWindowRect(hwnd, &mut actual) }.is_ok()
+                && [actual.left, actual.top, actual.right, actual.bottom] == expected
+                && client_size(hwnd) == [w as i32, h as i32];
+            if !actual_valid {
+                unsafe {
+                    let _ = DestroyWindow(hwnd);
+                }
+                anyhow::bail!("the oversized window did not retain its validated geometry");
+            }
+            unsafe {
+                SetWindowPos(
+                    hwnd,
+                    Some(HWND_TOPMOST),
+                    0,
+                    0,
+                    0,
+                    0,
+                    SWP_NOMOVE | SWP_NOSIZE | SWP_NOACTIVATE | SWP_SHOWWINDOW,
+                )?;
+                if GetForegroundWindow() == hwnd {
+                    let _ = DestroyWindow(hwnd);
+                    anyhow::bail!(
+                        "the oversized stimulus unexpectedly became the foreground window"
+                    );
+                }
+            }
+            log.write(&LogEvent::State {
+                state: "oversized-geometry-verified-without-activation".into(),
+                qpc: qpc(),
+            });
+        }
         let dpi = unsafe { GetDpiForWindow(hwnd) };
 
         let layout = Layout::new(w, h);
@@ -583,6 +682,9 @@ mod imp {
                 }
             }
             match command.swap(0, Ordering::SeqCst) {
+                3 | 4 | 7 | 8 if args.oversized => {
+                    anyhow::bail!("oversized stimulus geometry is fixed");
+                }
                 1 => {
                     frozen.store(true, Ordering::SeqCst);
                     log.write(&LogEvent::State {
@@ -849,6 +951,47 @@ mod imp {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn oversized_window_stays_left_of_the_other_display() {
+        assert_eq!(
+            oversized_rect(3840, 2160, [0, 0, 2560, 1440], &[[2560, 354, 4480, 1434]]),
+            Some([-1280, 0, 2560, 2160])
+        );
+    }
+
+    #[test]
+    fn oversized_window_supports_negative_monitor_coordinates() {
+        assert_eq!(
+            oversized_rect(3840, 2160, [-2560, -1440, 0, 0], &[[0, 0, 1920, 1080]]),
+            Some([-3840, -1440, 0, 720])
+        );
+    }
+
+    #[test]
+    fn oversized_window_refuses_other_displays_and_invalid_geometry() {
+        let monitor = [0, 0, 2560, 1440];
+        for other in [
+            [-1920, 0, 0, 1080],
+            [0, 1440, 1920, 2520],
+            [100, 100, 900, 900],
+        ] {
+            assert_eq!(oversized_rect(3840, 2160, monitor, &[other]), None);
+        }
+        for (width, height) in [(0, 2160), (3840, 0), (u32::MAX, 2160), (3840, u32::MAX)] {
+            assert_eq!(oversized_rect(width, height, monitor, &[]), None);
+        }
+        assert_eq!(oversized_rect(3840, 2160, [0, 0, 0, 1440], &[]), None);
+        assert_eq!(oversized_rect(3840, 2160, [0, 100, 2560, 0], &[]), None);
+        assert_eq!(
+            oversized_rect(3840, 2160, [i32::MIN, 0, i32::MIN + 2560, 1440], &[]),
+            None
+        );
+        assert_eq!(
+            oversized_rect(3840, 2160, [0, i32::MAX - 1440, 2560, i32::MAX], &[]),
+            None
+        );
+    }
 
     const FREQ: i64 = 10_000_000;
 
