@@ -58,6 +58,10 @@ AutomationState PermissiveState() {
     state.can_capture_frame = true;
     state.can_select_source = true;
     state.can_open_edit = true;
+    state.review_active = true;
+    state.review_can_play = true;
+    state.review_can_seek = true;
+    state.review_can_edit = true;
     state.can_add_marker = true;
     state.countdown_active = true;
     state.edit_session_open = true;
@@ -139,6 +143,9 @@ class FakeSource final : public LiveVerifySource {
         QJsonObject json = Marker(QStringLiteral("editor"));
         json.insert(QStringLiteral("export"), export_options);
         return json;
+    }
+    [[nodiscard]] QJsonObject ReviewSnapshot() const override {
+        return Marker(QStringLiteral("review"));
     }
     [[nodiscard]] QJsonObject DiagnosticsSnapshot() const override {
         return Marker(QStringLiteral("diagnostics"));
@@ -672,6 +679,18 @@ class FakeSource final : public LiveVerifySource {
         return Outcome(error);
     }
 
+    bool ReviewPlayPause(QString* error) override {
+        calls.append(QStringLiteral("review.playPause"));
+        return Outcome(error);
+    }
+    bool ReviewSeek(qint64 position_ms, QString* error) override {
+        calls.append(QStringLiteral("review.seek:%1").arg(position_ms));
+        return Outcome(error);
+    }
+    bool ReviewEdit(QString* error) override {
+        calls.append(QStringLiteral("review.edit"));
+        return Outcome(error);
+    }
     bool EditOpen(QString* error) override {
         calls.append(QStringLiteral("edit.open"));
         if (!Outcome(error))
@@ -1268,6 +1287,7 @@ TEST(LiveVerifyDispatcher, ObservabilityQueriesRouteToTheMatchingSurface) {
     ASSERT_TRUE(Ok(Hello(dispatcher, QString::fromLatin1(kRunId), 2)));
 
     const std::pair<QString, QString> expectations[] = {
+        {QStringLiteral("review.snapshot"), QStringLiteral("review")},
         {QStringLiteral("pipeline.snapshot"), QStringLiteral("pipeline")},
         {QStringLiteral("settings.snapshot"), QStringLiteral("settings")},
         {QStringLiteral("diagnostics.results"), QStringLiteral("diagnostics.results")},
@@ -2129,6 +2149,35 @@ TEST(LiveVerifyEdit, SeekAndTrimReachTheAdapterWithTheRequestedPosition) {
                                          QStringLiteral("edit.setTrimOut:9000")}));
 }
 
+TEST(LiveVerifyReview, CommandsRouteThroughReviewAndRefuseUnavailableOrMalformedIntents) {
+    FakeSource source;
+    LiveVerifyDispatcher dispatcher(&source, QString::fromLatin1(kRunId));
+    ASSERT_TRUE(Ok(Hello(dispatcher, QString::fromLatin1(kRunId), 2)));
+    auto response = dispatcher.Dispatch(RequestV2(QStringLiteral("review.playPause")));
+    ASSERT_TRUE(Ok(response));
+    EXPECT_FALSE(response.value(QStringLiteral("settled")).toBool(true));
+    ASSERT_TRUE(Ok(dispatcher.Dispatch(
+        RequestV2(QStringLiteral("review.seek"), QJsonObject{{QStringLiteral("positionMs"), 5000}}))));
+    response = dispatcher.Dispatch(RequestV2(QStringLiteral("review.edit")));
+    ASSERT_TRUE(Ok(response));
+    EXPECT_FALSE(response.value(QStringLiteral("settled")).toBool(true));
+    EXPECT_EQ(source.calls, QStringList({QStringLiteral("review.playPause"), QStringLiteral("review.seek:5000"),
+                                         QStringLiteral("review.edit")}));
+    source.calls.clear();
+    EXPECT_FALSE(Ok(dispatcher.Dispatch(
+        RequestV2(QStringLiteral("review.seek"), QJsonObject{{QStringLiteral("positionMs"), "halfway"}}))));
+    source.state.review_active = false;
+    for (const QString& command :
+         {QStringLiteral("review.playPause"), QStringLiteral("review.edit"), QStringLiteral("review.seek")}) {
+        response = dispatcher.Dispatch(RequestV2(command, command == QLatin1String("review.seek")
+                                                              ? QJsonObject{{QStringLiteral("positionMs"), 0}}
+                                                              : QJsonObject{}));
+        EXPECT_FALSE(Ok(response));
+        EXPECT_EQ(ErrorCode(response), QString::fromLatin1(error_code::kInvalidState));
+    }
+    EXPECT_TRUE(source.calls.isEmpty());
+}
+
 TEST(LiveVerifyEdit, CloseIsRefusedWhileAnExportIsRunning) {
     FakeSource source;
     source.state.edit_export_running = true;
@@ -2759,10 +2808,14 @@ TEST(LiveVerifyDescribe, IdempotencyIsDeclaredAndPlayPauseIsTheExceptionThatIsNo
         }
         if (command.value(QStringLiteral("name")).toString() == QStringLiteral("record.start"))
             EXPECT_EQ(command.value(QStringLiteral("settle")).toString(), QStringLiteral("asynchronous"));
+        if (command.value(QStringLiteral("name")).toString() == QStringLiteral("review.playPause")) {
+            EXPECT_FALSE(command.value(QStringLiteral("idempotent")).toBool());
+            EXPECT_EQ(command.value(QStringLiteral("settle")).toString(), QStringLiteral("asynchronous"));
+        }
     }
     EXPECT_TRUE(saw_play_pause);
     // The seven transport intents (six plus record.addMarker -- a second marker
-    // is a second marker), edit.playPause, profiles.create (two creates with the
+    // is a second marker), edit.playPause, review.playPause, profiles.create (two creates with the
     // same name are two profiles), notification.invokeAction (an action
     // navigates, opens a folder or relaunches), notification.raise (two calls are
     // two notifications), and webcam.overlay.set, whose effect repeats but whose
@@ -2773,7 +2826,7 @@ TEST(LiveVerifyDescribe, IdempotencyIsDeclaredAndPlayPauseIsTheExceptionThatIsNo
     // split, delete, closeGap and deleteTrack (the next target), undo and redo
     // (the next history step), applyCrossfade and removeTransition (the next
     // cut), and frameStep (the next frame).
-    EXPECT_EQ(non_idempotent, 24);
+    EXPECT_EQ(non_idempotent, 25);
 }
 
 // ---------------------------------------------------------------------------
