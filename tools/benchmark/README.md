@@ -39,14 +39,30 @@ From the configured Windows build environment, use an explicit Release executabl
 $scenario = 'desktop-idle-1080p60'
 $product = (Resolve-Path '.\build\windows-x64-ninja-release\app\exosnap.exe').Path
 $out = '.workspace/benchmark-results/idle-1080p60-baseline'
-Remove-Item Env:\EXOSNAP_STAGE_A_CACHE -ErrorAction SilentlyContinue
-Remove-Item Env:\EXOSNAP_DEMAND_COMPOSITION -ErrorAction SilentlyContinue
-cargo exo-dev benchmark topology --scenario $scenario
-if ($LASTEXITCODE -ne 0) { throw 'The requested capture topology is unavailable.' }
-cargo exo-dev benchmark campaign --scenario $scenario --quick-exe $product --output-root $out
+if (Test-Path $out) { throw 'Choose a fresh evidence directory.' }
+$benchmarkConfigBefore = $env:EXOSNAP_CONFIG_DIR
+$benchmarkStageABefore = $env:EXOSNAP_STAGE_A_CACHE
+$benchmarkDemandBefore = $env:EXOSNAP_DEMAND_COMPOSITION
+try {
+    $env:EXOSNAP_CONFIG_DIR = Join-Path (Get-Location) "$out/config"
+    Remove-Item Env:\EXOSNAP_STAGE_A_CACHE -ErrorAction SilentlyContinue
+    Remove-Item Env:\EXOSNAP_DEMAND_COMPOSITION -ErrorAction SilentlyContinue
+    cargo exo-dev benchmark topology --scenario $scenario
+    if ($LASTEXITCODE -ne 0) { throw 'The requested capture topology is unavailable.' }
+    [IO.Directory]::CreateDirectory($env:EXOSNAP_CONFIG_DIR) | Out-Null
+    cargo exo-dev benchmark campaign --scenario $scenario --quick-exe $product --output-root $out
+    if ($LASTEXITCODE -ne 0) { throw 'Inspect the retained failed run before continuing.' }
+    $set = Join-Path $out $scenario
+    cargo exo-dev benchmark compare --run-dir "$set/quick-run01" --run-dir "$set/quick-run02" --run-dir "$set/quick-run03" --run-dir "$set/quick-run04" --run-dir "$set/quick-run05" --run-dir "$set/quick-run06"
+    if ($LASTEXITCODE -ne 0) { throw 'The retained runs did not form a valid comparison.' }
+} finally {
+    $env:EXOSNAP_CONFIG_DIR = $benchmarkConfigBefore
+    $env:EXOSNAP_STAGE_A_CACHE = $benchmarkStageABefore
+    $env:EXOSNAP_DEMAND_COMPOSITION = $benchmarkDemandBefore
+}
 ```
 
-Replace the executable path with the actual harness build. The command keeps the normal topology, Release/harness and run-acceptance checks enabled. It uses the desktop directly and requires no external benchmark application. Repeat for the other three modes when the display and encoder can support them. Keep an unsupported mode as an explicit missing result.
+Replace the executable path with the actual harness build. The dedicated configuration directory prevents reuse of an existing application profile. Campaign checks cover display topology, the harness marker, process exit, report presence and the frontend's window placement. The subsequent comparison excludes calibration runs, unsuccessful recordings and non-Release reports, and requires comparable effective configuration fingerprints. Inspect its exclusions before accepting a measurement set. The command uses the desktop directly and requires no external benchmark application. Repeat for the other three modes when the display and encoder can support them. Keep an unsupported mode as an explicit missing result.
 
 For Stage A and demand-composition experiments, first fix a representative scene and downstream output geometry. Record both switch values with each run and use separate output directories for baseline, Stage A only, demand only and both. The idle scenarios supply the overhead control. Stage A additionally needs actual overlay composition and pixel parity checks. Demand reduction additionally needs larger capture dimensions than recording output, an eligible SDR configuration and controlled preview demand. The scenario loader currently does not configure output dimensions or overlay populations. Supply those conditions through a separately configured product run or focused native compositor tests before extending the comparison. [Harnesses](../../docs/dev/harness-and-tracing.md) documents the available experiments and their eligibility.
 
