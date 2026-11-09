@@ -284,9 +284,9 @@ struct SdlGamepadSource::Impl {
             device.identity.layout =
                 SdlLayoutKindFor(SDL_GetGamepadType(handle), device.identity.vendor_id, device.identity.product_id);
             device.identity.player_index = SDL_GetGamepadPlayerIndex(handle);
-            device.identity.player_led_supported =
-                SDL_GetBooleanProperty(SDL_GetGamepadProperties(handle), SDL_PROP_GAMEPAD_CAP_PLAYER_LED_BOOLEAN,
-                                       false);
+            const auto properties = SDL_GetGamepadProperties(handle);
+            const bool player_led = SDL_GetBooleanProperty(properties, SDL_PROP_GAMEPAD_CAP_PLAYER_LED_BOOLEAN, false);
+            device.identity.player_led_supported = player_led;
             const char* serial = SDL_GetGamepadSerial(handle);
             const char* path = SDL_GetGamepadPath(handle);
             device.physical_id = PersistentSdlDeviceId(device.identity.vendor_id, device.identity.product_id,

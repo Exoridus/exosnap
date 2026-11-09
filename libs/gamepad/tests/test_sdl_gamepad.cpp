@@ -500,7 +500,6 @@ TEST_F(SdlProvider, DeviceLimitFailsVisiblyAndRetiresExistingReadings) {
         EXPECT_FALSE(reading.connected);
 }
 
-
 TEST(SdlPlayerIndex, OnlyFourPlayersAndUnassignedAreSelectable) {
     EXPECT_TRUE(SelectablePlayerIndex(-1));
     for (int index = 0; index < 4; ++index)
@@ -522,14 +521,20 @@ TEST_F(SdlProvider, PlayerIndexReadsOnConnectAndSetsOnlyOnExplicitRequest) {
 
     ASSERT_TRUE(source->RequestPlayerIndex(device.id, 2));
     std::optional<PlayerIndexSetResult> assigned;
-    ASSERT_TRUE(WaitFor([&] { assigned = source->TakePlayerIndexResult(); return assigned.has_value(); }));
+    ASSERT_TRUE(WaitFor([&] {
+        assigned = source->TakePlayerIndexResult();
+        return assigned.has_value();
+    }));
     ASSERT_TRUE(assigned->success) << assigned->error;
     EXPECT_EQ(assigned->observed, 2);
     ASSERT_TRUE(WaitFor([&] { return source->Devices().front().player_index == 2; }));
 
     ASSERT_TRUE(source->RequestPlayerIndex(device.id, -1));
     std::optional<PlayerIndexSetResult> cleared;
-    ASSERT_TRUE(WaitFor([&] { cleared = source->TakePlayerIndexResult(); return cleared.has_value(); }));
+    ASSERT_TRUE(WaitFor([&] {
+        cleared = source->TakePlayerIndexResult();
+        return cleared.has_value();
+    }));
     ASSERT_TRUE(cleared->success) << cleared->error;
     EXPECT_EQ(cleared->observed, -1);
     ASSERT_TRUE(WaitFor([&] { return source->Devices().front().player_index == -1; }));
@@ -548,20 +553,28 @@ TEST_F(SdlProvider, PlayerIndexWritesUseStableDeviceIdentityAndReportMissingDevi
 
     ASSERT_TRUE(source->RequestPlayerIndex(devices[0].id, 1));
     std::optional<PlayerIndexSetResult> result;
-    ASSERT_TRUE(WaitFor([&] { result = source->TakePlayerIndexResult(); return result.has_value(); }));
+    ASSERT_TRUE(WaitFor([&] {
+        result = source->TakePlayerIndexResult();
+        return result.has_value();
+    }));
     ASSERT_TRUE(result->success) << result->error;
     ASSERT_TRUE(WaitFor([&] {
         const auto latest = source->Devices();
-        return std::any_of(latest.begin(), latest.end(), [&](const auto& dev) {
-            return dev.id == devices[0].id && dev.player_index == 1;
-        });
+        for (const auto& dev : latest) {
+            if (dev.id == devices[0].id && dev.player_index == 1)
+                return true;
+        }
+        return false;
     }));
 
     DeviceId unknown{};
     unknown.fill(0xff);
     ASSERT_TRUE(source->RequestPlayerIndex(unknown, 0));
     std::optional<PlayerIndexSetResult> missing;
-    ASSERT_TRUE(WaitFor([&] { missing = source->TakePlayerIndexResult(); return missing.has_value(); }));
+    ASSERT_TRUE(WaitFor([&] {
+        missing = source->TakePlayerIndexResult();
+        return missing.has_value();
+    }));
     EXPECT_FALSE(missing->success);
     EXPECT_NE(missing->error.find("disconnected"), std::string::npos);
 }
