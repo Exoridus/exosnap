@@ -32,6 +32,15 @@ target_include_directories(gamepad_sprite_tests PRIVATE
     ${CMAKE_CURRENT_SOURCE_DIR} ${PROJECT_SOURCE_DIR}/app ${PROJECT_SOURCE_DIR}/libs/engine/include)
 target_compile_definitions(gamepad_sprite_tests PRIVATE
     EXOSNAP_GAMEPAD_ASSET_DIR="${PROJECT_SOURCE_DIR}/app/assets/gamepad")
+# The focused sprite tests link the same delay-loaded gamepad provider as the
+# application. They must remain runnable after building only this test target,
+# without relying on exosnap.exe's independent POST_BUILD DLL staging.
+add_custom_command(TARGET gamepad_sprite_tests POST_BUILD
+    COMMAND ${CMAKE_COMMAND} -E copy_if_different
+        "$<TARGET_FILE:SDL3::SDL3>" "$<TARGET_FILE_DIR:gamepad_sprite_tests>"
+    COMMENT "Staging SDL3 runtime next to gamepad sprite tests"
+    VERBATIM
+)
 
 set_source_files_properties(ExoTheme.qml PROPERTIES
     QT_QML_SINGLETON_TYPE TRUE
