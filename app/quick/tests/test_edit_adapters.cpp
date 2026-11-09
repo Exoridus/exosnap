@@ -323,7 +323,7 @@ TEST(EditWorkspaceMarkers, SidecarUsesMetadataWorkerAndRejectsAReplacedContext) 
                 EXPECT_EQ(session.markers().front().time_ms, replace_context ? 200 : 900);
                 EXPECT_EQ(session.markers().front().label, replace_context ? "replacement" : "sidecar");
                 EXPECT_EQ(exporter.state(), state);
-                EXPECT_EQ(unsaved_notifications, !has_fallback && !replace_context ? 1 : 0);
+                EXPECT_EQ(unsaved_notifications, 0);
             }
         }
     }
@@ -669,6 +669,92 @@ TEST(EditSessionAdapterTrim, ATrimCountsAsUnsavedWork) {
     EXPECT_FALSE(session.hasUnsavedEdits());
 
     session.requestTrim(20'000, 40'000);
+    EXPECT_TRUE(session.hasUnsavedEdits());
+}
+
+TEST(EditSessionAdapterUnsaved, AuthoredChangesWarnAndUndoReturnsToInitialWorkspace) {
+    EnsureApplication();
+    EditSessionAdapter session;
+    session.setEditContext(MakeContext(10));
+    const auto video = session.workspace().clips().front().id;
+    const auto audio = session.workspace().clips().back().id;
+    const auto track = session.workspace().tracks().back().id;
+    ASSERT_FALSE(session.hasUnsavedEdits());
+    session.moveClipUs(video, 1'000'000);
+    EXPECT_TRUE(session.hasUnsavedEdits());
+    session.undo();
+    EXPECT_FALSE(session.hasUnsavedEdits());
+    ASSERT_TRUE(session.setTrackGain(track, -6));
+    EXPECT_TRUE(session.hasUnsavedEdits());
+    session.undo();
+    EXPECT_FALSE(session.hasUnsavedEdits());
+    ASSERT_TRUE(session.addGainKey(audio, 1'000'000));
+    EXPECT_TRUE(session.hasUnsavedEdits());
+    session.undo();
+    EXPECT_FALSE(session.hasUnsavedEdits());
+    ASSERT_TRUE(session.setVideoTransform(video, 0.2, 0.1, 1.2, 15));
+    EXPECT_TRUE(session.hasUnsavedEdits());
+    session.undo();
+    EXPECT_FALSE(session.hasUnsavedEdits());
+    session.redo();
+    EXPECT_TRUE(session.hasUnsavedEdits());
+}
+
+TEST(EditSessionAdapterUnsaved, SelectionSeekLocksAndAuditionAreNotAuthoredChanges) {
+    EnsureApplication();
+    EditSessionAdapter session;
+    auto context = MakeContext(10);
+    context.markers.push_back(MakeMarker(1000));
+    session.setEditContext(context);
+    const auto track = session.workspace().tracks().back().id;
+    session.selectClip(session.workspace().clips().front().id);
+    session.requestSeekUs(1'000'000);
+    session.setTrackLocked(track, true);
+    session.setTrackSolo(track, true);
+    EXPECT_FALSE(session.hasUnsavedEdits());
+}
+
+TEST(EditSessionAdapterUnsaved, AppendingDoesNotResetEarlierAuthoredWork) {
+    EnsureApplication();
+    EditSessionAdapter session;
+    session.setEditContext(MakeContext(10));
+    session.setEditContext(MakeContext(5));
+    EXPECT_TRUE(session.hasUnsavedEdits());
+    session.close();
+    EXPECT_FALSE(session.hasUnsavedEdits());
+    session.setEditContext(MakeContext(5));
+    EXPECT_FALSE(session.hasUnsavedEdits());
+}
+
+TEST(EditSessionAdapterUnsaved, FirstImportedPlacementIsCleanAndLaterPlacementIsAuthored) {
+    EnsureApplication();
+    EditSessionAdapter session;
+    engine::EditMediaMetadata metadata;
+    metadata.content_identity_valid = true;
+    metadata.content_sha256.fill(29);
+    metadata.duration_us = 2'000'000;
+    metadata.has_audio = true;
+    engine::EditSourceStream stream;
+    stream.kind = engine::TimelineStreamKind::Audio;
+    stream.container_index = 0;
+    stream.codec.channels = 2;
+    metadata.streams.push_back(stream);
+    ASSERT_NE(session.addProbedMediaForHarness(QStringLiteral("first.mkv"), metadata, true), 0u);
+    EXPECT_FALSE(session.hasUnsavedEdits());
+    const auto initial_revision = session.closeGuardRevision();
+    session.requestSeekUs(1'000'000);
+    session.clearSelection();
+    EXPECT_EQ(session.closeGuardRevision(), initial_revision);
+    metadata.content_sha256.fill(30);
+    ASSERT_NE(session.addProbedMediaForHarness(QStringLiteral("second.mkv"), metadata, true), 0u);
+    EXPECT_TRUE(session.hasUnsavedEdits());
+    EXPECT_GT(session.closeGuardRevision(), initial_revision);
+    session.undo();
+    EXPECT_FALSE(session.hasUnsavedEdits());
+    session.redo();
+    EXPECT_TRUE(session.hasUnsavedEdits());
+    session.setExportRunning(true);
+    session.setExportRunning(false);
     EXPECT_TRUE(session.hasUnsavedEdits());
 }
 

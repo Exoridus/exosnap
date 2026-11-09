@@ -2515,6 +2515,7 @@ void EditSessionAdapter::importMediaWithRevision(const QList<QUrl>& urls, bool a
                     return;
                 }
                 const bool placement_current = self->workspace_.revision() == revision;
+                const bool initial_placement = self->canEstablishInitialWorkspace();
                 std::vector<edit::Id> ids;
                 for (auto& candidate : candidates) {
                     for (const auto& [id, prior] : self->source_publications_)
@@ -2539,7 +2540,10 @@ void EditSessionAdapter::importMediaWithRevision(const QList<QUrl>& urls, bool a
                 }
                 self->workspace_error_.clear();
                 if (append && placement_current && !ids.empty()) {
-                    self->publishWorkspace(self->workspace_.insertAssets(ids, placement, crossfade));
+                    const bool inserted = self->workspace_.insertAssets(ids, placement, crossfade);
+                    if (inserted && initial_placement)
+                        self->initial_workspace_ = self->workspace_.snapshot();
+                    self->publishWorkspace(inserted);
                 } else if (append && !ids.empty()) {
                     for (const auto id : ids)
                         if (std::find(self->pending_placement_assets_.begin(), self->pending_placement_assets_.end(),
@@ -2813,11 +2817,15 @@ void EditSessionAdapter::retrySourceVerification(qulonglong asset_id) {
 }
 edit::Id EditSessionAdapter::addProbedMediaForHarness(const QString& path, const engine::EditMediaMetadata& metadata,
                                                       bool append) {
+    const bool initial_placement = canEstablishInitialWorkspace();
     const auto id = workspace_.addAsset(AssetFromProbe(path, metadata));
     workspace_error_.clear();
-    if (append)
-        publishWorkspace(workspace_.insertAssets({id}, -1, autoCrossfade));
-    else
+    if (append) {
+        const bool inserted = workspace_.insertAssets({id}, -1, autoCrossfade);
+        if (inserted && initial_placement)
+            initial_workspace_ = workspace_.snapshot();
+        publishWorkspace(inserted);
+    } else
         emit workspaceChanged();
     return id;
 }

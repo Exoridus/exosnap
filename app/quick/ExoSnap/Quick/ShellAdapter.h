@@ -8,6 +8,7 @@
 #include <QtQmlIntegration/qqmlintegration.h>
 
 #include <functional>
+#include <optional>
 
 namespace exosnap::quick {
 
@@ -163,7 +164,8 @@ class ShellAdapter : public QObject {
     // otherwise leaves nothing behind that says whether the product refused, asked
     // something nobody saw, or failed to tear down. `kind` is one of the
     // CloseGuardKind keys.
-    void closeDecided(const QString& kind, bool recording, bool exporting, bool remuxing, bool finalizing);
+    void closeDecided(const QString& kind, bool recording, bool exporting, bool remuxing, bool finalizing,
+                      bool editor_dirty);
     // Effects the application must apply. Emitted rather than executed here so
     // the adapter keeps no service references.
     void cancelRemuxRequested();
@@ -173,19 +175,21 @@ class ShellAdapter : public QObject {
   private:
     // Applies the waivers collected so far to a freshly sampled state.
     [[nodiscard]] CloseGuardState currentState() const;
-    void publish(const CloseGuardPrompt& prompt);
+    void publish(const CloseGuardPrompt& prompt, const CloseGuardState& state);
     void clearPrompt();
 
     std::function<CloseGuardState()> state_provider_;
     CloseGuardPrompt prompt_;
+    CloseGuardState prompted_state_;
     // Conditions the user has already answered "proceed" for during this close
     // attempt. Without them the re-evaluation after a confirm would show the
     // same dialog forever, because the effects are asynchronous: cancelling a
     // remux or stopping a recording does not clear the underlying state within
     // this call.
-    bool waived_remux_ = false;
-    bool waived_export_ = false;
-    bool waived_recording_ = false;
+    std::optional<quint64> waived_remux_;
+    std::optional<quint64> waived_export_;
+    std::optional<quint64> waived_recording_;
+    std::optional<quint64> waived_editor_;
     bool active_ = false;
     int current_page_ = RecordPage;
     int diagnostics_section_ = DiagnosticsOverview;
