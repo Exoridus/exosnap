@@ -1,0 +1,163 @@
+{
+  "schemaVersion": 1,
+  "layout": "joycon_left",
+  "controls": [
+    {
+      "source": "dpad_up",
+      "control": "dpad_up",
+      "svg": [
+        "btn-up"
+      ],
+      "nodes": [
+        "part__dpad_up"
+      ]
+    },
+    {
+      "source": "dpad_right",
+      "control": "dpad_right",
+      "svg": [
+        "btn-right"
+      ],
+      "nodes": [
+        "part__dpad_right"
+      ]
+    },
+    {
+      "source": "dpad_down",
+      "control": "dpad_down",
+      "svg": [
+        "btn-down"
+      ],
+      "nodes": [
+        "part__dpad_down"
+      ]
+    },
+    {
+      "source": "dpad_left",
+      "control": "dpad_left",
+      "svg": [
+        "btn-left"
+      ],
+      "nodes": [
+        "part__dpad_left"
+      ]
+    },
+    {
+      "source": "left_shoulder",
+      "control": "left_shoulder",
+      "svg": [
+        "btn-l1"
+      ],
+      "nodes": [
+        "part__left_bumper"
+      ]
+    },
+    {
+      "source": "left_trigger",
+      "control": "left_trigger",
+      "svg": [
+        "trigger-l2"
+      ],
+      "nodes": [
+        "part__left_trigger"
+      ]
+    },
+    {
+      "source": "left_stick",
+      "control": "left_stick",
+      "svg": [
+        "stick-l-cap"
+      ],
+      "nodes": [
+        "part__left_stick",
+        "part__left_ring",
+        "part__left_cap"
+      ]
+    },
+    {
+      "source": "left_stick_click",
+      "control": "left_stick_click",
+      "svg": [
+        "stick-l-cap"
+      ],
+      "nodes": [
+        "part__left_cap"
+      ]
+    },
+    {
+      "source": "back",
+      "control": "back",
+      "svg": [
+        "btn-view"
+      ],
+      "nodes": [
+        "part__back_button"
+      ]
+    },
+    {
+      "source": "share",
+      "control": "misc1",
+      "svg": [
+        "btn-share"
+      ],
+      "nodes": [
+        "part__misc"
+      ]
+    },
+    {
+      "source": "sl",
+      "control": "left_paddle1",
+      "svg": [],
+      "nodes": [
+        "part__paddle1"
+      ]
+    },
+    {
+      "source": "sr",
+      "control": "left_paddle2",
+      "svg": [],
+      "nodes": [
+        "part__paddle3"
+      ]
+    }
+  ],
+  "provenance": {
+    "labCommit": "3deb9535dbcdb37a34d463e537d902a783cc6ef6",
+    "sourceModel": "JoyconLeft",
+    "artworkLicense": "MIT",
+    "artworkCopyright": "Copyright (c) 2024 Al. Lopez",
+    "modelLicense": "MIT"
+  },
+  "reference2D": {
+    "bounds": [
+      0.0,
+      0.0,
+      109.55,
+      246.48
+    ],
+    "anchor": [
+      54.775,
+      123.24
+    ],
+    "aspect": 0.4445,
+    "orientation": "front"
+  },
+  "reference3D": {
+    "min": [
+      -0.9106,
+      -2.025,
+      -0.5756
+    ],
+    "max": [
+      0.9106,
+      2.025,
+      0.5756
+    ],
+    "anchor": [
+      0.0,
+      0.0,
+      0.0
+    ],
+    "extent": 4.05
+  }
+}

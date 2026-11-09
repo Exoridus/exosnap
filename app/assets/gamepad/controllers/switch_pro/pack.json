@@ -1,0 +1,249 @@
+{
+  "schemaVersion": 1,
+  "layout": "switch_pro",
+  "controls": [
+    {
+      "source": "south",
+      "control": "south",
+      "svg": [
+        "btn-b"
+      ],
+      "nodes": [
+        "part__b_button"
+      ]
+    },
+    {
+      "source": "east",
+      "control": "east",
+      "svg": [
+        "btn-a"
+      ],
+      "nodes": [
+        "part__a_button"
+      ]
+    },
+    {
+      "source": "west",
+      "control": "west",
+      "svg": [
+        "btn-y"
+      ],
+      "nodes": [
+        "part__y_button"
+      ]
+    },
+    {
+      "source": "north",
+      "control": "north",
+      "svg": [
+        "btn-x"
+      ],
+      "nodes": [
+        "part__x_button"
+      ]
+    },
+    {
+      "source": "dpad_up",
+      "control": "dpad_up",
+      "svg": [
+        "dpad"
+      ],
+      "nodes": [
+        "part__dpad_up"
+      ]
+    },
+    {
+      "source": "dpad_right",
+      "control": "dpad_right",
+      "svg": [
+        "dpad"
+      ],
+      "nodes": [
+        "part__dpad_right"
+      ]
+    },
+    {
+      "source": "dpad_down",
+      "control": "dpad_down",
+      "svg": [
+        "dpad"
+      ],
+      "nodes": [
+        "part__dpad_down"
+      ]
+    },
+    {
+      "source": "dpad_left",
+      "control": "dpad_left",
+      "svg": [
+        "dpad"
+      ],
+      "nodes": [
+        "part__dpad_left"
+      ]
+    },
+    {
+      "source": "left_shoulder",
+      "control": "left_shoulder",
+      "svg": [
+        "btn-l1"
+      ],
+      "nodes": [
+        "part__left_bumper"
+      ]
+    },
+    {
+      "source": "right_shoulder",
+      "control": "right_shoulder",
+      "svg": [
+        "btn-r1"
+      ],
+      "nodes": [
+        "part__right_bumper"
+      ]
+    },
+    {
+      "source": "left_trigger",
+      "control": "left_trigger",
+      "svg": [
+        "trigger-l2"
+      ],
+      "nodes": [
+        "part__left_trigger"
+      ]
+    },
+    {
+      "source": "right_trigger",
+      "control": "right_trigger",
+      "svg": [
+        "trigger-r2"
+      ],
+      "nodes": [
+        "part__right_trigger"
+      ]
+    },
+    {
+      "source": "left_stick",
+      "control": "left_stick",
+      "svg": [
+        "stick-l-cap"
+      ],
+      "nodes": [
+        "part__left_stick",
+        "part__left_ring",
+        "part__left_cap"
+      ]
+    },
+    {
+      "source": "right_stick",
+      "control": "right_stick",
+      "svg": [
+        "stick-r-cap"
+      ],
+      "nodes": [
+        "part__right_stick",
+        "part__right_ring",
+        "part__right_cap"
+      ]
+    },
+    {
+      "source": "left_stick_click",
+      "control": "left_stick_click",
+      "svg": [
+        "stick-l-cap"
+      ],
+      "nodes": [
+        "part__left_cap"
+      ]
+    },
+    {
+      "source": "right_stick_click",
+      "control": "right_stick_click",
+      "svg": [
+        "stick-r-cap"
+      ],
+      "nodes": [
+        "part__right_cap"
+      ]
+    },
+    {
+      "source": "back",
+      "control": "back",
+      "svg": [
+        "btn-view"
+      ],
+      "nodes": [
+        "part__back_button"
+      ]
+    },
+    {
+      "source": "start",
+      "control": "start",
+      "svg": [
+        "btn-menu"
+      ],
+      "nodes": [
+        "part__start_button"
+      ]
+    },
+    {
+      "source": "home",
+      "control": "guide",
+      "svg": [
+        "btn-home"
+      ],
+      "nodes": [
+        "part__guide_button"
+      ]
+    },
+    {
+      "source": "share",
+      "control": "misc1",
+      "svg": [
+        "btn-share"
+      ],
+      "nodes": [
+        "part__misc"
+      ]
+    }
+  ],
+  "provenance": {
+    "labCommit": "3deb9535dbcdb37a34d463e537d902a783cc6ef6",
+    "sourceModel": "SwitchPro",
+    "artworkLicense": "MIT",
+    "artworkCopyright": "Copyright (c) 2024 Al. Lopez",
+    "modelLicense": "MIT"
+  },
+  "reference2D": {
+    "bounds": [
+      0.0,
+      0.0,
+      419.1272,
+      304.546
+    ],
+    "anchor": [
+      209.5636,
+      152.273
+    ],
+    "aspect": 1.3762,
+    "orientation": "front"
+  },
+  "reference3D": {
+    "min": [
+      -2.025,
+      -1.4098,
+      -0.7999
+    ],
+    "max": [
+      2.025,
+      1.4098,
+      0.7999
+    ],
+    "anchor": [
+      0.0,
+      0.0,
+      0.0
+    ],
+    "extent": 4.05
+  }
+}

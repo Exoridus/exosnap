@@ -181,6 +181,25 @@ directory alongside the ExoSnap binary.
   bundled controller source notice.
 - **Additional provenance:** source URLs and modification details for these
   artwork sources are retained in `licenses/gamepad-al2009man-notice.txt`.
+- **Controller 3D models:** `model.glb` in the `lab/` directory of eleven controller
+  packs (DualSense, DualShock 4, Xbox One, Xbox 360, Switch Pro, Joy-Con Grip,
+  left and right Joy-Con, GameCube, WaveBird, and the generated Generic Pro).
+  The meshes are Larf's 3D Controller Overlay,
+  https://github.com/larfingshnew/3d-controller-overlay (MIT, Copyright (c) 2024
+  Larf). Their pivots and part manifests come from 3dco+,
+  https://github.com/Khyretos/3dco-plus, revision
+  `73b3a602a0b2afeb2fc7a2e9db940f9d2004ef9c` (MIT, Copyright (c) 2024 Larf and
+  2024-2026 Khyretos). The Generic Pro model is generated from the Xbox One mesh
+  and the CC0-1.0 Xelu/Luna body credited above. The Controller Lab reports every
+  visible source OBJ as byte-identical to the Larf repository. That includes the
+  Xbox One meshes, whose 3dco+ `info.json` names an unrelated Sketchfab URL. That
+  URL is not a license source for these files. The packs are exported unmodified
+  by https://github.com/Exoridus/exosnap-controller-lab at the commit pinned in
+  `controller-packs.lock.json`, with SHA-256 hashes per file. The license texts
+  are `LICENSE-models-larf.txt` and `LICENSE-models-3dco-plus.txt` in the
+  controller artwork directory. The models are repository source assets and are
+  not yet compiled into or installed with an executable. Models from PadForge,
+  CGTrader or other sources without verified redistribution rights are excluded.
 - **Legacy fixtures:** Nicolae (Xelu) Berbece, Free Controller & Key Prompts,
   https://thoseawesomeguys.com/prompts/ (CC0), remain in compatibility tests.
   Their original notice is retained as `licenses/gamepad-artwork.txt`.
@@ -210,7 +229,7 @@ directory alongside the ExoSnap binary.
   - added by `windeployqt` because the above need them: the remaining Qml, Quick and Basic Controls style libraries, Network, OpenGL, and the platform, image format, icon engine, network information and style plugins
 
   The shipped tree carries only the Basic Quick Controls style ExoSnap selects, and no QML debugger/profiler/preview (`qmltooling`) plugins. `exo-verify package` prunes other styles and the tooling plugins and refuses their return. The package manifest is the authoritative list: it names every deployed file with its SHA-256.
-- **Developer pilot:** Qt Quick 3D is used under GPLv3 in the separate Controller3D executable. It is not deployed with the recording application. No third-party controller model is bundled.
+- **Developer pilot:** Qt Quick 3D is used under GPLv3 in the separate Controller3D executable. It is not deployed with the recording application. No third-party controller model is compiled into an executable.
 - **Bundled license:** `licenses/qt.txt` (canonical LGPLv3 text from the Free
   Software Foundation)
 - **Note:** Qt DLLs are deployed alongside the ExoSnap binary by `windeployqt`.

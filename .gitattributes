@@ -3,3 +3,5 @@
 *.vcxproj* text eol=crlf
 # Unified diffs encode empty context lines with a single space.
 third_party/patches/*.patch whitespace=-blank-at-eol
+# Controller Lab models are verified byte for byte against their pack manifests.
+*.glb binary

@@ -20,6 +20,46 @@ The application source code retains its own license.
 Exact Steam Controller 2026 artwork requires documented sufficient rights or
 reviewed independent replacement provenance before inclusion.
 
+## Controller Lab packs
+
+The Controller Lab exports one pack per layout. `controller-packs.lock.json`
+pins the Lab commit and its CI artifact. It also lists the layouts whose 2D
+artwork stays native, the packs that are not imported, and the packs whose Lab
+face-button names follow printed labels. Import and verify with:
+
+```powershell
+cargo exo-dev import-controller-packs --from <extracted controller-packs artifact>
+cargo exo-dev import-controller-packs --check
+cargo exo-dev generate-gamepad-assets --svgo <svgo 4.1.0 bin/svgo.js>
+```
+
+The import verifies every file against the pack manifest's SHA-256 hash. It keeps
+the manifest, `controls.json`, the Lab `mapping.json` and, for 3D packs,
+`rig.json` and `model.glb` unmodified in the layout's `lab/` directory. Lab
+artwork replaces `source.svg` byte for byte. The merged `mapping.json` takes
+artwork-derived fields from the Lab, such as `viewBox`, `bounds`, `motion`,
+`pressElement` and `pressMode`. Native `control`, `clickControl`, `controls`,
+`binding`, `clip` and `file` fields are kept. A Lab viewBox may only extend the
+native canvas. A layer that exists on only one side blocks the pack.
+
+Lab control names are an exchange format. The import resolves each one once onto
+the native `gamepad::Control` names and writes the result to the generated
+`pack.json`. A native layer decides a control when the Lab references one, and it
+must agree with the SDL3 meaning of the name. Without a layer, only names with a
+single SDL3 meaning resolve: `home` is `guide`, `quick_access` is `misc1`, and
+`l4`, `r4`, `l5`, `r5` and Joy-Con `sl`/`sr` are paddles by side. `share` without
+a layer, Joy-Con rails without a side, and the Steam trackpads stay unsupported
+with a recorded reason. GameCube-family Lab names follow the printed labels, so
+the import swaps `east` and `west` to the positional meaning.
+
+`pack.json` also records provenance and the neutral reference geometry.
+`reference2D` is the union of every layer's neutral bounds, widened by each
+stick's travel radius, with its center anchor and aspect ratio. `reference3D` is
+the rest-pose world bounds of the model. The import requires the Lab's 4.05
+maximum extent, so a renderer never normalizes a model again. Renderers fit this
+fixed reference into the scene item's rectangle and never derive the fit from an
+input pose.
+
 ## Coordinates and layers
 
 All element SVGs retain their controller's full `viewBox`. Compose them at the

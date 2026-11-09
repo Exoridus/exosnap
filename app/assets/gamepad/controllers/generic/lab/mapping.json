@@ -1,0 +1,360 @@
+{
+  "schemaVersion": 1,
+  "id": "generic",
+  "name": "Generic Dual-Stick",
+  "status": "artwork-preview",
+  "source": "source.svg",
+  "viewBox": [
+    60.000000000000014,
+    20.999999999999996,
+    1340.0000000000005,
+    972.9924010240625
+  ],
+  "coordinateSystem": {
+    "xPositive": "right",
+    "yPositive": "down"
+  },
+  "appearance": {
+    "detailWidth": 50,
+    "detailOpacity": 40
+  },
+  "orientation": "front",
+  "license": {
+    "spdx": "MIT AND CC0-1.0",
+    "copyright": "Copyright (c) 2024 Al. Lopez; Luna diagram by Nicolae (Xelu) Berbece, updated by Paul Paun (2021)",
+    "notice": "../SOURCE-NOTICE.txt"
+  },
+  "layers": [
+    {
+      "id": "body",
+      "file": "elements/body.svg",
+      "role": "body",
+      "binding": null,
+      "bounds": {
+        "x": 60.000000000000014,
+        "y": 20.999999999999996,
+        "width": 1340.0000000000005,
+        "height": 972.9924010240625
+      }
+    },
+    {
+      "id": "trigger-r2",
+      "control": "right_trigger",
+      "file": "elements/trigger-r2.svg",
+      "role": "trigger",
+      "binding": {
+        "type": "axis",
+        "field": "right_trigger",
+        "range": [
+          0,
+          1
+        ]
+      },
+      "bounds": {
+        "x": 996.2999877929688,
+        "y": 21.999999999999996,
+        "width": 154.29998779296875,
+        "height": 73.4000015258789
+      },
+      "motion": {
+        "fillDirection": "bottom-to-top"
+      },
+      "pressElement": "trigger-r2-pressure"
+    },
+    {
+      "id": "trigger-l2",
+      "control": "left_trigger",
+      "file": "elements/trigger-l2.svg",
+      "role": "trigger",
+      "binding": {
+        "type": "axis",
+        "field": "left_trigger",
+        "range": [
+          0,
+          1
+        ]
+      },
+      "bounds": {
+        "x": 309.3999938964844,
+        "y": 21.999999999999996,
+        "width": 154.30001831054688,
+        "height": 73.4000015258789
+      },
+      "motion": {
+        "fillDirection": "bottom-to-top"
+      },
+      "pressElement": "trigger-l2-pressure"
+    },
+    {
+      "id": "dpad",
+      "controls": {"up": "dpad_up", "down": "dpad_down", "left": "dpad_left", "right": "dpad_right"},
+      "file": "elements/dpad.svg",
+      "role": "directional-pad",
+      "binding": {
+        "type": "directional-pad",
+        "up": 64,
+        "down": 128,
+        "left": 256,
+        "right": 512
+      },
+      "bounds": {
+        "x": 429.61859130859375,
+        "y": 499.72833251953125,
+        "width": 227.674072265625,
+        "height": 193.83453369140625
+      },
+      "pressElement": "path19817"
+    },
+    {
+      "id": "btn-y",
+      "control": "north",
+      "file": "elements/btn-y.svg",
+      "role": "button",
+      "binding": {
+        "type": "button",
+        "mask": 32
+      },
+      "bounds": {
+        "x": 1034.830078125,
+        "y": 264.4764709472656,
+        "width": 86.9998779296875,
+        "height": 80.46481323242188
+      }
+    },
+    {
+      "id": "btn-x",
+      "control": "west",
+      "file": "elements/btn-x.svg",
+      "role": "button",
+      "binding": {
+        "type": "button",
+        "mask": 16
+      },
+      "bounds": {
+        "x": 941.4384155273438,
+        "y": 350.58587646484375,
+        "width": 86.99969482421875,
+        "height": 82.40505981445312
+      }
+    },
+    {
+      "id": "btn-b",
+      "control": "east",
+      "file": "elements/btn-b.svg",
+      "role": "button",
+      "binding": {
+        "type": "button",
+        "mask": 8
+      },
+      "bounds": {
+        "x": 1123.189697265625,
+        "y": 343.9876403808594,
+        "width": 88.0006103515625,
+        "height": 81.46044921875
+      }
+    },
+    {
+      "id": "btn-a",
+      "control": "south",
+      "file": "elements/btn-a.svg",
+      "role": "button",
+      "binding": {
+        "type": "button",
+        "mask": 4
+      },
+      "bounds": {
+        "x": 1029.739990234375,
+        "y": 432.6273193359375,
+        "width": 88,
+        "height": 78.69720458984375
+      }
+    },
+    {
+      "id": "btn-home",
+      "control": "guide",
+      "file": "elements/btn-home.svg",
+      "role": "button",
+      "binding": {
+        "type": "auxiliary",
+        "field": "home",
+        "availability": "device-dependent"
+      },
+      "bounds": {
+        "x": 689.0001220703125,
+        "y": 279.0513000488281,
+        "width": 81.999755859375,
+        "height": 77.89739990234375
+      }
+    },
+    {
+      "id": "btn-share",
+      "control": "misc1",
+      "file": "elements/btn-share.svg",
+      "role": "button",
+      "binding": {
+        "type": "auxiliary",
+        "field": "share",
+        "availability": "device-dependent"
+      },
+      "bounds": {
+        "x": 698.0001220703125,
+        "y": 421.9211730957031,
+        "width": 63.99981689453125,
+        "height": 60.15765380859375
+      }
+    },
+    {
+      "id": "btn-view",
+      "control": "back",
+      "file": "elements/btn-view.svg",
+      "role": "button",
+      "binding": {
+        "type": "button",
+        "mask": 2
+      },
+      "bounds": {
+        "x": 605.0001220703125,
+        "y": 364.921142578125,
+        "width": 63.99981689453125,
+        "height": 60.157684326171875
+      }
+    },
+    {
+      "id": "btn-menu",
+      "control": "start",
+      "file": "elements/btn-menu.svg",
+      "role": "button",
+      "binding": {
+        "type": "button",
+        "mask": 1
+      },
+      "bounds": {
+        "x": 791.0001220703125,
+        "y": 364.9211730957031,
+        "width": 63.999755859375,
+        "height": 60.15765380859375
+      }
+    },
+    {
+      "id": "stick-r-cap",
+      "control": "right_stick",
+      "clickControl": "right_stick_click",
+      "file": "elements/stick-r-cap.svg",
+      "role": "stick",
+      "binding": {
+        "type": "stick",
+        "axes": [
+          "right_x",
+          "right_y"
+        ],
+        "clickMask": 8192
+      },
+      "bounds": {
+        "x": 837.7520141601562,
+        "y": 538.9931640625,
+        "width": 148.0001220703125,
+        "height": 140.050048828125
+      },
+      "motion": {
+        "center": [
+          911.720782940499,
+          608.976665744025
+        ],
+        "travelRadius": 25.20073448777751,
+        "deadzone": 0.08,
+        "yPositive": "up"
+      },
+      "pressElement": "stick-r-cap-pressure",
+      "knockout": "stick-r-cap-outline"
+    },
+    {
+      "id": "stick-l-cap",
+      "control": "left_stick",
+      "clickControl": "left_stick_click",
+      "file": "elements/stick-l-cap.svg",
+      "role": "stick",
+      "binding": {
+        "type": "stick",
+        "axes": [
+          "left_x",
+          "left_y"
+        ],
+        "clickMask": 4096
+      },
+      "bounds": {
+        "x": 297.11761474609375,
+        "y": 312.4664001464844,
+        "width": 147.99984741210938,
+        "height": 147.10052490234375
+      },
+      "motion": {
+        "center": [
+          371.11752929780533,
+          386.0166690914133
+        ],
+        "travelRadius": 26.22877792965306,
+        "deadzone": 0.08,
+        "yPositive": "up"
+      },
+      "pressElement": "stick-l-cap-pressure",
+      "knockout": "stick-l-cap-outline"
+    },
+    {
+      "id": "btn-l1",
+      "control": "left_shoulder",
+      "file": "elements/btn-l1.svg",
+      "role": "button",
+      "binding": {
+        "type": "button",
+        "mask": 1024
+      },
+      "bounds": {
+        "x": 237,
+        "y": 80,
+        "width": 233,
+        "height": 131.24142456054688
+      },
+      "clip": {
+        "x": 0,
+        "y": 0,
+        "width": 767.3637084960938,
+        "height": 954.0140991210938
+      },
+      "pressElement": "btn-l1-pressure"
+    },
+    {
+      "id": "btn-r1",
+      "control": "right_shoulder",
+      "file": "elements/btn-r1.svg",
+      "role": "button",
+      "binding": {
+        "type": "button",
+        "mask": 2048
+      },
+      "bounds": {
+        "x": 990,
+        "y": 80,
+        "width": 233,
+        "height": 131.24142456054688
+      },
+      "clip": {
+        "x": 767.3637084960938,
+        "y": 0,
+        "width": 767.3637084960938,
+        "height": 954.0140991210938
+      },
+      "pressElement": "btn-r1-pressure"
+    }
+  ],
+  "derivedFrom": "xbox_series",
+  "controlLabels": {
+    "south": "Unten",
+    "east": "Rechts",
+    "west": "Links",
+    "north": "Oben",
+    "home": "Home",
+    "view": "Select",
+    "menu": "Start",
+    "extra": "Zusatz"
+  }
+}

@@ -7,7 +7,7 @@
   "viewBox": [
     0,
     0,
-    109.55000305175781,
+    109.5500030517578,
     246.479998588562
   ],
   "coordinateSystem": {
@@ -33,13 +33,12 @@
       "bounds": {
         "x": 0,
         "y": 0,
-        "width": 109.55000305175781,
+        "width": 109.5500030517578,
         "height": 246.479998588562
       }
     },
     {
       "id": "trigger-l2",
-      "control": "left_trigger",
       "file": "elements/trigger-l2.svg",
       "role": "trigger",
       "binding": {
@@ -59,11 +58,11 @@
       "motion": {
         "fillDirection": "bottom-to-top"
       },
-      "pressElement": "trigger-l2-pressure"
+      "pressElement": "trigger-l2-pressure",
+      "control": "left_trigger"
     },
     {
       "id": "btn-l1",
-      "control": "left_shoulder",
       "file": "elements/btn-l1.svg",
       "role": "button",
       "binding": {
@@ -76,11 +75,11 @@
         "width": 63.860004425048814,
         "height": 33.700000762939446
       },
-      "pressElement": "btn-l1-pressure"
+      "pressElement": "btn-l1-pressure",
+      "control": "left_shoulder"
     },
     {
       "id": "btn-share",
-      "control": "misc1",
       "file": "elements/btn-share.svg",
       "role": "button",
       "binding": {
@@ -92,12 +91,12 @@
         "x": 47.92145156860351,
         "y": 171.25627136230466,
         "width": 14.28365707397461,
-        "height": 14.283721923828125
-      }
+        "height": 14.283721923828123
+      },
+      "control": "misc1"
     },
     {
       "id": "btn-up",
-      "control": "dpad_up",
       "file": "elements/btn-up.svg",
       "role": "button",
       "binding": {
@@ -109,11 +108,11 @@
         "y": 107.5673370361328,
         "width": 17.419998168945312,
         "height": 17.322662353515625
-      }
+      },
+      "control": "dpad_up"
     },
     {
       "id": "btn-left",
-      "control": "dpad_left",
       "file": "elements/btn-left.svg",
       "role": "button",
       "binding": {
@@ -125,11 +124,11 @@
         "y": 125.24607849121092,
         "width": 17.433925628662102,
         "height": 17.30392456054686
-      }
+      },
+      "control": "dpad_left"
     },
     {
       "id": "btn-right",
-      "control": "dpad_right",
       "file": "elements/btn-right.svg",
       "role": "button",
       "binding": {
@@ -137,15 +136,15 @@
         "mask": 512
       },
       "bounds": {
-        "x": 51.995857238769524,
+        "x": 51.99585723876952,
         "y": 125.24343109130858,
         "width": 17.43070983886718,
         "height": 17.320716857910142
-      }
+      },
+      "control": "dpad_right"
     },
     {
       "id": "btn-down",
-      "control": "dpad_down",
       "file": "elements/btn-down.svg",
       "role": "button",
       "binding": {
@@ -157,12 +156,11 @@
         "y": 142.93342590332028,
         "width": 17.450000762939453,
         "height": 17.266571044921875
-      }
+      },
+      "control": "dpad_down"
     },
     {
       "id": "stick-l-cap",
-      "control": "left_stick",
-      "clickControl": "left_stick_click",
       "file": "elements/stick-l-cap.svg",
       "role": "stick",
       "binding": {
@@ -176,7 +174,7 @@
       "bounds": {
         "x": 23.84285736083984,
         "y": 49.69765472412109,
-        "width": 36.547523498535156,
+        "width": 36.54752349853515,
         "height": 36.573623657226555
       },
       "motion": {
@@ -189,11 +187,12 @@
         "yPositive": "up"
       },
       "pressElement": "stick-l-cap-pressure",
-      "knockout": "stick-l-cap-pressure"
+      "knockout": "stick-l-cap-pressure",
+      "control": "left_stick",
+      "clickControl": "left_stick_click"
     },
     {
       "id": "btn-view",
-      "control": "back",
       "file": "elements/btn-view.svg",
       "role": "button",
       "binding": {
@@ -202,11 +201,12 @@
       },
       "bounds": {
         "x": 58.3178482055664,
-        "y": 29.306898117065426,
+        "y": 29.306898117065423,
         "width": 14.919448852539055,
         "height": 4.348234176635739
       },
-      "pressElement": "btn-view-surface"
+      "pressElement": "btn-view-surface",
+      "control": "back"
     }
   ],
   "deviceNote": "Artwork does not imply automatic Joy-Con pairing or qualified single-controller GameInput support."

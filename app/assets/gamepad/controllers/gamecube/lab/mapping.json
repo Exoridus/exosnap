@@ -1,0 +1,282 @@
+{
+  "schemaVersion": 1,
+  "id": "gamecube",
+  "name": "GameCube",
+  "status": "artwork-draft",
+  "source": "source.svg",
+  "viewBox": [
+    -12.397463113069534,
+    -12,
+    3850.6005859375,
+    2712.630126953125
+  ],
+  "coordinateSystem": {
+    "xPositive": "right",
+    "yPositive": "down"
+  },
+  "appearance": {
+    "detailWidth": 50,
+    "detailOpacity": 40
+  },
+  "orientation": "front",
+  "license": {
+    "spdx": "GPL-3.0-only",
+    "copyright": "GameCube artwork retraced from datkat21/ControllerOverlays",
+    "notice": "../SOURCE-NOTICE.txt"
+  },
+  "controlLabels": {
+    "r1": "Z",
+    "l2": "L",
+    "r2": "R",
+    "menu": "START/PAUSE",
+    "stick-r-cap": "C"
+  },
+  "layers": [
+    {
+      "id": "body",
+      "file": "elements/body.svg",
+      "role": "body",
+      "binding": null,
+      "bounds": {
+        "x": -12.397463113069534,
+        "y": -12,
+        "width": 3850.6005859375,
+        "height": 2712.630126953125
+      }
+    },
+    {
+      "id": "trigger-r2",
+      "control": "right_trigger",
+      "clickControl": "misc4",
+      "file": "elements/trigger-r2.svg",
+      "role": "trigger",
+      "binding": {
+        "type": "axis",
+        "field": "right_trigger",
+        "range": [
+          0,
+          1
+        ]
+      },
+      "bounds": {
+        "x": 2881.664794921875,
+        "y": 59.94713592529297,
+        "width": 623.70947265625,
+        "height": 297.8754577636719
+      },
+      "motion": {
+        "fillDirection": "bottom-to-top"
+      },
+      "pressElement": "trigger-r2-pressure"
+    },
+    {
+      "id": "trigger-l2",
+      "control": "left_trigger",
+      "clickControl": "misc3",
+      "file": "elements/trigger-l2.svg",
+      "role": "trigger",
+      "binding": {
+        "type": "axis",
+        "field": "left_trigger",
+        "range": [
+          0,
+          1
+        ]
+      },
+      "bounds": {
+        "x": 314.5,
+        "y": 59.859615325927734,
+        "width": 638.97802734375,
+        "height": 373.42889404296875
+      },
+      "motion": {
+        "fillDirection": "bottom-to-top"
+      },
+      "pressElement": "trigger-l2-pressure"
+    },
+    {
+      "id": "btn-r1",
+      "control": "right_shoulder",
+      "file": "elements/btn-r1.svg",
+      "role": "button",
+      "binding": {
+        "type": "button",
+        "mask": 2048
+      },
+      "bounds": {
+        "x": 3076.944580078125,
+        "y": 221.56581115722656,
+        "width": 484.91845703125,
+        "height": 242.2186737060547
+      },
+      "pressElement": "btn-r1-pressure"
+    },
+    {
+      "id": "dpad",
+      "controls": {"up": "dpad_up", "down": "dpad_down", "left": "dpad_left", "right": "dpad_right"},
+      "file": "elements/dpad.svg",
+      "role": "directional-pad",
+      "binding": {
+        "type": "directional-pad",
+        "up": 64,
+        "down": 128,
+        "left": 256,
+        "right": 512
+      },
+      "bounds": {
+        "x": 1085.1199951171875,
+        "y": 1627.4200439453125,
+        "width": 464.0899658203125,
+        "height": 463.8499755859375
+      },
+      "pressElement": "dpad-face"
+    },
+    {
+      "id": "btn-y",
+      "control": "north",
+      "file": "elements/btn-y.svg",
+      "role": "button",
+      "binding": {
+        "type": "button",
+        "mask": 32
+      },
+      "bounds": {
+        "x": 2736.232666015625,
+        "y": 468.0526428222656,
+        "width": 454.827392578125,
+        "height": 284.4618225097656
+      },
+      "pressElement": "btn-y-face"
+    },
+    {
+      "id": "btn-x",
+      "control": "east",
+      "file": "elements/btn-x.svg",
+      "role": "button",
+      "binding": {
+        "type": "button",
+        "mask": 16
+      },
+      "bounds": {
+        "x": 3340.821533203125,
+        "y": 626.7186889648438,
+        "width": 284.4619140625,
+        "height": 454.83135986328125
+      },
+      "pressElement": "btn-x-face"
+    },
+    {
+      "id": "btn-b",
+      "control": "west",
+      "file": "elements/btn-b.svg",
+      "role": "button",
+      "binding": {
+        "type": "button",
+        "mask": 8
+      },
+      "bounds": {
+        "x": 2509.06005859375,
+        "y": 1067.8299560546875,
+        "width": 296,
+        "height": 296
+      },
+      "pressElement": "btn-b-face"
+    },
+    {
+      "id": "btn-a",
+      "control": "south",
+      "file": "elements/btn-a.svg",
+      "role": "button",
+      "binding": {
+        "type": "button",
+        "mask": 4
+      },
+      "bounds": {
+        "x": 2857.06005859375,
+        "y": 743.8259887695312,
+        "width": 480,
+        "height": 480.00396728515625
+      },
+      "pressElement": "btn-a-face"
+    },
+    {
+      "id": "btn-menu",
+      "control": "start",
+      "file": "elements/btn-menu.svg",
+      "role": "button",
+      "binding": {
+        "type": "button",
+        "mask": 1
+      },
+      "bounds": {
+        "x": 1822.06005859375,
+        "y": 1066.8299560546875,
+        "width": 186,
+        "height": 186
+      },
+      "pressElement": "btn-menu-face"
+    },
+    {
+      "id": "stick-r-cap",
+      "control": "right_stick",
+      "clickControl": null,
+      "file": "elements/stick-r-cap.svg",
+      "role": "stick",
+      "binding": {
+        "type": "stick",
+        "axes": [
+          "right_x",
+          "right_y"
+        ]
+      },
+      "bounds": {
+        "x": 2369.4345703125,
+        "y": 1706.270263671875,
+        "width": 288,
+        "height": 288
+      },
+      "motion": {
+        "center": [
+          2513.4345703125,
+          1850.270263671875
+        ],
+        "travelRadius": 115.2,
+        "deadzone": 0.08,
+        "yPositive": "up"
+      },
+      "pressElement": "stick-r-cap-pressure",
+      "knockout": "stick-r-cap-outline"
+    },
+    {
+      "id": "stick-l-cap",
+      "control": "left_stick",
+      "clickControl": null,
+      "file": "elements/stick-l-cap.svg",
+      "role": "stick",
+      "binding": {
+        "type": "stick",
+        "axes": [
+          "left_x",
+          "left_y"
+        ]
+      },
+      "bounds": {
+        "x": 506.9969177246094,
+        "y": 752.829345703125,
+        "width": 496.8769836425781,
+        "height": 496.876953125
+      },
+      "motion": {
+        "center": [
+          755.4354248046875,
+          1001.2678527832031
+        ],
+        "travelRadius": 74.53155212402343,
+        "deadzone": 0.08,
+        "yPositive": "up"
+      },
+      "pressElement": "stick-l-cap-pressure",
+      "knockout": "stick-l-cap-outline"
+    }
+  ]
+}

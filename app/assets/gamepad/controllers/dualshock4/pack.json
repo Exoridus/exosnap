@@ -1,0 +1,249 @@
+{
+  "schemaVersion": 1,
+  "layout": "dualshock4",
+  "controls": [
+    {
+      "source": "south",
+      "control": "south",
+      "svg": [
+        "btn-cross"
+      ],
+      "nodes": [
+        "part__a_button"
+      ]
+    },
+    {
+      "source": "east",
+      "control": "east",
+      "svg": [
+        "btn-circle"
+      ],
+      "nodes": [
+        "part__b_button"
+      ]
+    },
+    {
+      "source": "west",
+      "control": "west",
+      "svg": [
+        "btn-square"
+      ],
+      "nodes": [
+        "part__x_button"
+      ]
+    },
+    {
+      "source": "north",
+      "control": "north",
+      "svg": [
+        "btn-triangle"
+      ],
+      "nodes": [
+        "part__y_button"
+      ]
+    },
+    {
+      "source": "dpad_up",
+      "control": "dpad_up",
+      "svg": [
+        "btn-up"
+      ],
+      "nodes": [
+        "part__dpad_up"
+      ]
+    },
+    {
+      "source": "dpad_right",
+      "control": "dpad_right",
+      "svg": [
+        "btn-right"
+      ],
+      "nodes": [
+        "part__dpad_right"
+      ]
+    },
+    {
+      "source": "dpad_down",
+      "control": "dpad_down",
+      "svg": [
+        "btn-down"
+      ],
+      "nodes": [
+        "part__dpad_down"
+      ]
+    },
+    {
+      "source": "dpad_left",
+      "control": "dpad_left",
+      "svg": [
+        "btn-left"
+      ],
+      "nodes": [
+        "part__dpad_left"
+      ]
+    },
+    {
+      "source": "left_shoulder",
+      "control": "left_shoulder",
+      "svg": [
+        "btn-l1"
+      ],
+      "nodes": [
+        "part__left_bumper"
+      ]
+    },
+    {
+      "source": "right_shoulder",
+      "control": "right_shoulder",
+      "svg": [
+        "btn-r1"
+      ],
+      "nodes": [
+        "part__right_bumper"
+      ]
+    },
+    {
+      "source": "left_trigger",
+      "control": "left_trigger",
+      "svg": [
+        "trigger-l2"
+      ],
+      "nodes": [
+        "part__left_trigger"
+      ]
+    },
+    {
+      "source": "right_trigger",
+      "control": "right_trigger",
+      "svg": [
+        "trigger-r2"
+      ],
+      "nodes": [
+        "part__right_trigger"
+      ]
+    },
+    {
+      "source": "left_stick",
+      "control": "left_stick",
+      "svg": [
+        "stick-l-cap"
+      ],
+      "nodes": [
+        "part__left_stick",
+        "part__left_ring",
+        "part__left_cap"
+      ]
+    },
+    {
+      "source": "right_stick",
+      "control": "right_stick",
+      "svg": [
+        "stick-r-cap"
+      ],
+      "nodes": [
+        "part__right_stick",
+        "part__right_ring",
+        "part__right_cap"
+      ]
+    },
+    {
+      "source": "left_stick_click",
+      "control": "left_stick_click",
+      "svg": [
+        "stick-l-cap"
+      ],
+      "nodes": [
+        "part__left_cap"
+      ]
+    },
+    {
+      "source": "right_stick_click",
+      "control": "right_stick_click",
+      "svg": [
+        "stick-r-cap"
+      ],
+      "nodes": [
+        "part__right_cap"
+      ]
+    },
+    {
+      "source": "back",
+      "control": "back",
+      "svg": [
+        "btn-view"
+      ],
+      "nodes": [
+        "part__back_button"
+      ]
+    },
+    {
+      "source": "start",
+      "control": "start",
+      "svg": [
+        "btn-menu"
+      ],
+      "nodes": [
+        "part__start_button"
+      ]
+    },
+    {
+      "source": "home",
+      "control": "guide",
+      "svg": [
+        "btn-home"
+      ],
+      "nodes": [
+        "part__guide_button"
+      ]
+    },
+    {
+      "source": "touchpad",
+      "control": "touchpad",
+      "svg": [
+        "btn-touchpad"
+      ],
+      "nodes": [
+        "part__touchpad"
+      ]
+    }
+  ],
+  "provenance": {
+    "labCommit": "3deb9535dbcdb37a34d463e537d902a783cc6ef6",
+    "sourceModel": "DS4Compact",
+    "artworkLicense": "MIT",
+    "artworkCopyright": "Copyright (c) 2024 Al. Lopez",
+    "modelLicense": "MIT"
+  },
+  "reference2D": {
+    "bounds": [
+      0.0,
+      0.0,
+      1542.6299,
+      824.2954
+    ],
+    "anchor": [
+      771.3149,
+      412.1477
+    ],
+    "aspect": 1.8715,
+    "orientation": "front"
+  },
+  "reference3D": {
+    "min": [
+      -2.025,
+      -1.2653,
+      -0.7903
+    ],
+    "max": [
+      2.025,
+      1.2653,
+      0.7903
+    ],
+    "anchor": [
+      0.0,
+      0.0,
+      0.0
+    ],
+    "extent": 4.05
+  }
+}
