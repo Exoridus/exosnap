@@ -19,6 +19,7 @@
 #include <vector>
 
 #include "audio_clock_drift.h"
+#include "audio_silence_fill.h"
 #include "clock_slaving.h"
 #include "output_format_audio_src.h"
 
@@ -42,6 +43,8 @@
 namespace exosnap::engine {
 
 namespace {
+uint64_t CapturePollQpcNs();
+
 struct PhysicalProcessingTimer {
     PhysicalAudioStatistics& statistics;
     std::chrono::steady_clock::time_point started = std::chrono::steady_clock::now();
@@ -71,8 +74,11 @@ struct PhysicalAudioClockSource::Impl {
     bool correction_enabled = true;
     bool initialized = false;
     bool observation_active = false;
+    bool measurement_faulted = false;
     double applied_origin_ms = 0;
     uint64_t observation_origin_qpc_ns = 0;
+    uint64_t native_packet_end_qpc_ns = 0;
+    uint64_t idle_through_qpc_ns = 0;
     uint64_t output_qpc_ns = 0;
     uint64_t next_output_qpc_ns = 0;
 
@@ -98,10 +104,18 @@ struct PhysicalAudioClockSource::Impl {
         controller = ClockSlavingController(5.0);
         applied_origin_ms = conversion.AppliedCompensationMs();
         observation_active = false;
+        measurement_faulted = false;
         timing_valid = false;
+        native_packet_end_qpc_ns = 0;
+        idle_through_qpc_ns = 0;
         statistics.clock_quality = PhysicalClockQuality::Unknown;
         statistics.compensation_ppm = 0;
         conversion.SetCompensationPpm(0);
+    }
+    void FaultObservation() {
+        ResetObservation();
+        measurement_faulted = true;
+        statistics.clock_quality = PhysicalClockQuality::Degraded;
     }
 };
 
@@ -121,16 +135,18 @@ bool PhysicalAudioClockSource::Init(std::string& error) {
             static_cast<size_t>(admission.maximum_packet_frames) * admission.channels, error) ||
         !impl_->conversion.Init(error))
         return false;
+    if (!impl_->Admit(error))
+        return false;
     impl_->ResetObservation();
-    return impl_->Admit(error);
+    return true;
 }
 bool PhysicalAudioClockSource::Reinit(std::string& error) {
     impl_->initialized = false;
     if (!impl_->conversion.Reinit(error))
         return false;
-    impl_->ResetObservation();
     if (!impl_->Admit(error))
         return false;
+    impl_->ResetObservation();
     ++impl_->descriptor.source_generation;
     ++impl_->descriptor.format_generation;
     ++impl_->statistics.reinit_count;
@@ -154,14 +170,36 @@ bool PhysicalAudioClockSource::AcquireBuffer(RawAudioBuffer& buffer, std::string
     impl_->statistics.input_frames += impl_->conversion.LastInputFrames();
     impl_->statistics.output_frames += buffer.num_frames;
     impl_->statistics.applied_compensation_ms = impl_->conversion.AppliedCompensationMs();
+    // A new native stream can establish a new clock. Later packets from this
+    // stream must not hide a measurement fault or restart correction from it.
+    if (impl_->measurement_faulted)
+        return true;
     AudioDeviceTiming timing;
     const bool valid = impl_->conversion.LastBufferDeviceTiming(timing) && timing.qpc_position_ns != 0;
-    if (!valid || (impl_->timing_valid && (timing.qpc_position_ns <= impl_->timing.qpc_position_ns ||
-                                           timing.device_position_ns < impl_->timing.device_position_ns))) {
+    if (!valid) {
         impl_->ResetObservation();
-        impl_->statistics.clock_quality = valid ? PhysicalClockQuality::Degraded : PhysicalClockQuality::Unknown;
         return true;
     }
+    if (impl_->timing_valid && (timing.qpc_position_ns <= impl_->timing.qpc_position_ns ||
+                                timing.device_position_ns < impl_->timing.device_position_ns)) {
+        impl_->FaultObservation();
+        return true;
+    }
+    // Healthy loopback can stop producing packets and freeze its device clock.
+    // Only a sustained, owner-certified idle interval permits a new baseline.
+    // A normal between-packet poll or an unexplained future timestamp does not.
+    if (impl_->native_packet_end_qpc_ns && IsSilentStall(impl_->idle_through_qpc_ns, impl_->native_packet_end_qpc_ns) &&
+        timing.qpc_position_ns >= impl_->idle_through_qpc_ns && timing.qpc_position_ns <= CapturePollQpcNs()) {
+        const double elapsed_s = static_cast<double>(timing.qpc_position_ns - impl_->timing.qpc_position_ns) / 1e9;
+        const double excess_device_ms =
+            static_cast<double>(timing.device_position_ns - impl_->timing.device_position_ns) / 1e6 - elapsed_s * 1000;
+        // Retain evidence of implausible forward device jumps across the idle interval.
+        if (excess_device_ms <= PlausibleDriftBoundMs(elapsed_s))
+            impl_->ResetObservation();
+    }
+    impl_->idle_through_qpc_ns = 0;
+    impl_->native_packet_end_qpc_ns =
+        timing.qpc_position_ns + DeviceFramesToNs(impl_->conversion.LastInputFrames(), SampleRate());
     impl_->timing = timing;
     impl_->timing_valid = true;
     if (!impl_->observation_active) {
@@ -174,8 +212,7 @@ bool PhysicalAudioClockSource::AcquireBuffer(RawAudioBuffer& buffer, std::string
     const double applied = impl_->conversion.AppliedCompensationMs() - impl_->applied_origin_ms;
     const double elapsed_s = static_cast<double>(timing.qpc_position_ns - impl_->observation_origin_qpc_ns) / 1e9;
     if (std::abs(drift) > PlausibleDriftBoundMs(elapsed_s)) {
-        impl_->ResetObservation();
-        impl_->statistics.clock_quality = PhysicalClockQuality::Degraded;
+        impl_->FaultObservation();
         return true;
     }
     impl_->statistics.drift_ms = drift;
@@ -187,8 +224,7 @@ bool PhysicalAudioClockSource::AcquireBuffer(RawAudioBuffer& buffer, std::string
         ++impl_->statistics.compensation_updates;
     }
     if (impl_->controller.MeasurementFaulted()) {
-        impl_->ResetObservation();
-        impl_->statistics.clock_quality = PhysicalClockQuality::Degraded;
+        impl_->FaultObservation();
     }
     return true;
 }
@@ -241,6 +277,10 @@ AudioCaptureDescriptor PhysicalAudioClockSource::Descriptor() const {
 uint64_t PhysicalAudioClockSource::BufferedFrames() const {
     return impl_->conversion.BufferedFrames();
 }
+void PhysicalAudioClockSource::NotifyNativeIdleThrough(uint64_t qpc_ns) {
+    if (!impl_->measurement_faulted && impl_->observation_active)
+        impl_->idle_through_qpc_ns = (std::max)(impl_->idle_through_qpc_ns, qpc_ns);
+}
 uint32_t PhysicalAudioClockSource::DrainResampler(RawAudioBuffer& buffer, int64_t* undrained_frames) {
     int64_t remaining = 0;
     const auto frames = impl_->conversion.DrainResampler(buffer, &remaining);
@@ -259,10 +299,15 @@ namespace {
 using SteadyClock = std::chrono::steady_clock;
 
 uint64_t CapturePollQpcNs() {
+#ifdef _WIN32
     LARGE_INTEGER ticks{}, frequency{};
     QueryPerformanceCounter(&ticks);
     QueryPerformanceFrequency(&frequency);
     return QpcTicksTo100ns(static_cast<uint64_t>(ticks.QuadPart), static_cast<uint64_t>(frequency.QuadPart)) * 100;
+#else
+    return static_cast<uint64_t>(
+        std::chrono::duration_cast<std::chrono::nanoseconds>(SteadyClock::now().time_since_epoch()).count());
+#endif
 }
 
 bool SameAdmission(const AudioCaptureDescriptor& left, const AudioCaptureDescriptor& right) {
@@ -837,6 +882,10 @@ void PhysicalOwner::Run() {
                         }
                     }
                     const auto latency = source_->MaxCaptureLatencyNs();
+                    // Native absence can rebase the clock even when conversion
+                    // retains PCM. That tail still blocks timeline completion.
+                    if (!degraded_ && !pending && latency && poll_qpc_ns >= *latency)
+                        source_->NotifyNativeIdleThrough(poll_qpc_ns - *latency);
                     {
                         std::lock_guard lock(mutex_);
                         uint64_t completed = last_output_end_qpc_;

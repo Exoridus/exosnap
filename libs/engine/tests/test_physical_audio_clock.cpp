@@ -1,4 +1,5 @@
 #include "audio_tee.h"
+#include "qpc_100ns.h"
 #include "shared_audio_capture.h"
 #include <algorithm>
 #include <cstddef>
@@ -15,11 +16,17 @@
 #include <chrono>
 #include <cmath>
 #include <condition_variable>
+#include <deque>
 #include <memory>
 #include <mutex>
+#include <optional>
 #include <string>
 #include <thread>
 #include <vector>
+
+#ifdef _WIN32
+#include <windows.h>
+#endif
 
 namespace {
 using namespace exosnap::engine;
@@ -184,11 +191,408 @@ AudioCaptureDescriptor Admission(uint32_t rate = 8000, uint32_t channels = 1) {
     return descriptor;
 }
 
-template <typename Predicate> bool WaitUntil(Predicate predicate) {
-    const auto deadline = std::chrono::steady_clock::now() + std::chrono::seconds(2);
+class ScriptedClockNative final : public IAudioCaptureSource {
+  public:
+    explicit ScriptedClockNative(std::vector<std::optional<AudioDeviceTiming>> observations)
+        : observations_(std::move(observations)) {
+    }
+    bool Init(std::string& error) override {
+        error.clear();
+        packet_ = 0;
+        timing_.reset();
+        return true;
+    }
+    uint32_t PendingFrameCount() override {
+        return packet_ < observations_.size() ? 80 : 0;
+    }
+    bool AcquireBuffer(RawAudioBuffer& buffer, std::string& error) override {
+        error.clear();
+        if (!PendingFrameCount())
+            return false;
+        timing_ = observations_[packet_++];
+        buffer = {};
+        buffer.bytes = reinterpret_cast<const uint8_t*>(samples_.data());
+        buffer.num_frames = 80;
+        return true;
+    }
+    void ReleaseBuffer() override {
+    }
+    uint32_t SampleRate() const override {
+        return 8000;
+    }
+    uint32_t Channels() const override {
+        return 1;
+    }
+    AudioSampleFormat SampleFormat() const override {
+        return AudioSampleFormat::Float32;
+    }
+    const std::string& EndpointName() const override {
+        return name_;
+    }
+    bool LastBufferDeviceTiming(AudioDeviceTiming& timing) const override {
+        if (!timing_)
+            return false;
+        timing = *timing_;
+        return true;
+    }
+    void Shutdown() override {
+    }
+
+  private:
+    std::vector<std::optional<AudioDeviceTiming>> observations_;
+    std::optional<AudioDeviceTiming> timing_;
+    size_t packet_ = 0;
+    std::vector<float> samples_ = std::vector<float>(80, 0.25f);
+    std::string name_ = "scripted native clock";
+};
+
+TEST(PhysicalAudioClock, ImplausibleObservationStaysFaultedUntilReinitialization) {
+    for (bool correction : {false, true}) {
+        SCOPED_TRACE(correction);
+        auto native = std::make_unique<ScriptedClockNative>(std::vector<std::optional<AudioDeviceTiming>>{
+            AudioDeviceTiming{0, 1'000'000'000ULL}, AudioDeviceTiming{10'000'000ULL, 11'000'000'000ULL},
+            AudioDeviceTiming{20'000'000ULL, 11'010'000'000ULL}, std::nullopt,
+            AudioDeviceTiming{40'000'000ULL, 11'030'000'000ULL}});
+        PhysicalAudioClockSource source(std::move(native), Admission(), correction);
+        std::string error;
+        ASSERT_TRUE(source.Init(error)) << error;
+        for (uint32_t packet = 0; packet < 5; ++packet) {
+            RawAudioBuffer block;
+            ASSERT_TRUE(source.AcquireBuffer(block, error)) << error;
+            EXPECT_EQ(block.num_frames, 80u);
+            const auto* pcm = reinterpret_cast<const float*>(block.bytes);
+            ASSERT_NE(pcm, nullptr);
+            EXPECT_TRUE(std::all_of(pcm, pcm + block.num_frames, [](float sample) { return sample == 0.25f; }));
+            const auto expected = packet == 0 ? PhysicalClockQuality::Measured : PhysicalClockQuality::Degraded;
+            EXPECT_EQ(source.Statistics().clock_quality, expected) << packet;
+            EXPECT_EQ(source.Descriptor().clock_quality, expected) << packet;
+            AudioDeviceTiming timing;
+            EXPECT_EQ(source.LastBufferDeviceTiming(timing), packet == 0) << packet;
+            EXPECT_DOUBLE_EQ(source.Statistics().compensation_ppm, 0.0);
+            source.ReleaseBuffer();
+        }
+        EXPECT_EQ(source.Statistics().input_frames, 400u);
+        EXPECT_EQ(source.Statistics().output_frames, 400u);
+        ASSERT_TRUE(source.Reinit(error)) << error;
+        EXPECT_EQ(source.Statistics().clock_quality, PhysicalClockQuality::Unknown);
+        RawAudioBuffer block;
+        ASSERT_TRUE(source.AcquireBuffer(block, error)) << error;
+        EXPECT_EQ(source.Statistics().clock_quality, PhysicalClockQuality::Measured);
+        EXPECT_DOUBLE_EQ(source.Statistics().drift_ms, 0.0);
+        source.ReleaseBuffer();
+    }
+}
+
+TEST(PhysicalAudioClock, RegressingObservationCannotBecomeMeasuredOnTheNextPacket) {
+    for (const auto invalid :
+         {AudioDeviceTiming{20'000'000ULL, 1'000'000'000ULL}, AudioDeviceTiming{5'000'000ULL, 1'010'000'000ULL}}) {
+        auto native = std::make_unique<ScriptedClockNative>(
+            std::vector<std::optional<AudioDeviceTiming>>{AudioDeviceTiming{10'000'000ULL, 1'000'000'000ULL}, invalid,
+                                                          AudioDeviceTiming{30'000'000ULL, 1'020'000'000ULL}});
+        PhysicalAudioClockSource source(std::move(native), Admission());
+        std::string error;
+        ASSERT_TRUE(source.Init(error)) << error;
+        for (uint32_t packet = 0; packet < 3; ++packet) {
+            RawAudioBuffer block;
+            ASSERT_TRUE(source.AcquireBuffer(block, error)) << error;
+            EXPECT_EQ(source.Statistics().clock_quality,
+                      packet == 0 ? PhysicalClockQuality::Measured : PhysicalClockQuality::Degraded)
+                << packet;
+            source.ReleaseBuffer();
+        }
+    }
+}
+
+TEST(PhysicalAudioClock, MissingObservationRemainsUnknownWithoutInventingAClockFault) {
+    auto native = std::make_unique<ScriptedClockNative>(std::vector<std::optional<AudioDeviceTiming>>{
+        AudioDeviceTiming{0, 1'000'000'000ULL}, std::nullopt, AudioDeviceTiming{20'000'000ULL, 1'020'000'000ULL}});
+    PhysicalAudioClockSource source(std::move(native), Admission());
+    std::string error;
+    ASSERT_TRUE(source.Init(error)) << error;
+    for (uint32_t packet = 0; packet < 3; ++packet) {
+        RawAudioBuffer block;
+        ASSERT_TRUE(source.AcquireBuffer(block, error)) << error;
+        EXPECT_EQ(source.Statistics().clock_quality,
+                  packet == 1 ? PhysicalClockQuality::Unknown : PhysicalClockQuality::Measured);
+        source.ReleaseBuffer();
+    }
+}
+
+template <typename Predicate>
+bool WaitUntil(Predicate predicate, std::chrono::milliseconds timeout = std::chrono::seconds(2)) {
+    const auto deadline = std::chrono::steady_clock::now() + timeout;
     while (!predicate() && std::chrono::steady_clock::now() < deadline)
         std::this_thread::sleep_for(std::chrono::milliseconds(1));
     return predicate();
+}
+
+uint64_t NativeClockNowNs() {
+#ifdef _WIN32
+    LARGE_INTEGER ticks{}, frequency{};
+    QueryPerformanceCounter(&ticks);
+    QueryPerformanceFrequency(&frequency);
+    return QpcTicksTo100ns(static_cast<uint64_t>(ticks.QuadPart), static_cast<uint64_t>(frequency.QuadPart)) * 100;
+#else
+    return static_cast<uint64_t>(
+        std::chrono::duration_cast<std::chrono::nanoseconds>(std::chrono::steady_clock::now().time_since_epoch())
+            .count());
+#endif
+}
+
+struct OwnerClockFeed {
+    std::mutex mutex;
+    std::deque<AudioDeviceTiming> packets;
+    std::atomic<uint32_t> idle_polls = 0;
+    bool pace_packets = false;
+    void Push(AudioDeviceTiming timing) {
+        std::lock_guard lock(mutex);
+        packets.push_back(timing);
+    }
+};
+
+class OwnerClockNative final : public IAudioCaptureSource {
+  public:
+    explicit OwnerClockNative(std::shared_ptr<OwnerClockFeed> feed) : feed_(std::move(feed)) {
+    }
+    bool Init(std::string& error) override {
+        error.clear();
+        return true;
+    }
+    uint32_t PendingFrameCount() override {
+        std::lock_guard lock(feed_->mutex);
+        if (!feed_->packets.empty() &&
+            (!feed_->pace_packets || NativeClockNowNs() >= feed_->packets.front().qpc_position_ns + 10'000'000ULL))
+            return 80;
+        ++feed_->idle_polls;
+        return 0;
+    }
+    std::optional<uint64_t> MaxCaptureLatencyNs() const override {
+        return 100'000'000ULL;
+    }
+    bool AcquireBuffer(RawAudioBuffer& buffer, std::string& error) override {
+        std::lock_guard lock(feed_->mutex);
+        error.clear();
+        if (feed_->packets.empty())
+            return false;
+        timing_ = feed_->packets.front();
+        feed_->packets.pop_front();
+        buffer = {reinterpret_cast<const uint8_t*>(samples_.data()), 80};
+        return true;
+    }
+    void ReleaseBuffer() override {
+    }
+    uint32_t SampleRate() const override {
+        return 8000;
+    }
+    uint32_t Channels() const override {
+        return 1;
+    }
+    AudioSampleFormat SampleFormat() const override {
+        return AudioSampleFormat::Float32;
+    }
+    const std::string& EndpointName() const override {
+        return name_;
+    }
+    bool LastBufferDeviceTiming(AudioDeviceTiming& timing) const override {
+        timing = timing_;
+        return true;
+    }
+    void Shutdown() override {
+    }
+
+  private:
+    std::shared_ptr<OwnerClockFeed> feed_;
+    AudioDeviceTiming timing_;
+    std::vector<float> samples_ = std::vector<float>(80, 0.25f);
+    std::string name_ = "owner clock fixture";
+};
+
+SharedAudioCaptureRequest OwnerClockRequest(const std::shared_ptr<OwnerClockFeed>& feed) {
+    SharedAudioCaptureRequest request;
+    request.key.endpoint_id = "owner clock fixture";
+    request.admission = Admission();
+    request.native_factory = [feed] { return std::make_unique<OwnerClockNative>(feed); };
+    return request;
+}
+
+testing::AssertionResult ConsumeOwnerClockPacket(IAudioCaptureSource& reader, uint64_t& frames) {
+    if (!WaitUntil([&] { return reader.PendingFrameCount() != 0; }))
+        return testing::AssertionFailure() << "Native clock packet was not published";
+    RawAudioBuffer block;
+    std::string error;
+    if (!reader.AcquireBuffer(block, error))
+        return testing::AssertionFailure() << error;
+    const auto* pcm = reinterpret_cast<const float*>(block.bytes);
+    const bool intact = block.num_frames && pcm && std::all_of(pcm, pcm + block.num_frames, [](float value) {
+                            return std::abs(value - 0.25f) < 0.0001f;
+                        });
+    frames += block.num_frames;
+    reader.ReleaseBuffer();
+    return intact ? testing::AssertionSuccess() : testing::AssertionFailure() << "Native PCM was not preserved";
+}
+
+TEST(SharedAudioCapture, HealthyIdleRebasesFrozenDeviceClockWithoutReinitialization) {
+    auto feed = std::make_shared<OwnerClockFeed>();
+    const uint64_t first_qpc = NativeClockNowNs() - 10'000'000ULL;
+    feed->Push({0, first_qpc});
+    SharedAudioCaptureRegistry registry;
+    std::string error;
+    auto readers = registry.AttachReaders({OwnerClockRequest(feed)}, 0, error);
+    ASSERT_EQ(readers.size(), 1u) << error;
+    uint64_t frames = 0;
+    ASSERT_TRUE(ConsumeOwnerClockPacket(*readers[0], frames));
+    ASSERT_TRUE(
+        WaitUntil([&] { return SharedAudioReaderCompletedThrough(*readers[0]) >= first_qpc + 2'500'000'000ULL; },
+                  std::chrono::seconds(4)));
+    ASSERT_GT(feed->idle_polls.load(), 0u);
+    const uint64_t resumed_qpc = NativeClockNowNs() - 10'000'000ULL;
+    for (uint64_t packet = 0; packet < 3; ++packet) {
+        const uint64_t qpc = resumed_qpc + packet * 10'000'000ULL;
+        ASSERT_TRUE(WaitUntil([&] { return NativeClockNowNs() >= qpc + 10'000'000ULL; }));
+        feed->Push({(packet + 1) * 10'000'000ULL, qpc});
+        ASSERT_TRUE(ConsumeOwnerClockPacket(*readers[0], frames));
+    }
+    ASSERT_TRUE(WaitUntil([&] { return registry.Statistics().input_frames == 320; }));
+    const auto meters = registry.MeterSnapshots();
+    ASSERT_EQ(meters.size(), 1u);
+    EXPECT_EQ(meters[0].clock_quality, AudioMeterClockQuality::Measured);
+    EXPECT_NEAR(meters[0].drift_ms, 0.0, 0.0001);
+    EXPECT_EQ(meters[0].capture_opens, 1u);
+    EXPECT_EQ(meters[0].reinit_count, 0u);
+    EXPECT_EQ(meters[0].output_frames, 320u);
+    EXPECT_EQ(frames, 320u);
+}
+
+TEST(SharedAudioCapture, QualifiedIdleCannotClearAGenuineDeviceClockFault) {
+    auto feed = std::make_shared<OwnerClockFeed>();
+    const uint64_t first_qpc = NativeClockNowNs() - 10'000'000ULL;
+    feed->Push({10'000'000ULL, first_qpc});
+    SharedAudioCaptureRegistry registry;
+    std::string error;
+    auto readers = registry.AttachReaders({OwnerClockRequest(feed)}, 0, error);
+    ASSERT_EQ(readers.size(), 1u) << error;
+    uint64_t frames = 0;
+    ASSERT_TRUE(ConsumeOwnerClockPacket(*readers[0], frames));
+    ASSERT_TRUE(WaitUntil([&] { return NativeClockNowNs() >= first_qpc + 20'000'000ULL; }));
+    const uint64_t invalid_qpc = NativeClockNowNs() - 10'000'000ULL;
+    feed->Push({0, invalid_qpc});
+    ASSERT_TRUE(ConsumeOwnerClockPacket(*readers[0], frames));
+    ASSERT_TRUE(
+        WaitUntil([&] { return SharedAudioReaderCompletedThrough(*readers[0]) >= invalid_qpc + 400'000'000ULL; }));
+    feed->Push({20'000'000ULL, NativeClockNowNs() - 10'000'000ULL});
+    ASSERT_TRUE(ConsumeOwnerClockPacket(*readers[0], frames));
+    ASSERT_TRUE(WaitUntil([&] { return registry.Statistics().input_frames == 240; }));
+    const auto meters = registry.MeterSnapshots();
+    ASSERT_EQ(meters.size(), 1u);
+    EXPECT_EQ(meters[0].clock_quality, AudioMeterClockQuality::Degraded);
+    EXPECT_EQ(meters[0].capture_opens, 1u);
+    EXPECT_EQ(meters[0].reinit_count, 0u);
+    EXPECT_EQ(frames, 240u);
+}
+
+TEST(SharedAudioCapture, QualifiedIdleDoesNotCertifyAFuturePacketTimestamp) {
+    auto feed = std::make_shared<OwnerClockFeed>();
+    const uint64_t first_qpc = NativeClockNowNs() - 10'000'000ULL;
+    feed->Push({0, first_qpc});
+    SharedAudioCaptureRegistry registry;
+    std::string error;
+    auto readers = registry.AttachReaders({OwnerClockRequest(feed)}, 0, error);
+    ASSERT_EQ(readers.size(), 1u) << error;
+    uint64_t frames = 0;
+    ASSERT_TRUE(ConsumeOwnerClockPacket(*readers[0], frames));
+    ASSERT_TRUE(
+        WaitUntil([&] { return SharedAudioReaderCompletedThrough(*readers[0]) >= first_qpc + 400'000'000ULL; }));
+    feed->Push({10'000'000ULL, NativeClockNowNs() + 10'000'000'000ULL});
+    ASSERT_TRUE(ConsumeOwnerClockPacket(*readers[0], frames));
+    ASSERT_TRUE(WaitUntil([&] { return registry.Statistics().input_frames == 160; }));
+    const auto meters = registry.MeterSnapshots();
+    ASSERT_EQ(meters.size(), 1u);
+    EXPECT_EQ(meters[0].clock_quality, AudioMeterClockQuality::Degraded);
+    EXPECT_EQ(meters[0].reinit_count, 0u);
+    EXPECT_EQ(frames, 160u);
+}
+
+TEST(SharedAudioCapture, QualifiedIdleDoesNotCertifyAnImpossibleDeviceClockAdvance) {
+    auto feed = std::make_shared<OwnerClockFeed>();
+    const uint64_t first_qpc = NativeClockNowNs() - 10'000'000ULL;
+    feed->Push({0, first_qpc});
+    SharedAudioCaptureRegistry registry;
+    std::string error;
+    auto readers = registry.AttachReaders({OwnerClockRequest(feed)}, 0, error);
+    ASSERT_EQ(readers.size(), 1u) << error;
+    uint64_t frames = 0;
+    ASSERT_TRUE(ConsumeOwnerClockPacket(*readers[0], frames));
+    ASSERT_TRUE(
+        WaitUntil([&] { return SharedAudioReaderCompletedThrough(*readers[0]) >= first_qpc + 400'000'000ULL; }));
+    feed->Push({10'000'000'000ULL, NativeClockNowNs() - 10'000'000ULL});
+    ASSERT_TRUE(ConsumeOwnerClockPacket(*readers[0], frames));
+    ASSERT_TRUE(WaitUntil([&] { return registry.Statistics().input_frames == 160; }));
+    const auto meters = registry.MeterSnapshots();
+    ASSERT_EQ(meters.size(), 1u);
+    EXPECT_EQ(meters[0].clock_quality, AudioMeterClockQuality::Degraded);
+    EXPECT_EQ(meters[0].reinit_count, 0u);
+    EXPECT_EQ(frames, 160u);
+}
+
+TEST(SharedAudioCapture, NativeIdleRebasesWithABufferedCompensationTail) {
+    auto feed = std::make_shared<OwnerClockFeed>();
+    const uint64_t first_qpc = NativeClockNowNs() - 1'040'000'000ULL;
+    for (uint64_t packet = 0; packet < 100; ++packet)
+        feed->Push({packet * 10'000'000ULL, first_qpc + packet * 10'400'000ULL});
+    SharedAudioCaptureRegistry registry;
+    std::string error;
+    auto readers = registry.AttachReaders({OwnerClockRequest(feed)}, 0, error);
+    ASSERT_EQ(readers.size(), 1u) << error;
+    uint64_t frames = 0;
+    for (uint32_t packet = 0; packet < 100; ++packet)
+        ASSERT_TRUE(ConsumeOwnerClockPacket(*readers[0], frames));
+    ASSERT_TRUE(WaitUntil([&] { return registry.Statistics().input_frames == 8000; }));
+    ASSERT_GT(registry.Statistics().compensation_updates, 0u);
+    ASSERT_LT(frames, 8000u);
+    const auto idle_polls = feed->idle_polls.load();
+    const uint64_t last_qpc = first_qpc + 99 * 10'400'000ULL;
+    ASSERT_TRUE(
+        WaitUntil([&] { return NativeClockNowNs() >= last_qpc + 2'500'000'000ULL && feed->idle_polls > idle_polls; },
+                  std::chrono::seconds(4)));
+    const uint64_t resumed_qpc = NativeClockNowNs() - 10'000'000ULL;
+    for (uint64_t packet = 0; packet < 3; ++packet) {
+        const uint64_t qpc = resumed_qpc + packet * 10'000'000ULL;
+        ASSERT_TRUE(WaitUntil([&] { return NativeClockNowNs() >= qpc + 10'000'000ULL; }));
+        feed->Push({1'000'000'000ULL + packet * 10'000'000ULL, qpc});
+        ASSERT_TRUE(ConsumeOwnerClockPacket(*readers[0], frames));
+    }
+    ASSERT_TRUE(WaitUntil([&] { return registry.Statistics().input_frames == 8240; }));
+    const auto meters = registry.MeterSnapshots();
+    ASSERT_EQ(meters.size(), 1u);
+    EXPECT_EQ(meters[0].clock_quality, AudioMeterClockQuality::Measured);
+    EXPECT_NEAR(meters[0].drift_ms, 0.0, 0.0001);
+    EXPECT_EQ(meters[0].capture_opens, 1u);
+    EXPECT_EQ(meters[0].reinit_count, 0u);
+    EXPECT_EQ(meters[0].output_frames, frames);
+}
+
+TEST(SharedAudioCapture, OrdinaryEmptyPollsPreserveContinuousClockMeasurement) {
+    auto feed = std::make_shared<OwnerClockFeed>();
+    feed->pace_packets = true;
+    const uint64_t first_qpc = NativeClockNowNs() - 10'000'000ULL;
+    for (uint64_t packet = 0; packet < 40; ++packet)
+        feed->Push({packet * 19'995'000ULL, first_qpc + packet * 20'000'000ULL});
+    SharedAudioCaptureRegistry registry;
+    std::string error;
+    auto readers = registry.AttachReaders({OwnerClockRequest(feed)}, 0, error);
+    ASSERT_EQ(readers.size(), 1u) << error;
+    uint64_t frames = 0;
+    for (uint64_t packet = 0; packet < 40; ++packet)
+        ASSERT_TRUE(ConsumeOwnerClockPacket(*readers[0], frames));
+    ASSERT_TRUE(WaitUntil([&] { return registry.Statistics().input_frames == 3200; }));
+    ASSERT_GT(feed->idle_polls.load(), 0u);
+    const auto meters = registry.MeterSnapshots();
+    ASSERT_EQ(meters.size(), 1u);
+    EXPECT_EQ(meters[0].clock_quality, AudioMeterClockQuality::Measured);
+    EXPECT_NEAR(meters[0].drift_ms, 0.0975, 0.0001);
+    EXPECT_EQ(meters[0].capture_opens, 1u);
+    EXPECT_EQ(meters[0].reinit_count, 0u);
+    EXPECT_EQ(frames, 3200u);
 }
 
 enum class StallStage { Init, Acquire, Shutdown };

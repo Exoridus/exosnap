@@ -59,6 +59,10 @@ class PhysicalAudioClockSource final : public IAudioCaptureSource {
     [[nodiscard]] PhysicalAudioStatistics Statistics() const;
     [[nodiscard]] AudioCaptureDescriptor Descriptor() const;
     [[nodiscard]] uint64_t BufferedFrames() const;
+    // The owner certifies native packet absence using an empty poll and the
+    // capture latency bound, independently of retained conversion PCM. Sustained
+    // idle can rebase a valid clock but cannot clear a latched measurement fault.
+    void NotifyNativeIdleThrough(uint64_t qpc_ns);
     uint32_t DrainResampler(RawAudioBuffer& buffer, int64_t* undrained_frames = nullptr);
 
   private:
