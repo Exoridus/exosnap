@@ -896,6 +896,18 @@ bool AudioRoutingAdapter::setDefaultMonitorSelection(const QStringList& trackIds
         candidate);
     return publish(std::move(candidate), environment());
 }
+bool AudioRoutingAdapter::resetDefaultMonitorSelection(qulonglong expectedRevision) {
+    if (!checkRevision(expectedRevision))
+        return false;
+    auto candidate = intent_;
+    std::visit(
+        [](auto& value) {
+            value.default_monitor_track_ids.clear();
+            value.monitor_selection_origin = engine::MonitorSelectionOrigin::Default;
+        },
+        candidate);
+    return publish(std::move(candidate), environment());
+}
 bool AudioRoutingAdapter::confirmLegacyConversion(qulonglong expectedRevision) {
     if (!checkRevision(expectedRevision))
         return false;

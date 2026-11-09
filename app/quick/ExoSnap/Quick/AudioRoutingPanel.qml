@@ -109,7 +109,7 @@ ExoCard {
         visible: root.routing.conversionPending
         text: root.routing.conversionText
         wrapMode: Text.WordWrap
-        color: ExoTheme.warning
+        color: ExoTheme.warningText
     }
     RowLayout {
         visible: root.routing.conversionPending
@@ -129,7 +129,7 @@ ExoCard {
         visible: (root.actionErrorTarget === "conversion" && root.actionError !== "") || (root.routing.readOnly && root.routing.lastError !== "")
         text: root.routing.readOnly ? root.routing.lastError : root.actionError
         wrapMode: Text.WordWrap
-        color: ExoTheme.error
+        color: ExoTheme.errorText
         Accessible.role: Accessible.AlertMessage
         Accessible.name: text
     }
@@ -196,7 +196,7 @@ ExoCard {
                     Layout.fillWidth: true
                     visible: root.actionErrorTarget === "source:" + liveSourceRow.modelData.id
                     text: root.actionError
-                    color: ExoTheme.error
+                    color: ExoTheme.errorText
                     wrapMode: Text.WordWrap
                     Accessible.role: Accessible.AlertMessage
                 }
@@ -258,7 +258,7 @@ ExoCard {
                 Layout.fillWidth: true
                 visible: root.actionErrorTarget === "create-source"
                 text: root.actionError
-                color: ExoTheme.error
+                color: ExoTheme.errorText
                 wrapMode: Text.WordWrap
                 Accessible.role: Accessible.AlertMessage
                 Accessible.name: text
@@ -313,7 +313,7 @@ ExoCard {
                         Layout.fillWidth: true
                         visible: root.actionErrorTarget === "source:" + sourceRow.modelData.id
                         text: root.actionError
-                        color: ExoTheme.error
+                        color: ExoTheme.errorText
                         wrapMode: Text.WordWrap
                         Accessible.role: Accessible.AlertMessage
                         Accessible.name: text
@@ -380,9 +380,17 @@ ExoCard {
             Label {
                 visible: root.selectedRoute.muted || root.selectedRoute.sourceMuted || !root.selectedRoute.participation
                 Layout.fillWidth: true
-                text: root.selectedRoute.muted ? qsTr("This route is muted in the saved preset. Remove and add the source to restore it.") : qsTr("This source is muted or disabled. Check its source settings.")
+                text: root.selectedRoute.muted ? qsTr("This route is muted in the saved preset. Unmute it to restore its saved gain.") : qsTr("This source is muted or disabled. Check its source settings.")
                 wrapMode: Text.WordWrap
                 color: ExoTheme.textMuted
+            }
+            ExoButton {
+                objectName: "audioUnmuteRoute"
+                text: qsTr("Unmute this route")
+                visible: !!root.selectedRoute.muted
+                enabled: !root.routing.readOnly
+                onClicked: root.performOperation("route:" + root.selectedRouteId,
+                    () => root.routing.setRouteMute(root.selectedRouteId, false, root.routing.revision))
             }
             ExoButton {
                 text: qsTr("Remove from this track")
@@ -419,6 +427,14 @@ ExoCard {
             enabled: false
         }
         ExoMenuItem {
+            objectName: "audioPlaybackAutomatic"
+            text: qsTr("Use all recorded tracks automatically")
+            enabled: !root.routing.readOnly && root.routing.monitorSelectionOrigin !== "default"
+            onTriggered: root.performOperation(root.selectedTrackId,
+                () => root.routing.resetDefaultMonitorSelection(root.routing.revision))
+        }
+        ExoMenuItem {
+            objectName: "audioPlaybackOnlyTrack"
             text: qsTr("Use only this track for ExoSnap playback")
             enabled: !root.routing.readOnly && !!root.selectedTrack.recordEnabled && !root.selectedTrack.empty
             ToolTip.visible: hovered
