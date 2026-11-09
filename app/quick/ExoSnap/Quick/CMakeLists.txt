@@ -2019,6 +2019,23 @@ target_include_directories(diagnostics_policy_tests
 
 target_compile_definitions(diagnostics_policy_tests PRIVATE NOMINMAX)
 
+exosnap_add_gtest(
+    NAME preview_rgba_converter_tests
+    TEST_PREFIX quick_preview_rgba.
+    PHASE gpu
+    SOURCES
+        ${EXOSNAP_QUICK_TESTS_DIR}/test_preview_rgba_converter.cpp
+        QuickPreviewRgbaConverter.cpp
+    LIBRARIES d3d11.lib d3dcompiler.lib
+)
+
+target_include_directories(preview_rgba_converter_tests
+    PRIVATE
+        ${CMAKE_CURRENT_SOURCE_DIR}
+        ${PROJECT_SOURCE_DIR}/libs/engine/include
+)
+target_compile_definitions(preview_rgba_converter_tests PRIVATE NOMINMAX)
+
 # The preview redraw gate. Header-only and Qt-free apart from quint64, so the
 # scheduling contract is pinned without a scene graph, a GPU or an event loop.
 exosnap_add_gtest(

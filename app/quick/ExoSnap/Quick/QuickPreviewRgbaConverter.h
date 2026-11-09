@@ -12,11 +12,14 @@ namespace exosnap::quick {
 // RGBA8, so this keeps format adaptation on the GPU without Qt private APIs.
 class QuickPreviewRgbaConverter {
   public:
+    // A failed rebind leaves the previous conversion usable. Shaders are reused
+    // for this converter's device and replaced together with the views on a device change.
     bool initialize(ID3D11Device* device, ID3D11DeviceContext* context, ID3D11Texture2D* source,
                     ID3D11Texture2D* destination, UINT width, UINT height, std::string& error);
     bool convert(std::string& error);
 
   private:
+    Microsoft::WRL::ComPtr<ID3D11Device> device_;
     Microsoft::WRL::ComPtr<ID3D11DeviceContext> context_;
     Microsoft::WRL::ComPtr<ID3D11ShaderResourceView> source_view_;
     Microsoft::WRL::ComPtr<ID3D11RenderTargetView> destination_view_;
