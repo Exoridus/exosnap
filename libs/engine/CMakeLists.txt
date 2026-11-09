@@ -767,6 +767,23 @@ exosnap_add_gtest(
 )
 target_include_directories(test_encoder_packet_dispatch PRIVATE src include)
 
+exosnap_add_gtest(
+    NAME test_encoder_input_requirements
+    TEST_PREFIX engine.
+    SOURCES tests/test_encoder_input_requirements.cpp
+)
+target_include_directories(test_encoder_input_requirements PRIVATE src include)
+
+exosnap_add_gtest(
+    NAME test_d3d11_encoder_input
+    TEST_PREFIX engine.
+    PHASE gpu
+    SOURCES tests/test_d3d11_encoder_input.cpp
+    LIBRARIES d3d11.lib
+)
+target_include_directories(test_d3d11_encoder_input PRIVATE src include)
+target_compile_definitions(test_d3d11_encoder_input PRIVATE NOMINMAX)
+
 # test_nvenc_rc_params: pure unit tests for ComputeNvencRcParams (no GPU needed).
 exosnap_add_gtest(
     NAME test_nvenc_rc_params

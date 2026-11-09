@@ -83,6 +83,9 @@ class NvencVideoEncoder : public IVideoEncoder {
     bool Open(void* gpu_context, std::string& out_error) override;
     bool Configure(uint32_t width, uint32_t height, uint32_t fps_num, uint32_t fps_den,
                    std::string& out_error) override;
+    [[nodiscard]] EncoderInputRequirements GetInputRequirements() const noexcept override {
+        return m_configured ? m_nvenc.GetInputRequirements() : EncoderInputRequirements{};
+    }
     bool RegisterSlotTexture(int32_t slot_idx, GpuTextureHandle texture, std::string& out_error) override;
     int32_t SlotCount() const override {
         return m_nvenc.SlotCount();
@@ -109,6 +112,7 @@ class NvencVideoEncoder : public IVideoEncoder {
   private:
     NvencEncoder m_nvenc;
     VideoCodec m_codec = VideoCodec::Av1;
+    bool m_configured = false;
 };
 
 } // namespace exosnap::engine

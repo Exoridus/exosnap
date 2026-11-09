@@ -17,6 +17,7 @@
 #include "annexb_to_avcc.h"
 #include "annexb_to_hvcc.h"
 #include "codec_private.h"
+#include "d3d11_encoder_input.h"
 #include "edit_mix_encoder.h"
 #include "encoder_packet_dispatch.h"
 #include "matroska_stream_writer.h"
@@ -113,7 +114,15 @@ struct EncodeSurfaces {
     std::vector<winrt::com_ptr<ID3D11VideoProcessorOutputView>> outputs;
 
     bool Init(RenderDevice& gpu, IVideoEncoder& encoder, ID3D11Texture2D* source, const EditRenderPlan& plan,
-              bool full_range, std::string& error) {
+              VideoCodec codec, bool full_range, std::string& error) {
+        const auto requirements = encoder.GetInputRequirements();
+        const int32_t slots = encoder.SlotCount();
+        const auto valid = ValidateEncoderInputForHost(requirements, codec, BitDepth::Bit8, ChromaSubsampling::Cs420,
+                                                       plan.output, slots, gpu.device.get());
+        if (!valid) {
+            error = valid.message;
+            return false;
+        }
         device = gpu.device.try_as<ID3D11VideoDevice>();
         context = gpu.context.try_as<ID3D11VideoContext1>();
         if (!device || !context) {
@@ -144,21 +153,10 @@ struct EncodeSurfaces {
         if (!Check(device->CreateVideoProcessorInputView(source, enumerator.get(), &input_desc, input.put()),
                    "Create timeline input view", error))
             return false;
-        if (encoder.SlotCount() <= 0 || encoder.SlotCount() > 128) {
-            error = "Encoder returned an invalid input surface count.";
-            return false;
-        }
-        textures.resize(encoder.SlotCount());
-        outputs.resize(encoder.SlotCount());
-        for (int32_t slot = 0; slot < encoder.SlotCount(); ++slot) {
-            D3D11_TEXTURE2D_DESC desc{};
-            desc.Width = plan.output.width;
-            desc.Height = plan.output.height;
-            desc.MipLevels = 1;
-            desc.ArraySize = 1;
-            desc.Format = DXGI_FORMAT_NV12;
-            desc.SampleDesc.Count = 1;
-            desc.BindFlags = D3D11_BIND_RENDER_TARGET;
+        textures.resize(static_cast<size_t>(slots));
+        outputs.resize(static_cast<size_t>(slots));
+        for (int32_t slot = 0; slot < slots; ++slot) {
+            const D3D11_TEXTURE2D_DESC desc = D3D11EncoderInputTextureDesc(requirements);
             D3D11_VIDEO_PROCESSOR_OUTPUT_VIEW_DESC output_desc{};
             output_desc.ViewDimension = D3D11_VPOV_DIMENSION_TEXTURE2D;
             if (!Check(CreateTrackedTexture2D(gpu.device.get(), &desc, nullptr, textures[slot].put(),
@@ -254,7 +252,7 @@ RemuxResult RenderEditTimeline(const TimelineRenderSnapshot& snapshot, const Edi
         encoder->SetConstantFrameRate(true);
         if (!encoder->Open(gpu.device.get(), error) ||
             !encoder->Configure(plan.output.width, plan.output.height, plan.fps_num, plan.fps_den, error) ||
-            !surfaces.Init(gpu, *encoder, compositor.Result(), plan, false, error))
+            !surfaces.Init(gpu, *encoder, compositor.Result(), plan, config.video_codec, false, error))
             return false;
         const int64_t span_in = plan.span_in_us;
         const int64_t span_out = plan.span_out_us < 0 ? snapshot.timeline.duration_us : plan.span_out_us;

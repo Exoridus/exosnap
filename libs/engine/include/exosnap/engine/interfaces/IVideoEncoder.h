@@ -6,6 +6,7 @@
 
 #include <exosnap/engine/codec_types.h>
 #include <exosnap/engine/color_metadata.h>
+#include <exosnap/engine/encoder_input_requirements.h>
 #include <exosnap/engine/packet_types.h>
 #include <exosnap/engine/pipeline_diagnostics.h>
 
@@ -52,17 +53,25 @@ class IVideoEncoder {
     virtual bool Configure(uint32_t width, uint32_t height, uint32_t fps_num, uint32_t fps_den,
                            std::string& out_error) = 0;
 
+    // Available after successful Configure, before allocating/registering inputs.
+    // The host validates the returned layout and retains its device and textures
+    // through Destroy. Requirements stay fixed for the configured session.
+    [[nodiscard]] virtual EncoderInputRequirements GetInputRequirements() const noexcept = 0;
+
     // Register a GPU texture as a reusable input slot.
     // slot_idx in [0, SlotCount()). Texture must remain valid for the encoder lifetime.
     virtual bool RegisterSlotTexture(int32_t slot_idx, GpuTextureHandle texture, std::string& out_error) = 0;
 
     virtual int32_t SlotCount() const = 0;
 
-    // Acquire the next free input slot. Returns -1 if no slot is free.
+    // Acquire the next free input slot. Returns -1 if no slot is free. Only a
+    // successful acquisition grants permission to write an input texture.
+    // Packet completion and PendingFrames do not establish input reuse safety.
     virtual int32_t AcquireFreeSlot() = 0;
 
     // Release a slot that was acquired but never submitted via EncodeFrame
-    // (error-path callers only; EncodeFrame itself owns the slot afterward).
+    // (error-path callers only; EncodeFrame itself owns the slot afterward,
+    // including on failure). Reuse a submitted slot only after acquisition.
     virtual void ReleaseSlot(int32_t slot_idx) noexcept = 0;
 
     // EncodeFrame, ReapCompleted and Flush transfer each appended packet to the
@@ -90,7 +99,8 @@ class IVideoEncoder {
     // Frames submitted and not yet delivered as packets. After a Flush that
     // returned false this is the number of frames the file will not contain;
     // after one that returned true it is 0. Encoders that emit every packet
-    // inline from EncodeFrame never hold any.
+    // inline from EncodeFrame never hold any. This is an output backlog, not a
+    // count of locked input textures. Backend input release can occur later.
     virtual uint64_t PendingFrames() const noexcept {
         return 0;
     }
