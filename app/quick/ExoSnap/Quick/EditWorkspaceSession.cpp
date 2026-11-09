@@ -2057,7 +2057,8 @@ QVariantMap EditSessionAdapter::projectClipRow(const edit::Clip& clip) const {
                      const auto y = db >= 0 ? 0.3 * (1 - db / 24) : 0.3 + 0.7 * (-db / 60);
                      keys.push_back(
                          QVariantMap{{QStringLiteral("sourceUs"), QVariant::fromValue<qint64>(key.source_us)},
-                                     {QStringLiteral("y"), y}});
+                                     {QStringLiteral("y"), y},
+                                     {QStringLiteral("gainDb"), db}});
                  }
              return keys;
          }()},

@@ -19,6 +19,20 @@ Rectangle {
 
     readonly property var clipDetails: session.selectedClipDetails
     readonly property var videoValues: session.videoProperties(clipDetails.id || 0, session.positionUs)
+    property real rotationPointerAngle: 0
+    property real rotationAccumulated: 0
+    property real rotationOrigin: 0
+    function beginRotation(initialDegrees: real, pointerRadians: real): void {
+        rotationOrigin = initialDegrees;
+        rotationPointerAngle = pointerRadians;
+        rotationAccumulated = 0;
+    }
+    function rotationAt(pointerRadians: real): real {
+        const delta = pointerRadians - rotationPointerAngle;
+        rotationAccumulated += Math.atan2(Math.sin(delta), Math.cos(delta));
+        rotationPointerAngle = pointerRadians;
+        return rotationOrigin + rotationAccumulated * 180 / Math.PI;
+    }
     activeFocusOnTab: true
     Keys.onPressed: event => {
         if (event.key === Qt.Key_K && event.modifiers === Qt.NoModifier && !event.isAutoRepeat) {
@@ -83,6 +97,7 @@ Rectangle {
                     root.player.setPlaying(false);
                     initial = root.videoValues.map(row => row.value);
                     origin = mapToItem(outputBox, mouse.x, mouse.y);
+                    root.beginRotation(initial[3], Math.atan2(origin.y - outputBox.height * (0.5 + initial[1]), origin.x - outputBox.width * (0.5 + initial[0])));
                     operation = mouse.x > width - 24 ? (mouse.y < 24 ? 2 : mouse.y > height - 24 ? 1 : 0) : 0;
                     transformBox.draftX = initial[0];
                     transformBox.draftY = initial[1];
@@ -103,7 +118,7 @@ Rectangle {
                         if (operation === 1)
                             transformBox.draftScale = initial[2] * Math.hypot(point.x - centerX, point.y - centerY) / Math.max(1, Math.hypot(origin.x - centerX, origin.y - centerY));
                         else
-                            transformBox.draftRotation = initial[3] + (Math.atan2(point.y - centerY, point.x - centerX) - Math.atan2(origin.y - centerY, origin.x - centerX)) * 180 / Math.PI;
+                            transformBox.draftRotation = root.rotationAt(Math.atan2(point.y - centerY, point.x - centerX));
                     }
                     root.session.updateVideoTransformDrag(transformBox.draftX, transformBox.draftY, transformBox.draftScale, transformBox.draftRotation);
                 }

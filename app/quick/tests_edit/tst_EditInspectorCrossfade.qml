@@ -49,6 +49,8 @@ TestCase {
         const action = findChild(page, "editInspectorCrossfadeAtCut");
         verify(!!action, "The contextual Inspector exposes the valid around-cut transition action");
         verify(action.visible);
+        findChild(page, "editInspector").revealItem(action);
+        waitForRendering(page);
         mouseClick(action);
         compare(testSession.dragActive, false, "A valid command leaves no pending candidate to confirm");
         compare(testSession.transitions.length, 2);
@@ -188,5 +190,124 @@ TestCase {
             verify(point.y >= 0 && point.y + editor.height <= inspector.flickable.height);
         }
         compare(testSession.selectedClipIds, [clip.id]);
+    }
+    function test_fit_selection_menu_matches_keyboard_and_restores_one_view() {
+        const page = createTemporaryObject(pageComponent, tests);
+        const strip = findChild(page, "editClipTimeline");
+        const action = findChild(page, "editFitSelection");
+        const selected = testSession.visibleClipsUs(0, 100000000).filter(row => row.startUs === 0).map(row => row.id);
+        for (const mode of ["clip", "clips", "range"]) {
+            testSession.clearSelection();
+            if (mode === "range")
+                verify(testSession.setEditRangeUs(10000000, 20000000, testSession.tracks.map(row => row.id)));
+            else {
+                testSession.linkedSelection = mode !== "clip";
+                testSession.selectClip(selected[0]);
+            }
+            strip.view.setVisibleInterval(60000000, 70000000);
+            const before = [strip.view.startUs, strip.view.endUs];
+            const depth = strip.view.historyDepth;
+            verify(action.enabled);
+            action.triggered();
+            const fitted = [strip.view.startUs, strip.view.endUs];
+            compare(strip.view.historyDepth, depth + 1);
+            strip.forceActiveFocus();
+            keyClick(Qt.Key_Backspace);
+            compare([strip.view.startUs, strip.view.endUs], before);
+            keyClick(Qt.Key_Z);
+            compare([strip.view.startUs, strip.view.endUs], fitted);
+            keyClick(Qt.Key_Backspace);
+            compare([strip.view.startUs, strip.view.endUs], before);
+        }
+        testSession.clearEditRange();
+        testSession.clearSelection();
+        verify(!action.enabled);
+    }
+    function test_crossfade_without_a_neighbor_is_disabled() {
+        const incoming = testSession.visibleClipsUs(0, 100000000).find(row => row.video && row.startUs > 0);
+        verify(testSession.inspectClip(incoming.id));
+        const page = createTemporaryObject(pageComponent, tests);
+        page.toggleDetails();
+        verify(!findChild(page, "editInspectorCrossfadeAtCut").enabled);
+    }
+    function test_junction_overlay_fits_content_and_escape_restores_canvas_focus() {
+        const outgoing = testSession.visibleClipsUs(0, 100000000).find(row => row.video && row.startUs === 0);
+        testSession.selectTransition(outgoing.id);
+        const page = createTemporaryObject(pageComponent, tests, {width: 860, height: 700});
+        const strip = findChild(page, "editClipTimeline");
+        strip.forceActiveFocus();
+        keyClick(Qt.Key_D);
+        const host = findChild(page, "editDetailsPanelLoader");
+        tryVerify(() => host.height < host.parent.height);
+        verify(host.height >= findChild(page, "editInspector").naturalContentHeight);
+        const selected = testSession.selectedTransition;
+        keyClick(Qt.Key_Escape);
+        verify(!page.detailsOpen);
+        compare(testSession.selectedTransition, selected);
+        verify(strip.activeFocus);
+    }
+    function test_gain_point_keyboard_add_time_gain_undo_redo_and_delete() {
+        const audio = testSession.visibleClipsUs(0, 100000000).find(row => !row.video && row.startUs === 0);
+        verify(testSession.inspectClip(audio.id));
+        testSession.requestSeekUs(5000000);
+        const page = createTemporaryObject(pageComponent, tests);
+        const strip = findChild(page, "editClipTimeline");
+        strip.forceActiveFocus();
+        keyClick(Qt.Key_D);
+        const add = findChild(page, "editAddGainPoint");
+        add.forceActiveFocus(Qt.TabFocusReason);
+        verify(add.enabled);
+        keyClick(Qt.Key_Space);
+        const point = () => testSession.selectedClipDetails.gainKeys.find(key => key.sourceUs === 6000000);
+        verify(testSession.selectedClipDetails.gainKeys.some(key => key.sourceUs === 5000000));
+        const time = findChild(page, "editGainPointTime");
+        time.changeFormat(1);
+        time.forceActiveFocus(Qt.TabFocusReason);
+        time.selectAll();
+        keyClick("6");
+        keyClick(Qt.Key_Right);
+        compare(testSession.positionUs, 5000000);
+        keyClick(Qt.Key_Return);
+        verify(!!point());
+        verify(!testSession.dragActive);
+        const gain = findChild(page, "editGainPointGain");
+        gain.forceActiveFocus(Qt.TabFocusReason);
+        gain.selectAll();
+        keyClick("-");
+        keyClick("9");
+        keyClick(Qt.Key_Return);
+        compare(point().gainDb, -9);
+        keyClick(Qt.Key_Z, Qt.ControlModifier);
+        compare(point().gainDb, 0);
+        keyClick(Qt.Key_Z, Qt.ControlModifier | Qt.ShiftModifier);
+        compare(point().gainDb, -9);
+        gain.forceActiveFocus(Qt.TabFocusReason);
+        gain.selectAll();
+        keyClick("-");
+        keyClick(Qt.Key_Return);
+        verify(gain.errorText.length > 0);
+        compare(point().gainDb, -9);
+        keyClick(Qt.Key_Escape);
+        verify(page.detailsOpen);
+        compare(point().gainDb, -9);
+        const remove = findChild(page, "editRemoveGainPoint");
+        remove.forceActiveFocus(Qt.TabFocusReason);
+        keyClick(Qt.Key_Space);
+        verify(!point());
+        strip.forceActiveFocus();
+        keyClick(Qt.Key_Z, Qt.ControlModifier);
+        compare(point().gainDb, -9);
+    }
+    function test_gain_point_numeric_edit_refuses_invalid_time_without_leaving_a_gesture() {
+        const audio = testSession.visibleClipsUs(0, 100000000).find(row => !row.video && row.startUs === 0);
+        verify(testSession.inspectClip(audio.id));
+        verify(testSession.addGainKey(audio.id, 5000000));
+        const page = createTemporaryObject(pageComponent, tests);
+        page.toggleDetails();
+        const inspector = findChild(page, "editInspector");
+        const before = JSON.stringify(testSession.selectedClipDetails.gainKeys);
+        verify(!inspector.editGainPoint(audio.id, 5000000, -1000000, -9));
+        verify(!testSession.dragActive);
+        compare(JSON.stringify(testSession.selectedClipDetails.gainKeys), before);
     }
 }
