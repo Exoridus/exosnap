@@ -1,5 +1,11 @@
 set(_nvenc_header "${CMAKE_SOURCE_DIR}/third_party/nvidia/nvEncodeAPI.h")
 
+# Compile public encoder contracts without private or capability include paths.
+add_library(engine_public_header_check OBJECT tests/test_public_encoder_headers.cpp)
+target_compile_features(engine_public_header_check PRIVATE cxx_std_20)
+target_include_directories(engine_public_header_check PRIVATE include ${PROJECT_SOURCE_DIR}/libs/gamepad/include)
+target_link_libraries(engine_public_header_check PRIVATE exosnap::warnings)
+
 if(NOT EXISTS "${_nvenc_header}")
     message(STATUS "exosnap_engine: nvEncodeAPI.h not found at ${_nvenc_header}")
     message(STATUS "  Place nvEncodeAPI.h in third_party/nvidia/ to enable the full exosnap_engine build")
@@ -452,13 +458,8 @@ add_library(exosnap_engine STATIC
 
 target_include_directories(exosnap_engine
     PUBLIC  include
-            # Header-only: VideoEncoderFactory.h needs capability::AdapterVendor
-            # (adapter_enum.h, no compiled symbols). Include path only, deliberately
-            # NOT a target_link_libraries(exosnap_engine ... exosnap::capability) --
-            # exosnap_capability already links exosnap_engine PUBLICLY, so linking it
-            # back here would be a build-graph cycle.
-            "${CMAKE_SOURCE_DIR}/libs/capability/include"
     PRIVATE src
+            "${CMAKE_SOURCE_DIR}/libs/capability/include"
             "${CMAKE_SOURCE_DIR}/third_party/nvidia"
 )
 

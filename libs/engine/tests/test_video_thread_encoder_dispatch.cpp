@@ -10,7 +10,6 @@
 #include "fakes/fake_video_encoder.h"
 #include "session_internal.h"
 
-#include <capability/adapter_enum.h>
 #include <exosnap/engine/interfaces/VideoEncoderFactory.h>
 
 #include <memory>
@@ -19,7 +18,6 @@
 
 namespace {
 
-using exosnap::capability::AdapterVendor;
 using exosnap::engine::EncodedVideoPacket;
 using exosnap::engine::IVideoEncoder;
 using exosnap::engine::SessionState;
@@ -34,7 +32,7 @@ class FakeVideoEncoderFactory : public VideoEncoderFactory {
     explicit FakeVideoEncoderFactory(int32_t slot_count = 4) : slot_count_(slot_count) {
     }
 
-    [[nodiscard]] std::unique_ptr<IVideoEncoder> Create(AdapterVendor vendor,
+    [[nodiscard]] std::unique_ptr<IVideoEncoder> Create(uint32_t vendor,
                                                         const exosnap::engine::RecorderConfig& = {}) const override {
         (void)vendor;
         return std::make_unique<FakeVideoEncoder>(slot_count_);
@@ -49,7 +47,7 @@ class FakeVideoEncoderFactory : public VideoEncoderFactory {
 // without depending on the real factory's in-flight Nvidia branch.
 class NullVideoEncoderFactory : public VideoEncoderFactory {
   public:
-    [[nodiscard]] std::unique_ptr<IVideoEncoder> Create(AdapterVendor vendor,
+    [[nodiscard]] std::unique_ptr<IVideoEncoder> Create(uint32_t vendor,
                                                         const exosnap::engine::RecorderConfig& = {}) const override {
         (void)vendor;
         return nullptr;
@@ -223,7 +221,7 @@ TEST(FakeVideoEncoderTest, EncodeFrameFailsWhenForced_SetsOutErrorAndReturnsFals
     std::string err;
     EXPECT_FALSE(enc.EncodeFrame(slot, 0, 1280, 720, pkts, err));
     EXPECT_FALSE(err.empty());
-    EXPECT_TRUE(pkts.empty()) << "a failed EncodeFrame must not append a packet";
+    EXPECT_TRUE(pkts.empty()) << "without earlier completions, rejecting a frame produces no packet";
 }
 
 TEST(FakeVideoEncoderTest, EncodeFrameFailureIsMidRecording_EarlierFramesUnaffected) {
@@ -354,9 +352,8 @@ TEST(VideoEncoderFactoryDispatchTest, ActualAdapterDispatchNeverFallsBackToNvidi
 TEST(VideoEncoderFactoryDispatchTest, ActualAdapterDispatchUsesInjectedFactoryForEveryVendor) {
     class TrackingFactory final : public VideoEncoderFactory {
       public:
-        mutable AdapterVendor selected = AdapterVendor::Other;
-        std::unique_ptr<IVideoEncoder> Create(AdapterVendor vendor,
-                                              const exosnap::engine::RecorderConfig&) const override {
+        mutable uint32_t selected = 0;
+        std::unique_ptr<IVideoEncoder> Create(uint32_t vendor, const exosnap::engine::RecorderConfig&) const override {
             selected = vendor;
             return std::make_unique<FakeVideoEncoder>(3);
         }
@@ -364,7 +361,7 @@ TEST(VideoEncoderFactoryDispatchTest, ActualAdapterDispatchUsesInjectedFactoryFo
     std::string error;
     const auto encoder = factory.CreateForAdapter(0x8086u, {}, error);
     ASSERT_NE(encoder, nullptr);
-    EXPECT_EQ(factory.selected, AdapterVendor::Intel);
+    EXPECT_EQ(factory.selected, 0x8086u);
     EXPECT_EQ(encoder->SlotCount(), 3);
     EXPECT_TRUE(error.empty());
 }
@@ -375,20 +372,19 @@ TEST(VideoEncoderFactoryDispatchTest, GenericContractHasNoVendorPreset) {
 
 TEST(VideoEncoderFactoryDispatchTest, NvidiaConstructionDoesNotRequireOpeningHardware) {
     const VideoEncoderFactory factory;
-    EXPECT_NE(factory.Create(AdapterVendor::Nvidia), nullptr);
+    EXPECT_NE(factory.Create(0x10DEu), nullptr);
 }
 
 TEST(VideoEncoderFactoryDispatchTest, DefaultProductionFactory_NonNvidiaVendorsReturnNull) {
     const VideoEncoderFactory factory;
-    EXPECT_EQ(factory.Create(AdapterVendor::Amd), nullptr);
-    EXPECT_EQ(factory.Create(AdapterVendor::Intel), nullptr);
-    EXPECT_EQ(factory.Create(AdapterVendor::Other), nullptr);
+    EXPECT_EQ(factory.Create(0x1002u), nullptr);
+    EXPECT_EQ(factory.Create(0x8086u), nullptr);
+    EXPECT_EQ(factory.Create(0x1414u), nullptr);
 }
 
 TEST(VideoEncoderFactoryDispatchTest, SubclassFactory_ReturnsFakeEncoderRegardlessOfVendor) {
     const FakeVideoEncoderFactory factory;
-    for (const AdapterVendor vendor :
-         {AdapterVendor::Nvidia, AdapterVendor::Amd, AdapterVendor::Intel, AdapterVendor::Other}) {
+    for (const uint32_t vendor : {0x10DEu, 0x1002u, 0x8086u, 0x1414u}) {
         std::unique_ptr<IVideoEncoder> encoder = factory.Create(vendor);
         ASSERT_NE(encoder, nullptr) << "vendor index " << static_cast<int>(vendor);
         EXPECT_NE(dynamic_cast<FakeVideoEncoder*>(encoder.get()), nullptr)
@@ -398,7 +394,7 @@ TEST(VideoEncoderFactoryDispatchTest, SubclassFactory_ReturnsFakeEncoderRegardle
 
 TEST(VideoEncoderFactoryDispatchTest, NullFactory_CreateReturnsNullptr_FatalInitErrorPrecondition) {
     const NullVideoEncoderFactory factory;
-    EXPECT_EQ(factory.Create(AdapterVendor::Nvidia), nullptr);
+    EXPECT_EQ(factory.Create(0x10DEu), nullptr);
 }
 
 // ---------------------------------------------------------------------------
@@ -410,14 +406,14 @@ TEST(SessionStateEncoderSeamTest, DefaultsToARealNonNullFactory) {
     ASSERT_NE(state.video_encoder_factory, nullptr);
     // The default factory is the base VideoEncoderFactory (production
     // behavior); confirm it's reachable and callable through the field.
-    EXPECT_EQ(state.video_encoder_factory->Create(AdapterVendor::Amd), nullptr);
+    EXPECT_EQ(state.video_encoder_factory->Create(0x1002u), nullptr);
 }
 
 TEST(SessionStateEncoderSeamTest, FactoryIsReplaceable_AndDispatchesThroughTheSeam) {
     SessionState state;
     state.video_encoder_factory = std::make_shared<FakeVideoEncoderFactory>(/*slot_count=*/6);
 
-    std::unique_ptr<IVideoEncoder> encoder = state.video_encoder_factory->Create(AdapterVendor::Nvidia);
+    std::unique_ptr<IVideoEncoder> encoder = state.video_encoder_factory->Create(0x10DEu);
     ASSERT_NE(encoder, nullptr);
     auto* fake = dynamic_cast<FakeVideoEncoder*>(encoder.get());
     ASSERT_NE(fake, nullptr) << "SessionState must hand back exactly the injected factory's product";
@@ -431,7 +427,7 @@ TEST(BackendTuning, NvencPresetIsAppliedOnlyByTheConcreteFactory) {
     for (int i = 0; i < 7; ++i) {
         exosnap::engine::RecorderConfig config;
         config.backend_tuning = exosnap::engine::NvencTuning{static_cast<exosnap::engine::NvencPreset>(i)};
-        const auto encoder = factory.Create(exosnap::capability::AdapterVendor::Nvidia, config);
+        const auto encoder = factory.Create(0x10DEu, config);
         ASSERT_NE(encoder, nullptr);
         EXPECT_EQ(encoder->GetInitInfo().backend_id, "nvenc");
         EXPECT_EQ(encoder->GetInitInfo().backend_preset, "P" + std::to_string(i + 1));
