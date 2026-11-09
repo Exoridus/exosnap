@@ -19,6 +19,18 @@ Menu {
     // which puts it outside `--visual-test`'s window grab and outside the frame
     // at the 860 px minimum window.
     popupType: Popup.Item
+    // Shown beside this menu's title when it is a submenu of another ExoMenu.
+    property string valueText
+    delegate: ExoMenuItem {}
+    // The Basic menu sizes itself from its background alone, so a row with a
+    // label and a value would be elided. Fit the widest row on every opening:
+    // rows and values change while the menu is closed.
+    onAboutToShow: {
+        let widest = 0;
+        for (let index = 0; index < root.count; ++index)
+            widest = Math.max(widest, root.itemAt(index)?.implicitWidth ?? 0);
+        root.contentWidth = widest;
+    }
     padding: ExoTheme.spacingXs
     // Popups have no ambient light in this design language; the border does the
     // separating, the same way cards do.

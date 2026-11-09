@@ -80,7 +80,7 @@ VisualSourceType MakeGamepadVisualSourceType(SourceFactory factory, CachedVisual
     type.id = "org.exosnap.gamepad/controller";
     type.label = {"VisualSources", QT_TRANSLATE_NOOP("VisualSources", "Gamepad")};
     type.settings.fields = {{.path = "device",
-                             .label = {"VisualSources", QT_TRANSLATE_NOOP("VisualSources", "Device")},
+                             .label = {"VisualSources", QT_TRANSLATE_NOOP("VisualSources", "Input device")},
                              .control = ControlKind::Select,
                              .default_value = std::string{},
                              .options_id = "devices"},
@@ -100,7 +100,8 @@ VisualSourceType MakeGamepadVisualSourceType(SourceFactory factory, CachedVisual
          {"VisualSources", QT_TRANSLATE_NOOP("VisualSources", "Select device")},
          ActionOperation::SelectProperty,
          "device",
-         "devices"},
+         "devices",
+         true},
         {"select-layout",
          {"VisualSources", QT_TRANSLATE_NOOP("VisualSources", "Select layout")},
          ActionOperation::SelectProperty,
@@ -133,7 +134,8 @@ VisualSourceType MakeWebcamVisualSourceType(SourceFactory factory, CachedVisualO
          {"VisualSources", QT_TRANSLATE_NOOP("VisualSources", "Select device")},
          ActionOperation::SelectProperty,
          "device_id",
-         "devices"},
+         "devices",
+         true},
         {"details",
          {"VisualSources", QT_TRANSLATE_NOOP("VisualSources", "Details")},
          ActionOperation::OpenDetails,

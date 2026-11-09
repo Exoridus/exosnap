@@ -450,8 +450,20 @@ class SettingsAdapter : public QObject {
     QString recordGamepadSourceId() const {
         return QString::fromStdString(engine::ToUuid(record_gamepad_address_.source));
     }
+    Q_PROPERTY(QString recordWebcamSourceId READ recordWebcamSourceId NOTIFY configChanged FINAL)
+    QString recordWebcamSourceId() const {
+        return QString::fromStdString(engine::ToUuid(record_webcam_address_.source));
+    }
     void setRecordGamepadTarget(engine::VisualAddress address, engine::SceneItemId item);
+    void setRecordWebcamTarget(engine::VisualAddress address, engine::SceneItemId item);
     void setRecordVisualEditingAllowed(bool allowed);
+    // Source-provided entries of the Record context menu for one scene item, in registration order. Selections carry
+    // a bounded choice list and the current value's label. Empty when the item is not the current Record target.
+    Q_INVOKABLE QVariantList sceneItemMenuEntries(const QString& source, const QString& item) const;
+    // Host node operation on a Record scene item: "front", "back", "hide", "show" or "remove". Rejected when the
+    // item, runtime generation or edit token is stale, or Record editing is locked.
+    Q_INVOKABLE bool applySceneItemCommand(const QString& source, const QString& item, const QString& runtime,
+                                           const QString& edit_revision, const QString& command);
     Q_INVOKABLE bool setRecordGamepadOutputVisible(const QString& source, const QString& item, const QString& token,
                                                    bool visible);
     Q_INVOKABLE bool setRecordGamepadPlacement(const QString& source, const QString& item, const QString& token,
@@ -1036,8 +1048,12 @@ class SettingsAdapter : public QObject {
         return record ? QStringLiteral("record:") + QString::number(record_edit_revision_)
                       : QString::number(visual_edit_revision_);
     }
-    engine::VisualAddress record_gamepad_address_;
-    engine::SceneItemId record_gamepad_item_;
+    engine::VisualAddress record_gamepad_address_, record_webcam_address_;
+    engine::SceneItemId record_gamepad_item_, record_webcam_item_;
+    [[nodiscard]] std::pair<engine::VisualAddress, engine::SceneItemId> visualTarget(engine::VisualSourceId source,
+                                                                                     bool record) const;
+    [[nodiscard]] std::optional<VisualSceneConfig> restoreVisualItem(const QString& source,
+                                                                     const QString& edit_revision, bool record) const;
     bool record_visual_editing_allowed_ = false;
     uint64_t record_edit_revision_ = 1;
     void advanceRecordEditRevision() noexcept {

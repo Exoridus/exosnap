@@ -199,7 +199,13 @@ VisualPilotTarget(const VisualSceneConfig& scene, std::string_view type_id, cons
                 first = target;
         }
     }
-    return first;
+    if (first.first != engine::VisualSourceId{})
+        return first;
+    // A source whose last item was removed stays addressable without an item, so enabling it again restores one.
+    const auto orphan = std::ranges::find_if(scene.sources, [&](const auto& candidate) {
+        return candidate.type_id == type_id && candidate.settings_version == type->settings_version;
+    });
+    return orphan == scene.sources.end() ? first : std::pair{orphan->id, engine::SceneItemId{}};
 }
 
 ChoiceSnapshot RetainVisualChoice(ChoiceSnapshot choices, const std::string& selected) {
@@ -3789,6 +3795,14 @@ void QuickApplication::bindVisualSettingsTargets() {
             record_address = *current;
     }
     settings_adapter_.setRecordGamepadTarget(record_address, record_gamepad.second);
+    const auto record_camera = VisualPilotTarget(record_config.visual_scene, "org.exosnap.webcam/camera",
+                                                 visual_registry_, {visual_camera_source_, visual_camera_item_});
+    engine::VisualAddress record_camera_address{record_camera.first, {}};
+    if (visual_sources_) {
+        if (const auto current = visual_sources_->CurrentAddress(record_camera.first))
+            record_camera_address = *current;
+    }
+    settings_adapter_.setRecordWebcamTarget(record_camera_address, record_camera.second);
     const auto& scene = settings_adapter_.displayedConfig().visual_scene;
     const auto camera = VisualPilotTarget(scene, "org.exosnap.webcam/camera", visual_registry_,
                                           {settings_camera_target_.source, settings_camera_item_});

@@ -155,6 +155,7 @@ qt_add_qml_module(exosnap
         ExoLogView.qml
         ExoMenu.qml
         ExoMenuItem.qml
+        SceneItemContextMenu.qml
         ExoNavTab.qml
         ExoInfoButton.qml
         ExoNotice.qml
@@ -1610,6 +1611,7 @@ qt_add_qml_module(record_source_picker_qml_tests
         ExoGlyph.qml
         ExoMenu.qml
         ExoMenuItem.qml
+        SceneItemContextMenu.qml
         ExoScrollBar.qml
         ExoSearchField.qml
         ExoSegmentedControl.qml
