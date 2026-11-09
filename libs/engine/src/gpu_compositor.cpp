@@ -107,7 +107,8 @@ bool CompileWebcamShader(ID3D11Device* device, const char* body, const char* nam
 } // namespace
 
 bool GpuCompositor::Init(ID3D11Device* device, ID3D11DeviceContext* context, UINT width, UINT height, std::string& err,
-                         DXGI_FORMAT render_format, float overlay_reference_white_nits) {
+                         DXGI_FORMAT render_format, float overlay_reference_white_nits, UINT logical_width,
+                         UINT logical_height) {
     if (device == nullptr || context == nullptr || width == 0 || height == 0) {
         err = "GpuCompositor::Init invalid arguments";
         return false;
@@ -118,6 +119,16 @@ bool GpuCompositor::Init(ID3D11Device* device, ID3D11DeviceContext* context, UIN
         return false;
     }
 
+    logical_width = logical_width == 0 ? width : logical_width;
+    logical_height = logical_height == 0 ? height : logical_height;
+    if (logical_width < width || logical_height < height ||
+        uint64_t{logical_width} * height != uint64_t{logical_height} * width ||
+        ((logical_width != width || logical_height != height) && render_format != DXGI_FORMAT_B8G8R8A8_UNORM)) {
+        err = "GpuCompositor::Init unsupported logical geometry";
+        return false;
+    }
+    logical_width_ = logical_width;
+    logical_height_ = logical_height;
     device_ = device;
     context_ = context;
     width_ = width;
@@ -127,6 +138,9 @@ bool GpuCompositor::Init(ID3D11Device* device, ID3D11DeviceContext* context, UIN
     // so overlay sprites are composited in linear light (see the pixel shader).
     hdr_linear_ = (render_format == DXGI_FORMAT_R16G16B16A16_FLOAT);
     overlay_ref_white_nits_ = EffectiveOverlayReferenceWhiteNits(overlay_reference_white_nits);
+    char setting[2]{};
+    stage_a_cache_enabled_ =
+        GetEnvironmentVariableA("EXOSNAP_STAGE_A_CACHE", setting, sizeof(setting)) == 1 && setting[0] == '1';
 
     winrt::com_ptr<ID3DBlob> vs_blob;
     winrt::com_ptr<ID3DBlob> ps_blob;
@@ -251,6 +265,9 @@ bool GpuCompositor::Init(ID3D11Device* device, ID3D11DeviceContext* context, UIN
         return false;
     }
 
+    if ((logical_width_ != width_ || logical_height_ != height_) &&
+        !EnsureTexture(background_tex_, logical_width_, logical_height_, render_format_, false, err))
+        return false;
     return true;
 }
 
@@ -258,6 +275,16 @@ void GpuCompositor::SetOverlayReferenceWhiteNits(float overlay_reference_white_n
     // Read per DrawTexture into the sprite's constants, so there is nothing to
     // rewrite here -- the next draw picks this up.
     overlay_ref_white_nits_ = EffectiveOverlayReferenceWhiteNits(overlay_reference_white_nits);
+}
+
+bool GpuCompositor::TransferVisualCachesFrom(GpuCompositor& source) noexcept {
+    if (&source == this || device_ == nullptr || device_ != source.device_ || context_ != source.context_ ||
+        render_format_ != source.render_format_ || logical_width_ != source.logical_width_ ||
+        logical_height_ != source.logical_height_ || !visual_images_.empty() || !sprite_atlases_.empty())
+        return false;
+    visual_images_ = std::move(source.visual_images_);
+    sprite_atlases_ = std::move(source.sprite_atlases_);
+    return true;
 }
 
 bool GpuCompositor::BeginFrame(ID3D11Texture2D* background, std::string& err) {
@@ -268,11 +295,17 @@ bool GpuCompositor::BeginFrame(ID3D11Texture2D* background, std::string& err) {
 
     D3D11_TEXTURE2D_DESC desc{};
     background->GetDesc(&desc);
-    if (desc.Width != width_ || desc.Height != height_ || desc.Format != render_format_) {
+    if (desc.Width != logical_width_ || desc.Height != logical_height_ || desc.Format != render_format_) {
         err = "GpuCompositor::BeginFrame background dimensions/format mismatch";
         return false;
     }
 
+    if (logical_width_ != width_ || logical_height_ != height_) {
+        context_->CopyResource(background_tex_.texture.get(), background);
+        return DrawTexture(background_tex_.srv.get(),
+                           {0, 0, static_cast<int>(logical_width_), static_cast<int>(logical_height_)}, false, {}, true,
+                           1.0f, err);
+    }
     context_->CopyResource(composite_tex_.get(), background);
     return true;
 }
@@ -553,6 +586,7 @@ bool GpuCompositor::DrawSpriteLayer(size_t layer_index, const SpriteLayerSnapsho
     }
 
     const ChromaKeyParams no_key;
+    bool pipeline_ready = false;
     for (const SpriteQuad& quad : layer.quads) {
         const SpriteDraw draw =
             MapSpriteQuad(quad, atlas->width, atlas->height, content.x, content.y, content.w, content.h);
@@ -581,9 +615,10 @@ bool GpuCompositor::DrawSpriteLayer(size_t layer_index, const SpriteLayerSnapsho
                 masks[index] = candidate;
         }
         if (!DrawTexture(cached.texture.srv.get(), draw.destination, false, no_key, false, draw.opacity, err, nullptr,
-                         uv_rect, &masks)) {
+                         uv_rect, &masks, pipeline_ready)) {
             return false;
         }
+        pipeline_ready = stage_a_cache_enabled_;
         ++sprite_quad_draw_count_;
     }
     return true;
@@ -607,13 +642,13 @@ bool GpuCompositor::UploadTexture(TextureResource& resource, const uint8_t* bgra
 bool GpuCompositor::DrawTexture(ID3D11ShaderResourceView* srv, const WebcamPixelRect& rect, bool mirror,
                                 const ChromaKeyParams& chroma, bool force_opaque, float opacity, std::string& err,
                                 ID3D11BlendState* blend, const float* uv_rect,
-                                const std::array<OverlayMaskConstants, 2>* masks) {
+                                const std::array<OverlayMaskConstants, 2>* masks, bool pipeline_ready) {
     if (srv == nullptr || context_ == nullptr || composite_rtv_ == nullptr || !rect.IsValid()) {
         err = "GpuCompositor::DrawTexture invalid arguments";
         return false;
     }
-    if (rect.x < 0 || rect.y < 0 || rect.x + rect.w > static_cast<int>(width_) ||
-        rect.y + rect.h > static_cast<int>(height_)) {
+    if (rect.x < 0 || rect.y < 0 || rect.x + rect.w > static_cast<int>(logical_width_) ||
+        rect.y + rect.h > static_cast<int>(logical_height_)) {
         err = "GpuCompositor::DrawTexture rect outside target";
         return false;
     }
@@ -628,13 +663,27 @@ bool GpuCompositor::DrawTexture(ID3D11ShaderResourceView* srv, const WebcamPixel
         std::memcpy(pc.uv_rect, uv_rect, sizeof(pc.uv_rect));
     if (masks != nullptr)
         pc.masks = *masks;
-    context_->UpdateSubresource(constants_.get(), 0, nullptr, &pc, 0, 0);
 
     D3D11_VIEWPORT viewport{};
     viewport.TopLeftX = static_cast<float>(rect.x);
     viewport.TopLeftY = static_cast<float>(rect.y);
     viewport.Width = static_cast<float>(rect.w);
     viewport.Height = static_cast<float>(rect.h);
+    if (logical_width_ != width_ || logical_height_ != height_) {
+        const float x_scale = static_cast<float>(width_) / logical_width_;
+        const float y_scale = static_cast<float>(height_) / logical_height_;
+        viewport.TopLeftX *= x_scale;
+        viewport.TopLeftY *= y_scale;
+        viewport.Width *= x_scale;
+        viewport.Height *= y_scale;
+        for (auto& mask : pc.masks) {
+            mask.destination[0] *= x_scale;
+            mask.destination[1] *= y_scale;
+            mask.destination[2] *= x_scale;
+            mask.destination[3] *= y_scale;
+        }
+    }
+    context_->UpdateSubresource(constants_.get(), 0, nullptr, &pc, 0, 0);
     viewport.MinDepth = 0.0f;
     viewport.MaxDepth = 1.0f;
 
@@ -643,13 +692,20 @@ bool GpuCompositor::DrawTexture(ID3D11ShaderResourceView* srv, const WebcamPixel
     context_->OMSetRenderTargets(1, &rtv, nullptr);
     context_->OMSetBlendState(blend == nullptr ? blend_state_.get() : blend, blend_factor, 0xffffffff);
     context_->RSSetViewports(1, &viewport);
-    context_->IASetPrimitiveTopology(D3D11_PRIMITIVE_TOPOLOGY_TRIANGLELIST);
-    context_->VSSetShader(vertex_shader_.get(), nullptr, 0);
-    context_->PSSetShader(pixel_shader_.get(), nullptr, 0);
-    ID3D11SamplerState* sampler = sampler_.get();
-    ID3D11Buffer* constants = constants_.get();
-    context_->PSSetSamplers(0, 1, &sampler);
-    context_->PSSetConstantBuffers(0, 1, &constants);
+    // Reuse is confined to one sprite loop; callers may change the shared
+    // immediate context between any two public compositor calls.
+    if (!pipeline_ready) {
+        ++pipeline_bind_count_;
+        context_->IASetPrimitiveTopology(D3D11_PRIMITIVE_TOPOLOGY_TRIANGLELIST);
+        context_->VSSetShader(vertex_shader_.get(), nullptr, 0);
+        context_->PSSetShader(pixel_shader_.get(), nullptr, 0);
+        ID3D11SamplerState* sampler = sampler_.get();
+        ID3D11Buffer* constants = constants_.get();
+        context_->PSSetSamplers(0, 1, &sampler);
+        context_->PSSetConstantBuffers(0, 1, &constants);
+    } else {
+        ++pipeline_reuse_count_;
+    }
     context_->PSSetShaderResources(0, 1, &srv);
     context_->Draw(3, 0);
 

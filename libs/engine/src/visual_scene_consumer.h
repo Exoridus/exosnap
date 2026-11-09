@@ -61,6 +61,12 @@ class VisualSceneConsumer final {
     [[nodiscard]] std::span<const VisualAddress> ImageSources() const noexcept;
     [[nodiscard]] size_t ItemCount() const noexcept;
     [[nodiscard]] bool HasItems(VisualCompositionMode) const noexcept;
+    [[nodiscard]] uint64_t PlanRebuildCount() const noexcept {
+        return plan_rebuild_count_;
+    }
+    [[nodiscard]] uint64_t PlanReuseCount() const noexcept {
+        return plan_reuse_count_;
+    }
     // Returned views are valid only through Frame destruction, which releases CPU
     // pins without reclaiming payloads. The consumer must outlive its Frame.
     [[nodiscard]] Frame Sample(CaptureTime100ns, const WebcamPixelRect&, VisualCompositionMode) noexcept;
@@ -69,7 +75,13 @@ class VisualSceneConsumer final {
   private:
     struct BindingState;
     struct ItemState;
+    struct BindingKey {
+        SourceToken token;
+        uint64_t resource_id = 0;
+        size_t kind = 0;
+    };
     explicit VisualSceneConsumer(std::shared_ptr<VisualSceneRuntime>);
+    [[nodiscard]] bool CanReusePlan() const noexcept;
     void ReleaseFrame() noexcept;
     void ReleaseItems() noexcept;
 
@@ -80,6 +92,10 @@ class VisualSceneConsumer final {
     std::vector<ItemState> items_;
     std::vector<VisualSceneItemFrame> frame_items_;
     std::vector<VisualAddress> image_sources_;
+    std::vector<BindingKey> plan_bindings_;
+    bool plan_cache_enabled_ = false;
+    uint64_t plan_rebuild_count_ = 0;
+    uint64_t plan_reuse_count_ = 0;
     uint64_t prepared_sequence_ = 0;
     bool frame_active_ = false;
     bool scene_changed_ = false;

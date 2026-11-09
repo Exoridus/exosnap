@@ -32,7 +32,7 @@ class GpuCompositor {
     using ChromaKeyParams = exosnap::engine::ChromaKeyParams;
 
     // render_format: format of the composite render target. Must match the
-    // capture source's frame format (BeginFrame copies the background via
+    // capture source's frame format (the normal path copies the background via
     // CopyResource, which requires identical formats). BGRA8 for WGC and
     // 8-bit SDR OD capture; R8G8B8A8 for a preview source already in Qt's
     // texture layout; R10G10B10A2 for a 10 bpc SDR desktop;
@@ -43,9 +43,12 @@ class GpuCompositor {
     // stay BGRA8 regardless.
     // overlay_reference_white_nits: the linear-light level SDR overlay sprites
     // are scaled to on the FP16 native-HDR path (ignored for SDR formats).
+    // Explicit logical dimensions permit same-aspect BGRA8 downsampling while
+    // retaining source-pixel overlay coordinates. Zero uses the target dimensions.
     bool Init(ID3D11Device* device, ID3D11DeviceContext* context, UINT width, UINT height, std::string& err,
               DXGI_FORMAT render_format = DXGI_FORMAT_B8G8R8A8_UNORM,
-              float overlay_reference_white_nits = kDefaultSdrWhiteLevelNits);
+              float overlay_reference_white_nits = kDefaultSdrWhiteLevelNits, UINT logical_width = 0,
+              UINT logical_height = 0);
     // Replace the overlay reference white on an initialised compositor, with the
     // same bounds Init applies (EffectiveOverlayReferenceWhiteNits) and the same
     // FP16-only meaning.
@@ -55,6 +58,10 @@ class GpuCompositor {
     // at the new level. An overlay left at the old one is the only thing in the
     // frame that did not move with it.
     void SetOverlayReferenceWhiteNits(float overlay_reference_white_nits) noexcept;
+
+    // Maintenance only, with no active scene frame. Preserves accepted image identities
+    // when changing target resolution on the same device and logical scene geometry.
+    bool TransferVisualCachesFrom(GpuCompositor& source) noexcept;
 
     bool BeginFrame(ID3D11Texture2D* background, std::string& err);
 
@@ -122,6 +129,13 @@ class GpuCompositor {
         return sprite_quad_draw_count_;
     }
 
+    [[nodiscard]] uint64_t PipelineBindCount() const noexcept {
+        return pipeline_bind_count_;
+    }
+    [[nodiscard]] uint64_t PipelineReuseCount() const noexcept {
+        return pipeline_reuse_count_;
+    }
+
   private:
     struct TextureResource {
         winrt::com_ptr<ID3D11Texture2D> texture;
@@ -142,12 +156,15 @@ class GpuCompositor {
     bool DrawTexture(ID3D11ShaderResourceView* srv, const WebcamPixelRect& rect, bool mirror,
                      const ChromaKeyParams& chroma, bool force_opaque, float opacity, std::string& err,
                      ID3D11BlendState* blend = nullptr, const float* uv_rect = nullptr,
-                     const std::array<OverlayMaskConstants, 2>* masks = nullptr);
+                     const std::array<OverlayMaskConstants, 2>* masks = nullptr, bool pipeline_ready = false);
 
     ID3D11Device* device_ = nullptr;
     ID3D11DeviceContext* context_ = nullptr;
     UINT width_ = 0;
     UINT height_ = 0;
+    UINT logical_width_ = 0;
+    UINT logical_height_ = 0;
+    TextureResource background_tex_;
     DXGI_FORMAT render_format_ = DXGI_FORMAT_B8G8R8A8_UNORM;
     bool hdr_linear_ = false; // true for the FP16 native-HDR path (linear-light compositing)
     float overlay_ref_white_nits_ = kDefaultSdrWhiteLevelNits;
@@ -192,6 +209,9 @@ class GpuCompositor {
     std::vector<SpriteAtlasTexture> sprite_atlases_;
     uint64_t sprite_atlas_upload_count_ = 0;
     uint64_t sprite_quad_draw_count_ = 0;
+    uint64_t pipeline_bind_count_ = 0;
+    uint64_t pipeline_reuse_count_ = 0;
+    bool stage_a_cache_enabled_ = false;
 };
 
 } // namespace exosnap::engine

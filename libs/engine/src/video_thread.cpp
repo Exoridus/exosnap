@@ -37,6 +37,7 @@
 #include <exosnap/engine/display_color_watch.h>
 #include <exosnap/engine/dxgi_od_capture_src.h>
 #include <exosnap/engine/gpu_compositor.h>
+#include <exosnap/engine/render_demand.h>
 #include <exosnap/engine/visual_frame.h>
 #include <exosnap/engine/visual_scene.h>
 
@@ -2009,10 +2010,32 @@ void VideoThread::RunAttachment(const std::shared_ptr<NativeState>& native, cons
     const uint32_t compositorHeight = sourceHeight;
 
     GpuCompositor gpuCompositor;
+    std::unique_ptr<GpuCompositor> reducedCompositor;
+    GpuCompositor* activeGpuCompositor = &gpuCompositor;
     bool gpuCompositorReady = false;
     std::unique_ptr<VisualSceneConsumer> visualConsumer;
     bool visualCachesPending = false;
+    auto previewAllowsReduced = [&]() {
+        if (!m_state.preview_shared_handle_cb)
+            return true;
+        const auto demand = visualRuntime ? visualRuntime->PreviewPixelDemand() : std::nullopt;
+        return demand && demand->width <= encodeWidth && demand->height <= encodeHeight;
+    };
     auto maintainVisualScene = [&]() -> bool {
+        if (reducedCompositor && activeGpuCompositor == reducedCompositor.get() && !previewAllowsReduced()) {
+            // Promote once per session before sampling; later shrinking is deferred
+            // to avoid resize oscillation and repeated GPU resource replacement.
+            if (!gpuCompositor.TransferVisualCachesFrom(*reducedCompositor)) {
+                m_state.RecordFailure(E_FAIL, ErrorPhase::VideoCapture, "Composition demand cache transfer failed");
+                return false;
+            }
+            activeGpuCompositor = &gpuCompositor;
+            ++visualGenerations.overlay;
+            const logging::LogField fields[] = {{"width", std::to_string(sourceWidth)},
+                                                {"height", std::to_string(sourceHeight)}};
+            logging::log(logging::LogLevel::Info, "video_thread", "Preview demand promoted composition to source size",
+                         fields);
+        }
         if (!visualRuntime)
             return true;
         if (!visualConsumer) {
@@ -2036,8 +2059,8 @@ void VideoThread::RunAttachment(const std::shared_ptr<NativeState>& native, cons
         }
         if (gpuCompositorReady && visualCachesPending) {
             std::string error;
-            if (!gpuCompositor.PrepareVisualImages(visualConsumer->ImageSources(), error) ||
-                !gpuCompositor.PrepareVisualSprites(visualConsumer->ItemCount(), error)) {
+            if (!activeGpuCompositor->PrepareVisualImages(visualConsumer->ImageSources(), error) ||
+                !activeGpuCompositor->PrepareVisualSprites(visualConsumer->ItemCount(), error)) {
                 m_state.RecordFailure(E_FAIL, ErrorPhase::VideoCapture, "GPU visual preparation: " + error);
                 return false;
             }
@@ -2087,11 +2110,10 @@ void VideoThread::RunAttachment(const std::shared_ptr<NativeState>& native, cons
         for (const auto& view : frame.Items()) {
             std::string error;
             const bool drawn =
-                view.sprites
-                    ? gpuCompositor.DrawVisualSprite(index, view.token, view.resource_id, *view.sprites,
-                                                     sourceContentRect(), error)
-                    : !view.cache_valid ||
-                          gpuCompositor.DrawVisualImage(view.token, view.resource_id, view.image_sequence, view.image,
+                view.sprites ? activeGpuCompositor->DrawVisualSprite(index, view.token, view.resource_id, *view.sprites,
+                                                                     sourceContentRect(), error)
+                             : !view.cache_valid || activeGpuCompositor->DrawVisualImage(
+                                                        view.token, view.resource_id, view.image_sequence, view.image,
                                                         view.image_rect, view.item->properties.placement.mirror,
                                                         view.item->chroma_key, error, view.image_opacity);
             if (!drawn) {
@@ -2208,7 +2230,7 @@ void VideoThread::RunAttachment(const std::shared_ptr<NativeState>& native, cons
         rect.h = clip.h;
 
         std::string compErr;
-        if (!gpuCompositor.DrawCursor(odCursorUploadBgra.data(), clip.w, clip.h, rect, compErr)) {
+        if (!activeGpuCompositor->DrawCursor(odCursorUploadBgra.data(), clip.w, clip.h, rect, compErr)) {
             m_state.RecordFailure(E_FAIL, ErrorPhase::VideoCapture, "GPU cursor composite: " + compErr);
             return false;
         }
@@ -2339,7 +2361,7 @@ void VideoThread::RunAttachment(const std::shared_ptr<NativeState>& native, cons
         rect.h = clip.h;
 
         std::string compErr;
-        if (!gpuCompositor.DrawCursor(wgcCursorUploadBgra.data(), clip.w, clip.h, rect, compErr)) {
+        if (!activeGpuCompositor->DrawCursor(wgcCursorUploadBgra.data(), clip.w, clip.h, rect, compErr)) {
             ++wgcCursorTrace.draw_failed;
             m_state.RecordFailure(E_FAIL, ErrorPhase::VideoCapture, "GPU WGC cursor composite: " + compErr);
             return false;
@@ -2358,7 +2380,8 @@ void VideoThread::RunAttachment(const std::shared_ptr<NativeState>& native, cons
                 uint8_t* dstRow = wgcCursorInvertUploadBgra.data() + static_cast<size_t>(row) * clip.w * 4u;
                 std::memcpy(dstRow, srcRow, static_cast<size_t>(clip.w) * 4u);
             }
-            if (!gpuCompositor.DrawCursorInvert(wgcCursorInvertUploadBgra.data(), clip.w, clip.h, rect, compErr)) {
+            if (!activeGpuCompositor->DrawCursorInvert(wgcCursorInvertUploadBgra.data(), clip.w, clip.h, rect,
+                                                       compErr)) {
                 ++wgcCursorTrace.draw_failed;
                 m_state.RecordFailure(E_FAIL, ErrorPhase::VideoCapture, "GPU WGC cursor invert composite: " + compErr);
                 return false;
@@ -2462,7 +2485,7 @@ void VideoThread::RunAttachment(const std::shared_ptr<NativeState>& native, cons
         const bool cursorActive =
             m_state.config.capture_cursor && (!useOdCapture || (odCursorVisible && odCursorShapeValid));
         const bool drawOverlays = gpuCompositorReady && (cursorActive || !frame.Items().empty());
-        if (!linearizePq && !drawOverlays) {
+        if (!linearizePq && !drawOverlays && activeGpuCompositor != reducedCompositor.get()) {
             noteVisualSceneComposited(frame);
             return source;
         }
@@ -2486,12 +2509,12 @@ void VideoThread::RunAttachment(const std::shared_ptr<NativeState>& native, cons
             }
             source = hdrLinearTex.get();
         }
-        if (!drawOverlays) {
+        if (!drawOverlays && activeGpuCompositor != reducedCompositor.get()) {
             noteVisualSceneComposited(frame);
             endCompositeTimer();
             return source;
         }
-        if (!gpuCompositor.BeginFrame(source, compErr)) {
+        if (!activeGpuCompositor->BeginFrame(source, compErr)) {
             endCompositeTimer();
             m_state.RecordFailure(E_FAIL, ErrorPhase::VideoCapture, "GPU compositor begin: " + compErr);
             return nullptr;
@@ -2512,7 +2535,7 @@ void VideoThread::RunAttachment(const std::shared_ptr<NativeState>& native, cons
         }
         noteVisualSceneComposited(frame);
         endCompositeTimer();
-        return gpuCompositor.Result();
+        return activeGpuCompositor->Result();
     };
 
     // --- WGC frame pool and session ---
@@ -3245,8 +3268,8 @@ void VideoThread::RunAttachment(const std::shared_ptr<NativeState>& native, cons
                                   (useOdCapture ? odSrc.DisplayFacts() : wgcHdrFacts).sdr_white_level_nits)
                             : kDefaultSdrWhiteLevelNits;
         std::string compErr;
-        if (!gpuCompositor.Init(d3dDevice.get(), d3dContext.get(), compositorWidth, compositorHeight, compErr,
-                                compositorFormat, overlayRefWhiteNits)) {
+        if (!activeGpuCompositor->Init(d3dDevice.get(), d3dContext.get(), compositorWidth, compositorHeight, compErr,
+                                       compositorFormat, overlayRefWhiteNits)) {
             m_state.RecordFailure(E_FAIL, ErrorPhase::Prepare, "GPU compositor init: " + compErr);
             if (!useOdCapture) {
                 if (captureSession != nullptr)
@@ -3255,6 +3278,49 @@ void VideoThread::RunAttachment(const std::shared_ptr<NativeState>& native, cons
                     framePool.Close();
             }
             return;
+        }
+        char demandGate[2]{};
+        const bool demandEnabled =
+            GetEnvironmentVariableA("EXOSNAP_DEMAND_COMPOSITION", demandGate, 2) == 1 && demandGate[0] == '1';
+        RenderDemand recordingDemand{1,
+                                     1,
+                                     visualRuntime ? visualRuntime->PublishedSceneSequence() : 0,
+                                     {encodeWidth, encodeHeight},
+                                     m_state.config.frame_rate_num};
+        recordingDemand.cadence_denominator = m_state.config.frame_rate_den;
+        const auto demandPlan = ResolveCompositionDemand(
+            {sourceWidth, sourceHeight}, std::span(&recordingDemand, 1),
+            demandEnabled && !hasCrop && !m_state.config.capture_cursor && !chroma444 && !tenBit && !hdrNativeActive &&
+                !hdrToneMapActive && previewAllowsReduced() && compositorFormat == DXGI_FORMAT_B8G8R8A8_UNORM);
+        if (demandEnabled) {
+            const logging::LogField fields[] = {
+                {"source_width", std::to_string(sourceWidth)},
+                {"source_height", std::to_string(sourceHeight)},
+                {"composition_width", std::to_string(demandPlan.pixels.width)},
+                {"composition_height", std::to_string(demandPlan.pixels.height)},
+                {"output_width", std::to_string(encodeWidth)},
+                {"output_height", std::to_string(encodeHeight)},
+                {"reason", demandPlan.reduced                                           ? "compatible-sdr-demand"
+                           : hasCrop                                                    ? "crop"
+                           : m_state.config.capture_cursor                              ? "cursor"
+                           : chroma444 || tenBit || hdrNativeActive || hdrToneMapActive ? "color-representation"
+                           : !previewAllowsReduced()                                    ? "preview-demand"
+                           : compositorFormat != DXGI_FORMAT_B8G8R8A8_UNORM             ? "capture-format"
+                                                                                        : "aspect-or-no-reduction"}};
+            logging::log(logging::LogLevel::Info, "video_thread", "Experimental composition demand resolved", fields);
+        }
+        if (demandPlan.reduced) {
+            auto candidate = std::make_unique<GpuCompositor>();
+            if (candidate->Init(d3dDevice.get(), d3dContext.get(), demandPlan.pixels.width, demandPlan.pixels.height,
+                                compErr, compositorFormat, overlayRefWhiteNits, sourceWidth, sourceHeight)) {
+                reducedCompositor = std::move(candidate);
+                activeGpuCompositor = reducedCompositor.get();
+                logging::log(logging::LogLevel::Info, "video_thread",
+                             "Experimental output-size SDR composition active");
+            } else {
+                logging::log(logging::LogLevel::Warn, "video_thread",
+                             "Demand composition initialization failed; retaining source-size composition: " + compErr);
+            }
         }
         gpuCompositorReady = true;
     }
@@ -3777,7 +3843,7 @@ void VideoThread::RunAttachment(const std::shared_ptr<NativeState>& native, cons
     //
     // Native capture reaches this tap as linear FP16, including PQ desktops.
     PreviewTapPlan previewTapPlan = ResolvePreviewTapPlan(hdrNativeActive, hdrPeakScale, hdrPaperWhiteScale);
-    PreviewSharedTexture previewSharedTex;
+    auto previewSharedTex = std::make_unique<PreviewSharedTexture>();
     bool previewSharedInitFailed = false;
     bool previewTransportPoisoned = false;
     PreviewPublishGate previewGate(kPreviewMinIntervalNs);
@@ -3810,7 +3876,7 @@ void VideoThread::RunAttachment(const std::shared_ptr<NativeState>& native, cons
             hdrToneMapper.SetDisplayScales(state.tone_map_peak_scale, state.paper_white_scale);
         }
         if (gpuCompositorReady && hdrNativeActive)
-            gpuCompositor.SetOverlayReferenceWhiteNits(state.overlay_reference_white_nits);
+            activeGpuCompositor->SetOverlayReferenceWhiteNits(state.overlay_reference_white_nits);
 
         // Re-resolved rather than assigned field by field: which scalars are
         // meaningful for this session is the plan's decision, and there must not
@@ -3819,7 +3885,7 @@ void VideoThread::RunAttachment(const std::shared_ptr<NativeState>& native, cons
         // Dropping the shared texture is what re-announces the descriptor: the
         // handle callback is one-shot by contract, so the next tapped frame
         // creates a texture and hands the consumer the new transform with it.
-        previewSharedTex.Reset();
+        previewSharedTex->Reset();
 
         const logging::LogField fields[] = {
             {"sdr_white_level_nits", std::to_string(sessionDisplayFacts.sdr_white_level_nits)},
@@ -3876,6 +3942,8 @@ void VideoThread::RunAttachment(const std::shared_ptr<NativeState>& native, cons
     auto tapPreviewSource = [&](ID3D11Texture2D* vpInput, uint64_t pts_ns) {
         if (!m_state.preview_shared_handle_cb)
             return; // no consumer registered -- zero cost beyond this check
+        if (activeGpuCompositor == reducedCompositor.get() && !previewAllowsReduced())
+            return;
         if (previewSharedInitFailed || vpInput == nullptr)
             return;
         // Counted AFTER the cheap disqualifiers and BEFORE the gate: a zero here
@@ -3886,35 +3954,51 @@ void VideoThread::RunAttachment(const std::shared_ptr<NativeState>& native, cons
             return; // throttle to ~30 Hz
         m_state.diagnostics.OnPreviewTapGatePass();
 
-        if (!previewSharedTex.Valid()) {
-            D3D11_TEXTURE2D_DESC srcDesc{};
-            vpInput->GetDesc(&srcDesc);
+        D3D11_TEXTURE2D_DESC srcDesc{};
+        vpInput->GetDesc(&srcDesc);
+        std::optional<PreviewSharedTexture::PublishResult> firstPublish;
+        double firstPublishMs = 0;
+        if (!previewSharedTex->Valid() || previewSharedTex->Width() != srcDesc.Width ||
+            previewSharedTex->Height() != srcDesc.Height || previewSharedTex->Format() != srcDesc.Format) {
+            auto replacement = std::make_unique<PreviewSharedTexture>();
             HANDLE ntHandle = nullptr;
             std::string err;
-            if (!previewSharedTex.Create(d3dDevice.get(), srcDesc.Width, srcDesc.Height, srcDesc.Format, &ntHandle,
-                                         err)) {
+            if (!replacement->Create(d3dDevice.get(), srcDesc.Width, srcDesc.Height, srcDesc.Format, &ntHandle, err)) {
                 previewSharedInitFailed = true;
                 logging::log(logging::LogLevel::Warn, "video_thread",
-                             "preview shared texture init failed; preview tap disabled for this session: " + err, {});
+                             "preview shared texture replacement failed: " + err, {});
                 return;
             }
-            // One-shot: ownership of the NT handle transfers to the consumer, which
-            // opens it on its render device and CloseHandle's it. Must return fast
-            // and must not touch D3D on this (video) thread.
-            m_state.preview_shared_handle_cb(ntHandle, srcDesc.Width, srcDesc.Height, previewTapPlan.desc);
+            if (reducedCompositor) {
+                const auto start = std::chrono::steady_clock::now();
+                firstPublish = replacement->TryPublish(d3dContext.get(), vpInput);
+                firstPublishMs =
+                    std::chrono::duration<double, std::milli>(std::chrono::steady_clock::now() - start).count();
+            }
+            if (firstPublish && !firstPublish->published()) {
+                CloseHandle(ntHandle);
+                previewSharedInitFailed = true;
+                return;
+            }
+            previewSharedTex = std::move(replacement);
+            auto tap = previewTapPlan.desc;
+            tap.logical_width = sourceWidth;
+            tap.logical_height = sourceHeight;
+            m_state.preview_shared_handle_cb(ntHandle, srcDesc.Width, srcDesc.Height, tap);
             m_state.diagnostics.OnPreviewTapSharedTextureReady();
         }
-
         // Non-blocking publish of the composited frame (observation-only; the encode
         // path continues regardless of whether the preview picked up this frame).
         // Time the CPU submission cost of the copy; the display present itself runs
         // on the consumer's (UI) render thread, outside this engine path.
         const auto prev_t0 = std::chrono::steady_clock::now();
-        const PreviewSharedTexture::PublishResult publish = previewSharedTex.TryPublish(d3dContext.get(), vpInput);
+        const PreviewSharedTexture::PublishResult publish =
+            firstPublish ? *firstPublish : previewSharedTex->TryPublish(d3dContext.get(), vpInput);
         const bool published = publish.published();
         const auto prev_t1 = std::chrono::steady_clock::now();
-        m_state.diagnostics.OnPreviewCopy(prev_t1,
-                                          std::chrono::duration<double, std::milli>(prev_t1 - prev_t0).count());
+        m_state.diagnostics.OnPreviewCopy(
+            prev_t1,
+            firstPublish ? firstPublishMs : std::chrono::duration<double, std::milli>(prev_t1 - prev_t0).count());
         m_state.diagnostics.OnPreviewTapPublish(publish.acquire, publish.released_ok);
         // Logged once per session, not per frame: an abandoned keyed mutex or a
         // failed release does not recover, so every later tick would repeat it.
@@ -3962,6 +4046,12 @@ void VideoThread::RunAttachment(const std::shared_ptr<NativeState>& native, cons
         HRESULT ivHr = videoDevice->CreateVideoProcessorInputView(vpInput, videoEnum.get(), &ivDesc, view.put());
         if (FAILED(ivHr) || view == nullptr)
             return nullptr;
+        if (reducedCompositor) {
+            D3D11_TEXTURE2D_DESC inputDesc{};
+            vpInput->GetDesc(&inputDesc);
+            const RECT inputRect{0, 0, static_cast<LONG>(inputDesc.Width), static_cast<LONG>(inputDesc.Height)};
+            videoContext->VideoProcessorSetStreamSourceRect(videoProcessor.get(), 0, TRUE, &inputRect);
+        }
         cachedInputView = view;
         cachedInputViewTex = vpInput;
         return cachedInputView.get();
@@ -5559,9 +5649,19 @@ end_encode_loop:
             {"history_missing", std::to_string(visualTrace.history_missing)},
             {"held_recompositions", std::to_string(visualTrace.held_recompositions)},
             {"composites", std::to_string(visualTrace.composites)},
-            {"image_gpu_uploads", std::to_string(gpuCompositor.WebcamUploadCount())},
-            {"atlas_gpu_uploads", std::to_string(gpuCompositor.SpriteAtlasUploadCount())},
-            {"quads_drawn", std::to_string(gpuCompositor.SpriteQuadDrawCount())},
+            {"image_gpu_uploads", std::to_string(gpuCompositor.WebcamUploadCount() +
+                                                 (reducedCompositor ? reducedCompositor->WebcamUploadCount() : 0))},
+            {"atlas_gpu_uploads",
+             std::to_string(gpuCompositor.SpriteAtlasUploadCount() +
+                            (reducedCompositor ? reducedCompositor->SpriteAtlasUploadCount() : 0))},
+            {"quads_drawn", std::to_string(gpuCompositor.SpriteQuadDrawCount() +
+                                           (reducedCompositor ? reducedCompositor->SpriteQuadDrawCount() : 0))},
+            {"plan_rebuilds", std::to_string(visualConsumer ? visualConsumer->PlanRebuildCount() : 0)},
+            {"plan_reuses", std::to_string(visualConsumer ? visualConsumer->PlanReuseCount() : 0)},
+            {"pipeline_binds", std::to_string(gpuCompositor.PipelineBindCount() +
+                                              (reducedCompositor ? reducedCompositor->PipelineBindCount() : 0))},
+            {"pipeline_reuses", std::to_string(gpuCompositor.PipelineReuseCount() +
+                                               (reducedCompositor ? reducedCompositor->PipelineReuseCount() : 0))},
             {"backend", useOdCapture ? "od" : "wgc"}};
         logging::log(logging::LogLevel::Info, "video_thread", "visual scene summary",
                      std::span<const logging::LogField>(fields, std::size(fields)));

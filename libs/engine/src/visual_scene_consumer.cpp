@@ -19,6 +19,7 @@
 #include <cassert>
 #include <new>
 #include <utility>
+#include <windows.h>
 
 namespace exosnap::engine {
 namespace {
@@ -54,6 +55,8 @@ struct VisualSceneConsumer::BindingState {
 };
 
 struct VisualSceneConsumer::ItemState {
+    SceneItemId id;
+    uint32_t binding_index = 0;
     BindingState* binding = nullptr;
     std::unique_ptr<GamepadFrameSampler> sampler;
     SpriteLayerSnapshot output;
@@ -62,6 +65,9 @@ struct VisualSceneConsumer::ItemState {
 };
 
 VisualSceneConsumer::VisualSceneConsumer(std::shared_ptr<VisualSceneRuntime> runtime) : runtime_(std::move(runtime)) {
+    char setting[2]{};
+    plan_cache_enabled_ =
+        GetEnvironmentVariableA("EXOSNAP_STAGE_A_CACHE", setting, sizeof(setting)) == 1 && setting[0] == '1';
 }
 
 VisualSceneConsumer::~VisualSceneConsumer() {
@@ -86,6 +92,25 @@ VisualSceneConsumer::Prepare(std::shared_ptr<VisualSceneRuntime> runtime) {
     } catch (const std::bad_alloc&) {
         return ConsumerError(EngineErrorCode::ResourceBudgetExceeded);
     }
+}
+
+bool VisualSceneConsumer::CanReusePlan() const noexcept {
+    if (!plan_cache_enabled_ || prepared_sequence_ == 0 || items_.size() != scene_.Items().size() ||
+        plan_bindings_.size() != scene_.Bindings().size())
+        return false;
+    for (size_t index = 0; index < plan_bindings_.size(); ++index) {
+        const auto& key = plan_bindings_[index];
+        const auto& binding = scene_.Bindings()[index];
+        if (key.token != binding.token || key.resource_id != binding.resource_id || key.kind != binding.content.index())
+            return false;
+    }
+    for (size_t index = 0; index < items_.size(); ++index) {
+        const auto& state = items_[index];
+        const auto& item = scene_.Items()[index];
+        if (state.id != item.id || state.binding_index != item.binding_index || state.binding->address != item.source)
+            return false;
+    }
+    return true;
 }
 
 bool VisualSceneConsumer::NeedsRefresh() const noexcept {
@@ -117,6 +142,15 @@ Outcome<ReadResult> VisualSceneConsumer::Refresh() {
         refresh_deferred_ = read == ReadResult::Busy;
         if (read != ReadResult::Updated)
             return read;
+        // Resource IDs are runtime-unique. The new lease pins the same immutable
+        // sampler data before any retained borrowed reference can be used again.
+        if (CanReusePlan()) {
+            prepared_sequence_ = scene_.PublicationSequence();
+            scene_changed_ = true;
+            refresh_deferred_ = false;
+            ++plan_reuse_count_;
+            return ReadResult::Updated;
+        }
         // Old borrowed views are invalid after replacement; only destroy their
         // holders here, without sampling or dereferencing the previous binding.
         ReleaseItems();
@@ -132,7 +166,11 @@ Outcome<ReadResult> VisualSceneConsumer::Refresh() {
         frame_items_.resize(scene_.Items().size());
         image_sources_.clear();
         image_sources_.reserve(scene_.Bindings().size());
+        if (plan_cache_enabled_)
+            plan_bindings_.reserve(scene_.Bindings().size());
         for (const auto& binding : scene_.Bindings()) {
+            if (plan_cache_enabled_)
+                plan_bindings_.push_back({binding.token, binding.resource_id, binding.content.index()});
             if (std::holds_alternative<CpuImageBinding>(binding.content) &&
                 std::ranges::find(image_sources_, binding.token.address) == image_sources_.end())
                 image_sources_.push_back(binding.token.address);
@@ -155,6 +193,8 @@ Outcome<ReadResult> VisualSceneConsumer::Refresh() {
                 found = std::prev(bindings_.end());
             }
             ItemState state;
+            state.id = item.id;
+            state.binding_index = item.binding_index;
             state.binding = found->get();
             if (const auto* pad = std::get_if<GamepadBinding>(&binding.content)) {
                 if (!pad->sprites || !pad->history) {
@@ -178,6 +218,7 @@ Outcome<ReadResult> VisualSceneConsumer::Refresh() {
         prepared_sequence_ = scene_.PublicationSequence();
         scene_changed_ = true;
         refresh_deferred_ = false;
+        ++plan_rebuild_count_;
         return ReadResult::Updated;
     } catch (const std::bad_alloc&) {
         ReleaseItems();
@@ -301,6 +342,7 @@ void VisualSceneConsumer::ReleaseItems() noexcept {
     items_.clear();
     frame_items_.clear();
     image_sources_.clear();
+    plan_bindings_.clear();
     prepared_sequence_ = 0;
 }
 
