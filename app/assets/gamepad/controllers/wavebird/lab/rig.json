@@ -1,0 +1,763 @@
+{
+  "schemaVersion": 1,
+  "id": "wavebird",
+  "modelId": "Wavebird",
+  "sourceModelId": "Wavebird",
+  "rootNode": "controller__wavebird",
+  "sourceUnits": "native OBJ normalized to 4.05 maximum extent",
+  "geometry": {
+    "sourceTriangles": 7260,
+    "glbTriangles": 7260,
+    "sourceVertexReferences": 21780,
+    "uniqueVertices": 4407,
+    "indexSavings": 17373,
+    "originalParts": 20,
+    "glbNodeCount": 62,
+    "glbGeometryMeshes": 20,
+    "glbBytes": 209100,
+    "geometryBytes": 184584
+  },
+  "parts": [
+    {
+      "file": "top_shell.obj",
+      "node": "part__top_shell",
+      "role": "housing",
+      "control": null,
+      "parent": null,
+      "pivot": [
+        0,
+        0,
+        0
+      ],
+      "rotation": [
+        0,
+        0,
+        0,
+        1
+      ],
+      "sourceIndex": 0,
+      "motion": null,
+      "physicalSource": "Wavebird"
+    },
+    {
+      "file": "bottom_shell.obj",
+      "node": "part__bottom_shell",
+      "role": "housing",
+      "control": null,
+      "parent": null,
+      "pivot": [
+        0,
+        0,
+        0
+      ],
+      "rotation": [
+        0,
+        0,
+        0,
+        1
+      ],
+      "sourceIndex": 1,
+      "motion": null,
+      "physicalSource": "Wavebird"
+    },
+    {
+      "file": "left_trigger.obj",
+      "node": "part__left_trigger",
+      "role": "trigger",
+      "control": "l2",
+      "parent": null,
+      "pivot": [
+        -0.60029,
+        -0.098426,
+        -0.501354
+      ],
+      "rotation": [
+        0,
+        0,
+        0,
+        1
+      ],
+      "sourceIndex": 2,
+      "motion": {
+        "kind": "trigger",
+        "control": "left_trigger",
+        "angleXDegrees": -10.886198107485642,
+        "translation": [
+          0,
+          0,
+          0
+        ]
+      },
+      "physicalSource": "Wavebird"
+    },
+    {
+      "file": "right_trigger.obj",
+      "node": "part__right_trigger",
+      "role": "trigger",
+      "control": "r2",
+      "parent": null,
+      "pivot": [
+        0.6,
+        -0.100169,
+        -0.499944
+      ],
+      "rotation": [
+        0,
+        0,
+        0,
+        1
+      ],
+      "sourceIndex": 3,
+      "motion": {
+        "kind": "trigger",
+        "control": "right_trigger",
+        "angleXDegrees": -10.886198107485642,
+        "translation": [
+          0,
+          0,
+          0
+        ]
+      },
+      "physicalSource": "Wavebird"
+    },
+    {
+      "file": "left_stick.obj",
+      "node": "part__left_stick",
+      "role": "stick-stem",
+      "control": "ls",
+      "parent": "left_ring.obj",
+      "pivot": [
+        -0.000149,
+        -0.009834,
+        -0.000256
+      ],
+      "rotation": [
+        0,
+        0,
+        0,
+        1
+      ],
+      "sourceIndex": 4,
+      "motion": null,
+      "physicalSource": "Wavebird"
+    },
+    {
+      "file": "right_stick.obj",
+      "node": "part__right_stick",
+      "role": "stick-stem",
+      "control": "rs",
+      "parent": "right_ring.obj",
+      "pivot": [
+        0.000211,
+        0.003263,
+        -0.000185
+      ],
+      "rotation": [
+        0,
+        0,
+        0,
+        1
+      ],
+      "sourceIndex": 5,
+      "motion": null,
+      "physicalSource": "Wavebird"
+    },
+    {
+      "file": "left_ring.obj",
+      "node": "part__left_ring",
+      "role": "stick-pivot",
+      "control": "ls",
+      "parent": null,
+      "pivot": [
+        -0.55,
+        0.16,
+        -0.21
+      ],
+      "rotation": [
+        0,
+        0,
+        0,
+        1
+      ],
+      "sourceIndex": 6,
+      "motion": {
+        "kind": "stick",
+        "axis": "left_stick",
+        "maxTiltDegrees": 16,
+        "clickTravel": 0.008,
+        "frontSign": 1
+      },
+      "physicalSource": "Wavebird"
+    },
+    {
+      "file": "right_ring.obj",
+      "node": "part__right_ring",
+      "role": "stick-pivot",
+      "control": "rs",
+      "parent": null,
+      "pivot": [
+        0.3,
+        0.13,
+        0.19
+      ],
+      "rotation": [
+        0,
+        0,
+        0,
+        1
+      ],
+      "sourceIndex": 7,
+      "motion": {
+        "kind": "stick",
+        "axis": "right_stick",
+        "maxTiltDegrees": 16,
+        "clickTravel": 0.008,
+        "frontSign": 1
+      },
+      "physicalSource": "Wavebird"
+    },
+    {
+      "file": "a_button.obj",
+      "node": "part__a_button",
+      "role": "button",
+      "control": "b1",
+      "parent": null,
+      "pivot": [
+        0,
+        0,
+        0
+      ],
+      "rotation": [
+        0,
+        0,
+        0,
+        1
+      ],
+      "sourceIndex": 8,
+      "motion": {
+        "kind": "press",
+        "control": "south",
+        "translation": [
+          0,
+          -0.008,
+          0
+        ]
+      },
+      "physicalSource": "Wavebird"
+    },
+    {
+      "file": "b_button.obj",
+      "node": "part__b_button",
+      "role": "button",
+      "control": "b2",
+      "parent": null,
+      "pivot": [
+        0,
+        0,
+        0
+      ],
+      "rotation": [
+        0,
+        0,
+        0,
+        1
+      ],
+      "sourceIndex": 9,
+      "motion": {
+        "kind": "press",
+        "control": "east",
+        "translation": [
+          0,
+          -0.008,
+          0
+        ]
+      },
+      "physicalSource": "Wavebird"
+    },
+    {
+      "file": "x_button.obj",
+      "node": "part__x_button",
+      "role": "button",
+      "control": "b3",
+      "parent": null,
+      "pivot": [
+        0,
+        0,
+        0
+      ],
+      "rotation": [
+        0,
+        0,
+        0,
+        1
+      ],
+      "sourceIndex": 10,
+      "motion": {
+        "kind": "press",
+        "control": "west",
+        "translation": [
+          0,
+          -0.008,
+          0
+        ]
+      },
+      "physicalSource": "Wavebird"
+    },
+    {
+      "file": "y_button.obj",
+      "node": "part__y_button",
+      "role": "button",
+      "control": "b4",
+      "parent": null,
+      "pivot": [
+        0,
+        0,
+        0
+      ],
+      "rotation": [
+        0,
+        0,
+        0,
+        1
+      ],
+      "sourceIndex": 11,
+      "motion": {
+        "kind": "press",
+        "control": "north",
+        "translation": [
+          0,
+          -0.008,
+          0
+        ]
+      },
+      "physicalSource": "Wavebird"
+    },
+    {
+      "file": "start_button.obj",
+      "node": "part__start_button",
+      "role": "button",
+      "control": "start",
+      "parent": null,
+      "pivot": [
+        0,
+        0,
+        0
+      ],
+      "rotation": [
+        0,
+        0,
+        0,
+        1
+      ],
+      "sourceIndex": 12,
+      "motion": {
+        "kind": "press",
+        "control": "start",
+        "translation": [
+          0,
+          -0.003,
+          0
+        ]
+      },
+      "physicalSource": "Wavebird"
+    },
+    {
+      "file": "left_cap.obj",
+      "node": "part__left_cap",
+      "role": "stick-cap",
+      "control": "ls",
+      "parent": "left_ring.obj",
+      "pivot": [
+        0,
+        0,
+        0
+      ],
+      "rotation": [
+        0,
+        0,
+        0,
+        1
+      ],
+      "sourceIndex": 13,
+      "motion": null,
+      "physicalSource": "Wavebird"
+    },
+    {
+      "file": "right_cap.obj",
+      "node": "part__right_cap",
+      "role": "stick-cap",
+      "control": "rs",
+      "parent": "right_ring.obj",
+      "pivot": [
+        0,
+        0,
+        0
+      ],
+      "rotation": [
+        0,
+        0,
+        0,
+        1
+      ],
+      "sourceIndex": 14,
+      "motion": null,
+      "physicalSource": "Wavebird"
+    },
+    {
+      "file": "right_bumper.obj",
+      "node": "part__right_bumper",
+      "role": "button",
+      "control": "r1",
+      "parent": null,
+      "pivot": [
+        0.6,
+        0.2,
+        -0.6
+      ],
+      "rotation": [
+        0,
+        0,
+        0,
+        1
+      ],
+      "sourceIndex": 15,
+      "motion": {
+        "kind": "press",
+        "control": "right_shoulder",
+        "translation": [
+          0,
+          -0.008,
+          0.003
+        ]
+      },
+      "physicalSource": "Wavebird"
+    },
+    {
+      "file": "dpad_up.obj",
+      "node": "part__dpad_up",
+      "role": "button",
+      "control": "up",
+      "parent": null,
+      "pivot": [
+        0,
+        0,
+        0
+      ],
+      "rotation": [
+        0,
+        0,
+        0,
+        1
+      ],
+      "sourceIndex": 16,
+      "motion": {
+        "kind": "press",
+        "control": "dpad_up",
+        "translation": [
+          0,
+          -0.008,
+          0
+        ]
+      },
+      "physicalSource": "Wavebird"
+    },
+    {
+      "file": "dpad_down.obj",
+      "node": "part__dpad_down",
+      "role": "button",
+      "control": "down",
+      "parent": null,
+      "pivot": [
+        0,
+        0,
+        0
+      ],
+      "rotation": [
+        0,
+        0,
+        0,
+        1
+      ],
+      "sourceIndex": 17,
+      "motion": {
+        "kind": "press",
+        "control": "dpad_down",
+        "translation": [
+          0,
+          -0.008,
+          0
+        ]
+      },
+      "physicalSource": "Wavebird"
+    },
+    {
+      "file": "dpad_left.obj",
+      "node": "part__dpad_left",
+      "role": "button",
+      "control": "left",
+      "parent": null,
+      "pivot": [
+        0,
+        0,
+        0
+      ],
+      "rotation": [
+        0,
+        0,
+        0,
+        1
+      ],
+      "sourceIndex": 18,
+      "motion": {
+        "kind": "press",
+        "control": "dpad_left",
+        "translation": [
+          0,
+          -0.008,
+          0
+        ]
+      },
+      "physicalSource": "Wavebird"
+    },
+    {
+      "file": "dpad_right.obj",
+      "node": "part__dpad_right",
+      "role": "button",
+      "control": "right",
+      "parent": null,
+      "pivot": [
+        0,
+        0,
+        0
+      ],
+      "rotation": [
+        0,
+        0,
+        0,
+        1
+      ],
+      "sourceIndex": 19,
+      "motion": {
+        "kind": "press",
+        "control": "dpad_right",
+        "translation": [
+          0,
+          -0.008,
+          0
+        ]
+      },
+      "physicalSource": "Wavebird"
+    }
+  ],
+  "controls": [
+    {
+      "control": "south",
+      "svg": [],
+      "nodes": [
+        {
+          "id": "part__a_button",
+          "file": "a_button.obj",
+          "role": "button"
+        }
+      ],
+      "has2D": false,
+      "has3D": true
+    },
+    {
+      "control": "east",
+      "svg": [],
+      "nodes": [
+        {
+          "id": "part__b_button",
+          "file": "b_button.obj",
+          "role": "button"
+        }
+      ],
+      "has2D": false,
+      "has3D": true
+    },
+    {
+      "control": "west",
+      "svg": [],
+      "nodes": [
+        {
+          "id": "part__x_button",
+          "file": "x_button.obj",
+          "role": "button"
+        }
+      ],
+      "has2D": false,
+      "has3D": true
+    },
+    {
+      "control": "north",
+      "svg": [],
+      "nodes": [
+        {
+          "id": "part__y_button",
+          "file": "y_button.obj",
+          "role": "button"
+        }
+      ],
+      "has2D": false,
+      "has3D": true
+    },
+    {
+      "control": "dpad_up",
+      "svg": [],
+      "nodes": [
+        {
+          "id": "part__dpad_up",
+          "file": "dpad_up.obj",
+          "role": "button"
+        }
+      ],
+      "has2D": false,
+      "has3D": true
+    },
+    {
+      "control": "dpad_right",
+      "svg": [],
+      "nodes": [
+        {
+          "id": "part__dpad_right",
+          "file": "dpad_right.obj",
+          "role": "button"
+        }
+      ],
+      "has2D": false,
+      "has3D": true
+    },
+    {
+      "control": "dpad_down",
+      "svg": [],
+      "nodes": [
+        {
+          "id": "part__dpad_down",
+          "file": "dpad_down.obj",
+          "role": "button"
+        }
+      ],
+      "has2D": false,
+      "has3D": true
+    },
+    {
+      "control": "dpad_left",
+      "svg": [],
+      "nodes": [
+        {
+          "id": "part__dpad_left",
+          "file": "dpad_left.obj",
+          "role": "button"
+        }
+      ],
+      "has2D": false,
+      "has3D": true
+    },
+    {
+      "control": "right_shoulder",
+      "svg": [],
+      "nodes": [
+        {
+          "id": "part__right_bumper",
+          "file": "right_bumper.obj",
+          "role": "button"
+        }
+      ],
+      "has2D": false,
+      "has3D": true
+    },
+    {
+      "control": "left_trigger",
+      "svg": [],
+      "nodes": [
+        {
+          "id": "part__left_trigger",
+          "file": "left_trigger.obj",
+          "role": "trigger"
+        }
+      ],
+      "has2D": false,
+      "has3D": true
+    },
+    {
+      "control": "right_trigger",
+      "svg": [],
+      "nodes": [
+        {
+          "id": "part__right_trigger",
+          "file": "right_trigger.obj",
+          "role": "trigger"
+        }
+      ],
+      "has2D": false,
+      "has3D": true
+    },
+    {
+      "control": "left_stick",
+      "svg": [],
+      "nodes": [
+        {
+          "id": "part__left_stick",
+          "file": "left_stick.obj",
+          "role": "stick-stem"
+        },
+        {
+          "id": "part__left_ring",
+          "file": "left_ring.obj",
+          "role": "stick-pivot"
+        },
+        {
+          "id": "part__left_cap",
+          "file": "left_cap.obj",
+          "role": "stick-cap"
+        }
+      ],
+      "has2D": false,
+      "has3D": true
+    },
+    {
+      "control": "right_stick",
+      "svg": [],
+      "nodes": [
+        {
+          "id": "part__right_stick",
+          "file": "right_stick.obj",
+          "role": "stick-stem"
+        },
+        {
+          "id": "part__right_ring",
+          "file": "right_ring.obj",
+          "role": "stick-pivot"
+        },
+        {
+          "id": "part__right_cap",
+          "file": "right_cap.obj",
+          "role": "stick-cap"
+        }
+      ],
+      "has2D": false,
+      "has3D": true
+    },
+    {
+      "control": "start",
+      "svg": [],
+      "nodes": [
+        {
+          "id": "part__start_button",
+          "file": "start_button.obj",
+          "role": "button"
+        }
+      ],
+      "has2D": false,
+      "has3D": true
+    }
+  ],
+  "motionPolicy": "Source pivots and original mechanics; analog control amounts 0..1; sticks X/Y -1..1",
+  "materials": {
+    "sourceColors": true,
+    "markings": "external source SVG mask / Qt CustomMaterial",
+    "ghost": "runtime material shader, not baked into GLB"
+  },
+  "nativeQtValidated": false
+}

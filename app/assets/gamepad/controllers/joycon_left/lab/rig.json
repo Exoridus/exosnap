@@ -1,0 +1,679 @@
+{
+  "schemaVersion": 1,
+  "id": "joycon_left",
+  "modelId": "JoyconLeft",
+  "sourceModelId": "JoyconLeft",
+  "rootNode": "controller__joycon_left",
+  "sourceUnits": "native OBJ normalized to 4.05 maximum extent",
+  "geometry": {
+    "sourceTriangles": 3235,
+    "glbTriangles": 3235,
+    "sourceVertexReferences": 9705,
+    "uniqueVertices": 2012,
+    "indexSavings": 7693,
+    "originalParts": 15,
+    "glbNodeCount": 47,
+    "glbGeometryMeshes": 14,
+    "glbBytes": 98316,
+    "geometryBytes": 81714
+  },
+  "parts": [
+    {
+      "file": "top_shell.obj",
+      "node": "part__top_shell",
+      "role": "housing",
+      "control": null,
+      "parent": null,
+      "pivot": [
+        0,
+        0,
+        0
+      ],
+      "rotation": [
+        0,
+        0,
+        0,
+        1
+      ],
+      "sourceIndex": 0,
+      "motion": null,
+      "physicalSource": "JoyconLeft"
+    },
+    {
+      "file": "bottom_shell.obj",
+      "node": "part__bottom_shell",
+      "role": "housing",
+      "control": null,
+      "parent": null,
+      "pivot": [
+        0,
+        0,
+        0
+      ],
+      "rotation": [
+        0,
+        0,
+        0,
+        1
+      ],
+      "sourceIndex": 1,
+      "motion": null,
+      "physicalSource": "JoyconLeft"
+    },
+    {
+      "file": "left_trigger.obj",
+      "node": "part__left_trigger",
+      "role": "trigger",
+      "control": "l2",
+      "parent": null,
+      "pivot": [
+        -0.09,
+        -0.07,
+        -0.59
+      ],
+      "rotation": [
+        0,
+        0,
+        0,
+        1
+      ],
+      "sourceIndex": 2,
+      "motion": {
+        "kind": "trigger",
+        "control": "left_trigger",
+        "angleXDegrees": -10.886198107485642,
+        "translation": [
+          0,
+          0,
+          0
+        ]
+      },
+      "physicalSource": "JoyconLeft"
+    },
+    {
+      "file": "left_stick.obj",
+      "node": "part__left_stick",
+      "role": "stick-stem",
+      "control": "ls",
+      "parent": "left_ring.obj",
+      "pivot": [
+        0,
+        0,
+        0
+      ],
+      "rotation": [
+        0,
+        0,
+        0,
+        1
+      ],
+      "sourceIndex": 3,
+      "motion": null,
+      "physicalSource": "JoyconLeft"
+    },
+    {
+      "file": "left_ring.obj",
+      "node": "part__left_ring",
+      "role": "stick-pivot",
+      "control": "ls",
+      "parent": null,
+      "pivot": [
+        -0.065,
+        0.07,
+        -0.343
+      ],
+      "rotation": [
+        0,
+        0,
+        0,
+        1
+      ],
+      "sourceIndex": 4,
+      "motion": {
+        "kind": "stick",
+        "axis": "left_stick",
+        "maxTiltDegrees": 16,
+        "clickTravel": 0.008,
+        "frontSign": 1
+      },
+      "physicalSource": "JoyconLeft"
+    },
+    {
+      "file": "back_button.obj",
+      "node": "part__back_button",
+      "role": "button",
+      "control": "select",
+      "parent": null,
+      "pivot": [
+        0,
+        0,
+        0
+      ],
+      "rotation": [
+        0,
+        0,
+        0,
+        1
+      ],
+      "sourceIndex": 5,
+      "motion": {
+        "kind": "press",
+        "control": "back",
+        "translation": [
+          0,
+          -0.003,
+          0
+        ]
+      },
+      "physicalSource": "JoyconLeft"
+    },
+    {
+      "file": "left_cap.obj",
+      "node": "part__left_cap",
+      "role": "stick-cap",
+      "control": "ls",
+      "parent": "left_ring.obj",
+      "pivot": [
+        0,
+        0,
+        0
+      ],
+      "rotation": [
+        0,
+        0,
+        0,
+        1
+      ],
+      "sourceIndex": 6,
+      "motion": null,
+      "physicalSource": "JoyconLeft"
+    },
+    {
+      "file": "left_bumper.obj",
+      "node": "part__left_bumper",
+      "role": "button",
+      "control": "l1",
+      "parent": null,
+      "pivot": [
+        -0.1,
+        0.1,
+        -0.7
+      ],
+      "rotation": [
+        0,
+        0,
+        0,
+        1
+      ],
+      "sourceIndex": 7,
+      "motion": {
+        "kind": "press",
+        "control": "left_shoulder",
+        "translation": [
+          0,
+          -0.008,
+          0.003
+        ]
+      },
+      "physicalSource": "JoyconLeft"
+    },
+    {
+      "file": "dpad_up.obj",
+      "node": "part__dpad_up",
+      "role": "button",
+      "control": "up",
+      "parent": null,
+      "pivot": [
+        0,
+        0,
+        0
+      ],
+      "rotation": [
+        0,
+        0,
+        0,
+        1
+      ],
+      "sourceIndex": 8,
+      "motion": {
+        "kind": "press",
+        "control": "dpad_up",
+        "translation": [
+          0,
+          -0.008,
+          0
+        ]
+      },
+      "physicalSource": "JoyconLeft"
+    },
+    {
+      "file": "dpad_down.obj",
+      "node": "part__dpad_down",
+      "role": "button",
+      "control": "down",
+      "parent": null,
+      "pivot": [
+        0,
+        0,
+        0
+      ],
+      "rotation": [
+        0,
+        0,
+        0,
+        1
+      ],
+      "sourceIndex": 9,
+      "motion": {
+        "kind": "press",
+        "control": "dpad_down",
+        "translation": [
+          0,
+          -0.008,
+          0
+        ]
+      },
+      "physicalSource": "JoyconLeft"
+    },
+    {
+      "file": "dpad_left.obj",
+      "node": "part__dpad_left",
+      "role": "button",
+      "control": "left",
+      "parent": null,
+      "pivot": [
+        0,
+        0,
+        0
+      ],
+      "rotation": [
+        0,
+        0,
+        0,
+        1
+      ],
+      "sourceIndex": 10,
+      "motion": {
+        "kind": "press",
+        "control": "dpad_left",
+        "translation": [
+          0,
+          -0.008,
+          0
+        ]
+      },
+      "physicalSource": "JoyconLeft"
+    },
+    {
+      "file": "dpad_right.obj",
+      "node": "part__dpad_right",
+      "role": "button",
+      "control": "right",
+      "parent": null,
+      "pivot": [
+        0,
+        0,
+        0
+      ],
+      "rotation": [
+        0,
+        0,
+        0,
+        1
+      ],
+      "sourceIndex": 11,
+      "motion": {
+        "kind": "press",
+        "control": "dpad_right",
+        "translation": [
+          0,
+          -0.008,
+          0
+        ]
+      },
+      "physicalSource": "JoyconLeft"
+    },
+    {
+      "file": "misc.obj",
+      "node": "part__misc",
+      "role": "button",
+      "control": "share",
+      "parent": null,
+      "pivot": [
+        0,
+        0,
+        0
+      ],
+      "rotation": [
+        0,
+        0,
+        0,
+        1
+      ],
+      "sourceIndex": 12,
+      "motion": {
+        "kind": "press",
+        "control": "share",
+        "translation": [
+          0,
+          -0.008,
+          0
+        ]
+      },
+      "physicalSource": "JoyconLeft"
+    },
+    {
+      "file": "paddle1.obj",
+      "node": "part__paddle1",
+      "role": "paddle",
+      "control": "sl",
+      "parent": null,
+      "pivot": [
+        0.3,
+        0,
+        -0.34
+      ],
+      "rotation": [
+        0,
+        0,
+        0,
+        1
+      ],
+      "sourceIndex": 13,
+      "motion": {
+        "kind": "press",
+        "control": "sl",
+        "translation": [
+          0,
+          -0.008,
+          0
+        ]
+      },
+      "physicalSource": "JoyconLeft"
+    },
+    {
+      "file": "paddle3.obj",
+      "node": "part__paddle3",
+      "role": "paddle",
+      "control": "sr",
+      "parent": null,
+      "pivot": [
+        0.3,
+        0,
+        0.28
+      ],
+      "rotation": [
+        0,
+        0,
+        0,
+        1
+      ],
+      "sourceIndex": 14,
+      "motion": {
+        "kind": "press",
+        "control": "sr",
+        "translation": [
+          0,
+          -0.008,
+          0
+        ]
+      },
+      "physicalSource": "JoyconLeft"
+    }
+  ],
+  "controls": [
+    {
+      "control": "dpad_up",
+      "svg": [
+        {
+          "id": "btn-up",
+          "file": "elements/btn-up.svg",
+          "role": "button",
+          "sourceControl": null,
+          "sourceClickControl": null
+        }
+      ],
+      "nodes": [
+        {
+          "id": "part__dpad_up",
+          "file": "dpad_up.obj",
+          "role": "button"
+        }
+      ],
+      "has2D": true,
+      "has3D": true
+    },
+    {
+      "control": "dpad_right",
+      "svg": [
+        {
+          "id": "btn-right",
+          "file": "elements/btn-right.svg",
+          "role": "button",
+          "sourceControl": null,
+          "sourceClickControl": null
+        }
+      ],
+      "nodes": [
+        {
+          "id": "part__dpad_right",
+          "file": "dpad_right.obj",
+          "role": "button"
+        }
+      ],
+      "has2D": true,
+      "has3D": true
+    },
+    {
+      "control": "dpad_down",
+      "svg": [
+        {
+          "id": "btn-down",
+          "file": "elements/btn-down.svg",
+          "role": "button",
+          "sourceControl": null,
+          "sourceClickControl": null
+        }
+      ],
+      "nodes": [
+        {
+          "id": "part__dpad_down",
+          "file": "dpad_down.obj",
+          "role": "button"
+        }
+      ],
+      "has2D": true,
+      "has3D": true
+    },
+    {
+      "control": "dpad_left",
+      "svg": [
+        {
+          "id": "btn-left",
+          "file": "elements/btn-left.svg",
+          "role": "button",
+          "sourceControl": null,
+          "sourceClickControl": null
+        }
+      ],
+      "nodes": [
+        {
+          "id": "part__dpad_left",
+          "file": "dpad_left.obj",
+          "role": "button"
+        }
+      ],
+      "has2D": true,
+      "has3D": true
+    },
+    {
+      "control": "left_shoulder",
+      "svg": [
+        {
+          "id": "btn-l1",
+          "file": "elements/btn-l1.svg",
+          "role": "button",
+          "sourceControl": null,
+          "sourceClickControl": null
+        }
+      ],
+      "nodes": [
+        {
+          "id": "part__left_bumper",
+          "file": "left_bumper.obj",
+          "role": "button"
+        }
+      ],
+      "has2D": true,
+      "has3D": true
+    },
+    {
+      "control": "left_trigger",
+      "svg": [
+        {
+          "id": "trigger-l2",
+          "file": "elements/trigger-l2.svg",
+          "role": "trigger",
+          "sourceControl": null,
+          "sourceClickControl": null
+        }
+      ],
+      "nodes": [
+        {
+          "id": "part__left_trigger",
+          "file": "left_trigger.obj",
+          "role": "trigger"
+        }
+      ],
+      "has2D": true,
+      "has3D": true
+    },
+    {
+      "control": "left_stick",
+      "svg": [
+        {
+          "id": "stick-l-cap",
+          "file": "elements/stick-l-cap.svg",
+          "role": "stick",
+          "sourceControl": null,
+          "sourceClickControl": null
+        }
+      ],
+      "nodes": [
+        {
+          "id": "part__left_stick",
+          "file": "left_stick.obj",
+          "role": "stick-stem"
+        },
+        {
+          "id": "part__left_ring",
+          "file": "left_ring.obj",
+          "role": "stick-pivot"
+        },
+        {
+          "id": "part__left_cap",
+          "file": "left_cap.obj",
+          "role": "stick-cap"
+        }
+      ],
+      "has2D": true,
+      "has3D": true
+    },
+    {
+      "control": "left_stick_click",
+      "svg": [
+        {
+          "id": "stick-l-cap",
+          "file": "elements/stick-l-cap.svg",
+          "role": "stick",
+          "sourceControl": null,
+          "sourceClickControl": null
+        }
+      ],
+      "nodes": [
+        {
+          "id": "part__left_cap",
+          "file": "left_cap.obj",
+          "role": "stick-cap"
+        }
+      ],
+      "has2D": true,
+      "has3D": true
+    },
+    {
+      "control": "back",
+      "svg": [
+        {
+          "id": "btn-view",
+          "file": "elements/btn-view.svg",
+          "role": "button",
+          "sourceControl": null,
+          "sourceClickControl": null
+        }
+      ],
+      "nodes": [
+        {
+          "id": "part__back_button",
+          "file": "back_button.obj",
+          "role": "button"
+        }
+      ],
+      "has2D": true,
+      "has3D": true
+    },
+    {
+      "control": "share",
+      "svg": [
+        {
+          "id": "btn-share",
+          "file": "elements/btn-share.svg",
+          "role": "button",
+          "sourceControl": null,
+          "sourceClickControl": null
+        }
+      ],
+      "nodes": [
+        {
+          "id": "part__misc",
+          "file": "misc.obj",
+          "role": "button"
+        }
+      ],
+      "has2D": true,
+      "has3D": true
+    },
+    {
+      "control": "sl",
+      "svg": [],
+      "nodes": [
+        {
+          "id": "part__paddle1",
+          "file": "paddle1.obj",
+          "role": "paddle"
+        }
+      ],
+      "has2D": false,
+      "has3D": true
+    },
+    {
+      "control": "sr",
+      "svg": [],
+      "nodes": [
+        {
+          "id": "part__paddle3",
+          "file": "paddle3.obj",
+          "role": "paddle"
+        }
+      ],
+      "has2D": false,
+      "has3D": true
+    }
+  ],
+  "motionPolicy": "Source pivots and original mechanics; analog control amounts 0..1; sticks X/Y -1..1",
+  "materials": {
+    "sourceColors": true,
+    "markings": "external source SVG mask / Qt CustomMaterial",
+    "ghost": "runtime material shader, not baked into GLB"
+  },
+  "nativeQtValidated": false
+}

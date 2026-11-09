@@ -1,0 +1,145 @@
+{
+  "schemaVersion": 1,
+  "layout": "wavebird",
+  "controls": [
+    {
+      "source": "south",
+      "control": "south",
+      "svg": [],
+      "nodes": [
+        "part__a_button"
+      ]
+    },
+    {
+      "source": "east",
+      "control": "west",
+      "svg": [],
+      "nodes": [
+        "part__b_button"
+      ]
+    },
+    {
+      "source": "west",
+      "control": "east",
+      "svg": [],
+      "nodes": [
+        "part__x_button"
+      ]
+    },
+    {
+      "source": "north",
+      "control": "north",
+      "svg": [],
+      "nodes": [
+        "part__y_button"
+      ]
+    },
+    {
+      "source": "dpad_up",
+      "control": "dpad_up",
+      "svg": [],
+      "nodes": [
+        "part__dpad_up"
+      ]
+    },
+    {
+      "source": "dpad_right",
+      "control": "dpad_right",
+      "svg": [],
+      "nodes": [
+        "part__dpad_right"
+      ]
+    },
+    {
+      "source": "dpad_down",
+      "control": "dpad_down",
+      "svg": [],
+      "nodes": [
+        "part__dpad_down"
+      ]
+    },
+    {
+      "source": "dpad_left",
+      "control": "dpad_left",
+      "svg": [],
+      "nodes": [
+        "part__dpad_left"
+      ]
+    },
+    {
+      "source": "right_shoulder",
+      "control": "right_shoulder",
+      "svg": [],
+      "nodes": [
+        "part__right_bumper"
+      ]
+    },
+    {
+      "source": "left_trigger",
+      "control": "left_trigger",
+      "svg": [],
+      "nodes": [
+        "part__left_trigger"
+      ]
+    },
+    {
+      "source": "right_trigger",
+      "control": "right_trigger",
+      "svg": [],
+      "nodes": [
+        "part__right_trigger"
+      ]
+    },
+    {
+      "source": "left_stick",
+      "control": "left_stick",
+      "svg": [],
+      "nodes": [
+        "part__left_stick",
+        "part__left_ring",
+        "part__left_cap"
+      ]
+    },
+    {
+      "source": "right_stick",
+      "control": "right_stick",
+      "svg": [],
+      "nodes": [
+        "part__right_stick",
+        "part__right_ring",
+        "part__right_cap"
+      ]
+    },
+    {
+      "source": "start",
+      "control": "start",
+      "svg": [],
+      "nodes": [
+        "part__start_button"
+      ]
+    }
+  ],
+  "provenance": {
+    "labCommit": "3deb9535dbcdb37a34d463e537d902a783cc6ef6",
+    "sourceModel": "Wavebird",
+    "modelLicense": "MIT"
+  },
+  "reference3D": {
+    "min": [
+      -2.025,
+      -1.4892,
+      -0.9656
+    ],
+    "max": [
+      2.025,
+      1.4892,
+      0.9656
+    ],
+    "anchor": [
+      0.0,
+      0.0,
+      0.0
+    ],
+    "extent": 4.05
+  }
+}

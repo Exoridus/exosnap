@@ -8,7 +8,7 @@
     60.000000000000014,
     20.999999999999996,
     1340.0000000000005,
-    972.9924010240625
+    972.9924010240624
   ],
   "coordinateSystem": {
     "xPositive": "right",
@@ -34,7 +34,7 @@
         "x": 60.000000000000014,
         "y": 20.999999999999996,
         "width": 1340.0000000000005,
-        "height": 972.9924010240625
+        "height": 972.9924010240624
       }
     },
     {
@@ -87,7 +87,12 @@
     },
     {
       "id": "dpad",
-      "controls": {"up": "dpad_up", "down": "dpad_down", "left": "dpad_left", "right": "dpad_right"},
+      "controls": {
+        "up": "dpad_up",
+        "down": "dpad_down",
+        "left": "dpad_left",
+        "right": "dpad_right"
+      },
       "file": "elements/dpad.svg",
       "role": "directional-pad",
       "binding": {
@@ -99,7 +104,7 @@
       },
       "bounds": {
         "x": 429.61859130859375,
-        "y": 499.72833251953125,
+        "y": 499.7283325195313,
         "width": 227.674072265625,
         "height": 193.83453369140625
       },

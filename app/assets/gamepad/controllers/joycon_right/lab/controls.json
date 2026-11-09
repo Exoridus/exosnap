@@ -1,0 +1,252 @@
+{
+  "schemaVersion": 1,
+  "layoutId": "joycon_right",
+  "controls": [
+    {
+      "control": "south",
+      "svg": [
+        {
+          "id": "btn-b",
+          "file": "elements/btn-b.svg",
+          "role": "button",
+          "sourceControl": null,
+          "sourceClickControl": null
+        }
+      ],
+      "nodes": [
+        {
+          "id": "part__b_button",
+          "file": "b_button.obj",
+          "role": "button"
+        }
+      ],
+      "has2D": true,
+      "has3D": true
+    },
+    {
+      "control": "east",
+      "svg": [
+        {
+          "id": "btn-a",
+          "file": "elements/btn-a.svg",
+          "role": "button",
+          "sourceControl": null,
+          "sourceClickControl": null
+        }
+      ],
+      "nodes": [
+        {
+          "id": "part__a_button",
+          "file": "a_button.obj",
+          "role": "button"
+        }
+      ],
+      "has2D": true,
+      "has3D": true
+    },
+    {
+      "control": "west",
+      "svg": [
+        {
+          "id": "btn-y",
+          "file": "elements/btn-y.svg",
+          "role": "button",
+          "sourceControl": null,
+          "sourceClickControl": null
+        }
+      ],
+      "nodes": [
+        {
+          "id": "part__y_button",
+          "file": "y_button.obj",
+          "role": "button"
+        }
+      ],
+      "has2D": true,
+      "has3D": true
+    },
+    {
+      "control": "north",
+      "svg": [
+        {
+          "id": "btn-x",
+          "file": "elements/btn-x.svg",
+          "role": "button",
+          "sourceControl": null,
+          "sourceClickControl": null
+        }
+      ],
+      "nodes": [
+        {
+          "id": "part__x_button",
+          "file": "x_button.obj",
+          "role": "button"
+        }
+      ],
+      "has2D": true,
+      "has3D": true
+    },
+    {
+      "control": "right_shoulder",
+      "svg": [
+        {
+          "id": "btn-r1",
+          "file": "elements/btn-r1.svg",
+          "role": "button",
+          "sourceControl": null,
+          "sourceClickControl": null
+        }
+      ],
+      "nodes": [
+        {
+          "id": "part__right_bumper",
+          "file": "right_bumper.obj",
+          "role": "button"
+        }
+      ],
+      "has2D": true,
+      "has3D": true
+    },
+    {
+      "control": "right_trigger",
+      "svg": [
+        {
+          "id": "trigger-r2",
+          "file": "elements/trigger-r2.svg",
+          "role": "trigger",
+          "sourceControl": null,
+          "sourceClickControl": null
+        }
+      ],
+      "nodes": [
+        {
+          "id": "part__right_trigger",
+          "file": "right_trigger.obj",
+          "role": "trigger"
+        }
+      ],
+      "has2D": true,
+      "has3D": true
+    },
+    {
+      "control": "right_stick",
+      "svg": [
+        {
+          "id": "stick-r-cap",
+          "file": "elements/stick-r-cap.svg",
+          "role": "stick",
+          "sourceControl": null,
+          "sourceClickControl": null
+        }
+      ],
+      "nodes": [
+        {
+          "id": "part__right_stick",
+          "file": "right_stick.obj",
+          "role": "stick-stem"
+        },
+        {
+          "id": "part__right_ring",
+          "file": "right_ring.obj",
+          "role": "stick-pivot"
+        },
+        {
+          "id": "part__right_cap",
+          "file": "right_cap.obj",
+          "role": "stick-cap"
+        }
+      ],
+      "has2D": true,
+      "has3D": true
+    },
+    {
+      "control": "right_stick_click",
+      "svg": [
+        {
+          "id": "stick-r-cap",
+          "file": "elements/stick-r-cap.svg",
+          "role": "stick",
+          "sourceControl": null,
+          "sourceClickControl": null
+        }
+      ],
+      "nodes": [
+        {
+          "id": "part__right_cap",
+          "file": "right_cap.obj",
+          "role": "stick-cap"
+        }
+      ],
+      "has2D": true,
+      "has3D": true
+    },
+    {
+      "control": "start",
+      "svg": [
+        {
+          "id": "btn-menu",
+          "file": "elements/btn-menu.svg",
+          "role": "button",
+          "sourceControl": null,
+          "sourceClickControl": null
+        }
+      ],
+      "nodes": [
+        {
+          "id": "part__start_button",
+          "file": "start_button.obj",
+          "role": "button"
+        }
+      ],
+      "has2D": true,
+      "has3D": true
+    },
+    {
+      "control": "home",
+      "svg": [
+        {
+          "id": "btn-home",
+          "file": "elements/btn-home.svg",
+          "role": "button",
+          "sourceControl": null,
+          "sourceClickControl": null
+        }
+      ],
+      "nodes": [
+        {
+          "id": "part__guide_button",
+          "file": "guide_button.obj",
+          "role": "button"
+        }
+      ],
+      "has2D": true,
+      "has3D": true
+    },
+    {
+      "control": "sl",
+      "svg": [],
+      "nodes": [
+        {
+          "id": "part__paddle2",
+          "file": "paddle2.obj",
+          "role": "paddle"
+        }
+      ],
+      "has2D": false,
+      "has3D": true
+    },
+    {
+      "control": "sr",
+      "svg": [],
+      "nodes": [
+        {
+          "id": "part__paddle4",
+          "file": "paddle4.obj",
+          "role": "paddle"
+        }
+      ],
+      "has2D": false,
+      "has3D": true
+    }
+  ]
+}

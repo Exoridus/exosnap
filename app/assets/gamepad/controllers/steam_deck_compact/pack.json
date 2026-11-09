@@ -1,0 +1,235 @@
+{
+  "schemaVersion": 1,
+  "layout": "steam_deck_compact",
+  "controls": [
+    {
+      "source": "south",
+      "control": "south",
+      "svg": [
+        "btn-a"
+      ],
+      "nodes": []
+    },
+    {
+      "source": "east",
+      "control": "east",
+      "svg": [
+        "btn-b"
+      ],
+      "nodes": []
+    },
+    {
+      "source": "west",
+      "control": "west",
+      "svg": [
+        "btn-x"
+      ],
+      "nodes": []
+    },
+    {
+      "source": "north",
+      "control": "north",
+      "svg": [
+        "btn-y"
+      ],
+      "nodes": []
+    },
+    {
+      "source": "dpad_up",
+      "control": "dpad_up",
+      "svg": [
+        "dpad"
+      ],
+      "nodes": []
+    },
+    {
+      "source": "dpad_right",
+      "control": "dpad_right",
+      "svg": [
+        "dpad"
+      ],
+      "nodes": []
+    },
+    {
+      "source": "dpad_down",
+      "control": "dpad_down",
+      "svg": [
+        "dpad"
+      ],
+      "nodes": []
+    },
+    {
+      "source": "dpad_left",
+      "control": "dpad_left",
+      "svg": [
+        "dpad"
+      ],
+      "nodes": []
+    },
+    {
+      "source": "left_shoulder",
+      "control": "left_shoulder",
+      "svg": [
+        "btn-l1"
+      ],
+      "nodes": []
+    },
+    {
+      "source": "right_shoulder",
+      "control": "right_shoulder",
+      "svg": [
+        "btn-r1"
+      ],
+      "nodes": []
+    },
+    {
+      "source": "left_trigger",
+      "control": "left_trigger",
+      "svg": [
+        "trigger-l2"
+      ],
+      "nodes": []
+    },
+    {
+      "source": "right_trigger",
+      "control": "right_trigger",
+      "svg": [
+        "trigger-r2"
+      ],
+      "nodes": []
+    },
+    {
+      "source": "left_stick",
+      "control": "left_stick",
+      "svg": [
+        "stick-l-cap"
+      ],
+      "nodes": []
+    },
+    {
+      "source": "right_stick",
+      "control": "right_stick",
+      "svg": [
+        "stick-r-cap"
+      ],
+      "nodes": []
+    },
+    {
+      "source": "left_stick_click",
+      "control": "left_stick_click",
+      "svg": [
+        "stick-l-cap"
+      ],
+      "nodes": []
+    },
+    {
+      "source": "right_stick_click",
+      "control": "right_stick_click",
+      "svg": [
+        "stick-r-cap"
+      ],
+      "nodes": []
+    },
+    {
+      "source": "back",
+      "control": "back",
+      "svg": [
+        "btn-view"
+      ],
+      "nodes": []
+    },
+    {
+      "source": "start",
+      "control": "start",
+      "svg": [
+        "btn-menu"
+      ],
+      "nodes": []
+    },
+    {
+      "source": "home",
+      "control": "guide",
+      "svg": [
+        "btn-home"
+      ],
+      "nodes": []
+    },
+    {
+      "source": "left_pad",
+      "control": null,
+      "reason": "disabled by the native mapping",
+      "svg": [
+        "trackpad-l"
+      ],
+      "nodes": []
+    },
+    {
+      "source": "right_pad",
+      "control": null,
+      "reason": "disabled by the native mapping",
+      "svg": [
+        "trackpad-r"
+      ],
+      "nodes": []
+    },
+    {
+      "source": "l4",
+      "control": "left_paddle1",
+      "svg": [
+        "btn-l4"
+      ],
+      "nodes": []
+    },
+    {
+      "source": "l5",
+      "control": "left_paddle2",
+      "svg": [
+        "btn-l5"
+      ],
+      "nodes": []
+    },
+    {
+      "source": "r4",
+      "control": "right_paddle1",
+      "svg": [
+        "btn-r4"
+      ],
+      "nodes": []
+    },
+    {
+      "source": "r5",
+      "control": "right_paddle2",
+      "svg": [
+        "btn-r5"
+      ],
+      "nodes": []
+    },
+    {
+      "source": "quick_access",
+      "control": "misc1",
+      "svg": [
+        "btn-quick-access"
+      ],
+      "nodes": []
+    }
+  ],
+  "provenance": {
+    "labCommit": "3deb9535dbcdb37a34d463e537d902a783cc6ef6",
+    "artworkLicense": "MIT",
+    "artworkCopyright": "Copyright (c) 2024 Al. Lopez"
+  },
+  "reference2D": {
+    "bounds": [
+      0.0,
+      0.0,
+      215.67,
+      200.8693
+    ],
+    "anchor": [
+      107.835,
+      100.4347
+    ],
+    "aspect": 1.0737,
+    "orientation": "front"
+  }
+}
