@@ -89,7 +89,7 @@ Item {
     // spelled out as an eyebrow ("SCREEN") beside a name that already said
     // "Display 1"; one icon carries the same fact without a second text run, and
     // the accessible name below still states it in words.
-    readonly property int sourceGlyph: root.recordViewModel.sourceKindText === "WINDOW" ? ExoGlyph.AppWindow : root.recordViewModel.sourceKindText === "REGION" ? ExoGlyph.Region : ExoGlyph.Display
+    readonly property int sourceGlyph: root.recordViewModel.sourceKind === RecordViewModelAdapter.WindowSource ? ExoGlyph.AppWindow : root.recordViewModel.sourceKind === RecordViewModelAdapter.RegionSource ? ExoGlyph.Region : ExoGlyph.Display
 
     ColumnLayout {
         spacing: ExoTheme.spacingLg

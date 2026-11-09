@@ -79,7 +79,7 @@ Item {
             Label {
                 Layout.fillWidth: true
                 text: root.overlay ? root.overlay.status : ""
-                color: ExoTheme.textDim
+                color: ExoTheme.textMuted
                 wrapMode: Text.WordWrap
             }
         }

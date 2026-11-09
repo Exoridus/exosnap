@@ -80,6 +80,15 @@ TestCase {
         compare(select.value, "");
         compare(editSpy.count, 0);
     }
+    function test_controller_only_offers_supported_actions() {
+        recordDriver.resetVisualSettings(false, true);
+        const form = createForm(true);
+        compare(findControl(form, qsTr("Details")), null);
+        const retry = findControl(form, qsTr("Retry"));
+        verify(!!retry && retry.enabled);
+        mouseClick(retry);
+        tryCompare(retrySpy, "count", 1);
+    }
     function test_select_commits_through_the_form_data() {
         return [{tag: "webcam", gamepad: false, label: qsTr("Device"), value: "camera"},
                 {tag: "gamepad", gamepad: true, label: qsTr("Layout"), value: "xbox_elite"}];
