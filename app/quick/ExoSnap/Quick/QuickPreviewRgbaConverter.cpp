@@ -4,6 +4,7 @@
 
 #include <cstdio>
 #include <cstring>
+#include <utility>
 
 namespace exosnap::quick {
 namespace {
@@ -46,47 +47,70 @@ bool QuickPreviewRgbaConverter::initialize(ID3D11Device* device, ID3D11DeviceCon
         return false;
     }
 
-    Microsoft::WRL::ComPtr<ID3DBlob> vertex_blob;
-    Microsoft::WRL::ComPtr<ID3DBlob> pixel_blob;
-    Microsoft::WRL::ComPtr<ID3DBlob> compiler_error;
-    HRESULT result = D3DCompile(kVertexShader, std::strlen(kVertexShader), "quick_preview_rgba_vs", nullptr, nullptr,
-                                "main", "vs_5_0", D3DCOMPILE_ENABLE_STRICTNESS, 0, vertex_blob.GetAddressOf(),
-                                compiler_error.GetAddressOf());
-    if (FAILED(result)) {
-        setHResultError(error, "D3DCompile(Quick preview vertex shader)", result);
+    Microsoft::WRL::ComPtr<ID3D11Device> context_device;
+    context->GetDevice(context_device.GetAddressOf());
+    if (context_device.Get() != device) {
+        error = "QuickPreviewRgbaConverter::initialize received a context from another device";
         return false;
     }
-    compiler_error.Reset();
-    result =
-        D3DCompile(kPixelShader, std::strlen(kPixelShader), "quick_preview_rgba_ps", nullptr, nullptr, "main", "ps_5_0",
-                   D3DCOMPILE_ENABLE_STRICTNESS, 0, pixel_blob.GetAddressOf(), compiler_error.GetAddressOf());
-    if (FAILED(result)) {
-        setHResultError(error, "D3DCompile(Quick preview pixel shader)", result);
-        return false;
+
+    const bool replace_pipeline = device_.Get() != device;
+    Microsoft::WRL::ComPtr<ID3D11VertexShader> vertex_shader;
+    Microsoft::WRL::ComPtr<ID3D11PixelShader> pixel_shader;
+    if (replace_pipeline) {
+        Microsoft::WRL::ComPtr<ID3DBlob> vertex_blob;
+        Microsoft::WRL::ComPtr<ID3DBlob> pixel_blob;
+        Microsoft::WRL::ComPtr<ID3DBlob> compiler_error;
+        HRESULT result = D3DCompile(kVertexShader, std::strlen(kVertexShader), "quick_preview_rgba_vs", nullptr,
+                                    nullptr, "main", "vs_5_0", D3DCOMPILE_ENABLE_STRICTNESS, 0,
+                                    vertex_blob.GetAddressOf(), compiler_error.GetAddressOf());
+        if (FAILED(result)) {
+            setHResultError(error, "D3DCompile(Quick preview vertex shader)", result);
+            return false;
+        }
+        compiler_error.Reset();
+        result = D3DCompile(kPixelShader, std::strlen(kPixelShader), "quick_preview_rgba_ps", nullptr, nullptr, "main",
+                            "ps_5_0", D3DCOMPILE_ENABLE_STRICTNESS, 0, pixel_blob.GetAddressOf(),
+                            compiler_error.GetAddressOf());
+        if (FAILED(result)) {
+            setHResultError(error, "D3DCompile(Quick preview pixel shader)", result);
+            return false;
+        }
+        result = device->CreateVertexShader(vertex_blob->GetBufferPointer(), vertex_blob->GetBufferSize(), nullptr,
+                                            vertex_shader.GetAddressOf());
+        if (FAILED(result)) {
+            setHResultError(error, "CreateVertexShader(Quick preview)", result);
+            return false;
+        }
+        result = device->CreatePixelShader(pixel_blob->GetBufferPointer(), pixel_blob->GetBufferSize(), nullptr,
+                                           pixel_shader.GetAddressOf());
+        if (FAILED(result)) {
+            setHResultError(error, "CreatePixelShader(Quick preview)", result);
+            return false;
+        }
     }
-    result = device->CreateVertexShader(vertex_blob->GetBufferPointer(), vertex_blob->GetBufferSize(), nullptr,
-                                        vertex_shader_.GetAddressOf());
-    if (FAILED(result)) {
-        setHResultError(error, "CreateVertexShader(Quick preview)", result);
-        return false;
-    }
-    result = device->CreatePixelShader(pixel_blob->GetBufferPointer(), pixel_blob->GetBufferSize(), nullptr,
-                                       pixel_shader_.GetAddressOf());
-    if (FAILED(result)) {
-        setHResultError(error, "CreatePixelShader(Quick preview)", result);
-        return false;
-    }
-    result = device->CreateShaderResourceView(source, nullptr, source_view_.GetAddressOf());
+    Microsoft::WRL::ComPtr<ID3D11ShaderResourceView> source_view;
+    Microsoft::WRL::ComPtr<ID3D11RenderTargetView> destination_view;
+    HRESULT result = device->CreateShaderResourceView(source, nullptr, source_view.GetAddressOf());
     if (FAILED(result)) {
         setHResultError(error, "CreateShaderResourceView(Quick preview source)", result);
         return false;
     }
-    result = device->CreateRenderTargetView(destination, nullptr, destination_view_.GetAddressOf());
+    result = device->CreateRenderTargetView(destination, nullptr, destination_view.GetAddressOf());
     if (FAILED(result)) {
         setHResultError(error, "CreateRenderTargetView(Quick preview RGBA target)", result);
         return false;
     }
 
+    // Publish one complete configuration. In particular, a failed target view
+    // must not replace the source while retaining the old destination or context.
+    if (replace_pipeline) {
+        vertex_shader_ = std::move(vertex_shader);
+        pixel_shader_ = std::move(pixel_shader);
+        device_ = std::move(context_device);
+    }
+    source_view_ = std::move(source_view);
+    destination_view_ = std::move(destination_view);
     context_ = context;
     width_ = width;
     height_ = height;
