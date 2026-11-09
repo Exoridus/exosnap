@@ -4559,19 +4559,25 @@ void VideoThread::RunAttachment(const std::shared_ptr<NativeState>& native, cons
                 const auto tick_t0 = std::chrono::steady_clock::now();
                 const uint64_t pts_ns = cfr_frame_idx * frame_interval_ns;
 
-                int32_t slot = encoder->AcquireFreeSlot();
-                if (slot < 0) {
+                auto acquired = encoder->AcquireInputSlot();
+                if (acquired.status == EncoderInputSlotStatus::Busy) {
                     // No free input slot: give the async encoder a bounded chance to
                     // reap a completion and free one before counting a drop.
                     if (!reapAndRoute(kSlotWaitMs))
                         goto end_encode_loop;
-                    slot = encoder->AcquireFreeSlot();
+                    acquired = encoder->AcquireInputSlot();
                 }
-                if (slot < 0) {
+                if (acquired.status == EncoderInputSlotStatus::Invalid) {
+                    m_state.RecordFailure(E_FAIL, ErrorPhase::VideoEncode,
+                                          "Video encoder returned an invalid input slot");
+                    goto end_encode_loop;
+                }
+                if (acquired.status == EncoderInputSlotStatus::Busy) {
                     ++slotStallCount;
                     m_state.diagnostics.OnSlotStall();
                     break; // retry this tick next outer iteration once a slot is free
                 }
+                const int32_t slot = acquired.index;
 
                 bool frameWritten = false;
                 uint64_t selectedPresentNs = 0;
@@ -5259,13 +5265,18 @@ void VideoThread::RunAttachment(const std::shared_ptr<NativeState>& native, cons
             if (vfrHeldDesktop != nullptr && !odHolding &&
                 (desktopArrived || visualNow100ns >= vfrNextVisualSample100ns)) {
                 vfrNextVisualSample100ns = visualNow100ns + frame_interval_100ns;
-                int32_t slot = encoder->AcquireFreeSlot();
-                if (slot < 0 && vfrDesktopPending) {
+                auto acquired = encoder->AcquireInputSlot();
+                if (acquired.status == EncoderInputSlotStatus::Busy && vfrDesktopPending) {
                     if (!reapAndRoute(kSlotWaitMs))
                         goto end_encode_loop;
-                    slot = encoder->AcquireFreeSlot();
+                    acquired = encoder->AcquireInputSlot();
                 }
-                if (slot < 0) {
+                if (acquired.status == EncoderInputSlotStatus::Invalid) {
+                    m_state.RecordFailure(E_FAIL, ErrorPhase::VideoEncode,
+                                          "Video encoder returned an invalid input slot");
+                    goto end_encode_loop;
+                }
+                if (acquired.status == EncoderInputSlotStatus::Busy) {
                     if (vfrDesktopPending) {
                         ++slotStallCount;
                         m_state.diagnostics.OnSlotStall();
@@ -5276,6 +5287,7 @@ void VideoThread::RunAttachment(const std::shared_ptr<NativeState>& native, cons
                     Sleep(1);
                     continue;
                 }
+                const int32_t slot = acquired.index;
                 sampleWgcCursor();
                 latestFrameTicks100ns =
                     vfrDesktopPending ? vfrHeldDesktopTicks100ns : static_cast<int64_t>(visualNow100ns);
@@ -5511,8 +5523,14 @@ void VideoThread::RunAttachment(const std::shared_ptr<NativeState>& native, cons
                                            : 0;
                 if (NeedsVfrEncoderHeartbeat(encoder->PendingFrames(), vfrCachedPictureValid, nowNs,
                                              vfrLastSubmissionNs)) {
-                    const int32_t slot = encoder->AcquireFreeSlot();
-                    if (slot >= 0) {
+                    const auto acquired = encoder->AcquireInputSlot();
+                    if (acquired.status == EncoderInputSlotStatus::Invalid) {
+                        m_state.RecordFailure(E_FAIL, ErrorPhase::VideoEncode,
+                                              "Video encoder returned an invalid input slot");
+                        goto end_encode_loop;
+                    }
+                    if (acquired.status == EncoderInputSlotStatus::Available) {
+                        const int32_t slot = acquired.index;
                         const auto tickStarted = std::chrono::steady_clock::now();
                         // Read from an independent cache, never an input surface
                         // whose ownership is still held by the encoder.

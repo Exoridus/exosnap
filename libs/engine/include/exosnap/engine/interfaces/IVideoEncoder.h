@@ -21,6 +21,15 @@ namespace exosnap::engine {
 // The encoder does not take ownership.
 using GpuTextureHandle = void*;
 
+enum class EncoderInputSlotStatus { Available, Busy, Invalid };
+
+struct EncoderInputSlot {
+    EncoderInputSlotStatus status = EncoderInputSlotStatus::Busy;
+    int32_t index = -1;
+};
+
+// Calls are serialized on the encoding worker. Native asynchronous completion
+// does not transfer the host device/context or input-pool ownership.
 class IVideoEncoder {
   public:
     virtual ~IVideoEncoder() = default;
@@ -49,7 +58,9 @@ class IVideoEncoder {
     // gpu_context: on Windows, an ID3D11Device* cast to void*. Null for CPU-only encoders.
     virtual bool Open(void* gpu_context, std::string& out_error) = 0;
 
-    // Configure dimensions and frame rate. Call after Open(), before RegisterSlotTexture().
+    // Configure visible dimensions and frame rate after Open(), before input
+    // registration. Live reconfiguration is unsupported. Changed configuration
+    // requires teardown and a new session with a newly validated input pool.
     virtual bool Configure(uint32_t width, uint32_t height, uint32_t fps_num, uint32_t fps_den,
                            std::string& out_error) = 0;
 
@@ -68,6 +79,17 @@ class IVideoEncoder {
     // successful acquisition grants permission to write an input texture.
     // Packet completion and PendingFrames do not establish input reuse safety.
     virtual int32_t AcquireFreeSlot() = 0;
+
+    // Busy has accepted no input and advances no submission state. Invalid is
+    // a backend contract failure, never a writable index or a retry request.
+    [[nodiscard]] EncoderInputSlot AcquireInputSlot() {
+        const int32_t slot = AcquireFreeSlot();
+        if (slot == -1)
+            return {EncoderInputSlotStatus::Busy, -1};
+        if (slot < 0 || slot >= SlotCount())
+            return {EncoderInputSlotStatus::Invalid, -1};
+        return {EncoderInputSlotStatus::Available, slot};
+    }
 
     // Release a slot that was acquired but never submitted via EncodeFrame
     // (error-path callers only; EncodeFrame itself owns the slot afterward,

@@ -132,7 +132,16 @@ Every valid same-track overlap owns exactly one junction. Overlaps created by a 
 
 `EditTimelineCompositor` reuses the existing plane uploader/YUV converter. Each admitted source has a persistent FP16 working texture holding BT.709-linearized pixels. A track resolves its junction pair with complementary weights, each scaled by that clip's opacity and edge-fade gain, into premultiplied color and coverage. Tracks are then composited back to front with premultiplied source-over into a linear FP16 accumulator, so an upper layer occludes rather than adds and identical pictures keep their level through a Crossfade. A disabled junction endpoint contributes no picture; the remaining endpoint retains its envelope as partial coverage over black or a lower track. Contain letterbox bands carry no coverage and reveal lower tracks. A final pass applies the shared BT.709 output transfer over black. Admission is bounded to eight sources and four UHD frames of summed source pixels. `AssessTimelineVideoAdmission` evaluates that demand before any decoder opens, and export planning refuses an unadmitted span with `ResourceLimitExceeded` instead of failing during encode. A persistent BGRA output feeds presentation or the shared SDR VideoProcessor color setup. Blend/raster/depth/shader state is explicitly established. There is no CPU BGRA blend or readback between layers. Texture sizes are stable until geometry changes, and failed initialization/device removal returns an error.
 
-Render export resolves generic `RecorderConfig` intent and calls `VideoEncoderFactory`/`IVideoEncoder`. One NV12 surface per encoder slot is created and registered once. Acquire/reap/flush and pending-frame completion preserve the encoder's reordered PTS/DTS contract. `IAudioEncoder` uses the shipping PCM24 encoder, and `MatroskaStreamWriter` receives video/audio packets and codec private data. Audio is rounded to the final CFR frame boundary, with an explicit mux duration. Linked imports keep refusing rendered MP4. Per-stream timelines reach MP4 through the AAC profile above; existing lossless MP4 delivery is unchanged.
+Render export resolves generic `RecorderConfig` intent and calls `VideoEncoderFactory`/`IVideoEncoder`.
+It validates the configured backend's input requirements before allocating and registering one persistent surface per slot.
+The current 8-bit 4:2:0 render profile requires an unpadded NV12 layout on the render device; unsupported geometry, resource flags and pool bounds fail before allocation.
+Input reuse follows slot acquisition independently of output completion.
+Acquire/reap/flush preserve the encoder's reordered PTS/DTS contract, including packets returned alongside failure.
+A failed export still removes its staging output.
+`IAudioEncoder` uses the shipping PCM24 encoder, and `MatroskaStreamWriter` receives video/audio packets and codec private data.
+Audio is rounded to the final CFR frame boundary, with an explicit mux duration.
+Linked imports keep refusing rendered MP4.
+Per-stream timelines reach MP4 through the AAC profile above; existing lossless MP4 delivery is unchanged.
 
 | Render contract | Support |
 | --- | --- |
