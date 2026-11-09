@@ -1634,6 +1634,7 @@ FocusScope {
                     delegate: Rectangle {
                         id: gainPoint
                         required property var modelData
+                        objectName: "editGainPoint" + clipItem.modelData.id + "_" + modelData.sourceUs
                         width: 10
                         height: 10
                         radius: 5

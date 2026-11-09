@@ -87,6 +87,9 @@ TestCase {
         verify(testSession.applyTimeValue(clip.id, "fadeIn", 1000000));
         const page = createTemporaryObject(pageComponent, tests);
         page.toggleDetails();
+        const timing = findChild(page, "editDetailsTimingToggle");
+        timing.forceActiveFocus(Qt.TabFocusReason);
+        keyClick(Qt.Key_Space);
         const curve = findChild(page, "editDetailsFadeInCurve");
         verify(!!curve && curve.visible, "The selected video fade has an evaluator-backed curve selector");
         compare(curve.Accessible.name, "Video fade in curve");
@@ -309,5 +312,46 @@ TestCase {
         verify(!inspector.editGainPoint(audio.id, 5000000, -1000000, -9));
         verify(!testSession.dragActive);
         compare(JSON.stringify(testSession.selectedClipDetails.gainKeys), before);
+    }
+    function test_visual_inspection_routes_expand_the_requested_section() {
+        const clip = testSession.visibleClipsUs(0, 100000000).find(row => row.video);
+        verify(testSession.inspectClip(clip.id));
+        const page = createTemporaryObject(pageComponent, tests);
+        verify(!page.applyHarnessView({inspectorField: "animation"}));
+        page.toggleDetails();
+        const inspector = findChild(page, "editInspector");
+        compare(inspector.animationExpanded, false);
+        compare(inspector.timingExpanded, false);
+        verify(page.applyHarnessView({inspectorField: "animation"}));
+        compare(inspector.animationExpanded, true);
+        verify(page.applyHarnessView({inspectorField: "fadeIn"}));
+        compare(inspector.timingExpanded, true);
+        const fade = findChild(page, "editDetailsFadeIn");
+        tryCompare(fade, "activeFocus", true);
+        waitForPolish(page);
+        const point = fade.mapToItem(inspector.flickable, 0, 0);
+        verify(point.y >= 0 && point.y + fade.height <= inspector.flickable.height);
+        verify(!page.applyHarnessView({inspectorField: "unknown"}));
+        keyClick(Qt.Key_Escape);
+    }
+    function test_focused_gain_point_opens_its_numeric_editor_without_moving_playhead() {
+        const audio = testSession.visibleClipsUs(0, 100000000).find(row => !row.video && row.startUs === 0);
+        verify(testSession.addGainKey(audio.id, 5000000));
+        const page = createTemporaryObject(pageComponent, tests);
+        const strip = findChild(page, "editClipTimeline");
+        strip.view.setVisibleInterval(0, 10000000);
+        waitForRendering(strip);
+        const point = findChild(strip, "editGainPoint" + audio.id + "_5000000");
+        verify(!!point && point.visible);
+        verify(point.Accessible.name.includes("dB"));
+        const position = testSession.positionUs;
+        point.forceActiveFocus(Qt.TabFocusReason);
+        keyClick(Qt.Key_Return);
+        tryCompare(page, "detailsOpen", true);
+        const time = findChild(page, "editGainPointTime");
+        tryCompare(time, "activeFocus", true);
+        compare(time.valueUs, 5000000);
+        compare(testSession.positionUs, position);
+        keyClick(Qt.Key_Escape);
     }
 }

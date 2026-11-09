@@ -42,17 +42,28 @@ ExoScrollView {
         return committed;
     }
     function focusField(field: string): void {
-        if (field.startsWith("gain:")) {
-            selectedGainSourceUs = Number(field.slice(5));
-            gainPointTime.forceActiveFocus(Qt.OtherFocusReason);
-            root.revealFocusedControl(gainPointTime);
+        if (field === "animation") {
+            animationExpanded = true;
+            root.scrollToHome();
             return;
         }
-        timingExpanded = true;
-        const editor = field === "sourceIn" ? sourceInRow.editor : field === "sourceOut" ? sourceOutRow.editor : null;
-        if (editor && editor.enabled) {
-            editor.forceActiveFocus(Qt.OtherFocusReason);
-            root.revealFocusedControl(editor);
+        let editor = null;
+        if (field.startsWith("gain:")) {
+            selectedGainSourceUs = Number(field.slice(5));
+            editor = gainPointTime;
+        } else {
+            editor = field === "sourceIn" ? sourceInRow.editor : field === "sourceOut" ? sourceOutRow.editor : field === "fadeIn" ? fadeInRow.editor : null;
+            if (editor)
+                timingExpanded = true;
+        }
+        if (editor) {
+            Qt.callLater(() => {
+                if (!editor || !root.visible)
+                    return;
+                if (editor.enabled)
+                    editor.forceActiveFocus(Qt.OtherFocusReason);
+                root.revealFocusedControl(editor);
+            });
         }
     }
     contentWidth: availableWidth
@@ -304,6 +315,7 @@ ExoScrollView {
                 }
             }
             ExoButton {
+                objectName: "editDetailsAnimationToggle"
                 Layout.fillWidth: true
                 visible: root.clipDetails.video ?? false
                 text: root.animationExpanded ? qsTr("Hide animation") : qsTr("Animation")
@@ -423,6 +435,7 @@ ExoScrollView {
                 TimeRow { id: sourceOutRow; label: qsTr("Source out"); field: "sourceOut"; fieldObjectName: "editDetailsSourceOut"; timeUs: root.clipDetails.sourceOutUs ?? 0; targetId: root.clipDetails.id ?? 0 }
                 TimeRow { label: qsTr("Duration"); field: "duration"; timeUs: root.clipDetails.durationUs ?? 0; targetId: root.clipDetails.id ?? 0 }
                 TimeRow {
+                    id: fadeInRow
                     label: root.clipDetails.video ? qsTr("Video fade in") : qsTr("Audio fade in")
                     field: "fadeIn"; fieldObjectName: "editDetailsFadeIn"
                     timeUs: root.clipDetails.fadeInUs ?? 0; targetId: root.clipDetails.id ?? 0

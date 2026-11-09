@@ -342,7 +342,7 @@ FocusScope {
     function applyHarnessView(layout: var): bool {
         if (!layout || typeof layout !== "object")
             return false;
-        const keys = ["fit", "media", "details", "sourceTab", "popup", "viewFromUs", "viewToUs"];
+        const keys = ["fit", "media", "details", "sourceTab", "popup", "viewFromUs", "viewToUs", "inspectorField"];
         if (Object.keys(layout).some(key => keys.indexOf(key) < 0))
             return false;
         for (const panel of ["media", "details"]) {
@@ -358,6 +358,10 @@ FocusScope {
             return false;
         if (layout.fit !== undefined && typeof layout.fit !== "boolean")
             return false;
+        if (layout.inspectorField !== undefined && (["sourceIn", "sourceOut", "fadeIn", "animation"].indexOf(layout.inspectorField) < 0
+                || !root.detailsOpen || root.rightContext !== "details" || !rightPanelHost.item
+                || root.session.selectedClipIds.length !== 1 || (layout.inspectorField === "animation" && !root.session.selectedClipDetails.video)))
+            return false;
         const hasInterval = layout.viewFromUs !== undefined || layout.viewToUs !== undefined;
         if (hasInterval && (!Number.isFinite(layout.viewFromUs) || !Number.isFinite(layout.viewToUs)
                 || layout.viewFromUs < 0 || layout.viewToUs <= layout.viewFromUs))
@@ -372,6 +376,8 @@ FocusScope {
             return false;
         if (popup === "source-audio" && !root.session.sourceAudioChoice.active)
             return false;
+        if (layout.inspectorField !== undefined)
+            root.inspectorFieldRequested(layout.inspectorField);
         if (hasInterval)
             clips.view.setVisibleInterval(layout.viewFromUs, layout.viewToUs);
         else if (layout.fit)
