@@ -912,6 +912,22 @@
         <source>Cancel</source>
         <translation>Abbrechen</translation>
     </message>
+    <message>
+        <source>Discard editor changes?</source>
+        <translation>Editor-Änderungen verwerfen?</translation>
+    </message>
+    <message>
+        <source>Your editing workspace exists only in this session. Closing will discard its clips, tracks and adjustments. Exported files contain finished media and do not save an editable workspace. Your original recordings are untouched.</source>
+        <translation>Der Bearbeitungsbereich ist nur während dieser Sitzung verfügbar. Beim Schließen gehen Clips, Spuren und Anpassungen verloren. Exportierte Dateien enthalten das fertige Medium, aber keinen weiter bearbeitbaren Arbeitsbereich. Die Originalaufnahmen bleiben unverändert.</translation>
+    </message>
+    <message>
+        <source>Discard edits and close</source>
+        <translation>Änderungen verwerfen und schließen</translation>
+    </message>
+    <message>
+        <source>Keep editing</source>
+        <translation>Bearbeitung fortsetzen</translation>
+    </message>
 </context>
 <context>
     <name>CrashReportAdapter</name>
