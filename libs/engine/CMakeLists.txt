@@ -772,7 +772,7 @@ target_include_directories(test_encoder_packet_dispatch PRIVATE src include)
 exosnap_add_gtest(
     NAME test_encoder_input_requirements
     TEST_PREFIX engine.
-    SOURCES tests/test_encoder_input_requirements.cpp tests/test_encoder_input_slots.cpp
+    SOURCES tests/test_encoder_input_requirements.cpp tests/test_encoder_input_slots.cpp tests/test_encoder_input_lifetime.cpp
 )
 target_include_directories(test_encoder_input_requirements PRIVATE src include)
 

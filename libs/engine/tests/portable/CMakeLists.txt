@@ -31,6 +31,7 @@ add_executable(exosnap_concurrency_tests
     ../test_encoder_packet_dispatch.cpp
     ../test_encoder_input_requirements.cpp
     ../test_encoder_input_slots.cpp
+    ../test_encoder_input_lifetime.cpp
 )
 target_compile_features(exosnap_concurrency_tests PRIVATE cxx_std_20)
 set_target_properties(exosnap_concurrency_tests PROPERTIES CXX_EXTENSIONS OFF)
