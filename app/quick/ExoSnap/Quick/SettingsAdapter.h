@@ -54,6 +54,16 @@ class SettingsAdapter : public QObject {
     QML_UNCREATABLE("SettingsAdapter is provided by the application")
 
   public:
+    enum WebcamPreviewState {
+        CameraOff,
+        CameraDisconnected,
+        CameraInactive,
+        CameraStarting,
+        CameraReady,
+        CameraUnavailable
+    };
+    Q_ENUM(WebcamPreviewState)
+
     enum class OutputValidationTrigger { Startup, PathEdit, ApplicationActivation, OutputCardReveal };
     Q_ENUM(OutputValidationTrigger)
 
@@ -185,6 +195,8 @@ class SettingsAdapter : public QObject {
     Q_PROPERTY(int cq READ cq WRITE setCq NOTIFY configChanged FINAL)
     Q_PROPERTY(QVariantList rateControlOptions READ rateControlOptions NOTIFY optionsChanged FINAL)
     Q_PROPERTY(int rateControl READ rateControl WRITE setRateControl NOTIFY configChanged FINAL)
+    Q_PROPERTY(bool constantQualityRelevant READ constantQualityRelevant NOTIFY configChanged FINAL)
+    Q_PROPERTY(QString rateControlLabel READ rateControlLabel NOTIFY configChanged FINAL)
     Q_PROPERTY(bool bitrateRelevant READ bitrateRelevant NOTIFY configChanged FINAL)
     Q_PROPERTY(QString nativeQuantizerHint READ nativeQuantizerHint NOTIFY configChanged FINAL)
     Q_PROPERTY(int bitrateKbps READ bitrateKbps WRITE setBitrateKbps NOTIFY configChanged FINAL)
@@ -387,6 +399,8 @@ class SettingsAdapter : public QObject {
     // The live camera picture for the Webcam card (a WebcamPreviewFeed). Set
     // once by the application before QML loads.
     Q_PROPERTY(QObject* webcamPreviewFeed READ webcamPreviewFeed CONSTANT FINAL)
+    Q_PROPERTY(WebcamPreviewState webcamPreviewState READ webcamPreviewState NOTIFY configChanged FINAL)
+    Q_PROPERTY(QString webcamPreviewMessage READ webcamPreviewMessage NOTIFY configChanged FINAL)
     // The UVC controls the selected camera reports, each a map with control,
     // label, minimum, maximum, step, canAutomatic, canManual and, for a choice
     // rather than a range, options. Empty until the camera has been probed or
@@ -516,6 +530,9 @@ class SettingsAdapter : public QObject {
     Q_INVOKABLE void setWebcamControlAutomatic(int control, bool automatic);
     // Hands every control back to the camera's defaults.
     Q_INVOKABLE void resetWebcamControls();
+    void setWebcamSourceStatus(std::optional<SourceStatus> status);
+    [[nodiscard]] WebcamPreviewState webcamPreviewState() const;
+    [[nodiscard]] QString webcamPreviewMessage() const;
     void setWebcamPreviewFeed(QObject* feed) noexcept {
         webcam_preview_feed_ = feed;
     }
@@ -618,6 +635,8 @@ class SettingsAdapter : public QObject {
     [[nodiscard]] int cq() const noexcept;
     [[nodiscard]] const QVariantList& rateControlOptions() const noexcept;
     [[nodiscard]] int rateControl() const noexcept;
+    [[nodiscard]] bool constantQualityRelevant() const noexcept;
+    [[nodiscard]] QString rateControlLabel() const;
     [[nodiscard]] bool bitrateRelevant() const noexcept;
     // The quantizer the selected codec is actually configured with for the
     // current CQ, named in that codec's own domain. The Expert CQ field shows
@@ -1113,6 +1132,7 @@ class SettingsAdapter : public QObject {
     QHash<QString, std::vector<WebcamControlRange>> webcam_control_ranges_;
     QVariantList webcam_controls_;
     QObject* webcam_preview_feed_ = nullptr;
+    std::optional<SourceStatus> webcam_source_status_;
     QVariantList webcam_resolution_options_;
     QVariantList webcam_frame_rate_options_;
 

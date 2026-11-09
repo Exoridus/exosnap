@@ -16,6 +16,15 @@ ExoCard {
 
     title: qsTr("Webcam")
 
+    FontMetrics {
+        id: frameRateMetrics
+        font.family: ExoTheme.sansFamily
+        font.pixelSize: ExoTheme.fontBody
+    }
+    readonly property real frameRateTextWidth: root.settings.webcamFrameRateOptions.reduce(
+        (widest, option) => Math.max(widest, frameRateMetrics.advanceWidth(option.label)),
+        frameRateMetrics.advanceWidth(qsTr("120 fps")))
+
     // The empty state has the shape of the filled one. A notice where the picture
     // will be means the card jumps into a different geometry the moment a camera
     // is plugged in; a box that is already the right size just fills up.
@@ -89,11 +98,13 @@ ExoCard {
         }
 
         Label {
-            text: root.settings.webcamEnabled ? qsTr("Starting camera…") : qsTr("Camera off")
+            text: root.settings.webcamPreviewMessage
             textFormat: Text.PlainText
             horizontalAlignment: Text.AlignHCenter
-            color: ExoTheme.textSecondary
-            visible: !root.settings.webcamEnabled || !cameraPreview.hasFrame
+            color: root.settings.webcamPreviewState === SettingsAdapter.CameraUnavailable ? ExoTheme.errorText : ExoTheme.textSecondary
+            wrapMode: Text.WordWrap
+            width: parent.width - 2 * ExoTheme.spacingMd
+            visible: root.settings.webcamPreviewState !== SettingsAdapter.CameraReady || !cameraPreview.hasFrame
             anchors.centerIn: parent
             font {
                 family: ExoTheme.sansFamily
@@ -148,7 +159,8 @@ ExoCard {
                 options: root.settings.webcamFrameRateOptions
                 value: root.settings.webcamFrameRate
                 enabled: root.webcamEditable
-                Layout.preferredWidth: 84
+                Layout.preferredWidth: Math.ceil(root.frameRateTextWidth) + 2 * ExoTheme.spacingMd + 24
+                Layout.minimumWidth: Layout.preferredWidth
                 Accessible.name: qsTr("Webcam frame rate")
                 onValueActivated: value => root.settings.webcamFrameRate = value
             }
