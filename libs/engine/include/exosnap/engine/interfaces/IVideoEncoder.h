@@ -65,6 +65,10 @@ class IVideoEncoder {
     // (error-path callers only; EncodeFrame itself owns the slot afterward).
     virtual void ReleaseSlot(int32_t slot_idx) noexcept = 0;
 
+    // EncodeFrame, ReapCompleted and Flush transfer each appended packet to the
+    // caller exactly once, including when returning false. Route these packets
+    // before handling the error. Later calls never return them again.
+    //
     // Submit one frame for encoding. Appends 0..k completed packets to
     // out_packets in decode order, including across successive calls. PTS is
     // presentation time. Reordered packets carry an explicit decode timestamp.
@@ -72,7 +76,7 @@ class IVideoEncoder {
     virtual bool EncodeFrame(int32_t slot_idx, uint64_t pts_ns, uint32_t width, uint32_t height,
                              std::vector<EncodedVideoPacket>& out_packets, std::string& out_error) = 0;
 
-    // Flush all buffered frames (EOS). Appends remaining packets.
+    // Flush all buffered frames (EOS). Appends remaining packets in decode order.
     //
     // Returns true only when every frame the encoder still held reached
     // out_packets. False means the drain was cut short -- EOS was refused, the
@@ -97,7 +101,8 @@ class IVideoEncoder {
     // it; the default no-op keeps today's sync encoders (and future CPU-only
     // encoders, roadmap 0.11) trivially conformant since they always emit their
     // output inline from EncodeFrame. wait_head_ms bounds how long to wait for
-    // the oldest pending completion (0 = non-blocking poll).
+    // the oldest pending completion (0 = non-blocking poll). As with EncodeFrame,
+    // a false result can accompany completed packets and sets out_error.
     virtual bool ReapCompleted(std::vector<EncodedVideoPacket>& out_packets, std::string& out_error,
                                uint32_t wait_head_ms = 0) {
         (void)out_packets;

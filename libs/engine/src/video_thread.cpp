@@ -26,6 +26,7 @@
 #include "annexb_to_hvcc.h"
 #include "av_epoch_align.h"
 #include "codec_private.h"
+#include "encoder_packet_dispatch.h"
 #include "gpu_frame_luminance.h"
 #include "gpu_hdr_pq.h"
 #include "gpu_rgb_to_ayuv.h"
@@ -3559,7 +3560,7 @@ void VideoThread::RunAttachment(const std::shared_ptr<NativeState>& native, cons
 
     // Helper lambda: push an encoded packet to premux or mux queue.
     // Uses h264CodecPrivateReady, hevcCodecPrivateReady, and av1CodecPrivateReady by reference.
-    auto routePacket = [&](EncodedVideoPacket pkt) -> bool {
+    auto routePacket = [&](EncodedVideoPacket pkt, std::string& route_error) -> bool {
         const size_t pkt_bytes_count = pkt.bytes.size();
         if (pkt.bytes.empty())
             return true;
@@ -3570,9 +3571,8 @@ void VideoThread::RunAttachment(const std::shared_ptr<NativeState>& native, cons
             const auto route = m_state.premux.Route(pkt, m_state.config.video_codec, m_state.audio_track_count);
             if (route != PremuxRoute::Mux) {
                 if (route == PremuxRoute::Full) {
-                    m_state.RecordFailure(E_OUTOFMEMORY, ErrorPhase::Mux,
-                                          "Pre-mux video buffer limit (120 packets) exceeded "
-                                          "before codec private data was ready");
+                    route_error = "Pre-mux video buffer limit (120 packets) exceeded "
+                                  "before codec private data was ready";
                     return false;
                 }
             } else {
@@ -3599,9 +3599,8 @@ void VideoThread::RunAttachment(const std::shared_ptr<NativeState>& native, cons
                     // mux that stopped consuming is the shutdown policy's report to
                     // make, and an existing failure already names the cause.
                     if (room == MuxQueueWait::TimedOut) {
-                        m_state.RecordFailure(E_OUTOFMEMORY, ErrorPhase::Mux,
-                                              "Mux queue limit exceeded: the output destination "
-                                              "cannot keep up with the recording");
+                        route_error = "Mux queue limit exceeded: the output destination "
+                                      "cannot keep up with the recording";
                     } else if (room == MuxQueueWait::Stopping) {
                         logging::log(logging::LogLevel::Warn, "video_thread",
                                      "mux queue still full at stop; the tail of the video stream was not written", {});
@@ -3636,6 +3635,19 @@ void VideoThread::RunAttachment(const std::shared_ptr<NativeState>& native, cons
         return true;
     };
 
+    // Defer failure publication until completed packets have reached the sink.
+    // Publishing first can interrupt the bounded mux wait and discard them.
+    auto routeEncoderPackets = [&](bool encoder_ok, std::vector<EncodedVideoPacket>& packets, std::string& error,
+                                   const char* encode_context) -> bool {
+        const bool routed = RouteEncoderPackets(encoder_ok, packets, error, routePacket);
+        if (!encoder_ok) {
+            m_state.RecordFailure(E_FAIL, ErrorPhase::VideoEncode, std::string(encode_context) + error);
+        } else if (!routed && !error.empty()) {
+            m_state.RecordFailure(E_OUTOFMEMORY, ErrorPhase::Mux, error);
+        }
+        return routed;
+    };
+
     // Report per-packet diagnostics (encode latency, order-validation
     // mismatch counters) — shared between the EncodeFrame submit path and
     // the ReapCompleted drain path below so both origins account
@@ -3661,17 +3673,11 @@ void VideoThread::RunAttachment(const std::shared_ptr<NativeState>& native, cons
     auto reapAndRoute = [&](uint32_t wait_head_ms) -> bool {
         std::vector<EncodedVideoPacket> reaped;
         std::string reapErr;
-        if (!encoder->ReapCompleted(reaped, reapErr, wait_head_ms)) {
-            m_state.RecordFailure(E_FAIL, ErrorPhase::VideoEncode, "Video encoder async reap: " + reapErr);
-            return false;
-        }
+        const bool reapOk = encoder->ReapCompleted(reaped, reapErr, wait_head_ms);
         const auto reap_t = std::chrono::steady_clock::now();
-        for (EncodedVideoPacket& pkt : reaped) {
+        for (const EncodedVideoPacket& pkt : reaped)
             reportPacketDiagnostics(pkt, reap_t);
-            if (!routePacket(std::move(pkt)))
-                return false;
-        }
-        return true;
+        return routeEncoderPackets(reapOk, reaped, reapErr, "Video encoder async reap: ");
     };
 
     // Bounded wait for ReapCompleted when a slot acquisition fails before
@@ -4897,21 +4903,16 @@ void VideoThread::RunAttachment(const std::shared_ptr<NativeState>& native, cons
                 for (const EncodedVideoPacket& pkt : pkts)
                     reportPacketDiagnostics(pkt, enc_t1);
 
-                if (!encOk) {
-                    m_state.RecordFailure(E_FAIL, ErrorPhase::VideoEncode, "Video encoder encode (CFR): " + encErr);
+                if (encOk) {
+                    m_state.diagnostics.OnCfrOutput(enc_t1, idealSlotNs, selectedPresentNs,
+                                                    usePhaseCorrect ? freshSelection : frameWritten, ringOccupancy,
+                                                    frame_interval_ns, Qpc100ns(qpcFreq) * 100);
+                    ++videoFramesCaptured;
+                    lastVideoPts = pts_ns;
+                }
+
+                if (!routeEncoderPackets(encOk, pkts, encErr, "Video encoder encode (CFR): "))
                     goto end_encode_loop;
-                }
-
-                m_state.diagnostics.OnCfrOutput(enc_t1, idealSlotNs, selectedPresentNs,
-                                                usePhaseCorrect ? freshSelection : frameWritten, ringOccupancy,
-                                                frame_interval_ns, Qpc100ns(qpcFreq) * 100);
-                ++videoFramesCaptured;
-                lastVideoPts = pts_ns;
-
-                for (EncodedVideoPacket& pkt : pkts) {
-                    if (!routePacket(std::move(pkt)))
-                        goto end_encode_loop;
-                }
 
                 const auto tick_t1 = std::chrono::steady_clock::now();
                 m_state.diagnostics.OnVideoTickTime(
@@ -5384,16 +5385,12 @@ void VideoThread::RunAttachment(const std::shared_ptr<NativeState>& native, cons
                             enc_t1, std::chrono::duration<double, std::milli>(enc_t1 - enc_t0).count());
                         for (const EncodedVideoPacket& pkt : pkts)
                             reportPacketDiagnostics(pkt, enc_t1);
-                        if (!encOk) {
-                            m_state.RecordFailure(E_FAIL, ErrorPhase::VideoEncode, "Video encoder encode: " + encErr);
-                            break;
+                        if (encOk) {
+                            ++videoFramesCaptured;
+                            vfrLastSubmissionNs = framePts_ns;
                         }
-                        ++videoFramesCaptured;
-                        vfrLastSubmissionNs = framePts_ns;
-                        for (EncodedVideoPacket& pkt : pkts) {
-                            if (!routePacket(std::move(pkt)))
-                                goto end_encode_loop;
-                        }
+                        if (!routeEncoderPackets(encOk, pkts, encErr, "Video encoder encode: "))
+                            goto end_encode_loop;
                         const auto tick_t1 = std::chrono::steady_clock::now();
                         m_state.diagnostics.OnVideoTickTime(
                             tick_t1, std::chrono::duration<double, std::milli>(tick_t1 - tick_t0).count());
@@ -5474,19 +5471,13 @@ void VideoThread::RunAttachment(const std::shared_ptr<NativeState>& native, cons
                                 for (const EncodedVideoPacket& pkt : pkts)
                                     reportPacketDiagnostics(pkt, enc_t1);
 
-                                if (!encOk) {
-                                    m_state.RecordFailure(E_FAIL, ErrorPhase::VideoEncode,
-                                                          "Video encoder encode: " + encErr);
-                                    break;
+                                if (encOk) {
+                                    ++videoFramesCaptured;
+                                    vfrLastSubmissionNs = framePts_ns;
                                 }
 
-                                ++videoFramesCaptured;
-                                vfrLastSubmissionNs = framePts_ns;
-
-                                for (EncodedVideoPacket& pkt : pkts) {
-                                    if (!routePacket(std::move(pkt)))
-                                        goto end_encode_loop;
-                                }
+                                if (!routeEncoderPackets(encOk, pkts, encErr, "Video encoder encode: "))
+                                    goto end_encode_loop;
 
                                 const auto tick_t1 = std::chrono::steady_clock::now();
                                 m_state.diagnostics.OnVideoTickTime(
@@ -5547,17 +5538,13 @@ void VideoThread::RunAttachment(const std::shared_ptr<NativeState>& native, cons
                             finished, std::chrono::duration<double, std::milli>(finished - started).count());
                         for (const auto& packet : packets)
                             reportPacketDiagnostics(packet, finished);
-                        if (!ok) {
-                            m_state.RecordFailure(E_FAIL, ErrorPhase::VideoEncode, "VFR encoder heartbeat: " + error);
+                        if (ok) {
+                            ++videoFramesCaptured;
+                            m_state.diagnostics.OnVfrEncoderHeartbeat();
+                            lastVideoPts = vfrLastSubmissionNs = ptsNs;
+                        }
+                        if (!routeEncoderPackets(ok, packets, error, "VFR encoder heartbeat: "))
                             goto end_encode_loop;
-                        }
-                        ++videoFramesCaptured;
-                        m_state.diagnostics.OnVfrEncoderHeartbeat();
-                        lastVideoPts = vfrLastSubmissionNs = ptsNs;
-                        for (auto& packet : packets) {
-                            if (!routePacket(std::move(packet)))
-                                goto end_encode_loop;
-                        }
                         m_state.diagnostics.OnVideoTickTime(
                             finished, std::chrono::duration<double, std::milli>(finished - tickStarted).count());
                         anyWork = true;

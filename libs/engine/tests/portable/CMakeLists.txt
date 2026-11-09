@@ -28,6 +28,7 @@ add_executable(exosnap_concurrency_tests
     ../test_mux_queue.cpp
     ../test_session_synchronization.cpp
     ../test_session_callback_gate.cpp
+    ../test_encoder_packet_dispatch.cpp
 )
 target_compile_features(exosnap_concurrency_tests PRIVATE cxx_std_20)
 set_target_properties(exosnap_concurrency_tests PROPERTIES CXX_EXTENSIONS OFF)

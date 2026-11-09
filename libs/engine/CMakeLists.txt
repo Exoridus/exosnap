@@ -759,6 +759,14 @@ exosnap_add_gtest(
 )
 target_include_directories(test_video_thread_encoder_dispatch PRIVATE src)
 
+exosnap_add_gtest(
+    NAME test_encoder_packet_dispatch
+    TEST_PREFIX engine.
+    PHASE cpu
+    SOURCES tests/test_encoder_packet_dispatch.cpp
+)
+target_include_directories(test_encoder_packet_dispatch PRIVATE src include)
+
 # test_nvenc_rc_params: pure unit tests for ComputeNvencRcParams (no GPU needed).
 exosnap_add_gtest(
     NAME test_nvenc_rc_params

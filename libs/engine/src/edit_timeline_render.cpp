@@ -18,6 +18,7 @@
 #include "annexb_to_hvcc.h"
 #include "codec_private.h"
 #include "edit_mix_encoder.h"
+#include "encoder_packet_dispatch.h"
 #include "matroska_stream_writer.h"
 #include "render_audio_manifest.h"
 
@@ -300,27 +301,27 @@ RemuxResult RenderEditTimeline(const TimelineRenderSnapshot& snapshot, const Edi
         if (!reader.Open(snapshot, plan, error))
             return false;
         std::vector<EncodedVideoPacket> packets;
-        const auto mux_video = [&]() {
-            for (auto& packet : packets) {
-                std::vector<uint8_t> bytes;
-                bool converted = true;
-                if (config.video_codec == VideoCodec::H264)
-                    converted = annexb::ConvertAnnexBToAvcc(packet.bytes.data(), packet.bytes.size(), bytes);
-                else if (config.video_codec == VideoCodec::Hevc)
-                    converted = annexb::ConvertAnnexBToHevcSample(packet.bytes.data(), packet.bytes.size(), bytes);
-                else
-                    bytes = std::move(packet.bytes);
-                if (!converted) {
-                    error = "Cannot package encoded video sample.";
-                    return false;
-                }
-                if (!writer.Push({packet.pts_ns, 1, packet.keyframe, std::move(bytes), packet.dts_ns})) {
-                    error = writer.error();
-                    return false;
-                }
-            }
-            packets.clear();
-            return true;
+        const auto mux_video = [&](bool encoder_ok) {
+            return RouteEncoderPackets(
+                encoder_ok, packets, error, [&](EncodedVideoPacket packet, std::string& mux_error) {
+                    std::vector<uint8_t> bytes;
+                    bool converted = true;
+                    if (config.video_codec == VideoCodec::H264)
+                        converted = annexb::ConvertAnnexBToAvcc(packet.bytes.data(), packet.bytes.size(), bytes);
+                    else if (config.video_codec == VideoCodec::Hevc)
+                        converted = annexb::ConvertAnnexBToHevcSample(packet.bytes.data(), packet.bytes.size(), bytes);
+                    else
+                        bytes = std::move(packet.bytes);
+                    if (!converted) {
+                        mux_error = "Cannot package encoded video sample.";
+                        return false;
+                    }
+                    if (!writer.Push({packet.pts_ns, 1, packet.keyframe, std::move(bytes), packet.dts_ns})) {
+                        mux_error = writer.error();
+                        return false;
+                    }
+                    return true;
+                });
         };
         uint64_t audio_position = 0;
         uint64_t accumulated = 0;
@@ -339,7 +340,7 @@ RemuxResult RenderEditTimeline(const TimelineRenderSnapshot& snapshot, const Edi
             int32_t slot = encoder->AcquireFreeSlot();
             const auto waiting = std::chrono::steady_clock::now();
             while (slot < 0) {
-                if (!encoder->ReapCompleted(packets, error, 10) || !mux_video())
+                if (!mux_video(encoder->ReapCompleted(packets, error, 10)))
                     return false;
                 if (!progress(static_cast<float>(frame_index) / static_cast<float>(frames))) {
                     error = "Export cancelled.";
@@ -355,7 +356,7 @@ RemuxResult RenderEditTimeline(const TimelineRenderSnapshot& snapshot, const Edi
                 encoder->ReleaseSlot(slot);
                 return false;
             }
-            if (!encoder->EncodeFrame(slot, pts, plan.output.width, plan.output.height, packets, error) || !mux_video())
+            if (!mux_video(encoder->EncodeFrame(slot, pts, plan.output.width, plan.output.height, packets, error)))
                 return false;
             ++stats.video_frames;
             stats.peak_encoder_backlog = std::max(stats.peak_encoder_backlog, encoder->PendingFrames());
@@ -377,10 +378,10 @@ RemuxResult RenderEditTimeline(const TimelineRenderSnapshot& snapshot, const Edi
                 audio_packets.clear();
                 audio_position += count;
             }
-            if (!encoder->ReapCompleted(packets, error) || !mux_video())
+            if (!mux_video(encoder->ReapCompleted(packets, error)))
                 return false;
         }
-        if (!encoder->Flush(packets, error) || !mux_video() || encoder->PendingFrames() != 0)
+        if (!mux_video(encoder->Flush(packets, error)) || encoder->PendingFrames() != 0)
             return false;
         if (audio) {
             audio_encoder->Flush(audio_packets);

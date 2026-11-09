@@ -16,6 +16,7 @@
 
 #include <cstdint>
 #include <string>
+#include <utility>
 #include <vector>
 
 namespace exosnap::engine::testutil {
@@ -33,8 +34,15 @@ class FakeVideoEncoder : public IVideoEncoder {
     bool force_open_fail = false;
     bool force_configure_fail = false;
     bool force_encode_fail = false;
+    bool force_reap_fail = false;
     bool force_flush_fail = false;
     std::string forced_error_message = "FakeVideoEncoder: forced failure";
+
+    // Completions from earlier submissions can accompany a later failure.
+    // Each batch is transferred once, before the corresponding status returns.
+    std::vector<EncodedVideoPacket> encode_completions;
+    std::vector<EncodedVideoPacket> reap_completions;
+    std::vector<EncodedVideoPacket> flush_completions;
 
     // --- Configuration setters: recorded only, no validation. The fake has
     // no real codec limits to enforce. ---
@@ -148,6 +156,7 @@ class FakeVideoEncoder : public IVideoEncoder {
             slot_in_use_[static_cast<size_t>(slot_idx)] = false;
         }
 
+        AppendCompletions(encode_completions, out_packets);
         if (force_encode_fail) {
             out_error = forced_error_message;
             return false;
@@ -163,8 +172,19 @@ class FakeVideoEncoder : public IVideoEncoder {
         return true;
     }
 
+    bool ReapCompleted(std::vector<EncodedVideoPacket>& out_packets, std::string& out_error,
+                       uint32_t wait_head_ms = 0) override {
+        (void)wait_head_ms;
+        AppendCompletions(reap_completions, out_packets);
+        if (force_reap_fail) {
+            out_error = forced_error_message;
+            return false;
+        }
+        return true;
+    }
+
     bool Flush(std::vector<EncodedVideoPacket>& out_packets, std::string& out_error) override {
-        (void)out_packets; // the fake buffers nothing internally; nothing to drain
+        AppendCompletions(flush_completions, out_packets);
         if (force_flush_fail) {
             out_error = forced_error_message;
             return false;
@@ -211,6 +231,13 @@ class FakeVideoEncoder : public IVideoEncoder {
     }
 
   private:
+    static void AppendCompletions(std::vector<EncodedVideoPacket>& completed,
+                                  std::vector<EncodedVideoPacket>& out_packets) {
+        for (auto& packet : completed)
+            out_packets.push_back(std::move(packet));
+        completed.clear();
+    }
+
     static constexpr size_t kPacketSize = 256;
 
     int32_t slot_count_;
