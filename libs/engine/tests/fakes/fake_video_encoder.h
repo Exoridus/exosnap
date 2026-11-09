@@ -43,6 +43,11 @@ class FakeVideoEncoder : public IVideoEncoder {
     std::vector<EncodedVideoPacket> encode_completions;
     std::vector<EncodedVideoPacket> reap_completions;
     std::vector<EncodedVideoPacket> flush_completions;
+    bool retain_input_after_encode = false;
+
+    void CompleteInput(int32_t slot_idx) {
+        ReleaseSlot(slot_idx);
+    }
 
     // --- Configuration setters: recorded only, no validation. The fake has
     // no real codec limits to enforce. ---
@@ -156,9 +161,8 @@ class FakeVideoEncoder : public IVideoEncoder {
 
     // Error-path release: caller acquired a slot but never submitted it via
     // EncodeFrame (e.g. a texture-copy failure between AcquireFreeSlot and
-    // EncodeFrame). EncodeFrame itself already frees the slot on both its
-    // success and failure paths (see EncodeFrame below), matching the real
-    // interface contract documented on IVideoEncoder::ReleaseSlot.
+    // EncodeFrame). Submitted inputs belong to the encoder until the fake's
+    // completion hook or its immediate-completion default frees them.
     void ReleaseSlot(int32_t slot_idx) noexcept override {
         if (slot_idx >= 0 && slot_idx < slot_count_) {
             slot_in_use_[static_cast<size_t>(slot_idx)] = false;
@@ -170,10 +174,9 @@ class FakeVideoEncoder : public IVideoEncoder {
         (void)width;
         (void)height;
         ++encode_frame_calls_;
-        // EncodeFrame owns the slot once called, on both the success and the
-        // failure path (mirrors the real encoder's contract) — the caller
-        // never needs a matching ReleaseSlot after a submitted EncodeFrame.
-        if (slot_idx >= 0 && slot_idx < slot_count_) {
+        // Output can complete while input reuse remains blocked. A forced
+        // failure in this fake rejects the new input and frees that slot.
+        if (slot_idx >= 0 && slot_idx < slot_count_ && (!retain_input_after_encode || force_encode_fail)) {
             slot_in_use_[static_cast<size_t>(slot_idx)] = false;
         }
 

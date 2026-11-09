@@ -335,9 +335,9 @@ RemuxResult RenderEditTimeline(const TimelineRenderSnapshot& snapshot, const Edi
             if (!reader.VideoAt(span_in + static_cast<int64_t>(pts / 1000), frame, error) ||
                 !compositor.Compose(frame.layers, error))
                 return false;
-            int32_t slot = encoder->AcquireFreeSlot();
+            auto acquired = encoder->AcquireInputSlot();
             const auto waiting = std::chrono::steady_clock::now();
-            while (slot < 0) {
+            while (acquired.status == EncoderInputSlotStatus::Busy) {
                 if (!mux_video(encoder->ReapCompleted(packets, error, 10)))
                     return false;
                 if (!progress(static_cast<float>(frame_index) / static_cast<float>(frames))) {
@@ -348,8 +348,13 @@ RemuxResult RenderEditTimeline(const TimelineRenderSnapshot& snapshot, const Edi
                     error = "Encoder stopped returning reusable input slots.";
                     return false;
                 }
-                slot = encoder->AcquireFreeSlot();
+                acquired = encoder->AcquireInputSlot();
             }
+            if (acquired.status != EncoderInputSlotStatus::Available) {
+                error = "Encoder returned an invalid input slot.";
+                return false;
+            }
+            const int32_t slot = acquired.index;
             if (!surfaces.Convert(slot, error)) {
                 encoder->ReleaseSlot(slot);
                 return false;

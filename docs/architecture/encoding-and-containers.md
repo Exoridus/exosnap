@@ -44,6 +44,23 @@ P1-P7 are NVENC-only speed/quality presets and apply across supported NVENC code
 
 Advanced NVENC tuning includes B-frames, reference mode, lookahead/depth, spatial/temporal AQ and multipass. Expert controls resolve through the capability policy against the selected adapter and codec. B-reference capability values contain supported-mode flags: mask value 1 permits Each and value 2 permits Middle. Only modes represented by the pinned SDK are offered. A newer hierarchical-reference bit does not grant an unknown mode. The pinned SDK implements at most seven AV1 B-frames, even when a newer driver reports 31 for its hierarchical mode. The raw hardware fact remains available in diagnostics; the executable count follows both hardware and implemented SDK limits. Lookahead depth is bounded jointly with B-frames by the pinned SDK header and capped at 16 by product resource policy. Temporal AQ has no lookahead prerequisite. Spatial AQ is an SDK configuration feature without a separate capability ID. Multipass is rate-control work for VBR/CBR, not CQ. All fields are explicitly pinned after preset configuration. Conservative defaults remain off/single-pass. Changing a quality default requires representative measurement, independently of whether a supported feature is offered as Expert. See the [quality workflow](../dev/encoder-quality-matrix.md).
 
+## Encoder input contract
+
+After successful configuration, `IVideoEncoder::GetInputRequirements` declares the native format, bit depth/chroma, allocation and visible geometry, alignment, resource bindings/subresource restrictions, pool bounds and borrowed device.
+Recording and render export validate this declaration before allocating their persistent input textures.
+The current host supports one unshared, GPU-default, single-sample texture per slot, with no padding or visible crop and subresource zero.
+Unsupported layouts fail explicitly instead of selecting a default format.
+Native NVENC registration inspects the actual texture description and COM device identity before calling the SDK.
+These structural checks do not replace successful native initialization or establish support for an untested device/configuration.
+
+Input reuse is granted only by successful slot acquisition.
+`AcquireInputSlot` distinguishes an available slot, ordinary backpressure and an invalid backend index.
+A busy acquisition submits no picture; neither completed packets nor `PendingFrames` authorize overwriting a submitted texture.
+The host owns the device, context and textures through encoder teardown, and calls the encoder from one worker.
+Calling `EncodeFrame` transfers slot ownership even when it returns false, because that result alone does not identify whether submission was accepted.
+Completed packets still belong to the caller and must be routed before handling the failure.
+Changed configuration requires a new session and a newly validated pool; live reconfiguration is unsupported.
+
 ## NVENC resource lifetime
 
 Input textures remain mapped/owned until their submissions complete. The conservative configuration has eight input slots, four allocated async outputs and active output depth two. Reordering/lookahead configurations allocate `max(8, B-frames + 5 + Lookahead depth)` input slots and `B-frames + 5 + Lookahead depth` active output resources. The conservative synchronous fallback uses four active outputs to accommodate preset buffering. A GPU without async capability uses the synchronous path. At seven B-frames and Lookahead 16 this requires 28 slots rather than 36. At 3840x2160, tightly packed NV12, P010 and AYUV input surfaces alone use approximately 332, 664 and 886 MiB for 28 slots, respectively. Pitch alignment, AYUV conversion intermediates, capture/composition resources and driver buffering increase the actual allocation. The depth cap does not promise that a small-VRAM adapter can initialize every format/resolution combination. Active depth is internal, not a user setting or a universal throughput guarantee. VFR keeps one independent processed-picture cache. When the encoder still buffers pictures and no fresh input arrives for one second, the worker submits that cached picture to advance the encoder. The cache never aliases an encoder-owned input slot. These submissions increment `vfr_encoder_heartbeats`, separately from CFR duplicates and real capture/processing loss.
@@ -106,7 +123,7 @@ Zero-B-frame streams keep the existing PTS-based path. Reordered streams require
 | Packet ordering | Explicit PTS/optional DTS contract | Produce truthful timestamps and qualify real reordered files |
 | Factory dispatch | Existing backend dispatch seam | Add dispatch only when a real backend implementation exists |
 | Backend tuning | Typed alternative available | Add vendor-owned tuning and migrate app preferences when a second backend requires it |
-| Native surface input | GPU texture seam available | Map D3D11 formats and synchronization to AMF or oneVPL |
+| Native surface input | Backend-declared layout, device and pool contract enforced | Map native input release and satisfy or extend the supported host conversion layouts |
 | Capability probing | Adapter-scoped model available | Add authoritative vendor queries and codec-specific mappings |
 | Quality calibration | Canonical product quality intent available | Measure vendor/codec native quality curves |
 | Rate-control mapping | Generic CQ/VBR/CBR intent available | Map and qualify backend rate-control behavior |
