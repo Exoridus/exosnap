@@ -2343,10 +2343,10 @@ bool EditSessionAdapter::removeOverlap(qulonglong junction_id) {
     return previewRemoveOverlap(junction_id) && commitClipDrag();
 }
 
-bool EditSessionAdapter::canCrossfadeAtCut(qulonglong outgoing) const {
+bool EditSessionAdapter::canCrossfadeAtCut(qulonglong outgoing, qint64 duration_us) const {
     const auto snapshot = workspace_.snapshot();
     const auto command =
-        AdjacentCutCommand(*snapshot, outgoing ? outgoing : workspace_.selection(), 500'000, linkedSelection);
+        AdjacentCutCommand(*snapshot, outgoing ? outgoing : workspace_.selection(), duration_us, linkedSelection);
     if (!command)
         return false;
     const auto targets =
