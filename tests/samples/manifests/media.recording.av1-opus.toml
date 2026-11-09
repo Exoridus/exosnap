@@ -1,0 +1,30 @@
+id = "media.recording.av1-opus"
+class = "regression"
+contract = """
+Software AV1 and Opus streams decode with ordered timestamps, continuous audio \
+samples and the declared one-second completeness. This qualifies the media \
+oracle and does not establish NVENC, capture or physical-clock behavior.
+"""
+
+[input]
+generate = [
+    "-f", "lavfi", "-i", "testsrc2=size=64x64:rate=10:duration=1",
+    "-f", "lavfi", "-i", "sine=frequency=440:sample_rate=48000:duration=1",
+    "-map", "0:v:0", "-map", "1:a:0",
+    "-c:v", "libaom-av1", "-cpu-used", "8", "-threads", "1",
+    "-c:a", "libopus",
+]
+extension = "mkv"
+
+[oracle]
+kind = "recording-integrity"
+video_streams = 1
+audio_streams = 1
+expected_seconds = 1.0
+tolerance_ms = 25.0
+max_gap_ms = 2.0
+min_video_frames = 10
+
+[requirements]
+capabilities = ["ffmpeg", "ffprobe"]
+encoders = ["libaom-av1", "libopus"]

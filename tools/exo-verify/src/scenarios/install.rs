@@ -449,6 +449,7 @@ fn runtime_sufficient(version: &Option<(u64, u64, u64, u64)>) -> bool {
 
 /// Drives one interactive Setup run, keeps its Burn log and page screenshots,
 /// and turns a driver failure into a product failure with the log path.
+#[cfg(windows)]
 fn run_uia(ctx: &mut Context, run: &super::setup_ui::Run<'_>) -> Step {
     let result = super::setup_ui::drive(run)
         .map_err(|error| Stop::fail(format!("the interactive Setup failed: {error:#}")));
@@ -464,6 +465,12 @@ fn run_uia(ctx: &mut Context, run: &super::setup_ui::Run<'_>) -> Step {
     result
 }
 
+#[cfg(not(windows))]
+fn setup_interactive(_: &mut Context) -> Step {
+    Err(Stop::unavailable("interactive Setup requires Windows"))
+}
+
+#[cfg(windows)]
 fn setup_interactive(ctx: &mut Context) -> Step {
     let residue = super::clean::residue()?;
     infra_ensure!(

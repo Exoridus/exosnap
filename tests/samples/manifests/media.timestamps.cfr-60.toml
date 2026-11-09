@@ -14,8 +14,13 @@ generate = [
 extension = "mkv"
 
 [[oracle]]
-kind = "decode-integrity"
-min_frames = 240
+kind = "recording-integrity"
+video_streams = 1
+audio_streams = 0
+expected_seconds = 4.0
+tolerance_ms = 25.0
+max_gap_ms = 2.0
+min_video_frames = 240
 
 [[oracle]]
 kind = "timestamps"

@@ -1,0 +1,29 @@
+id = "media.recording.multitrack"
+class = "regression"
+contract = """
+The recording integrity oracle decodes all three generated streams and checks \
+their frame/sample counts, packet and presentation ordering, continuity and \
+declared one-second completeness. This qualifies the oracle, not hardware capture.
+"""
+
+[input]
+generate = [
+    "-f", "lavfi", "-i", "testsrc2=size=64x48:rate=10:duration=1",
+    "-f", "lavfi", "-i", "sine=frequency=440:sample_rate=48000:duration=1",
+    "-f", "lavfi", "-i", "sine=frequency=880:sample_rate=48000:duration=1",
+    "-map", "0:v:0", "-map", "1:a:0", "-map", "2:a:0",
+    "-c:v", "ffv1", "-c:a", "flac",
+]
+extension = "mkv"
+
+[oracle]
+kind = "recording-integrity"
+video_streams = 1
+audio_streams = 2
+expected_seconds = 1.0
+tolerance_ms = 25.0
+max_gap_ms = 2.0
+min_video_frames = 10
+
+[requirements]
+capabilities = ["ffmpeg", "ffprobe"]

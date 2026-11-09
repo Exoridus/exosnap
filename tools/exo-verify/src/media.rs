@@ -11,6 +11,8 @@ use std::time::Duration;
 use crate::pattern::{self, Decoded, Luma};
 use crate::tools;
 
+pub mod integrity;
+
 pub fn probe(file: &Path) -> Result<Value> {
     let out = tools::run(
         Command::new(tools::require("ffprobe")?)
@@ -210,7 +212,9 @@ pub fn luma_frames(file: &Path, width: u32) -> Result<Vec<LumaFrame>> {
         .collect())
 }
 
-fn frame_pts(file: &Path) -> Result<Vec<f64>> {
+/// Decoded PTS of the first video stream. Missing or nonfinite timestamps
+/// cannot be silently omitted from a timing or decoded-frame comparison.
+pub fn frame_pts(file: &Path) -> Result<Vec<f64>> {
     let out = tools::run(
         Command::new(tools::require("ffprobe")?)
             .args([
@@ -219,7 +223,7 @@ fn frame_pts(file: &Path) -> Result<Vec<f64>> {
                 "-select_streams",
                 "v:0",
                 "-show_entries",
-                "frame=pts_time,best_effort_timestamp_time",
+                "frame=pts_time:frame_side_data=",
                 "-of",
                 "csv=p=0",
             ])
@@ -227,15 +231,26 @@ fn frame_pts(file: &Path) -> Result<Vec<f64>> {
         Duration::from_secs(600),
     )?;
     ensure!(
-        out.status.success(),
+        out.status.success() && out.stderr.trim().is_empty(),
         "ffprobe frames failed: {}",
         out.stderr.trim()
     );
-    Ok(out
-        .stdout
+    parse_frame_pts(&out.stdout)
+}
+
+fn parse_frame_pts(output: &str) -> Result<Vec<f64>> {
+    output
         .lines()
-        .filter_map(|l| l.split(',').find_map(|p| p.trim().parse::<f64>().ok()))
-        .collect())
+        .filter(|line| !line.trim().is_empty())
+        .map(|line| {
+            let text = line.trim().trim_end_matches(',');
+            let pts: f64 = text
+                .parse()
+                .with_context(|| format!("invalid frame PTS: {text}"))?;
+            ensure!(pts.is_finite(), "nonfinite frame PTS: {text}");
+            Ok(pts)
+        })
+        .collect()
 }
 
 /// Decodes one audio stream to mono f32 at `rate` Hz.
@@ -515,6 +530,17 @@ pub fn encode_edit_source(
 pub mod tests {
     use super::*;
     use crate::pattern::{FrameState, Layout, render};
+
+    #[test]
+    fn frame_timestamp_rows_do_not_discard_missing_or_nonfinite_values() {
+        for invalid in ["N/A", "NaN", "inf", "-inf", "broken"] {
+            assert!(
+                parse_frame_pts(&format!("0.0\n{invalid}\n0.02\n")).is_err(),
+                "accepted {invalid}"
+            );
+        }
+        assert_eq!(parse_frame_pts("0.0,\n0.02\n").unwrap(), vec![0.0, 0.02]);
+    }
 
     /// Oracle tests need real ffmpeg. They skip where it is absent unless
     /// EXO_VERIFY_REQUIRE_FFMPEG is set, which CI sets so a missing tool
