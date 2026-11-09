@@ -370,6 +370,18 @@
         <source>Remove track</source>
         <translation>Spur entfernen</translation>
     </message>
+    <message>
+        <source>This route is muted in the saved preset. Unmute it to restore its saved gain.</source>
+        <translation>Diese Route ist im gespeicherten Preset stummgeschaltet. Beim Aufheben der Stummschaltung wird ihre gespeicherte Verstärkung wieder wirksam.</translation>
+    </message>
+    <message>
+        <source>Unmute this route</source>
+        <translation>Stummschaltung dieser Route aufheben</translation>
+    </message>
+    <message>
+        <source>Use all recorded tracks automatically</source>
+        <translation>Alle aufgenommenen Spuren automatisch verwenden</translation>
+    </message>
 </context>
 <context>
     <name>AudioSourceDetailsPopup</name>
@@ -489,6 +501,14 @@
         <location line="+12"/>
         <source>Close</source>
         <translation>Schließen</translation>
+    </message>
+    <message>
+        <source>Device</source>
+        <translation>Gerät</translation>
+    </message>
+    <message>
+        <source>Channel mode</source>
+        <translation>Kanalmodus</translation>
     </message>
 </context>
 <context>
@@ -9793,6 +9813,14 @@ Die Farben für Aufnahme, Vorsicht und Bereitschaft bleiben fest, damit ein Stat
         <source>Edit next recording</source>
         <translation>Nächste Aufnahme bearbeiten</translation>
     </message>
+    <message>
+        <source>Expert</source>
+        <translation>Experte</translation>
+    </message>
+    <message>
+        <source>Expert settings</source>
+        <translation>Experteneinstellungen</translation>
+    </message>
 </context>
 <context>
     <name>SettingsPresenceSection</name>
@@ -10106,6 +10134,14 @@ Kleiner Text auf dem Bildschirm verliert früher an Qualität als Videoinhalte. 
         <source>Capture cursor</source>
         <translation>Mauszeiger aufnehmen</translation>
     </message>
+    <message>
+        <source>Quality is controlled by the video bitrate</source>
+        <translation>Die Videobitrate bestimmt die Qualität</translation>
+    </message>
+    <message>
+        <source>Change in Expert</source>
+        <translation>Im Expertenmodus ändern</translation>
+    </message>
 </context>
 <context>
     <name>SettingsStorageSection</name>
@@ -10319,6 +10355,10 @@ Kleiner Text auf dem Bildschirm verliert früher an Qualität als Videoinhalte. 
         <location line="+10"/>
         <source>Spill reduction</source>
         <translation>Spill-Reduktion</translation>
+    </message>
+    <message>
+        <source>120 fps</source>
+        <translation>120 fps</translation>
     </message>
 </context>
 <context>
@@ -13861,6 +13901,34 @@ Kleiner Text auf dem Bildschirm verliert früher an Qualität als Videoinhalte. 
         <location line="+1"/>
         <source>Preview</source>
         <translation>Vorschau</translation>
+    </message>
+    <message>
+        <source>Camera off</source>
+        <translation>Kamera aus</translation>
+    </message>
+    <message>
+        <source>Camera disconnected. Connect a camera to preview it.</source>
+        <translation>Keine Kamera verbunden. Für eine Vorschau eine Kamera anschließen.</translation>
+    </message>
+    <message>
+        <source>Camera preview is not active for this configuration.</source>
+        <translation>Die Kameravorschau ist für diese Konfiguration nicht aktiv.</translation>
+    </message>
+    <message>
+        <source>Starting camera…</source>
+        <translation>Kamera wird gestartet…</translation>
+    </message>
+    <message>
+        <source>Waiting for a camera frame…</source>
+        <translation>Warten auf ein Kamerabild…</translation>
+    </message>
+    <message>
+        <source>Camera unavailable: %1</source>
+        <translation>Kamera nicht verfügbar: %1</translation>
+    </message>
+    <message>
+        <source>Camera unavailable. Check the device connection and Diagnostics.</source>
+        <translation>Kamera nicht verfügbar. Geräteverbindung und Diagnose prüfen.</translation>
     </message>
 </context>
 <context>
