@@ -3,6 +3,8 @@
 #include <QDir>
 #include <QFile>
 #include <QFileInfo>
+#include <QJsonDocument>
+#include <QJsonObject>
 #include <QStandardPaths>
 #include <QTemporaryDir>
 
@@ -43,6 +45,13 @@ capability::RuntimeCapabilitySnapshot MakeSnapshot() {
     snap.nvidia.nvenc_av1 = true;
     snap.nvidia.nvenc_hevc = true;
     snap.nvidia.nvenc_h264 = true;
+    using capability::EncoderFormatSupport;
+    snap.nvidia.nvenc_formats_h264 = {EncoderFormatSupport::Supported, EncoderFormatSupport::Unsupported,
+                                      EncoderFormatSupport::Unavailable};
+    snap.nvidia.nvenc_formats_hevc = {EncoderFormatSupport::Supported, EncoderFormatSupport::Supported,
+                                      EncoderFormatSupport::Supported};
+    snap.nvidia.nvenc_formats_av1 = {EncoderFormatSupport::Supported, EncoderFormatSupport::Unknown,
+                                     EncoderFormatSupport::Unsupported};
     snap.nvidia.nvenc_yuv444_h264 = false;
     snap.nvidia.nvenc_yuv444_hevc = true;
     snap.nvidia.nvenc_adv_h264 = {2, 1, true, true}; // max_bframes, bframe_ref_mode, lookahead, temporal_aq
@@ -95,6 +104,9 @@ TEST(CapabilityCacheStoreTest, RoundtripWithMatchingKey) {
     EXPECT_EQ(loaded->nvidia.nvenc_api_version, snapshot.nvidia.nvenc_api_version);
     EXPECT_TRUE(loaded->nvidia.nvenc_codec_probed);
     EXPECT_TRUE(loaded->nvidia.nvenc_av1);
+    EXPECT_EQ(loaded->nvidia.nvenc_formats_h264, snapshot.nvidia.nvenc_formats_h264);
+    EXPECT_EQ(loaded->nvidia.nvenc_formats_hevc, snapshot.nvidia.nvenc_formats_hevc);
+    EXPECT_EQ(loaded->nvidia.nvenc_formats_av1, snapshot.nvidia.nvenc_formats_av1);
     EXPECT_FALSE(loaded->nvidia.nvenc_yuv444_h264);
     EXPECT_TRUE(loaded->nvidia.nvenc_yuv444_hevc);
     EXPECT_EQ(loaded->nvidia.nvenc_adv_h264.max_bframes, 2);
@@ -114,6 +126,40 @@ TEST(CapabilityCacheStoreTest, RoundtripWithMatchingKey) {
     EXPECT_FLOAT_EQ(loaded->displays[0].max_luminance_nits, 1000.0f);
 
     QFile::remove(path);
+}
+
+TEST(CapabilityCacheStoreTest, MissingOrInvalidFormatEvidenceStaysUnknown) {
+    const QString path = UniqueTempStorePath();
+    CapabilityCacheStore store(path);
+    const auto key = MakeKey();
+    ASSERT_TRUE(store.Save(MakeSnapshot(), key));
+    QFile file(path);
+    ASSERT_TRUE(file.open(QIODevice::ReadOnly));
+    QJsonObject root = QJsonDocument::fromJson(file.readAll()).object();
+    file.close();
+    QJsonObject snapshot = root.value(QStringLiteral("snapshot")).toObject();
+    QJsonObject nvidia = snapshot.value(QStringLiteral("nvidia")).toObject();
+    nvidia.remove(QStringLiteral("nvenc_formats_hevc"));
+    nvidia[QStringLiteral("nvenc_formats_av1")] = QJsonObject{{QStringLiteral("p010"), 99}};
+    snapshot[QStringLiteral("nvidia")] = nvidia;
+    root[QStringLiteral("snapshot")] = snapshot;
+    ASSERT_TRUE(file.open(QIODevice::WriteOnly | QIODevice::Truncate));
+    ASSERT_GT(file.write(QJsonDocument(root).toJson()), 0);
+    file.close();
+    const auto loaded = store.LoadMatching(key);
+    ASSERT_TRUE(loaded.has_value());
+    EXPECT_EQ(loaded->nvidia.nvenc_formats_hevc, capability::CodecFormatCapabilities{});
+    EXPECT_EQ(loaded->nvidia.nvenc_formats_av1.p010, capability::EncoderFormatSupport::Unknown);
+}
+
+TEST(CapabilityCacheStoreTest, CacheBeforeExactFormatEvidenceIsDiscarded) {
+    const QString path = UniqueTempStorePath();
+    CapabilityCacheStore store(path);
+    const auto key = MakeKey();
+    auto previous_key = key;
+    previous_key.schema_version = capability::kCapabilityCacheSchemaVersion - 1;
+    ASSERT_TRUE(store.Save(MakeSnapshot(), previous_key));
+    EXPECT_FALSE(store.LoadMatching(key).has_value());
 }
 
 // =============================================================================
