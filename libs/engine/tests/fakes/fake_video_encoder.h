@@ -76,18 +76,23 @@ class FakeVideoEncoder : public IVideoEncoder {
         return init_info_;
     }
 
+    [[nodiscard]] EncoderInputRequirements GetInputRequirements() const noexcept override {
+        return input_requirements_;
+    }
+
     bool Open(void* gpu_context, std::string& out_error) override {
-        (void)gpu_context;
         open_called_ = true;
         if (force_open_fail) {
             out_error = forced_error_message;
             return false;
         }
+        device_ = gpu_context;
         return true;
     }
 
     bool Configure(uint32_t width, uint32_t height, uint32_t fps_num, uint32_t fps_den,
                    std::string& out_error) override {
+        input_requirements_ = {};
         if (force_configure_fail) {
             out_error = forced_error_message;
             return false;
@@ -97,6 +102,22 @@ class FakeVideoEncoder : public IVideoEncoder {
         fps_num_ = fps_num;
         fps_den_ = fps_den;
         configured_ = true;
+        input_requirements_.storage = EncoderInputStorage::D3D11Texture2D;
+        input_requirements_.format = chroma_ == ChromaSubsampling::Cs444 ? EncoderInputFormat::Ayuv
+                                     : bit_depth_ == BitDepth::Bit10     ? EncoderInputFormat::P010
+                                                                         : EncoderInputFormat::Nv12;
+        input_requirements_.codec = codec_;
+        input_requirements_.bit_depth = bit_depth_;
+        input_requirements_.chroma = chroma_;
+        input_requirements_.allocation = {width, height};
+        input_requirements_.visible = {0, 0, width, height};
+        input_requirements_.alignment = {2, 2};
+        input_requirements_.required_bind =
+            chroma_ == ChromaSubsampling::Cs444 ? EncoderInputBind::UnorderedAccess : EncoderInputBind::RenderTarget;
+        input_requirements_.allowed_bind = input_requirements_.required_bind | EncoderInputBind::ShaderResource;
+        const auto slots = static_cast<uint32_t>(slot_count_ < 0 ? 0 : slot_count_);
+        input_requirements_.pool = {slots, slots, slots};
+        input_requirements_.device = device_;
 
         init_info_.valid = true;
         init_info_.codec = codec_;
@@ -198,6 +219,7 @@ class FakeVideoEncoder : public IVideoEncoder {
 
     void Destroy() override {
         destroyed_ = true;
+        input_requirements_ = {};
     }
 
     // --- Test introspection ---
@@ -265,6 +287,8 @@ class FakeVideoEncoder : public IVideoEncoder {
     uint64_t last_pts_ns_ = 0;
 
     EncoderInitInfo init_info_{};
+    EncoderInputRequirements input_requirements_;
+    void* device_ = nullptr;
 };
 
 } // namespace exosnap::engine::testutil

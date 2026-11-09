@@ -26,6 +26,7 @@
 #include "annexb_to_hvcc.h"
 #include "av_epoch_align.h"
 #include "codec_private.h"
+#include "d3d11_encoder_input.h"
 #include "encoder_packet_dispatch.h"
 #include "gpu_frame_luminance.h"
 #include "gpu_hdr_pq.h"
@@ -1369,27 +1370,27 @@ void VideoThread::RunAttachment(const std::shared_ptr<NativeState>& native, cons
         }
     }
 
-    // --- NV12 / P010 texture ring + video processor ---
-    // For 10-bit recording (HEVC Main10 / AV1 10-bit, SDR BT.709) the
-    // VideoProcessor converts RGB → P010 instead of NV12, and the encode ring +
-    // reference texture use DXGI_FORMAT_P010. The output color space stays studio
-    // BT.709 (no HDR/BT.2020 here — that is a later slice).
-    const bool tenBit = (m_state.config.bit_depth == BitDepth::Bit10);
+    const auto encoderInput = encoder ? encoder->GetInputRequirements() : EncoderInputRequirements{};
+    const int32_t kSlotCount = encoder ? encoder->SlotCount() : 0;
+    const auto inputValidation =
+        ValidateEncoderInputForHost(encoderInput, m_state.config.video_codec, m_state.config.bit_depth,
+                                    m_state.config.chroma, {encodeWidth, encodeHeight}, kSlotCount, d3dDevice.get());
+    if (!inputValidation) {
+        m_state.RecordFailure(E_INVALIDARG, ErrorPhase::Prepare,
+                              std::string("Video encoder input: ") + inputValidation.message);
+        return;
+    }
+
+    // Conversion and the persistent pool follow the configured backend's
+    // native input declaration. No padded/cropped allocation is admitted yet.
+    const bool tenBit = encoderInput.format == EncoderInputFormat::P010;
 
     // Expert 4:4:4 (8-bit H.264/HEVC): the VideoProcessor cannot emit 4:4:4, so it
     // performs geometry (crop/scale/letterbox) into a full-range BGRA intermediate,
     // and a compute shader converts that into the packed AYUV encoder surface. The 4:2:0 path is untouched. 4:4:4 is
     // 8-bit only and mutually exclusive with 10-bit / native HDR (blocked upstream).
-    const bool chroma444 = (m_state.config.chroma == ChromaSubsampling::Cs444);
-    // Native encoder input texture: NV12/P010 for 4:2:0, AYUV for 4:4:4.
-    const DXGI_FORMAT encodeFormat = chroma444 ? DXGI_FORMAT_AYUV : (tenBit ? DXGI_FORMAT_P010 : DXGI_FORMAT_NV12);
-
-    // Number of pipelined capture/encode slots (shared by every per-slot texture array).
-    const int32_t kSlotCount = encoder ? encoder->SlotCount() : 0;
-    if (hasOutput && kSlotCount <= 0) {
-        m_state.RecordFailure(E_FAIL, ErrorPhase::Prepare, "Video encoder exposes no input slots");
-        return;
-    }
+    const bool chroma444 = encoderInput.format == EncoderInputFormat::Ayuv;
+    const DXGI_FORMAT encodeFormat = D3D11EncoderInputFormat(encoderInput.format);
 
     // 4:4:4: the VideoProcessor output is a separate BGRA intermediate (RGB, geometry
     // only); the shader then writes AYUV into the encode textures. RgbToAyuvConverter
@@ -1461,17 +1462,7 @@ void VideoThread::RunAttachment(const std::shared_ptr<NativeState>& native, cons
         // 4:4:4: the VP output view targets a BGRA intermediate (geometry only); the
         //        shader converts it into the AYUV encode texture registered below.
         for (int32_t i = 0; i < kSlotCount; ++i) {
-            D3D11_TEXTURE2D_DESC desc{};
-            desc.Width = encodeWidth;
-            desc.Height = encodeHeight;
-            desc.MipLevels = 1;
-            desc.ArraySize = 1;
-            desc.Format = encodeFormat; // NV12 (8-bit) / P010 (10-bit) / AYUV (4:4:4)
-            desc.SampleDesc = {1, 0};
-            desc.Usage = D3D11_USAGE_DEFAULT;
-            // AYUV encode textures are written by the compute shader (UAV) and copied
-            // for frame duplication; NV12/P010 are VideoProcessorBlt render targets.
-            desc.BindFlags = chroma444 ? D3D11_BIND_UNORDERED_ACCESS : D3D11_BIND_RENDER_TARGET;
+            const D3D11_TEXTURE2D_DESC desc = D3D11EncoderInputTextureDesc(encoderInput);
 
             hr = exosnap::engine::CreateTrackedTexture2D(d3dDevice.get(), &desc, nullptr, nv12Textures[i].put(),
                                                          exosnap::engine::GpuSurfaceOwner::EncoderInputs);

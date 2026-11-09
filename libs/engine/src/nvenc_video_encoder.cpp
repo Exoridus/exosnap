@@ -10,6 +10,7 @@
 namespace exosnap::engine {
 
 bool NvencVideoEncoder::Open(void* gpu_context, std::string& out_error) {
+    m_configured = false;
     auto* device = static_cast<ID3D11Device*>(gpu_context);
     if (!m_nvenc.Open(device, out_error))
         return false;
@@ -26,12 +27,14 @@ bool NvencVideoEncoder::Open(void* gpu_context, std::string& out_error) {
 
 bool NvencVideoEncoder::Configure(uint32_t width, uint32_t height, uint32_t fps_num, uint32_t fps_den,
                                   std::string& out_error) {
+    m_configured = false;
     if (!m_nvenc.FetchPresetConfig(out_error))
         return false;
     if (!m_nvenc.InitEncoder(width, height, fps_num, fps_den, out_error))
         return false;
     if (!m_nvenc.CreateBitstreamBuffer(out_error))
         return false;
+    m_configured = true;
     return true;
 }
 
@@ -57,6 +60,7 @@ bool NvencVideoEncoder::Flush(std::vector<EncodedVideoPacket>& out_packets, std:
 }
 
 void NvencVideoEncoder::Destroy() {
+    m_configured = false;
     m_nvenc.UnregisterAllSlots();
     m_nvenc.Destroy();
 }
