@@ -28,6 +28,57 @@ TestCase {
         }
     }
 
+    function test_closed_keyboard_traverses_available_options_data() {
+        return [
+            {tag: "forward", initial: 1, key: Qt.Key_Down, expected: 3, activations: 1},
+            {tag: "backward", initial: 3, key: Qt.Key_Up, expected: 1, activations: 1},
+            {tag: "first boundary", initial: 1, key: Qt.Key_Up, expected: 1, activations: 0},
+            {tag: "last boundary", initial: 3, key: Qt.Key_Down, expected: 3, activations: 0},
+            {tag: "unavailable current forward", initial: 2, key: Qt.Key_Down, expected: 3, activations: 1},
+            {tag: "unavailable current backward", initial: 2, key: Qt.Key_Up, expected: 1, activations: 1},
+            {tag: "unmatched current forward", initial: -1, key: Qt.Key_Down, expected: 1, activations: 1},
+            {tag: "unmatched current backward", initial: -1, key: Qt.Key_Up, expected: 3, activations: 1}
+        ];
+    }
+
+    function test_closed_keyboard_traverses_available_options(data) {
+        const select = createTemporaryObject(selectComponent, testCase, {value: data.initial});
+        verify(!!select);
+        select.forceActiveFocus();
+        keyClick(data.key);
+        compare(select.popup.visible, false);
+        compare(select.value, data.expected);
+        compare(select.activations, data.activations);
+        if (data.expected === 1 || data.expected === 3) {
+            // A second press at the reached boundary cannot activate again.
+            const boundaryKey = data.expected === 1 ? Qt.Key_Up : Qt.Key_Down;
+            keyClick(boundaryKey);
+            compare(select.value, data.expected);
+            compare(select.activations, data.activations);
+        }
+    }
+
+    function test_closed_keyboard_preserves_value_when_no_option_is_available_data() {
+        return [
+            {tag: "all unavailable", options: [
+                {value: 1, label: "One", selectable: false, reason: "Unavailable"},
+                {value: 2, label: "Two", selectable: false, reason: "Unavailable"}
+            ]},
+            {tag: "empty", options: []}
+        ];
+    }
+
+    function test_closed_keyboard_preserves_value_when_no_option_is_available(data) {
+        const select = createTemporaryObject(selectComponent, testCase, {options: data.options});
+        select.forceActiveFocus();
+        for (const key of [Qt.Key_Down, Qt.Key_Down, Qt.Key_Up, Qt.Key_Up]) {
+            keyClick(key);
+            compare(select.value, 1);
+            compare(select.activations, 0);
+            compare(select.popup.visible, false);
+        }
+    }
+
     function test_unavailable_reason_wraps_and_choice_cannot_activate() {
         const select = createTemporaryObject(selectComponent, testCase);
         verify(!!select);
