@@ -6,6 +6,7 @@
 #include "exosnap/engine/recorder_session.h"
 #include "exosnap/engine/visual_frame.h"
 #include "exosnap/engine/visual_generations.h"
+#include "exosnap/engine/visual_scene.h"
 #include "exosnap/engine/visual_scene_runtime.h"
 #include "exosnap/engine/webcam_placement.h"
 #include "session_internal.h"
