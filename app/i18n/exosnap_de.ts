@@ -3507,6 +3507,10 @@ Das Original kann danach nicht wiederhergestellt werden.</translation>
         <source>Unknown error</source>
         <translation>Unbekannter Fehler</translation>
     </message>
+    <message>
+        <source>MP4 audio encoding is unavailable. Choose MKV.</source>
+        <translation>Die MP4-Audiokodierung ist nicht verfügbar. MKV auswählen.</translation>
+    </message>
 </context>
 <context>
     <name>EditExportPanel</name>
@@ -3782,6 +3786,10 @@ Das Original kann danach nicht wiederhergestellt werden.</translation>
         <location line="+19"/>
         <source>Choose another folder</source>
         <translation>Anderen Ordner wählen</translation>
+    </message>
+    <message>
+        <source>Enabled audio tracks mixed with their clip and track settings. Solo and preview volume do not affect export.</source>
+        <translation>Aktivierte Audiospuren werden mit ihren Clip- und Spureinstellungen gemischt. Solo und Vorschau-Lautstärke beeinflussen den Export nicht.</translation>
     </message>
 </context>
 <context>

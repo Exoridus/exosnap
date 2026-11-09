@@ -1,5 +1,6 @@
 #pragma once
 
+#include <exosnap/engine/edit_export_issue.h>
 #include <exosnap/engine/edit_timeline_render.h>
 
 #include <array>
@@ -16,28 +17,6 @@ enum class EditVideoProfile { MatchSourceAuto, H264, Hevc };
 enum class EditAudioProfile { Pcm24Stereo, AacLc192Stereo };
 enum class EditVideoPath { Copy, Render, Unsupported };
 enum class EditAudioPath { Absent, CopyStereo, RenderStereo, CopyOriginalStreams, Unsupported };
-enum class EditExportIssueCode {
-    EmptySpan,
-    InvalidTimeline,
-    MissingSource,
-    SourceChanged,
-    MixSelectionRequired,
-    OriginalRecipeChanged,
-    UnsupportedProfile,
-    UnsupportedAudioLayout,
-    BoundaryConsentRequired,
-    ResourceLimitExceeded,
-    DestinationAliasesSource,
-    InvalidSelection,
-    PartialJunctionOwnership
-};
-enum class EditExportIssueScope { Timeline, Source, Video, Audio, Destination };
-struct EditExportIssue {
-    EditExportIssueCode code = EditExportIssueCode::InvalidTimeline;
-    EditExportIssueScope scope = EditExportIssueScope::Timeline;
-    std::vector<uint64_t> affected_ids;
-};
-
 using EditPlanHash = std::array<uint8_t, 32>;
 struct EditBoundaryDeviation {
     uint64_t clip = 0;
