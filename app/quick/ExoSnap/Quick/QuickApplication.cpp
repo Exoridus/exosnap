@@ -4911,7 +4911,10 @@ void QuickApplication::applyEditVisualScenario() {
         layout.insert(QStringLiteral("popup"), QStringLiteral("crossfade"));
     else if (scenario == QStringLiteral("edit-volume-popup"))
         layout.insert(QStringLiteral("popup"), QStringLiteral("volume"));
+    if (scenario == QStringLiteral("edit-video-automation"))
+        layout.insert(QStringLiteral("inspectorField"), QStringLiteral("animation"));
     if (scenario == QStringLiteral("edit-clip-fades")) {
+        layout.insert(QStringLiteral("inspectorField"), QStringLiteral("fadeIn"));
         layout.insert(QStringLiteral("viewFromUs"), 0);
         layout.insert(QStringLiteral("viewToUs"), 42'000'000);
     }

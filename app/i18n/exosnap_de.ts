@@ -4257,6 +4257,86 @@ Das Original kann danach nicht wiederhergestellt werden.</translation>
         <source>Close Gap</source>
         <translation>Lücke schließen</translation>
     </message>
+    <message>
+        <source>Position as a fraction of the output size; 0 is centered.</source>
+        <translation>Position als Anteil der Ausgabegröße; 0 ist zentriert.</translation>
+    </message>
+    <message>
+        <source>Scale factor; 1 is the original size.</source>
+        <translation>Skalierungsfaktor; 1 entspricht der Originalgröße.</translation>
+    </message>
+    <message>
+        <source>Rotation in degrees.</source>
+        <translation>Drehung in Grad.</translation>
+    </message>
+    <message>
+        <source>Opacity from 0 (transparent) to 1 (opaque).</source>
+        <translation>Deckkraft von 0 (transparent) bis 1 (undurchsichtig).</translation>
+    </message>
+    <message>
+        <source>Hide animation</source>
+        <translation>Animation ausblenden</translation>
+    </message>
+    <message>
+        <source>Animation</source>
+        <translation>Animation</translation>
+    </message>
+    <message>
+        <source>Add gain point at playhead</source>
+        <translation>Pegelpunkt am Abspielkopf hinzufügen</translation>
+    </message>
+    <message>
+        <source>Move the playhead inside an unlocked audio clip.</source>
+        <translation>Den Abspielkopf in einen nicht gesperrten Audioclip verschieben.</translation>
+    </message>
+    <message>
+        <source>%1 s · %2 dB</source>
+        <translation>%1 s · %2 dB</translation>
+    </message>
+    <message>
+        <source>Gain envelope point</source>
+        <translation>Hüllkurvenpunkt</translation>
+    </message>
+    <message>
+        <source>Point time</source>
+        <translation>Punktzeit</translation>
+    </message>
+    <message>
+        <source>Gain point timeline time</source>
+        <translation>Timeline-Zeit des Pegelpunkts</translation>
+    </message>
+    <message>
+        <source>Point gain</source>
+        <translation>Punktpegel</translation>
+    </message>
+    <message>
+        <source>Gain point in decibels</source>
+        <translation>Pegelpunkt in Dezibel</translation>
+    </message>
+    <message>
+        <source>Delete gain point</source>
+        <translation>Pegelpunkt löschen</translation>
+    </message>
+    <message>
+        <source>Hide trim and timing</source>
+        <translation>Zuschnitt und Zeitangaben ausblenden</translation>
+    </message>
+    <message>
+        <source>Trim and timing</source>
+        <translation>Zuschnitt und Zeitangaben</translation>
+    </message>
+    <message>
+        <source>Select a clip with an adjacent compatible clip and available source handles.</source>
+        <translation>Einen Clip mit kompatiblem Nachbarclip und genügend Quellmaterial über die Schnittkanten hinaus auswählen.</translation>
+    </message>
+    <message>
+        <source>Keyframe at playhead</source>
+        <translation>Keyframe am Abspielkopf</translation>
+    </message>
+    <message>
+        <source>Animated value</source>
+        <translation>Animierter Wert</translation>
+    </message>
 </context>
 <context>
     <name>EditMixPanel</name>
@@ -4688,6 +4768,86 @@ Das Original kann danach nicht wiederhergestellt werden.</translation>
         <location line="+11"/>
         <source>Snapping</source>
         <translation>Einrasten</translation>
+    </message>
+    <message>
+        <source>Select clips or a range to fit the view.</source>
+        <translation>Clips oder einen Bereich auswählen, um die Ansicht einzupassen.</translation>
+    </message>
+    <message>
+        <source>Navigation and playback</source>
+        <translation>Navigation und Wiedergabe</translation>
+    </message>
+    <message>
+        <source>Space: Play or pause on release; Shift+Space: Play the active range once</source>
+        <translation>Leertaste: Beim Loslassen abspielen oder pausieren; Umschalt+Leertaste: Aktiven Bereich einmal abspielen</translation>
+    </message>
+    <message>
+        <source>Left / Right: Step one frame; Alt+Left / Right: One audio sample; Shift+Left / Right: One second</source>
+        <translation>Links / Rechts: Ein Bild; Alt+Links / Rechts: Ein Audiosample; Umschalt+Links / Rechts: Eine Sekunde</translation>
+    </message>
+    <message>
+        <source>Up / Down: Previous or next boundary; Alt+Up / Down: Previous or next clip</source>
+        <translation>Hoch / Runter: Vorherige oder nächste Grenze; Alt+Hoch / Runter: Vorheriger oder nächster Clip</translation>
+    </message>
+    <message>
+        <source>Home / End: Timeline start or end; Ctrl+L: Toggle Loop</source>
+        <translation>Pos1 / Ende: Anfang oder Ende der Timeline; Strg+L: Loop umschalten</translation>
+    </message>
+    <message>
+        <source>Ctrl+Plus / Equal / Minus: Zoom in or out; Z: Fit selection; Shift+Z: Fit timeline; Backspace: Previous view</source>
+        <translation>Strg+Plus / Gleich / Minus: Vergrößern oder verkleinern; Z: Auswahl einpassen; Umschalt+Z: Timeline einpassen; Rücktaste: Vorherige Ansicht</translation>
+    </message>
+    <message>
+        <source>Selection and editing</source>
+        <translation>Auswahl und Bearbeitung</translation>
+    </message>
+    <message>
+        <source>Ctrl+A: Select all clips; Ctrl+Shift+A: Select the active track's clips</source>
+        <translation>Strg+A: Alle Clips auswählen; Strg+Umschalt+A: Clips der aktiven Spur auswählen</translation>
+    </message>
+    <message>
+        <source>S / Ctrl+B: Split scope; Shift+S: Split all tracks; K: Toggle Auto-Key</source>
+        <translation>S / Strg+B: Im aktuellen Bearbeitungsumfang teilen; Umschalt+S: Alle Spuren teilen; K: Auto-Key umschalten</translation>
+    </message>
+    <message>
+        <source>Delete: Lift; Shift+Delete: Ripple delete; Ctrl+Delete: Lift and select the next clip</source>
+        <translation>Entf: Entfernen und Lücke behalten; Umschalt+Entf: Mit Zeitverschiebung löschen; Strg+Entf: Entfernen und nächsten Clip auswählen</translation>
+    </message>
+    <message>
+        <source>Ctrl+C / X / V: Copy, cut or paste clips or copied media files; Ctrl+Shift+V: Insert paste; Ctrl+D: Duplicate clips</source>
+        <translation>Strg+C / X / V: Clips kopieren, ausschneiden oder einfügen bzw. kopierte Mediendateien einfügen; Strg+Umschalt+V: Mit Zeitverschiebung einfügen; Strg+D: Clips duplizieren</translation>
+    </message>
+    <message>
+        <source>Comma / Period: Nudge clips one frame; Alt+Comma / Period: Nudge one audio sample</source>
+        <translation>Komma / Punkt: Clips um ein Bild verschieben; Alt+Komma / Punkt: Um ein Audiosample verschieben</translation>
+    </message>
+    <message>
+        <source>Ctrl+Comma / Period: Trim start or end inward one frame; Ctrl+Shift+Comma / Period: Extend start or end outward one frame</source>
+        <translation>Strg+Komma / Punkt: Anfang oder Ende um ein Bild kürzen; Strg+Umschalt+Komma / Punkt: Anfang oder Ende um ein Bild verlängern</translation>
+    </message>
+    <message>
+        <source>M: Mute the active track; Ctrl+Z: Undo; Ctrl+Y / Ctrl+Shift+Z: Redo</source>
+        <translation>M: Aktive Spur stummschalten; Strg+Z: Rückgängig; Strg+Y / Strg+Umschalt+Z: Wiederholen</translation>
+    </message>
+    <message>
+        <source>Panels and focus</source>
+        <translation>Panels und Fokus</translation>
+    </message>
+    <message>
+        <source>Ctrl+M: Media; D: Details; Ctrl+E: Export; Menu / Shift+F10: Context menu; ?: This help</source>
+        <translation>Strg+M: Medien; D: Details; Strg+E: Export; Menütaste / Umschalt+F10: Kontextmenü; ?: Diese Hilfe</translation>
+    </message>
+    <message>
+        <source>Escape: Cancel the active draft or gesture, then close the open panel, then clear the range or selection</source>
+        <translation>Esc: Zuerst die aktive Eingabe oder Geste abbrechen, danach das offene Panel schließen, danach Bereich oder Auswahl aufheben</translation>
+    </message>
+    <message>
+        <source>Text fields keep their editing keys. Timeline shortcuts work with canvas focus. Audio sample steps require an audio editing context.</source>
+        <translation>Textfelder behalten ihre Bearbeitungstasten. Timeline-Kürzel gelten bei Fokus auf der Arbeitsfläche. Audiosample-Schritte erfordern einen Audio-Bearbeitungskontext.</translation>
+    </message>
+    <message>
+        <source>Gain points: Tab to a point and press Enter to edit its time and gain in Details. Delete removes the focused point. Add points at the playhead from Details.</source>
+        <translation>Pegelpunkt per Tab fokussieren und mit Eingabe seine Zeit und seinen Pegel in Details bearbeiten. Entf löscht den fokussierten Punkt. In Details lassen sich Punkte am Abspielkopf hinzufügen.</translation>
     </message>
 </context>
 <context>
@@ -5792,6 +5952,14 @@ Ermittelte SHA-256: %2</translation>
         <location line="+34"/>
         <source>Crossfade, %1 ms. Enter to adjust duration.</source>
         <translation>Überblendung, %1 ms. Eingabetaste zum Ändern der Dauer.</translation>
+    </message>
+    <message>
+        <source>Gain point at %1 s, %2 dB</source>
+        <translation>Pegelpunkt bei %1 s, %2 dB</translation>
+    </message>
+    <message>
+        <source>Press Enter to edit the point time and gain in Details.</source>
+        <translation>Mit Eingabe die Zeit und den Pegel des Punkts in Details bearbeiten.</translation>
     </message>
 </context>
 <context>
