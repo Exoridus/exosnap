@@ -198,7 +198,25 @@ ComboBox {
         ToolTip.text: optionDelegate.model.reason ?? ""
     }
 
+    function stepSelectable(direction: int): void {
+        const entries = root.options || [];
+        const current = root.resolvedIndex;
+        const start = current < 0 ? (direction > 0 ? 0 : entries.length - 1) : current + direction;
+        for (let index = start; index >= 0 && index < entries.length; index += direction) {
+            if (entries[index].selectable) {
+                root.valueActivated(entries[index].value);
+                return;
+            }
+        }
+    }
+
     Keys.onPressed: event => {
+        if (!root.popup.visible && event.modifiers === Qt.NoModifier &&
+            (event.key === Qt.Key_Down || event.key === Qt.Key_Up)) {
+            root.stepSelectable(event.key === Qt.Key_Down ? 1 : -1);
+            event.accepted = true;
+            return;
+        }
         if (!root.popup.visible || (event.key !== Qt.Key_PageDown && event.key !== Qt.Key_PageUp))
             return;
         const list = root.popup.contentItem;
