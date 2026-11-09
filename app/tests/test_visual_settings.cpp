@@ -85,7 +85,7 @@ TEST(VisualSettings, ActionArgumentsChoiceAndIncarnationAreValidated) {
     const auto type = SettingsType();
     const engine::VisualAddress address{engine::VisualSourceId{{1}}, engine::VisualRuntimeGeneration{1}};
     const VisualSourceRecord source{address.source, type.id, 1, true, {}};
-    ActionInvocation action{address, engine::CommandId{{2}}, "select-device", "available"};
+    ActionInvocation action{address, engine::CommandId{{2}}, "select-device", "available", engine::SceneItemId{{5}}};
     EXPECT_TRUE(ValidateVisualAction(action, type, source, address).succeeded());
     action.choice_id.reset();
     EXPECT_FALSE(ValidateVisualAction(action, type, source, address).succeeded());
@@ -97,8 +97,27 @@ TEST(VisualSettings, ActionArgumentsChoiceAndIncarnationAreValidated) {
     action.target.runtime.value = 2;
     EXPECT_FALSE(ValidateVisualAction(action, type, source, address).succeeded());
     action.target = address;
+    action.item = {};
+    EXPECT_FALSE(ValidateVisualAction(action, type, source, address).succeeded());
+    action.item = engine::SceneItemId{{5}};
     action.action_id = "unknown";
     EXPECT_FALSE(ValidateVisualAction(action, type, source, address).succeeded());
+}
+
+TEST(VisualSettings, NodeMenuActionsAreBounded) {
+    auto type = SettingsType();
+    for (auto& action : type.actions)
+        action.node_menu = true;
+    for (size_t index = type.actions.size(); index <= kMaxNodeMenuActions; ++index)
+        type.actions.push_back({"details-" + std::to_string(index),
+                                {"VisualTests", "Details"},
+                                ActionOperation::OpenDetails,
+                                {},
+                                {},
+                                true});
+    EXPECT_FALSE(ValidateVisualSettings(type).succeeded());
+    type.actions.back().node_menu = false;
+    EXPECT_TRUE(ValidateVisualSettings(type).succeeded());
 }
 
 TEST(VisualSettings, RetryRejectsUnexpectedChoice) {
@@ -106,7 +125,7 @@ TEST(VisualSettings, RetryRejectsUnexpectedChoice) {
     type.actions.push_back({"retry", {"VisualTests", "Retry"}, ActionOperation::Retry, {}, {}});
     const engine::VisualAddress address{engine::VisualSourceId{{1}}, engine::VisualRuntimeGeneration{1}};
     const VisualSourceRecord source{address.source, type.id, 1, true, {}};
-    ActionInvocation action{address, engine::CommandId{{2}}, "retry", "available"};
+    ActionInvocation action{address, engine::CommandId{{2}}, "retry", "available", engine::SceneItemId{{5}}};
     EXPECT_FALSE(ValidateVisualAction(action, type, source, address).succeeded());
     action.choice_id.reset();
     EXPECT_TRUE(ValidateVisualAction(action, type, source, address).succeeded());
@@ -116,7 +135,7 @@ TEST(VisualSettings, MalformedAndIncompatibleActionInputsAreNotStale) {
     const auto type = SettingsType();
     const engine::VisualAddress address{engine::VisualSourceId{{1}}, engine::VisualRuntimeGeneration{1}};
     VisualSourceRecord source{address.source, type.id, 1, true, {}};
-    ActionInvocation action{address, engine::CommandId{{2}}, "select-device", "available"};
+    ActionInvocation action{address, engine::CommandId{{2}}, "select-device", "available", engine::SceneItemId{{5}}};
     const auto expect_invalid = [&] {
         auto result = ValidateVisualAction(action, type, source, address);
         ASSERT_FALSE(result.succeeded());
@@ -151,7 +170,7 @@ TEST(VisualSettings, DuplicateCurrentChoicesAreAmbiguousAndDetailsRejectsChoices
     type.actions.push_back({"details", {"VisualTests", "Details"}, ActionOperation::OpenDetails, {}, {}});
     const engine::VisualAddress address{engine::VisualSourceId{{1}}, engine::VisualRuntimeGeneration{1}};
     const VisualSourceRecord source{address.source, type.id, 1, true, {}};
-    ActionInvocation action{address, engine::CommandId{{2}}, "select-device", "available"};
+    ActionInvocation action{address, engine::CommandId{{2}}, "select-device", "available", engine::SceneItemId{{5}}};
     EXPECT_FALSE(ValidateVisualAction(action, type, source, address).succeeded());
     action.action_id = "details";
     EXPECT_FALSE(ValidateVisualAction(action, type, source, address).succeeded());
