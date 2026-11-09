@@ -620,7 +620,9 @@ fn resolve_bindings(
                 from_layers.push(match layer_control(layer, lab) {
                     Some(Value::String(name)) => Some(name.clone()),
                     Some(Value::Null) => None,
-                    None if !matches!(expected, Ok(Some(_))) => None,
+                    // An optional control without a native assignment falls back to
+                    // its SDL3 meaning, which records the precise reason.
+                    None if !matches!(expected, Ok(Some(_))) => continue,
                     _ => bail!(
                         "{layout}: layer {} lacks the required native control for {lab}",
                         reference.id
@@ -1097,6 +1099,7 @@ mod tests {
             {"control":"left_pad","svg":[{"id":"trackpad-l"}]}]}"#;
         let resolved = resolve_bindings("pad", &controls(optional), Some(&mapping), false).unwrap();
         assert_eq!(resolved["controls"][0]["control"], Value::Null);
+        assert_eq!(resolved["controls"][0]["reason"], "no SDL3 button");
         let required = r#"{"schemaVersion":1,"layoutId":"pad","controls":[
             {"control":"south","svg":[{"id":"btn-a"}]}]}"#;
         let error =
