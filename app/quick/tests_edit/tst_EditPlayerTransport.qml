@@ -48,4 +48,19 @@ TestCase {
         testTransportPlayer.endScrub();
         compare(surface.opacity, 1);
     }
+    function test_rotation_crosses_the_angle_seam_in_both_directions_and_multiple_turns() {
+        const viewer = createTemporaryObject(playerComponent, testCase);
+        const radians = degrees => degrees * Math.PI / 180;
+        for (const initial of [-35, 0, 420]) {
+            viewer.beginRotation(initial, radians(170));
+            verify(Math.abs(viewer.rotationAt(radians(-179)) - (initial + 11)) < 0.0001);
+            viewer.beginRotation(initial, radians(-170));
+            verify(Math.abs(viewer.rotationAt(radians(179)) - (initial - 11)) < 0.0001);
+            viewer.beginRotation(initial, 0);
+            for (let degrees = 30; degrees <= 720; degrees += 30) {
+                const wrapped = Math.atan2(Math.sin(radians(degrees)), Math.cos(radians(degrees)));
+                verify(Math.abs(viewer.rotationAt(wrapped) - (initial + degrees)) < 0.0001);
+            }
+        }
+    }
 }

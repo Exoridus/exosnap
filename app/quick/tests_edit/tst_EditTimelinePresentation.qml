@@ -1798,4 +1798,62 @@ TestCase {
         wait(0);
         testSession.visibleClips(0, 1000000).forEach(clip => verify(findChild(strip, "editClip" + clip.id) !== null));
     }
+    function test_keyboard_zoom_preserves_the_center_when_playhead_is_offscreen() {
+        const strip = createTemporaryObject(timelineComponent, tests);
+        strip.view.setVisibleInterval(40000000, 60000000);
+        testSession.requestSeekUs(0);
+        const center = strip.view.usableWidth / 2;
+        const time = strip.view.mapping.timeAtX(center);
+        strip.zoomTo(strip.pixelsPerSecond * 2);
+        verify(Math.abs(strip.view.mapping.timeAtX(center) - time) <= 1);
+        testSession.requestSeekUs(time);
+        const playheadX = strip.view.mapping.xAtTime(time);
+        strip.zoomTo(strip.pixelsPerSecond * 1.25);
+        verify(Math.abs(strip.view.mapping.xAtTime(time) - playheadX) < 0.01);
+    }
+    function test_ctrl_content_marquee_after_vertical_scroll_uses_the_press_position() {
+        const video = testSession.visibleClipsUs(0, 100000000).find(row => row.video);
+        testSession.linkedSelection = false;
+        for (let index = 0; index < 4; ++index) {
+            testSession.selectClip(video.id);
+            verify(testSession.duplicateSelectedClips());
+            testSession.beginClipDrag(testSession.selectedClip, -1, true);
+            verify(testSession.dragActive);
+            testSession.updateClipDragUs(-100000000, 0, 0);
+            verify(testSession.commitClipDrag());
+        }
+        verify(testSession.tracks.length >= 5);
+        for (const track of testSession.tracks)
+            testSession.trackLayout.setTrackHeight(track.id, 96);
+        const strip = createTemporaryObject(timelineComponent, tests, {height: 220});
+        strip.view.setVisibleInterval(0, 10000000);
+        const scroll = findChild(strip, "editTimelineScroll");
+        scroll.contentY = 240;
+        waitForRendering(strip);
+        verify(scroll.contentY > 200);
+        const row = testSession.visibleClipsUs(0, 100000000).find(row => {
+            const bounds = strip.trackGeometry(row.trackId, false);
+            const y = bounds.top + strip.rulerHeight + 40 - scroll.contentY;
+            return y > strip.rulerHeight + 20 && y < strip.height - 40;
+        });
+        verify(!!row);
+        const clip = findChild(strip, "editClip" + row.id);
+        verify(!!clip);
+        testSession.clearSelection();
+        const press = clip.mapToItem(strip, 130, 40);
+        mousePress(clip, 130, 40, Qt.LeftButton, Qt.ControlModifier);
+        mouseMove(clip, 131, 41, 20);
+        const marquee = findChild(strip, "editMarquee");
+        verify(!marquee.visible);
+        compare(testSession.selectedClipIds.length, 0);
+        mouseMove(clip, 220, 50, 20);
+        verify(marquee.visible);
+        const start = marquee.mapToItem(strip, 0, 0);
+        verify(Math.abs(start.x - press.x) < 1);
+        verify(Math.abs(start.y - press.y) < 1);
+        verify(testSession.selectedClipIds.includes(row.id));
+        keyClick(Qt.Key_Escape);
+        compare(testSession.selectedClipIds.length, 0);
+        mouseRelease(clip, 220, 50, Qt.LeftButton, Qt.ControlModifier);
+    }
 }

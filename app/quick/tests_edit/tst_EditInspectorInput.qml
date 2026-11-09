@@ -86,6 +86,7 @@ TestCase {
     }
     function test_supported_fade_options_are_enabled_and_activated_by_pointer() {
         const inspector = createTemporaryObject(inspectorComponent, tests);
+        inspector.timingExpanded = true;
         const curve = findChild(inspector, "editDetailsFadeInCurve");
         verify(!!curve && curve.visible);
         inspector.revealItem(curve);

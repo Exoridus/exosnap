@@ -36,6 +36,15 @@ FocusScope {
     signal inspectorToggleRequested()
     signal inspectorOpenRequested(string fieldName)
     signal shortcutsRequested()
+    property var closePanelContext: null
+    property var selectionBounds: ({valid: false})
+    function refreshSelectionBounds(): void { selectionBounds = session.selectionBounds(); }
+    Connections {
+        target: root.session
+        function onSelectionChanged(): void { root.refreshSelectionBounds(); }
+        function onTimeSelectionChanged(): void { root.refreshSelectionBounds(); }
+        function onWorkspaceChanged(): void { root.refreshSelectionBounds(); }
+    }
     property alias pixelsPerSecond: viewport.pixelsPerSecond
     readonly property bool snapping: session.snapping
     property real hoveredGroup: 0
@@ -132,8 +141,13 @@ FocusScope {
     }
     function zoomAt(value: real, pointerX: real): void {
         const playheadX = root.positionAtUs(root.session.positionUs);
-        const anchorX = pointerX >= root.labelWidth ? pointerX : playheadX >= root.labelWidth && playheadX <= scroll.width ? playheadX : root.labelWidth;
+        const anchorX = pointerX >= root.labelWidth ? pointerX : playheadX >= root.labelWidth && playheadX <= scroll.width ? playheadX : root.labelWidth + (scroll.width - root.labelWidth) / 2;
         viewport.zoomAt(Math.max(root.minimumZoom, Math.min(root.maximumZoom, value)), anchorX - root.labelWidth);
+    }
+    function fitSelection(): void {
+        const bounds = root.session.selectionBounds();
+        if (bounds.valid)
+            root.view.fitSelection(bounds.startUs, bounds.endUs);
     }
     function fitTimeline(): void {
         viewport.fitTimeline();
@@ -248,6 +262,7 @@ FocusScope {
     }
     Component.onCompleted: {
         trackLabelModel.setRows(root.trackLayout.rows);
+        refreshSelectionBounds();
         refreshClips();
     }
     EditViewportAdapter {
@@ -331,12 +346,7 @@ FocusScope {
         case "zoom-in": root.zoomTo(root.pixelsPerSecond * 1.25); break;
         case "zoom-out": root.zoomTo(root.pixelsPerSecond / 1.25); break;
         case "fit-timeline": root.view.fitTimeline(); break;
-        case "fit-selection": {
-            const bounds = root.session.selectionBounds();
-            if (bounds.valid)
-                root.view.fitSelection(bounds.startUs, bounds.endUs);
-            break;
-        }
+        case "fit-selection": root.fitSelection(); break;
         case "previous-view": root.view.restorePreviousView(); break;
         case "auto-key": root.session.autoKey = !root.session.autoKey; break;
         case "loop": root.player.loopEnabled = !root.player.loopEnabled; break;
@@ -353,6 +363,8 @@ FocusScope {
                 root.openTransitionPopup(root.session.selectedJunctionDetails);
             break;
         case "cancel":
+            if (root.closePanelContext && root.closePanelContext())
+                break;
             if (root.session.selectionMode === EditSessionAdapter.RangeSelection)
                 root.session.clearEditRange();
             else
@@ -829,8 +841,8 @@ FocusScope {
             property bool marquee: false
             property bool marqueeArmed: false
             property bool forwarded: false
-            function beginContentMarquee(point: point, timeUs: real, trackId: var): void {
-                const local = scroll.contentItem.mapFromItem(root, point.x, point.y);
+            function beginContentMarquee(rootPoint: point, timeUs: real, trackId: var): void {
+                const local = scroll.contentItem.mapFromItem(root, rootPoint.x, rootPoint.y);
                 forwarded = true;
                 started = false;
                 marquee = false;
@@ -838,13 +850,13 @@ FocusScope {
                 pressPolicy = {valid: true, marquee: true, additive: true, range: false, seek: false};
                 pressTrack = trackId;
                 pressTimeUs = timeUs;
-                pressPoint = point;
+                pressPoint = rootPoint;
                 pressPlayheadUs = root.session.positionUs;
                 marqueeOriginal = root.session.selectedClipIds;
                 marqueeStartX = marqueeEndX = local.x;
                 marqueeStartY = marqueeEndY = local.y;
                 root.session.beginLanePointerSelection(trackId, timeUs, false);
-                root.pointerPosition = point;
+                root.pointerPosition = rootPoint;
                 root.pointerScrollVertical = true;
                 root.pointerUpdater = physical => laneMouse.updatePointer(physical);
             }
@@ -1631,7 +1643,20 @@ FocusScope {
                         y: clipItem.trackBounds.headerHeight + modelData.y * clipItem.bodyHeight - height / 2
                         visible: x >= 10 && x + width <= clipItem.width - 10
                         Accessible.role: Accessible.Button
-                        Accessible.name: qsTr("Gain envelope point")
+                        Accessible.name: qsTr("Gain point at %1 s, %2 dB").arg(root.session.formatTimeValue(clipItem.modelData.startUs + modelData.sourceUs - clipItem.modelData.sourceInUs, 1)).arg(root.session.formatGainValue(modelData.gainDb))
+                        Accessible.description: qsTr("Press Enter to edit the point time and gain in Details.")
+                        border.width: activeFocus ? 2 : 0
+                        border.color: ExoTheme.text
+                        Keys.onReturnPressed: {
+                            const sourceUs = modelData.sourceUs;
+                            if (root.session.inspectClip(clipItem.modelData.id))
+                                root.inspectorOpenRequested("gain:" + sourceUs);
+                        }
+                        Keys.onEnterPressed: {
+                            const sourceUs = modelData.sourceUs;
+                            if (root.session.inspectClip(clipItem.modelData.id))
+                                root.inspectorOpenRequested("gain:" + sourceUs);
+                        }
                         activeFocusOnTab: true
                         Keys.onDeletePressed: root.session.removeGainKey(clipItem.modelData.id, modelData.sourceUs)
                         MouseArea {
@@ -1744,7 +1769,7 @@ FocusScope {
                             return;
                         }
                         if (pressPolicy.marquee) {
-                            laneMouse.beginContentMarquee(point, pressTimeUs, clipItem.modelData.trackId);
+                            laneMouse.beginContentMarquee(pressPoint, pressTimeUs, clipItem.modelData.trackId);
                             root.forceActiveFocus();
                             return;
                         }
@@ -2193,10 +2218,10 @@ FocusScope {
                 Label {
                     objectName: "editJunctionLabel" + transitionOverlay.modelData.id
                     x: Math.max(0, Math.min(transitionOverlay.width - width, transitionOverlay.hardCut ? transitionOverlay.cutX + 6 : 4))
-                    y: -transitionOverlay.trackBounds.headerHeight
+                    y: 8
                     height: transitionOverlay.trackBounds.headerHeight
                     text: transitionOverlay.hardCut ? qsTr("Hard cut") : qsTr("%1 ms").arg(transitionOverlay.modelData.durationUs / 1000)
-                    visible: transitionOverlay.hardCut || transitionMouse.containsMouse || transitionOverlay.activeFocus || transitionOverlay.modelData.selected
+                    visible: transitionOverlay.height >= y + height && (transitionMouse.containsMouse || transitionOverlay.activeFocus || transitionOverlay.modelData.selected)
                     color: ExoTheme.text
                     font.family: ExoTheme.sansFamily
                     font.pixelSize: ExoTheme.fontCaption
