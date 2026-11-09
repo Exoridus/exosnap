@@ -1,14 +1,18 @@
 #include "soak_runner.h"
 
 #include <chrono>
+#include <cmath>
+#include <stdexcept>
 
 namespace exosnap::soak {
 
 using exosnap::engine::MetricAvailability;
 using exosnap::engine::PipelineHealth;
 
-SoakRunner::SoakRunner(SoakThresholds thresholds, IProcessSampler& sampler, std::string jsonl_path)
-    : thresholds_(thresholds), policy_(thresholds), sampler_(sampler), jsonl_path_(std::move(jsonl_path)) {
+SoakRunner::SoakRunner(SoakThresholds thresholds, IProcessSampler& sampler, std::string jsonl_path,
+                       std::function<void()> abort_callback)
+    : thresholds_(thresholds), policy_(thresholds), sampler_(sampler), jsonl_path_(std::move(jsonl_path)),
+      abort_callback_(std::move(abort_callback)) {
     if (!jsonl_path_.empty()) {
         jsonl_.open(jsonl_path_, std::ios::binary);
     }
@@ -31,27 +35,52 @@ void SoakRunner::OnDiagnostics(const exosnap::engine::RecordingDiagnosticsSnapsh
 }
 
 void SoakRunner::Start(double sample_interval_s) {
+    if (started_)
+        throw std::logic_error("A soak sampler can only start once");
+    if (!std::isfinite(sample_interval_s) || sample_interval_s <= 0)
+        throw std::invalid_argument("Soak sample interval must be positive and finite");
+    if (!jsonl_path_.empty() && !jsonl_.is_open())
+        throw std::runtime_error("Cannot open soak timeline: " + jsonl_path_);
+    started_ = true;
     start_time_ = std::chrono::steady_clock::now();
     stop_.store(false);
     const auto interval = std::chrono::duration_cast<std::chrono::steady_clock::duration>(
         std::chrono::duration<double>(sample_interval_s));
     thread_ = std::thread([this, interval] {
-        // One sample immediately so even a sub-interval run yields a row.
-        SampleOnce();
-        while (!stop_.load()) {
-            std::this_thread::sleep_for(interval);
-            if (stop_.load())
-                break;
+        try {
+            // One sample immediately so even a sub-interval run yields a row.
             SampleOnce();
+            std::unique_lock lock(stop_mutex_);
+            while (!wake_.wait_for(lock, interval, [this] { return stop_.load(); })) {
+                lock.unlock();
+                SampleOnce();
+                lock.lock();
+            }
+        } catch (const std::exception& error) {
+            ReportFailure(error.what());
+        } catch (...) {
+            ReportFailure("Unknown soak sampler failure");
         }
     });
 }
 
 void SoakRunner::Stop() {
     if (thread_.joinable()) {
-        stop_.store(true);
+        {
+            std::lock_guard lock(stop_mutex_);
+            stop_.store(true);
+        }
+        wake_.notify_all();
         thread_.join();
-        SampleOnce(); // final sample after the loop exits
+        if (error().empty()) {
+            try {
+                SampleOnce();
+            } catch (const std::exception& error) {
+                ReportFailure(error.what());
+            } catch (...) {
+                ReportFailure("Unknown final soak sample failure");
+            }
+        }
     }
 }
 
@@ -105,27 +134,55 @@ void SoakRunner::SampleOnce() {
         s.duration_skew_available = true;
     }
 
+    AbortDecision decision;
     {
         std::lock_guard lk(timeline_mutex_);
         timeline_.push_back(s);
         if (jsonl_.is_open()) {
             jsonl_ << SampleToJsonLine(s);
             jsonl_.flush();
+            if (!jsonl_)
+                throw std::runtime_error("Cannot write soak timeline: " + jsonl_path_);
         }
         if (!aborted_.load()) {
-            const AbortDecision d = policy_.Evaluate(timeline_);
-            if (d.verdict == SoakVerdict::Abort) {
-                aborted_.store(true);
-                std::lock_guard alk(abort_mutex_);
-                abort_decision_ = d;
-            }
+            decision = policy_.Evaluate(timeline_);
         }
     }
+    if (decision.verdict == SoakVerdict::Abort)
+        PublishAbort(std::move(decision));
+}
+
+void SoakRunner::PublishAbort(AbortDecision decision) {
+    {
+        std::lock_guard lock(abort_mutex_);
+        if (aborted_.load())
+            return;
+        abort_decision_ = std::move(decision);
+        aborted_.store(true);
+    }
+    // The session stop path and callback consumers may read the runner. Never
+    // call them while holding the timeline or abort locks.
+    if (abort_callback_)
+        abort_callback_();
+}
+
+void SoakRunner::ReportFailure(const std::string& error) {
+    {
+        std::lock_guard lock(abort_mutex_);
+        if (error_.empty())
+            error_ = error;
+    }
+    PublishAbort({SoakVerdict::Abort, error});
 }
 
 AbortDecision SoakRunner::abort_decision() const {
     std::lock_guard lk(abort_mutex_);
     return abort_decision_;
+}
+
+std::string SoakRunner::error() const {
+    std::lock_guard lock(abort_mutex_);
+    return error_;
 }
 
 std::vector<SoakSample> SoakRunner::timeline() const {

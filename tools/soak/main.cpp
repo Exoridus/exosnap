@@ -18,7 +18,7 @@
 //
 // Runtime gate: the REAL path needs an NVIDIA GPU. With no capture target it fails
 // fast (non-zero exit) instead of hanging — a stray CI invocation dies deterministically.
-// The --synthetic path runs anywhere.
+// The --synthetic path needs the Windows build, but no capture device or GPU.
 
 #define WIN32_LEAN_AND_MEAN
 #include <objbase.h>
@@ -36,6 +36,7 @@ extern "C" {
 #include "soak_metrics.h"
 #include "soak_process_sampler.h"
 #include "soak_runner.h"
+#include "soak_stop_control.h"
 #include "synthetic_session.h"
 
 #include <atomic>
@@ -46,6 +47,8 @@ extern "C" {
 #include <filesystem>
 #include <fstream>
 #include <limits>
+#include <memory>
+#include <stdexcept>
 #include <string>
 #include <thread>
 
@@ -53,17 +56,37 @@ using namespace exosnap::engine;
 
 namespace {
 
-std::atomic<RecorderSession*> g_session{nullptr};
-std::atomic<exosnap::soak::SoakRunner*> g_runner{nullptr};
+std::atomic<std::shared_ptr<exosnap::soak::SoakStopControl>> g_stop_control;
 
 BOOL WINAPI CtrlHandler(DWORD type) {
     if (type == CTRL_C_EVENT || type == CTRL_BREAK_EVENT || type == CTRL_CLOSE_EVENT) {
-        if (auto* s = g_session.load())
-            s->Stop();
+        if (auto control = g_stop_control.load())
+            control->RequestStop();
         return TRUE;
     }
     return FALSE;
 }
+
+// A console callback only retains a stop signal. This scope joins the callback
+// worker while its captured session is still alive, including exception paths.
+class ConsoleStopScope {
+  public:
+    explicit ConsoleStopScope(std::shared_ptr<exosnap::soak::SoakStopControl> control) : control_(std::move(control)) {
+        g_stop_control.store(control_);
+        if (!SetConsoleCtrlHandler(CtrlHandler, TRUE)) {
+            g_stop_control.store(nullptr);
+            throw std::runtime_error("Cannot register soak console stop handler");
+        }
+    }
+    ~ConsoleStopScope() {
+        SetConsoleCtrlHandler(CtrlHandler, FALSE);
+        g_stop_control.store(nullptr);
+        control_->Complete();
+    }
+
+  private:
+    std::shared_ptr<exosnap::soak::SoakStopControl> control_;
+};
 
 bool ParseContainer(const std::string& s, Container& out) {
     if (s == "mkv" || s == "matroska") {
@@ -154,6 +177,7 @@ bool ParseAudio(const std::string& s, AudioCodec& out) {
 struct MediaProbe {
     bool ok = false;
     double duration_s = 0.0;
+    uint64_t packets = 0;
 };
 MediaProbe ProbeMedia(const std::string& path) {
     MediaProbe p;
@@ -161,13 +185,20 @@ MediaProbe ProbeMedia(const std::string& path) {
     AVFormatContext* ctx = nullptr;
     if (avformat_open_input(&ctx, path.c_str(), nullptr, nullptr) != 0)
         return p;
-    if (avformat_find_stream_info(ctx, nullptr) >= 0 && ctx->duration > 0)
+    const bool stream_info_ok = avformat_find_stream_info(ctx, nullptr) >= 0;
+    if (stream_info_ok && ctx->duration > 0)
         p.duration_s = static_cast<double>(ctx->duration) / AV_TIME_BASE;
     AVPacket* pkt = av_packet_alloc();
+    if (!pkt) {
+        avformat_close_input(&ctx);
+        return p;
+    }
     int ret = 0;
-    while ((ret = av_read_frame(ctx, pkt)) >= 0)
+    while ((ret = av_read_frame(ctx, pkt)) >= 0) {
+        ++p.packets;
         av_packet_unref(pkt);
-    p.ok = (ret == AVERROR_EOF);
+    }
+    p.ok = stream_info_ok && p.packets > 0 && (ret == AVERROR_EOF);
     av_packet_free(&pkt);
     avformat_close_input(&ctx);
     return p;
@@ -182,19 +213,29 @@ std::string Timestamp() {
     return buf;
 }
 
-void WriteReport(const exosnap::soak::SoakSummary& summary, const std::string& report_dir,
+bool WriteReport(const exosnap::soak::SoakSummary& summary, const std::string& report_dir,
                  const std::vector<std::pair<std::string, std::string>>& metadata) {
-    std::filesystem::create_directories(report_dir);
+    std::error_code error;
+    std::filesystem::create_directories(report_dir, error);
+    if (error)
+        return false;
     const std::string base = report_dir + "/soak-report-" + Timestamp();
     {
         std::ofstream j(base + ".json", std::ios::binary);
         j << exosnap::soak::SummaryToJson(summary, metadata);
+        j.close();
+        if (!j)
+            return false;
     }
     {
         std::ofstream m(base + ".md", std::ios::binary);
         m << exosnap::soak::SummaryToMarkdown(summary, metadata);
+        m.close();
+        if (!m)
+            return false;
     }
     std::fprintf(stdout, "[soak] report: %s.json / .md\n", base.c_str());
+    return true;
 }
 
 // --- Clapper: full-frame white flash + loud beep on a fixed schedule (live only) ---
@@ -254,6 +295,10 @@ int main(int argc, char* argv[]) {
     std::int64_t minutes = 0, seconds = 0, start_margin_seconds = 0, end_margin_seconds = 0;
     int marker_count = 2, flash_ms = 120, sample_ms = 1000;
     std::string container_s = "mkv", vcodec_s = "av1", acodec_s = "opus", out_s, report_dir, audio_sources_s;
+    std::string output_fault_name;
+    std::optional<exosnap::engine::testutil::SyntheticOutputFaultPoint> output_fault;
+    uint64_t fault_occurrence = 1;
+    bool fault_occurrence_set = false;
     exosnap::soak::SoakThresholds thresholds;
 
     for (int i = 1; i < argc; ++i) {
@@ -317,7 +362,24 @@ int main(int argc, char* argv[]) {
             report_dir = next();
         else if (a == "--audio-sources")
             audio_sources_s = next();
-        else if (a == "--max-drift-ms")
+        else if (a == "--output-fault") {
+            output_fault_name = next();
+            output_fault = exosnap::engine::testutil::ParseSyntheticOutputFault(output_fault_name);
+            if (!output_fault) {
+                std::fprintf(stderr,
+                             "[soak] --output-fault: expected payload, cluster, trailer, flush, close or durability\n");
+                return 64;
+            }
+        } else if (a == "--fault-after") {
+            std::int64_t parsed = 0;
+            std::string parse_error;
+            if (!exosnap::soak::ParsePositiveInt64(next(), parsed, parse_error)) {
+                std::fprintf(stderr, "[soak] --fault-after: %s\n", parse_error.c_str());
+                return 64;
+            }
+            fault_occurrence = static_cast<uint64_t>(parsed);
+            fault_occurrence_set = true;
+        } else if (a == "--max-drift-ms")
             thresholds.av_drift_abort_ms = std::atof(next().c_str());
         else if (a == "--max-skew-ms")
             thresholds.duration_skew_abort_ms = std::atof(next().c_str());
@@ -329,6 +391,10 @@ int main(int argc, char* argv[]) {
 
     if (seconds_set && minutes_set) {
         std::fprintf(stderr, "[soak] choose exactly one of --seconds or --minutes\n");
+        return 64;
+    }
+    if ((output_fault && (!synthetic || clapper)) || (fault_occurrence_set && !output_fault)) {
+        std::fprintf(stderr, "[soak] output faults require --synthetic and --output-fault\n");
         return 64;
     }
     if (minutes > std::numeric_limits<std::int64_t>::max() / 60) {
@@ -379,6 +445,10 @@ int main(int argc, char* argv[]) {
             return 64;
         }
     }
+    if (synthetic && (container != Container::Matroska || vcodec == VideoCodec::Hevc || !audio_rows.empty())) {
+        std::fprintf(stderr, "[soak] synthetic fixtures support MKV, AV1/H.264 and one synthetic audio source\n");
+        return 64;
+    }
     if (out_s.empty()) {
         char tmp[MAX_PATH] = {};
         GetTempPathA(MAX_PATH, tmp);
@@ -387,9 +457,10 @@ int main(int argc, char* argv[]) {
 
     exosnap::soak::WinProcessSampler win_sampler;
     const std::string jsonl = out_s + ".timeline.jsonl";
-    exosnap::soak::SoakRunner runner(thresholds, win_sampler, jsonl);
-    g_runner.store(&runner);
-    SetConsoleCtrlHandler(CtrlHandler, TRUE);
+    exosnap::soak::SoakRunner runner(thresholds, win_sampler, jsonl, [] {
+        if (auto control = g_stop_control.load())
+            control->RequestStop();
+    });
 
     std::vector<std::pair<std::string, std::string>> metadata = {
         {"mode", synthetic ? "synthetic" : "real"},
@@ -398,99 +469,125 @@ int main(int argc, char* argv[]) {
         {"acodec", acodec_s},
         {"audio_sources", audio_sources_s.empty() ? "legacy-single-track" : audio_sources_s},
         {"target_seconds", std::to_string(duration_s)},
+        {"output_validation", "container-demux-only"},
+        {"video_decode", "not-run"},
+        {"hardware_qualified", "false"},
         {"volume", std::filesystem::path(out_s).root_name().string()},
         {"advisory", "thresholds advisory for 0.10 — not a release gate"},
     };
 
     bool ok = false;
+    bool fault_triggered = false;
     std::string err;
 
-    if (synthetic) {
-        exosnap::engine::testutil::SyntheticSessionConfig cfg;
-        cfg.video_codec = vcodec;
-        cfg.audio_codec = acodec;
-        cfg.output_path = out_s;
-        cfg.target_seconds = duration_s;
-        cfg.realtime_pace = realtime;
-        cfg.drive_stats_collector = true;
-        exosnap::engine::testutil::SyntheticSession session(cfg);
-        session.SetStatsCallback([&](const SessionStats& s) { runner.OnStats(s); });
-        session.SetDiagnosticsCallback([&](const RecordingDiagnosticsSnapshot& d) { runner.OnDiagnostics(d); });
-        runner.Start(sample_ms / 1000.0);
-        const auto r = session.Run();
-        runner.Stop();
-        ok = r.success;
-        err = r.error;
-    } else {
-        auto targets = RecorderSession::EnumerateTargets();
-        if (targets.empty()) {
-            std::fprintf(stderr, "[soak] no capture targets (needs a GPU/display). The real path requires "
-                                 "hardware; use --synthetic on a headless host.\n");
-            return 2;
-        }
-        RecorderConfig cfg;
-        cfg.output_path = out_s;
-        cfg.target = targets[0];
-        cfg.container = container;
-        cfg.video_codec = vcodec;
-        cfg.audio_codec = acodec;
-        cfg.record_audio = true;
-        cfg.frame_rate_num = 60;
-        cfg.frame_rate_den = 1;
-        cfg.cfr = true;
-        if (!audio_rows.empty()) {
-            const bool window_target = cfg.target.kind == CaptureTarget::Kind::Window;
-            cfg.audio_track_plan = ResolveAudioTracks(NormalizeSourceRowsForTarget(audio_rows, window_target));
-        }
-
-        RecorderSession session;
-        RecorderResult vr{};
-        if (!session.Validate(cfg, &vr)) {
-            std::fprintf(stderr, "[soak] validate rejected: %s\n", vr.error_detail.c_str());
-            return 2;
-        }
-        session.SetStatsCallback([&](const SessionStats& s) { runner.OnStats(s); });
-        session.SetDiagnosticsCallback([&](const RecordingDiagnosticsSnapshot& d) {
-            runner.OnDiagnostics(d);
-            if (runner.aborted()) {
-                if (auto* sp = g_session.load())
-                    sp->Stop();
+    try {
+        if (synthetic) {
+            exosnap::engine::testutil::SyntheticSessionConfig cfg;
+            cfg.video_codec = vcodec;
+            cfg.audio_codec = acodec;
+            cfg.output_path = out_s;
+            cfg.target_seconds = duration_s;
+            cfg.realtime_pace = realtime;
+            cfg.drive_stats_collector = true;
+            if (output_fault)
+                cfg.output_fault = exosnap::engine::testutil::SyntheticOutputFaultSpec{*output_fault, fault_occurrence};
+            exosnap::engine::testutil::SyntheticSession session(cfg);
+            auto control = std::make_shared<exosnap::soak::SoakStopControl>();
+            ConsoleStopScope console_stop(control);
+            session.SetStatsCallback([&](const SessionStats& s) { runner.OnStats(s); });
+            session.SetDiagnosticsCallback([&](const RecordingDiagnosticsSnapshot& d) { runner.OnDiagnostics(d); });
+            control->Start(std::nullopt, [&] { session.RequestStop(); });
+            runner.Start(sample_ms / 1000.0);
+            const auto r = session.Run();
+            control->Complete();
+            runner.Stop();
+            ok = r.success;
+            err = r.error;
+            fault_triggered = r.output_fault_triggered;
+            if (output_fault) {
+                metadata.emplace_back("output_fault", output_fault_name);
+                metadata.emplace_back("fault_after", std::to_string(fault_occurrence));
+                metadata.emplace_back("fault_visits", std::to_string(r.output_fault_visits));
+                metadata.emplace_back("fault_triggered", fault_triggered ? "true" : "false");
             }
-        });
-        g_session.store(&session);
+        } else {
+            auto targets = RecorderSession::EnumerateTargets();
+            if (targets.empty()) {
+                std::fprintf(stderr, "[soak] no capture targets (needs a GPU/display). The real path requires "
+                                     "hardware; use --synthetic on a headless host.\n");
+                return 2;
+            }
+            RecorderConfig cfg;
+            cfg.output_path = out_s;
+            cfg.target = targets[0];
+            cfg.container = container;
+            cfg.video_codec = vcodec;
+            cfg.audio_codec = acodec;
+            cfg.record_audio = true;
+            cfg.frame_rate_num = 60;
+            cfg.frame_rate_den = 1;
+            cfg.cfr = true;
+            if (!audio_rows.empty()) {
+                const bool window_target = cfg.target.kind == CaptureTarget::Kind::Window;
+                cfg.audio_track_plan = ResolveAudioTracks(NormalizeSourceRowsForTarget(audio_rows, window_target));
+            }
 
-        std::thread stopper([&session, duration_s] {
-            std::this_thread::sleep_for(std::chrono::duration<double>(duration_s));
-            session.Stop();
-        });
-        runner.Start(sample_ms / 1000.0);
-        const RecorderResult r = session.Record(cfg);
-        stopper.join();
+            RecorderSession session;
+            auto control = std::make_shared<exosnap::soak::SoakStopControl>();
+            ConsoleStopScope console_stop(control);
+            RecorderResult vr{};
+            if (!session.Validate(cfg, &vr)) {
+                std::fprintf(stderr, "[soak] validate rejected: %s\n", vr.error_detail.c_str());
+                return 2;
+            }
+            session.SetStatsCallback([&](const SessionStats& s) { runner.OnStats(s); });
+            session.SetDiagnosticsCallback([&](const RecordingDiagnosticsSnapshot& d) { runner.OnDiagnostics(d); });
+            control->Start(std::chrono::duration<double>(duration_s), [&] { session.Stop(); });
+            runner.Start(sample_ms / 1000.0);
+            const RecorderResult r = session.Record(cfg);
+            control->Complete();
+            runner.Stop();
+            ok = r.succeeded;
+            if (!ok)
+                err = r.error_detail;
+        }
+    } catch (const std::exception& error) {
         runner.Stop();
-        g_session.store(nullptr);
-        ok = r.succeeded;
-        if (!ok)
-            err = r.error_detail;
+        std::fprintf(stderr, "[soak] infrastructure failure: %s\n", error.what());
+        return 2;
     }
 
     const MediaProbe probe = ProbeMedia(out_s);
     metadata.emplace_back("file", out_s);
     metadata.emplace_back("clean_eof", probe.ok ? "true" : "false");
     metadata.emplace_back("media_duration_s", std::to_string(probe.duration_s));
+    metadata.emplace_back("demuxed_packets", std::to_string(probe.packets));
     metadata.emplace_back("session_ok", ok ? "true" : "false");
     if (!err.empty())
         metadata.emplace_back("error", err);
 
     const auto summary = runner.Summarize();
-    WriteReport(summary, report_dir, metadata);
+    const std::string runner_error = runner.error();
+    if (!runner_error.empty())
+        metadata.emplace_back("instrument_error", runner_error);
+    const bool report_ok = WriteReport(summary, report_dir, metadata);
+    const bool fault_covered = !output_fault || fault_triggered;
+    const int exit_code =
+        exosnap::soak::SoakExitCode(ok, probe.ok, report_ok && runner_error.empty() && fault_covered, runner.aborted());
+
+    if (exit_code == 2) {
+        std::fprintf(stderr, "[soak] output/evidence validation failed (demux=%s, report=%s): %s\n",
+                     probe.ok ? "yes" : "no", report_ok ? "yes" : "no", runner_error.c_str());
+        return exit_code;
+    }
 
     if (runner.aborted()) {
         std::fprintf(stderr, "[soak] ABORTED (advisory): %s\n", runner.abort_decision().reason.c_str());
-        return 3;
+        return exit_code;
     }
     if (!ok) {
         std::fprintf(stderr, "[soak] session failed: %s\n", err.c_str());
-        return 1;
+        return exit_code;
     }
     std::fprintf(stdout, "[soak] OK — %s (clean_eof=%s, media=%.1fs)\n", out_s.c_str(), probe.ok ? "yes" : "no",
                  probe.duration_s);

@@ -15,6 +15,7 @@
 // Stats/Diagnostics callbacks fire — the soak twin needs a non-empty metric
 // timeline, and only Record() instantiates that collector in production.
 
+#include "synthetic_output_fault.h"
 #include <exosnap/engine/codec_types.h>
 #include <exosnap/engine/pipeline_diagnostics.h>
 #include <exosnap/engine/session_stats.h>
@@ -43,6 +44,9 @@ struct SyntheticSessionConfig {
     // When true, instantiate a SessionStatsCollector against the shared state so
     // the Stats/Diagnostics callbacks below actually fire (soak twin needs this).
     bool drive_stats_collector = false;
+
+    // Test-tool-only injection into the real mux writer's output operations.
+    std::optional<SyntheticOutputFaultSpec> output_fault;
 };
 
 struct SyntheticSessionResult {
@@ -50,6 +54,8 @@ struct SyntheticSessionResult {
     bool finalized = false;
     uint64_t output_bytes = 0;
     std::string error;
+    bool output_fault_triggered = false;
+    uint64_t output_fault_visits = 0;
 };
 
 class SyntheticSession {
