@@ -162,7 +162,7 @@ Expert can disable clock slaving for a bit-exact workflow. That only removes thi
 
 ### Quality and rate control
 
-Default mode presents named quality tiers for constant-quality rate control. A retained VBR or CBR mode instead shows its effective bitrate summary and an explicit path to Expert; switching the display mode never silently changes rate control. Expert replaces them with CQ/VBR/CBR controls and numeric CQ or bitrate. A canonical quality value is not universally the native encoder quantizer and is never labeled CRF.
+Default mode presents named quality tiers for constant-quality rate control. A retained VBR or CBR mode instead shows its effective rate-control mode and an explicit path to Expert; switching the display mode never silently changes rate control. Expert replaces them with CQ/VBR/CBR controls and numeric CQ or bitrate. A canonical quality value is not universally the native encoder quantizer and is never labeled CRF.
 
 | Tier | Canonical CQ | H.264 QP | HEVC QP | AV1 qindex |
 |---|---|---|---|---|
