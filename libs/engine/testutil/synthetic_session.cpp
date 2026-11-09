@@ -1,4 +1,5 @@
 #include "synthetic_session.h"
+#include "synthetic_audio_source.h"
 
 #include "audio_thread.h"
 #include "exosnap/engine/codec_types.h"
@@ -7,6 +8,7 @@
 #include "exosnap/engine/packet_types.h"
 #include "exosnap/engine/pipeline_diagnostics.h"
 #include "exosnap/engine/session_stats.h"
+#include "matroska_stream_writer.h"
 #include "mux_queue.h"
 #include "mux_thread.h"
 #include "premux_state.h"
@@ -29,80 +31,6 @@
 namespace exosnap::engine::testutil {
 
 namespace {
-
-// Deterministic mock capture source: a fixed number of non-silent 48 kHz stereo
-// float packets. Reports when it is drained. (Lifted verbatim from
-// test_session_e2e_real_file.cpp so behaviour is identical.)
-class MockAudioCaptureSource : public IAudioCaptureSource {
-  public:
-    MockAudioCaptureSource(std::atomic<bool>* drained, size_t packet_count) : drained_(drained) {
-        packets_.resize(packet_count);
-        for (auto& p : packets_)
-            p.assign(static_cast<size_t>(kFramesPerPacket) * kChannels, 0.1f);
-    }
-
-    bool Init(std::string& out_error) override {
-        initialized_ = true;
-        out_error.clear();
-        return true;
-    }
-    uint32_t PendingFrameCount() override {
-        if (!initialized_ || acquired_)
-            return 0;
-        if (next_ < packets_.size())
-            return kFramesPerPacket;
-        if (drained_)
-            drained_->store(true);
-        return 0;
-    }
-    bool AcquireBuffer(RawAudioBuffer& out_buf, std::string& out_error) override {
-        out_buf = {};
-        if (!initialized_ || acquired_ || next_ >= packets_.size()) {
-            out_error.clear();
-            return false;
-        }
-        acquired_ = true;
-        out_buf.bytes = reinterpret_cast<const uint8_t*>(packets_[next_].data());
-        out_buf.num_frames = kFramesPerPacket;
-        out_buf.silent = false;
-        out_error.clear();
-        return true;
-    }
-    void ReleaseBuffer() override {
-        if (!acquired_)
-            return;
-        acquired_ = false;
-        ++next_;
-        if (next_ >= packets_.size() && drained_)
-            drained_->store(true);
-    }
-    uint32_t SampleRate() const override {
-        return kSampleRate;
-    }
-    uint32_t Channels() const override {
-        return kChannels;
-    }
-    AudioSampleFormat SampleFormat() const override {
-        return AudioSampleFormat::Float32;
-    }
-    const std::string& EndpointName() const override {
-        return endpoint_;
-    }
-    void Shutdown() override {
-    }
-
-  private:
-    static constexpr uint32_t kSampleRate = 48000;
-    static constexpr uint32_t kChannels = 2;
-    static constexpr uint32_t kFramesPerPacket = 960; // 20 ms
-
-    std::atomic<bool>* drained_ = nullptr;
-    bool initialized_ = false;
-    bool acquired_ = false;
-    size_t next_ = 0;
-    std::vector<std::vector<float>> packets_;
-    std::string endpoint_ = "SyntheticCapture";
-};
 
 std::vector<uint8_t> FakeH264AnnexbSpsPps() {
     return {0x00, 0x00, 0x00, 0x01, 0x67, 0x42, 0x00, 0x1F, 0xAC, 0xD9, 0x00, 0x00, 0x00, 0x01, 0x68, 0xCE, 0x3C, 0x80};
@@ -140,7 +68,7 @@ void SyntheticSession::SetDiagnosticsCallback(DiagnosticsCallback cb) {
 
 void SyntheticSession::RequestStop() {
     if (impl_ && impl_->state)
-        impl_->state->stop_requested.store(true);
+        impl_->state->RequestCleanStop();
 }
 
 SyntheticSessionResult SyntheticSession::Run() {
@@ -148,6 +76,27 @@ SyntheticSessionResult SyntheticSession::Run() {
     const SyntheticSessionConfig& cfg = impl_->cfg;
     auto state_ptr = impl_->state;
     SessionState& state = *state_ptr;
+    std::shared_ptr<SyntheticOutputFault> output_fault;
+    if (cfg.output_fault) {
+        output_fault = std::make_shared<SyntheticOutputFault>(*cfg.output_fault);
+        state.output_io_failure = [output_fault](OutputIoOperation operation) {
+            switch (operation) {
+            case OutputIoOperation::PayloadWrite:
+                return output_fault->Visit(SyntheticOutputFaultPoint::Payload);
+            case OutputIoOperation::ClusterWrite:
+                return output_fault->Visit(SyntheticOutputFaultPoint::Cluster);
+            case OutputIoOperation::TrailerWrite:
+                return output_fault->Visit(SyntheticOutputFaultPoint::Trailer);
+            case OutputIoOperation::CrtFlush:
+                return output_fault->Visit(SyntheticOutputFaultPoint::Flush);
+            case OutputIoOperation::Close:
+                return output_fault->Visit(SyntheticOutputFaultPoint::Close);
+            case OutputIoOperation::DurabilityFlush:
+                return output_fault->Visit(SyntheticOutputFaultPoint::Durability);
+            }
+            return false;
+        };
+    }
 
     state.config.output_path = cfg.output_path;
     state.config.container = Container::Matroska;
@@ -177,8 +126,8 @@ SyntheticSessionResult SyntheticSession::Run() {
     }
 
     const size_t audio_packets = static_cast<size_t>(cfg.target_seconds * 50.0); // 20 ms packets
-    std::atomic<bool> audio_drained{false};
-    auto source = std::make_unique<MockAudioCaptureSource>(&audio_drained, audio_packets);
+    auto audio_drained = std::make_shared<std::atomic<bool>>(false);
+    auto source = std::make_unique<SyntheticAudioSource>(audio_drained, audio_packets);
     auto audio_thread = std::make_shared<AudioThread>(state_ptr, std::move(source), /*track_id=*/0);
     auto mux_thread = std::make_shared<MuxThread>(state_ptr);
 
@@ -247,7 +196,7 @@ SyntheticSessionResult SyntheticSession::Run() {
                 break;
         }
 
-        while (!audio_drained.load() && !st.stop_requested.load())
+        while (!audio_drained->load() && !st.stop_requested.load())
             std::this_thread::yield();
         if (!st.stop_requested.load())
             st.RequestCleanStop();
@@ -273,6 +222,10 @@ SyntheticSessionResult SyntheticSession::Run() {
     const bool mux_joined = mux_thread->Join(60000);
     if (collector)
         collector->Stop();
+    if (output_fault) {
+        result.output_fault_triggered = output_fault->triggered();
+        result.output_fault_visits = output_fault->visits();
+    }
 
     if (!audio_joined) {
         result.error = "audio thread did not join";

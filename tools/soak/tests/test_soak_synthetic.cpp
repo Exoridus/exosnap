@@ -14,10 +14,12 @@ extern "C" {
 
 #include "soak_process_sampler.h"
 #include "soak_runner.h"
+#include "soak_stop_control.h"
 #include "synthetic_session.h"
 
 #include <gtest/gtest.h>
 
+#include <atomic>
 #include <chrono>
 #include <cstdint>
 #include <filesystem>
@@ -149,4 +151,64 @@ TEST(SoakSynthetic, InjectedSkewRampTripsWiredAbortPolicy) {
 
     EXPECT_TRUE(runner.aborted());
     EXPECT_NE(runner.abort_decision().reason.find("skew"), std::string::npos);
+}
+
+TEST(SoakSynthetic, ConfiguredTrailerFailureReachesTheMuxerAndKeepsPartialMedia) {
+    using namespace exosnap::engine::testutil;
+    const std::string mkv = UniqueTemp("trailer-failure.mkv");
+    SyntheticSessionConfig config;
+    config.output_path = mkv;
+    config.target_seconds = 4;
+    config.output_fault = SyntheticOutputFaultSpec{SyntheticOutputFaultPoint::Trailer, 1};
+    SyntheticSession session(config);
+    const auto result = session.Run();
+    EXPECT_TRUE(result.output_fault_triggered);
+    EXPECT_FALSE(result.success);
+    EXPECT_FALSE(result.finalized);
+    EXPECT_FALSE(result.error.empty());
+    ASSERT_TRUE(std::filesystem::exists(mkv));
+    EXPECT_GT(std::filesystem::file_size(mkv), 0u);
+    const auto facts = DemuxAndInspect(mkv);
+    EXPECT_TRUE(facts.open_ok);
+    EXPECT_GT(facts.packets, 0);
+    std::error_code error;
+    std::filesystem::remove(mkv, error);
+}
+
+TEST(SoakSynthetic, DiagnosticAbortRequestsTheRunningSessionToStop) {
+    using namespace exosnap::engine::testutil;
+    const std::string mkv = UniqueTemp("aborted.mkv");
+    SyntheticSessionConfig config;
+    config.output_path = mkv;
+    config.target_seconds = 30;
+    config.realtime_pace = true;
+    config.drive_stats_collector = true;
+    SyntheticSession session(config);
+    exosnap::soak::SoakStopControl control;
+    FakeSampler sampler;
+    SoakThresholds thresholds;
+    thresholds.sustained_samples = 1;
+    std::atomic<unsigned> requests{0};
+    SoakRunner runner(thresholds, sampler, "", [&] { control.RequestStop(); });
+    session.SetDiagnosticsCallback([&](const auto& observed) {
+        auto diagnostics = observed;
+        diagnostics.health = exosnap::engine::PipelineHealth::Critical;
+        runner.OnDiagnostics(diagnostics);
+    });
+    control.Start(std::nullopt, [&] {
+        ++requests;
+        session.RequestStop();
+    });
+    runner.Start(0.01);
+    const auto started = std::chrono::steady_clock::now();
+    (void)session.Run();
+    control.Complete();
+    runner.Stop();
+    EXPECT_TRUE(runner.aborted());
+    EXPECT_EQ(requests.load(), 1u);
+    // A finite guard distinguishes a wired stop from merely reporting an abort
+    // while the entire thirty-second session continues to run.
+    EXPECT_LT(std::chrono::steady_clock::now() - started, std::chrono::seconds(15));
+    std::error_code error;
+    std::filesystem::remove(mkv, error);
 }

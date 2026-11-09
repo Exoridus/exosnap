@@ -8,6 +8,11 @@ on:
       - 'libs/engine/src/premux_state.h'
       - 'libs/engine/src/session_failure.h'
       - 'libs/engine/src/session_callback_gate.h'
+      - 'libs/engine/src/session_request_gate.h'
+      - 'libs/engine/src/audio_capture_drain.h'
+      - 'libs/engine/include/exosnap/engine/record_request_id.h'
+      - 'libs/engine/testutil/synthetic_audio_source.h'
+      - 'libs/engine/testutil/synthetic_output_fault.h'
       - 'libs/engine/src/split_sentinel_policy.h'
       - 'libs/engine/include/exosnap/engine/packet_types.h'
       - 'libs/engine/include/exosnap/engine/codec_types.h'
@@ -17,6 +22,7 @@ on:
       - 'libs/engine/tests/test_session_synchronization.cpp'
       - 'libs/engine/tests/test_session_callback_gate.cpp'
       - 'libs/engine/tests/portable/**'
+      - 'tools/soak/**'
       - '.github/workflows/concurrency-sanitizers.yml'
 
 permissions:
