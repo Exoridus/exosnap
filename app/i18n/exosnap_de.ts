@@ -1497,6 +1497,14 @@ Wahrscheinliche Ursache: </translation>
         <translation>GPU / Erfasste Surface-Texel</translation>
     </message>
     <message>
+        <source>Surfaces with unknown byte size: %1</source>
+        <translation>Surfaces mit unbekannter Bytegröße: %1</translation>
+    </message>
+    <message>
+        <source> (incomplete)</source>
+        <translation> (unvollständig)</translation>
+    </message>
+    <message>
         <location line="+4"/>
         <source>All process adapters; excludes driver storage and external pools. </source>
         <translation>Alle Prozessadapter; ohne Treiberspeicher und externe Pools. </translation>

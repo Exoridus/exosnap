@@ -27,12 +27,14 @@ inline constexpr std::array<const char*, static_cast<size_t>(GpuSurfaceOwner::Co
     "capture_held",   "pacing_ring", "compositor", "webcam_cursor", "hdr",
     "encoder_inputs", "preview",     "editor",     "readback"};
 struct GpuSurfaceUsage {
+    // Sum of the available logical byte estimates, not resident GPU memory.
     uint64_t bytes = 0;
     uint64_t surfaces = 0;
+    uint64_t unknown_byte_surfaces = 0;
 };
 namespace gpu_inventory_detail {
 struct Counter {
-    std::atomic<uint64_t> bytes{0}, surfaces{0};
+    std::atomic<uint64_t> bytes{0}, surfaces{0}, unknown_byte_surfaces{0};
 };
 inline std::array<Counter, static_cast<size_t>(GpuSurfaceOwner::Count)> counters;
 inline constexpr GUID kInventoryId{0x5a563bc8, 0x60bd, 0x4480, {0xaa, 0xa0, 0x6b, 0x08, 0x68, 0x84, 0x91, 0xee}};
@@ -42,6 +44,8 @@ class Lifetime final : public IUnknown {
         auto& c = counters[static_cast<size_t>(owner_)];
         c.bytes.fetch_add(bytes_);
         c.surfaces.fetch_add(1);
+        if (bytes_ == 0)
+            c.unknown_byte_surfaces.fetch_add(1);
     }
     HRESULT STDMETHODCALLTYPE QueryInterface(REFIID iid, void** out) override {
         if (!out)
@@ -68,6 +72,8 @@ class Lifetime final : public IUnknown {
         auto& c = counters[static_cast<size_t>(owner_)];
         c.bytes.fetch_sub(bytes_);
         c.surfaces.fetch_sub(1);
+        if (bytes_ == 0)
+            c.unknown_byte_surfaces.fetch_sub(1);
     }
     std::atomic<ULONG> refs_{1};
     GpuSurfaceOwner owner_;
@@ -76,13 +82,17 @@ class Lifetime final : public IUnknown {
 } // namespace gpu_inventory_detail
 // Logical texel storage for tracked single-mip surfaces across all process adapters.
 // Excludes driver alignment, compression, shared imports and untracked external pools.
+// Zero means the format or layout has no byte estimate.
 inline uint64_t LogicalSurfaceBytes(const D3D11_TEXTURE2D_DESC& desc) {
+    if (desc.MipLevels != 1)
+        return 0;
     const uint64_t pixels = uint64_t(desc.Width) * desc.Height * desc.ArraySize * desc.SampleDesc.Count;
     switch (desc.Format) {
     case DXGI_FORMAT_R16G16B16A16_FLOAT:
         return pixels * 8;
     case DXGI_FORMAT_B8G8R8A8_UNORM:
     case DXGI_FORMAT_R8G8B8A8_UNORM:
+    case DXGI_FORMAT_R8G8B8A8_UINT:
     case DXGI_FORMAT_R10G10B10A2_UNORM:
     case DXGI_FORMAT_AYUV:
         return pixels * 4;
@@ -91,9 +101,12 @@ inline uint64_t LogicalSurfaceBytes(const D3D11_TEXTURE2D_DESC& desc) {
     case DXGI_FORMAT_P010:
         return pixels * 3;
     case DXGI_FORMAT_R8_UNORM:
+    case DXGI_FORMAT_R8_UINT:
         return pixels;
     case DXGI_FORMAT_R16_UNORM:
+    case DXGI_FORMAT_R16_UINT:
     case DXGI_FORMAT_R8G8_UNORM:
+    case DXGI_FORMAT_R8G8_UINT:
         return pixels * 2;
     case DXGI_FORMAT_R16G16_UNORM:
         return pixels * 4;
@@ -103,7 +116,8 @@ inline uint64_t LogicalSurfaceBytes(const D3D11_TEXTURE2D_DESC& desc) {
 }
 inline GpuSurfaceUsage ReadGpuSurfaceUsage(GpuSurfaceOwner owner) {
     auto& c = gpu_inventory_detail::counters[static_cast<size_t>(owner)];
-    return {c.bytes.load(std::memory_order_relaxed), c.surfaces.load(std::memory_order_relaxed)};
+    return {c.bytes.load(std::memory_order_relaxed), c.surfaces.load(std::memory_order_relaxed),
+            c.unknown_byte_surfaces.load(std::memory_order_relaxed)};
 }
 inline HRESULT CreateTrackedTexture2D(ID3D11Device* device, const D3D11_TEXTURE2D_DESC* desc,
                                       const D3D11_SUBRESOURCE_DATA* data, ID3D11Texture2D** texture,
@@ -112,12 +126,10 @@ inline HRESULT CreateTrackedTexture2D(ID3D11Device* device, const D3D11_TEXTURE2
     const HRESULT result = device->CreateTexture2D(desc, data, texture);
     if (SUCCEEDED(result) && texture && *texture) {
         const uint64_t bytes = LogicalSurfaceBytes(*desc);
-        if (bytes != 0) {
-            auto* lifetime = new (std::nothrow) gpu_inventory_detail::Lifetime(owner, bytes);
-            if (lifetime) {
-                (*texture)->SetPrivateDataInterface(gpu_inventory_detail::kInventoryId, lifetime);
-                lifetime->Release();
-            }
+        auto* lifetime = new (std::nothrow) gpu_inventory_detail::Lifetime(owner, bytes);
+        if (lifetime) {
+            (*texture)->SetPrivateDataInterface(gpu_inventory_detail::kInventoryId, lifetime);
+            lifetime->Release();
         }
     }
     return result;

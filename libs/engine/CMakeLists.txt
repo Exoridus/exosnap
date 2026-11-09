@@ -1105,6 +1105,16 @@ exosnap_add_gtest(
 target_include_directories(test_session_stats_meter PRIVATE src)
 
 exosnap_add_gtest(
+    NAME test_gpu_surface_inventory
+    TEST_PREFIX engine.
+    PHASE gpu
+    SOURCES tests/test_gpu_surface_inventory.cpp
+    LIBRARIES d3d11.lib
+)
+target_include_directories(test_gpu_surface_inventory PRIVATE include)
+target_compile_definitions(test_gpu_surface_inventory PRIVATE NOMINMAX)
+
+exosnap_add_gtest(
     NAME test_gpu_compositor
     TEST_PREFIX engine.
     SOURCES tests/test_gpu_compositor.cpp

@@ -2,6 +2,7 @@
 #include <cstddef>
 #include <gtest/gtest.h>
 
+#include <exosnap/engine/gpu_surface_inventory.h>
 #include <exosnap/engine/preview_shared_texture.h>
 
 #include <d3d11.h>
@@ -134,6 +135,7 @@ void RunRoundTrip(DXGI_FORMAT format) {
     ASSERT_TRUE(consumer.device);
 
     constexpr uint32_t kW = 32, kH = 24;
+    const auto before = exosnap::engine::ReadGpuSurfaceUsage(exosnap::engine::GpuSurfaceOwner::Preview);
     PreviewSharedTexture shared;
     HANDLE handle = nullptr;
     std::string err;
@@ -149,6 +151,10 @@ void RunRoundTrip(DXGI_FORMAT format) {
 
     std::vector<uint32_t> pixels;
     ASSERT_TRUE(ConsumeSharedPixels(consumer, handle, kW, kH, format, pixels));
+    const auto after_import = exosnap::engine::ReadGpuSurfaceUsage(exosnap::engine::GpuSurfaceOwner::Preview);
+    EXPECT_EQ(after_import.surfaces, before.surfaces + 1);
+    EXPECT_EQ(after_import.bytes, before.bytes + 3072);
+    EXPECT_EQ(after_import.unknown_byte_surfaces, before.unknown_byte_surfaces);
 
     std::vector<uint32_t> expected(static_cast<size_t>(kW) * kH);
     for (uint32_t i = 0; i < expected.size(); ++i)

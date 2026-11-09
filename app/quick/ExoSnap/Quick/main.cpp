@@ -2771,13 +2771,20 @@ int main(int argc, char* argv[]) {
                         report.insert(QStringLiteral("preview_rate"),
                                       quick_application.recordPreviewAdapter()->previewFrameRate());
                         QJsonObject surfaces;
+                        QJsonObject unknown_surface_counts;
+                        bool surface_bytes_complete = true;
                         for (size_t i = 0; i < exosnap::engine::kGpuSurfaceOwnerNames.size(); ++i) {
                             const auto usage =
                                 exosnap::engine::ReadGpuSurfaceUsage(static_cast<exosnap::engine::GpuSurfaceOwner>(i));
                             surfaces.insert(QLatin1String(exosnap::engine::kGpuSurfaceOwnerNames[i]),
                                             static_cast<double>(usage.bytes));
+                            unknown_surface_counts.insert(QLatin1String(exosnap::engine::kGpuSurfaceOwnerNames[i]),
+                                                          static_cast<double>(usage.unknown_byte_surfaces));
+                            surface_bytes_complete = surface_bytes_complete && usage.unknown_byte_surfaces == 0;
                         }
                         report.insert(QStringLiteral("logical_surface_bytes"), surfaces);
+                        report.insert(QStringLiteral("logical_surface_unknown_byte_counts"), unknown_surface_counts);
+                        report.insert(QStringLiteral("logical_surface_bytes_complete"), surface_bytes_complete);
                         report.insert(QStringLiteral("scene_graph_api"), QStringLiteral("Direct3D 11"));
                         report.insert(QStringLiteral("qt_version"), QString::fromLatin1(qVersion()));
                         report.insert(QStringLiteral("child_hwnd_count"),
