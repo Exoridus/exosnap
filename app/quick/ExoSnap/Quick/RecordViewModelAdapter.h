@@ -88,6 +88,7 @@ class RecordViewModelAdapter : public QObject {
     Q_PROPERTY(bool selectedTargetAvailable READ selectedTargetAvailable NOTIFY targetOptionsChanged FINAL)
     Q_PROPERTY(int selectedTargetIndex READ selectedTargetIndex NOTIFY changed FINAL)
     Q_PROPERTY(int captureMode READ captureMode NOTIFY changed FINAL)
+    Q_PROPERTY(SourceKind sourceKind READ sourceKind NOTIFY changed FINAL)
     Q_PROPERTY(QString sourceName READ sourceName NOTIFY changed FINAL)
     Q_PROPERTY(QString sourceKindText READ sourceKindText NOTIFY changed FINAL)
     Q_PROPERTY(QString sourceDetailText READ sourceDetailText NOTIFY changed FINAL)
@@ -220,7 +221,10 @@ class RecordViewModelAdapter : public QObject {
     [[nodiscard]] QString targetIdentity(const exosnap::engine::CaptureTarget& target) const;
     [[nodiscard]] bool targetVisible(const QString& identity) const;
     [[nodiscard]] int selectedTargetIndex() const noexcept;
+    enum SourceKind { DisplaySource, WindowSource, RegionSource };
+    Q_ENUM(SourceKind)
     [[nodiscard]] int captureMode() const noexcept;
+    [[nodiscard]] SourceKind sourceKind() const noexcept;
     [[nodiscard]] const QString& sourceName() const noexcept;
     [[nodiscard]] const QString& sourceKindText() const noexcept;
     [[nodiscard]] const QString& sourceDetailText() const noexcept;

@@ -64,7 +64,7 @@ TestCase {
         return form;
     }
     function test_cached_choices_render_without_editing_data() {
-        return [{tag: "webcam", gamepad: false, rows: 3}, {tag: "gamepad", gamepad: true, rows: 4}];
+        return [{tag: "webcam", gamepad: false, rows: 3}, {tag: "gamepad", gamepad: true, rows: 3}];
     }
     function test_cached_choices_render_without_editing(data) {
         const form = createForm(data.gamepad);
@@ -76,6 +76,15 @@ TestCase {
         compare(select.options[2].selectable, false);
         compare(select.value, "");
         compare(editSpy.count, 0);
+    }
+    function test_controller_only_offers_supported_actions() {
+        recordDriver.resetVisualSettings(false, true);
+        const form = createForm(true);
+        compare(findControl(form, qsTr("Details")), null);
+        const retry = findControl(form, qsTr("Retry"));
+        verify(!!retry && retry.enabled);
+        mouseClick(retry);
+        tryCompare(retrySpy, "count", 1);
     }
     function test_select_commits_through_the_form_data() {
         return [{tag: "webcam", gamepad: false, label: qsTr("Device"), value: "camera"},

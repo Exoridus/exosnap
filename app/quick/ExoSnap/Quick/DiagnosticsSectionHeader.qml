@@ -34,7 +34,7 @@ RowLayout {
         text: root.meta
         textFormat: Text.PlainText
         visible: root.meta !== ""
-        color: ExoTheme.textDim
+        color: ExoTheme.textMuted
         font {
             family: ExoTheme.sansFamily
             pixelSize: ExoTheme.fontCaption

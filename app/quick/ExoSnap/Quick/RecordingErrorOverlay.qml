@@ -51,7 +51,7 @@ ExoOverlayCard {
             text: qsTr("Sends the error phase, code, and codec/container only — never file paths, folder names, or recording content.")
             textFormat: Text.PlainText
             wrapMode: Text.WordWrap
-            color: ExoTheme.textDim
+            color: ExoTheme.textMuted
             Layout.fillWidth: true
             font {
                 family: ExoTheme.sansFamily

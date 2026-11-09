@@ -43,6 +43,19 @@ TestCase {
         return null;
     }
 
+    function test_elided_hint_is_focusable_and_exposes_complete_text() {
+        const message = "This is a deliberately long configuration explanation whose complete meaning must remain available.";
+        const row = createTemporaryObject(rowComponent, testCase, {width: 300, hint: message});
+        verify(!!row);
+        const line = findSecondaryLine(row);
+        tryCompare(line, "truncated", true);
+        verify(line.activeFocusOnTab);
+        line.forceActiveFocus();
+        tryCompare(line.ToolTip, "visible", true);
+        compare(line.ToolTip.text, message);
+        compare(line.Accessible.description, message);
+    }
+
     function test_secondary_line_source_data() {
         return [
             {

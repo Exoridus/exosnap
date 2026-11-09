@@ -224,7 +224,7 @@ Rectangle {
             textFormat: Text.PlainText
             wrapMode: Text.WordWrap
             visible: root.detail !== ""
-            color: ExoTheme.textDim
+            color: ExoTheme.textMuted
             Layout.fillWidth: true
             // Same one-line floor as `sub`: an unconstrained wrapping label
             // clips its own tile at the 860 px width class.

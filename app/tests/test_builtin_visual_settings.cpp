@@ -1,6 +1,7 @@
 #include "extensions/BuiltinVisualSettings.h"
 #include "models/VisualSceneConfig.h"
 
+#include <algorithm>
 #include <gtest/gtest.h>
 
 #include <limits>
@@ -14,6 +15,15 @@ SourceFactory InertFactory() {
 
 CachedVisualOptions EmptyChoices() {
     return [](const VisualSourceRecord&) { return ChoiceSnapshot{}; };
+}
+
+TEST(BuiltinVisualSettings, OnlyWebcamDeclaresTheSupportedDetailsDestination) {
+    const auto gamepad = MakeGamepadVisualSourceType(InertFactory(), EmptyChoices(), EmptyChoices());
+    const auto webcam = MakeWebcamVisualSourceType(InertFactory(), EmptyChoices());
+    for (const auto& action : gamepad.actions)
+        EXPECT_NE(action.operation, ActionOperation::OpenDetails);
+    EXPECT_TRUE(std::any_of(webcam.actions.begin(), webcam.actions.end(),
+                            [](const auto& action) { return action.operation == ActionOperation::OpenDetails; }));
 }
 
 TEST(BuiltinVisualSettings, AllGamepadLayoutsAndAutoProjectWithoutChangingUnknownNodes) {
