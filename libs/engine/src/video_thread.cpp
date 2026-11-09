@@ -27,6 +27,7 @@
 #include "av_epoch_align.h"
 #include "codec_private.h"
 #include "d3d11_encoder_input.h"
+#include "encoder_input_lifetime.h"
 #include "encoder_packet_dispatch.h"
 #include "gpu_frame_luminance.h"
 #include "gpu_hdr_pq.h"
@@ -1427,6 +1428,7 @@ void VideoThread::RunAttachment(const std::shared_ptr<NativeState>& native, cons
     winrt::com_ptr<ID3D11VideoProcessorEnumerator> videoEnum;
     winrt::com_ptr<ID3D11VideoProcessor> videoProcessor;
     std::vector<winrt::com_ptr<ID3D11VideoProcessorOutputView>> videoOutputViews(static_cast<size_t>(kSlotCount));
+    EncoderInputLifetime encoderInputLifetime(*encoder);
 
     {
         // Video processor enumerator (shared across all slots)
@@ -5752,7 +5754,7 @@ end_encode_loop:
     }
 
     // --- Unregister encoder resources + destroy ---
-    encoder->Destroy();
+    encoderInputLifetime.Destroy();
     if (output)
         output->ReleaseEncoder();
 
