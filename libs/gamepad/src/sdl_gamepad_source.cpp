@@ -274,8 +274,10 @@ struct SdlGamepadSource::Impl {
         if (devices.size() >= 16)
             throw std::runtime_error("More than sixteen controllers are connected");
         SDL_Gamepad* handle = SDL_OpenGamepad(instance);
+        // A device can disappear between enumeration and opening, or fail one HID open.
+        // That must not stop input for every other controller. The next reconcile retries it.
         if (!handle)
-            throw std::runtime_error(SDL_GetError());
+            return;
         try {
             Device device;
             device.handle = handle;
