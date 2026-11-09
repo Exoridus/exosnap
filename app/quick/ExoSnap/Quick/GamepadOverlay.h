@@ -89,6 +89,8 @@ class GamepadOverlay final : public QObject, public engine::SpriteSourceProvider
     void setOpacity(double value);
     void setPlacement(QRectF value);
     void setDevice(const QString& value);
+    // Selects a device for this run only, overriding the saved device. Empty ends it.
+    void setSessionDevice(const QString& value);
     // Invoked by the future per-overlay context menu; no automatic hardware writes.
     Q_INVOKABLE void setPlayerIndex(int index);
     Q_INVOKABLE void setContentSize(QSize size);
@@ -134,6 +136,7 @@ class GamepadOverlay final : public QObject, public engine::SpriteSourceProvider
     QString atlas_key_;
     QString pending_atlas_key_;
     QVariantList devices_;
+    QString session_device_;
     int player_index_ = -1;
     bool player_connected_ = false;
     bool player_led_supported_ = false;

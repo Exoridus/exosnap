@@ -4759,7 +4759,7 @@ Das Original kann danach nicht wiederhergestellt werden.</translation>
 <context>
     <name>EditRender</name>
     <message>
-        <location filename="../../libs/engine/src/edit_timeline_reader.cpp" line="+90"/>
+        <location filename="../../libs/engine/src/edit_timeline_reader.cpp" line="+92"/>
         <source>Render export currently supports Matroska with PCM audio. Choose MKV.</source>
         <translation>Renderexport unterstützt derzeit Matroska mit PCM-Audio. MKV auswählen.</translation>
     </message>
@@ -4923,7 +4923,7 @@ Das Original kann danach nicht wiederhergestellt werden.</translation>
         <translation>Die Videoanfrage für die Zeitleiste wurde nicht abgeschlossen.</translation>
     </message>
     <message>
-        <location filename="../../libs/engine/src/edit_export_plan.cpp" line="+661"/>
+        <location filename="../../libs/engine/src/edit_export_plan.cpp" line="+662"/>
         <source>The timeline has no established output format.</source>
         <translation>Für die Zeitleiste wurde kein Ausgabeformat festgelegt.</translation>
     </message>
@@ -6120,17 +6120,17 @@ Ermittelte SHA-256: %2</translation>
 <context>
     <name>GamepadArtwork</name>
     <message>
-        <location filename="../quick/ExoSnap/Quick/GamepadSprites.cpp" line="+154"/>
+        <location filename="../quick/ExoSnap/Quick/GamepadSprites.cpp" line="+119"/>
         <source>Invalid gamepad artwork or raster size.</source>
         <translation>Ungültige Gamepad-Grafik oder Rastergröße.</translation>
     </message>
     <message>
-        <location line="+54"/>
+        <location line="+86"/>
         <source>Gamepad atlas exceeds the supported texture size.</source>
         <translation>Der Gamepad-Atlas überschreitet die unterstützte Texturgröße.</translation>
     </message>
     <message>
-        <location filename="../quick/ExoSnap/Quick/GamepadArtwork.cpp" line="+200"/>
+        <location filename="../quick/ExoSnap/Quick/GamepadArtwork.cpp" line="+181"/>
         <source>Invalid controller source or mapping.</source>
         <translation>Ungültige Controller-Quelle oder Zuordnung.</translation>
     </message>
@@ -6138,7 +6138,7 @@ Ermittelte SHA-256: %2</translation>
 <context>
     <name>GamepadOverlayControls</name>
     <message>
-        <location filename="../quick/ExoSnap/Quick/GamepadOverlayControls.qml" line="+18"/>
+        <location filename="../quick/ExoSnap/Quick/GamepadOverlayControls.qml" line="+20"/>
         <source>Gamepad</source>
         <translation>Gamepad</translation>
     </message>
@@ -6149,22 +6149,7 @@ Ermittelte SHA-256: %2</translation>
         <translation>Gamepad-Overlay</translation>
     </message>
     <message>
-        <location line="+8"/>
-        <source>Automatic controller</source>
-        <translation>Automatische Controllerauswahl</translation>
-    </message>
-    <message>
-        <location line="+1"/>
-        <source>Controller device</source>
-        <translation>Controllergerät</translation>
-    </message>
-    <message>
-        <location line="+7"/>
-        <source>Controller layout</source>
-        <translation>Controllerlayout</translation>
-    </message>
-    <message>
-        <location line="+5"/>
+        <location line="+17"/>
         <source>Opacity</source>
         <translation>Deckkraft</translation>
     </message>
@@ -6273,7 +6258,7 @@ Ermittelte SHA-256: %2</translation>
         <translation>Win</translation>
     </message>
     <message>
-        <location filename="../quick/ExoSnap/Quick/QuickApplication.cpp" line="+3480"/>
+        <location filename="../quick/ExoSnap/Quick/QuickApplication.cpp" line="+4053"/>
         <location filename="../services/GlobalHotkeyService.cpp" line="+52"/>
         <source>This shortcut is already used by Windows or another application.</source>
         <translation>Dieser Hotkey wird bereits von Windows oder einer anderen Anwendung verwendet.</translation>
@@ -6993,7 +6978,7 @@ Ermittelte SHA-256: %2</translation>
 <context>
     <name>QObject</name>
     <message>
-        <location filename="../quick/ExoSnap/Quick/SettingsAdapter.cpp" line="+133"/>
+        <location filename="../quick/ExoSnap/Quick/SettingsAdapter.cpp" line="+134"/>
         <source>Ultra</source>
         <translation>Ultra</translation>
     </message>
@@ -7022,12 +7007,12 @@ Ermittelte SHA-256: %2</translation>
 <context>
     <name>QuickApplication</name>
     <message>
-        <location filename="../quick/ExoSnap/Quick/QuickApplication.cpp" line="-2701"/>
+        <location filename="../quick/ExoSnap/Quick/QuickApplication.cpp" line="-3231"/>
         <source>Recording is blocked</source>
         <translation>Aufnahme blockiert</translation>
     </message>
     <message>
-        <location line="+149"/>
+        <location line="+199"/>
         <source>Clip unavailable</source>
         <translation>Clip nicht verfügbar</translation>
     </message>
@@ -7067,12 +7052,18 @@ Ermittelte SHA-256: %2</translation>
         <translation>Diese Aufnahme hat keinen Eintrag zur Absturzwiederherstellung: %1. Die Aufnahme läuft unverändert, kann bei einer Unterbrechung von ExoSnap aber nicht wiederhergestellt werden.</translation>
     </message>
     <message>
-        <location line="+675"/>
+        <location line="+277"/>
+        <location line="+2082"/>
+        <source>Automatic</source>
+        <translation>Automatisch</translation>
+    </message>
+    <message>
+        <location line="-1673"/>
         <source>Start recording and wait for committed media to create a clip.</source>
         <translation>Starte eine Aufnahme und warte, bis genügend Aufnahmedaten für einen Clip vorliegen.</translation>
     </message>
     <message>
-        <location line="+242"/>
+        <location line="+243"/>
         <source>Region could not be applied</source>
         <translation>Bereich konnte nicht übernommen werden</translation>
     </message>
@@ -7092,20 +7083,30 @@ Ermittelte SHA-256: %2</translation>
         <translation>Wählen Sie einen Bereich mit mindestens 64 × 64 Pixeln.</translation>
     </message>
     <message>
-        <location line="+1201"/>
-        <location line="+388"/>
+        <location line="+1268"/>
+        <location line="+789"/>
         <location line="+69"/>
         <source>Settings could not be saved</source>
         <translation>Einstellungen konnten nicht gespeichert werden</translation>
     </message>
     <message>
-        <location line="-456"/>
-        <location line="+389"/>
+        <location line="-857"/>
+        <location line="+790"/>
         <source>The change may be lost when ExoSnap restarts.</source>
         <translation>Die Änderung kann beim Neustart von ExoSnap verloren gehen.</translation>
     </message>
     <message>
-        <location line="-206"/>
+        <location line="-686"/>
+        <source>Visual sources could not be prepared.</source>
+        <translation>Visuelle Quellen konnten nicht vorbereitet werden.</translation>
+    </message>
+    <message>
+        <location line="+67"/>
+        <source>Camera unavailable: %1</source>
+        <translation>Kamera nicht verfügbar: %1</translation>
+    </message>
+    <message>
+        <location line="+413"/>
         <source>The preset file could not be read or written.</source>
         <translation>Die Preset-Datei konnte nicht gelesen oder geschrieben werden.</translation>
     </message>
@@ -7151,12 +7152,12 @@ Ermittelte SHA-256: %2</translation>
     </message>
     <message>
         <location line="+4"/>
-        <location line="+1809"/>
+        <location line="+1804"/>
         <source>Window capture appears to have stalled</source>
         <translation>Die Fensteraufnahme scheint stillzustehen</translation>
     </message>
     <message>
-        <location line="-1808"/>
+        <location line="-1803"/>
         <source>No new frame has arrived from the captured window for 12 seconds. The recording is still running, but the captured window may be frozen.</source>
         <translation>Seit 12 Sekunden ist kein neuer Frame vom aufgenommenen Fenster angekommen. Die Aufnahme läuft weiter, das Fenster könnte jedoch eingefroren sein.</translation>
     </message>
@@ -7176,7 +7177,7 @@ Ermittelte SHA-256: %2</translation>
         <translation>2026-08-10 21-14-08.mkv - 2:34, 412 MB</translation>
     </message>
     <message>
-        <location line="+1051"/>
+        <location line="+1046"/>
         <source>Update checks are paused while a recording is in progress.</source>
         <translation>Während einer Aufnahme wird nicht nach Updates gesucht.</translation>
     </message>
@@ -7227,8 +7228,8 @@ Ermittelte SHA-256: %2</translation>
         <translation>Letzte Session wiederherstellen?</translation>
     </message>
     <message>
-        <location line="-1528"/>
-        <location line="+1681"/>
+        <location line="-1523"/>
+        <location line="+1676"/>
         <location line="+470"/>
         <source>Recording saved</source>
         <translation>Aufnahme gespeichert</translation>
@@ -7239,14 +7240,14 @@ Ermittelte SHA-256: %2</translation>
         <translation>2026-08-10_22-31-22_Desktop_Display 1.mkv · 1.4 GB</translation>
     </message>
     <message>
-        <location line="-1725"/>
-        <location line="+1730"/>
+        <location line="-1720"/>
+        <location line="+1725"/>
         <source>Frames were dropped</source>
         <translation>Frames wurden verworfen</translation>
     </message>
     <message>
-        <location line="-1729"/>
-        <location line="+1730"/>
+        <location line="-1724"/>
+        <location line="+1725"/>
         <source>122 frames did not reach the encoder during the last recording.</source>
         <translation>122 Frames haben den Encoder während der letzten Aufnahme nicht erreicht.</translation>
     </message>
@@ -7267,18 +7268,23 @@ Ermittelte SHA-256: %2</translation>
         <translation>ExoSnap 0.9.1 ist zur Installation bereit.</translation>
     </message>
     <message>
-        <location line="-1719"/>
-        <location line="+2192"/>
+        <location line="-1714"/>
+        <location line="+2187"/>
         <source>Storage running low</source>
         <translation>Speicherplatz wird knapp</translation>
     </message>
     <message>
-        <location line="-5082"/>
+        <location line="-6208"/>
+        <source>Unavailable</source>
+        <translation>Nicht verfügbar</translation>
+    </message>
+    <message>
+        <location line="+601"/>
         <source>Recording is blocked by the current system configuration.</source>
         <translation>Die aktuelle Systemkonfiguration verhindert eine Aufnahme.</translation>
     </message>
     <message numerus="yes">
-        <location line="+4438"/>
+        <location line="+4963"/>
         <source>Unfinalized recordings from the last session: %n</source>
         <translation>
             <numerusform>Nicht abgeschlossene Aufnahmen der letzten Sitzung: %n</numerusform>
@@ -7311,7 +7317,7 @@ Ermittelte SHA-256: %2</translation>
         <translation>Tastenkürzel nicht verfügbar</translation>
     </message>
     <message>
-        <location line="+496"/>
+        <location line="+503"/>
         <source>Output folder is not writable</source>
         <translation>Ausgabeordner ist nicht beschreibbar</translation>
     </message>
@@ -7334,7 +7340,7 @@ Ermittelte SHA-256: %2</translation>
 <context>
     <name>RecordPage</name>
     <message>
-        <location filename="../quick/ExoSnap/Quick/RecordPage.qml" line="+136"/>
+        <location filename="../quick/ExoSnap/Quick/RecordPage.qml" line="+155"/>
         <source>Preview off</source>
         <translation>Vorschau aus</translation>
     </message>
@@ -7354,7 +7360,7 @@ Ermittelte SHA-256: %2</translation>
         <translation>Quelle wählen</translation>
     </message>
     <message>
-        <location line="+42"/>
+        <location line="+46"/>
         <source>Gamepad overlay</source>
         <translation>Gamepad-Overlay</translation>
     </message>
@@ -7442,7 +7448,7 @@ Ermittelte SHA-256: %2</translation>
         <translation>NT shared handle + keyed mutex + GPU CopyResource</translation>
     </message>
     <message>
-        <location line="+241"/>
+        <location line="+235"/>
         <source>No Ready preview frame is available</source>
         <translation>Kein Vorschau-Frame im Zustand „Bereit“ verfügbar</translation>
     </message>
@@ -7502,7 +7508,7 @@ Ermittelte SHA-256: %2</translation>
 <context>
     <name>RecordPreviewChrome</name>
     <message>
-        <location filename="../quick/ExoSnap/Quick/RecordPreviewChrome.qml" line="+64"/>
+        <location filename="../quick/ExoSnap/Quick/RecordPreviewChrome.qml" line="+65"/>
         <source>Webcam settings</source>
         <translation>Webcam-Einstellungen</translation>
     </message>
@@ -8137,7 +8143,7 @@ Ermittelte SHA-256: %2</translation>
 <context>
     <name>RecordViewModelAdapter</name>
     <message>
-        <location filename="../quick/ExoSnap/Quick/RecordViewModelAdapter.cpp" line="+940"/>
+        <location filename="../quick/ExoSnap/Quick/RecordViewModelAdapter.cpp" line="+941"/>
         <source>No source</source>
         <translation>Keine Quelle</translation>
     </message>
@@ -8195,7 +8201,7 @@ Ermittelte SHA-256: %2</translation>
         <translation>Webcam-Overlay</translation>
     </message>
     <message>
-        <location line="+22"/>
+        <location line="+24"/>
         <source>Drag to move. Use arrow keys to move and Shift plus arrow keys to resize.</source>
         <translation>Zum Verschieben ziehen. Pfeiltasten verschieben, Umschalt plus Pfeiltasten ändern die Größe.</translation>
     </message>
@@ -8205,7 +8211,7 @@ Ermittelte SHA-256: %2</translation>
         <translation>Webcam-Vorschau nicht verfügbar</translation>
     </message>
     <message>
-        <location line="+218"/>
+        <location line="+228"/>
         <source>Hide from recording</source>
         <translation>Aus Aufnahme ausblenden</translation>
     </message>
@@ -8223,7 +8229,7 @@ Ermittelte SHA-256: %2</translation>
 <context>
     <name>RecordingActions</name>
     <message>
-        <location filename="../services/RecordingCoordinator.cpp" line="+1835"/>
+        <location filename="../services/RecordingCoordinator.cpp" line="+1878"/>
         <source>Split is only available while recording.</source>
         <translation>Aufteilen ist nur während einer Aufnahme möglich.</translation>
     </message>
@@ -8243,7 +8249,7 @@ Ermittelte SHA-256: %2</translation>
         <translation>Segment %1 gestartet</translation>
     </message>
     <message>
-        <location line="+1262"/>
+        <location line="+1254"/>
         <source>Failed to write PNG file</source>
         <translation>Die PNG-Datei konnte nicht gespeichert werden</translation>
     </message>
@@ -8689,7 +8695,7 @@ Ermittelte SHA-256: %2</translation>
 <context>
     <name>RecordingState</name>
     <message>
-        <location filename="../viewmodels/RecordViewModel.cpp" line="+171"/>
+        <location filename="../viewmodels/RecordViewModel.cpp" line="+172"/>
         <source>Checking capabilities...</source>
         <translation>Capabilities werden geprüft...</translation>
     </message>
@@ -10194,17 +10200,7 @@ Kleiner Text auf dem Bildschirm verliert früher an Qualität als Videoinhalte. 
         <translation>Webcam einbeziehen</translation>
     </message>
     <message>
-        <location line="+7"/>
-        <source>Camera</source>
-        <translation>Kamera</translation>
-    </message>
-    <message>
-        <location line="+9"/>
-        <source>Webcam device</source>
-        <translation>Webcam-Gerät</translation>
-    </message>
-    <message>
-        <location line="+6"/>
+        <location line="+15"/>
         <source>Capture format</source>
         <translation>Capture-Format</translation>
     </message>
@@ -12676,22 +12672,17 @@ Kleiner Text auf dem Bildschirm verliert früher an Qualität als Videoinhalte. 
 <context>
     <name>exosnap::quick::GamepadOverlay</name>
     <message>
-        <location filename="../quick/ExoSnap/Quick/GamepadOverlay.cpp" line="+91"/>
-        <source>GameInput unavailable: %1</source>
-        <translation>GameInput nicht verfügbar: %1</translation>
-    </message>
-    <message>
-        <location line="+158"/>
+        <location filename="../quick/ExoSnap/Quick/GamepadOverlay.cpp" line="+491"/>
         <source>Controller connected</source>
         <translation>Controller verbunden</translation>
     </message>
     <message>
-        <location line="+2"/>
+        <location line="+9"/>
         <source>Waiting for controller</source>
         <translation>Warte auf Controller</translation>
     </message>
     <message>
-        <location line="+11"/>
+        <location line="+12"/>
         <source>Automatic</source>
         <translation>Automatisch</translation>
     </message>
@@ -12701,13 +12692,13 @@ Kleiner Text auf dem Bildschirm verliert früher an Qualität als Videoinhalte. 
         <translation>DualSense</translation>
     </message>
     <message>
-        <location line="-225"/>
-        <location line="+226"/>
+        <location line="-454"/>
+        <location line="+455"/>
         <source>Xbox Series</source>
         <translation>Xbox Series</translation>
     </message>
     <message>
-        <location line="-227"/>
+        <location line="-456"/>
         <source>PlayStation 5 DualSense</source>
         <translation>PlayStation 5 DualSense</translation>
     </message>
@@ -12723,18 +12714,18 @@ Kleiner Text auf dem Bildschirm verliert früher an Qualität als Videoinhalte. 
     </message>
     <message>
         <location line="+1"/>
-        <location line="+224"/>
+        <location line="+453"/>
         <source>Xbox One</source>
         <translation>Xbox One</translation>
     </message>
     <message>
-        <location line="-223"/>
-        <location line="+224"/>
+        <location line="-452"/>
+        <location line="+453"/>
         <source>Switch Pro</source>
         <translation>Switch Pro</translation>
     </message>
     <message>
-        <location line="-223"/>
+        <location line="-452"/>
         <source>Joy-Cons in grip</source>
         <translation>Joy-Cons in Halterung</translation>
     </message>
@@ -12745,16 +12736,18 @@ Kleiner Text auf dem Bildschirm verliert früher an Qualität als Videoinhalte. 
     </message>
     <message>
         <location line="+1"/>
+        <location line="+453"/>
         <source>Joy-Con L</source>
         <translation>Joy-Con L</translation>
     </message>
     <message>
-        <location line="+1"/>
+        <location line="-452"/>
+        <location line="+453"/>
         <source>Joy-Con R</source>
         <translation>Joy-Con R</translation>
     </message>
     <message>
-        <location line="+1"/>
+        <location line="-452"/>
         <source>Joy-Con L (horizontal)</source>
         <translation>Joy-Con L (horizontal)</translation>
     </message>
@@ -12785,16 +12778,18 @@ Kleiner Text auf dem Bildschirm verliert früher an Qualität als Videoinhalte. 
     </message>
     <message>
         <location line="+1"/>
+        <location line="+444"/>
         <source>Xbox 360</source>
         <translation>Xbox 360</translation>
     </message>
     <message>
-        <location line="+1"/>
+        <location line="-443"/>
+        <location line="+447"/>
         <source>GameCube</source>
         <translation>GameCube</translation>
     </message>
     <message>
-        <location line="+1"/>
+        <location line="-446"/>
         <source>PlayStation 5 DualSense Edge</source>
         <translation>PlayStation 5 DualSense Edge</translation>
     </message>
@@ -12809,12 +12804,73 @@ Kleiner Text auf dem Bildschirm verliert früher an Qualität als Videoinhalte. 
         <translation>Automatisches Layout</translation>
     </message>
     <message>
-        <location line="+215"/>
+        <location line="+83"/>
+        <location line="+328"/>
+        <source>Controller input unavailable: %1</source>
+        <translation>Controller-Eingabe nicht verfügbar: %1</translation>
+    </message>
+    <message>
+        <location line="-162"/>
+        <source>Select a connected controller and a valid player P1-P4 or Unassigned</source>
+        <translation>Wählen Sie einen verbundenen Controller und einen gültigen Spieler P1–P4 oder „Nicht zugewiesen“</translation>
+    </message>
+    <message>
+        <location line="+5"/>
+        <source>Controller player-index change is unavailable</source>
+        <translation>Der Spielerindex des Controllers kann nicht geändert werden</translation>
+    </message>
+    <message>
+        <location line="+4"/>
+        <source>Updating player index...</source>
+        <translation>Spielerindex wird aktualisiert…</translation>
+    </message>
+    <message>
+        <location line="+151"/>
+        <source>Controller connected (session-only identity)</source>
+        <translation>Controller verbunden (nur diese Sitzung)</translation>
+    </message>
+    <message>
+        <location line="+6"/>
+        <source>Preparing controller input</source>
+        <translation>Controller-Eingabe wird vorbereitet</translation>
+    </message>
+    <message>
+        <location line="+3"/>
+        <source>Controller disconnected</source>
+        <translation>Controller getrennt</translation>
+    </message>
+    <message>
+        <location line="+20"/>
+        <source>DualShock 4</source>
+        <translation>DualShock 4</translation>
+    </message>
+    <message>
+        <location line="+4"/>
+        <source>Joy-Con pair</source>
+        <translation>Joy-Con-Paar</translation>
+    </message>
+    <message>
+        <location line="+2"/>
         <source>Gamepad</source>
         <translation>Gamepad</translation>
     </message>
     <message>
-        <location line="+9"/>
+        <location line="+1"/>
+        <source>Unassigned</source>
+        <translation>Nicht zugewiesen</translation>
+    </message>
+    <message>
+        <location line="+4"/>
+        <source>SDL player %1</source>
+        <translation>SDL-Spieler %1</translation>
+    </message>
+    <message>
+        <location line="+3"/>
+        <source>%1 (%2, this session only)</source>
+        <translation>%1 (%2, nur diese Sitzung)</translation>
+    </message>
+    <message>
+        <location line="+11"/>
         <source>Selected controller (disconnected)</source>
         <translation>Ausgewählter Controller (getrennt)</translation>
     </message>
@@ -12860,7 +12916,7 @@ Kleiner Text auf dem Bildschirm verliert früher an Qualität als Videoinhalte. 
 <context>
     <name>exosnap::quick::RecordPreviewAdapter</name>
     <message>
-        <location filename="../quick/ExoSnap/Quick/RecordPreviewAdapter.cpp" line="-669"/>
+        <location filename="../quick/ExoSnap/Quick/RecordPreviewAdapter.cpp" line="-663"/>
         <source>Preview off</source>
         <translation>Vorschau aus</translation>
     </message>
@@ -12868,7 +12924,7 @@ Kleiner Text auf dem Bildschirm verliert früher an Qualität als Videoinhalte. 
 <context>
     <name>exosnap::quick::RecordViewModelAdapter</name>
     <message>
-        <location filename="../quick/ExoSnap/Quick/RecordViewModelAdapter.cpp" line="-857"/>
+        <location filename="../quick/ExoSnap/Quick/RecordViewModelAdapter.cpp" line="-858"/>
         <source>Draw custom</source>
         <translation>Bereich zeichnen</translation>
     </message>
@@ -12945,7 +13001,7 @@ Kleiner Text auf dem Bildschirm verliert früher an Qualität als Videoinhalte. 
         <translation>Kamera aktiv</translation>
     </message>
     <message>
-        <location line="+453"/>
+        <location line="+454"/>
         <source>Window lifetime could not be verified. Refresh the list or choose another source.</source>
         <translation>Die Lebensdauer des Fensters konnte nicht überprüft werden. Aktualisieren Sie die Liste oder wählen Sie eine andere Quelle.</translation>
     </message>
@@ -13119,7 +13175,7 @@ Kleiner Text auf dem Bildschirm verliert früher an Qualität als Videoinhalte. 
 <context>
     <name>exosnap::quick::SettingsAdapter</name>
     <message>
-        <location filename="../quick/ExoSnap/Quick/SettingsAdapter.cpp" line="+1633"/>
+        <location filename="../quick/ExoSnap/Quick/SettingsAdapter.cpp" line="+2116"/>
         <source>On</source>
         <translation>Ein</translation>
     </message>
@@ -13134,7 +13190,7 @@ Kleiner Text auf dem Bildschirm verliert früher an Qualität als Videoinhalte. 
         <translation>Auto: Aus. Lookahead wird nur für unterstütztes AV1/VBR aktiviert.</translation>
     </message>
     <message>
-        <location line="-792"/>
+        <location line="-793"/>
         <source>Managed externally</source>
         <translation>Extern verwaltet</translation>
     </message>
@@ -13220,7 +13276,7 @@ Kleiner Text auf dem Bildschirm verliert früher an Qualität als Videoinhalte. 
         <translation>Aktuell · zuletzt geprüft %1</translation>
     </message>
     <message>
-        <location line="+85"/>
+        <location line="+86"/>
         <source>8-bit</source>
         <translation>8 Bit</translation>
     </message>
@@ -13555,7 +13611,7 @@ Kleiner Text auf dem Bildschirm verliert früher an Qualität als Videoinhalte. 
         <translation>Aus</translation>
     </message>
     <message>
-        <location line="-2648"/>
+        <location line="-2688"/>
         <source>System default</source>
         <translation>Systemstandard</translation>
     </message>
@@ -13565,22 +13621,22 @@ Kleiner Text auf dem Bildschirm verliert früher an Qualität als Videoinhalte. 
         <translation>Systemstandard (%1)</translation>
     </message>
     <message>
-        <location line="+21"/>
+        <location line="+22"/>
         <source>Automatic (%1)</source>
         <translation>Automatisch (%1)</translation>
     </message>
     <message>
-        <location line="+154"/>
+        <location line="+158"/>
         <source>Changed since this preset was saved. Your settings are kept either way.</source>
         <translation>Seit dem Speichern dieses Presets geändert. Ihre Einstellungen bleiben so oder so erhalten.</translation>
     </message>
     <message>
-        <location line="+229"/>
+        <location line="+260"/>
         <source>Enter 3 or 6 hex digits, such as 00ff00 or 0f0</source>
         <translation>3 oder 6 Hex-Ziffern eingeben, etwa 00ff00 oder 0f0</translation>
     </message>
     <message>
-        <location line="+656"/>
+        <location line="+660"/>
         <location line="+666"/>
         <source>Application audio</source>
         <translation>Anwendungsaudio</translation>

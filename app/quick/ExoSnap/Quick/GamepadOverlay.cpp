@@ -172,8 +172,9 @@ void GamepadOverlay::ConfigureBackend(GamepadOverlaySettings settings) {
     }
     if (input_) {
         std::optional<gamepad::DeviceId> id;
-        if (!settings.device.empty()) {
-            const QByteArray bytes = QByteArray::fromHex(QByteArray::fromStdString(settings.device));
+        const std::string requested = session_device_.isEmpty() ? settings.device : session_device_.toStdString();
+        if (!requested.empty()) {
+            const QByteArray bytes = QByteArray::fromHex(QByteArray::fromStdString(requested));
             gamepad::DeviceId decoded{};
             std::copy_n(bytes.begin(), std::min(static_cast<size_t>(bytes.size()), decoded.size()), decoded.begin());
             id = decoded;
@@ -316,6 +317,13 @@ void GamepadOverlay::setDevice(const QString& value) {
     auto settings = Settings();
     settings.device = value.toStdString();
     Configure(settings);
+}
+
+void GamepadOverlay::setSessionDevice(const QString& value) {
+    if (session_device_ == value)
+        return;
+    session_device_ = value;
+    ConfigureBackend(Settings());
 }
 
 void GamepadOverlay::setPlayerIndex(int index) {
@@ -489,7 +497,8 @@ void GamepadOverlay::Poll() {
     } else if (input_ && input_->State() == gamepad::InputSourceState::Starting) {
         SetStatus(tr("Preparing controller input"));
     } else if (input_) {
-        SetStatus(device().isEmpty() ? tr("Waiting for controller") : tr("Controller disconnected"));
+        SetStatus(device().isEmpty() && session_device_.isEmpty() ? tr("Waiting for controller")
+                                                                  : tr("Controller disconnected"));
     }
     if (detected != automatic_layout_) {
         automatic_layout_ = detected;
@@ -523,16 +532,19 @@ void GamepadOverlay::Poll() {
             player = tr("SDL player %1").arg(device.player_index + 1);
         QString label = QStringLiteral("%1 (%2)").arg(family, id.right(6));
         if (!device.persistent)
-            label = tr("%1 (%2, session only)").arg(family, id.right(6));
+            label = tr("%1 (%2, this session only)").arg(family, id.right(6));
         label += QStringLiteral(" · ") + player;
-        options.push_back(QVariantMap{{QStringLiteral("value"), id}, {QStringLiteral("label"), label}});
+        options.push_back(QVariantMap{{QStringLiteral("value"), id},
+                                      {QStringLiteral("label"), label},
+                                      {QStringLiteral("sessionOnly"), !device.persistent}});
     }
-    const auto selected = device();
+    const auto selected = session_device_.isEmpty() ? device() : session_device_;
     if (!selected.isEmpty() && std::none_of(options.begin(), options.end(), [&](const QVariant& option) {
             return option.toMap().value(QStringLiteral("value")).toString() == selected;
         }))
         options.push_back(QVariantMap{{QStringLiteral("value"), selected},
-                                      {QStringLiteral("label"), tr("Selected controller (disconnected)")}});
+                                      {QStringLiteral("label"), tr("Selected controller (disconnected)")},
+                                      {QStringLiteral("sessionOnly"), !session_device_.isEmpty()}});
     for (auto& option : options) {
         auto entry = option.toMap();
         entry.insert(QStringLiteral("selectable"), true);
