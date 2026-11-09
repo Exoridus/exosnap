@@ -312,6 +312,9 @@ TestCase {
         verify(!inspector.editGainPoint(audio.id, 5000000, -1000000, -9));
         verify(!testSession.dragActive);
         compare(JSON.stringify(testSession.selectedClipDetails.gainKeys), before);
+        verify(inspector.editGainPoint(audio.id, 5000000, 6000001, -9));
+        compare(inspector.selectedGainKey.sourceUs, 6000000);
+        compare(inspector.selectedGainKey.gainDb, -9);
     }
     function test_visual_inspection_routes_expand_the_requested_section() {
         const clip = testSession.visibleClipsUs(0, 100000000).find(row => row.video);

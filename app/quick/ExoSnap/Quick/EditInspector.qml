@@ -26,6 +26,10 @@ ExoScrollView {
     readonly property var gainKeys: clipDetails.gainKeys || []
     readonly property var selectedGainKey: gainKeys.find(key => key.sourceUs === selectedGainSourceUs) || ({})
     readonly property real naturalContentHeight: inspectorContent.implicitHeight
+    function selectGainPoint(sourceUs: real): void {
+        const nearest = gainKeys.reduce((best, key) => !best || Math.abs(key.sourceUs - sourceUs) < Math.abs(best.sourceUs - sourceUs) ? key : best, null);
+        selectedGainSourceUs = nearest ? nearest.sourceUs : -1;
+    }
     function editGainPoint(target: var, originalSourceUs: real, sourceUs: real, gainDb: real): bool {
         if (!session.beginGainKeyDrag(target, originalSourceUs)) {
             session.cancelClipDrag();
@@ -38,7 +42,7 @@ ExoScrollView {
         }
         const committed = session.commitClipDrag();
         if (committed)
-            selectedGainSourceUs = sourceUs;
+            selectGainPoint(sourceUs);
         return committed;
     }
     function focusField(field: string): void {
@@ -361,7 +365,7 @@ ExoScrollView {
                     onClicked: {
                         const sourceUs = root.clipDetails.sourceInUs + root.session.positionUs - root.clipDetails.startUs;
                         if (root.session.addGainKey(root.clipDetails.id, sourceUs))
-                            root.selectedGainSourceUs = sourceUs;
+                            root.selectGainPoint(sourceUs);
                     }
                 }
                 ExoSelect {
