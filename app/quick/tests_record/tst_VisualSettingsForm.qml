@@ -64,11 +64,13 @@ TestCase {
         return form;
     }
     function test_cached_choices_render_without_editing_data() {
-        return [{tag: "webcam", gamepad: false, rows: 3}, {tag: "gamepad", gamepad: true, rows: 4}];
+        return [{tag: "webcam", gamepad: false, rows: 3}, {tag: "gamepad", gamepad: true, rows: 3}];
     }
     function test_cached_choices_render_without_editing(data) {
         const form = createForm(data.gamepad);
         compare(form.rows.length, data.rows);
+        compare(!!findControl(form, qsTr("Details")), !data.gamepad);
+        verify(!!findControl(form, qsTr("Retry")));
         const select = findControl(form, qsTr("Device"));
         verify(!!select);
         compare(select.options.length, 3);

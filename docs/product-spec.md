@@ -265,6 +265,7 @@ other controller families, motion tracking and recording output remain outside t
 ### Gamepad overlay
 
 The Record preview's Add overlay menu adds one controller widget and provides access to its device, layout and appearance settings. It is off by default.
+Source actions select a device or layout and retry the current controller source.
 Automatic device selection prefers the first actively used gamepad and stays with it until disconnect.
 Manual selection pins one device and never borrows another controller's inputs. Disconnect resets the visible inputs.
 Automatic artwork selection recognizes DualSense, Xbox Series, Xbox One and Switch Pro families.
