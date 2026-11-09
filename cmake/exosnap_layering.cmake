@@ -79,3 +79,26 @@ function(exosnap_assert_no_ui_dependency target)
         endforeach()
     endwhile()
 endfunction()
+
+# Leaf input libraries can consume public clock contracts, but not private
+# recording-engine implementation headers, even through an include-only edge.
+function(exosnap_assert_no_private_engine_headers target)
+    if(NOT TARGET ${target})
+        message(FATAL_ERROR "exosnap_assert_no_private_engine_headers: no such target '${target}'")
+    endif()
+
+    foreach(_property INCLUDE_DIRECTORIES INTERFACE_INCLUDE_DIRECTORIES)
+        get_target_property(_includes ${target} ${_property})
+        foreach(_include IN LISTS _includes)
+            string(REPLACE "\\" "/" _include "${_include}")
+            if(NOT _include MATCHES "^\\$<")
+                cmake_path(NORMAL_PATH _include)
+            endif()
+            if(_include MATCHES "(^|/)libs/engine/src($|/|>)")
+                message(FATAL_ERROR
+                    "Layering violation: ${target} includes private engine headers from ${_include}.\n"
+                    "Use the public header-only contract instead.")
+            endif()
+        endforeach()
+    endforeach()
+endfunction()

@@ -15,9 +15,8 @@ add_library(exosnap_gamepad STATIC
 
 target_include_directories(exosnap_gamepad
     PUBLIC  ${CMAKE_CURRENT_SOURCE_DIR}/include
-    # Header-only qpc_100ns.h: the capture clock's own tick conversion, so the
-    # two clocks cannot drift apart in their arithmetic.
-    PRIVATE ${PROJECT_SOURCE_DIR}/libs/engine/src
+    # Share the public, header-only capture clock contract without linking the engine.
+    PRIVATE ${PROJECT_SOURCE_DIR}/libs/engine/include/exosnap/engine
 )
 target_compile_definitions(exosnap_gamepad PRIVATE NOMINMAX WIN32_LEAN_AND_MEAN)
 
