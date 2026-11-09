@@ -542,7 +542,8 @@ Item {
             testSession.selectClipWithModifiers(clips[0].id);
             compare(testSession.selectedClipIds.length, 1);
             page.toggleDetails();
-            child(page, "editInspector").timingExpanded = true;
+            child(page, "editDetailsTimingToggle").forceActiveFocus(Qt.TabFocusReason);
+            keyClick(Qt.Key_Space);
             const start = child(page, "editDetailsClipStart");
             verify(start.visible);
             const inspector = child(page, "editInspector");
@@ -770,9 +771,10 @@ Item {
                     saved = result.saveToFile(testVisualDirectory + "/edit-crossfade-" + testScale + ".png");
                 }, Qt.size(Math.round(page.width * Number(testScale)), Math.round(page.height * Number(testScale)))));
                 tryVerify(() => saved);
-                testSession.selectClip(videos[1].id);
-                page.toggleDetails();
-                tryVerify(() => findChild(page, "editDetailsFadeIn") !== null);
+                verify(testSession.inspectClip(videos[1].id));
+                page.openInspector("fadeIn");
+                tryVerify(() => findChild(page, "editDetailsFadeIn") !== null && findChild(page, "editDetailsFadeIn").visible);
+                waitForRendering(page);
                 saved = false;
                 verify(page.grabToImage(result => {
                     saved = result.saveToFile(testVisualDirectory + "/edit-details-" + testScale + ".png");
