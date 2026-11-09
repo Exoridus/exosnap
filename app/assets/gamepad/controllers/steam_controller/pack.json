@@ -141,7 +141,7 @@
     {
       "source": "left_pad",
       "control": null,
-      "reason": "disabled by the native mapping",
+      "reason": "no SDL3 button",
       "svg": [
         "trackpad-l"
       ],
@@ -150,7 +150,7 @@
     {
       "source": "right_pad",
       "control": null,
-      "reason": "disabled by the native mapping",
+      "reason": "no SDL3 button",
       "svg": [
         "trackpad-r"
       ],
