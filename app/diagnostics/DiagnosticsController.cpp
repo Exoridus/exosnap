@@ -671,20 +671,31 @@ std::vector<LiveTile> BuildLiveTiles(const LiveTileInputs& in) {
                                    : "DXGI budget unavailable");
     std::string ownership;
     uint64_t logical_bytes = 0;
+    uint64_t unknown_byte_surfaces = 0;
     for (const auto& surface : in.video_memory.logical_surfaces) {
         if (!surface.owner || surface.surfaces == 0)
             continue;
         logical_bytes += surface.bytes;
+        unknown_byte_surfaces += surface.unknown_byte_surfaces;
         if (!ownership.empty())
             ownership += "; ";
         ownership += std::string(surface.owner) + " " + Number(surface.bytes / (1024 * 1024)) +
                      QCoreApplication::translate("Diagnostics", " MiB").toStdString();
+        if (surface.unknown_byte_surfaces != 0) {
+            ownership += " (" +
+                         QCoreApplication::translate("Diagnostics", "Surfaces with unknown byte size: %1")
+                             .arg(static_cast<qulonglong>(surface.unknown_byte_surfaces))
+                             .toStdString() +
+                         ")";
+        }
     }
+    std::string logical_value =
+        Number(logical_bytes / (1024 * 1024)) + QCoreApplication::translate("Diagnostics", " MiB").toStdString();
+    if (unknown_byte_surfaces != 0)
+        logical_value += QCoreApplication::translate("Diagnostics", " (incomplete)").toStdString();
     evidence(
         "gpuSurfaceOwnership", QCoreApplication::translate("Diagnostics", "GPU / Tracked surface texels").toStdString(),
-        in.video_memory.logical_surfaces_sampled
-            ? Number(logical_bytes / (1024 * 1024)) + QCoreApplication::translate("Diagnostics", " MiB").toStdString()
-            : kDash,
+        in.video_memory.logical_surfaces_sampled ? logical_value : kDash,
         QCoreApplication::translate("Diagnostics", "All process adapters; excludes driver storage and external pools. ")
                 .toStdString() +
             ownership);

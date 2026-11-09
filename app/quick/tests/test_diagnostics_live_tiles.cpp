@@ -410,6 +410,32 @@ TEST(DiagnosticsLiveTiles, AnInDepthTileWithNoReadingKeepsItsPlaceAndNamesWhy) {
     EXPECT_EQ(Find(tiles, "gpuTime").key, "gpuTime");
 }
 
+TEST(DiagnosticsLiveTiles, TrackedSurfaceBytesExposeUnknownCoverage) {
+    const auto healthy = visual::MakeDiagnosticsLiveSnapshot(QStringLiteral("healthy"));
+    const SessionLedger clean;
+    LiveTileInputs inputs{healthy, clean, /*in_depth=*/true};
+    inputs.video_memory.logical_surfaces_sampled = true;
+    inputs.video_memory.logical_surfaces[0] = {"preview", 4 * 1024 * 1024, 2, 0};
+    inputs.video_memory.logical_surfaces[1] = {"editor", 0, 1, 1};
+
+    const auto tile = Find(BuildLiveTiles(inputs), "gpuSurfaceOwnership");
+    EXPECT_EQ(tile.value, "4 MiB (incomplete)");
+    EXPECT_NE(tile.detail.find("preview 4 MiB"), std::string::npos);
+    EXPECT_NE(tile.detail.find("editor 0 MiB (Surfaces with unknown byte size: 1)"), std::string::npos);
+}
+
+TEST(DiagnosticsLiveTiles, KnownSurfaceBytesHaveCompleteCoverage) {
+    const auto healthy = visual::MakeDiagnosticsLiveSnapshot(QStringLiteral("healthy"));
+    const SessionLedger clean;
+    LiveTileInputs inputs{healthy, clean, /*in_depth=*/true};
+    inputs.video_memory.logical_surfaces_sampled = true;
+    inputs.video_memory.logical_surfaces[0] = {"preview", 4 * 1024 * 1024, 2, 0};
+
+    const auto tile = Find(BuildLiveTiles(inputs), "gpuSurfaceOwnership");
+    EXPECT_EQ(tile.value, "4 MiB");
+    EXPECT_EQ(tile.detail.find("unknown"), std::string::npos);
+}
+
 // Spec section 8: coral only when the selected codec cannot be encoded here, or
 // when nothing can. A 9 px cross inside one chip is not the severity of the one
 // condition on this page that stops a recording from happening at all.

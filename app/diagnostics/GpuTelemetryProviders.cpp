@@ -162,7 +162,8 @@ VideoMemoryReading DxgiVideoMemoryProvider::Read(int64_t adapter_luid) {
     static_assert(reading.logical_surfaces.size() == engine::kGpuSurfaceOwnerNames.size());
     for (size_t i = 0; i < reading.logical_surfaces.size(); ++i) {
         const auto usage = engine::ReadGpuSurfaceUsage(static_cast<engine::GpuSurfaceOwner>(i));
-        reading.logical_surfaces[i] = {engine::kGpuSurfaceOwnerNames[i], usage.bytes, usage.surfaces};
+        reading.logical_surfaces[i] = {engine::kGpuSurfaceOwnerNames[i], usage.bytes, usage.surfaces,
+                                       usage.unknown_byte_surfaces};
     }
     const auto adapter = FindAdapter(adapter_luid);
     Microsoft::WRL::ComPtr<IDXGIAdapter3> budget_adapter;

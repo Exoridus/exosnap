@@ -19,6 +19,7 @@ struct LogicalSurfaceUsage {
     const char* owner = nullptr;
     uint64_t bytes = 0;
     uint64_t surfaces = 0;
+    uint64_t unknown_byte_surfaces = 0;
 };
 
 struct VideoMemoryReading {
