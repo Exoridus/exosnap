@@ -74,6 +74,46 @@ class SettingsVisualCutover : public ::testing::Test {
     int active_edits = 0;
 };
 
+TEST_F(SettingsVisualCutover, WebcamPreviewReflectsOwnerLifecycleAndRejectsStaleStatus) {
+    adapter.setWebcamDevices({QVariantMap{{"value", "camera"}, {"label", "Camera"}}});
+    const engine::VisualAddress camera{engine::VisualSourceId{{1}}, engine::VisualRuntimeGeneration{7}};
+    adapter.setVisualTargets(camera, engine::SceneItemId{{2}}, {engine::VisualSourceId{{3}}, {}},
+                             engine::SceneItemId{{4}});
+    EXPECT_EQ(adapter.webcamPreviewState(), SettingsAdapter::CameraInactive);
+    SourceStatus status{{camera, engine::SourceRequestRevision{2}}, SourcePhase::Preparing, {}};
+    adapter.setWebcamSourceStatus(status);
+    EXPECT_EQ(adapter.webcamPreviewState(), SettingsAdapter::CameraStarting);
+    status.phase = SourcePhase::Ready;
+    adapter.setWebcamSourceStatus(status);
+    EXPECT_EQ(adapter.webcamPreviewState(), SettingsAdapter::CameraReady);
+    status.phase = SourcePhase::Waiting;
+    adapter.setWebcamSourceStatus(status);
+    EXPECT_EQ(adapter.webcamPreviewState(), SettingsAdapter::CameraUnavailable);
+    EXPECT_FALSE(adapter.webcamPreviewMessage().isEmpty());
+    status.phase = SourcePhase::Failed;
+    status.reason = engine::EngineError{.context = "Device in use"};
+    adapter.setWebcamSourceStatus(status);
+    EXPECT_EQ(adapter.webcamPreviewState(), SettingsAdapter::CameraUnavailable);
+    EXPECT_TRUE(adapter.webcamPreviewMessage().contains("Device in use"));
+    auto stale = status;
+    stale.token.request = engine::SourceRequestRevision{1};
+    stale.phase = SourcePhase::Ready;
+    adapter.setWebcamSourceStatus(stale);
+    EXPECT_EQ(adapter.webcamPreviewState(), SettingsAdapter::CameraUnavailable);
+    stale = status;
+    stale.token.address.runtime = engine::VisualRuntimeGeneration{6};
+    adapter.setWebcamSourceStatus(stale);
+    EXPECT_EQ(adapter.webcamPreviewState(), SettingsAdapter::CameraUnavailable);
+    adapter.setWebcamDevices({});
+    EXPECT_EQ(adapter.webcamPreviewState(), SettingsAdapter::CameraDisconnected);
+    adapter.setWebcamEnabled(false);
+    EXPECT_EQ(adapter.webcamPreviewState(), SettingsAdapter::CameraOff);
+    const auto before = edits;
+    adapter.setWebcamSourceStatus(std::nullopt);
+    EXPECT_EQ(adapter.webcamPreviewState(), SettingsAdapter::CameraOff);
+    EXPECT_EQ(edits, before);
+}
+
 TEST_F(SettingsVisualCutover, HydrationAndRowsNeverWriteIntentOrRequireNativeRuntime) {
     adapter.setConfig(config);
     EXPECT_EQ(edits, 0);

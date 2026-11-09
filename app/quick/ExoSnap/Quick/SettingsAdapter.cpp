@@ -538,6 +538,8 @@ void SettingsAdapter::refreshVisualOptions() {
 void SettingsAdapter::setVisualTargets(engine::VisualAddress webcam, engine::SceneItemId webcam_item,
                                        engine::VisualAddress gamepad, engine::SceneItemId gamepad_item) {
     advanceVisualEditRevision();
+    if (webcam_address_ != webcam)
+        webcam_source_status_.reset();
     webcam_address_ = webcam;
     webcam_item_ = webcam_item;
     gamepad_address_ = gamepad;
@@ -1271,6 +1273,59 @@ void SettingsAdapter::resetHotkey(int action) {
 // ---------------------------------------------------------------------------
 // Webcam
 // ---------------------------------------------------------------------------
+
+void SettingsAdapter::setWebcamSourceStatus(std::optional<SourceStatus> status) {
+    if (status && (status->token.address != webcam_address_ ||
+                   (webcam_source_status_ && status->token.request.value < webcam_source_status_->token.request.value)))
+        return;
+    const auto previous_state = webcamPreviewState();
+    const auto previous_message = webcamPreviewMessage();
+    webcam_source_status_ = std::move(status);
+    if (webcamPreviewState() != previous_state || webcamPreviewMessage() != previous_message)
+        emit configChanged();
+}
+
+SettingsAdapter::WebcamPreviewState SettingsAdapter::webcamPreviewState() const {
+    if (!webcamEnabled())
+        return CameraOff;
+    if (!webcamAvailable())
+        return CameraDisconnected;
+    if (!webcam_source_status_ || webcam_address_.runtime.value == 0)
+        return CameraInactive;
+    switch (webcam_source_status_->phase) {
+    case SourcePhase::Preparing:
+        return CameraStarting;
+    case SourcePhase::Ready:
+        return CameraReady;
+    case SourcePhase::Waiting:
+    case SourcePhase::Failed:
+        return CameraUnavailable;
+    case SourcePhase::Dormant:
+    case SourcePhase::Stopping:
+        return CameraInactive;
+    }
+    return CameraInactive;
+}
+
+QString SettingsAdapter::webcamPreviewMessage() const {
+    switch (webcamPreviewState()) {
+    case CameraOff:
+        return tr("Camera off");
+    case CameraDisconnected:
+        return tr("Camera disconnected. Connect a camera to preview it.");
+    case CameraInactive:
+        return tr("Camera preview is not active for this configuration.");
+    case CameraStarting:
+        return tr("Starting camera…");
+    case CameraReady:
+        return tr("Waiting for a camera frame…");
+    case CameraUnavailable:
+        return webcam_source_status_ && webcam_source_status_->reason
+                   ? tr("Camera unavailable: %1").arg(QString::fromStdString(webcam_source_status_->reason->context))
+                   : tr("Camera unavailable. Check the device connection and Diagnostics.");
+    }
+    return {};
+}
 
 bool SettingsAdapter::webcamEnabled() const noexcept {
     return webcamSettings().enabled;
@@ -2426,6 +2481,17 @@ const QVariantList& SettingsAdapter::rateControlOptions() const noexcept {
 }
 int SettingsAdapter::rateControl() const noexcept {
     return static_cast<int>(config_.video.rate_control);
+}
+bool SettingsAdapter::constantQualityRelevant() const noexcept {
+    return config_.video.rate_control == exosnap::engine::RateControlMode::ConstantQuality;
+}
+QString SettingsAdapter::rateControlLabel() const {
+    for (const auto& option : rate_control_options_) {
+        const auto row = option.toMap();
+        if (row.value(QStringLiteral("value")).toInt() == rateControl())
+            return row.value(QStringLiteral("label")).toString();
+    }
+    return {};
 }
 bool SettingsAdapter::bitrateRelevant() const noexcept {
     return config_.video.rate_control == exosnap::engine::RateControlMode::VariableBitrate ||
