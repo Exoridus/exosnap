@@ -29,7 +29,7 @@
     "container": "mkv",
     "video_codec": "av1",
     "audio_codec": "opus",
-    "chroma": 420,
+    "chroma": "420",
     "bit_depth": 8,
     "hdr_mode": "off",
     "audio_rows": ["sys"]

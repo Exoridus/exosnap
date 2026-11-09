@@ -734,6 +734,33 @@ mod tests {
     use super::*;
 
     #[test]
+    fn committed_scenarios_load_and_supply_chroma_arguments() {
+        let repo_root = Path::new(env!("CARGO_MANIFEST_DIR")).join("../..");
+        let mut paths: Vec<_> = std::fs::read_dir(repo_root.join("tools/benchmark/scenarios"))
+            .unwrap()
+            .map(|entry| entry.unwrap().path())
+            .filter(|path| {
+                path.extension()
+                    .is_some_and(|extension| extension == "json")
+            })
+            .collect();
+        paths.sort();
+        assert!(!paths.is_empty());
+        for path in paths {
+            let definition = load_scenario_definition(&path)
+                .unwrap_or_else(|error| panic!("{}: {error:#}", path.display()));
+            assert_eq!(path.file_stem().unwrap().to_str().unwrap(), definition.id);
+            assert!(matches!(definition.exosnap.chroma.as_str(), "420" | "444"));
+            let arguments = exosnap_args(&definition.exosnap, &definition, Path::new("output"));
+            assert!(
+                arguments
+                    .windows(2)
+                    .any(|pair| { pair[0] == "--chroma" && pair[1] == definition.exosnap.chroma })
+            );
+        }
+    }
+
+    #[test]
     fn resolving_quick_never_needs_a_widgets_executable() {
         let resolved =
             resolve_executable(Frontend::Quick, None, Path::new("C:/exosnap.exe")).unwrap();
