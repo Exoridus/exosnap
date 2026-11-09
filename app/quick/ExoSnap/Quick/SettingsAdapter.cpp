@@ -571,14 +571,19 @@ bool SettingsAdapter::selectVisualSetting(const QString& source_id, const QStrin
         emit optionsChanged();
         return true;
     }
-    if (session_choices_.erase(session_key) != 0) {
-        emit visualSessionChoiceChanged(source_id, QString::fromStdString(field->path), QString());
-        emit optionsChanged();
-    }
+    // A saved choice ends the session selection only once it is committed, so a rejected
+    // edit leaves the runtime selection that is still displayed.
+    const auto end_session = [&](bool committed) {
+        if (committed && session_choices_.erase(session_key) != 0) {
+            emit visualSessionChoiceChanged(source_id, QString::fromStdString(field->path), QString());
+            emit optionsChanged();
+        }
+        return committed;
+    };
     const auto current = source->settings[field->path].value<std::string>();
     const auto* fallback = std::get_if<std::string>(&field->default_value);
     if (current.value_or(fallback ? *fallback : std::string{}) == choice_id.toStdString())
-        return ValidateVisualScene(config.visual_scene, *visual_registry_).succeeded();
+        return end_session(ValidateVisualScene(config.visual_scene, *visual_registry_).succeeded());
     if (source->type_id == "org.exosnap.webcam/camera" && action->property_path == "device_id") {
         auto desired = webcamSettings();
         if (desired.device_id != choice_id.toStdString()) {
@@ -586,13 +591,13 @@ bool SettingsAdapter::selectVisualSetting(const QString& source_id, const QStrin
             desired.controls.clear();
         }
         auto scene = EditSceneWebcam(config.visual_scene, target->first, target->second, desired, *visual_registry_);
-        return scene.succeeded() && commitVisualScene(std::move(*scene.value()));
+        return end_session(scene.succeeded() && commitVisualScene(std::move(*scene.value())));
     }
     auto scene = config.visual_scene;
     auto& edited = *std::find_if(scene.sources.begin(), scene.sources.end(),
                                  [&](const auto& row) { return row.id == target->first; });
     edited.settings.insert_or_assign(action->property_path, choice_id.toStdString());
-    return commitVisualScene(std::move(scene), field->change == ChangePolicy::Live, record);
+    return end_session(commitVisualScene(std::move(scene), field->change == ChangePolicy::Live, record));
 }
 bool SettingsAdapter::dispatchVisualAction(const QString& source_id, const QString& item_id, const QString& runtime,
                                            const QString& action_id, bool record, const QString& choice) {
@@ -649,6 +654,20 @@ void SettingsAdapter::setConfig(RecordingPresetConfig config) {
     advanceVisualEditRevision();
     next_config_ = SanitizePresetConfig(std::move(config));
     config_ = controlsLocked() && active_config_ ? *active_config_ : next_config_;
+    // A session selection belongs to one source. It ends when that source leaves the scene,
+    // for example on a preset switch, and is not revived if the source returns later.
+    for (auto session = session_choices_.begin(); session != session_choices_.end();) {
+        const auto& sources = config_.visual_scene.sources;
+        if (std::any_of(sources.begin(), sources.end(),
+                        [&](const auto& row) { return row.id == session->first.first; })) {
+            ++session;
+            continue;
+        }
+        const auto source = QString::fromStdString(engine::ToUuid(session->first.first));
+        const auto path = QString::fromStdString(session->first.second);
+        session = session_choices_.erase(session);
+        emit visualSessionChoiceChanged(source, path, QString());
+    }
     custom_resolution_pending_ = config_.output.resolution.mode == OutputResolutionMode::Custom;
     pending_custom_width_ = config_.output.resolution.custom_width;
     pending_custom_height_ = config_.output.resolution.custom_height;

@@ -3609,6 +3609,9 @@ void QuickApplication::updateVisualSources(uint8_t demand) {
     visual_camera_item_ = camera_target.second;
     const auto gamepad_target = VisualPilotTarget(desired, "org.exosnap.gamepad/controller", visual_registry_,
                                                   {visual_gamepad_source_, visual_gamepad_item_});
+    // A runtime-only device selection belongs to the previous source.
+    if (gamepad_target.first != visual_gamepad_source_)
+        gamepad_overlay_.setSessionDevice({});
     visual_gamepad_source_ = gamepad_target.first;
     visual_gamepad_item_ = gamepad_target.second;
     const bool verification = !recording_coordinator_->VerificationWebcamSourceName().isEmpty();
