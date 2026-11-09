@@ -2317,6 +2317,7 @@ exosnap_add_gtest(
     TEST_PREFIX quick_edit_adapter.
     SOURCES
         ${EXOSNAP_QUICK_TESTS_DIR}/test_edit_adapters.cpp
+        ${EXOSNAP_QUICK_TESTS_DIR}/test_edit_export_text.cpp
         ${EXOSNAP_QUICK_TESTS_DIR}/test_edit_visual_seeds.cpp
         ${PROJECT_SOURCE_DIR}/app/visual_tests/EditVisualMedia.cpp
         ${PROJECT_SOURCE_DIR}/app/visual_tests/EditVisualMedia.h

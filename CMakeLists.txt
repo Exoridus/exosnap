@@ -319,6 +319,7 @@ if(TARGET exosnap_updater)
             app/extensions/BuiltinVisualSettings.cpp
             app/diagnostics/DiagnosticsController.cpp
             app/quick/ExoSnap/Quick/EditRenderText.h
+            app/quick/ExoSnap/Quick/EditExportText.h
             app/models/OutputSettingsModel.cpp
             app/models/OutputPathPolicy.cpp
             app/models/OutputPathValidator.cpp

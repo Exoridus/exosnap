@@ -196,7 +196,7 @@ ColumnLayout {
                 ResultOption {
                     objectName: "editExportFinishedStereo"
                     text: qsTr("Finished stereo mix")
-                    detail: qsTr("Enabled audio tracks mixed into one stereo track, as you hear it.")
+                    detail: qsTr("Enabled audio tracks mixed with their clip and track settings. Solo and preview volume do not affect export.")
                     checked: root.exporter.modeKey === "finishedStereo"
                     onClicked: {
                         root.exporter.modeKey = "finishedStereo";
