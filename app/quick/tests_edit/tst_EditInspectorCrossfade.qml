@@ -27,6 +27,7 @@ TestCase {
     }
     function init() {
         testSession.cancelClipDrag();
+        testSession.autoKey = false;
         while (testSession.canUndo) testSession.undo();
         testSession.appendAsset(testSession.media[0].id);
         testSession.requestSeekUs(50000000);
@@ -34,6 +35,7 @@ TestCase {
     }
     function cleanup() {
         testSession.cancelClipDrag();
+        testSession.autoKey = false;
         while (testSession.canUndo) testSession.undo();
         testSession.linkedSelection = true;
     }
@@ -355,6 +357,129 @@ TestCase {
         tryCompare(time, "activeFocus", true);
         compare(time.valueUs, 5000000);
         compare(testSession.positionUs, position);
+        keyClick(Qt.Key_Escape);
+    }
+    function test_crossfade_availability_uses_committed_duration_with_short_source_handles() {
+        while (testSession.canUndo) testSession.undo();
+        testSession.appendAsset(testSession.media[0].id);
+        testSession.linkedSelection = false;
+        const outgoing = testSession.visibleClipsUs(0, 100000000).find(row => row.video);
+        verify(testSession.applyTimeValue(outgoing.id, "sourceOut", 99900000));
+        testSession.appendAsset(testSession.media[0].id);
+        const incoming = testSession.visibleClipsUs(0, 200000000).find(row => row.video && row.id !== outgoing.id);
+        verify(testSession.applyTimeValue(incoming.id, "sourceIn", 100000));
+        verify(testSession.applyTimeValue(incoming.id, "clipStart", 99900000));
+        verify(testSession.inspectClip(outgoing.id));
+        const geometry = () => testSession.visibleClipsUs(0, 200000000).map(row => [row.id, row.startUs, row.sourceInUs, row.sourceOutUs]);
+        const before = geometry();
+        const revision = testEditHarness.timelineCheckpoint().revision;
+        verify(!testSession.canCrossfadeAtCut(outgoing.id));
+        verify(!testSession.canCrossfadeAtCut(outgoing.id, 1000000));
+        verify(testSession.canCrossfadeAtCut(outgoing.id, 100000));
+        compare(geometry(), before);
+        compare(testEditHarness.timelineCheckpoint().revision, revision);
+        const page = createTemporaryObject(pageComponent, tests);
+        page.toggleDetails();
+        const action = findChild(page, "editInspectorCrossfadeAtCut");
+        const duration = findChild(page, "editInspectorCrossfadeDuration");
+        verify(!action.enabled);
+        duration.changeFormat(1);
+        duration.forceActiveFocus(Qt.TabFocusReason);
+        duration.selectAll();
+        for (const character of "0.1") keyClick(character);
+        verify(!action.enabled, "Uncommitted text does not change command availability");
+        keyClick(Qt.Key_Return);
+        verify(action.enabled);
+        duration.forceActiveFocus(Qt.TabFocusReason);
+        duration.selectAll();
+        keyClick("1");
+        keyClick(Qt.Key_Return);
+        verify(!action.enabled);
+        duration.forceActiveFocus(Qt.TabFocusReason);
+        duration.selectAll();
+        for (const character of "0.1") keyClick(character);
+        keyClick(Qt.Key_Return);
+        verify(action.enabled);
+        action.forceActiveFocus(Qt.TabFocusReason);
+        keyClick(Qt.Key_Space);
+        compare(testSession.transitions.length, 1);
+        compare(testEditHarness.timelineCheckpoint().revision, revision + 1);
+        const after = geometry();
+        testSession.undo();
+        compare(testSession.transitions.length, 0);
+        compare(geometry(), before);
+        testSession.redo();
+        compare(testSession.transitions.length, 1);
+        compare(geometry(), after);
+    }
+    function test_crossfade_availability_refreshes_when_link_scope_changes() {
+        const outgoing = testSession.visibleClipsUs(0, 100000000).find(row => row.video && row.startUs === 0);
+        const audio = testSession.tracks.find(row => !row.video);
+        verify(testSession.inspectClip(outgoing.id));
+        const page = createTemporaryObject(pageComponent, tests);
+        page.toggleDetails();
+        const action = findChild(page, "editInspectorCrossfadeAtCut");
+        verify(action.enabled);
+        verify(testSession.setTrackLocked(audio.id, true));
+        verify(!action.enabled);
+        testSession.linkedSelection = false;
+        compare(testSession.selectedClip, outgoing.id);
+        verify(action.enabled);
+        testSession.linkedSelection = true;
+        compare(testSession.selectedClip, outgoing.id);
+        verify(!action.enabled);
+    }
+    function test_collapsed_animation_keeps_auto_key_mode_and_key_state_visible() {
+        const clip = testSession.visibleClipsUs(0, 100000000).find(row => row.video && row.startUs === 0);
+        verify(testSession.inspectClip(clip.id));
+        testSession.requestSeekUs(5000000);
+        const page = createTemporaryObject(pageComponent, tests);
+        const strip = findChild(page, "editClipTimeline");
+        strip.forceActiveFocus();
+        keyClick(Qt.Key_D);
+        const inspector = findChild(page, "editInspector");
+        const autoKey = findChild(page, "editDetailsAutoKey");
+        const value = findChild(page, "editVideoProperty0");
+        const marker = findChild(page, "editVideoPropertyState0");
+        compare(inspector.animationExpanded, false);
+        verify(autoKey.visible);
+        verify(!autoKey.checked);
+        keyClick(Qt.Key_K);
+        verify(autoKey.checked);
+        compare(inspector.animationExpanded, false);
+        const disclosure = findChild(page, "editDetailsAnimationToggle");
+        disclosure.forceActiveFocus(Qt.TabFocusReason);
+        keyClick(Qt.Key_Space);
+        compare(inspector.animationExpanded, true);
+        verify(autoKey.checked);
+        keyClick(Qt.Key_Space);
+        compare(inspector.animationExpanded, false);
+        verify(autoKey.checked);
+        value.forceActiveFocus(Qt.TabFocusReason);
+        value.selectAll();
+        for (const character of "0.25") keyClick(character);
+        keyClick(Qt.Key_Return);
+        compare(testSession.videoProperties(clip.id, 5000000)[0].value, 0.25);
+        verify(testSession.videoProperties(clip.id, 5000000)[0].key);
+        verify(marker.visible);
+        compare(marker.kind, ExoGlyph.KeyframeFilled);
+        testSession.requestSeekUs(2500000);
+        verify(marker.visible);
+        compare(marker.kind, ExoGlyph.Keyframe);
+        keyClick(Qt.Key_Z, Qt.ControlModifier);
+        verify(!testSession.videoProperties(clip.id, 5000000)[0].animated);
+        verify(!marker.visible);
+        verify(autoKey.checked);
+        autoKey.forceActiveFocus(Qt.TabFocusReason);
+        keyClick(Qt.Key_Space);
+        verify(!autoKey.checked);
+        verify(!testSession.autoKey);
+        compare(inspector.animationExpanded, false);
+        value.forceActiveFocus(Qt.TabFocusReason);
+        value.selectAll();
+        keyClick(Qt.Key_K);
+        verify(!testSession.autoKey, "The numeric draft owns its text keys");
+        compare(testSession.positionUs, 2500000);
         keyClick(Qt.Key_Escape);
     }
 }

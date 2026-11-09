@@ -507,7 +507,7 @@ class EditSessionAdapter : public QObject {
     Q_INVOKABLE bool crossfadeAtCut(qulonglong outgoing = 0, qint64 duration_us = 500000);
     Q_INVOKABLE bool previewRemoveOverlap(qulonglong junction_id = 0);
     Q_INVOKABLE bool removeOverlap(qulonglong junction_id = 0);
-    Q_INVOKABLE bool canCrossfadeAtCut(qulonglong outgoing = 0) const;
+    Q_INVOKABLE bool canCrossfadeAtCut(qulonglong outgoing = 0, qint64 duration_us = 500'000) const;
     Q_INVOKABLE bool dropCrossfade(qint64 at_ms, qint64 tolerance_ms);
     // Tolerance is limited to 250 ms.
     Q_INVOKABLE bool dropCrossfadeUs(qint64 at_us, qint64 tolerance_us);

@@ -18,6 +18,19 @@ ExoScrollView {
     readonly property bool oneClip: mode === EditSessionAdapter.ClipSelection && session.selectedClipIds.length === 1
     readonly property var videoValues: session.videoProperties(clipDetails.id || 0, session.positionUs)
     property real crossfadeDurationUs: 500000
+    property bool crossfadeAvailable: false
+    function refreshCrossfadeAvailability(): void {
+        crossfadeAvailable = root.session && root.session.selectionMode === EditSessionAdapter.ClipSelection
+            && root.session.canCrossfadeAtCut(root.session.selectedClip, root.crossfadeDurationUs);
+    }
+    onCrossfadeDurationUsChanged: refreshCrossfadeAvailability()
+    Component.onCompleted: refreshCrossfadeAvailability()
+    Connections {
+        target: root.session
+        function onWorkspaceChanged(): void { root.refreshCrossfadeAvailability(); }
+        function onSelectionChanged(): void { root.refreshCrossfadeAvailability(); }
+        function onInteractionSettingsChanged(): void { root.refreshCrossfadeAvailability(); }
+    }
     property bool timingExpanded: false
     property bool animationExpanded: false
     property real selectedGainSourceUs: -1
@@ -225,6 +238,29 @@ ExoScrollView {
             }
             GridLayout {
                 Layout.fillWidth: true
+                visible: root.clipDetails.video ?? false
+                columns: root.availableWidth < 260 ? 1 : 2
+                columnSpacing: ExoTheme.spacingSm
+                rowSpacing: ExoTheme.spacingSm
+                ExoButton {
+                    objectName: "editDetailsAnimationToggle"
+                    Layout.fillWidth: true
+                    compact: true
+                    text: root.animationExpanded ? qsTr("Hide animation") : qsTr("Animation")
+                    onClicked: root.animationExpanded = !root.animationExpanded
+                }
+                ExoButton {
+                    objectName: "editDetailsAutoKey"
+                    Layout.fillWidth: true
+                    compact: true
+                    text: qsTr("Auto-Key (K)")
+                    checkable: true
+                    checked: root.session.autoKey
+                    onClicked: root.session.autoKey = !root.session.autoKey
+                }
+            }
+            GridLayout {
+                Layout.fillWidth: true
                 columns: root.animationExpanded || root.availableWidth < 260 ? 1 : 2
                 columnSpacing: ExoTheme.spacingSm
                 rowSpacing: ExoTheme.spacingSm
@@ -254,6 +290,7 @@ ExoScrollView {
                         RowLayout {
                             Layout.fillWidth: true
                             EditDraftField {
+                                objectName: "editVideoProperty" + propertyRow.index
                                 Layout.fillWidth: true
                                 Layout.minimumWidth: 0
                                 Layout.preferredWidth: 1
@@ -266,6 +303,20 @@ ExoScrollView {
                                 parseValue: text => ({valid: text.trim().length > 0 && isFinite(Number(text)), value: Number(text), error: qsTr("Enter a finite number.")})
                                 applyValue: (value, target) => root.session.setVideoProperty(target, propertyRow.index, value)
                                 Accessible.name: propertyRow.modelData
+                                Accessible.description: errorText.length > 0 ? errorText : propertyRow.channel.key ? qsTr("Keyframe at playhead") : propertyRow.channel.animated ? qsTr("Animated value") : ""
+                            }
+                            ExoGlyph {
+                                objectName: "editVideoPropertyState" + propertyRow.index
+                                Layout.preferredWidth: 14
+                                Layout.preferredHeight: 14
+                                visible: !root.animationExpanded && (propertyRow.channel.animated ?? false)
+                                kind: propertyRow.channel.key ? ExoGlyph.KeyframeFilled : ExoGlyph.Keyframe
+                                color: propertyRow.channel.key ? ExoTheme.accent : ExoTheme.textSecondary
+                                Accessible.role: Accessible.StaticText
+                                Accessible.name: propertyRow.channel.key ? qsTr("Keyframe at playhead") : qsTr("Animated value")
+                                ToolTip.text: Accessible.name
+                                ToolTip.visible: animationStateHover.hovered
+                                HoverHandler { id: animationStateHover }
                             }
                             ExoButton {
                                 visible: root.animationExpanded
@@ -317,21 +368,6 @@ ExoScrollView {
                         }
                     }
                 }
-            }
-            ExoButton {
-                objectName: "editDetailsAnimationToggle"
-                Layout.fillWidth: true
-                visible: root.clipDetails.video ?? false
-                text: root.animationExpanded ? qsTr("Hide animation") : qsTr("Animation")
-                onClicked: root.animationExpanded = !root.animationExpanded
-            }
-            ExoButton {
-                visible: (root.clipDetails.video ?? false) && root.animationExpanded
-                Layout.fillWidth: true
-                text: qsTr("Auto-Key (K)")
-                checkable: true
-                checked: root.session.autoKey
-                onClicked: root.session.autoKey = !root.session.autoKey
             }
             ExoSettingRow {
                 label: qsTr("Clip gain"); stacked: true; Layout.fillWidth: true
@@ -542,7 +578,7 @@ ExoScrollView {
                 objectName: "editInspectorCrossfadeAtCut"
                 Layout.fillWidth: true
                 text: qsTr("Crossfade to next clip")
-                enabled: root.session.canCrossfadeAtCut(root.session.selectedClip)
+                enabled: root.crossfadeAvailable
                 Accessible.description: enabled ? "" : qsTr("Select a clip with an adjacent compatible clip and available source handles.")
                 ToolTip.text: Accessible.description
                 ToolTip.visible: !enabled && crossfadeHover.hovered
