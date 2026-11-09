@@ -44,6 +44,7 @@
 // NVENC per-GPU codec-GUID probe (A2). Guarded so a headless build without the vendor
 // header (third_party/nvidia/nvEncodeAPI.h) still compiles and degrades gracefully.
 #if __has_include(<nvEncodeAPI.h>)
+#include "nvenc_format_probe.h"
 #include <d3d11.h>
 #include <nvEncodeAPI.h>
 #define EXOSNAP_CAPABILITY_HAVE_NVENC 1
@@ -123,9 +124,9 @@ void ProbeNvidia(NvidiaRuntimeFacts& nvidia) {
 
 #if EXOSNAP_CAPABILITY_HAVE_NVENC
 
-// Create a D3D11 device on the first NVIDIA adapter (PCI vendor 0x10DE). Returns
-// nullptr when there is no NVIDIA adapter or device creation fails. Best-effort.
-Microsoft::WRL::ComPtr<ID3D11Device> CreateNvidiaD3D11Device() {
+// Create a D3D11 device on the adapter named by the runtime/cache identity.
+// Device creation failure never redirects the probe to a different adapter.
+Microsoft::WRL::ComPtr<ID3D11Device> CreateNvidiaD3D11Device(int64_t target_luid) {
     using Microsoft::WRL::ComPtr;
 
     ComPtr<IDXGIFactory1> factory;
@@ -134,9 +135,10 @@ Microsoft::WRL::ComPtr<ID3D11Device> CreateNvidiaD3D11Device() {
     }
 
     ComPtr<IDXGIAdapter1> adapter;
-    for (UINT i = 0; factory->EnumAdapters1(i, &adapter) != DXGI_ERROR_NOT_FOUND; ++i) {
+    for (UINT i = 0; SUCCEEDED(factory->EnumAdapters1(i, &adapter)); ++i) {
         DXGI_ADAPTER_DESC1 desc{};
-        if (FAILED(adapter->GetDesc1(&desc)) || desc.VendorId != 0x10DEu) {
+        if (FAILED(adapter->GetDesc1(&desc)) || desc.VendorId != 0x10DEu ||
+            PackAdapterLuid(desc.AdapterLuid.HighPart, desc.AdapterLuid.LowPart) != target_luid) {
             adapter.Reset();
             continue;
         }
@@ -149,17 +151,20 @@ Microsoft::WRL::ComPtr<ID3D11Device> CreateNvidiaD3D11Device() {
         if (SUCCEEDED(hr) && device) {
             return device;
         }
+        return nullptr;
     }
     return nullptr;
 }
 
-void ProbeNvencCodecs(NvidiaRuntimeFacts& nvidia) {
+void ProbeNvencCodecs(NvidiaRuntimeFacts& nvidia, int64_t target_luid) {
+    nvidia.nvenc_formats_h264 = nvidia.nvenc_formats_hevc = nvidia.nvenc_formats_av1 = {
+        EncoderFormatSupport::Unavailable, EncoderFormatSupport::Unavailable, EncoderFormatSupport::Unavailable};
     // No point opening a session if the lightweight presence probe already failed.
     if (!nvidia.nvenc_dll_present || !nvidia.nvenc_api_version_valid) {
         return;
     }
 
-    Microsoft::WRL::ComPtr<ID3D11Device> device = CreateNvidiaD3D11Device();
+    Microsoft::WRL::ComPtr<ID3D11Device> device = CreateNvidiaD3D11Device(target_luid);
     if (!device) {
         return; // no NVIDIA D3D11 device — keep nvenc_codec_probed = false
     }
@@ -203,7 +208,7 @@ void ProbeNvencCodecs(NvidiaRuntimeFacts& nvidia) {
     if (funcs.nvEncGetEncodeGUIDCount(encoder, &count) == NV_ENC_SUCCESS && count > 0) {
         std::vector<GUID> guids(count);
         uint32_t got = 0;
-        if (funcs.nvEncGetEncodeGUIDs(encoder, guids.data(), count, &got) == NV_ENC_SUCCESS) {
+        if (funcs.nvEncGetEncodeGUIDs(encoder, guids.data(), count, &got) == NV_ENC_SUCCESS && got <= count) {
             for (uint32_t i = 0; i < got; ++i) {
                 if (IsEqualGUID(guids[i], NV_ENC_CODEC_AV1_GUID) != 0) {
                     nvidia.nvenc_av1 = true;
@@ -216,25 +221,20 @@ void ProbeNvencCodecs(NvidiaRuntimeFacts& nvidia) {
             // Only now is the per-codec result authoritative.
             nvidia.nvenc_codec_probed = true;
 
-            // Per-codec 4:4:4 (YUV444, 8-bit) support via
-            // NV_ENC_CAPS_SUPPORT_YUV444_ENCODE. Only queried for the codecs the
-            // GPU actually advertised; a failed/absent query leaves the flag
-            // false (no 4:4:4 claimed beyond the static baseline).
-            if (funcs.nvEncGetEncodeCaps != nullptr) {
-                auto query_yuv444 = [&funcs, encoder](const GUID& codec) -> bool {
-                    NV_ENC_CAPS_PARAM capsParam{};
-                    capsParam.version = NV_ENC_CAPS_PARAM_VER;
-                    capsParam.capsToQuery = NV_ENC_CAPS_SUPPORT_YUV444_ENCODE;
-                    int value = 0;
-                    return funcs.nvEncGetEncodeCaps(encoder, codec, &capsParam, &value) == NV_ENC_SUCCESS && value != 0;
-                };
-                if (nvidia.nvenc_h264) {
-                    nvidia.nvenc_yuv444_h264 = query_yuv444(NV_ENC_CODEC_H264_GUID);
-                }
-                if (nvidia.nvenc_hevc) {
-                    nvidia.nvenc_yuv444_hevc = query_yuv444(NV_ENC_CODEC_HEVC_GUID);
-                }
+            if (nvidia.nvenc_h264)
+                nvidia.nvenc_formats_h264 =
+                    detail::ProbeNvencFormats(funcs, encoder, NV_ENC_CODEC_H264_GUID, VideoCodec::H264);
+            if (nvidia.nvenc_hevc)
+                nvidia.nvenc_formats_hevc =
+                    detail::ProbeNvencFormats(funcs, encoder, NV_ENC_CODEC_HEVC_GUID, VideoCodec::Hevc);
+            if (nvidia.nvenc_av1)
+                nvidia.nvenc_formats_av1 =
+                    detail::ProbeNvencFormats(funcs, encoder, NV_ENC_CODEC_AV1_GUID, VideoCodec::Av1);
+            nvidia.nvenc_yuv444_h264 = nvidia.nvenc_formats_h264.ayuv == EncoderFormatSupport::Supported;
+            nvidia.nvenc_yuv444_hevc = nvidia.nvenc_formats_hevc.ayuv == EncoderFormatSupport::Supported;
 
+            // Advanced settings retain their existing per-codec queries.
+            if (funcs.nvEncGetEncodeCaps != nullptr) {
                 auto query_cap = [&funcs, encoder](const GUID& codec, NV_ENC_CAPS cap) -> int {
                     NV_ENC_CAPS_PARAM capsParam{};
                     capsParam.version = NV_ENC_CAPS_PARAM_VER;
@@ -271,9 +271,10 @@ void ProbeNvencCodecs(NvidiaRuntimeFacts& nvidia) {
 
 #else // EXOSNAP_CAPABILITY_HAVE_NVENC
 
-// Headless / no-vendor-header build: probe is unavailable. Leaves nvenc_codec_probed
-// false so the static baseline stands.
-void ProbeNvencCodecs(NvidiaRuntimeFacts&) {
+// A build without the vendor header has unavailable format evidence.
+void ProbeNvencCodecs(NvidiaRuntimeFacts& nvidia, int64_t) {
+    nvidia.nvenc_formats_h264 = nvidia.nvenc_formats_hevc = nvidia.nvenc_formats_av1 = {
+        EncoderFormatSupport::Unavailable, EncoderFormatSupport::Unavailable, EncoderFormatSupport::Unavailable};
 }
 
 #endif // EXOSNAP_CAPABILITY_HAVE_NVENC
@@ -282,7 +283,7 @@ void ProbeNvencCodecs(NvidiaRuntimeFacts&) {
 // B. DXGI adapter name discovery
 // -------------------------------------------------------------------------
 
-void ProbeAdapterName(NvidiaRuntimeFacts& nvidia) {
+void ProbeAdapterName(NvidiaRuntimeFacts& nvidia, int64_t target_luid) {
     // DXGI is always available on Windows 11+, so load via the static import.
     // We use the static link (dxgi.lib) rather than dynamic LoadLibrary to
     // avoid a use-after-free: ComPtr destructors would call Release() through
@@ -296,9 +297,7 @@ void ProbeAdapterName(NvidiaRuntimeFacts& nvidia) {
         return;
     }
 
-    // Enumerate adapters and pick the first discrete one that is not the
-    // Microsoft Basic Render Driver (software adapter).
-    // Fall back to adapter 0 if no discrete adapter is found.
+    // Name exactly the adapter whose identity the runtime probe uses.
     std::string best_name;
     for (UINT i = 0;; ++i) {
         Microsoft::WRL::ComPtr<IDXGIAdapter> adapter;
@@ -306,14 +305,16 @@ void ProbeAdapterName(NvidiaRuntimeFacts& nvidia) {
             break;
         }
         DXGI_ADAPTER_DESC desc{};
-        if (FAILED(adapter->GetDesc(&desc))) {
+        if (FAILED(adapter->GetDesc(&desc)) ||
+            PackAdapterLuid(desc.AdapterLuid.HighPart, desc.AdapterLuid.LowPart) != target_luid) {
             continue;
         }
         // Convert wide description to narrow UTF-8 using WideCharToMultiByte.
         const int len = WideCharToMultiByte(CP_UTF8, 0, desc.Description, -1, nullptr, 0, nullptr, nullptr);
         if (len > 1) {
-            std::string name(static_cast<size_t>(len - 1), '\0');
+            std::string name(static_cast<size_t>(len), '\0');
             WideCharToMultiByte(CP_UTF8, 0, desc.Description, -1, name.data(), len, nullptr, nullptr);
+            name.resize(static_cast<size_t>(len - 1));
 
             // Prefer first non-software adapter.
             const bool is_software = (desc.VendorId == 0x1414u && desc.DeviceId == 0x008cu); // WARP / Microsoft Basic
@@ -463,17 +464,24 @@ void ProbeDisplays(std::vector<DisplayHdrFacts>& displays) {
 // B3. Cheap adapter-identity read (LUID + WDDM driver version)
 // -------------------------------------------------------------------------
 //
-// Used only to build the disk-cache warm-start key (capability_cache_key.h);
-// never consulted by the real probe path. Reuses EnumerateAdapters() (the
-// same "skip software/WARP" filtering ProbeAdapterName applies) instead of
-// re-walking DXGI adapters a third way.
+// Shared by the default runtime probe and the disk-cache warm-start key.
+// Reuses EnumerateAdapters() so both reads exclude software adapters.
 void ProbeAdapterIdentity(AdapterIdentity& identity) {
     const std::vector<AdapterInfo> adapters = EnumerateAdapters();
     if (adapters.empty())
         return; // no real adapter — identity stays default (luid=0, driver_version empty)
 
-    identity.adapter_luid = adapters.front().luid;
-    identity.vendor_id = adapters.front().vendor_id;
+    // The cache key and runtime probe must name the same default encoder
+    // adapter, even when DXGI lists an Intel/AMD display adapter first.
+    const AdapterInfo* selected = &adapters.front();
+    for (const auto& adapter : adapters) {
+        if (adapter.vendor == AdapterVendor::Nvidia) {
+            selected = &adapter;
+            break;
+        }
+    }
+    identity.adapter_luid = selected->luid;
+    identity.vendor_id = selected->vendor_id;
 
     Microsoft::WRL::ComPtr<IDXGIFactory4> factory4;
     if (FAILED(CreateDXGIFactory1(IID_PPV_ARGS(&factory4))))
@@ -587,19 +595,16 @@ void ProbeOs(OsRuntimeFacts& os) {
 RuntimeCapabilitySnapshot CapabilityBuilder::QueryRuntimeFacts() {
     RuntimeCapabilitySnapshot snapshot;
 
+    ProbeAdapterIdentity(snapshot.adapter);
+
     // Probes are independent; each writes only to its own sub-struct.
     ProbeNvidia(snapshot.nvidia);
-    ProbeNvencCodecs(snapshot.nvidia); // A2: per-GPU codec GUIDs (best-effort; needs a real NVIDIA GPU)
-    ProbeAdapterName(snapshot.nvidia);
+    ProbeNvencCodecs(snapshot.nvidia, snapshot.adapter.adapter_luid);
+    ProbeAdapterName(snapshot.nvidia, snapshot.adapter.adapter_luid);
     ProbeMfWebcam(snapshot.mf_webcam); // S4: webcam MF presence probe (safe, LoadLibraryW-based)
     // No AAC probe: FFmpeg's bundled native AAC-LC encoder is always available.
     ProbeOs(snapshot.os);
     ProbeDisplays(snapshot.displays);
-    // DXGI-only and no heavier than the display probe next to it. Carried in the
-    // snapshot because the Diagnostics encoder tile names the driver, and the
-    // cache-key read is a separate call the shipping app never makes.
-    ProbeAdapterIdentity(snapshot.adapter);
-
     return snapshot;
 }
 

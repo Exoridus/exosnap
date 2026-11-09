@@ -28,6 +28,14 @@ Recommended and allowed combinations may be selectable. Experimental/fallback/pr
 
 Settings options carry `{value, label, selectable, reason}` from the C++ owners. The UI must not infer availability from a codec label or vendor name. Reconciliation runs when the container changes, followed by sanitization, and admission validates again before recording.
 
+### Device format evidence
+
+The NVENC capability probes reuse their open per-adapter sessions to enumerate input formats and profiles and query encode capabilities. NV12 establishes the implemented 8-bit 4:2:0 input path. P010 additionally requires 10-bit encode support and the HEVC Main10 or AV1 Main profile. AYUV additionally requires 4:4:4 encode support and H.264 High 4:4:4 or HEVC FREXT. H.264 10-bit, AV1 4:4:4, 10-bit 4:4:4 and 4:2:2 remain unimplemented regardless of driver advertisements.
+
+`EncoderFormatSupport` distinguishes unknown evidence, an unavailable query, an authoritative negative and supported input prerequisites. Only supported evidence admits a runtime format. The resolver verifies the probe's nonzero adapter LUID, then codec, depth and chroma. Runtime combination overrides cannot bypass this check. The static implementation matrix cannot authorize recording; runtime views always replace it with probe facts. The default probe, display name and cache identity refer to the same adapter, and a failed device creation never falls through to another GPU. Cache schema changes invalidate snapshots that lack the exact format evidence.
+
+Native HDR admission uses the selected encoder adapter's P010 evidence when an HDR-active capture engages that path. It does not infer HDR support from HEVC or AV1 alone. These format queries establish encoder input prerequisites, not successful capture/conversion, HDR signaling, resolution/FPS limits or rate-control/GOP combinations. Native initialization and hardware/media validation retain those responsibilities.
+
 ## Rate control and encoder preset
 
 The product's constant-quality value is a canonical scale, not universal CRF. NVENC maps it to per-codec constant quantizers. H.264/HEVC use their native QP representation; AV1 uses the canonical-to-native curve, not a linear range ratio. The inter-picture offset is applied in the canonical domain before conversion. VBR and CBR map bitrate fields explicitly.

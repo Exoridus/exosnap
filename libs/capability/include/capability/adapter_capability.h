@@ -1,19 +1,19 @@
 #pragma once
 
 #include "adapter_enum.h"
+#include "encoder_format_capability.h"
 
 #include <string>
 
 namespace exosnap::capability {
 
-// Real per-adapter encoder capability. Deliberately independent of
-// capability::VideoCodec; plain bool flags mirror the existing
-// NvidiaRuntimeFacts convention in runtime_snapshot.h.
+// Real per-adapter encoder capability, tied to the device opened by the probe.
 struct AdapterEncoderCapability {
-    // True only when a real hardware probe executed and returned an
-    // authoritative result. False means the per-codec flags below are not
-    // meaningful (either the probe failed, or — for non-NVIDIA vendors — no
-    // probe was attempted at all because no backend is wired yet).
+    // Boot-scoped identity of the device the probe actually opened.
+    int64_t adapter_luid = 0;
+    // True only when codec enumeration returned an authoritative result.
+    // Individual format queries can still be unavailable. False means the
+    // codec-advertisement flags are not meaningful.
     bool probed = false;
 
     // Human-readable encoder backend name, e.g. "NVENC". Empty when this
@@ -28,10 +28,12 @@ struct AdapterEncoderCapability {
     bool hevc = false;
     bool av1 = false;
 
-    // Per-codec 8-bit 4:4:4 (YUV444) encode support, from
-    // NV_ENC_CAPS_SUPPORT_YUV444_ENCODE. Only meaningful when probed==true; only
-    // queried for a codec this adapter actually advertised. No AV1 field on
-    // purpose — NVENC AV1 is 4:2:0 Main only.
+    CodecFormatCapabilities formats_h264;
+    CodecFormatCapabilities formats_hevc;
+    CodecFormatCapabilities formats_av1;
+
+    // Convenience flags for the exact AYUV/profile/4:4:4 evidence above.
+    // False alone does not distinguish an unavailable query from rejection.
     bool yuv444_h264 = false;
     bool yuv444_hevc = false;
 
@@ -57,9 +59,7 @@ std::string EncoderBackendLabelForVendor(AdapterVendor vendor) noexcept;
 // Probes real encoder capability for one adapter:
 //   - NVIDIA: opens a real NVENC session on a D3D11 device created against
 //     THIS adapter's LUID (re-enumerates DXGI to locate it — see adapter_enum.cpp)
-//     and enumerates EncodeGUIDs, the same technique as runtime_query.cpp's
-//     existing system-wide probe (A2), but targeted at a specific adapter
-//     instead of "the first NVIDIA adapter DXGI happens to return first".
+//     and enumerates codecs, input formats, required profiles and encode caps.
 //     Best-effort: no NVENC DLL / no device / no session / vendor header
 //     absent (headless build) all leave probed=false.
 //   - AMD / Intel / Other: no probe is attempted — MVP has no AMD/AMF,
