@@ -516,13 +516,15 @@ void GamepadOverlay::Poll() {
                                : device.layout == gamepad::LayoutKind::JoyConPair  ? tr("Joy-Con pair")
                                : device.layout == gamepad::LayoutKind::GameCube    ? tr("GameCube")
                                                                                    : tr("Gamepad");
-        const QString player = device.player_index < 0 ? tr("Unassigned")
-                               : device.player_index < 4 ? QStringLiteral("P%1").arg(device.player_index + 1)
-                                                         : tr("SDL player %1").arg(device.player_index + 1);
-        const QString label =
-            (device.persistent ? QStringLiteral("%1 (%2)").arg(family, id.right(6))
-                               : tr("%1 (%2, session only)").arg(family, id.right(6))) +
-            QStringLiteral(" · ") + player;
+        QString player = tr("Unassigned");
+        if (device.player_index >= 0 && device.player_index < 4)
+            player = QStringLiteral("P%1").arg(device.player_index + 1);
+        else if (device.player_index >= 4)
+            player = tr("SDL player %1").arg(device.player_index + 1);
+        QString label = QStringLiteral("%1 (%2)").arg(family, id.right(6));
+        if (!device.persistent)
+            label = tr("%1 (%2, session only)").arg(family, id.right(6));
+        label += QStringLiteral(" · ") + player;
         options.push_back(QVariantMap{{QStringLiteral("value"), id}, {QStringLiteral("label"), label}});
     }
     const auto selected = device();

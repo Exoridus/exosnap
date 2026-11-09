@@ -67,10 +67,18 @@ class GamepadOverlay final : public QObject, public engine::SpriteSourceProvider
         return devices_;
     }
     QVariantList layouts() const;
-    int playerIndex() const noexcept { return player_index_; }
-    bool playerConnected() const noexcept { return player_connected_; }
-    bool playerLedSupported() const noexcept { return player_led_supported_; }
-    const QString& playerIndexStatus() const noexcept { return player_index_status_; }
+    int playerIndex() const noexcept {
+        return player_index_;
+    }
+    bool playerConnected() const noexcept {
+        return player_connected_;
+    }
+    bool playerLedSupported() const noexcept {
+        return player_led_supported_;
+    }
+    const QString& playerIndexStatus() const noexcept {
+        return player_index_status_;
+    }
     const QString& status() const {
         return status_;
     }
