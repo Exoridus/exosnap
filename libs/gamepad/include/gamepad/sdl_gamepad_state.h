@@ -29,4 +29,10 @@ struct SdlClockAnchor {
 [[nodiscard]] std::optional<DeviceId> PersistentSdlDeviceId(uint16_t vendor, uint16_t product, std::string_view serial,
                                                             std::string_view path);
 
+/// Test seam for an open failure SDL cannot produce on demand. While set, an instance for
+/// which the predicate returns true is handled as a failed `SDL_OpenGamepad`. Production
+/// code never sets it. The predicate runs on the input worker thread.
+using SdlOpenFailureForTest = bool (*)(SDL_JoystickID instance);
+void SetSdlOpenFailureForTest(SdlOpenFailureForTest predicate) noexcept;
+
 } // namespace exosnap::gamepad

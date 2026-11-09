@@ -28,6 +28,7 @@ namespace exosnap::gamepad {
 namespace {
 std::atomic<DWORD> input_main_thread{0};
 std::atomic<bool> input_owner_active{false};
+std::atomic<SdlOpenFailureForTest> open_failure_for_test{nullptr};
 
 struct RuntimeModule {
     HMODULE handle = nullptr;
@@ -108,6 +109,10 @@ DeviceId SessionIdentity() {
     return id;
 }
 } // namespace
+
+void SetSdlOpenFailureForTest(SdlOpenFailureForTest predicate) noexcept {
+    open_failure_for_test.store(predicate, std::memory_order_release);
+}
 
 struct SdlGamepadSource::Impl {
     struct Device {
@@ -273,7 +278,8 @@ struct SdlGamepadSource::Impl {
             return;
         if (devices.size() >= 16)
             throw std::runtime_error("More than sixteen controllers are connected");
-        SDL_Gamepad* handle = SDL_OpenGamepad(instance);
+        const auto fail_for_test = open_failure_for_test.load(std::memory_order_acquire);
+        SDL_Gamepad* handle = fail_for_test && fail_for_test(instance) ? nullptr : SDL_OpenGamepad(instance);
         // A device can disappear between enumeration and opening, or fail one HID open.
         // That must not stop input for every other controller. The next reconcile retries it.
         if (!handle)
