@@ -15,8 +15,8 @@
 
 namespace exosnap::capability {
 
-// The format the recording wants, as the selector needs it. Only the facts a
-// per-adapter probe actually answers are consulted: codec support and 4:4:4.
+// The format the recording wants. Admission requires evidence for its exact
+// codec, native input format, bit depth and chroma on the selected adapter.
 struct EncoderDeviceRequest {
     VideoCodec video_codec = VideoCodec::Av1;
     ChromaSubsampling chroma = ChromaSubsampling::Cs420;
@@ -31,12 +31,13 @@ struct EncoderDeviceCandidate {
     AdapterEncoderCapability capability;
     exosnap::engine::EncoderBackend backend = exosnap::engine::EncoderBackend::None;
     bool supports_request = false;
+    EncoderFormatSupport format_support = EncoderFormatSupport::Unknown;
     // Empty when this candidate can execute the request; otherwise the
     // structured reason the UI and session admission report.
     std::string unavailable_reason;
 
     // Usable = an implemented backend that probed successfully AND satisfies
-    // the requested codec/chroma. Cross-adapter executability is a separate
+    // the requested codec/depth/chroma. Cross-adapter executability is a separate
     // resolver decision, not a property of the adapter alone.
     [[nodiscard]] bool usable() const noexcept {
         return backend != exosnap::engine::EncoderBackend::None && supports_request;
@@ -45,7 +46,8 @@ struct EncoderDeviceCandidate {
 
 // Builds one candidate per adapter. Every adapter is returned, including
 // unusable ones, so the UI can show them disabled with a reason. Pairing is by
-// position; the shorter input bounds the result.
+// position; the shorter input bounds the result. Each probe must also name the
+// same nonzero LUID as its adapter, otherwise the candidate is unavailable.
 std::vector<EncoderDeviceCandidate> BuildEncoderDeviceCandidates(std::span<const AdapterInfo> adapters,
                                                                  std::span<const AdapterEncoderCapability> capabilities,
                                                                  const EncoderDeviceRequest& request);
@@ -94,7 +96,7 @@ FingerprintFromAdapter(const AdapterInfo& adapter) noexcept {
 }
 
 // A capability view scoped to one concrete adapter, derived from a system-wide
-// set without touching hardware. NVIDIA codec/4:4:4 facts come from the
+// set without touching hardware. NVIDIA codec and exact format facts come from the
 // adapter's own probe; a vendor with no implemented backend has every video
 // path marked NotImplemented rather than inheriting another GPU's result.
 CapabilitySet CapabilitySetForAdapter(const CapabilitySet& base, const AdapterInfo& adapter,

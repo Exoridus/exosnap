@@ -197,6 +197,8 @@ Output resolution offers Native, 720p, 1080p, 1440p, 2160p and validated Custom 
 
 All codecs have an 8-bit path. HEVC/AV1 can offer 10-bit P010 on compatible hardware. The Expert depth choice controls SDR precision; native HDR independently requires 10-bit. The irrelevant H.264 depth row is hidden.
 
+Runtime selection requires evidence for the exact input format, depth and chroma on the selected adapter. A codec advertisement alone does not establish 10-bit or HDR support. Missing and failed format queries remain unknown or unavailable and block start; a successful negative query reports unsupported. Switching devices replaces the prior device's format evidence.
+
 4:2:0 is the default. Expert 8-bit 4:4:4 is available for H.264/HEVC only where the GPU exposes the required encode support. The row is hidden when irrelevant, but a fixable 10-bit conflict leaves its unavailable 4:4:4 choice visible with a reason. AV1 4:4:4, 10-bit 4:4:4 and 4:2:2 are not product paths. Live preview and still capture remain supported for the implemented 4:4:4 path.
 
 ### Color and HDR

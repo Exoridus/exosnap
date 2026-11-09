@@ -20,6 +20,16 @@ RuntimeCapabilitySnapshot MakeFavorableSnapshot() {
     snap.nvidia.nvenc_api_version_valid = true;
     snap.nvidia.nvenc_api_version = 0x000D0000u; // dummy version
     snap.nvidia.adapter_name = "NVIDIA GeForce RTX 9999 (synthetic)";
+    snap.nvidia.nvenc_codec_probed = true;
+    snap.nvidia.nvenc_h264 = true;
+    snap.nvidia.nvenc_hevc = true;
+    snap.nvidia.nvenc_av1 = true;
+    snap.nvidia.nvenc_formats_h264 = {EncoderFormatSupport::Supported, EncoderFormatSupport::Unsupported,
+                                      EncoderFormatSupport::Unsupported};
+    snap.nvidia.nvenc_formats_hevc = {EncoderFormatSupport::Supported, EncoderFormatSupport::Supported,
+                                      EncoderFormatSupport::Unsupported};
+    snap.nvidia.nvenc_formats_av1 = {EncoderFormatSupport::Supported, EncoderFormatSupport::Supported,
+                                     EncoderFormatSupport::Unsupported};
     snap.mf_webcam.available = true; // S4: MF present in favorable snapshot
     snap.os.build_number = 26100u;
     snap.os.version_string = "10.0.26100";
@@ -533,9 +543,8 @@ TEST(NvencCodecSupportTest, BuildEffective_HonorsProbeFlags) {
 }
 
 // -------------------------------------------------------------------------
-// Explicit per-codec HDR10-native (10-bit / P010) capability.
-// HEVC and AV1 carry HDR10; H.264 does not. This is a codec-format fact, not a
-// per-GPU probe (see the inference note in capability_builder.cpp).
+// Static implementation support cannot authorize recording. Runtime/device
+// views replace these annotations with the selected adapter's format evidence.
 // -------------------------------------------------------------------------
 TEST(Hdr10CapabilityTest, HevcAndAv1AreHdr10Native_H264IsNot) {
     const CapabilitySet caps = CapabilityBuilder::BuildStaticValidatedBaseline();
@@ -552,20 +561,15 @@ TEST(Hdr10CapabilityTest, HevcAndAv1AreHdr10Native_H264IsNot) {
     EXPECT_NE(h264.reason.find("AV1"), std::string::npos) << "reason: " << h264.reason;
 }
 
-// The HDR10-native annotation is a codec-intrinsic format fact and must NOT be
-// coupled to the NVENC-absence downgrade (which governs encode availability, a
-// separate concern owned by QueryVideoCodec / rec.003).
-TEST(Hdr10CapabilityTest, Hdr10NativeIsIndependentOfNvencPresence) {
+TEST(Hdr10CapabilityTest, Hdr10NativeRequiresAvailableRuntimeAndFormatEvidence) {
     RuntimeCapabilitySnapshot snap = MakeFavorableSnapshot();
     snap.nvidia.nvenc_dll_present = false;
     snap.nvidia.nvenc_api_version_valid = false;
     const CapabilitySet caps = CapabilityBuilder::BuildEffectiveCapabilities(snap);
 
-    // Encode availability is gone (rec.003 territory) …
     EXPECT_FALSE(IsSelectable(caps.QueryVideoCodec(VideoCodec::Av1)));
-    // … but the format-capability annotation is unchanged.
-    EXPECT_TRUE(IsSelectable(caps.QueryHdr10Native(VideoCodec::Av1)));
-    EXPECT_TRUE(IsSelectable(caps.QueryHdr10Native(VideoCodec::Hevc)));
+    EXPECT_FALSE(IsSelectable(caps.QueryHdr10Native(VideoCodec::Av1)));
+    EXPECT_FALSE(IsSelectable(caps.QueryHdr10Native(VideoCodec::Hevc)));
     EXPECT_FALSE(IsSelectable(caps.QueryHdr10Native(VideoCodec::H264)));
 }
 

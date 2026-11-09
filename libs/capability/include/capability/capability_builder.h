@@ -23,8 +23,8 @@ class CapabilityBuilder {
 
     // Cheap adapter-identity read (LUID + WDDM driver version) — see
     // AdapterIdentity's doc comment in runtime_snapshot.h. Used to build the
-    // disk-cache key for the warm-start path; never consulted by the real
-    // probe itself.
+    // disk-cache key for the warm-start path. Uses the same adapter selection
+    // as the full runtime probe.
     static AdapterIdentity QueryAdapterIdentity();
 
     // Pure: derives a CapabilitySet from an already-obtained snapshot, without
@@ -47,6 +47,10 @@ class CapabilityBuilder {
 // CI to "no codecs"). Called by BuildEffectiveCapabilities after the NVENC
 // DLL-presence gate. Exposed for headless unit testing.
 void ApplyNvencCodecSupport(CapabilitySet& caps, const NvidiaRuntimeFacts& facts);
+
+// Applies exact native input-format/profile/depth/chroma evidence. Missing or
+// failed queries block runtime selection without claiming hardware rejection.
+void ApplyNvencFormatSupport(CapabilitySet& caps, const NvidiaRuntimeFacts& facts);
 
 // Pure refinement: when a real per-GPU NVENC probe ran (facts.nvenc_codec_probed),
 // downgrade per-codec 4:4:4 (chroma444) to NotImplemented for any codec whose

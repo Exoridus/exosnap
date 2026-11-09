@@ -52,6 +52,13 @@ capability::RuntimeCapabilitySnapshot CanonicalMachineRuntimeSnapshot() {
     snapshot.nvidia.nvenc_av1 = true;
     snapshot.nvidia.nvenc_yuv444_h264 = true;
     snapshot.nvidia.nvenc_yuv444_hevc = true;
+    using capability::EncoderFormatSupport;
+    snapshot.nvidia.nvenc_formats_h264 = {EncoderFormatSupport::Supported, EncoderFormatSupport::Unsupported,
+                                          EncoderFormatSupport::Supported};
+    snapshot.nvidia.nvenc_formats_hevc = {EncoderFormatSupport::Supported, EncoderFormatSupport::Supported,
+                                          EncoderFormatSupport::Supported};
+    snapshot.nvidia.nvenc_formats_av1 = {EncoderFormatSupport::Supported, EncoderFormatSupport::Supported,
+                                         EncoderFormatSupport::Unsupported};
     snapshot.nvidia.nvenc_adv_h264 = AdvancedEncode(4);
     snapshot.nvidia.nvenc_adv_hevc = AdvancedEncode(4);
     snapshot.nvidia.nvenc_adv_av1 = AdvancedEncode(3);
@@ -91,6 +98,7 @@ std::vector<capability::AdapterInfo> CanonicalMachineAdapters() {
 
 std::vector<capability::AdapterEncoderCapability> CanonicalMachineAdapterCapabilities() {
     capability::AdapterEncoderCapability capability;
+    capability.adapter_luid = 0x0000'0001'0000'2A17;
     capability.probed = true;
     capability.backend_label = "NVENC";
     capability.provenance = "probed via NVENC encode GUIDs";
@@ -99,6 +107,10 @@ std::vector<capability::AdapterEncoderCapability> CanonicalMachineAdapterCapabil
     capability.av1 = true;
     capability.yuv444_h264 = true;
     capability.yuv444_hevc = true;
+    const auto snapshot = CanonicalMachineRuntimeSnapshot();
+    capability.formats_h264 = snapshot.nvidia.nvenc_formats_h264;
+    capability.formats_hevc = snapshot.nvidia.nvenc_formats_hevc;
+    capability.formats_av1 = snapshot.nvidia.nvenc_formats_av1;
     capability.max_bframes_h264 = 4;
     capability.max_bframes_hevc = 4;
     capability.max_bframes_av1 = 3;

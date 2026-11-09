@@ -56,10 +56,14 @@ struct CapabilitySet {
     std::unordered_map<ChromaSubsampling, SupportAnnotation> chroma_modes;
     std::unordered_map<BitDepth, SupportAnnotation> bit_depths;
 
-    // Explicit per-codec HDR10-native (10-bit / P010, PQ/BT.2020) capability.
-    // HEVC and AV1 carry HDR10; H.264 does not. This is a codec-format fact,
-    // so gate against it instead of comparing codec names (the H.264+HDR10
-    // pre-flight blocker, and a future expert HDR control).
+    // Empty only in the static implementation matrix, which cannot authorize
+    // recording. Runtime/device views populate every codec, including unknown
+    // evidence. QueryCombo applies this gate after any compatibility override.
+    std::unordered_map<VideoCodec, CodecFormatCapabilities> encoder_formats;
+
+    // Encoder-side HDR10 prerequisite: P010 input, 10-bit encode support and
+    // the required HEVC Main10/AV1 Main profile on the selected device.
+    // This does not certify capture, color conversion or HDR signaling.
     std::unordered_map<VideoCodec, SupportAnnotation> hdr10_native;
 
     // Explicit per-codec 4:4:4 (YUV444, 8-bit) encode capability. NVENC supports
@@ -90,9 +94,9 @@ struct CapabilitySet {
     SupportAnnotation QueryAudioCodec(AudioCodec a) const;
     SupportAnnotation QueryChroma(ChromaSubsampling cs) const;
     SupportAnnotation QueryBitDepth(BitDepth bd) const;
+    EncoderFormatSupport QueryEncoderFormat(VideoCodec v, ChromaSubsampling cs, BitDepth bd) const;
 
-    // Whether `v` can carry a native HDR10 (10-bit/P010) signal. Selectable for
-    // HEVC/AV1, NotImplemented for H.264.
+    // Whether this view satisfies the encoder-side native HDR10 prerequisites.
     SupportAnnotation QueryHdr10Native(VideoCodec v) const;
 
     // Whether `v` can encode 8-bit 4:4:4 (YUV444). Selectable for H.264/HEVC when
