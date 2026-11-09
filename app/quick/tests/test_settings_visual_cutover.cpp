@@ -8,6 +8,9 @@
 namespace exosnap::quick {
 namespace {
 
+// A valid persistent gamepad identity: 64 hexadecimal digits.
+const std::string kSavedPad(64, 'a');
+
 class SettingsVisualCutover : public ::testing::Test {
   protected:
     static void SetUpTestSuite() {
@@ -27,7 +30,8 @@ class SettingsVisualCutover : public ::testing::Test {
                                   {{"", {"VisualTests", "Automatic"}},
                                    {"camera", {"VisualTests", "Camera"}},
                                    {"blocked", {"VisualTests", "Blocked"}, false},
-                                   {"session-pad", {"VisualTests", "Session pad"}, true, {}, true}}};
+                                   {"session-pad", {"VisualTests", "Session pad"}, true, {}, true},
+                                   {kSavedPad, {"VisualTests", "Saved pad"}}}};
         };
         CachedVisualOptions layouts = [](const VisualSourceRecord&) {
             return ChoiceSnapshot{
@@ -386,9 +390,12 @@ TEST_F(SettingsVisualCutover, SessionOnlyChoiceIsHeldAtRuntimeAndNeverPersisted)
         }
         return QStringLiteral("<missing>");
     };
+    ASSERT_TRUE(Select(State(true), "select-device", kSavedPad.c_str()));
+    ASSERT_EQ(edits, 1);
+    edits = 0;
     EXPECT_TRUE(Select(State(true), "select-device", "session-pad"));
     EXPECT_EQ(edits, 0) << "a session-only selection must not edit the saved configuration";
-    EXPECT_FALSE(adapter.config().visual_scene.sources[1].settings.contains("device"));
+    EXPECT_EQ(adapter.config().visual_scene.sources[1].settings["device"].value<std::string>(), kSavedPad);
     EXPECT_EQ(device_value(), QStringLiteral("session-pad"));
     EXPECT_EQ(changes, QStringList{QStringLiteral("device=session-pad")});
 
@@ -398,14 +405,40 @@ TEST_F(SettingsVisualCutover, SessionOnlyChoiceIsHeldAtRuntimeAndNeverPersisted)
     EXPECT_EQ(changes.back(), QStringLiteral("device="));
     EXPECT_EQ(device_value(), QString());
 
-    // A fresh adapter, as after a restart, restores nothing from the session.
+    // A fresh adapter, as after a restart, shows only the saved choice.
+    ASSERT_TRUE(Select(State(true), "select-device", kSavedPad.c_str()));
     EXPECT_TRUE(Select(State(true), "select-device", "session-pad"));
     SettingsAdapter restarted;
     restarted.setVisualRegistry(&registry);
     restarted.setVisualTargets({engine::VisualSourceId{{1}}, {}}, engine::SceneItemId{{2}},
                                {engine::VisualSourceId{{3}}, {}}, engine::SceneItemId{{4}});
     restarted.setConfig(adapter.config());
+    bool found = false;
     for (const auto& row : restarted.visualSettingsRows(restarted.gamepadSourceId())) {
+        if (row.toMap()["path"] == QStringLiteral("device")) {
+            found = true;
+            EXPECT_EQ(row.toMap()["value"].toString(), QString::fromStdString(kSavedPad));
+        }
+    }
+    EXPECT_TRUE(found);
+}
+
+TEST_F(SettingsVisualCutover, SessionSelectionEndsWhenItsSourceLeavesTheScene) {
+    QStringList changes;
+    QObject::connect(&adapter, &SettingsAdapter::visualSessionChoiceChanged, &adapter,
+                     [&](const QString&, const QString& path, const QString& choice) {
+                         changes.append(path + QLatin1Char('=') + choice);
+                     });
+    ASSERT_TRUE(Select(State(true), "select-device", "session-pad"));
+    auto switched = config;
+    switched.visual_scene.sources[1].id = engine::VisualSourceId{{9}};
+    switched.visual_scene.items[1].source = engine::VisualSourceId{{9}};
+    adapter.setConfig(switched);
+    EXPECT_EQ(changes, (QStringList{QStringLiteral("device=session-pad"), QStringLiteral("device=")}));
+    // The source returning later does not revive the old runtime selection.
+    adapter.setConfig(config);
+    EXPECT_EQ(changes.size(), 2);
+    for (const auto& row : adapter.visualSettingsRows(adapter.gamepadSourceId())) {
         if (row.toMap()["path"] == QStringLiteral("device"))
             EXPECT_EQ(row.toMap()["value"].toString(), QString());
     }
