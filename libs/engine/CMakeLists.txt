@@ -1510,7 +1510,8 @@ exosnap_add_gtest(
             src/yuv_to_bgra.cpp
     LIBRARIES exosnap_engine FFmpeg::mux
 )
-target_include_directories(test_edit_player_engine PRIVATE src include)
+target_include_directories(test_edit_player_engine PRIVATE src include
+    "${CMAKE_SOURCE_DIR}/libs/capability/include")
 target_compile_definitions(test_edit_player_engine PRIVATE EXOSNAP_SOURCE_DIR="${CMAKE_SOURCE_DIR}")
 
 # Hardware-decode readback: semi-planar (NV12/P010) -> planar de-interleave,
