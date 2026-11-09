@@ -122,6 +122,7 @@ class AudioRoutingAdapter : public QObject {
     Q_INVOKABLE bool setTrackRecordEnabled(QString trackId, bool enabled, qulonglong expectedRevision);
     Q_INVOKABLE bool setTrackRole(QString trackId, int role, qulonglong expectedRevision);
     Q_INVOKABLE bool setDefaultMonitorSelection(const QStringList& trackIds, qulonglong expectedRevision);
+    Q_INVOKABLE bool resetDefaultMonitorSelection(qulonglong expectedRevision);
     Q_INVOKABLE bool confirmLegacyConversion(qulonglong expectedRevision);
     Q_INVOKABLE bool cancelLegacyConversion(qulonglong expectedRevision);
     Q_INVOKABLE bool undo(qulonglong expectedRevision);

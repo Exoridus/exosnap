@@ -451,6 +451,62 @@ TEST(AudioRoutingAdapter, UnknownFutureConfigurationRejectsEditsWithVisibleError
     EXPECT_EQ(adapter.revision(), revision);
 }
 
+TEST(AudioRoutingAdapter, AutomaticPlaybackResetSurvivesReopenAndRestoresOverlapConfirmation) {
+    auto graph = ExampleGraph();
+    auto duplicate = graph.routes.front();
+    duplicate.id = NewId<AudioRouteId>();
+    duplicate.track_id = graph.tracks.back().id;
+    graph.routes.push_back(duplicate);
+    AudioIntent saved = graph;
+    AudioRoutingAdapter adapter;
+    adapter.configure(
+        [&](const AudioIntent& candidate, QString&) {
+            saved = candidate;
+            return true;
+        },
+        Environment);
+    adapter.refresh(saved);
+    EXPECT_EQ(adapter.monitorSelectionOrigin(), "default");
+    ASSERT_TRUE(adapter.setDefaultMonitorSelection({Id(graph.tracks.front().id)}, adapter.revision()));
+    EXPECT_FALSE(adapter.monitorConfirmationRequired());
+    const auto selectedRevision = adapter.revision();
+    ASSERT_TRUE(adapter.resetDefaultMonitorSelection(selectedRevision));
+    EXPECT_EQ(adapter.monitorSelectionOrigin(), "default");
+    EXPECT_TRUE(adapter.monitorConfirmationRequired());
+    EXPECT_FALSE(adapter.resetDefaultMonitorSelection(selectedRevision));
+    const auto& stored = std::get<TrackGraph1Intent>(saved);
+    EXPECT_EQ(stored.monitor_selection_origin, MonitorSelectionOrigin::Default);
+    AudioRoutingAdapter reopened;
+    reopened.refresh(saved);
+    EXPECT_EQ(reopened.monitorSelectionOrigin(), "default");
+    EXPECT_TRUE(reopened.monitorConfirmationRequired());
+    EXPECT_EQ(reopened.property("effectiveMonitorTrackIds").toStringList().size(), 2);
+    reopened.refresh(saved, true);
+    EXPECT_FALSE(reopened.resetDefaultMonitorSelection(reopened.revision()));
+}
+
+TEST(AudioRoutingAdapter, UnmutingRoutePreservesItsIdentityGainAndAllOtherFields) {
+    auto graph = ExampleGraph();
+    graph.routes.front().muted = true;
+    graph.routes.front().gain_db = -7.5f;
+    AudioIntent saved = graph;
+    AudioRoutingAdapter adapter;
+    adapter.configure(
+        [&](const AudioIntent& candidate, QString&) {
+            saved = candidate;
+            return true;
+        },
+        Environment);
+    adapter.refresh(saved);
+    ASSERT_TRUE(adapter.setRouteMute(Id(graph.routes.front().id), false, adapter.revision()));
+    auto expected = graph;
+    expected.routes.front().muted = false;
+    EXPECT_EQ(std::get<TrackGraph1Intent>(saved), expected);
+    adapter.refresh(saved, true);
+    EXPECT_FALSE(adapter.setRouteMute(Id(graph.routes.front().id), true, adapter.revision()));
+    EXPECT_EQ(std::get<TrackGraph1Intent>(saved), expected);
+}
+
 TEST(AudioRoutingAdapter, NativeDefaultMonitoringAddsRoutesWithoutRemovingSelectionAndExplicitChoiceIsUser) {
     const auto graph = ExampleGraph();
     AudioIntent saved;
