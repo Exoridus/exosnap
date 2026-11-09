@@ -478,6 +478,85 @@ TEST_F(SdlProvider, RepeatedStopRequestsPreserveTerminalStateAndExternalJoystick
     EXPECT_EQ(SDL_WasInit(SDL_INIT_GAMEPAD), 0U);
 }
 
+namespace {
+std::atomic<SDL_JoystickID> failing_instance{0};
+std::atomic<int> failed_opens{0};
+
+bool FailOpenOfSelectedInstance(SDL_JoystickID instance) {
+    if (instance == 0 || instance != failing_instance.load(std::memory_order_acquire))
+        return false;
+    failed_opens.fetch_add(1, std::memory_order_acq_rel);
+    return true;
+}
+
+struct OpenFailureScope {
+    explicit OpenFailureScope(SDL_JoystickID instance) {
+        failing_instance.store(instance, std::memory_order_release);
+        failed_opens.store(0, std::memory_order_release);
+        SetSdlOpenFailureForTest(&FailOpenOfSelectedInstance);
+    }
+    ~OpenFailureScope() {
+        SetSdlOpenFailureForTest(nullptr);
+        failing_instance.store(0, std::memory_order_release);
+    }
+};
+
+bool PressSouth(VirtualPad& pad, bool pressed) {
+    const JoystickLock lock;
+    const bool set = SDL_SetJoystickVirtualButton(pad.joystick, 0, pressed);
+    SDL_UpdateJoysticks();
+    return set;
+}
+
+bool SouthIs(const SdlGamepadSource& source, const DeviceId& device, ControlStatus status) {
+    const auto reading = source.StateAt(std::numeric_limits<uint64_t>::max());
+    return reading && reading->connected && reading->device.id == device &&
+           ReadControl(reading->state, Control::South).status == status;
+}
+} // namespace
+
+TEST_F(SdlProvider, AControllerThatFailsToOpenIsRetriedWithoutStoppingOtherInput) {
+    VirtualPad healthy;
+    VirtualPad flaky;
+    ASSERT_NE(healthy.id, 0U) << SDL_GetError();
+    ASSERT_NE(flaky.id, 0U) << SDL_GetError();
+    const OpenFailureScope failure(flaky.id);
+    auto source = Start();
+    ASSERT_TRUE(source);
+
+    // A second failed attempt proves the worker survived the first one and kept reconciling.
+    ASSERT_TRUE(WaitFor([&] { return failed_opens.load(std::memory_order_acquire) >= 2; })) << source->Error();
+    EXPECT_EQ(source->State(), InputSourceState::Ready) << source->Error();
+    const auto only = source->Devices();
+    ASSERT_EQ(only.size(), 1U);
+    const DeviceId healthy_id = only.front().id;
+    source->SelectDevice(healthy_id);
+    ASSERT_TRUE(PressSouth(healthy, true));
+    ASSERT_TRUE(WaitFor([&] { return SouthIs(*source, healthy_id, ControlStatus::Active); })) << source->Error();
+    ASSERT_TRUE(PressSouth(healthy, false));
+    ASSERT_TRUE(WaitFor([&] { return SouthIs(*source, healthy_id, ControlStatus::Released); })) << source->Error();
+
+    failing_instance.store(0, std::memory_order_release);
+    ASSERT_TRUE(WaitFor([&] { return source->Devices().size() == 2; })) << source->Error();
+    EXPECT_EQ(source->State(), InputSourceState::Ready) << source->Error();
+    const auto devices = source->Devices();
+    ASSERT_EQ(devices.size(), 2U);
+    EXPECT_NE(devices[0].id, devices[1].id);
+    const auto healthy_entry =
+        std::ranges::find_if(devices, [&](const DeviceIdentity& device) { return device.id == healthy_id; });
+    ASSERT_NE(healthy_entry, devices.end()) << "the open failure must not re-identify the healthy controller";
+    const DeviceId flaky_id = healthy_entry == devices.begin() ? devices[1].id : devices[0].id;
+
+    // The retried controller starts from its own neutral state, then reports its own input.
+    source->SelectDevice(flaky_id);
+    ASSERT_TRUE(WaitFor([&] { return SouthIs(*source, flaky_id, ControlStatus::Released); })) << source->Error();
+    ASSERT_TRUE(PressSouth(flaky, true));
+    ASSERT_TRUE(WaitFor([&] { return SouthIs(*source, flaky_id, ControlStatus::Active); })) << source->Error();
+    source->SelectDevice(healthy_id);
+    EXPECT_TRUE(SouthIs(*source, healthy_id, ControlStatus::Released));
+    EXPECT_EQ(source->Devices().size(), 2U);
+}
+
 TEST_F(SdlProvider, DeviceLimitFailsVisiblyAndRetiresExistingReadings) {
     auto source = Start();
     ASSERT_TRUE(source);
