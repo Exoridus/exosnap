@@ -1,0 +1,53 @@
+{
+  "schemaVersion": 1,
+  "id": "xbox_elite",
+  "label": "Xbox Elite",
+  "has2D": true,
+  "has3D": false,
+  "availability": "reference",
+  "sourceModelId": null,
+  "format2D": "source.svg + mapping.json + generated elements + controls.json",
+  "format3D": null,
+  "runtime2D": "Qt QPainter/QSvgRenderer prepared atlas, not SVG render on every frame",
+  "runtime3D": null,
+  "controlContract": "canonical GamepadState v1; one host input, separate 2D/3D render rules",
+  "playerIndex": "provider-only; unknown is null; browser Gamepad.index is not player index",
+  "licensing": {
+    "svg": "MIT",
+    "svgCopyright": "Copyright (c) 2024 Al. Lopez",
+    "mesh": null,
+    "separateSourceLicenses": true
+  },
+  "missing2DElements": [],
+  "geometry": null,
+  "sourceHashes": {
+    "references/controllers/xbox_elite/source.svg": "d91f244cc7491981f0027fa9954bbe85224787b97f4042a750f903c44f98eba8",
+    "references/controllers/xbox_elite/mapping.json": "397e8074678f285b4b354150353ee0f48947b882352914b9dd0274d1f7f07bcd"
+  },
+  "fileHashes": {
+    "source.svg": "d91f244cc7491981f0027fa9954bbe85224787b97f4042a750f903c44f98eba8",
+    "mapping.json": "397e8074678f285b4b354150353ee0f48947b882352914b9dd0274d1f7f07bcd",
+    "elements/body.svg": "b9a65784182a0e0095baa46497532ac048dcab14c78d7aee83e9a1701cf870dd",
+    "elements/btn-l4.svg": "9800354a3fb1aad4f079b396c863b7960c2969ea96ffe7f7acbcddf59f49f5c6",
+    "elements/btn-l5.svg": "bd4bed764138ec30f24a0e393fc3610899f25e727569b82df7f472f514f08f3e",
+    "elements/btn-r4.svg": "c17db2b489cf99fa0cb55deb42d925294de2f4683353ec7b22225522d52958fa",
+    "elements/btn-r5.svg": "96effa94fbb258e929cfbf978f9b17873ad5ebe070bcac048fc3dbaaeab3b0f0",
+    "elements/trigger-r2.svg": "572658b2c4d185b5c47a861684a2b76895ee443d90140779c20ecf599c08933a",
+    "elements/trigger-l2.svg": "d5465d07a58be99368acd3f42bfe1c379c2f7b6e5e5a7ac26dc4068079270873",
+    "elements/dpad.svg": "64b7ed8fdb6588c61034aae85c0433bc2722bba0323dc7ebea4950398a4166c9",
+    "elements/btn-y.svg": "a821782cda8f709c03f3317e8ebacdf80125e83c5e8ba1f9f78350e99cc2be1d",
+    "elements/btn-x.svg": "808bae80d1d72facbb272cdf5a47b9f23dc6e06863fb17e67d1b2c04bbe34b0e",
+    "elements/btn-b.svg": "a6357e85cb98ef7eeca804e56e990325d71fd6e20b4ca7a6b2df9b3be4952fef",
+    "elements/btn-a.svg": "da27c02a0dce67400f2a64f05c8209802a65609b837f71fa8e9ae1fa0b93372e",
+    "elements/btn-home.svg": "2f1343d42a0158e6ef946418771e572d62e0244600c4cbb91f31c1548bf03c82",
+    "elements/btn-share.svg": "dbb2e6b71efcc72529af232165886761b7a20e33a775590447f7544c5b9dc0c2",
+    "elements/btn-view.svg": "1fc102f759980f698baf9aead5a8df195b892bc2a7bf8c0c2af2c67dfc4786f1",
+    "elements/btn-menu.svg": "0eb92d692cdf773743986e0555ab6c59a76596e197acf20f98a9990879b77295",
+    "elements/stick-r-cap.svg": "86f64d61edd3e5c621582ddf309d00aea399afe823e320d4268418c267d34698",
+    "elements/stick-l-cap.svg": "fb90d0ecdf111ae1c1f2a81e30fad5995c0edb11ed7503c5dbe3c495d4e01e59",
+    "elements/btn-l1.svg": "c1790dfdb7eb516c4165eeef736549d7a5ca01f629dd3425d91e17d7da3e58fa",
+    "elements/btn-r1.svg": "54eca6031e21e3f60c4053035b4580328b8b6e361c78b98f41422ad16887b8cc",
+    "controls.json": "93747769b6f5639d7107cf2fb8ffaebf90df82d634a714879ba8260f6c5263d7"
+  },
+  "nativeQtValidated": false
+}
