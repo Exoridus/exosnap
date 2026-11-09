@@ -26,7 +26,8 @@ class SettingsVisualCutover : public ::testing::Test {
             return ChoiceSnapshot{1,
                                   {{"", {"VisualTests", "Automatic"}},
                                    {"camera", {"VisualTests", "Camera"}},
-                                   {"blocked", {"VisualTests", "Blocked"}, false}}};
+                                   {"blocked", {"VisualTests", "Blocked"}, false},
+                                   {"session-pad", {"VisualTests", "Session pad"}, true, {}, true}}};
         };
         CachedVisualOptions layouts = [](const VisualSourceRecord&) {
             return ChoiceSnapshot{
@@ -402,6 +403,45 @@ TEST_F(SettingsVisualCutover, LifecycleRevokesGestureWithoutLockingNextSettings)
     EXPECT_TRUE(adapter.setRecordGamepadPlacement(fresh["sourceId"].toString(), fresh["itemId"].toString(),
                                                   fresh["editRevision"].toString(), {0.2, 0.3, 0.4, 0.4}));
     EXPECT_EQ(active_edits, 1);
+}
+
+TEST_F(SettingsVisualCutover, SessionOnlyChoiceIsHeldAtRuntimeAndNeverPersisted) {
+    QStringList changes;
+    QObject::connect(&adapter, &SettingsAdapter::visualSessionChoiceChanged, &adapter,
+                     [&](const QString&, const QString& path, const QString& choice) {
+                         changes.append(path + QLatin1Char('=') + choice);
+                     });
+    const auto device_value = [&] {
+        for (const auto& row : adapter.visualSettingsRows(adapter.gamepadSourceId())) {
+            const auto map = row.toMap();
+            if (map["path"] == QStringLiteral("device"))
+                return map["value"].toString();
+        }
+        return QStringLiteral("<missing>");
+    };
+    EXPECT_TRUE(Select(State(true), "select-device", "session-pad"));
+    EXPECT_EQ(edits, 0) << "a session-only selection must not edit the saved configuration";
+    EXPECT_FALSE(adapter.config().visual_scene.sources[1].settings.contains("device"));
+    EXPECT_EQ(device_value(), QStringLiteral("session-pad"));
+    EXPECT_EQ(changes, QStringList{QStringLiteral("device=session-pad")});
+
+    // A saved choice replaces the runtime selection and is persisted as before.
+    EXPECT_TRUE(Select(State(true), "select-device", ""));
+    EXPECT_EQ(changes.size(), 2);
+    EXPECT_EQ(changes.back(), QStringLiteral("device="));
+    EXPECT_EQ(device_value(), QString());
+
+    // A fresh adapter, as after a restart, restores nothing from the session.
+    EXPECT_TRUE(Select(State(true), "select-device", "session-pad"));
+    SettingsAdapter restarted;
+    restarted.setVisualRegistry(&registry);
+    restarted.setVisualTargets({engine::VisualSourceId{{1}}, {}}, engine::SceneItemId{{2}},
+                               {engine::VisualSourceId{{3}}, {}}, engine::SceneItemId{{4}});
+    restarted.setConfig(adapter.config());
+    for (const auto& row : restarted.visualSettingsRows(restarted.gamepadSourceId())) {
+        if (row.toMap()["path"] == QStringLiteral("device"))
+            EXPECT_EQ(row.toMap()["value"].toString(), QString());
+    }
 }
 
 } // namespace

@@ -487,7 +487,9 @@ QVariantList SettingsAdapter::visualSettingsRows(const QString& source_id, bool 
                      ? QCoreApplication::translate(choice.reason->context.c_str(), choice.reason->source_text.c_str())
                      : QString{}}});
         }
-        const auto value = source->settings[field.path].value<std::string>();
+        auto value = source->settings[field.path].value<std::string>();
+        if (const auto session = session_choices_.find({*id, field.path}); session != session_choices_.end())
+            value = session->second;
         const auto* fallback = std::get_if<std::string>(&field.default_value);
         rows.append(QVariantMap{
             {QStringLiteral("sourceId"), source_id},
@@ -551,14 +553,28 @@ bool SettingsAdapter::selectVisualSetting(const QString& source_id, const QStrin
     const auto snapshot = options->snapshot(*source);
     std::set<std::string> seen;
     bool selectable = false;
+    bool session_only = false;
     for (const auto& choice : snapshot.choices) {
         if (!seen.insert(choice.id).second)
             return false;
-        if (choice.id == choice_id.toStdString())
+        if (choice.id == choice_id.toStdString()) {
             selectable = choice.selectable;
+            session_only = choice.session_only;
+        }
     }
     if (!selectable)
         return false;
+    const auto session_key = std::pair{target->first, field->path};
+    if (session_only) {
+        session_choices_[session_key] = choice_id.toStdString();
+        emit visualSessionChoiceChanged(source_id, QString::fromStdString(field->path), choice_id);
+        emit optionsChanged();
+        return true;
+    }
+    if (session_choices_.erase(session_key) != 0) {
+        emit visualSessionChoiceChanged(source_id, QString::fromStdString(field->path), QString());
+        emit optionsChanged();
+    }
     const auto current = source->settings[field->path].value<std::string>();
     const auto* fallback = std::get_if<std::string>(&field->default_value);
     if (current.value_or(fallback ? *fallback : std::string{}) == choice_id.toStdString())

@@ -59,7 +59,7 @@ The existing recording diagnostics cadence samples runtime-lifetime CPU publicat
 ### Gamepad source and artwork
 
 The Qt-free gamepad library uses one SDL3 input provider. Each device has its own bounded timestamp history.
-Persistent identity combines a reported serial number with a native HID path. Serial numbers can repeat, while serialless USB paths can identify ports. Model GUIDs and XInput slot paths do not identify a physical controller. Missing identity information or a changed path requires explicit reselection. Session-only IDs remain selectable while connected and are never rebound to a replacement. Saved identities from a different provider remain waiting. Disconnect publishes neutral input.
+Persistent identity combines a reported serial number with a native HID path. Serial numbers can repeat, while serialless USB paths can identify ports. Model GUIDs and XInput slot paths do not identify a physical controller. Missing identity information or a changed path requires explicit reselection. Session-only IDs remain selectable while connected and are never rebound to a replacement. Their option is marked `session_only`, so `SettingsAdapter` holds the selection in memory and never writes it to the source settings. Saved identities from a different provider remain waiting. Disconnect publishes neutral input.
 
 SDL event timestamps describe host observation, not a fabricated hardware clock. A bracketed startup anchor converts SDL nanoseconds into the capture clock's QPC-derived 100 ns units. Initial and reconciled snapshots use acquisition time. The video thread queries retained history at its actual frame time, without SDL calls or a UI timer in the input-to-recording path.
 

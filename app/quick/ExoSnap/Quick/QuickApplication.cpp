@@ -3543,6 +3543,12 @@ void QuickApplication::initializeVisualSources() {
         });
     QObject::connect(&gamepad_overlay_, &GamepadOverlay::devicesChanged, &record_view_model_adapter_,
                      [this] { refreshVisualGamepadChoices(); });
+    QObject::connect(&settings_adapter_, &SettingsAdapter::visualSessionChoiceChanged, &gamepad_overlay_,
+                     [this](const QString& source, const QString& path, const QString& choice) {
+                         if (path == QStringLiteral("device") &&
+                             engine::FromUuid<engine::VisualSourceId>(source.toStdString()) == visual_gamepad_source_)
+                             gamepad_overlay_.setSessionDevice(choice);
+                     });
     QObject::connect(&gamepad_overlay_, &GamepadOverlay::frameChanged, &record_view_model_adapter_, [this] {
         if (!shutting_down_visual_sources_)
             record_preview_adapter_.visualContentChanged();
@@ -3581,7 +3587,8 @@ void QuickApplication::refreshVisualGamepadChoices() {
             destination.choices.push_back({std::move(id),
                                            {"", row.value(QStringLiteral("label")).toString().toStdString()},
                                            row.value(QStringLiteral("selectable"), true).toBool(),
-                                           {}});
+                                           {},
+                                           row.value(QStringLiteral("sessionOnly")).toBool()});
         }
     };
     update(visual_gamepad_choices_, gamepad_overlay_.devices(), false);
