@@ -1,0 +1,63 @@
+{
+  "schemaVersion": 1,
+  "id": "wavebird",
+  "label": "WaveBird",
+  "has2D": false,
+  "has3D": true,
+  "availability": "3d-only",
+  "sourceModelId": "Wavebird",
+  "format2D": null,
+  "format3D": "glTF 2.0 binary GLB with named nodes + rig.json",
+  "runtime2D": "Qt QPainter/QSvgRenderer prepared atlas, not SVG render on every frame",
+  "runtime3D": "Balsam Qt Mesh/QML pre-import preferred; Qt 6.12 RuntimeLoader for development",
+  "controlContract": "canonical GamepadState v1; one host input, separate 2D/3D render rules",
+  "playerIndex": "provider-only; unknown is null; browser Gamepad.index is not player index",
+  "licensing": {
+    "svg": null,
+    "svgCopyright": null,
+    "mesh": "MIT (licensed 3dco+ / Xbox One source)",
+    "separateSourceLicenses": true
+  },
+  "missing2DElements": [],
+  "geometry": {
+    "sourceTriangles": 7260,
+    "glbTriangles": 7260,
+    "sourceVertexReferences": 21780,
+    "uniqueVertices": 4407,
+    "indexSavings": 17373,
+    "originalParts": 20,
+    "glbNodeCount": 62,
+    "glbGeometryMeshes": 20,
+    "glbBytes": 209100,
+    "geometryBytes": 184584
+  },
+  "sourceHashes": {
+    "assets/Wavebird/info.json": "b5f7f82d1384b9efd5b46130a0a6187fd86f430fe12dcf1b09744e43d1756777",
+    "assets/Wavebird/top_shell.obj": "d65986081974fea2555c2fedbfdf8ea96a99dbb01603a42344148d211315cfb6",
+    "assets/Wavebird/bottom_shell.obj": "6da44e95a7a44fdf05986dc76fb4b81eab36c4d40993ee357ed2c96cd80d25c1",
+    "assets/Wavebird/left_trigger.obj": "b580969c1cbf9042e9b83d71582a9ec04d24ad480934ac8c66d4a51c6e83156d",
+    "assets/Wavebird/right_trigger.obj": "a6969c6ddf4aeed000c75a635a409f5a76811256cb4d65cb20e93914b7513d3d",
+    "assets/Wavebird/left_stick.obj": "67f86c0329119a14209f3bb70cc8f43eb2b1e0abc9dd4ebb512404480ef816b3",
+    "assets/Wavebird/right_stick.obj": "40f82367a37b507b5e97100c092d64110e8eef5b6023a491af894630cd9aaa25",
+    "assets/Wavebird/left_ring.obj": "5ccfccc1dc0040b34dcca0ff55bdeefc8b71052e9dc8411b68f289e4332215bf",
+    "assets/Wavebird/right_ring.obj": "da57b4d57fc74dc5f31836d9a5fe319ccccb24a7b656bf1461359d911dfec176",
+    "assets/Wavebird/a_button.obj": "c376f97fe35cc897e018aca34bceeba373dcd5c9682ff072dd96b03d706b7e4b",
+    "assets/Wavebird/b_button.obj": "ca029da801532536ab1a23b63eb3052b7846c6e8b43a0ba89cd5491d0b59be36",
+    "assets/Wavebird/x_button.obj": "678fb5a47e801ef94359055c8480915a656170147cea043f6e020226a0380788",
+    "assets/Wavebird/y_button.obj": "be3533fe57bca191b4b489f273a0c98df1ef9d2b169e14c6e2093a92b4bb3fc4",
+    "assets/Wavebird/start_button.obj": "495320ba2c0c6fae12f113d17a7545453ac2afb359643ad439c1facefaa99b0b",
+    "assets/Wavebird/left_cap.obj": "b926c56edc398685c99ce4f6ea8404763befa4d001cd33f442bf458aae8347a8",
+    "assets/Wavebird/right_cap.obj": "6b83a961cf2569ef03478b845324a8e833dc6125bff3acf41771e02de2f09bea",
+    "assets/Wavebird/right_bumper.obj": "3fb0198f06dec1ff8a689b1ed3bd750571bd3882dad0e39eb11d530aa401cba5",
+    "assets/Wavebird/dpad_up.obj": "eb1a2f5461e2e4e9b745de7f9a1d4af9893e01122534f2423e0e122594b85ef5",
+    "assets/Wavebird/dpad_down.obj": "85eeca6a6012bfbabd8a5827152f56a3eccb6bbd7077bb76d9a8f9c2ae0c8494",
+    "assets/Wavebird/dpad_left.obj": "9edbe7108edbe7e4c5178452b076289c638a0c36da2ed6a433ed8d10d9d3f9a6",
+    "assets/Wavebird/dpad_right.obj": "9ede31aea97fcb666928bca96c52918cd4c403df7065374f40272607f67bc669"
+  },
+  "fileHashes": {
+    "model.glb": "9fdcf34e8ce4d7c2c502a04b9f22c5c9812202657fab0def83823e8051f66b1d",
+    "rig.json": "f09f41e4495ab545ede2b54e3fefe584a8a471f244d41d9f201ca78949967493",
+    "controls.json": "90a100eff5853415a79ac48690136f76fcc9e86154c36f138ca3e1cc2fef4c39"
+  },
+  "nativeQtValidated": false
+}

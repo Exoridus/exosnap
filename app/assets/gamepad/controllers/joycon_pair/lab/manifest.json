@@ -1,0 +1,52 @@
+{
+  "schemaVersion": 1,
+  "id": "joycon_pair",
+  "label": "Joy-Cons getrennt",
+  "has2D": true,
+  "has3D": false,
+  "availability": "composite",
+  "sourceModelId": null,
+  "format2D": "source.svg + mapping.json + generated elements + controls.json",
+  "format3D": null,
+  "runtime2D": "Qt QPainter/QSvgRenderer prepared atlas, not SVG render on every frame",
+  "runtime3D": null,
+  "controlContract": "canonical GamepadState v1; one host input, separate 2D/3D render rules",
+  "playerIndex": "provider-only; unknown is null; browser Gamepad.index is not player index",
+  "licensing": {
+    "svg": "MIT",
+    "svgCopyright": "Copyright (c) 2024 Al. Lopez",
+    "mesh": null,
+    "separateSourceLicenses": true
+  },
+  "missing2DElements": [],
+  "geometry": null,
+  "sourceHashes": {
+    "references/controllers/joycon_pair/source.svg": "f4b4760ab4473febc81527de85448e74610f516257c0dece896a54c6eaf03574",
+    "references/controllers/joycon_pair/mapping.json": "3f010f0f99f5c8c244442a317961b79e011a418967cae91c51811df7511c8d4d"
+  },
+  "fileHashes": {
+    "source.svg": "f4b4760ab4473febc81527de85448e74610f516257c0dece896a54c6eaf03574",
+    "mapping.json": "3f010f0f99f5c8c244442a317961b79e011a418967cae91c51811df7511c8d4d",
+    "elements/body.svg": "60738d4080ce5fe9afd423c2eff19db8215da181303d3c27029ddb1eca42cd23",
+    "elements/trigger-r2.svg": "d49989d1bb4a7ab06106a43ab21c642b1fe70cfd2abf76a2e14e640d5661b519",
+    "elements/btn-r1.svg": "d808d4010f05734bebfd7dbfbdfd6435da269313e8a44a3c447b08fa7b10b8e1",
+    "elements/btn-x.svg": "1dc53f6bde7935dd60fa9ae63dae55060b652238ec3c9c6d92b369124892f304",
+    "elements/btn-y.svg": "8ec61505c2891a3d9a6f61213b1cd0f4d1d36df4aeada0183a78b929a07e2afe",
+    "elements/btn-a.svg": "049b503acada927b4ecef40f79af97b2e2fb90062384e184a0fd7f34c8c88084",
+    "elements/btn-b.svg": "c1189de82dd5f23cab5e06f9e44b90b8d1e07541e05e54ea9516281bfcfd73d0",
+    "elements/btn-home.svg": "e52c328a3d3557e57cfdf7fdaa7b782646e8829591727121da2457566fc81f2a",
+    "elements/stick-r-cap.svg": "4b798db0201c9714b580e39d48de3038dba8ff5f947bf596ce4918d2ccd1b7fa",
+    "elements/btn-menu.svg": "c6d18f946979506b5242049ce8aedc03162c6c4fb024c541e5b1ea88ea84936c",
+    "elements/trigger-l2.svg": "69acc21e768a60ad6c07f936554bd0b7b86b2b79df2925e809b7f99945004184",
+    "elements/btn-l1.svg": "26b7ec2c0ae96280ff074034aeb975674b4d80f47d5aedff618dfc787e31df92",
+    "elements/btn-share.svg": "1719b9ee2023de17e8e0adb21ec6e053f04b494772389adb82a326d046609111",
+    "elements/btn-up.svg": "577b75a03c2462ec9329e0bd65ae1995de5c0c2248f0000c58015a664c8c77bb",
+    "elements/btn-left.svg": "3732fdb79f435e84bceacf3887b8a26114cf178c3083b2ca31f224f64176b9ca",
+    "elements/btn-right.svg": "f0c2a5bc097c01f8e0da247fe15b1054e52067d76a0981eba2078c6d59a2307c",
+    "elements/btn-down.svg": "fb34de6ea5341197bab3a17506bb20b98131ba31f57f05ec6ba9dd547b2f13b7",
+    "elements/stick-l-cap.svg": "24dd89d5b06995148515a7bc356a3ea33e07890b6cc6ea96c367609310c691b7",
+    "elements/btn-view.svg": "770e5f47be11ecf234166c1eb2f36846c803e72ad2dcf2f4f9ae1c9d2da95213",
+    "controls.json": "0e223476ae6a6f2f3088e0854ebb3189ad6d1e4bc970c16849419fef0b0da2ae"
+  },
+  "nativeQtValidated": false
+}

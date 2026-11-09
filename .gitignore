@@ -67,6 +67,8 @@ logs/
 
 #Spec pack installer metadata
 manifest.json
+# Controller Lab pack manifests are verified provenance, not installer metadata.
+!app/assets/gamepad/controllers/*/lab/manifest.json
 
 #Internal scratch / agent workspace (not tracked in repo)
 /.workspace/
