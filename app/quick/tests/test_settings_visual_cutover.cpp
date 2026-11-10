@@ -544,7 +544,10 @@ TEST_F(SceneItemCommands, MenuEntriesComeFromNodeMenuRegistrationsOfTheAddressed
     ASSERT_EQ(entries.size(), 1);
     EXPECT_EQ(entries[0].toMap()["action"], QStringLiteral("select-device"));
     EXPECT_EQ(entries[0].toMap()["valueLabel"], QStringLiteral("Automatic"));
-    EXPECT_EQ(entries[0].toMap()["choices"].toList().size(), 3);
+    const auto choices = entries[0].toMap()["choices"].toList();
+    ASSERT_EQ(choices.size(), 5);
+    EXPECT_EQ(choices[3].toMap()["value"], QStringLiteral("session-pad"));
+    EXPECT_TRUE(choices[3].toMap()["selectable"].toBool());
     const auto camera = Record(false);
     EXPECT_EQ(adapter.sceneItemMenuEntries(camera["sourceId"].toString(), camera["itemId"].toString()).size(), 1);
     EXPECT_TRUE(adapter.sceneItemMenuEntries(camera["sourceId"].toString(), pad["itemId"].toString()).isEmpty());
