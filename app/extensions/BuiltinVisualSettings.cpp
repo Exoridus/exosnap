@@ -106,11 +106,6 @@ VisualSourceType MakeGamepadVisualSourceType(SourceFactory factory, CachedVisual
          ActionOperation::SelectProperty,
          "layout",
          "layouts"},
-        {"details",
-         {"VisualSources", QT_TRANSLATE_NOOP("VisualSources", "Details")},
-         ActionOperation::OpenDetails,
-         {},
-         {}},
         {"retry", {"VisualSources", QT_TRANSLATE_NOOP("VisualSources", "Retry")}, ActionOperation::Retry, {}, {}}};
     type.options = {{"devices", std::move(devices)}, {"layouts", std::move(layouts)}};
     type.create = std::move(factory);

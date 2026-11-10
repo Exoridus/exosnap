@@ -16,6 +16,31 @@ CachedVisualOptions EmptyChoices() {
     return [](const VisualSourceRecord&) { return ChoiceSnapshot{}; };
 }
 
+TEST(BuiltinVisualSettings, GamepadRejectsUnsupportedDetailsAction) {
+    const auto type = MakeGamepadVisualSourceType(InertFactory(), EmptyChoices(), EmptyChoices());
+    const VisualSourceRecord source{engine::VisualSourceId{{1}}, type.id, 1, true, {}};
+    const engine::VisualAddress address{source.id, engine::VisualRuntimeGeneration{7}};
+    ActionInvocation invocation{.target = address, .request = engine::CommandId{{2}}, .action_id = "details"};
+
+    EXPECT_FALSE(ValidateVisualAction(invocation, type, source, address).succeeded());
+    invocation.action_id = "retry";
+    EXPECT_TRUE(ValidateVisualAction(invocation, type, source, address).succeeded());
+}
+
+TEST(BuiltinVisualSettings, WebcamDetailsRequiresCurrentRuntimeAndCompatibleSettings) {
+    const auto type = MakeWebcamVisualSourceType(InertFactory(), EmptyChoices());
+    VisualSourceRecord source{engine::VisualSourceId{{1}}, type.id, 1, true, {}};
+    const engine::VisualAddress address{source.id, engine::VisualRuntimeGeneration{7}};
+    ActionInvocation invocation{.target = address, .request = engine::CommandId{{2}}, .action_id = "details"};
+
+    EXPECT_TRUE(ValidateVisualAction(invocation, type, source, address).succeeded());
+    invocation.target.runtime = engine::VisualRuntimeGeneration{6};
+    EXPECT_FALSE(ValidateVisualAction(invocation, type, source, address).succeeded());
+    invocation.target = address;
+    source.settings_version = 2;
+    EXPECT_FALSE(ValidateVisualAction(invocation, type, source, address).succeeded());
+}
+
 TEST(BuiltinVisualSettings, AllGamepadLayoutsAndAutoProjectWithoutChangingUnknownNodes) {
     const auto type = MakeGamepadVisualSourceType(InertFactory(), EmptyChoices(), EmptyChoices());
     ASSERT_TRUE(type.settings.validate);

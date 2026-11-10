@@ -133,6 +133,39 @@ TEST_F(SettingsVisualCutover, RuntimeActionsRejectZeroOrStaleIncarnationBeforeDi
     EXPECT_EQ(edits, 0);
 }
 
+TEST_F(SettingsVisualCutover, GamepadDetailsIsAbsentAndRejectedInSettingsAndRecordScopes) {
+    adapter.setVisualTargets(
+        {engine::VisualSourceId{{1}}, engine::VisualRuntimeGeneration{7}}, engine::SceneItemId{{2}},
+        {engine::VisualSourceId{{3}}, engine::VisualRuntimeGeneration{7}}, engine::SceneItemId{{4}});
+    adapter.setRecordGamepadTarget({engine::VisualSourceId{{3}}, engine::VisualRuntimeGeneration{7}},
+                                   engine::SceneItemId{{4}});
+    int details = 0;
+    int retries = 0;
+    QObject::connect(&adapter, &SettingsAdapter::visualDetailsRequested, &adapter,
+                     [&](const auto&, const auto&) { ++details; });
+    QObject::connect(&adapter, &SettingsAdapter::visualRetryRequested, &adapter, [&](const auto&, bool) { ++retries; });
+
+    for (const bool record : {false, true}) {
+        const auto state = adapter.visualSourceState(adapter.gamepadSourceId(), record);
+        const auto source = state["sourceId"].toString();
+        const auto item = state["itemId"].toString();
+        const auto runtime = state["runtime"].toString();
+        for (const auto& row : adapter.visualSettingsRows(source, record))
+            EXPECT_NE(row.toMap()["action"].toString(), QStringLiteral("details"));
+        EXPECT_FALSE(adapter.dispatchVisualAction(source, item, runtime, QStringLiteral("details"), record));
+        EXPECT_TRUE(adapter.dispatchVisualAction(source, item, runtime, QStringLiteral("retry"), record));
+    }
+    EXPECT_EQ(details, 0);
+    EXPECT_EQ(retries, 2);
+    EXPECT_EQ(edits, 0);
+    EXPECT_EQ(active_edits, 0);
+
+    const auto webcam = State();
+    EXPECT_TRUE(adapter.dispatchVisualAction(webcam["sourceId"].toString(), webcam["itemId"].toString(),
+                                             webcam["runtime"].toString(), QStringLiteral("details")));
+    EXPECT_EQ(details, 1);
+}
+
 TEST_F(SettingsVisualCutover, NativeControlsClampAndResetPreservesFutureControlNames) {
     config.visual_scene.sources.front().settings.insert("controls", toml::table{{"future_control", true}});
     adapter.setConfig(config);

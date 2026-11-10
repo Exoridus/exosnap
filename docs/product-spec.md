@@ -225,6 +225,8 @@ Idle display preview uses the selected capture hub and holds through transient l
 
 Preview frame rate is a global preference under Settings / App behaviour: Off, 15, 30, 60 or 120 fps, default 60. Unsupported display-derived choices remain visible but disabled. It caps idle acquisition/publication and preview presentation independently of recording cadence. Off releases the idle capture subscription and shows Preview off; framing and webcam placement cannot be checked there while disabled. Recording and its composited tap continue. The preference is not part of a recording preset.
 
+During recording, the composited tap has a separate 30 ms minimum publication interval and publishes only newly composed frames. The selected preference caps presentation of those publications; selecting 60 or 120 fps does not increase their production rate.
+
 Preview redraw is producer-driven. A published frame missed during screen movement/exposure/scene reconstruction is presented when rendering is usable again without another frame or mouse event. Ready screenshots remain disabled until a usable preview frame exists.
 
 ### Target loss and identity
@@ -265,6 +267,7 @@ other controller families, motion tracking and recording output remain outside t
 ### Gamepad overlay
 
 The Record preview's Add overlay menu adds one controller widget and provides access to its device, layout and appearance settings. It is off by default.
+Source actions select a device or layout and retry the current controller source.
 Automatic device selection prefers the first actively used gamepad and stays with it until disconnect. It may then select another available controller.
 Manual selection persists the ExoSnap device identity, never an SDL instance ID or discovery index. Disconnect resets the visible inputs and reports Controller disconnected. Other connected controllers do not take over. The same reliably identified controller resumes the selection on reconnect, independently of discovery order. A controller without a stable identity, such as an Xbox controller over Bluetooth, is listed as "this session only". Selecting it applies until the selection changes or ExoSnap exits and is never saved. While it is disconnected the selection stays visible as Controller disconnected with neutral inputs, and no other controller takes over. Reconnecting gives it a new session identity, so it must be selected again. After a restart the saved selection, or Automatic, applies.
 Persistent device identities require both a reported serial number and a native HID path. A serial number alone can be duplicated, while a serialless USB path can identify a port rather than a physical controller. A changed path requires explicit reselection. Devices without this identity information, including XInput slot-only identities, are marked as session-only. They can be selected while connected, but require explicit reselection after an uncertain reconnect. Saved identities from a different input provider remain waiting until the user selects a current device.
