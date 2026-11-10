@@ -585,6 +585,8 @@ class EditSessionAdapter : public QObject {
     // Mirrored from EditExportAdapter; the flag itself is owned there.
     void setExportRunning(bool running);
     [[nodiscard]] bool hasUnsavedEdits() const;
+    // Changes whenever authored content changes, including undo and reset.
+    [[nodiscard]] quint64 closeGuardRevision() const;
 
     // A trim handle was released at these millisecond positions. Clamps against
     // the other handle and the clip length, snaps, stores, and reports the frame
@@ -844,9 +846,13 @@ class EditSessionAdapter : public QObject {
     void loadMarkers();
     void startKeyframeScan(std::shared_ptr<const engine::MediaReadCapability> source = {});
     void setTrimUs(int64_t start_us, int64_t end_us);
+    bool canEstablishInitialWorkspace() const;
 
     EditContext context_;
     edit::Workspace workspace_;
+    std::shared_ptr<const edit::EditSnapshot> initial_workspace_;
+    mutable std::shared_ptr<const edit::EditSnapshot> observed_workspace_;
+    mutable quint64 close_guard_revision_ = 0;
     EditTrackLayoutModel* track_layout_ = nullptr;
     QString workspace_error_;
     QVariantList facts_;

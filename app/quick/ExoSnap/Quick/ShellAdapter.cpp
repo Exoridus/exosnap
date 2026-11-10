@@ -19,6 +19,8 @@ namespace {
         return "confirmExport";
     case CloseGuardKind::ConfirmRecording:
         return "confirmRecording";
+    case CloseGuardKind::ConfirmEditor:
+        return "confirmEditor";
     }
     return "unknown";
 }
@@ -116,12 +118,14 @@ CloseGuardState ShellAdapter::currentState() const {
     // Failing open is correct here: refusing every close because the wiring is
     // missing would strand the user in an unclosable window.
     CloseGuardState state = state_provider_ ? state_provider_() : CloseGuardState{};
-    if (waived_remux_)
+    if (waived_remux_ == state.remux_generation)
         state.remuxing = false;
-    if (waived_export_)
+    if (waived_export_ == state.export_generation)
         state.exporting = false;
-    if (waived_recording_)
+    if (waived_recording_ == state.recording_generation)
         state.recording = false;
+    if (waived_editor_ == state.editor_revision)
+        state.editor_dirty = false;
     return state;
 }
 
@@ -138,23 +142,24 @@ bool ShellAdapter::requestClose() {
     // dependency surface. The application logs it, which is also where the other
     // half of the story lives -- the tray Quit that asked for the close.
     const auto report = [this, &state](const char* kind) {
-        emit closeDecided(QString::fromLatin1(kind), state.recording, state.exporting, state.remuxing,
-                          state.finalizing);
+        emit closeDecided(QString::fromLatin1(kind), state.recording, state.exporting, state.remuxing, state.finalizing,
+                          state.editor_dirty);
     };
 
     switch (prompt.kind) {
     case CloseGuardKind::ConfirmRemux:
     case CloseGuardKind::ConfirmExport:
     case CloseGuardKind::ConfirmRecording:
+    case CloseGuardKind::ConfirmEditor:
         report(CloseGuardKindKey(prompt.kind));
-        publish(prompt);
+        publish(prompt, state);
         return false;
     case CloseGuardKind::BlockSilently:
         // The finalizing overlay is already on screen; no prompt, no close, and
         // no alternative route that would let the half-written container the
         // guard exists to prevent arise anyway.
         report(CloseGuardKindKey(prompt.kind));
-        clearPrompt();
+        cancelCloseGuard();
         return false;
     case CloseGuardKind::Allow:
         break;
@@ -168,67 +173,64 @@ bool ShellAdapter::requestClose() {
 void ShellAdapter::confirmCloseGuard() {
     if (!active_)
         return;
-    switch (prompt_.kind) {
-    case CloseGuardKind::ConfirmRemux:
-        waived_remux_ = true;
-        emit cancelRemuxRequested();
-        break;
-    case CloseGuardKind::ConfirmExport:
-        waived_export_ = true;
-        emit cancelExportRequested();
-        break;
-    case CloseGuardKind::ConfirmRecording:
-        waived_recording_ = true;
-        emit stopRecordingRequested();
-        break;
-    case CloseGuardKind::Allow:
-    case CloseGuardKind::BlockSilently:
-        break;
+    const auto current = currentState();
+    const auto next = EvaluateCloseGuard(current);
+    const bool same_work = [&] {
+        if (next.kind != prompt_.kind)
+            return false;
+        switch (prompt_.kind) {
+        case CloseGuardKind::ConfirmRemux:
+            return current.remux_generation == prompted_state_.remux_generation;
+        case CloseGuardKind::ConfirmExport:
+            return current.export_generation == prompted_state_.export_generation;
+        case CloseGuardKind::ConfirmRecording:
+            return current.recording_generation == prompted_state_.recording_generation;
+        case CloseGuardKind::ConfirmEditor:
+            return current.editor_revision == prompted_state_.editor_revision;
+        default:
+            return false;
+        }
+    }();
+    // Recheck before effects: finalization may have begun, another operation
+    // may now have priority, or the prompt may describe an older workspace.
+    if (same_work) {
+        switch (prompt_.kind) {
+        case CloseGuardKind::ConfirmRemux:
+            waived_remux_ = current.remux_generation;
+            emit cancelRemuxRequested();
+            break;
+        case CloseGuardKind::ConfirmExport:
+            waived_export_ = current.export_generation;
+            emit cancelExportRequested();
+            break;
+        case CloseGuardKind::ConfirmRecording:
+            waived_recording_ = current.recording_generation;
+            emit stopRecordingRequested();
+            break;
+        case CloseGuardKind::ConfirmEditor:
+            waived_editor_ = current.editor_revision;
+            break;
+        default:
+            break;
+        }
     }
-
-    // Re-evaluate rather than closing straight away: the Widgets guard chain
-    // fell through from the export question to the recording question, and a
-    // user who cancels an export while still recording must be asked both.
-    const CloseGuardPrompt next = EvaluateCloseGuard(currentState());
-    if (next.kind == CloseGuardKind::ConfirmRemux || next.kind == CloseGuardKind::ConfirmExport ||
-        next.kind == CloseGuardKind::ConfirmRecording) {
-        publish(next);
-        return;
-    }
-    clearPrompt();
-    if (next.kind == CloseGuardKind::Allow) {
-        // BOTH signals, and closeDecided FIRST. They answer different questions, and
-        // only one of them ends the process: `closeApproved` tells the window it may
-        // go and flushes pending persists, while `closeDecided("allow")` is what the
-        // application hangs the explicit QCoreApplication::quit() off.
-        //
-        // Emitting only the former is how a confirmed close came to destroy the
-        // window without ending the process. Qt's own quit does not step in there:
-        // it fires on the last visible PRIMARY window, and all five capture overlays
-        // are exactly that -- top level, `transientParent: null` -- and they are
-        // hidden rather than closed, so the signal gets no later chance either. What
-        // is left is no window, a live tray icon, and Task Manager. That is the
-        // failure the tray-Quit path used to have; the guarded path kept it longer
-        // because it approves the close HERE and never returns through
-        // requestClose(), which is where every other outcome is reported.
-        const CloseGuardState allowed = currentState();
-        emit closeDecided(QString::fromLatin1(CloseGuardKindKey(CloseGuardKind::Allow)), allowed.recording,
-                          allowed.exporting, allowed.remuxing, allowed.finalizing);
+    // requestClose reports the allow decision that queues application quit,
+    // as well as every follow-up prompt or finalize block.
+    if (requestClose())
         emit closeApproved();
-    }
-    // BlockSilently: a finalize started while the dialog was up. Keeping the
-    // window open is the only safe answer, and the overlay explains it.
 }
 
 void ShellAdapter::cancelCloseGuard() {
-    waived_remux_ = false;
-    waived_export_ = false;
-    waived_recording_ = false;
+    waived_remux_.reset();
+    waived_export_.reset();
+    waived_recording_.reset();
+    waived_editor_.reset();
     clearPrompt();
 }
 
-void ShellAdapter::publish(const CloseGuardPrompt& prompt) {
+void ShellAdapter::publish(const CloseGuardPrompt& prompt, const CloseGuardState& state) {
     prompt_ = prompt;
+    prompted_state_ = state;
     active_ = true;
     emit closeGuardChanged();
 }

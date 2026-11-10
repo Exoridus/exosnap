@@ -97,6 +97,82 @@ class ShellAdapterTest : public ::testing::Test {
     ShellAdapter adapter_;
 };
 
+TEST_F(ShellAdapterTest, FinalizingDuringARecordingPromptDoesNotStopTheRecording) {
+    state_.recording = true;
+    SignalCounter stop(&adapter_, &ShellAdapter::stopRecordingRequested);
+    SignalCounter approved(&adapter_, &ShellAdapter::closeApproved);
+    EXPECT_FALSE(adapter_.requestClose());
+    state_.finalizing = true;
+    adapter_.confirmCloseGuard();
+    EXPECT_EQ(stop.count(), 0);
+    EXPECT_EQ(approved.count(), 0);
+    EXPECT_FALSE(adapter_.closeGuardActive());
+}
+
+TEST_F(ShellAdapterTest, EditorDiscardIsCancelFirstAndCancelPreservesTheWorkspace) {
+    state_.editor_dirty = true;
+    SignalCounter approved(&adapter_, &ShellAdapter::closeApproved);
+    EXPECT_FALSE(adapter_.requestClose());
+    EXPECT_TRUE(adapter_.closeGuardDefaultIsCancel());
+    EXPECT_EQ(adapter_.closeGuardProceedLabel(), QStringLiteral("Discard edits and close"));
+    EXPECT_EQ(adapter_.closeGuardCancelLabel(), QStringLiteral("Keep editing"));
+    adapter_.cancelCloseGuard();
+    EXPECT_EQ(approved.count(), 0);
+    EXPECT_TRUE(state_.editor_dirty);
+    EXPECT_FALSE(adapter_.requestClose());
+    adapter_.confirmCloseGuard();
+    EXPECT_EQ(approved.count(), 1);
+}
+
+TEST_F(ShellAdapterTest, NewEditsDuringThePromptRequireAFreshConfirmation) {
+    state_.editor_dirty = true;
+    state_.editor_revision = 1;
+    SignalCounter approved(&adapter_, &ShellAdapter::closeApproved);
+    EXPECT_FALSE(adapter_.requestClose());
+    state_.editor_revision = 2;
+    adapter_.confirmCloseGuard();
+    EXPECT_EQ(approved.count(), 0);
+    EXPECT_TRUE(adapter_.closeGuardActive());
+    adapter_.confirmCloseGuard();
+    EXPECT_EQ(approved.count(), 1);
+}
+
+TEST_F(ShellAdapterTest, EachOperationPrecedesTheEditorAndNewExportInvalidatesItsWaiver) {
+    state_.remuxing = state_.exporting = state_.recording = state_.editor_dirty = true;
+    SignalCounter approved(&adapter_, &ShellAdapter::closeApproved);
+    SignalCounter cancelled(&adapter_, &ShellAdapter::cancelExportRequested);
+    EXPECT_FALSE(adapter_.requestClose());
+    EXPECT_EQ(adapter_.closeGuardTitle(), QStringLiteral("Saving in progress"));
+    adapter_.confirmCloseGuard();
+    EXPECT_EQ(adapter_.closeGuardTitle(), QStringLiteral("Export in progress"));
+    adapter_.confirmCloseGuard();
+    EXPECT_EQ(adapter_.closeGuardTitle(), QStringLiteral("Recording in progress"));
+    adapter_.confirmCloseGuard();
+    EXPECT_EQ(adapter_.closeGuardTitle(), QStringLiteral("Discard editor changes?"));
+    EXPECT_EQ(approved.count(), 0);
+    ++state_.export_generation;
+    adapter_.confirmCloseGuard();
+    EXPECT_EQ(adapter_.closeGuardTitle(), QStringLiteral("Export in progress"));
+    EXPECT_EQ(cancelled.count(), 1);
+    adapter_.confirmCloseGuard();
+    EXPECT_EQ(cancelled.count(), 2);
+    EXPECT_EQ(adapter_.closeGuardTitle(), QStringLiteral("Discard editor changes?"));
+    adapter_.confirmCloseGuard();
+    EXPECT_EQ(approved.count(), 1);
+}
+
+TEST_F(ShellAdapterTest, ReplacementRecordingCannotBeStoppedByAnOldPrompt) {
+    state_.recording = true;
+    SignalCounter stop(&adapter_, &ShellAdapter::stopRecordingRequested);
+    EXPECT_FALSE(adapter_.requestClose());
+    ++state_.recording_generation;
+    adapter_.confirmCloseGuard();
+    EXPECT_EQ(stop.count(), 0);
+    EXPECT_TRUE(adapter_.closeGuardActive());
+    adapter_.confirmCloseGuard();
+    EXPECT_EQ(stop.count(), 1);
+}
+
 TEST_F(ShellAdapterTest, IdleCloseIsApprovedImmediately) {
     EXPECT_TRUE(adapter_.requestClose());
     EXPECT_FALSE(adapter_.closeGuardActive());
@@ -244,7 +320,7 @@ TEST_F(ShellAdapterTest, FinalizeStartedWhileThePromptWasUpKeepsTheWindowOpen) {
 // Close means close
 // ---------------------------------------------------------------------------
 // There is no preference that turns a close into something else. The only inputs
-// are the four in-flight conditions, and the only outcomes are the ones
+// are the operation and editor conditions, and the only outcomes are the ones
 // CloseGuardPolicy names. Close-to-tray used to sit between them: with it on, a
 // close during a recording silently meant "hide", and the user never learned that
 // the thing they asked to close was still running.

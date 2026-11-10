@@ -19,6 +19,7 @@
 #include <algorithm>
 #include <cmath>
 #include <filesystem>
+#include <set>
 #include <system_error>
 
 namespace exosnap::quick {
@@ -28,6 +29,48 @@ QUrl EditSessionAdapter::layoutSettingsLocation() const {
 }
 
 namespace {
+
+// Only authored output participates. Source verification, audition, locks and
+// selection can change independently without creating work to discard.
+bool SameAuthoredWorkspace(const edit::EditSnapshot& before, const edit::EditSnapshot& after) {
+    if (&before == &after)
+        return true;
+    if (before.tracks != after.tracks || before.junctions != after.junctions || before.spacers != after.spacers ||
+        before.result_range != after.result_range || before.timeline_end != after.timeline_end ||
+        before.output_fps != after.output_fps || before.output_width != after.output_width ||
+        before.output_height != after.output_height || before.clips.size() != after.clips.size())
+        return false;
+    const auto find_asset = [](const auto& snapshot, edit::Id id) -> const edit::Asset* {
+        const auto found = std::find_if(snapshot.assets.begin(), snapshot.assets.end(),
+                                        [id](const auto& asset) { return asset->id == id; });
+        return found == snapshot.assets.end() ? nullptr : found->get();
+    };
+    auto clips = before.clips;
+    std::set<edit::Id> checked;
+    for (const auto& clip : after.clips) {
+        if (!checked.insert(clip.asset).second)
+            continue;
+        const auto* old_asset = find_asset(before, clip.asset);
+        const auto* asset = find_asset(after, clip.asset);
+        if (!old_asset || !asset || old_asset->path != asset->path ||
+            old_asset->source_version != asset->source_version)
+            return false;
+        const auto& old_mix = old_asset->input_mix_selection;
+        const auto& mix = asset->input_mix_selection;
+        // Late verification establishes imported defaults, including in undo
+        // history. Apply that same baseline adjustment without forgiving a user
+        // choice or a changed source binding.
+        if (old_asset->mix_decision_required && mix &&
+            mix->authority == edit::InputMixAuthority::VerifiedRecordedDefault) {
+            edit::RebaseImportedAudioDefaults(clips, clip.asset, *mix);
+        } else if (bool(old_mix) != bool(mix) ||
+                   (mix && (old_mix->selected_stream_identities != mix->selected_stream_identities ||
+                            old_mix->authority != mix->authority))) {
+            return false;
+        }
+    }
+    return clips == after.clips;
+}
 
 const QString kEmptyValue = QStringLiteral("\xe2\x80\x94");
 
@@ -60,6 +103,12 @@ int64_t SnapTrimBoundaryUs(int64_t requested_us, const std::vector<int64_t>& key
 }
 
 EditSessionAdapter::EditSessionAdapter(QObject* parent) : QObject(parent) {
+    initial_workspace_ = workspace_.snapshot();
+    observed_workspace_ = initial_workspace_;
+    connect(this, &EditSessionAdapter::workspaceChanged, this, [this] {
+        (void)closeGuardRevision();
+        emit unsavedEditsChanged();
+    });
     track_layout_ = new EditTrackLayoutModel(this);
     media_model_ = new EditTimelineClipModel(this);
     folder_model_ = new EditFolderModel(layoutSettingsLocation().toLocalFile(), this);
@@ -221,6 +270,7 @@ void EditSessionAdapter::setEditContextUs(const EditContext& context, qint64 tim
 void EditSessionAdapter::applyEditContextUs(const EditContext& context, qint64 timeline_start_us,
                                             qint64 initial_position_us, std::vector<edit::SourceImport> imports,
                                             std::vector<SourcePublication> publications) {
+    const bool initial_placement = canEstablishInitialWorkspace();
     context_ = context;
     const auto previous_duration_us = workspace_.duration();
     const qint64 append_start = timeline_start_us < 0 ? workspace_.duration() : timeline_start_us;
@@ -282,6 +332,8 @@ void EditSessionAdapter::applyEditContextUs(const EditContext& context, qint64 t
     if (std::any_of(segments.begin(), segments.end(),
                     [](const auto& segment) { return segment.duration_seconds <= 0; }))
         workspace_error_ = tr("Some segments have unknown duration. They remain in Media and cannot be placed yet.");
+    if (initial_placement && !workspace_.clips().empty())
+        initial_workspace_ = workspace_.snapshot();
     const auto added_duration = std::max<qint64>(0, workspace_.duration() - append_start);
     workspace_.seek(append_start + std::clamp<qint64>(initial_position_us, 0, added_duration));
     ++clip_generation_;
@@ -430,7 +482,19 @@ void EditSessionAdapter::setExportRunning(bool running) {
 }
 
 bool EditSessionAdapter::hasUnsavedEdits() const {
-    return trimmed() || !markers_.empty();
+    return !SameAuthoredWorkspace(*initial_workspace_, *workspace_.snapshot());
+}
+
+bool EditSessionAdapter::canEstablishInitialWorkspace() const {
+    return initial_workspace_->clips.empty() && workspace_.clips().empty() && !hasUnsavedEdits();
+}
+
+quint64 EditSessionAdapter::closeGuardRevision() const {
+    const auto current = workspace_.snapshot();
+    if (!SameAuthoredWorkspace(*observed_workspace_, *current))
+        ++close_guard_revision_;
+    observed_workspace_ = current;
+    return close_guard_revision_;
 }
 
 void EditSessionAdapter::requestTrim(qint64 start_ms, qint64 end_ms) {
@@ -533,7 +597,7 @@ void EditSessionAdapter::close() {
     // A fixture context carries a duration but no master path, and must close
     // just as completely as a real clip -- hence not `open_` alone.
     const bool had_clip = open_ || duration_ms_ > 0 || !context_.output_path.isEmpty() ||
-                          !workspace_.assets().empty() || !workspace_.clips().empty();
+                          !workspace_.assets().empty() || !workspace_.clips().empty() || hasUnsavedEdits();
     if (!had_clip) {
         emit closeRequested();
         return;
@@ -557,6 +621,7 @@ void EditSessionAdapter::close() {
     copied_blank_duration_ = 0;
     emit timeSelectionChanged();
     workspace_ = edit::Workspace{};
+    initial_workspace_ = workspace_.snapshot();
     syncSelection();
     track_layout_->reset();
     emit workspaceChanged();

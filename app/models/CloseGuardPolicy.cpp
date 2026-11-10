@@ -48,6 +48,18 @@ CloseGuardPrompt EvaluateCloseGuard(const CloseGuardState& state) {
         return prompt;
     }
 
+    if (state.editor_dirty) {
+        prompt.kind = CloseGuardKind::ConfirmEditor;
+        prompt.title = QCoreApplication::translate("CloseGuardPolicy", "Discard editor changes?");
+        prompt.body = QCoreApplication::translate(
+            "CloseGuardPolicy", "Your editing workspace exists only in this session. Closing will discard its clips, "
+                                "tracks and adjustments. Exported files contain finished media and do not save an "
+                                "editable workspace. Your original recordings are untouched.");
+        prompt.proceed_label = QCoreApplication::translate("CloseGuardPolicy", "Discard edits and close");
+        prompt.cancel_label = QCoreApplication::translate("CloseGuardPolicy", "Keep editing");
+        return prompt;
+    }
+
     prompt.kind = CloseGuardKind::Allow;
     return prompt;
 }
