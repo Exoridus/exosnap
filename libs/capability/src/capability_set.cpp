@@ -1,7 +1,9 @@
 #include <capability/capability_set.h>
 
 #include <capability/config_types.h>
+#include <capability/encoder_format_capability.h>
 #include <capability/support_level.h>
+#include <capability/translatable.h>
 #include <cstddef>
 #include <exosnap/engine/codec_types.h>
 
@@ -146,6 +148,10 @@ SupportAnnotation CapabilitySet::QueryCombo(Container c, VideoCodec v, AudioCode
         result = override_it->second;
     }
 
+    if (!encoder_formats.empty()) {
+        result = CombineAnnotations(result, EncoderFormatAnnotation(QueryEncoderFormat(v, cs, bd)));
+    }
+
     return result;
 }
 
@@ -167,6 +173,32 @@ SupportAnnotation CapabilitySet::QueryChroma(ChromaSubsampling cs) const {
 
 SupportAnnotation CapabilitySet::QueryBitDepth(BitDepth bd) const {
     return LookupAnnotation(bit_depths, bd, "bit depth");
+}
+
+EncoderFormatSupport CapabilitySet::QueryEncoderFormat(VideoCodec v, ChromaSubsampling cs, BitDepth bd) const {
+    const auto it = encoder_formats.find(v);
+    return QueryEncoderFormatSupport(v, it == encoder_formats.end() ? CodecFormatCapabilities{} : it->second, cs, bd);
+}
+
+SupportAnnotation EncoderFormatAnnotation(EncoderFormatSupport support) {
+    switch (support) {
+    case EncoderFormatSupport::Supported:
+        return {
+            SupportLevel::Available,
+            EXOSNAP_TRANSLATABLE("Capabilities", "The required encoder input format is supported on this adapter.")};
+    case EncoderFormatSupport::Unsupported:
+        return {SupportLevel::NotImplemented,
+                EXOSNAP_TRANSLATABLE("Capabilities", "The requested encoder format is not supported on this adapter.")};
+    case EncoderFormatSupport::Unavailable:
+        return {SupportLevel::NotImplemented,
+                EXOSNAP_TRANSLATABLE("Capabilities",
+                                     "Encoder format information is unavailable because the query failed.")};
+    case EncoderFormatSupport::Unknown:
+        return {
+            SupportLevel::NotImplemented,
+            EXOSNAP_TRANSLATABLE("Capabilities", "Encoder format support is unknown because it has not been probed.")};
+    }
+    return {SupportLevel::Invalid, EXOSNAP_TRANSLATABLE("Capabilities", "Invalid encoder format evidence.")};
 }
 
 SupportAnnotation CapabilitySet::QueryHdr10Native(VideoCodec v) const {

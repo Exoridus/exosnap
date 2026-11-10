@@ -16,6 +16,7 @@
 
 #include <cstdint>
 #include <string>
+#include <utility>
 #include <vector>
 
 namespace exosnap::engine::testutil {
@@ -33,8 +34,20 @@ class FakeVideoEncoder : public IVideoEncoder {
     bool force_open_fail = false;
     bool force_configure_fail = false;
     bool force_encode_fail = false;
+    bool force_reap_fail = false;
     bool force_flush_fail = false;
     std::string forced_error_message = "FakeVideoEncoder: forced failure";
+
+    // Completions from earlier submissions can accompany a later failure.
+    // Each batch is transferred once, before the corresponding status returns.
+    std::vector<EncodedVideoPacket> encode_completions;
+    std::vector<EncodedVideoPacket> reap_completions;
+    std::vector<EncodedVideoPacket> flush_completions;
+    bool retain_input_after_encode = false;
+
+    void CompleteInput(int32_t slot_idx) {
+        ReleaseSlot(slot_idx);
+    }
 
     // --- Configuration setters: recorded only, no validation. The fake has
     // no real codec limits to enforce. ---
@@ -68,18 +81,23 @@ class FakeVideoEncoder : public IVideoEncoder {
         return init_info_;
     }
 
+    [[nodiscard]] EncoderInputRequirements GetInputRequirements() const noexcept override {
+        return input_requirements_;
+    }
+
     bool Open(void* gpu_context, std::string& out_error) override {
-        (void)gpu_context;
         open_called_ = true;
         if (force_open_fail) {
             out_error = forced_error_message;
             return false;
         }
+        device_ = gpu_context;
         return true;
     }
 
     bool Configure(uint32_t width, uint32_t height, uint32_t fps_num, uint32_t fps_den,
                    std::string& out_error) override {
+        input_requirements_ = {};
         if (force_configure_fail) {
             out_error = forced_error_message;
             return false;
@@ -89,6 +107,22 @@ class FakeVideoEncoder : public IVideoEncoder {
         fps_num_ = fps_num;
         fps_den_ = fps_den;
         configured_ = true;
+        input_requirements_.storage = EncoderInputStorage::D3D11Texture2D;
+        input_requirements_.format = chroma_ == ChromaSubsampling::Cs444 ? EncoderInputFormat::Ayuv
+                                     : bit_depth_ == BitDepth::Bit10     ? EncoderInputFormat::P010
+                                                                         : EncoderInputFormat::Nv12;
+        input_requirements_.codec = codec_;
+        input_requirements_.bit_depth = bit_depth_;
+        input_requirements_.chroma = chroma_;
+        input_requirements_.allocation = {width, height};
+        input_requirements_.visible = {0, 0, width, height};
+        input_requirements_.alignment = {2, 2};
+        input_requirements_.required_bind =
+            chroma_ == ChromaSubsampling::Cs444 ? EncoderInputBind::UnorderedAccess : EncoderInputBind::RenderTarget;
+        input_requirements_.allowed_bind = input_requirements_.required_bind | EncoderInputBind::ShaderResource;
+        const auto slots = static_cast<uint32_t>(slot_count_ < 0 ? 0 : slot_count_);
+        input_requirements_.pool = {slots, slots, slots};
+        input_requirements_.device = device_;
 
         init_info_.valid = true;
         init_info_.codec = codec_;
@@ -127,9 +161,8 @@ class FakeVideoEncoder : public IVideoEncoder {
 
     // Error-path release: caller acquired a slot but never submitted it via
     // EncodeFrame (e.g. a texture-copy failure between AcquireFreeSlot and
-    // EncodeFrame). EncodeFrame itself already frees the slot on both its
-    // success and failure paths (see EncodeFrame below), matching the real
-    // interface contract documented on IVideoEncoder::ReleaseSlot.
+    // EncodeFrame). Submitted inputs belong to the encoder until the fake's
+    // completion hook or its immediate-completion default frees them.
     void ReleaseSlot(int32_t slot_idx) noexcept override {
         if (slot_idx >= 0 && slot_idx < slot_count_) {
             slot_in_use_[static_cast<size_t>(slot_idx)] = false;
@@ -141,13 +174,13 @@ class FakeVideoEncoder : public IVideoEncoder {
         (void)width;
         (void)height;
         ++encode_frame_calls_;
-        // EncodeFrame owns the slot once called, on both the success and the
-        // failure path (mirrors the real encoder's contract) — the caller
-        // never needs a matching ReleaseSlot after a submitted EncodeFrame.
-        if (slot_idx >= 0 && slot_idx < slot_count_) {
+        // Output can complete while input reuse remains blocked. A forced
+        // failure in this fake rejects the new input and frees that slot.
+        if (slot_idx >= 0 && slot_idx < slot_count_ && (!retain_input_after_encode || force_encode_fail)) {
             slot_in_use_[static_cast<size_t>(slot_idx)] = false;
         }
 
+        AppendCompletions(encode_completions, out_packets);
         if (force_encode_fail) {
             out_error = forced_error_message;
             return false;
@@ -163,8 +196,19 @@ class FakeVideoEncoder : public IVideoEncoder {
         return true;
     }
 
+    bool ReapCompleted(std::vector<EncodedVideoPacket>& out_packets, std::string& out_error,
+                       uint32_t wait_head_ms = 0) override {
+        (void)wait_head_ms;
+        AppendCompletions(reap_completions, out_packets);
+        if (force_reap_fail) {
+            out_error = forced_error_message;
+            return false;
+        }
+        return true;
+    }
+
     bool Flush(std::vector<EncodedVideoPacket>& out_packets, std::string& out_error) override {
-        (void)out_packets; // the fake buffers nothing internally; nothing to drain
+        AppendCompletions(flush_completions, out_packets);
         if (force_flush_fail) {
             out_error = forced_error_message;
             return false;
@@ -178,6 +222,7 @@ class FakeVideoEncoder : public IVideoEncoder {
 
     void Destroy() override {
         destroyed_ = true;
+        input_requirements_ = {};
     }
 
     // --- Test introspection ---
@@ -211,6 +256,13 @@ class FakeVideoEncoder : public IVideoEncoder {
     }
 
   private:
+    static void AppendCompletions(std::vector<EncodedVideoPacket>& completed,
+                                  std::vector<EncodedVideoPacket>& out_packets) {
+        for (auto& packet : completed)
+            out_packets.push_back(std::move(packet));
+        completed.clear();
+    }
+
     static constexpr size_t kPacketSize = 256;
 
     int32_t slot_count_;
@@ -238,6 +290,8 @@ class FakeVideoEncoder : public IVideoEncoder {
     uint64_t last_pts_ns_ = 0;
 
     EncoderInitInfo init_info_{};
+    EncoderInputRequirements input_requirements_;
+    void* device_ = nullptr;
 };
 
 } // namespace exosnap::engine::testutil

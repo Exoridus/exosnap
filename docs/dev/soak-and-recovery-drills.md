@@ -12,7 +12,9 @@ cmake --build build/windows-x64-debug --config Debug --target exosnap-soak
 exosnap-soak --minutes 120 --vcodec av1 --acodec opus --container mkv --out '<scratch>/run.mkv' --report-dir '<scratch>'
 ```
 
-Real capture needs NVIDIA NVENC and a suitable display/audio environment. Use repeatable source content, stable power/display settings and adequate output storage. Stop by the configured duration or Ctrl+C for graceful finalization. Exit 0 is a completed run, 1 session failure, 2 target/validation failure and 3 a diagnostic abort budget. Inspect the report rather than equating process exit with release eligibility.
+Real capture needs NVIDIA NVENC and a suitable display/audio environment. Use repeatable source content, stable power/display settings and adequate output storage. Stop by the configured duration or Ctrl+C for graceful finalization. Exit 0 requires a successful session, readable nonempty output and successfully written evidence. Exit 1 is session failure, 2 target/output/evidence failure and 3 a diagnostic abort budget. Inspect the report rather than equating process exit with release eligibility. Closing a console window is an OS termination event and does not prove that finalization completed.
+
+Use MKV for engine-only integrity drills. The application owns the MP4 delivery remux from its transient Matroska source. Calling `RecorderSession` directly does not qualify that final-publication path. Exercise MP4 through the official application and Live Verify.
 
 Samples include capture/emission/drop/duplicate counters, A/V drift availability, duration skew, audio discontinuities, mux queue, disk ETA, memory/handles and pipeline health. Reports aggregate percentiles and memory/handle slopes. Evaluate sustained growth after a baseline window, not a one-sample working-set fluctuation. Record the output volume; flush cost and host load can affect results.
 
@@ -22,7 +24,73 @@ The synthetic form exercises real audio encode/mux/finalize/report plumbing with
 exosnap-soak --synthetic --seconds 60 --realtime --out '<scratch>/synthetic.mkv'
 ```
 
-It cannot measure physical device-clock drift, hardware capture loss or real GPU resource growth. It qualifies the instrument and deterministic pipeline behavior, never hardware A/V acceptance.
+The synthetic executable still needs the Windows build. Its video packets are structural fixtures, not decodable captured video. The built-in file probe establishes demuxability and clean EOF only. It cannot measure physical device-clock drift, hardware capture loss or real GPU resource growth. It qualifies the instrument and deterministic pipeline behavior, never hardware A/V acceptance. Its PCM generator retains one borrowed packet rather than preallocating the entire future recording.
+
+### Deterministic output failures
+
+Inject a failure at a selected visit to an existing production writer boundary:
+
+```powershell
+exosnap-soak --synthetic --seconds 10 --output-fault trailer --fault-after 1 --out '<scratch>/trailer.mkv' --report-dir '<scratch>'
+```
+
+`--output-fault` accepts `payload`, `cluster`, `trailer`, `flush`, `close` and `durability`. `--fault-after` is a positive, one-based occurrence at that boundary. The point and occurrence define the replay completely. This schedule has no random seed or scheduler dependency. It records the matching visit count and whether the fault fired. A requested fault that never fires is evidence failure, not a successful negative test.
+
+These controls belong to the test utility and use the existing `SessionState` writer failure callback. They do not add a product environment variable or change production recording defaults. Each run must use its own scratch path. They model failed operations, not physical disk removal, power loss, a driver reset or the timing of a partial storage-controller write.
+
+Payload, cluster, trailer, CRT flush and close failures must remain visible to the recording result. An expected injected session failure still returns exit 1. The test orchestrator must assert the expected error and inspect retained media; it must not require exit 0. Durability flush follows the writer's existing best-effort contract: inspect its failure counter separately rather than assuming it is a fatal write error. A nonempty retained file is not automatically a complete or decodable recording.
+
+The native synthetic suite checks the trailer failure through `AudioThread`, `MuxThread` and the real writer and checks that a sampler abort reaches the running session. The portable suite tests the actual schedule, sampler and stop control, but cannot execute those Windows owners.
+
+### Profiles and test tiers
+
+| Profile | Requested wall time | Required interpretation |
+|---|---|---|
+| Short | 10-30 seconds | Functional stop, report and media checks |
+| Medium | 2-10 minutes | Early backpressure and resource trends |
+| Extended | 30-60 minutes | Independently inspected streams and drift reference |
+| Long | 2-4 hours | Hardware recording with a qualified A/V stimulus |
+| Soak | 8 hours or more | Sustained growth and rare failures on a controlled host |
+
+Use `--realtime` for a synthetic wall-time profile. An accelerated media timeline is not an equally long endurance run. Retain exact requested and observed duration, source/build identity, OS, driver, device configuration, codec/container, repeat count, output validation level and unmeasured metrics. Do not relabel a partial run as completion of its requested profile.
+
+| Tier | Entry points | Scheduling and coverage |
+|---|---|---|
+| 1 | Portable synchronization/control CTest target, normal native non-live tests, deterministic sample regressions | Existing PR lanes; no added full Windows matrix |
+| 2 | Repeated focused concurrency tests, native synthetic writer failures, media fixtures, session churn | Targeted or periodic runs on an available developer host |
+| 3 | Real `exosnap-soak`, official-app Live Verify, physical devices and OS transitions | Manually controlled hardware runs; never inferred from Tier 1 or 2 |
+
+The portable target is independently configurable:
+
+```text
+cmake -S libs/engine/tests/portable -B build/concurrency-portable -DCMAKE_BUILD_TYPE=Debug
+cmake --build build/concurrency-portable
+ctest --test-dir build/concurrency-portable --output-on-failure
+```
+
+The existing Linux Clang ThreadSanitizer lane also covers these controls. A normal build without `EXOSNAP_TSAN=ON` is not sanitizer evidence. Native worker tests still require the Windows build and the normal repository test runner.
+
+Use the existing same-process DXGI lifecycle command for churn, with a unique output directory:
+
+```powershell
+cargo exo-verify dxgi-lifecycle --product '<official-executable>' --out '<scratch>/churn' --cycles 100 --same-process
+```
+
+This covers its declared presentation lifecycle, not hundreds of completed recordings. Recording churn must additionally start, stop, validate each output and return to Ready between sessions through Live Verify. Record per-cycle stop time and post-cleanup resource samples. Do not infer a recording churn pass from process exit or a swapchain cycle count.
+
+### Output evidence levels
+
+Report each level separately: file existence, successful demux, every A/V stream decoded, temporally consistent streams, and completeness against an independently declared recording interval. A clean EOF does not establish all five. Check stream count and codec parameters, packet DTS in decode order, decoded-frame presentation order, frame/sample counts, per-stream spans and gaps, and each track's end position. Do not sort timestamps before checking ordering. Packet PTS may reorder in valid B-frame video.
+
+Use an external FFmpeg/FFprobe build for full decode. Decode every audio and video stream explicitly, including nondefault tracks, and retain the exit status and errors. An expected duration must come from the scenario or observed recording interval before finalization, not the same container duration being tested. Timestamp agreement alone does not establish content alignment; use the clapper analysis below for the decodable output.
+
+The existing sample runner qualifies the media oracles independently:
+
+```powershell
+cargo exo-verify samples run 'media.*' --out '<scratch>/media-samples.json'
+```
+
+Passing generated fixtures qualifies the inspector for those fixtures. It is not a measurement of ExoSnap capture, NVENC, device recovery or hour-scale A/V drift.
 
 ## A/V clapper stimulus
 

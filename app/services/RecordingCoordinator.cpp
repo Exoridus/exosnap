@@ -1413,10 +1413,11 @@ void RecordingCoordinator::PrepareAndRecordThreadProc(const PrepareContext& ctx)
     {
         AdmissionFacts admission;
         admission.hdr_mode = config.hdr_mode;
+        const auto& encoder_caps = ctx.encoder_caps ? *ctx.encoder_caps : ctx.caps;
         // Same capability annotation the diagnostics card reads, so the gate and
         // the card can never disagree about which codec carries HDR10.
         admission.codec_can_carry_hdr10 =
-            capability::IsSelectable(ctx.caps.QueryHdr10Native(ctx.resolved_user_config.video_codec).level);
+            capability::IsSelectable(encoder_caps.QueryHdr10Native(ctx.resolved_user_config.video_codec).level);
         admission.target_display_hdr_active = target_display_facts != nullptr && target_display_facts->hdr_active;
         admission.window_exclusive_evidence = ctx.window_exclusive_evidence;
 

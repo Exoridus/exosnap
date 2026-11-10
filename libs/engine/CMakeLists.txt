@@ -1,5 +1,11 @@
 set(_nvenc_header "${CMAKE_SOURCE_DIR}/third_party/nvidia/nvEncodeAPI.h")
 
+# Compile public encoder contracts without private or capability include paths.
+add_library(engine_public_header_check OBJECT tests/test_public_encoder_headers.cpp)
+target_compile_features(engine_public_header_check PRIVATE cxx_std_20)
+target_include_directories(engine_public_header_check PRIVATE include ${PROJECT_SOURCE_DIR}/libs/gamepad/include)
+target_link_libraries(engine_public_header_check PRIVATE exosnap::warnings)
+
 if(NOT EXISTS "${_nvenc_header}")
     message(STATUS "exosnap_engine: nvEncodeAPI.h not found at ${_nvenc_header}")
     message(STATUS "  Place nvEncodeAPI.h in third_party/nvidia/ to enable the full exosnap_engine build")
@@ -452,13 +458,8 @@ add_library(exosnap_engine STATIC
 
 target_include_directories(exosnap_engine
     PUBLIC  include
-            # Header-only: VideoEncoderFactory.h needs capability::AdapterVendor
-            # (adapter_enum.h, no compiled symbols). Include path only, deliberately
-            # NOT a target_link_libraries(exosnap_engine ... exosnap::capability) --
-            # exosnap_capability already links exosnap_engine PUBLICLY, so linking it
-            # back here would be a build-graph cycle.
-            "${CMAKE_SOURCE_DIR}/libs/capability/include"
     PRIVATE src
+            "${CMAKE_SOURCE_DIR}/libs/capability/include"
             "${CMAKE_SOURCE_DIR}/third_party/nvidia"
 )
 
@@ -759,6 +760,31 @@ exosnap_add_gtest(
     LIBRARIES exosnap_engine
 )
 target_include_directories(test_video_thread_encoder_dispatch PRIVATE src)
+
+exosnap_add_gtest(
+    NAME test_encoder_packet_dispatch
+    TEST_PREFIX engine.
+    PHASE cpu
+    SOURCES tests/test_encoder_packet_dispatch.cpp
+)
+target_include_directories(test_encoder_packet_dispatch PRIVATE src include)
+
+exosnap_add_gtest(
+    NAME test_encoder_input_requirements
+    TEST_PREFIX engine.
+    SOURCES tests/test_encoder_input_requirements.cpp tests/test_encoder_input_slots.cpp tests/test_encoder_input_lifetime.cpp
+)
+target_include_directories(test_encoder_input_requirements PRIVATE src include)
+
+exosnap_add_gtest(
+    NAME test_d3d11_encoder_input
+    TEST_PREFIX engine.
+    PHASE gpu
+    SOURCES tests/test_d3d11_encoder_input.cpp
+    LIBRARIES d3d11.lib
+)
+target_include_directories(test_d3d11_encoder_input PRIVATE src include)
+target_compile_definitions(test_d3d11_encoder_input PRIVATE NOMINMAX)
 
 # test_nvenc_rc_params: pure unit tests for ComputeNvencRcParams (no GPU needed).
 exosnap_add_gtest(
@@ -1104,6 +1130,16 @@ exosnap_add_gtest(
     LIBRARIES exosnap_engine
 )
 target_include_directories(test_session_stats_meter PRIVATE src)
+
+exosnap_add_gtest(
+    NAME test_gpu_surface_inventory
+    TEST_PREFIX engine.
+    PHASE gpu
+    SOURCES tests/test_gpu_surface_inventory.cpp
+    LIBRARIES d3d11.lib
+)
+target_include_directories(test_gpu_surface_inventory PRIVATE include)
+target_compile_definitions(test_gpu_surface_inventory PRIVATE NOMINMAX)
 
 exosnap_add_gtest(
     NAME test_gpu_compositor
@@ -1509,7 +1545,8 @@ exosnap_add_gtest(
             src/yuv_to_bgra.cpp
     LIBRARIES exosnap_engine FFmpeg::mux
 )
-target_include_directories(test_edit_player_engine PRIVATE src include)
+target_include_directories(test_edit_player_engine PRIVATE src include
+    "${CMAKE_SOURCE_DIR}/libs/capability/include")
 target_compile_definitions(test_edit_player_engine PRIVATE EXOSNAP_SOURCE_DIR="${CMAKE_SOURCE_DIR}")
 
 # Hardware-decode readback: semi-planar (NV12/P010) -> planar de-interleave,

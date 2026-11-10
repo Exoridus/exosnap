@@ -18,6 +18,8 @@ ExoSnap is a Windows x64 application with a C++20 recording engine and a Qt Quic
 
 The practical dependency direction is presentation → application services/models → capability/engine contracts. Some application services use Qt Core for signals, files and asynchronous work. That does not make them part of the QML layer. Build layering checks and focused tests enforce the distinctions.
 
+Encoder factories consume PCI vendor IDs through the engine contract. Their public headers do not require capability headers. Gamepad input shares the public, header-only performance-counter conversion in `exosnap/engine/qpc_100ns.h` without linking the engine or including its private source directory.
+
 ## Internal visual sources
 
 `QuickApplication` composes a small typed capability registry, seals it before use and owns the visual source manager. Module registration and factories do not open devices. The manager validates desired source/item records, resolves aggregate consumer demand and delivers token-scoped status on the control thread. Native webcam and gamepad adapters alone request their existing backend work; recording preparation does not independently control those devices.

@@ -4506,6 +4506,10 @@ TEST(EditRenderConfig, AutomaticDeviceUsesActualRenderAdapterAndItsTuningCapabil
         adapters[i].luid = static_cast<int64_t>(i + 10);
     }
     std::vector<capability::AdapterEncoderCapability> adapter_caps(2);
+    for (size_t i = 0; i < adapter_caps.size(); ++i) {
+        adapter_caps[i].adapter_luid = adapters[i].luid;
+        adapter_caps[i].formats_h264.nv12 = capability::EncoderFormatSupport::Supported;
+    }
     adapter_caps[0].probed = true;
     adapter_caps[1].probed = true;
     adapter_caps[1].h264 = true;
@@ -4553,6 +4557,8 @@ TEST(EditRenderConfig, DeviceResolutionRejectsUnprobedAndAmbiguousSelections) {
     preference.device = capability::FingerprintFromAdapter(adapter);
     adapter_caps[0].probed = true;
     adapter_caps[0].h264 = true;
+    adapter_caps[0].adapter_luid = adapter.luid;
+    adapter_caps[0].formats_h264.nv12 = capability::EncoderFormatSupport::Supported;
     device = ResolveEditEncoderDevice(adapters, adapter_caps, capability::VideoCodec::H264, preference);
     EXPECT_TRUE(device.valid) << device.reason;
     EXPECT_EQ(device.adapter_luid, 42);

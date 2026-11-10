@@ -3,6 +3,7 @@
 #include <cwchar>
 #include <exosnap/engine/background_io.h>
 #include <exosnap/engine/mic_dsp_config.h>
+#include <exosnap/engine/record_request_id.h>
 #include <exosnap/engine/recorder_session.h>
 #include <exosnap/engine/recording_media_types.h>
 
@@ -28,6 +29,7 @@
 #include "session_callback_gate.h"
 #include "session_internal.h"
 #include "session_outcome.h"
+#include "session_request_gate.h"
 #include "session_stats_collector.h"
 #include "session_stop_reset.h"
 #include "shared_audio_capture.h"
@@ -166,14 +168,9 @@ struct RecorderSession::Impl {
     std::shared_ptr<ProductionRuntime> runtime = std::make_shared<ProductionRuntime>();
     uint64_t output_generation = 0;
     bool workers_leaked = false; // guarded by state_mutex
-    // A Stop() that arrives outside Record()'s active-recording window (see
-    // session_stop_reset.h). Deliberately NOT on SessionState: it must survive
-    // the state swap above. Guarded by state_mutex.
-    PendingStopTracker pending_stop;
-    // The request the currently running Record() call was started with, so Stop()
-    // can tell a stop meant for this recording from one left over by an earlier
-    // one. Guarded by state_mutex.
-    RecordRequestId active_request = kUnscopedRecordRequest;
+    // Request admission and pre-start cancellation outlive each SessionState.
+    // Their shared-state selection uses this same mutex.
+    SessionRequestGate requests;
     // Outbound-callback gate of the running Record() call (session_callback_gate.h).
     // Replaced, never reopened, per call; guarded by state_mutex. Null until the
     // first Record().
@@ -187,18 +184,12 @@ struct RecorderSession::Impl {
     SegmentCallback segment_callback;
     BackgroundIoAdmission background_io_admission;
     uint64_t diagnostics_generation{0};
-    std::atomic<bool> recording{false};
-
-    std::shared_ptr<SessionState> State() {
-        std::lock_guard lk(state_mutex);
-        return state;
-    }
 
     // The state a live command naming request_id may act on, or null when that
     // request is not the one Record() is running (see RecordRequestMatches).
     std::shared_ptr<SessionState> StateForRequest(RecordRequestId request_id) {
         std::lock_guard lk(state_mutex);
-        if (!RecordRequestMatches(active_request, request_id))
+        if (!RecordRequestMatches(requests.active_request, request_id))
             return nullptr;
         return state;
     }
@@ -506,21 +497,9 @@ bool RecorderSession::Validate(const RecorderConfig& config, RecorderResult* out
 // ---------------------------------------------------------------------------
 
 void RecorderSession::Stop(RecordRequestId request_id) {
-    std::shared_ptr<SessionState> st;
-    {
-        std::lock_guard lk(m_impl->state_mutex);
-        const bool recording = m_impl->recording.load();
-        // A stop that names a recording other than the one running belongs to a
-        // recording that has already ended; applying it would cut short a session
-        // its caller never meant to touch.
-        if (recording && !RecordRequestMatches(m_impl->active_request, request_id)) {
-            return;
-        }
-        st = m_impl->state;
-        // Only a Stop() outside the active-recording window needs to survive into
-        // the next Record() call — see session_stop_reset.h.
-        m_impl->pending_stop.NoteStop(recording, request_id);
-    }
+    const auto st = m_impl->requests.SelectForStop(m_impl->state_mutex, m_impl->state, request_id);
+    if (!st)
+        return;
     st->pause_requested.store(false);
     st->caller_stop_requested.store(true);
     st->RequestCleanStop();
@@ -530,7 +509,7 @@ void RecorderSession::Pause(RecordRequestId request_id) {
     std::shared_ptr<SessionState> st;
     {
         std::lock_guard lk(m_impl->state_mutex);
-        if (!RecordRequestMatches(m_impl->active_request, request_id))
+        if (!RecordRequestMatches(m_impl->requests.active_request, request_id))
             return;
         st = m_impl->state;
     }
@@ -541,7 +520,7 @@ void RecorderSession::Resume(RecordRequestId request_id) {
     std::shared_ptr<SessionState> st;
     {
         std::lock_guard lk(m_impl->state_mutex);
-        if (!RecordRequestMatches(m_impl->active_request, request_id))
+        if (!RecordRequestMatches(m_impl->requests.active_request, request_id))
             return;
         st = m_impl->state;
     }
@@ -554,18 +533,11 @@ bool RecorderSession::RequestSplit(SplitTriggerSource source, RecordRequestId re
     // meaning, and the mux samples the sequence counter when it starts, so an
     // increment made before that would be absorbed without a boundary. The
     // caller learns of the drop so its own pending flag does not outlive it.
-    if (!m_impl->recording.load())
+    const auto st = m_impl->requests.SelectForSplit(m_impl->state_mutex, m_impl->state, request_id);
+    if (!st)
         return false;
-    {
-        // Same reason Stop() checks: a split queued for a recording that has
-        // ended must not land in the one that followed it.
-        std::lock_guard lk(m_impl->state_mutex);
-        if (!RecordRequestMatches(m_impl->active_request, request_id))
-            return false;
-    }
     // Record the trigger (for logging) before bumping the sequence so the
     // observing thread sees a consistent (seq, trigger) pair.
-    const auto st = m_impl->State();
     // Compare-exchange, not a store: two requesters (a hotkey and the size
     // monitor) must not lose each other's trigger bit, and the sequence and the
     // trigger have to become visible together or the consumer can pair a
@@ -649,7 +621,7 @@ void RecorderSession::RequestFrameSnapshot(FrameSnapshotCallback callback, Recor
     std::shared_ptr<SessionCallbackGate> gate;
     {
         std::lock_guard lk(m_impl->state_mutex);
-        if (!RecordRequestMatches(m_impl->active_request, request_id) || !m_impl->gate)
+        if (!RecordRequestMatches(m_impl->requests.active_request, request_id) || !m_impl->gate)
             return;
         st = m_impl->state;
         gate = m_impl->gate;
@@ -696,7 +668,7 @@ RecorderResult RecorderSession::Record(const RecorderConfig& config, RecordReque
         // applied to the next Record() instead, which is a different recording.
         {
             std::lock_guard lk(m_impl->state_mutex);
-            (void)m_impl->pending_stop.Consume(request_id);
+            (void)m_impl->requests.pending_stop.Consume(request_id);
         }
         return validationResult;
     }
@@ -720,6 +692,7 @@ RecorderResult RecorderSession::Record(const RecorderConfig& config, RecordReque
     std::shared_ptr<SessionState> state_ptr;
     std::shared_ptr<SessionCallbackGate> gate;
     bool pre_stop = false;
+    SessionRequestScope request_scope(m_impl->state_mutex, m_impl->requests);
     {
         std::lock_guard lk(m_impl->state_mutex);
         if (m_impl->workers_leaked || m_impl->runtime->gpu_stalled()) {
@@ -730,12 +703,12 @@ RecorderResult RecorderSession::Record(const RecorderConfig& config, RecordReque
         m_impl->state = std::make_shared<SessionState>();
         state_ptr = m_impl->state;
         state_ptr->background_io_admission = m_impl->background_io_admission;
-        m_impl->active_request = request_id;
+        m_impl->requests.active_request = request_id;
         // Consumed here (under the same lock as the swap above) so a Stop() that
         // raced ahead of this Record() call is honored regardless of whether the
         // swap just happened — see session_stop_reset.h. A stop naming a different
         // request is dropped by the same call.
-        pre_stop = m_impl->pending_stop.Consume(request_id);
+        pre_stop = m_impl->requests.pending_stop.Consume(request_id);
         gate = m_impl->gate = std::make_shared<SessionCallbackGate>();
 
         // Reset session state -- still under the lock. A Stop(), Pause(), mute or
@@ -812,7 +785,7 @@ RecorderResult RecorderSession::Record(const RecorderConfig& config, RecordReque
         r.error_code = hr;
         r.error_phase = ErrorPhase::Prepare;
         r.error_detail = detail;
-        m_impl->recording.store(false);
+        m_impl->requests.recording.store(false);
         return r;
     };
 
@@ -971,7 +944,7 @@ RecorderResult RecorderSession::Record(const RecorderConfig& config, RecordReque
                 state->RecordFailure(E_FAIL, ErrorPhase::AudioCapture, error);
         });
     }
-    m_impl->recording.store(true);
+    m_impl->requests.recording.store(true);
 
     // Start stats collector (Stop() joins its thread before Record returns, so
     // a plain reference into the shared state is safe here).
@@ -1157,7 +1130,7 @@ RecorderResult RecorderSession::Record(const RecorderConfig& config, RecordReque
     // Stop stats collector
     statsCollector.Stop();
 
-    m_impl->recording.store(false);
+    m_impl->requests.recording.store(false);
 
     // Any worker that missed its join is now abandoned — but it stays alive
     // through its own shared ownership (worker thread -> worker -> state).
@@ -1341,15 +1314,6 @@ RecorderResult RecorderSession::Record(const RecorderConfig& config, RecordReque
         if (state_ptr->config.visual_scene)
             snapshot.visual_runtime = state_ptr->config.visual_scene->Counters();
         m_impl->diagnostics_callback(snapshot);
-    }
-
-    // Discard any Stop() that arrived after m_impl->recording dropped above (e.g.
-    // an extra click during finalize) — it targets this already-finishing session,
-    // not the next Record() call.
-    {
-        std::lock_guard lk(m_impl->state_mutex);
-        m_impl->pending_stop.Clear();
-        m_impl->active_request = kUnscopedRecordRequest;
     }
 
     return result;

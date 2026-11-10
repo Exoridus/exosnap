@@ -1,11 +1,11 @@
 #include "production_runtime.h"
 #include "file_output.h"
-#include "qpc_100ns.h"
 #include "session_internal.h"
 #include "video_thread.h"
 #include <atomic>
 #include <cstddef>
 #include <cstdint>
+#include <exosnap/engine/qpc_100ns.h>
 #include <exosnap/engine/recorder_session.h>
 #include <exosnap/engine/recording_media_types.h>
 #include <memory>

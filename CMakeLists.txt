@@ -262,6 +262,7 @@ add_subdirectory(tools/envctl)
 # ---------------------------------------------------------------------------
 exosnap_assert_no_ui_dependency(exosnap_engine)
 exosnap_assert_no_ui_dependency(exosnap_capability)
+exosnap_assert_no_private_engine_headers(exosnap_gamepad)
 
 if(TARGET exosnap_updater)
     find_package(Qt6 6.12 REQUIRED COMPONENTS Core LinguistTools)

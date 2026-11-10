@@ -94,6 +94,17 @@ QJsonObject SnapshotToJson(const RuntimeCapabilitySnapshot& s) {
     nvidia[QStringLiteral("nvenc_yuv444_h264")] = s.nvidia.nvenc_yuv444_h264;
     nvidia[QStringLiteral("nvenc_yuv444_hevc")] = s.nvidia.nvenc_yuv444_hevc;
 
+    const auto formats_to_json = [](const capability::CodecFormatCapabilities& formats) {
+        QJsonObject obj;
+        obj[QStringLiteral("nv12")] = static_cast<int>(formats.nv12);
+        obj[QStringLiteral("p010")] = static_cast<int>(formats.p010);
+        obj[QStringLiteral("ayuv")] = static_cast<int>(formats.ayuv);
+        return obj;
+    };
+    nvidia[QStringLiteral("nvenc_formats_h264")] = formats_to_json(s.nvidia.nvenc_formats_h264);
+    nvidia[QStringLiteral("nvenc_formats_hevc")] = formats_to_json(s.nvidia.nvenc_formats_hevc);
+    nvidia[QStringLiteral("nvenc_formats_av1")] = formats_to_json(s.nvidia.nvenc_formats_av1);
+
     auto adv_to_json = [](const capability::NvencAdvancedEncodeFacts& adv) {
         QJsonObject obj;
         obj[QStringLiteral("max_bframes")] = adv.max_bframes;
@@ -155,6 +166,28 @@ bool SnapshotFromJson(const QJsonObject& obj, RuntimeCapabilitySnapshot& out) {
     out.nvidia.nvenc_h264 = nvidia.value(QStringLiteral("nvenc_h264")).toBool(false);
     out.nvidia.nvenc_yuv444_h264 = nvidia.value(QStringLiteral("nvenc_yuv444_h264")).toBool(false);
     out.nvidia.nvenc_yuv444_hevc = nvidia.value(QStringLiteral("nvenc_yuv444_hevc")).toBool(false);
+
+    const auto formats_from_json = [](const QJsonObject& parent, const char* key) {
+        const QJsonObject obj = parent.value(QLatin1String(key)).toObject();
+        const auto support = [&obj](const char* field) {
+            using capability::EncoderFormatSupport;
+            const int value = obj.value(QLatin1String(field)).toInt(-1);
+            switch (value) {
+            case static_cast<int>(EncoderFormatSupport::Supported):
+                return EncoderFormatSupport::Supported;
+            case static_cast<int>(EncoderFormatSupport::Unsupported):
+                return EncoderFormatSupport::Unsupported;
+            case static_cast<int>(EncoderFormatSupport::Unavailable):
+                return EncoderFormatSupport::Unavailable;
+            default:
+                return EncoderFormatSupport::Unknown;
+            }
+        };
+        return capability::CodecFormatCapabilities{support("nv12"), support("p010"), support("ayuv")};
+    };
+    out.nvidia.nvenc_formats_h264 = formats_from_json(nvidia, "nvenc_formats_h264");
+    out.nvidia.nvenc_formats_hevc = formats_from_json(nvidia, "nvenc_formats_hevc");
+    out.nvidia.nvenc_formats_av1 = formats_from_json(nvidia, "nvenc_formats_av1");
 
     auto adv_from_json = [](const QJsonObject& parent, const char* key) {
         capability::NvencAdvancedEncodeFacts adv;

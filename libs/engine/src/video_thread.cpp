@@ -3,6 +3,7 @@
 #include "exosnap/engine/codec_types.h"
 #include "exosnap/engine/color_metadata.h"
 #include "exosnap/engine/encoder_device.h"
+#include "exosnap/engine/encoder_input_requirements.h"
 #include "exosnap/engine/error_types.h"
 #include "exosnap/engine/output_geometry.h"
 #include "exosnap/engine/pipeline_diagnostics.h"
@@ -13,12 +14,12 @@
 #include "mux_queue.h"
 #include "premux_state.h"
 #include "production_runtime.h"
-#include "qpc_100ns.h"
 #include "visual_scene_consumer.h"
 #include <atomic>
 #include <cstdint>
 #include <exosnap/engine/gpu_surface_inventory.h>
 #include <exosnap/engine/interfaces/IVideoEncoder.h>
+#include <exosnap/engine/qpc_100ns.h>
 #include <exosnap/engine/video_processor_color.h>
 #include <iterator>
 
@@ -26,6 +27,9 @@
 #include "annexb_to_hvcc.h"
 #include "av_epoch_align.h"
 #include "codec_private.h"
+#include "d3d11_encoder_input.h"
+#include "encoder_input_lifetime.h"
+#include "encoder_packet_dispatch.h"
 #include "gpu_frame_luminance.h"
 #include "gpu_hdr_pq.h"
 #include "gpu_rgb_to_ayuv.h"
@@ -1368,27 +1372,27 @@ void VideoThread::RunAttachment(const std::shared_ptr<NativeState>& native, cons
         }
     }
 
-    // --- NV12 / P010 texture ring + video processor ---
-    // For 10-bit recording (HEVC Main10 / AV1 10-bit, SDR BT.709) the
-    // VideoProcessor converts RGB → P010 instead of NV12, and the encode ring +
-    // reference texture use DXGI_FORMAT_P010. The output color space stays studio
-    // BT.709 (no HDR/BT.2020 here — that is a later slice).
-    const bool tenBit = (m_state.config.bit_depth == BitDepth::Bit10);
+    const auto encoderInput = encoder ? encoder->GetInputRequirements() : EncoderInputRequirements{};
+    const int32_t kSlotCount = encoder ? encoder->SlotCount() : 0;
+    const auto inputValidation =
+        ValidateEncoderInputForHost(encoderInput, m_state.config.video_codec, m_state.config.bit_depth,
+                                    m_state.config.chroma, {encodeWidth, encodeHeight}, kSlotCount, d3dDevice.get());
+    if (!inputValidation) {
+        m_state.RecordFailure(E_INVALIDARG, ErrorPhase::Prepare,
+                              std::string("Video encoder input: ") + inputValidation.message);
+        return;
+    }
+
+    // Conversion and the persistent pool follow the configured backend's
+    // native input declaration. No padded/cropped allocation is admitted yet.
+    const bool tenBit = encoderInput.format == EncoderInputFormat::P010;
 
     // Expert 4:4:4 (8-bit H.264/HEVC): the VideoProcessor cannot emit 4:4:4, so it
     // performs geometry (crop/scale/letterbox) into a full-range BGRA intermediate,
     // and a compute shader converts that into the packed AYUV encoder surface. The 4:2:0 path is untouched. 4:4:4 is
     // 8-bit only and mutually exclusive with 10-bit / native HDR (blocked upstream).
-    const bool chroma444 = (m_state.config.chroma == ChromaSubsampling::Cs444);
-    // Native encoder input texture: NV12/P010 for 4:2:0, AYUV for 4:4:4.
-    const DXGI_FORMAT encodeFormat = chroma444 ? DXGI_FORMAT_AYUV : (tenBit ? DXGI_FORMAT_P010 : DXGI_FORMAT_NV12);
-
-    // Number of pipelined capture/encode slots (shared by every per-slot texture array).
-    const int32_t kSlotCount = encoder ? encoder->SlotCount() : 0;
-    if (hasOutput && kSlotCount <= 0) {
-        m_state.RecordFailure(E_FAIL, ErrorPhase::Prepare, "Video encoder exposes no input slots");
-        return;
-    }
+    const bool chroma444 = encoderInput.format == EncoderInputFormat::Ayuv;
+    const DXGI_FORMAT encodeFormat = D3D11EncoderInputFormat(encoderInput.format);
 
     // 4:4:4: the VideoProcessor output is a separate BGRA intermediate (RGB, geometry
     // only); the shader then writes AYUV into the encode textures. RgbToAyuvConverter
@@ -1428,6 +1432,7 @@ void VideoThread::RunAttachment(const std::shared_ptr<NativeState>& native, cons
     winrt::com_ptr<ID3D11VideoProcessorEnumerator> videoEnum;
     winrt::com_ptr<ID3D11VideoProcessor> videoProcessor;
     std::vector<winrt::com_ptr<ID3D11VideoProcessorOutputView>> videoOutputViews(static_cast<size_t>(kSlotCount));
+    EncoderInputLifetime encoderInputLifetime(*encoder);
 
     {
         // Video processor enumerator (shared across all slots)
@@ -1460,17 +1465,7 @@ void VideoThread::RunAttachment(const std::shared_ptr<NativeState>& native, cons
         // 4:4:4: the VP output view targets a BGRA intermediate (geometry only); the
         //        shader converts it into the AYUV encode texture registered below.
         for (int32_t i = 0; i < kSlotCount; ++i) {
-            D3D11_TEXTURE2D_DESC desc{};
-            desc.Width = encodeWidth;
-            desc.Height = encodeHeight;
-            desc.MipLevels = 1;
-            desc.ArraySize = 1;
-            desc.Format = encodeFormat; // NV12 (8-bit) / P010 (10-bit) / AYUV (4:4:4)
-            desc.SampleDesc = {1, 0};
-            desc.Usage = D3D11_USAGE_DEFAULT;
-            // AYUV encode textures are written by the compute shader (UAV) and copied
-            // for frame duplication; NV12/P010 are VideoProcessorBlt render targets.
-            desc.BindFlags = chroma444 ? D3D11_BIND_UNORDERED_ACCESS : D3D11_BIND_RENDER_TARGET;
+            const D3D11_TEXTURE2D_DESC desc = D3D11EncoderInputTextureDesc(encoderInput);
 
             hr = exosnap::engine::CreateTrackedTexture2D(d3dDevice.get(), &desc, nullptr, nv12Textures[i].put(),
                                                          exosnap::engine::GpuSurfaceOwner::EncoderInputs);
@@ -3565,7 +3560,7 @@ void VideoThread::RunAttachment(const std::shared_ptr<NativeState>& native, cons
 
     // Helper lambda: push an encoded packet to premux or mux queue.
     // Uses h264CodecPrivateReady, hevcCodecPrivateReady, and av1CodecPrivateReady by reference.
-    auto routePacket = [&](EncodedVideoPacket pkt) -> bool {
+    auto routePacket = [&](EncodedVideoPacket pkt, std::string& route_error) -> bool {
         const size_t pkt_bytes_count = pkt.bytes.size();
         if (pkt.bytes.empty())
             return true;
@@ -3576,9 +3571,8 @@ void VideoThread::RunAttachment(const std::shared_ptr<NativeState>& native, cons
             const auto route = m_state.premux.Route(pkt, m_state.config.video_codec, m_state.audio_track_count);
             if (route != PremuxRoute::Mux) {
                 if (route == PremuxRoute::Full) {
-                    m_state.RecordFailure(E_OUTOFMEMORY, ErrorPhase::Mux,
-                                          "Pre-mux video buffer limit (120 packets) exceeded "
-                                          "before codec private data was ready");
+                    route_error = "Pre-mux video buffer limit (120 packets) exceeded "
+                                  "before codec private data was ready";
                     return false;
                 }
             } else {
@@ -3605,9 +3599,8 @@ void VideoThread::RunAttachment(const std::shared_ptr<NativeState>& native, cons
                     // mux that stopped consuming is the shutdown policy's report to
                     // make, and an existing failure already names the cause.
                     if (room == MuxQueueWait::TimedOut) {
-                        m_state.RecordFailure(E_OUTOFMEMORY, ErrorPhase::Mux,
-                                              "Mux queue limit exceeded: the output destination "
-                                              "cannot keep up with the recording");
+                        route_error = "Mux queue limit exceeded: the output destination "
+                                      "cannot keep up with the recording";
                     } else if (room == MuxQueueWait::Stopping) {
                         logging::log(logging::LogLevel::Warn, "video_thread",
                                      "mux queue still full at stop; the tail of the video stream was not written", {});
@@ -3642,6 +3635,19 @@ void VideoThread::RunAttachment(const std::shared_ptr<NativeState>& native, cons
         return true;
     };
 
+    // Defer failure publication until completed packets have reached the sink.
+    // Publishing first can interrupt the bounded mux wait and discard them.
+    auto routeEncoderPackets = [&](bool encoder_ok, std::vector<EncodedVideoPacket>& packets, std::string& error,
+                                   const char* encode_context) -> bool {
+        const bool routed = RouteEncoderPackets(encoder_ok, packets, error, routePacket);
+        if (!encoder_ok) {
+            m_state.RecordFailure(E_FAIL, ErrorPhase::VideoEncode, std::string(encode_context) + error);
+        } else if (!routed && !error.empty()) {
+            m_state.RecordFailure(E_OUTOFMEMORY, ErrorPhase::Mux, error);
+        }
+        return routed;
+    };
+
     // Report per-packet diagnostics (encode latency, order-validation
     // mismatch counters) — shared between the EncodeFrame submit path and
     // the ReapCompleted drain path below so both origins account
@@ -3667,17 +3673,11 @@ void VideoThread::RunAttachment(const std::shared_ptr<NativeState>& native, cons
     auto reapAndRoute = [&](uint32_t wait_head_ms) -> bool {
         std::vector<EncodedVideoPacket> reaped;
         std::string reapErr;
-        if (!encoder->ReapCompleted(reaped, reapErr, wait_head_ms)) {
-            m_state.RecordFailure(E_FAIL, ErrorPhase::VideoEncode, "Video encoder async reap: " + reapErr);
-            return false;
-        }
+        const bool reapOk = encoder->ReapCompleted(reaped, reapErr, wait_head_ms);
         const auto reap_t = std::chrono::steady_clock::now();
-        for (EncodedVideoPacket& pkt : reaped) {
+        for (const EncodedVideoPacket& pkt : reaped)
             reportPacketDiagnostics(pkt, reap_t);
-            if (!routePacket(std::move(pkt)))
-                return false;
-        }
-        return true;
+        return routeEncoderPackets(reapOk, reaped, reapErr, "Video encoder async reap: ");
     };
 
     // Bounded wait for ReapCompleted when a slot acquisition fails before
@@ -4568,19 +4568,25 @@ void VideoThread::RunAttachment(const std::shared_ptr<NativeState>& native, cons
                 const auto tick_t0 = std::chrono::steady_clock::now();
                 const uint64_t pts_ns = cfr_frame_idx * frame_interval_ns;
 
-                int32_t slot = encoder->AcquireFreeSlot();
-                if (slot < 0) {
+                auto acquired = encoder->AcquireInputSlot();
+                if (acquired.status == EncoderInputSlotStatus::Busy) {
                     // No free input slot: give the async encoder a bounded chance to
                     // reap a completion and free one before counting a drop.
                     if (!reapAndRoute(kSlotWaitMs))
                         goto end_encode_loop;
-                    slot = encoder->AcquireFreeSlot();
+                    acquired = encoder->AcquireInputSlot();
                 }
-                if (slot < 0) {
+                if (acquired.status == EncoderInputSlotStatus::Invalid) {
+                    m_state.RecordFailure(E_FAIL, ErrorPhase::VideoEncode,
+                                          "Video encoder returned an invalid input slot");
+                    goto end_encode_loop;
+                }
+                if (acquired.status == EncoderInputSlotStatus::Busy) {
                     ++slotStallCount;
                     m_state.diagnostics.OnSlotStall();
                     break; // retry this tick next outer iteration once a slot is free
                 }
+                const int32_t slot = acquired.index;
 
                 bool frameWritten = false;
                 uint64_t selectedPresentNs = 0;
@@ -4903,21 +4909,16 @@ void VideoThread::RunAttachment(const std::shared_ptr<NativeState>& native, cons
                 for (const EncodedVideoPacket& pkt : pkts)
                     reportPacketDiagnostics(pkt, enc_t1);
 
-                if (!encOk) {
-                    m_state.RecordFailure(E_FAIL, ErrorPhase::VideoEncode, "Video encoder encode (CFR): " + encErr);
+                if (encOk) {
+                    m_state.diagnostics.OnCfrOutput(enc_t1, idealSlotNs, selectedPresentNs,
+                                                    usePhaseCorrect ? freshSelection : frameWritten, ringOccupancy,
+                                                    frame_interval_ns, Qpc100ns(qpcFreq) * 100);
+                    ++videoFramesCaptured;
+                    lastVideoPts = pts_ns;
+                }
+
+                if (!routeEncoderPackets(encOk, pkts, encErr, "Video encoder encode (CFR): "))
                     goto end_encode_loop;
-                }
-
-                m_state.diagnostics.OnCfrOutput(enc_t1, idealSlotNs, selectedPresentNs,
-                                                usePhaseCorrect ? freshSelection : frameWritten, ringOccupancy,
-                                                frame_interval_ns, Qpc100ns(qpcFreq) * 100);
-                ++videoFramesCaptured;
-                lastVideoPts = pts_ns;
-
-                for (EncodedVideoPacket& pkt : pkts) {
-                    if (!routePacket(std::move(pkt)))
-                        goto end_encode_loop;
-                }
 
                 const auto tick_t1 = std::chrono::steady_clock::now();
                 m_state.diagnostics.OnVideoTickTime(
@@ -5273,13 +5274,18 @@ void VideoThread::RunAttachment(const std::shared_ptr<NativeState>& native, cons
             if (vfrHeldDesktop != nullptr && !odHolding &&
                 (desktopArrived || visualNow100ns >= vfrNextVisualSample100ns)) {
                 vfrNextVisualSample100ns = visualNow100ns + frame_interval_100ns;
-                int32_t slot = encoder->AcquireFreeSlot();
-                if (slot < 0 && vfrDesktopPending) {
+                auto acquired = encoder->AcquireInputSlot();
+                if (acquired.status == EncoderInputSlotStatus::Busy && vfrDesktopPending) {
                     if (!reapAndRoute(kSlotWaitMs))
                         goto end_encode_loop;
-                    slot = encoder->AcquireFreeSlot();
+                    acquired = encoder->AcquireInputSlot();
                 }
-                if (slot < 0) {
+                if (acquired.status == EncoderInputSlotStatus::Invalid) {
+                    m_state.RecordFailure(E_FAIL, ErrorPhase::VideoEncode,
+                                          "Video encoder returned an invalid input slot");
+                    goto end_encode_loop;
+                }
+                if (acquired.status == EncoderInputSlotStatus::Busy) {
                     if (vfrDesktopPending) {
                         ++slotStallCount;
                         m_state.diagnostics.OnSlotStall();
@@ -5290,6 +5296,7 @@ void VideoThread::RunAttachment(const std::shared_ptr<NativeState>& native, cons
                     Sleep(1);
                     continue;
                 }
+                const int32_t slot = acquired.index;
                 sampleWgcCursor();
                 latestFrameTicks100ns =
                     vfrDesktopPending ? vfrHeldDesktopTicks100ns : static_cast<int64_t>(visualNow100ns);
@@ -5390,16 +5397,12 @@ void VideoThread::RunAttachment(const std::shared_ptr<NativeState>& native, cons
                             enc_t1, std::chrono::duration<double, std::milli>(enc_t1 - enc_t0).count());
                         for (const EncodedVideoPacket& pkt : pkts)
                             reportPacketDiagnostics(pkt, enc_t1);
-                        if (!encOk) {
-                            m_state.RecordFailure(E_FAIL, ErrorPhase::VideoEncode, "Video encoder encode: " + encErr);
-                            break;
+                        if (encOk) {
+                            ++videoFramesCaptured;
+                            vfrLastSubmissionNs = framePts_ns;
                         }
-                        ++videoFramesCaptured;
-                        vfrLastSubmissionNs = framePts_ns;
-                        for (EncodedVideoPacket& pkt : pkts) {
-                            if (!routePacket(std::move(pkt)))
-                                goto end_encode_loop;
-                        }
+                        if (!routeEncoderPackets(encOk, pkts, encErr, "Video encoder encode: "))
+                            goto end_encode_loop;
                         const auto tick_t1 = std::chrono::steady_clock::now();
                         m_state.diagnostics.OnVideoTickTime(
                             tick_t1, std::chrono::duration<double, std::milli>(tick_t1 - tick_t0).count());
@@ -5480,19 +5483,13 @@ void VideoThread::RunAttachment(const std::shared_ptr<NativeState>& native, cons
                                 for (const EncodedVideoPacket& pkt : pkts)
                                     reportPacketDiagnostics(pkt, enc_t1);
 
-                                if (!encOk) {
-                                    m_state.RecordFailure(E_FAIL, ErrorPhase::VideoEncode,
-                                                          "Video encoder encode: " + encErr);
-                                    break;
+                                if (encOk) {
+                                    ++videoFramesCaptured;
+                                    vfrLastSubmissionNs = framePts_ns;
                                 }
 
-                                ++videoFramesCaptured;
-                                vfrLastSubmissionNs = framePts_ns;
-
-                                for (EncodedVideoPacket& pkt : pkts) {
-                                    if (!routePacket(std::move(pkt)))
-                                        goto end_encode_loop;
-                                }
+                                if (!routeEncoderPackets(encOk, pkts, encErr, "Video encoder encode: "))
+                                    goto end_encode_loop;
 
                                 const auto tick_t1 = std::chrono::steady_clock::now();
                                 m_state.diagnostics.OnVideoTickTime(
@@ -5535,8 +5532,14 @@ void VideoThread::RunAttachment(const std::shared_ptr<NativeState>& native, cons
                                            : 0;
                 if (NeedsVfrEncoderHeartbeat(encoder->PendingFrames(), vfrCachedPictureValid, nowNs,
                                              vfrLastSubmissionNs)) {
-                    const int32_t slot = encoder->AcquireFreeSlot();
-                    if (slot >= 0) {
+                    const auto acquired = encoder->AcquireInputSlot();
+                    if (acquired.status == EncoderInputSlotStatus::Invalid) {
+                        m_state.RecordFailure(E_FAIL, ErrorPhase::VideoEncode,
+                                              "Video encoder returned an invalid input slot");
+                        goto end_encode_loop;
+                    }
+                    if (acquired.status == EncoderInputSlotStatus::Available) {
+                        const int32_t slot = acquired.index;
                         const auto tickStarted = std::chrono::steady_clock::now();
                         // Read from an independent cache, never an input surface
                         // whose ownership is still held by the encoder.
@@ -5553,17 +5556,13 @@ void VideoThread::RunAttachment(const std::shared_ptr<NativeState>& native, cons
                             finished, std::chrono::duration<double, std::milli>(finished - started).count());
                         for (const auto& packet : packets)
                             reportPacketDiagnostics(packet, finished);
-                        if (!ok) {
-                            m_state.RecordFailure(E_FAIL, ErrorPhase::VideoEncode, "VFR encoder heartbeat: " + error);
+                        if (ok) {
+                            ++videoFramesCaptured;
+                            m_state.diagnostics.OnVfrEncoderHeartbeat();
+                            lastVideoPts = vfrLastSubmissionNs = ptsNs;
+                        }
+                        if (!routeEncoderPackets(ok, packets, error, "VFR encoder heartbeat: "))
                             goto end_encode_loop;
-                        }
-                        ++videoFramesCaptured;
-                        m_state.diagnostics.OnVfrEncoderHeartbeat();
-                        lastVideoPts = vfrLastSubmissionNs = ptsNs;
-                        for (auto& packet : packets) {
-                            if (!routePacket(std::move(packet)))
-                                goto end_encode_loop;
-                        }
                         m_state.diagnostics.OnVideoTickTime(
                             finished, std::chrono::duration<double, std::milli>(finished - tickStarted).count());
                         anyWork = true;
@@ -5762,7 +5761,7 @@ end_encode_loop:
     }
 
     // --- Unregister encoder resources + destroy ---
-    encoder->Destroy();
+    encoderInputLifetime.Destroy();
     if (output)
         output->ReleaseEncoder();
 

@@ -5,6 +5,7 @@
 #include <exosnap/engine/edit_timeline_compositor.h>
 #include <exosnap/engine/edit_timeline_render.h>
 #include <exosnap/engine/encoder_device.h>
+#include <exosnap/engine/encoder_input_requirements.h>
 #include <exosnap/engine/gpu_surface_inventory.h>
 #include <exosnap/engine/interfaces/IAudioEncoder.h>
 #include <exosnap/engine/interfaces/IVideoEncoder.h>
@@ -17,7 +18,9 @@
 #include "annexb_to_avcc.h"
 #include "annexb_to_hvcc.h"
 #include "codec_private.h"
+#include "d3d11_encoder_input.h"
 #include "edit_mix_encoder.h"
+#include "encoder_packet_dispatch.h"
 #include "matroska_stream_writer.h"
 #include "render_audio_manifest.h"
 
@@ -25,6 +28,7 @@
 
 #include <algorithm>
 #include <chrono>
+#include <cstddef>
 #include <cstdint>
 #include <filesystem>
 #include <memory>
@@ -112,7 +116,15 @@ struct EncodeSurfaces {
     std::vector<winrt::com_ptr<ID3D11VideoProcessorOutputView>> outputs;
 
     bool Init(RenderDevice& gpu, IVideoEncoder& encoder, ID3D11Texture2D* source, const EditRenderPlan& plan,
-              bool full_range, std::string& error) {
+              VideoCodec codec, bool full_range, std::string& error) {
+        const auto requirements = encoder.GetInputRequirements();
+        const int32_t slot_count = encoder.SlotCount();
+        const auto valid = ValidateEncoderInputForHost(requirements, codec, BitDepth::Bit8, ChromaSubsampling::Cs420,
+                                                       plan.output, slot_count, gpu.device.get());
+        if (!valid) {
+            error = valid.message;
+            return false;
+        }
         device = gpu.device.try_as<ID3D11VideoDevice>();
         context = gpu.context.try_as<ID3D11VideoContext1>();
         if (!device || !context) {
@@ -143,21 +155,10 @@ struct EncodeSurfaces {
         if (!Check(device->CreateVideoProcessorInputView(source, enumerator.get(), &input_desc, input.put()),
                    "Create timeline input view", error))
             return false;
-        if (encoder.SlotCount() <= 0 || encoder.SlotCount() > 128) {
-            error = "Encoder returned an invalid input surface count.";
-            return false;
-        }
-        textures.resize(encoder.SlotCount());
-        outputs.resize(encoder.SlotCount());
-        for (int32_t slot = 0; slot < encoder.SlotCount(); ++slot) {
-            D3D11_TEXTURE2D_DESC desc{};
-            desc.Width = plan.output.width;
-            desc.Height = plan.output.height;
-            desc.MipLevels = 1;
-            desc.ArraySize = 1;
-            desc.Format = DXGI_FORMAT_NV12;
-            desc.SampleDesc.Count = 1;
-            desc.BindFlags = D3D11_BIND_RENDER_TARGET;
+        textures.resize(static_cast<size_t>(slot_count));
+        outputs.resize(static_cast<size_t>(slot_count));
+        for (int32_t slot = 0; slot < slot_count; ++slot) {
+            const D3D11_TEXTURE2D_DESC desc = D3D11EncoderInputTextureDesc(requirements);
             D3D11_VIDEO_PROCESSOR_OUTPUT_VIEW_DESC output_desc{};
             output_desc.ViewDimension = D3D11_VPOV_DIMENSION_TEXTURE2D;
             if (!Check(CreateTrackedTexture2D(gpu.device.get(), &desc, nullptr, textures[slot].put(),
@@ -253,7 +254,7 @@ RemuxResult RenderEditTimeline(const TimelineRenderSnapshot& snapshot, const Edi
         encoder->SetConstantFrameRate(true);
         if (!encoder->Open(gpu.device.get(), error) ||
             !encoder->Configure(plan.output.width, plan.output.height, plan.fps_num, plan.fps_den, error) ||
-            !surfaces.Init(gpu, *encoder, compositor.Result(), plan, false, error))
+            !surfaces.Init(gpu, *encoder, compositor.Result(), plan, config.video_codec, false, error))
             return false;
         const int64_t span_in = plan.span_in_us;
         const int64_t span_out = plan.span_out_us < 0 ? snapshot.timeline.duration_us : plan.span_out_us;
@@ -300,27 +301,27 @@ RemuxResult RenderEditTimeline(const TimelineRenderSnapshot& snapshot, const Edi
         if (!reader.Open(snapshot, plan, error))
             return false;
         std::vector<EncodedVideoPacket> packets;
-        const auto mux_video = [&]() {
-            for (auto& packet : packets) {
-                std::vector<uint8_t> bytes;
-                bool converted = true;
-                if (config.video_codec == VideoCodec::H264)
-                    converted = annexb::ConvertAnnexBToAvcc(packet.bytes.data(), packet.bytes.size(), bytes);
-                else if (config.video_codec == VideoCodec::Hevc)
-                    converted = annexb::ConvertAnnexBToHevcSample(packet.bytes.data(), packet.bytes.size(), bytes);
-                else
-                    bytes = std::move(packet.bytes);
-                if (!converted) {
-                    error = "Cannot package encoded video sample.";
-                    return false;
-                }
-                if (!writer.Push({packet.pts_ns, 1, packet.keyframe, std::move(bytes), packet.dts_ns})) {
-                    error = writer.error();
-                    return false;
-                }
-            }
-            packets.clear();
-            return true;
+        const auto mux_video = [&](bool encoder_ok) {
+            return RouteEncoderPackets(
+                encoder_ok, packets, error, [&](EncodedVideoPacket packet, std::string& mux_error) {
+                    std::vector<uint8_t> bytes;
+                    bool converted = true;
+                    if (config.video_codec == VideoCodec::H264)
+                        converted = annexb::ConvertAnnexBToAvcc(packet.bytes.data(), packet.bytes.size(), bytes);
+                    else if (config.video_codec == VideoCodec::Hevc)
+                        converted = annexb::ConvertAnnexBToHevcSample(packet.bytes.data(), packet.bytes.size(), bytes);
+                    else
+                        bytes = std::move(packet.bytes);
+                    if (!converted) {
+                        mux_error = "Cannot package encoded video sample.";
+                        return false;
+                    }
+                    if (!writer.Push({packet.pts_ns, 1, packet.keyframe, std::move(bytes), packet.dts_ns})) {
+                        mux_error = writer.error();
+                        return false;
+                    }
+                    return true;
+                });
         };
         uint64_t audio_position = 0;
         uint64_t accumulated = 0;
@@ -336,10 +337,10 @@ RemuxResult RenderEditTimeline(const TimelineRenderSnapshot& snapshot, const Edi
             if (!reader.VideoAt(span_in + static_cast<int64_t>(pts / 1000), frame, error) ||
                 !compositor.Compose(frame.layers, error))
                 return false;
-            int32_t slot = encoder->AcquireFreeSlot();
+            auto acquired = encoder->AcquireInputSlot();
             const auto waiting = std::chrono::steady_clock::now();
-            while (slot < 0) {
-                if (!encoder->ReapCompleted(packets, error, 10) || !mux_video())
+            while (acquired.status == EncoderInputSlotStatus::Busy) {
+                if (!mux_video(encoder->ReapCompleted(packets, error, 10)))
                     return false;
                 if (!progress(static_cast<float>(frame_index) / static_cast<float>(frames))) {
                     error = "Export cancelled.";
@@ -349,13 +350,18 @@ RemuxResult RenderEditTimeline(const TimelineRenderSnapshot& snapshot, const Edi
                     error = "Encoder stopped returning reusable input slots.";
                     return false;
                 }
-                slot = encoder->AcquireFreeSlot();
+                acquired = encoder->AcquireInputSlot();
             }
+            if (acquired.status != EncoderInputSlotStatus::Available) {
+                error = "Encoder returned an invalid input slot.";
+                return false;
+            }
+            const int32_t slot = acquired.index;
             if (!surfaces.Convert(slot, error)) {
                 encoder->ReleaseSlot(slot);
                 return false;
             }
-            if (!encoder->EncodeFrame(slot, pts, plan.output.width, plan.output.height, packets, error) || !mux_video())
+            if (!mux_video(encoder->EncodeFrame(slot, pts, plan.output.width, plan.output.height, packets, error)))
                 return false;
             ++stats.video_frames;
             stats.peak_encoder_backlog = std::max(stats.peak_encoder_backlog, encoder->PendingFrames());
@@ -377,10 +383,10 @@ RemuxResult RenderEditTimeline(const TimelineRenderSnapshot& snapshot, const Edi
                 audio_packets.clear();
                 audio_position += count;
             }
-            if (!encoder->ReapCompleted(packets, error) || !mux_video())
+            if (!mux_video(encoder->ReapCompleted(packets, error)))
                 return false;
         }
-        if (!encoder->Flush(packets, error) || !mux_video() || encoder->PendingFrames() != 0)
+        if (!mux_video(encoder->Flush(packets, error)) || encoder->PendingFrames() != 0)
             return false;
         if (audio) {
             audio_encoder->Flush(audio_packets);

@@ -245,6 +245,53 @@ class EndlessSource : public IAudioCaptureSource {
     std::string name_ = "EndlessSource";
 };
 
+// Stop inside the first packet, then remain ready. The finite cap keeps a broken
+// drain from hanging the test while exposing every packet taken after stop.
+class StopOnReleaseSource : public EndlessSource {
+  public:
+    StopOnReleaseSource(std::weak_ptr<SessionState> state, std::shared_ptr<std::atomic<uint32_t>> released)
+        : state_(std::move(state)), released_(std::move(released)) {
+    }
+    uint32_t PendingFrameCount() override {
+        return released_->load() < 8 ? EndlessSource::PendingFrameCount() : 0;
+    }
+    void ReleaseBuffer() override {
+        if (released_->fetch_add(1) == 0) {
+            if (const auto state = state_.lock())
+                state->RequestCleanStop();
+        }
+    }
+
+  private:
+    std::weak_ptr<SessionState> state_;
+    std::shared_ptr<std::atomic<uint32_t>> released_;
+};
+
+void ExpectAudioStopAtCurrentPacket(bool paused) {
+    auto state = std::make_shared<SessionState>();
+    state->config.audio_codec = AudioCodec::Pcm;
+    state->config.audio_bit_depth = 16;
+    state->audio_track_count = 1;
+    state->pause_requested.store(paused);
+    auto released = std::make_shared<std::atomic<uint32_t>>(0);
+    auto worker = std::make_shared<AudioThread>(state, std::make_unique<StopOnReleaseSource>(state, released), 0);
+
+    worker->Start();
+    ASSERT_TRUE(worker->Join(2000));
+
+    EXPECT_TRUE(state->stop_requested.load());
+    EXPECT_FALSE(state->HasFailure());
+    EXPECT_EQ(released->load(), 1u);
+}
+
+TEST(WorkerTeardownOwnership, LiveAudioDrainObservesStopAfterReleasingTheCurrentPacket) {
+    ExpectAudioStopAtCurrentPacket(false);
+}
+
+TEST(WorkerTeardownOwnership, PausedAudioDrainObservesStopAfterReleasingTheCurrentPacket) {
+    ExpectAudioStopAtCurrentPacket(true);
+}
+
 TEST(WorkerTeardownOwnership, ProducerBlockedOnQueueBoundNeverDeadlocksTeardown) {
     auto state = std::make_shared<SessionState>();
     std::weak_ptr<SessionState> state_weak = state;

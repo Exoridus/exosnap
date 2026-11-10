@@ -26,6 +26,8 @@
 #include <wrl/client.h>
 
 #include <capability/adapter_capability.h>
+#include <capability/config_types.h>
+#include <capability/encoder_format_capability.h>
 
 #include <cstdint>
 #include <vector>
@@ -34,6 +36,7 @@
 // vendor header (third_party/nvidia/nvEncodeAPI.h) still compiles and
 // degrades gracefully to probed=false.
 #if __has_include(<nvEncodeAPI.h>)
+#include "nvenc_format_probe.h"
 #include <d3d11.h>
 #include <nvEncodeAPI.h>
 #define EXOSNAP_ADAPTER_CAPABILITY_HAVE_NVENC 1
@@ -116,7 +119,7 @@ void ProbeNvencGuidsOnDevice(HMODULE dll, ID3D11Device* device, AdapterEncoderCa
     if (funcs.nvEncGetEncodeGUIDCount(encoder, &count) == NV_ENC_SUCCESS && count > 0) {
         std::vector<GUID> guids(count);
         uint32_t got = 0;
-        if (funcs.nvEncGetEncodeGUIDs(encoder, guids.data(), count, &got) == NV_ENC_SUCCESS) {
+        if (funcs.nvEncGetEncodeGUIDs(encoder, guids.data(), count, &got) == NV_ENC_SUCCESS && got <= count) {
             for (uint32_t i = 0; i < got; ++i) {
                 if (IsEqualGUID(guids[i], NV_ENC_CODEC_AV1_GUID) != 0)
                     out.av1 = true;
@@ -127,25 +130,17 @@ void ProbeNvencGuidsOnDevice(HMODULE dll, ID3D11Device* device, AdapterEncoderCa
             }
             out.probed = true; // only now is the per-codec result authoritative
 
-            // Per-codec 8-bit 4:4:4 (YUV444) support via
-            // NV_ENC_CAPS_SUPPORT_YUV444_ENCODE. Mirrors runtime_query.cpp's
-            // system-wide probe, but targeted at THIS adapter's session. Only
-            // queried for codecs this adapter advertised; a failed/absent query
-            // leaves the flag false (no 4:4:4 claimed). No AV1 — NVENC AV1 is
-            // 4:2:0 only.
-            if (funcs.nvEncGetEncodeCaps != nullptr) {
-                auto query_yuv444 = [&funcs, encoder](const GUID& codec) -> bool {
-                    NV_ENC_CAPS_PARAM capsParam{};
-                    capsParam.version = NV_ENC_CAPS_PARAM_VER;
-                    capsParam.capsToQuery = NV_ENC_CAPS_SUPPORT_YUV444_ENCODE;
-                    int value = 0;
-                    return funcs.nvEncGetEncodeCaps(encoder, codec, &capsParam, &value) == NV_ENC_SUCCESS && value != 0;
-                };
-                if (out.h264)
-                    out.yuv444_h264 = query_yuv444(NV_ENC_CODEC_H264_GUID);
-                if (out.hevc)
-                    out.yuv444_hevc = query_yuv444(NV_ENC_CODEC_HEVC_GUID);
+            if (out.h264)
+                out.formats_h264 = detail::ProbeNvencFormats(funcs, encoder, NV_ENC_CODEC_H264_GUID, VideoCodec::H264);
+            if (out.hevc)
+                out.formats_hevc = detail::ProbeNvencFormats(funcs, encoder, NV_ENC_CODEC_HEVC_GUID, VideoCodec::Hevc);
+            if (out.av1)
+                out.formats_av1 = detail::ProbeNvencFormats(funcs, encoder, NV_ENC_CODEC_AV1_GUID, VideoCodec::Av1);
+            out.yuv444_h264 = out.formats_h264.ayuv == EncoderFormatSupport::Supported;
+            out.yuv444_hevc = out.formats_hevc.ayuv == EncoderFormatSupport::Supported;
 
+            // Advanced settings retain their existing per-codec queries.
+            if (funcs.nvEncGetEncodeCaps != nullptr) {
                 auto query_cap = [&funcs, encoder](const GUID& codec, NV_ENC_CAPS cap) -> int {
                     NV_ENC_CAPS_PARAM capsParam{};
                     capsParam.version = NV_ENC_CAPS_PARAM_VER;
@@ -182,6 +177,9 @@ void ProbeNvencGuidsOnDevice(HMODULE dll, ID3D11Device* device, AdapterEncoderCa
 AdapterEncoderCapability ProbeNvidiaAdapter(const AdapterInfo& adapter) {
     AdapterEncoderCapability out;
     out.backend_label = "NVENC";
+    out.adapter_luid = adapter.luid;
+    out.formats_h264 = out.formats_hevc = out.formats_av1 = {
+        EncoderFormatSupport::Unavailable, EncoderFormatSupport::Unavailable, EncoderFormatSupport::Unavailable};
 
     // Load the NVENC DLL exactly once for presence check AND the GUID probe.
     HMODULE dll = LoadLibraryW(L"nvEncodeAPI64.dll");
@@ -198,8 +196,8 @@ AdapterEncoderCapability ProbeNvidiaAdapter(const AdapterInfo& adapter) {
     }
 
     ProbeNvencGuidsOnDevice(dll, device.Get(), out);
-    out.provenance =
-        out.probed ? "probed via NVENC encode GUIDs" : "NVENC probe unavailable (session open or GUID query failed)";
+    out.provenance = out.probed ? "probed via NVENC codec, input-format, profile and encode-capability queries"
+                                : "NVENC probe unavailable (session open or GUID query failed)";
     // Free the DLL only after the D3D11 device is still alive but the encoder
     // session is closed (ProbeNvencGuidsOnDevice destroyed it before returning).
     FreeLibrary(dll);
@@ -211,8 +209,11 @@ AdapterEncoderCapability ProbeNvidiaAdapter(const AdapterInfo& adapter) {
 // Headless / no-vendor-header build: the probe path is unavailable. Still
 // reports the backend as NVENC (this IS an NVIDIA adapter) but honestly
 // unprobed, matching runtime_query.cpp's degrade-gracefully behavior.
-AdapterEncoderCapability ProbeNvidiaAdapter(const AdapterInfo&) {
+AdapterEncoderCapability ProbeNvidiaAdapter(const AdapterInfo& adapter) {
     AdapterEncoderCapability out;
+    out.adapter_luid = adapter.luid;
+    out.formats_h264 = out.formats_hevc = out.formats_av1 = {
+        EncoderFormatSupport::Unavailable, EncoderFormatSupport::Unavailable, EncoderFormatSupport::Unavailable};
     out.backend_label = "NVENC";
     out.provenance = "NVENC probe unavailable (vendor SDK header not present in this build)";
     return out;
@@ -229,6 +230,7 @@ std::string EncoderBackendLabelForVendor(AdapterVendor vendor) noexcept {
 AdapterEncoderCapability ProbeAdapterEncoderCapability(const AdapterInfo& adapter) {
     if (adapter.vendor != AdapterVendor::Nvidia) {
         AdapterEncoderCapability out;
+        out.adapter_luid = adapter.luid;
         out.probed = false;
         out.backend_label.clear();
         out.provenance = kNotYetSupportedMessage;

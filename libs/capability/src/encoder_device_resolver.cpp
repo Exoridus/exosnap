@@ -5,6 +5,7 @@
 #include <capability/adapter_enum.h>
 #include <capability/capability_set.h>
 #include <capability/config_types.h>
+#include <capability/encoder_format_capability.h>
 #include <capability/runtime_snapshot.h>
 #include <capability/support_level.h>
 #include <cstddef>
@@ -31,22 +32,17 @@ bool CodecSupported(const AdapterEncoderCapability& capability, VideoCodec codec
     return false;
 }
 
-bool ChromaSupported(const AdapterEncoderCapability& capability, VideoCodec codec, ChromaSubsampling chroma) noexcept {
-    switch (chroma) {
-    case ChromaSubsampling::Cs420:
-        return true;
-    case ChromaSubsampling::Cs444:
-        if (codec == VideoCodec::H264) {
-            return capability.yuv444_h264;
-        }
-        if (codec == VideoCodec::Hevc) {
-            return capability.yuv444_hevc;
-        }
-        return false; // AV1 has no 4:4:4 path
-    case ChromaSubsampling::Cs422:
-        return false; // not implemented for any backend
+const CodecFormatCapabilities& FormatsForCodec(const AdapterEncoderCapability& capability, VideoCodec codec) noexcept {
+    switch (codec) {
+    case VideoCodec::H264:
+        return capability.formats_h264;
+    case VideoCodec::Hevc:
+        return capability.formats_hevc;
+    case VideoCodec::Av1:
+        return capability.formats_av1;
     }
-    return false;
+    static const CodecFormatCapabilities unknown;
+    return unknown;
 }
 
 exosnap::engine::PipelineAdapterIdentity IdentityFromCandidate(const EncoderDeviceCandidate& candidate) {
@@ -115,16 +111,14 @@ std::string UnavailableReason(const EncoderDeviceCandidate& candidate, const Enc
                                           "The encoder capability probe did not complete on this adapter.")
                    : candidate.capability.provenance;
     }
+    if (candidate.capability.adapter_luid == 0 || candidate.capability.adapter_luid != candidate.adapter.luid) {
+        return EXOSNAP_TRANSLATABLE("Capabilities", "Encoder capability evidence does not identify this adapter.");
+    }
     if (!CodecSupported(candidate.capability, request.video_codec)) {
         return std::string(ToString(request.video_codec)) + " is not supported by this encoder on this adapter.";
     }
-    if (request.chroma == ChromaSubsampling::Cs444) {
-        return "4:4:4 is not supported for " + std::string(ToString(request.video_codec)) + " on this adapter.";
-    }
-    if (request.chroma == ChromaSubsampling::Cs422) {
-        return "4:2:2 chroma is not implemented.";
-    }
-    return EXOSNAP_TRANSLATABLE("Capabilities", "This adapter cannot execute the requested format.");
+    return std::string(ToString(request.video_codec)) + " " + std::string(ToString(request.bit_depth)) + " " +
+           std::string(ToString(request.chroma)) + ": " + EncoderFormatAnnotation(candidate.format_support).reason;
 }
 
 } // namespace
@@ -140,10 +134,21 @@ std::vector<EncoderDeviceCandidate> BuildEncoderDeviceCandidates(std::span<const
         candidate.adapter = adapters[i];
         candidate.capability = capabilities[i];
         candidate.backend = exosnap::engine::ImplementedEncoderBackendForVendorId(candidate.adapter.vendor_id);
+        candidate.format_support =
+            QueryEncoderFormatSupport(request.video_codec, FormatsForCodec(candidate.capability, request.video_codec),
+                                      request.chroma, request.bit_depth);
+        if (!candidate.capability.probed) {
+            if (candidate.format_support != EncoderFormatSupport::Unavailable)
+                candidate.format_support = EncoderFormatSupport::Unknown;
+        } else if (candidate.capability.adapter_luid == 0 ||
+                   candidate.capability.adapter_luid != candidate.adapter.luid)
+            candidate.format_support = EncoderFormatSupport::Unavailable;
+        else if (!CodecSupported(candidate.capability, request.video_codec))
+            candidate.format_support = EncoderFormatSupport::Unsupported;
         candidate.supports_request = candidate.backend != exosnap::engine::EncoderBackend::None &&
                                      candidate.capability.probed &&
                                      CodecSupported(candidate.capability, request.video_codec) &&
-                                     ChromaSupported(candidate.capability, request.video_codec, request.chroma);
+                                     candidate.format_support == EncoderFormatSupport::Supported;
         if (!candidate.supports_request) {
             candidate.unavailable_reason = UnavailableReason(candidate, request);
         }
@@ -225,8 +230,23 @@ CapabilitySet CapabilitySetForAdapter(const CapabilitySet& base, const AdapterIn
                                       const AdapterEncoderCapability& capability) {
     CapabilitySet result = base;
     result.gpu_adapter_name = adapter.name;
+    if (result.runtime.adapter.adapter_luid != adapter.luid)
+        result.runtime.adapter.driver_version.clear();
     result.runtime.adapter.adapter_luid = adapter.luid;
     result.runtime.adapter.vendor_id = adapter.vendor_id;
+
+    // The system-wide view may describe a different adapter. Both positive and
+    // negative hardware annotations must be replaced by this adapter's facts.
+    const auto baseline = CapabilityBuilder::BuildStaticValidatedBaseline();
+    result.video_codecs = baseline.video_codecs;
+    result.bit_depths = baseline.bit_depths;
+    result.hdr10_native = baseline.hdr10_native;
+    result.chroma444 = baseline.chroma444;
+    result.runtime.nvidia = {};
+    result.runtime.nvidia.adapter_name = adapter.name;
+    result.runtime.nvidia.nvenc_dll_present = base.runtime.nvidia.nvenc_dll_present;
+    result.runtime.nvidia.nvenc_api_version_valid = base.runtime.nvidia.nvenc_api_version_valid;
+    result.runtime.nvidia.nvenc_api_version = base.runtime.nvidia.nvenc_api_version;
 
     result.runtime.nvidia.nvenc_codec_probed = false;
     for (const VideoCodec codec : AllVideoCodecs()) {
@@ -246,12 +266,20 @@ CapabilitySet CapabilitySetForAdapter(const CapabilitySet& base, const AdapterIn
         }
     } else {
         NvidiaRuntimeFacts& facts = result.runtime.nvidia;
-        facts.nvenc_codec_probed = capability.probed;
+        facts.nvenc_codec_probed =
+            capability.probed && capability.adapter_luid != 0 && capability.adapter_luid == adapter.luid;
+        if (facts.nvenc_codec_probed) {
+            facts.nvenc_dll_present = true;
+            facts.nvenc_api_version_valid = true;
+        }
         facts.nvenc_h264 = capability.h264;
         facts.nvenc_hevc = capability.hevc;
         facts.nvenc_av1 = capability.av1;
         facts.nvenc_yuv444_h264 = capability.yuv444_h264;
         facts.nvenc_yuv444_hevc = capability.yuv444_hevc;
+        facts.nvenc_formats_h264 = capability.formats_h264;
+        facts.nvenc_formats_hevc = capability.formats_hevc;
+        facts.nvenc_formats_av1 = capability.formats_av1;
         ApplyNvencCodecSupport(result, facts);
         ApplyNvencYuv444Support(result, facts);
         facts.nvenc_adv_h264 = {capability.max_bframes_h264, capability.bframe_ref_mode_h264, capability.lookahead_h264,
@@ -262,6 +290,8 @@ CapabilitySet CapabilitySetForAdapter(const CapabilitySet& base, const AdapterIn
                                capability.temporal_aq_av1};
         ApplyNvencAdvancedEncodeSupport(result, facts);
     }
+    ApplyNvencFormatSupport(result, result.runtime.nvidia);
+    result.nvenc_dll_present = result.runtime.nvidia.nvenc_dll_present;
 
     // A combo override can pin an unavailable codec back to Available; scoped
     // to this adapter, that would resurrect exactly the path the probe denied.

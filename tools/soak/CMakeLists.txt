@@ -75,5 +75,14 @@ exosnap_add_gtest(
 )
 target_compile_definitions(soak_synthetic_tests PRIVATE NOMINMAX)
 
+exosnap_add_gtest(
+    NAME soak_runner_tests
+    TEST_PREFIX soak.
+    PHASE cpu
+    SOURCES tests/test_soak_runner.cpp
+    LIBRARIES soak_runner
+)
+target_include_directories(soak_runner_tests PRIVATE ${PROJECT_SOURCE_DIR}/libs/engine/testutil)
+
 # The A/V-sync analyzer's own unit tests live with its implementation now:
 # `cargo test -p exo-dev av_sync::`, run as part of the `rust` verification step.

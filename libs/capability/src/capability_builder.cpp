@@ -3,10 +3,12 @@
 
 #include <capability/capability_set.h>
 #include <capability/config_types.h>
+#include <capability/encoder_format_capability.h>
 #include <capability/runtime_snapshot.h>
 #include <capability/support_level.h>
 
 #include <string>
+#include <utility>
 
 namespace exosnap::capability {
 
@@ -116,21 +118,14 @@ CapabilitySet CapabilityBuilder::BuildStaticValidatedBaseline() {
                                                "(SDR BT.709); not yet validated on recording hardware. "
                                                "Requires HEVC or AV1; H.264 is 8-bit only.")});
 
-    // Explicit per-codec HDR10-native (10-bit / P010) capability.
-    // HEVC (Main10) and AV1 (Main 10-bit) carry a native PQ/BT.2020 HDR10 signal;
-    // H.264 has no 10-bit NVENC path, so it cannot. This is a codec-format fact,
-    // NOT a per-GPU probe: like the Bit10 annotation above it is inferred from
-    // "NVENC can HEVC/AV1", not from an NV_ENC_CAPS_SUPPORT_10BIT_ENCODE query —
-    // a real probe is deferred; the inference (NVENC HEVC/AV1 implies
-    // Main10/10-bit) is the documented risk. Kept independent of the
-    // NVENC-absence downgrade below: encode availability is a separate concern
-    // owned by video_codecs / the codec-availability blocker.
+    // Static implementation support only. Every runtime/device view replaces
+    // these annotations with the selected codec's P010/profile/10-bit evidence.
     caps.hdr10_native.emplace(
         VideoCodec::Av1,
-        SupportAnnotation{SupportLevel::Available, "AV1 carries native HDR10 (10-bit/P010, PQ/BT.2020)."});
-    caps.hdr10_native.emplace(
-        VideoCodec::Hevc,
-        SupportAnnotation{SupportLevel::Available, "HEVC Main10 carries native HDR10 (10-bit/P010, PQ/BT.2020)."});
+        SupportAnnotation{SupportLevel::ValidUnvalidated, "AV1 HDR10 requires a successful P010/10-bit device probe."});
+    caps.hdr10_native.emplace(VideoCodec::Hevc,
+                              SupportAnnotation{SupportLevel::ValidUnvalidated,
+                                                "HEVC HDR10 requires a successful P010/Main10 device probe."});
     caps.hdr10_native.emplace(
         VideoCodec::H264,
         SupportAnnotation{
@@ -169,19 +164,6 @@ CapabilitySet CapabilityBuilder::BuildEffectiveCapabilities(const RuntimeCapabil
         // 10-bit requires NVENC (HEVC Main10 / AV1 10-bit). Without NVENC it cannot be
         // produced at all, so downgrade it to NotImplemented mirroring the HEVC codec.
         caps.bit_depths[BitDepth::Bit10] = SupportAnnotation{SupportLevel::NotImplemented, nvenc_reason};
-
-        // Force primary combos to non-selectable via combo_override.
-        const ComboKey mkv_av1_key{Container::Matroska, VideoCodec::Av1, AudioCodec::Aac, ChromaSubsampling::Cs420,
-                                   BitDepth::Bit8};
-        caps.combo_overrides[mkv_av1_key] = SupportAnnotation{SupportLevel::NotImplemented, nvenc_reason};
-
-        const ComboKey mkv_h264_key{Container::Matroska, VideoCodec::H264, AudioCodec::Aac, ChromaSubsampling::Cs420,
-                                    BitDepth::Bit8};
-        caps.combo_overrides[mkv_h264_key] = SupportAnnotation{SupportLevel::NotImplemented, nvenc_reason};
-
-        const ComboKey mp4_key{Container::Mp4, VideoCodec::H264, AudioCodec::Aac, ChromaSubsampling::Cs420,
-                               BitDepth::Bit8};
-        caps.combo_overrides[mp4_key] = SupportAnnotation{SupportLevel::NotImplemented, nvenc_reason};
     }
 
     // AAC has no runtime-availability downgrade rule: it is encoded
@@ -205,8 +187,59 @@ CapabilitySet CapabilityBuilder::BuildEffectiveCapabilities(const RuntimeCapabil
     ApplyNvencCodecSupport(caps, snapshot.nvidia);
     ApplyNvencYuv444Support(caps, snapshot.nvidia);
     ApplyNvencAdvancedEncodeSupport(caps, snapshot.nvidia);
+    ApplyNvencFormatSupport(caps, snapshot.nvidia);
 
     return caps;
+}
+
+void ApplyNvencFormatSupport(CapabilitySet& caps, const NvidiaRuntimeFacts& facts) {
+    const auto apply = [&caps, &facts](VideoCodec codec, bool advertised, CodecFormatCapabilities formats) {
+        if (!facts.nvenc_dll_present || !facts.nvenc_api_version_valid) {
+            formats = {EncoderFormatSupport::Unavailable, EncoderFormatSupport::Unavailable,
+                       EncoderFormatSupport::Unavailable};
+        } else if (!facts.nvenc_codec_probed) {
+            const auto unprobed = [](EncoderFormatSupport support) {
+                return support == EncoderFormatSupport::Unavailable ? support : EncoderFormatSupport::Unknown;
+            };
+            formats = {unprobed(formats.nv12), unprobed(formats.p010), unprobed(formats.ayuv)};
+        } else if (!advertised) {
+            formats = {EncoderFormatSupport::Unsupported, EncoderFormatSupport::Unsupported,
+                       EncoderFormatSupport::Unsupported};
+        }
+        caps.encoder_formats[codec] = formats;
+        caps.chroma444[codec] = EncoderFormatAnnotation(
+            QueryEncoderFormatSupport(codec, formats, ChromaSubsampling::Cs444, BitDepth::Bit8));
+        if (IsSelectable(caps.chroma444[codec]))
+            caps.chroma444[codec].level = SupportLevel::ValidUnvalidated;
+        if (codec != VideoCodec::H264) {
+            auto annotation = EncoderFormatAnnotation(
+                QueryEncoderFormatSupport(codec, formats, ChromaSubsampling::Cs420, BitDepth::Bit10));
+            if (IsSelectable(annotation)) {
+                annotation.level = SupportLevel::ValidUnvalidated;
+                annotation.reason = EXOSNAP_TRANSLATABLE(
+                    "Capabilities", "P010, 10-bit encoding and the required profile are supported on this adapter; "
+                                    "HDR capture and signaling require separate validation.");
+            }
+            caps.hdr10_native[codec] = std::move(annotation);
+        }
+    };
+    apply(VideoCodec::H264, facts.nvenc_h264, facts.nvenc_formats_h264);
+    apply(VideoCodec::Hevc, facts.nvenc_hevc, facts.nvenc_formats_hevc);
+    apply(VideoCodec::Av1, facts.nvenc_av1, facts.nvenc_formats_av1);
+
+    auto ten_bit = EncoderFormatSupport::Unsupported;
+    for (const auto codec : {VideoCodec::Hevc, VideoCodec::Av1}) {
+        const auto support = caps.QueryEncoderFormat(codec, ChromaSubsampling::Cs420, BitDepth::Bit10);
+        if (support == EncoderFormatSupport::Supported) {
+            ten_bit = support;
+            break;
+        }
+        if (support == EncoderFormatSupport::Unknown || support == EncoderFormatSupport::Unavailable)
+            ten_bit = support;
+    }
+    caps.bit_depths[BitDepth::Bit10] = EncoderFormatAnnotation(ten_bit);
+    if (ten_bit == EncoderFormatSupport::Supported)
+        caps.bit_depths[BitDepth::Bit10].level = SupportLevel::ValidUnvalidated;
 }
 
 void ApplyNvencCodecSupport(CapabilitySet& caps, const NvidiaRuntimeFacts& facts) {

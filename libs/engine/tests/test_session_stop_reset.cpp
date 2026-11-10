@@ -10,10 +10,11 @@
 #include "exosnap/engine/codec_types.h"
 #include "exosnap/engine/error_types.h"
 #include "exosnap/engine/packet_types.h"
-#include "exosnap/engine/recorder_session.h"
+#include "exosnap/engine/record_request_id.h"
 #include "mux_queue.h"
 #include "premux_state.h"
 #include "session_internal.h"
+#include "session_request_gate.h"
 #include "session_stop_reset.h"
 #include "split_sentinel_policy.h"
 

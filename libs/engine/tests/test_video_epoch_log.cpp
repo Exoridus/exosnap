@@ -5,9 +5,9 @@
 #include <gtest/gtest.h>
 
 #include "exosnap/engine/logging/logging.h"
-#include "qpc_100ns.h"
 #include "vfr_encode_policy.h"
 #include "video_epoch_log.h"
+#include <exosnap/engine/qpc_100ns.h>
 
 #include <optional>
 #include <string>

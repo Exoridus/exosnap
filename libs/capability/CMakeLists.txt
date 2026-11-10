@@ -142,6 +142,15 @@ exosnap_add_gtest(
   LIBRARIES exosnap_capability
 )
 
+# Pure SDK function-table fixtures; no driver, device, or encode session is opened.
+exosnap_add_gtest(
+  NAME capability_nvenc_format_probe_tests
+  TEST_PREFIX capability.
+  SOURCES tests/test_nvenc_format_probe.cpp
+  LIBRARIES exosnap_capability
+)
+target_include_directories(capability_nvenc_format_probe_tests PRIVATE "${CMAKE_SOURCE_DIR}/third_party/nvidia")
+
 exosnap_add_gtest(
   NAME capability_nvenc_tuning_policy_tests
   TEST_PREFIX capability.

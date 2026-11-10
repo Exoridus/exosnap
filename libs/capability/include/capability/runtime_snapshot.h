@@ -1,5 +1,7 @@
 #pragma once
 
+#include "encoder_format_capability.h"
+
 #include <cstdint>
 #include <string>
 #include <string_view>
@@ -96,17 +98,19 @@ struct NvidiaRuntimeFacts {
     // nvenc_codec_probed is true only when a real NVENC session was opened and its
     // EncodeGUIDs enumerated successfully; the per-codec flags are then authoritative.
     // When false (no DLL / no device / no session — i.e. headless CI or a probe
-    // failure) the per-codec flags are meaningless and the static baseline is kept.
+    // failure) the per-codec flags are meaningless. Exact format evidence still
+    // blocks runtime selection when a codec's implementation exists.
     bool nvenc_codec_probed = false;
     bool nvenc_av1 = false;
     bool nvenc_hevc = false;
     bool nvenc_h264 = false;
 
-    // Per-GPU 4:4:4 (YUV444, 8-bit) encode support, probed via
-    // NV_ENC_CAPS_SUPPORT_YUV444_ENCODE on the matched H.264/HEVC codec GUIDs.
-    // Only meaningful when nvenc_codec_probed is true. AV1 has no 4:4:4 path so no
-    // flag exists for it. Default false so a GPU that is not probed never claims
-    // 4:4:4 beyond the ValidUnvalidated static baseline.
+    CodecFormatCapabilities nvenc_formats_h264;
+    CodecFormatCapabilities nvenc_formats_hevc;
+    CodecFormatCapabilities nvenc_formats_av1;
+
+    // Convenience flags for supported AYUV/profile/4:4:4 evidence above.
+    // The structured format facts retain query failure and unknown states.
     bool nvenc_yuv444_h264 = false;
     bool nvenc_yuv444_hevc = false;
 
@@ -139,7 +143,7 @@ struct MfWebcamRuntimeFacts {
 // session, no Media Foundation — same cost class as QueryDisplayFacts(), safe
 // to call synchronously on the UI thread. See CapabilityBuilder::QueryAdapterIdentity.
 struct AdapterIdentity {
-    int64_t adapter_luid = 0; // 0 when no real (non-software) adapter was found
+    int64_t adapter_luid = 0; // default encoding adapter; 0 when no real adapter was found
     // PCI vendor of that adapter (DXGI_ADAPTER_DESC1::VendorId), 0 when unknown.
     // Not part of the cache key -- the LUID already identifies the adapter -- but
     // the driver version below is only interpretable against it: every vendor

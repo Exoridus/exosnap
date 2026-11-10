@@ -6,6 +6,7 @@
 
 #include <exosnap/engine/codec_types.h>
 #include <exosnap/engine/color_metadata.h>
+#include <exosnap/engine/encoder_input_requirements.h>
 #include <exosnap/engine/packet_types.h>
 #include <exosnap/engine/pipeline_diagnostics.h>
 
@@ -20,6 +21,15 @@ namespace exosnap::engine {
 // The encoder does not take ownership.
 using GpuTextureHandle = void*;
 
+enum class EncoderInputSlotStatus { Available, Busy, Invalid };
+
+struct EncoderInputSlot {
+    EncoderInputSlotStatus status = EncoderInputSlotStatus::Busy;
+    int32_t index = -1;
+};
+
+// Calls are serialized on the encoding worker. Native asynchronous completion
+// does not transfer the host device/context or input-pool ownership.
 class IVideoEncoder {
   public:
     virtual ~IVideoEncoder() = default;
@@ -48,9 +58,16 @@ class IVideoEncoder {
     // gpu_context: on Windows, an ID3D11Device* cast to void*. Null for CPU-only encoders.
     virtual bool Open(void* gpu_context, std::string& out_error) = 0;
 
-    // Configure dimensions and frame rate. Call after Open(), before RegisterSlotTexture().
+    // Configure visible dimensions and frame rate after Open(), before input
+    // registration. Live reconfiguration is unsupported. Changed configuration
+    // requires teardown and a new session with a newly validated input pool.
     virtual bool Configure(uint32_t width, uint32_t height, uint32_t fps_num, uint32_t fps_den,
                            std::string& out_error) = 0;
+
+    // Available after successful Configure, before allocating/registering inputs.
+    // The host validates the returned layout and retains its device and textures
+    // through Destroy. Requirements stay fixed for the configured session.
+    [[nodiscard]] virtual EncoderInputRequirements GetInputRequirements() const noexcept = 0;
 
     // Register a GPU texture as a reusable input slot.
     // slot_idx in [0, SlotCount()). Texture must remain valid for the encoder lifetime.
@@ -58,13 +75,31 @@ class IVideoEncoder {
 
     virtual int32_t SlotCount() const = 0;
 
-    // Acquire the next free input slot. Returns -1 if no slot is free.
+    // Acquire the next free input slot. Returns -1 if no slot is free. Only a
+    // successful acquisition grants permission to write an input texture.
+    // Packet completion and PendingFrames do not establish input reuse safety.
     virtual int32_t AcquireFreeSlot() = 0;
 
+    // Busy has accepted no input and advances no submission state. Invalid is
+    // a backend contract failure, never a writable index or a retry request.
+    [[nodiscard]] EncoderInputSlot AcquireInputSlot() {
+        const int32_t slot = AcquireFreeSlot();
+        if (slot == -1)
+            return {EncoderInputSlotStatus::Busy, -1};
+        if (slot < 0 || slot >= SlotCount())
+            return {EncoderInputSlotStatus::Invalid, -1};
+        return {EncoderInputSlotStatus::Available, slot};
+    }
+
     // Release a slot that was acquired but never submitted via EncodeFrame
-    // (error-path callers only; EncodeFrame itself owns the slot afterward).
+    // (error-path callers only; EncodeFrame itself owns the slot afterward,
+    // including on failure). Reuse a submitted slot only after acquisition.
     virtual void ReleaseSlot(int32_t slot_idx) noexcept = 0;
 
+    // EncodeFrame, ReapCompleted and Flush transfer each appended packet to the
+    // caller exactly once, including when returning false. Route these packets
+    // before handling the error. Later calls never return them again.
+    //
     // Submit one frame for encoding. Appends 0..k completed packets to
     // out_packets in decode order, including across successive calls. PTS is
     // presentation time. Reordered packets carry an explicit decode timestamp.
@@ -72,7 +107,7 @@ class IVideoEncoder {
     virtual bool EncodeFrame(int32_t slot_idx, uint64_t pts_ns, uint32_t width, uint32_t height,
                              std::vector<EncodedVideoPacket>& out_packets, std::string& out_error) = 0;
 
-    // Flush all buffered frames (EOS). Appends remaining packets.
+    // Flush all buffered frames (EOS). Appends remaining packets in decode order.
     //
     // Returns true only when every frame the encoder still held reached
     // out_packets. False means the drain was cut short -- EOS was refused, the
@@ -86,7 +121,8 @@ class IVideoEncoder {
     // Frames submitted and not yet delivered as packets. After a Flush that
     // returned false this is the number of frames the file will not contain;
     // after one that returned true it is 0. Encoders that emit every packet
-    // inline from EncodeFrame never hold any.
+    // inline from EncodeFrame never hold any. This is an output backlog, not a
+    // count of locked input textures. Backend input release can occur later.
     virtual uint64_t PendingFrames() const noexcept {
         return 0;
     }
@@ -97,7 +133,8 @@ class IVideoEncoder {
     // it; the default no-op keeps today's sync encoders (and future CPU-only
     // encoders, roadmap 0.11) trivially conformant since they always emit their
     // output inline from EncodeFrame. wait_head_ms bounds how long to wait for
-    // the oldest pending completion (0 = non-blocking poll).
+    // the oldest pending completion (0 = non-blocking poll). As with EncodeFrame,
+    // a false result can accompany completed packets and sets out_error.
     virtual bool ReapCompleted(std::vector<EncodedVideoPacket>& out_packets, std::string& out_error,
                                uint32_t wait_head_ms = 0) {
         (void)out_packets;

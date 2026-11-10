@@ -20,6 +20,7 @@
 #include <exosnap/engine/backend_tuning.h>
 #include <exosnap/engine/codec_types.h>
 #include <exosnap/engine/color_metadata.h>
+#include <exosnap/engine/encoder_input_requirements.h>
 #include <exosnap/engine/pipeline_diagnostics.h>
 
 namespace exosnap::engine {
@@ -484,6 +485,10 @@ class NvencEncoder {
         return static_cast<int32_t>(m_slots.size());
     }
 
+    [[nodiscard]] const EncoderInputRequirements& GetInputRequirements() const noexcept {
+        return m_inputRequirements;
+    }
+
     [[nodiscard]] const std::vector<uint8_t>& SequenceHeader() const {
         return m_sequenceHeader;
     }
@@ -649,6 +654,8 @@ class NvencEncoder {
     void Destroy();
 
   private:
+    ID3D11Device* m_device = nullptr;
+    EncoderInputRequirements m_inputRequirements;
     HMODULE m_dll = nullptr;
     NV_ENCODE_API_FUNCTION_LIST m_funcs{};
     void* m_encoder = nullptr;

@@ -1,4 +1,5 @@
 #include "audio_thread.h"
+#include "audio_capture_drain.h"
 #include <atomic>
 #include <exosnap/engine/performance_measurements.h>
 
@@ -529,7 +530,7 @@ void AudioThread::EncodeLoop(IAudioEncoder& enc, uint32_t sample_rate, uint32_t 
     // --- Capture / encode loop ---
     while (!m_state.stop_requested.load()) {
         if (m_state.pause_requested.load()) {
-            while (source_->PendingFrameCount() > 0) {
+            DrainAudioCapture(*source_, m_state.stop_requested, [&] {
                 RawAudioBuffer raw{};
                 std::string err;
                 if (source_->AcquireBuffer(raw, err)) {
@@ -544,9 +545,10 @@ void AudioThread::EncodeLoop(IAudioEncoder& enc, uint32_t sample_rate, uint32_t 
                         bare_degraded = true;
                         markDegradedOccurred();
                     }
-                    break;
+                    return false;
                 }
-            }
+                return true;
+            });
             // A pause produces no audio by design, so the paused stretch is not a
             // gap in the timeline: keep the silence clock anchored at now, or the
             // first clock-driven fill after the resume would try to cover the
@@ -710,7 +712,7 @@ void AudioThread::EncodeLoop(IAudioEncoder& enc, uint32_t sample_rate, uint32_t 
                                  (mute_mask & AudioSourceKindBit(source_kinds_[0])) != 0;
 
         bool anyWork = false;
-        while (source_->PendingFrameCount() > 0) {
+        DrainAudioCapture(*source_, m_state.stop_requested, [&] {
             RawAudioBuffer raw{};
             std::string captureErr;
             if (!source_->AcquireBuffer(raw, captureErr)) {
@@ -729,7 +731,7 @@ void AudioThread::EncodeLoop(IAudioEncoder& enc, uint32_t sample_rate, uint32_t 
                         }
                     }
                 }
-                break;
+                return false;
             }
 
             if (raw.data_discontinuity) {
@@ -852,7 +854,7 @@ void AudioThread::EncodeLoop(IAudioEncoder& enc, uint32_t sample_rate, uint32_t 
                 m_state.RecordFailure(E_FAIL, ErrorPhase::AudioCapture,
                                       "Audio source returned null bytes for non-silent packet");
                 failed = true;
-                break;
+                return false;
             } else if (source_format == AudioSampleFormat::Float32) {
                 new_rms = ComputeRmsLinear(reinterpret_cast<const float*>(raw.bytes), totalSamples);
                 enc.FeedFloat32(reinterpret_cast<const float*>(raw.bytes), totalSamples, 0, encoderAccumulatedFrames,
@@ -893,11 +895,12 @@ void AudioThread::EncodeLoop(IAudioEncoder& enc, uint32_t sample_rate, uint32_t 
 
             if (!routeAudioPackets(pkts)) {
                 failed = true;
-                break;
+                return false;
             }
 
             anyWork = true;
-        }
+            return true;
+        });
 
         // A merged inner can go degraded during the drain above (its acquire
         // fails inside MixedAudioSrc). Record it here too, so the post-flight

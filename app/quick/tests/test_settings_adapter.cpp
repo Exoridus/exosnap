@@ -1464,6 +1464,7 @@ capability::AdapterInfo MakeDevice(const char* name, capability::AdapterVendor v
 
 capability::AdapterEncoderCapability MakeNvencProbe() {
     capability::AdapterEncoderCapability capability;
+    capability.adapter_luid = 1;
     capability.probed = true;
     capability.backend_label = "NVENC";
     capability.provenance = "probed via NVENC encode GUIDs";
@@ -1472,6 +1473,13 @@ capability::AdapterEncoderCapability MakeNvencProbe() {
     capability.av1 = true;
     capability.yuv444_h264 = true;
     capability.yuv444_hevc = true;
+    using capability::EncoderFormatSupport;
+    capability.formats_h264 = {EncoderFormatSupport::Supported, EncoderFormatSupport::Unsupported,
+                               EncoderFormatSupport::Supported};
+    capability.formats_hevc = {EncoderFormatSupport::Supported, EncoderFormatSupport::Supported,
+                               EncoderFormatSupport::Supported};
+    capability.formats_av1 = {EncoderFormatSupport::Supported, EncoderFormatSupport::Supported,
+                              EncoderFormatSupport::Unsupported};
     return capability;
 }
 

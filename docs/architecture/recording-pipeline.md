@@ -14,6 +14,28 @@ Input snapshots include output, split, video, webcam, audio, target context and 
 
 ## Workers and queues
 
+### Lifecycle reliability invariants
+
+The recording request identity, its state selection and stop/split admission form one synchronization decision. A stale request must not stop a newer preparation, and a selected state must remain the state whose identity was checked. Request retirement applies to every admitted return, including failed preparation. A stop before admission belongs to its matching request and is consumed once.
+
+Stop closes new capture work while permitting the finite encoder/mux tail to drain. An audio source that keeps reporting ready packets must not prevent the capture loop from observing stop between packets. This is separate from a driver call that has already blocked inside acquisition and from the bounded encoder flush.
+
+Callback admission and callback completion are distinct. Closing a gate rejects new invocations; an already admitted invocation can outlast a bounded wait. Every object borrowed by that invocation must remain alive through its completion. A join timeout or a gate timeout cannot itself justify destroying borrowed owners.
+
+| Transition | Required failure behavior |
+|---|---|
+| Idle to Preparing | Admit one request and capture immutable configuration; reject overlapping admission |
+| Preparing to Running | Publish running state only after required preparation; cancel or roll back partial ownership on failure |
+| Running to Paused or resumed | Preserve the selected session and its media-time policy; no second source ownership |
+| Running to Stopping | Make stop effective once, wake blocked queues and prevent unbounded new capture work |
+| Stopping to Draining | Retain worker state and callback owners while finite tail work remains |
+| Draining to Finalizing | Preserve first failure and distinguish incomplete drain from complete delivery |
+| Finalizing to Published | Publish only after required finalization and final-path operations succeed |
+| Any admitted state to Failed | Retire request admission, keep valuable partials, preserve failure detail and prevent false Saved state |
+| Finished to next Preparing | Use a fresh output generation; retained old workers must not receive reset state |
+
+These are correctness contracts, not hardware qualification. The [soak runbook](../dev/soak-and-recovery-drills.md) distinguishes portable synchronization tests, native pipeline fixtures and actual device/OS transitions. Recovery after a device failure requires an explicit supported contract. A new codec, resolution or capture mode must not be introduced silently as a recovery action.
+
 `RecorderSession` owns shared session state. Video work owns its D3D11 immediate/video contexts and encoder resources. Audio workers own capture, conversion and encoding for their resolved tracks. The mux worker serializes encoded audio/video packets into the container. Codec-private slots, duration accounting, track meters and container configuration share the central eight-track limit. UI callbacks are queued observations and may not touch an engine context from the GUI thread.
 
 `ProductionRuntime` retains the native capture/GPU execution domain independently of `FileOutput`. Each recording gets fresh session state and an output generation. Runtime configuration keys include the effective capture, video, webcam and audio settings. GPU frame leases require actual completion before reuse; releasing the final CPU reader alone is insufficient. A timed-out SDK owner retains its resources instead of transferring them to a replacement thread.

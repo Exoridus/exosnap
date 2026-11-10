@@ -28,6 +28,10 @@ add_executable(exosnap_concurrency_tests
     ../test_mux_queue.cpp
     ../test_session_synchronization.cpp
     ../test_session_callback_gate.cpp
+    ../test_encoder_packet_dispatch.cpp
+    ../test_encoder_input_requirements.cpp
+    ../test_encoder_input_slots.cpp
+    ../test_encoder_input_lifetime.cpp
 )
 target_compile_features(exosnap_concurrency_tests PRIVATE cxx_std_20)
 set_target_properties(exosnap_concurrency_tests PROPERTIES CXX_EXTENSIONS OFF)
@@ -42,3 +46,35 @@ endif()
 
 add_test(NAME engine.portable_concurrency COMMAND exosnap_concurrency_tests)
 set_tests_properties(engine.portable_concurrency PROPERTIES TIMEOUT 120 LABELS phase.cpu)
+
+# The actual sampler, deadline and output-fault controls are portable. They do
+# not instantiate RecorderSession or imply Windows capture/encoding coverage.
+FetchContent_Declare(
+    nlohmann_json
+    GIT_REPOSITORY https://github.com/nlohmann/json.git
+    GIT_TAG 9cca280a4d0ccf0c08f47a99aa71d1b0e52f8d03
+)
+set(JSON_BuildTests OFF CACHE INTERNAL "")
+set(JSON_Install OFF CACHE INTERNAL "")
+FetchContent_MakeAvailable(nlohmann_json)
+set(SOAK_ROOT ${CMAKE_CURRENT_SOURCE_DIR}/../../../../tools/soak)
+add_executable(exosnap_soak_control_tests
+    ${SOAK_ROOT}/tests/test_soak_runner.cpp
+    ${SOAK_ROOT}/tests/test_soak_policy.cpp
+    ${SOAK_ROOT}/tests/test_clapper_schedule.cpp
+    ${SOAK_ROOT}/soak_runner.cpp
+    ${SOAK_ROOT}/soak_metrics.cpp
+    ${SOAK_ROOT}/clapper_schedule.cpp
+)
+target_compile_features(exosnap_soak_control_tests PRIVATE cxx_std_20)
+set_target_properties(exosnap_soak_control_tests PROPERTIES CXX_EXTENSIONS OFF)
+target_include_directories(exosnap_soak_control_tests PRIVATE ${SOAK_ROOT} ../../include ../../testutil)
+target_link_libraries(exosnap_soak_control_tests PRIVATE GTest::gtest_main nlohmann_json::nlohmann_json)
+exosnap_stage_asan_runtime(exosnap_soak_control_tests)
+if(MSVC)
+    target_compile_options(exosnap_soak_control_tests PRIVATE /W4 /WX /w14062)
+else()
+    target_compile_options(exosnap_soak_control_tests PRIVATE -Wall -Wextra -Werror)
+endif()
+add_test(NAME soak.portable_controls COMMAND exosnap_soak_control_tests)
+set_tests_properties(soak.portable_controls PROPERTIES TIMEOUT 15 LABELS phase.cpu)

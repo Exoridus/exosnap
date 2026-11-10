@@ -28,6 +28,14 @@ Recommended and allowed combinations may be selectable. Experimental/fallback/pr
 
 Settings options carry `{value, label, selectable, reason}` from the C++ owners. The UI must not infer availability from a codec label or vendor name. Reconciliation runs when the container changes, followed by sanitization, and admission validates again before recording.
 
+### Device format evidence
+
+The NVENC capability probes reuse their open per-adapter sessions to enumerate input formats and profiles and query encode capabilities. NV12 establishes the implemented 8-bit 4:2:0 input path. P010 additionally requires 10-bit encode support and the HEVC Main10 or AV1 Main profile. AYUV additionally requires 4:4:4 encode support and H.264 High 4:4:4 or HEVC FREXT. H.264 10-bit, AV1 4:4:4, 10-bit 4:4:4 and 4:2:2 remain unimplemented regardless of driver advertisements.
+
+`EncoderFormatSupport` distinguishes unknown evidence, an unavailable query, an authoritative negative and supported input prerequisites. Only supported evidence admits a runtime format. The resolver verifies the probe's nonzero adapter LUID, then codec, depth and chroma. Runtime combination overrides cannot bypass this check. The static implementation matrix cannot authorize recording; runtime views always replace it with probe facts. The default probe, display name and cache identity refer to the same adapter, and a failed device creation never falls through to another GPU. Cache schema changes invalidate snapshots that lack the exact format evidence.
+
+Native HDR admission uses the selected encoder adapter's P010 evidence when an HDR-active capture engages that path. It does not infer HDR support from HEVC or AV1 alone. These format queries establish encoder input prerequisites, not successful capture/conversion, HDR signaling, resolution/FPS limits or rate-control/GOP combinations. Native initialization and hardware/media validation retain those responsibilities.
+
 ## Rate control and encoder preset
 
 The product's constant-quality value is a canonical scale, not universal CRF. NVENC maps it to per-codec constant quantizers. H.264/HEVC use their native QP representation; AV1 uses the canonical-to-native curve, not a linear range ratio. The inter-picture offset is applied in the canonical domain before conversion. VBR and CBR map bitrate fields explicitly.
@@ -35,6 +43,23 @@ The product's constant-quality value is a canonical scale, not universal CRF. NV
 P1-P7 are NVENC-only speed/quality presets and apply across supported NVENC codecs. P4 is the default. Read the SDK preset configuration, then apply the application's explicit rate-control, color, GOP and feature choices. Otherwise a driver-provided default could silently change product behavior.
 
 Advanced NVENC tuning includes B-frames, reference mode, lookahead/depth, spatial/temporal AQ and multipass. Expert controls resolve through the capability policy against the selected adapter and codec. B-reference capability values contain supported-mode flags: mask value 1 permits Each and value 2 permits Middle. Only modes represented by the pinned SDK are offered. A newer hierarchical-reference bit does not grant an unknown mode. The pinned SDK implements at most seven AV1 B-frames, even when a newer driver reports 31 for its hierarchical mode. The raw hardware fact remains available in diagnostics; the executable count follows both hardware and implemented SDK limits. Lookahead depth is bounded jointly with B-frames by the pinned SDK header and capped at 16 by product resource policy. Temporal AQ has no lookahead prerequisite. Spatial AQ is an SDK configuration feature without a separate capability ID. Multipass is rate-control work for VBR/CBR, not CQ. All fields are explicitly pinned after preset configuration. Conservative defaults remain off/single-pass. Changing a quality default requires representative measurement, independently of whether a supported feature is offered as Expert. See the [quality workflow](../dev/encoder-quality-matrix.md).
+
+## Encoder input contract
+
+After successful configuration, `IVideoEncoder::GetInputRequirements` declares the native format, bit depth/chroma, allocation and visible geometry, alignment, resource bindings/subresource restrictions, pool bounds and borrowed device.
+Recording and render export validate this declaration before allocating their persistent input textures.
+The current host supports one unshared, GPU-default, single-sample texture per slot, with no padding or visible crop and subresource zero.
+Unsupported layouts fail explicitly instead of selecting a default format.
+Native NVENC registration inspects the actual texture description and COM device identity before calling the SDK.
+These structural checks do not replace successful native initialization or establish support for an untested device/configuration.
+
+Input reuse is granted only by successful slot acquisition.
+`AcquireInputSlot` distinguishes an available slot, ordinary backpressure and an invalid backend index.
+A busy acquisition submits no picture; neither completed packets nor `PendingFrames` authorize overwriting a submitted texture.
+The host owns the device, context and textures through encoder teardown, and calls the encoder from one worker.
+Calling `EncodeFrame` transfers slot ownership even when it returns false, because that result alone does not identify whether submission was accepted.
+Completed packets still belong to the caller and must be routed before handling the failure.
+Changed configuration requires a new session and a newly validated pool; live reconfiguration is unsupported.
 
 ## NVENC resource lifetime
 
@@ -98,7 +123,7 @@ Zero-B-frame streams keep the existing PTS-based path. Reordered streams require
 | Packet ordering | Explicit PTS/optional DTS contract | Produce truthful timestamps and qualify real reordered files |
 | Factory dispatch | Existing backend dispatch seam | Add dispatch only when a real backend implementation exists |
 | Backend tuning | Typed alternative available | Add vendor-owned tuning and migrate app preferences when a second backend requires it |
-| Native surface input | GPU texture seam available | Map D3D11 formats and synchronization to AMF or oneVPL |
+| Native surface input | Backend-declared layout, device and pool contract enforced | Map native input release and satisfy or extend the supported host conversion layouts |
 | Capability probing | Adapter-scoped model available | Add authoritative vendor queries and codec-specific mappings |
 | Quality calibration | Canonical product quality intent available | Measure vendor/codec native quality curves |
 | Rate-control mapping | Generic CQ/VBR/CBR intent available | Map and qualify backend rate-control behavior |

@@ -16,7 +16,9 @@
 #include <exosnap/engine/session_stats.h>
 
 #include <atomic>
+#include <condition_variable>
 #include <fstream>
+#include <functional>
 #include <mutex>
 #include <string>
 #include <thread>
@@ -28,7 +30,8 @@ class SoakRunner {
   public:
     // `sampler` and `jsonl_path` must outlive the runner. An empty jsonl_path
     // disables the on-disk timeline (in-memory only — used by the unit test).
-    SoakRunner(SoakThresholds thresholds, IProcessSampler& sampler, std::string jsonl_path);
+    SoakRunner(SoakThresholds thresholds, IProcessSampler& sampler, std::string jsonl_path,
+               std::function<void()> abort_callback = {});
     ~SoakRunner();
 
     // Thread-safe engine callback sinks — pass straight to
@@ -46,6 +49,7 @@ class SoakRunner {
         return aborted_.load();
     }
     [[nodiscard]] AbortDecision abort_decision() const;
+    [[nodiscard]] std::string error() const;
 
     [[nodiscard]] std::vector<SoakSample> timeline() const;
     [[nodiscard]] SoakSummary Summarize() const;
@@ -58,12 +62,15 @@ class SoakRunner {
 
   private:
     void SampleOnce();
+    void PublishAbort(AbortDecision decision);
+    void ReportFailure(const std::string& error);
 
     SoakThresholds thresholds_;
     SoakAbortPolicy policy_;
     IProcessSampler& sampler_;
     std::string jsonl_path_;
     std::ofstream jsonl_;
+    std::function<void()> abort_callback_;
 
     mutable std::mutex latch_mutex_;
     exosnap::engine::SessionStats last_stats_{};
@@ -75,10 +82,14 @@ class SoakRunner {
     std::vector<SoakSample> timeline_;
 
     std::thread thread_;
+    std::mutex stop_mutex_;
+    std::condition_variable wake_;
+    bool started_ = false;
     std::atomic<bool> stop_{false};
     std::atomic<bool> aborted_{false};
     mutable std::mutex abort_mutex_;
     AbortDecision abort_decision_;
+    std::string error_;
 
     std::chrono::steady_clock::time_point start_time_;
     double skew_injection_ms_per_s_ = 0.0;

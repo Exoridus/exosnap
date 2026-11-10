@@ -1,10 +1,13 @@
 #include "nvenc_encoder.h"
+#include "d3d11_encoder_input.h"
 #include "exosnap/engine/backend_tuning.h"
 #include "exosnap/engine/codec_types.h"
 #include "exosnap/engine/color_metadata.h"
 #include "nvEncodeAPI.h"
+#include "nvenc_input_requirements.h"
 
 #include <cstdint>
+#include <exosnap/engine/encoder_input_requirements.h>
 #include <exosnap/engine/hdr_bitstream_metadata.h>
 #include <exosnap/engine/logging/logging.h>
 #include <exosnap/engine/packet_types.h>
@@ -430,6 +433,10 @@ NvencEncoder::~NvencEncoder() {
 // ---------------------------------------------------------------------------
 
 bool NvencEncoder::Open(ID3D11Device* device, std::string& out_error) {
+    if (!device) {
+        out_error = "NVENC requires a D3D11 device.";
+        return false;
+    }
     m_dll = LoadLibraryW(L"nvEncodeAPI64.dll");
     if (!m_dll) {
         char buf[80];
@@ -469,6 +476,7 @@ bool NvencEncoder::Open(ID3D11Device* device, std::string& out_error) {
         out_error = std::string("nvEncOpenEncodeSessionEx: ") + NvencStatusName(st);
         return false;
     }
+    m_device = device;
     return true;
 }
 
@@ -1028,6 +1036,14 @@ void NvencEncoder::BuildHdrBitstreamPayloads() {
 
 bool NvencEncoder::InitEncoder(uint32_t width, uint32_t height, uint32_t frame_rate_num, uint32_t frame_rate_den,
                                std::string& out_error) {
+    m_inputRequirements = {};
+    const auto input = MakeNvencInputRequirements(m_codec, m_bitDepth, m_chroma, {width, height},
+                                                  static_cast<uint32_t>(SlotCount()), m_device);
+    const auto valid = ValidateEncoderInputRequirements(input);
+    if (!valid) {
+        out_error = valid.message;
+        return false;
+    }
     // Keyframe interval: gopLength = round(interval_secs * fps), applied together
     // with the codec-specific idrPeriod. m_keyframeIntervalSecs is set from the
     // user's Settings → Advanced selection (via SetKeyframeIntervalSecs) and
@@ -1162,6 +1178,7 @@ bool NvencEncoder::InitEncoder(uint32_t width, uint32_t height, uint32_t frame_r
         return false;
     }
     m_sequenceHeader.resize(header_size);
+    m_inputRequirements = input;
     return true;
 }
 
@@ -1279,6 +1296,12 @@ bool NvencEncoder::RegisterSlotTexture(int32_t slot_idx, ID3D11Texture2D* textur
         return false;
     }
 
+    const auto valid = ValidateD3D11EncoderInputTexture(m_inputRequirements, texture);
+    if (!valid) {
+        out_error = valid.message;
+        return false;
+    }
+
     D3D11_TEXTURE2D_DESC desc{};
     texture->GetDesc(&desc);
 
@@ -1288,7 +1311,7 @@ bool NvencEncoder::RegisterSlotTexture(int32_t slot_idx, ID3D11Texture2D* textur
     reg.width = desc.Width;
     reg.height = desc.Height;
     reg.pitch = 0;
-    reg.subResourceIndex = 0;
+    reg.subResourceIndex = m_inputRequirements.subresource;
     reg.resourceToRegister = texture;
     // 8-bit registers the NV12 D3D11 texture; 10-bit registers the P010 texture as
     // NV_ENC_BUFFER_FORMAT_YUV420_10BIT (both are semi-planar 4:2:0, P010 being 16 bpc).
@@ -1830,6 +1853,8 @@ void NvencEncoder::Destroy() {
         m_funcs.nvEncDestroyEncoder(m_encoder);
         m_encoder = nullptr;
     }
+    m_inputRequirements = {};
+    m_device = nullptr;
 }
 
 } // namespace exosnap::engine

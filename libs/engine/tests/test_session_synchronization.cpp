@@ -1,8 +1,11 @@
+#include "audio_capture_drain.h"
 #include "exosnap/engine/codec_types.h"
 #include "exosnap/engine/error_types.h"
 #include "exosnap/engine/packet_types.h"
+#include "exosnap/engine/record_request_id.h"
 #include "premux_state.h"
 #include "session_failure.h"
+#include "session_request_gate.h"
 #include "split_sentinel_policy.h"
 #include <exosnap/engine/audio_limits.h>
 
@@ -13,8 +16,12 @@
 #include <chrono>
 #include <cstddef>
 #include <cstdint>
+#include <functional>
 #include <future>
+#include <memory>
+#include <mutex>
 #include <thread>
+#include <utility>
 #include <vector>
 
 namespace {
@@ -214,6 +221,223 @@ TEST(SplitRequest, ConcurrentPublicationNeverTearsSequenceAndTrigger) {
         EXPECT_EQ(published.primary_trigger, i % 4);
     }
     writer.join();
+}
+
+TEST(SessionRequestGate, AStaleStopCannotCancelTheRequestBeingPrepared) {
+    SessionRequestGate requests;
+    std::mutex mutex;
+    auto state = std::make_shared<int>(2);
+    requests.active_request = 22;
+
+    EXPECT_EQ(requests.SelectForStop(mutex, state, 11), nullptr);
+    EXPECT_FALSE(requests.pending_stop.Consume(11));
+    EXPECT_EQ(requests.SelectForStop(mutex, state, 22), state);
+}
+
+TEST(SessionRequestGate, StopBeforeAdmissionRemainsScopedAndOneShot) {
+    SessionRequestGate requests;
+    std::mutex mutex;
+    auto state = std::make_shared<int>(0);
+
+    EXPECT_EQ(requests.SelectForStop(mutex, state, 22), state);
+    EXPECT_TRUE(requests.pending_stop.Consume(22));
+    EXPECT_FALSE(requests.pending_stop.Consume(22));
+    EXPECT_EQ(requests.SelectForStop(mutex, state, 11), state);
+    EXPECT_FALSE(requests.pending_stop.Consume(22));
+}
+
+TEST(SessionRequestGate, AStopDuringRecordingDoesNotArmTheNextRecording) {
+    SessionRequestGate requests;
+    std::mutex mutex;
+    auto state = std::make_shared<int>(1);
+    requests.active_request = 11;
+    requests.recording.store(true);
+
+    EXPECT_EQ(requests.SelectForStop(mutex, state, 11), state);
+    EXPECT_FALSE(requests.pending_stop.Consume(11));
+    EXPECT_EQ(requests.SelectForStop(mutex, state, kUnscopedRecordRequest), state);
+    EXPECT_FALSE(requests.pending_stop.Consume(11));
+    EXPECT_EQ(requests.SelectForStop(mutex, state, 22), nullptr);
+    EXPECT_FALSE(requests.pending_stop.Consume(22));
+}
+
+TEST(SessionRequestGate, LeavingPreparationRetiresItsRequestBeforeTheNextPreAdmissionStop) {
+    SessionRequestGate requests;
+    std::mutex mutex;
+    auto state = std::make_shared<int>(1);
+    requests.active_request = 11;
+    {
+        SessionRequestScope scope(mutex, requests);
+        EXPECT_EQ(requests.SelectForStop(mutex, state, 11), state);
+    }
+
+    EXPECT_FALSE(requests.pending_stop.Consume(11));
+    EXPECT_EQ(requests.SelectForStop(mutex, state, 22), state);
+    EXPECT_TRUE(requests.pending_stop.Consume(22));
+}
+
+TEST(SessionRequestGate, RequestRetirementAlsoClosesSplitAdmission) {
+    SessionRequestGate requests;
+    std::mutex mutex;
+    auto state = std::make_shared<int>(1);
+    requests.active_request = 11;
+    requests.recording.store(true);
+    {
+        SessionRequestScope scope(mutex, requests);
+    }
+
+    EXPECT_EQ(requests.SelectForSplit(mutex, state, 11), nullptr);
+    EXPECT_EQ(requests.SelectForSplit(mutex, state, kUnscopedRecordRequest), nullptr);
+}
+
+TEST(SessionRequestGate, SplitRequiresRunningWorkersAndTheMatchingRequest) {
+    SessionRequestGate requests;
+    std::mutex mutex;
+    auto state = std::make_shared<int>(1);
+    requests.active_request = 11;
+
+    EXPECT_EQ(requests.SelectForSplit(mutex, state, 11), nullptr);
+    requests.recording.store(true);
+    EXPECT_EQ(requests.SelectForSplit(mutex, state, 22), nullptr);
+    EXPECT_EQ(requests.SelectForSplit(mutex, state, 11), state);
+    EXPECT_EQ(requests.SelectForSplit(mutex, state, kUnscopedRecordRequest), state);
+    requests.recording.store(false);
+    EXPECT_EQ(requests.SelectForSplit(mutex, state, 11), nullptr);
+}
+
+// Schedule a second session at the first point where an operation releases its
+// lock. This exercises the production selector's locking boundary without sleeps.
+class SessionTurnoverMutex {
+  public:
+    void lock() {
+        mutex_.lock();
+    }
+    void unlock() {
+        mutex_.unlock();
+        if (auto next = std::exchange(after_unlock, {}))
+            next();
+    }
+    std::function<void()> after_unlock;
+
+  private:
+    std::mutex mutex_;
+};
+
+TEST(SessionRequestGate, AcceptedSplitKeepsTheStateWhoseRequestWasChecked) {
+    SessionRequestGate requests;
+    SessionTurnoverMutex mutex;
+    const auto first = std::make_shared<int>(1);
+    const auto second = std::make_shared<int>(2);
+    auto state = first;
+    requests.active_request = 11;
+    requests.recording.store(true);
+    mutex.after_unlock = [&] {
+        std::lock_guard lock(mutex);
+        state = second;
+        requests.active_request = 22;
+    };
+
+    const auto selected = requests.SelectForSplit(mutex, state, 11);
+
+    ASSERT_EQ(state, second);
+    EXPECT_EQ(selected, first);
+    EXPECT_EQ(requests.SelectForSplit(mutex, state, 11), nullptr);
+}
+
+TEST(SessionRequestGate, AcceptedStopKeepsItsStateWhenTheNextRequestIsAdmitted) {
+    SessionRequestGate requests;
+    SessionTurnoverMutex mutex;
+    const auto first = std::make_shared<int>(1);
+    const auto second = std::make_shared<int>(2);
+    auto state = first;
+    requests.active_request = 11;
+    requests.recording.store(true);
+    mutex.after_unlock = [&] {
+        std::lock_guard lock(mutex);
+        state = second;
+        requests.active_request = 22;
+        requests.recording.store(false);
+    };
+
+    const auto selected = requests.SelectForStop(mutex, state, 11);
+
+    ASSERT_EQ(state, second);
+    EXPECT_EQ(selected, first);
+    EXPECT_EQ(requests.SelectForStop(mutex, state, 11), nullptr);
+}
+
+struct ReadyAudioPackets {
+    uint32_t remaining = 8;
+    uint32_t polls = 0;
+
+    uint32_t PendingFrameCount() {
+        ++polls;
+        return remaining == 0 ? 0 : 480;
+    }
+};
+
+TEST(AudioCaptureDrain, StopEndsAnAlwaysReadyDrainAfterTheCurrentPacket) {
+    ReadyAudioPackets source;
+    std::atomic<bool> stopped{false};
+    uint32_t processed = 0;
+
+    DrainAudioCapture(source, stopped, [&] {
+        --source.remaining;
+        ++processed;
+        stopped.store(true);
+        return true;
+    });
+
+    EXPECT_EQ(processed, 1u);
+    EXPECT_EQ(source.polls, 1u);
+    EXPECT_EQ(source.remaining, 7u);
+}
+
+TEST(AudioCaptureDrain, AnAlreadyStoppedDrainDoesNotPollOrAcquire) {
+    ReadyAudioPackets source;
+    std::atomic<bool> stopped{true};
+    uint32_t processed = 0;
+
+    DrainAudioCapture(source, stopped, [&] {
+        --source.remaining;
+        ++processed;
+        return true;
+    });
+
+    EXPECT_EQ(processed, 0u);
+    EXPECT_EQ(source.polls, 0u);
+    EXPECT_EQ(source.remaining, 8u);
+}
+
+TEST(AudioCaptureDrain, AnAcquisitionFailureEndsTheDrainWithoutAnotherPoll) {
+    ReadyAudioPackets source;
+    std::atomic<bool> stopped{false};
+    uint32_t attempted = 0;
+
+    DrainAudioCapture(source, stopped, [&] {
+        ++attempted;
+        return false;
+    });
+
+    EXPECT_EQ(attempted, 1u);
+    EXPECT_EQ(source.polls, 1u);
+    EXPECT_EQ(source.remaining, 8u);
+}
+
+TEST(AudioCaptureDrain, ReadinessBecomingEmptyEndsAnUnstoppedDrain) {
+    ReadyAudioPackets source;
+    source.remaining = 2;
+    std::atomic<bool> stopped{false};
+    uint32_t processed = 0;
+
+    DrainAudioCapture(source, stopped, [&] {
+        --source.remaining;
+        ++processed;
+        return true;
+    });
+
+    EXPECT_EQ(processed, 2u);
+    EXPECT_EQ(source.polls, 3u);
 }
 
 } // namespace

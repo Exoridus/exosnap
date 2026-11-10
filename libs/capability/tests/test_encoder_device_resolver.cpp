@@ -2,7 +2,10 @@
 
 #include <capability/adapter_capability.h>
 #include <capability/adapter_enum.h>
+#include <capability/capability_set.h>
 #include <capability/config_types.h>
+#include <capability/encoder_format_capability.h>
+#include <capability/runtime_snapshot.h>
 #include <capability/support_level.h>
 #include <cstddef>
 #include <cstdint>
@@ -23,6 +26,7 @@ using exosnap::capability::AdapterVendor;
 using exosnap::capability::BuildEncoderDeviceCandidates;
 using exosnap::capability::CapabilitySetForAdapter;
 using exosnap::capability::EncoderDeviceRequest;
+using exosnap::capability::EncoderFormatSupport;
 using exosnap::capability::ResolveEncoderDevice;
 using exosnap::capability::VideoCodec;
 using exosnap::engine::EncoderBackend;
@@ -53,12 +57,21 @@ AdapterEncoderCapability NvencCapability(bool av1 = true, bool hevc = true, bool
     capability.av1 = av1;
     capability.yuv444_h264 = true;
     capability.yuv444_hevc = true;
+    capability.formats_h264 = {EncoderFormatSupport::Supported, EncoderFormatSupport::Unsupported,
+                               EncoderFormatSupport::Supported};
+    capability.formats_hevc = {EncoderFormatSupport::Supported, EncoderFormatSupport::Supported,
+                               EncoderFormatSupport::Supported};
+    capability.formats_av1 = {EncoderFormatSupport::Supported, EncoderFormatSupport::Supported,
+                              EncoderFormatSupport::Unsupported};
     return capability;
 }
 
-std::vector<exosnap::capability::EncoderDeviceCandidate>
-Candidates(const std::vector<AdapterInfo>& adapters, const std::vector<AdapterEncoderCapability>& capabilities,
-           EncoderDeviceRequest request = {}) {
+std::vector<exosnap::capability::EncoderDeviceCandidate> Candidates(const std::vector<AdapterInfo>& adapters,
+                                                                    std::vector<AdapterEncoderCapability> capabilities,
+                                                                    EncoderDeviceRequest request = {}) {
+    for (size_t i = 0; i < adapters.size() && i < capabilities.size(); ++i)
+        if (capabilities[i].adapter_luid == 0)
+            capabilities[i].adapter_luid = adapters[i].luid;
     return BuildEncoderDeviceCandidates(adapters, capabilities, request);
 }
 
@@ -72,6 +85,202 @@ TEST(EncoderDeviceResolver, AutoChoosesTheCaptureAdapterNotTheFirstNvidia) {
     ASSERT_TRUE(resolution.resolved);
     ASSERT_GE(resolution.candidate_index, 0);
     EXPECT_EQ(candidates[static_cast<size_t>(resolution.candidate_index)].adapter.luid, 2);
+}
+
+TEST(EncoderDeviceResolver, AdvertisedCodecWithoutFormatEvidenceCannotAuthorizeTenBit) {
+    AdapterEncoderCapability capability;
+    capability.probed = true;
+    capability.hevc = true;
+    const auto candidates = Candidates(
+        {MakeAdapter("NVIDIA", AdapterVendor::Nvidia, 1)}, {capability},
+        {VideoCodec::Hevc, exosnap::capability::ChromaSubsampling::Cs420, exosnap::capability::BitDepth::Bit10});
+    ASSERT_EQ(candidates.size(), 1u);
+    EXPECT_FALSE(candidates.front().usable());
+    EXPECT_FALSE(ResolveEncoderDevice(candidates, {}, 1, true).resolved);
+}
+
+TEST(EncoderDeviceResolver, H264TenBitIsNotAnImplementedPath) {
+    const auto candidates = Candidates(
+        {MakeAdapter("NVIDIA", AdapterVendor::Nvidia, 1)}, {NvencCapability()},
+        {VideoCodec::H264, exosnap::capability::ChromaSubsampling::Cs420, exosnap::capability::BitDepth::Bit10});
+    ASSERT_EQ(candidates.size(), 1u);
+    EXPECT_FALSE(candidates.front().usable());
+}
+
+TEST(EncoderDeviceResolver, TenBit444CannotReuseEightBit444Support) {
+    const auto candidates = Candidates(
+        {MakeAdapter("NVIDIA", AdapterVendor::Nvidia, 1)}, {NvencCapability()},
+        {VideoCodec::Hevc, exosnap::capability::ChromaSubsampling::Cs444, exosnap::capability::BitDepth::Bit10});
+    ASSERT_EQ(candidates.size(), 1u);
+    EXPECT_FALSE(candidates.front().usable());
+}
+
+TEST(EncoderDeviceCapabilityView, CodecAdvertisementAloneDoesNotProveNativeHdr) {
+    exosnap::capability::RuntimeCapabilitySnapshot snapshot;
+    snapshot.nvidia.nvenc_dll_present = true;
+    snapshot.nvidia.nvenc_api_version_valid = true;
+    snapshot.nvidia.nvenc_codec_probed = true;
+    snapshot.nvidia.nvenc_hevc = true;
+    snapshot.nvidia.nvenc_av1 = true;
+    const auto caps = exosnap::capability::CapabilityBuilder::BuildEffectiveCapabilities(snapshot);
+    EXPECT_FALSE(exosnap::capability::IsSelectable(caps.QueryHdr10Native(VideoCodec::Hevc)));
+    EXPECT_FALSE(exosnap::capability::IsSelectable(caps.QueryHdr10Native(VideoCodec::Av1)));
+}
+
+TEST(EncoderDeviceResolver, EightBitAlsoRequiresTheAdvertisedNativeInputFormat) {
+    auto capability = NvencCapability();
+    capability.formats_hevc.nv12 = EncoderFormatSupport::Unsupported;
+    const auto candidates =
+        Candidates({MakeAdapter("NVIDIA", AdapterVendor::Nvidia, 1)}, {capability}, {VideoCodec::Hevc});
+    EXPECT_FALSE(candidates.front().usable());
+    EXPECT_EQ(candidates.front().format_support, EncoderFormatSupport::Unsupported);
+}
+
+TEST(EncoderDeviceResolver, UnknownAndUnavailableAreNotReportedAsUnsupported) {
+    for (const auto state : {EncoderFormatSupport::Unknown, EncoderFormatSupport::Unavailable}) {
+        auto capability = NvencCapability();
+        capability.formats_hevc.p010 = state;
+        const auto candidates = Candidates(
+            {MakeAdapter("NVIDIA", AdapterVendor::Nvidia, 1)}, {capability},
+            {VideoCodec::Hevc, exosnap::capability::ChromaSubsampling::Cs420, exosnap::capability::BitDepth::Bit10});
+        EXPECT_FALSE(candidates.front().usable());
+        EXPECT_EQ(candidates.front().format_support, state);
+        EXPECT_EQ(candidates.front().unavailable_reason.find("not supported"), std::string::npos);
+    }
+}
+
+TEST(EncoderDeviceResolver, FailedSessionKeepsUnavailableFormatEvidence) {
+    auto capability = NvencCapability();
+    capability.probed = false;
+    capability.formats_av1.nv12 = EncoderFormatSupport::Unavailable;
+    const auto candidates = Candidates({MakeAdapter("NVIDIA", AdapterVendor::Nvidia, 1)}, {capability});
+    EXPECT_FALSE(candidates.front().usable());
+    EXPECT_EQ(candidates.front().format_support, EncoderFormatSupport::Unavailable);
+}
+
+TEST(EncoderDeviceResolver, MissingOrWrongProbeIdentityNeverAuthorizesAnotherAdapter) {
+    for (const int64_t probed_luid : {0, 2}) {
+        auto capability = NvencCapability();
+        capability.adapter_luid = probed_luid;
+        const std::vector<AdapterInfo> adapters{MakeAdapter("NVIDIA", AdapterVendor::Nvidia, 1)};
+        const std::vector<AdapterEncoderCapability> capabilities{capability};
+        const auto candidates = BuildEncoderDeviceCandidates(adapters, capabilities, {});
+        EXPECT_FALSE(candidates.front().usable());
+        EXPECT_EQ(candidates.front().format_support, EncoderFormatSupport::Unavailable);
+        EXPECT_NE(candidates.front().unavailable_reason.find("identify this adapter"), std::string::npos);
+    }
+}
+
+TEST(EncoderDeviceResolver, CaptureAdapterMustSupportDepthEvenWhenAnotherAdapterDoes) {
+    auto first = NvencCapability();
+    auto second = NvencCapability();
+    second.formats_hevc.p010 = EncoderFormatSupport::Unsupported;
+    const auto candidates = Candidates(
+        {MakeAdapter("First", AdapterVendor::Nvidia, 1), MakeAdapter("Second", AdapterVendor::Nvidia, 2)},
+        {first, second},
+        {VideoCodec::Hevc, exosnap::capability::ChromaSubsampling::Cs420, exosnap::capability::BitDepth::Bit10});
+    EXPECT_TRUE(ResolveEncoderDevice(candidates, {}, 1, true).resolved);
+    const auto denied = ResolveEncoderDevice(candidates, {}, 2, true);
+    EXPECT_FALSE(denied.resolved);
+    EXPECT_EQ(denied.candidate_index, 1);
+}
+
+TEST(EncoderDeviceResolver, OnlyTheImplementedSupportedCombinationsResolve) {
+    using exosnap::capability::BitDepth;
+    using exosnap::capability::ChromaSubsampling;
+    for (const auto codec : exosnap::capability::AllVideoCodecs()) {
+        for (const auto chroma : exosnap::capability::AllChromaModes()) {
+            for (const auto depth : exosnap::capability::AllBitDepths()) {
+                const bool expected =
+                    chroma == ChromaSubsampling::Cs420
+                        ? (depth == BitDepth::Bit8 || codec != VideoCodec::H264)
+                        : (chroma == ChromaSubsampling::Cs444 && depth == BitDepth::Bit8 && codec != VideoCodec::Av1);
+                const auto candidates = Candidates({MakeAdapter("NVIDIA", AdapterVendor::Nvidia, 1)},
+                                                   {NvencCapability()}, {codec, chroma, depth});
+                EXPECT_EQ(candidates.front().usable(), expected)
+                    << ToString(codec) << " " << ToString(chroma) << " " << ToString(depth);
+            }
+        }
+    }
+}
+
+TEST(EncoderDeviceCapabilityView, SelectedAdapterCannotInheritAnotherAdaptersHdrOrFormatEvidence) {
+    using exosnap::capability::BitDepth;
+    using exosnap::capability::ChromaSubsampling;
+    auto first = NvencCapability();
+    first.adapter_luid = 1;
+    const auto base = CapabilitySetForAdapter(exosnap::capability::CapabilityBuilder::BuildStaticValidatedBaseline(),
+                                              MakeAdapter("First", AdapterVendor::Nvidia, 1), first);
+    ASSERT_TRUE(exosnap::capability::IsSelectable(base.QueryHdr10Native(VideoCodec::Hevc)));
+    auto second = NvencCapability();
+    second.adapter_luid = 2;
+    second.formats_hevc.p010 = EncoderFormatSupport::Unsupported;
+    const auto selected = CapabilitySetForAdapter(base, MakeAdapter("Second", AdapterVendor::Nvidia, 2), second);
+    EXPECT_FALSE(exosnap::capability::IsSelectable(selected.QueryHdr10Native(VideoCodec::Hevc)));
+    EXPECT_EQ(selected.QueryEncoderFormat(VideoCodec::Hevc, ChromaSubsampling::Cs420, BitDepth::Bit10),
+              EncoderFormatSupport::Unsupported);
+    EXPECT_EQ(selected.QueryEncoderFormat(VideoCodec::Av1, ChromaSubsampling::Cs420, BitDepth::Bit10),
+              EncoderFormatSupport::Supported);
+}
+
+TEST(EncoderDeviceCapabilityView, SelectedAdapterCanSupportCodecThatDefaultAdapterCannot) {
+    auto first = NvencCapability(/*av1=*/false);
+    first.adapter_luid = 1;
+    const auto base = CapabilitySetForAdapter(exosnap::capability::CapabilityBuilder::BuildStaticValidatedBaseline(),
+                                              MakeAdapter("First", AdapterVendor::Nvidia, 1), first);
+    ASSERT_FALSE(exosnap::capability::IsSelectable(base.QueryVideoCodec(VideoCodec::Av1)));
+    auto second = NvencCapability();
+    second.adapter_luid = 2;
+    const auto selected = CapabilitySetForAdapter(base, MakeAdapter("Second", AdapterVendor::Nvidia, 2), second);
+    EXPECT_TRUE(exosnap::capability::IsSelectable(selected.QueryVideoCodec(VideoCodec::Av1)));
+}
+
+TEST(EncoderDeviceCapabilityView, CompatibilityOverrideCannotResurrectUnsupportedDepth) {
+    using namespace exosnap::capability;
+    auto capability = NvencCapability();
+    capability.adapter_luid = 1;
+    capability.formats_hevc.p010 = EncoderFormatSupport::Unsupported;
+    auto caps = CapabilitySetForAdapter(CapabilityBuilder::BuildStaticValidatedBaseline(),
+                                        MakeAdapter("NVIDIA", AdapterVendor::Nvidia, 1), capability);
+    const ComboKey key{Container::Matroska, VideoCodec::Hevc, AudioCodec::Aac, ChromaSubsampling::Cs420,
+                       BitDepth::Bit10};
+    caps.combo_overrides[key] = {SupportLevel::Available, "Synthetic compatibility override"};
+    EXPECT_FALSE(IsSelectable(caps.QueryCombo(key.c, key.v, key.a, key.cs, key.bd)));
+}
+
+TEST(EncoderDeviceCapabilityView, RuntimeWithoutProbeKeepsUnknownAndBlocksEveryNativeFormat) {
+    using namespace exosnap::capability;
+    RuntimeCapabilitySnapshot snapshot;
+    snapshot.nvidia.nvenc_dll_present = true;
+    snapshot.nvidia.nvenc_api_version_valid = true;
+    const auto caps = CapabilityBuilder::BuildEffectiveCapabilities(snapshot);
+    EXPECT_EQ(caps.QueryEncoderFormat(VideoCodec::Hevc, ChromaSubsampling::Cs420, BitDepth::Bit10),
+              EncoderFormatSupport::Unknown);
+    EXPECT_FALSE(IsSelectable(caps.QueryCombo(Container::Matroska, VideoCodec::Hevc, AudioCodec::Aac,
+                                              ChromaSubsampling::Cs420, BitDepth::Bit8)));
+    EXPECT_FALSE(IsSelectable(caps.QueryHdr10Native(VideoCodec::Hevc)));
+}
+
+TEST(EncoderDeviceCapabilityView, MissingRuntimeMakesFormatAndHdrUnavailable) {
+    using namespace exosnap::capability;
+    auto caps = CapabilityBuilder::BuildEffectiveCapabilities({});
+    EXPECT_EQ(caps.QueryEncoderFormat(VideoCodec::Hevc, ChromaSubsampling::Cs420, BitDepth::Bit10),
+              EncoderFormatSupport::Unavailable);
+    EXPECT_FALSE(IsSelectable(caps.QueryHdr10Native(VideoCodec::Hevc)));
+    const ComboKey key{Container::Matroska, VideoCodec::Av1, AudioCodec::Aac, ChromaSubsampling::Cs420, BitDepth::Bit8};
+    caps.combo_overrides[key] = {SupportLevel::Available, "Synthetic compatibility override"};
+    EXPECT_FALSE(IsSelectable(caps.QueryCombo(key.c, key.v, key.a, key.cs, key.bd)));
+}
+
+TEST(EncoderDeviceCapabilityView, SuccessfulAdapterProbeReplacesAnEarlierUnavailableRuntime) {
+    using namespace exosnap::capability;
+    const auto unavailable = CapabilityBuilder::BuildEffectiveCapabilities({});
+    auto capability = NvencCapability();
+    capability.adapter_luid = 1;
+    const auto recovered =
+        CapabilitySetForAdapter(unavailable, MakeAdapter("NVIDIA", AdapterVendor::Nvidia, 1), capability);
+    EXPECT_TRUE(IsSelectable(recovered.QueryCombo(Container::Matroska, VideoCodec::Av1, AudioCodec::Aac,
+                                                  ChromaSubsampling::Cs420, BitDepth::Bit8)));
 }
 
 TEST(EncoderDeviceResolver, AutoFailsRatherThanChoosingAnotherGpuWhenCaptureHasNoBackend) {
@@ -162,10 +371,12 @@ TEST(EncoderDeviceResolver, ExplicitNonNvidiaDeviceIsAvailableButHasNoBackend) {
 
 TEST(EncoderDeviceResolver, FourFourFourUnsupportedRemovesTheCandidate) {
     EncoderDeviceRequest request;
+    request.video_codec = VideoCodec::Hevc;
     request.chroma = exosnap::capability::ChromaSubsampling::Cs444;
     const std::vector<AdapterInfo> adapters{MakeAdapter("RTX 5070 Ti", AdapterVendor::Nvidia, 1)};
     auto capability = NvencCapability();
     capability.yuv444_hevc = false;
+    capability.formats_hevc.ayuv = EncoderFormatSupport::Unsupported;
     const auto candidates = Candidates(adapters, {capability}, request);
     ASSERT_EQ(candidates.size(), 1u);
     EXPECT_FALSE(candidates[0].usable());
@@ -322,8 +533,9 @@ TEST(EncoderDeviceCapabilityView, NonNvidiaBackendMarksEveryVideoPathUnavailable
 
 TEST(EncoderDeviceCapabilityView, ProbedNvidiaDeviceDropsExactlyTheUnsupportedCodec) {
     const auto base = exosnap::capability::CapabilityBuilder::BuildStaticValidatedBaseline();
-    const auto view = CapabilitySetForAdapter(base, MakeAdapter("RTX 4090", AdapterVendor::Nvidia, 1),
-                                              NvencCapability(/*av1=*/false));
+    auto probe = NvencCapability(/*av1=*/false);
+    probe.adapter_luid = 1;
+    const auto view = CapabilitySetForAdapter(base, MakeAdapter("RTX 4090", AdapterVendor::Nvidia, 1), probe);
     EXPECT_FALSE(exosnap::capability::IsSelectable(view.QueryVideoCodec(VideoCodec::Av1)));
     EXPECT_TRUE(exosnap::capability::IsSelectable(view.QueryVideoCodec(VideoCodec::H264)));
     EXPECT_TRUE(exosnap::capability::IsSelectable(view.QueryVideoCodec(VideoCodec::Hevc)));
