@@ -272,7 +272,8 @@ void GamepadOverlay::ConfigureBackend(GamepadOverlaySettings settings) {
 GamepadControlHooks GamepadOverlay::CreateControlHooks(std::shared_ptr<engine::VisualSceneRuntime> runtime) {
     visual_runtime_ = std::move(runtime);
     ConfigureBackend(Settings());
-    return {[this](engine::SourceToken token, GamepadOverlaySettings source, std::function<void(SourceStatus)> status) {
+    return {[this](const engine::SourceToken& token, GamepadOverlaySettings source,
+                   std::function<void(SourceStatus)> status) {
                 RetireNative();
                 native_failed_ = false;
                 visual_token_ = token;
