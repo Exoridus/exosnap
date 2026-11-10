@@ -6,7 +6,8 @@ namespace exosnap::engine {
 
 [[nodiscard]] inline EncoderInputRequirements MakeNvencInputRequirements(VideoCodec codec, BitDepth depth,
                                                                          ChromaSubsampling chroma, FrameSize size,
-                                                                         uint32_t slots, const void* device) noexcept {
+                                                                         uint32_t slot_count,
+                                                                         const void* device) noexcept {
     EncoderInputRequirements input;
     input.storage = EncoderInputStorage::D3D11Texture2D;
     if (depth == BitDepth::Bit8 && chroma == ChromaSubsampling::Cs420)
@@ -24,7 +25,7 @@ namespace exosnap::engine {
     input.required_bind =
         chroma == ChromaSubsampling::Cs444 ? EncoderInputBind::UnorderedAccess : EncoderInputBind::RenderTarget;
     input.allowed_bind = input.required_bind | EncoderInputBind::ShaderResource;
-    input.pool = {slots, slots, slots};
+    input.pool = {slot_count, slot_count, slot_count};
     input.device = device;
     return input;
 }

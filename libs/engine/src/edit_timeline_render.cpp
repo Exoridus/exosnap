@@ -116,9 +116,9 @@ struct EncodeSurfaces {
     bool Init(RenderDevice& gpu, IVideoEncoder& encoder, ID3D11Texture2D* source, const EditRenderPlan& plan,
               VideoCodec codec, bool full_range, std::string& error) {
         const auto requirements = encoder.GetInputRequirements();
-        const int32_t slots = encoder.SlotCount();
+        const int32_t slot_count = encoder.SlotCount();
         const auto valid = ValidateEncoderInputForHost(requirements, codec, BitDepth::Bit8, ChromaSubsampling::Cs420,
-                                                       plan.output, slots, gpu.device.get());
+                                                       plan.output, slot_count, gpu.device.get());
         if (!valid) {
             error = valid.message;
             return false;
@@ -153,9 +153,9 @@ struct EncodeSurfaces {
         if (!Check(device->CreateVideoProcessorInputView(source, enumerator.get(), &input_desc, input.put()),
                    "Create timeline input view", error))
             return false;
-        textures.resize(static_cast<size_t>(slots));
-        outputs.resize(static_cast<size_t>(slots));
-        for (int32_t slot = 0; slot < slots; ++slot) {
+        textures.resize(static_cast<size_t>(slot_count));
+        outputs.resize(static_cast<size_t>(slot_count));
+        for (int32_t slot = 0; slot < slot_count; ++slot) {
             const D3D11_TEXTURE2D_DESC desc = D3D11EncoderInputTextureDesc(requirements);
             D3D11_VIDEO_PROCESSOR_OUTPUT_VIEW_DESC output_desc{};
             output_desc.ViewDimension = D3D11_VPOV_DIMENSION_TEXTURE2D;

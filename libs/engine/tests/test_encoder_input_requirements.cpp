@@ -65,11 +65,11 @@ TEST(EncoderInputRequirements, CurrentNvencLayoutsPreserveFormatAndExactConfigur
          EncoderInputBind::UnorderedAccess},
     };
     for (const auto& test : cases) {
-        for (const uint32_t slots : {8u, 12u, 36u}) {
-            const auto input =
-                MakeNvencInputRequirements(test.codec, test.depth, test.chroma, {1920, 1080}, slots, &device_identity);
-            EXPECT_TRUE(ValidateEncoderInputForHost(input, test.codec, test.depth, test.chroma, {1920, 1080}, slots,
-                                                    &device_identity));
+        for (const uint32_t slot_count : {8u, 12u, 36u}) {
+            const auto input = MakeNvencInputRequirements(test.codec, test.depth, test.chroma, {1920, 1080}, slot_count,
+                                                          &device_identity);
+            EXPECT_TRUE(ValidateEncoderInputForHost(input, test.codec, test.depth, test.chroma, {1920, 1080},
+                                                    slot_count, &device_identity));
             EXPECT_EQ(input.format, test.format);
             EXPECT_EQ(input.required_bind, test.bind);
             EXPECT_EQ(input.allocation.width, 1920u);
@@ -78,9 +78,9 @@ TEST(EncoderInputRequirements, CurrentNvencLayoutsPreserveFormatAndExactConfigur
             EXPECT_EQ(input.visible.y, 0u);
             EXPECT_EQ(input.visible.width, 1920u);
             EXPECT_EQ(input.visible.height, 1080u);
-            EXPECT_EQ(input.pool.minimum, slots);
-            EXPECT_EQ(input.pool.preferred, slots);
-            EXPECT_EQ(input.pool.maximum, slots);
+            EXPECT_EQ(input.pool.minimum, slot_count);
+            EXPECT_EQ(input.pool.preferred, slot_count);
+            EXPECT_EQ(input.pool.maximum, slot_count);
         }
     }
 }
@@ -179,9 +179,9 @@ TEST(EncoderInputRequirements, HostChecksRequestedConfigurationAndActualPool) {
                                           {1280, 720}, 8, &device_identity)
                   .code,
               EncoderInputError::ConfigurationMismatch);
-    for (const int32_t slots : {-1, 0, 7, 9, 129})
-        EXPECT_EQ(ValidateEncoderInputForHost(input, input.codec, input.bit_depth, input.chroma, {1920, 1080}, slots,
-                                              &device_identity)
+    for (const int32_t slot_count : {-1, 0, 7, 9, 129})
+        EXPECT_EQ(ValidateEncoderInputForHost(input, input.codec, input.bit_depth, input.chroma, {1920, 1080},
+                                              slot_count, &device_identity)
                       .code,
                   EncoderInputError::InvalidPool);
     EXPECT_EQ(ValidateEncoderInputForHost(input, input.codec, input.bit_depth, input.chroma, {1920, 1080}, 8,
