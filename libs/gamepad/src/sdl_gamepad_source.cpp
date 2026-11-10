@@ -409,8 +409,7 @@ struct SdlGamepadSource::Impl {
                     if (count < static_cast<int>(events.size()))
                         break;
                 }
-                if (processed >= 2048)
-                    throw std::runtime_error("Controller event queue exceeded its bounded processing budget");
+                // The budget bounds one tick's work; the next tick continues with any remaining events.
                 if (std::chrono::steady_clock::now() >= next_reconcile) {
                     Reconcile();
                     RefreshPlayerIndices();
