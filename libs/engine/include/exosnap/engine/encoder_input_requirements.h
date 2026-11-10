@@ -153,15 +153,16 @@ ValidateEncoderInputRequirements(const EncoderInputRequirements& input) noexcept
 [[nodiscard]] inline EncoderInputValidation ValidateEncoderInputForHost(const EncoderInputRequirements& input,
                                                                         VideoCodec codec, BitDepth depth,
                                                                         ChromaSubsampling chroma, FrameSize requested,
-                                                                        int32_t slots, const void* device) noexcept {
+                                                                        int32_t slot_count,
+                                                                        const void* device) noexcept {
     const auto valid = ValidateEncoderInputRequirements(input);
     if (!valid)
         return valid;
     if (input.codec != codec || input.bit_depth != depth || input.chroma != chroma ||
         input.visible.width != requested.width || input.visible.height != requested.height)
         return {EncoderInputError::ConfigurationMismatch, "Encoder input does not match the configured output."};
-    if (slots <= 0 || static_cast<uint32_t>(slots) < input.pool.minimum ||
-        static_cast<uint32_t>(slots) > input.pool.maximum)
+    if (slot_count <= 0 || static_cast<uint32_t>(slot_count) < input.pool.minimum ||
+        static_cast<uint32_t>(slot_count) > input.pool.maximum)
         return {EncoderInputError::InvalidPool, "Encoder slot count is outside its declared pool bounds."};
     if (input.device != device)
         return {EncoderInputError::WrongDevice, "Encoder inputs must use the configured host device."};
