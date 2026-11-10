@@ -1,3 +1,4 @@
+#include <exosnap/engine/codec_types.h>
 #include <exosnap/engine/encoder_input_requirements.h>
 
 #include "fakes/fake_video_encoder.h"
@@ -5,9 +6,11 @@
 
 #include <gtest/gtest.h>
 
+#include <cstddef>
 #include <cstdint>
 #include <functional>
 #include <limits>
+#include <string>
 #include <vector>
 
 namespace {

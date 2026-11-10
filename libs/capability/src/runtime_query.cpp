@@ -54,6 +54,8 @@
 
 #include <capability/adapter_enum.h>
 #include <capability/capability_builder.h>
+#include <capability/config_types.h>
+#include <capability/encoder_format_capability.h>
 #include <capability/runtime_snapshot.h>
 
 #include <cstdio>

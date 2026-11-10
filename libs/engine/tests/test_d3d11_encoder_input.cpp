@@ -1,9 +1,10 @@
 #include "d3d11_encoder_input.h"
 #include "nvenc_input_requirements.h"
 
+#include <exosnap/engine/codec_types.h>
+#include <exosnap/engine/encoder_input_requirements.h>
 #include <gtest/gtest.h>
 
-#include <cstdint>
 #include <winrt/base.h>
 
 namespace {

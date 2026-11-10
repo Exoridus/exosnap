@@ -3,6 +3,7 @@
 #include "exosnap/engine/codec_types.h"
 #include "exosnap/engine/color_metadata.h"
 #include "exosnap/engine/encoder_device.h"
+#include "exosnap/engine/encoder_input_requirements.h"
 #include "exosnap/engine/error_types.h"
 #include "exosnap/engine/output_geometry.h"
 #include "exosnap/engine/pipeline_diagnostics.h"
@@ -13,12 +14,12 @@
 #include "mux_queue.h"
 #include "premux_state.h"
 #include "production_runtime.h"
-#include "qpc_100ns.h"
 #include "visual_scene_consumer.h"
 #include <atomic>
 #include <cstdint>
 #include <exosnap/engine/gpu_surface_inventory.h>
 #include <exosnap/engine/interfaces/IVideoEncoder.h>
+#include <exosnap/engine/qpc_100ns.h>
 #include <exosnap/engine/video_processor_color.h>
 #include <iterator>
 

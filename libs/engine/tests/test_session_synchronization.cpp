@@ -2,6 +2,7 @@
 #include "exosnap/engine/codec_types.h"
 #include "exosnap/engine/error_types.h"
 #include "exosnap/engine/packet_types.h"
+#include "exosnap/engine/record_request_id.h"
 #include "premux_state.h"
 #include "session_failure.h"
 #include "session_request_gate.h"

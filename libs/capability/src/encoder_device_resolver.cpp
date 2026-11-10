@@ -5,6 +5,7 @@
 #include <capability/adapter_enum.h>
 #include <capability/capability_set.h>
 #include <capability/config_types.h>
+#include <capability/encoder_format_capability.h>
 #include <capability/runtime_snapshot.h>
 #include <capability/support_level.h>
 #include <cstddef>

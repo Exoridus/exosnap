@@ -7,6 +7,7 @@
 #include "nvenc_input_requirements.h"
 
 #include <cstdint>
+#include <exosnap/engine/encoder_input_requirements.h>
 #include <exosnap/engine/hdr_bitstream_metadata.h>
 #include <exosnap/engine/logging/logging.h>
 #include <exosnap/engine/packet_types.h>

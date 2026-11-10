@@ -26,6 +26,8 @@
 #include <wrl/client.h>
 
 #include <capability/adapter_capability.h>
+#include <capability/config_types.h>
+#include <capability/encoder_format_capability.h>
 
 #include <cstdint>
 #include <vector>

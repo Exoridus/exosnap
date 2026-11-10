@@ -4,7 +4,6 @@
 #include "audio_thread.h"
 #include "exosnap/engine/codec_types.h"
 #include "exosnap/engine/error_types.h"
-#include "exosnap/engine/interfaces/IAudioCaptureSource.h"
 #include "exosnap/engine/packet_types.h"
 #include "exosnap/engine/pipeline_diagnostics.h"
 #include "exosnap/engine/session_stats.h"
@@ -14,6 +13,7 @@
 #include "premux_state.h"
 #include "session_internal.h"
 #include "session_stats_collector.h"
+#include "synthetic_output_fault.h"
 
 #include <atomic>
 #include <chrono>

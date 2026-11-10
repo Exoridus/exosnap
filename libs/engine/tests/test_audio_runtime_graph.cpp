@@ -1,13 +1,13 @@
 #include "audio_runtime_graph.h"
 #include "audio_tee.h"
 #include "logical_audio_source.h"
-#include "qpc_100ns.h"
 #include "shared_audio_capture.h"
 #include <algorithm>
 #include <cstddef>
 #include <cstdint>
 #include <exosnap/engine/audio_routing_model.h>
 #include <exosnap/engine/interfaces/IAudioCaptureSource.h>
+#include <exosnap/engine/qpc_100ns.h>
 #include <exosnap/engine/recording_media_types.h>
 #include <exosnap/engine/session_stats.h>
 #include <memory>

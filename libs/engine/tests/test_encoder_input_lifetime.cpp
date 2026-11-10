@@ -1,12 +1,16 @@
 #include "encoder_input_lifetime.h"
 #include "fakes/fake_video_encoder.h"
 
+#include <exosnap/engine/interfaces/IVideoEncoder.h>
+#include <exosnap/engine/packet_types.h>
 #include <gtest/gtest.h>
 
 #include <array>
+#include <cstdint>
 #include <memory>
 #include <optional>
 #include <string>
+#include <utility>
 #include <vector>
 
 namespace {

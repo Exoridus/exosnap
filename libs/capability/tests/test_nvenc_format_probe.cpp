@@ -1,6 +1,10 @@
 #include <gtest/gtest.h>
 
 #if __has_include(<nvEncodeAPI.h>)
+#include <capability/config_types.h>
+#include <capability/encoder_format_capability.h>
+#include <nvEncodeAPI.h>
+
 #include "../src/nvenc_format_probe.h"
 
 #include <algorithm>

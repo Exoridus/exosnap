@@ -2,9 +2,11 @@
 #include "fakes/fake_video_encoder.h"
 #include "mux_queue.h"
 
+#include <exosnap/engine/packet_types.h>
 #include <gtest/gtest.h>
 
 #include <chrono>
+#include <cstddef>
 #include <cstdint>
 #include <string>
 #include <utility>

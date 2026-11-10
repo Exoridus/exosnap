@@ -4,6 +4,7 @@
 #include <wrl/client.h>
 
 #include <array>
+#include <cstdint>
 
 namespace {
 

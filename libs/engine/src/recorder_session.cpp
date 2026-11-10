@@ -3,6 +3,7 @@
 #include <cwchar>
 #include <exosnap/engine/background_io.h>
 #include <exosnap/engine/mic_dsp_config.h>
+#include <exosnap/engine/record_request_id.h>
 #include <exosnap/engine/recorder_session.h>
 #include <exosnap/engine/recording_media_types.h>
 
@@ -28,6 +29,7 @@
 #include "session_callback_gate.h"
 #include "session_internal.h"
 #include "session_outcome.h"
+#include "session_request_gate.h"
 #include "session_stats_collector.h"
 #include "session_stop_reset.h"
 #include "shared_audio_capture.h"

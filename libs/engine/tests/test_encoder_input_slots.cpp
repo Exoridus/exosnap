@@ -1,5 +1,7 @@
 #include "fakes/fake_video_encoder.h"
 
+#include <exosnap/engine/interfaces/IVideoEncoder.h>
+#include <exosnap/engine/packet_types.h>
 #include <gtest/gtest.h>
 
 #include <cstdint>

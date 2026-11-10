@@ -5,6 +5,7 @@
 #include <exosnap/engine/edit_timeline_compositor.h>
 #include <exosnap/engine/edit_timeline_render.h>
 #include <exosnap/engine/encoder_device.h>
+#include <exosnap/engine/encoder_input_requirements.h>
 #include <exosnap/engine/gpu_surface_inventory.h>
 #include <exosnap/engine/interfaces/IAudioEncoder.h>
 #include <exosnap/engine/interfaces/IVideoEncoder.h>
@@ -27,6 +28,7 @@
 
 #include <algorithm>
 #include <chrono>
+#include <cstddef>
 #include <cstdint>
 #include <filesystem>
 #include <memory>

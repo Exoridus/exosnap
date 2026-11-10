@@ -1,5 +1,9 @@
+#include <exosnap/engine/interfaces/IVideoEncoder.h>
 #include <exosnap/engine/interfaces/VideoEncoderFactory.h>
+#include <exosnap/engine/recorder_session.h>
 
+#include <cstdint>
+#include <memory>
 #include <type_traits>
 
 namespace {
