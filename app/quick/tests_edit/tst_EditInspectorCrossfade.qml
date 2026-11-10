@@ -237,7 +237,9 @@ TestCase {
     }
     function test_junction_overlay_fits_content_and_escape_restores_canvas_focus() {
         const outgoing = testSession.visibleClipsUs(0, 100000000).find(row => row.video && row.startUs === 0);
+        verify(testSession.applyCrossfade(outgoing.id, 500));
         testSession.selectTransition(outgoing.id);
+        verify(testSession.selectedTransition !== 0);
         const page = createTemporaryObject(pageComponent, tests, {width: 860, height: 700});
         const strip = findChild(page, "editClipTimeline");
         strip.forceActiveFocus();
@@ -333,7 +335,7 @@ TestCase {
         compare(inspector.timingExpanded, true);
         const fade = findChild(page, "editDetailsFadeIn");
         tryCompare(fade, "activeFocus", true);
-        waitForPolish(page);
+        waitForPolish(tests.Window.window);
         const point = fade.mapToItem(inspector.flickable, 0, 0);
         verify(point.y >= 0 && point.y + fade.height <= inspector.flickable.height);
         verify(!page.applyHarnessView({inspectorField: "unknown"}));

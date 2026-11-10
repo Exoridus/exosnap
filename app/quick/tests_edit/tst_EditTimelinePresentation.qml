@@ -1812,14 +1812,13 @@ TestCase {
         verify(Math.abs(strip.view.mapping.xAtTime(time) - playheadX) < 0.01);
     }
     function test_ctrl_content_marquee_after_vertical_scroll_uses_the_press_position() {
-        const video = testSession.visibleClipsUs(0, 100000000).find(row => row.video);
         testSession.linkedSelection = false;
         for (let index = 0; index < 4; ++index) {
-            testSession.selectClip(video.id);
-            verify(testSession.duplicateSelectedClips());
+            const atUs = testSession.durationUs;
+            testSession.appendAsset(testSession.media[0].id);
             testSession.beginClipDrag(testSession.selectedClip, -1, true);
             verify(testSession.dragActive);
-            testSession.updateClipDragUs(-100000000, 0, 0);
+            testSession.updateClipDragUs(-atUs, 0, 0);
             verify(testSession.commitClipDrag());
         }
         verify(testSession.tracks.length >= 5);
