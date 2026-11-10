@@ -421,13 +421,17 @@ TestCase {
         const action = findChild(page, "editInspectorCrossfadeAtCut");
         verify(action.enabled);
         verify(testSession.setTrackLocked(audio.id, true));
-        verify(!action.enabled);
-        testSession.linkedSelection = false;
-        compare(testSession.selectedClip, outgoing.id);
-        verify(action.enabled);
-        testSession.linkedSelection = true;
-        compare(testSession.selectedClip, outgoing.id);
-        verify(!action.enabled);
+        try {
+            verify(!action.enabled);
+            testSession.linkedSelection = false;
+            compare(testSession.selectedClip, outgoing.id);
+            verify(action.enabled);
+            testSession.linkedSelection = true;
+            compare(testSession.selectedClip, outgoing.id);
+            verify(!action.enabled);
+        } finally {
+            testSession.setTrackLocked(audio.id, false);
+        }
     }
     function test_collapsed_animation_keeps_auto_key_mode_and_key_state_visible() {
         const clip = testSession.visibleClipsUs(0, 100000000).find(row => row.video && row.startUs === 0);

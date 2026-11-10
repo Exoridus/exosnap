@@ -420,9 +420,8 @@ std::shared_ptr<const EditExportPlan> PrepareEditExport(TimelineRenderSnapshot s
             p->video_path = EditVideoPath::Copy;
             p->audio_path = EditAudioPath::CopyOriginalStreams;
             for (const auto& s : p->snapshot.sources)
-                p->output_audio_streams =
-                    (std::max)(p->output_audio_streams,
-                               static_cast<uint32_t>(s.metadata.audio_metadata.actual_tracks.size()));
+                p->output_audio_streams = (std::max)(
+                    p->output_audio_streams, static_cast<uint32_t>(s.metadata.audio_metadata.actual_tracks.size()));
         }
     } else {
         p->video_path = !video_effect && !p->intent.geometry.IsValid() && !p->intent.fps_num &&
@@ -647,7 +646,7 @@ RemuxResult ExecuteFinished(const EditExportPlan& plan, RecorderConfig config, c
     render.aac_audio = aac;
     render.output = plan.intent.geometry.IsValid() ? plan.intent.geometry
                     : reference                    ? FrameSize{static_cast<uint32_t>(reference->metadata.width),
-                                                               static_cast<uint32_t>(reference->metadata.height)}
+                                            static_cast<uint32_t>(reference->metadata.height)}
                                                    : FrameSize{timeline.output_width, timeline.output_height};
     if (plan.intent.fps_num) {
         render.fps_num = static_cast<int>(plan.intent.fps_num);

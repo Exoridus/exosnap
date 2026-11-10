@@ -98,6 +98,8 @@ TestCase {
         const route = item.routing.tracks[0].routes[0];
         verify(item.routing.setRouteGain(route.id, -7.5, item.routing.revision));
         verify(item.routing.setRouteMute(route.id, true, item.routing.revision));
+        waitForPolish(item);
+        waitForRendering(item);
         mouseClick(findChild(item, "audioRoute-" + route.id));
         const popup = findChild(item, "audioGainPopup");
         tryCompare(popup, "opened", true);
@@ -117,8 +119,9 @@ TestCase {
         item.editSource(sourceId);
         const popup = findChild(item, "audioSourceDetails");
         tryCompare(popup, "opened", true);
-        const stage = findChild(popup, "audioSourceStage-hpfEnabled");
-        const parameter = findChild(popup, "audioSourceParameter-hpfCutoffHz");
+        const stage = findChild(popup.contentItem, "audioSourceStage-hpfEnabled");
+        const parameter = findChild(popup.contentItem, "audioSourceParameter-hpfCutoffHz");
+        verify(!!stage && !!parameter);
         verify(stage.visible && stage.enabled);
         compare(parameter.enabled, false);
         compare(parameter.value, 170);
@@ -130,7 +133,7 @@ TestCase {
         keyClick(Qt.Key_Space);
         tryCompare(parameter, "enabled", false);
         compare(parameter.value, 170);
-        compare(findChild(popup, "audioSourceParameter-gainDb").enabled, true);
+        compare(findChild(popup.contentItem, "audioSourceParameter-gainDb").enabled, true);
     }
 
     function test_empty_warning_is_next_to_track_name() {
