@@ -59,13 +59,23 @@ struct ActionDescriptor {
     LocalizedText label;
     ActionOperation operation = ActionOperation::OpenDetails;
     std::string property_path, options_id;
+    // Offers the action in the host context menu of each scene item of this source. The host owns the menu layout,
+    // places these entries before its own node operations and shows at most kMaxNodeMenuActions of them.
+    bool node_menu = false;
 };
+
+inline constexpr size_t kMaxNodeMenuActions = 4;
+// A node-menu selection lists at most this many choices; the current value is always kept.
+inline constexpr size_t kMaxNodeMenuChoices = 16;
 
 struct ActionInvocation {
     engine::VisualAddress target;
     engine::CommandId request;
     std::string action_id;
     std::optional<std::string> choice_id;
+    // The scene item the action was offered for. The host rejects an invocation whose item does not belong to the
+    // target source in the current scene.
+    engine::SceneItemId item;
 };
 
 [[nodiscard]] bool IsVisualIdentifier(std::string_view) noexcept;

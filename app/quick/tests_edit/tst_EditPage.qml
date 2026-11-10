@@ -542,6 +542,8 @@ Item {
             testSession.selectClipWithModifiers(clips[0].id);
             compare(testSession.selectedClipIds.length, 1);
             page.toggleDetails();
+            child(page, "editDetailsTimingToggle").forceActiveFocus(Qt.TabFocusReason);
+            keyClick(Qt.Key_Space);
             const start = child(page, "editDetailsClipStart");
             verify(start.visible);
             const inspector = child(page, "editInspector");
@@ -769,9 +771,10 @@ Item {
                     saved = result.saveToFile(testVisualDirectory + "/edit-crossfade-" + testScale + ".png");
                 }, Qt.size(Math.round(page.width * Number(testScale)), Math.round(page.height * Number(testScale)))));
                 tryVerify(() => saved);
-                testSession.selectClip(videos[1].id);
-                page.toggleDetails();
-                tryVerify(() => findChild(page, "editDetailsFadeIn") !== null);
+                verify(testSession.inspectClip(videos[1].id));
+                page.openInspector("fadeIn");
+                tryVerify(() => findChild(page, "editDetailsFadeIn") !== null && findChild(page, "editDetailsFadeIn").visible);
+                waitForRendering(page);
                 saved = false;
                 verify(page.grabToImage(result => {
                     saved = result.saveToFile(testVisualDirectory + "/edit-details-" + testScale + ".png");
@@ -886,6 +889,50 @@ Item {
             } finally {
                 while (testSession.canUndo) testSession.undo();
             }
+        }
+
+        function test_shortcut_help_scrolls_in_a_short_window_and_closes_with_escape() {
+            const page = make({height: 600});
+            child(page, "editClipTimeline").forceActiveFocus();
+            keyClick(Qt.Key_Question);
+            const help = child(page, "editShortcutHelp");
+            tryCompare(help, "visible", true);
+            verify(help.height <= page.height - 32);
+            const scroll = child(page, "editShortcutScroll");
+            tryVerify(() => scroll.flickable.contentHeight > scroll.flickable.height);
+            scroll.forceActiveFocus();
+            keyClick(Qt.Key_End);
+            verify(scroll.flickable.contentY > 0);
+            keyClick(Qt.Key_Escape);
+            tryCompare(help, "visible", false);
+        }
+
+        function test_canvas_escape_closes_details_before_clearing_selection() {
+            testSession.appendAsset(testSession.media[0].id);
+            const page = make({session: testSession, width: 1280, height: 800});
+            const timeline = child(page, "editClipTimeline");
+            const selected = testSession.selectedClipIds.slice();
+            for (const canvas of [timeline, child(page, "editViewer")]) {
+                canvas.forceActiveFocus();
+                keyClick(Qt.Key_D);
+                tryCompare(page, "detailsOpen", true);
+                keyClick(Qt.Key_Escape);
+                compare(page.detailsOpen, false);
+                compare(testSession.selectedClipIds, selected);
+            }
+            timeline.forceActiveFocus();
+            keyClick(Qt.Key_D);
+            testSession.beginClipDrag(testSession.selectedClip);
+            verify(testSession.dragActive);
+            testSession.updateClipDragUs(1000000, 0, -1, false, 0);
+            keyClick(Qt.Key_Escape);
+            verify(!testSession.dragActive);
+            verify(page.detailsOpen);
+            compare(testSession.selectedClipIds, selected);
+            keyClick(Qt.Key_Escape);
+            verify(!page.detailsOpen);
+            compare(testSession.selectedClipIds, selected);
+            while (testSession.canUndo) testSession.undo();
         }
 
         function test_keyboard_close_returns_focus_without_activating_a_rail() {

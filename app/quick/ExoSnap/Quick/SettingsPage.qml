@@ -328,6 +328,14 @@ Item {
                 text: root.settings.editingNextRecording ? qsTr("For the next recording") : qsTr("Active recording (read-only): %1").arg(root.settings.activePresetName)
                 color: ExoTheme.textMuted
             }
+            ExoCheckBox {
+                objectName: "activeSettingsExpert"
+                text: qsTr("Expert")
+                visible: !root.settings.editingNextRecording
+                checked: root.settings.expertMode
+                Accessible.name: qsTr("Expert settings")
+                onToggledByUser: value => root.settings.expertMode = value
+            }
             ExoButton {
                 text: root.settings.editingNextRecording ? qsTr("Show active recording") : qsTr("Edit next recording")
                 onClicked: {

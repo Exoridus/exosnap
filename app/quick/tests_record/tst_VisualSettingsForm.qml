@@ -64,20 +64,30 @@ TestCase {
         return form;
     }
     function test_cached_choices_render_without_editing_data() {
-        return [{tag: "webcam", gamepad: false, rows: 3}, {tag: "gamepad", gamepad: true, rows: 3}];
+        return [{tag: "webcam", gamepad: false, rows: 3, label: "Device"},
+                {tag: "gamepad", gamepad: true, rows: 3, label: "Input device"}];
     }
     function test_cached_choices_render_without_editing(data) {
         const form = createForm(data.gamepad);
         compare(form.rows.length, data.rows);
         compare(!!findControl(form, qsTr("Details")), !data.gamepad);
         verify(!!findControl(form, qsTr("Retry")));
-        const select = findControl(form, qsTr("Device"));
+        const select = findControl(form, data.label);
         verify(!!select);
         compare(select.options.length, 3);
         compare(select.options[2].value, "blocked");
         compare(select.options[2].selectable, false);
         compare(select.value, "");
         compare(editSpy.count, 0);
+    }
+    function test_controller_only_offers_supported_actions() {
+        recordDriver.resetVisualSettings(false, true);
+        const form = createForm(true);
+        compare(findControl(form, qsTr("Details")), null);
+        const retry = findControl(form, qsTr("Retry"));
+        verify(!!retry && retry.enabled);
+        mouseClick(retry);
+        tryCompare(retrySpy, "count", 1);
     }
     function test_select_commits_through_the_form_data() {
         return [{tag: "webcam", gamepad: false, label: qsTr("Device"), value: "camera"},

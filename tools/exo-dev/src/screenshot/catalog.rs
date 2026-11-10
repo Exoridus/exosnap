@@ -265,20 +265,27 @@ pub fn set(name: &str, values: &ProductValues) -> anyhow::Result<Vec<(String, Sh
             shots
         }
         "workspace" => {
-            let mut shots: Vec<_> = ["overlay-menu", "gamepad", "gamepad-hidden"]
-                .into_iter()
-                .map(|panel| {
-                    named(ShotSpec {
-                        record_panel: Some(panel.to_string()),
-                        record_state: Some("ready".to_string()),
-                        ..page(Page::Record)
-                    })
+            let mut shots: Vec<_> = [
+                "overlay-menu",
+                "gamepad",
+                "gamepad-hidden",
+                "gamepad-menu",
+                "gamepad-device-menu",
+            ]
+            .into_iter()
+            .map(|panel| {
+                named(ShotSpec {
+                    record_panel: Some(panel.to_string()),
+                    record_state: Some("ready".to_string()),
+                    ..page(Page::Record)
                 })
-                .collect();
+            })
+            .collect();
             for (state, panel) in [
                 ("recording", "overlay-menu"),
                 ("paused", "overlay-menu"),
                 ("recording", "gamepad-hidden"),
+                ("recording", "gamepad-menu"),
             ] {
                 shots.push(named(ShotSpec {
                     record_panel: Some(panel.to_string()),
@@ -585,7 +592,13 @@ mod tests {
         for (_, shot) in set("workspace", &values).unwrap() {
             assert!(matches!(
                 shot.record_panel.as_deref(),
-                Some("overlay-menu" | "gamepad" | "gamepad-hidden")
+                Some(
+                    "overlay-menu"
+                        | "gamepad"
+                        | "gamepad-hidden"
+                        | "gamepad-menu"
+                        | "gamepad-device-menu"
+                )
             ));
         }
         let diagnostics = set("diagnostics", &values).unwrap();

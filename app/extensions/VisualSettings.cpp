@@ -69,10 +69,15 @@ engine::Outcome<std::monostate> ValidateVisualSettings(const VisualSourceType& t
             return engine::EngineError{.context = "Only selection fields accept options"};
     }
     std::set<std::string_view> actions;
+    if (std::count_if(type.actions.begin(), type.actions.end(), [](const auto& action) { return action.node_menu; }) >
+        static_cast<std::ptrdiff_t>(kMaxNodeMenuActions))
+        return engine::EngineError{.context = "Too many visual node menu actions"};
     for (const auto& action : type.actions) {
         if (!IsVisualIdentifier(action.id) || action.label.context.empty() || action.label.source_text.empty() ||
             !actions.insert(action.id).second)
             return engine::EngineError{.context = "Invalid or duplicate visual action"};
+        if (action.node_menu && action.operation != ActionOperation::SelectProperty)
+            return engine::EngineError{.context = "Only visual selections can join the node menu"};
         switch (action.operation) {
         case ActionOperation::SelectProperty: {
             const auto field =
@@ -100,8 +105,8 @@ engine::Outcome<std::monostate> ValidateVisualAction(const ActionInvocation& inv
                                                      const engine::VisualAddress& current) {
     if (current.runtime.value == 0 || current.source == engine::VisualSourceId{} ||
         invocation.target.runtime.value == 0 || invocation.target.source == engine::VisualSourceId{} ||
-        source.id != current.source || source.type_id != type.id || source.settings_version != type.settings_version ||
-        invocation.request == engine::CommandId{})
+        invocation.item == engine::SceneItemId{} || source.id != current.source || source.type_id != type.id ||
+        source.settings_version != type.settings_version || invocation.request == engine::CommandId{})
         return engine::EngineError{.context = "Visual action has invalid arguments or incompatible source settings"};
     if (invocation.target != current)
         return engine::EngineError{.code = engine::EngineErrorCode::StaleRevision,

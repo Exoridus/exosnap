@@ -74,6 +74,46 @@ class SettingsVisualCutover : public ::testing::Test {
     int active_edits = 0;
 };
 
+TEST_F(SettingsVisualCutover, WebcamPreviewReflectsOwnerLifecycleAndRejectsStaleStatus) {
+    adapter.setWebcamDevices({QVariantMap{{"value", "camera"}, {"label", "Camera"}}});
+    const engine::VisualAddress camera{engine::VisualSourceId{{1}}, engine::VisualRuntimeGeneration{7}};
+    adapter.setVisualTargets(camera, engine::SceneItemId{{2}}, {engine::VisualSourceId{{3}}, {}},
+                             engine::SceneItemId{{4}});
+    EXPECT_EQ(adapter.webcamPreviewState(), SettingsAdapter::CameraInactive);
+    SourceStatus status{{camera, engine::SourceRequestRevision{2}}, SourcePhase::Preparing, {}};
+    adapter.setWebcamSourceStatus(status);
+    EXPECT_EQ(adapter.webcamPreviewState(), SettingsAdapter::CameraStarting);
+    status.phase = SourcePhase::Ready;
+    adapter.setWebcamSourceStatus(status);
+    EXPECT_EQ(adapter.webcamPreviewState(), SettingsAdapter::CameraReady);
+    status.phase = SourcePhase::Waiting;
+    adapter.setWebcamSourceStatus(status);
+    EXPECT_EQ(adapter.webcamPreviewState(), SettingsAdapter::CameraUnavailable);
+    EXPECT_FALSE(adapter.webcamPreviewMessage().isEmpty());
+    status.phase = SourcePhase::Failed;
+    status.reason = engine::EngineError{.context = "Device in use"};
+    adapter.setWebcamSourceStatus(status);
+    EXPECT_EQ(adapter.webcamPreviewState(), SettingsAdapter::CameraUnavailable);
+    EXPECT_TRUE(adapter.webcamPreviewMessage().contains("Device in use"));
+    auto stale = status;
+    stale.token.request = engine::SourceRequestRevision{1};
+    stale.phase = SourcePhase::Ready;
+    adapter.setWebcamSourceStatus(stale);
+    EXPECT_EQ(adapter.webcamPreviewState(), SettingsAdapter::CameraUnavailable);
+    stale = status;
+    stale.token.address.runtime = engine::VisualRuntimeGeneration{6};
+    adapter.setWebcamSourceStatus(stale);
+    EXPECT_EQ(adapter.webcamPreviewState(), SettingsAdapter::CameraUnavailable);
+    adapter.setWebcamDevices({});
+    EXPECT_EQ(adapter.webcamPreviewState(), SettingsAdapter::CameraDisconnected);
+    adapter.setWebcamEnabled(false);
+    EXPECT_EQ(adapter.webcamPreviewState(), SettingsAdapter::CameraOff);
+    const auto before = edits;
+    adapter.setWebcamSourceStatus(std::nullopt);
+    EXPECT_EQ(adapter.webcamPreviewState(), SettingsAdapter::CameraOff);
+    EXPECT_EQ(edits, before);
+}
+
 TEST_F(SettingsVisualCutover, HydrationAndRowsNeverWriteIntentOrRequireNativeRuntime) {
     adapter.setConfig(config);
     EXPECT_EQ(edits, 0);
@@ -402,6 +442,103 @@ TEST_F(SettingsVisualCutover, LifecycleRevokesGestureWithoutLockingNextSettings)
     EXPECT_TRUE(adapter.setRecordGamepadPlacement(fresh["sourceId"].toString(), fresh["itemId"].toString(),
                                                   fresh["editRevision"].toString(), {0.2, 0.3, 0.4, 0.4}));
     EXPECT_EQ(active_edits, 1);
+}
+
+class SceneItemCommands : public SettingsVisualCutover {
+  protected:
+    void SetUp() override {
+        SettingsVisualCutover::SetUp();
+        adapter.setRecordWebcamTarget({engine::VisualSourceId{{1}}, engine::VisualRuntimeGeneration{5}},
+                                      engine::SceneItemId{{2}});
+        adapter.setRecordGamepadTarget({engine::VisualSourceId{{3}}, engine::VisualRuntimeGeneration{6}},
+                                       engine::SceneItemId{{4}});
+    }
+    QVariantMap Record(bool gamepad) {
+        return adapter.visualSourceState(gamepad ? adapter.recordGamepadSourceId() : adapter.recordWebcamSourceId(),
+                                         true);
+    }
+    bool Command(const QVariantMap& state, const char* command) {
+        return adapter.applySceneItemCommand(state["sourceId"].toString(), state["itemId"].toString(),
+                                             state["runtime"].toString(), state["editRevision"].toString(),
+                                             QString::fromLatin1(command));
+    }
+};
+
+TEST_F(SceneItemCommands, MenuEntriesComeFromNodeMenuRegistrationsOfTheAddressedItem) {
+    const auto pad = Record(true);
+    const auto entries = adapter.sceneItemMenuEntries(pad["sourceId"].toString(), pad["itemId"].toString());
+    // Layout is registered as an action but not for the node menu.
+    ASSERT_EQ(entries.size(), 1);
+    EXPECT_EQ(entries[0].toMap()["action"], QStringLiteral("select-device"));
+    EXPECT_EQ(entries[0].toMap()["valueLabel"], QStringLiteral("Automatic"));
+    EXPECT_EQ(entries[0].toMap()["choices"].toList().size(), 3);
+    const auto camera = Record(false);
+    EXPECT_EQ(adapter.sceneItemMenuEntries(camera["sourceId"].toString(), camera["itemId"].toString()).size(), 1);
+    EXPECT_TRUE(adapter.sceneItemMenuEntries(camera["sourceId"].toString(), pad["itemId"].toString()).isEmpty());
+}
+
+TEST_F(SceneItemCommands, StackingCommandsMoveOnlyTheAddressedItem) {
+    EXPECT_EQ(Record(false)["stackIndex"], 0);
+    EXPECT_EQ(Record(true)["stackIndex"], 1);
+    EXPECT_FALSE(Record(false)["canSendToBack"].toBool());
+    EXPECT_TRUE(Command(Record(false), "front"));
+    EXPECT_EQ(Record(false)["stackIndex"], 1);
+    EXPECT_EQ(Record(true)["stackIndex"], 0);
+    EXPECT_FALSE(Record(false)["canBringToFront"].toBool());
+    EXPECT_TRUE(Command(Record(false), "back"));
+    EXPECT_EQ(Record(false)["stackIndex"], 0);
+    EXPECT_EQ(edits, 2);
+}
+
+TEST_F(SceneItemCommands, HideShowAndRemoveUseTheHostSceneState) {
+    EXPECT_TRUE(Command(Record(true), "hide"));
+    EXPECT_FALSE(Record(true)["outputVisible"].toBool());
+    EXPECT_TRUE(Record(true)["enabled"].toBool());
+    EXPECT_TRUE(Command(Record(true), "show"));
+    EXPECT_TRUE(Record(true)["outputVisible"].toBool());
+    const auto before_remove = Record(true);
+    EXPECT_TRUE(Command(before_remove, "remove"));
+    EXPECT_EQ(adapter.config().visual_scene.items.size(), 1u);
+    EXPECT_EQ(adapter.config().visual_scene.items.front().id, (engine::SceneItemId{{2}}));
+    EXPECT_FALSE(adapter.config().visual_scene.sources[1].enabled);
+    EXPECT_TRUE(adapter.config().visual_scene.sources.front().enabled);
+    EXPECT_FALSE(Command(before_remove, "remove"));
+    EXPECT_FALSE(Command(before_remove, "front"));
+}
+
+TEST_F(SceneItemCommands, StaleTokensForeignItemsAndLockedEditingAreRejected) {
+    const auto pad = Record(true);
+    auto foreign = Record(false);
+    foreign["itemId"] = pad["itemId"];
+    EXPECT_FALSE(Command(foreign, "remove"));
+    auto stale_runtime = pad;
+    stale_runtime["runtime"] = QStringLiteral("5");
+    EXPECT_FALSE(Command(stale_runtime, "hide"));
+    EXPECT_FALSE(Command(pad, "unknown"));
+    adapter.setRecordGamepadTarget({engine::VisualSourceId{{3}}, engine::VisualRuntimeGeneration{7}},
+                                   engine::SceneItemId{{4}});
+    EXPECT_FALSE(Command(pad, "hide"));
+    adapter.setRecordVisualEditingAllowed(false);
+    EXPECT_FALSE(Command(Record(true), "hide"));
+    EXPECT_EQ(edits, 0);
+}
+
+TEST_F(SceneItemCommands, EnablingASourceWithoutItemsRestoresOneItem) {
+    EXPECT_TRUE(Command(Record(true), "remove"));
+    adapter.setRecordGamepadTarget({engine::VisualSourceId{{3}}, {}}, {});
+    const auto orphan = Record(true);
+    EXPECT_EQ(orphan["itemId"], QString());
+    EXPECT_FALSE(orphan["enabled"].toBool());
+    EXPECT_TRUE(adapter.setVisualEnabled(orphan["sourceId"].toString(), QString(), orphan["editRevision"].toString(),
+                                         true, true));
+    const auto& scene = adapter.config().visual_scene;
+    ASSERT_EQ(scene.items.size(), 2u);
+    EXPECT_EQ(scene.items.back().source, (engine::VisualSourceId{{3}}));
+    EXPECT_TRUE(scene.sources[1].enabled);
+    // A repeated enable against the same orphan state must not add a second item.
+    EXPECT_FALSE(adapter.setVisualEnabled(orphan["sourceId"].toString(), QString(), orphan["editRevision"].toString(),
+                                          true, true));
+    EXPECT_EQ(adapter.config().visual_scene.items.size(), 2u);
 }
 
 } // namespace

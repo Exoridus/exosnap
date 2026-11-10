@@ -1,6 +1,7 @@
 #include <capability/translatable.h>
 #include <exosnap/engine/codec_types.h>
 #include <exosnap/engine/edit_automation.h>
+#include <exosnap/engine/edit_export_issue.h>
 #include <exosnap/engine/edit_export_plan.h>
 #include <exosnap/engine/edit_timeline.h>
 #include <exosnap/engine/edit_timeline_export.h>
@@ -438,8 +439,6 @@ std::shared_ptr<const EditExportPlan> PrepareEditExport(TimelineRenderSnapshot s
         p->output_audio_streams = has_audio ? 1 : 0;
         if (has_audio && !p->facts.input_mix_validated)
             issue(EditExportIssueCode::MixSelectionRequired, EditExportIssueScope::Audio);
-        if (p->intent.container == EditExportContainer::Mp4 && !p->facts.mp4_finished_available)
-            issue(EditExportIssueCode::UnsupportedProfile, EditExportIssueScope::Video);
         if (p->video_path == EditVideoPath::Unsupported)
             issue(EditExportIssueCode::UnsupportedProfile, EditExportIssueScope::Video);
         if (p->audio_path == EditAudioPath::Unsupported)
@@ -450,6 +449,9 @@ std::shared_ptr<const EditExportPlan> PrepareEditExport(TimelineRenderSnapshot s
         issue(EditExportIssueCode::ResourceLimitExceeded, EditExportIssueScope::Video);
     if (!p->facts.deviations.empty())
         issue(EditExportIssueCode::BoundaryConsentRequired, EditExportIssueScope::Video);
+    if (p->intent.mode == EditExportMode::FinishedStereo && has_audio &&
+        p->intent.container == EditExportContainer::Mp4 && !p->facts.mp4_finished_available)
+        issue(EditExportIssueCode::Mp4AudioUnavailable, EditExportIssueScope::Audio);
     p->hash = Hash(*p);
     return p;
 }

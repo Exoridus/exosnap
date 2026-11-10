@@ -10,8 +10,25 @@ Item {
     required property RecordViewModelAdapter recordViewModel
     property GamepadOverlay gamepadOverlay: null
     property var gamepadState: ({})
+    property var webcamState: ({})
     function refreshGamepad(): void {
         root.gamepadState = root.settings ? root.settings.visualSourceState(root.settings.recordGamepadSourceId, true) : ({});
+        root.webcamState = root.settings ? root.settings.visualSourceState(root.settings.recordWebcamSourceId, true) : ({});
+    }
+    // Host node operations go through the same validated command the context
+    // menu uses, so Delete and "Remove" cannot diverge.
+    function removeSceneItem(state: var): bool {
+        const removed = root.settings.applySceneItemCommand(state.sourceId, state.itemId, state.runtime,
+                                                            state.editRevision, "remove");
+        if (removed)
+            root.selectedOverlay = "";
+        return removed;
+    }
+    function openSceneItemMenu(name: string, state: var, at: point): void {
+        if (state.itemId === undefined || state.itemId.length === 0)
+            return;
+        root.selectedOverlay = name;
+        sceneItemMenu.openFor(state, previewStage.mapToItem(sceneItemMenu.parent, at.x, at.y));
     }
     function setGamepadEnabled(value: bool): bool {
         return settings.setVisualEnabled(gamepadState.sourceId, gamepadState.itemId,
@@ -72,7 +89,7 @@ Item {
     // spelled out as an eyebrow ("SCREEN") beside a name that already said
     // "Display 1"; one icon carries the same fact without a second text run, and
     // the accessible name below still states it in words.
-    readonly property int sourceGlyph: root.recordViewModel.sourceKindText === "WINDOW" ? ExoGlyph.AppWindow : root.recordViewModel.sourceKindText === "REGION" ? ExoGlyph.Region : ExoGlyph.Display
+    readonly property int sourceGlyph: root.recordViewModel.sourceKind === RecordViewModelAdapter.WindowSource ? ExoGlyph.AppWindow : root.recordViewModel.sourceKind === RecordViewModelAdapter.RegionSource ? ExoGlyph.Region : ExoGlyph.Display
 
     ColumnLayout {
         spacing: ExoTheme.spacingLg
@@ -247,14 +264,13 @@ Item {
                             editable: root.recordViewModel.webcamOverlayEditable
                             error: root.recordViewModel.webcamError
                             selected: root.selectedOverlay === "webcam"
-                            toolbarTopInset: Math.max(0, previewChrome.controlsBottom - previewStage.y + 4)
+                            // Stacking follows the scene order the compositor draws, so the
+                            // item on top in the picture is the one a click reaches.
+                            z: 1 + (root.webcamState.stackIndex ?? 0)
                             outputVisible: root.recordViewModel.webcamOutputVisible
                             onSelectionRequested: root.selectedOverlay = "webcam"
-                            onOutputVisibilityRequested: value => root.recordViewModel.requestWebcamOutputVisible(value)
-                            onRemoveRequested: {
-                                root.recordViewModel.requestToggleSource("webcam");
-                                root.selectedOverlay = "";
-                            }
+                            onRemoveRequested: root.removeSceneItem(root.webcamState)
+                            onContextMenuRequested: at => root.openSceneItemMenu("webcam", root.webcamState, at)
                             onRectRequested: rect => root.recordViewModel.requestWebcamOverlayRect(rect)
                         }
 
@@ -271,14 +287,11 @@ Item {
                             modelRect: root.gamepadState.placement ?? Qt.rect(0, 0, 1, 1)
                             editable: root.gamepadState.editable === true
                             selected: root.selectedOverlay === "gamepad"
-                            toolbarTopInset: Math.max(0, previewChrome.controlsBottom - previewStage.y + 4)
+                            z: 1 + (root.gamepadState.stackIndex ?? 0)
                             outputVisible: root.gamepadState.outputVisible !== false
                             onSelectionRequested: root.selectedOverlay = "gamepad"
-                            onOutputVisibilityRequested: value => root.setGamepadOutputVisible(value)
-                            onRemoveRequested: {
-                                root.setGamepadEnabled(false);
-                                root.selectedOverlay = "";
-                            }
+                            onRemoveRequested: root.removeSceneItem(root.gamepadState)
+                            onContextMenuRequested: at => root.openSceneItemMenu("gamepad", root.gamepadState, at)
                             function requestPlacement(rect: rect): void {
                                 const target = gestureTarget ?? root.gamepadState;
                                 root.settings.setRecordGamepadPlacement(target.sourceId, target.itemId,
@@ -289,6 +302,19 @@ Item {
                                     requestPlacement(draftRect);
                             }
                             onRectRequested: rect => requestPlacement(rect)
+                        }
+
+                        SceneItemContextMenu {
+                            id: sceneItemMenu
+                            settings: root.settings
+                            // Keep the edited node selected while its menu is open and
+                            // after a command; only removal clears the selection.
+                            onClosed: {
+                                if (root.active && root.selectedOverlay === "webcam" && webcamOverlay.visible)
+                                    webcamOverlay.forceActiveFocus(Qt.OtherFocusReason);
+                                else if (root.active && root.selectedOverlay === "gamepad" && gamepadPlacement.visible)
+                                    gamepadPlacement.forceActiveFocus(Qt.OtherFocusReason);
+                            }
                         }
 
                         GamepadOverlayControls {
@@ -510,11 +536,18 @@ Item {
         if (name === "overlay-menu") {
             return previewChrome.openOverlayMenu();
         }
-        if ((name === "gamepad" || name === "gamepad-hidden") && root.gamepadOverlay) {
+        const menu = name === "gamepad-menu" || name === "gamepad-device-menu";
+        if ((name === "gamepad" || name === "gamepad-hidden" || menu) && root.gamepadOverlay) {
             root.setGamepadEnabled(true);
             root.setGamepadOutputVisible(name !== "gamepad-hidden");
             root.selectedOverlay = "gamepad";
-            return gamepadPlacement.visible;
+            if (menu && gamepadPlacement.visible)
+                root.openSceneItemMenu("gamepad", root.gamepadState,
+                                       gamepadPlacement.mapToItem(previewStage, gamepadPlacement.width / 2,
+                                                                  gamepadPlacement.height / 2));
+            if (name === "gamepad-device-menu" && !sceneItemMenu.openEntry(0))
+                return false;
+            return gamepadPlacement.visible && (!menu || sceneItemMenu.opened);
         }
         return false;
     }

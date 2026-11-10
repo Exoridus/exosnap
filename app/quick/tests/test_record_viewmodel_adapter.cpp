@@ -2,8 +2,11 @@
 
 #include "viewmodels/RecordViewModel.h"
 
+#include <QCoreApplication>
+#include <QTranslator>
 #include <gtest/gtest.h>
 
+#include <memory>
 #include <string>
 
 namespace exosnap::quick {
@@ -21,6 +24,60 @@ void SeedWindowIdentities(RecordViewModelAdapter& adapter, const RecordViewModel
     adapter.setWindowIdentities(std::move(identities), std::move(applications));
     adapter.synchronize();
 }
+TEST(RecordViewModelAdapterTest, SourceKindIgnoresTranslatedDisplayLabels) {
+    int argc = 1;
+    char name[] = "source_kind_translation";
+    char* argv[] = {name, nullptr};
+    std::unique_ptr<QCoreApplication> application;
+    if (!QCoreApplication::instance())
+        application = std::make_unique<QCoreApplication>(argc, argv);
+    class SourceTranslator : public QTranslator {
+      public:
+        QString windowText;
+        QString regionText;
+        bool isEmpty() const override {
+            return false;
+        }
+        QString translate(const char* context, const char* source, const char*, int) const override {
+            if (std::string(context) == "RecordViewModelAdapter") {
+                if (std::string(source) == "WINDOW")
+                    return windowText;
+                if (std::string(source) == "REGION")
+                    return regionText;
+            }
+            return {};
+        }
+    } translator;
+    RecordViewModel source;
+    engine::CaptureTarget window{};
+    window.kind = engine::CaptureTarget::Kind::Window;
+    source.targets.push_back(window);
+    source.selected_target_index = 0;
+    RecordViewModelAdapter adapter(&source);
+    ASSERT_TRUE(QCoreApplication::installTranslator(&translator));
+    for (const auto& labels :
+         {std::pair{QStringLiteral("WINDOW"), QStringLiteral("REGION")},
+          std::pair{QStringLiteral("FENSTER"), QStringLiteral("BEREICH")},
+          std::pair{QStringLiteral("[Pseudo translated window]"), QStringLiteral("[Pseudo translated region]")}}) {
+        translator.windowText = labels.first;
+        translator.regionText = labels.second;
+        source.capture_mode = CaptureMode::Window;
+        adapter.synchronize();
+        EXPECT_EQ(adapter.sourceKindText(), labels.first);
+        EXPECT_EQ(adapter.sourceKind(), RecordViewModelAdapter::WindowSource);
+        source.capture_mode = CaptureMode::Region;
+        adapter.synchronize();
+        EXPECT_EQ(adapter.sourceKindText(), labels.second);
+        EXPECT_EQ(adapter.sourceKind(), RecordViewModelAdapter::RegionSource);
+        source.capture_mode = CaptureMode::Monitor;
+        source.targets.front().kind = engine::CaptureTarget::Kind::Monitor;
+        adapter.synchronize();
+        EXPECT_EQ(adapter.sourceKind(), RecordViewModelAdapter::DisplaySource);
+        source.targets.front().kind = engine::CaptureTarget::Kind::Window;
+    }
+    QCoreApplication::removeTranslator(&translator);
+}
+
 TEST(RecordViewModelAdapterTest, CopiesRepresentativeStateAtConstruction) {
     RecordViewModel source;
     source.state_text = L"Ready";

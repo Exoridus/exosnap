@@ -1,4 +1,5 @@
 #include "EditExportAdapter.h"
+#include "EditExportText.h"
 #include <QCoreApplication>
 
 #include "EditRenderText.h"
@@ -98,58 +99,6 @@ QVariantMap AudioRow(const engine::ContainerAudioTrack& track, uint64_t asset, b
             {QStringLiteral("name"), QString::fromStdString(track.name)},
             {QStringLiteral("role"), QString::fromStdString(track.role)},
             {QStringLiteral("position"), track.stream_index.value + 1}};
-}
-
-QString IssueText(const engine::EditExportPlan& plan, const engine::EditExportIssue& issue) {
-    using engine::EditExportIssueCode;
-    switch (issue.code) {
-    case EditExportIssueCode::EmptySpan:
-        return QCoreApplication::translate("EditExportAdapter", "The selected export range is empty.");
-    case EditExportIssueCode::InvalidSelection:
-        return QCoreApplication::translate("EditExportAdapter", "Select clips or a valid time range for export.");
-    case EditExportIssueCode::PartialJunctionOwnership:
-        return QCoreApplication::translate("EditExportAdapter",
-                                           "The selected clips contain only one side of a transition.");
-    case EditExportIssueCode::InvalidTimeline:
-        return QCoreApplication::translate("EditExportAdapter", "The timeline contains an invalid clip.");
-    case EditExportIssueCode::MissingSource:
-        return QCoreApplication::translate("EditExportAdapter", "The timeline contains unavailable media.");
-    case EditExportIssueCode::SourceChanged:
-        return QCoreApplication::translate("EditExportAdapter",
-                                           "A source changed after it was imported. Import it again.");
-    case EditExportIssueCode::MixSelectionRequired:
-        return QCoreApplication::translate(
-            "EditExportAdapter", "Choose which audio streams of the recording form the mix before exporting.");
-    case EditExportIssueCode::OriginalRecipeChanged:
-        return QCoreApplication::translate("EditExportAdapter",
-                                           "Original streams can only be kept for unedited source cuts. Export "
-                                           "the finished result instead.");
-    case EditExportIssueCode::UnsupportedAudioLayout:
-        return QCoreApplication::translate("EditExportAdapter",
-                                           "An audio stream has a channel layout that cannot be mixed to stereo.");
-    case EditExportIssueCode::BoundaryConsentRequired:
-        return QCoreApplication::translate("EditExportAdapter",
-                                           "Copying would move the cut boundaries. Export a rendered result instead.");
-    case EditExportIssueCode::ResourceLimitExceeded:
-        return QCoreApplication::translate("EditExportAdapter", "The export needs more resources than are available.");
-    case EditExportIssueCode::DestinationAliasesSource:
-        return QCoreApplication::translate("EditExportAdapter",
-                                           "The destination would replace an original source. Choose another file.");
-    case EditExportIssueCode::UnsupportedProfile:
-        break;
-    }
-    if (plan.intent.container == engine::EditExportContainer::Mp4)
-        return QCoreApplication::translate("EditExportAdapter",
-                                           "MP4 is not available for the finished result yet. Choose MKV.");
-    if (issue.scope == engine::EditExportIssueScope::Audio)
-        return QCoreApplication::translate("EditExportAdapter",
-                                           "The timeline audio cannot be exported with this output.");
-    return plan.facts.original_copy_qualified
-               ? QCoreApplication::translate("EditExportAdapter",
-                                             "This edit cannot be rendered here. To copy the source cut, keep the "
-                                             "original streams in the export details.")
-               : QCoreApplication::translate("EditExportAdapter",
-                                             "The timeline video cannot be exported with this output.");
 }
 
 QString RenderVideoCodec(engine::VideoCodec codec) {
@@ -292,7 +241,8 @@ struct EditExportAdapter::PreparedExport {
         auto facts = engine::AssessEditExportFacts(snapshot, intent, input_mix_validated, &cancelled);
         edit_plan = engine::PrepareEditExport(snapshot, intent, std::move(facts));
         if (!edit_plan->ready()) {
-            error = IssueText(*edit_plan, edit_plan->issues.front()).toStdString();
+            error = TranslateEditExportIssue(edit_plan->issues.front(), edit_plan->facts.original_copy_qualified)
+                        .toStdString();
             return false;
         }
         const auto& planned_snapshot = edit_plan->snapshot;

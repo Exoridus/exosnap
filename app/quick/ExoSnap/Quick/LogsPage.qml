@@ -290,7 +290,7 @@ Item {
             Label {
                 text: qsTr("Full session logs are written to")
                 textFormat: Text.PlainText
-                color: ExoTheme.textDim
+                color: ExoTheme.textMuted
                 font {
                     family: ExoTheme.sansFamily
                     pixelSize: ExoTheme.fontCaption
@@ -330,11 +330,11 @@ Item {
                     text: root.logs.logFolderPath + "."
                     textFormat: Text.PlainText
                     elide: Text.ElideMiddle
-                    color: folderLink.hovered ? ExoTheme.text : ExoTheme.accent
+                    color: folderLink.hovered ? ExoTheme.text : ExoTheme.textSecondary
                     font {
                         family: ExoTheme.monoFamily
                         pixelSize: ExoTheme.fontCaption
-                        underline: folderLink.hovered
+                        underline: true
                     }
                 }
             }

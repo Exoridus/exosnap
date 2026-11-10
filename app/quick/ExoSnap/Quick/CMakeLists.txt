@@ -155,6 +155,7 @@ qt_add_qml_module(exosnap
         ExoLogView.qml
         ExoMenu.qml
         ExoMenuItem.qml
+        SceneItemContextMenu.qml
         ExoNavTab.qml
         ExoInfoButton.qml
         ExoNotice.qml
@@ -1610,6 +1611,7 @@ qt_add_qml_module(record_source_picker_qml_tests
         ExoGlyph.qml
         ExoMenu.qml
         ExoMenuItem.qml
+        SceneItemContextMenu.qml
         ExoScrollBar.qml
         ExoSearchField.qml
         ExoSegmentedControl.qml
@@ -2315,6 +2317,7 @@ exosnap_add_gtest(
     TEST_PREFIX quick_edit_adapter.
     SOURCES
         ${EXOSNAP_QUICK_TESTS_DIR}/test_edit_adapters.cpp
+        ${EXOSNAP_QUICK_TESTS_DIR}/test_edit_export_text.cpp
         ${EXOSNAP_QUICK_TESTS_DIR}/test_edit_visual_seeds.cpp
         ${PROJECT_SOURCE_DIR}/app/visual_tests/EditVisualMedia.cpp
         ${PROJECT_SOURCE_DIR}/app/visual_tests/EditVisualMedia.h

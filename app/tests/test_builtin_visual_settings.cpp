@@ -1,6 +1,7 @@
 #include "extensions/BuiltinVisualSettings.h"
 #include "models/VisualSceneConfig.h"
 
+#include <algorithm>
 #include <gtest/gtest.h>
 
 #include <limits>
@@ -20,7 +21,8 @@ TEST(BuiltinVisualSettings, GamepadRejectsUnsupportedDetailsAction) {
     const auto type = MakeGamepadVisualSourceType(InertFactory(), EmptyChoices(), EmptyChoices());
     const VisualSourceRecord source{engine::VisualSourceId{{1}}, type.id, 1, true, {}};
     const engine::VisualAddress address{source.id, engine::VisualRuntimeGeneration{7}};
-    ActionInvocation invocation{.target = address, .request = engine::CommandId{{2}}, .action_id = "details"};
+    ActionInvocation invocation{
+        .target = address, .request = engine::CommandId{{2}}, .action_id = "details", .item = engine::SceneItemId{{3}}};
 
     EXPECT_FALSE(ValidateVisualAction(invocation, type, source, address).succeeded());
     invocation.action_id = "retry";
@@ -31,7 +33,8 @@ TEST(BuiltinVisualSettings, WebcamDetailsRequiresCurrentRuntimeAndCompatibleSett
     const auto type = MakeWebcamVisualSourceType(InertFactory(), EmptyChoices());
     VisualSourceRecord source{engine::VisualSourceId{{1}}, type.id, 1, true, {}};
     const engine::VisualAddress address{source.id, engine::VisualRuntimeGeneration{7}};
-    ActionInvocation invocation{.target = address, .request = engine::CommandId{{2}}, .action_id = "details"};
+    ActionInvocation invocation{
+        .target = address, .request = engine::CommandId{{2}}, .action_id = "details", .item = engine::SceneItemId{{3}}};
 
     EXPECT_TRUE(ValidateVisualAction(invocation, type, source, address).succeeded());
     invocation.target.runtime = engine::VisualRuntimeGeneration{6};
@@ -39,6 +42,15 @@ TEST(BuiltinVisualSettings, WebcamDetailsRequiresCurrentRuntimeAndCompatibleSett
     invocation.target = address;
     source.settings_version = 2;
     EXPECT_FALSE(ValidateVisualAction(invocation, type, source, address).succeeded());
+}
+
+TEST(BuiltinVisualSettings, OnlyWebcamDeclaresTheSupportedDetailsDestination) {
+    const auto gamepad = MakeGamepadVisualSourceType(InertFactory(), EmptyChoices(), EmptyChoices());
+    const auto webcam = MakeWebcamVisualSourceType(InertFactory(), EmptyChoices());
+    for (const auto& action : gamepad.actions)
+        EXPECT_NE(action.operation, ActionOperation::OpenDetails);
+    EXPECT_TRUE(std::any_of(webcam.actions.begin(), webcam.actions.end(),
+                            [](const auto& action) { return action.operation == ActionOperation::OpenDetails; }));
 }
 
 TEST(BuiltinVisualSettings, AllGamepadLayoutsAndAutoProjectWithoutChangingUnknownNodes) {

@@ -1381,6 +1381,7 @@ int main(int argc, char* argv[]) {
     const QString record_panel = qEnvironmentVariable("EXOSNAP_VISUAL_RECORD_PANEL");
     if (!visualOutputPath(arguments).isEmpty() && !record_panel.isEmpty() &&
         !QStringList{QStringLiteral("overlay-menu"), QStringLiteral("gamepad"), QStringLiteral("gamepad-hidden"),
+                     QStringLiteral("gamepad-menu"), QStringLiteral("gamepad-device-menu"),
                      QStringLiteral("review-audio"), QStringLiteral("review-edit")}
              .contains(record_panel)) {
         reportStartupError(QStringLiteral("--visual-test: unknown recording panel %1").arg(record_panel));

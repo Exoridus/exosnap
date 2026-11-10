@@ -38,7 +38,7 @@ ExoOverlayCard {
     Label {
         text: qsTr("WHAT HAPPENED")
         textFormat: Text.PlainText
-        color: ExoTheme.textDim
+        color: ExoTheme.textMuted
         Layout.fillWidth: true
         font {
             family: ExoTheme.monoFamily
@@ -129,7 +129,7 @@ ExoOverlayCard {
                 text: root.crash.channelNote
                 textFormat: Text.PlainText
                 wrapMode: Text.WordWrap
-                color: ExoTheme.textDim
+                color: ExoTheme.textMuted
                 Layout.fillWidth: true
                 font {
                     family: ExoTheme.sansFamily
@@ -156,7 +156,7 @@ ExoOverlayCard {
             textFormat: Text.PlainText
             wrapMode: Text.WordWrap
             visible: root.crash.rememberChoice
-            color: ExoTheme.textDim
+            color: ExoTheme.textMuted
             Layout.fillWidth: true
             font {
                 family: ExoTheme.sansFamily

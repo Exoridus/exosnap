@@ -34,6 +34,7 @@ TestCase {
         recordDriver.clearActiveAudioPlan();
     }
     function cleanup() {
+        recordDriver.setRecordingContext(false);
         recordDriver.setTestAppearance(QuickThemeTokens, "dark");
         testCase.width = 860;
         testCase.height = 700;
@@ -60,6 +61,79 @@ TestCase {
                 return result;
         }
         return null;
+    }
+
+    function test_active_settings_can_toggle_expert_without_switching_context() {
+        recordDriver.setRecordingContext(true);
+        const settings = recordDriver.settings;
+        const previous = settings.expertMode;
+        const item = createTemporaryObject(settingsComponent, testCase, {width: 860, height: 700});
+        verify(!!item);
+        const expert = findChild(item, "activeSettingsExpert");
+        verify(!!expert && expert.visible && expert.enabled);
+        mouseClick(expert);
+        compare(settings.expertMode, !previous);
+        compare(settings.editingNextRecording, false);
+        verify(settings.controlsLocked);
+        settings.expertMode = previous;
+        recordDriver.setRecordingContext(false);
+    }
+
+    function test_playback_automatic_round_trip_through_track_menu() {
+        const item = panel();
+        const id = item.routing.tracks[0].id;
+        mouseClick(findChild(row(item, id), "audioTrackMenu"));
+        const menu = findChild(item, "audioTrackActions");
+        tryCompare(menu, "opened", true);
+        mouseClick(findChild(menu, "audioPlaybackOnlyTrack"));
+        tryCompare(item.routing, "monitorSelectionOrigin", "user");
+        mouseClick(findChild(row(item, id), "audioTrackMenu"));
+        tryCompare(menu, "opened", true);
+        mouseClick(findChild(menu, "audioPlaybackAutomatic"));
+        tryCompare(item.routing, "monitorSelectionOrigin", "default");
+    }
+
+    function test_saved_muted_route_can_be_restored_in_place() {
+        const item = panel();
+        const route = item.routing.tracks[0].routes[0];
+        verify(item.routing.setRouteGain(route.id, -7.5, item.routing.revision));
+        verify(item.routing.setRouteMute(route.id, true, item.routing.revision));
+        waitForPolish(item);
+        waitForRendering(item);
+        mouseClick(findChild(item, "audioRoute-" + route.id));
+        const popup = findChild(item, "audioGainPopup");
+        tryCompare(popup, "opened", true);
+        const restore = findChild(popup, "audioUnmuteRoute");
+        verify(restore.visible && restore.enabled);
+        mouseClick(restore);
+        tryVerify(() => !item.routing.tracks[0].routes[0].muted);
+        compare(item.routing.tracks[0].routes[0].id, route.id);
+        compare(item.routing.tracks[0].routes[0].gainDb, -7.5);
+        verify(popup.opened);
+    }
+
+    function test_dsp_stage_controls_precede_their_retained_values() {
+        const item = panel();
+        const sourceId = item.routing.sources[0].id;
+        verify(item.routing.setSourceDetails(sourceId, {hpfEnabled: false, hpfCutoffHz: 170}, item.routing.revision));
+        item.editSource(sourceId);
+        const popup = findChild(item, "audioSourceDetails");
+        tryCompare(popup, "opened", true);
+        const stage = findChild(popup.contentItem, "audioSourceStage-hpfEnabled");
+        const parameter = findChild(popup.contentItem, "audioSourceParameter-hpfCutoffHz");
+        verify(!!stage && !!parameter);
+        verify(stage.visible && stage.enabled);
+        compare(parameter.enabled, false);
+        compare(parameter.value, 170);
+        verify(stage.mapToItem(popup.contentItem, 0, 0).y < parameter.mapToItem(popup.contentItem, 0, 0).y);
+        stage.forceActiveFocus();
+        keyClick(Qt.Key_Space);
+        tryCompare(parameter, "enabled", true);
+        compare(parameter.value, 170);
+        keyClick(Qt.Key_Space);
+        tryCompare(parameter, "enabled", false);
+        compare(parameter.value, 170);
+        compare(findChild(popup.contentItem, "audioSourceParameter-gainDb").enabled, true);
     }
 
     function test_empty_warning_is_next_to_track_name() {

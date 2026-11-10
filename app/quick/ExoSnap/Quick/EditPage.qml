@@ -73,6 +73,17 @@ FocusScope {
         target: root.recordings
         function onRecordingRevealRequested(): void { root.revealRequestedRecording(); }
     }
+    function closePanelContext(): bool {
+        if (root.detailsOpen) {
+            root.toggleRight(root.rightContext, true);
+            return true;
+        }
+        if (root.mediaOpen) {
+            root.toggleMedia(true);
+            return true;
+        }
+        return false;
+    }
     Keys.priority: Keys.AfterItem
     Keys.forwardTo: [clips]
     Keys.onPressed: event => {
@@ -331,7 +342,7 @@ FocusScope {
     function applyHarnessView(layout: var): bool {
         if (!layout || typeof layout !== "object")
             return false;
-        const keys = ["fit", "media", "details", "sourceTab", "popup", "viewFromUs", "viewToUs"];
+        const keys = ["fit", "media", "details", "sourceTab", "popup", "viewFromUs", "viewToUs", "inspectorField"];
         if (Object.keys(layout).some(key => keys.indexOf(key) < 0))
             return false;
         for (const panel of ["media", "details"]) {
@@ -347,6 +358,10 @@ FocusScope {
             return false;
         if (layout.fit !== undefined && typeof layout.fit !== "boolean")
             return false;
+        if (layout.inspectorField !== undefined && (["sourceIn", "sourceOut", "fadeIn", "animation"].indexOf(layout.inspectorField) < 0
+                || !root.detailsOpen || root.rightContext !== "details" || !rightPanelHost.item
+                || root.session.selectedClipIds.length !== 1 || (layout.inspectorField === "animation" && !root.session.selectedClipDetails.video)))
+            return false;
         const hasInterval = layout.viewFromUs !== undefined || layout.viewToUs !== undefined;
         if (hasInterval && (!Number.isFinite(layout.viewFromUs) || !Number.isFinite(layout.viewToUs)
                 || layout.viewFromUs < 0 || layout.viewToUs <= layout.viewFromUs))
@@ -361,6 +376,8 @@ FocusScope {
             return false;
         if (popup === "source-audio" && !root.session.sourceAudioChoice.active)
             return false;
+        if (layout.inspectorField !== undefined)
+            root.inspectorFieldRequested(layout.inspectorField);
         if (hasInterval)
             clips.view.setVisibleInterval(layout.viewFromUs, layout.viewToUs);
         else if (layout.fit)
@@ -483,13 +500,34 @@ FocusScope {
                 id: rightPanelHost
                 objectName: "editDetailsPanelLoader"
                 active: root.detailsOpen
+                property real compactHeight: 0
+                function refreshCompactHeight(): void {
+                    if (root.session.dragActive)
+                        return;
+                    compactHeight = item && !root.detailsPinned && root.rightContext === "details"
+                        && root.session.selectionMode === EditSessionAdapter.JunctionSelection
+                        ? item.junctionContentHeight + 32 + ExoTheme.spacingMd * 3 : 0;
+                }
+                onLoaded: Qt.callLater(refreshCompactHeight)
+                Connections {
+                    target: root.session
+                    function onSelectionChanged(): void { Qt.callLater(rightPanelHost.refreshCompactHeight); }
+                    function onDragChanged(): void { Qt.callLater(rightPanelHost.refreshCompactHeight); }
+                }
+                Connections {
+                    target: root
+                    function onDetailsPinnedChanged(): void { rightPanelHost.refreshCompactHeight(); }
+                    function onRightContextChanged(): void { rightPanelHost.refreshCompactHeight(); }
+                }
                 width: root.detailsWidth
+                height: compactHeight > 0 ? Math.min(parent.height, compactHeight) : parent.height
                 anchors.top: parent.top
-                anchors.bottom: parent.bottom
                 anchors.right: parent.right
                 anchors.rightMargin: root.railWidth
                 sourceComponent: EditSidePanel {
                     objectName: "editDetailsPanel"
+                    readonly property real junctionContentHeight: inspector.naturalContentHeight
+                    onJunctionContentHeightChanged: Qt.callLater(rightPanelHost.refreshCompactHeight)
                     readonly property bool mix: root.rightContext === "mix"
                     readonly property bool exporting: root.rightContext === "export"
                     title: mix ? qsTr("Audio mix") : exporting ? qsTr("Export") : qsTr("Details")
@@ -543,7 +581,7 @@ FocusScope {
                 media: false
                 visible: root.detailsOpen
                 anchors.top: parent.top
-                anchors.bottom: parent.bottom
+                height: rightPanelHost.height
                 x: parent.width - root.railWidth - root.detailsWidth - width / 2
                 z: 2
             }
@@ -761,7 +799,18 @@ FocusScope {
                                 EditingToggle { text: qsTr("Auto Crossfade"); visible: root.width < 1100; checked: root.session.autoCrossfade; onTriggered: root.session.autoCrossfade = !root.session.autoCrossfade }
                                 EditingToggle { objectName: "editOverflowLinkedSelection"; text: qsTr("Linked Selection"); visible: root.width < 1100; checked: root.session.linkedSelection; onTriggered: root.session.linkedSelection = !root.session.linkedSelection }
                                 ExoMenuItem { text: qsTr("Ripple delete"); visible: root.width < 1000; enabled: root.session.selectionMode !== EditSessionAdapter.NoSelection; onTriggered: root.session.deleteSelected(true) }
-                                ExoMenuItem { text: qsTr("Fit selection"); onTriggered: clips.fitSelection() }
+                                ExoMenuItem {
+                                    id: fitSelectionAction
+                                    objectName: "editFitSelection"
+                                    text: qsTr("Fit selection")
+                                    enabled: clips.selectionBounds.valid
+                                    Accessible.description: enabled ? "" : qsTr("Select clips or a range to fit the view.")
+                                    ToolTip.text: Accessible.description
+                                    ToolTip.visible: !enabled && fitSelectionHover.hovered
+                                    ToolTip.delay: 500
+                                    HoverHandler { id: fitSelectionHover; enabled: !fitSelectionAction.enabled }
+                                    onTriggered: clips.fitSelection()
+                                }
                                 ExoMenuItem {
                                     objectName: "editFitClips"
                                     text: qsTr("Fit clips")
@@ -876,6 +925,7 @@ FocusScope {
                     onExportRequested: root.openExport()
                     onMediaToggleRequested: root.toggleMedia(true)
                     onInspectorToggleRequested: root.toggleDetails(true)
+                    closePanelContext: root.closePanelContext
                     onInspectorOpenRequested: fieldName => root.openInspector(fieldName)
                     onShortcutsRequested: shortcutHelp.open()
                     Layout.fillWidth: true
@@ -925,31 +975,56 @@ FocusScope {
         anchors.centerIn: parent
         width: Math.min(root.width - 32, 520)
         standardButtons: Dialog.Close
-        contentItem: ColumnLayout {
-            spacing: ExoTheme.spacingSm
-            Repeater {
-                model: [
-                    qsTr("Space: Play or pause on release"),
-                    qsTr("Space + drag / wheel: Pan without changing playback"),
-                    qsTr("Shift+Space: Play the active range once"),
-                    qsTr("Ctrl+L: Toggle Loop"),
-                    qsTr("Left / Right: Step one frame; Alt: one sample; Shift: one second"),
-                    qsTr("Up / Down: Previous or next boundary"),
-                    qsTr("I / O: Set range in or out; Alt+X: Clear range"),
-                    qsTr("S / Ctrl+B: Split scope; Shift+S: Split all tracks; K: Auto-Key; Delete: Lift; Shift+Delete: Ripple delete"),
-                    qsTr("Ctrl+Delete: Lift and select the next clip"),
-                    qsTr("Ctrl+C / X / V: Copy, cut or paste clips or copied media files; Ctrl+Shift+V: Insert paste"),
-                    qsTr("Ctrl+D: Duplicate clips; Ctrl+A: Select all clips; Ctrl+Shift+A: Select the active track's clips"),
-                    qsTr("Ctrl+Z / Ctrl+Y: Undo or redo"),
-                    qsTr("Z: Fit selection; Shift+Z: Fit timeline; Backspace: Previous view"),
-                    qsTr("Ctrl+M / D / Ctrl+E: Media, Details or export")
-                ]
-                Label {
-                    required property string modelData
-                    Layout.fillWidth: true
-                    text: modelData
-                    color: ExoTheme.text
-                    wrapMode: Text.Wrap
+        objectName: "editShortcutHelp"
+        height: Math.min(root.height - 32, 640)
+        contentItem: ExoScrollView {
+            id: shortcutScroll
+            objectName: "editShortcutScroll"
+            activeFocusOnTab: true
+            Keys.onPressed: event => {
+                if (scrollByKey(event.key))
+                    event.accepted = true;
+            }
+            reserveScrollBarGutters: true
+            contentWidth: availableWidth
+            ScrollBar.horizontal.policy: ScrollBar.AlwaysOff
+            ColumnLayout {
+                width: shortcutScroll.availableWidth
+                spacing: ExoTheme.spacingSm
+                Repeater {
+                    model: [
+                        {heading: true, text: qsTr("Navigation and playback")},
+                        {text: qsTr("Space: Play or pause on release; Shift+Space: Play the active range once")},
+                        {text: qsTr("Space + drag / wheel: Pan without changing playback")},
+                        {text: qsTr("Left / Right: Step one frame; Alt+Left / Right: One audio sample; Shift+Left / Right: One second")},
+                        {text: qsTr("Up / Down: Previous or next boundary; Alt+Up / Down: Previous or next clip")},
+                        {text: qsTr("Home / End: Timeline start or end; Ctrl+L: Toggle Loop")},
+                        {text: qsTr("Ctrl+Plus / Equal / Minus: Zoom in or out; Z: Fit selection; Shift+Z: Fit timeline; Backspace: Previous view")},
+                        {heading: true, text: qsTr("Selection and editing")},
+                        {text: qsTr("Ctrl+A: Select all clips; Ctrl+Shift+A: Select the active track's clips")},
+                        {text: qsTr("I / O: Set range in or out; Alt+X: Clear range")},
+                        {text: qsTr("S / Ctrl+B: Split scope; Shift+S: Split all tracks; K: Toggle Auto-Key")},
+                        {text: qsTr("Delete: Lift; Shift+Delete: Ripple delete; Ctrl+Delete: Lift and select the next clip")},
+                        {text: qsTr("Ctrl+C / X / V: Copy, cut or paste clips or copied media files; Ctrl+Shift+V: Insert paste; Ctrl+D: Duplicate clips")},
+                        {text: qsTr("Comma / Period: Nudge clips one frame; Alt+Comma / Period: Nudge one audio sample")},
+                        {text: qsTr("Ctrl+Comma / Period: Trim start or end inward one frame; Ctrl+Shift+Comma / Period: Extend start or end outward one frame")},
+                        {text: qsTr("M: Mute the active track; Ctrl+Z: Undo; Ctrl+Y / Ctrl+Shift+Z: Redo")},
+                        {heading: true, text: qsTr("Panels and focus")},
+                        {text: qsTr("Ctrl+M: Media; D: Details; Ctrl+E: Export; Menu / Shift+F10: Context menu; ?: This help")},
+                        {text: qsTr("Escape: Cancel the active draft or gesture, then close the open panel, then clear the range or selection")},
+                        {text: qsTr("Text fields keep their editing keys. Timeline shortcuts work with canvas focus. Audio sample steps require an audio editing context.")},
+                        {text: qsTr("Gain points: Tab to a point and press Enter to edit its time and gain in Details. Delete removes the focused point. Add points at the playhead from Details.")}
+                    ]
+                    Label {
+                        required property var modelData
+                        Layout.fillWidth: true
+                        Layout.topMargin: modelData.heading ? ExoTheme.spacingSm : 0
+                        text: modelData.text
+                        color: ExoTheme.text
+                        font.weight: modelData.heading ? Font.DemiBold : Font.Normal
+                        Accessible.role: modelData.heading ? Accessible.Heading : Accessible.StaticText
+                        wrapMode: Text.Wrap
+                    }
                 }
             }
         }
