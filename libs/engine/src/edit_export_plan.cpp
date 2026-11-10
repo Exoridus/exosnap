@@ -1,6 +1,7 @@
 #include <capability/translatable.h>
 #include <exosnap/engine/codec_types.h>
 #include <exosnap/engine/edit_automation.h>
+#include <exosnap/engine/edit_export_issue.h>
 #include <exosnap/engine/edit_export_plan.h>
 #include <exosnap/engine/edit_timeline.h>
 #include <exosnap/engine/edit_timeline_export.h>
