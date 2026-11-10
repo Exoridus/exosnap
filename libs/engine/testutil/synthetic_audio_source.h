@@ -4,6 +4,7 @@
 
 #include <array>
 #include <atomic>
+#include <chrono>
 #include <cstddef>
 #include <cstdint>
 #include <memory>
@@ -16,18 +17,21 @@ namespace exosnap::engine::testutil {
 // Each borrowed buffer stays valid until ReleaseBuffer, just like capture.
 class SyntheticAudioSource : public IAudioCaptureSource {
   public:
-    SyntheticAudioSource(std::shared_ptr<std::atomic<bool>> drained, size_t packet_count)
-        : drained_(std::move(drained)), packet_count_(packet_count) {
+    SyntheticAudioSource(std::shared_ptr<std::atomic<bool>> drained, size_t packet_count, bool realtime_pace = false)
+        : drained_(std::move(drained)), packet_count_(packet_count), realtime_pace_(realtime_pace) {
         packet_.fill(0.1f);
     }
 
     bool Init(std::string& out_error) override {
         initialized_ = true;
+        next_packet_time_ = std::chrono::steady_clock::now();
         out_error.clear();
         return true;
     }
     uint32_t PendingFrameCount() override {
         if (!initialized_ || acquired_)
+            return 0;
+        if (realtime_pace_ && std::chrono::steady_clock::now() < next_packet_time_)
             return 0;
         if (next_ < packet_count_)
             return kFramesPerPacket;
@@ -37,7 +41,7 @@ class SyntheticAudioSource : public IAudioCaptureSource {
     }
     bool AcquireBuffer(RawAudioBuffer& out_buf, std::string& out_error) override {
         out_buf = {};
-        if (!initialized_ || acquired_ || next_ >= packet_count_) {
+        if (PendingFrameCount() == 0) {
             out_error.clear();
             return false;
         }
@@ -53,6 +57,8 @@ class SyntheticAudioSource : public IAudioCaptureSource {
             return;
         acquired_ = false;
         ++next_;
+        if (realtime_pace_)
+            next_packet_time_ += std::chrono::milliseconds(20);
         if (next_ >= packet_count_ && drained_)
             drained_->store(true);
     }
@@ -78,6 +84,8 @@ class SyntheticAudioSource : public IAudioCaptureSource {
 
     std::shared_ptr<std::atomic<bool>> drained_;
     size_t packet_count_ = 0;
+    bool realtime_pace_ = false;
+    std::chrono::steady_clock::time_point next_packet_time_;
     bool initialized_ = false;
     bool acquired_ = false;
     size_t next_ = 0;

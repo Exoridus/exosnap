@@ -127,7 +127,7 @@ SyntheticSessionResult SyntheticSession::Run() {
 
     const size_t audio_packets = static_cast<size_t>(cfg.target_seconds * 50.0); // 20 ms packets
     auto audio_drained = std::make_shared<std::atomic<bool>>(false);
-    auto source = std::make_unique<SyntheticAudioSource>(audio_drained, audio_packets);
+    auto source = std::make_unique<SyntheticAudioSource>(audio_drained, audio_packets, cfg.realtime_pace);
     auto audio_thread = std::make_shared<AudioThread>(state_ptr, std::move(source), /*track_id=*/0);
     auto mux_thread = std::make_shared<MuxThread>(state_ptr);
 

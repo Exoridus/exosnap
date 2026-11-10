@@ -36,7 +36,7 @@ struct SyntheticSessionConfig {
     uint32_t fps = 60;
     uint32_t gop = 30;
 
-    // When true, pace the feeder to wall-clock (one frame per real frame interval)
+    // When true, pace audio and video to wall-clock (one packet/frame per interval)
     // so a short run produces a spread of stats samples. When false, feed as fast
     // as possible ("2 h of media in seconds") for harness-scale validation.
     bool realtime_pace = false;

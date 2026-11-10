@@ -201,9 +201,10 @@ TEST(SoakSynthetic, DiagnosticAbortRequestsTheRunningSessionToStop) {
     });
     runner.Start(0.01);
     const auto started = std::chrono::steady_clock::now();
-    (void)session.Run();
+    const auto result = session.Run();
     control.Complete();
     runner.Stop();
+    EXPECT_TRUE(result.success) << result.error;
     EXPECT_TRUE(runner.aborted());
     EXPECT_EQ(requests.load(), 1u);
     // A finite guard distinguishes a wired stop from merely reporting an abort
