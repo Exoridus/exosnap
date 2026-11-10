@@ -56,7 +56,8 @@ bool GamepadSource::IsQuiescent() const noexcept {
 }
 
 engine::Outcome<std::monostate> RegisterGamepadModule(CapabilityRegistry& registry, GamepadControlHooks hooks,
-                                                      CachedVisualOptions devices, CachedVisualOptions layouts) {
+                                                      CachedVisualOptions devices, CachedVisualOptions layouts,
+                                                      CachedVisualOptions views) {
     if (!hooks.request_prepare || !hooks.request_stop || !hooks.is_quiescent)
         return engine::EngineError{.context = "Gamepad control hooks are incomplete"};
     SourceFactory factory =
@@ -66,7 +67,8 @@ engine::Outcome<std::monostate> RegisterGamepadModule(CapabilityRegistry& regist
             return *projected.error();
         return std::unique_ptr<VisualSource>(std::make_unique<GamepadSource>(std::move(request), hooks));
     };
-    auto type = MakeGamepadVisualSourceType(std::move(factory), std::move(devices), std::move(layouts));
+    auto type =
+        MakeGamepadVisualSourceType(std::move(factory), std::move(devices), std::move(layouts), std::move(views));
     return registry.Register({{"org.exosnap.gamepad"}, {std::move(type)}});
 }
 

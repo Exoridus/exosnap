@@ -16,6 +16,7 @@ struct VisualSceneItemFrame {
     ReadResult sample_result = ReadResult::NotReady;
     const WebcamFrameSnapshot* image = nullptr;
     const SpriteLayerSnapshot* sprites = nullptr;
+    const VisualGpuFrame* gpu = nullptr;
     WebcamPixelRect image_rect;
     float image_opacity = 1.0F;
     // Authorizes reuse only if the caller has this exact token/resource/sequence cached.
@@ -39,6 +40,7 @@ class VisualSceneConsumer final {
         // No item/cache authorization is returned during contention. Preserve the
         // last completed composition or retry; do not compose a partial new frame.
         [[nodiscard]] bool Deferred() const noexcept;
+        [[nodiscard]] bool HasGpuFrames(std::span<const SourceToken>) const noexcept;
         [[nodiscard]] uint64_t PublicationSequence() const noexcept;
         [[nodiscard]] ConfigRevision Revision() const noexcept;
 
@@ -50,7 +52,8 @@ class VisualSceneConsumer final {
         bool deferred_ = false;
     };
 
-    static Outcome<std::unique_ptr<VisualSceneConsumer>> Prepare(std::shared_ptr<VisualSceneRuntime>);
+    static Outcome<std::unique_ptr<VisualSceneConsumer>> Prepare(std::shared_ptr<VisualSceneRuntime>,
+                                                                 VisualGpuConsumerDevice = {});
     ~VisualSceneConsumer();
     VisualSceneConsumer(const VisualSceneConsumer&) = delete;
     VisualSceneConsumer& operator=(const VisualSceneConsumer&) = delete;
@@ -67,9 +70,11 @@ class VisualSceneConsumer final {
     [[nodiscard]] uint64_t PlanReuseCount() const noexcept {
         return plan_reuse_count_;
     }
-    // Returned views are valid only through Frame destruction, which releases CPU
-    // pins without reclaiming payloads. The consumer must outlive its Frame.
-    [[nodiscard]] Frame Sample(CaptureTime100ns, const WebcamPixelRect&, VisualCompositionMode) noexcept;
+    // Returned views are valid only through Frame destruction, which releases
+    // pins without reclaiming payloads. Missing required GPU tokens defer the
+    // whole frame. The consumer must outlive its Frame.
+    [[nodiscard]] Frame Sample(CaptureTime100ns, const WebcamPixelRect&, VisualCompositionMode,
+                               std::span<const SourceToken> required_gpu_tokens = {}) noexcept;
     void Close() noexcept;
 
   private:

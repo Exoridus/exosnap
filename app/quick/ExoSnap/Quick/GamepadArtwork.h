@@ -1,6 +1,7 @@
 #pragma once
 
 #include <QByteArray>
+#include <QColor>
 #include <QHash>
 #include <QPointF>
 #include <QString>
@@ -13,6 +14,8 @@ struct MappedGamepadControl {
     gamepad::Control control = gamepad::Control::Count;
     gamepad::Control click_control = gamepad::Control::Count;
     bool live = false;
+    /// Highlight of the active control, shared by the 2D and 3D views.
+    QColor press_color;
 };
 
 struct MappedGamepadArtwork {

@@ -19,7 +19,7 @@ ApplicationWindow {
     visible: true
     flags: window.capture ? Qt.Tool | Qt.FramelessWindowHint | Qt.WindowDoesNotAcceptFocus | Qt.WindowTransparentForInput : Qt.Window
     opacity: window.capture ? 0 : 1
-    title: qsTr("DualSense native pilot")
+    title: qsTr("Controller native pilot")
     color: window.light ? "#edf1f5" : "#171d26"
 
     header: ToolBar {
@@ -28,7 +28,7 @@ ApplicationWindow {
         RowLayout {
             anchors.fill: parent
             Label {
-                text: qsTr("DualSense / procedural pilot")
+                text: qsTr("Controller Lab model pilot")
                 Layout.fillWidth: true
             }
             ComboBox {
@@ -70,6 +70,6 @@ ApplicationWindow {
         height: visible ? implicitHeight + 16 : 0
         padding: 8
         color: window.light ? "#273545" : "#e5edf5"
-        text: window.controller.connected ? qsTr("Live GameInput") : qsTr("No available controller input")
+        text: window.controller.connected ? qsTr("Live controller input") : qsTr("No available controller input")
     }
 }

@@ -133,6 +133,7 @@ class PreviewTextureNode final : public QSGNode {
             return;
         }
         context_ = device_context;
+        device_generation_ = engine::NextDeviceGeneration();
 
         ComPtr<ID3D11Device1> device1;
         HRESULT hr = device_->QueryInterface(IID_PPV_ARGS(device1.GetAddressOf()));
@@ -334,7 +335,7 @@ class PreviewTextureNode final : public QSGNode {
         draft_visible_ = draft_visible;
         draft_rect_ = draft_rect;
         if (visual_runtime_ && !visual_consumer_) {
-            auto prepared = engine::VisualSceneConsumer::Prepare(visual_runtime_);
+            auto prepared = engine::VisualSceneConsumer::Prepare(visual_runtime_, {context_.Get(), device_generation_});
             if (!prepared.succeeded()) {
                 error = QString::fromStdString(prepared.error()->context);
                 return false;
@@ -576,7 +577,7 @@ class PreviewTextureNode final : public QSGNode {
                 if (!compositor_.DrawVisualSprite(item_index, view.token, view.resource_id, *view.sprites, content,
                                                   error))
                     return false;
-            } else if (view.cache_valid) {
+            } else if (view.gpu || view.cache_valid) {
                 auto rect = view.image_rect;
                 if (draft_visible_ && view.item->id == placement_item_) {
                     auto placement = view.item->properties.placement;
@@ -586,9 +587,13 @@ class PreviewTextureNode final : public QSGNode {
                     placement.h = static_cast<float>(draft_rect_.height());
                     rect = engine::MapWebcamPlacementToContent(placement, content.x, content.y, content.w, content.h);
                 }
-                if (!compositor_.DrawVisualImage(view.token, view.resource_id, view.image_sequence, view.image, rect,
-                                                 view.item->properties.placement.mirror, view.item->chroma_key, error,
-                                                 view.image_opacity))
+                const bool drawn =
+                    view.gpu ? compositor_.DrawVisualGpu(view.gpu->view, rect, view.item->properties.placement.mirror,
+                                                         error, view.image_opacity)
+                             : compositor_.DrawVisualImage(view.token, view.resource_id, view.image_sequence,
+                                                           view.image, rect, view.item->properties.placement.mirror,
+                                                           view.item->chroma_key, error, view.image_opacity);
+                if (!drawn)
                     return false;
             }
             ++item_index;
@@ -648,6 +653,7 @@ class PreviewTextureNode final : public QSGNode {
         keyed_mutex_.Reset();
         shared_texture_.Reset();
         context_.Reset();
+        device_generation_ = {};
         device_.Reset();
         width_ = 0;
         height_ = 0;
@@ -667,6 +673,7 @@ class PreviewTextureNode final : public QSGNode {
     QRectF normalized_source_rect_{0.0, 0.0, 1.0, 1.0};
 
     ComPtr<ID3D11Device> device_;
+    engine::DeviceGeneration device_generation_;
     ComPtr<ID3D11DeviceContext> context_;
     ComPtr<ID3D11Texture2D> shared_texture_;
     ComPtr<IDXGIKeyedMutex> keyed_mutex_;

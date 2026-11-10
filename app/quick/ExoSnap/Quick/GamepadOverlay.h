@@ -3,12 +3,17 @@
 #include "GamepadSprites.h"
 #include "extensions/GamepadModule.h"
 #include "models/GamepadOverlaySettings.h"
+#include <exosnap/engine/error_types.h>
+#include <exosnap/engine/visual_diagnostics.h>
 
 #include <atomic>
+#include <optional>
+#include <string>
 
 #include <QObject>
 #include <QRectF>
 #include <QSize>
+#include <QStringList>
 #include <QThreadPool>
 #include <QTimer>
 #include <QVariantList>
@@ -32,6 +37,7 @@ class GamepadOverlay final : public QObject, public engine::SpriteSourceProvider
     Q_PROPERTY(bool playerLedSupported READ playerLedSupported NOTIFY playerIndexChanged FINAL)
     Q_PROPERTY(QString playerIndexStatus READ playerIndexStatus NOTIFY playerIndexChanged FINAL)
     Q_PROPERTY(QVariantList layouts READ layouts CONSTANT FINAL)
+    Q_PROPERTY(QVariantList views READ views NOTIFY viewsChanged FINAL)
     Q_PROPERTY(QString status READ status NOTIFY statusChanged FINAL)
 
   public:
@@ -41,6 +47,8 @@ class GamepadOverlay final : public QObject, public engine::SpriteSourceProvider
     void Configure(GamepadOverlaySettings settings);
     GamepadControlHooks CreateControlHooks(std::shared_ptr<engine::VisualSceneRuntime>);
     [[nodiscard]] GamepadOverlaySettings Settings() const;
+    // GUI-thread snapshot of the matching active native generation.
+    [[nodiscard]] std::optional<engine::NativeGamepadDiagnostics> NativeDiagnostics(const engine::SourceToken&) const;
     [[nodiscard]] std::shared_ptr<const engine::SpriteLayerSnapshot> Snapshot(uint64_t frame_time_qpc_100ns) override;
     [[nodiscard]] std::shared_ptr<const engine::SpriteLayerSnapshot> PreviewSnapshot(uint64_t frame_time_qpc_100ns);
 
@@ -67,6 +75,8 @@ class GamepadOverlay final : public QObject, public engine::SpriteSourceProvider
         return devices_;
     }
     QVariantList layouts() const;
+    QVariantList views() const;
+    QVariantList viewsForDevice(const QString&) const;
     int playerIndex() const noexcept {
         return player_index_;
     }
@@ -99,9 +109,11 @@ class GamepadOverlay final : public QObject, public engine::SpriteSourceProvider
     void settingsChanged();
     void devicesChanged();
     void playerIndexChanged();
+    void viewsChanged();
     void statusChanged();
     void frameChanged();
     void visualControlSettled();
+    void visualBindingInvalidated();
 
   private:
     friend class GamepadOverlayTest;
@@ -113,6 +125,8 @@ class GamepadOverlay final : public QObject, public engine::SpriteSourceProvider
     void PublishVisualData();
     void RetireInput();
     void FinishInputRetirement();
+    void UpdateNative(const std::optional<gamepad::GamepadReading>&, uint64_t timestamp);
+    void RetireNative();
     void ReportVisualStatus(SourcePhase, std::optional<engine::EngineError> error = std::nullopt);
     void SetStatus(QString text);
     std::shared_ptr<const engine::SpriteLayerSnapshot> BuildSnapshot(uint64_t timestamp, bool preview);
@@ -156,6 +170,12 @@ class GamepadOverlay final : public QObject, public engine::SpriteSourceProvider
     bool visual_waiting_ = false;
     bool source_demand_ = false;
     bool native_enabled_ = false;
+    struct NativeState;
+    std::unique_ptr<NativeState> native_;
+    uint64_t native_generation_ = 0;
+    bool native_failed_ = false;
+    bool selected_native_supported_ = false;
+    QStringList native_devices_;
 };
 
 } // namespace exosnap::quick

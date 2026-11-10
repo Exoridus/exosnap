@@ -13,6 +13,7 @@
 
 #include "visual_scene_runtime_storage.h"
 #include <atomic>
+#include <cstddef>
 #include <cstdint>
 #include <exosnap/engine/color_metadata.h>
 #include <exosnap/engine/recording_media_types.h>
@@ -26,70 +27,13 @@
 #include <algorithm>
 #include <array>
 #include <chrono>
-#include <cstdlib>
 #include <future>
-#include <new>
+#include <semaphore>
 #include <thread>
 #include <tuple>
 #include <utility>
 
 using namespace exosnap::engine;
-
-namespace visual_allocations {
-thread_local Probe* active = nullptr;
-
-bool MatchesAllocation(size_t actual, size_t requested) noexcept {
-    return requested != 0 && actual >= requested && actual - requested <= active->allocation_overhead;
-}
-
-void* Allocate(size_t size) {
-    if (active) {
-        ++active->allocations;
-        if (MatchesAllocation(size, active->pause_size) && active->entered && active->resume) {
-            active->pause_size = 0;
-            active->entered->release();
-            active->resume->acquire();
-        }
-        if (active->fail && (active->fail_size == 0 || MatchesAllocation(size, active->fail_size))) {
-            active->fail = false;
-            throw std::bad_alloc();
-        }
-    }
-    void* pointer = nullptr;
-    while (!(pointer = std::malloc(size ? size : 1))) {
-        const auto handler = std::get_new_handler();
-        if (!handler)
-            throw std::bad_alloc();
-        handler();
-    }
-    return pointer;
-}
-
-void Free(void* pointer) noexcept {
-    if (active && pointer) {
-        ++active->frees;
-        if (active->pause_free == pointer && active->entered && active->resume) {
-            active->pause_free = nullptr;
-            active->entered->release();
-            active->resume->acquire();
-        }
-    }
-    std::free(pointer);
-}
-} // namespace visual_allocations
-
-void* operator new(size_t size) {
-    return visual_allocations::Allocate(size);
-}
-void* operator new[](size_t size) {
-    return visual_allocations::Allocate(size);
-}
-void operator delete(void* pointer) noexcept {
-    visual_allocations::Free(pointer);
-}
-void operator delete[](void* pointer) noexcept {
-    visual_allocations::Free(pointer);
-}
 
 namespace exosnap::engine {
 class VisualRuntimeTestAccess {
@@ -867,4 +811,29 @@ TEST_F(VisualRuntime, PublicCountersReportAcceptedAndContendedAttemptsWithoutTak
     ASSERT_EQ(Publish(2), PublishResult::Accepted);
     EXPECT_EQ(runtime.Counters().accepted_publications, 2U);
     EXPECT_EQ(initial.accepted_publications, 0U);
+}
+
+TEST(VisualRuntimeDiagnostics, ReservationSampleIsUnavailableWhileStorageIsBusy) {
+    VisualSceneRuntime runtime{VisualBudgetPolicy{}};
+    auto& storage = VisualRuntimeTestAccess::Storage(runtime);
+    storage.reserved_gpu_bytes = 4096;
+    ASSERT_EQ(runtime.Counters().reserved_gpu_bytes, 4096u);
+    std::promise<void> locked;
+    std::promise<void> release;
+    auto released = release.get_future();
+    auto holder = std::async(std::launch::async, [&] {
+        const std::scoped_lock lock(storage.mutex);
+        locked.set_value();
+        released.wait();
+    });
+    locked.get_future().wait();
+    auto sample = std::async(std::launch::async, [&] { return runtime.Counters(); });
+    const auto ready = sample.wait_for(std::chrono::seconds{1});
+    release.set_value();
+    holder.get();
+    EXPECT_EQ(ready, std::future_status::ready);
+    EXPECT_FALSE(sample.get().reserved_gpu_bytes.has_value());
+    storage.reserved_gpu_bytes = 0;
+    ASSERT_TRUE(runtime.Counters().reserved_gpu_bytes.has_value());
+    EXPECT_EQ(*runtime.Counters().reserved_gpu_bytes, 0u);
 }

@@ -255,14 +255,13 @@ Device and resolution are fixed during recording. Supported mirror/opacity/chrom
 
 Media Foundation is a webcam dependency, not an AAC/recording dependency. Windows N/KN without the Media Feature Pack can still launch and record without webcam; webcam UI and Diagnostics explain the missing runtime.
 
-### Native Controller3D pilot
+### Native 3D controller
 
-A separate developer executable previews an original procedural DualSense rig in Normal 3D or Ghost 3D.
-It is not an overlay choice in the recording application and does not feed the recording compositor.
-The pilot shares the existing SDL3 owner and canonical control mapping. Its radial stick response
-uses a 5% inner deadzone and 5% outer saturation, independently of the 2D display filter.
-Ghost retains physical depth occlusion with transparent shell surfaces. Rear hints, final licensed models,
-other controller families, motion tracking and recording output remain outside this pilot.
+The Gamepad view offers 2D, Normal 3D and Ghost 3D. Native 3D is available for a connected DualSense identified by Sony vendor 054C and product 0CE6. Selecting DualSense artwork for another device does not qualify it; DualSense Edge and other controller families retain their existing 2D views. A saved native view remains stored when its device is absent, but cannot borrow another controller's inputs.
+
+Normal and Ghost draw the Controller Lab model of the controller with its original colors, moving buttons, triggers and stick pivots, and physical depth occlusion. The view faces the controller's front from slightly above and fits the model to the scene item. Active controls use the same highlight color as the 2D view. Ghost keeps the shell nearly clear with lit edges while controls stay closed and opaque. Controls the model does not have are never drawn as live. The radial stick response uses a 5% inner deadzone and 5% outer saturation, independently of the 2D display filter. Placement, opacity and output visibility belong to the same scene item as the 2D view.
+
+The native renderer produces an offscreen GPU texture for preview and recording. It opens no developer window. If input, renderer or compatible GPU output is unavailable, the source reports its state and stops drawing 3D; recording continues. The user can select 2D or retry the source. Rear hints, additional controller models and motion tracking are not provided.
 
 ### Gamepad overlay
 

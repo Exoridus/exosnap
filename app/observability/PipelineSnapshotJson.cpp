@@ -4,6 +4,7 @@
 #include "observability/ProtocolNames.h"
 
 #include <QJsonArray>
+#include <exosnap/engine/visual_diagnostics.h>
 
 namespace exosnap::observability {
 namespace {
@@ -357,6 +358,44 @@ QJsonObject SplitJson(const exosnap::engine::SplitDiagnostics& sp) {
     return json;
 }
 
+QJsonObject NativeTimingJson(const exosnap::engine::VisualStageTiming& timing) {
+    const bool available = timing.samples != 0;
+    return {{QStringLiteral("availability"),
+             QString::fromLatin1(available ? availability::kAvailable : availability::kUnavailable)},
+            {QStringLiteral("samples"), Count(timing.samples)},
+            {QStringLiteral("latestMs"), Metric(timing.latest_ms, available)},
+            {QStringLiteral("averageMs"), available ? QJsonValue(timing.total_ms / timing.samples) : QJsonValue()},
+            {QStringLiteral("maximumMs"), Metric(timing.maximum_ms, available)},
+            {QStringLiteral("totalMs"), Metric(timing.total_ms, available)}};
+}
+
+QJsonObject NativeGamepadJson(const std::optional<exosnap::engine::NativeGamepadDiagnostics>& native) {
+    QJsonObject json;
+    json.insert(QStringLiteral("availability"),
+                QString::fromLatin1(native ? availability::kAvailable : availability::kUnavailable));
+    json.insert(QStringLiteral("scope"), QStringLiteral("currentNativeProducerGeneration"));
+    json.insert(QStringLiteral("cadence"), QStringLiteral("GUI producer attempts; asynchronous GPU completion"));
+    json.insert(QStringLiteral("cpuSemantics"),
+                QStringLiteral("GUI elapsed render/update and publication calls, including timestamp submission"));
+    json.insert(QStringLiteral("gpuSemantics"),
+                QStringLiteral("D3D11 timestamp spans including CPU submission gaps; not isolated GPU busy time"));
+    json.insert(QStringLiteral("publishSemantics"),
+                QStringLiteral(
+                    "All consumer-lane attempts; accepted means at least one lane accepted, not recording delivery"));
+    if (!native)
+        return json;
+    json.insert(QStringLiteral("generation"), Count(native->generation));
+    json.insert(QStringLiteral("latestSample100ns"),
+                native->render_cpu.samples ? Count(native->latest_sample_100ns) : QJsonValue());
+    json.insert(QStringLiteral("renderCpu"), NativeTimingJson(native->render_cpu));
+    json.insert(QStringLiteral("renderGpuSpan"), NativeTimingJson(native->render_gpu_span));
+    json.insert(QStringLiteral("publishCpu"), NativeTimingJson(native->publish_cpu));
+    json.insert(QStringLiteral("publishGpuSpan"), NativeTimingJson(native->publish_gpu_span));
+    json.insert(QStringLiteral("acceptedPublications"), Count(native->accepted_publications));
+    json.insert(QStringLiteral("noFreeSlotPublications"), Count(native->no_free_slot_publications));
+    return json;
+}
+
 QJsonObject VisualJson(const RecordingDiagnosticsSnapshot& s) {
     QJsonObject host;
     host.insert(QStringLiteral("availability"),
@@ -367,6 +406,13 @@ QJsonObject VisualJson(const RecordingDiagnosticsSnapshot& s) {
     host.insert(QStringLiteral("droppedCpuImageAttempts"),
                 s.visual_runtime ? Count(s.visual_runtime->dropped_publications) : QJsonValue());
     host.insert(QStringLiteral("busyHostReads"), s.visual_runtime ? Count(s.visual_runtime->busy_reads) : QJsonValue());
+
+    host.insert(QStringLiteral("reservedGpuBytes"), s.visual_runtime && s.visual_runtime->reserved_gpu_bytes
+                                                        ? Count(*s.visual_runtime->reserved_gpu_bytes)
+                                                        : QJsonValue());
+    host.insert(QStringLiteral("reservedGpuBytesScope"),
+                QStringLiteral("Logical producer/shared/consumer texture reservations, including pinned retired "
+                               "generations; excludes Qt internal textures and driver overhead"));
 
     QJsonObject sampler;
     sampler.insert(QStringLiteral("availability"),
@@ -407,6 +453,7 @@ QJsonObject VisualJson(const RecordingDiagnosticsSnapshot& s) {
             provider.insert(QStringLiteral("errorCode"),
                             source.provider_error_code ? Count(*source.provider_error_code) : QJsonValue());
             entry.insert(QStringLiteral("provider"), provider);
+            entry.insert(QStringLiteral("nativeGamepad"), NativeGamepadJson(source.native_gamepad));
             entries.push_back(entry);
         }
         rows = entries;

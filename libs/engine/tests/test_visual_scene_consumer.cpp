@@ -310,6 +310,33 @@ TEST_F(SceneConsumer, BusyDefersCompositionWithoutAuthorizingCacheOrReportingRem
     EXPECT_EQ(frame.Items()[0].image_result, ReadResult::Unchanged);
 }
 
+TEST_F(SceneConsumer, CpuFrameDoesNotSatisfyAnExpectedGpuRequest) {
+    const SourceToken required[] = {camera};
+    auto frame = consumer->Sample(CaptureTime100ns{150}, {0, 0, 480, 320}, VisualCompositionMode::Recording);
+    ASSERT_EQ(frame.Items().size(), 1);
+    EXPECT_TRUE(frame.HasGpuFrames({}));
+    EXPECT_FALSE(frame.HasGpuFrames(required));
+}
+
+TEST_F(SceneConsumer, MissingGpuAdmissionDefersAndReauthorizesTheCpuUpload) {
+    const SourceToken required[] = {pad};
+    {
+        auto frame =
+            consumer->Sample(CaptureTime100ns{150}, {0, 0, 480, 320}, VisualCompositionMode::Recording, required);
+        EXPECT_TRUE(frame.Deferred());
+        EXPECT_TRUE(frame.Items().empty());
+        EXPECT_FALSE(frame.Changed());
+    }
+    ASSERT_TRUE(consumer->NeedsRefresh());
+    ASSERT_TRUE(consumer->Refresh().succeeded());
+    auto frame = consumer->Sample(CaptureTime100ns{150}, {0, 0, 480, 320}, VisualCompositionMode::Recording);
+    EXPECT_FALSE(frame.Deferred());
+    EXPECT_TRUE(frame.Changed());
+    ASSERT_EQ(frame.Items().size(), 1);
+    EXPECT_EQ(frame.Items()[0].image_result, ReadResult::Updated);
+    EXPECT_NE(frame.Items()[0].image, nullptr);
+}
+
 TEST_F(SceneConsumer, FrameReleaseAfterRetirementIsPinOnly) {
     visual_allocations::Probe allocations;
     {

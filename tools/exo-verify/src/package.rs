@@ -393,10 +393,12 @@ pub fn validate_tree(root: &Path, version: &str, leak_patterns: &[String]) -> Re
     Ok(errors)
 }
 
-/// Qt debug builds append `d` to the module name (`Qt6Cored.dll`); no Qt 6
-/// release module name ends in `d`.
+/// Qt debug builds append `d` to the module name; `Quick3D` is a release exception.
 fn is_debug_qt(lower_name: &str) -> bool {
-    lower_name.starts_with("qt6") && lower_name.ends_with("d.dll")
+    let lower_name = lower_name.to_ascii_lowercase();
+    lower_name.starts_with("qt6")
+        && lower_name.ends_with("d.dll")
+        && !lower_name.ends_with("3d.dll")
 }
 
 fn run_checked(command: &mut Command, what: &str, timeout: Duration) -> Result<()> {
@@ -1104,6 +1106,11 @@ mod tests {
     fn debug_qt_names_are_recognised() {
         assert!(is_debug_qt("qt6cored.dll"));
         assert!(is_debug_qt("qt6quickd.dll"));
+        assert!(is_debug_qt("qt6quick3dd.dll"));
+        assert!(!is_debug_qt("qt6quick3d.dll"));
+        assert!(!is_debug_qt("Qt6Quick3D.dll"));
+        assert!(is_debug_qt("Qt6Quick3Dd.dll"));
+        assert!(is_debug_qt("Qt6Cored.dll"));
         assert!(!is_debug_qt("qt6quickshapes.dll"));
         assert!(!is_debug_qt("qt6core.dll"));
     }

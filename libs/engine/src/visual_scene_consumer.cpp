@@ -49,6 +49,7 @@ struct VisualSceneConsumer::BindingState {
     uint64_t accepted_resource = 0;
     uint64_t accepted_sequence = 0;
     VisualReadLease image;
+    GpuReadLease gpu;
     ReadResult result = ReadResult::NotReady;
     bool sampled = false;
     bool needs_image_reset = false;
@@ -75,13 +76,13 @@ VisualSceneConsumer::~VisualSceneConsumer() {
     Close();
 }
 
-Outcome<std::unique_ptr<VisualSceneConsumer>>
-VisualSceneConsumer::Prepare(std::shared_ptr<VisualSceneRuntime> runtime) {
+Outcome<std::unique_ptr<VisualSceneConsumer>> VisualSceneConsumer::Prepare(std::shared_ptr<VisualSceneRuntime> runtime,
+                                                                           VisualGpuConsumerDevice gpu) {
     if (!runtime)
         return ConsumerError(EngineErrorCode::InvalidConfig);
     try {
         auto result = std::unique_ptr<VisualSceneConsumer>(new VisualSceneConsumer(std::move(runtime)));
-        auto registered = result->runtime_->RegisterConsumer();
+        auto registered = result->runtime_->RegisterConsumer(gpu);
         if (!registered.succeeded())
             return *registered.error();
         result->consumer_ = *registered.value();
@@ -241,7 +242,8 @@ bool VisualSceneConsumer::HasItems(VisualCompositionMode mode) const noexcept {
 }
 
 VisualSceneConsumer::Frame VisualSceneConsumer::Sample(CaptureTime100ns time, const WebcamPixelRect& content,
-                                                       VisualCompositionMode mode) noexcept {
+                                                       VisualCompositionMode mode,
+                                                       std::span<const SourceToken> required_gpu_tokens) noexcept {
     Frame frame;
     if (frame_active_ || !runtime_)
         return frame;
@@ -267,10 +269,13 @@ VisualSceneConsumer::Frame VisualSceneConsumer::Sample(CaptureTime100ns time, co
         if (visible) {
             auto& source = *state.binding;
             if (!source.sampled) {
-                source.result = state.sampler ? runtime_->CheckBinding(binding)
-                                              : runtime_->TryReadImage(consumer_, item.source, source.image);
+                if (std::holds_alternative<GpuImageBinding>(binding.content))
+                    source.result = runtime_->TryReadGpu(consumer_, binding, source.gpu);
+                else
+                    source.result = state.sampler ? runtime_->CheckBinding(binding)
+                                                  : runtime_->TryReadImage(consumer_, item.source, source.image);
                 source.sampled = true;
-                if (source.result == ReadResult::Updated) {
+                if (source.result == ReadResult::Updated && source.image) {
                     source.accepted_token = source.image.Stamp().token;
                     source.accepted_resource = source.image.ResourceId();
                     source.accepted_sequence = source.image.Stamp().sequence;
@@ -294,6 +299,16 @@ VisualSceneConsumer::Frame VisualSceneConsumer::Sample(CaptureTime100ns time, co
                     view.sprites = &state.output;
                     frame.changed_ |= state.sampler->SampleChanged();
                     drawn = !state.output.quads.empty();
+                } else if (source.gpu) {
+                    view.gpu = &source.gpu.Frame();
+                    view.token = view.gpu->identity.token;
+                    view.resource_id = view.gpu->identity.resource_id;
+                    view.image_sequence = view.gpu->stamp.sequence;
+                    view.image_rect =
+                        MapWebcamPlacementToContent(properties.placement, content.x, content.y, content.w, content.h);
+                    view.image_opacity = properties.opacity;
+                    frame.changed_ |= source.result == ReadResult::Updated;
+                    drawn = true;
                 } else if (source.accepted_resource != 0) {
                     view.token = source.accepted_token;
                     view.resource_id = source.accepted_resource;
@@ -314,6 +329,7 @@ VisualSceneConsumer::Frame VisualSceneConsumer::Sample(CaptureTime100ns time, co
         frame.changed_ |= state.drawn != drawn;
         state.sampled_drawn = drawn;
     }
+    frame.deferred_ |= !frame.HasGpuFrames(required_gpu_tokens);
     if (frame.deferred_) {
         for (auto& binding : bindings_) {
             if (binding->image) {
@@ -332,8 +348,10 @@ VisualSceneConsumer::Frame VisualSceneConsumer::Sample(CaptureTime100ns time, co
 }
 
 void VisualSceneConsumer::ReleaseFrame() noexcept {
-    for (auto& binding : bindings_)
+    for (auto& binding : bindings_) {
         binding->image.Reset();
+        binding->gpu.Reset();
+    }
     frame_active_ = false;
 }
 
@@ -390,6 +408,13 @@ bool VisualSceneConsumer::Frame::Changed() const noexcept {
 
 bool VisualSceneConsumer::Frame::Deferred() const noexcept {
     return deferred_;
+}
+
+bool VisualSceneConsumer::Frame::HasGpuFrames(std::span<const SourceToken> tokens) const noexcept {
+    return !Deferred() && std::ranges::all_of(tokens, [&](const auto& token) {
+        return std::ranges::any_of(Items(),
+                                   [&](const auto& item) { return item.gpu && item.gpu->identity.token == token; });
+    });
 }
 
 uint64_t VisualSceneConsumer::Frame::PublicationSequence() const noexcept {

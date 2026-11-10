@@ -24,6 +24,9 @@
 
 namespace exosnap::quick {
 namespace {
+QColor PressColor(const QJsonObject& layer) {
+    return QColor(layer.value("pressColor").toString(QStringLiteral("#4cb8ff")));
+}
 
 QDomElement Find(QDomElement node, const QString& id) {
     if (node.attribute(QStringLiteral("id")) == id)
@@ -233,7 +236,7 @@ MappedGamepadArtwork PrepareMappedGamepadArtwork(const QString& mapping_path, QS
     const auto add = [&](QDomElement source_part, const QJsonObject& layer, const QString& id, const QString& region) {
         if (id.isEmpty())
             return false;
-        const QColor press_color(layer.value("pressColor").toString(QStringLiteral("#4cb8ff")));
+        const QColor press_color = PressColor(layer);
         if (!press_color.isValid())
             return false;
         const auto explicit_shape = layer.value("pressElement").toString();
@@ -314,7 +317,7 @@ MappedGamepadArtwork PrepareMappedGamepadArtwork(const QString& mapping_path, QS
                 if (canonical == gamepad::Control::Count ||
                     !add(part, layer, id, center + ' ' + corners[i] + ' ' + corners[(i + 1) % 4]))
                     return fail();
-                result.controls.insert(id, {canonical, gamepad::Control::Count, true});
+                result.controls.insert(id, {canonical, gamepad::Control::Count, true, PressColor(layer)});
             }
             continue;
         }
@@ -335,7 +338,7 @@ MappedGamepadArtwork PrepareMappedGamepadArtwork(const QString& mapping_path, QS
             return fail();
         if (!add(part, layer, id, {}))
             return fail();
-        result.controls.insert(id, {control, click, true});
+        result.controls.insert(id, {control, click, true, PressColor(layer)});
         if (control == gamepad::Control::LeftStick || control == gamepad::Control::RightStick) {
             const auto knockout = layer.value("knockout").toString();
             if (!knockout.isEmpty()) {

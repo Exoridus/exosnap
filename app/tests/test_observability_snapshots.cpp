@@ -1094,3 +1094,53 @@ TEST(PipelineSnapshotJson, VisualSourceSelfReportDoesNotInventAHostObservation) 
     EXPECT_FALSE(first.contains(QStringLiteral("latestArrival")));
     EXPECT_FALSE(first.contains(QStringLiteral("imageGeneration")));
 }
+
+TEST(PipelineSnapshotJson, NativeGamepadTimingSeparatesPendingQueriesAndMeasuredZero) {
+    engine::RecordingDiagnosticsSnapshot snapshot;
+    snapshot.valid = true;
+    engine::VisualSourceDiagnostics source;
+    source.native_gamepad.emplace();
+    source.native_gamepad->generation = 3;
+    source.native_gamepad->latest_sample_100ns = 1234;
+    source.native_gamepad->render_cpu.Add(0);
+    source.native_gamepad->render_cpu.Add(4);
+    source.native_gamepad->render_cpu.Add(2);
+    snapshot.visual_sources = std::vector{source};
+    snapshot.visual_runtime.emplace();
+    snapshot.visual_runtime->reserved_gpu_bytes = 0;
+    const auto json = PipelineSnapshotToJson(snapshot);
+    const auto rows = At(json, {"visual", "providerSources", "rows"}).toArray();
+    const auto native = rows[0].toObject().value("nativeGamepad").toObject();
+    EXPECT_EQ(native.value("generation").toDouble(), 3);
+    EXPECT_EQ(native.value("latestSample100ns").toDouble(), 1234);
+    const auto cpu = native.value("renderCpu").toObject();
+    EXPECT_EQ(cpu.value("samples").toDouble(), 3);
+    EXPECT_EQ(cpu.value("latestMs").toDouble(), 2);
+    EXPECT_EQ(cpu.value("averageMs").toDouble(), 2);
+    EXPECT_EQ(cpu.value("maximumMs").toDouble(), 4);
+    EXPECT_EQ(cpu.value("totalMs").toDouble(), 6);
+    EXPECT_TRUE(native.value("renderGpuSpan").toObject().value("latestMs").isNull());
+    EXPECT_EQ(native.value("renderGpuSpan").toObject().value("availability").toString(), "unavailable");
+    EXPECT_EQ(At(json, {"visual", "host", "reservedGpuBytes"}).toDouble(-1), 0);
+
+    snapshot.visual_sources->front().native_gamepad->render_gpu_span.Add(0);
+    const auto measured = PipelineSnapshotToJson(snapshot);
+    const auto gpu = At(measured, {"visual", "providerSources", "rows"})
+                         .toArray()[0]
+                         .toObject()
+                         .value("nativeGamepad")
+                         .toObject()
+                         .value("renderGpuSpan")
+                         .toObject();
+    EXPECT_EQ(gpu.value("availability").toString(), "available");
+    EXPECT_EQ(gpu.value("latestMs").toDouble(-1), 0);
+
+    snapshot.visual_sources->front().native_gamepad.reset();
+    snapshot.visual_runtime->reserved_gpu_bytes.reset();
+    const auto absent = PipelineSnapshotToJson(snapshot);
+    const auto missing =
+        At(absent, {"visual", "providerSources", "rows"}).toArray()[0].toObject().value("nativeGamepad").toObject();
+    EXPECT_EQ(missing.value("availability").toString(), "unavailable");
+    EXPECT_FALSE(missing.contains("renderCpu"));
+    EXPECT_TRUE(At(absent, {"visual", "host", "reservedGpuBytes"}).isNull());
+}
