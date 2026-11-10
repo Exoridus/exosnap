@@ -106,15 +106,22 @@ TEST(VisualSettings, ActionArgumentsChoiceAndIncarnationAreValidated) {
 
 TEST(VisualSettings, NodeMenuActionsAreBounded) {
     auto type = SettingsType();
-    for (auto& action : type.actions)
-        action.node_menu = true;
-    for (size_t index = type.actions.size(); index <= kMaxNodeMenuActions; ++index)
-        type.actions.push_back({"details-" + std::to_string(index),
-                                {"VisualTests", "Details"},
-                                ActionOperation::OpenDetails,
-                                {},
-                                {},
+    type.actions.front().node_menu = true;
+    for (size_t index = 2; index <= kMaxNodeMenuActions + 1; ++index)
+        type.actions.push_back({"select-device-" + std::to_string(index),
+                                {"VisualTests", "Select device"},
+                                ActionOperation::SelectProperty,
+                                "device",
+                                "devices",
                                 true});
+    EXPECT_FALSE(ValidateVisualSettings(type).succeeded());
+    type.actions.back().node_menu = false;
+    EXPECT_TRUE(ValidateVisualSettings(type).succeeded());
+}
+
+TEST(VisualSettings, NodeMenuAdmitsOnlySelectionActions) {
+    auto type = SettingsType();
+    type.actions.push_back({"details", {"VisualTests", "Details"}, ActionOperation::OpenDetails, {}, {}, true});
     EXPECT_FALSE(ValidateVisualSettings(type).succeeded());
     type.actions.back().node_menu = false;
     EXPECT_TRUE(ValidateVisualSettings(type).succeeded());

@@ -76,6 +76,8 @@ engine::Outcome<std::monostate> ValidateVisualSettings(const VisualSourceType& t
         if (!IsVisualIdentifier(action.id) || action.label.context.empty() || action.label.source_text.empty() ||
             !actions.insert(action.id).second)
             return engine::EngineError{.context = "Invalid or duplicate visual action"};
+        if (action.node_menu && action.operation != ActionOperation::SelectProperty)
+            return engine::EngineError{.context = "Only visual selections can join the node menu"};
         switch (action.operation) {
         case ActionOperation::SelectProperty: {
             const auto field =
