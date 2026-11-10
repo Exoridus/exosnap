@@ -1,29 +1,29 @@
 # Destination-demand composition and render-plan caching
 
-> **Status:** Accepted direction / experiment plan, **not implemented**. Discussion: 2026-11-06.
-> No shipped behavior, performance gain, GPU backend migration, or multi-destination support is claimed by this document.
+> **Status:** Stage A and a bounded single-output SDR demand pilot are implemented and disabled by default. Native performance and output qualification remain open. General multi-destination and color-branch planning is accepted, not implemented.
+> [Capture and preview](../architecture/capture-and-preview.md) owns the implemented flags, eligibility and lifetime contracts. This document describes remaining design and qualification work without claiming performance gains or multi-destination support.
 
 ## Decisions and scope
 
-- Implement **Stage A** first: keep Direct3D 11, reuse scene topology and immutable render state, bind changing source frames and per-item parameters dynamically.
+- Qualify **Stage A** independently of demand sizing: keep Direct3D 11, reuse scene topology and immutable render state, bind changing source frames and per-item parameters dynamically.
 - Test whether composition can run at the *effective physical-pixel resolution demanded by active consumers* rather than always at capture-source dimensions. Resolution and color are separate dimensions of a render profile.
 - Treat the **Preview as a consumer of the composed image** and the editor of scene intent. It does not capture its own Qt UI or use an encoded/decompressed video image as an input. Selection handles and editing chrome are not recorded.
 - Do not implement D3D11 deferred-command-list replay (Stage B), D3D12, Vulkan, or wgpu ports as part of this work. Revisit them only if measurements establish a meaningful bottleneck.
 - Do not replace `VisualSource`, `VisualSceneRuntime`, the existing recorder/encoder, or the host-owned compositor with an extension-owned scene renderer.
 - Keep a prospective sandboxed browser/HTML surface for **external plugins after V3**, rather than building native chat text as a mandatory substitute for custom HTML/CSS/emotes now.
 
-## Verified current baseline on `next`
+## Current baseline
 
-1. `libs/engine/src/video_thread.cpp`: ordinary SDR capture is composited in source coordinates/size, then `VideoProcessorBlt` applies crop, contain-fit output geometry, letterboxing, scaling, and RGB-to-NV12/P010 conversion. The native HDR and 4:4:4 paths have distinct conversions. Reducing the compositor target is **not** just switching `encodeWidth`; it moves work relative to existing scale/color passes and requires equivalence tests.
-2. `libs/engine/src/gpu_compositor.cpp`: D3D11 shaders, samplers and blend states are created in `Init` and reused; video/camera texture and sprite-atlas uploads are cached using generation, dimensions, token and resource identity where applicable. Stage A is **partly implemented**, not a blank slate.
+1. `libs/engine/src/video_thread.cpp`: default SDR capture is composited in source coordinates/size, then `VideoProcessorBlt` applies crop, contain-fit output geometry, letterboxing, scaling, and RGB-to-NV12/P010 conversion. The native HDR and 4:4:4 paths have distinct conversions. The opt-in demand pilot moves scaling before composition for its eligible subset and retains the source-size fallback.
+2. `libs/engine/src/gpu_compositor.cpp`: D3D11 shaders, samplers and blend states are created in `Init` and reused; video/camera texture and sprite-atlas uploads are cached using generation, dimensions, token and resource identity where applicable. The opt-in Stage A cache adds prepared scene reuse and bounded invariant sprite-state reuse.
 3. `libs/engine/src/visual_scene_consumer.cpp`: the consumer refreshes prepared item/binding state when publication sequence/invalidation requires it. `app/extensions/VisualSourceManager.cpp` publishes scene items in order. Existing source/scene revision and lease contracts must remain authoritative.
 4. `app/quick/ExoSnap/Quick/ExoPreviewItem.cpp`: the preview has change-driven updates, a separate scene consumer and cached visual resources. Idle preview may compose independently; recording preview consumes the engine-composited feed. Both must keep the same accepted scene intent and color semantics.
 5. `docs/architecture/color-management.md`: SDR and native-HDR paths have explicitly different working/output representations. Source-specific HDR conversion and 80-nit scRGB normalization/overlay reference white must not be lost.
-6. A general multi-destination render graph and destination-driven composition resolution **do not exist** in the current product. Treat this document as a design/benchmark plan, not an instruction to silently change current recording output.
+6. The demand pilot handles one reduced, same-aspect SDR recording with compatible known preview demand or no preview consumer. A general multi-destination render graph, mixed color branches and live resizing back to smaller targets remain unimplemented. Both experiment flags default off.
 
 ## Logical render demand and resolution policy
 
-A consumer publishes a **RenderDemand** at a stable control boundary. Suggested fields: consumer identity, scene/view identity, output pixel dimensions, physical preview viewport and device pixel ratio where applicable, zoom/crop, desired frame cadence, SDR/HDR working/output profiles, alpha requirement, visibility/availability, and transformation/overlay policy. Outputs may be one-shot (screenshot) or continuous.
+The existing **RenderDemand** planner handles compatible full-scene SDR requests; the recording pilot supplies one output demand and separately checks preview pixels. The future general consumer contract below adds broader output, color and live reconfiguration policy. A consumer publishes demand at a stable control boundary, including scene/view identity, physical output dimensions, zoom/crop, cadence, color and alpha requirements, visibility and transformation policy. Outputs may be one-shot (screenshot) or continuous.
 
 - One active output and no more demanding visible preview: compose only the pixels that output needs, subject to source quality and format correctness.
 - Multiple **compatible** consumers: calculate the cheapest shared composition representation that satisfies all of them, usually the largest required pixel dimensions for a common aspect, scene layout, timebase, and working color representation. Downsample after shared composition for smaller outputs.
@@ -58,13 +58,12 @@ A **scene plan** stores ordering/grouping, source identity and roles, node prese
 - Preserve `SourceToken`, `ConfigRevision`, leases, host-owned scene publication, cache retirement, and on-thread D3D11 immediate-context ownership. No extension may retain mutable producer-owned frames.
 - Prefer retained D3D11 state objects + a compact precomputed draw schedule over `ID3D11CommandList`. Deferred command lists can carry recorded resource bindings and add driver-dependent playback overhead; **do not** add them without separate evidence.
 
-### Suggested incremental slices
+### Remaining qualification and extension work
 
-1. **Audit/measurement:** capture existing CPU submission, GPU composition/video-processor timings, upload counts, render sizes, scene refresh and preview cadence. Record real output receipts; profile all changes before implementing a new planner.
-2. **Pure planner:** build deterministic consumer-demand aggregation/compatibility and scene-plan invalidation logic with unit tests, without changing the runtime path. Distinguish scene topology from live transforms and source-frame data.
-3. **D3D11 cache integration:** reuse stable draw order/state across frames; update only dynamic buffers/resource bindings and affected scene ranges. Avoid new allocations or blocking synchronization in the frame loop.
-4. **Demand-aware composition pilot:** behind an experimental gate, change eligible SDR single-output cases to render at resolved output size; move source scaling before composition where necessary. Keep existing capture-size compositor as a correctness oracle. Do not automatically activate it for native-HDR, 4:4:4 or mixed-format cases until parity is demonstrated.
-5. **Multi-demand/preview acceptance:** add visible-preview physical sizing/zoom, multi-resolution destinations and color branching in distinct verified steps. No feature rollout until recorded artifacts and on-screen preview both pass.
+1. **Measurement:** capture CPU submission, GPU composition/video-processor timings, upload counts, render sizes, scene refresh and actual preview publication cadence. Record real output receipts and separate each experiment from its baseline.
+2. **Stage A qualification:** exercise topology and resource invalidation, live transforms and changing source frames. Validate recorded output and Preview before enabling the cache by default.
+3. **Demand-pilot qualification:** compare eligible SDR cases with the source-size compositor, including preview growth, zoom and promotion. Include retained fallback allocations and full-source copy/scaling costs in the comparison. Native-HDR, 4:4:4 and mixed-format cases retain their existing paths.
+4. **Additional consumers:** extend demand aggregation only for concrete multi-resolution destinations and color branches, with independent compatibility and lifetime tests. Recorded artifacts and on-screen preview must both pass before rollout.
 
 ## Benchmark and visual acceptance
 
