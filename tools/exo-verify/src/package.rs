@@ -135,6 +135,7 @@ const REQUIRED_FILES: &[&str] = &[
     "Qt6QuickShapes.dll",
     "Qt6QuickDialogs2.dll",
     "Qt6QuickEffects.dll",
+    "Qt6Quick3D.dll",
     "LICENSE",
     "THIRD_PARTY_NOTICES.md",
     "KNOWN_LIMITATIONS.md",
@@ -158,6 +159,8 @@ const REQUIRED_DIRS: &[&str] = &[
     // The countdown overlay's MultiEffect; a missing module fails inside a
     // capture-excluded overlay, where nobody can observe it.
     "qml/QtQuick/Effects",
+    // The production Controller3D scene loads this module for the native gamepad view.
+    "qml/QtQuick3D",
 ];
 
 /// Kept in step with THIRD_PARTY_NOTICES.md: the package never ships a
@@ -182,6 +185,8 @@ const REQUIRED_LICENSES: &[&str] = &[
     "gamepad-artwork.txt",
     "gamepad-al2009man.txt",
     "gamepad-al2009man-notice.txt",
+    "controller-models-larf.txt",
+    "controller-models-3dco-plus.txt",
 ];
 
 const CRASH_CAPTURE_LICENSES: &[&str] = &["sentry-native.txt", "crashpad.txt", "mini_chromium.txt"];

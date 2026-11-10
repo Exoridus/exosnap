@@ -197,9 +197,11 @@ directory alongside the ExoSnap binary.
   by https://github.com/Exoridus/exosnap-controller-lab at the commit pinned in
   `controller-packs.lock.json`, with SHA-256 hashes per file. The license texts
   are `LICENSE-models-larf.txt` and `LICENSE-models-3dco-plus.txt` in the
-  controller artwork directory. The models are repository source assets and are
-  not yet compiled into or installed with an executable. Models from PadForge,
-  CGTrader or other sources without verified redistribution rights are excluded.
+  controller artwork directory. They are installed as
+  `controller-models-larf.txt` and `controller-models-3dco-plus.txt`. The models
+  are compiled into the application's Controller3D scene resources and installed
+  with the application. Models from PadForge, CGTrader or other sources without
+  verified redistribution rights are excluded.
 - **Legacy fixtures:** Nicolae (Xelu) Berbece, Free Controller & Key Prompts,
   https://thoseawesomeguys.com/prompts/ (CC0), remain in compatibility tests.
   Their original notice is retained as `licenses/gamepad-artwork.txt`.
@@ -229,7 +231,7 @@ directory alongside the ExoSnap binary.
   - added by `windeployqt` because the above need them: the remaining Qml, Quick and Basic Controls style libraries, Network, OpenGL, and the platform, image format, icon engine, network information and style plugins
 
   The shipped tree carries only the Basic Quick Controls style ExoSnap selects, and no QML debugger/profiler/preview (`qmltooling`) plugins. `exo-verify package` prunes other styles and the tooling plugins and refuses their return. The package manifest is the authoritative list: it names every deployed file with its SHA-256.
-- **Developer pilot:** Qt Quick 3D is used under GPLv3 in the separate Controller3D executable. It is not deployed with the recording application. No third-party controller model is compiled into an executable.
+- **Qt Quick 3D:** Used under GPLv3 by the recording application's Controller3D scene and by the separate developer pilot. It is linked into the recording application and deployed with it. ExoSnap is GPL-3.0-or-later, so the combined binary is distributed under GPLv3 with corresponding source available. The imported controller models are compiled into the application resources.
 - **Bundled license:** `licenses/qt.txt` (canonical LGPLv3 text from the Free
   Software Foundation)
 - **Note:** Qt DLLs are deployed alongside the ExoSnap binary by `windeployqt`.

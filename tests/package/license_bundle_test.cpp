@@ -64,6 +64,8 @@ const std::vector<std::string> k_expected_licenses = {
     "gamepad-artwork.txt",
     "gamepad-al2009man.txt",
     "gamepad-al2009man-notice.txt",
+    "controller-models-larf.txt",
+    "controller-models-3dco-plus.txt",
     // Official-release-build-only (EXOSNAP_OFFICIAL_BUILD=ON); still documented unconditionally.
     "sentry-native.txt",
     "crashpad.txt",

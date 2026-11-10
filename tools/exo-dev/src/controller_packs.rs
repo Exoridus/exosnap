@@ -3,7 +3,7 @@
 //!
 //! The Lab packs are an asset exchange format. Their 30 control identifiers never
 //! reach the runtime: every control is translated here, once, into the native
-//! SDL3-ordered names and written to a generated `bindings.json` per pack.
+//! SDL3-ordered names and written to the pack's generated `pack.json`.
 
 use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};

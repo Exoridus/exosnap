@@ -935,12 +935,17 @@ endif()
 # when windeployqt is told to skip it. `exo-verify package` prunes them after
 # the install and validation refuses their return.
 if(WIN32)
+    # The app links the separate Controller3D QML module, whose ControllerScene.qml
+    # imports QtQuick3D. The app's own QML scan does not reach that sibling module,
+    # so windeployqt scans their common parent or the installed tree would miss
+    # qml/QtQuick3D and fail when the native view loads the scene.
     qt_generate_deploy_qml_app_script(
         TARGET exosnap
         OUTPUT_SCRIPT _exosnap_deploy_script
         NO_UNSUPPORTED_PLATFORM_ERROR
         NO_COMPILER_RUNTIME
         EXCLUDE_PLUGIN_TYPES qmltooling
+        DEPLOY_TOOL_OPTIONS --qmldir "${PROJECT_SOURCE_DIR}/app/quick/ExoSnap"
     )
 
     install(TARGETS exosnap RUNTIME DESTINATION .)

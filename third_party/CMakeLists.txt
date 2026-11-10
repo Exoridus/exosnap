@@ -412,6 +412,11 @@ _exosnap_install_license("Controller artwork (MIT)"
     "${PROJECT_SOURCE_DIR}/app/assets/gamepad/controllers/LICENSE.txt" "gamepad-al2009man.txt")
 _exosnap_install_license("Controller artwork source credits"
     "${PROJECT_SOURCE_DIR}/app/assets/gamepad/controllers/SOURCE-NOTICE.txt" "gamepad-al2009man-notice.txt")
+_exosnap_install_license("Controller 3D models (MIT, Larf)"
+    "${PROJECT_SOURCE_DIR}/app/assets/gamepad/controllers/LICENSE-models-larf.txt" "controller-models-larf.txt")
+_exosnap_install_license("Controller 3D model manifests (MIT, 3dco+)"
+    "${PROJECT_SOURCE_DIR}/app/assets/gamepad/controllers/LICENSE-models-3dco-plus.txt"
+    "controller-models-3dco-plus.txt")
 
 # ---------------------------------------------------------------------------
 # Vendored in-tree sources (libs/update/third_party) -- no FetchContent step,
