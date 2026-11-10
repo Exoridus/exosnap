@@ -1,26 +1,14 @@
 #pragma once
 
-// What must happen when the user tries to close the application window.
-//
-// This is product safety policy, not presentation: closing at the wrong moment
-// corrupts a container being finalized, abandons an MP4 remux, or kills a
-// running capture. The Widgets shell expressed it as a chain of early returns
-// inside `MainWindow::closeEvent` with three `QMessageBox::exec()` calls. A QML
-// dialog has no `exec()`, so the decision has to be a value the frontend can
-// route asynchronously — which is what this header provides.
-//
-// Pure and frontend-free on purpose: the ordering below is the part that must
-// not drift between the two frontends, and it is the part worth testing without
-// a window.
+// Product policy for asynchronous close decisions. Finalization cannot be
+// waived; other operations and authored editor work require explicit consent.
 
 #include <QString>
 
 namespace exosnap {
 
 // Everything the decision depends on, sampled at the moment of the close
-// request. Deliberately booleans rather than a recording-state enum: the export
-// is not a recording state at all, and mixing the two is what let the Widgets
-// version grow four separate flag sources.
+// request. Operation generations identify the work described by a prompt.
 struct CloseGuardState {
     // Container finalize in flight (UiRecordingState::Stopping). Not
     // cancellable — aborting it corrupts the file being written.
@@ -33,10 +21,16 @@ struct CloseGuardState {
     bool exporting = false;
     // Capture still running (recording, paused, or counting down).
     bool recording = false;
+    bool editor_dirty = false;
+    // Identity tokens prevent a prompt or waiver from consenting to later work.
+    quint64 remux_generation = 0;
+    quint64 export_generation = 0;
+    quint64 recording_generation = 0;
+    quint64 editor_revision = 0;
 };
 
 enum class CloseGuardKind {
-    // Nothing in flight — close immediately.
+    // No operation or authored editor work needs confirmation.
     Allow,
     // Refuse without a prompt. The finalizing overlay is already on screen for
     // the whole Stopping phase, so a dialog would only restate it, and there is
@@ -45,6 +39,7 @@ enum class CloseGuardKind {
     ConfirmRemux,
     ConfirmExport,
     ConfirmRecording,
+    ConfirmEditor,
 };
 
 // What the frontend should show, if anything. Labels live here rather than in
@@ -57,15 +52,13 @@ struct CloseGuardPrompt {
     QString proceed_label;
     // Label of the button that keeps the window open.
     QString cancel_label;
-    // Which button is focused. Every guard except the recording one defaults to
-    // the safe choice of waiting; the recording guard defaults to Cancel because
-    // stopping a capture by accident is the more expensive mistake.
+    // Every prompt focuses the safe choice that keeps the application open.
     bool default_is_cancel = true;
 };
 
 // Evaluates the guards in their authoritative order: finalize first (it cannot
-// be waived at all), then remux, then export, then recording. The order is the
-// policy — a close during both an export and a recording must ask about both,
+// be waived at all), then remux, export, recording and editor changes. A close
+// during both an export and a recording must ask about both,
 // which the caller achieves by clearing the waived condition and evaluating
 // again.
 [[nodiscard]] CloseGuardPrompt EvaluateCloseGuard(const CloseGuardState& state);

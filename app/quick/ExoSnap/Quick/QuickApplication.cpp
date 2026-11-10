@@ -6452,7 +6452,32 @@ void QuickApplication::publishRecordingResultNotification(const UiRecordingResul
 }
 
 void QuickApplication::initializeShell() {
-    shell_adapter_.setStateProvider([this]() { return sampleCloseGuardState(); });
+    auto operations = std::make_shared<CloseGuardState>();
+    const auto observe_operations = [this, operations] {
+        const auto recording = record_view_model_.state;
+        const auto observe = [](bool active, bool& previous, quint64& generation) {
+            if (active && !previous)
+                ++generation;
+            previous = active;
+        };
+        observe(recording == UiRecordingState::Saving, operations->remuxing, operations->remux_generation);
+        observe(edit_export_adapter_.running(), operations->exporting, operations->export_generation);
+        observe(recording == UiRecordingState::Recording || recording == UiRecordingState::Paused ||
+                    recording == UiRecordingState::Countdown,
+                operations->recording, operations->recording_generation);
+    };
+    QObject::connect(&record_view_model_adapter_, &RecordViewModelAdapter::changed, &shell_adapter_,
+                     observe_operations);
+    QObject::connect(&edit_export_adapter_, &EditExportAdapter::stateChanged, &shell_adapter_, observe_operations);
+    observe_operations();
+    shell_adapter_.setStateProvider([this, operations, observe_operations]() {
+        observe_operations();
+        auto state = sampleCloseGuardState();
+        state.remux_generation = operations->remux_generation;
+        state.export_generation = operations->export_generation;
+        state.recording_generation = operations->recording_generation;
+        return state;
+    });
     QObject::connect(&shell_adapter_, &ShellAdapter::cancelRemuxRequested, &shell_adapter_,
                      [this]() { recording_coordinator_->CancelRemux(); });
     QObject::connect(&shell_adapter_, &ShellAdapter::cancelExportRequested, &shell_adapter_,
@@ -6469,7 +6494,7 @@ void QuickApplication::initializeShell() {
     // until now indistinguishable in a support bundle too.
     QObject::connect(
         &shell_adapter_, &ShellAdapter::closeDecided, &shell_adapter_,
-        [this](const QString& kind, bool recording, bool exporting, bool remuxing, bool finalizing) {
+        [this](const QString& kind, bool recording, bool exporting, bool remuxing, bool finalizing, bool editor_dirty) {
             // Every flag the decision could have been made from, including the one
             // that decides silently: a finalize blocks the close with no prompt and
             // no visible change, so a line that named only the other three reported
@@ -6477,12 +6502,14 @@ void QuickApplication::initializeShell() {
             // reason.
             diagnostics::AppLog::info(
                 QStringLiteral("shell"),
-                QStringLiteral("close requested -> %1 (recording=%2 exporting=%3 remuxing=%4 finalizing=%5)")
+                QStringLiteral(
+                    "close requested -> %1 (recording=%2 exporting=%3 remuxing=%4 finalizing=%5 editorDirty=%6)")
                     .arg(kind)
                     .arg(recording ? 1 : 0)
                     .arg(exporting ? 1 : 0)
                     .arg(remuxing ? 1 : 0)
-                    .arg(finalizing ? 1 : 0));
+                    .arg(finalizing ? 1 : 0)
+                    .arg(editor_dirty ? 1 : 0));
             // An APPROVED close ends the process, and does so explicitly rather than
             // leaving it to quitOnLastWindowClosed. Qt quits when the last visible
             // "primary window (i.e. top level window with no transient parent)"
@@ -6919,6 +6946,8 @@ CloseGuardState QuickApplication::sampleCloseGuardState() const {
     state.finalizing = recording_state == UiRecordingState::Stopping;
     state.remuxing = recording_state == UiRecordingState::Saving;
     state.exporting = edit_export_adapter_.running();
+    state.editor_dirty = edit_session_adapter_.hasUnsavedEdits();
+    state.editor_revision = edit_session_adapter_.closeGuardRevision();
     // Countdown counts as recording: the capture is already committed from the
     // user's point of view, and closing mid-countdown would strand the armed
     // pipeline.
