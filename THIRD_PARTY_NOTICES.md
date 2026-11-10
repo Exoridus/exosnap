@@ -227,7 +227,7 @@ directory alongside the ExoSnap binary.
 - **License:** Available under LGPLv3, GPLv2, GPLv3, or Qt Commercial License.
   This distribution uses the open source edition.
 - **Linkage:** dynamic, in two groups:
-  - linked by ExoSnap: Core, Gui, Widgets, Svg, Qml, Quick, QuickControls2, QuickDialogs2, LabsPlatform
+  - linked by ExoSnap: Core, Gui, Widgets, Svg, Qml, Quick, QuickControls2, QuickDialogs2, Quick3D, LabsPlatform
   - added by `windeployqt` because the above need them: the remaining Qml, Quick and Basic Controls style libraries, Network, OpenGL, and the platform, image format, icon engine, network information and style plugins
 
   The shipped tree carries only the Basic Quick Controls style ExoSnap selects, and no QML debugger/profiler/preview (`qmltooling`) plugins. `exo-verify package` prunes other styles and the tooling plugins and refuses their return. The package manifest is the authoritative list: it names every deployed file with its SHA-256.

@@ -136,6 +136,8 @@ const REQUIRED_FILES: &[&str] = &[
     "Qt6QuickDialogs2.dll",
     "Qt6QuickEffects.dll",
     "Qt6Quick3D.dll",
+    "Qt6Quick3DRuntimeRender.dll",
+    "Qt6Quick3DUtils.dll",
     "LICENSE",
     "THIRD_PARTY_NOTICES.md",
     "KNOWN_LIMITATIONS.md",

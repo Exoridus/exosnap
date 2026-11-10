@@ -172,6 +172,8 @@ TEST_F(InstallTreeTest, AllExpectedLicensesPresent) {
         "licenses/gamepad-artwork.txt",
         "licenses/gamepad-al2009man.txt",
         "licenses/gamepad-al2009man-notice.txt",
+        "licenses/controller-models-larf.txt",
+        "licenses/controller-models-3dco-plus.txt",
     };
     for (const auto& lic : expected) {
         EXPECT_TRUE(file_exists(_root, lic)) << "Missing license: " << lic;
