@@ -149,47 +149,37 @@ ComboBox {
         required property var model
 
         width: ListView.view.width
-        height: ExoTheme.controlHeight
+        implicitHeight: Math.max(ExoTheme.controlHeight, contentItem.implicitHeight + topPadding + bottomPadding)
         enabled: optionDelegate.model.selectable
         highlighted: optionDelegate.ListView.isCurrentItem
 
         HoverHandler {
-            cursorShape: Qt.PointingHandCursor
+            cursorShape: optionDelegate.enabled ? Qt.PointingHandCursor : Qt.ArrowCursor
         }
 
-        contentItem: RowLayout {
-            spacing: ExoTheme.spacingSm
+        contentItem: ColumnLayout {
+            spacing: ExoTheme.spacingXs
 
             Label {
                 text: optionDelegate.model.label
                 textFormat: Text.PlainText
-                elide: Text.ElideRight
-                verticalAlignment: Text.AlignVCenter
-                color: optionDelegate.enabled ? ExoTheme.text : ExoTheme.textDim
-                leftPadding: ExoTheme.spacingSm
+                wrapMode: Text.WordWrap
+                color: optionDelegate.enabled ? ExoTheme.text : ExoTheme.textSecondary
                 Layout.fillWidth: true
-                Layout.minimumWidth: 0
                 font {
                     family: ExoTheme.sansFamily
                     pixelSize: ExoTheme.fontBody
                 }
             }
 
-            // Why this one cannot be chosen, stated in the row. It was a
-            // ToolTip on a DISABLED delegate — and Qt delivers no hover events
-            // to a disabled item, so it never appeared for any input at all.
-            // The row it explains is the only place with the room for it.
             Label {
+                objectName: "selectOptionReason"
                 text: optionDelegate.model.reason ?? ""
                 textFormat: Text.PlainText
-                elide: Text.ElideRight
-                horizontalAlignment: Text.AlignRight
-                verticalAlignment: Text.AlignVCenter
+                wrapMode: Text.WordWrap
                 visible: !optionDelegate.enabled && text !== ""
-                color: ExoTheme.textDim
-                rightPadding: ExoTheme.spacingSm
-                Layout.maximumWidth: optionDelegate.width / 2
-                Layout.minimumWidth: 0
+                color: ExoTheme.textMuted
+                Layout.fillWidth: true
                 font {
                     family: ExoTheme.sansFamily
                     pixelSize: ExoTheme.fontCaption
@@ -203,20 +193,42 @@ ComboBox {
             opacity: optionDelegate.highlighted ? 1.0 : 0.55
         }
 
-        // QCR-509. The reason also rides on the accessible description, for the
-        // enabled and the disabled case alike.
         Accessible.description: optionDelegate.model.reason ?? ""
-        // The tooltip stays for an ENABLED option — an option can carry a
-        // reason without being unavailable, and hover works there. It is the
-        // DISABLED case the row above had to take over, because Qt delivers no
-        // hover events to a disabled item at all.
         ToolTip.visible: optionDelegate.hovered && (optionDelegate.model.reason ?? "") !== ""
         ToolTip.text: optionDelegate.model.reason ?? ""
     }
 
+    function stepSelectable(direction: int): void {
+        const entries = root.options || [];
+        const current = root.resolvedIndex;
+        const start = current < 0 ? (direction > 0 ? 0 : entries.length - 1) : current + direction;
+        for (let index = start; index >= 0 && index < entries.length; index += direction) {
+            if (entries[index].selectable) {
+                root.valueActivated(entries[index].value);
+                return;
+            }
+        }
+    }
+
+    Keys.onPressed: event => {
+        if (!root.popup.visible && event.modifiers === Qt.NoModifier &&
+            (event.key === Qt.Key_Down || event.key === Qt.Key_Up)) {
+            root.stepSelectable(event.key === Qt.Key_Down ? 1 : -1);
+            event.accepted = true;
+            return;
+        }
+        if (!root.popup.visible || (event.key !== Qt.Key_PageDown && event.key !== Qt.Key_PageUp))
+            return;
+        const list = root.popup.contentItem;
+        const delta = event.key === Qt.Key_PageDown ? list.height : -list.height;
+        list.contentY = Math.max(0, Math.min(Math.max(0, list.contentHeight - list.height), list.contentY + delta));
+        event.accepted = true;
+    }
+
     popup: Popup {
         y: root.height
-        width: root.width
+        width: Math.min(Math.max(root.width, 360), (Overlay.overlay ? Overlay.overlay.width : root.width) - 2 * ExoTheme.spacingMd)
+        margins: ExoTheme.spacingMd
         implicitHeight: Math.min(contentItem.implicitHeight, 280)
         padding: 1
 
@@ -237,5 +249,10 @@ ComboBox {
         }
     }
 
-    onActivated: index => root.valueActivated(root.valueAt(index))
+    onActivated: index => {
+        const option = root.options[index];
+        root.currentIndex = Qt.binding(() => root.resolvedIndex);
+        if (option && option.selectable)
+            root.valueActivated(option.value);
+    }
 }

@@ -172,7 +172,7 @@ Item {
                 Label {
                     visible: root.track.recordEnabled && root.track.empty
                     text: qsTr("No source")
-                    color: ExoTheme.warning
+                    color: ExoTheme.warningText
                     font.pixelSize: ExoTheme.fontSecondary
                 }
                 Item {
@@ -251,7 +251,7 @@ Item {
                 Layout.fillWidth: true
                 visible: root.errorText !== ""
                 text: root.errorText
-                color: ExoTheme.error
+                color: ExoTheme.errorText
                 wrapMode: Text.WordWrap
                 Accessible.role: Accessible.AlertMessage
                 Accessible.name: text

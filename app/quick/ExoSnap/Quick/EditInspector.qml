@@ -18,11 +18,69 @@ ExoScrollView {
     readonly property bool oneClip: mode === EditSessionAdapter.ClipSelection && session.selectedClipIds.length === 1
     readonly property var videoValues: session.videoProperties(clipDetails.id || 0, session.positionUs)
     property real crossfadeDurationUs: 500000
+    property bool crossfadeAvailable: false
+    function refreshCrossfadeAvailability(): void {
+        crossfadeAvailable = root.session && root.session.selectionMode === EditSessionAdapter.ClipSelection
+            && root.session.canCrossfadeAtCut(root.session.selectedClip, root.crossfadeDurationUs);
+    }
+    onCrossfadeDurationUsChanged: refreshCrossfadeAvailability()
+    Component.onCompleted: refreshCrossfadeAvailability()
+    Connections {
+        target: root.session
+        function onWorkspaceChanged(): void { root.refreshCrossfadeAvailability(); }
+        function onSelectionChanged(): void { root.refreshCrossfadeAvailability(); }
+        function onInteractionSettingsChanged(): void { root.refreshCrossfadeAvailability(); }
+    }
+    property bool timingExpanded: false
+    property bool animationExpanded: false
+    property real selectedGainSourceUs: -1
+    readonly property var gainClipId: clipDetails.id || 0
+    onGainClipIdChanged: selectedGainSourceUs = -1
+    readonly property var gainKeys: clipDetails.gainKeys || []
+    readonly property var selectedGainKey: gainKeys.find(key => key.sourceUs === selectedGainSourceUs) || ({})
+    readonly property real naturalContentHeight: inspectorContent.implicitHeight
+    function selectGainPoint(sourceUs: real): void {
+        const nearest = gainKeys.reduce((best, key) => !best || Math.abs(key.sourceUs - sourceUs) < Math.abs(best.sourceUs - sourceUs) ? key : best, null);
+        selectedGainSourceUs = nearest ? nearest.sourceUs : -1;
+    }
+    function editGainPoint(target: var, originalSourceUs: real, sourceUs: real, gainDb: real): bool {
+        if (!session.beginGainKeyDrag(target, originalSourceUs)) {
+            session.cancelClipDrag();
+            return false;
+        }
+        session.updateGainKeyDrag(sourceUs, gainDb);
+        if (!session.dragValid) {
+            session.cancelClipDrag();
+            return false;
+        }
+        const committed = session.commitClipDrag();
+        if (committed)
+            selectGainPoint(sourceUs);
+        return committed;
+    }
     function focusField(field: string): void {
-        const editor = field === "sourceIn" ? sourceInRow.editor : field === "sourceOut" ? sourceOutRow.editor : null;
-        if (editor && editor.enabled) {
-            editor.forceActiveFocus(Qt.OtherFocusReason);
-            root.revealFocusedControl(editor);
+        if (field === "animation") {
+            animationExpanded = true;
+            root.scrollToHome();
+            return;
+        }
+        let editor = null;
+        if (field.startsWith("gain:")) {
+            selectedGainSourceUs = Number(field.slice(5));
+            editor = gainPointTime;
+        } else {
+            editor = field === "sourceIn" ? sourceInRow.editor : field === "sourceOut" ? sourceOutRow.editor : field === "fadeIn" ? fadeInRow.editor : null;
+            if (editor)
+                timingExpanded = true;
+        }
+        if (editor) {
+            Qt.callLater(() => {
+                if (!editor || !root.visible)
+                    return;
+                if (editor.enabled)
+                    editor.forceActiveFocus(Qt.OtherFocusReason);
+                root.revealFocusedControl(editor);
+            });
         }
     }
     contentWidth: availableWidth
@@ -166,49 +224,9 @@ ExoScrollView {
         }
     }
     ColumnLayout {
+        id: inspectorContent
         width: root.availableWidth
         spacing: ExoTheme.spacingLg
-        Section {
-            title: qsTr("Transition")
-            visible: root.mode === EditSessionAdapter.ClipSelection && root.session.selectedClip !== 0
-            ExoSettingRow {
-                label: qsTr("Crossfade duration")
-                stacked: true
-                Layout.fillWidth: true
-                EditTimeField {
-                    id: crossfadeDuration
-                    objectName: "editInspectorCrossfadeDuration"
-                    Layout.fillWidth: true
-                    session: root.session
-                    canvasFocusItem: root.canvasFocusItem
-                    targetId: root.session.selectedClip
-                    valueUs: root.crossfadeDurationUs
-                    sampleContext: root.session.timeValueUsesSamples(targetId, "fadeIn")
-                    function refreshGrid(): void {
-                        sampleContext = root.session.timeValueUsesSamples(targetId, "fadeIn");
-                    }
-                    Connections {
-                        target: root.session
-                        function onWorkspaceChanged(): void { crossfadeDuration.refreshGrid(); }
-                        function onSelectionChanged(): void { crossfadeDuration.refreshGrid(); }
-                        function onInteractionSettingsChanged(): void { crossfadeDuration.refreshGrid(); }
-                    }
-                    Accessible.name: qsTr("Crossfade duration")
-                    applyValue: value => {
-                        if (value <= 0)
-                            return false;
-                        root.crossfadeDurationUs = value;
-                        return true;
-                    }
-                }
-            }
-            ExoButton {
-                objectName: "editInspectorCrossfadeAtCut"
-                Layout.fillWidth: true
-                text: qsTr("Crossfade to next clip")
-                onClicked: if (root.session.crossfadeAtCut(root.session.selectedClip, root.crossfadeDurationUs)) root.canvasFocusItem.forceActiveFocus()
-            }
-        }
         Section {
             title: qsTr("Clip")
             visible: root.oneClip
@@ -218,116 +236,139 @@ ExoScrollView {
                 wrapMode: Text.Wrap
                 color: ExoTheme.textSecondary
             }
-            ExoButton {
-                visible: root.clipDetails.video ?? false
+            GridLayout {
                 Layout.fillWidth: true
-                text: qsTr("Auto-Key (K)")
-                checkable: true
-                checked: root.session.autoKey
-                onClicked: root.session.autoKey = !root.session.autoKey
-            }
-            Repeater {
-                model: root.clipDetails.video ? [qsTr("Position X"), qsTr("Position Y"), qsTr("Scale"), qsTr("Rotation"), qsTr("Opacity")] : []
-                delegate: ExoSettingRow {
-                    id: propertyRow
-                    required property int index
-                    required property string modelData
-                    readonly property var channel: root.videoValues[index] || ({})
-                    property bool keysExpanded: false
-                    property var keyframes: []
-                    function refreshKeys(): void {
-                        keyframes = keysExpanded ? root.session.videoKeyframes(root.clipDetails.id || 0, index) : [];
-                    }
-                    onKeysExpandedChanged: refreshKeys()
-                    Connections {
-                        target: root.session
-                        function onWorkspaceChanged(): void { propertyRow.refreshKeys(); }
-                        function onSelectionChanged(): void { propertyRow.keysExpanded = false; }
-                    }
-                    label: modelData
-                    stacked: true
+                visible: root.clipDetails.video ?? false
+                columns: root.availableWidth < 260 ? 1 : 2
+                columnSpacing: ExoTheme.spacingSm
+                rowSpacing: ExoTheme.spacingSm
+                ExoButton {
+                    objectName: "editDetailsAnimationToggle"
                     Layout.fillWidth: true
-                    RowLayout {
-                        Layout.fillWidth: true
-                        EditDraftField {
-                            Layout.fillWidth: true
-                            session: root.session
-                            canvasFocusItem: root.canvasFocusItem
-                            targetId: root.clipDetails.id || 0
-                            value: propertyRow.channel.value ?? 0
-                            enabled: !root.session.trackLocked(root.clipDetails.trackId || 0)
-                            formatValue: value => String(Math.round(value * 10000) / 10000)
-                            parseValue: text => ({valid: text.trim().length > 0 && isFinite(Number(text)), value: Number(text), error: qsTr("Enter a finite number.")})
-                            applyValue: (value, target) => root.session.setVideoProperty(target, propertyRow.index, value)
-                            Accessible.name: propertyRow.modelData
+                    compact: true
+                    text: root.animationExpanded ? qsTr("Hide animation") : qsTr("Animation")
+                    onClicked: root.animationExpanded = !root.animationExpanded
+                }
+                ExoButton {
+                    objectName: "editDetailsAutoKey"
+                    Layout.fillWidth: true
+                    compact: true
+                    text: qsTr("Auto-Key (K)")
+                    checkable: true
+                    checked: root.session.autoKey
+                    onClicked: root.session.autoKey = !root.session.autoKey
+                }
+            }
+            GridLayout {
+                Layout.fillWidth: true
+                columns: root.animationExpanded || root.availableWidth < 260 ? 1 : 2
+                columnSpacing: ExoTheme.spacingSm
+                rowSpacing: ExoTheme.spacingSm
+                Repeater {
+                    model: root.clipDetails.video ? [qsTr("Position X"), qsTr("Position Y"), qsTr("Scale"), qsTr("Rotation"), qsTr("Opacity")] : []
+                    delegate: ExoSettingRow {
+                        id: propertyRow
+                        required property int index
+                        required property string modelData
+                        readonly property var channel: root.videoValues[index] || ({})
+                        property bool keysExpanded: false
+                        property var keyframes: []
+                        function refreshKeys(): void {
+                            keyframes = keysExpanded ? root.session.videoKeyframes(root.clipDetails.id || 0, index) : [];
                         }
-                        ExoButton {
-                            glyph: propertyRow.channel.key ? ExoGlyph.KeyframeFilled : ExoGlyph.Keyframe
-                            Accessible.name: propertyRow.channel.key ? qsTr("Remove keyframe") : qsTr("Add keyframe")
-                            enabled: !root.session.trackLocked(root.clipDetails.trackId || 0)
-                            onClicked: root.session.toggleVideoKey(root.clipDetails.id || 0, propertyRow.index)
+                        onKeysExpandedChanged: refreshKeys()
+                        Connections {
+                            target: root.session
+                            function onWorkspaceChanged(): void { propertyRow.refreshKeys(); }
+                            function onSelectionChanged(): void { propertyRow.keysExpanded = false; }
                         }
-                    }
-                    ExoButton {
-                        visible: propertyRow.channel.animated ?? false
+                        label: modelData
+                        info: index < 2 ? qsTr("Position as a fraction of the output size; 0 is centered.") : index === 2 ? qsTr("Scale factor; 1 is the original size.") : index === 3 ? qsTr("Rotation in degrees.") : qsTr("Opacity from 0 (transparent) to 1 (opaque).")
+                        stacked: true
+                        Layout.minimumWidth: 0
                         Layout.fillWidth: true
-                        text: propertyRow.keysExpanded ? qsTr("Hide keyframes") : qsTr("Keyframes")
-                        onClicked: propertyRow.keysExpanded = !propertyRow.keysExpanded
-                    }
-                    Repeater {
-                        model: propertyRow.keyframes
-                        delegate: RowLayout {
-                            id: keyRow
-                            required property var modelData
+                        RowLayout {
                             Layout.fillWidth: true
-                            ExoButton {
-                                text: qsTr("%1 s").arg(Number(keyRow.modelData.timelineUs / 1000000).toLocaleString(Qt.locale(), "f", 3))
-                                Accessible.name: qsTr("Seek to keyframe at %1").arg(text)
-                                onClicked: root.session.requestSeekUs(keyRow.modelData.timelineUs)
-                            }
                             EditDraftField {
+                                objectName: "editVideoProperty" + propertyRow.index
                                 Layout.fillWidth: true
+                                Layout.minimumWidth: 0
+                                Layout.preferredWidth: 1
                                 session: root.session
                                 canvasFocusItem: root.canvasFocusItem
                                 targetId: root.clipDetails.id || 0
-                                context: ({sourceUs: keyRow.modelData.sourceUs, property: propertyRow.index})
-                                value: keyRow.modelData.value
+                                value: propertyRow.channel.value ?? 0
                                 enabled: !root.session.trackLocked(root.clipDetails.trackId || 0)
                                 formatValue: value => String(Math.round(value * 10000) / 10000)
                                 parseValue: text => ({valid: text.trim().length > 0 && isFinite(Number(text)), value: Number(text), error: qsTr("Enter a finite number.")})
-                                applyValue: (value, target, captured) => root.session.setVideoKeyValue(target, captured.property, captured.sourceUs, value)
-                                Accessible.name: qsTr("Selected keyframe value for %1").arg(propertyRow.modelData)
+                                applyValue: (value, target) => root.session.setVideoProperty(target, propertyRow.index, value)
+                                Accessible.name: propertyRow.modelData
+                                Accessible.description: errorText.length > 0 ? errorText : propertyRow.channel.key ? qsTr("Keyframe at playhead") : propertyRow.channel.animated ? qsTr("Animated value") : ""
+                            }
+                            ExoGlyph {
+                                objectName: "editVideoPropertyState" + propertyRow.index
+                                Layout.preferredWidth: 14
+                                Layout.preferredHeight: 14
+                                visible: !root.animationExpanded && (propertyRow.channel.animated ?? false)
+                                kind: propertyRow.channel.key ? ExoGlyph.KeyframeFilled : ExoGlyph.Keyframe
+                                color: propertyRow.channel.key ? ExoTheme.accent : ExoTheme.textSecondary
+                                Accessible.role: Accessible.StaticText
+                                Accessible.name: propertyRow.channel.key ? qsTr("Keyframe at playhead") : qsTr("Animated value")
+                                ToolTip.text: Accessible.name
+                                ToolTip.visible: animationStateHover.hovered
+                                HoverHandler { id: animationStateHover }
+                            }
+                            ExoButton {
+                                visible: root.animationExpanded
+                                glyph: propertyRow.channel.key ? ExoGlyph.KeyframeFilled : ExoGlyph.Keyframe
+                                Accessible.name: propertyRow.channel.key ? qsTr("Remove keyframe") : qsTr("Add keyframe")
+                                enabled: !root.session.trackLocked(root.clipDetails.trackId || 0)
+                                onClicked: root.session.toggleVideoKey(root.clipDetails.id || 0, propertyRow.index)
                             }
                         }
-                    }
-                    ExoSelect {
-                        visible: propertyRow.channel.key ?? false
-                        Layout.fillWidth: true
-                        options: [{value: 0, label: qsTr("Linear"), selectable: true}, {value: 1, label: qsTr("Smooth"), selectable: true}, {value: 2, label: qsTr("Hold"), selectable: true}]
-                        value: propertyRow.channel.interpolation ?? 0
-                        Accessible.name: qsTr("Keyframe interpolation")
-                        onValueActivated: value => root.session.setVideoInterpolation(root.clipDetails.id || 0, propertyRow.index, value)
+                        ExoButton {
+                            visible: root.animationExpanded && (propertyRow.channel.animated ?? false)
+                            Layout.fillWidth: true
+                            text: propertyRow.keysExpanded ? qsTr("Hide keyframes") : qsTr("Keyframes")
+                            onClicked: propertyRow.keysExpanded = !propertyRow.keysExpanded
+                        }
+                        Repeater {
+                            model: root.animationExpanded ? propertyRow.keyframes : []
+                            delegate: RowLayout {
+                                id: keyRow
+                                required property var modelData
+                                Layout.fillWidth: true
+                                ExoButton {
+                                    text: qsTr("%1 s").arg(Number(keyRow.modelData.timelineUs / 1000000).toLocaleString(Qt.locale(), "f", 3))
+                                    Accessible.name: qsTr("Seek to keyframe at %1").arg(text)
+                                    onClicked: root.session.requestSeekUs(keyRow.modelData.timelineUs)
+                                }
+                                EditDraftField {
+                                    Layout.fillWidth: true
+                                    session: root.session
+                                    canvasFocusItem: root.canvasFocusItem
+                                    targetId: root.clipDetails.id || 0
+                                    context: ({sourceUs: keyRow.modelData.sourceUs, property: propertyRow.index})
+                                    value: keyRow.modelData.value
+                                    enabled: !root.session.trackLocked(root.clipDetails.trackId || 0)
+                                    formatValue: value => String(Math.round(value * 10000) / 10000)
+                                    parseValue: text => ({valid: text.trim().length > 0 && isFinite(Number(text)), value: Number(text), error: qsTr("Enter a finite number.")})
+                                    applyValue: (value, target, captured) => root.session.setVideoKeyValue(target, captured.property, captured.sourceUs, value)
+                                    Accessible.name: qsTr("Selected keyframe value for %1").arg(propertyRow.modelData)
+                                }
+                            }
+                        }
+                        ExoSelect {
+                            visible: root.animationExpanded && (propertyRow.channel.key ?? false)
+                            Layout.fillWidth: true
+                            options: [{value: 0, label: qsTr("Linear"), selectable: true}, {value: 1, label: qsTr("Smooth"), selectable: true}, {value: 2, label: qsTr("Hold"), selectable: true}]
+                            value: propertyRow.channel.interpolation ?? 0
+                            Accessible.name: qsTr("Keyframe interpolation")
+                            onValueActivated: value => root.session.setVideoInterpolation(root.clipDetails.id || 0, propertyRow.index, value)
+                        }
                     }
                 }
             }
-            TimeRow { label: qsTr("Timeline start"); field: "clipStart"; fieldObjectName: "editDetailsClipStart"; timeUs: root.clipDetails.startUs ?? 0; targetId: root.clipDetails.id ?? 0 }
-            TimeRow { id: sourceInRow; label: qsTr("Source in"); field: "sourceIn"; fieldObjectName: "editDetailsSourceIn"; timeUs: root.clipDetails.sourceInUs ?? 0; targetId: root.clipDetails.id ?? 0 }
-            TimeRow { id: sourceOutRow; label: qsTr("Source out"); field: "sourceOut"; fieldObjectName: "editDetailsSourceOut"; timeUs: root.clipDetails.sourceOutUs ?? 0; targetId: root.clipDetails.id ?? 0 }
-            TimeRow { label: qsTr("Duration"); field: "duration"; timeUs: root.clipDetails.durationUs ?? 0; targetId: root.clipDetails.id ?? 0 }
-            TimeRow {
-                label: root.clipDetails.video ? qsTr("Video fade in") : qsTr("Audio fade in")
-                field: "fadeIn"; fieldObjectName: "editDetailsFadeIn"
-                timeUs: root.clipDetails.fadeInUs ?? 0; targetId: root.clipDetails.id ?? 0
-                unavailableReason: root.clipDetails.fadeInOwned ? qsTr("The incoming junction owns this fade.") : ""
-            }
-            FadeShape { incoming: true }
-            TimeRow {
-                label: root.clipDetails.video ? qsTr("Video fade out") : qsTr("Audio fade out")
-                field: "fadeOut"; fieldObjectName: "editDetailsFadeOut"
-                timeUs: root.clipDetails.fadeOutUs ?? 0; targetId: root.clipDetails.id ?? 0
-                unavailableReason: root.clipDetails.fadeOutOwned ? qsTr("The outgoing junction owns this fade.") : ""
-            }
-            FadeShape { incoming: false }
             ExoSettingRow {
                 label: qsTr("Clip gain"); stacked: true; Layout.fillWidth: true
                 visible: !root.clipDetails.video
@@ -342,6 +383,112 @@ ExoScrollView {
                     Accessible.name: qsTr("Clip gain in decibels")
                     applyValue: (value, target) => root.session.setClipGain(target, value)
                 }
+            }
+            ColumnLayout {
+                visible: !root.clipDetails.video
+                Layout.fillWidth: true
+                ExoButton {
+                    id: addGainPoint
+                    objectName: "editAddGainPoint"
+                    Layout.fillWidth: true
+                    text: qsTr("Add gain point at playhead")
+                    enabled: !root.session.trackLocked(root.clipDetails.trackId || 0) && root.session.positionUs >= root.clipDetails.startUs && root.session.positionUs < root.clipDetails.endUs
+                    Accessible.description: enabled ? "" : qsTr("Move the playhead inside an unlocked audio clip.")
+                    ToolTip.text: Accessible.description
+                    ToolTip.visible: !enabled && addGainPointHover.hovered
+                    ToolTip.delay: 500
+                    HoverHandler { id: addGainPointHover; enabled: !addGainPoint.enabled }
+                    onClicked: {
+                        const sourceUs = root.clipDetails.sourceInUs + root.session.positionUs - root.clipDetails.startUs;
+                        if (root.session.addGainKey(root.clipDetails.id, sourceUs))
+                            root.selectGainPoint(sourceUs);
+                    }
+                }
+                ExoSelect {
+                    objectName: "editGainPointChoice"
+                    Layout.fillWidth: true
+                    visible: root.gainKeys.length > 0
+                    options: root.gainKeys.map(key => ({value: key.sourceUs, label: qsTr("%1 s · %2 dB").arg(root.session.formatTimeValue(root.clipDetails.startUs + key.sourceUs - root.clipDetails.sourceInUs, 1)).arg(root.session.formatGainValue(key.gainDb)), selectable: true}))
+                    value: root.selectedGainSourceUs
+                    Accessible.name: qsTr("Gain envelope point")
+                    onValueActivated: value => {
+                        if (root.session.preflightPendingDraft())
+                            root.selectedGainSourceUs = value;
+                    }
+                }
+                ExoSettingRow {
+                    label: qsTr("Point time"); stacked: true; Layout.fillWidth: true
+                    visible: root.selectedGainKey.sourceUs !== undefined
+                    EditTimeField {
+                        id: gainPointTime
+                        objectName: "editGainPointTime"
+                        Layout.fillWidth: true
+                        session: root.session
+                        canvasFocusItem: root.canvasFocusItem
+                        targetId: root.clipDetails.id || 0
+                        valueUs: (root.selectedGainKey.sourceUs ?? 0) + (root.clipDetails.startUs || 0) - (root.clipDetails.sourceInUs || 0)
+                        sampleContext: true
+                        context: ({format: effectiveFormat, samples: true, sourceUs: root.selectedGainKey.sourceUs, gainDb: root.selectedGainKey.gainDb, offset: (root.clipDetails.sourceInUs || 0) - (root.clipDetails.startUs || 0)})
+                        enabled: !root.session.trackLocked(root.clipDetails.trackId || 0)
+                        Accessible.name: qsTr("Gain point timeline time")
+                        applyValue: (value, target, captured) => root.editGainPoint(target, captured.sourceUs, value + captured.offset, captured.gainDb)
+                    }
+                }
+                ExoSettingRow {
+                    label: qsTr("Point gain"); stacked: true; Layout.fillWidth: true
+                    visible: root.selectedGainKey.sourceUs !== undefined
+                    EditGainField {
+                        objectName: "editGainPointGain"
+                        Layout.fillWidth: true
+                        session: root.session
+                        canvasFocusItem: root.canvasFocusItem
+                        targetId: root.clipDetails.id || 0
+                        gainDb: root.selectedGainKey.gainDb ?? 0
+                        context: ({track: false, mixed: false, sourceUs: root.selectedGainKey.sourceUs})
+                        enabled: !root.session.trackLocked(root.clipDetails.trackId || 0)
+                        Accessible.name: qsTr("Gain point in decibels")
+                        applyValue: (value, target, captured) => root.editGainPoint(target, captured.sourceUs, captured.sourceUs, value)
+                    }
+                }
+                ExoButton {
+                    objectName: "editRemoveGainPoint"
+                    Layout.fillWidth: true
+                    visible: root.selectedGainKey.sourceUs !== undefined
+                    text: qsTr("Delete gain point")
+                    enabled: !root.session.trackLocked(root.clipDetails.trackId || 0)
+                    onClicked: root.session.removeGainKey(root.clipDetails.id, root.selectedGainSourceUs)
+                }
+            }
+            ExoButton {
+                objectName: "editDetailsTimingToggle"
+                Layout.fillWidth: true
+                text: root.timingExpanded ? qsTr("Hide trim and timing") : qsTr("Trim and timing")
+                checkable: true
+                checked: root.timingExpanded
+                onClicked: root.timingExpanded = !root.timingExpanded
+            }
+            ColumnLayout {
+                Layout.fillWidth: true
+                visible: root.timingExpanded
+                TimeRow { label: qsTr("Timeline start"); field: "clipStart"; fieldObjectName: "editDetailsClipStart"; timeUs: root.clipDetails.startUs ?? 0; targetId: root.clipDetails.id ?? 0 }
+                TimeRow { id: sourceInRow; label: qsTr("Source in"); field: "sourceIn"; fieldObjectName: "editDetailsSourceIn"; timeUs: root.clipDetails.sourceInUs ?? 0; targetId: root.clipDetails.id ?? 0 }
+                TimeRow { id: sourceOutRow; label: qsTr("Source out"); field: "sourceOut"; fieldObjectName: "editDetailsSourceOut"; timeUs: root.clipDetails.sourceOutUs ?? 0; targetId: root.clipDetails.id ?? 0 }
+                TimeRow { label: qsTr("Duration"); field: "duration"; timeUs: root.clipDetails.durationUs ?? 0; targetId: root.clipDetails.id ?? 0 }
+                TimeRow {
+                    id: fadeInRow
+                    label: root.clipDetails.video ? qsTr("Video fade in") : qsTr("Audio fade in")
+                    field: "fadeIn"; fieldObjectName: "editDetailsFadeIn"
+                    timeUs: root.clipDetails.fadeInUs ?? 0; targetId: root.clipDetails.id ?? 0
+                    unavailableReason: root.clipDetails.fadeInOwned ? qsTr("The incoming junction owns this fade.") : ""
+                }
+                FadeShape { incoming: true }
+                TimeRow {
+                    label: root.clipDetails.video ? qsTr("Video fade out") : qsTr("Audio fade out")
+                    field: "fadeOut"; fieldObjectName: "editDetailsFadeOut"
+                    timeUs: root.clipDetails.fadeOutUs ?? 0; targetId: root.clipDetails.id ?? 0
+                    unavailableReason: root.clipDetails.fadeOutOwned ? qsTr("The outgoing junction owns this fade.") : ""
+                }
+                FadeShape { incoming: false }
             }
         }
         Section {
@@ -390,6 +537,54 @@ ExoScrollView {
                     Accessible.description: enabled ? qsTr("Applies only to the named audio clips.") : qsTr("A selected audio track is locked.")
                     applyValue: (value, target, context) => root.session.setClipGains(context.targets, value)
                 }
+            }
+        }
+        Section {
+            title: qsTr("Transition")
+            visible: root.mode === EditSessionAdapter.ClipSelection && root.session.selectedClip !== 0
+            ExoSettingRow {
+                label: qsTr("Crossfade duration")
+                stacked: true
+                Layout.fillWidth: true
+                EditTimeField {
+                    id: crossfadeDuration
+                    objectName: "editInspectorCrossfadeDuration"
+                    Layout.fillWidth: true
+                    session: root.session
+                    canvasFocusItem: root.canvasFocusItem
+                    targetId: root.session.selectedClip
+                    valueUs: root.crossfadeDurationUs
+                    sampleContext: root.session.timeValueUsesSamples(targetId, "fadeIn")
+                    function refreshGrid(): void {
+                        sampleContext = root.session.timeValueUsesSamples(targetId, "fadeIn");
+                    }
+                    Connections {
+                        target: root.session
+                        function onWorkspaceChanged(): void { crossfadeDuration.refreshGrid(); }
+                        function onSelectionChanged(): void { crossfadeDuration.refreshGrid(); }
+                        function onInteractionSettingsChanged(): void { crossfadeDuration.refreshGrid(); }
+                    }
+                    Accessible.name: qsTr("Crossfade duration")
+                    applyValue: value => {
+                        if (value <= 0)
+                            return false;
+                        root.crossfadeDurationUs = value;
+                        return true;
+                    }
+                }
+            }
+            ExoButton {
+                id: crossfadeAction
+                objectName: "editInspectorCrossfadeAtCut"
+                Layout.fillWidth: true
+                text: qsTr("Crossfade to next clip")
+                enabled: root.crossfadeAvailable
+                Accessible.description: enabled ? "" : qsTr("Select a clip with an adjacent compatible clip and available source handles.")
+                ToolTip.text: Accessible.description
+                ToolTip.visible: !enabled && crossfadeHover.hovered
+                ToolTip.delay: 500
+                HoverHandler { id: crossfadeHover; enabled: !crossfadeAction.enabled }
+                onClicked: if (root.session.crossfadeAtCut(root.session.selectedClip, root.crossfadeDurationUs)) root.canvasFocusItem.forceActiveFocus()
             }
         }
         Section {

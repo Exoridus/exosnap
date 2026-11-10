@@ -155,6 +155,13 @@ GridLayout {
 
         Label {
             objectName: "secondaryLine"
+            id: secondaryLine
+            activeFocusOnTab: truncated
+            Accessible.name: text
+            Accessible.description: text
+            HoverHandler { id: secondaryHover }
+            ToolTip.visible: secondaryLine.truncated && (secondaryHover.hovered || secondaryLine.activeFocus)
+            ToolTip.text: secondaryLine.text
             text: root.hint !== "" ? root.hint : root.readout
             textFormat: Text.PlainText
             elide: Text.ElideRight

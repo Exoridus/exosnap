@@ -16,7 +16,9 @@ ExoCard {
         }
         if (target === SettingsAdapter.FrameRate)
             return root.settings.expertMode ? frameRateExpert : frameRateControl;
-        return root.settings.expertMode ? qualityExpert : qualityControl;
+        return root.settings.constantQualityRelevant
+            ? (root.settings.expertMode ? qualityExpert : qualityControl)
+            : (root.settings.expertMode ? rateControlControl : changeQualityMode);
     }
     title: qsTr("Video quality & timing")
 
@@ -31,7 +33,7 @@ Expert mode replaces this ladder with the rate-control mode and ExoSnap's qualit
         // Expert states the same setting twice: the rows below expose the
         // rate-control mode and the CQ value this tier is a name for. Same swap
         // the Frame rate row makes.
-        visible: !root.settings.expertMode
+        visible: !root.settings.expertMode && root.settings.constantQualityRelevant
         Layout.fillWidth: true
 
         ExoSelect {
@@ -46,6 +48,21 @@ Expert mode replaces this ladder with the rate-control mode and ExoSnap's qualit
     }
 
     ExoSettingRow {
+        label: root.settings.rateControlLabel
+        hint: qsTr("Quality is controlled by the video bitrate")
+        stacked: root.stacked
+        visible: !root.settings.expertMode && !root.settings.constantQualityRelevant
+        Layout.fillWidth: true
+
+        ExoButton {
+            id: changeQualityMode
+            text: qsTr("Change in Expert")
+            Layout.fillWidth: true
+            onClicked: root.settings.expertMode = true
+        }
+    }
+
+    ExoSettingRow {
         label: qsTr("Rate control")
         info: qsTr("Constant quality targets a look and lets the bitrate move with the scene. Variable bitrate aims at an average and allows peaks. Constant bitrate holds one rate at all times, which only matters when the file has to fit a fixed budget.")
         stacked: root.stacked
@@ -53,6 +70,7 @@ Expert mode replaces this ladder with the rate-control mode and ExoSnap's qualit
         Layout.fillWidth: true
 
         ExoSelect {
+            id: rateControlControl
             options: root.settings.rateControlOptions
             value: root.settings.rateControl
             enabled: !root.settings.controlsLocked
@@ -69,7 +87,7 @@ Expert mode replaces this ladder with the rate-control mode and ExoSnap's qualit
 Screen content with small text degrades earlier than video does, so the useful range for recording a desktop is narrower than the scale suggests.")
         readout: root.settings.nativeQuantizerHint
         stacked: root.stacked
-        visible: root.settings.expertMode
+        visible: root.settings.expertMode && root.settings.constantQualityRelevant
         Layout.fillWidth: true
 
         ExoNumberField {

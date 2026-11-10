@@ -200,7 +200,13 @@ VisualPilotTarget(const VisualSceneConfig& scene, std::string_view type_id, cons
                 first = target;
         }
     }
-    return first;
+    if (first.first != engine::VisualSourceId{})
+        return first;
+    // A source whose last item was removed stays addressable without an item, so enabling it again restores one.
+    const auto orphan = std::ranges::find_if(scene.sources, [&](const auto& candidate) {
+        return candidate.type_id == type_id && candidate.settings_version == type->settings_version;
+    });
+    return orphan == scene.sources.end() ? first : std::pair{orphan->id, engine::SceneItemId{}};
 }
 
 ChoiceSnapshot RetainVisualChoice(ChoiceSnapshot choices, const std::string& selected) {
@@ -537,6 +543,7 @@ class QuickConsoleDisplayStateFilter final : public QAbstractNativeEventFilter {
 
 QuickApplication::~QuickApplication() {
     shutting_down_visual_sources_ = true;
+    settings_adapter_.setWebcamSourceStatus(std::nullopt);
     edit_export_adapter_.cancelAndWait();
     recording_review_adapter_.close();
     recording_review_adapter_.player()->setSession(nullptr);
@@ -3565,6 +3572,8 @@ void QuickApplication::initializeVisualSources() {
         std::make_unique<VisualSourceManager>(visual_registry_, *visual_runtime_, [this](SourceStatus status) {
             if (shutting_down_visual_sources_)
                 return;
+            if (status.token.address == settings_camera_target_)
+                settings_adapter_.setWebcamSourceStatus(status);
             if (status.token.address.source == visual_camera_source_) {
                 webcam_error_ =
                     status.reason && (status.phase == SourcePhase::Failed || status.phase == SourcePhase::Waiting)
@@ -3788,8 +3797,11 @@ void QuickApplication::visualControlSettled() {
 }
 
 void QuickApplication::refreshVisualSettingsPreview(bool allow_busy_retry) {
-    if (!visual_runtime_ || !visual_sources_ || settings_visual_consumer_ == 0 || shutting_down_visual_sources_)
+    if (!visual_runtime_ || !visual_sources_ || settings_visual_consumer_ == 0 || shutting_down_visual_sources_) {
+        settings_adapter_.setWebcamSourceStatus(std::nullopt);
         return;
+    }
+    settings_adapter_.setWebcamSourceStatus(visual_sources_->Status(settings_camera_target_));
     const auto address = visual_sources_->CurrentAddress(visual_camera_source_);
     const auto clear = [this] {
         webcam_preview_feed_.setFrame({});
@@ -3843,6 +3855,14 @@ void QuickApplication::bindVisualSettingsTargets() {
             record_address = *current;
     }
     settings_adapter_.setRecordGamepadTarget(record_address, record_gamepad.second);
+    const auto record_camera = VisualPilotTarget(record_config.visual_scene, "org.exosnap.webcam/camera",
+                                                 visual_registry_, {visual_camera_source_, visual_camera_item_});
+    engine::VisualAddress record_camera_address{record_camera.first, {}};
+    if (visual_sources_) {
+        if (const auto current = visual_sources_->CurrentAddress(record_camera.first))
+            record_camera_address = *current;
+    }
+    settings_adapter_.setRecordWebcamTarget(record_camera_address, record_camera.second);
     const auto& scene = settings_adapter_.displayedConfig().visual_scene;
     const auto camera = VisualPilotTarget(scene, "org.exosnap.webcam/camera", visual_registry_,
                                           {settings_camera_target_.source, settings_camera_item_});
@@ -3859,14 +3879,16 @@ void QuickApplication::bindVisualSettingsTargets() {
     };
     const auto camera_address = address(camera.first);
     const auto gamepad_address = address(gamepad.first);
-    if (camera_address == settings_camera_target_ && camera.second == settings_camera_item_ &&
-        gamepad_address == settings_gamepad_target_ && gamepad.second == settings_gamepad_item_)
-        return;
-    settings_camera_target_ = camera_address;
-    settings_camera_item_ = camera.second;
-    settings_gamepad_target_ = gamepad_address;
-    settings_gamepad_item_ = gamepad.second;
-    settings_adapter_.setVisualTargets(camera_address, camera.second, gamepad_address, gamepad.second);
+    if (camera_address != settings_camera_target_ || camera.second != settings_camera_item_ ||
+        gamepad_address != settings_gamepad_target_ || gamepad.second != settings_gamepad_item_) {
+        settings_camera_target_ = camera_address;
+        settings_camera_item_ = camera.second;
+        settings_gamepad_target_ = gamepad_address;
+        settings_gamepad_item_ = gamepad.second;
+        settings_adapter_.setVisualTargets(camera_address, camera.second, gamepad_address, gamepad.second);
+    }
+    settings_adapter_.setWebcamSourceStatus(native_scope && visual_sources_ ? visual_sources_->Status(camera_address)
+                                                                            : std::nullopt);
 }
 engine::Outcome<WebcamSettings> QuickApplication::webcamSettingsForEdit() const {
     const auto& config = settings_adapter_.recordingActive() ? settings_adapter_.sessionConfig() : live_config_;
@@ -4965,7 +4987,10 @@ void QuickApplication::applyEditVisualScenario() {
         layout.insert(QStringLiteral("popup"), QStringLiteral("crossfade"));
     else if (scenario == QStringLiteral("edit-volume-popup"))
         layout.insert(QStringLiteral("popup"), QStringLiteral("volume"));
+    if (scenario == QStringLiteral("edit-video-automation"))
+        layout.insert(QStringLiteral("inspectorField"), QStringLiteral("animation"));
     if (scenario == QStringLiteral("edit-clip-fades")) {
+        layout.insert(QStringLiteral("inspectorField"), QStringLiteral("fadeIn"));
         layout.insert(QStringLiteral("viewFromUs"), 0);
         layout.insert(QStringLiteral("viewToUs"), 42'000'000);
     }

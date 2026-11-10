@@ -139,5 +139,99 @@ TEST(VisualSceneEdits, GamepadViewRoundTripsAndUnrelatedEditsKeepItsIdentity) {
     desired.value()->view = static_cast<GamepadView>(255);
     EXPECT_FALSE(EditSceneGamepad(scene, source, item, *desired.value(), registry).succeeded());
 }
+
+VisualSceneConfig LayeredScene() {
+    auto scene = CameraScene();
+    scene.sources.push_back({engine::VisualSourceId{{3}}, "org.exosnap.gamepad/controller", 1, true, {}});
+    SceneItemRecord pad;
+    pad.id = engine::SceneItemId{{4}};
+    pad.source = scene.sources.back().id;
+    scene.items.push_back(pad);
+    SceneItemRecord second_camera = scene.items.front();
+    second_camera.id = engine::SceneItemId{{6}};
+    scene.items.push_back(second_camera);
+    return scene;
+}
+
+std::vector<engine::SceneItemId> BackToFront(const VisualSceneConfig& scene) {
+    std::vector<engine::SceneItemId> order(scene.items.size());
+    for (const auto& item : scene.items)
+        order[*SceneItemStackIndex(scene, item.id)] = item.id;
+    return order;
+}
+
+TEST(VisualSceneEdits, StackEdgesRenumberDenselyAndResolveTiesByPublicationOrder) {
+    const auto registry = Registry();
+    const auto scene = LayeredScene();
+    const engine::SceneItemId camera{{2}}, pad{{4}}, second{{6}};
+    EXPECT_EQ(BackToFront(scene), (std::vector{camera, pad, second}));
+    auto front = MoveSceneItemToEdge(scene, scene.sources.front().id, camera, SceneItemStackEdge::Front, registry);
+    ASSERT_TRUE(front.succeeded());
+    EXPECT_EQ(BackToFront(*front.value()), (std::vector{pad, second, camera}));
+    for (const auto& item : front.value()->items)
+        EXPECT_EQ(item.properties.order, static_cast<int32_t>(*SceneItemStackIndex(*front.value(), item.id)));
+    auto back = MoveSceneItemToEdge(*front.value(), scene.sources.back().id, pad, SceneItemStackEdge::Back, registry);
+    ASSERT_TRUE(back.succeeded());
+    EXPECT_EQ(BackToFront(*back.value()), (std::vector{pad, second, camera}));
+    auto again =
+        MoveSceneItemToEdge(*back.value(), scene.sources.front().id, camera, SceneItemStackEdge::Front, registry);
+    ASSERT_TRUE(again.succeeded());
+    EXPECT_EQ(BackToFront(*again.value()), BackToFront(*back.value()));
+}
+
+TEST(VisualSceneEdits, NodeOperationsRejectItemsOfAnotherSource) {
+    const auto registry = Registry();
+    const auto scene = LayeredScene();
+    const engine::VisualSourceId camera_source{{1}};
+    const engine::SceneItemId pad{{4}};
+    EXPECT_FALSE(MoveSceneItemToEdge(scene, camera_source, pad, SceneItemStackEdge::Front, registry).succeeded());
+    EXPECT_FALSE(SetSceneItemOutputVisible(scene, camera_source, pad, false, registry).succeeded());
+    EXPECT_FALSE(RemoveSceneItem(scene, camera_source, pad, registry).succeeded());
+    EXPECT_FALSE(RemoveSceneItem(scene, camera_source, {}, registry).succeeded());
+    EXPECT_FALSE(RemoveSceneItem(scene, engine::VisualSourceId{{9}}, pad, registry).succeeded());
+}
+
+TEST(VisualSceneEdits, HidingChangesOnlyTheAddressedItem) {
+    const auto registry = Registry();
+    const auto scene = LayeredScene();
+    auto hidden = SetSceneItemOutputVisible(scene, scene.sources.front().id, engine::SceneItemId{{6}}, false, registry);
+    ASSERT_TRUE(hidden.succeeded());
+    EXPECT_TRUE(hidden.value()->items[0].properties.output_visible);
+    EXPECT_FALSE(hidden.value()->items[2].properties.output_visible);
+    EXPECT_TRUE(hidden.value()->sources.front().enabled);
+}
+
+TEST(VisualSceneEdits, RemovingTheLastItemDisablesItsSourceAndAnEditRestoresOne) {
+    const auto registry = Registry();
+    const auto scene = LayeredScene();
+    const auto camera_source = scene.sources.front().id;
+    auto removed = RemoveSceneItem(scene, camera_source, engine::SceneItemId{{6}}, registry);
+    ASSERT_TRUE(removed.succeeded());
+    EXPECT_EQ(removed.value()->items.size(), 2u);
+    EXPECT_TRUE(removed.value()->sources.front().enabled);
+    removed = RemoveSceneItem(*removed.value(), camera_source, engine::SceneItemId{{2}}, registry);
+    ASSERT_TRUE(removed.succeeded());
+    ASSERT_EQ(removed.value()->items.size(), 1u);
+    EXPECT_EQ(removed.value()->items.front().id, (engine::SceneItemId{{4}}));
+    EXPECT_FALSE(removed.value()->sources.front().enabled);
+    EXPECT_EQ(removed.value()->sources.size(), 2u);
+
+    EXPECT_FALSE(ProjectSceneWebcam(*removed.value(), camera_source, engine::SceneItemId{{2}}).succeeded());
+    auto desired = ProjectSceneWebcam(*removed.value(), camera_source, {});
+    ASSERT_TRUE(desired.succeeded());
+    EXPECT_FALSE(desired.value()->enabled);
+    desired.value()->enabled = true;
+    auto restored = EditSceneWebcam(*removed.value(), camera_source, {}, *desired.value(), registry);
+    ASSERT_TRUE(restored.succeeded());
+    ASSERT_EQ(restored.value()->items.size(), 2u);
+    const auto& item = restored.value()->items.back();
+    EXPECT_EQ(item.source, camera_source);
+    EXPECT_NE(item.id, engine::SceneItemId{});
+    EXPECT_EQ(*SceneItemStackIndex(*restored.value(), item.id), 1u);
+    EXPECT_TRUE(restored.value()->sources.front().enabled);
+    // Once the source has an item again, a null item no longer addresses it.
+    EXPECT_FALSE(ProjectSceneWebcam(*restored.value(), camera_source, {}).succeeded());
+}
+
 } // namespace
 } // namespace exosnap

@@ -136,77 +136,124 @@ TestCase {
         fuzzyCompare(Math.min(sent.width, sent.height), 0.05, 0.002)
     }
 
-    function test_selection_exposes_fixed_size_output_and_remove_controls() {
+    function test_selection_carries_no_command_buttons() {
         const stage = createTemporaryObject(stageComponent, root)
         verify(stage)
         const overlay = stage.overlay
         mouseClick(overlay, overlay.width / 2, overlay.height / 2)
-        const toolbar = findChild(overlay, "overlayToolbar")
-        verify(toolbar, "selected overlays expose editing controls")
-        verify(toolbar.visible)
-        const width = toolbar.width
-        const height = toolbar.height
-        overlay.modelRect = Qt.rect(0, 0, 0.1, 0.1)
-        compare(toolbar.width, width, "controls do not scale with the overlay")
-        compare(toolbar.height, height)
-        const position = toolbar.mapToItem(stage, 0, 0)
-        verify(position.x >= 0 && position.x + toolbar.width <= stage.width)
-        verify(position.y >= 0, "toolbar stays inside the preview at its top edge")
+        verify(overlay.selected)
+        compare(findChild(overlay, "overlayToolbar"), null)
+        compare(findChild(overlay, "overlayOutputButton"), null)
+        compare(findChild(overlay, "overlayRemoveButton"), null)
     }
 
-    function test_output_toggle_does_not_remove_or_move_the_overlay() {
+    function test_right_click_selects_and_requests_menu_without_moving() {
         const stage = createTemporaryObject(stageComponent, root)
         verify(stage)
         const overlay = stage.overlay
-        compare(overlay.outputVisible, true)
-        mouseClick(overlay, overlay.width / 2, overlay.height / 2)
-        const toggle = findChild(overlay, "overlayOutputButton")
-        verify(toggle)
-        const spy = Qt.createQmlObject('import QtTest; SignalSpy { signalName: "outputVisibilityRequested" }', root)
-        spy.target = overlay
-        mouseClick(toggle)
-        compare(spy.count, 1)
-        compare(spy.signalArguments[0][0], false)
-        verify(overlay.visible)
-        fuzzyRect(overlay.draftRect, Qt.rect(0.3, 0.3, 0.4, 0.4), "output toggle preserves placement")
-        spy.destroy()
+        const menu = Qt.createQmlObject('import QtTest; SignalSpy { signalName: "contextMenuRequested" }', root)
+        menu.target = overlay
+        const selection = Qt.createQmlObject('import QtTest; SignalSpy { signalName: "selectionRequested" }', root)
+        selection.target = overlay
+        requested.target = overlay
+        requested.clear()
+        mousePress(overlay, 20, 30, Qt.RightButton)
+        mouseMove(overlay, 80, 90)
+        mouseRelease(overlay, 80, 90, Qt.RightButton)
+        compare(menu.count, 1)
+        verify(selection.count >= 1)
+        const at = menu.signalArguments[0][0]
+        const expected = overlay.mapToItem(stage, 20, 30)
+        fuzzyCompare(at.x, expected.x, 0.5)
+        fuzzyCompare(at.y, expected.y, 0.5)
+        compare(requested.count, 0, "a secondary click is not a drag")
+        fuzzyRect(overlay.draftRect, Qt.rect(0.3, 0.3, 0.4, 0.4), "right click preserves placement")
+        menu.destroy()
+        selection.destroy()
     }
 
-    function test_selected_toolbar_receives_clicks_above_an_overlapping_overlay() {
+    function test_right_click_reaches_the_overlay_on_top() {
         const stage = createTemporaryObject(stageComponent, root)
         verify(stage)
-        stage.overlay.modelRect = Qt.rect(0.2, 0.4, 0.4, 0.3)
         stage.secondOverlay.visible = true
-        const spy = Qt.createQmlObject('import QtTest; SignalSpy { signalName: "outputVisibilityRequested" }', root)
+        stage.secondOverlay.z = 5
+        const lower = Qt.createQmlObject('import QtTest; SignalSpy { signalName: "contextMenuRequested" }', root)
+        lower.target = stage.overlay
+        const upper = Qt.createQmlObject('import QtTest; SignalSpy { signalName: "contextMenuRequested" }', root)
+        upper.target = stage.secondOverlay
+        mouseClick(stage, 0.35 * stage.width, 0.35 * stage.height, Qt.RightButton)
+        compare(upper.count, 1)
+        compare(lower.count, 0)
+        lower.destroy()
+        upper.destroy()
+    }
+
+    function test_drag_and_resize_still_work_with_secondary_button_enabled() {
+        const stage = createTemporaryObject(stageComponent, root)
+        verify(stage)
+        const overlay = stage.overlay
+        requested.target = overlay
+        requested.clear()
+        // Stage coordinates: the overlay moves under the pointer during the drag.
+        const x = overlay.x + overlay.width / 2
+        const y = overlay.y + overlay.height / 2
+        mousePress(stage, x, y)
+        mouseMove(stage, x + 20, y + 15)
+        mouseMove(stage, x + 40, y + 30)
+        mouseRelease(stage, x + 40, y + 30)
+        compare(requested.count, 1)
+        fuzzyRect(requested.signalArguments[0][0], Qt.rect(0.4, 0.4, 0.4, 0.4), "drag moves the overlay")
+        requested.clear()
+        dragCorner(stage, 2, 20, 20)
+        compare(requested.count, 1)
+        verify(requested.signalArguments[0][0].width > 0.4, "corner grip still resizes")
+    }
+
+    function test_menu_key_requests_menu_at_the_overlay_center() {
+        const stage = createTemporaryObject(stageComponent, root)
+        verify(stage)
+        const overlay = stage.overlay
+        const menu = Qt.createQmlObject('import QtTest; SignalSpy { signalName: "contextMenuRequested" }', root)
+        menu.target = overlay
+        overlay.forceActiveFocus()
+        keyClick(Qt.Key_Menu)
+        compare(menu.count, 1)
+        menu.destroy()
+    }
+
+    function test_hidden_output_shows_a_badge_only_while_editable() {
+        const stage = createTemporaryObject(stageComponent, root)
+        verify(stage)
+        const badge = findChild(stage.overlay, "overlayHiddenBadge")
+        verify(badge)
+        verify(!badge.visible)
+        stage.overlay.outputVisible = false
+        verify(badge.visible)
+        stage.overlay.editable = false
+        verify(!badge.visible)
+    }
+
+    Component {
+        id: fieldComponent
+        TextInput {
+            width: 100
+            height: 20
+            text: "name"
+        }
+    }
+
+    function test_delete_in_a_focused_text_field_does_not_remove() {
+        const stage = createTemporaryObject(stageComponent, root)
+        verify(stage)
+        const field = createTemporaryObject(fieldComponent, root)
+        const spy = Qt.createQmlObject('import QtTest; SignalSpy { signalName: "removeRequested" }', root)
         spy.target = stage.overlay
-        mouseClick(stage.overlay, stage.overlay.width / 2, stage.overlay.height - 10)
-        const button = findChild(stage.overlay, "overlayOutputButton")
-        verify(button.visible)
-        mouseClick(button)
-        compare(spy.count, 1, "the selected overlay owns its toolbar even when overlays overlap")
+        mouseClick(stage.overlay, stage.overlay.width / 2, stage.overlay.height / 2)
+        verify(stage.overlay.selected)
+        field.forceActiveFocus()
+        keyClick(Qt.Key_Delete)
+        compare(spy.count, 0, "Delete edits the focused field, not the overlay")
         spy.destroy()
-    }
-
-    function test_toolbar_stays_below_preview_controls_at_the_top_edge() {
-        const stage = createTemporaryObject(stageComponent, root)
-        verify(stage)
-        stage.overlay.modelRect = Qt.rect(0.2, 0, 0.1, 0.1)
-        stage.overlay.toolbarTopInset = 60
-        mouseClick(stage.overlay, stage.overlay.width / 2, stage.overlay.height / 2)
-        const toolbar = findChild(stage.overlay, "overlayToolbar")
-        verify(toolbar.visible)
-        verify(toolbar.mapToItem(stage, 0, 0).y >= 60)
-    }
-
-    function test_tiny_top_edge_overlay_keeps_resize_corners_clear() {
-        const stage = createTemporaryObject(stageComponent, root)
-        verify(stage)
-        stage.overlay.modelRect = Qt.rect(0.2, 0, 0.1, 0.1)
-        mouseClick(stage.overlay, stage.overlay.width / 2, stage.overlay.height / 2)
-        const toolbar = findChild(stage.overlay, "overlayToolbar")
-        verify(toolbar.visible)
-        verify(toolbar.y >= stage.overlay.height || toolbar.y + toolbar.height <= 0,
-               "a toolbar wider and taller than the overlay stays outside its resize corners")
     }
 
     function test_delete_requires_selected_editable_overlay() {
@@ -219,15 +266,13 @@ TestCase {
         mouseClick(overlay, overlay.width / 2, overlay.height / 2)
         keyClick(Qt.Key_Delete)
         compare(spy.count, 1)
-        mouseClick(findChild(overlay, "overlayRemoveButton"))
-        compare(spy.count, 2)
         overlay.selected = false
         keyClick(Qt.Key_Delete)
-        compare(spy.count, 2, "unselected overlays cannot be removed")
+        compare(spy.count, 1, "unselected overlays cannot be removed")
         overlay.editable = false
         overlay.forceActiveFocus()
         keyClick(Qt.Key_Delete)
-        compare(spy.count, 2, "locked overlays cannot be removed")
+        compare(spy.count, 1, "locked overlays cannot be removed")
         spy.destroy()
     }
 }

@@ -124,6 +124,25 @@ TEST_F(SettingsAdapterTest, ActiveSnapshotRejectsEditsUntilNextRecordingIsExplic
     EXPECT_EQ(adapter.frameRate(), 60);
 }
 
+TEST_F(SettingsAdapterTest, ExpertPreferenceCanChangeOnActiveSnapshotWithoutEditingEitherPlan) {
+    adapter.setControlsLocked(true);
+    adapter.editNextRecording();
+    adapter.setFrameRate(30);
+    adapter.showActiveRecording();
+    const auto active = adapter.sessionConfig();
+    const auto next = adapter.config();
+    SignalCounter edits(adapter, &SettingsAdapter::configEdited);
+    for (const bool expert : {true, false}) {
+        adapter.setExpertMode(expert);
+        EXPECT_EQ(adapter.expertMode(), expert);
+        EXPECT_TRUE(adapter.controlsLocked());
+        EXPECT_FALSE(adapter.editingNextRecording());
+        EXPECT_TRUE(NormalizedConfigEquals(adapter.sessionConfig(), active));
+        EXPECT_TRUE(NormalizedConfigEquals(adapter.config(), next));
+    }
+    EXPECT_EQ(edits.count(), 0);
+}
+
 TEST_F(SettingsAdapterTest, PresetApplyDoesNotReplaceTheRunningSnapshot) {
     auto active = MakeDefaultPreset().config;
     active.video.frame_rate_num = 30;
@@ -333,6 +352,27 @@ TEST_F(SettingsAdapterTest, QualityPresetMapsToCanonicalCq) {
 
     EXPECT_EQ(adapter.cq(), static_cast<int>(exosnap::engine::CanonicalCq(exosnap::engine::QualityPreset::Low)));
     EXPECT_EQ(adapter.qualityPreset(), static_cast<int>(exosnap::engine::QualityPreset::Low));
+}
+
+TEST_F(SettingsAdapterTest, QualityRelevanceTracksModeWithoutChangingStoredValuesOrExpertPreference) {
+    auto config = MakeDefaultPreset().config;
+    config.video.cq = 19;
+    config.video.bitrate_kbps = 28000;
+    for (const auto mode : {engine::RateControlMode::ConstantQuality, engine::RateControlMode::VariableBitrate,
+                            engine::RateControlMode::ConstantBitrate}) {
+        config.video.rate_control = mode;
+        adapter.setConfig(config);
+        SignalCounter edits(adapter, &SettingsAdapter::configEdited);
+        EXPECT_EQ(adapter.constantQualityRelevant(), mode == engine::RateControlMode::ConstantQuality);
+        EXPECT_EQ(adapter.bitrateRelevant(), mode != engine::RateControlMode::ConstantQuality);
+        EXPECT_FALSE(adapter.rateControlLabel().isEmpty());
+        adapter.setExpertMode(true);
+        adapter.setExpertMode(false);
+        EXPECT_EQ(adapter.rateControl(), static_cast<int>(mode));
+        EXPECT_EQ(adapter.cq(), 19);
+        EXPECT_EQ(adapter.bitrateKbps(), 28000);
+        EXPECT_EQ(edits.count(), 0);
+    }
 }
 
 TEST_F(SettingsAdapterTest, QualityTierLabelsCarryNoCqNumber) {

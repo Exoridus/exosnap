@@ -54,6 +54,16 @@ class SettingsAdapter : public QObject {
     QML_UNCREATABLE("SettingsAdapter is provided by the application")
 
   public:
+    enum WebcamPreviewState {
+        CameraOff,
+        CameraDisconnected,
+        CameraInactive,
+        CameraStarting,
+        CameraReady,
+        CameraUnavailable
+    };
+    Q_ENUM(WebcamPreviewState)
+
     enum class OutputValidationTrigger { Startup, PathEdit, ApplicationActivation, OutputCardReveal };
     Q_ENUM(OutputValidationTrigger)
 
@@ -185,6 +195,8 @@ class SettingsAdapter : public QObject {
     Q_PROPERTY(int cq READ cq WRITE setCq NOTIFY configChanged FINAL)
     Q_PROPERTY(QVariantList rateControlOptions READ rateControlOptions NOTIFY optionsChanged FINAL)
     Q_PROPERTY(int rateControl READ rateControl WRITE setRateControl NOTIFY configChanged FINAL)
+    Q_PROPERTY(bool constantQualityRelevant READ constantQualityRelevant NOTIFY configChanged FINAL)
+    Q_PROPERTY(QString rateControlLabel READ rateControlLabel NOTIFY configChanged FINAL)
     Q_PROPERTY(bool bitrateRelevant READ bitrateRelevant NOTIFY configChanged FINAL)
     Q_PROPERTY(QString nativeQuantizerHint READ nativeQuantizerHint NOTIFY configChanged FINAL)
     Q_PROPERTY(int bitrateKbps READ bitrateKbps WRITE setBitrateKbps NOTIFY configChanged FINAL)
@@ -387,6 +399,8 @@ class SettingsAdapter : public QObject {
     // The live camera picture for the Webcam card (a WebcamPreviewFeed). Set
     // once by the application before QML loads.
     Q_PROPERTY(QObject* webcamPreviewFeed READ webcamPreviewFeed CONSTANT FINAL)
+    Q_PROPERTY(WebcamPreviewState webcamPreviewState READ webcamPreviewState NOTIFY configChanged FINAL)
+    Q_PROPERTY(QString webcamPreviewMessage READ webcamPreviewMessage NOTIFY configChanged FINAL)
     // The UVC controls the selected camera reports, each a map with control,
     // label, minimum, maximum, step, canAutomatic, canManual and, for a choice
     // rather than a range, options. Empty until the camera has been probed or
@@ -450,8 +464,20 @@ class SettingsAdapter : public QObject {
     QString recordGamepadSourceId() const {
         return QString::fromStdString(engine::ToUuid(record_gamepad_address_.source));
     }
+    Q_PROPERTY(QString recordWebcamSourceId READ recordWebcamSourceId NOTIFY configChanged FINAL)
+    QString recordWebcamSourceId() const {
+        return QString::fromStdString(engine::ToUuid(record_webcam_address_.source));
+    }
     void setRecordGamepadTarget(engine::VisualAddress address, engine::SceneItemId item);
+    void setRecordWebcamTarget(engine::VisualAddress address, engine::SceneItemId item);
     void setRecordVisualEditingAllowed(bool allowed);
+    // Source-provided entries of the Record context menu for one scene item, in registration order. Selections carry
+    // a bounded choice list and the current value's label. Empty when the item is not the current Record target.
+    Q_INVOKABLE QVariantList sceneItemMenuEntries(const QString& source, const QString& item) const;
+    // Host node operation on a Record scene item: "front", "back", "hide", "show" or "remove". Rejected when the
+    // item, runtime generation or edit token is stale, or Record editing is locked.
+    Q_INVOKABLE bool applySceneItemCommand(const QString& source, const QString& item, const QString& runtime,
+                                           const QString& edit_revision, const QString& command);
     Q_INVOKABLE bool setRecordGamepadOutputVisible(const QString& source, const QString& item, const QString& token,
                                                    bool visible);
     Q_INVOKABLE bool setRecordGamepadPlacement(const QString& source, const QString& item, const QString& token,
@@ -516,6 +542,9 @@ class SettingsAdapter : public QObject {
     Q_INVOKABLE void setWebcamControlAutomatic(int control, bool automatic);
     // Hands every control back to the camera's defaults.
     Q_INVOKABLE void resetWebcamControls();
+    void setWebcamSourceStatus(std::optional<SourceStatus> status);
+    [[nodiscard]] WebcamPreviewState webcamPreviewState() const;
+    [[nodiscard]] QString webcamPreviewMessage() const;
     void setWebcamPreviewFeed(QObject* feed) noexcept {
         webcam_preview_feed_ = feed;
     }
@@ -618,6 +647,8 @@ class SettingsAdapter : public QObject {
     [[nodiscard]] int cq() const noexcept;
     [[nodiscard]] const QVariantList& rateControlOptions() const noexcept;
     [[nodiscard]] int rateControl() const noexcept;
+    [[nodiscard]] bool constantQualityRelevant() const noexcept;
+    [[nodiscard]] QString rateControlLabel() const;
     [[nodiscard]] bool bitrateRelevant() const noexcept;
     // The quantizer the selected codec is actually configured with for the
     // current CQ, named in that codec's own domain. The Expert CQ field shows
@@ -1040,8 +1071,12 @@ class SettingsAdapter : public QObject {
         return record ? QStringLiteral("record:") + QString::number(record_edit_revision_)
                       : QString::number(visual_edit_revision_);
     }
-    engine::VisualAddress record_gamepad_address_;
-    engine::SceneItemId record_gamepad_item_;
+    engine::VisualAddress record_gamepad_address_, record_webcam_address_;
+    engine::SceneItemId record_gamepad_item_, record_webcam_item_;
+    [[nodiscard]] std::pair<engine::VisualAddress, engine::SceneItemId> visualTarget(engine::VisualSourceId source,
+                                                                                     bool record) const;
+    [[nodiscard]] std::optional<VisualSceneConfig> restoreVisualItem(const QString& source,
+                                                                     const QString& edit_revision, bool record) const;
     bool record_visual_editing_allowed_ = false;
     uint64_t record_edit_revision_ = 1;
     void advanceRecordEditRevision() noexcept {
@@ -1117,6 +1152,7 @@ class SettingsAdapter : public QObject {
     QHash<QString, std::vector<WebcamControlRange>> webcam_control_ranges_;
     QVariantList webcam_controls_;
     QObject* webcam_preview_feed_ = nullptr;
+    std::optional<SourceStatus> webcam_source_status_;
     QVariantList webcam_resolution_options_;
     QVariantList webcam_frame_rate_options_;
 

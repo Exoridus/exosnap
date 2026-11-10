@@ -517,6 +517,18 @@ int RecordViewModelAdapter::captureMode() const noexcept {
     return source_ != nullptr ? static_cast<int>(source_->capture_mode) : 0;
 }
 
+RecordViewModelAdapter::SourceKind RecordViewModelAdapter::sourceKind() const noexcept {
+    if (!source_)
+        return DisplaySource;
+    if (source_->capture_mode == CaptureMode::Region)
+        return RegionSource;
+    const auto index = source_->selected_target_index;
+    return index >= 0 && index < static_cast<int>(source_->targets.size()) &&
+                   source_->targets[static_cast<std::size_t>(index)].kind == engine::CaptureTarget::Kind::Window
+               ? WindowSource
+               : DisplaySource;
+}
+
 const QString& RecordViewModelAdapter::sourceName() const noexcept {
     return source_name_;
 }

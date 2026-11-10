@@ -180,6 +180,90 @@ TEST(EditorExportPlan, Mp4IntentRetained) {
     EXPECT_EQ(plan->intent.audio_profile, EditAudioProfile::AacLc192Stereo);
 }
 
+TEST(EditorExportPlan, Mp4AudioCapabilityFailureHasItsOwnIssue) {
+    Fixture f;
+    f.intent.container = EditExportContainer::Mp4;
+    const auto plan = f.prepare();
+    ASSERT_EQ(plan->issues.size(), 1u);
+    EXPECT_EQ(plan->issues.front().code, EditExportIssueCode::Mp4AudioUnavailable);
+    EXPECT_EQ(plan->issues.front().scope, EditExportIssueScope::Audio);
+}
+
+TEST(EditorExportPlan, Mp4VideoFailureKeepsItsVideoCause) {
+    Fixture f;
+    f.intent.container = EditExportContainer::Mp4;
+    f.facts.mp4_finished_available = true;
+    f.facts.video_copy_qualified = false;
+    const auto plan = f.prepare();
+    ASSERT_EQ(plan->issues.size(), 1u);
+    EXPECT_EQ(plan->issues.front().code, EditExportIssueCode::UnsupportedProfile);
+    EXPECT_EQ(plan->issues.front().scope, EditExportIssueScope::Video);
+}
+
+TEST(EditorExportPlan, Mp4VideoWithoutAudioDoesNotRequireAac) {
+    for (const bool render_video : {false, true}) {
+        SCOPED_TRACE(render_video);
+        Fixture f;
+        f.intent.container = EditExportContainer::Mp4;
+        std::erase_if(f.snapshot.timeline.clips, [](const auto& clip) { return clip.audio; });
+        f.facts.video_copy_qualified = !render_video;
+        f.facts.video_render_available = render_video;
+        f.facts.stereo_render_available = false;
+        const auto plan = f.prepare();
+        ASSERT_TRUE(plan->ready());
+        EXPECT_EQ(plan->video_path, render_video ? EditVideoPath::Render : EditVideoPath::Copy);
+        EXPECT_EQ(plan->audio_path, EditAudioPath::Absent);
+        EXPECT_EQ(plan->output_audio_streams, 0u);
+    }
+}
+
+TEST(EditorExportPlan, Mp4MutedAudioDoesNotRequireAac) {
+    Fixture f;
+    f.intent.container = EditExportContainer::Mp4;
+    for (auto& track : f.snapshot.timeline.tracks)
+        if (track.audio)
+            track.enabled = false;
+    f.facts.stereo_render_available = false;
+    const auto plan = f.prepare();
+    ASSERT_TRUE(plan->ready());
+    EXPECT_EQ(plan->audio_path, EditAudioPath::Absent);
+    EXPECT_EQ(plan->output_audio_streams, 0u);
+}
+
+TEST(EditorExportPlan, Mp4MixFailureKeepsItsAudioCause) {
+    Fixture f;
+    f.intent.container = EditExportContainer::Mp4;
+    f.facts.mp4_finished_available = true;
+    f.facts.stereo_render_available = false;
+    const auto plan = f.prepare();
+    ASSERT_EQ(plan->issues.size(), 1u);
+    EXPECT_EQ(plan->issues.front().code, EditExportIssueCode::UnsupportedProfile);
+    EXPECT_EQ(plan->issues.front().scope, EditExportIssueScope::Audio);
+}
+
+TEST(EditorExportPlan, UnsupportedColorDoesNotBecomeAnMp4CapabilityFailure) {
+    Fixture f;
+    f.intent.container = EditExportContainer::Mp4;
+    f.facts.mp4_finished_available = true;
+    f.facts.video_render_available = true;
+    f.snapshot.timeline.clips.front().opacity = 0.5;
+    f.snapshot.sources.front().metadata.render_color_supported = false;
+    const auto plan = f.prepare();
+    ASSERT_EQ(plan->issues.size(), 1u);
+    EXPECT_EQ(plan->issues.front().code, EditExportIssueCode::UnsupportedProfile);
+    EXPECT_EQ(plan->issues.front().scope, EditExportIssueScope::Video);
+}
+
+TEST(EditorExportPlan, BoundaryReviewPrecedesMp4AudioAdvice) {
+    Fixture f;
+    f.intent.container = EditExportContainer::Mp4;
+    f.facts.deviations.push_back({1, 10, 4'000'000, 0, 4'000'000, true});
+    const auto plan = f.prepare();
+    ASSERT_EQ(plan->issues.size(), 2u);
+    EXPECT_EQ(plan->issues.front().code, EditExportIssueCode::BoundaryConsentRequired);
+    EXPECT_EQ(plan->issues.back().code, EditExportIssueCode::Mp4AudioUnavailable);
+}
+
 TEST(EditorExportPlan, BoundaryConsentHash) {
     Fixture f;
     f.facts.deviations.push_back({1, 10, 4'000'000, 0, 4'000'000, true});
@@ -234,6 +318,17 @@ void StackVideo(Fixture& f, uint32_t count) {
         clip.track = track;
         t.clips.push_back(clip);
     }
+}
+
+TEST(EditorExportPlan, VideoLayerFailurePrecedesMp4AudioAdvice) {
+    Fixture f;
+    StackVideo(f, kMaxTimelineVideoSources + 1);
+    f.intent.container = EditExportContainer::Mp4;
+    const auto plan = f.prepare();
+    ASSERT_EQ(plan->issues.size(), 2u);
+    EXPECT_EQ(plan->issues.front().code, EditExportIssueCode::ResourceLimitExceeded);
+    EXPECT_EQ(plan->issues.front().scope, EditExportIssueScope::Video);
+    EXPECT_EQ(plan->issues.back().code, EditExportIssueCode::Mp4AudioUnavailable);
 }
 
 TEST(EditorExportPlan, VideoLayerAdmissionIsDecidedWhilePlanning) {
