@@ -139,7 +139,7 @@ QVariantList GamepadOverlay::viewsForDevice(const QString& device) const {
 }
 
 QVariantList GamepadOverlay::views() const {
-    return viewsForDevice(device());
+    return viewsForDevice(session_device_.isEmpty() ? device() : session_device_);
 }
 
 QRectF GamepadOverlay::placement() const {
@@ -524,6 +524,7 @@ void GamepadOverlay::setSessionDevice(const QString& value) {
     if (session_device_ == value)
         return;
     session_device_ = value;
+    native_failed_ = false;
     ConfigureBackend(Settings());
 }
 
@@ -670,7 +671,18 @@ void GamepadOverlay::Poll() {
         return;
     }
     const auto timestamp = gamepad::NowCapture100ns();
-    const auto reading = ReadingAt(timestamp);
+    gamepad::GamepadReading sampled;
+    gamepad::HistoryReadResult read = gamepad::HistoryReadResult::Empty;
+    {
+        const std::scoped_lock lock(mutex_);
+        read = input_history_.TryStateAt(timestamp, sampled);
+    }
+    // A writer burst must not retire the native view; keep the last published state for one tick.
+    if (read == gamepad::HistoryReadResult::Busy)
+        return;
+    const auto reading = read == gamepad::HistoryReadResult::Found
+                             ? std::optional<gamepad::GamepadReading>(std::move(sampled))
+                             : std::nullopt;
     const bool flat = Settings().view == GamepadView::TwoDimensional;
     if (input_) {
         if (const auto result = input_->TakePlayerIndexResult()) {

@@ -3555,8 +3555,10 @@ void QuickApplication::initializeVisualSources() {
             },
             [this](const VisualSourceRecord& source) {
                 ChoiceSnapshot choices{visual_gamepad_choices_.revision, {}};
-                const auto device = source.settings["device"].value_or(std::string{});
-                for (const auto& option : gamepad_overlay_.viewsForDevice(QString::fromStdString(device))) {
+                const auto saved_device = QString::fromStdString(source.settings["device"].value_or(std::string{}));
+                const auto device =
+                    gamepad_overlay_.sessionDevice().isEmpty() ? saved_device : gamepad_overlay_.sessionDevice();
+                for (const auto& option : gamepad_overlay_.viewsForDevice(device)) {
                     const auto row = option.toMap();
                     choices.choices.push_back({row.value(QStringLiteral("value")).toString().toStdString(),
                                                {"", row.value(QStringLiteral("label")).toString().toStdString()},

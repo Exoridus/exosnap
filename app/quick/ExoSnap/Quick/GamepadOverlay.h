@@ -99,6 +99,9 @@ class GamepadOverlay final : public QObject, public engine::SpriteSourceProvider
     void setOpacity(double value);
     void setPlacement(QRectF value);
     void setDevice(const QString& value);
+    const QString& sessionDevice() const noexcept {
+        return session_device_;
+    }
     // Selects a device for this run only, overriding the saved device. Empty ends it.
     void setSessionDevice(const QString& value);
     // Invoked by the future per-overlay context menu; no automatic hardware writes.
