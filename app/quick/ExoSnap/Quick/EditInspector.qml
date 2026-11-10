@@ -95,6 +95,7 @@ ExoScrollView {
             ancestor = ancestor.parent;
         if (ancestor !== root)
             return;
+        inspectorContent.ensurePolished();
         const point = item.mapToItem(root.flickable, 0, 0);
         if (point.y < 0 || point.y + item.height > root.flickable.height)
             root.revealItem(item);
