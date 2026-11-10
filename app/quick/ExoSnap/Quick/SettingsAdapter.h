@@ -972,6 +972,8 @@ class SettingsAdapter : public QObject {
   signals:
     void visualDetailsRequested(exosnap::engine::VisualAddress target, exosnap::engine::SceneItemId item);
     void visualRetryRequested(exosnap::ActionInvocation invocation, bool record);
+    // A runtime-only selection changed. An empty choice ends it and restores the saved one.
+    void visualSessionChoiceChanged(const QString& source, const QString& path, const QString& choice);
     void activeVisualSceneEdited();
     void clearMediaCachesRequested();
     void mediaCachesCleared();
@@ -1053,6 +1055,8 @@ class SettingsAdapter : public QObject {
             ++visual_edit_revision_;
     }
     const CapabilityRegistry* visual_registry_ = nullptr;
+    // Session-only selections by source and setting path. Never persisted.
+    std::map<std::pair<engine::VisualSourceId, std::string>, std::string> session_choices_;
     engine::VisualAddress webcam_address_, gamepad_address_;
     engine::SceneItemId webcam_item_, gamepad_item_;
     void commitWebcamEdit(const WebcamSettings& settings);

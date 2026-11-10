@@ -64,6 +64,7 @@ pub enum Popup {
     SourcePickerSearch,
     SourcePickerFilters,
     NotificationHub,
+    Gamepad,
 }
 
 impl Popup {
@@ -74,6 +75,7 @@ impl Popup {
             Popup::SourcePickerSearch => "source-picker-search",
             Popup::SourcePickerFilters => "source-picker-filters",
             Popup::NotificationHub => "notification-hub",
+            Popup::Gamepad => "gamepad",
         }
     }
 }

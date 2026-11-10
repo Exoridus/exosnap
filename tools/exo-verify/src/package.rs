@@ -118,8 +118,7 @@ fn external_path(path: &Path) -> PathBuf {
 const REQUIRED_FILES: &[&str] = &[
     "exosnap.exe",
     "exosnap-updater.exe",
-    "GameInputRedist.dll",
-    "GameInputRawInputProxy.exe",
+    "SDL3.dll",
     "qt.conf",
     "Qt6Core.dll",
     "Qt6Gui.dll",
@@ -136,6 +135,9 @@ const REQUIRED_FILES: &[&str] = &[
     "Qt6QuickShapes.dll",
     "Qt6QuickDialogs2.dll",
     "Qt6QuickEffects.dll",
+    "Qt6Quick3D.dll",
+    "Qt6Quick3DRuntimeRender.dll",
+    "Qt6Quick3DUtils.dll",
     "LICENSE",
     "THIRD_PARTY_NOTICES.md",
     "KNOWN_LIMITATIONS.md",
@@ -159,6 +161,8 @@ const REQUIRED_DIRS: &[&str] = &[
     // The countdown overlay's MultiEffect; a missing module fails inside a
     // capture-excluded overlay, where nobody can observe it.
     "qml/QtQuick/Effects",
+    // The production Controller3D scene loads this module for the native gamepad view.
+    "qml/QtQuick3D",
 ];
 
 /// Kept in step with THIRD_PARTY_NOTICES.md: the package never ships a
@@ -179,12 +183,12 @@ const REQUIRED_LICENSES: &[&str] = &[
     "presentmon.txt",
     "miniz.txt",
     "monocypher.txt",
-    "gameinput.txt",
-    "gameinput-notice.txt",
-    "gameinput-mit.txt",
+    "sdl3.txt",
     "gamepad-artwork.txt",
     "gamepad-al2009man.txt",
     "gamepad-al2009man-notice.txt",
+    "controller-models-larf.txt",
+    "controller-models-3dco-plus.txt",
 ];
 
 const CRASH_CAPTURE_LICENSES: &[&str] = &["sentry-native.txt", "crashpad.txt", "mini_chromium.txt"];
@@ -239,6 +243,8 @@ const FORBIDDEN_DIRS: &[&str] = &[
 /// [`FORBIDDEN_DIRS`]: a future Qt layout that flattens a style plugin next to
 /// the executables is caught here instead of shipping silently.
 const FORBIDDEN_NAME_FRAGMENTS: &[&str] = &[
+    "gameinputredist",
+    "gameinputrawinputproxy",
     "vc_redist",
     "qmldbg_",
     "qtquickcontrols2fusion",
@@ -394,10 +400,12 @@ pub fn validate_tree(root: &Path, version: &str, leak_patterns: &[String]) -> Re
     Ok(errors)
 }
 
-/// Qt debug builds append `d` to the module name (`Qt6Cored.dll`); no Qt 6
-/// release module name ends in `d`.
+/// Qt debug builds append `d` to the module name; `Quick3D` is a release exception.
 fn is_debug_qt(lower_name: &str) -> bool {
-    lower_name.starts_with("qt6") && lower_name.ends_with("d.dll")
+    let lower_name = lower_name.to_ascii_lowercase();
+    lower_name.starts_with("qt6")
+        && lower_name.ends_with("d.dll")
+        && !lower_name.ends_with("3d.dll")
 }
 
 fn run_checked(command: &mut Command, what: &str, timeout: Duration) -> Result<()> {
@@ -1105,6 +1113,11 @@ mod tests {
     fn debug_qt_names_are_recognised() {
         assert!(is_debug_qt("qt6cored.dll"));
         assert!(is_debug_qt("qt6quickd.dll"));
+        assert!(is_debug_qt("qt6quick3dd.dll"));
+        assert!(!is_debug_qt("qt6quick3d.dll"));
+        assert!(!is_debug_qt("Qt6Quick3D.dll"));
+        assert!(is_debug_qt("Qt6Quick3Dd.dll"));
+        assert!(is_debug_qt("Qt6Cored.dll"));
         assert!(!is_debug_qt("qt6quickshapes.dll"));
         assert!(!is_debug_qt("qt6core.dll"));
     }
@@ -1121,6 +1134,24 @@ mod tests {
                 .any(|e| e.contains("qml/QtQuick/Controls/Basic"))
         );
         assert!(errors.iter().any(|e| e.contains("licenses/ffmpeg.txt")));
+    }
+
+    #[test]
+    fn retired_gameinput_payloads_are_rejected_even_beside_sdl() {
+        let dir = tempfile::tempdir().unwrap();
+        fs::write(dir.path().join("SDL3.dll"), []).unwrap();
+        fs::write(dir.path().join("GameInputRedist.dll"), []).unwrap();
+        fs::create_dir(dir.path().join("nested")).unwrap();
+        fs::write(dir.path().join("nested/GAMEINPUTRAWINPUTPROXY.EXE"), []).unwrap();
+        let errors = validate_tree(dir.path(), "0.10.0", &[]).unwrap();
+        for name in ["GameInputRedist.dll", "GAMEINPUTRAWINPUTPROXY.EXE"] {
+            assert!(
+                errors.iter().any(
+                    |error| error.contains("forbidden runtime payload") && error.contains(name)
+                ),
+                "retired runtime was accepted: {name}"
+            );
+        }
     }
 
     #[test]

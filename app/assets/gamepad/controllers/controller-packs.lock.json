@@ -1,0 +1,16 @@
+{
+  "schemaVersion": 1,
+  "repository": "https://github.com/Exoridus/exosnap-controller-lab",
+  "commit": "3deb9535dbcdb37a34d463e537d902a783cc6ef6",
+  "artifact": "controller-packs-3deb9535dbcdb37a34d463e537d902a783cc6ef6",
+  "native2d": {
+    "steam_controller_2026": "The Lab outline has unresolved provenance. The native layout is the Generic geometry fallback.",
+    "xbox_elite": "The Lab artwork lacks the native btn-pair layer.",
+    "xbox_series": "The Lab artwork lacks the native btn-pair layer."
+  },
+  "excluded": {},
+  "labelFaceButtons": [
+    "gamecube",
+    "wavebird"
+  ]
+}

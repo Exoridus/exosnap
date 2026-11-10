@@ -397,6 +397,8 @@ exosnap_add_gtest(
         extensions/VisualSettings.cpp
         models/VisualSceneConfig.cpp
         ${PROJECT_SOURCE_DIR}/libs/engine/src/visual_scene_runtime.cpp
+        ${PROJECT_SOURCE_DIR}/libs/engine/src/visual_gpu_lane.cpp
+        ${PROJECT_SOURCE_DIR}/libs/engine/src/preview_shared_texture.cpp
         ${PROJECT_SOURCE_DIR}/libs/engine/src/gamepad_frame_sampler.cpp
     LIBRARIES tomlplusplus::tomlplusplus exosnap_gamepad
 )
@@ -406,6 +408,7 @@ target_include_directories(visual_manager_tests PRIVATE
     ${PROJECT_SOURCE_DIR}/libs/engine/src
 )
 target_compile_definitions(visual_manager_tests PRIVATE NOMINMAX)
+target_link_libraries(visual_manager_tests PRIVATE d3d11.lib dxgi.lib runtimeobject.lib)
 
 exosnap_add_gtest(
     NAME recording_preset_tests
@@ -1595,8 +1598,8 @@ endif()
 # at generate time.
 #
 # Unconditional: this subdirectory defines `exosnap`, the shipped application.
-add_subdirectory(quick/ExoSnap/Quick)
 add_subdirectory(quick/ExoSnap/Controller3D)
+add_subdirectory(quick/ExoSnap/Quick)
 
 exosnap_add_gtest(
     NAME gpu_telemetry_tests

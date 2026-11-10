@@ -1,3 +1,4 @@
+#include "extensions/VisualPresetMigration.h"
 #include "models/VisualSceneEdits.h"
 
 #include <gtest/gtest.h>
@@ -102,6 +103,41 @@ TEST(VisualSceneEdits, AllGamepadLayoutsRoundTripWithoutChangingIdentityOrFuture
         EXPECT_EQ(edited.value()->items.front().id, scene.items.front().id);
         EXPECT_TRUE(edited.value()->sources.front().settings["future"].value_or(false));
     }
+}
+
+TEST(VisualSceneEdits, GamepadViewRoundTripsAndUnrelatedEditsKeepItsIdentity) {
+    const auto registry = Registry();
+    auto scene = CameraScene();
+    scene.sources.front().type_id = "org.exosnap.gamepad/controller";
+    scene.sources.front().settings.insert("future", true);
+    const auto source = scene.sources.front().id;
+    const auto item = scene.items.front().id;
+    auto desired = ProjectSceneGamepad(scene, source, item);
+    ASSERT_TRUE(desired.succeeded());
+    desired.value()->opacity = 0.5f;
+    auto edited = EditSceneGamepad(scene, source, item, *desired.value(), registry);
+    ASSERT_TRUE(edited.succeeded());
+    EXPECT_FALSE(edited.value()->sources.front().settings["view"]);
+    scene = *edited.value();
+    for (const auto view : {GamepadView::NativeNormal, GamepadView::NativeGhost, GamepadView::TwoDimensional}) {
+        desired = ProjectSceneGamepad(scene, source, item);
+        ASSERT_TRUE(desired.succeeded());
+        desired.value()->view = view;
+        edited = EditSceneGamepad(scene, source, item, *desired.value(), registry);
+        ASSERT_TRUE(edited.succeeded());
+        const auto encoded = WriteVisualScene(*edited.value());
+        ASSERT_TRUE(encoded.succeeded());
+        const auto decoded = ReadVisualScene(*encoded.value());
+        ASSERT_TRUE(decoded.succeeded());
+        scene = *decoded.value();
+        const auto restored = ProjectSceneGamepad(scene, source, item);
+        ASSERT_TRUE(restored.succeeded());
+        EXPECT_EQ(restored.value()->view, view);
+        EXPECT_FLOAT_EQ(restored.value()->opacity, 0.5f);
+        EXPECT_TRUE(scene.sources.front().settings["future"].value_or(false));
+    }
+    desired.value()->view = static_cast<GamepadView>(255);
+    EXPECT_FALSE(EditSceneGamepad(scene, source, item, *desired.value(), registry).succeeded());
 }
 
 VisualSceneConfig LayeredScene() {

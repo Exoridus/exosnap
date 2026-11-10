@@ -387,47 +387,36 @@ if(EXOSNAP_WITH_PRESENTMON)
         "${presentmon_SOURCE_DIR}/LICENSE.txt" "presentmon.txt")
 endif()
 
-# ---- Microsoft GameInput (NuGet Microsoft.GameInput) -----------------------
-# The loader is built from the package's MIT source rather than its prebuilt
-# GameInput.lib so it follows this tree's toolchain and runtime flags. At run
-# time the loader picks the newest of the in-box GameInput.dll, an installed
-# GameInputRedist.dll, and a GameInputRedist.dll next to the executable. The
-# in-box Windows DLL only implements API v0, so the v4 interface needs the
-# redistributable on the end-user machine. The .nupkg is a zip archive;
-# DOWNLOAD_NAME gives it an extension the extract step recognizes.
+# ---- SDL3 gamepad runtime -------------------------------------------------
 FetchContent_Declare(
-  gameinput
-  URL           https://api.nuget.org/v3-flatcontainer/microsoft.gameinput/4.0.302/microsoft.gameinput.4.0.302.nupkg
-  URL_HASH      SHA256=A4F000C3A41385819B51E5CDD7DAE66D7DDE85C6DE0BFD823CFE617D4BAAAC33
-  DOWNLOAD_NAME microsoft.gameinput.4.0.302.zip
+  sdl3
+  URL           https://github.com/libsdl-org/SDL/releases/download/release-3.4.20/SDL3-devel-3.4.20-VC.zip
+  URL_HASH      SHA256=1EC3009655EE37B1F73E52B3B120ACC5AFD8ABAF9532F3303B1BF1DFE91B5969
+  DOWNLOAD_NAME SDL3-devel-3.4.20-VC.zip
   DOWNLOAD_EXTRACT_TIMESTAMP TRUE
 )
-FetchContent_MakeAvailable(gameinput)
-add_library(gameinput_loader STATIC "${gameinput_SOURCE_DIR}/native/src/GameInput.cpp")
-target_include_directories(gameinput_loader SYSTEM PUBLIC "${gameinput_SOURCE_DIR}/native/include")
-target_compile_options(gameinput_loader PRIVATE
-    $<$<CXX_COMPILER_ID:MSVC>:/W0>
-    $<$<CXX_COMPILER_ID:Clang>:-w>
+FetchContent_MakeAvailable(sdl3)
+add_library(exosnap_sdl3 SHARED IMPORTED GLOBAL)
+set_target_properties(exosnap_sdl3 PROPERTIES
+    IMPORTED_IMPLIB "${sdl3_SOURCE_DIR}/lib/x64/SDL3.lib"
+    IMPORTED_LOCATION "${sdl3_SOURCE_DIR}/lib/x64/SDL3.dll"
+    INTERFACE_INCLUDE_DIRECTORIES "${sdl3_SOURCE_DIR}/include"
 )
-add_library(GameInput::GameInput ALIAS gameinput_loader)
-_exosnap_install_license("Microsoft GameInput 4.0.302"
-    "${gameinput_SOURCE_DIR}/LICENSE.txt" "gameinput.txt")
-_exosnap_install_license("Microsoft GameInput notices"
-    "${gameinput_SOURCE_DIR}/NOTICE.txt" "gameinput-notice.txt")
-_exosnap_install_license("Microsoft GameInput loader (MIT)"
-    "${PROJECT_SOURCE_DIR}/third_party/gameinput/LICENSE-MIT.txt" "gameinput-mit.txt")
-
-set(EXOSNAP_GAMEINPUT_RUNTIME_FILES
-    "${gameinput_SOURCE_DIR}/native/bin/x64/GameInputRedist.dll"
-    "${gameinput_SOURCE_DIR}/native/bin/x64/GameInputRawInputProxy.exe"
-    CACHE INTERNAL "Application-local GameInput x64 runtime")
-install(FILES ${EXOSNAP_GAMEINPUT_RUNTIME_FILES} DESTINATION ".")
+add_library(SDL3::SDL3 ALIAS exosnap_sdl3)
+_exosnap_install_license("SDL3 3.4.20 (zlib)"
+    "${sdl3_SOURCE_DIR}/LICENSE.txt" "sdl3.txt")
+install(FILES "$<TARGET_FILE:SDL3::SDL3>" DESTINATION ".")
 _exosnap_install_license("Gamepad artwork (CC0)"
     "${PROJECT_SOURCE_DIR}/third_party/gamepad/xelu.txt" "gamepad-artwork.txt")
 _exosnap_install_license("Controller artwork (MIT)"
     "${PROJECT_SOURCE_DIR}/app/assets/gamepad/controllers/LICENSE.txt" "gamepad-al2009man.txt")
 _exosnap_install_license("Controller artwork source credits"
     "${PROJECT_SOURCE_DIR}/app/assets/gamepad/controllers/SOURCE-NOTICE.txt" "gamepad-al2009man-notice.txt")
+_exosnap_install_license("Controller 3D models (MIT, Larf)"
+    "${PROJECT_SOURCE_DIR}/app/assets/gamepad/controllers/LICENSE-models-larf.txt" "controller-models-larf.txt")
+_exosnap_install_license("Controller 3D model manifests (MIT, 3dco+)"
+    "${PROJECT_SOURCE_DIR}/app/assets/gamepad/controllers/LICENSE-models-3dco-plus.txt"
+    "controller-models-3dco-plus.txt")
 
 # ---------------------------------------------------------------------------
 # Vendored in-tree sources (libs/update/third_party) -- no FetchContent step,

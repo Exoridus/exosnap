@@ -1,4 +1,3 @@
-#include "ControllerGeometry.h"
 #include "ControllerState.h"
 #include "GamepadArtwork.h"
 #include "GamepadOverlay.h"
@@ -68,6 +67,7 @@ QByteArray Hash(const QImage& image) {
 } // namespace
 
 int main(int argc, char** argv) {
+    RegisterInputMainThread();
     QCoreApplication::setAttribute(Qt::AA_DisableShaderDiskCache);
     QSurfaceFormat format;
     format.setSwapInterval(0);
@@ -88,14 +88,19 @@ int main(int argc, char** argv) {
         return 2;
     }
     QString error;
-    const auto mapping =
-        PrepareMappedGamepadArtwork(QStringLiteral(":/gamepad/controllers/dualsense/mapping.json"), error);
-    if (!error.isEmpty()) {
+    QStringList warnings;
+    const QString pack = QStringLiteral(":/gamepad/controllers/") +
+                         Option(args, QStringLiteral("--controller-pack"), QStringLiteral("dualsense"));
+    const auto model = SharedControllerModel(pack, warnings, error);
+    const auto mapping = model ? ControllerPressMapping(pack, error) : MappedGamepadArtwork{};
+    for (const auto& warning : warnings)
+        qWarning().noquote() << warning;
+    if (!model || !error.isEmpty()) {
         qCritical().noquote() << error;
         return 2;
     }
     GamepadOverlay owner;
-    ControllerState state(mapping);
+    ControllerState state(model, mapping);
     if (!capture) {
         exosnap::GamepadOverlaySettings settings;
         settings.enabled = true;
@@ -103,7 +108,7 @@ int main(int argc, char** argv) {
         settings.device = qEnvironmentVariable("EXOSNAP_CONTROLLER3D_DEVICE").toStdString();
         owner.Configure(settings);
     }
-    const auto reading = Fixture(scenario, GameInputSource::NowCapture100ns());
+    const auto reading = Fixture(scenario, NowCapture100ns());
     if (capture)
         state.ApplyReading(reading, reading.capture_100ns);
 
@@ -126,7 +131,7 @@ int main(int argc, char** argv) {
          {QStringLiteral("closeup"), scenario.contains("closeup")},
          {QStringLiteral("viewRotation"),
           QVariant::fromValue(scenario.endsWith("side") ? QVector3D(0, -65, 0) : QVector3D())}});
-    engine.loadFromModule("ExoSnap.Controller3D", "PilotWindow");
+    engine.loadFromModule("ExoSnap.Controller3DPilot", "PilotWindow");
     if (engine.rootObjects().isEmpty())
         return 2;
     auto* window = qobject_cast<QQuickWindow*>(engine.rootObjects().first());
@@ -135,7 +140,7 @@ int main(int argc, char** argv) {
     QQmlComponent depth_component(&engine);
     std::unique_ptr<QObject> depth_probe;
     if (capture && scenario.endsWith("depth")) {
-        depth_component.loadUrl(QUrl(QStringLiteral("qrc:/qt/qml/ExoSnap/Controller3D/ControllerDepthProbe.qml")));
+        depth_component.loadUrl(QUrl(QStringLiteral("qrc:/qt/qml/ExoSnap/Controller3DPilot/ControllerDepthProbe.qml")));
         depth_probe.reset(depth_component.createWithInitialProperties(
             {{QStringLiteral("parent"), QVariant::fromValue(window->findChild<QObject*>("controllerRig"))}}));
         if (!depth_probe)
@@ -143,8 +148,10 @@ int main(int argc, char** argv) {
     }
     QTimer live;
     if (!capture) {
-        QObject::connect(&live, &QTimer::timeout, &state,
-                         [&] { state.Sample(owner, GameInputSource::NowCapture100ns()); });
+        QObject::connect(&live, &QTimer::timeout, &state, [&] {
+            const auto now = NowCapture100ns();
+            state.ApplyReading(owner.ReadingAt(now), now);
+        });
         live.start(8);
         return app.exec();
     }
@@ -177,9 +184,9 @@ int main(int argc, char** argv) {
     QObject::connect(&timer, &QTimer::timeout, &app, [&] {
         if (!elapsed.isValid())
             elapsed.start();
-        const auto now = GameInputSource::NowCapture100ns();
+        const auto now = NowCapture100ns();
         state.ApplyReading(reading, now);
-        const auto pose_time = GameInputSource::NowCapture100ns();
+        const auto pose_time = NowCapture100ns();
         if (depth_probe)
             depth_probe->setProperty("visible", frames % 2 == 0);
         const QImage image = window->grabWindow().convertToFormat(QImage::Format_RGBA8888);
@@ -188,14 +195,13 @@ int main(int argc, char** argv) {
             app.exit(3);
             return;
         }
-        int geometry_generation = 0;
-        for (const auto* geometry : window->findChildren<ControllerGeometry*>())
-            geometry_generation += geometry->generation();
+        // Geometry is immutable once loaded, so the count of drawn primitives identifies it.
+        const int geometry_generation = static_cast<int>(state.Parts().Rows().size());
         const auto hash = Hash(image);
         QByteArray pose_bytes;
         QDataStream pose_stream(&pose_bytes, QIODevice::WriteOnly);
-        pose_stream << state.leftRotation() << state.rightRotation() << state.leftClick() << state.rightClick()
-                    << state.buttons();
+        for (const auto& row : state.Parts().Rows())
+            pose_stream << row.position << row.rotation << row.scale << row.active;
         const auto pose_hash = QCryptographicHash::hash(pose_bytes, QCryptographicHash::Sha256).toHex();
         const auto roi = image.copy(image.width() / 4, image.height() / 3, image.width() / 2, image.height() / 2);
         if (frames == 0) {
@@ -220,7 +226,8 @@ int main(int argc, char** argv) {
         const bool saved = first.save(output);
         bool depth_probe_verified = true;
         if (depth_probe) {
-            window->findChild<QObject*>("controllerShell")->setProperty("visible", false);
+            for (auto* shell : window->findChildren<QObject*>(QStringLiteral("controllerShell")))
+                shell->setProperty("visible", false);
             depth_probe->setProperty("visible", false);
             const auto uncovered = window->grabWindow();
             depth_probe->setProperty("visible", true);

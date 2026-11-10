@@ -160,6 +160,17 @@ enum Command {
         #[arg(long)]
         check: bool,
     },
+    /// Import Controller Lab asset packs pinned by controller-packs.lock.json, or
+    /// re-derive and check every output from the committed Lab files.
+    #[cfg(feature = "dev-tools")]
+    ImportControllerPacks {
+        /// Extracted `controller-packs-<commit>` artifact of the pinned Lab commit.
+        #[arg(long, conflicts_with = "check")]
+        from: Option<PathBuf>,
+        /// Report drifted outputs without writing them.
+        #[arg(long)]
+        check: bool,
+    },
     /// Export controller layers without modifying their editable SVG sources.
     #[cfg(feature = "dev-tools")]
     GenerateGamepadAssets {
@@ -1358,6 +1369,25 @@ fn run_cli() -> anyhow::Result<ExitCode> {
         }
         #[cfg(feature = "dev-tools")]
         Command::GenerateBrandMarks { check } => generate_brand_marks(&repo_root, check),
+        #[cfg(feature = "dev-tools")]
+        Command::ImportControllerPacks { from, check } => {
+            let report = exo_dev::controller_packs::run(&repo_root, from.as_deref(), check)?;
+            for (id, reason) in &report.blocked {
+                eprintln!("blocked {id}: {reason}");
+            }
+            for path in &report.stale {
+                eprintln!("stale {}", path.display());
+            }
+            if !report.blocked.is_empty() || !report.stale.is_empty() {
+                return Ok(ExitCode::FAILURE);
+            }
+            println!(
+                "{} controller packs {}",
+                report.packs,
+                if check { "verified" } else { "imported" }
+            );
+            Ok(ExitCode::SUCCESS)
+        }
         #[cfg(feature = "dev-tools")]
         Command::GenerateGamepadAssets { check, svgo } => {
             let report = exo_dev::gamepad_assets::generate(&repo_root, check, svgo.as_deref())?;

@@ -63,7 +63,7 @@ std::string_view ControlName(Control control) noexcept {
     return index < kControlNames.size() ? kControlNames[index] : std::string_view{};
 }
 
-Control ControlFromGameInputButton(uint32_t mask) noexcept {
+Control ControlFromLegacyButton(uint32_t mask) noexcept {
     if (mask != 0)
         for (size_t index = 0; index < kGameInputButtons.size(); ++index)
             if (kGameInputButtons[index] == mask)
@@ -78,8 +78,8 @@ Control ControlFromName(std::string_view name) noexcept {
     return Control::Count;
 }
 
-void NormalizeGameInputControls(GamepadState& state, uint32_t supported_buttons, bool gamepad_available,
-                                bool separately_reported_trigger_clicks) noexcept {
+void NormalizeLegacyControls(GamepadState& state, uint32_t supported_buttons, bool gamepad_available,
+                             bool separately_reported_trigger_clicks) noexcept {
     state.controls = {};
     state.controls_normalized = true;
     for (size_t index = 0; index < kGameInputButtons.size(); ++index) {
@@ -115,7 +115,7 @@ ControlValue ReadControl(const GamepadState& state, Control control) noexcept {
     if (state.controls_normalized)
         return state.controls[index];
     auto legacy = state;
-    NormalizeGameInputControls(legacy, 0x3FFF);
+    NormalizeLegacyControls(legacy, 0x3FFF);
     return legacy.controls[index];
 }
 LayoutKind LayoutKindFor(uint16_t vendor_id, uint16_t product_id) noexcept {
@@ -176,11 +176,11 @@ GamepadState Normalized(const GamepadState& state) noexcept {
     return out;
 }
 
-uint64_t GameInputToCapture100ns(uint64_t gameinput_us, const ClockAnchor& anchor) noexcept {
-    if (gameinput_us >= anchor.gameinput_us) {
-        return anchor.capture_100ns + (gameinput_us - anchor.gameinput_us) * 10U;
+uint64_t InputToCapture100ns(uint64_t input_us, const ClockAnchor& anchor) noexcept {
+    if (input_us >= anchor.input_us) {
+        return anchor.capture_100ns + (input_us - anchor.input_us) * 10U;
     }
-    const uint64_t back = (anchor.gameinput_us - gameinput_us) * 10U;
+    const uint64_t back = (anchor.input_us - input_us) * 10U;
     return back >= anchor.capture_100ns ? 0U : anchor.capture_100ns - back;
 }
 
@@ -230,6 +230,18 @@ std::optional<GamepadReading> ReadingRing::StateAtLocked(uint64_t capture_100ns)
 void DeviceHistory::Push(GamepadReading reading) {
     const std::scoped_lock lock(mutex_);
     const auto selected_before = manual_ ? manual_ : automatic_;
+    if (!devices_.contains(reading.device.id) && devices_.size() >= 64) {
+        auto oldest = devices_.end();
+        for (auto candidate = devices_.begin(); candidate != devices_.end(); ++candidate) {
+            if (candidate->second.connected || candidate->first == manual_ || candidate->first == automatic_)
+                continue;
+            if (oldest == devices_.end() || candidate->second.latest_100ns < oldest->second.latest_100ns)
+                oldest = candidate;
+        }
+        if (oldest == devices_.end())
+            return;
+        devices_.erase(oldest);
+    }
     auto& entry = devices_[reading.device.id];
     const bool selected_connection_changed = selected_before == reading.device.id &&
                                              reading.capture_100ns >= entry.latest_100ns &&
@@ -251,9 +263,23 @@ void DeviceHistory::Push(GamepadReading reading) {
         entry.latest_100ns = reading.capture_100ns;
         entry.connected = reading.connected;
         const auto& state = reading.state;
-        const bool active = (state.buttons & 0x3FFFU) != 0 || std::hypot(state.left_x, state.left_y) > 0.20F ||
-                            std::hypot(state.right_x, state.right_y) > 0.20F || state.left_trigger > 0.1F ||
-                            state.right_trigger > 0.1F;
+        const bool active = [&] {
+            if (!state.controls_normalized)
+                return (state.buttons & 0x3FFFU) != 0 || std::hypot(state.left_x, state.left_y) > 0.20F ||
+                       std::hypot(state.right_x, state.right_y) > 0.20F || state.left_trigger > 0.1F ||
+                       state.right_trigger > 0.1F;
+            for (size_t index = 0; index < state.controls.size(); ++index) {
+                const auto& value = state.controls[index];
+                if (value.status != ControlStatus::Active)
+                    continue;
+                const float threshold = index < static_cast<size_t>(Control::LeftStick)     ? 0.0F
+                                        : index < static_cast<size_t>(Control::LeftTrigger) ? 0.20F
+                                                                                            : 0.1F;
+                if (std::hypot(value.x, value.y) > threshold)
+                    return true;
+            }
+            return false;
+        }();
         if (!reading.connected && automatic_ == reading.device.id) {
             automatic_engaged_ = false;
             automatic_since_ = reading.capture_100ns;

@@ -58,32 +58,24 @@ The existing recording diagnostics cadence samples runtime-lifetime CPU publicat
 
 ### Gamepad source and artwork
 
-The Qt-free gamepad library uses GameInput v4 reading and device callbacks. Each application-local device ID has
-its own bounded timestamp history. IDs distinguish identical VID/PID pairs. Partial auxiliary readings merge only
-with that same device's state at or before the reading timestamp. Disconnect publishes a neutral state.
-The initial GameInput microsecond/QPC-100ns anchor is sampled between two QPC reads. The video thread queries
-history at its actual frame time, without a UI timer in the input-to-recording path.
+The Qt-free gamepad library uses one SDL3 input provider. Each device has its own bounded timestamp history.
+Persistent identity combines a reported serial number with a native HID path. Serial numbers can repeat, while serialless USB paths can identify ports. Model GUIDs and XInput slot paths do not identify a physical controller. Missing identity information or a changed path requires explicit reselection. Session-only IDs remain selectable while connected and are never rebound to a replacement. Their option is marked `session_only`, so `SettingsAdapter` holds the selection in memory and never writes it to the source settings. Saved identities from a different provider remain waiting. Disconnect publishes neutral input.
+
+SDL event timestamps describe host observation, not a fabricated hardware clock. A bracketed startup anchor converts SDL nanoseconds into the capture clock's QPC-derived 100 ns units. Initial and reconciled snapshots use acquisition time. The video thread queries retained history at its actual frame time, without SDL calls or a UI timer in the input-to-recording path.
 
 The Qt-free `GamepadState` exposes 30 canonical controls through `ReadControl`.
-Its populated canonical array is authoritative. Raw GameInput fields remain a compatibility input for older
+Its populated canonical array is authoritative. Legacy raw fields remain a compatibility input for older
 callers, converted centrally when `controls_normalized` is false. Renderers consume `ControlValue`, not provider
 bit positions or SVG identifiers. `Released` and `Active` carry valid values. `Unavailable` means no usable
 reading for a potentially supported control, while `Unsupported` means the provider/device does not expose it.
 Buttons use x = 0 or 1, triggers x in [0, 1], and sticks x/y in [-1, 1] with positive y up.
 Unknown values are not evidence of released controls. Presentation deadzones do not alter captured input.
 
-`NormalizeGameInputControls` explicitly translates standard GameInput button positions and its paddle fields.
-The live provider consults `GetGamepadInfo().supportedLayout` and `GetSupportedSystemButtons()` before exposing
-controls. Guide/share use system readings, with the existing DualSense PS/touchpad-click path retained.
-Touchpad click is independent of touch contact. GameInput trigger-button flags do not by themselves prove a
-separate mechanical end click. The live provider does not qualify them as `misc3`/`misc4`.
-A qualified provider can supply these states through the canonical array or explicitly enable separate-click
-normalization. Selecting GameCube artwork does not identify or remap an adapter. Its physical B/X wiring and
-separate end-click reporting remain unqualified.
+The live provider translates SDL's named buttons and axes explicitly and queries their availability before exposing controls. SDL's downward-positive stick Y axis is inverted. Missing controls remain unsupported, and disconnected or unusable readings do not become supported zero values. Guide, Capture/Share, paddles and touchpad click are exposed only when reported by the device mapping. Touchpad click is independent of touch contact. Trigger values do not prove separate mechanical end clicks, so the provider does not qualify them as `misc3`/`misc4`. Selecting GameCube artwork does not identify or remap an adapter or qualify its end-click wiring.
 
 The SDL3 symbol correspondence and additive mapping schema are documented with the
 [controller artwork contract](../../app/assets/gamepad/controllers/README.md#logical-controls).
-SDL3 supplies the semantic convention only and is not a runtime dependency. SDL enum values, GameInput masks
+SDL enum values, legacy compatibility masks
 and browser indices are separate domains. The same state contract is available to other renderers without
 requiring any artwork identifier or provider mask.
 
@@ -98,17 +90,23 @@ It neither erases the framebuffer background nor masks other control quads. Caps
 Stick movement changes quad/mask destinations, without copying, rasterizing or uploading atlas pixels.
 Button, trigger, opacity and placement changes also reuse the atlas. Unbound controls remain static artwork.
 
-The GUI compares input state only to request preview updates. Recording and preview consumers sample retained `HistoryReadView` data with the existing Qt-free gamepad math and canonical masks. A history view owns data independently of the GameInput driver. The sample point is the CFR output slot or the existing VFR timestamp. A new request recreates sampler fallback state, preventing a prior device's pose from surviving an identity change. Busy or missing history uses only the current binding's safe historical or neutral output.
+The GUI compares input state only to request preview updates. Recording and preview consumers sample retained `HistoryReadView` data with the existing Qt-free gamepad math and canonical masks. A history view owns data independently of the SDL input owner. The sample point is the CFR output slot or the existing VFR timestamp. A new request recreates sampler fallback state, preventing a prior device's pose from surviving an identity change. Busy or missing history uses only the current binding's safe historical or neutral output.
 
-The x64 GameInputRedist.dll and GameInputRawInputProxy.exe ship beside the executable through the common CMake
-install tree used by both package formats. Runtime terms, Microsoft notices and the MIT loader notice ship together.
-The loader uses the newest supported local/system runtime. No GameInput MSI is installed.
-Microsoft recommends retaining the process-wide GameInput instance until application shutdown.
-With the 4.0.302 runtime, final IGameInput release can block after successful callback unregistration.
-One process reference is therefore retained and reused across source restarts. Each source unregisters both
-callbacks before freeing its context and releases its own interface reference. This bounds retention to one
-runtime instance, rather than leaking one instance per recording. Omitting the final release is a workaround,
-not a documented GameInput requirement. Clean final runtime release remains unqualified.
+The GUI thread owns SDL initialization and final subsystem shutdown. Only the gamepad subsystem is requested, with its implicit joystick/events dependencies. GameInput paths inside SDL are disabled before initialization. A single input worker updates devices and drains gamepad events through thread-safe SDL APIs. It does not call the main-thread event pump. Input retirement completes before source quiescence and before GUI-owned SDL shutdown, while retained history stays readable by consumers. No SDL work runs in the compositor frame loop.
+
+The official x64 SDL3.dll and its zlib license ship through the common CMake install tree. The DLL is delay-loaded and explicitly checked before SDL calls so missing runtime files become source startup failures. No GameInput runtime files or service installation are required by the application.
+
+### Native gamepad GPU frames
+
+The shared Controller3D QML module draws Controller Lab packs: a strict glTF 2.0 binary reader, `rig.json` mechanics and `pack.json` canonical control bindings. Loading rejects models that cannot be drawn faithfully, such as required extensions, textures, non-uniform scale, accessor overruns or missing rig nodes, and reports unbound entries as warnings. Parsed models are cached per pack for the process lifetime. Geometry objects belong to one Qt Quick 3D scene, so every native generation uploads its own while the vertex bytes stay implicitly shared. Poses only change node transforms. `NativeControllerPack` is the single list of devices qualified for a model; every other device keeps its 2D view. The GUI-owned provider samples the same timestamped SDL3 input history and renders through QQuickRenderControl into an RGBA8 target. Qt Quick 3D's linear tone mapping returns SDR sRGB; the Qt surface is premultiplied. The host shader recovers straight color before its existing SDR/HDR transfer and applies alpha and item opacity once. The developer pilot and probe have separate window resources; production loads only the scene.
+
+Each GPU consumer registers its immediate context and device generation on the context's owner thread. Registration captures device and adapter identity; control work never queries a foreign immediate context. Native output requires compatible adapter LUIDs and multithread-capable D3D11 devices. The producer creates its own device on that adapter. Incompatible or absent endpoints leave the source waiting instead of introducing a CPU fallback.
+
+A reservation accounts for the producer target and one shared plus one consumer-local texture per endpoint before Qt allocates its target. The runtime bounds resource generations and logical texel bytes. Keyed-mutex acquisition in publication and sampling is nonblocking. GPU copies transfer ownership into fixed lanes; no product frame performs a GPU-to-CPU readback. Duplicate scene items share one source read. Exact source token, resource and device generations protect cached views from reuse across replacement.
+
+Adding or removing an endpoint retires its resource generation. The provider republishes bindingless intent, allowing old scene pins to drain, then destroys its Qt target and releases the producer lease before collection and readmission. Frame leases only release pins; native resource reclamation belongs to control maintenance. A contended GPU read defers the entire composition and preserves change/upload work for the retry.
+
+Ready-frame capture registers its own endpoint and waits on its worker for the exact requested native source tokens, bounded to five seconds. It releases all frame pins between retries and keeps the GUI available for renderer admission. A changed or unavailable request fails explicitly instead of saving a still without requested 3D. The eventual PNG readback is the existing one-shot screenshot boundary. Qt internal MSAA surfaces and driver residency are not included in the logical texture reservation.
 
 ## Exclusive fullscreen and stalls
 

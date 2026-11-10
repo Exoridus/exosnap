@@ -17,6 +17,7 @@
 #include <QJsonObject>
 #include <QObject>
 #include <QPainter>
+#include <QScopeGuard>
 #include <QSemaphore>
 #include <QSize>
 #include <QSvgRenderer>
@@ -27,6 +28,7 @@
 #include <gtest/gtest.h>
 #include <iterator>
 #include <memory>
+#include <thread>
 #include <utility>
 
 using namespace exosnap::quick;
@@ -434,7 +436,139 @@ class GamepadOverlayTest : public ::testing::Test {
     static bool HasPublishedSprites(const GamepadOverlay& overlay) {
         return overlay.published_sprites_ != nullptr;
     }
+    static void SeedHistory(GamepadOverlay& overlay, const std::shared_ptr<gamepad::DeviceHistory>& history,
+                            const QString& selected) {
+        overlay.settings_.device = selected.toStdString();
+        overlay.native_enabled_ = true;
+        overlay.input_history_ = gamepad::HistoryReadView(history);
+        gamepad::RegisterInputMainThread();
+        std::string error;
+        overlay.input_ = gamepad::SdlGamepadSource::Start(error);
+        ASSERT_TRUE(overlay.input_) << error;
+        const auto deadline = std::chrono::steady_clock::now() + std::chrono::seconds(2);
+        while (overlay.input_->State() == gamepad::InputSourceState::Starting &&
+               std::chrono::steady_clock::now() < deadline)
+            std::this_thread::sleep_for(std::chrono::milliseconds(1));
+        ASSERT_EQ(overlay.input_->State(), gamepad::InputSourceState::Ready);
+    }
+    static void SetSelected(GamepadOverlay& overlay, const QString& selected) {
+        overlay.settings_.device = selected.toStdString();
+    }
+    static void SetInputError(GamepadOverlay& overlay) {
+        overlay.input_start_error_ = QStringLiteral("test failure");
+    }
+    static std::string_view DetectedArtwork(const gamepad::DeviceIdentity& device) {
+        return kGamepadOverlayArtworkIds[static_cast<size_t>(GamepadOverlay::DetectedLayout(device))];
+    }
+    static void PrepareNativeWithoutEndpoint(GamepadOverlay& overlay, std::vector<SourceStatus>& statuses) {
+        overlay.visual_runtime_ = std::make_shared<engine::VisualSceneRuntime>(engine::VisualBudgetPolicy{});
+        overlay.visual_token_ = {{engine::VisualSourceId{{1}}, engine::VisualRuntimeGeneration{1}},
+                                 engine::SourceRequestRevision{1}};
+        ASSERT_TRUE(overlay.visual_runtime_->CreateSource(overlay.visual_token_.address).succeeded());
+        overlay.visual_runtime_->SetRequest(overlay.visual_token_, true, engine::HoldPolicy::ClearAccepted);
+        overlay.settings_.view = GamepadView::NativeNormal;
+        overlay.source_demand_ = true;
+        overlay.visual_status_ = [&statuses](SourceStatus status) { statuses.push_back(std::move(status)); };
+        gamepad::GamepadReading reading;
+        reading.device.vendor_id = 0x054C;
+        reading.device.product_id = 0x0CE6;
+        reading.device.layout = gamepad::LayoutKind::DualSense;
+        for (uint64_t tick = 1; tick <= 3; ++tick)
+            overlay.UpdateNative(reading, tick);
+        EXPECT_FALSE(overlay.native_);
+        EXPECT_FALSE(overlay.input_);
+    }
 };
+
+TEST_F(GamepadOverlayTest, RecognizedFamiliesRouteToExistingArtworkWithoutChangingManualIndices) {
+    const std::array cases{std::pair{gamepad::LayoutKind::DualShock4, "dualshock4"},
+                           std::pair{gamepad::LayoutKind::Xbox360, "xbox_360"},
+                           std::pair{gamepad::LayoutKind::JoyConLeft, "joycon_left"},
+                           std::pair{gamepad::LayoutKind::JoyConRight, "joycon_right"},
+                           std::pair{gamepad::LayoutKind::JoyConPair, "joycon_pair"},
+                           std::pair{gamepad::LayoutKind::GameCube, "gamecube"},
+                           std::pair{gamepad::LayoutKind::Generic, "generic"}};
+    gamepad::DeviceIdentity device;
+    for (const auto& [family, artwork] : cases) {
+        device.layout = family;
+        EXPECT_EQ(DetectedArtwork(device), artwork);
+    }
+    device.vendor_id = 0x054C;
+    device.product_id = 0x0DF2;
+    device.layout = gamepad::LayoutKind::DualSense;
+    EXPECT_EQ(DetectedArtwork(device), "dualsense_edge");
+    device.vendor_id = 0x045E;
+    device.product_id = 0x0B00;
+    device.layout = gamepad::LayoutKind::XboxOne;
+    EXPECT_EQ(DetectedArtwork(device), "xbox_elite");
+    GamepadOverlaySettings settings;
+    settings.layout = 11;
+    EXPECT_EQ(SanitizeGamepadOverlaySettings(settings).layout, 11);
+    EXPECT_EQ(kGamepadOverlayArtworkIds[11], "joycon_right_horizontal");
+}
+
+TEST_F(GamepadOverlayTest, ManualDisconnectIsDistinctFromAutomaticWaitingAndStartupFailure) {
+    int argc = 1;
+    char name[] = "gamepad-tests";
+    char* argv[]{name, nullptr};
+    QCoreApplication application(argc, argv);
+    const std::array<const char*, 5> hints{"SDL_JOYSTICK_HIDAPI", "SDL_JOYSTICK_DINPUT", "SDL_XINPUT_ENABLED",
+                                           "SDL_JOYSTICK_RAWINPUT", "SDL_GAMECONTROLLER_IGNORE_DEVICES_EXCEPT"};
+    std::array<QByteArray, hints.size()> saved;
+    for (size_t index = 0; index < hints.size(); ++index) {
+        saved[index] = qgetenv(hints[index]);
+        qputenv(hints[index], index + 1 == hints.size() ? "0x1209/0xFFFF" : "0");
+    }
+    const auto restore = qScopeGuard([&] {
+        for (size_t index = 0; index < hints.size(); ++index) {
+            if (saved[index].isNull())
+                qunsetenv(hints[index]);
+            else
+                qputenv(hints[index], saved[index]);
+        }
+    });
+    auto history = std::make_shared<gamepad::DeviceHistory>();
+    gamepad::GamepadReading reading;
+    reading.device.id[0] = 1;
+    history->Select(reading.device.id);
+    const QString selected = QString::fromLatin1(
+        QByteArray(reinterpret_cast<const char*>(reading.device.id.data()), reading.device.id.size()).toHex());
+    GamepadOverlay overlay;
+    SeedHistory(overlay, history, selected);
+    ASSERT_FALSE(HasFatalFailure());
+    Poll(overlay);
+    EXPECT_EQ(overlay.status(), QStringLiteral("Controller disconnected"));
+    reading.connected = true;
+    history->Push(reading);
+    Poll(overlay);
+    EXPECT_EQ(overlay.status(), QStringLiteral("Controller connected"));
+    reading.capture_100ns = 1;
+    reading.connected = false;
+    history->Push(reading);
+    Poll(overlay);
+    EXPECT_EQ(overlay.status(), QStringLiteral("Controller disconnected"));
+    SetSelected(overlay, {});
+    history->Select(std::nullopt);
+    Poll(overlay);
+    EXPECT_EQ(overlay.status(), QStringLiteral("Waiting for controller"));
+    SetSelected(overlay, selected);
+    SetInputError(overlay);
+    Poll(overlay);
+    EXPECT_EQ(overlay.status(), QStringLiteral("Controller input unavailable: test failure"));
+}
+
+TEST_F(GamepadOverlayTest, NativeAdmissionWaitsWithoutAllocatingRendererOrOpeningInput) {
+    int argc = 1;
+    char name[] = "gamepad-tests";
+    char* argv[]{name, nullptr};
+    QCoreApplication application(argc, argv);
+    GamepadOverlay overlay;
+    std::vector<SourceStatus> statuses;
+    PrepareNativeWithoutEndpoint(overlay, statuses);
+    EXPECT_TRUE(statuses.empty());
+    EXPECT_FALSE(overlay.views().at(1).toMap().value(QStringLiteral("selectable")).toBool());
+    EXPECT_TRUE(overlay.views().at(0).toMap().value(QStringLiteral("selectable")).toBool());
+}
 
 TEST_F(GamepadOverlayTest, ManagedConfigurationDefersNativeWorkUntilSourceDemand) {
     int argc = 1;

@@ -24,14 +24,29 @@ exosnap_add_gtest(
     NAME gamepad_sprite_tests
     TEST_PREFIX gamepad.sprites.
     SOURCES "${EXOSNAP_QUICK_TESTS_DIR}/test_gamepad_sprites.cpp" GamepadSprites.cpp GamepadArtwork.cpp GamepadOverlay.cpp GamepadOverlay.h
+        ../Controller3D/Controller3DPluginImport.cpp
+        ${PROJECT_SOURCE_DIR}/libs/engine/src/device_generation.cpp
         ${PROJECT_SOURCE_DIR}/libs/engine/src/gamepad_frame_sampler.cpp
         ${PROJECT_SOURCE_DIR}/libs/engine/src/visual_scene_runtime.cpp
+        ${PROJECT_SOURCE_DIR}/libs/engine/src/visual_gpu_lane.cpp
+        ${PROJECT_SOURCE_DIR}/libs/engine/src/gpu_timestamp_profiler.cpp
+        ${PROJECT_SOURCE_DIR}/libs/engine/src/preview_shared_texture.cpp
     LIBRARIES Qt6::Gui Qt6::Svg Qt6::Xml Qt6::Qml exosnap::gamepad tomlplusplus::tomlplusplus
 )
+target_link_libraries(gamepad_sprite_tests PRIVATE exosnap_controller3d_sceneplugin d3d11.lib dxgi.lib runtimeobject.lib)
 target_include_directories(gamepad_sprite_tests PRIVATE
     ${CMAKE_CURRENT_SOURCE_DIR} ${PROJECT_SOURCE_DIR}/app ${PROJECT_SOURCE_DIR}/libs/engine/include)
 target_compile_definitions(gamepad_sprite_tests PRIVATE
     EXOSNAP_GAMEPAD_ASSET_DIR="${PROJECT_SOURCE_DIR}/app/assets/gamepad")
+# The focused sprite tests link the same delay-loaded gamepad provider as the
+# application. They must remain runnable after building only this test target,
+# without relying on exosnap.exe's independent POST_BUILD DLL staging.
+add_custom_command(TARGET gamepad_sprite_tests POST_BUILD
+    COMMAND ${CMAKE_COMMAND} -E copy_if_different
+        "$<TARGET_FILE:SDL3::SDL3>" "$<TARGET_FILE_DIR:gamepad_sprite_tests>"
+    COMMENT "Staging SDL3 runtime next to gamepad sprite tests"
+    VERBATIM
+)
 
 set_source_files_properties(ExoTheme.qml PROPERTIES
     QT_QML_SINGLETON_TYPE TRUE
@@ -39,6 +54,7 @@ set_source_files_properties(ExoTheme.qml PROPERTIES
 
 qt_add_executable(exosnap WIN32
     main.cpp
+    ../Controller3D/Controller3DPluginImport.cpp
     ${PROJECT_SOURCE_DIR}/app/assets/brand/exosnap_brand.qrc
     # The mark suite, loaded by the runtime renderer rather than by QML: it is
     # recoloured for the running theme before anything rasterizes it.
@@ -92,6 +108,7 @@ qt_add_resources(gamepad_sprite_tests "gamepad_test_artwork"
 qt_add_qml_module(exosnap
     URI ExoSnap.Quick
     DEPENDENCIES
+        TARGET exosnap_controller3d_scene
         QtQuick
         QtQuick.Dialogs
         # OverlayCountdown's circle carries a MultiEffect drop shadow.
@@ -709,6 +726,7 @@ endif()
 
 target_link_libraries(exosnap
     PRIVATE
+        exosnap_controller3d_sceneplugin
         Qt6::Core
         Qt6::Gui
         # The brand marks are SVG assets recoloured at load, so the renderer
@@ -847,7 +865,7 @@ endforeach()
 exosnap_stage_asan_runtime(exosnap)
 add_custom_command(TARGET exosnap POST_BUILD
     COMMAND ${CMAKE_COMMAND} -E copy_if_different
-        ${EXOSNAP_GAMEINPUT_RUNTIME_FILES} "$<TARGET_FILE_DIR:exosnap>"
+        "$<TARGET_FILE:SDL3::SDL3>" "$<TARGET_FILE_DIR:exosnap>"
     VERBATIM
 )
 
@@ -917,12 +935,17 @@ endif()
 # when windeployqt is told to skip it. `exo-verify package` prunes them after
 # the install and validation refuses their return.
 if(WIN32)
+    # The app links the separate Controller3D QML module, whose ControllerScene.qml
+    # imports QtQuick3D. The app's own QML scan does not reach that sibling module,
+    # so windeployqt scans their common parent or the installed tree would miss
+    # qml/QtQuick3D and fail when the native view loads the scene.
     qt_generate_deploy_qml_app_script(
         TARGET exosnap
         OUTPUT_SCRIPT _exosnap_deploy_script
         NO_UNSUPPORTED_PLATFORM_ERROR
         NO_COMPILER_RUNTIME
         EXCLUDE_PLUGIN_TYPES qmltooling
+        DEPLOY_TOOL_OPTIONS --qmldir "${PROJECT_SOURCE_DIR}/app/quick/ExoSnap"
     )
 
     install(TARGETS exosnap RUNTIME DESTINATION .)

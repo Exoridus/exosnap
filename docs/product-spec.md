@@ -257,26 +257,26 @@ Device and resolution are fixed during recording. Supported mirror/opacity/chrom
 
 Media Foundation is a webcam dependency, not an AAC/recording dependency. Windows N/KN without the Media Feature Pack can still launch and record without webcam; webcam UI and Diagnostics explain the missing runtime.
 
-### Native Controller3D pilot
+### Native 3D controller
 
-A separate developer executable previews an original procedural DualSense rig in Normal 3D or Ghost 3D.
-It is not an overlay choice in the recording application and does not feed the recording compositor.
-The pilot shares the existing GameInput owner and canonical control mapping. Its radial stick response
-uses a 5% inner deadzone and 5% outer saturation, independently of the 2D display filter.
-Ghost retains physical depth occlusion with transparent shell surfaces. Rear hints, final licensed models,
-other controller families, motion tracking and recording output remain outside this pilot.
+The Gamepad view offers 2D, Normal 3D and Ghost 3D. Native 3D is available for a connected DualSense identified by Sony vendor 054C and product 0CE6. Selecting DualSense artwork for another device does not qualify it; DualSense Edge and other controller families retain their existing 2D views. A saved native view remains stored when its device is absent, but cannot borrow another controller's inputs.
+
+Normal and Ghost draw the Controller Lab model of the controller with its original colors, moving buttons, triggers and stick pivots, and physical depth occlusion. The view faces the controller's front from slightly above and fits the model to the scene item. Active controls use the same highlight color as the 2D view. Ghost keeps the shell nearly clear with lit edges while controls stay closed and opaque. Controls the model does not have are never drawn as live. The radial stick response uses a 5% inner deadzone and 5% outer saturation, independently of the 2D display filter. Placement, opacity and output visibility belong to the same scene item as the 2D view.
+
+The native renderer produces an offscreen GPU texture for preview and recording. It opens no developer window. If input, renderer or compatible GPU output is unavailable, the source reports its state and stops drawing 3D; recording continues. The user can select 2D or retry the source. Rear hints, additional controller models and motion tracking are not provided.
 
 ### Gamepad overlay
 
 The Record preview's Add overlay menu adds one controller widget and provides access to its device, layout and appearance settings. It is off by default.
 Source actions select a device or layout and retry the current controller source.
-Automatic device selection prefers the first actively used gamepad and stays with it until disconnect.
-Manual selection pins one device and never borrows another controller's inputs. Disconnect resets the visible inputs.
-Automatic artwork selection recognizes DualSense, Xbox Series, Xbox One and Switch Pro families.
+Automatic device selection prefers the first actively used gamepad and stays with it until disconnect. It may then select another available controller.
+Manual selection persists the ExoSnap device identity, never an SDL instance ID or discovery index. Disconnect resets the visible inputs and reports Controller disconnected. Other connected controllers do not take over. The same reliably identified controller resumes the selection on reconnect, independently of discovery order. A controller without a stable identity, such as an Xbox controller over Bluetooth, is listed as "this session only". Selecting it applies until the selection changes or ExoSnap exits and is never saved. While it is disconnected the selection stays visible as Controller disconnected with neutral inputs, and no other controller takes over. Reconnecting gives it a new session identity, so it must be selected again. After a restart the saved selection, or Automatic, applies.
+Persistent device identities require both a reported serial number and a native HID path. A serial number alone can be duplicated, while a serialless USB path can identify a port rather than a physical controller. A changed path requires explicit reselection. Devices without this identity information, including XInput slot-only identities, are marked as session-only. They can be selected while connected, but require explicit reselection after an uncertain reconnect. Saved identities from a different input provider remain waiting until the user selects a current device.
+Automatic artwork selection follows the active controller using SDL device types and known device identities. It selects matching catalog artwork when the device can be distinguished, and Generic otherwise. Manual artwork selection remains fixed when automatic device selection changes controllers.
 Manual selection additionally offers DualShock 4, Joy-Cons in a grip or separate, individual Joy-Cons
 in upright or horizontal orientation, the Steam Controller (2015 and 2026), Steam Deck compact and full views,
 Xbox 360, GameCube, DualSense Edge and Xbox Elite. Compact is the default Steam Deck artwork in the
-asset catalog. Automatic GameInput detection does not yet identify Steam Deck devices.
+asset catalog. Artwork availability does not establish physical device support.
 Generic uses a vendor-neutral controller silhouette. Selecting a Joy-Con drawing does not combine physical devices.
 Steam Controller (2026, generic artwork) retains its saved layout identity and uses the same silhouette as Generic.
 It does not depict the physical controller's shape or imply qualified hardware support.
@@ -293,7 +293,7 @@ The artwork uses white lines with adjustable opacity. Legacy Glass and Glow prof
 Controls normally light blue when pressed while their vector symbols stay white. A mapped pressure color can
 override blue, and a tint-mode control colors its designated graphic. Stick caps move within their wells,
 qualified stick clicks tint the caps, and trigger fills are proportional.
-PS and touchpad clicks are shown when GameInput exposes them. Touchpad clicks do not imply finger contact.
+PS and touchpad clicks are shown when SDL3 exposes them. Touchpad clicks do not imply finger contact.
 Unavailable and unsupported inputs remain visually inactive, without being treated as measured releases.
 Unbound paddles, Quick Access, Mute, Fn, pairing and touch-contact artwork do not acquire live input from
 preview simulations. Microphone-button and finger-position visualization requires a qualified input transport.

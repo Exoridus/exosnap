@@ -190,7 +190,9 @@ engine::Outcome<VisualSceneConfig> EditSceneGamepad(const VisualSceneConfig& sce
                                                     engine::SceneItemId item_id, const GamepadOverlaySettings& desired,
                                                     const CapabilityRegistry& registry) {
     if (!registry.IsSealed() || desired.layout < -1 ||
-        desired.layout >= static_cast<int>(kGamepadOverlayArtworkIds.size()) || desired.glass || desired.glow)
+        desired.layout >= static_cast<int>(kGamepadOverlayArtworkIds.size()) || desired.glass || desired.glow ||
+        (desired.view != GamepadView::TwoDimensional && desired.view != GamepadView::NativeNormal &&
+         desired.view != GamepadView::NativeGhost))
         return engine::EngineError{.context = "Invalid gamepad edit"};
     const auto before = ProjectSceneGamepad(scene, source_id, item_id);
     const auto* type = registry.FindVisualSource("org.exosnap.gamepad/controller");
@@ -208,6 +210,10 @@ engine::Outcome<VisualSceneConfig> EditSceneGamepad(const VisualSceneConfig& sce
     if (before.value()->layout != desired.layout)
         source.settings.insert_or_assign("layout", desired.layout == -1 ? std::string_view("auto")
                                                                         : kGamepadOverlayArtworkIds[desired.layout]);
+    if (before.value()->view != desired.view)
+        source.settings.insert_or_assign("view", desired.view == GamepadView::NativeNormal  ? "3d-normal"
+                                                 : desired.view == GamepadView::NativeGhost ? "3d-ghost"
+                                                                                            : "2d");
     item.properties.output_visible = desired.output_visible;
     item.properties.opacity = desired.opacity;
     item.properties.placement.x = desired.x;

@@ -8,7 +8,7 @@
     0,
     0,
     1543.2388916015625,
-    956.3123779296875
+    956.3123779296876
   ],
   "coordinateSystem": {
     "xPositive": "right",
@@ -34,12 +34,11 @@
         "x": 0,
         "y": 0,
         "width": 1543.2388916015625,
-        "height": 956.3123779296875
+        "height": 956.3123779296876
       }
     },
     {
       "id": "trigger-r2",
-      "control": "right_trigger",
       "file": "elements/trigger-r2.svg",
       "role": "trigger",
       "binding": {
@@ -59,11 +58,11 @@
       "motion": {
         "fillDirection": "bottom-to-top"
       },
-      "pressElement": "trigger-r2-pressure"
+      "pressElement": "trigger-r2-pressure",
+      "control": "right_trigger"
     },
     {
       "id": "trigger-l2",
-      "control": "left_trigger",
       "file": "elements/trigger-l2.svg",
       "role": "trigger",
       "binding": {
@@ -83,11 +82,11 @@
       "motion": {
         "fillDirection": "bottom-to-top"
       },
-      "pressElement": "trigger-l2-pressure"
+      "pressElement": "trigger-l2-pressure",
+      "control": "left_trigger"
     },
     {
       "id": "dpad",
-      "controls": {"up": "dpad_up", "down": "dpad_down", "left": "dpad_left", "right": "dpad_right"},
       "file": "elements/dpad.svg",
       "role": "directional-pad",
       "binding": {
@@ -98,15 +97,20 @@
         "right": 512
       },
       "bounds": {
-        "x": 432.91738891601557,
+        "x": 432.9173889160156,
         "y": 624.3305664062499,
         "width": 236.20681762695307,
         "height": 190.69677734375
+      },
+      "controls": {
+        "up": "dpad_up",
+        "down": "dpad_down",
+        "left": "dpad_left",
+        "right": "dpad_right"
       }
     },
     {
       "id": "btn-y",
-      "control": "north",
       "file": "elements/btn-y.svg",
       "role": "button",
       "binding": {
@@ -114,15 +118,15 @@
         "mask": 32
       },
       "bounds": {
-        "x": 1164.7325439453123,
+        "x": 1164.7325439453125,
         "y": 341.9594421386718,
         "width": 110.3748779296875,
         "height": 99.55111694335938
-      }
+      },
+      "control": "north"
     },
     {
       "id": "btn-x",
-      "control": "west",
       "file": "elements/btn-x.svg",
       "role": "button",
       "binding": {
@@ -130,15 +134,15 @@
         "mask": 16
       },
       "bounds": {
-        "x": 1033.4591064453123,
+        "x": 1033.4591064453125,
         "y": 441.8702087402343,
         "width": 117.870849609375,
-        "height": 103.24978637695307
-      }
+        "height": 103.24978637695308
+      },
+      "control": "west"
     },
     {
       "id": "btn-b",
-      "control": "east",
       "file": "elements/btn-b.svg",
       "role": "button",
       "binding": {
@@ -150,11 +154,11 @@
         "y": 436.11999511718744,
         "width": 110.3760986328125,
         "height": 95.6699829101562
-      }
+      },
+      "control": "east"
     },
     {
       "id": "btn-a",
-      "control": "south",
       "file": "elements/btn-a.svg",
       "role": "button",
       "binding": {
@@ -165,12 +169,12 @@
         "x": 1146.9699707031248,
         "y": 543.3900146484374,
         "width": 112.25,
-        "height": 95.27996826171875
-      }
+        "height": 95.27996826171876
+      },
+      "control": "south"
     },
     {
       "id": "btn-home",
-      "control": "guide",
       "file": "elements/btn-home.svg",
       "role": "button",
       "binding": {
@@ -183,11 +187,11 @@
         "y": 275.82336425781244,
         "width": 124.5301513671875,
         "height": 116.78927612304688
-      }
+      },
+      "control": "guide"
     },
     {
       "id": "btn-view",
-      "control": "back",
       "file": "elements/btn-view.svg",
       "role": "button",
       "binding": {
@@ -199,11 +203,11 @@
         "y": 471.0177917480468,
         "width": 72.761962890625,
         "height": 56.97531127929682
-      }
+      },
+      "control": "back"
     },
     {
       "id": "btn-menu",
-      "control": "start",
       "file": "elements/btn-menu.svg",
       "role": "button",
       "binding": {
@@ -215,12 +219,11 @@
         "y": 471.0177917480468,
         "width": 72.09259033203125,
         "height": 56.98458862304682
-      }
+      },
+      "control": "start"
     },
     {
       "id": "stick-r-cap",
-      "control": "right_stick",
-      "clickControl": "right_stick_click",
       "file": "elements/stick-r-cap.svg",
       "role": "stick",
       "binding": {
@@ -247,12 +250,12 @@
         "yPositive": "up"
       },
       "pressElement": "stick-r-cap-pressure",
-      "knockout": "stick-r-cap-outline"
+      "knockout": "stick-r-cap-outline",
+      "control": "right_stick",
+      "clickControl": "right_stick_click"
     },
     {
       "id": "stick-l-cap",
-      "control": "left_stick",
-      "clickControl": "left_stick_click",
       "file": "elements/stick-l-cap.svg",
       "role": "stick",
       "binding": {
@@ -272,18 +275,19 @@
       "motion": {
         "center": [
           346.7790221116051,
-          486.32500457836187
+          486.3250045783618
         ],
         "travelRadius": 32.32441406249999,
         "deadzone": 0.08,
         "yPositive": "up"
       },
       "pressElement": "stick-l-cap-pressure",
-      "knockout": "stick-l-cap-outline"
+      "knockout": "stick-l-cap-outline",
+      "control": "left_stick",
+      "clickControl": "left_stick_click"
     },
     {
       "id": "btn-l1",
-      "control": "left_shoulder",
       "file": "elements/btn-l1.svg",
       "role": "button",
       "binding": {
@@ -300,19 +304,19 @@
         "x": 0,
         "y": 0,
         "width": 771.6194458007812,
-        "height": 956.3123779296875
+        "height": 956.3123779296876
       },
       "pressClip": {
         "x": 0,
         "y": 0,
         "width": 533.8,
-        "height": 956.3123779296875
+        "height": 956.3123779296876
       },
-      "pressElement": "btn-l1-pressure"
+      "pressElement": "btn-l1-pressure",
+      "control": "left_shoulder"
     },
     {
       "id": "btn-r1",
-      "control": "right_shoulder",
       "file": "elements/btn-r1.svg",
       "role": "button",
       "binding": {
@@ -329,15 +333,16 @@
         "x": 771.6194458007812,
         "y": 0,
         "width": 771.6194458007812,
-        "height": 956.3123779296875
+        "height": 956.3123779296876
       },
       "pressClip": {
-        "x": 1009.4388916015625,
+        "x": 1009.4388916015624,
         "y": 0,
         "width": 533.8,
-        "height": 956.3123779296875
+        "height": 956.3123779296876
       },
-      "pressElement": "btn-r1-pressure"
+      "pressElement": "btn-r1-pressure",
+      "control": "right_shoulder"
     }
   ]
 }

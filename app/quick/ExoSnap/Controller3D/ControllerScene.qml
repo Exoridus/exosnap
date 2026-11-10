@@ -12,6 +12,12 @@ View3D {
     property bool closeup: false
     property vector3d viewRotation: Qt.vector3d(0, 0, 0)
 
+    readonly property vector3d viewDirection: Qt.vector3d(0, Math.sin(-controller.cameraPitch * Math.PI / 180),
+                                                          Math.cos(controller.cameraPitch * Math.PI / 180))
+    readonly property color ghostFill: light ? "#2f4459" : "#c4d4e6"
+    readonly property color ghostRim: light ? "#1d3b5a" : "#e8f2ff"
+    readonly property color ghostIdle: light ? "#41566c" : "#8ea3bb"
+
     environment: SceneEnvironment {
         backgroundMode: SceneEnvironment.Transparent
         antialiasingMode: SceneEnvironment.MSAA
@@ -19,14 +25,19 @@ View3D {
         depthTestEnabled: true
         depthPrePassEnabled: true
     }
-    camera: pilotCamera
+    camera: fitCamera
     OrthographicCamera {
-        id: pilotCamera
-        position: controllerScene.closeup ? Qt.vector3d(0, 368, 188) : Qt.vector3d(0, 340, 220)
-        eulerRotation.x: -57.1
+        id: fitCamera
+        readonly property real distance: 1000
+        position: (controllerScene.closeup ? controllerScene.controller.closeupCenter
+                                           : controllerScene.controller.center)
+                      .times(controllerScene.controller.sceneScale).plus(controllerScene.viewDirection.times(distance))
+        eulerRotation.x: controllerScene.controller.cameraPitch
         clipNear: 1
-        clipFar: 1000
-        horizontalMagnification: Math.max(1, controllerScene.width) / (controllerScene.closeup ? 95 : (controllerScene.viewRotation.y === 0 ? 235 : 330))
+        clipFar: 2 * distance
+        horizontalMagnification: (controllerScene.closeup ? 3 : 0.92) * Math.min(
+            Math.max(1, controllerScene.width) / (controllerScene.controller.fitWidth * controllerScene.controller.sceneScale),
+            Math.max(1, controllerScene.height) / (controllerScene.controller.fitHeight * controllerScene.controller.sceneScale))
         verticalMagnification: horizontalMagnification
     }
     DirectionalLight {
@@ -38,79 +49,71 @@ View3D {
         eulerRotation: Qt.vector3d(-30, 150, 0)
         brightness: 0.45
     }
-    ControllerGeometry { id: shell; part: ControllerGeometry.Shell }
-    ControllerGeometry { id: stem; part: ControllerGeometry.Stem }
-    ControllerGeometry { id: rim; part: ControllerGeometry.Rim }
-    ControllerGeometry { id: cap; part: ControllerGeometry.Cap }
-    ControllerGeometry { id: well; part: ControllerGeometry.Well }
-
-    PrincipledMaterial {
-        id: idle
-        baseColor: controllerScene.ghost ? (controllerScene.light ? "#394d62" : "#aebed0") : "#242b35"
-        roughness: 0.72
-    }
-    PrincipledMaterial {
-        id: leftCap
-        baseColor: controllerScene.controller.leftClick > 0 ? "#239fe8" : (controllerScene.ghost ? "#8299b3" : "#454d5b")
-        roughness: 0.65
-    }
-    PrincipledMaterial {
-        id: rightCap
-        baseColor: controllerScene.controller.rightClick > 0 ? "#239fe8" : (controllerScene.ghost ? "#8299b3" : "#454d5b")
-        roughness: 0.65
-    }
 
     Node {
         objectName: "controllerRig"
-        scale: Qt.vector3d(100, 100, 100)
+        scale: Qt.vector3d(controllerScene.controller.sceneScale, controllerScene.controller.sceneScale,
+                           controllerScene.controller.sceneScale)
+        pivot: controllerScene.controller.center
         eulerRotation: controllerScene.viewRotation
-        Model {
-            objectName: "controllerShell"
-            geometry: shell
-            materials: PrincipledMaterial {
-                baseColor: controllerScene.ghost ? (controllerScene.light ? "#405a76" : "#b3cee9") : "#e4e8ee"
-                opacity: controllerScene.ghost ? 0.22 : 1
-                roughness: 0.8
-                depthDrawMode: Material.AlwaysDepthDraw
-            }
-        }
-        ControllerStick {
-            position: Qt.vector3d(-0.32, 0.2, -0.02)
-            tilt: controllerScene.controller.leftRotation
-            click: controllerScene.controller.leftClick
-            stemGeometry: stem
-            rimGeometry: rim
-            capGeometry: cap
-            wellGeometry: well
-            idleMaterial: idle
-            capMaterial: leftCap
-        }
-        ControllerStick {
-            position: Qt.vector3d(0.32, 0.2, -0.02)
-            tilt: controllerScene.controller.rightRotation
-            click: controllerScene.controller.rightClick
-            stemGeometry: stem
-            rimGeometry: rim
-            capGeometry: cap
-            wellGeometry: well
-            idleMaterial: idle
-            capMaterial: rightCap
-        }
         Repeater3D {
-            model: controllerScene.controller.buttons
-            delegate: Node {
-                required property var modelData
-                id: button
-                position: modelData.position
-                rotation: modelData.rotation
-                Model {
-                    source: button.modelData.round ? "#Cylinder" : "#Cube"
-                    scale: button.modelData.size
-                    z: button.modelData.hinged ? -0.08 : 0
-                    materials: PrincipledMaterial {
-                        baseColor: button.modelData.amount > 0 ? "#239fe8" : (controllerScene.ghost ? "#8299b3" : "#343d4b")
-                        roughness: 0.65
-                    }
+            model: controllerScene.controller.parts
+            delegate: Model {
+                id: part
+                required property int mesh
+                required property vector3d partPosition
+                required property quaternion partRotation
+                required property real partScale
+                required property color baseColor
+                required property color pressColor
+                required property bool active
+                required property bool housing
+
+                objectName: housing ? "controllerShell" : "controllerControl"
+                geometry: ControllerGeometry {
+                    controller: controllerScene.controller
+                    mesh: part.mesh
+                }
+                position: partPosition
+                rotation: partRotation
+                scale: Qt.vector3d(partScale, partScale, partScale)
+                materials: [part.active ? activeMaterial
+                                        : controllerScene.ghost ? (part.housing ? shellMaterial : ghostMaterial)
+                                                                : normalMaterial]
+
+                PrincipledMaterial {
+                    id: normalMaterial
+                    baseColor: part.baseColor
+                    roughness: 0.68
+                    metalness: 0
+                }
+                PrincipledMaterial {
+                    id: activeMaterial
+                    baseColor: part.pressColor
+                    emissiveFactor: Qt.vector3d(0.25, 0.25, 0.25)
+                    roughness: 0.5
+                    metalness: 0
+                }
+                // Ghost controls stay closed and opaque so they hide the contours behind them.
+                PrincipledMaterial {
+                    id: ghostMaterial
+                    baseColor: controllerScene.ghostIdle
+                    roughness: 0.65
+                    metalness: 0
+                }
+                CustomMaterial {
+                    id: shellMaterial
+                    property color fillColor: controllerScene.ghostFill
+                    property color rimColor: controllerScene.ghostRim
+                    shadingMode: CustomMaterial.Shaded
+                    // Custom materials blend only when asked; alpha stays premultiplied-compatible for the host.
+                    sourceBlend: CustomMaterial.SrcAlpha
+                    destinationBlend: CustomMaterial.OneMinusSrcAlpha
+                    sourceAlphaBlend: CustomMaterial.One
+                    destinationAlphaBlend: CustomMaterial.OneMinusSrcAlpha
+                    cullMode: Material.BackFaceCulling
+                    depthDrawMode: Material.AlwaysDepthDraw
+                    fragmentShader: "ghost_shell.frag"
                 }
             }
         }

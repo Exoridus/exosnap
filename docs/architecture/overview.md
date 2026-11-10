@@ -32,7 +32,7 @@ The webcam service remains owned by `RecordingCoordinator`. Its bounded control 
 
 The developer-only `exosnap_controller3d` target owns a `GamepadOverlay` and borrows one raw, timestamped
 reading per frame through `ReadingAt`. Device selection, normalization and history stay in the existing
-GameInput source. `ControllerState` uses `ReadControl` and the existing mapping's live/null permissions.
+SDL3 source. `ControllerState` uses `ReadControl` and the existing mapping's live/null permissions.
 Unavailable input and disconnect clear transforms and highlights. The 2D `DisplayState` filter is not part
 of this path. The engine's Qt-free sprite snapshot and immutable CPU atlas contract are unchanged.
 

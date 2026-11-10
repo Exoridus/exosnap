@@ -34,7 +34,7 @@ TEST(Controls, GameInputCapabilitiesGatePaddlesAndTriggerClicks) {
     state.left_x = -0.5F;
     state.left_y = 0.75F;
     state.right_trigger = 0.6F;
-    NormalizeGameInputControls(state, 0x1001000C, true, true);
+    NormalizeLegacyControls(state, 0x1001000C, true, true);
     EXPECT_EQ(ReadControl(state, Control::South).status, ControlStatus::Active);
     EXPECT_EQ(ReadControl(state, Control::East).status, ControlStatus::Active);
     EXPECT_EQ(ReadControl(state, Control::RightPaddle1).status, ControlStatus::Active);
@@ -43,9 +43,9 @@ TEST(Controls, GameInputCapabilitiesGatePaddlesAndTriggerClicks) {
     EXPECT_EQ(ReadControl(state, Control::LeftStickClick).status, ControlStatus::Unsupported);
     EXPECT_EQ(ReadControl(state, Control::LeftStick), (ControlValue{ControlStatus::Active, -0.5F, 0.75F}));
     EXPECT_EQ(ReadControl(state, Control::RightTrigger).x, 0.6F);
-    NormalizeGameInputControls(state, 0x1001000C);
+    NormalizeLegacyControls(state, 0x1001000C);
     EXPECT_EQ(ReadControl(state, Control::Misc3).status, ControlStatus::Unsupported);
-    NormalizeGameInputControls(state, 4, false);
+    NormalizeLegacyControls(state, 4, false);
     EXPECT_EQ(ReadControl(state, Control::South).status, ControlStatus::Unavailable);
 }
 
@@ -136,7 +136,7 @@ TEST(DeviceHistory, DisconnectRestsAndReconnectDoesNotRestoreOldPress) {
 TEST(DeviceHistory, DisconnectPreservesCapabilityAbsenceWithoutReportingReleasedControls) {
     DeviceHistory history;
     auto reading = At(100, 4);
-    NormalizeGameInputControls(reading.state, 4);
+    NormalizeLegacyControls(reading.state, 4);
     history.Push(reading);
     reading.capture_100ns = 200;
     reading.connected = false;
@@ -153,7 +153,7 @@ TEST(DeviceHistory, DisconnectPreservesCapabilityAbsenceWithoutReportingReleased
 TEST(DeviceHistory, DisconnectWithoutPriorCapabilitiesReportsUnknownControls) {
     DeviceHistory history;
     auto reading = At(200);
-    NormalizeGameInputControls(reading.state, 0);
+    NormalizeLegacyControls(reading.state, 0);
     history.Push(reading);
     reading.capture_100ns = 100;
     reading.connected = false;
@@ -176,6 +176,61 @@ TEST(DeviceHistory, MissingManualDeviceNeverFallsBackToAnotherPad) {
     EXPECT_FALSE(history.StateAt(200));
     history.Select(std::nullopt);
     EXPECT_EQ(history.StateAt(200)->device.id, reading.device.id);
+}
+
+TEST(DeviceHistory, SavedManualSelectionWaitsAndRecoversWithoutAdoptingAnotherFamily) {
+    for (const bool switch_first : {false, true}) {
+        SCOPED_TRACE(switch_first);
+        DeviceHistory history;
+        auto selected = At(100, 4);
+        selected.device.id[0] = 1;
+        selected.device.vendor_id = 0x057E;
+        selected.device.product_id = 0x2009;
+        selected.device.layout = LayoutKind::SwitchPro;
+        auto other = At(100, 8);
+        other.device.id[0] = 2;
+        other.device.vendor_id = 0x045E;
+        other.device.layout = LayoutKind::XboxOne;
+        history.Select(selected.device.id);
+        EXPECT_FALSE(history.StateAt(100));
+        history.Push(switch_first ? selected : other);
+        if (!switch_first)
+            EXPECT_FALSE(history.StateAt(100));
+        history.Push(switch_first ? other : selected);
+        ASSERT_TRUE(history.StateAt(100));
+        EXPECT_EQ(history.StateAt(100)->device.id, selected.device.id);
+        const auto connected_generation = history.SelectionGeneration();
+        selected.capture_100ns = 200;
+        selected.connected = false;
+        history.Push(selected);
+        other.capture_100ns = 210;
+        history.Push(other);
+        const auto missing = history.StateAt(210);
+        ASSERT_TRUE(missing);
+        EXPECT_EQ(missing->device.id, selected.device.id);
+        EXPECT_FALSE(missing->connected);
+        EXPECT_EQ(missing->state.buttons, 0U);
+        EXPECT_GT(history.SelectionGeneration(), connected_generation);
+        selected.capture_100ns = 220;
+        selected.connected = true;
+        selected.state.buttons = 0;
+        history.Push(selected);
+        const auto recovered = history.StateAt(220);
+        ASSERT_TRUE(recovered);
+        EXPECT_EQ(recovered->device.id, selected.device.id);
+        EXPECT_TRUE(recovered->connected);
+        EXPECT_EQ(recovered->state.buttons, 0U);
+        EXPECT_FALSE(history.StateAt(210)->connected);
+        selected.capture_100ns = 230;
+        selected.connected = false;
+        history.Push(selected);
+        other.capture_100ns = 240;
+        history.Push(other);
+        history.Select(std::nullopt);
+        ASSERT_TRUE(history.StateAt(240));
+        EXPECT_EQ(history.StateAt(240)->device.id, other.device.id);
+        EXPECT_TRUE(history.StateAt(240)->connected);
+    }
 }
 
 TEST(DeviceHistory, AutomaticSelectionPrefersFirstActivePadThenStaysWithIt) {
@@ -252,16 +307,16 @@ TEST(ReadingRing, WraparoundEvictsOldest) {
 }
 
 TEST(ClockConversion, MapsThroughAnchor) {
-    const ClockAnchor anchor{.gameinput_us = 1'000'000, .capture_100ns = 50'000'000};
-    EXPECT_EQ(GameInputToCapture100ns(1'000'000, anchor), 50'000'000U);
-    EXPECT_EQ(GameInputToCapture100ns(1'000'016, anchor), 50'000'160U);
-    EXPECT_EQ(GameInputToCapture100ns(999'000, anchor), 49'990'000U);
+    const ClockAnchor anchor{.input_us = 1'000'000, .capture_100ns = 50'000'000};
+    EXPECT_EQ(InputToCapture100ns(1'000'000, anchor), 50'000'000U);
+    EXPECT_EQ(InputToCapture100ns(1'000'016, anchor), 50'000'160U);
+    EXPECT_EQ(InputToCapture100ns(999'000, anchor), 49'990'000U);
 }
 
 TEST(ClockConversion, SaturatesBeforeCaptureOrigin) {
-    const ClockAnchor anchor{.gameinput_us = 1'000'000, .capture_100ns = 100};
-    EXPECT_EQ(GameInputToCapture100ns(0, anchor), 0U);
-    EXPECT_EQ(GameInputToCapture100ns(999'990, anchor), 0U);
+    const ClockAnchor anchor{.input_us = 1'000'000, .capture_100ns = 100};
+    EXPECT_EQ(InputToCapture100ns(0, anchor), 0U);
+    EXPECT_EQ(InputToCapture100ns(999'990, anchor), 0U);
 }
 
 TEST(LayoutKind, MapsKnownControllers) {

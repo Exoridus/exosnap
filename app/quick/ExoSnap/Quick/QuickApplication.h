@@ -107,6 +107,7 @@ class QuickApplication {
     [[nodiscard]] RecordViewModelAdapter* recordViewModelAdapter() noexcept;
     [[nodiscard]] OverlayTelemetryAdapter* overlayTelemetryAdapter() noexcept;
     [[nodiscard]] SettingsAdapter* settingsAdapter() noexcept;
+    [[nodiscard]] const GamepadOverlay* gamepadOverlay() const noexcept;
     [[nodiscard]] AudioRoutingAdapter* audioRoutingAdapter() noexcept;
     [[nodiscard]] RecordingClipAdapter* recordingClipAdapter() noexcept;
     [[nodiscard]] DeviceAdapter* deviceAdapter() noexcept;

@@ -19,6 +19,7 @@
 #include <wrl/client.h>
 
 #include <algorithm>
+#include <chrono>
 #include <cmath>
 #include <cstdio>
 #include <cstring>
@@ -201,6 +202,10 @@ bool drawVisualScene(exosnap::engine::GpuCompositor& compositor,
         if (view.sprites) {
             if (!compositor.DrawVisualSprite(index, view.token, view.resource_id, *view.sprites, content, error))
                 return false;
+        } else if (view.gpu) {
+            if (!compositor.DrawVisualGpu(view.gpu->view, view.image_rect, view.item->properties.placement.mirror,
+                                          error, view.image_opacity))
+                return false;
         } else if (view.cache_valid &&
                    !compositor.DrawVisualImage(view.token, view.resource_id, view.image_sequence, view.image,
                                                view.image_rect, view.item->properties.placement.mirror,
@@ -309,21 +314,24 @@ void captureOnWorker(ReadyFrameSource source, ReadyFrameComposition composition,
         fail("No Ready preview frame is available");
         return;
     }
-    std::unique_ptr<exosnap::engine::VisualSceneConsumer> consumer;
-    if (composition.visual_runtime) {
-        auto prepared = exosnap::engine::VisualSceneConsumer::Prepare(composition.visual_runtime);
-        if (!prepared.succeeded()) {
-            fail(prepared.error()->context);
-            return;
-        }
-        consumer = std::move(*prepared.value());
-    }
-
     std::string error;
     ComPtr<ID3D11Device> device;
     ComPtr<ID3D11DeviceContext> context;
     if (!createDevice(device, context, error)) {
         fail(std::move(error));
+        return;
+    }
+    std::unique_ptr<exosnap::engine::VisualSceneConsumer> consumer;
+    if (composition.visual_runtime) {
+        auto prepared = exosnap::engine::VisualSceneConsumer::Prepare(
+            composition.visual_runtime, {context.Get(), exosnap::engine::NextDeviceGeneration()});
+        if (!prepared.succeeded()) {
+            fail(prepared.error()->context);
+            return;
+        }
+        consumer = std::move(*prepared.value());
+    } else if (!composition.required_gpu_tokens.empty()) {
+        fail("Ready visual runtime is unavailable");
         return;
     }
     ComPtr<ID3D11Device1> device1;
@@ -399,7 +407,9 @@ void captureOnWorker(ReadyFrameSource source, ReadyFrameComposition composition,
     exosnap::engine::VisualSceneConsumer::Frame visual_frame;
     if (consumer) {
         bool sampled = false;
-        for (int attempt = 0; attempt < 8; ++attempt) {
+        const bool waiting_for_gpu = !composition.required_gpu_tokens.empty();
+        const auto deadline = std::chrono::steady_clock::now() + std::chrono::milliseconds(waiting_for_gpu ? 5000 : 8);
+        do {
             if (consumer->NeedsRefresh()) {
                 auto refreshed = consumer->Refresh();
                 if (!refreshed.succeeded()) {
@@ -407,22 +417,22 @@ void captureOnWorker(ReadyFrameSource source, ReadyFrameComposition composition,
                     return;
                 }
                 if (*refreshed.value() == exosnap::engine::ReadResult::Busy) {
-                    Sleep(1);
+                    Sleep(waiting_for_gpu ? 5 : 1);
                     continue;
                 }
             }
             visual_frame =
-                consumer->Sample({gamepad::GameInputSource::NowCapture100ns()}, {0, 0, crop.width(), crop.height()},
-                                 exosnap::engine::VisualCompositionMode::Recording);
-            if (!visual_frame.Deferred()) {
+                consumer->Sample({gamepad::NowCapture100ns()}, {0, 0, crop.width(), crop.height()},
+                                 exosnap::engine::VisualCompositionMode::Recording, composition.required_gpu_tokens);
+            if (visual_frame.HasGpuFrames(composition.required_gpu_tokens)) {
                 sampled = true;
                 break;
             }
             visual_frame = {};
-            Sleep(1);
-        }
+            Sleep(waiting_for_gpu ? 5 : 1);
+        } while (std::chrono::steady_clock::now() < deadline);
         if (!sampled) {
-            fail("Ready visual scene remained contended");
+            fail("Ready visual scene did not become available before the capture deadline");
             return;
         }
     }
@@ -450,7 +460,7 @@ void captureOnWorker(ReadyFrameSource source, ReadyFrameComposition composition,
 } // namespace
 
 void ReadyFrameCaptureService::Capture(QThreadPool& pool, const ReadyFrameSource& source,
-                                       ReadyFrameComposition composition, Callback callback) {
+                                       const ReadyFrameComposition& composition, Callback callback) {
     // The payload is captured by copy, not moved into a mutable lambda: only a
     // const-callable closure converts to the std::function overload of
     // QThreadPool::start. Nothing here is expensive to copy: the camera frame

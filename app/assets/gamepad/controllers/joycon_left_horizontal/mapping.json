@@ -39,7 +39,6 @@
     },
     {
       "id": "btn-sr",
-      "control": "right_shoulder",
       "file": "elements/btn-sr.svg",
       "role": "button",
       "binding": {
@@ -52,11 +51,11 @@
         "width": 33.68000793457031,
         "height": 9.190000534057615
       },
-      "pressElement": "btn-sr-pressure"
+      "pressElement": "btn-sr-pressure",
+      "control": "right_shoulder"
     },
     {
       "id": "btn-sl",
-      "control": "left_shoulder",
       "file": "elements/btn-sl.svg",
       "role": "button",
       "binding": {
@@ -69,7 +68,8 @@
         "width": 33.68000411987304,
         "height": 9.190000534057615
       },
-      "pressElement": "btn-sl-pressure"
+      "pressElement": "btn-sl-pressure",
+      "control": "left_shoulder"
     },
     {
       "id": "btn-aux-zl",
@@ -78,7 +78,7 @@
       "binding": null,
       "bounds": {
         "x": 3.9400000572204585,
-        "y": 26.717147827148434,
+        "y": 26.71714782714843,
         "width": 23.06784629821777,
         "height": 53.25595092773436
       },
@@ -109,7 +109,6 @@
     },
     {
       "id": "btn-share",
-      "control": "misc1",
       "file": "elements/btn-share.svg",
       "role": "button",
       "binding": {
@@ -120,13 +119,13 @@
       "bounds": {
         "x": 174.65629577636716,
         "y": 27.51779174804687,
-        "width": 14.283721923828125,
+        "width": 14.283721923828123,
         "height": 14.283657073974606
-      }
+      },
+      "control": "misc1"
     },
     {
       "id": "btn-up",
-      "control": "west",
       "file": "elements/btn-up.svg",
       "role": "button",
       "binding": {
@@ -138,11 +137,11 @@
         "y": 38.97607803344726,
         "width": 17.36000823974608,
         "height": 17.277843475341797
-      }
+      },
+      "control": "west"
     },
     {
       "id": "btn-left",
-      "control": "south",
       "file": "elements/btn-left.svg",
       "role": "button",
       "binding": {
@@ -154,11 +153,11 @@
         "y": 57.56999969482421,
         "width": 17.383926391601562,
         "height": 17.290000915527337
-      }
+      },
+      "control": "south"
     },
     {
       "id": "btn-right",
-      "control": "north",
       "file": "elements/btn-right.svg",
       "role": "button",
       "binding": {
@@ -170,11 +169,11 @@
         "y": 20.350000381469723,
         "width": 17.3800048828125,
         "height": 17.319997787475582
-      }
+      },
+      "control": "north"
     },
     {
       "id": "btn-down",
-      "control": "east",
       "file": "elements/btn-down.svg",
       "role": "button",
       "binding": {
@@ -186,12 +185,11 @@
         "y": 38.97999954223632,
         "width": 17.3699951171875,
         "height": 17.270000457763672
-      }
+      },
+      "control": "east"
     },
     {
       "id": "stick-l-cap",
-      "control": "left_stick",
-      "clickControl": "left_stick_click",
       "file": "elements/stick-l-cap.svg",
       "role": "stick",
       "binding": {
@@ -204,25 +202,26 @@
       },
       "bounds": {
         "x": 53.09767532348632,
-        "y": 29.332513809204098,
+        "y": 29.332513809204094,
         "width": 36.57361984252929,
         "height": 36.54753112792967
       },
       "motion": {
         "center": [
           71.3844871520996,
-          47.606279373168476
+          47.60627937316848
         ],
         "travelRadius": 6.578554916381833,
         "deadzone": 0.08,
         "yPositive": "up"
       },
       "pressElement": "stick-l-cap-pressure",
-      "knockout": "stick-l-cap-pressure"
+      "knockout": "stick-l-cap-pressure",
+      "control": "left_stick",
+      "clickControl": "left_stick_click"
     },
     {
       "id": "btn-view",
-      "control": "back",
       "file": "elements/btn-view.svg",
       "role": "button",
       "binding": {
@@ -235,7 +234,8 @@
         "width": 4.348236083984375,
         "height": 14.919443130493164
       },
-      "pressElement": "btn-view-surface"
+      "pressElement": "btn-view-surface",
+      "control": "back"
     }
   ],
   "controlLabels": {

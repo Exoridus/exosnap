@@ -69,7 +69,7 @@ gamepad::GamepadReading Reading(uint64_t time, float x, uint8_t device = 1) {
     reading.capture_100ns = time;
     reading.device.id.back() = device;
     reading.state.left_x = x;
-    gamepad::NormalizeGameInputControls(reading.state, 0x3FFF);
+    gamepad::NormalizeLegacyControls(reading.state, 0x3FFF);
     return reading;
 }
 

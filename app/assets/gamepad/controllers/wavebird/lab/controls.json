@@ -1,0 +1,208 @@
+{
+  "schemaVersion": 1,
+  "layoutId": "wavebird",
+  "controls": [
+    {
+      "control": "south",
+      "svg": [],
+      "nodes": [
+        {
+          "id": "part__a_button",
+          "file": "a_button.obj",
+          "role": "button"
+        }
+      ],
+      "has2D": false,
+      "has3D": true
+    },
+    {
+      "control": "east",
+      "svg": [],
+      "nodes": [
+        {
+          "id": "part__b_button",
+          "file": "b_button.obj",
+          "role": "button"
+        }
+      ],
+      "has2D": false,
+      "has3D": true
+    },
+    {
+      "control": "west",
+      "svg": [],
+      "nodes": [
+        {
+          "id": "part__x_button",
+          "file": "x_button.obj",
+          "role": "button"
+        }
+      ],
+      "has2D": false,
+      "has3D": true
+    },
+    {
+      "control": "north",
+      "svg": [],
+      "nodes": [
+        {
+          "id": "part__y_button",
+          "file": "y_button.obj",
+          "role": "button"
+        }
+      ],
+      "has2D": false,
+      "has3D": true
+    },
+    {
+      "control": "dpad_up",
+      "svg": [],
+      "nodes": [
+        {
+          "id": "part__dpad_up",
+          "file": "dpad_up.obj",
+          "role": "button"
+        }
+      ],
+      "has2D": false,
+      "has3D": true
+    },
+    {
+      "control": "dpad_right",
+      "svg": [],
+      "nodes": [
+        {
+          "id": "part__dpad_right",
+          "file": "dpad_right.obj",
+          "role": "button"
+        }
+      ],
+      "has2D": false,
+      "has3D": true
+    },
+    {
+      "control": "dpad_down",
+      "svg": [],
+      "nodes": [
+        {
+          "id": "part__dpad_down",
+          "file": "dpad_down.obj",
+          "role": "button"
+        }
+      ],
+      "has2D": false,
+      "has3D": true
+    },
+    {
+      "control": "dpad_left",
+      "svg": [],
+      "nodes": [
+        {
+          "id": "part__dpad_left",
+          "file": "dpad_left.obj",
+          "role": "button"
+        }
+      ],
+      "has2D": false,
+      "has3D": true
+    },
+    {
+      "control": "right_shoulder",
+      "svg": [],
+      "nodes": [
+        {
+          "id": "part__right_bumper",
+          "file": "right_bumper.obj",
+          "role": "button"
+        }
+      ],
+      "has2D": false,
+      "has3D": true
+    },
+    {
+      "control": "left_trigger",
+      "svg": [],
+      "nodes": [
+        {
+          "id": "part__left_trigger",
+          "file": "left_trigger.obj",
+          "role": "trigger"
+        }
+      ],
+      "has2D": false,
+      "has3D": true
+    },
+    {
+      "control": "right_trigger",
+      "svg": [],
+      "nodes": [
+        {
+          "id": "part__right_trigger",
+          "file": "right_trigger.obj",
+          "role": "trigger"
+        }
+      ],
+      "has2D": false,
+      "has3D": true
+    },
+    {
+      "control": "left_stick",
+      "svg": [],
+      "nodes": [
+        {
+          "id": "part__left_stick",
+          "file": "left_stick.obj",
+          "role": "stick-stem"
+        },
+        {
+          "id": "part__left_ring",
+          "file": "left_ring.obj",
+          "role": "stick-pivot"
+        },
+        {
+          "id": "part__left_cap",
+          "file": "left_cap.obj",
+          "role": "stick-cap"
+        }
+      ],
+      "has2D": false,
+      "has3D": true
+    },
+    {
+      "control": "right_stick",
+      "svg": [],
+      "nodes": [
+        {
+          "id": "part__right_stick",
+          "file": "right_stick.obj",
+          "role": "stick-stem"
+        },
+        {
+          "id": "part__right_ring",
+          "file": "right_ring.obj",
+          "role": "stick-pivot"
+        },
+        {
+          "id": "part__right_cap",
+          "file": "right_cap.obj",
+          "role": "stick-cap"
+        }
+      ],
+      "has2D": false,
+      "has3D": true
+    },
+    {
+      "control": "start",
+      "svg": [],
+      "nodes": [
+        {
+          "id": "part__start_button",
+          "file": "start_button.obj",
+          "role": "button"
+        }
+      ],
+      "has2D": false,
+      "has3D": true
+    }
+  ]
+}

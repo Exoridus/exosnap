@@ -34,6 +34,10 @@ struct Choice {
     LocalizedText label;
     bool selectable = true;
     std::optional<LocalizedText> reason;
+    // The choice identifies something that cannot be recognized again after this run,
+    // such as a device without a stable identity. Selecting it holds a runtime-only
+    // selection that is never written to the source settings.
+    bool session_only = false;
 };
 
 struct ChoiceSnapshot {

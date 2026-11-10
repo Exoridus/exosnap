@@ -289,6 +289,12 @@ engine::Outcome<std::monostate> VisualSourceManager::Retry(engine::VisualAddress
     return std::monostate{};
 }
 
+void VisualSourceManager::RepublishScene() {
+    if (shutting_down_ || mutating_ || revision_.value == 0)
+        return;
+    PublishScene();
+}
+
 engine::Outcome<engine::ConfigRevision> VisualSourceManager::PublishScene() {
     engine::PreparedSceneDescription scene;
     scene.revision = revision_;

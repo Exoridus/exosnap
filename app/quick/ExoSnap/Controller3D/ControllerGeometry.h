@@ -1,38 +1,39 @@
 #pragma once
 
-#include "ControllerMechanics.h"
+#include "ControllerState.h"
+
 #include <QQuick3DGeometry>
 #include <QtQmlIntegration/qqmlintegration.h>
 
 namespace exosnap::quick {
 
+/// Uploads one immutable controller primitive into the scene that owns it.
+/// Geometry objects belong to a single scene, so every scene creates its own
+/// while the vertex bytes stay implicitly shared with the cached model.
 class ControllerGeometry : public QQuick3DGeometry {
     Q_OBJECT
     QML_ELEMENT
-    Q_PROPERTY(Part part READ part WRITE setPart NOTIFY geometryChanged FINAL)
-    Q_PROPERTY(int generation READ generation NOTIFY geometryChanged FINAL)
+    Q_PROPERTY(ControllerState* controller READ controller WRITE setController NOTIFY sourceChanged FINAL)
+    Q_PROPERTY(int mesh READ mesh WRITE setMesh NOTIFY sourceChanged FINAL)
 
   public:
-    enum Part { Stem, Rim, Cap, Well, Shell };
-    Q_ENUM(Part)
     explicit ControllerGeometry(QQuick3DObject* parent = nullptr);
-    Part part() const {
-        return part_;
+    ControllerState* controller() const noexcept {
+        return controller_;
     }
-    int generation() const {
-        return generation_;
+    int mesh() const noexcept {
+        return mesh_;
     }
-    void setPart(Part part);
-    bool SetDimensions(const StickDimensions& dimensions);
+    void setController(ControllerState* controller);
+    void setMesh(int mesh);
 
   signals:
-    void geometryChanged();
+    void sourceChanged();
 
   private:
-    void Rebuild();
-    Part part_ = Stem;
-    int generation_ = 0;
-    StickDimensions dimensions_;
+    void Upload();
+    ControllerState* controller_ = nullptr;
+    int mesh_ = -1;
 };
 
 } // namespace exosnap::quick

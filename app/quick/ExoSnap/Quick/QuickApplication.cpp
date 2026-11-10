@@ -2,6 +2,7 @@
 
 #include "CaptureExclusion.h"
 #include "EditThumbnailImageProvider.h"
+#include "extensions/BuiltinVisualSettings.h"
 #include "models/VisualSceneEdits.h"
 
 #include <QScopedValueRollback>
@@ -772,6 +773,27 @@ void QuickApplication::initializeRecordWorkflow() {
         composition.normalized_source_rect = record_view_model_adapter_.normalizedSourceRect();
         composition.video = live_config_.video;
         composition.visual_runtime = visual_runtime_;
+        if (accepted_visual_scene_ && visual_sources_) {
+            for (const auto& source : accepted_visual_scene_->sources) {
+                if (!source.enabled || source.type_id != "org.exosnap.gamepad/controller" ||
+                    std::ranges::none_of(accepted_visual_scene_->items, [&](const auto& item) {
+                        return item.source == source.id && item.properties.output_visible;
+                    }))
+                    continue;
+                const auto settings = ProjectGamepadSettings(source.settings);
+                if (!settings.succeeded() || settings.value()->view == GamepadView::TwoDimensional)
+                    continue;
+                const auto address = visual_sources_->CurrentAddress(source.id);
+                const auto status = address ? visual_sources_->Status(*address) : std::nullopt;
+                if (!status || status->token.address != *address) {
+                    callback(
+                        false, 0, 0, {},
+                        QCoreApplication::translate("QuickApplication", "The requested 3D source is unavailable."));
+                    return;
+                }
+                composition.required_gpu_tokens.push_back(status->token);
+            }
+        }
         record_preview_adapter_.requestReadyFrame(std::move(composition), std::move(callback));
     });
     wireRecordCommands();
@@ -937,6 +959,7 @@ void QuickApplication::initializeRecordWorkflow() {
                         if (const auto status = visual_sources_->Status(*address);
                             status && status->token.address == *address) {
                             row.request_revision = status->token.request.value;
+                            row.native_gamepad = gamepad_overlay_.NativeDiagnostics(status->token);
                             switch (status->phase) {
                             case SourcePhase::Dormant:
                                 row.provider_phase = "dormant";
@@ -1917,7 +1940,8 @@ void QuickApplication::selectTarget(int target_index, CaptureMode mode) {
     record_view_model_.capture_mode = mode;
     const capability::CaptureTargetKind target_kind =
         mode == CaptureMode::Window ? capability::CaptureTargetKind::Window : capability::CaptureTargetKind::Display;
-    record_view_model_.ApplyTargetKindPreservingAudio(target_kind);
+    record_view_model_.ApplyTargetKindPreservingAudio(
+        target_kind, live_config_.audio_intent ? &*live_config_.audio_intent : nullptr);
     if (mode == CaptureMode::Window) {
         DWORD process_id = 0;
         GetWindowThreadProcessId(reinterpret_cast<HWND>(target.native_id), &process_id);
@@ -3528,6 +3552,22 @@ void QuickApplication::initializeVisualSources() {
             [this](const VisualSourceRecord& source) {
                 return RetainVisualChoice(visual_layout_choices_,
                                           source.settings["layout"].value_or(std::string{"auto"}));
+            },
+            [this](const VisualSourceRecord& source) {
+                ChoiceSnapshot choices{visual_gamepad_choices_.revision, {}};
+                const auto saved_device = QString::fromStdString(source.settings["device"].value_or(std::string{}));
+                const bool current_source = source.id == visual_gamepad_source_;
+                const auto device = current_source && !gamepad_overlay_.sessionDevice().isEmpty()
+                                        ? gamepad_overlay_.sessionDevice()
+                                        : saved_device;
+                for (const auto& option : gamepad_overlay_.viewsForDevice(device)) {
+                    const auto row = option.toMap();
+                    choices.choices.push_back({row.value(QStringLiteral("value")).toString().toStdString(),
+                                               {"", row.value(QStringLiteral("label")).toString().toStdString()},
+                                               row.value(QStringLiteral("selectable")).toBool(),
+                                               {}});
+                }
+                return RetainVisualChoice(choices, source.settings["view"].value_or(std::string{"2d"}));
             })) ||
         !accept(visual_registry_.Seal()))
         return;
@@ -3551,6 +3591,20 @@ void QuickApplication::initializeVisualSources() {
         });
     QObject::connect(&gamepad_overlay_, &GamepadOverlay::devicesChanged, &record_view_model_adapter_,
                      [this] { refreshVisualGamepadChoices(); });
+    QObject::connect(&settings_adapter_, &SettingsAdapter::visualSessionChoiceChanged, &gamepad_overlay_,
+                     [this](const QString& source, const QString& path, const QString& choice) {
+                         if (path == QStringLiteral("device") &&
+                             engine::FromUuid<engine::VisualSourceId>(source.toStdString()) == visual_gamepad_source_)
+                             gamepad_overlay_.setSessionDevice(choice);
+                     });
+    QObject::connect(&gamepad_overlay_, &GamepadOverlay::viewsChanged, &record_view_model_adapter_,
+                     [this] { refreshVisualGamepadChoices(); });
+    QObject::connect(&gamepad_overlay_, &GamepadOverlay::visualBindingInvalidated, &record_view_model_adapter_, [this] {
+        if (!shutting_down_visual_sources_ && visual_sources_) {
+            visual_sources_->RepublishScene();
+            record_preview_adapter_.visualContentChanged();
+        }
+    });
     QObject::connect(&gamepad_overlay_, &GamepadOverlay::frameChanged, &record_view_model_adapter_, [this] {
         if (!shutting_down_visual_sources_)
             record_preview_adapter_.visualContentChanged();
@@ -3589,7 +3643,8 @@ void QuickApplication::refreshVisualGamepadChoices() {
             destination.choices.push_back({std::move(id),
                                            {"", row.value(QStringLiteral("label")).toString().toStdString()},
                                            row.value(QStringLiteral("selectable"), true).toBool(),
-                                           {}});
+                                           {},
+                                           row.value(QStringLiteral("sessionOnly")).toBool()});
         }
     };
     update(visual_gamepad_choices_, gamepad_overlay_.devices(), false);
@@ -3610,6 +3665,9 @@ void QuickApplication::updateVisualSources(uint8_t demand) {
     visual_camera_item_ = camera_target.second;
     const auto gamepad_target = VisualPilotTarget(desired, "org.exosnap.gamepad/controller", visual_registry_,
                                                   {visual_gamepad_source_, visual_gamepad_item_});
+    // A runtime-only device selection belongs to the previous source.
+    if (gamepad_target.first != visual_gamepad_source_)
+        gamepad_overlay_.setSessionDevice({});
     visual_gamepad_source_ = gamepad_target.first;
     visual_gamepad_item_ = gamepad_target.second;
     const bool verification = !recording_coordinator_->VerificationWebcamSourceName().isEmpty();
@@ -3677,7 +3735,7 @@ void QuickApplication::updateVisualSources(uint8_t demand) {
         if (!applied.succeeded()) {
             diagnostics::AppLog::warning(QStringLiteral("visual"), QString::fromStdString(applied.error()->context));
         } else {
-            const auto accepted_at = gamepad::GameInputSource::NowCapture100ns();
+            const auto accepted_at = gamepad::NowCapture100ns();
             accepted_visual_scene_ = std::move(*validated.value());
             accepted_visual_revision_ = *applied.value();
             accepted_visual_qpc_100ns_ = accepted_at;
@@ -7296,6 +7354,10 @@ OverlayTelemetryAdapter* QuickApplication::overlayTelemetryAdapter() noexcept {
 }
 SettingsAdapter* QuickApplication::settingsAdapter() noexcept {
     return &settings_adapter_;
+}
+
+const GamepadOverlay* QuickApplication::gamepadOverlay() const noexcept {
+    return &gamepad_overlay_;
 }
 AudioRoutingAdapter* QuickApplication::audioRoutingAdapter() noexcept {
     return &audio_routing_adapter_;

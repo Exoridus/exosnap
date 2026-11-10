@@ -39,45 +39,44 @@
     },
     {
       "id": "btn-l4",
-      "control": "left_paddle1",
-      "file": "elements/btn-l4.svg",
       "role": "button",
       "binding": null,
       "bounds": {
-        "x": 95.91773223876952,
-        "y": 248.56684875488278,
-        "width": 38.96781158447264,
-        "height": 42.64530944824216
+        "x": 129.7137298583984,
+        "y": 239.87915039062497,
+        "width": 35.30149841308594,
+        "height": 30.164825439453097
       },
       "pressElement": "btn-l4-pressure",
       "inputStatus": "unqualified",
       "preview": {
         "key": "l4",
         "label": "Left back button"
-      }
+      },
+      "control": "left_paddle1",
+      "file": "elements/btn-l4.svg"
     },
     {
       "id": "btn-r4",
-      "control": "right_paddle1",
-      "file": "elements/btn-r4.svg",
       "role": "button",
       "binding": null,
       "bounds": {
-        "x": 409.82107543945307,
-        "y": 248.56684875488278,
-        "width": 38.967803955078125,
-        "height": 42.64530944824216
+        "x": 379.6913757324218,
+        "y": 239.87915039062497,
+        "width": 35.301513671875,
+        "height": 30.164825439453097
       },
       "pressElement": "btn-r4-pressure",
       "inputStatus": "unqualified",
       "preview": {
         "key": "r4",
         "label": "Right back button"
-      }
+      },
+      "control": "right_paddle1",
+      "file": "elements/btn-r4.svg"
     },
     {
       "id": "trigger-r2",
-      "control": "right_trigger",
       "file": "elements/trigger-r2.svg",
       "role": "trigger",
       "binding": {
@@ -97,11 +96,11 @@
       "motion": {
         "fillDirection": "bottom-to-top"
       },
-      "pressElement": "trigger-r2-pressure"
+      "pressElement": "trigger-r2-pressure",
+      "control": "right_trigger"
     },
     {
       "id": "trigger-l2",
-      "control": "left_trigger",
       "file": "elements/trigger-l2.svg",
       "role": "trigger",
       "binding": {
@@ -121,11 +120,11 @@
       "motion": {
         "fillDirection": "bottom-to-top"
       },
-      "pressElement": "trigger-l2-pressure"
+      "pressElement": "trigger-l2-pressure",
+      "control": "left_trigger"
     },
     {
       "id": "btn-r1",
-      "control": "right_shoulder",
       "file": "elements/btn-r1.svg",
       "role": "button",
       "binding": {
@@ -138,11 +137,11 @@
         "width": 81.409423828125,
         "height": 45.56962585449217
       },
-      "pressElement": "btn-r1-pressure"
+      "pressElement": "btn-r1-pressure",
+      "control": "right_shoulder"
     },
     {
       "id": "btn-l1",
-      "control": "left_shoulder",
       "file": "elements/btn-l1.svg",
       "role": "button",
       "binding": {
@@ -155,12 +154,11 @@
         "width": 80.64315795898435,
         "height": 45.30841827392577
       },
-      "pressElement": "btn-l1-pressure"
+      "pressElement": "btn-l1-pressure",
+      "control": "left_shoulder"
     },
     {
       "id": "stick-r-cap",
-      "control": "right_stick",
-      "clickControl": "right_stick_click",
       "file": "elements/stick-r-cap.svg",
       "role": "stick",
       "binding": {
@@ -187,12 +185,12 @@
         "yPositive": "up"
       },
       "pressElement": "stick-r-cap-pressure",
-      "knockout": "stick-r-cap-outline"
+      "knockout": "stick-r-cap-outline",
+      "control": "right_stick",
+      "clickControl": "right_stick_click"
     },
     {
       "id": "stick-l-cap",
-      "control": "left_stick",
-      "clickControl": "left_stick_click",
       "file": "elements/stick-l-cap.svg",
       "role": "stick",
       "binding": {
@@ -214,16 +212,17 @@
           183.65000916126527,
           222.50600624084785
         ],
-        "travelRadius": 9.886280822753905,
+        "travelRadius": 9.886280822753903,
         "deadzone": 0.08,
         "yPositive": "up"
       },
       "pressElement": "stick-l-cap-pressure",
-      "knockout": "stick-l-cap-outline"
+      "knockout": "stick-l-cap-outline",
+      "control": "left_stick",
+      "clickControl": "left_stick_click"
     },
     {
       "id": "btn-home",
-      "control": "guide",
       "file": "elements/btn-home.svg",
       "role": "button",
       "binding": {
@@ -233,15 +232,16 @@
       },
       "bounds": {
         "x": 255.84748840332028,
-        "y": 203.15254211425778,
+        "y": 203.15254211425776,
         "width": 35.75059509277341,
         "height": 18.964141845703125
       },
-      "pressElement": "home-logo-press"
+      "pressElement": "home-logo",
+      "pressMode": "tint",
+      "control": "guide"
     },
     {
       "id": "btn-mute",
-      "control": "misc1",
       "file": "elements/btn-mute.svg",
       "role": "button",
       "binding": null,
@@ -257,11 +257,11 @@
         "label": "Mute (graphic only)"
       },
       "pressElement": "btn-mute-face",
-      "pressColor": "#ff8a3d"
+      "pressColor": "#ff8a3d",
+      "control": "misc1"
     },
     {
       "id": "btn-view",
-      "control": "back",
       "file": "elements/btn-view.svg",
       "role": "button",
       "binding": {
@@ -273,11 +273,11 @@
         "y": 85.15076446533202,
         "width": 14.957412719726562,
         "height": 33.071250915527344
-      }
+      },
+      "control": "back"
     },
     {
       "id": "btn-menu",
-      "control": "start",
       "file": "elements/btn-menu.svg",
       "role": "button",
       "binding": {
@@ -287,13 +287,13 @@
       "bounds": {
         "x": 398.39819335937494,
         "y": 84.70223236083983,
-        "width": 15.085662841796875,
+        "width": 15.085662841796877,
         "height": 33.81901550292969
-      }
+      },
+      "control": "start"
     },
     {
       "id": "btn-triangle",
-      "control": "north",
       "file": "elements/btn-triangle.svg",
       "role": "button",
       "binding": {
@@ -305,11 +305,11 @@
         "y": 110.84999847412108,
         "width": 36.962860107421875,
         "height": 31.549995422363267
-      }
+      },
+      "control": "north"
     },
     {
       "id": "btn-square",
-      "control": "west",
       "file": "elements/btn-square.svg",
       "role": "button",
       "binding": {
@@ -320,12 +320,12 @@
         "x": 387.98001098632807,
         "y": 146.67999267578122,
         "width": 37.379974365234375,
-        "height": 29.650009155273438
-      }
+        "height": 29.65000915527344
+      },
+      "control": "west"
     },
     {
       "id": "btn-cross",
-      "control": "south",
       "file": "elements/btn-cross.svg",
       "role": "button",
       "binding": {
@@ -334,14 +334,14 @@
       },
       "bounds": {
         "x": 428.8999938964843,
-        "y": 180.95625305175778,
+        "y": 180.95625305175776,
         "width": 35.8719482421875,
         "height": 27.3074951171875
-      }
+      },
+      "control": "south"
     },
     {
       "id": "btn-circle",
-      "control": "east",
       "file": "elements/btn-circle.svg",
       "role": "button",
       "binding": {
@@ -353,11 +353,11 @@
         "y": 144.31608581542966,
         "width": 34.69000244140625,
         "height": 30.947662353515625
-      }
+      },
+      "control": "east"
     },
     {
       "id": "btn-up",
-      "control": "dpad_up",
       "file": "elements/btn-up.svg",
       "role": "button",
       "binding": {
@@ -366,14 +366,14 @@
       },
       "bounds": {
         "x": 80.7261505126953,
-        "y": 125.59111022949217,
+        "y": 125.59111022949216,
         "width": 31.909698486328125,
         "height": 29.872741699218736
-      }
+      },
+      "control": "dpad_up"
     },
     {
       "id": "btn-left",
-      "control": "dpad_left",
       "file": "elements/btn-left.svg",
       "role": "button",
       "binding": {
@@ -385,11 +385,11 @@
         "y": 149.31759643554685,
         "width": 38.62359619140624,
         "height": 24.7537841796875
-      }
+      },
+      "control": "dpad_left"
     },
     {
       "id": "btn-down",
-      "control": "dpad_down",
       "file": "elements/btn-down.svg",
       "role": "button",
       "binding": {
@@ -401,11 +401,11 @@
         "y": 168.4311370849609,
         "width": 31.28179168701172,
         "height": 30.46539306640625
-      }
+      },
+      "control": "dpad_down"
     },
     {
       "id": "btn-right",
-      "control": "dpad_right",
       "file": "elements/btn-right.svg",
       "role": "button",
       "binding": {
@@ -415,13 +415,13 @@
       "bounds": {
         "x": 105.04013061523436,
         "y": 149.5274963378906,
-        "width": 38.620666503906236,
-        "height": 24.544052124023438
-      }
+        "width": 38.62066650390624,
+        "height": 24.54405212402344
+      },
+      "control": "dpad_right"
     },
     {
       "id": "btn-touchpad",
-      "control": "touchpad",
       "file": "elements/btn-touchpad.svg",
       "role": "button",
       "binding": {
@@ -435,45 +435,46 @@
         "width": 227.17555236816403,
         "height": 114.1476135253906
       },
-      "pressElement": "touchpad-surface"
+      "pressElement": "touchpad-surface",
+      "control": "touchpad"
     },
     {
       "id": "btn-fn-l",
-      "control": "left_paddle2",
-      "file": "elements/btn-fn-l.svg",
       "role": "button",
       "binding": null,
       "bounds": {
-        "x": 166.6500091552734,
-        "y": 254.81120300292966,
-        "width": 34,
-        "height": 17.025100708007784
+        "x": 170.6500091552734,
+        "y": 255.8973236083984,
+        "width": 26,
+        "height": 12.660751342773407
       },
       "pressElement": "btn-fn-l-face",
       "inputStatus": "unqualified",
       "preview": {
         "key": "fn-l",
         "label": "Fn left"
-      }
+      },
+      "control": "left_paddle2",
+      "file": "elements/btn-fn-l.svg"
     },
     {
       "id": "btn-fn-r",
-      "control": "right_paddle2",
-      "file": "elements/btn-fn-r.svg",
       "role": "button",
       "binding": null,
       "bounds": {
-        "x": 344.5919799804687,
-        "y": 254.62922668457028,
-        "width": 34,
-        "height": 17.323501586914034
+        "x": 348.5919799804687,
+        "y": 255.7599945068359,
+        "width": 26,
+        "height": 12.92362976074216
       },
       "pressElement": "btn-fn-r-face",
       "inputStatus": "unqualified",
       "preview": {
         "key": "fn-r",
         "label": "Fn right"
-      }
+      },
+      "control": "right_paddle2",
+      "file": "elements/btn-fn-r.svg"
     }
   ]
 }

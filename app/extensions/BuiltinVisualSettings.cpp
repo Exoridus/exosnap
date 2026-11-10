@@ -36,8 +36,16 @@ template <typename T> bool ReadInteger(const toml::table& table, std::string_vie
 engine::Outcome<GamepadOverlaySettings> ProjectGamepadSettings(const toml::table& table) {
     GamepadOverlaySettings settings;
     std::string layout = "auto";
-    if (!ReadExact(table, "device", settings.device) || !ReadExact(table, "layout", layout))
-        return engine::EngineError{.context = "Gamepad device and layout must be strings"};
+    std::string view = "2d";
+    if (!ReadExact(table, "device", settings.device) || !ReadExact(table, "layout", layout) ||
+        !ReadExact(table, "view", view))
+        return engine::EngineError{.context = "Gamepad device, layout and view must be strings"};
+    if (view == "3d-normal")
+        settings.view = GamepadView::NativeNormal;
+    else if (view == "3d-ghost")
+        settings.view = GamepadView::NativeGhost;
+    else if (view != "2d")
+        return engine::EngineError{.context = "Unknown gamepad view"};
     if (SanitizeGamepadOverlaySettings(settings).device != settings.device)
         return engine::EngineError{.context = "Invalid gamepad device identity"};
     if (layout != "auto") {
@@ -75,7 +83,7 @@ engine::Outcome<WebcamSettings> ProjectWebcamSettings(const toml::table& table) 
 }
 
 VisualSourceType MakeGamepadVisualSourceType(SourceFactory factory, CachedVisualOptions devices,
-                                             CachedVisualOptions layouts) {
+                                             CachedVisualOptions layouts, CachedVisualOptions views) {
     VisualSourceType type;
     type.id = "org.exosnap.gamepad/controller";
     type.label = {"VisualSources", QT_TRANSLATE_NOOP("VisualSources", "Gamepad")};
@@ -84,6 +92,11 @@ VisualSourceType MakeGamepadVisualSourceType(SourceFactory factory, CachedVisual
                              .control = ControlKind::Select,
                              .default_value = std::string{},
                              .options_id = "devices"},
+                            {.path = "view",
+                             .label = {"VisualSources", QT_TRANSLATE_NOOP("VisualSources", "View")},
+                             .control = ControlKind::Select,
+                             .default_value = std::string("2d"),
+                             .options_id = "views"},
                             {.path = "layout",
                              .label = {"VisualSources", QT_TRANSLATE_NOOP("VisualSources", "Layout")},
                              .control = ControlKind::Select,
@@ -107,8 +120,15 @@ VisualSourceType MakeGamepadVisualSourceType(SourceFactory factory, CachedVisual
          ActionOperation::SelectProperty,
          "layout",
          "layouts"},
+        {"select-view",
+         {"VisualSources", QT_TRANSLATE_NOOP("VisualSources", "Select view")},
+         ActionOperation::SelectProperty,
+         "view",
+         "views"},
         {"retry", {"VisualSources", QT_TRANSLATE_NOOP("VisualSources", "Retry")}, ActionOperation::Retry, {}, {}}};
-    type.options = {{"devices", std::move(devices)}, {"layouts", std::move(layouts)}};
+    if (!views)
+        views = [](const VisualSourceRecord&) { return ChoiceSnapshot{}; };
+    type.options = {{"devices", std::move(devices)}, {"layouts", std::move(layouts)}, {"views", std::move(views)}};
     type.create = std::move(factory);
     return type;
 }

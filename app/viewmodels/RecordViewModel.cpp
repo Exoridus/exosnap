@@ -2,6 +2,7 @@
 #include <QCoreApplication>
 
 #include "../diagnostics/error_message.h"
+#include "../models/AudioRoutingMigration.h"
 #include "../models/CaptureTargetPresentation.h"
 #include "../services/DisplayNumbering.h"
 #include "../settings/RecordingHistoryStore.h"
@@ -462,13 +463,21 @@ void RecordViewModel::ApplyTargetKind(capability::CaptureTargetKind kind) {
     RebuildAudioPlan();
 }
 
-void RecordViewModel::ApplyTargetKindPreservingAudio(capability::CaptureTargetKind kind) {
+void RecordViewModel::ApplyTargetKindPreservingAudio(capability::CaptureTargetKind kind,
+                                                     const engine::AudioIntent* intent) {
     audio_ui_state.target_kind = kind;
     if (kind != capability::CaptureTargetKind::Window) {
         audio_ui_state.selected_window_pid.reset();
     }
 
-    if (kind == capability::CaptureTargetKind::Window) {
+    if (intent) {
+        // Capture selection changes the environment, not the authored source graph.
+        // A projection-only App row would invalidate later legacy settings edits.
+        if (const auto* legacy = std::get_if<engine::LegacyRows25Intent>(intent))
+            ProjectLegacyAudioIntent(*legacy, audio_ui_state);
+        else
+            ProjectNativeAudioIntent(std::get<engine::TrackGraph1Intent>(*intent), audio_ui_state);
+    } else if (kind == capability::CaptureTargetKind::Window) {
         using K = exosnap::engine::AudioSourceKind;
         const bool has_app = std::any_of(audio_ui_state.source_rows.begin(), audio_ui_state.source_rows.end(),
                                          [](const exosnap::engine::AudioSourceRow& r) { return r.kind == K::App; });

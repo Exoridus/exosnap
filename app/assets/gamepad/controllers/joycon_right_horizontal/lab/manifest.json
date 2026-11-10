@@ -1,0 +1,45 @@
+{
+  "schemaVersion": 1,
+  "id": "joycon_right_horizontal",
+  "label": "Joy-Con R · horizontal",
+  "has2D": true,
+  "has3D": false,
+  "availability": "proxy",
+  "sourceModelId": null,
+  "format2D": "source.svg + mapping.json + generated elements + controls.json",
+  "format3D": null,
+  "runtime2D": "Qt QPainter/QSvgRenderer prepared atlas, not SVG render on every frame",
+  "runtime3D": null,
+  "controlContract": "canonical GamepadState v1; one host input, separate 2D/3D render rules",
+  "playerIndex": "provider-only; unknown is null; browser Gamepad.index is not player index",
+  "licensing": {
+    "svg": "MIT",
+    "svgCopyright": "Copyright (c) 2024 Al. Lopez",
+    "mesh": null,
+    "separateSourceLicenses": true
+  },
+  "missing2DElements": [],
+  "geometry": null,
+  "sourceHashes": {
+    "references/controllers/joycon_right_horizontal/source.svg": "1a57bfdb2e4558d0b79cfef865c1e6d58b7410f0a3b53cfedaf15c951e5722a0",
+    "references/controllers/joycon_right_horizontal/mapping.json": "32873ca326e57d10ba42cde4395111f05979f02257910de822b7733ae6ecd63e"
+  },
+  "fileHashes": {
+    "source.svg": "1a57bfdb2e4558d0b79cfef865c1e6d58b7410f0a3b53cfedaf15c951e5722a0",
+    "mapping.json": "32873ca326e57d10ba42cde4395111f05979f02257910de822b7733ae6ecd63e",
+    "elements/body.svg": "bea58394cb5ef44b20de7f6ad3691a0f0f42715e72d6895fc0403d0f673caa83",
+    "elements/btn-sl.svg": "c9f03a122b35412d4ea0b4ecdca89753479c88ea8e1907af281a34b3dbccb857",
+    "elements/btn-sr.svg": "4f88352ca193973466f691fdac2d3ee38f1c80d6f6ff95c0165e8825199fd486",
+    "elements/btn-aux-zr.svg": "476d495d9dbf8380546c239439c02cd6aeae4b1f942a3cfbe443031227403df7",
+    "elements/btn-aux-r.svg": "99e09badde8f1fdcd16e1cccb6f65fcf33cfef36402eb1c648012dfbd182f660",
+    "elements/btn-x.svg": "a79e18b9cffac21b77d59c3b4c972c11785af44595b2dabee5190b8ca2cae613",
+    "elements/btn-y.svg": "a4f42c0a26ccb162fa852dae2e8f1b66ccecfe82542647b323ba01669340114f",
+    "elements/btn-a.svg": "c2be2b23b2132d1146c0c66dceba62130440d5201961e3b7eac701674d734328",
+    "elements/btn-b.svg": "71f9cab0e4d5ef21e047c935fbd91a6dfb1601ab2d0c8117494da23fbf349538",
+    "elements/btn-home.svg": "55c449131c21394361aa81eadbeabd8280f185d8151c16d4de32c17383858880",
+    "elements/stick-l-cap.svg": "1c0dbde073d35bf510f7383fc6290b117545aa0e2c4f40e92dcb1e86c1a96914",
+    "elements/btn-menu.svg": "8681b703a4a2564e124bbccc2a7fe098ba3e591b867bf4966cac82313031a2ca",
+    "controls.json": "54b88066652d6e54f518216571103527524d7419d7e9752cadc40a34fe79423f"
+  },
+  "nativeQtValidated": false
+}

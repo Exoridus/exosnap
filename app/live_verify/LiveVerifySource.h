@@ -115,6 +115,11 @@ class LiveVerifySource {
     // the result back to see what it became.
     virtual bool SettingsSet(const QString& key, const QJsonValue& value, QString* error) = 0;
     // Observes the same revision and identities used by the profile inspector.
+    [[nodiscard]] virtual QJsonObject GamepadSnapshot() const = 0;
+    virtual bool SelectGamepadDevice(const QString& source_id, const QString& item_id, const QString& edit_revision,
+                                     const QString& choice, QString* error) = 0;
+    virtual bool SelectGamepadLayout(const QString& source_id, const QString& item_id, const QString& edit_revision,
+                                     const QString& choice, QString* error) = 0;
     [[nodiscard]] virtual QJsonObject AudioRoutingSnapshot() const = 0;
     virtual bool AddAudioTrack(quint64 expected_revision, QString* error) = 0;
     virtual bool AssignAudioSource(const QString& source_id, const QString& track_id, int mode,

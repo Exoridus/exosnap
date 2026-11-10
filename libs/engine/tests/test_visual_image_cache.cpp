@@ -76,6 +76,28 @@ class VisualImageCache : public testing::Test {
     std::string error;
 };
 
+TEST_F(VisualImageCache, PremultipliedGpuColorBlendsAlphaAndOpacityExactlyOnce) {
+    D3D11_TEXTURE2D_DESC desc{};
+    desc.Width = desc.Height = 2;
+    desc.MipLevels = desc.ArraySize = 1;
+    desc.Format = DXGI_FORMAT_R8G8B8A8_UNORM;
+    desc.SampleDesc.Count = 1;
+    desc.BindFlags = D3D11_BIND_SHADER_RESOURCE;
+    const std::array<uint8_t, 16> pixels{128, 0, 0, 128, 128, 0, 0, 128, 128, 0, 0, 128, 128, 0, 0, 128};
+    const D3D11_SUBRESOURCE_DATA data{pixels.data(), 8, 0};
+    winrt::com_ptr<ID3D11Texture2D> texture;
+    winrt::com_ptr<ID3D11ShaderResourceView> view;
+    ASSERT_TRUE(SUCCEEDED(device->CreateTexture2D(&desc, &data, texture.put())));
+    ASSERT_TRUE(SUCCEEDED(device->CreateShaderResourceView(texture.get(), nullptr, view.put())));
+    ASSERT_TRUE(compositor.BeginFrame(background.get(), error)) << error;
+    ASSERT_TRUE(compositor.DrawVisualGpu(view.get(), {0, 0, 2, 2}, false, error)) << error;
+    EXPECT_NEAR(Pixel()[2], 128, 1);
+    ASSERT_TRUE(compositor.BeginFrame(background.get(), error)) << error;
+    ASSERT_TRUE(compositor.DrawVisualGpu(view.get(), {0, 0, 2, 2}, false, error, 0.5F)) << error;
+    EXPECT_NEAR(Pixel()[2], 64, 1);
+    EXPECT_EQ(compositor.WebcamUploadCount(), 0u);
+}
+
 TEST_F(VisualImageCache, ReusesOnlyTheExactTokenResourceAndSequence) {
     const std::array addresses{first.address};
     ASSERT_TRUE(compositor.PrepareVisualImages(addresses, error));

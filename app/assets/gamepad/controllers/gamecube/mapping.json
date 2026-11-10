@@ -87,7 +87,7 @@
         "x": 314.5,
         "y": 59.859615325927734,
         "width": 638.97802734375,
-        "height": 373.42889404296875
+        "height": 373.4288940429687
       },
       "motion": {
         "fillDirection": "bottom-to-top"
@@ -113,7 +113,12 @@
     },
     {
       "id": "dpad",
-      "controls": {"up": "dpad_up", "down": "dpad_down", "left": "dpad_left", "right": "dpad_right"},
+      "controls": {
+        "up": "dpad_up",
+        "down": "dpad_down",
+        "left": "dpad_left",
+        "right": "dpad_right"
+      },
       "file": "elements/dpad.svg",
       "role": "directional-pad",
       "binding": {
@@ -161,7 +166,7 @@
         "x": 3340.821533203125,
         "y": 626.7186889648438,
         "width": 284.4619140625,
-        "height": 454.83135986328125
+        "height": 454.8313598632813
       },
       "pressElement": "btn-x-face"
     },
@@ -269,7 +274,7 @@
       "motion": {
         "center": [
           755.4354248046875,
-          1001.2678527832031
+          1001.2678527832032
         ],
         "travelRadius": 74.53155212402343,
         "deadzone": 0.08,

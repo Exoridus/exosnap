@@ -8,6 +8,8 @@ pub mod brand;
 pub mod build_artifacts;
 pub mod cli_flags;
 pub mod commit_policy;
+#[cfg(feature = "dev-tools")]
+pub mod controller_packs;
 pub mod crash_dump;
 pub mod dependency_patch;
 pub mod distribution;
