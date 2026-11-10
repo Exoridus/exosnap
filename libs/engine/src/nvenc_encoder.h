@@ -485,7 +485,7 @@ class NvencEncoder {
         return static_cast<int32_t>(m_slots.size());
     }
 
-    [[nodiscard]] EncoderInputRequirements GetInputRequirements() const noexcept {
+    [[nodiscard]] const EncoderInputRequirements& GetInputRequirements() const noexcept {
         return m_inputRequirements;
     }
 
