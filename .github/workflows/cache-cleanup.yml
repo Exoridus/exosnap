@@ -110,10 +110,11 @@ jobs:
               if grep -q 'HTTP 404' "$err"; then
                 return 0
               fi
-              if grep -qi 'rate limit' "$err"; then
+              if grep -q 'HTTP 429' "$err" || grep -qi 'rate limit' "$err"; then
                 # A primary limit resets on an hourly boundary, far beyond any
                 # backoff worth sleeping through. Stop instead of spending the
-                # remaining job time on retries that cannot succeed.
+                # remaining job time on retries that cannot succeed. A 429 may
+                # arrive as a bare "Too Many Requests" without that phrase.
                 if [ "$attempt" -ge 3 ]; then
                   echo "::warning::cache id $id: API rate limit is spent; stopping this run."
                   return 3
@@ -181,6 +182,7 @@ jobs:
             delete_ref "refs/pull/$PR_NUMBER/head" "$MAX_PR_DELETES"
             if [ "$quota_stop" -eq 1 ]; then
               echo "::warning::cache cleanup stopped at the hourly API quota; the scheduled sweep continues."
+              echo "Cleanup stopped at the hourly API quota; the scheduled sweep continues." >> "$GITHUB_STEP_SUMMARY"
             fi
             exit 0
           fi
@@ -267,6 +269,11 @@ jobs:
           protected="$work/protected.json"
           gh pr list --state open --limit 1000 \
             --json number,headRefName,baseRefName > "$open_prs"
+          if ! jq -e 'all(.[]; has("headRefName") and has("baseRefName"))' \
+            "$open_prs" > /dev/null; then
+            echo "::error::open PR listing is missing headRefName or baseRefName; refusing to select"
+            exit 1
+          fi
           build_protected "$open_prs" > "$protected"
           if [[ "$CURRENT_REF" == refs/heads/* ]]; then
             jq --arg ref "$CURRENT_REF" '. + [$ref] | unique' \
@@ -354,6 +361,8 @@ jobs:
           echo "Deleted $deleted_total entries; $failed_total deletion attempts failed."
           if [ "$quota_stop" -eq 1 ]; then
             echo "::warning::Remaining cache usage was not re-measured because the API quota is spent; the next sweep continues."
+            echo "" >> "$GITHUB_STEP_SUMMARY"
+            echo "Sweep stopped at the hourly API quota after deleting $deleted_total entries; the next sweep continues." >> "$GITHUB_STEP_SUMMARY"
           else
             list_all | jq -s '.' > "$caches"
             remaining_entries=$(jq 'length' "$caches")
