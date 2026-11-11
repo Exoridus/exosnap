@@ -28,9 +28,9 @@ on:
 #
 #   - on pull_request.closed, the closed PR's own merge and head scopes;
 #   - weekly (and on manual dispatch), every ref that is neither a protected
-#     branch, nor an open pull request's scope or head branch, nor the ref of
-#     the run itself. That covers PR scopes closed before this cleanup existed,
-#     stale feature-branch scopes and tag scopes.
+#     branch, nor an open pull request's scope, head branch or base branch, nor
+#     the ref of the run itself. That covers PR scopes closed before this
+#     cleanup existed, stale feature-branch scopes and tag scopes.
 #
 # The weekly path runs from the repository's default branch (main), so this
 # file must also exist on main. A change that only lands on next cannot fix the
@@ -39,9 +39,13 @@ on:
 # Listings use the paginated REST API rather than `gh cache list --limit`,
 # because the repository holds more entries than one listing returns. Deletes
 # are retried with exponential backoff: both 429 and 403 are used for rate
-# limiting, and a burst of deletes will hit them. The selection rule is
-# self-tested against a fixture on every sweep, and workflow_dispatch defaults
-# to a dry run so an operator can inspect the plan before deleting anything.
+# limiting, and a burst of deletes will hit them. The repository token allows
+# roughly a thousand API requests per hour, so a run that exhausts the quota
+# stops cleanly and leaves the rest to the next sweep instead of spending its
+# job timeout on retries that cannot succeed. The selection and protection
+# rules are each self-tested against a fixture on every sweep, and
+# workflow_dispatch defaults to a dry run so an operator can inspect the plan
+# before deleting anything.
 #
 # A pull request from a fork receives a read-only token. Its close handler
 # warns instead of failing; the weekly sweep, which runs with this repository's
@@ -89,10 +93,12 @@ jobs:
 
           work=$(mktemp -d)
           trap 'rm -rf "$work"' EXIT
+          quota_stop=0
 
           # Returns 0 on success (including an entry that is already gone),
-          # 2 when the token may not delete at all, and 1 after retries are
-          # exhausted. Callers treat 2 as "leave the rest to the sweep".
+          # 2 when the token may not delete at all, 1 after retries are
+          # exhausted, and 3 when the hourly API quota is spent. Callers stop
+          # the run on 2 or 3 and leave the rest to the next sweep.
           delete_cache() {
             local id="$1" attempt=1 delay=2 err="$work/delete.err"
             while [ "$attempt" -le 6 ]; do
@@ -105,7 +111,13 @@ jobs:
                 return 0
               fi
               if grep -qi 'rate limit' "$err"; then
-                : # retry below
+                # A primary limit resets on an hourly boundary, far beyond any
+                # backoff worth sleeping through. Stop instead of spending the
+                # remaining job time on retries that cannot succeed.
+                if [ "$attempt" -ge 3 ]; then
+                  echo "::warning::cache id $id: API rate limit is spent; stopping this run."
+                  return 3
+                fi
               elif grep -q 'HTTP 403' "$err"; then
                 echo "::warning::not permitted to delete cache id $id; a read-only token cannot clean a fork PR."
                 return 2
@@ -149,6 +161,10 @@ jobs:
                   echo "::warning::ref $ref: deletion is not permitted; leaving the remaining entries to the weekly sweep."
                   break
                 fi
+                if [ "$status" -eq 3 ]; then
+                  quota_stop=1
+                  break
+                fi
                 failed=$((failed + 1))
               fi
               sleep 0.2
@@ -163,6 +179,9 @@ jobs:
             fi
             delete_ref "refs/pull/$PR_NUMBER/merge" "$MAX_PR_DELETES"
             delete_ref "refs/pull/$PR_NUMBER/head" "$MAX_PR_DELETES"
+            if [ "$quota_stop" -eq 1 ]; then
+              echo "::warning::cache cleanup stopped at the hourly API quota; the scheduled sweep continues."
+            fi
             exit 0
           fi
 
@@ -208,18 +227,47 @@ jobs:
           fi
           echo "Cache deletion selector self-test passed."
 
+          # The protected set is the other decision input: every ref that a run
+          # can still read. A pull request restores its base branch's scope as
+          # well as writing its own, so an open PR's base branch is as protected
+          # as its head branch.
+          build_protected() {
+            local prs_file="$1"
+            jq --arg default "$DEFAULT_BRANCH" '
+              [ .[] | .number as $n
+                | (.headRefName // "") as $h
+                | (.baseRefName // "") as $b
+                | ["refs/pull/\($n)/merge", "refs/pull/\($n)/head"]
+                  + (if $h == "" then [] else ["refs/heads/\($h)"] end)
+                  + (if $b == "" then [] else ["refs/heads/\($b)"] end) ]
+              | add // []
+              | . + ["refs/heads/\($default)", "refs/heads/main", "refs/heads/next"]
+              | unique
+            ' "$prs_file"
+          }
+
+          fixture_prs="$work/fixture-prs.json"
+          cat > "$fixture_prs" <<'JSON'
+          [{"number":900,"headRefName":"open-pr","baseRefName":"integrate-parent"}]
+          JSON
+          fixture_built=$(build_protected "$fixture_prs")
+          for want in \
+            refs/pull/900/merge refs/pull/900/head \
+            refs/heads/open-pr refs/heads/integrate-parent \
+            refs/heads/main refs/heads/next; do
+            if ! jq -e --arg want "$want" 'index($want) != null' \
+              <<<"$fixture_built" > /dev/null; then
+              echo "::error::protected-set self-test failed: $want is missing"
+              exit 1
+            fi
+          done
+          echo "Protected-set self-test passed."
+
           open_prs="$work/open-prs.json"
           protected="$work/protected.json"
           gh pr list --state open --limit 1000 \
-            --json number,headRefName > "$open_prs"
-          jq --arg default "$DEFAULT_BRANCH" '
-            [ .[] | .number as $n | (.headRefName // "") as $h
-              | ["refs/pull/\($n)/merge", "refs/pull/\($n)/head"]
-                + (if $h == "" then [] else ["refs/heads/\($h)"] end) ]
-            | add // []
-            | . + ["refs/heads/\($default)", "refs/heads/main", "refs/heads/next"]
-            | unique
-          ' "$open_prs" > "$protected"
+            --json number,headRefName,baseRefName > "$open_prs"
+          build_protected "$open_prs" > "$protected"
           if [[ "$CURRENT_REF" == refs/heads/* ]]; then
             jq --arg ref "$CURRENT_REF" '. + [$ref] | unique' \
               "$protected" > "$protected.tmp"
@@ -284,25 +332,38 @@ jobs:
               if delete_cache "$id"; then
                 deleted_total=$((deleted_total + 1))
               else
+                status=$?
+                if [ "$status" -eq 3 ]; then
+                  quota_stop=1
+                  break
+                fi
                 failed_total=$((failed_total + 1))
               fi
               sleep 0.2
             done < <(jq -r '.[] | [.id] | @tsv' "$plan")
+            if [ "$quota_stop" -eq 1 ]; then
+              echo "::warning::Round $round stopped at the hourly API quota; the next sweep continues."
+              break
+            fi
             round=$((round + 1))
           done
           if [ "$round" -gt "$max_rounds" ]; then
             echo "::warning::cache sweep stopped after $max_rounds rounds; unreachable entries may remain."
           fi
 
-          list_all | jq -s '.' > "$caches"
-          remaining_entries=$(jq 'length' "$caches")
-          remaining_gib=$(jq -r '(([.[].size_in_bytes] | add // 0) / 1073741824 * 100 | round) / 100' "$caches")
           echo "Deleted $deleted_total entries; $failed_total deletion attempts failed."
-          echo "Remaining cache usage: $remaining_entries entries, $remaining_gib GiB."
-          {
-            echo ""
-            echo "After sweep: $remaining_entries entries, $remaining_gib GiB."
-          } >> "$GITHUB_STEP_SUMMARY"
+          if [ "$quota_stop" -eq 1 ]; then
+            echo "::warning::Remaining cache usage was not re-measured because the API quota is spent; the next sweep continues."
+          else
+            list_all | jq -s '.' > "$caches"
+            remaining_entries=$(jq 'length' "$caches")
+            remaining_gib=$(jq -r '(([.[].size_in_bytes] | add // 0) / 1073741824 * 100 | round) / 100' "$caches")
+            echo "Remaining cache usage: $remaining_entries entries, $remaining_gib GiB."
+            {
+              echo ""
+              echo "After sweep: $remaining_entries entries, $remaining_gib GiB."
+            } >> "$GITHUB_STEP_SUMMARY"
+          fi
           if [ "$failed_total" -gt 0 ]; then
             echo "::warning::$failed_total cache entries could not be deleted; the next scheduled sweep will retry."
           fi

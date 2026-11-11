@@ -28,6 +28,10 @@ runs:
         $json = sccache --show-stats --stats-format=json
         if ($LASTEXITCODE -ne 0) { throw 'sccache --show-stats --stats-format=json failed' }
         $stats = $json | ConvertFrom-Json
+        if ($null -eq $stats -or $null -eq $stats.stats -or
+            $null -eq $stats.stats.cache_hits -or $null -eq $stats.stats.cache_misses) {
+          throw 'sccache stats JSON is missing stats.cache_hits or stats.cache_misses'
+        }
 
         function Get-CountSum($counts) {
           if ($null -eq $counts) { return [int64]0 }
@@ -42,7 +46,9 @@ runs:
         $writeErrors = [int64]$stats.stats.cache_write_errors
         $readErrors = [int64]$stats.stats.cache_read_errors
         $total = $hits + $misses
-        $rate = if ($total -gt 0) { '{0:N2} %' -f (100.0 * $hits / $total) } else { 'n/a' }
+        $rate = if ($total -gt 0) {
+          [string]::Format([Globalization.CultureInfo]::InvariantCulture, '{0:F2} %', (100.0 * $hits / $total))
+        } else { 'n/a' }
         $mode = if ($stats.effective_cache_mode) { $stats.effective_cache_mode } else { 'unknown' }
 
         @(

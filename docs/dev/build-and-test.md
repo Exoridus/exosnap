@@ -132,15 +132,17 @@ GitHub applies one repository-wide cache cap (10 GB at the time of writing) with
 | Scope | Writer | Readers |
 |---|---|---|
 | `refs/heads/next` | `cache-warm.yml`, the crash-capture push handler | PRs against `next` |
-| `refs/heads/main` | the nightly advisory run | PRs against `main` |
-| `refs/pull/<N>/merge` | no sccache writes (clang-tidy results only) | that PR's own runs |
-| `refs/tags/v*` | no sccache writes (clang-tidy results only) | that tag's run |
+| `refs/heads/main` | the nightly advisory run (debug preset only) | PRs against `main` |
+| `refs/pull/<N>/merge` | clang-tidy results and the crash-capture FetchContent tree; no sccache objects | that PR's own runs |
+| `refs/tags/v*` | no sccache objects | that tag's run |
 
-Pull requests, tags and release-candidate builds set `SCCACHE_GHA_RW_MODE=READ_ONLY`. A read-only miss compiles normally; it only declines to add a scope that dies with the PR or tag. Do not make PR builds read-write again without accounting for the closed scopes that then compete with the shared branch cache. The blocking clang-tidy result cache is separate, small and PR-scoped; the sccache object cache is the budget consumer.
+Pull requests, tags and release-candidate builds set `SCCACHE_GHA_RW_MODE=READ_ONLY`. A read-only miss compiles normally and the backend counts the refused write as one write error, so a read-only job reports one write error per miss. The mode only declines to add a scope that dies with the PR or tag. Do not make PR builds read-write again without accounting for the closed scopes that then compete with the shared branch cache. The blocking clang-tidy result cache is separate, small and PR-scoped.
 
-`cache-cleanup.yml` deletes only scopes it can prove are unreachable: a closed PR's own scope on close, and weekly every scope that is not `main`, `next`, an open PR or the running ref. It runs from the default branch, so the scheduled sweep uses the file on `main`. A change that only lands on `next` cannot fix the schedule. Manual dispatch defaults to a dry run and the selection rule is self-tested against a fixture.
+Manual `workflow_dispatch` is the exception to the table: `cache-warm.yml`, `advisory-checks.yml` and the crash-capture workflow keep their read-write default, so a dispatch on a tag writes that tag's scope. Treat a manual dispatch as a deliberate write.
 
-The cache does not hold build directories, PDBs, Qt SDK trees or Cargo target directories. Do not add them: the backend has no per-cache quota to divide, only the one LRU cap, and those artifacts are much larger than the compiler objects they would replace.
+`cache-cleanup.yml` deletes only scopes it can prove are unreachable: a closed PR's own scope on close, and weekly every scope that is not `main`, `next`, an open PR's scope, head branch or base branch, or the running ref. It runs from the default branch, so the scheduled sweep uses the file on `main`. A change that only lands on `next` cannot fix the schedule. Manual dispatch defaults to a dry run, and the selection and protection rules are each self-tested against a fixture. The repository token allows about a thousand API requests per hour, so a run that exhausts the quota stops with a warning and leaves the rest to the next sweep; clearing a large backlog takes several sweeps.
+
+The cache holds no sccache build directories, PDBs, Qt SDK trees or Cargo target directories. The one exception is the crash-capture workflow's `es-fetchcontent-*` entry, the sentry-native FetchContent build tree, which is about 0.8 GiB and is written to the branch or PR scope that runs it. It exists because rebuilding that tree dominates the crash-capture job. Do not add other build trees: the backend has no per-cache quota to divide, only the one LRU cap, and those artifacts are much larger than the compiler objects they would replace.
 
 ## Documentation gate
 
