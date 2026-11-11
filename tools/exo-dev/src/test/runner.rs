@@ -127,31 +127,37 @@ fn direct_build_targets(
     build_dir: &Path,
     tests: &[catalog::CatalogTest],
 ) -> Result<Vec<String>, String> {
+    // Canonicalized once so the comparison survives different drive or segment
+    // casing. An executable that has not been built yet is resolved through its
+    // parent directory, which does exist in a configured tree.
+    let root = std::fs::canonicalize(build_dir).unwrap_or_else(|_| build_dir.to_path_buf());
     let mut targets = Vec::new();
     for test in tests.iter().filter(|test| !test.disabled) {
         let Some(executable) = test.command.first() else {
-            return Err(format!("selected test {} has no command", test.name));
+            // ctest reports a command only for an executable that already
+            // exists, so a freshly configured tree lands here.
+            return Err(format!("selected test {} has no executable yet", test.name));
         };
         let path = PathBuf::from(executable);
-        let path =
-            std::path::absolute(&path).map_err(|error| format!("test {}: {error}", test.name))?;
-        let relative = match path.strip_prefix(build_dir) {
-            Ok(relative) => relative.to_path_buf(),
-            Err(_) => match std::fs::canonicalize(&path) {
-                Ok(path) => path
-                    .strip_prefix(build_dir)
-                    .map(Path::to_path_buf)
-                    .map_err(|_| {
-                        format!("test {} does not run a build-tree executable", test.name)
-                    })?,
-                Err(_) => {
-                    return Err(format!(
-                        "test {} does not run a build-tree executable",
-                        test.name
-                    ));
-                }
+        if !path.is_absolute() {
+            return Err(format!(
+                "test {} does not run an absolute build-tree executable",
+                test.name
+            ));
+        }
+        let resolved = match std::fs::canonicalize(&path) {
+            Ok(path) => path,
+            Err(_) => match path
+                .parent()
+                .and_then(|parent| std::fs::canonicalize(parent).ok())
+            {
+                Some(parent) => parent.join(path.file_name().unwrap_or_default()),
+                None => path,
             },
         };
+        let relative = resolved
+            .strip_prefix(&root)
+            .map_err(|_| format!("test {} does not run a build-tree executable", test.name))?;
         targets.push(relative.to_string_lossy().replace('\\', "/"));
     }
     targets.sort();
@@ -259,6 +265,7 @@ pub fn run(options: &Options, host: &dyn Host, console: &mut Console) -> RunResu
         keep_config_dir: false,
         tree_mark: None,
         targets: options.build_targets.clone(),
+        auto_resolved: false,
         receipt,
         completed: false,
         published: false,
@@ -296,6 +303,8 @@ struct Run<'a> {
     tree_mark: Option<(String, String)>,
     /// The build targets this run asked for, after `auto` resolution.
     targets: Vec<String>,
+    /// True when `targets` came from the selected tests rather than the caller.
+    auto_resolved: bool,
     receipt: Receipt,
     completed: bool,
     published: bool,
@@ -579,27 +588,11 @@ impl Run<'_> {
         };
         self.receipt.tests_selected = selected.len();
         if !self.targets.is_empty() {
-            let tree = std::fs::canonicalize(&self.build_dir)?;
-            let mut binaries = Vec::new();
-            for test in selected.iter().filter(|test| !test.disabled) {
-                let previous = binaries.len();
-                if let Some(executable) = test.command.first() {
-                    let path = PathBuf::from(executable);
-                    if path.is_absolute() {
-                        let path = std::path::absolute(path)?;
-                        if let Ok(relative) = path.strip_prefix(&self.build_dir) {
-                            binaries.push(relative.to_string_lossy().replace('\\', "/"));
-                        } else if let Ok(path) = std::fs::canonicalize(path) {
-                            if let Ok(relative) = path.strip_prefix(&tree) {
-                                binaries.push(relative.to_string_lossy().replace('\\', "/"));
-                            }
-                        }
-                    }
-                }
-                if binaries.len() == previous {
+            let binaries = match direct_build_targets(&self.build_dir, &selected) {
+                Ok(binaries) => binaries,
+                Err(detail) => {
                     let detail = format!(
-                        "cannot prove dependencies of selected test {} outside the Ninja build graph; use a full build",
-                        test.name
+                        "{detail}; cannot prove the selected test outputs, use a full build"
                     );
                     self.receipt.freshness = Freshness::Unknown;
                     self.receipt.freshness_detail = detail.clone();
@@ -607,10 +600,8 @@ impl Run<'_> {
                     self.invalid(detail);
                     return Ok(3);
                 }
-            }
+            };
             if !binaries.is_empty() {
-                binaries.sort();
-                binaries.dedup();
                 self.receipt.resolved_test_targets = binaries.clone();
                 if self.options.no_build {
                     let (freshness, detail) = self.ninja_freshness(&cache, &binaries)?;
@@ -623,15 +614,19 @@ impl Run<'_> {
                         return Ok(3);
                     }
                 } else {
-                    self.console.line(format!(
-                        "Building selected test outputs [{}]...",
-                        binaries.join(", ")
-                    ));
-                    let code = self.build(&binaries)?;
-                    self.receipt.build_exit_code = Some(code);
-                    if code != 0 {
-                        self.receipt.build_status = "failed";
-                        return Ok(code);
+                    // An auto run already built exactly these outputs before
+                    // the suite selection was read a second time.
+                    if !self.auto_resolved {
+                        self.console.line(format!(
+                            "Building selected test outputs [{}]...",
+                            binaries.join(", ")
+                        ));
+                        let code = self.build(&binaries)?;
+                        self.receipt.build_exit_code = Some(code);
+                        if code != 0 {
+                            self.receipt.build_status = "failed";
+                            return Ok(code);
+                        }
                     }
                     let current =
                         catalog::query(&self.build_dir, &self.options.config, &selection, &env)
@@ -830,6 +825,7 @@ impl Run<'_> {
                     targets.len()
                 ));
                 self.targets = targets;
+                self.auto_resolved = true;
                 self.receipt.build_targets = self.targets.clone();
             }
             Ok(_) => self.full_build_fallback("the selection matches no enabled test"),

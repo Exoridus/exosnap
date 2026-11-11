@@ -454,6 +454,44 @@ fn targeted_runs_build_the_selected_executable_before_certifying_its_source() {
 }
 
 #[test]
+fn auto_build_targets_build_the_selected_executable() {
+    let repo = source_repo();
+    let (_root, build) = configured_tree(
+        "find_program(fixture_rustc rustc REQUIRED)\nfile(WRITE \"${CMAKE_CURRENT_SOURCE_DIR}/input.rs\" \"fn main() {}\")\nadd_custom_command(OUTPUT stale-test.exe COMMAND \"${fixture_rustc}\" \"${CMAKE_CURRENT_SOURCE_DIR}/input.rs\" -o stale-test.exe DEPENDS \"${CMAKE_CURRENT_SOURCE_DIR}/input.rs\")\nadd_custom_target(test_binary DEPENDS stale-test.exe)\nadd_test(NAME fixture.binary COMMAND \"${CMAKE_CURRENT_BINARY_DIR}/stale-test.exe\")\nset_tests_properties(fixture.binary PROPERTIES LABELS phase.hermetic)\n",
+    );
+    // CTest omits the command until the executable exists, which is the
+    // documented fallback case. Build it once, then let auto resolve it.
+    let built = std::process::Command::new("cmake")
+        .arg("--build")
+        .arg(&build)
+        .args(["--target", "test_binary"])
+        .output()
+        .unwrap();
+    assert!(built.status.success());
+    let outcome = run(&Options {
+        build_targets: vec!["auto".into()],
+        filter: "^fixture.binary$".into(),
+        ..options(repo.path(), &build)
+    });
+    assert_eq!(outcome.code(), 0, "{}", outcome.output);
+    assert_eq!(outcome.receipt()["reusable"], true);
+    assert_eq!(
+        outcome.receipt()["build_targets"],
+        serde_json::json!(["stale-test.exe"])
+    );
+    assert_eq!(
+        outcome.receipt()["resolved_test_targets"],
+        serde_json::json!(["stale-test.exe"])
+    );
+    assert!(build.join("stale-test.exe").exists());
+    assert!(
+        outcome.output.contains("Focused build: 1 selected tests"),
+        "{}",
+        outcome.output
+    );
+}
+
+#[test]
 fn required_tests_cannot_disappear_or_be_disabled_behind_a_broader_filter() {
     let repo = source_repo();
     for registration in [

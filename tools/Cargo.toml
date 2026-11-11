@@ -18,9 +18,9 @@ lto = "thin"
 codegen-units = 4
 
 # The host tools are rebuilt in their own target directory per worktree, and
-# full DWARF was the largest part of it. Line tables keep panic backtraces
-# (file and line) while dropping variable and type records nobody reads from a
-# release-style CLI.
+# full debug information was the largest part of it. Line tables keep panic
+# backtraces (function and file/line for non-inlined frames) while dropping
+# variable and type records nobody reads from a release-style CLI.
 [profile.dev]
 debug = "line-tables-only"
 

@@ -1584,6 +1584,18 @@ fn test(repo_root: &std::path::Path, args: TestArgs) -> anyhow::Result<ExitCode>
         runner,
     };
 
+    if args.build_targets.len() > 1
+        && args
+            .build_targets
+            .iter()
+            .any(|target| target == runner::AUTO_BUILD_TARGETS)
+    {
+        anyhow::bail!(
+            "--build-target {} cannot be combined with explicit targets",
+            runner::AUTO_BUILD_TARGETS
+        );
+    }
+
     let options = runner::Options {
         build_dir: args.build_dir,
         config: args.config,
