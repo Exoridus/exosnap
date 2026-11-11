@@ -97,6 +97,15 @@ int main() { std::printf("%d\n", marker()); return 0; }
         Write-Host "  $line"
     }
 
+    # The old checkout disappears only inside this newly created scratch root.
+    # A replayed path now becomes missing, and a no-op should remain a no-op.
+    Remove-Item -LiteralPath $srcA -Recurse -Force
+    $noOp = @(& ninja -C $buildB -n)
+    if ($LASTEXITCODE -ne 0) { throw 'ninja dry-run after source-A removal failed' }
+    $pending = @($noOp | Where-Object { $_ -match '^\[[0-9]+/[0-9]+\]' })
+    Write-Host "No-op edges after removing scratch checkout A: $($pending.Count)"
+    foreach ($line in ($pending | Select-Object -First 5)) { Write-Host "  $line" }
+
     # A healthy dependency graph must recompile when the current header changes.
     # This is a correctness gate independent of cache hit rate.
     Start-Sleep -Milliseconds 1100
