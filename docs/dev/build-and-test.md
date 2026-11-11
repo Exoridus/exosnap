@@ -136,7 +136,7 @@ GitHub applies one repository-wide cache cap (10 GB at the time of writing) with
 | `refs/pull/<N>/merge` | clang-tidy results and the crash-capture FetchContent tree; no sccache objects | that PR's own runs |
 | `refs/tags/v*` | no sccache objects | that tag's run |
 
-Pull requests, tags and release-candidate builds set `SCCACHE_GHA_RW_MODE=READ_ONLY`. A read-only miss compiles normally and the backend counts the refused write as one write error, so a read-only job reports one write error per miss. The mode only declines to add a scope that dies with the PR or tag. Do not make PR builds read-write again without accounting for the closed scopes that then compete with the shared branch cache. The blocking clang-tidy result cache is separate, small and PR-scoped.
+Pull requests, tags and release-candidate builds set `SCCACHE_GHA_RW_MODE=READ_ONLY`. A read-only miss compiles normally, and sccache 0.19 reports the refused write as one write error, so those jobs show one write error per miss. The mode only declines to add a scope that dies with the PR or tag. Do not make PR builds read-write again without accounting for the closed scopes that then compete with the shared branch cache. The blocking clang-tidy result cache is separate, small and PR-scoped.
 
 Manual `workflow_dispatch` is the exception to the table: `cache-warm.yml`, `advisory-checks.yml` and the crash-capture workflow keep their read-write default, so a dispatch on a tag writes that tag's scope. Treat a manual dispatch as a deliberate write.
 
