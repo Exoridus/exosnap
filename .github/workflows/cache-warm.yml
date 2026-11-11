@@ -67,7 +67,9 @@ jobs:
 
       - name: sccache stats
         if: always()
-        run: sccache --show-stats
+        uses: ./.github/actions/sccache-report
+        with:
+          label: windows-x64-ninja-debug
 
   cache-warm-release:
     name: cache-warm (windows-x64-ninja-release)
@@ -98,4 +100,6 @@ jobs:
 
       - name: sccache stats
         if: always()
-        run: sccache --show-stats
+        uses: ./.github/actions/sccache-report
+        with:
+          label: windows-x64-ninja-release

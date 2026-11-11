@@ -200,7 +200,9 @@ jobs:
 
       - name: sccache stats
         if: always()
-        run: sccache --show-stats
+        uses: ./.github/actions/sccache-report
+        with:
+          label: crash-capture windows-x64-ninja-release
 
   # ---------------------------------------------------------------------------
   # The required context for this workflow, for the same reason ci.yml has one:

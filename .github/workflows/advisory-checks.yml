@@ -54,7 +54,9 @@ jobs:
 
       - name: sccache stats
         if: always()
-        run: sccache --show-stats
+        uses: ./.github/actions/sccache-report
+        with:
+          label: advisory windows-x64-ninja-debug
 
       - name: Provision pinned cppcheck
         run: cargo exo-dev setup cppcheck

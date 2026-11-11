@@ -550,7 +550,9 @@ jobs:
 
       - name: sccache stats
         if: always()
-        run: sccache --show-stats
+        uses: ./.github/actions/sccache-report
+        with:
+          label: windows-x64-ninja-debug
 
       - name: Retain clang-tidy performance profile
         if: always()
@@ -664,7 +666,9 @@ jobs:
 
       - name: sccache stats
         if: always()
-        run: sccache --show-stats
+        uses: ./.github/actions/sccache-report
+        with:
+          label: windows-x64-ninja-release
 
       - name: Upload test logs (windows-x64-ninja-release)
         if: failure()
