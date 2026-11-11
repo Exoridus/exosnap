@@ -46,10 +46,12 @@ on:
 # roughly a thousand API requests per hour, so a run that exhausts the quota
 # stops cleanly and leaves the rest to the next sweep instead of spending its
 # job timeout on retries that cannot succeed. A listing that fails for the same
-# reason stops the run before anything is deleted.
+# reason stops the run before it deletes from that listing.
 #
 # Before a ref's entries are deleted, the sweep reads that pull request's
-# current state again. A PR reopened during the run therefore keeps its scope.
+# current state again. A PR reopened before that check keeps its scope; one
+# reopened between the check and the deletes can still lose it, which costs a
+# rebuild of disposable objects.
 # The selection and protection rules are each self-tested against a fixture on
 # every sweep, and workflow_dispatch defaults to a dry run so an operator can
 # inspect the plan before deleting anything.
@@ -176,20 +178,22 @@ jobs:
           # Returns 0 on success, 2/3 for permission/quota failures and 1 for
           # other errors. A failed listing must never feed a deletion plan.
           list_ref() {
-            local ref="$1" attempt=1 delay=2 err="$work/list-ref.err" kind
+            local ref="$1" attempt=1 delay=2 err="$work/list-ref.err" out="$work/list-ref.out" kind
             while [ "$attempt" -le 4 ]; do
-              rm -f "$err"
+              rm -f "$err" "$out"
               if gh api --method GET --paginate \
                 "repos/$GH_REPO/actions/caches" \
                 -f ref="$ref" -f per_page=100 2>"$err" \
-                --jq '.actions_caches[]? | [.id, .ref, .key, .size_in_bytes] | @tsv'; then
+                --jq '.actions_caches[]? | [.id, .ref, .key, .size_in_bytes] | @tsv' \
+                > "$out"; then
+                cat "$out"
                 return 0
               fi
               kind=$(classify_api_error "$err")
               if [ "$kind" = quota ]; then return 3; fi
               if [ "$kind" = permission ]; then return 2; fi
               if [ "$attempt" -eq 4 ]; then
-                echo "::warning::cache listing for $ref failed: $(tr '\n' ' ' < "$err")"
+                echo "::warning::cache listing for $ref failed: $(tr '\n' ' ' < "$err")" >&2
                 return 1
               fi
               sleep "$delay"
@@ -354,20 +358,22 @@ jobs:
           # Returns 0 on success, 2/3 for permission/quota failures and 1 for
           # other errors. A failed listing must never feed a deletion plan.
           list_all() {
-            local attempt=1 delay=2 err="$work/list-all.err" kind
+            local attempt=1 delay=2 err="$work/list-all.err" out="$work/list-all.out" kind
             while [ "$attempt" -le 4 ]; do
-              rm -f "$err"
+              rm -f "$err" "$out"
               if gh api --method GET --paginate \
                 "repos/$GH_REPO/actions/caches" \
                 -f per_page=100 2>"$err" \
-                --jq '.actions_caches[]? | {id, ref, key, size_in_bytes}'; then
+                --jq '.actions_caches[]? | {id, ref, key, size_in_bytes}' \
+                > "$out"; then
+                cat "$out"
                 return 0
               fi
               kind=$(classify_api_error "$err")
               if [ "$kind" = quota ]; then return 3; fi
               if [ "$kind" = permission ]; then return 2; fi
               if [ "$attempt" -eq 4 ]; then
-                echo "::warning::cache listing failed: $(tr '\n' ' ' < "$err")"
+                echo "::warning::cache listing failed: $(tr '\n' ' ' < "$err")" >&2
                 return 1
               fi
               sleep "$delay"
