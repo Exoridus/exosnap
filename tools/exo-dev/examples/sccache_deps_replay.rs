@@ -124,10 +124,28 @@ fn configure_and_build(probe: &Probe, source: &Path, build: &Path) -> Result<()>
             "-G".into(),
             "Ninja".into(),
             "-DCMAKE_CXX_COMPILER_LAUNCHER=sccache".into(),
+            // sccache does not cache MSVC compiles that write a compiler PDB
+            // (`/Zi`); it passes them straight through. The repository embeds
+            // debug information (`/Z7`), so the experiment must match that or
+            // it measures nothing.
+            "-DCMAKE_MSVC_DEBUG_INFORMATION_FORMAT=Embedded".into(),
         ],
     )?;
     probe.run("cmake", &["--build".into(), build.display().to_string()])?;
     Ok(())
+}
+
+/// Dependency entries in `ninja -t deps` naming files that do not exist.
+/// After the populating checkout is retired, every such entry is a replayed
+/// path from the cache entry rather than a header this build can consult.
+fn missing_deps(output: &str, build: &Path) -> Vec<String> {
+    output
+        .lines()
+        .filter(|line| line.starts_with(char::is_whitespace))
+        .map(str::trim)
+        .filter(|dependency| !dependency.is_empty() && !build.join(dependency).exists())
+        .map(str::to_string)
+        .collect()
 }
 
 fn count_ninja_edges(output: &str) -> usize {
@@ -141,16 +159,26 @@ fn count_ninja_edges(output: &str) -> usize {
 }
 
 fn foreign_deps<'a>(output: &'a str, root: &Path) -> Vec<&'a str> {
-    let needle = root
+    // sccache replays the include lines recorded by the compile that populated
+    // the entry. Depending on how the producer's include directories were
+    // spelled, that is the absolute source root or a path relative to the
+    // consuming build directory, so both spellings have to be recognized.
+    let absolute = root
         .to_string_lossy()
         .replace('\\', "/")
         .to_ascii_lowercase();
+    let relative = format!(
+        "/{}/",
+        root.file_name()
+            .unwrap_or_default()
+            .to_string_lossy()
+            .to_ascii_lowercase()
+    );
     output
         .lines()
         .filter(|line| {
-            line.replace('\\', "/")
-                .to_ascii_lowercase()
-                .contains(&needle)
+            let normalized = line.replace('\\', "/").to_ascii_lowercase();
+            normalized.contains(&absolute) || normalized.contains(&relative)
         })
         .collect()
 }
@@ -175,11 +203,27 @@ fn main() -> Result<()> {
     );
     println!("Build A, populating isolated sccache...");
     configure_and_build(&probe, &source_a, &build_a)?;
+
+    // Control: a clean rebuild of the same checkout must hit. Without it, a
+    // zero cross-checkout hit count cannot distinguish a root-sensitive key
+    // from a fixture that sccache never cached.
+    probe.run(
+        "ninja",
+        &[
+            "-C".into(),
+            build_a.display().to_string(),
+            "-t".into(),
+            "clean".into(),
+        ],
+    )?;
     let before = probe.cache_hits()?;
+    probe.run("cmake", &["--build".into(), build_a.display().to_string()])?;
+    let control = probe.cache_hits()?.saturating_sub(before);
+    println!("Same-checkout cache hits (control): {control}");
 
     println!("Build B from a different checkout...");
     configure_and_build(&probe, &source_b, &build_b)?;
-    let hits = probe.cache_hits()?.saturating_sub(before);
+    let hits = probe.cache_hits()?.saturating_sub(before + control);
     let deps = probe.run(
         "ninja",
         &[
@@ -204,7 +248,21 @@ fn main() -> Result<()> {
         &["-C".into(), build_b.display().to_string(), "-n".into()],
     )?;
     let pending = count_ninja_edges(&no_op);
+    let deps_after = probe.run(
+        "ninja",
+        &[
+            "-C".into(),
+            build_b.display().to_string(),
+            "-t".into(),
+            "deps".into(),
+        ],
+    )?;
+    let missing = missing_deps(&deps_after, &build_b);
     println!("Pending no-op edges after retiring A: {pending}");
+    println!("Dependencies naming a missing file: {}", missing.len());
+    for line in missing.iter().take(8) {
+        println!("  {line}");
+    }
 
     // A missed dependency here would be a correctness failure, not just
     // a performance problem. Always check it, even if cache reuse was absent.
@@ -226,12 +284,23 @@ fn main() -> Result<()> {
     }
     println!("PASS: current header edit rebuilt the executable correctly.");
 
-    if hits == 0 {
-        println!("INCONCLUSIVE: no cross-checkout cache hit. No claim about dependency replay.");
-    } else if !foreign.is_empty() {
-        println!("REPRODUCED: sccache replay referenced the previous source root.");
+    if control == 0 {
+        println!(
+            "INCONCLUSIVE: sccache did not serve the same-checkout control, so the fixture \
+             cannot show whether cross-checkout reuse happens."
+        );
+    } else if hits == 0 {
+        println!(
+            "NOT_REPRODUCIBLE: the cache works for this fixture, but the cross-checkout build \
+             did not reuse it."
+        );
+    } else if !missing.is_empty() || pending > 0 {
+        println!(
+            "REPRODUCED: replayed /showIncludes lines name the retired checkout and keep the \
+             consuming tree dirty."
+        );
     } else {
-        println!("PASS: cross-checkout cache hit without foreign dependency paths.");
+        println!("PASS: cross-checkout cache hit without foreign or missing dependency paths.");
     }
     Ok(())
 }
@@ -246,6 +315,29 @@ mod tests {
         let matches = foreign_deps(text, Path::new("C:\\temp\\other"));
         assert_eq!(matches.len(), 1);
         assert!(matches[0].contains("marker.h"));
+    }
+
+    #[test]
+    fn recognizes_foreign_paths_relative_to_the_consuming_build() {
+        let text = "CMakeFiles/p.dir/main.cpp.obj: #deps 1\n    ../source-a/marker.h\n";
+        let matches = foreign_deps(text, Path::new("C:\\temp\\probe\\source-a"));
+        assert_eq!(matches.len(), 1);
+    }
+
+    #[test]
+    fn reports_dependencies_that_a_retired_checkout_left_missing() {
+        let dir = tempfile::tempdir().unwrap();
+        let present = dir.path().join("marker.h");
+        std::fs::write(&present, "").unwrap();
+        let text = format!(
+            "a.obj: #deps 2\n    {}\n    {}\n",
+            dir.path().join("retired/marker.h").display(),
+            present.display()
+        );
+        let missing = missing_deps(&text, dir.path());
+        assert_eq!(missing.len(), 1, "{missing:?}");
+        assert!(missing[0].contains("retired"));
+        assert!(missing_deps("a.obj: #deps 0\n", dir.path()).is_empty());
     }
 
     #[test]
