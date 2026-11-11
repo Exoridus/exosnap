@@ -503,7 +503,8 @@ enum PrCommand {
 
 #[derive(Args)]
 struct TestArgs {
-    /// Build only these CMake targets before testing. Repeat for multiple targets.
+    /// Build only these CMake targets before testing. Repeat for multiple
+    /// targets. Pass `auto` to build the executables of the selected tests.
     #[arg(long = "build-target")]
     build_targets: Vec<String>,
     /// CMake build tree to test, relative to the repository root. The tree

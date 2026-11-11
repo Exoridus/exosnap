@@ -69,6 +69,7 @@ pub struct Options {
     pub jobs: usize,
     pub no_build: bool,
     /// Explicit CMake targets. Empty builds the complete default tree.
+    /// `["auto"]` builds the executables of the selected tests instead.
     pub build_targets: Vec<String>,
     /// Named tests that must be selected and enabled.
     pub required_tests: Vec<String>,
@@ -112,6 +113,51 @@ pub struct RunResult {
 }
 
 const SEPARATOR: &str = "------------------------------------------------------------";
+
+/// The `--build-target` value that derives the build targets from the selected
+/// tests instead of naming them. Only a direct build-tree executable can prove
+/// that its dependencies are in the graph, so anything else falls back to a
+/// complete build rather than guessing.
+pub const AUTO_BUILD_TARGETS: &str = "auto";
+
+/// The build-tree executables of `tests`, as Ninja target paths. A selected
+/// test that does not run a direct executable under `build_dir` makes the
+/// whole selection unprovable, which is the error.
+fn direct_build_targets(
+    build_dir: &Path,
+    tests: &[catalog::CatalogTest],
+) -> Result<Vec<String>, String> {
+    let mut targets = Vec::new();
+    for test in tests.iter().filter(|test| !test.disabled) {
+        let Some(executable) = test.command.first() else {
+            return Err(format!("selected test {} has no command", test.name));
+        };
+        let path = PathBuf::from(executable);
+        let path =
+            std::path::absolute(&path).map_err(|error| format!("test {}: {error}", test.name))?;
+        let relative = match path.strip_prefix(build_dir) {
+            Ok(relative) => relative.to_path_buf(),
+            Err(_) => match std::fs::canonicalize(&path) {
+                Ok(path) => path
+                    .strip_prefix(build_dir)
+                    .map(Path::to_path_buf)
+                    .map_err(|_| {
+                        format!("test {} does not run a build-tree executable", test.name)
+                    })?,
+                Err(_) => {
+                    return Err(format!(
+                        "test {} does not run a build-tree executable",
+                        test.name
+                    ));
+                }
+            },
+        };
+        targets.push(relative.to_string_lossy().replace('\\', "/"));
+    }
+    targets.sort();
+    targets.dedup();
+    Ok(targets)
+}
 
 /// Builds, runs and judges one tree. Never returns an error: every failure is
 /// an exit code, a stated reason and, once the tree lock was held, a receipt.
@@ -212,6 +258,7 @@ pub fn run(options: &Options, host: &dyn Host, console: &mut Console) -> RunResu
         config_dir: None,
         keep_config_dir: false,
         tree_mark: None,
+        targets: options.build_targets.clone(),
         receipt,
         completed: false,
         published: false,
@@ -247,6 +294,8 @@ struct Run<'a> {
     /// secured: the original is then the only copy and must survive.
     keep_config_dir: bool,
     tree_mark: Option<(String, String)>,
+    /// The build targets this run asked for, after `auto` resolution.
+    targets: Vec<String>,
     receipt: Receipt,
     completed: bool,
     published: bool,
@@ -363,6 +412,22 @@ impl Run<'_> {
         self.receipt.generator = generator.clone();
         let ninja = generator.to_ascii_lowercase().contains("ninja");
 
+        // The same selection the suite uses, read before the build so an
+        // `auto` target request can be resolved from it.
+        let pattern = catalog::exclude_pattern(&self.options.exclude_label);
+        self.receipt.exclude_pattern = pattern.clone();
+        let mut selection: Vec<String> = Vec::new();
+        if !self.options.filter.is_empty() {
+            selection.extend(["-R".into(), self.options.filter.clone()]);
+        }
+        if !pattern.is_empty() {
+            selection.extend(["-LE".into(), pattern]);
+        }
+        if let Some(phase) = self.options.phase {
+            selection.extend(["-L".into(), format!("^phase\\.{}$", phase.name())]);
+        }
+        self.resolve_auto_targets(ninja, &selection);
+
         // Build by default, so the run is its own evidence: a build that fails
         // leaves the previous binaries in place, and a suite run against those
         // passes and reads exactly like a pass for the change.
@@ -372,15 +437,15 @@ impl Run<'_> {
             }
             self.console.line(format!(
                 "Building {} in {} ({})...",
-                if self.options.build_targets.is_empty() {
+                if self.targets.is_empty() {
                     "all targets".to_string()
                 } else {
-                    format!("targets [{}]", self.options.build_targets.join(", "))
+                    format!("targets [{}]", self.targets.join(", "))
                 },
                 self.build_dir.display(),
                 self.options.config
             ));
-            let code = self.build(&self.options.build_targets.clone())?;
+            let code = self.build(&self.targets.clone())?;
             self.receipt.build_exit_code = Some(code);
             if code != 0 {
                 self.receipt.build_status = "failed";
@@ -430,18 +495,6 @@ impl Run<'_> {
             }
         }
 
-        let pattern = catalog::exclude_pattern(&self.options.exclude_label);
-        self.receipt.exclude_pattern = pattern.clone();
-        let mut selection: Vec<String> = Vec::new();
-        if !self.options.filter.is_empty() {
-            selection.extend(["-R".into(), self.options.filter.clone()]);
-        }
-        if !pattern.is_empty() {
-            selection.extend(["-LE".into(), pattern]);
-        }
-        if let Some(phase) = self.options.phase {
-            selection.extend(["-L".into(), format!("^phase\\.{}$", phase.name())]);
-        }
         let mut ctest_args: Vec<String> = vec![
             "--test-dir".into(),
             build_dir.clone(),
@@ -525,7 +578,7 @@ impl Run<'_> {
             }
         };
         self.receipt.tests_selected = selected.len();
-        if !self.options.build_targets.is_empty() {
+        if !self.targets.is_empty() {
             let tree = std::fs::canonicalize(&self.build_dir)?;
             let mut binaries = Vec::new();
             for test in selected.iter().filter(|test| !test.disabled) {
@@ -744,6 +797,53 @@ impl Run<'_> {
         Ok(lock)
     }
 
+    /// Turns `--build-target auto` into the executables of the selected tests.
+    /// Anything that cannot be proven to run a direct build-tree executable
+    /// leaves the targets empty, which builds the complete tree: a focused
+    /// build that silently omitted a dependency is worse than a slow one.
+    fn resolve_auto_targets(&mut self, ninja: bool, selection: &[String]) {
+        if self.options.build_targets.len() != 1
+            || self.options.build_targets[0] != AUTO_BUILD_TARGETS
+        {
+            return;
+        }
+        self.targets.clear();
+        if !ninja {
+            self.full_build_fallback(
+                "only a Ninja tree can build a test executable by its output path",
+            );
+            return;
+        }
+        let env = self.env_for(&[]).0;
+        let tests = match catalog::query(&self.build_dir, &self.options.config, selection, &env) {
+            Ok(tests) => tests,
+            Err(reason) => {
+                self.full_build_fallback(&format!("the test catalog is unavailable: {reason}"));
+                return;
+            }
+        };
+        match direct_build_targets(&self.build_dir, &tests) {
+            Ok(targets) if !targets.is_empty() => {
+                self.console.line(format!(
+                    "Focused build: {} selected tests resolve to {} build targets.",
+                    tests.iter().filter(|test| !test.disabled).count(),
+                    targets.len()
+                ));
+                self.targets = targets;
+                self.receipt.build_targets = self.targets.clone();
+            }
+            Ok(_) => self.full_build_fallback("the selection matches no enabled test"),
+            Err(reason) => self.full_build_fallback(&reason),
+        }
+    }
+
+    fn full_build_fallback(&mut self, reason: &str) {
+        self.console.line(format!(
+            "Building the full tree instead of the selected tests: {reason}."
+        ));
+        self.receipt.build_targets.clear();
+    }
+
     fn build(&mut self, targets: &[String]) -> anyhow::Result<i32> {
         let lock = self.acquire(LockKind::Build)?;
         self.host.checkpoint(Checkpoint::BeforeBuild)?;
@@ -792,10 +892,10 @@ impl Run<'_> {
     /// asked, and a timestamp comparison is not an answer: a copied or
     /// restored tree keeps the mtimes it was created with.
     fn freshness(&mut self, ninja: bool, cache: &Path) -> anyhow::Result<(Freshness, String)> {
-        if !self.options.no_build && (self.options.build_targets.is_empty() || ninja) {
+        if !self.options.no_build && (self.targets.is_empty() || ninja) {
             return Ok((
                 Freshness::Fresh,
-                if self.options.build_targets.is_empty() {
+                if self.targets.is_empty() {
                     "built by this invocation".into()
                 } else {
                     "selected targets built by this invocation".into()
@@ -808,7 +908,7 @@ impl Run<'_> {
                 "this generator cannot report staleness without building; drop --no-build",
             );
         }
-        self.ninja_freshness(cache, &self.options.build_targets)
+        self.ninja_freshness(cache, &self.targets)
     }
 
     fn ninja_freshness(
@@ -1129,5 +1229,50 @@ impl Run<'_> {
             self.console
                 .line(format!("        ... and {} more", names.len() - LIMIT));
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn test(name: &str, command: &str) -> catalog::CatalogTest {
+        catalog::CatalogTest {
+            name: name.into(),
+            command: vec![command.into()],
+            labels: Vec::new(),
+            disabled: false,
+        }
+    }
+
+    #[test]
+    fn direct_targets_are_build_tree_executables_in_ninja_spelling() {
+        let root = Path::new(r"C:\repo\build");
+        let targets = direct_build_targets(
+            root,
+            &[
+                test("a", r"C:\repo\build\app\a.exe"),
+                test("b", r"C:\repo\build\libs\b.exe"),
+                test("a-again", r"C:\repo\build\app\a.exe"),
+            ],
+        )
+        .unwrap();
+        assert_eq!(targets, ["app/a.exe", "libs/b.exe"]);
+    }
+
+    #[test]
+    fn a_selected_test_outside_the_build_tree_refuses_targeting() {
+        let root = Path::new(r"C:\repo\build");
+        let error =
+            direct_build_targets(root, &[test("wrapper", r"C:\elsewhere\python.exe")]).unwrap_err();
+        assert!(error.contains("wrapper"), "{error}");
+    }
+
+    #[test]
+    fn disabled_tests_do_not_require_targets() {
+        let root = Path::new(r"C:\repo\build");
+        let mut disabled = test("off", r"C:\elsewhere\tool.exe");
+        disabled.disabled = true;
+        assert!(direct_build_targets(root, &[disabled]).unwrap().is_empty());
     }
 }
