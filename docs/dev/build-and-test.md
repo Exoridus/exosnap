@@ -127,6 +127,14 @@ Build, test and receipt publication share a host lock per build directory. Indep
 
 Every test run writes `<BuildDir>/Testing/last-run-receipt.json`, including a failing run. `reusable` is true only when build/source identity, phase declarations, census and evidence requirements hold. Targeted runs record requested build targets and the resolved test executable outputs actually built. A clean printed case list does not override an unusable receipt. `--no-build` can refuse stale binaries (exit 3); `--allow-stale` deliberately weakens that claim. Exit 4 means no usable verdict, not a passing product. Retain raw build/CTest exit codes and failure classification when diagnosing the runner. Missing diagnostic evidence does not replace a known timeout or abnormal-exit cause.
 
+## Local build footprint and cache reuse
+
+A complete Debug Ninja tree measured 24.6 GB: PDBs 8.0 GB, `.ilk` files 6.36 GB, objects 5.3 GB, executables 2.0 GB and staged runtime DLLs 1.75 GB. Test executables still link incrementally. Disabling that was measured and not adopted: it removes 6.36 GB of `.ilk` and costs only 0.37 s on one test binary (7.03 s incremental against 7.40 s full on the 45 MB `record_source_picker_qml_tests`), but a change to a widely linked library then relinks about 270 test binaries in 48 s instead of 13 s. Reconsider it once the dependency replay below is clean, because a no-op build in such a tree relinks the same 270 binaries.
+
+`sccache` is shared across worktrees and hits objects compiled in another checkout, because it relativizes the paths under the working directory. Its replayed `/showIncludes` lines still name the worktree that populated the entry. Once that worktree is gone, Ninja sees the recorded headers as missing, treats the object as dirty on every build and rebuilds it from the cache, which relinks its dependents. A measured tree did that for about 300 edges on every build, 13 s with incremental test links. Delete that one worktree and the paths must be corrected before the tree settles: `SCCACHE_BASEDIRS` set to the worktree root rewrote the replayed paths into the current tree in a measurement, while the default configuration keeps the stale ones. This repository does not set it. Expect a cache-warmed tree to settle at a short nonzero no-op build rather than none, and do not read that relink as a source change.
+
+The Rust host tools build with line-table debug information only. A panic backtrace still names the function, file and line; measured on `exo-dev` alone, a clean target directory went from 1318 MB to 875 MB.
+
 ## CI cache lifecycle
 
 GitHub applies one repository-wide cache cap (10 GB at the time of writing) with LRU eviction. It scopes entries to the ref that wrote them. A pull request can restore its base branch's scope, so `next` is the shared compiler cache for development PRs and `main` is the shared scope for PRs that target the release branch.
