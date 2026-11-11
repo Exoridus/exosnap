@@ -125,6 +125,23 @@ Build, test and receipt publication share a host lock per build directory. Indep
 
 Every test run writes `<BuildDir>/Testing/last-run-receipt.json`, including a failing run. `reusable` is true only when build/source identity, phase declarations, census and evidence requirements hold. Targeted runs record requested build targets and the resolved test executable outputs actually built. A clean printed case list does not override an unusable receipt. `--no-build` can refuse stale binaries (exit 3); `--allow-stale` deliberately weakens that claim. Exit 4 means no usable verdict, not a passing product. Retain raw build/CTest exit codes and failure classification when diagnosing the runner. Missing diagnostic evidence does not replace a known timeout or abnormal-exit cause.
 
+## CI cache lifecycle
+
+GitHub applies one repository-wide cache cap (10 GB at the time of writing) with LRU eviction. It scopes entries to the ref that wrote them. A pull request can restore its base branch's scope, so `next` is the shared compiler cache for development PRs and `main` is the shared scope for PRs that target the release branch.
+
+| Scope | Writer | Readers |
+|---|---|---|
+| `refs/heads/next` | `cache-warm.yml`, the crash-capture push handler | PRs against `next` |
+| `refs/heads/main` | the nightly advisory run | PRs against `main` |
+| `refs/pull/<N>/merge` | no sccache writes (clang-tidy results only) | that PR's own runs |
+| `refs/tags/v*` | no sccache writes (clang-tidy results only) | that tag's run |
+
+Pull requests, tags and release-candidate builds set `SCCACHE_GHA_RW_MODE=READ_ONLY`. A read-only miss compiles normally; it only declines to add a scope that dies with the PR or tag. Do not make PR builds read-write again without accounting for the closed scopes that then compete with the shared branch cache. The blocking clang-tidy result cache is separate, small and PR-scoped; the sccache object cache is the budget consumer.
+
+`cache-cleanup.yml` deletes only scopes it can prove are unreachable: a closed PR's own scope on close, and weekly every scope that is not `main`, `next`, an open PR or the running ref. It runs from the default branch, so the scheduled sweep uses the file on `main`. A change that only lands on `next` cannot fix the schedule. Manual dispatch defaults to a dry run and the selection rule is self-tested against a fixture.
+
+The cache does not hold build directories, PDBs, Qt SDK trees or Cargo target directories. Do not add them: the backend has no per-cache quota to divide, only the one LRU cap, and those artifacts are much larger than the compiler objects they would replace.
+
 ## Documentation gate
 
 ```powershell
