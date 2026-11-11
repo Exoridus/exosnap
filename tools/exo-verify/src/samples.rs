@@ -14,7 +14,7 @@ use anyhow::{Context as _, Result, bail};
 use clap::Subcommand;
 use serde::Deserialize;
 use serde_json::{Value, json};
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, BTreeSet};
 use std::path::{Path, PathBuf};
 use std::process::{Command, ExitCode};
 use std::time::{Duration, Instant};
@@ -108,6 +108,8 @@ fn mkv() -> String {
 pub struct Requirements {
     #[serde(default)]
     pub capabilities: Vec<String>,
+    #[serde(default)]
+    pub encoders: Vec<String>,
 }
 
 #[derive(Debug, Deserialize)]
@@ -118,6 +120,9 @@ pub enum Oracle {
         #[serde(default)]
         min_frames: u64,
     },
+    /// Every declared A/V stream decodes with ordered timing and covers an
+    /// independently specified recording duration and minimum frame count.
+    RecordingIntegrity(media::integrity::Expectation),
     /// Video presentation timestamps strictly increase and never leave a gap
     /// longer than `max_gap_ms`.
     Timestamps { max_gap_ms: f64 },
@@ -144,6 +149,7 @@ impl Oracle {
     fn name(&self) -> &'static str {
         match self {
             Oracle::DecodeIntegrity { .. } => "decode-integrity",
+            Oracle::RecordingIntegrity(_) => "recording-integrity",
             Oracle::Timestamps { .. } => "timestamps",
             Oracle::Keyframes { .. } => "keyframes",
             Oracle::Metadata { .. } => "metadata",
@@ -196,8 +202,32 @@ fn validate(sample: &Sample) -> Result<()> {
     if sample.oracles.as_slice().is_empty() {
         bail!("a sample needs at least one oracle");
     }
+    for oracle in sample.oracles.as_slice() {
+        if let Oracle::RecordingIntegrity(expected) = oracle {
+            expected.validate()?;
+        }
+    }
     for c in &sample.requirements.capabilities {
         Capability::parse(c).with_context(|| format!("unknown capability '{c}'"))?;
+    }
+    if !sample.requirements.encoders.is_empty() {
+        if !sample
+            .requirements
+            .capabilities
+            .iter()
+            .any(|name| name == "ffmpeg")
+        {
+            bail!("encoder requirements need the ffmpeg capability");
+        }
+        for encoder in &sample.requirements.encoders {
+            if encoder.is_empty()
+                || !encoder
+                    .chars()
+                    .all(|c| c.is_ascii_lowercase() || c.is_ascii_digit() || c == '-' || c == '_')
+            {
+                bail!("invalid encoder requirement '{encoder}'");
+            }
+        }
     }
     Ok(())
 }
@@ -250,24 +280,13 @@ fn input_file(run: &Run, sample: &Sample) -> Step<PathBuf> {
 }
 
 fn decode_integrity(run: &mut Run, file: &Path, min_frames: u64) -> Step {
-    let result = tools::run(
-        Command::new(tools::require("ffmpeg")?)
-            .args(["-v", "error", "-nostdin", "-i"])
-            .arg(file)
-            .args(["-f", "null", "-"]),
-        Duration::from_secs(600),
-    )?;
-    let errors: Vec<&str> = result
-        .stderr
-        .lines()
-        .filter(|l| !l.trim().is_empty())
-        .collect();
-    run.put("decodeErrors", errors.len());
+    let result = media::integrity::decode_all(file)?;
+    run.put("decodeErrors", result.errors);
     product_ensure!(
-        result.success() && errors.is_empty(),
+        result.success,
         "decoding reported {} error(s), first: {}",
-        errors.len(),
-        errors.first().copied().unwrap_or("exit status")
+        result.errors,
+        result.first_error.as_deref().unwrap_or("exit status")
     );
     let (frames, _) = media::frame_packet_counts(file)?;
     run.put("frames", frames);
@@ -279,31 +298,7 @@ fn decode_integrity(run: &mut Run, file: &Path, min_frames: u64) -> Step {
 }
 
 fn timestamps(run: &mut Run, file: &Path, max_gap_ms: f64) -> Step {
-    let out = tools::run(
-        Command::new(tools::require("ffprobe")?)
-            .args([
-                "-v",
-                "error",
-                "-select_streams",
-                "v:0",
-                "-show_entries",
-                "frame=pts_time",
-                "-of",
-                "csv=p=0",
-            ])
-            .arg(file),
-        Duration::from_secs(300),
-    )?;
-    infra_ensure!(
-        out.success(),
-        "ffprobe frames failed: {}",
-        out.stderr.trim()
-    );
-    let pts: Vec<f64> = out
-        .stdout
-        .lines()
-        .filter_map(|l| l.trim().trim_end_matches(',').parse().ok())
-        .collect();
+    let pts = media::frame_pts(file)?;
     infra_ensure!(pts.len() >= 2, "fewer than two timestamped frames");
     let backwards = pts.windows(2).filter(|w| w[1] <= w[0]).count();
     let largest_gap = pts
@@ -462,6 +457,43 @@ fn av_sync(
     Ok(())
 }
 
+fn missing_encoders(required: &[String]) -> Step<Vec<String>> {
+    if required.is_empty() {
+        return Ok(Vec::new());
+    }
+    let output = tools::run(
+        Command::new(tools::require("ffmpeg")?).args(["-v", "error", "-encoders"]),
+        Duration::from_secs(20),
+    )?;
+    infra_ensure!(
+        output.success(),
+        "ffmpeg encoder inspection failed: {}",
+        output.stderr.trim()
+    );
+    infra_ensure!(
+        output.stdout.lines().any(|line| line.trim() == "Encoders:"),
+        "ffmpeg returned an unrecognized encoder inventory"
+    );
+    let available: BTreeSet<&str> = output
+        .stdout
+        .lines()
+        .filter_map(|line| {
+            let mut fields = line.split_whitespace();
+            let flags = fields.next()?;
+            let name = fields.next()?;
+            (flags.len() == 6
+                && matches!(flags.chars().next(), Some('V' | 'A' | 'S'))
+                && name != "=")
+                .then_some(name)
+        })
+        .collect();
+    Ok(required
+        .iter()
+        .filter(|name| !available.contains(name.as_str()))
+        .cloned()
+        .collect())
+}
+
 fn run_sample(run: &mut Run, sample: &Sample, caps: &capability::CapabilitySet) -> ScenarioResult {
     let started = Instant::now();
     let required: Vec<Capability> = sample
@@ -473,11 +505,31 @@ fn run_sample(run: &mut Run, sample: &Sample, caps: &capability::CapabilitySet) 
     let missing = caps.missing(&required);
     let outcome: Step = if missing.is_empty() {
         (|| {
+            let absent_encoders = missing_encoders(&sample.requirements.encoders)?;
+            if !sample.requirements.encoders.is_empty() {
+                run.put("requiredEncoders", json!(sample.requirements.encoders));
+                run.put("missingEncoders", json!(absent_encoders));
+            }
+            if !absent_encoders.is_empty() {
+                return Err(Stop::unavailable(format!(
+                    "ffmpeg lacks required encoders: {}",
+                    absent_encoders.join(", ")
+                )));
+            }
             let file = input_file(run, sample)?;
+            let (sha256, bytes) = crate::bundle::sha256_file(&file)?;
+            run.put("input", json!({"sha256": sha256, "bytes": bytes}));
             for oracle in sample.oracles.as_slice() {
                 let step = match oracle {
                     Oracle::DecodeIntegrity { min_frames } => {
                         decode_integrity(run, &file, *min_frames)
+                    }
+                    Oracle::RecordingIntegrity(expected) => {
+                        let report =
+                            media::integrity::inspect(&file, &run.scratch, expected.clone())?;
+                        run.put("recordingIntegrity", serde_json::to_value(&report)?);
+                        product_ensure!(report.passed(), "{}", report.violations.join("; "));
+                        Ok(())
                     }
                     Oracle::Timestamps { max_gap_ms } => timestamps(run, &file, *max_gap_ms),
                     Oracle::Keyframes { max_interval_s } => keyframes(run, &file, *max_interval_s),
@@ -530,6 +582,13 @@ fn run_sample(run: &mut Run, sample: &Sample, caps: &capability::CapabilitySet) 
         evidence: std::mem::take(&mut run.evidence),
         artifacts: vec![],
     }
+}
+
+fn sample_host(caps: &capability::CapabilitySet) -> (BTreeMap<String, Value>, String) {
+    let mut environment = caps.facts.clone();
+    environment.insert("runnerOs".into(), json!(std::env::consts::OS));
+    environment.insert("runnerArchitecture".into(), json!(std::env::consts::ARCH));
+    (environment, format!("{}-local-media", std::env::consts::OS))
 }
 
 pub fn run(command: SamplesCommand) -> Result<ExitCode> {
@@ -587,6 +646,14 @@ pub fn run(command: SamplesCommand) -> Result<ExitCode> {
                 .iter()
                 .any(|r| matches!(r.verdict, Verdict::Fail | Verdict::InfraError));
             if let Some(path) = out {
+                let (environment, slot) = sample_host(&caps);
+                let tool_versions = ["ffmpeg", "ffprobe"]
+                    .into_iter()
+                    .filter_map(|name| {
+                        let path = tools::resolve(name)?;
+                        Some((name.to_string(), tools::version_line(&path)?))
+                    })
+                    .collect();
                 let document = LaneResult {
                     schema_version: RESULT_SCHEMA_VERSION,
                     lane: "samples".into(),
@@ -596,13 +663,10 @@ pub fn run(command: SamplesCommand) -> Result<ExitCode> {
                     finished_at: now_rfc3339(),
                     attempt: current_attempt(),
                     identity: Identity::default(),
-                    environment: caps.facts.clone(),
-                    tools: BTreeMap::new(),
+                    environment,
+                    tools: tool_versions,
                     capabilities: caps.names(),
-                    slot: Some(crate::disposable::default_slot(
-                        crate::disposable::BackendKind::Local,
-                        &caps,
-                    )),
+                    slot: Some(slot),
                     backend: Some("local".into()),
                     scenarios: results,
                 };
@@ -623,6 +687,206 @@ pub fn run(command: SamplesCommand) -> Result<ExitCode> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn sample_host_reports_the_actual_platform_without_hardware_qualification() {
+        let (environment, slot) = sample_host(&capability::CapabilitySet::default());
+        assert_eq!(
+            environment.get("runnerOs"),
+            Some(&json!(std::env::consts::OS))
+        );
+        assert_eq!(
+            environment.get("runnerArchitecture"),
+            Some(&json!(std::env::consts::ARCH))
+        );
+        assert!(slot.starts_with(std::env::consts::OS), "{slot}");
+        assert!(slot.ends_with("-local-media"), "{slot}");
+    }
+
+    #[test]
+    fn missing_encoder_is_unavailable_before_generating_a_sample() {
+        if !media::tests::ffmpeg_or_skip() {
+            return;
+        }
+        let sample: Sample = toml::from_str(
+            r#"
+id = "media.missing-encoder"
+class = "regression"
+contract = "A missing optional encoder cannot become a media verdict."
+[input]
+generate = ["-this-input-must-not-run"]
+[oracle]
+kind = "decode-integrity"
+[requirements]
+capabilities = ["ffmpeg", "ffprobe"]
+encoders = ["exosnap-missing-encoder-fixture"]
+"#,
+        )
+        .unwrap();
+        let directory = tempfile::tempdir().unwrap();
+        let mut run = Run {
+            root: directory.path(),
+            scratch: directory.path().join("oracle"),
+            update_reference: false,
+            evidence: BTreeMap::new(),
+        };
+        let result = run_sample(&mut run, &sample, &capability::probe(&[]));
+        assert_eq!(result.verdict, Verdict::Unavailable, "{}", result.detail);
+        assert!(
+            !run.scratch.exists(),
+            "generation ran despite the missing encoder"
+        );
+        assert!(result.detail.contains("exosnap-missing-encoder-fixture"));
+    }
+
+    fn multi_track_fixture(directory: &Path, secondary_seconds: f64) -> PathBuf {
+        let file = directory.join("secondary-audio.mkv");
+        let generated = tools::run(
+            Command::new(tools::require("ffmpeg").unwrap())
+                .args(["-v", "error", "-nostdin", "-y"])
+                .args([
+                    "-f",
+                    "lavfi",
+                    "-i",
+                    "testsrc2=size=64x48:rate=10:duration=1",
+                ])
+                .args([
+                    "-f",
+                    "lavfi",
+                    "-i",
+                    "sine=frequency=440:sample_rate=48000:duration=1",
+                ])
+                .args(["-f", "lavfi", "-i"])
+                .arg(format!(
+                    "sine=frequency=880:sample_rate=48000:duration={secondary_seconds}"
+                ))
+                .args(["-map", "0:v:0", "-map", "1:a:0", "-map", "2:a:0"])
+                .args(["-c:v", "ffv1", "-c:a", "flac"])
+                .args(["-disposition:a:0", "default", "-disposition:a:1", "0"])
+                .arg(&file),
+            Duration::from_secs(30),
+        )
+        .unwrap();
+        assert!(generated.success(), "{}", generated.stderr);
+        file
+    }
+
+    #[test]
+    fn decode_integrity_rejects_corruption_in_a_nondefault_audio_track() {
+        if !media::tests::ffmpeg_or_skip() {
+            return;
+        }
+        let dir = tempfile::tempdir().unwrap();
+        let file = multi_track_fixture(dir.path(), 1.0);
+        let packets = tools::run(
+            Command::new(tools::require("ffprobe").unwrap())
+                .args(["-v", "error", "-select_streams", "a:1"])
+                .args(["-show_entries", "packet=pos,size", "-of", "json"])
+                .arg(&file),
+            Duration::from_secs(30),
+        )
+        .unwrap();
+        assert!(packets.success(), "{}", packets.stderr);
+        let packets: Value = serde_json::from_str(&packets.stdout).unwrap();
+        let packet = &packets["packets"][5];
+        let position: usize = packet["pos"].as_str().unwrap().parse().unwrap();
+        let size: usize = packet["size"].as_str().unwrap().parse().unwrap();
+        assert!(size > 100);
+        let mut bytes = std::fs::read(&file).unwrap();
+        bytes[position + size / 3..position + size * 2 / 3].fill(0xff);
+        std::fs::write(&file, bytes).unwrap();
+
+        let mut run = Run {
+            root: dir.path(),
+            scratch: dir.path().join("oracle"),
+            update_reference: false,
+            evidence: BTreeMap::new(),
+        };
+        let result = decode_integrity(&mut run, &file, 10);
+        assert!(matches!(result, Err(Stop::Fail(_))), "{result:?}");
+        let report = media::integrity::inspect(
+            &file,
+            &run.scratch,
+            media::integrity::Expectation {
+                video_streams: 1,
+                audio_streams: 2,
+                expected_seconds: 1.0,
+                tolerance_ms: 25.0,
+                max_gap_ms: 2.0,
+                min_video_frames: 10,
+            },
+        )
+        .unwrap();
+        assert!(!report.passed());
+        assert!(!report.decode.success);
+        assert!(!report.timeline_checked);
+    }
+
+    fn recording_integrity_result(secondary_seconds: f64, expected_seconds: f64) -> ScenarioResult {
+        let dir = tempfile::tempdir().unwrap();
+        multi_track_fixture(dir.path(), secondary_seconds);
+        let sample: Sample = toml::from_str(&format!(
+            r#"
+id = "media.recording-integrity"
+class = "regression"
+contract = "Every declared track decodes and covers the independently expected recording."
+[input]
+path = "secondary-audio.mkv"
+[oracle]
+kind = "recording-integrity"
+video_streams = 1
+audio_streams = 2
+expected_seconds = {expected_seconds}
+tolerance_ms = 25.0
+max_gap_ms = 2.0
+min_video_frames = 10
+"#
+        ))
+        .unwrap();
+        let mut run = Run {
+            root: dir.path(),
+            scratch: dir.path().join("oracle"),
+            update_reference: false,
+            evidence: BTreeMap::new(),
+        };
+        run_sample(&mut run, &sample, &capability::probe(&[]))
+    }
+
+    #[test]
+    fn recording_integrity_accepts_complete_multitrack_media() {
+        if !media::tests::ffmpeg_or_skip() {
+            return;
+        }
+        let result = recording_integrity_result(1.0, 1.0);
+        assert_eq!(result.verdict, Verdict::Pass, "{}", result.detail);
+        let streams = result.evidence["recordingIntegrity"]["streams"]
+            .as_array()
+            .unwrap();
+        assert_eq!(streams.len(), 3);
+        assert_eq!(streams[0]["frames"], 10);
+        assert_eq!(streams[1]["samples"], 48_000);
+        assert_eq!(streams[2]["samples"], 48_000);
+    }
+
+    #[test]
+    fn recording_integrity_rejects_a_clean_file_missing_the_expected_tail() {
+        if !media::tests::ffmpeg_or_skip() {
+            return;
+        }
+        let result = recording_integrity_result(1.0, 2.0);
+        assert_eq!(result.verdict, Verdict::Fail, "{}", result.detail);
+        assert!(result.detail.contains("duration"), "{}", result.detail);
+    }
+
+    #[test]
+    fn recording_integrity_rejects_a_short_secondary_track() {
+        if !media::tests::ffmpeg_or_skip() {
+            return;
+        }
+        let result = recording_integrity_result(0.5, 1.0);
+        assert_eq!(result.verdict, Verdict::Fail, "{}", result.detail);
+        assert!(result.detail.contains("stream 2"), "{}", result.detail);
+    }
 
     fn repo_samples() -> PathBuf {
         Path::new(env!("CARGO_MANIFEST_DIR")).join("../../tests/samples")

@@ -17,6 +17,7 @@ use crate::{infra_ensure, product_ensure};
 use super::common::{self, Stimulus, StimulusOptions, VideoExpectation, secs};
 
 const SOAK_SECONDS: f64 = 1800.0;
+const SOAK_FPS: u32 = 60;
 
 pub fn scenarios() -> Vec<Scenario> {
     vec![
@@ -43,10 +44,10 @@ pub fn scenarios() -> Vec<Scenario> {
         },
         Scenario {
             id: "audio.mixed-clock-soak",
-            revision: 1,
+            revision: 2,
             title: "A 30 minute system and microphone recording stays complete",
             class: ScenarioClass::Hardware,
-            contract: "separate render and microphone tracks span a long recording with bounded duration skew and a clean session report",
+            contract: "every video, render and microphone stream decodes with ordered timing, continuous decoded samples, bounded duration skew and a clean session report",
             lane: Lane::Hardware,
             also: &[],
             tier: Tier::Recommended,
@@ -55,8 +56,9 @@ pub fn scenarios() -> Vec<Scenario> {
                 Capability::AudioRender,
                 Capability::AudioCapture,
                 Capability::Ffprobe,
+                Capability::Ffmpeg,
             ],
-            timeout: secs(1960.0),
+            timeout: secs(3300.0),
             run: mixed_clock_soak,
         },
         Scenario {
@@ -769,6 +771,7 @@ fn mixed_clock_soak(ctx: &mut Context) -> Step {
             ("video.container", json!("MKV")),
             ("video.videoCodec", json!("H.264")),
             ("video.audioCodec", json!("Opus")),
+            ("video.frameRate", json!(SOAK_FPS)),
             ("audio.systemEnabled", json!(true)),
             ("audio.appEnabled", json!(false)),
             ("audio.microphoneEnabled", json!(true)),
@@ -810,8 +813,8 @@ fn mixed_clock_soak(ctx: &mut Context) -> Step {
             "avDriftAvailability": pipeline["avTiming"]["avDriftAvailability"]
         }));
     }
-    let result = common::stop_recording(&mut app)?;
     let wall = started.elapsed().as_secs_f64();
+    let result = common::stop_recording(&mut app)?;
     let file = common::output_path(&result)?;
     let probe = media::probe(&file)?;
     let duration = media::f64_field(&probe["format"], "duration")
@@ -821,7 +824,6 @@ fn mixed_clock_soak(ctx: &mut Context) -> Step {
         audio_count == 2,
         "the soak recording has {audio_count} audio streams instead of separate system and microphone tracks"
     );
-    let spans = audio_packet_spans(&file, audio_count)?;
     let report = app.call("session.latest", json!({}))?;
     mixed_track_count(&report, audio_count)?;
     ctx.evidence.put("audioSourceSettings", settings);
@@ -831,8 +833,30 @@ fn mixed_clock_soak(ctx: &mut Context) -> Step {
     ctx.evidence.put("recordResult", result);
     ctx.evidence.put("session", report.clone());
     ctx.evidence.put("ffprobe", probe);
-    ctx.evidence.put("audioPacketSpansSeconds", json!(spans));
     ctx.evidence.put("recordWallSeconds", wall);
+    let integrity = media::integrity::inspect(
+        &file,
+        &ctx.scenario_dir,
+        media::integrity::Expectation {
+            video_streams: 1,
+            audio_streams: 2,
+            expected_seconds: wall,
+            tolerance_ms: wall * 0.02 * 1000.0,
+            max_gap_ms: 2.0,
+            min_video_frames: (wall * 0.98 * f64::from(SOAK_FPS)).floor() as u64,
+        },
+    )?;
+    ctx.evidence
+        .put("recordingIntegrity", serde_json::to_value(&integrity)?);
+    product_ensure!(integrity.passed(), "{}", integrity.violations.join("; "));
+    let spans: Vec<f64> = integrity
+        .streams
+        .iter()
+        .filter(|stream| stream.kind == "audio")
+        .filter_map(|stream| stream.first_pts_seconds.zip(stream.end_pts_seconds))
+        .map(|(first, end)| end - first)
+        .collect();
+    ctx.evidence.put("audioDecodedSpansSeconds", json!(spans));
     judge_soak(&report, duration, wall, &spans)
 }
 
