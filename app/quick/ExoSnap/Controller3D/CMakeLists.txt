@@ -110,14 +110,16 @@ add_test(NAME controller3d.render COMMAND exosnap_controller3d
     --visual-test "${CMAKE_CURRENT_BINARY_DIR}/render-test.png" --visual-test-size 480x320)
 set_tests_properties(controller3d.render PROPERTIES
     ENVIRONMENT "QT_QPA_PLATFORM=windows;QT_QUICK_BACKEND=rhi;QSG_RHI_BACKEND=d3d11;QSG_RHI_PREFER_SOFTWARE_RENDERER=1;QSG_RENDER_LOOP=basic;QT_FORCE_STDERR_LOGGING=1"
-    TIMEOUT 30)
+    TIMEOUT 30
+    EXOSNAP_BUILD_TARGET exosnap_controller3d)
 exosnap_set_test_phase(controller3d.render gpu)
 foreach(mode IN ITEMS normal ghost)
     add_test(NAME controller3d.depth.${mode} COMMAND exosnap_controller3d
         --visual-test "${CMAKE_CURRENT_BINARY_DIR}/depth-${mode}.png" --visual-test-size 320x214)
     set_tests_properties(controller3d.depth.${mode} PROPERTIES
         ENVIRONMENT "QT_QPA_PLATFORM=windows;QT_QUICK_BACKEND=rhi;QSG_RHI_BACKEND=d3d11;QSG_RHI_PREFER_SOFTWARE_RENDERER=1;QSG_RENDER_LOOP=basic;QT_FORCE_STDERR_LOGGING=1;EXOSNAP_VISUAL_CONTROLLER3D=${mode}-depth"
-        TIMEOUT 30)
+        TIMEOUT 30
+        EXOSNAP_BUILD_TARGET exosnap_controller3d)
     exosnap_set_test_phase(controller3d.depth.${mode} gpu)
 endforeach()
 
@@ -161,5 +163,6 @@ add_test(NAME controller3d.native.render COMMAND exosnap_controller3d_native
     --warp --output "${CMAKE_CURRENT_BINARY_DIR}/native-evidence")
 set_tests_properties(controller3d.native.render PROPERTIES
     ENVIRONMENT "QT_QPA_PLATFORM=windows;QT_QUICK_BACKEND=rhi;QSG_RHI_BACKEND=d3d11;QSG_RENDER_LOOP=basic;QT_FORCE_STDERR_LOGGING=1"
-    TIMEOUT 90)
+    TIMEOUT 90
+    EXOSNAP_BUILD_TARGET exosnap_controller3d_native)
 exosnap_set_test_phase(controller3d.native.render gpu)
