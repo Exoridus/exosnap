@@ -20,6 +20,54 @@ The command retains an explicit alternate-executable comparison interface (`--wi
 
 `cargo exo-dev benchmark campaign --scenario '<scenario name>'` runs the alternating campaign. Its default order is six Quick runs (the Widgets frontend was removed with the Qt Quick cutover, so the default never names it); pass `--order widgets,quick,...` explicitly when both artifacts are available.
 
+## Idle recording matrix
+
+The generic idle scenarios use H.264, MKV, Opus system audio, SDR 8-bit 4:2:0, a 15-second recording warmup and a 60-second measurement window. They require a primary capture display in the stated mode and a separate display for the frontend. The secondary display dimensions are unrestricted. The recorder's selected device must support the effective configuration.
+
+| Scenario | Primary capture dimensions | Minimum reported refresh | Requested recording rate |
+| --- | --- | --- | --- |
+| `desktop-idle-1080p60` | 1920 x 1080 | 60 Hz | 60 fps |
+| `desktop-idle-1440p60` | 2560 x 1440 | 60 Hz | 60 fps |
+| `desktop-idle-2160p60` | 3840 x 2160 | 60 Hz | 60 fps |
+| `desktop-idle-1080p144` | 1920 x 1080 | 144 Hz | 144 fps |
+
+Set the capture display mode before selecting each scenario. Keep the desktop image, source activity, preview geometry, scaling, system audio activity and power state fixed across repeats. These cases measure idle recorder and visible-preview overhead. An idle source normally exercises CFR repeats, so retain unique captures, intentional repeats, coalescing and actual losses separately. The requested packet cadence alone does not establish unique-frame capture throughput.
+
+From the configured Windows build environment, use an explicit Release executable built with `EXOSNAP_BUILD_BENCHMARK_HARNESS=ON` and a fresh evidence directory:
+
+```powershell
+$scenario = 'desktop-idle-1080p60'
+$product = (Resolve-Path '.\build\windows-x64-ninja-release\app\exosnap.exe').Path
+$out = '.workspace/benchmark-results/idle-1080p60-baseline'
+if (Test-Path $out) { throw 'Choose a fresh evidence directory.' }
+$benchmarkConfigBefore = $env:EXOSNAP_CONFIG_DIR
+$benchmarkStageABefore = $env:EXOSNAP_STAGE_A_CACHE
+$benchmarkDemandBefore = $env:EXOSNAP_DEMAND_COMPOSITION
+try {
+    $env:EXOSNAP_CONFIG_DIR = Join-Path (Get-Location) "$out/config"
+    Remove-Item Env:\EXOSNAP_STAGE_A_CACHE -ErrorAction SilentlyContinue
+    Remove-Item Env:\EXOSNAP_DEMAND_COMPOSITION -ErrorAction SilentlyContinue
+    cargo exo-dev benchmark topology --scenario $scenario
+    if ($LASTEXITCODE -ne 0) { throw 'The requested capture topology is unavailable.' }
+    [IO.Directory]::CreateDirectory($env:EXOSNAP_CONFIG_DIR) | Out-Null
+    cargo exo-dev benchmark campaign --scenario $scenario --quick-exe $product --output-root $out
+    if ($LASTEXITCODE -ne 0) { throw 'Inspect the retained failed run before continuing.' }
+    $set = Join-Path $out $scenario
+    cargo exo-dev benchmark compare --run-dir "$set/quick-run01" --run-dir "$set/quick-run02" --run-dir "$set/quick-run03" --run-dir "$set/quick-run04" --run-dir "$set/quick-run05" --run-dir "$set/quick-run06"
+    if ($LASTEXITCODE -ne 0) { throw 'The retained runs did not form a valid comparison.' }
+} finally {
+    $env:EXOSNAP_CONFIG_DIR = $benchmarkConfigBefore
+    $env:EXOSNAP_STAGE_A_CACHE = $benchmarkStageABefore
+    $env:EXOSNAP_DEMAND_COMPOSITION = $benchmarkDemandBefore
+}
+```
+
+Replace the executable path with the actual harness build. The dedicated configuration directory prevents reuse of an existing application profile. Campaign checks cover display topology, the harness marker, process exit, report presence and the frontend's window placement. The subsequent comparison excludes calibration runs, unsuccessful recordings and non-Release reports, and requires comparable effective configuration fingerprints. Inspect its exclusions before accepting a measurement set. The command uses the desktop directly and requires no external benchmark application. Repeat for the other three modes when the display and encoder can support them. Keep an unsupported mode as an explicit missing result.
+
+For Stage A and demand-composition experiments, first fix a representative scene and downstream output geometry. Record both switch values with each run and use separate output directories for baseline, Stage A only, demand only and both. The idle scenarios supply the overhead control. Stage A additionally needs actual overlay composition and pixel parity checks. Demand reduction additionally needs larger capture dimensions than recording output, an eligible SDR configuration and controlled preview demand. The scenario loader currently does not configure output dimensions or overlay populations. Supply those conditions through a separately configured product run or focused native compositor tests before extending the comparison. [Harnesses](../../docs/dev/harness-and-tracing.md) documents the available experiments and their eligibility.
+
+Retain CPU time per output frame and per unique capture, submission wall time, measured GPU stage time and query coverage, queue/synchronization waits, P50/P95/P99, encoder latency, memory and decode parity where the selected harness exposes them. Missing measurements remain unavailable. Logical surface allocation and resident VRAM are separate quantities. Keep timing runs free of competing builds, alternate variant order, report per-run variation and extend selected cases to at least ten minutes to check growth and backpressure before making a performance claim.
+
 ## Comparing runs and calibrating scenes
 
 ```powershell

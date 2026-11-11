@@ -327,13 +327,13 @@ fn superposition_args(cli: &WorkloadCli, run_dir: &Path) -> Vec<String> {
 }
 
 fn exosnap_args(
+    frontend: Frontend,
     settings: &ExoSnapSettings,
     definition: &ScenarioDefinition,
     run_dir: &Path,
 ) -> Vec<String> {
     let mut args = vec![
         "--auto-record".to_string(),
-        "--enable-preview".to_string(),
         "--target".to_string(),
         settings.target.clone(),
         "--duration".to_string(),
@@ -359,6 +359,11 @@ fn exosnap_args(
         "--benchmark-warmup".to_string(),
         settings.warmup_seconds.to_string(),
     ];
+    // Explicit historical Widgets artifacts used a separate preview mode.
+    // The current Quick parser rejects that retired switch.
+    if frontend == Frontend::Widgets {
+        args.push("--enable-preview".to_string());
+    }
     if !settings.audio_rows.is_empty() {
         args.push("--audio-rows".to_string());
         args.push(settings.audio_rows.join(","));
@@ -464,7 +469,7 @@ pub fn run(scenario: &Scenario) -> anyhow::Result<RunManifest> {
     }
 
     let settings = &scenario.definition.exosnap;
-    let exo_args = exosnap_args(settings, &scenario.definition, &run_dir);
+    let exo_args = exosnap_args(scenario.frontend, settings, &scenario.definition, &run_dir);
     let stdout_path = run_dir.join("exosnap.stdout.log");
     let stderr_path = run_dir.join("exosnap.stderr.log");
     let mut exo_child = Command::new(&exe)
@@ -732,6 +737,75 @@ mod win32 {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn committed_scenarios_load_and_supply_chroma_arguments() {
+        let repo_root = Path::new(env!("CARGO_MANIFEST_DIR")).join("../..");
+        let mut paths: Vec<_> = std::fs::read_dir(repo_root.join("tools/benchmark/scenarios"))
+            .unwrap()
+            .map(|entry| entry.unwrap().path())
+            .filter(|path| {
+                path.extension()
+                    .is_some_and(|extension| extension == "json")
+            })
+            .collect();
+        paths.sort();
+        assert!(!paths.is_empty());
+        for path in paths {
+            let definition = load_scenario_definition(&path)
+                .unwrap_or_else(|error| panic!("{}: {error:#}", path.display()));
+            assert_eq!(path.file_stem().unwrap().to_str().unwrap(), definition.id);
+            assert!(matches!(definition.exosnap.chroma.as_str(), "420" | "444"));
+            let arguments = exosnap_args(
+                Frontend::Quick,
+                &definition.exosnap,
+                &definition,
+                Path::new("output"),
+            );
+            assert!(
+                arguments
+                    .windows(2)
+                    .any(|pair| { pair[0] == "--chroma" && pair[1] == definition.exosnap.chroma })
+            );
+        }
+    }
+
+    #[test]
+    fn quick_recording_arguments_omit_the_retired_preview_mode() {
+        let repo_root = Path::new(env!("CARGO_MANIFEST_DIR")).join("../..");
+        let definition =
+            load_scenario_definition(&scenario_path(&repo_root, "desktop-idle-1080p60")).unwrap();
+        let arguments = exosnap_args(
+            Frontend::Quick,
+            &definition.exosnap,
+            &definition,
+            Path::new("output"),
+        );
+        assert!(arguments.iter().any(|argument| argument == "--auto-record"));
+        assert!(
+            !arguments
+                .iter()
+                .any(|argument| argument == "--enable-preview")
+        );
+    }
+
+    #[test]
+    fn explicit_legacy_widgets_arguments_retain_the_preview_mode() {
+        let repo_root = Path::new(env!("CARGO_MANIFEST_DIR")).join("../..");
+        let definition =
+            load_scenario_definition(&scenario_path(&repo_root, "desktop-idle-1080p60")).unwrap();
+        let arguments = exosnap_args(
+            Frontend::Widgets,
+            &definition.exosnap,
+            &definition,
+            Path::new("output"),
+        );
+        assert!(
+            arguments
+                .iter()
+                .any(|argument| argument == "--enable-preview")
+        );
+    }
 
     #[test]
     fn resolving_quick_never_needs_a_widgets_executable() {

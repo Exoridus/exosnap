@@ -1,0 +1,31 @@
+{
+  "id": "desktop-idle-1080p60",
+  "source_notes": "Static SDR desktop at 1920x1080. Keep source content, audio activity, display scaling and preview state fixed between repeats. Record the actual display refresh and adapter identity with the evidence.",
+  "workload": {
+    "kind": "none"
+  },
+  "exosnap": {
+    "target": "monitor",
+    "duration_seconds": 60,
+    "warmup_seconds": 15,
+    "frame_rate": 60,
+    "container": "mkv",
+    "video_codec": "h264",
+    "audio_codec": "opus",
+    "chroma": "420",
+    "bit_depth": 8,
+    "hdr_mode": "off",
+    "audio_rows": ["sys"]
+  },
+  "topology": {
+    "capture_display": {
+      "width": 1920,
+      "height": 1080,
+      "min_refresh_hz": 60
+    },
+    "ui_display": {
+      "width": 0,
+      "height": 0
+    }
+  }
+}
