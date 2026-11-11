@@ -454,20 +454,14 @@ fn targeted_runs_build_the_selected_executable_before_certifying_its_source() {
 }
 
 #[test]
-fn auto_build_targets_build_the_selected_executable() {
+fn auto_build_targets_build_a_not_yet_existing_selected_executable() {
     let repo = source_repo();
     let (_root, build) = configured_tree(
-        "find_program(fixture_rustc rustc REQUIRED)\nfile(WRITE \"${CMAKE_CURRENT_SOURCE_DIR}/input.rs\" \"fn main() {}\")\nadd_custom_command(OUTPUT stale-test.exe COMMAND \"${fixture_rustc}\" \"${CMAKE_CURRENT_SOURCE_DIR}/input.rs\" -o stale-test.exe DEPENDS \"${CMAKE_CURRENT_SOURCE_DIR}/input.rs\")\nadd_custom_target(test_binary DEPENDS stale-test.exe)\nadd_test(NAME fixture.binary COMMAND \"${CMAKE_CURRENT_BINARY_DIR}/stale-test.exe\")\nset_tests_properties(fixture.binary PROPERTIES LABELS phase.hermetic)\n",
+        "find_program(fixture_rustc rustc REQUIRED)\nfile(WRITE \"${CMAKE_CURRENT_SOURCE_DIR}/input.rs\" \"fn main() {}\")\nadd_custom_command(OUTPUT stale-test.exe COMMAND \"${fixture_rustc}\" \"${CMAKE_CURRENT_SOURCE_DIR}/input.rs\" -o stale-test.exe DEPENDS \"${CMAKE_CURRENT_SOURCE_DIR}/input.rs\")\nadd_custom_target(test_binary DEPENDS stale-test.exe)\nadd_test(NAME fixture.binary COMMAND \"${CMAKE_CURRENT_BINARY_DIR}/stale-test.exe\")\nset_tests_properties(fixture.binary PROPERTIES LABELS phase.hermetic EXOSNAP_BUILD_TARGET test_binary)\n",
     );
-    // CTest omits the command until the executable exists, which is the
-    // documented fallback case. Build it once, then let auto resolve it.
-    let built = std::process::Command::new("cmake")
-        .arg("--build")
-        .arg(&build)
-        .args(["--target", "test_binary"])
-        .output()
-        .unwrap();
-    assert!(built.status.success());
+    // A new tree has no test executable. Its CTest metadata must still let
+    // auto build the selected target without compiling the full tree.
+    assert!(!build.join("stale-test.exe").exists());
     let outcome = run(&Options {
         no_build: false,
         build_targets: vec!["auto".into()],
@@ -480,7 +474,7 @@ fn auto_build_targets_build_the_selected_executable() {
     assert_eq!(outcome.receipt()["build_exit_code"], 0);
     assert_eq!(
         outcome.receipt()["build_targets"],
-        serde_json::json!(["stale-test.exe"])
+        serde_json::json!(["test_binary"])
     );
     assert_eq!(
         outcome.receipt()["resolved_test_targets"],
@@ -492,6 +486,26 @@ fn auto_build_targets_build_the_selected_executable() {
         "{}",
         outcome.output
     );
+}
+
+#[test]
+fn auto_without_a_declared_target_falls_back_to_the_full_build() {
+    let repo = source_repo();
+    let (_root, build) = configured_tree(
+        "find_program(fixture_rustc rustc REQUIRED)\nfile(WRITE \"\u0024{CMAKE_CURRENT_SOURCE_DIR}/input.rs\" \"fn main() {}\")\nadd_custom_command(OUTPUT fallback-test.exe COMMAND \"\u0024{fixture_rustc}\" \"\u0024{CMAKE_CURRENT_SOURCE_DIR}/input.rs\" -o fallback-test.exe DEPENDS \"\u0024{CMAKE_CURRENT_SOURCE_DIR}/input.rs\")\nadd_custom_target(test_binary ALL DEPENDS fallback-test.exe)\nadd_test(NAME fixture.binary COMMAND \"\u0024{CMAKE_CURRENT_BINARY_DIR}/fallback-test.exe\")\nset_tests_properties(fixture.binary PROPERTIES LABELS phase.hermetic)\n",
+    );
+    assert!(!build.join("fallback-test.exe").exists());
+    let outcome = run(&Options {
+        no_build: false,
+        build_targets: vec!["auto".into()],
+        filter: "^fixture.binary$".into(),
+        ..options(repo.path(), &build)
+    });
+    assert_eq!(outcome.code(), 0, "{}", outcome.output);
+    assert!(outcome.receipt()["reusable"].as_bool().unwrap());
+    assert_eq!(outcome.receipt()["build_targets"], serde_json::json!([]));
+    assert!(outcome.output.contains("Building the full tree instead"));
+    assert!(build.join("fallback-test.exe").is_file());
 }
 
 #[test]

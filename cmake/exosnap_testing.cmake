@@ -196,7 +196,12 @@ function(exosnap_add_gtest)
   else()
     set(_exosnap_timeout 300)
   endif()
-  set_tests_properties("${_exosnap_test_name}" PROPERTIES TIMEOUT ${_exosnap_timeout})
+  set_tests_properties("${_exosnap_test_name}" PROPERTIES
+    TIMEOUT ${_exosnap_timeout}
+    # CTest retains the explicit build target before the binary exists.
+    # This lets exo-dev build a selected test in a fresh Ninja tree.
+    EXOSNAP_BUILD_TARGET "${ARG_NAME}"
+  )
 
   # The execution phase, as a label, on every entry without exception. Default
   # `hermetic`: a gtest binary that was given no phase links against the libraries

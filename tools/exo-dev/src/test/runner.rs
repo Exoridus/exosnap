@@ -120,9 +120,9 @@ const SEPARATOR: &str = "-------------------------------------------------------
 /// complete build rather than guessing.
 pub const AUTO_BUILD_TARGETS: &str = "auto";
 
-/// The build-tree executables of `tests`, as Ninja target paths. A selected
-/// test that does not run a direct executable under `build_dir` makes the
-/// whole selection unprovable, which is the error.
+/// Build-tree executable paths, or explicitly registered CMake target names
+/// for binaries not yet built. Scripts and unknown wrappers remain unprovable
+/// and require a complete build.
 fn direct_build_targets(
     build_dir: &Path,
     tests: &[catalog::CatalogTest],
@@ -134,8 +134,18 @@ fn direct_build_targets(
     let mut targets = Vec::new();
     for test in tests.iter().filter(|test| !test.disabled) {
         let Some(executable) = test.command.first() else {
-            // ctest reports a command only for an executable that already
-            // exists, so a freshly configured tree lands here.
+            // CTest omits the command before the executable exists, but
+            // preserves a direct test registration's CMake target property.
+            // Scripts and unknown wrappers still require a complete build.
+            if let Some(target) = test.build_target.as_deref().filter(|target| {
+                !target.is_empty()
+                    && target
+                        .chars()
+                        .all(|c| c.is_ascii_alphanumeric() || matches!(c, '_' | '-' | '.' | '+'))
+            }) {
+                targets.push(target.to_string());
+                continue;
+            }
             return Err(format!("selected test {} has no executable yet", test.name));
         };
         let path = PathBuf::from(executable);
