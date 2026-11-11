@@ -492,7 +492,7 @@ fn auto_build_targets_build_a_not_yet_existing_selected_executable() {
 fn auto_without_a_declared_target_falls_back_to_the_full_build() {
     let repo = source_repo();
     let (_root, build) = configured_tree(
-        "find_program(fixture_rustc rustc REQUIRED)\nfile(WRITE \"\u0024{CMAKE_CURRENT_SOURCE_DIR}/input.rs\" \"fn main() {}\")\nadd_custom_command(OUTPUT fallback-test.exe COMMAND \"\u0024{fixture_rustc}\" \"\u0024{CMAKE_CURRENT_SOURCE_DIR}/input.rs\" -o fallback-test.exe DEPENDS \"\u0024{CMAKE_CURRENT_SOURCE_DIR}/input.rs\")\nadd_custom_target(test_binary ALL DEPENDS fallback-test.exe)\nadd_test(NAME fixture.binary COMMAND \"\u0024{CMAKE_CURRENT_BINARY_DIR}/fallback-test.exe\")\nset_tests_properties(fixture.binary PROPERTIES LABELS phase.hermetic)\n",
+        "find_program(fixture_rustc rustc REQUIRED)\nfile(WRITE \"${CMAKE_CURRENT_SOURCE_DIR}/input.rs\" \"fn main() {}\")\nadd_custom_command(OUTPUT fallback-test.exe COMMAND \"${fixture_rustc}\" \"${CMAKE_CURRENT_SOURCE_DIR}/input.rs\" -o fallback-test.exe DEPENDS \"${CMAKE_CURRENT_SOURCE_DIR}/input.rs\")\nadd_custom_target(test_binary ALL DEPENDS fallback-test.exe)\nadd_test(NAME fixture.binary COMMAND \"${CMAKE_CURRENT_BINARY_DIR}/fallback-test.exe\")\nset_tests_properties(fixture.binary PROPERTIES LABELS phase.hermetic)\n",
     );
     assert!(!build.join("fallback-test.exe").exists());
     let outcome = run(&Options {
