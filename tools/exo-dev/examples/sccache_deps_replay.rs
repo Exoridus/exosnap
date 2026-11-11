@@ -81,10 +81,7 @@ impl Probe {
 
 impl Drop for Probe {
     fn drop(&mut self) {
-        let _ = self
-            .command("sccache")
-            .arg("--stop-server")
-            .output();
+        let _ = self.command("sccache").arg("--stop-server").output();
         if self.keep {
             eprintln!("Evidence retained: {}", self.root.display());
         } else {
@@ -109,7 +106,10 @@ fn write_fixture(source: &Path) -> Result<()> {
          #include <cstdio>\n\
          int main() { std::printf(\"%d\\n\", marker()); return 0; }\n",
     )?;
-    fs::write(source.join("marker.h"), "inline int marker() { return 41; }\n")?;
+    fs::write(
+        source.join("marker.h"),
+        "inline int marker() { return 41; }\n",
+    )?;
     Ok(())
 }
 
@@ -126,10 +126,7 @@ fn configure_and_build(probe: &Probe, source: &Path, build: &Path) -> Result<()>
             "-DCMAKE_CXX_COMPILER_LAUNCHER=sccache".into(),
         ],
     )?;
-    probe.run(
-        "cmake",
-        &["--build".into(), build.display().to_string()],
-    )?;
+    probe.run("cmake", &["--build".into(), build.display().to_string()])?;
     Ok(())
 }
 
@@ -144,7 +141,10 @@ fn count_ninja_edges(output: &str) -> usize {
 }
 
 fn foreign_deps<'a>(output: &'a str, root: &Path) -> Vec<&'a str> {
-    let needle = root.to_string_lossy().replace('\\', "/").to_ascii_lowercase();
+    let needle = root
+        .to_string_lossy()
+        .replace('\\', "/")
+        .to_ascii_lowercase();
     output
         .lines()
         .filter(|line| {
@@ -213,10 +213,7 @@ fn main() -> Result<()> {
         source_b.join("marker.h"),
         "inline int marker() { return 42; }\n",
     )?;
-    probe.run(
-        "cmake",
-        &["--build".into(), build_b.display().to_string()],
-    )?;
+    probe.run("cmake", &["--build".into(), build_b.display().to_string()])?;
     let binary = build_b.join("exosnap_probe.exe");
     let result = probe
         .run(&binary.to_string_lossy(), &[])
