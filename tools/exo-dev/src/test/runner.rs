@@ -1254,6 +1254,7 @@ mod tests {
         catalog::CatalogTest {
             name: name.into(),
             command: vec![command.into()],
+            build_target: None,
             labels: Vec::new(),
             disabled: false,
         }
