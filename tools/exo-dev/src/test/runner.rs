@@ -614,9 +614,10 @@ impl Run<'_> {
                         return Ok(3);
                     }
                 } else {
-                    // An auto run already built exactly these outputs before
-                    // the suite selection was read a second time.
-                    if !self.auto_resolved {
+                    // An auto run already built these outputs. If a
+                    // regeneration changed the selection in between, build
+                    // the current list rather than assume the old one.
+                    if !self.auto_resolved || binaries != self.targets {
                         self.console.line(format!(
                             "Building selected test outputs [{}]...",
                             binaries.join(", ")
@@ -797,12 +798,19 @@ impl Run<'_> {
     /// leaves the targets empty, which builds the complete tree: a focused
     /// build that silently omitted a dependency is worse than a slow one.
     fn resolve_auto_targets(&mut self, ninja: bool, selection: &[String]) {
-        if self.options.build_targets.len() != 1
-            || self.options.build_targets[0] != AUTO_BUILD_TARGETS
+        if !self
+            .options
+            .build_targets
+            .iter()
+            .any(|target| target == AUTO_BUILD_TARGETS)
         {
             return;
         }
         self.targets.clear();
+        if self.options.build_targets.len() != 1 {
+            self.full_build_fallback("auto cannot be combined with explicit targets");
+            return;
+        }
         if !ninja {
             self.full_build_fallback(
                 "only a Ninja tree can build a test executable by its output path",

@@ -469,12 +469,15 @@ fn auto_build_targets_build_the_selected_executable() {
         .unwrap();
     assert!(built.status.success());
     let outcome = run(&Options {
+        no_build: false,
         build_targets: vec!["auto".into()],
         filter: "^fixture.binary$".into(),
         ..options(repo.path(), &build)
     });
     assert_eq!(outcome.code(), 0, "{}", outcome.output);
     assert_eq!(outcome.receipt()["reusable"], true);
+    assert_eq!(outcome.receipt()["build_status"], "succeeded");
+    assert_eq!(outcome.receipt()["build_exit_code"], 0);
     assert_eq!(
         outcome.receipt()["build_targets"],
         serde_json::json!(["stale-test.exe"])
