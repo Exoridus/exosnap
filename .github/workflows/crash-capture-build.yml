@@ -29,6 +29,10 @@ concurrency:
 
 env:
   SCCACHE_GHA_ENABLED: "true"
+  # Push -> next is the writer. A pull request's sccache scope dies with the PR
+  # and its unchanged objects are already in next's scope, so PR builds read
+  # only. Manual dispatch keeps the read-write default.
+  SCCACHE_GHA_RW_MODE: ${{ github.event_name == 'pull_request' && 'READ_ONLY' || 'READ_WRITE' }}
   # Same reason as ci.yml: the stats step sits behind the test steps, and an
   # idled-out server reports zeros instead of the run's real hit rate.
   SCCACHE_IDLE_TIMEOUT: "0"
@@ -196,7 +200,9 @@ jobs:
 
       - name: sccache stats
         if: always()
-        run: sccache --show-stats
+        uses: ./.github/actions/sccache-report
+        with:
+          label: crash-capture windows-x64-ninja-release
 
   # ---------------------------------------------------------------------------
   # The required context for this workflow, for the same reason ci.yml has one:

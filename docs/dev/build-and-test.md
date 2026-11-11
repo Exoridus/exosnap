@@ -125,6 +125,25 @@ Build, test and receipt publication share a host lock per build directory. Indep
 
 Every test run writes `<BuildDir>/Testing/last-run-receipt.json`, including a failing run. `reusable` is true only when build/source identity, phase declarations, census and evidence requirements hold. Targeted runs record requested build targets and the resolved test executable outputs actually built. A clean printed case list does not override an unusable receipt. `--no-build` can refuse stale binaries (exit 3); `--allow-stale` deliberately weakens that claim. Exit 4 means no usable verdict, not a passing product. Retain raw build/CTest exit codes and failure classification when diagnosing the runner. Missing diagnostic evidence does not replace a known timeout or abnormal-exit cause.
 
+## CI cache lifecycle
+
+GitHub applies one repository-wide cache cap (10 GB at the time of writing) with LRU eviction. It scopes entries to the ref that wrote them. A pull request can restore its base branch's scope, so `next` is the shared compiler cache for development PRs and `main` is the shared scope for PRs that target the release branch.
+
+| Scope | Writer | Readers |
+|---|---|---|
+| `refs/heads/next` | `cache-warm.yml`, the crash-capture push handler | PRs against `next` |
+| `refs/heads/main` | the nightly advisory run (debug preset only) | PRs against `main` |
+| `refs/pull/<N>/merge` | clang-tidy results and the crash-capture FetchContent tree; no new sccache objects | that PR's own runs |
+| `refs/tags/v*` | no new sccache objects | that tag's run |
+
+The `next` workflows set `SCCACHE_GHA_RW_MODE=READ_ONLY` for pull requests, tags and release-candidate builds. A read-only miss compiles normally, and sccache 0.19 reports the refused write as one write error, so those jobs show one write error per miss. The mode only declines to add a scope that dies with the PR or tag. Do not make PR builds read-write again without accounting for the closed scopes that then compete with the shared branch cache. The blocking clang-tidy result cache is separate, small and PR-scoped. The `main` branch carries only the cleanup backport, so its release workflow still uses the previous mode until the same change reaches it.
+
+Manual `workflow_dispatch` is the exception to the table: `cache-warm.yml`, `advisory-checks.yml` and the crash-capture workflow keep their read-write default, so a dispatch on a tag writes that tag's scope. Treat a manual dispatch as a deliberate write.
+
+`cache-cleanup.yml` deletes only scopes it can prove are unreachable: a closed PR's own scope on close, and weekly every pull request scope whose PR is no longer open. Before a ref's entries are deleted, the sweep reads that PR's current state again. A PR reopened between that read and the deletes can still lose its scope; the cache is disposable, so the cost is a rebuild. Branch and tag scopes are never deleted automatically: a branch without an open PR can be pushed again, and a tag workflow can be dispatched again, so removing those needs an explicit retention rule. It runs from the default branch, so the scheduled sweep uses the file on `main`. A change that only lands on `next` cannot fix the schedule. Manual dispatch defaults to a dry run, and the selection and protection rules are each self-tested against a fixture. A listing that fails for rate limiting or permissions stops the run before it deletes from that listing. The repository token allows about a thousand API requests per hour, so a run that exhausts the quota stops with a warning and leaves the rest to the next sweep; clearing a large backlog takes several sweeps.
+
+The cache holds no sccache build directories, PDBs, Qt SDK trees or Cargo target directories. The one exception is the crash-capture workflow's `es-fetchcontent-*` entry, the sentry-native FetchContent build tree, which is about 0.8 GiB and is written to the branch or PR scope that runs it. It exists because rebuilding that tree dominates the crash-capture job. Do not add other build trees: the backend has no per-cache quota to divide, only the one LRU cap, and those artifacts are much larger than the compiler objects they would replace.
+
 ## Documentation gate
 
 ```powershell

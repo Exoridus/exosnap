@@ -6,100 +6,548 @@ on:
   schedule:
     - cron: '0 3 * * 0' # Sunday 03:00 UTC
   workflow_dispatch:
+    inputs:
+      dry_run:
+        description: List the deletion plan without deleting any cache entry.
+        type: boolean
+        default: true
 
 # ---------------------------------------------------------------------------
 # GitHub Actions caches are scoped to the ref that wrote them. A pull_request
-# run writes to refs/pull/<N>/merge, and only that PR's own runs can ever read
-# that scope back -- no other PR, and not main. Once the PR closes, those
-# entries can never be read again by anything, but GitHub does not delete them:
-# they just sit there until LRU eviction reclaims space at the repository's
-# 10 GB cache cap. With enough closed PRs accumulating dead scopes, that
-# eviction started reaching past them into main's own scope
-# (refs/heads/main) and evicting its live sccache entries instead -- the one
-# scope every PR's build actually restores from, so evicting it cost every
-# subsequent PR a cold sccache run.
+# run writes to refs/pull/<N>/merge, and only that PR's own runs can read that
+# scope back. The base branch is the shared scope: a PR against next restores
+# next's entries, and a PR against main restores main's entries. Those two
+# branch scopes are therefore live inputs for every pull request and must
+# never be swept.
 #
-# So this workflow deletes what it can prove is unreachable, immediately, on
-# two paths:
-#   - a merged or closed PR's own scope, right away, since nothing can read it
-#     again the moment the PR closes;
-#   - everything that is not main's scope, weekly, as a backstop for anything
-#     the per-PR cleanup missed (a PR closed before this workflow existed, a
-#     run that failed, workflow_dispatch for an ad hoc sweep).
-# main's scope is the one thing this workflow must never delete: it is the
-# only scope every PR's build reads sccache from, and it is exactly what the
-# LRU eviction was destroying before this existed.
+# Closed pull requests are different: once the PR closes, nothing can read its
+# merge/head scope again, but GitHub does not delete those entries. They remain
+# charged against the repository's 10 GB cache budget until LRU eviction
+# reclaims them, and that eviction reaches into next's live compiler cache.
+# This workflow removes only what it can prove is unreachable:
 #
-# No actions/checkout: every step here only calls the GitHub API through gh,
-# never reads or writes anything in the repository tree.
+#   - on pull_request.closed, the closed PR's own merge and head scopes;
+#   - weekly (and on manual dispatch), pull request scopes whose PR is no
+#     longer open. That covers PR scopes closed before this cleanup existed.
+#
+# Branch and tag scopes are never deleted automatically. A branch without an
+# open pull request can be pushed again, and a tag workflow can be dispatched
+# again, so both can still read their own entries. Removing them requires an
+# explicit retention rule; this workflow does not invent one.
+#
+# The weekly path runs from the repository's default branch (main), so this
+# file must also exist on main. A change that only lands on next cannot fix the
+# scheduled sweep.
+#
+# Listings use the paginated REST API rather than `gh cache list --limit`,
+# because the repository holds more entries than one listing returns. Deletes
+# are retried with exponential backoff: both 429 and 403 are used for rate
+# limiting, and a burst of deletes will hit them. The repository token allows
+# roughly a thousand API requests per hour, so a run that exhausts the quota
+# stops cleanly and leaves the rest to the next sweep instead of spending its
+# job timeout on retries that cannot succeed. A listing that fails for the same
+# reason stops the run before it deletes from that listing.
+#
+# Before a ref's entries are deleted, the sweep reads that pull request's
+# current state again. A PR reopened before that check keeps its scope; one
+# reopened between the check and the deletes can still lose it, which costs a
+# rebuild of disposable objects.
+# The selection and protection rules are each self-tested against a fixture on
+# every sweep, and workflow_dispatch defaults to a dry run so an operator can
+# inspect the plan before deleting anything.
+#
+# A pull request from a fork receives a read-only token. Its close handler
+# warns instead of failing; the weekly sweep, which runs with this repository's
+# write token, removes the scope later.
+#
+# No actions/checkout: every step only calls the GitHub API through gh, never
+# reads or writes anything in the repository tree.
 # ---------------------------------------------------------------------------
 
 permissions:
   contents: read
   actions: write
+  pull-requests: read
+
+# A separate group per closing PR: GitHub keeps only one pending run per
+# concurrency group, so a shared group would silently discard all but one
+# cleanup when several PRs close together. The weekly sweep has its own group.
+concurrency:
+  group: cache-cleanup-${{ github.event.pull_request.number || 'sweep' }}
+  cancel-in-progress: false
+
+env:
+  GH_TOKEN: ${{ github.token }}
+  GH_REPO: ${{ github.repository }}
 
 jobs:
   cleanup:
     name: cleanup
     runs-on: ubuntu-latest
-    timeout-minutes: 15
-    concurrency:
-      group: cache-cleanup
-      cancel-in-progress: false
-    env:
-      GH_TOKEN: ${{ github.token }}
-      GH_REPO: ${{ github.repository }}
+    # The initial sweep may have to delete a large backlog at the cache API's
+    # roughly one-delete-per-second rate. Later sweeps normally find nothing.
+    timeout-minutes: 90
     steps:
-      # A PR that never triggered a cached build (docs-only, closed unmerged
-      # before CI ran) has no cache entries at all, and `gh cache delete --all`
-      # exits 1 on an empty scope by default -- --succeed-on-no-caches makes
-      # that ordinary case a no-op instead of a failed job.
-      - name: Delete this pull request's cache scope
-        if: github.event_name == 'pull_request'
+      - name: Delete unreachable cache scopes
         shell: bash
+        env:
+          EVENT: ${{ github.event_name }}
+          PR_NUMBER: ${{ github.event.pull_request.number }}
+          DRY_RUN: ${{ github.event_name == 'workflow_dispatch' && inputs.dry_run }}
+          DEFAULT_BRANCH: ${{ github.event.repository.default_branch }}
+          CURRENT_REF: ${{ github.ref }}
+          MAX_PR_DELETES: '300'
         run: |
-          gh cache delete --all --succeed-on-no-caches \
-            --ref "refs/pull/${{ github.event.pull_request.number }}/merge"
+          set -euo pipefail
 
-      # The weekly backstop: delete every cache entry outside main's scope,
-      # regardless of which PR wrote it or whether that PR's own cleanup step
-      # already ran. `gh cache list --limit` pages the underlying 100/page API
-      # on its own, but a single listing can still race entries created while
-      # this sweep runs -- so the list-then-delete round repeats until a
-      # listing comes back with nothing left to delete, capped so a runaway
-      # rate of new non-main entries cannot make this loop forever.
-      - name: Sweep every non-main cache scope
-        if: github.event_name != 'pull_request'
-        shell: bash
-        run: |
-          total_deleted=0
-          total_bytes=0
-          max_rounds=30
-          round=1
-          while [ "$round" -le "$max_rounds" ]; do
-            entries=$(gh cache list --limit 1000 --json id,ref,key,sizeInBytes \
-              --jq '[.[] | select(.ref != "refs/heads/main")]')
-            remaining=$(echo "$entries" | jq 'length')
-            if [ "$remaining" -eq 0 ]; then
-              break
+          work=$(mktemp -d)
+          trap 'rm -rf "$work"' EXIT
+          stop_reason=''
+
+          # quota, permission or api; empty while the run may continue.
+          classify_api_error() {
+            local err="$1"
+            if grep -q 'HTTP 429' "$err" || grep -qi 'rate limit' "$err"; then
+              echo quota
+            elif grep -q 'HTTP 403' "$err"; then
+              echo permission
+            else
+              echo api
             fi
+          }
 
-            round_bytes=$(echo "$entries" | jq '[.[].sizeInBytes] | add')
-            echo "Round $round: deleting $remaining non-main cache entries ($round_bytes bytes)."
+          report_stop() {
+            case "$stop_reason" in
+              quota)
+                echo "::warning::cache cleanup stopped at the hourly API quota; the next run continues."
+                echo "Cleanup stopped at the hourly API quota; the next run continues." >> "$GITHUB_STEP_SUMMARY"
+                ;;
+              permission)
+                echo "::warning::cache cleanup stopped because the token may not delete these entries; the next run retries."
+                echo "Cleanup stopped: the token may not delete these entries; the next run retries." >> "$GITHUB_STEP_SUMMARY"
+                ;;
+              api)
+                echo "::warning::cache cleanup stopped after an API error; the next run retries."
+                echo "Cleanup stopped after an API error; the next run retries." >> "$GITHUB_STEP_SUMMARY"
+                ;;
+            esac
+          }
 
-            echo "$entries" | jq -r '.[].id' | while read -r id; do
-              gh cache delete "$id"
+          # Returns 0 on success (including an entry that is already gone),
+          # 2 when the token may not delete at all, 1 after retries are
+          # exhausted, and 3 when the hourly API quota is spent. Callers stop
+          # the run on 2 or 3 and leave the rest to the next sweep.
+          delete_cache() {
+            local id="$1" attempt=1 delay=2 err="$work/delete.err" kind
+            while [ "$attempt" -le 6 ]; do
+              rm -f "$err"
+              if gh api --silent --method DELETE \
+                "repos/$GH_REPO/actions/caches/$id" 2>"$err"; then
+                return 0
+              fi
+              if grep -q 'HTTP 404' "$err"; then
+                return 0
+              fi
+              kind=$(classify_api_error "$err")
+              case "$kind" in
+                quota)
+                  # A primary limit resets on an hourly boundary, far beyond
+                  # any backoff worth sleeping through. Stop instead of
+                  # spending the remaining job time on retries that cannot
+                  # succeed. A 429 may arrive as a bare "Too Many Requests".
+                  if [ "$attempt" -ge 3 ]; then
+                    echo "::warning::cache id $id: API rate limit is spent; stopping this run."
+                    return 3
+                  fi
+                  ;;
+                permission)
+                  echo "::warning::not permitted to delete cache id $id; a read-only token cannot clean a fork PR."
+                  return 2
+                  ;;
+              esac
+              if [ "$attempt" -eq 6 ]; then
+                echo "::warning::cache id $id could not be deleted: $(tr '\n' ' ' < "$err")"
+                return 1
+              fi
+              sleep "$delay"
+              delay=$((delay * 2))
+              attempt=$((attempt + 1))
             done
+          }
 
-            total_deleted=$((total_deleted + remaining))
-            total_bytes=$((total_bytes + round_bytes))
-            round=$((round + 1))
-          done
+          # Returns 0 on success, 2/3 for permission/quota failures and 1 for
+          # other errors. A failed listing must never feed a deletion plan.
+          list_ref() {
+            local ref="$1" attempt=1 delay=2 err="$work/list-ref.err" out="$work/list-ref.out" kind
+            while [ "$attempt" -le 4 ]; do
+              rm -f "$err" "$out"
+              if gh api --method GET --paginate \
+                "repos/$GH_REPO/actions/caches" \
+                -f ref="$ref" -f per_page=100 2>"$err" \
+                --jq '.actions_caches[]? | [.id, .ref, .key, .size_in_bytes] | @tsv' \
+                > "$out"; then
+                cat "$out"
+                return 0
+              fi
+              kind=$(classify_api_error "$err")
+              if [ "$kind" = quota ]; then return 3; fi
+              if [ "$kind" = permission ]; then return 2; fi
+              if [ "$attempt" -eq 4 ]; then
+                echo "::warning::cache listing for $ref failed: $(tr '\n' ' ' < "$err")" >&2
+                return 1
+              fi
+              sleep "$delay"
+              delay=$((delay * 2))
+              attempt=$((attempt + 1))
+            done
+          }
 
-          if [ "$round" -gt "$max_rounds" ]; then
-            echo "::warning::Cache sweep stopped after $max_rounds rounds; non-main entries may remain."
+          delete_ref() {
+            local ref="$1" limit="${2:-0}" entries="$work/ref.tsv"
+            local total deleted=0 failed=0 status remaining
+            [ -z "$stop_reason" ] || return 0
+            status=0
+            list_ref "$ref" > "$entries" || status=$?
+            case "$status" in
+              0) ;;
+              3) stop_reason=quota; return 0 ;;
+              2) stop_reason=permission; return 0 ;;
+              *) stop_reason=api; return 0 ;;
+            esac
+            total=$(wc -l < "$entries" | tr -d ' ')
+            echo "ref $ref: $total cache entries"
+            while IFS=$'\t' read -r id _; do
+              [ -n "$id" ] || continue
+              if [ "$limit" -gt 0 ] && [ "$deleted" -ge "$limit" ]; then
+                remaining=$((total - deleted))
+                echo "::warning::ref $ref: stopped after $limit deletions; $remaining entries remain for the next run."
+                break
+              fi
+              if delete_cache "$id"; then
+                deleted=$((deleted + 1))
+              else
+                status=$?
+                if [ "$status" -eq 2 ]; then
+                  stop_reason=permission
+                  break
+                fi
+                if [ "$status" -eq 3 ]; then
+                  stop_reason=quota
+                  break
+                fi
+                failed=$((failed + 1))
+              fi
+              sleep 0.2
+            done < "$entries"
+            echo "ref $ref: deleted $deleted, failed $failed"
+          }
+
+          if [ "$EVENT" = "pull_request" ]; then
+            if [ -z "${PR_NUMBER:-}" ]; then
+              echo "::error::pull_request event without a number"
+              exit 1
+            fi
+            delete_ref "refs/pull/$PR_NUMBER/merge" "$MAX_PR_DELETES"
+            delete_ref "refs/pull/$PR_NUMBER/head" "$MAX_PR_DELETES"
+            report_stop
+            exit 0
           fi
 
-          remaining_main=$(gh cache list --limit 1000 --json id --jq 'length')
-          echo "Deleted $total_deleted cache entries, freed approximately $total_bytes bytes."
-          echo "Remaining entries (main scope only, by construction): $remaining_main."
+          # The selector is the single decision point. Only a pull request
+          # scope is provably disposable, and only once the PR is not open.
+          # Branch and tag scopes stay until an explicit retention rule says
+          # otherwise. The selector is exercised against a fixture before it
+          # is applied to the live list.
+          select_deletable() {
+            local protected_file="$1"
+            jq --argjson protected "$(cat "$protected_file")" '
+              [ .[] | select(.ref | test("^refs/pull/[0-9]+/(merge|head)$"))
+                | select((.ref as $r | $protected | index($r)) | not)
+                | . + {reason: "closed pull request"} ]
+            '
+          }
+
+          fixture_protected="$work/fixture-protected.json"
+          fixture_caches="$work/fixture-caches.json"
+          cat > "$fixture_protected" <<'JSON'
+          ["refs/heads/main", "refs/heads/next", "refs/pull/900/merge", "refs/pull/900/head", "refs/heads/open-pr"]
+          JSON
+          cat > "$fixture_caches" <<'JSON'
+          [
+            {"id":1,"ref":"refs/heads/main","key":"keep-main","size_in_bytes":10},
+            {"id":2,"ref":"refs/heads/next","key":"keep-next","size_in_bytes":20},
+            {"id":3,"ref":"refs/pull/900/merge","key":"keep-open-merge","size_in_bytes":30},
+            {"id":4,"ref":"refs/pull/900/head","key":"keep-open-head","size_in_bytes":40},
+            {"id":5,"ref":"refs/heads/open-pr","key":"keep-open-branch","size_in_bytes":50},
+            {"id":6,"ref":"refs/pull/111/merge","key":"drop-closed-merge","size_in_bytes":60},
+            {"id":7,"ref":"refs/pull/111/head","key":"drop-closed-head","size_in_bytes":70},
+            {"id":8,"ref":"refs/heads/stale-feature","key":"keep-stale-branch","size_in_bytes":80},
+            {"id":9,"ref":"refs/tags/v1.0.0","key":"keep-tag","size_in_bytes":90},
+            {"id":10,"ref":"refs/heads/other-branch","key":"keep-other-branch","size_in_bytes":100}
+          ]
+          JSON
+          actual=$(select_deletable "$fixture_protected" < "$fixture_caches" | jq -c '[.[].id]')
+          expected='[6,7]'
+          if [ "$actual" != "$expected" ]; then
+            echo "::error::cache deletion selector self-test failed: expected $expected, got $actual"
+            exit 1
+          fi
+          echo "Cache deletion selector self-test passed."
+
+          # The protected set is the second decision input: every ref that a
+          # run can still read. A pull request restores its base branch's scope
+          # as well as writing its own, so an open PR's base branch is as
+          # protected as its head branch.
+          build_protected() {
+            local prs_file="$1"
+            jq --arg default "$DEFAULT_BRANCH" '
+              [ .[] | .number as $n
+                | (.headRefName // "") as $h
+                | (.baseRefName // "") as $b
+                | ["refs/pull/\($n)/merge", "refs/pull/\($n)/head"]
+                  + (if $h == "" then [] else ["refs/heads/\($h)"] end)
+                  + (if $b == "" then [] else ["refs/heads/\($b)"] end) ]
+              | add // []
+              | . + ["refs/heads/\($default)", "refs/heads/main", "refs/heads/next"]
+              | unique
+            ' "$prs_file"
+          }
+
+          fixture_prs="$work/fixture-prs.json"
+          cat > "$fixture_prs" <<'JSON'
+          [{"number":900,"headRefName":"open-pr","baseRefName":"integrate-parent"}]
+          JSON
+          fixture_built=$(build_protected "$fixture_prs")
+          for want in \
+            refs/pull/900/merge refs/pull/900/head \
+            refs/heads/open-pr refs/heads/integrate-parent \
+            refs/heads/main refs/heads/next; do
+            if ! jq -e --arg want "$want" 'index($want) != null' \
+              <<<"$fixture_built" > /dev/null; then
+              echo "::error::protected-set self-test failed: $want is missing"
+              exit 1
+            fi
+          done
+          echo "Protected-set self-test passed."
+
+          open_prs="$work/open-prs.json"
+          protected="$work/protected.json"
+          if ! gh pr list --state open --limit 1000 \
+            --json number,headRefName,baseRefName > "$open_prs" \
+            2> "$work/pr-list.err"; then
+            echo "::error::could not list open pull requests: $(tr '\n' ' ' < "$work/pr-list.err")"
+            exit 1
+          fi
+          if ! jq -e 'all(.[]; has("headRefName") and has("baseRefName"))' \
+            "$open_prs" > /dev/null; then
+            echo "::error::open PR listing is missing headRefName or baseRefName; refusing to select"
+            exit 1
+          fi
+          open_count=$(jq 'length' "$open_prs")
+          if [ "$open_count" -ge 1000 ]; then
+            echo "::error::the open pull request list reached its 1000-entry limit; refusing to select without a complete list"
+            exit 1
+          fi
+          build_protected "$open_prs" > "$protected"
+          if [[ "$CURRENT_REF" == refs/heads/* ]]; then
+            jq --arg ref "$CURRENT_REF" '. + [$ref] | unique' \
+              "$protected" > "$protected.tmp"
+            mv "$protected.tmp" "$protected"
+          fi
+
+          # Returns 0 on success, 2/3 for permission/quota failures and 1 for
+          # other errors. A failed listing must never feed a deletion plan.
+          list_all() {
+            local attempt=1 delay=2 err="$work/list-all.err" out="$work/list-all.out" kind
+            while [ "$attempt" -le 4 ]; do
+              rm -f "$err" "$out"
+              if gh api --method GET --paginate \
+                "repos/$GH_REPO/actions/caches" \
+                -f per_page=100 2>"$err" \
+                --jq '.actions_caches[]? | {id, ref, key, size_in_bytes}' \
+                > "$out"; then
+                cat "$out"
+                return 0
+              fi
+              kind=$(classify_api_error "$err")
+              if [ "$kind" = quota ]; then return 3; fi
+              if [ "$kind" = permission ]; then return 2; fi
+              if [ "$attempt" -eq 4 ]; then
+                echo "::warning::cache listing failed: $(tr '\n' ' ' < "$err")" >&2
+                return 1
+              fi
+              sleep "$delay"
+              delay=$((delay * 2))
+              attempt=$((attempt + 1))
+            done
+          }
+
+          # One state check per ref immediately before its entries are
+          # deleted. Returns 0 when the scope is unreachable, 1 when it must
+          # be kept, and 2 when the quota is spent.
+          ref_still_closed() {
+            local ref="$1" number state err="$work/pr-state.err"
+            case "$ref" in
+              refs/pull/*/merge|refs/pull/*/head) ;;
+              *) return 1 ;;
+            esac
+            number="${ref#refs/pull/}"
+            number="${number%%/*}"
+            rm -f "$err"
+            if ! state=$(gh api "repos/$GH_REPO/pulls/$number" \
+              --jq '.state' 2>"$err"); then
+              if grep -q 'HTTP 404' "$err"; then
+                return 0
+              fi
+              if [ "$(classify_api_error "$err")" = quota ]; then
+                return 2
+              fi
+              echo "::warning::cannot read pull request #$number; keeping its cache."
+              return 1
+            fi
+            if [ "$state" = "open" ]; then
+              return 1
+            fi
+            return 0
+          }
+
+          caches="$work/caches.json"
+          plan="$work/plan.json"
+          status=0
+          list_all | jq -s '.' > "$caches" || status=$?
+          if [ "$status" -ne 0 ]; then
+            case "$status" in
+              3) stop_reason=quota ;;
+              2) stop_reason=permission ;;
+              *) stop_reason=api ;;
+            esac
+            if [ "$stop_reason" = api ]; then
+              echo "::error::cache usage could not be listed; rerun the workflow."
+              exit 1
+            fi
+            report_stop
+            exit 0
+          fi
+
+          total_entries=$(jq 'length' "$caches")
+          total_gib=$(jq -r '(([.[].size_in_bytes] | add // 0) / 1073741824 * 100 | round) / 100' "$caches")
+          {
+            echo "### GitHub Actions cache usage"
+            echo ""
+            echo "| Ref | Entries | Size |"
+            echo "|---|---:|---:|"
+            jq -r 'group_by(.ref)[]
+              | "| `\(.[0].ref)` | \(length) | \(((map(.size_in_bytes) | add) / 1073741824 * 100 | round) / 100) GiB |"' "$caches"
+            echo ""
+            echo "Total: $total_entries entries, $total_gib GiB."
+          } >> "$GITHUB_STEP_SUMMARY"
+          echo "Cache usage: $total_entries entries, $total_gib GiB."
+
+          select_deletable "$protected" < "$caches" > "$plan"
+          count=$(jq 'length' "$plan")
+          if [ "$count" -eq 0 ]; then
+            echo "No unreachable cache entries."
+            exit 0
+          fi
+
+          jq -r 'group_by(.reason)[]
+            | "\(.[0].reason): \(length) entries, \(((map(.size_in_bytes) | add) / 1073741824 * 100 | round) / 100) GiB"' "$plan"
+          jq -r '.[:20][] | "  id=\(.id) ref=\(.ref) key=\(.key) reason=\(.reason)"' "$plan"
+
+          if [ "$DRY_RUN" = "true" ]; then
+            echo "Dry run: $count cache entries would be deleted."
+            exit 0
+          fi
+
+          deleted_total=0
+          failed_total=0
+          round=1
+          max_rounds=10
+          while [ "$round" -le "$max_rounds" ] && [ -z "$stop_reason" ]; do
+            status=0
+            list_all | jq -s '.' > "$caches" || status=$?
+            if [ "$status" -ne 0 ]; then
+              case "$status" in
+                3) stop_reason=quota ;;
+                2) stop_reason=permission ;;
+                *) stop_reason=api ;;
+              esac
+              break
+            fi
+            select_deletable "$protected" < "$caches" > "$plan"
+            count=$(jq 'length' "$plan")
+            if [ "$count" -eq 0 ]; then
+              echo "Round $round: no unreachable entries remain."
+              break
+            fi
+            echo "Round $round: deleting $count entries."
+            deleted_this_round=0
+            while IFS=$'\t' read -r ref ids; do
+              [ -n "$ref" ] || continue
+              status=0
+              ref_still_closed "$ref" || status=$?
+              if [ "$status" -eq 1 ]; then
+                echo "ref $ref: kept, the pull request is open or unreadable."
+                continue
+              fi
+              if [ "$status" -eq 2 ]; then
+                stop_reason=quota
+                break
+              fi
+              IFS=',' read -r -a id_list <<< "$ids"
+              for id in "${id_list[@]}"; do
+                if delete_cache "$id"; then
+                  deleted_total=$((deleted_total + 1))
+                  deleted_this_round=$((deleted_this_round + 1))
+                else
+                  status=$?
+                  if [ "$status" -eq 3 ]; then
+                    stop_reason=quota
+                    break
+                  fi
+                  if [ "$status" -eq 2 ]; then
+                    stop_reason=permission
+                    break
+                  fi
+                  failed_total=$((failed_total + 1))
+                fi
+                sleep 0.2
+              done
+              if [ -n "$stop_reason" ]; then
+                break
+              fi
+            done < <(jq -r 'group_by(.ref)[] | [.[0].ref, (map(.id) | join(","))] | @tsv' "$plan")
+            if [ -n "$stop_reason" ]; then
+              break
+            fi
+            if [ "$deleted_this_round" -eq 0 ]; then
+              echo "Round $round: no cache entries were deleted; stopping."
+              break
+            fi
+            round=$((round + 1))
+          done
+          if [ "$round" -gt "$max_rounds" ]; then
+            echo "::warning::cache sweep stopped after $max_rounds rounds; unreachable entries may remain."
+          fi
+
+          echo "Deleted $deleted_total entries; $failed_total deletion attempts failed."
+          if [ -n "$stop_reason" ]; then
+            report_stop
+          else
+            status=0
+            list_all | jq -s '.' > "$caches" || status=$?
+            if [ "$status" -eq 0 ]; then
+              remaining_entries=$(jq 'length' "$caches")
+              remaining_gib=$(jq -r '(([.[].size_in_bytes] | add // 0) / 1073741824 * 100 | round) / 100' "$caches")
+              echo "Remaining cache usage: $remaining_entries entries, $remaining_gib GiB."
+              {
+                echo ""
+                echo "After sweep: $remaining_entries entries, $remaining_gib GiB."
+              } >> "$GITHUB_STEP_SUMMARY"
+            else
+              echo "::warning::remaining cache usage was not re-measured; the next run retries."
+            fi
+          fi
+          if [ "$failed_total" -gt 0 ]; then
+            echo "::warning::$failed_total cache entries could not be deleted; the next run retries."
+          fi

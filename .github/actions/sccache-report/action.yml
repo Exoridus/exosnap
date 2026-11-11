@@ -1,0 +1,63 @@
+name: Report sccache stats
+description: Print sccache counters and append this job's hit rate to the summary.
+
+# Prints the text table and appends the same run's machine-readable counters to
+# the job summary. The JSON form is the stable surface; the text form stays for
+# a reader who opens the log.
+#
+# A missing or malformed response fails the step. An unavailable measurement
+# must not be presented as a zero.
+
+inputs:
+  label:
+    description: Job-specific label for the summary row.
+    required: false
+    default: sccache
+
+runs:
+  using: composite
+  steps:
+    - name: sccache stats
+      shell: pwsh
+      env:
+        SCCACHE_LABEL: ${{ inputs.label }}
+      run: |
+        $ErrorActionPreference = 'Stop'
+        sccache --show-stats
+        if ($LASTEXITCODE -ne 0) { throw 'sccache --show-stats failed' }
+        $json = sccache --show-stats --stats-format=json
+        if ($LASTEXITCODE -ne 0) { throw 'sccache --show-stats --stats-format=json failed' }
+        $stats = $json | ConvertFrom-Json
+        if ($null -eq $stats -or $null -eq $stats.stats -or
+            $null -eq $stats.stats.cache_hits -or $null -eq $stats.stats.cache_misses -or
+            $null -eq $stats.stats.cache_writes -or
+            $null -eq $stats.stats.cache_write_errors -or
+            $null -eq $stats.stats.cache_read_errors) {
+          throw 'sccache stats JSON is missing a required stats field'
+        }
+
+        function Get-CountSum($counts) {
+          if ($null -eq $counts) { return [int64]0 }
+          $sum = ($counts.PSObject.Properties | Measure-Object -Property Value -Sum).Sum
+          if ($null -eq $sum) { return [int64]0 }
+          return [int64]$sum
+        }
+
+        $hits = Get-CountSum $stats.stats.cache_hits.counts
+        $misses = Get-CountSum $stats.stats.cache_misses.counts
+        $writes = [int64]$stats.stats.cache_writes
+        $writeErrors = [int64]$stats.stats.cache_write_errors
+        $readErrors = [int64]$stats.stats.cache_read_errors
+        $total = $hits + $misses
+        $rate = if ($total -gt 0) {
+          [string]::Format([Globalization.CultureInfo]::InvariantCulture, '{0:F2} %', (100.0 * $hits / $total))
+        } else { 'n/a' }
+        $mode = if ($stats.effective_cache_mode) { $stats.effective_cache_mode } else { 'unknown' }
+
+        @(
+          "### sccache: $env:SCCACHE_LABEL"
+          ''
+          '| Hits | Misses | Hit rate | Writes | Write errors | Read errors | Mode |'
+          '|---:|---:|---:|---:|---:|---:|---|'
+          "| $hits | $misses | $rate | $writes | $writeErrors | $readErrors | $mode |"
+        ) | Add-Content -LiteralPath $env:GITHUB_STEP_SUMMARY
