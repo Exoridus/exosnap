@@ -134,7 +134,7 @@ jobs:
             list_ref "$ref" > "$entries"
             total=$(wc -l < "$entries" | tr -d ' ')
             echo "ref $ref: $total cache entries"
-            while IFS=$'\t' read -r id entry_ref key bytes; do
+            while IFS=$'\t' read -r id _; do
               [ -n "$id" ] || continue
               if [ "$limit" -gt 0 ] && [ "$deleted" -ge "$limit" ]; then
                 remaining=$((total - deleted))
@@ -279,7 +279,7 @@ jobs:
               break
             fi
             echo "Round $round: deleting $count entries."
-            while IFS=$'\t' read -r id ref key reason; do
+            while IFS=$'\t' read -r id _; do
               [ -n "$id" ] || continue
               if delete_cache "$id"; then
                 deleted_total=$((deleted_total + 1))
@@ -287,7 +287,7 @@ jobs:
                 failed_total=$((failed_total + 1))
               fi
               sleep 0.2
-            done < <(jq -r '.[] | [.id, .ref, .key, .reason] | @tsv' "$plan")
+            done < <(jq -r '.[] | [.id] | @tsv' "$plan")
             round=$((round + 1))
           done
           if [ "$round" -gt "$max_rounds" ]; then
