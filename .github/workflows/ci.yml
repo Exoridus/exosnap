@@ -98,13 +98,15 @@ on:
 # contention. Ninja + MSVC needs the dev-cmd environment for cl.exe.
 env:
   SCCACHE_GHA_ENABLED: "true"
-  # A tag ref writes to its own scope, which nothing ever reads again (a tag is
-  # never rebuilt) — every object sccache would write there is pure write cost
-  # against the repository's shared 10 GB cache budget, evicting entries a PR
-  # could actually have hit. Read-only on tags gets whatever next last warmed
-  # without adding to the pile; PRs and next keep read-write so they still
-  # populate the scope the next run reads from.
-  SCCACHE_GHA_RW_MODE: ${{ startsWith(github.ref, 'refs/tags/') && 'READ_ONLY' || 'READ_WRITE' }}
+  # Only a long-lived branch scope is worth writing. A pull request writes to
+  # refs/pull/<N>/merge, which only that PR's later runs can read, and a tag is
+  # never rebuilt. Both scopes become unreachable as soon as the work ends, but
+  # their objects keep consuming the repository's shared 10 GB cache budget and
+  # evict entries a later PR would have hit. Pull requests and tags therefore
+  # read the base branch's scope without adding to the pile. cache-warm.yml is
+  # the writer that keeps next current; a read-only miss still compiles
+  # normally, so a missing entry cannot fail a build.
+  SCCACHE_GHA_RW_MODE: ${{ (github.event_name == 'pull_request' || startsWith(github.ref, 'refs/tags/')) && 'READ_ONLY' || 'READ_WRITE' }}
   # The sccache server exits after its idle timeout (600 s by default), and a
   # `--show-stats` that outlives it silently starts a fresh server and reports
   # zeros rather than failing. Any job whose stats step sits behind a long

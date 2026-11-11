@@ -6,7 +6,7 @@ name: Advisory Checks
 on:
   # Nightly on the default branch. 03:00 UTC is off-peak for GitHub's hosted
   # Windows pool, and a run that starts then has finished long before the
-  # working day. schedule events always run on the default branch (next).
+  # working day. schedule events always run on the default branch (main).
   schedule:
     - cron: '0 3 * * *'
   workflow_dispatch:
@@ -15,6 +15,9 @@ on:
 
 env:
   SCCACHE_GHA_ENABLED: "true"
+  # This scheduled run executes on main and is the writer of main's shared
+  # scope, which release pull requests read. next is warmed by cache-warm.yml.
+  SCCACHE_GHA_RW_MODE: "READ_WRITE"
 
 jobs:
   advisory-unused-checks:

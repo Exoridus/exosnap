@@ -6,6 +6,10 @@ name: Cache Warm
 # next PR's first build would start cold. This workflow exists solely to keep
 # that scope warm for both Ninja presets when build inputs change. It reports no
 # tests and no status the README badge or branch protection depends on.
+#
+# This workflow is the writer of that shared scope. Pull requests and tags are
+# read-only in ci.yml, so their disposable scopes never compete with next for
+# the repository's cache budget.
 on:
   push:
     branches: [next]
@@ -21,6 +25,10 @@ on:
 
 env:
   SCCACHE_GHA_ENABLED: "true"
+  # A writer of the shared branch scope, together with the crash-capture
+  # workflow's push handler. See ci.yml for why pull requests and tags are
+  # read-only.
+  SCCACHE_GHA_RW_MODE: "READ_WRITE"
   # The sccache server exits after its idle timeout (600 s by default), and a
   # `--show-stats` that outlives it silently starts a fresh server and reports
   # zeros rather than failing. Any job whose stats step sits behind a long
