@@ -21,7 +21,7 @@ include_guard(GLOBAL)
 set(EXOSNAP_TEST_PHASES hermetic cpu gpu desktop vm human)
 
 function(exosnap_add_gtest)
-  set(options)
+  set(options NO_CTEST)
   set(one_value_args NAME TEST_PREFIX TIMEOUT PHASE)
   set(multi_value_args SOURCES LIBRARIES LABELS)
 
@@ -184,8 +184,14 @@ function(exosnap_add_gtest)
   # TEST_PREFIX semantics are preserved by folding the prefix into the single
   # entry name, e.g. TEST_PREFIX "engine." + NAME "test_mp4_remuxer"
   # -> CTest entry "engine.test_mp4_remuxer".
+  #
+  # NO_CTEST builds and stages the executable without registering it. It is for
+  # a binary that serves several CTest entries through their own filters, where
+  # an entry for the whole binary would run every case a second time.
   set(_exosnap_test_name "${ARG_TEST_PREFIX}${ARG_NAME}")
-  add_test(NAME "${_exosnap_test_name}" COMMAND ${ARG_NAME})
+  if(NOT ARG_NO_CTEST)
+    add_test(NAME "${_exosnap_test_name}" COMMAND ${ARG_NAME})
+  endif()
 
   # Per-binary timeout. Default 300 s is comfortably above any current binary
   # (the slowest run a handful of seconds); override via TIMEOUT for a binary
@@ -196,7 +202,9 @@ function(exosnap_add_gtest)
   else()
     set(_exosnap_timeout 300)
   endif()
-  set_tests_properties("${_exosnap_test_name}" PROPERTIES TIMEOUT ${_exosnap_timeout})
+  if(NOT ARG_NO_CTEST)
+    set_tests_properties("${_exosnap_test_name}" PROPERTIES TIMEOUT ${_exosnap_timeout})
+  endif()
 
   # The execution phase, as a label, on every entry without exception. Default
   # `hermetic`: a gtest binary that was given no phase links against the libraries
@@ -223,7 +231,9 @@ function(exosnap_add_gtest)
     list(APPEND _exosnap_labels ${ARG_LABELS})
   endif()
 
-  set_tests_properties("${_exosnap_test_name}" PROPERTIES LABELS "${_exosnap_labels}")
+  if(NOT ARG_NO_CTEST)
+    set_tests_properties("${_exosnap_test_name}" PROPERTIES LABELS "${_exosnap_labels}")
+  endif()
 endfunction()
 
 # Declares the execution phase of a test registered with a bare `add_test`.

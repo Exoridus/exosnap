@@ -38,13 +38,13 @@ From the configured Windows build environment, use an explicit Release executabl
 ```powershell
 $scenario = 'desktop-idle-1080p60'
 $product = (Resolve-Path '.\build\windows-x64-ninja-release\app\exosnap.exe').Path
-$out = '.workspace/benchmark-results/idle-1080p60-baseline'
+$out = Join-Path $env:TEMP 'exosnap-benchmark/idle-1080p60-baseline'
 if (Test-Path $out) { throw 'Choose a fresh evidence directory.' }
 $benchmarkConfigBefore = $env:EXOSNAP_CONFIG_DIR
 $benchmarkStageABefore = $env:EXOSNAP_STAGE_A_CACHE
 $benchmarkDemandBefore = $env:EXOSNAP_DEMAND_COMPOSITION
 try {
-    $env:EXOSNAP_CONFIG_DIR = Join-Path (Get-Location) "$out/config"
+    $env:EXOSNAP_CONFIG_DIR = Join-Path $out 'config'
     Remove-Item Env:\EXOSNAP_STAGE_A_CACHE -ErrorAction SilentlyContinue
     Remove-Item Env:\EXOSNAP_DEMAND_COMPOSITION -ErrorAction SilentlyContinue
     cargo exo-dev benchmark topology --scenario $scenario
