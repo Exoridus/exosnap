@@ -316,12 +316,19 @@ fn missing_deps(output: &str, build: &Path) -> Vec<String> {
         .collect()
 }
 
+/// Build work a dry run would do. Ninja's own bookkeeping steps (a glob
+/// re-check or a build-file regeneration) are not a compile or link the fixture
+/// is counting, and a tree that reconfigures itself would otherwise report
+/// pending work it does not have.
 fn count_ninja_edges(output: &str) -> usize {
     output
         .lines()
         .filter(|line| {
             let line = line.trim_start();
-            line.starts_with('[') && line.contains('/')
+            line.starts_with('[')
+                && line.contains('/')
+                && !line.contains("Re-running CMake")
+                && !line.contains("Re-checking globbed")
         })
         .count()
 }
@@ -674,5 +681,11 @@ mod tests {
         let text = "[1/2] Compiling CXX\n[2/2] Linking CXX\nninja: no work to do.\n";
         assert_eq!(count_ninja_edges(text), 2);
         assert_eq!(count_ninja_edges("ninja: no work to do."), 0);
+        assert_eq!(
+            count_ninja_edges(
+                "[0/2] Re-checking globbed directories...\n[1/2] Re-running CMake...\n"
+            ),
+            0
+        );
     }
 }
