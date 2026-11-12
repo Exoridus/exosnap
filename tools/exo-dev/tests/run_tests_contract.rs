@@ -482,10 +482,31 @@ fn auto_build_targets_build_a_not_yet_existing_selected_executable() {
     );
     assert!(build.join("stale-test.exe").exists());
     assert!(
-        outcome.output.contains("Focused build: 1 selected tests"),
+        outcome.output.contains("Focused targets: 1 selected tests"),
         "{}",
         outcome.output
     );
+}
+
+#[test]
+fn an_explicit_target_builds_a_selected_executable_that_does_not_exist_yet() {
+    let repo = source_repo();
+    let (_root, build) = configured_tree(
+        "find_program(fixture_rustc rustc REQUIRED)\nfile(WRITE \"${CMAKE_CURRENT_SOURCE_DIR}/input.rs\" \"fn main() {}\")\nadd_custom_command(OUTPUT stale-test.exe COMMAND \"${fixture_rustc}\" \"${CMAKE_CURRENT_SOURCE_DIR}/input.rs\" -o stale-test.exe DEPENDS \"${CMAKE_CURRENT_SOURCE_DIR}/input.rs\")\nadd_custom_target(test_binary DEPENDS stale-test.exe)\nadd_test(NAME fixture.binary COMMAND \"${CMAKE_CURRENT_BINARY_DIR}/stale-test.exe\")\nset_tests_properties(fixture.binary PROPERTIES LABELS phase.hermetic EXOSNAP_BUILD_TARGET test_binary)\n",
+    );
+    assert!(!build.join("stale-test.exe").exists());
+    // The CTest command appears only once the executable exists, which must
+    // not read as a changed selection after the runner built it.
+    let outcome = run(&Options {
+        no_build: false,
+        build_targets: vec!["test_binary".into()],
+        filter: "^fixture.binary$".into(),
+        ..options(repo.path(), &build)
+    });
+    assert_eq!(outcome.code(), 0, "{}", outcome.output);
+    assert_eq!(outcome.receipt()["reusable"], true);
+    assert_eq!(outcome.receipt()["build_status"], "succeeded");
+    assert!(build.join("stale-test.exe").exists());
 }
 
 #[test]

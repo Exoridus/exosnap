@@ -175,6 +175,20 @@ fn direct_build_targets(
     Ok(targets)
 }
 
+/// Whether a tree still registers the same tests after a build. A command that
+/// appears for the first time is not a change: CTest omits it until the
+/// executable exists, and building that executable is what the run just did.
+fn same_registered_selection(
+    before: &[catalog::CatalogTest],
+    after: &[catalog::CatalogTest],
+) -> bool {
+    before.len() == after.len()
+        && before
+            .iter()
+            .zip(after)
+            .all(|(before, after)| before.name == after.name && before.disabled == after.disabled)
+}
+
 /// Builds, runs and judges one tree. Never returns an error: every failure is
 /// an exit code, a stated reason and, once the tree lock was held, a receipt.
 pub fn run(options: &Options, host: &dyn Host, console: &mut Console) -> RunResult {
@@ -642,11 +656,20 @@ impl Run<'_> {
                     let current =
                         catalog::query(&self.build_dir, &self.options.config, &selection, &env)
                             .map_err(anyhow::Error::msg)?;
-                    if current != selected {
+                    // A test that had no executable before this build now has
+                    // one, so its command is filled in for the first time.
+                    // That is the expected result of the build, not a changed
+                    // selection; only the registered set may decide that.
+                    if !same_registered_selection(&selected, &current) {
                         self.invalid(
                             "test selection changed while building its executable outputs",
                         );
                         return Ok(EXIT_INVALID_RUN);
+                    }
+                    // Now that the executables exist, record the outputs that
+                    // were actually built rather than the pre-build targets.
+                    if let Ok(built) = direct_build_targets(&self.build_dir, &current) {
+                        self.receipt.resolved_test_targets = built;
                     }
                     self.receipt.freshness = Freshness::Fresh;
                     self.receipt.freshness_detail =
@@ -838,7 +861,7 @@ impl Run<'_> {
         match direct_build_targets(&self.build_dir, &tests) {
             Ok(targets) if !targets.is_empty() => {
                 self.console.line(format!(
-                    "Focused build: {} selected tests resolve to {} build targets.",
+                    "Focused targets: {} selected tests resolve to {} build targets.",
                     tests.iter().filter(|test| !test.disabled).count(),
                     targets.len()
                 ));
@@ -1289,5 +1312,23 @@ mod tests {
         let mut disabled = test("off", r"C:\elsewhere\tool.exe");
         disabled.disabled = true;
         assert!(direct_build_targets(root, &[disabled]).unwrap().is_empty());
+    }
+
+    #[test]
+    fn a_command_that_appears_after_the_build_is_not_a_changed_selection() {
+        let mut before = test("engine.a", "");
+        before.command.clear();
+        let after = test("engine.a", r"C:\repo\build\libs\a.exe");
+        assert!(same_registered_selection(&[before], &[after]));
+    }
+
+    #[test]
+    fn disappearing_or_disabled_tests_are_a_changed_selection() {
+        let one = vec![test("engine.a", "")];
+        let two = vec![test("engine.a", ""), test("engine.b", "")];
+        assert!(!same_registered_selection(&one, &two));
+        let mut disabled = vec![test("engine.a", "")];
+        disabled[0].disabled = true;
+        assert!(!same_registered_selection(&one, &disabled));
     }
 }
