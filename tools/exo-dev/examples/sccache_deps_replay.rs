@@ -24,12 +24,14 @@ impl Probe {
             "exosnap-sccache-replay-{}-{stamp}",
             std::process::id()
         ));
-        fs::create_dir(&root).context("could not create the isolated scratch directory")?;
         // Reserve an ephemeral port only long enough to learn its number. This
         // keeps the experiment's sccache server separate from the user's server.
         let socket = std::net::TcpListener::bind("127.0.0.1:0")?;
         let port = socket.local_addr()?.port();
         drop(socket);
+        // After the fallible port lookup, so a failure here cannot leak the
+        // directory. `create_dir` also guarantees the root was never in use.
+        fs::create_dir(&root).context("could not create the isolated scratch directory")?;
         Ok(Self {
             cache: root.join("cache"),
             root,
@@ -42,8 +44,12 @@ impl Probe {
         let mut cmd = Command::new(program);
         cmd.env("SCCACHE_DIR", &self.cache)
             .env("SCCACHE_SERVER_PORT", self.port.to_string())
+            // A developer's cache backend or basedir configuration must not
+            // decide what this probe measures.
+            .env_remove("SCCACHE_CONF")
+            .env_remove("SCCACHE_GHA_CACHE_URL")
+            .env_remove("SCCACHE_GHA_RUNTIME_TOKEN")
             .env_remove("SCCACHE_GHA_ENABLED");
-        // Inherited SCCACHE_BASEDIRS is deliberately not modified.
         cmd
     }
 
@@ -71,6 +77,23 @@ impl Probe {
             &["--show-stats".into(), "--stats-format=json".into()],
         )?;
         let stats: Value = serde_json::from_str(&text)?;
+        // The client talks to whatever server answers on the probe port. A
+        // stale or foreign server would silently report another cache's
+        // counters and make every later number meaningless.
+        if let Some(location) = stats["cache_location"].as_str() {
+            let marker = self
+                .root
+                .file_name()
+                .unwrap_or_default()
+                .to_string_lossy()
+                .to_ascii_lowercase();
+            if !location.to_ascii_lowercase().contains(&marker) {
+                bail!(
+                    "the sccache server on port {} reports cache {location:?} instead of the probe cache; stop it and rerun",
+                    self.port
+                );
+            }
+        }
         let counts = stats
             .pointer("/stats/cache_hits/counts")
             .and_then(Value::as_object)
@@ -84,9 +107,13 @@ impl Drop for Probe {
         let _ = self.command("sccache").arg("--stop-server").output();
         if self.keep {
             eprintln!("Evidence retained: {}", self.root.display());
-        } else {
-            // Only this exact, newly created GUID-like scratch directory.
-            let _ = fs::remove_dir_all(&self.root);
+        } else if let Err(error) = fs::remove_dir_all(&self.root) {
+            // A locked cache file is the usual cause. Say so instead of
+            // leaving the directory behind as an unexplained leftover.
+            eprintln!(
+                "warning: could not remove the scratch directory {}: {error}",
+                self.root.display()
+            );
         }
     }
 }
@@ -113,7 +140,7 @@ fn write_fixture(source: &Path) -> Result<()> {
     Ok(())
 }
 
-fn configure_and_build(probe: &Probe, source: &Path, build: &Path) -> Result<()> {
+fn configure(probe: &Probe, source: &Path, build: &Path) -> Result<()> {
     probe.run(
         "cmake",
         &[
@@ -131,6 +158,10 @@ fn configure_and_build(probe: &Probe, source: &Path, build: &Path) -> Result<()>
             "-DCMAKE_MSVC_DEBUG_INFORMATION_FORMAT=Embedded".into(),
         ],
     )?;
+    Ok(())
+}
+
+fn build(probe: &Probe, build: &Path) -> Result<()> {
     probe.run("cmake", &["--build".into(), build.display().to_string()])?;
     Ok(())
 }
@@ -202,7 +233,8 @@ fn main() -> Result<()> {
         std::env::var_os("SCCACHE_BASEDIRS")
     );
     println!("Build A, populating isolated sccache...");
-    configure_and_build(&probe, &source_a, &build_a)?;
+    configure(&probe, &source_a, &build_a)?;
+    build(&probe, &build_a)?;
 
     // Control: a clean rebuild of the same checkout must hit. Without it, a
     // zero cross-checkout hit count cannot distinguish a root-sensitive key
@@ -217,13 +249,17 @@ fn main() -> Result<()> {
         ],
     )?;
     let before = probe.cache_hits()?;
-    probe.run("cmake", &["--build".into(), build_a.display().to_string()])?;
+    build(&probe, &build_a)?;
     let control = probe.cache_hits()?.saturating_sub(before);
     println!("Same-checkout cache hits (control): {control}");
 
     println!("Build B from a different checkout...");
-    configure_and_build(&probe, &source_b, &build_b)?;
-    let hits = probe.cache_hits()?.saturating_sub(before + control);
+    configure(&probe, &source_b, &build_b)?;
+    // Sampled after configuring B, so a hit from CMake's compiler checks
+    // cannot be mistaken for reuse of the fixture's object.
+    let before_b = probe.cache_hits()?;
+    build(&probe, &build_b)?;
+    let hits = probe.cache_hits()?.saturating_sub(before_b);
     let deps = probe.run(
         "ninja",
         &[
@@ -294,10 +330,17 @@ fn main() -> Result<()> {
             "NOT_REPRODUCIBLE: the cache works for this fixture, but the cross-checkout build \
              did not reuse it."
         );
-    } else if !missing.is_empty() || pending > 0 {
+    } else if !missing.is_empty() {
         println!(
-            "REPRODUCED: replayed /showIncludes lines name the retired checkout and keep the \
-             consuming tree dirty."
+            "REPRODUCED: {hits} cross-checkout hit(s) replayed {} foreign include path(s) and \
+             left {} dependency path(s) naming the retired checkout.",
+            foreign.len(),
+            missing.len()
+        );
+    } else if pending > 0 {
+        println!(
+            "REPRODUCED: {hits} cross-checkout hit(s) left {pending} edge(s) pending after the \
+             populating checkout was retired."
         );
     } else {
         println!("PASS: cross-checkout cache hit without foreign or missing dependency paths.");
