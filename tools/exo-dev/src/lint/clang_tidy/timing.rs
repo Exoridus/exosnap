@@ -182,6 +182,7 @@ impl super::ClangTidyReport {
             "selected": self.analyzed,
             "cache_enabled": self.cache_enabled,
             "cache_entries": self.cache_entries,
+            "cache_keyed": self.cache_keyed,
             "cache_hits": self.replayed,
             "cache_misses": self.analyzed.saturating_sub(self.replayed),
             "compiler_policy": self.compiler_policy,
@@ -247,6 +248,7 @@ mod tests {
         report.tool_version = "22.1.3".into();
         report.analyzed = 2;
         report.cache_entries = 7;
+        report.cache_keyed = 6;
         report.replayed = 1;
         report.timing.units.push(super::UnitTiming {
             unit: Some(2),
@@ -266,6 +268,7 @@ mod tests {
         assert!(rich["timing"]["units"][0].get("unit").is_none());
         assert!(rich.get("profile_mode").is_none());
         assert_eq!(rich["cache_entries"], 7);
+        assert_eq!(rich["cache_keyed"], 6);
         let public = report.profile_identity(Some("abcdef"), true, true).unwrap();
         assert!(public.get("tool").is_none());
         assert!(public.get("compile_database").is_none());

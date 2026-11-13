@@ -103,6 +103,8 @@ pub struct ClangTidyReport {
     pub cache_dir: PathBuf,
     /// Verdict files present when the run started, before any analysis.
     pub cache_entries: u64,
+    /// Translation units the run could key, that is, the cache candidates.
+    pub cache_keyed: usize,
     pub replayed: usize,
     pub violations: Vec<String>,
     pub timing: TidyTiming,
@@ -124,6 +126,7 @@ impl ClangTidyReport {
             cache_enabled: false,
             cache_dir: cache_dir.to_path_buf(),
             cache_entries: 0,
+            cache_keyed: 0,
             replayed: 0,
             violations: Vec::new(),
             timing: TidyTiming::default(),
@@ -486,6 +489,7 @@ pub fn run_blocking(
         cache_enabled,
         cache_dir: cache_dir.to_path_buf(),
         cache_entries,
+        cache_keyed: cache_keys.len(),
         replayed,
         violations: violations.into_iter().collect(),
         timing,
