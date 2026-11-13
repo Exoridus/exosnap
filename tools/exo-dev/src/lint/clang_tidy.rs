@@ -101,6 +101,8 @@ pub struct ClangTidyReport {
     pub analyzed: usize,
     pub cache_enabled: bool,
     pub cache_dir: PathBuf,
+    /// Verdict files present when the run started, before any analysis.
+    pub cache_entries: u64,
     pub replayed: usize,
     pub violations: Vec<String>,
     pub timing: TidyTiming,
@@ -121,6 +123,7 @@ impl ClangTidyReport {
             analyzed: 0,
             cache_enabled: false,
             cache_dir: cache_dir.to_path_buf(),
+            cache_entries: 0,
             replayed: 0,
             violations: Vec::new(),
             timing: TidyTiming::default(),
@@ -166,6 +169,9 @@ pub fn run_blocking(
     }
 
     let started = Instant::now();
+    // Recorded before anything is analysed: zero means the restored cache was
+    // empty, which is the difference between changed keys and nothing to replay.
+    let cache_entries = cached_verdicts(cache_dir);
     timing::progress_phase("compile_database", started);
     let mut timing = TidyTiming::default();
     let phase = Instant::now();
@@ -479,6 +485,7 @@ pub fn run_blocking(
         analyzed: sources.len(),
         cache_enabled,
         cache_dir: cache_dir.to_path_buf(),
+        cache_entries,
         replayed,
         violations: violations.into_iter().collect(),
         timing,
@@ -1340,6 +1347,25 @@ fn sha256_hex(bytes: &[u8]) -> String {
 
 fn cache_entry_path(cache_dir: &Path, key: &str) -> PathBuf {
     cache_dir.join(&key[..2]).join(format!("{key}.txt"))
+}
+
+/// Verdict files present in the cache directory. Entries are one shard
+/// directory below the root, so a single level is the whole set.
+fn cached_verdicts(cache_dir: &Path) -> u64 {
+    let Ok(shards) = std::fs::read_dir(cache_dir) else {
+        return 0;
+    };
+    let mut total = 0;
+    for shard in shards.flatten() {
+        let Ok(files) = std::fs::read_dir(shard.path()) else {
+            continue;
+        };
+        total += files
+            .flatten()
+            .filter(|entry| entry.path().extension().is_some_and(|kind| kind == "txt"))
+            .count() as u64;
+    }
+    total
 }
 
 #[derive(serde::Serialize, serde::Deserialize)]
@@ -3296,6 +3322,19 @@ mod tests {
             read_cache_entry(&path, "abcdef0123456789", "source.cpp").unwrap(),
             "cached output\n"
         );
+    }
+
+    #[test]
+    fn counts_only_verdict_files_in_the_cache() {
+        let dir = tempfile::tempdir().unwrap();
+        let cache = dir.path().join("cache");
+        std::fs::create_dir_all(cache.join("ab")).unwrap();
+        std::fs::create_dir_all(cache.join("cd")).unwrap();
+        std::fs::write(cache.join("ab/key1.txt"), "{}\n").unwrap();
+        std::fs::write(cache.join("ab/key2.txt"), "{}\n").unwrap();
+        std::fs::write(cache.join("cd/notes.md"), "not a verdict\n").unwrap();
+        assert_eq!(cached_verdicts(&cache), 2);
+        assert_eq!(cached_verdicts(&dir.path().join("missing")), 0);
     }
 
     #[test]
