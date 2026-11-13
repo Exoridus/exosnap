@@ -227,6 +227,34 @@ mod tests {
     const LINUX_PROFILES: [Profile; 2] = [Profile::CiGuardrails, Profile::PrPolicy];
 
     #[test]
+    fn hosted_windows_ci_keeps_its_explicit_compiler_cache() {
+        // The local Ninja presets disable sccache for cross-worktree dependency
+        // correctness. CI has one checkout path per job and must keep restoring
+        // its compiler cache through an explicit argument rather than a preset.
+        for profile in [Profile::CiBuildDebug, Profile::CiBuildRelease] {
+            let spec = profile.spec();
+            assert!(
+                spec.configure_args
+                    .iter()
+                    .any(|arg| arg.contains("EXOSNAP_USE_SCCACHE=ON")),
+                "{} must configure its own sccache because the presets no longer enable it",
+                spec.name
+            );
+        }
+        for local in [Profile::PreCommit, Profile::PrePush] {
+            assert!(
+                local
+                    .spec()
+                    .configure_args
+                    .iter()
+                    .all(|arg| !arg.contains("EXOSNAP_USE_SCCACHE")),
+                "{} must keep the safe preset default",
+                local.spec().name
+            );
+        }
+    }
+
+    #[test]
     fn every_blocking_ci_step_also_blocks_before_a_push_or_says_why_not() {
         let pre_push = Profile::PrePush.spec();
         for profile in Profile::ALL.into_iter().filter(|p| p.spec().ci) {

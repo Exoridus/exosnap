@@ -120,12 +120,17 @@ const SEPARATOR: &str = "-------------------------------------------------------
 /// complete build rather than guessing.
 pub const AUTO_BUILD_TARGETS: &str = "auto";
 
-/// A local Windows Ninja tree using a shared compiler cache cannot prove its
-/// /showIncludes dependencies belong to this checkout. Refuse local test
-/// verdicts from such a tree until a safe cache replay contract exists.
-fn unsafe_local_sccache(cache: &Path, hosted_ci: bool) -> bool {
+/// Why this local Windows Ninja tree cannot support a trustworthy test
+/// verdict, or `None` when it can. A shared compiler cache may replay another
+/// checkout's `/showIncludes` paths, and switching the cache off does not
+/// rewrite what a previous build already recorded.
+fn unsafe_local_cache_reason(
+    cache: &Path,
+    build_dir: &Path,
+    hosted_ci: bool,
+) -> Option<&'static str> {
     if hosted_ci {
-        return false;
+        return None;
     }
     let enabled = freshness::cache_value(cache, "EXOSNAP_USE_SCCACHE").is_some_and(|value| {
         ["ON", "TRUE", "YES", "1"]
@@ -136,9 +141,36 @@ fn unsafe_local_sccache(cache: &Path, hosted_ci: bool) -> bool {
         freshness::cache_value(cache, name)
             .is_some_and(|value| value.to_ascii_lowercase().contains("sccache"))
     };
-    enabled
+    if enabled
         || uses_sccache("EXOSNAP_COMPILER_LAUNCHER")
         || uses_sccache("CMAKE_CXX_COMPILER_LAUNCHER")
+    {
+        return Some(concat!(
+            "unsafe local sccache in this Ninja build tree: foreign /showIncludes ",
+            "paths can hide header edits. Configure EXOSNAP_USE_SCCACHE=OFF and ",
+            "recompile in a fresh isolated build tree before trusting test results"
+        ));
+    }
+    if configured_with_sccache_before(cache) && build_dir.join(".ninja_deps").is_file() {
+        return Some(concat!(
+            "this Ninja build tree was configured with sccache before: its recorded ",
+            "include paths may still name another checkout, and turning the cache off ",
+            "does not rewrite them. Build in a fresh isolated build directory before ",
+            "trusting test results"
+        ));
+    }
+    None
+}
+
+/// `EXOSNAP_SCCACHE_EXE` is written by `find_program` only under
+/// `EXOSNAP_USE_SCCACHE=ON`, and CMake keeps a cached entry when the option is
+/// turned off. A real path here therefore records that this tree used the
+/// shared cache at some point.
+fn configured_with_sccache_before(cache: &Path) -> bool {
+    freshness::cache_value(cache, "EXOSNAP_SCCACHE_EXE").is_some_and(|value| {
+        let value = value.trim();
+        !value.is_empty() && !value.ends_with("-NOTFOUND")
+    })
 }
 
 /// Build-tree executable paths, or explicitly registered CMake target names
@@ -469,21 +501,13 @@ impl Run<'_> {
         // Do not publish apparently passing local tests against a Ninja graph
         // that can silently omit this worktree's changed headers on a cache hit.
         // Hosted CI keeps its explicit cache configuration and fixed checkout.
-        if cfg!(windows)
-            && ninja
-            && unsafe_local_sccache(
-                &cache,
-                std::env::var("GITHUB_ACTIONS").is_ok_and(|v| v == "true"),
-            )
-        {
-            let reason = concat!(
-                "unsafe local sccache in this Ninja build tree: foreign /showIncludes ",
-                "paths can hide header edits. Configure EXOSNAP_USE_SCCACHE=OFF and ",
-                "recompile in a fresh isolated build tree before trusting test results"
-            );
-            self.console.line(reason);
-            self.invalid(reason);
-            return Ok(EXIT_INVALID_RUN);
+        if cfg!(windows) && ninja {
+            let hosted_ci = std::env::var("GITHUB_ACTIONS").is_ok_and(|value| value == "true");
+            if let Some(reason) = unsafe_local_cache_reason(&cache, &self.build_dir, hosted_ci) {
+                self.console.line(reason);
+                self.invalid(reason);
+                return Ok(EXIT_INVALID_RUN);
+            }
         }
 
         // The same selection the suite uses, read before the build so an
@@ -1328,6 +1352,7 @@ mod tests {
     fn local_sccache_test_verdicts_fail_closed() {
         let dir = tempfile::tempdir().unwrap();
         let cache = dir.path().join("CMakeCache.txt");
+        let build = dir.path();
         for (contents, unsafe_expected) in [
             ("EXOSNAP_USE_SCCACHE:BOOL=ON\n", true),
             ("EXOSNAP_USE_SCCACHE:BOOL=OFF\n", false),
@@ -1342,9 +1367,38 @@ mod tests {
             ("EXOSNAP_COMPILER_LAUNCHER:STRING=\n", false),
         ] {
             std::fs::write(&cache, contents).unwrap();
-            assert_eq!(unsafe_local_sccache(&cache, false), unsafe_expected);
-            assert!(!unsafe_local_sccache(&cache, true));
+            assert_eq!(
+                unsafe_local_cache_reason(&cache, build, false).is_some(),
+                unsafe_expected
+            );
+            assert!(unsafe_local_cache_reason(&cache, build, true).is_none());
         }
+    }
+
+    #[test]
+    fn a_tree_that_built_with_sccache_stays_refused_after_it_is_turned_off() {
+        let dir = tempfile::tempdir().unwrap();
+        let cache = dir.path().join("CMakeCache.txt");
+        let build = dir.path();
+        // CMake keeps `EXOSNAP_SCCACHE_EXE` from the run that had the option on.
+        let reused =
+            "EXOSNAP_USE_SCCACHE:BOOL=OFF\nEXOSNAP_SCCACHE_EXE:FILEPATH=C:/tools/sccache.exe\n";
+        std::fs::write(&cache, reused).unwrap();
+        // Configured but never built: no recorded includes to distrust.
+        assert!(unsafe_local_cache_reason(&cache, build, false).is_none());
+
+        // A build database next to it means objects may carry foreign includes.
+        std::fs::write(build.join(".ninja_deps"), b"").unwrap();
+        assert!(unsafe_local_cache_reason(&cache, build, false).is_some());
+        assert!(unsafe_local_cache_reason(&cache, build, true).is_none());
+
+        // A tree that never found sccache keeps its verdicts.
+        std::fs::write(
+            &cache,
+            "EXOSNAP_USE_SCCACHE:BOOL=OFF\nEXOSNAP_SCCACHE_EXE:FILEPATH=EXOSNAP_SCCACHE_EXE-NOTFOUND\n",
+        )
+        .unwrap();
+        assert!(unsafe_local_cache_reason(&cache, build, false).is_none());
     }
 
     #[test]
