@@ -67,3 +67,9 @@ test-support = ["dep:tempfile"]
 
 [dev-dependencies]
 exo-dev = { path = ".", features = ["test-support"] }
+
+# The diagnostics in this example carry self-checks that must run in the
+# workspace test gate rather than only when someone invokes the example.
+[[example]]
+name = "sccache_deps_replay"
+test = true

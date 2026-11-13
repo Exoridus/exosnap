@@ -184,10 +184,8 @@ function(exosnap_add_gtest)
   # TEST_PREFIX semantics are preserved by folding the prefix into the single
   # entry name, e.g. TEST_PREFIX "engine." + NAME "test_mp4_remuxer"
   # -> CTest entry "engine.test_mp4_remuxer".
-  #
-  # NO_CTEST builds and stages the executable without registering it. It is for
-  # a binary that serves several CTest entries through their own filters, where
-  # an entry for the whole binary would run every case a second time.
+  # NO_CTEST builds and stages a shared test binary without registering an
+  # extra entry that would execute all of its member suites a second time.
   set(_exosnap_test_name "${ARG_TEST_PREFIX}${ARG_NAME}")
   if(NOT ARG_NO_CTEST)
     add_test(NAME "${_exosnap_test_name}" COMMAND ${ARG_NAME})
@@ -203,7 +201,12 @@ function(exosnap_add_gtest)
     set(_exosnap_timeout 300)
   endif()
   if(NOT ARG_NO_CTEST)
-    set_tests_properties("${_exosnap_test_name}" PROPERTIES TIMEOUT ${_exosnap_timeout})
+    set_tests_properties("${_exosnap_test_name}" PROPERTIES
+      TIMEOUT ${_exosnap_timeout}
+      # Retained in CTest metadata before an executable is built, allowing
+      # --build-target auto to select focused targets in fresh Ninja trees.
+      EXOSNAP_BUILD_TARGET "${ARG_NAME}"
+    )
   endif()
 
   # The execution phase, as a label, on every entry without exception. Default

@@ -503,7 +503,8 @@ enum PrCommand {
 
 #[derive(Args)]
 struct TestArgs {
-    /// Build only these CMake targets before testing. Repeat for multiple targets.
+    /// Build only these CMake targets before testing. Repeat for multiple
+    /// targets. Pass `auto` to build the executables of the selected tests.
     #[arg(long = "build-target")]
     build_targets: Vec<String>,
     /// CMake build tree to test, relative to the repository root. The tree
@@ -1582,6 +1583,18 @@ fn test(repo_root: &std::path::Path, args: TestArgs) -> anyhow::Result<ExitCode>
         host::{Console, RealHost},
         runner,
     };
+
+    if args.build_targets.len() > 1
+        && args
+            .build_targets
+            .iter()
+            .any(|target| target == runner::AUTO_BUILD_TARGETS)
+    {
+        anyhow::bail!(
+            "--build-target {} cannot be combined with explicit targets",
+            runner::AUTO_BUILD_TARGETS
+        );
+    }
 
     let options = runner::Options {
         build_dir: args.build_dir,
