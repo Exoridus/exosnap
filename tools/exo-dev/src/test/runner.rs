@@ -120,6 +120,20 @@ const SEPARATOR: &str = "-------------------------------------------------------
 /// complete build rather than guessing.
 pub const AUTO_BUILD_TARGETS: &str = "auto";
 
+/// A local Windows Ninja tree using a shared compiler cache cannot prove its
+/// /showIncludes dependencies belong to this checkout. Refuse local test
+/// verdicts from such a tree until a safe cache replay contract exists.
+fn unsafe_local_sccache(cache: &Path, hosted_ci: bool) -> bool {
+    if hosted_ci {
+        return false;
+    }
+    let enabled = freshness::cache_value(cache, "EXOSNAP_USE_SCCACHE")
+        .is_some_and(|value| ["ON", "TRUE", "YES", "1"].iter().any(|on| value.eq_ignore_ascii_case(on)));
+    let custom_launcher = freshness::cache_value(cache, "EXOSNAP_COMPILER_LAUNCHER")
+        .is_some_and(|value| value.to_ascii_lowercase().contains("sccache"));
+    enabled || custom_launcher
+}
+
 /// Build-tree executable paths, or explicitly registered CMake target names
 /// for binaries not yet built. Scripts and unknown wrappers remain unprovable
 /// and require a complete build.
@@ -444,6 +458,22 @@ impl Run<'_> {
         let generator = freshness::cache_value(&cache, "CMAKE_GENERATOR").unwrap_or_default();
         self.receipt.generator = generator.clone();
         let ninja = generator.to_ascii_lowercase().contains("ninja");
+
+        // Do not publish apparently passing local tests against a Ninja graph
+        // that can silently omit this worktree's changed headers on a cache hit.
+        // Hosted CI keeps its explicit cache configuration and fixed checkout.
+        if cfg!(windows)
+            && ninja
+            && unsafe_local_sccache(
+                &cache,
+                std::env::var("GITHUB_ACTIONS").is_ok_and(|v| v == "true"),
+            )
+        {
+            let reason = "unsafe shared local sccache in this Ninja build tree:                 foreign /showIncludes paths can hide header edits. Configure                 EXOSNAP_USE_SCCACHE=OFF, and recompile in a fresh isolated                 build tree before trusting test results";
+            self.console.line(reason);
+            self.invalid(reason);
+            return Ok(EXIT_INVALID_RUN);
+        }
 
         // The same selection the suite uses, read before the build so an
         // `auto` target request can be resolved from it.
@@ -1280,6 +1310,22 @@ mod tests {
             build_target: None,
             labels: Vec::new(),
             disabled: false,
+        }
+    }
+
+    #[test]
+    fn local_sccache_test_verdicts_fail_closed() {
+        let dir = tempfile::tempdir().unwrap();
+        let cache = dir.path().join("CMakeCache.txt");
+        for (contents, unsafe_expected) in [
+            ("EXOSNAP_USE_SCCACHE:BOOL=ON\n", true),
+            ("EXOSNAP_USE_SCCACHE:BOOL=OFF\n", false),
+            ("EXOSNAP_COMPILER_LAUNCHER:STRING=C:/tools/sccache.exe\n", true),
+            ("EXOSNAP_COMPILER_LAUNCHER:STRING=\n", false),
+        ] {
+            std::fs::write(&cache, contents).unwrap();
+            assert_eq!(unsafe_local_sccache(&cache, false), unsafe_expected);
+            assert!(!unsafe_local_sccache(&cache, true));
         }
     }
 

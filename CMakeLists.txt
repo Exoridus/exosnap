@@ -76,9 +76,9 @@ set(EXOSNAP_COMPILER_LAUNCHER "" CACHE STRING "Optional C++ compiler launcher ex
 if(WIN32 AND EXOSNAP_USE_SCCACHE AND NOT DEFINED ENV{GITHUB_ACTIONS})
     message(WARNING
         "Local sccache can replay another worktree's /showIncludes paths and miss "
-        "required header rebuilds (ExoSnap issue #558). Only enable it with an "
-        "isolated cache/server or after a verified upstream fix. Previously "
-        "affected build trees require fresh compilation.")
+        "required header rebuilds (ExoSnap issue #558). Local exo-dev test "
+        "runs refuse such configurations until a verified correction exists. "
+        "Previously affected build trees require fresh compilation.")
 endif()
 
 if(EXOSNAP_COMPILER_LAUNCHER)
