@@ -226,14 +226,17 @@ mod tests {
     #[test]
     fn local_ninja_presets_do_not_enable_cross_worktree_sccache() {
         // Cross-worktree MSVC /showIncludes replay may omit current-header
-        // dependencies. Local presets must fail safe until issue #558 is fixed;
+        // dependencies. Local presets must fail safe until the dependency replay is fixed;
         // hosted CI opts into its separate cache through explicit arguments.
         let repo = Path::new(env!("CARGO_MANIFEST_DIR")).join("../..");
         let contents = std::fs::read_to_string(repo.join("CMakePresets.json")).unwrap();
         let document: serde_json::Value = serde_json::from_str(&contents).unwrap();
         let presets = document["configurePresets"].as_array().unwrap();
         for name in ["windows-x64-ninja-debug", "windows-x64-ninja-release"] {
-            let preset = presets.iter().find(|preset| preset["name"] == name).unwrap();
+            let preset = presets
+                .iter()
+                .find(|preset| preset["name"] == name)
+                .unwrap();
             assert_eq!(
                 preset["cacheVariables"]["EXOSNAP_USE_SCCACHE"].as_str(),
                 Some("OFF"),

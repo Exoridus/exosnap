@@ -67,7 +67,7 @@ endif()
 
 # Worktree-shared local sccache may replay MSVC /showIncludes paths from the
 # producer checkout into the consumer's Ninja deps. With both worktrees present,
-# changing a header in the consumer can leave its object and tests stale (#558).
+# changing a header in the consumer can leave its object and tests stale.
 # The local Ninja presets default to OFF until that correctness bug is fixed.
 # Hosted CI still enables a separate GitHub cache explicitly with a stable
 # checkout layout. A locally supplied compiler launcher is an explicit override.
