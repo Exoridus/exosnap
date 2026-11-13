@@ -619,13 +619,39 @@ exosnap_add_gtest(
 target_include_directories(test_opus_encoder PRIVATE src)
 
 # Audio v2 (0.6.0): PCM passthrough encoder (self-contained; no FFmpeg/NVENC).
+#
+# Audio DSP test pilot: five small, self-contained suites share one executable.
+# Each keeps its CTest name, phase and timeout and selects only its own suite,
+# so selection, filtering and the census are unchanged while one EXE, PDB and
+# ILK replace five. One suite per source file is what makes the filters exact.
 exosnap_add_gtest(
-    NAME test_pcm_audio_encoder
-    TEST_PREFIX engine.
-    SOURCES tests/test_pcm_audio_encoder.cpp
-            src/pcm_audio_encoder.cpp
+    NAME engine_audio_dsp_tests
+    NO_CTEST
+    SOURCES
+        tests/test_brickwall_limiter.cpp src/brickwall_limiter.cpp
+        tests/test_high_pass_filter.cpp src/high_pass_filter.cpp
+        tests/test_noise_gate.cpp src/noise_gate.cpp
+        tests/test_automatic_gain_control.cpp src/automatic_gain_control.cpp
+        tests/test_pcm_audio_encoder.cpp src/pcm_audio_encoder.cpp
+    TIMEOUT 300
 )
-target_include_directories(test_pcm_audio_encoder PRIVATE src include)
+target_include_directories(engine_audio_dsp_tests PRIVATE src include)
+foreach(_dsp_member IN ITEMS
+        "test_brickwall_limiter|BrickwallLimiter"
+        "test_high_pass_filter|HighPassFilter"
+        "test_noise_gate|NoiseGate"
+        "test_automatic_gain_control|AutomaticGainControl"
+        "test_pcm_audio_encoder|PcmAudioEncoder")
+  string(REPLACE "|" ";" _dsp_pair "${_dsp_member}")
+  list(GET _dsp_pair 0 _dsp_test)
+  list(GET _dsp_pair 1 _dsp_suite)
+  add_test(NAME "engine.${_dsp_test}"
+      COMMAND engine_audio_dsp_tests "--gtest_filter=${_dsp_suite}.*")
+  set_tests_properties("engine.${_dsp_test}" PROPERTIES
+      LABELS "phase.hermetic"
+      TIMEOUT 300
+      EXOSNAP_BUILD_TARGET engine_audio_dsp_tests)
+endforeach()
 
 # Audio v2 (0.6.0): FLAC lossless encoder (links libFLAC; not pure-logic).
 exosnap_add_gtest(
@@ -1044,40 +1070,10 @@ exosnap_add_gtest(
 )
 
 # Audio v2 (0.6.0): brickwall limiter DSP (self-contained; no FFmpeg/NVENC).
-exosnap_add_gtest(
-    NAME test_brickwall_limiter
-    TEST_PREFIX engine.
-    SOURCES tests/test_brickwall_limiter.cpp
-            src/brickwall_limiter.cpp
-)
-target_include_directories(test_brickwall_limiter PRIVATE src)
-
-# Audio v2 (0.6.0): mic high-pass filter DSP (self-contained; no FFmpeg/NVENC).
-exosnap_add_gtest(
-    NAME test_high_pass_filter
-    TEST_PREFIX engine.
-    SOURCES tests/test_high_pass_filter.cpp
-            src/high_pass_filter.cpp
-)
-target_include_directories(test_high_pass_filter PRIVATE src)
-
-# Audio v2 (0.6.0): mic noise gate DSP (self-contained; no FFmpeg/NVENC).
-exosnap_add_gtest(
-    NAME test_noise_gate
-    TEST_PREFIX engine.
-    SOURCES tests/test_noise_gate.cpp
-            src/noise_gate.cpp
-)
-target_include_directories(test_noise_gate PRIVATE src)
-
-# Audio v2 (0.6.0): mic automatic gain control DSP (self-contained; no FFmpeg/NVENC).
-exosnap_add_gtest(
-    NAME test_automatic_gain_control
-    TEST_PREFIX engine.
-    SOURCES tests/test_automatic_gain_control.cpp
-            src/automatic_gain_control.cpp
-)
-target_include_directories(test_automatic_gain_control PRIVATE src)
+#
+# The limiter, high-pass, noise-gate and gain-control suites live in the
+# consolidated engine_audio_dsp_tests binary; their entries are registered
+# beside it and select one suite each.
 
 # Audio v2 (0.6.0): RNNoise neural noise-suppression DSP (links rnnoise; not
 # pure-logic — exercises the real RNNoise default model).
