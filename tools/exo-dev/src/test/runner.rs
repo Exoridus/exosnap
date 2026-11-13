@@ -127,11 +127,18 @@ fn unsafe_local_sccache(cache: &Path, hosted_ci: bool) -> bool {
     if hosted_ci {
         return false;
     }
-    let enabled = freshness::cache_value(cache, "EXOSNAP_USE_SCCACHE")
-        .is_some_and(|value| ["ON", "TRUE", "YES", "1"].iter().any(|on| value.eq_ignore_ascii_case(on)));
-    let custom_launcher = freshness::cache_value(cache, "EXOSNAP_COMPILER_LAUNCHER")
-        .is_some_and(|value| value.to_ascii_lowercase().contains("sccache"));
-    enabled || custom_launcher
+    let enabled = freshness::cache_value(cache, "EXOSNAP_USE_SCCACHE").is_some_and(|value| {
+        ["ON", "TRUE", "YES", "1"]
+            .iter()
+            .any(|on| value.eq_ignore_ascii_case(on))
+    });
+    let uses_sccache = |name| {
+        freshness::cache_value(cache, name)
+            .is_some_and(|value| value.to_ascii_lowercase().contains("sccache"))
+    };
+    enabled
+        || uses_sccache("EXOSNAP_COMPILER_LAUNCHER")
+        || uses_sccache("CMAKE_CXX_COMPILER_LAUNCHER")
 }
 
 /// Build-tree executable paths, or explicitly registered CMake target names
@@ -1320,7 +1327,14 @@ mod tests {
         for (contents, unsafe_expected) in [
             ("EXOSNAP_USE_SCCACHE:BOOL=ON\n", true),
             ("EXOSNAP_USE_SCCACHE:BOOL=OFF\n", false),
-            ("EXOSNAP_COMPILER_LAUNCHER:STRING=C:/tools/sccache.exe\n", true),
+            (
+                "EXOSNAP_COMPILER_LAUNCHER:STRING=C:/tools/sccache.exe\n",
+                true,
+            ),
+            (
+                "CMAKE_CXX_COMPILER_LAUNCHER:STRING=C:/tools/sccache.exe\n",
+                true,
+            ),
             ("EXOSNAP_COMPILER_LAUNCHER:STRING=\n", false),
         ] {
             std::fs::write(&cache, contents).unwrap();
