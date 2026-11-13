@@ -65,8 +65,21 @@ if(MSVC)
     add_link_options("$<$<CONFIG:Release>:/DEBUG>" "$<$<CONFIG:Release>:/OPT:REF>" "$<$<CONFIG:Release>:/OPT:ICF>")
 endif()
 
+# Worktree-shared local sccache may replay MSVC /showIncludes paths from the
+# producer checkout into the consumer's Ninja deps. With both worktrees present,
+# changing a header in the consumer can leave its object and tests stale (#558).
+# The local Ninja presets default to OFF until that correctness bug is fixed.
+# Hosted CI still enables a separate GitHub cache explicitly with a stable
+# checkout layout. A locally supplied compiler launcher is an explicit override.
 option(EXOSNAP_USE_SCCACHE "Use sccache as the C++ compiler launcher when it is available." OFF)
 set(EXOSNAP_COMPILER_LAUNCHER "" CACHE STRING "Optional C++ compiler launcher executable, such as sccache.")
+if(WIN32 AND EXOSNAP_USE_SCCACHE AND NOT DEFINED ENV{GITHUB_ACTIONS})
+    message(WARNING
+        "Local sccache can replay another worktree's /showIncludes paths and miss "
+        "required header rebuilds (ExoSnap issue #558). Only enable it with an "
+        "isolated cache/server or after a verified upstream fix. Previously "
+        "affected build trees require fresh compilation.")
+endif()
 
 if(EXOSNAP_COMPILER_LAUNCHER)
     set(CMAKE_CXX_COMPILER_LAUNCHER "${EXOSNAP_COMPILER_LAUNCHER}")

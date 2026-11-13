@@ -42,11 +42,11 @@
     {
       "name": "windows-x64-ninja-debug",
       "displayName": "Windows x64 Ninja Debug",
-      "description": "Ninja + MSVC Debug, sccache on. cargo exo-dev verify imports the MSVC environment itself; a bare cmake --preset needs a Developer PowerShell.",
+      "description": "Ninja + MSVC Debug, local sccache off for reliable cross-worktree dependencies. CI explicitly enables its separate cache. A bare cmake --preset needs a Developer PowerShell.",
       "generator": "Ninja",
       "binaryDir": "${sourceDir}/build/${presetName}",
       "cacheVariables": {
-        "EXOSNAP_USE_SCCACHE": "ON",
+        "EXOSNAP_USE_SCCACHE": "OFF",
         "CMAKE_BUILD_TYPE": "Debug",
         "CMAKE_EXPORT_COMPILE_COMMANDS": "ON"
       }
@@ -54,11 +54,11 @@
     {
       "name": "windows-x64-ninja-release",
       "displayName": "Windows x64 Ninja Release",
-      "description": "Ninja + MSVC Release, sccache on. cargo exo-dev verify imports the MSVC environment itself; a bare cmake --preset needs a Developer PowerShell.",
+      "description": "Ninja + MSVC Release, local sccache off for reliable cross-worktree dependencies. CI explicitly enables its separate cache. A bare cmake --preset needs a Developer PowerShell.",
       "generator": "Ninja",
       "binaryDir": "${sourceDir}/build/${presetName}",
       "cacheVariables": {
-        "EXOSNAP_USE_SCCACHE": "ON",
+        "EXOSNAP_USE_SCCACHE": "OFF",
         "CMAKE_BUILD_TYPE": "Release"
       }
     },
