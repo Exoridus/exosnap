@@ -1587,6 +1587,24 @@ mod tests {
     }
 
     #[test]
+    fn a_recorded_foreign_worktree_dependency_is_refused() {
+        // Shape taken from a real Debug tree whose cache was populated by a
+        // sibling worktree: every dependency of the object named the producer.
+        let dir = tempfile::tempdir().unwrap();
+        let repo = dir.path().join("repo");
+        let build = repo.join(".worktrees/consumer/build/windows-x64-ninja-debug");
+        let producer = repo.join(".worktrees/producer");
+        std::fs::create_dir_all(&build).unwrap();
+        std::fs::create_dir_all(producer.join("libs/update/include")).unwrap();
+        std::fs::create_dir_all(producer.join(".git")).unwrap();
+        std::fs::write(producer.join("libs/update/include/ed25519_verify.h"), "").unwrap();
+        let text = "libs/update/CMakeFiles/exosnap_update.dir/src/ed25519_verify.cpp.obj: #deps 1\n    ../../../producer/libs/update/include/ed25519_verify.h\n";
+        let found = foreign_dependencies(text, &build, &repo.join(".worktrees/consumer"));
+        assert_eq!(found.len(), 1, "{found:?}");
+        assert!(found[0].contains("producer"));
+    }
+
+    #[test]
     fn a_relative_dependency_inside_the_checkout_is_not_foreign() {
         let dir = tempfile::tempdir().unwrap();
         let repo = dir.path().join("repo");
