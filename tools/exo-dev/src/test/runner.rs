@@ -476,7 +476,11 @@ impl Run<'_> {
                 std::env::var("GITHUB_ACTIONS").is_ok_and(|v| v == "true"),
             )
         {
-            let reason = "unsafe shared local sccache in this Ninja build tree:                 foreign /showIncludes paths can hide header edits. Configure                 EXOSNAP_USE_SCCACHE=OFF, and recompile in a fresh isolated                 build tree before trusting test results";
+            let reason = concat!(
+                "unsafe local sccache in this Ninja build tree: foreign /showIncludes ",
+                "paths can hide header edits. Configure EXOSNAP_USE_SCCACHE=OFF and ",
+                "recompile in a fresh isolated build tree before trusting test results"
+            );
             self.console.line(reason);
             self.invalid(reason);
             return Ok(EXIT_INVALID_RUN);
