@@ -89,11 +89,18 @@ if(WIN32 AND EXOSNAP_USE_SCCACHE AND NOT EXOSNAP_SCCACHE_ISOLATED AND NOT DEFINE
         "Previously affected build trees require fresh compilation.")
 endif()
 
+include(cmake/exosnap_sccache.cmake)
+
 if(EXOSNAP_COMPILER_LAUNCHER)
     set(CMAKE_CXX_COMPILER_LAUNCHER "${EXOSNAP_COMPILER_LAUNCHER}")
+    string(TOLOWER "${EXOSNAP_COMPILER_LAUNCHER}" _exosnap_launcher_lower)
+    if(_exosnap_launcher_lower MATCHES "sccache")
+        exosnap_record_sccache_history("compiler launcher ${EXOSNAP_COMPILER_LAUNCHER}")
+    endif()
 elseif(EXOSNAP_USE_SCCACHE)
     find_program(EXOSNAP_SCCACHE_EXE NAMES sccache)
     if(EXOSNAP_SCCACHE_EXE)
+        exosnap_record_sccache_history("sccache option")
         if(EXOSNAP_SCCACHE_ISOLATED)
             # The launcher itself carries the isolation, so it applies to every
             # compile regardless of how ninja or the IDE was started.
@@ -128,14 +135,9 @@ elseif(EXOSNAP_USE_SCCACHE)
                     "Port ${_exosnap_sccache_port} may be in use. Refusing to configure a compiler cache that another process would serve. "
                     "Re-run with -DEXOSNAP_SCCACHE_PORT=<free port> or configure a different build directory.")
             endif()
-            string(JSON _exosnap_sccache_location ERROR_VARIABLE _exosnap_sccache_json_error
-                GET "${_exosnap_sccache_stats}" cache_location)
-            string(REGEX MATCH "\"([^\"]*)\"" _exosnap_sccache_quoted "${_exosnap_sccache_location}")
-            set(_exosnap_sccache_reported "${CMAKE_MATCH_1}")
-            string(REPLACE "\\" "/" _exosnap_sccache_reported_slashed "${_exosnap_sccache_reported}")
-            string(REPLACE "\\" "/" _exosnap_sccache_local_slashed "${EXOSNAP_SCCACHE_LOCAL_DIR}")
-            string(TOLOWER "${_exosnap_sccache_reported_slashed}" _exosnap_sccache_reported_lower)
-            string(TOLOWER "${_exosnap_sccache_local_slashed}" _exosnap_sccache_local_lower)
+            exosnap_sccache_location(_exosnap_sccache_reported "${_exosnap_sccache_stats}")
+            exosnap_sccache_normalized_path(_exosnap_sccache_reported_lower "${_exosnap_sccache_reported}")
+            exosnap_sccache_normalized_path(_exosnap_sccache_local_lower "${EXOSNAP_SCCACHE_LOCAL_DIR}")
             if(_exosnap_sccache_reported STREQUAL "")
                 message(FATAL_ERROR "sccache did not report a cache location: ${_exosnap_sccache_stats}")
             endif()
@@ -165,6 +167,14 @@ include(cmake/exosnap_asan.cmake)
 
 include(cmake/exosnap_warnings.cmake)
 include(cmake/exosnap_testing.cmake)
+
+# Pins the sccache 0.19 `cache_location` shape the isolation check relies on.
+add_test(NAME build.sccache_location_parse
+    COMMAND ${CMAKE_COMMAND}
+        -P ${CMAKE_SOURCE_DIR}/cmake/tests/assert_sccache_location_parse.cmake)
+set_tests_properties(build.sccache_location_parse PROPERTIES
+    LABELS "phase.hermetic"
+    TIMEOUT 60)
 include(cmake/exosnap_layering.cmake)
 
 # libebml/libmatroska ship cmake_minimum_required() floors below CMake's

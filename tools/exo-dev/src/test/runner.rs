@@ -171,10 +171,16 @@ fn isolated_configuration(cache: &Path) -> bool {
     on("EXOSNAP_USE_SCCACHE") && on("EXOSNAP_SCCACHE_ISOLATED") && !overridden
 }
 fn configured_with_sccache_before(cache: &Path) -> bool {
-    freshness::cache_value(cache, "EXOSNAP_SCCACHE_EXE").is_some_and(|value| {
+    let executable = freshness::cache_value(cache, "EXOSNAP_SCCACHE_EXE").is_some_and(|value| {
         let value = value.trim();
         !value.is_empty() && !value.ends_with("-NOTFOUND")
-    })
+    });
+    // A tree built through EXOSNAP_COMPILER_LAUNCHER never runs find_program, so
+    // the executable entry is absent. CMake records the history marker once and
+    // keeps it after the option or the launcher is cleared.
+    let history = freshness::cache_value(cache, "EXOSNAP_SCCACHE_HISTORY")
+        .is_some_and(|value| !value.trim().is_empty());
+    executable || history
 }
 
 /// Folds `.` and `..` without touching the filesystem, so a recorded relative
@@ -211,11 +217,12 @@ fn path_is_inside(path: &Path, root: &Path) -> bool {
 /// Whether an ancestor of `path` is a checkout root (it has a `.git` entry, a
 /// directory for a clone or a file for a linked worktree).
 fn belongs_to_a_checkout(path: &Path) -> bool {
+    // A producer's header can sit many directories below its `.git` (build
+    // trees, extracted dependencies), so the walk has to reach the filesystem
+    // root. It stops at the first `.git`, and the cost is one metadata read per
+    // ancestor of an outside path, which is a handful per build.
     let mut current = path.parent();
-    for _ in 0..8 {
-        let Some(directory) = current else {
-            return false;
-        };
+    while let Some(directory) = current {
         if directory.join(".git").exists() {
             return true;
         }
@@ -1544,6 +1551,46 @@ mod tests {
         )
         .unwrap();
         assert!(shared_cache_reason(&cache, false).is_some());
+    }
+
+    #[test]
+    fn a_cleared_compiler_launcher_keeps_the_cache_history() {
+        let dir = tempfile::tempdir().unwrap();
+        let cache = dir.path().join("CMakeCache.txt");
+        // Built through EXOSNAP_COMPILER_LAUNCHER, so no EXOSNAP_SCCACHE_EXE was
+        // ever written; the launcher is cleared afterwards.
+        std::fs::write(
+            &cache,
+            "EXOSNAP_USE_SCCACHE:BOOL=OFF\nEXOSNAP_COMPILER_LAUNCHER:STRING=\n\
+             EXOSNAP_SCCACHE_HISTORY:INTERNAL=compiler launcher C:/tools/sccache.exe\n",
+        )
+        .unwrap();
+        assert!(configured_with_sccache_before(&cache));
+        assert!(shared_cache_reason(&cache, false).is_none());
+        // Not isolated, so the pre-build refusal for a tree with cache history
+        // has to catch it; the dependency scan would not run otherwise.
+        assert!(!isolated_configuration(&cache));
+    }
+
+    #[test]
+    fn a_deeply_nested_foreign_checkout_is_still_recognized() {
+        let dir = tempfile::tempdir().unwrap();
+        let repo = dir.path().join("repo");
+        let build = repo.join("build/windows-x64-ninja-debug");
+        std::fs::create_dir_all(&build).unwrap();
+        // Twelve levels between the producer checkout root and its header, far
+        // beyond a fixed ancestor budget.
+        let mut deep = dir.path().join("producer");
+        std::fs::create_dir_all(&deep).unwrap();
+        std::fs::write(deep.join(".git"), "gitdir: elsewhere\n").unwrap();
+        for level in 0..12 {
+            deep = deep.join(format!("level{level}"));
+        }
+        std::fs::create_dir_all(&deep).unwrap();
+        std::fs::write(deep.join("header.h"), "").unwrap();
+        let text = format!("a.obj: #deps 1\n    {}\n", deep.join("header.h").display());
+        let found = foreign_dependencies(&text, &build, &repo);
+        assert_eq!(found.len(), 1, "{found:?}");
     }
 
     #[test]
