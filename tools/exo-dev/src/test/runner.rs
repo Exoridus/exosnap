@@ -136,11 +136,10 @@ fn shared_cache_reason(cache: &Path, hosted_ci: bool) -> Option<&'static str> {
         freshness::cache_value(cache, name)
             .is_some_and(|value| value.to_ascii_lowercase().contains("sccache"))
     };
-    // An isolated launcher still says sccache, so isolation is decided by the
-    // recorded dependencies later, not by this check.
-    let isolated = freshness::cache_value(cache, "EXOSNAP_SCCACHE_ISOLATED")
-        .is_some_and(|value| value.eq_ignore_ascii_case("ON"));
-    if enabled && isolated {
+    // An isolated configuration starts its own cache and server, so it only
+    // reaches the dependency check later. A launcher override cancels it, which
+    // is why the decision is not made from the option alone.
+    if isolated_configuration(cache) {
         return None;
     }
     if enabled
@@ -1536,6 +1535,15 @@ mod tests {
         )
         .unwrap();
         assert!(shared_cache_reason(&cache, false).is_none());
+
+        // A launcher override cancels the isolation, so the shared refusal must
+        // return instead of trusting the option.
+        std::fs::write(
+            &cache,
+            "EXOSNAP_USE_SCCACHE:BOOL=ON\nEXOSNAP_SCCACHE_ISOLATED:BOOL=ON\nEXOSNAP_COMPILER_LAUNCHER:STRING=C:/tools/sccache.exe\n",
+        )
+        .unwrap();
+        assert!(shared_cache_reason(&cache, false).is_some());
     }
 
     #[test]
