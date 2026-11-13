@@ -132,6 +132,11 @@ fn unsafe_local_cache_reason(
     if hosted_ci {
         return None;
     }
+    // A launcher that pins its own cache directory and server port cannot
+    // consult another checkout's entries, so it is safe by construction.
+    if isolated_sccache_launcher(build_dir) {
+        return None;
+    }
     let enabled = freshness::cache_value(cache, "EXOSNAP_USE_SCCACHE").is_some_and(|value| {
         ["ON", "TRUE", "YES", "1"]
             .iter()
@@ -147,19 +152,38 @@ fn unsafe_local_cache_reason(
     {
         return Some(concat!(
             "unsafe local sccache in this Ninja build tree: foreign /showIncludes ",
-            "paths can hide header edits. Configure EXOSNAP_USE_SCCACHE=OFF and ",
+            "paths can hide header edits. Configure EXOSNAP_USE_SCCACHE=OFF, or ",
+            "EXOSNAP_USE_SCCACHE=ON together with EXOSNAP_SCCACHE_ISOLATED=ON, and ",
             "recompile in a fresh isolated build tree before trusting test results"
         ));
     }
     if configured_with_sccache_before(cache) && build_dir.join(".ninja_deps").is_file() {
         return Some(concat!(
-            "this Ninja build tree was configured with sccache before: its recorded ",
-            "include paths may still name another checkout, and turning the cache off ",
-            "does not rewrite them. Build in a fresh isolated build directory before ",
-            "trusting test results"
+            "this Ninja build tree was configured with a shared sccache before: its ",
+            "recorded include paths may still name another checkout, and turning the ",
+            "cache off does not rewrite them. Build in a fresh isolated build directory ",
+            "before trusting test results"
         ));
     }
     None
+}
+
+/// Whether this tree's generated build pins sccache to its own cache directory
+/// and server port. The launcher itself carries the isolation, so a tree built
+/// this way cannot replay another checkout's includes regardless of how the
+/// tool that started the build was configured.
+fn isolated_sccache_launcher(build_dir: &Path) -> bool {
+    let Ok(text) = std::fs::read_to_string(build_dir.join("build.ninja")) else {
+        return false;
+    };
+    let text = text.to_ascii_lowercase();
+    let cache_dir = build_dir
+        .to_string_lossy()
+        .replace('\\', "/")
+        .to_ascii_lowercase();
+    let cache_dir = cache_dir.trim_end_matches('/');
+    text.contains(&format!("sccache_dir={cache_dir}/sccache"))
+        && text.contains("sccache_server_port=")
 }
 
 /// `EXOSNAP_SCCACHE_EXE` is written by `find_program` only under
@@ -1401,6 +1425,41 @@ mod tests {
         assert!(unsafe_local_cache_reason(&cache, build, false).is_none());
     }
 
+    #[test]
+    fn an_isolated_launcher_is_accepted_and_a_bare_one_is_not() {
+        let dir = tempfile::tempdir().unwrap();
+        let cache = dir.path().join("CMakeCache.txt");
+        let build = dir.path();
+        let build_slashed = build.to_string_lossy().replace('\\', "/");
+        let generated = format!(
+            "rule CXX_COMPILER__probe\n  command = \"C:/cmake/bin/cmake.exe\" -E env \
+             SCCACHE_DIR={build_slashed}/sccache SCCACHE_SERVER_PORT=48123 C:/tools/sccache.exe cl.exe /c x.cpp\n"
+        );
+        std::fs::write(build.join("build.ninja"), &generated).unwrap();
+        std::fs::write(
+            &cache,
+            "EXOSNAP_USE_SCCACHE:BOOL=ON\nEXOSNAP_SCCACHE_ISOLATED:BOOL=ON\n",
+        )
+        .unwrap();
+        std::fs::write(build.join(".ninja_deps"), b"").unwrap();
+        assert!(unsafe_local_cache_reason(&cache, build, false).is_none());
+
+        // The same launcher naming another tree's cache is not this tree's cache.
+        let elsewhere = generated.replace(
+            &format!("SCCACHE_DIR={build_slashed}/"),
+            "SCCACHE_DIR=C:/other/",
+        );
+        std::fs::write(build.join("build.ninja"), elsewhere).unwrap();
+        assert!(unsafe_local_cache_reason(&cache, build, false).is_some());
+
+        // A bare launcher has no such guarantee.
+        std::fs::write(
+            build.join("build.ninja"),
+            "rule CXX_COMPILER__probe\n  command = C:/tools/sccache.exe cl.exe /c x.cpp\n",
+        )
+        .unwrap();
+        assert!(unsafe_local_cache_reason(&cache, build, false).is_some());
+    }
     #[test]
     fn direct_targets_are_build_tree_executables_in_ninja_spelling() {
         let root = Path::new(r"C:\repo\build");
