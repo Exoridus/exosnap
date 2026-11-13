@@ -1000,6 +1000,7 @@ set_tests_properties(quick.qml.about_smoke PROPERTIES
     ENVIRONMENT "EXOSNAP_CONFIG_DIR=${CMAKE_CURRENT_BINARY_DIR}/test-config/about_smoke"
 )
 exosnap_set_test_phase(quick.qml.about_smoke desktop)
+set_tests_properties(quick.qml.about_smoke PROPERTIES EXOSNAP_BUILD_TARGET exosnap)
 
 # The four non-Record destinations are loaded by URL so their documents stay out
 # of the startup compile (QCR-615). That the pages are absent until navigation,
@@ -1013,6 +1014,7 @@ set_tests_properties(quick.qml.navigation_lifecycle PROPERTIES
     ENVIRONMENT "EXOSNAP_CONFIG_DIR=${CMAKE_CURRENT_BINARY_DIR}/test-config/navigation_lifecycle;QV4_FAIL_ON_INVALID_AOT=1;EXOSNAP_QML_PREVIEW=0"
 )
 exosnap_set_test_phase(quick.qml.navigation_lifecycle desktop)
+set_tests_properties(quick.qml.navigation_lifecycle PROPERTIES EXOSNAP_BUILD_TARGET exosnap)
 
 # An isolated run has to isolate Qt's QML bytecode cache as well — see the
 # script for why EXOSNAP_CONFIG_DIR does not reach it on its own.
@@ -1290,6 +1292,7 @@ set_tests_properties(quick.qml.record_controls PROPERTIES
     ENVIRONMENT_MODIFICATION "PATH=path_list_prepend:${_exosnap_quick_qt_prefix}/bin"
 )
 exosnap_set_test_phase(quick.qml.record_controls desktop)
+set_tests_properties(quick.qml.record_controls PROPERTIES EXOSNAP_BUILD_TARGET record_controls_qml_tests)
 
 add_test(NAME quick.qml.record_controls_contracts COMMAND record_controls_qml_tests
     ExoSettingRow::test_hint_outranks_readout
@@ -1303,6 +1306,7 @@ set_tests_properties(quick.qml.record_controls_contracts PROPERTIES
     TIMEOUT 120
 )
 exosnap_set_test_phase(quick.qml.record_controls_contracts desktop)
+set_tests_properties(quick.qml.record_controls_contracts PROPERTIES EXOSNAP_BUILD_TARGET record_controls_qml_tests)
 
 # The Edit surface's keyboard contract (QCR-504). A second QML test executable
 # rather than more files in the one above, because EditTimeline.qml takes three
@@ -1475,6 +1479,7 @@ set_tests_properties(quick.qml.edit_timeline PROPERTIES
     ENVIRONMENT_MODIFICATION "PATH=path_list_prepend:${_exosnap_quick_qt_prefix}/bin"
 )
 exosnap_set_test_phase(quick.qml.edit_timeline desktop)
+set_tests_properties(quick.qml.edit_timeline PROPERTIES EXOSNAP_BUILD_TARGET edit_timeline_qml_tests)
 add_test(NAME quick.qml.recording_review COMMAND edit_timeline_qml_tests
     -input "${PROJECT_SOURCE_DIR}/app/quick/tests_review/tst_RecordingReview.qml"
     -o "${CMAKE_BINARY_DIR}/Testing/recording-review-test.txt,txt")
@@ -1485,6 +1490,7 @@ set_tests_properties(quick.qml.recording_review PROPERTIES
     ENVIRONMENT_MODIFICATION "PATH=path_list_prepend:${_exosnap_quick_qt_prefix}/bin"
 )
 exosnap_set_test_phase(quick.qml.recording_review desktop)
+set_tests_properties(quick.qml.recording_review PROPERTIES EXOSNAP_BUILD_TARGET edit_timeline_qml_tests)
 add_test(NAME quick.qml.recording_review_native COMMAND edit_timeline_qml_tests
     -input "${PROJECT_SOURCE_DIR}/app/quick/tests_review_native/tst_RecordingReviewNative.qml"
     -o "${CMAKE_BINARY_DIR}/Testing/recording-review-native-test.txt,txt")
@@ -1495,6 +1501,7 @@ set_tests_properties(quick.qml.recording_review_native PROPERTIES
     ENVIRONMENT_MODIFICATION "PATH=path_list_prepend:${_exosnap_quick_qt_prefix}/bin"
 )
 exosnap_set_test_phase(quick.qml.recording_review_native desktop)
+set_tests_properties(quick.qml.recording_review_native PROPERTIES EXOSNAP_BUILD_TARGET edit_timeline_qml_tests)
 
 add_test(NAME quick.qml.edit_audio_timeline COMMAND edit_timeline_qml_tests
     EditTimelinePresentation::test_header_click_preserves_playhead_and_content_click_seeks
@@ -1513,6 +1520,7 @@ set_tests_properties(quick.qml.edit_audio_timeline PROPERTIES
     TIMEOUT 120
 )
 exosnap_set_test_phase(quick.qml.edit_audio_timeline desktop)
+set_tests_properties(quick.qml.edit_audio_timeline PROPERTIES EXOSNAP_BUILD_TARGET edit_timeline_qml_tests)
 
 add_test(NAME quick.qml.edit_video_automation COMMAND edit_timeline_qml_tests
     EditTimelineKeyboard::test_auto_key_toggle_does_not_edit_document_and_ignores_text_focus
@@ -1527,6 +1535,7 @@ set_tests_properties(quick.qml.edit_video_automation PROPERTIES
     TIMEOUT 120
 )
 exosnap_set_test_phase(quick.qml.edit_video_automation desktop)
+set_tests_properties(quick.qml.edit_video_automation PROPERTIES EXOSNAP_BUILD_TARGET edit_timeline_qml_tests)
 
 add_test(NAME quick.qml.edit_timeline_contracts COMMAND edit_timeline_qml_tests
     EditPage::test_EmptyViewerStable
@@ -1540,6 +1549,7 @@ set_tests_properties(quick.qml.edit_timeline_contracts PROPERTIES
     TIMEOUT 120
 )
 exosnap_set_test_phase(quick.qml.edit_timeline_contracts desktop)
+set_tests_properties(quick.qml.edit_timeline_contracts PROPERTIES EXOSNAP_BUILD_TARGET edit_timeline_qml_tests)
 
 # The Record source picker's QML contract. A third QML test executable, for the
 # reason the edit runner states: RecordSourcePicker takes a REQUIRED, C++-typed
@@ -1690,6 +1700,7 @@ set_tests_properties(quick.qml.record_source_picker PROPERTIES
     ENVIRONMENT_MODIFICATION "PATH=path_list_prepend:${_exosnap_quick_qt_prefix}/bin"
 )
 exosnap_set_test_phase(quick.qml.record_source_picker desktop)
+set_tests_properties(quick.qml.record_source_picker PROPERTIES EXOSNAP_BUILD_TARGET record_source_picker_qml_tests)
 
 add_test(NAME quick.qml.record_source_picker_contracts COMMAND record_source_picker_qml_tests
     RecordingProfileReveal::test_empty_audio_details_do_not_create_a_source
@@ -1703,6 +1714,7 @@ set_tests_properties(quick.qml.record_source_picker_contracts PROPERTIES
     TIMEOUT 120
 )
 exosnap_set_test_phase(quick.qml.record_source_picker_contracts desktop)
+set_tests_properties(quick.qml.record_source_picker_contracts PROPERTIES EXOSNAP_BUILD_TARGET record_source_picker_qml_tests)
 
 # Focused builds also need the shared runtime staging dependency. Reuse the
 # directory's existing writer so parallel test builds cannot race DLL copies.
@@ -1721,6 +1733,7 @@ set_tests_properties(quick.qml.record_preview_smoke PROPERTIES
     SKIP_RETURN_CODE 3
 )
 exosnap_set_test_phase(quick.qml.record_preview_smoke desktop)
+set_tests_properties(quick.qml.record_preview_smoke PROPERTIES EXOSNAP_BUILD_TARGET exosnap)
 
 # Walks every navigation destination, reports the pointer over each control that
 # declares a pointing hand, and compares what Qt thinks the window cursor is with
@@ -1734,6 +1747,7 @@ set_tests_properties(quick.qml.cursor_audit PROPERTIES
     RUN_SERIAL TRUE
 )
 exosnap_set_test_phase(quick.qml.cursor_audit desktop)
+set_tests_properties(quick.qml.cursor_audit PROPERTIES EXOSNAP_BUILD_TARGET exosnap)
 
 add_test(NAME quick.qml.record_preview_lifecycle COMMAND exosnap --preview-lifecycle-test)
 set_tests_properties(quick.qml.record_preview_lifecycle PROPERTIES
@@ -1743,6 +1757,7 @@ set_tests_properties(quick.qml.record_preview_lifecycle PROPERTIES
     SKIP_RETURN_CODE 3
 )
 exosnap_set_test_phase(quick.qml.record_preview_lifecycle desktop)
+set_tests_properties(quick.qml.record_preview_lifecycle PROPERTIES EXOSNAP_BUILD_TARGET exosnap)
 
 exosnap_add_gtest(
     NAME record_viewmodel_qml_adapter_tests
@@ -2661,6 +2676,7 @@ foreach(_i18n_scale IN ITEMS 1 1.25 1.5 2)
         ENVIRONMENT_MODIFICATION "PATH=path_list_prepend:${_exosnap_quick_qt_prefix}/bin"
     )
     exosnap_set_test_phase("${_i18n_test}" desktop)
+    set_tests_properties("${_i18n_test}" PROPERTIES EXOSNAP_BUILD_TARGET record_controls_qml_tests)
 endforeach()
 
 

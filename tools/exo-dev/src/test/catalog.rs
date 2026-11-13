@@ -67,6 +67,9 @@ pub fn exclude_pattern(label: &str) -> String {
 pub struct CatalogTest {
     pub name: String,
     pub command: Vec<String>,
+    /// An explicitly registered CMake target, available even before the
+    /// executable exists in the build tree.
+    pub build_target: Option<String>,
     pub labels: Vec<String>,
     pub disabled: bool,
 }
@@ -89,16 +92,21 @@ pub fn parse_catalog(text: &str) -> Result<Vec<CatalogTest>, String> {
         .map(|test| {
             let mut labels = Vec::new();
             let mut disabled = false;
+            let mut build_target = None;
             for property in test["properties"].as_array().into_iter().flatten() {
                 match property["name"].as_str() {
                     Some("LABELS") => labels = strings(&property["value"]),
                     Some("DISABLED") => disabled = truthy(&property["value"]),
+                    Some("EXOSNAP_BUILD_TARGET") => {
+                        build_target = property["value"].as_str().map(str::to_string);
+                    }
                     _ => {}
                 }
             }
             CatalogTest {
                 name: test["name"].as_str().unwrap_or_default().to_string(),
                 command: strings(&test["command"]),
+                build_target,
                 labels,
                 disabled,
             }
@@ -217,6 +225,7 @@ mod tests {
         CatalogTest {
             name: name.into(),
             command: Vec::new(),
+            build_target: None,
             labels: labels.iter().map(|l| l.to_string()).collect(),
             disabled: false,
         }
@@ -246,7 +255,8 @@ mod tests {
     #[test]
     fn the_catalog_reads_names_labels_and_disabled() {
         let json = r#"{"kind":"ctestInfo","tests":[
-            {"name":"a","properties":[{"name":"LABELS","value":["live","phase.gpu"]}]},
+            {"name":"a","properties":[{"name":"LABELS","value":["live","phase.gpu"]},
+                                        {"name":"EXOSNAP_BUILD_TARGET","value":"fixture_binary"}]},
             {"name":"b","properties":[{"name":"LABELS","value":["phase.hermetic"]},
                                       {"name":"DISABLED","value":true}]},
             {"name":"c"}
@@ -254,6 +264,7 @@ mod tests {
         let tests = parse_catalog(json).unwrap();
         assert_eq!(tests.len(), 3);
         assert_eq!(tests[0].labels, vec!["live", "phase.gpu"]);
+        assert_eq!(tests[0].build_target.as_deref(), Some("fixture_binary"));
         assert!(!tests[0].disabled);
         assert!(tests[1].disabled);
         assert!(tests[2].labels.is_empty());
