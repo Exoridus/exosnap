@@ -72,27 +72,93 @@ endif()
 # Hosted CI still enables a separate GitHub cache explicitly with a stable
 # checkout layout. A locally supplied compiler launcher is an explicit override.
 option(EXOSNAP_USE_SCCACHE "Use sccache as the C++ compiler launcher when it is available." OFF)
+# A cache and server of its own per build tree cannot replay another checkout's
+# include paths. It also cannot share objects with another worktree, which is
+# the trade-off a local cache stays correct with.
+option(EXOSNAP_SCCACHE_ISOLATED
+    "Give this build tree its own sccache cache directory and server port." OFF)
+set(EXOSNAP_SCCACHE_PORT "" CACHE STRING
+    "Fixed sccache server port for this build tree. Empty derives one from the build directory; set it explicitly when two build trees derive the same port.")
 set(EXOSNAP_COMPILER_LAUNCHER "" CACHE STRING "Optional C++ compiler launcher executable, such as sccache.")
-if(WIN32 AND EXOSNAP_USE_SCCACHE AND NOT DEFINED ENV{GITHUB_ACTIONS})
+if(WIN32 AND EXOSNAP_USE_SCCACHE AND NOT EXOSNAP_SCCACHE_ISOLATED AND NOT DEFINED ENV{GITHUB_ACTIONS})
     message(WARNING
         "Local sccache can replay another worktree's /showIncludes paths and miss "
         "required header rebuilds (ExoSnap issue #558). Local exo-dev test "
         "runs refuse such configurations until a verified correction exists. "
+        "EXOSNAP_SCCACHE_ISOLATED=ON gives this tree its own cache and server. "
         "Previously affected build trees require fresh compilation.")
 endif()
 
+include(cmake/exosnap_sccache.cmake)
+
 if(EXOSNAP_COMPILER_LAUNCHER)
     set(CMAKE_CXX_COMPILER_LAUNCHER "${EXOSNAP_COMPILER_LAUNCHER}")
+    string(TOLOWER "${EXOSNAP_COMPILER_LAUNCHER}" _exosnap_launcher_lower)
+    if(_exosnap_launcher_lower MATCHES "sccache")
+        exosnap_record_sccache_history("compiler launcher ${EXOSNAP_COMPILER_LAUNCHER}")
+    endif()
 elseif(EXOSNAP_USE_SCCACHE)
     find_program(EXOSNAP_SCCACHE_EXE NAMES sccache)
     if(EXOSNAP_SCCACHE_EXE)
-        set(CMAKE_CXX_COMPILER_LAUNCHER "${EXOSNAP_SCCACHE_EXE}")
-        message(STATUS "Compiler launcher: sccache (${EXOSNAP_SCCACHE_EXE})")
+        exosnap_record_sccache_history("sccache option")
+        if(EXOSNAP_SCCACHE_ISOLATED)
+            # The launcher itself carries the isolation, so it applies to every
+            # compile regardless of how ninja or the IDE was started.
+            set(EXOSNAP_SCCACHE_LOCAL_DIR "${CMAKE_BINARY_DIR}/sccache")
+            if(EXOSNAP_SCCACHE_PORT)
+                set(_exosnap_sccache_port "${EXOSNAP_SCCACHE_PORT}")
+            else()
+                # Derived from the build directory, not the source directory, so
+                # Debug and Release of one worktree are separate servers. The
+                # range stays below the Windows dynamic range (49152-65535).
+                string(SHA256 _exosnap_sccache_id "${CMAKE_BINARY_DIR}")
+                string(SUBSTRING "${_exosnap_sccache_id}" 0 8 _exosnap_sccache_hex)
+                math(EXPR _exosnap_sccache_port "0x${_exosnap_sccache_hex} % 8000 + 41000")
+            endif()
+            # A client that finds another server on its port uses that server's
+            # cache and ignores SCCACHE_DIR, so the pairing is proven here before
+            # any compile can rely on it. A foreign listener blocks the query, and
+            # a foreign sccache answers with its own cache location; both fail.
+            execute_process(
+                COMMAND "${CMAKE_COMMAND}" -E env
+                    "SCCACHE_DIR=${EXOSNAP_SCCACHE_LOCAL_DIR}"
+                    "SCCACHE_SERVER_PORT=${_exosnap_sccache_port}"
+                    "${EXOSNAP_SCCACHE_EXE}" --show-stats --stats-format=json
+                TIMEOUT 15
+                RESULT_VARIABLE _exosnap_sccache_query
+                OUTPUT_VARIABLE _exosnap_sccache_stats
+                ERROR_VARIABLE _exosnap_sccache_query_error
+                OUTPUT_STRIP_TRAILING_WHITESPACE)
+            if(NOT _exosnap_sccache_query MATCHES "^0$")
+                message(FATAL_ERROR
+                    "sccache on port ${_exosnap_sccache_port} did not answer: ${_exosnap_sccache_query} ${_exosnap_sccache_query_error}\n"
+                    "Port ${_exosnap_sccache_port} may be in use. Refusing to configure a compiler cache that another process would serve. "
+                    "Re-run with -DEXOSNAP_SCCACHE_PORT=<free port> or configure a different build directory.")
+            endif()
+            exosnap_sccache_location(_exosnap_sccache_reported "${_exosnap_sccache_stats}")
+            exosnap_sccache_normalized_path(_exosnap_sccache_reported_lower "${_exosnap_sccache_reported}")
+            exosnap_sccache_normalized_path(_exosnap_sccache_local_lower "${EXOSNAP_SCCACHE_LOCAL_DIR}")
+            if(_exosnap_sccache_reported STREQUAL "")
+                message(FATAL_ERROR "sccache did not report a cache location: ${_exosnap_sccache_stats}")
+            endif()
+            if(NOT _exosnap_sccache_reported_lower STREQUAL _exosnap_sccache_local_lower)
+                message(FATAL_ERROR
+                    "sccache on port ${_exosnap_sccache_port} serves cache '${_exosnap_sccache_reported}' instead of '${EXOSNAP_SCCACHE_LOCAL_DIR}'. "
+                    "Another build tree derived the same port. Refusing to share a compiler cache between build trees; "
+                    "re-run with -DEXOSNAP_SCCACHE_PORT=<free port>.")
+            endif()
+            set(CMAKE_CXX_COMPILER_LAUNCHER
+                "${CMAKE_COMMAND};-E;env;SCCACHE_DIR=${EXOSNAP_SCCACHE_LOCAL_DIR};SCCACHE_SERVER_PORT=${_exosnap_sccache_port};${EXOSNAP_SCCACHE_EXE}")
+            message(STATUS
+                "Compiler launcher: sccache ${EXOSNAP_SCCACHE_EXE}, isolated cache ${EXOSNAP_SCCACHE_LOCAL_DIR} on port ${_exosnap_sccache_port}")
+        else()
+            set(CMAKE_CXX_COMPILER_LAUNCHER "${EXOSNAP_SCCACHE_EXE}")
+            message(STATUS "Compiler launcher: sccache (${EXOSNAP_SCCACHE_EXE})")
+        endif()
     else()
         message(WARNING "EXOSNAP_USE_SCCACHE is ON, but sccache was not found. Configure continues without a compiler launcher.")
     endif()
 endif()
-
 enable_testing()
 
 # Must come before any add_subdirectory(): it edits the global compile/link flags
@@ -101,6 +167,14 @@ include(cmake/exosnap_asan.cmake)
 
 include(cmake/exosnap_warnings.cmake)
 include(cmake/exosnap_testing.cmake)
+
+# Pins the sccache 0.19 `cache_location` shape the isolation check relies on.
+add_test(NAME build.sccache_location_parse
+    COMMAND ${CMAKE_COMMAND}
+        -P ${CMAKE_SOURCE_DIR}/cmake/tests/assert_sccache_location_parse.cmake)
+set_tests_properties(build.sccache_location_parse PROPERTIES
+    LABELS "phase.hermetic"
+    TIMEOUT 60)
 include(cmake/exosnap_layering.cmake)
 
 # libebml/libmatroska ship cmake_minimum_required() floors below CMake's
