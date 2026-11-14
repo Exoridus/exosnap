@@ -41,10 +41,14 @@ jobs:
   cache-warm-debug:
     name: cache-warm (windows-x64-ninja-debug)
     runs-on: windows-2022
-    timeout-minutes: 60
+    # First complete clang-tidy seed can take over two hours. Later runs
+    # replay unchanged per-TU verdicts and refresh only invalidated inputs.
+    timeout-minutes: 180
     concurrency:
       group: cache-warm-debug-next
-      cancel-in-progress: true
+      # A new next push must not interrupt the sole shared-cache writer before
+      # its clang-tidy verdicts have been saved.
+      cancel-in-progress: false
     steps:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
 
@@ -64,6 +68,51 @@ jobs:
 
       - name: Build (windows-x64-ninja-debug)
         run: cmake --build --preset windows-x64-ninja-debug
+
+      # Pull requests can read next's cache scope, but their merge-ref caches
+      # are not shared with other PRs. Keep a full-tree verdict seed in next's
+      # branch scope so a PR's first run can replay unchanged TUs. The same
+      # per-TU input/toolchain validation as the required Debug gate is used.
+      - name: Restore blocking clang-tidy verdict cache
+        id: tidy-cache
+        uses: actions/cache/restore@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        # zizmor: ignore[cache-poisoning] -- only the protected next branch writes these validated verdicts
+        with:
+          path: ${{ runner.temp }}/clang-tidy-cache
+          key: clang-tidy-blocking-${{ runner.os }}-${{ github.run_id }}-${{ github.run_attempt }}
+          restore-keys: |
+            clang-tidy-blocking-${{ runner.os }}-
+
+      - name: Warm blocking clang-tidy verdicts (full tree)
+        shell: pwsh
+        env:
+          TIDY_CACHE: ${{ runner.temp }}/clang-tidy-cache
+          TIDY_PROFILE: ${{ runner.temp }}/clang-tidy-warm-profile.json
+          EXO_DEV_CLANG_TIDY_PROGRESS: '1'
+          EXO_DEV_CLANG_TIDY_PROFILE: public
+        run: >-
+          cargo exo-dev lint clang-tidy
+          --build-dir build/windows-x64-ninja-debug
+          --cache-dir $env:TIDY_CACHE --jobs 4
+          --profile-path $env:TIDY_PROFILE
+
+      # Cache keys are immutable. A run-unique key retains the restored verdicts
+      # plus newly validated TUs even if a subset reports findings or fails.
+      # The next writer and PR restore by prefix without weakening any checks.
+      - name: Save blocking clang-tidy verdict cache
+        if: always() && steps.tidy-cache.outputs.cache-primary-key != '' && steps.tidy-cache.outputs.cache-hit != 'true'
+        uses: actions/cache/save@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: ${{ runner.temp }}/clang-tidy-cache
+          key: ${{ steps.tidy-cache.outputs.cache-primary-key }}
+
+      - name: Retain full-tree clang-tidy warmup profile
+        if: always()
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        with:
+          name: clang-tidy-next-warm-profile
+          path: ${{ runner.temp }}/clang-tidy-warm-profile.json
+          if-no-files-found: ignore
 
       - name: sccache stats
         if: always()
