@@ -146,7 +146,7 @@ GitHub applies one repository-wide cache cap (10 GB at the time of writing) with
 | Scope | Writer | Readers |
 |---|---|---|
 | `refs/heads/next` | `cache-warm.yml`, the crash-capture push handler | PRs against `next` |
-| `refs/heads/main` | the nightly advisory run (debug preset only) | PRs against `main` |
+| `refs/heads/main` | the nightly advisory run (debug preset only), when `main` changed and weekly | PRs against `main` |
 | `refs/pull/<N>/merge` | clang-tidy results and the crash-capture FetchContent tree; no new sccache objects | that PR's own runs |
 | `refs/tags/v*` | no new sccache objects | that tag's run |
 

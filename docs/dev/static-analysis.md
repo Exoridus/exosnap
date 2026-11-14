@@ -67,7 +67,7 @@ Inspect `git diff` after editing, then rerun the read-only blocking gate with th
 
 Run `cargo exo-dev lint quality --only clang-tidy --report-path build/advisory/clang-tidy.txt` against a configured Ninja build. The runner selects actual repository translation units from `compile_commands.json`, excludes generated and vendored sources, and retains every batch's output. It writes raw text, normalized JSON and a Markdown summary beside the requested report path. The identity is `(repository-relative file, line, column, check)` with tracked path spelling and case-insensitive lookup on Windows. Reports record commit, dirty-tree status, tool version, translation-unit count, timing, raw and unique counts, and per-check/per-layer counts. Compare matching tool versions and input scopes.
 
-The nightly/manual workflow uploads all three artifacts even when analysis fails. A missing tool, missing compilation database, compiler error or malformed diagnostic is an infrastructure failure, not an empty successful report. Advisory findings themselves do not fail the run.
+The nightly/manual workflow uploads all three artifacts even when analysis fails. On Monday to Saturday the schedule skips a `main` commit that already has a successful advisory run. The Sunday run and every manual dispatch analyse unconditionally. A missing tool, missing compilation database, compiler error or malformed diagnostic is an infrastructure failure, not an empty successful report. Advisory findings themselves do not fail the run.
 
 Select a frontend compatible with the compilation database's MSVC standard library using `--clang-tidy <executable>` when the default LLVM installation is older. The advisory invocation removes compiler warning promotion only for measurement; production `/WX` and `-Werror` remain unchanged. The pinned PresentMon dependency carries a small build patch qualifying enum types hidden by descriptor member names and correcting include-path casing, so Clang can parse the same provider implementation.
 
@@ -118,6 +118,9 @@ a target. A full selection with no cache hits must not be attributed to CMake se
 Added, removed or renamed headers select the full tree and reload current dependency records.
 The header-membership fingerprint invalidates earlier verdicts when include search changes,
 while later runs with the same verified inputs can reuse the new results.
+Every `.clang-tidy` in a directory between a project translation unit and the repository root
+belongs to the global configuration identity, so adding, editing or removing one invalidates earlier verdicts.
+A scoped run selects the translation units below a changed nested `.clang-tidy`.
 Scoping and cache-key construction share one initial ownership/header snapshot. Readable directory
 links are traversed with cycle detection, and physical link targets contribute to membership identity.
 Deleted registered worktrees are ignored; unreadable existing roots remain unavailable evidence.
@@ -128,9 +131,13 @@ A disabled cache prints the unavailable evidence category.
 Cached entries carry their schema, source, key, exit status and output digest.
 Before storing any fresh result, the runner rechecks compilation-database bytes,
 configuration, header membership, toolchain identity and the captured source/dependency keys.
-Fresh work is checkpointed in batches of at least 16 units or four worker waves, whichever is larger.
-Changed or unreadable evidence aborts the current batch before its cache writes. Earlier validated
-batches remain reusable under their original keys; a changed input produces a different key.
+Fresh work runs in one continuous worker pool. A worker starts the next queued unit as soon as its
+previous one ends, so a slow unit does not hold back the rest of the queue.
+Completed results are checkpointed after at least 16 units or four worker waves, whichever is larger,
+while the workers continue. A checkpoint stores only results that completed before its revalidation began.
+Changed or unreadable evidence aborts the run before that checkpoint's cache writes, stops queued units
+from starting and discards every result not yet checkpointed. Earlier checkpoints remain reusable
+under their original keys. A changed input produces a different key.
 Full toolchain revalidation is retained, including selected cache hits, rather than trusting an old
 snapshot across analysis. This deliberately costs additional reads to detect persistent input drift.
 Schema 4 rejects entries from producers that did not perform this validation.
@@ -141,8 +148,8 @@ Old, malformed or damaged entries are misses. The digest detects corruption, not
 already able to write a trusted cache scope. GitHub cache ref isolation remains the trust boundary.
 CI restores and saves the verdict cache in separate steps. Validated diagnostics are saved
 also when they make the analysis fail, and replaying a blocking finding still fails the check.
-An interrupted analysis retains completed, validated checkpoints locally. Work in the unfinished
-batch must run again. CI reuse still depends on its separate cache upload finishing, which a hard
+An interrupted analysis retains completed, validated checkpoints locally. Results not yet
+checkpointed must run again. CI reuse still depends on its separate cache upload finishing, which a hard
 job timeout does not guarantee. Cache upload failures do not replace the analysis verdict.
 cppcheck keeps its separate build-directory cache.
 

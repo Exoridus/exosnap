@@ -6,12 +6,19 @@ name: Advisory Checks
 on:
   # Nightly on the default branch. 03:00 UTC is off-peak for GitHub's hosted
   # Windows pool, and a run that starts then has finished long before the
-  # working day. schedule events always run on the default branch (main).
+  # working day. schedule events always run on the default branch (main), so
+  # this file takes effect, and the skip below compares commits, only on main.
+  # The Sunday entry always analyses: it observes runner-image drift at least
+  # weekly even while main does not change.
   schedule:
-    - cron: '0 3 * * *'
+    - cron: '0 3 * * 1-6'
+    - cron: '0 3 * * 0'
   workflow_dispatch:
 
 # Keep measurements independent: cancelling a run discards its evidence.
+
+permissions:
+  contents: read
 
 env:
   SCCACHE_GHA_ENABLED: "true"
@@ -20,8 +27,50 @@ env:
   SCCACHE_GHA_RW_MODE: "READ_WRITE"
 
 jobs:
+  # A weekday schedule skips a commit that already has a successful run of this
+  # workflow. Such a run is either a complete analysis or a skip that itself
+  # found an earlier success, so every skip rests on a complete analysis of the
+  # same commit. Manual dispatch and the weekly entry always analyse. An
+  # unanswered query analyses rather than skipping on missing evidence.
+  freshness:
+    name: decide whether to analyse
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    permissions:
+      actions: read
+    outputs:
+      analyze: ${{ steps.decide.outputs.analyze }}
+    steps:
+      - name: Look for a successful run of this commit
+        id: decide
+        env:
+          GH_TOKEN: ${{ github.token }}
+          EVENT: ${{ github.event_name }}
+          SCHEDULE: ${{ github.event.schedule }}
+          REPOSITORY: ${{ github.repository }}
+          HEAD_SHA: ${{ github.sha }}
+        run: |
+          set -euo pipefail
+          if [ "$EVENT" != 'schedule' ] || [ "$SCHEDULE" = '0 3 * * 0' ]; then
+            echo 'analyze=true' >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+          if ! passed=$(gh api "repos/$REPOSITORY/actions/workflows/advisory-checks.yml/runs?head_sha=$HEAD_SHA&status=success&per_page=1" --jq '.total_count'); then
+            echo '::warning title=Advisory freshness unknown::The run history query failed, so this run analyses.'
+            echo 'analyze=true' >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+          if [ "$passed" -gt 0 ]; then
+            echo "::notice title=Advisory analysis skipped::$HEAD_SHA already has a successful advisory run. The weekly run or a manual dispatch analyses it again."
+            echo 'analyze=false' >> "$GITHUB_OUTPUT"
+          else
+            echo 'analyze=true' >> "$GITHUB_OUTPUT"
+          fi
+
   advisory-unused-checks:
     name: advisory-unused-checks
+    needs: freshness
+    if: needs.freshness.outputs.analyze == 'true'
     runs-on: windows-2022
     # Qt-heavy translation units require a larger budget than blocking lint.
     timeout-minutes: 300

@@ -1,6 +1,6 @@
 //! Identity and checkout ownership of repository headers.
 
-use std::collections::{BTreeSet, HashMap};
+use std::collections::{BTreeMap, BTreeSet, HashMap};
 use std::path::{Path, PathBuf};
 
 #[derive(Debug)]
@@ -179,11 +179,18 @@ impl HeaderInventory {
         })
     }
 
-    pub(super) fn configuration_hash(&self, repo: &Path) -> Option<String> {
+    /// Covers the root `.clang-tidy`, every nested `.clang-tidy` that
+    /// clang-tidy can select for one of `sources`, and the header inventory.
+    /// `None` when a configuration file exists but cannot be read.
+    pub(super) fn configuration_hash(&self, repo: &Path, sources: &[String]) -> Option<String> {
         let config = super::hash_file(&repo.join(".clang-tidy").to_string_lossy())?;
-        Some(super::sha256_hex(
-            format!(".clang-tidy={config}\nheaders={}", self.hash).as_bytes(),
-        ))
+        let mut identity = format!(".clang-tidy={config}\nheaders={}", self.hash);
+        // Appended only when present, so a tree without nested files keeps
+        // the identity, and the cached verdicts, it had before they counted.
+        for (directory, hash) in nested_configurations(repo, sources)? {
+            identity.push_str(&format!("\n{directory}/.clang-tidy={hash}"));
+        }
+        Some(super::sha256_hex(identity.as_bytes()))
     }
 
     pub(super) fn repository_relative(&self, path: &str) -> Option<String> {
@@ -204,9 +211,45 @@ impl HeaderInventory {
     }
 }
 
+/// clang-tidy configures a unit from the nearest `.clang-tidy` above it, so
+/// a file in any directory between a source and the repository root can
+/// change that unit's verdict. Keyed by repository-relative directory.
+fn nested_configurations(repo: &Path, sources: &[String]) -> Option<BTreeMap<String, String>> {
+    let root = format!("{}/", super::normalize_root(repo));
+    let mut directories = BTreeSet::new();
+    for source in sources {
+        if !source
+            .get(..root.len())
+            .is_some_and(|prefix| prefix.eq_ignore_ascii_case(&root))
+        {
+            continue;
+        }
+        let relative = &source[root.len()..];
+        let mut end = 0;
+        while let Some(separator) = relative[end..].find('/') {
+            end += separator;
+            directories.insert(relative[..end].to_string());
+            end += 1;
+        }
+    }
+    let mut configurations = BTreeMap::new();
+    for directory in directories {
+        let path = repo.join(&directory).join(".clang-tidy");
+        match std::fs::metadata(&path) {
+            Ok(metadata) if metadata.is_file() => {
+                configurations.insert(directory, super::hash_file(path.to_str()?)?);
+            }
+            Ok(_) => {}
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => {}
+            Err(_) => return None,
+        }
+    }
+    Some(configurations)
+}
+
 #[cfg(test)]
 pub(super) fn configuration_hash(repo: &Path, build: &Path) -> Option<String> {
-    HeaderInventory::read(repo, build)?.configuration_hash(repo)
+    HeaderInventory::read(repo, build)?.configuration_hash(repo, &[])
 }
 
 pub(super) fn foreign_roots(repo: &Path) -> Option<Vec<CheckoutRoot>> {
@@ -284,6 +327,51 @@ pub(super) fn retain_dependencies(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn nested_clang_tidy_files_on_a_source_path_change_the_identity() {
+        let dir = tempfile::tempdir().unwrap();
+        let repo = dir.path();
+        let build = repo.join("build");
+        std::fs::create_dir_all(repo.join("libs/core/detail")).unwrap();
+        std::fs::create_dir_all(repo.join("tests")).unwrap();
+        std::fs::write(repo.join(".clang-tidy"), "Checks: '-*'\n").unwrap();
+        let source = super::super::normalize_root(&repo.join("libs/core/detail/a.cpp"));
+        std::fs::write(&source, "int a;\n").unwrap();
+        let sources = [source];
+        let identity = || {
+            HeaderInventory::read(repo, &build)
+                .unwrap()
+                .configuration_hash(repo, &sources)
+                .unwrap()
+        };
+        let root_only = identity();
+        assert_eq!(
+            root_only,
+            configuration_hash(repo, &build).unwrap(),
+            "a tree without nested files keeps its previous identity"
+        );
+
+        std::fs::write(repo.join("tests/.clang-tidy"), "Checks: '*'\n").unwrap();
+        assert_eq!(
+            identity(),
+            root_only,
+            "only directories above a source count"
+        );
+
+        let nested = repo.join("libs/core/.clang-tidy");
+        std::fs::write(&nested, "WarningsAsErrors: ''\n").unwrap();
+        let added = identity();
+        assert_ne!(added, root_only);
+        std::fs::write(&nested, "WarningsAsErrors: '*'\n").unwrap();
+        let changed = identity();
+        assert_ne!(changed, added);
+        std::fs::remove_file(&nested).unwrap();
+        assert_eq!(identity(), root_only);
+
+        std::fs::write(repo.join("libs/core/detail/.clang-tidy"), "Checks: '*'\n").unwrap();
+        assert_ne!(identity(), root_only, "the source's own directory counts");
+    }
     #[test]
     fn unrecorded_conditional_header_edits_invalidate_cache_keys() {
         let dir = tempfile::tempdir().unwrap();
