@@ -392,10 +392,7 @@ impl<'a> Recorder<'a> {
         let mut bytes = Vec::new();
         file.read_to_end(&mut bytes)
             .map_err(|_| "unreadable_file")?;
-        let physical =
-            super::normalize_root(&std::fs::canonicalize(path).map_err(|_| "unreadable_file")?);
-        let target = (!physical.eq_ignore_ascii_case(path)).then_some(physical);
-        Ok((super::sha256_hex(&bytes), target))
+        Ok((super::sha256_hex(&bytes), physical_target(path)?))
     }
 
     /// Build-tree paths (generated and fetched sources) and repository paths
@@ -412,6 +409,17 @@ impl<'a> Recorder<'a> {
         }
         ("absolute", path.to_string())
     }
+}
+
+/// The physical path when a link or junction makes it differ from `path`.
+/// Short 8.3 component names are expanded first, so they never count as a
+/// different location.
+fn physical_target(path: &str) -> Result<Option<String>, &'static str> {
+    let physical =
+        super::normalize_root(&std::fs::canonicalize(path).map_err(|_| "unreadable_file")?);
+    let spelled = super::input_identity::long_path(Path::new(&path.replace('/', "\\")))
+        .map_or_else(|| path.to_string(), |long| super::normalize_root(&long));
+    Ok((!physical.eq_ignore_ascii_case(&spelled)).then_some(physical))
 }
 
 /// Written aside and moved into place, like verdict entries.
@@ -969,12 +977,39 @@ mod tests {
             |file: &serde_json::Value| file["target"].as_str().unwrap().to_ascii_lowercase();
         assert_eq!(
             target(&first),
-            fixture.path("first/linked.h").to_ascii_lowercase()
+            canonical(&fixture.root.join("first/linked.h"))
         );
         assert_eq!(
             target(&second),
-            fixture.path("second/linked.h").to_ascii_lowercase()
+            canonical(&fixture.root.join("second/linked.h"))
         );
+    }
+
+    fn canonical(path: &Path) -> String {
+        super::super::normalize_root(&std::fs::canonicalize(path).unwrap()).to_ascii_lowercase()
+    }
+
+    /// 8.3 spellings, such as a short `TEMP` directory, name the same file
+    /// and must not read as a link.
+    #[cfg(windows)]
+    #[test]
+    fn short_path_spellings_have_no_physical_target() {
+        let dir = tempfile::tempdir().unwrap();
+        let long = dir.path().join("a directory with a long name");
+        std::fs::create_dir(&long).unwrap();
+        let file = long.join("header.h");
+        std::fs::write(&file, "int header;\n").unwrap();
+        let path = super::super::normalize_root(&file);
+        assert_eq!(physical_target(&path), Ok(None));
+        let Some(short) = super::super::input_identity::short_root(&file) else {
+            return;
+        };
+        let short = super::super::normalize_root(&short);
+        if short.eq_ignore_ascii_case(&path) {
+            eprintln!("SKIP short-name spelling: 8.3 names are disabled on this volume");
+            return;
+        }
+        assert_eq!(physical_target(&short), Ok(None), "{short}");
     }
 
     #[test]
@@ -1120,7 +1155,7 @@ mod tests {
                 .as_str()
                 .unwrap()
                 .to_ascii_lowercase(),
-            format!("{root}/real/used.h").to_ascii_lowercase()
+            canonical(&dir.path().join("real/used.h"))
         );
     }
 }

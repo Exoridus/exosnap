@@ -72,7 +72,7 @@ fn checkout_name(path: &Path) -> Option<String> {
 }
 
 #[cfg(windows)]
-fn short_root(path: &Path) -> Option<PathBuf> {
+pub(super) fn short_root(path: &Path) -> Option<PathBuf> {
     use std::os::windows::ffi::OsStrExt as _;
     use windows::Win32::Storage::FileSystem::GetShortPathNameW;
     use windows::core::PCWSTR;
@@ -94,7 +94,35 @@ fn short_root(path: &Path) -> Option<PathBuf> {
 }
 
 #[cfg(not(windows))]
-fn short_root(path: &Path) -> Option<PathBuf> {
+pub(super) fn short_root(path: &Path) -> Option<PathBuf> {
+    Some(path.to_path_buf())
+}
+
+/// `path` with every 8.3 short component expanded, without resolving links.
+#[cfg(windows)]
+pub(super) fn long_path(path: &Path) -> Option<PathBuf> {
+    use std::os::windows::ffi::OsStrExt as _;
+    use windows::Win32::Storage::FileSystem::GetLongPathNameW;
+    use windows::core::PCWSTR;
+    let wide: Vec<u16> = path
+        .as_os_str()
+        .encode_wide()
+        .chain(std::iter::once(0))
+        .collect();
+    let capacity = unsafe { GetLongPathNameW(PCWSTR(wide.as_ptr()), None) };
+    if capacity == 0 {
+        return None;
+    }
+    let mut output = vec![0u16; capacity as usize];
+    let copied = unsafe { GetLongPathNameW(PCWSTR(wide.as_ptr()), Some(&mut output)) } as usize;
+    if copied == 0 || copied >= output.len() {
+        return None;
+    }
+    Some(PathBuf::from(String::from_utf16(&output[..copied]).ok()?))
+}
+
+#[cfg(not(windows))]
+pub(super) fn long_path(path: &Path) -> Option<PathBuf> {
     Some(path.to_path_buf())
 }
 
