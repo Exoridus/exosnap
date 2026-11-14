@@ -85,7 +85,7 @@ pub fn run(repo: &Path, args: RustArgs) -> Result<()> {
                     let _ = std::fs::remove_dir_all(&target);
                 }
                 if mode == CARGO_SCCACHE && scenario != "touch" {
-                    reset_sccache(&cache_dir, SCCACHE_PORT, scenario == "cold");
+                    reset_sccache(&cache_dir, SCCACHE_PORT, scenario == "cold")?;
                 }
                 if scenario == "touch" {
                     // The first build leaves a populated target to touch.

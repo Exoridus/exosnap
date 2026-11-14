@@ -436,13 +436,40 @@ pub fn read_sccache(cache_dir: &Path, port: u16) -> Option<SccacheStats> {
     })
 }
 
-pub fn reset_sccache(cache_dir: &Path, port: u16, wipe: bool) {
-    let _ = sccache_command(cache_dir, port, &["--stop-server"]).output();
-    if wipe {
-        let _ = std::fs::remove_dir_all(cache_dir);
+/// Cache lifecycle steps are mandatory preconditions for measured scenarios.
+pub fn reset_sccache(cache_dir: &Path, port: u16, wipe: bool) -> Result<()> {
+    let stop = sccache_command(cache_dir, port, &["--stop-server"])
+        .output()
+        .context("stop sccache server")?;
+    if !stop.status.success() {
+        let message = String::from_utf8_lossy(&stop.stderr).to_ascii_lowercase();
+        anyhow::ensure!(
+            message.contains("no server running") || message.contains("not running"),
+            "sccache stop-server failed: {}",
+            String::from_utf8_lossy(&stop.stderr).trim()
+        );
     }
-    let _ = sccache_command(cache_dir, port, &["--start-server"]).output();
-    let _ = sccache_command(cache_dir, port, &["--zero-stats"]).output();
+    if wipe {
+        match std::fs::remove_dir_all(cache_dir) {
+            Ok(()) => {}
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => {}
+            Err(error) => {
+                return Err(error)
+                    .with_context(|| format!("wipe sccache cache {}", cache_dir.display()));
+            }
+        }
+    }
+    for flag in ["--start-server", "--zero-stats"] {
+        let output = sccache_command(cache_dir, port, &[flag])
+            .output()
+            .with_context(|| format!("sccache {flag}"))?;
+        anyhow::ensure!(
+            output.status.success(),
+            "sccache {flag} failed: {}",
+            String::from_utf8_lossy(&output.stderr).trim()
+        );
+    }
+    Ok(())
 }
 
 pub fn ninja(repo: &Path, dir: &Path, env: &EnvVars, jobs: usize, args: &[&str]) -> Command {
@@ -463,6 +490,15 @@ pub fn touch(path: &Path) -> Result<()> {
     Ok(())
 }
 
+fn require_success(timing: Timing, step: &str) -> Result<()> {
+    anyhow::ensure!(
+        timing.exit_code == 0,
+        "{step} failed with exit code {}",
+        timing.exit_code
+    );
+    Ok(())
+}
+
 fn measure_scenario(
     repo: &Path,
     variant: &Variant,
@@ -474,38 +510,39 @@ fn measure_scenario(
 ) -> Result<(Timing, Option<SccacheStats>)> {
     let dir = variant.build_dir(repo);
     let build = |target: &str| ninja(repo, &dir, env, jobs, &[target]);
-    let cache_state = |wipe: bool| {
+    let cache_state = |wipe: bool| -> Result<()> {
         if variant.sccache {
-            reset_sccache(&dir.join("sccache"), variant.sccache_port(), wipe);
+            reset_sccache(&dir.join("sccache"), variant.sccache_port(), wipe)?;
         }
+        Ok(())
     };
     let timing = match scenario {
         "cold" => {
-            cache_state(true);
-            timed(
-                ninja(repo, &dir, env, jobs, &["-t", "clean", &args.target]),
-                log,
+            cache_state(true)?;
+            require_success(
+                timed(ninja(repo, &dir, env, jobs, &["-t", "clean", &args.target]), log)?,
+                "cold: ninja clean",
             )?;
             timed(build(&args.target), log)?
         }
         "warm" => {
             anyhow::ensure!(variant.sccache, "warm needs a compiler cache");
-            timed(
-                ninja(repo, &dir, env, jobs, &["-t", "clean", &args.target]),
-                log,
+            require_success(
+                timed(ninja(repo, &dir, env, jobs, &["-t", "clean", &args.target]), log)?,
+                "warm: ninja clean",
             )?;
-            cache_state(false);
+            cache_state(false)?;
             timed(build(&args.target), log)?
         }
         "noop" => timed(build(&args.target), log)?,
         "touch-cpp" => {
             touch(&repo.join(&args.touch_cpp))?;
-            cache_state(false);
+            cache_state(false)?;
             timed(build(&args.target), log)?
         }
         "touch-header" => {
             touch(&repo.join(&args.touch_header))?;
-            cache_state(false);
+            cache_state(false)?;
             timed(build(&args.target), log)?
         }
         "fulllink" => {
@@ -516,9 +553,9 @@ fn measure_scenario(
                 args.link_target,
                 if variant.release { "Release" } else { "Debug" }
             );
-            timed(
-                ninja(repo, &dir, env, jobs, &["-t", "clean", "-r", &rule]),
-                log,
+            require_success(
+                timed(ninja(repo, &dir, env, jobs, &["-t", "clean", "-r", &rule]), log)?,
+                "fulllink: ninja clean",
             )?;
             timed(build(&args.link_target), log)?
         }
@@ -706,6 +743,17 @@ mod tests {
         assert!(Variant::parse("msvc").is_err());
         assert!(Variant::parse("gcc-debug").is_err());
         assert!(Variant::parse("msvc-fast-debug").is_err());
+    }
+
+    #[test]
+    fn failed_measurement_precondition_is_rejected() {
+        let timing = Timing {
+            wall_seconds: 0.1,
+            peak_commit_bytes: None,
+            exit_code: 1,
+        };
+        assert!(require_success(timing.clone(), "ninja clean").is_err());
+        assert!(require_success(Timing { exit_code: 0, ..timing }, "ninja clean").is_ok());
     }
 
     #[test]
