@@ -118,6 +118,9 @@ a target. A full selection with no cache hits must not be attributed to CMake se
 Added, removed or renamed headers select the full tree and reload current dependency records.
 The header-membership fingerprint invalidates earlier verdicts when include search changes,
 while later runs with the same verified inputs can reuse the new results.
+Every `.clang-tidy` in a directory between a project translation unit and the repository root
+belongs to the global configuration identity, so adding, editing or removing one invalidates earlier verdicts.
+A scoped run selects the translation units below a changed nested `.clang-tidy`.
 Scoping and cache-key construction share one initial ownership/header snapshot. Readable directory
 links are traversed with cycle detection, and physical link targets contribute to membership identity.
 Deleted registered worktrees are ignored; unreadable existing roots remain unavailable evidence.

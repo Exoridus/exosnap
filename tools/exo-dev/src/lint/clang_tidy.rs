@@ -146,8 +146,8 @@ impl ClangTidyReport {
 /// `cache_dir` is not analysed again; its stored diagnostics are replayed
 /// instead. The cache key covers every input that can change a verdict: the
 /// translation unit, the union of headers recorded for every compile command,
-/// the complete command identities, `.clang-tidy`, [`CACHE_SCHEMA`], the check
-/// list and the tool version banner.
+/// the complete command identities, every `.clang-tidy` that can configure a
+/// project unit, [`CACHE_SCHEMA`], the check list and the tool version banner.
 /// Reuse requires complete, current Ninja records from the configured build.
 /// Unhashable inputs are cache misses. Keep inputs stable throughout analysis.
 /// Completed results are revalidated in periodic checkpoints before they are
@@ -308,7 +308,7 @@ pub fn run_blocking(
 
     let configuration_hash = inventory
         .as_ref()
-        .and_then(|inventory| inventory.configuration_hash(repo_root));
+        .and_then(|inventory| inventory.configuration_hash(repo_root, &all_sources));
     let toolchain_started = Instant::now();
     let toolchain_hash = toolchain_identity::hash_with_overrides(build_dir, environment);
     timing.toolchain_identity_seconds = toolchain_started.elapsed().as_secs_f64();
@@ -445,7 +445,8 @@ pub fn run_blocking(
             }
             timing::progress_phase("input_revalidation", started);
             let phase = Instant::now();
-            let current_configuration = configuration_identity(repo_root, build_dir, environment);
+            let current_configuration =
+                configuration_identity(repo_root, build_dir, &all_sources, environment);
             revalidate_cache_inputs(
                 &compile_db_path,
                 &compile_db_text,
@@ -1112,8 +1113,16 @@ fn scope_for_base(
         })
         .cloned()
         .collect();
+    // A nested .clang-tidy configures the units below its directory, so
+    // adding, editing or removing one changes their verdicts.
+    let configured_directories: Vec<String> = changed_all
+        .iter()
+        .filter_map(|path| path.strip_suffix(".clang-tidy"))
+        .filter(|directory| directory.ends_with('/'))
+        .map(|directory| format!("{repo_root_norm}/{directory}").to_ascii_lowercase())
+        .collect();
 
-    if changed.is_empty() && canary_hit.is_empty() {
+    if changed.is_empty() && canary_hit.is_empty() && configured_directories.is_empty() {
         return Ok(BaseScope::Nothing(format!(
             "No C/C++ sources or headers changed since {base} - nothing to analyse."
         )));
@@ -1126,7 +1135,13 @@ fn scope_for_base(
 
     let mut affected: BTreeSet<String> = all_sources
         .iter()
-        .filter(|s| changed_abs.contains(&s.to_ascii_lowercase()))
+        .filter(|s| {
+            let lower = s.to_ascii_lowercase();
+            changed_abs.contains(&lower)
+                || configured_directories
+                    .iter()
+                    .any(|directory| lower.starts_with(directory))
+        })
         .cloned()
         .collect();
 
@@ -1270,10 +1285,11 @@ fn combine_configuration_identity(
 fn configuration_identity(
     repo: &Path,
     build: &Path,
+    sources: &[String],
     environment: &[(std::ffi::OsString, std::ffi::OsString)],
 ) -> Option<String> {
     let configuration =
-        input_identity::HeaderInventory::read(repo, build)?.configuration_hash(repo);
+        input_identity::HeaderInventory::read(repo, build)?.configuration_hash(repo, sources);
     combine_configuration_identity(
         configuration,
         toolchain_identity::hash_with_overrides(build, environment),
@@ -1807,7 +1823,7 @@ mod tests {
             .inventory
             .as_ref()
             .unwrap()
-            .configuration_hash(dir.path())
+            .configuration_hash(dir.path(), &[])
             .unwrap();
         std::fs::write(dir.path().join("libs/late.h"), "int late;\n").unwrap();
         assert_eq!(
@@ -1815,14 +1831,14 @@ mod tests {
                 .inventory
                 .as_ref()
                 .unwrap()
-                .configuration_hash(dir.path())
+                .configuration_hash(dir.path(), &[])
                 .unwrap(),
             before
         );
         assert_ne!(
             input_identity::HeaderInventory::read(dir.path(), &dir.path().join("build"))
                 .unwrap()
-                .configuration_hash(dir.path())
+                .configuration_hash(dir.path(), &[])
                 .unwrap(),
             before
         );
@@ -2464,6 +2480,9 @@ mod tests {
             "toolchain",
             "missing-source",
             "missing-configuration",
+            "nested-configuration-added",
+            "nested-configuration-changed",
+            "nested-configuration-removed",
         ] {
             let dir = tempfile::tempdir().unwrap();
             let repo = dir.path();
@@ -2472,6 +2491,13 @@ mod tests {
             std::fs::create_dir(&build).unwrap();
             std::fs::write(repo.join("libs/shared.h"), "int shared;\n").unwrap();
             std::fs::write(repo.join(".clang-tidy"), "Checks: '-*'\n").unwrap();
+            let nested = repo.join("libs/.clang-tidy");
+            if matches!(
+                changed,
+                "nested-configuration-changed" | "nested-configuration-removed"
+            ) {
+                std::fs::write(&nested, "WarningsAsErrors: ''\n").unwrap();
+            }
             std::fs::write(repo.join("compiler-input"), "compiler").unwrap();
             let sources: Vec<String> = ["a.cpp", "b.cpp"]
                 .into_iter()
@@ -2497,7 +2523,8 @@ mod tests {
                 .collect();
             let identity = || {
                 combine_configuration_identity(
-                    input_identity::configuration_hash(repo, &build),
+                    input_identity::HeaderInventory::read(repo, &build)
+                        .and_then(|inventory| inventory.configuration_hash(repo, &sources)),
                     hash_file(&normalize_root(&repo.join("compiler-input"))),
                 )
             };
@@ -2519,6 +2546,10 @@ mod tests {
                 }
                 "missing-source" => std::fs::remove_file(&sources[1]).unwrap(),
                 "missing-configuration" => std::fs::remove_file(repo.join(".clang-tidy")).unwrap(),
+                "nested-configuration-added" | "nested-configuration-changed" => {
+                    std::fs::write(&nested, "WarningsAsErrors: '*'\n").unwrap()
+                }
+                "nested-configuration-removed" => std::fs::remove_file(&nested).unwrap(),
                 _ => {}
             }
             let current = identity();
@@ -3405,6 +3436,66 @@ mod tests {
         let mut expected = all_sources;
         expected.sort();
         assert_eq!(sorted, expected);
+    }
+
+    #[test]
+    fn scope_for_base_selects_the_units_a_nested_configuration_change_can_affect() {
+        for (setup, change) in [
+            (None, Some("WarningsAsErrors: '*'\n")),
+            (
+                Some("WarningsAsErrors: ''\n"),
+                Some("WarningsAsErrors: '*'\n"),
+            ),
+            (Some("WarningsAsErrors: ''\n"), None),
+        ] {
+            let mut files = vec![
+                (".clang-tidy", "Checks: '-*'\n"),
+                ("libs/media/a.cpp", "// a\n"),
+                ("libs/media/deep/b.cpp", "// b\n"),
+                ("libs/mediaplayer/c.cpp", "// c\n"),
+            ];
+            if let Some(setup) = setup {
+                files.push(("libs/media/.clang-tidy", setup));
+            }
+            let dir = crate::test_support::fixture_repo_committed(&files);
+            let repo_root = dir.path();
+            match change {
+                Some(content) => crate::test_support::write_files(
+                    repo_root,
+                    &[("libs/media/.clang-tidy", content)],
+                ),
+                None => std::fs::remove_file(repo_root.join("libs/media/.clang-tidy")).unwrap(),
+            }
+            let (code, _) = crate::git::Git::new(repo_root).run(&["add", "-A"]);
+            assert_eq!(code, 0);
+            let repo_root_norm = normalize_root(repo_root);
+            let all_sources: Vec<String> = [
+                "libs/media/a.cpp",
+                "libs/media/deep/b.cpp",
+                "libs/mediaplayer/c.cpp",
+            ]
+            .iter()
+            .map(|source| format!("{repo_root_norm}/{source}"))
+            .collect();
+            let scope = scope_for_base(
+                repo_root,
+                &repo_root_norm,
+                &format!("{repo_root_norm}/build"),
+                "HEAD",
+                &all_sources,
+                &HashMap::new(),
+                &FakeNinja {
+                    whole: None,
+                    batched: None,
+                },
+                &mut TidyTiming::default(),
+            )
+            .unwrap();
+            let BaseScope::Scoped { sources, .. } = scope else {
+                panic!("a nested configuration change must not skip analysis");
+            };
+            assert_eq!(sources, all_sources[..2].to_vec());
+        }
     }
 
     #[test]
