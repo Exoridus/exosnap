@@ -528,12 +528,6 @@ exosnap_add_gtest(
 # Capture-hub arbitration: consumer refcount, the held frame across loss and
 # unbounded reopen, and the release-before-the-engine-opens handover order that
 # the one-duplication-per-process constraint forces. Pure, GPU-free.
-exosnap_add_gtest(
-    NAME test_capture_hub_policy
-    TEST_PREFIX engine.
-    SOURCES tests/test_capture_hub_policy.cpp
-    LIBRARIES exosnap_engine
-)
 
 # What a running session may adopt from its display without being rebuilt: the
 # scalars every consumer holds as a GPU constant, against the colour-space
@@ -581,34 +575,13 @@ exosnap_add_gtest(
     LIBRARIES exosnap_engine
 )
 
-exosnap_add_gtest(
-    NAME test_codec_private_readiness
-    TEST_PREFIX engine.
-    SOURCES tests/test_codec_private_readiness.cpp
-    LIBRARIES exosnap_engine
-)
-target_include_directories(test_codec_private_readiness PRIVATE src)
 
 # The AV1CodecConfigurationRecord written as V_AV1 CodecPrivate: fixed bytes
 # plus the Sequence Header OBU as configOBUs. Pure parsing, no hardware.
-exosnap_add_gtest(
-    NAME test_av1_codec_private
-    TEST_PREFIX engine.
-    SOURCES tests/test_av1_codec_private.cpp
-    LIBRARIES exosnap_engine
-)
-target_include_directories(test_av1_codec_private PRIVATE src)
 
 # Two-phase worker shutdown wait (worker_join.h): guards against the
 # max-recording-duration defect where the join budget started at recording
 # START instead of STOP. Header-only logic exercised with real std::threads.
-exosnap_add_gtest(
-    NAME test_worker_join
-    TEST_PREFIX engine.
-    SOURCES tests/test_worker_join.cpp
-    LIBRARIES exosnap_engine
-)
-target_include_directories(test_worker_join PRIVATE src)
 
 exosnap_add_gtest(
     NAME test_opus_encoder
@@ -651,6 +624,49 @@ foreach(_dsp_member IN ITEMS
       LABELS "phase.hermetic"
       TIMEOUT 300
       EXOSNAP_BUILD_TARGET engine_audio_dsp_tests)
+endforeach()
+
+# Ten pure engine-linked policy suites use one test executable, but keep
+# their original CTest names, one process per entry, and targeted build owners.
+# Each source has exactly one GoogleTest suite, so filters do not overlap.
+exosnap_add_gtest(
+    NAME engine_policy_tests
+    NO_CTEST
+    SOURCES
+        tests/test_capture_hub_policy.cpp
+        tests/test_codec_private_readiness.cpp
+        tests/test_av1_codec_private.cpp
+        tests/test_worker_join.cpp
+        tests/test_session_callback_gate.cpp
+        tests/test_hdr_native_reconcile.cpp
+        tests/test_audio_duration_stats.cpp
+        tests/test_audio_plan_validate.cpp
+        tests/test_webm_container_validation.cpp
+        tests/test_mp4_container_validation.cpp
+    LIBRARIES exosnap_engine
+)
+target_include_directories(engine_policy_tests PRIVATE src include)
+foreach(_policy_member IN ITEMS
+        "test_capture_hub_policy|CaptureHubPolicy"
+        "test_codec_private_readiness|CodecPrivateReadinessTest"
+        "test_av1_codec_private|Av1CodecPrivate"
+        "test_worker_join|WorkerJoinTest"
+        "test_session_callback_gate|SessionCallbackGate"
+        "test_hdr_native_reconcile|HdrNativeReconcileTest"
+        "test_audio_duration_stats|AudioDurationStatsTest"
+        "test_audio_plan_validate|AudioPlanValidateTest"
+        "test_webm_container_validation|WebMContainerValidationTest"
+        "test_mp4_container_validation|Mp4ValidationTest"
+)
+  string(REPLACE "|" ";" _policy_pair "${_policy_member}")
+  list(GET _policy_pair 0 _policy_test)
+  list(GET _policy_pair 1 _policy_suite)
+  add_test(NAME "engine.${_policy_test}"
+      COMMAND engine_policy_tests "--gtest_filter=${_policy_suite}.*")
+  set_tests_properties("engine.${_policy_test}" PROPERTIES
+      LABELS "phase.hermetic"
+      TIMEOUT 300
+      EXOSNAP_BUILD_TARGET engine_policy_tests)
 endforeach()
 
 # Audio v2 (0.6.0): FLAC lossless encoder (links libFLAC; not pure-logic).
@@ -733,13 +749,6 @@ target_include_directories(test_session_stop_reset PRIVATE src)
 
 # The per-Record() gate that keeps an abandoned worker's late callback out of
 # the caller. Plain threads, no hardware.
-exosnap_add_gtest(
-    NAME test_session_callback_gate
-    TEST_PREFIX engine.
-    SOURCES tests/test_session_callback_gate.cpp
-    LIBRARIES exosnap_engine
-)
-target_include_directories(test_session_callback_gate PRIVATE src)
 
 # Worker teardown ownership: an abandoned (stalled/hung) worker keeps its
 # SessionState and capture source alive through the thread's shared ownership,
@@ -933,13 +942,6 @@ target_include_directories(test_hdr_bitstream_metadata PRIVATE src include)
 # test_hdr_native_reconcile: coordinator-seam tests for the native HDR10 encode
 # reconcile (ApplyHdr10NativeEncode) — pins 10-bit and snaps 4:4:4 -> 4:2:0 so an
 # HDR-active display never turns a valid UI selection into a Validate() failure.
-exosnap_add_gtest(
-    NAME test_hdr_native_reconcile
-    TEST_PREFIX engine.
-    SOURCES tests/test_hdr_native_reconcile.cpp
-    LIBRARIES exosnap_engine
-)
-target_include_directories(test_hdr_native_reconcile PRIVATE src include)
 
 # test_nvenc_preset_guid: pure unit tests for NvencPresetToGuid (P1..P7 -> SDK
 # preset GUID mapping — no GPU needed).
@@ -982,26 +984,8 @@ exosnap_add_gtest(
 )
 target_include_directories(test_mic_channel_mapping PRIVATE src)
 
-exosnap_add_gtest(
-    NAME test_audio_plan_validate
-    TEST_PREFIX engine.
-    SOURCES tests/test_audio_plan_validate.cpp
-    LIBRARIES exosnap_engine
-)
 
-exosnap_add_gtest(
-    NAME test_webm_container_validation
-    TEST_PREFIX engine.
-    SOURCES tests/test_webm_container_validation.cpp
-    LIBRARIES exosnap_engine
-)
 
-exosnap_add_gtest(
-    NAME test_mp4_container_validation
-    TEST_PREFIX engine.
-    SOURCES tests/test_mp4_container_validation.cpp
-    LIBRARIES exosnap_engine
-)
 
 exosnap_add_gtest(
     NAME test_annexb_to_avcc
@@ -1027,13 +1011,6 @@ exosnap_add_gtest(
     LIBRARIES exosnap_engine
 )
 
-exosnap_add_gtest(
-    NAME test_audio_duration_stats
-    TEST_PREFIX engine.
-    SOURCES tests/test_audio_duration_stats.cpp
-    LIBRARIES exosnap_engine
-)
-target_include_directories(test_audio_duration_stats PRIVATE src)
 
 # The recording clock's pause arithmetic. Reaches into src/ for the collector's
 # header, which is where the one function that answers "how long is this
