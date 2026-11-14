@@ -11,8 +11,8 @@
 // the vendored consumer it returns nullptr and the caller reports unavailable.
 
 #include <cstdint>
-#include <optional>
 #include <memory>
+#include <optional>
 #include <vector>
 
 namespace exosnap::diagnostics {
