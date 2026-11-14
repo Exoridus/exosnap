@@ -54,10 +54,18 @@ runs:
         } else { 'n/a' }
         $mode = if ($stats.effective_cache_mode) { $stats.effective_cache_mode } else { 'unknown' }
 
-        @(
+        # sccache counts each write a read-only cache declines as a write
+        # error, one per miss. Those are the mode working, not failures.
+        $writeCell = if ($mode -eq 'ReadOnly') { "$writeErrors (declined: read-only)" } else { "$writeErrors" }
+        $lines = @(
           "### sccache: $env:SCCACHE_LABEL"
           ''
           '| Hits | Misses | Hit rate | Writes | Write errors | Read errors | Mode |'
           '|---:|---:|---:|---:|---:|---:|---|'
-          "| $hits | $misses | $rate | $writes | $writeErrors | $readErrors | $mode |"
-        ) | Add-Content -LiteralPath $env:GITHUB_STEP_SUMMARY
+          "| $hits | $misses | $rate | $writes | $writeCell | $readErrors | $mode |"
+        )
+        if ($mode -eq 'ReadOnly' -and $writeErrors -gt 0) {
+          $lines += ''
+          $lines += "Read-only cache: $writeErrors write attempts for missed compilations were declined by design. They do not indicate a cache or storage failure."
+        }
+        $lines | Add-Content -LiteralPath $env:GITHUB_STEP_SUMMARY
