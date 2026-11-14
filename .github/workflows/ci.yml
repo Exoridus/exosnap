@@ -681,6 +681,18 @@ jobs:
           include-hidden-files: true
           if-no-files-found: warn
 
+      # Per-test durations of this run's suite, kept on success too, so slow
+      # and flaky tests can be ranked without rerunning the job. A fresh tree
+      # has one recorded run, so each cost is this run's wall time in seconds.
+      # Absent when the job stopped before the suite ran.
+      - name: Retain CTest durations (windows-x64-ninja-debug)
+        if: always()
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        with:
+          name: ctest-durations-windows-x64-ninja-debug
+          path: build/windows-x64-ninja-debug/Testing/Temporary/CTestCostData.txt
+          if-no-files-found: ignore
+
   build-test-release:
     name: build-test (windows-x64-release)
     runs-on: windows-2022
