@@ -519,6 +519,49 @@ jobs:
           restore-keys: |
             clang-tidy-blocking-${{ runner.os }}-
 
+      # A cache hit can be empty; a prefix restore can contain entries for
+      # other TUs or toolchain identities. Capture the actual restore outcome
+      # before the analysis writes any verdicts, so the performance profile
+      # can distinguish no restored data from invalidated or absent keys.
+      - name: Record clang-tidy cache restore provenance
+        if: always()
+        shell: pwsh
+        env:
+          TIDY_RESTORE_HIT: ${{ steps.tidy-cache.outputs.cache-hit }}
+          TIDY_RESTORE_MATCHED_KEY: ${{ steps.tidy-cache.outputs.cache-matched-key }}
+          TIDY_RESTORE_PRIMARY_KEY: ${{ steps.tidy-cache.outputs.cache-primary-key }}
+        run: |
+          $cache = Join-Path $env:RUNNER_TEMP 'clang-tidy-cache'
+          $verdicts = 0
+          if (Test-Path -LiteralPath $cache -PathType Container) {
+            $verdicts = @(Get-ChildItem -LiteralPath $cache -Recurse -File -Filter '*.txt' -ErrorAction Stop).Count
+          }
+          $matched = [string]$env:TIDY_RESTORE_MATCHED_KEY
+          $state = if ([string]::IsNullOrEmpty($matched)) {
+            'no-match'
+          } elseif ($env:TIDY_RESTORE_HIT -eq 'true') {
+            'exact'
+          } else {
+            'prefix'
+          }
+          $report = [ordered]@{
+            schema = 'exo-clang-tidy-cache-restore/1'
+            head = $env:GITHUB_SHA
+            result = $state
+            cache_hit = [string]$env:TIDY_RESTORE_HIT
+            matched_key = $matched
+            primary_key = [string]$env:TIDY_RESTORE_PRIMARY_KEY
+            restored_verdict_files = [int]$verdicts
+          }
+          $report | ConvertTo-Json -Depth 3 | Set-Content -LiteralPath (Join-Path $env:RUNNER_TEMP 'clang-tidy-cache-provenance.json') -Encoding utf8
+          @(
+            '### clang-tidy cache restore',
+            '',
+            ('- Restore: {0}' -f $state),
+            ('- Verdict files before analysis: {0}' -f $verdicts),
+            ('- Matched key: {0}' -f $(if ($matched) { $matched } else { '(none)' }))
+          ) | Out-File -FilePath $env:GITHUB_STEP_SUMMARY -Append -Encoding utf8
+
       # Configure (sccache on), qmllint over every QML module, build, the scoped
       # blocking clang-tidy set against HEAD^, then the complete test suite through
       # exo-dev test without the `live` label (this runner has no GPU). The build
@@ -562,6 +605,14 @@ jobs:
           path: .workspace/verify/**/clang-tidy-profile.json
           include-hidden-files: true
           if-no-files-found: ignore
+
+      - name: Retain clang-tidy cache restore provenance
+        if: always()
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        with:
+          name: clang-tidy-cache-provenance
+          path: ${{ runner.temp }}/clang-tidy-cache-provenance.json
+          if-no-files-found: warn
 
       - name: Upload test logs (windows-x64-ninja-debug)
         if: failure()
