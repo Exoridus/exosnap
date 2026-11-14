@@ -11,6 +11,7 @@
 // the vendored consumer it returns nullptr and the caller reports unavailable.
 
 #include <cstdint>
+#include <optional>
 #include <memory>
 #include <vector>
 
@@ -94,6 +95,13 @@ class IPresentTraceBackend {
     // Everything decoded since the last call, oldest first. Called from the reader
     // side; the real implementation is thread-safe against Consume().
     [[nodiscard]] virtual std::vector<TracePresentEvent> Drain() = 0;
+
+    // System-wide consumer-classified incomplete presents since last drain.
+    // Not a per-process frame-drop or complete ETW packet-loss metric.
+    // Nullopt means the backend cannot measure this, not zero losses.
+    [[nodiscard]] virtual std::optional<uint64_t> DrainLostPresentCount() {
+        return std::nullopt;
+    }
 };
 
 // The one real backend, or nullptr when the vendored PresentMon consumer is not part
