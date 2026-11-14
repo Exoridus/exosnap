@@ -304,9 +304,9 @@ fn nested_configurations(repo: &Path, sources: &[String]) -> Option<BTreeMap<Str
     Some(configurations)
 }
 
-/// Compiler and linker outputs. No include lookup names one, and a manifest
-/// that opened one is refused, so new objects of a new source leave every
-/// lookup's membership unchanged.
+/// Compiler and linker outputs, left out of lookup membership so new objects
+/// of a new source change no key. A manifest that opened one, or whose files
+/// probe for one, is refused instead.
 pub(super) const BUILD_ARTIFACTS: [&str; 12] = [
     "obj", "pdb", "ilk", "exe", "dll", "lib", "exp", "idb", "iobj", "ipdb", "pch", "res",
 ];

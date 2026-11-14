@@ -109,7 +109,7 @@ every `-I`, `/I`, `-external:I`, `-isystem`, `-imsvc`, `-iquote`, `-idirafter` a
 `--include-directory` directory of a project unit, and the directories of the project sources.
 That includes generated and fetched build-tree headers and external installations such as Qt.
 Any extension counts, except compiler and linker outputs such as `.obj`, `.pdb` and `.exe`,
-which no lookup names and which a manifest refuses to record.
+because a manifest that opened or probed one is refused.
 Installed MSVC/SDK include trees, the compiler identity and the include environment remain one global
 content fingerprint. Without an explicit INCLUDE environment or readable supported toolchain inputs,
 verdicts are not reused. Use a matching Developer PowerShell for direct lint invocations.
@@ -128,7 +128,10 @@ the toolchain roots and the clang-tidy installation, whose resource headers its 
 A manifest is also refused when an opened file contains an include or `__has_include` lookup that could
 probe outside the covered roots: an absolute name outside them, or a parent-relative name that is not
 found beside its includer and leaves the roots from any directory it is searched in.
+A macro that wraps `__has_include`, directly or through another such macro, is followed to its invocations
+in every opened file, and each invocation is checked like the builtin probe.
 An include name computed from a macro is refused unless the file belongs to the toolchain identity.
+A probe for a build artifact name is refused, because lookup membership leaves those names out.
 Checkout ownership and header consumers compare physically proven Windows path aliases
 without changing recorded paths. Readable directory links are traversed with cycle detection,
 and physical link targets contribute to membership.

@@ -244,7 +244,7 @@ pub(super) struct Recorder<'a> {
     identities: &'a HashMap<String, String>,
     coverage: Coverage<'a>,
     admissions: HashMap<String, Option<&'static str>>,
-    directives: HashMap<String, Result<Vec<Directive>, &'static str>>,
+    directives: HashMap<String, Result<Vec<String>, &'static str>>,
     contents: HashMap<String, Result<Content, &'static str>>,
     pub(super) summary: ManifestSummary,
 }
@@ -619,9 +619,16 @@ impl<'a> Recorder<'a> {
                     .map(|(directory, _)| directory.to_string())
             })
             .collect();
+        // A project macro can wrap `__has_include`, and another opened file
+        // can invoke it, so every file's probes see every file's wrappers.
+        let mut every = Vec::new();
+        for (path, _) in opened.values() {
+            every.extend(self.directives_of(path)?);
+        }
+        let wrappers = probe_wrappers(every.iter());
         for (path, _) in opened.values() {
             let trusted = within(&self.coverage.trusted, path);
-            for (quoted, name) in self.directives_of(path)? {
+            for (quoted, name) in include_directives(&self.directives_of(path)?, &wrappers) {
                 let Some(name) = name else {
                     if trusted {
                         continue;
@@ -629,6 +636,11 @@ impl<'a> Recorder<'a> {
                     return Err("computed_include");
                 };
                 let name = name.replace('\\', "/");
+                // Lookup membership leaves build artifacts out, so a probe for
+                // one could turn true without changing any key.
+                if super::input_identity::is_build_artifact(&name) {
+                    return Err("artifact_lookup");
+                }
                 if super::is_rooted(&name) {
                     if !self.coverage.covers(&super::normalize_segments(&name)) {
                         return Err("uncovered_lookup");
@@ -659,12 +671,13 @@ impl<'a> Recorder<'a> {
         Ok(())
     }
 
-    fn directives_of(&mut self, path: &str) -> Result<Vec<Directive>, &'static str> {
+    /// The preprocessor directives of `path`, without their `#`.
+    fn directives_of(&mut self, path: &str) -> Result<Vec<String>, &'static str> {
         self.directives
             .entry(path.to_string())
             .or_insert_with(|| {
                 std::fs::read(path)
-                    .map(|bytes| include_directives(&String::from_utf8_lossy(&bytes)))
+                    .map(|bytes| preprocessor_lines(&String::from_utf8_lossy(&bytes)))
                     .map_err(|_| "unreadable_file")
             })
             .clone()
@@ -740,11 +753,60 @@ impl Coverage<'_> {
     }
 }
 
-/// Every include lookup a preprocessor line can perform: `#include`,
-/// `#include_next`, `#import` and `__has_include`/`__has_include_next`
-/// probes. Lines inside comments or inactive branches count as well, which
-/// can only refuse a manifest, never admit one.
-fn include_directives(text: &str) -> Vec<Directive> {
+/// Every preprocessor line, without its `#`. Lines inside comments or
+/// inactive branches count as well, which can only refuse a manifest, never
+/// admit one.
+fn preprocessor_lines(text: &str) -> Vec<String> {
+    text.lines()
+        .filter_map(|line| line.trim_start().strip_prefix('#'))
+        .map(|directive| directive.trim_start().to_string())
+        .collect()
+}
+
+/// The macro name and the rest of a `#define` line.
+fn definition(directive: &str) -> Option<(&str, &str)> {
+    let rest = directive.strip_prefix("define")?;
+    if !rest.starts_with([' ', '\t']) {
+        return None;
+    }
+    let rest = rest.trim_start();
+    let end = rest
+        .find(|character: char| !(character.is_ascii_alphanumeric() || character == '_'))
+        .unwrap_or(rest.len());
+    Some((&rest[..end], &rest[end..]))
+}
+
+/// Macros whose definition probes with `__has_include`, such as
+/// `#define HAS_FILE(x) __has_include(x)`, directly or through another
+/// such macro.
+fn probe_wrappers<'d>(directives: impl Iterator<Item = &'d String>) -> BTreeSet<String> {
+    let definitions: Vec<(&str, &str)> = directives
+        .filter_map(|directive| definition(directive))
+        .filter(|(name, _)| !name.starts_with("__has_include"))
+        .collect();
+    let mut wrappers = BTreeSet::new();
+    loop {
+        let before = wrappers.len();
+        for (name, body) in &definitions {
+            if body.contains("__has_include")
+                || wrappers
+                    .iter()
+                    .any(|wrapper: &String| body.contains(wrapper.as_str()))
+            {
+                wrappers.insert(name.to_string());
+            }
+        }
+        if wrappers.len() == before {
+            return wrappers;
+        }
+    }
+}
+
+/// Every include lookup the directives can perform: `#include`,
+/// `#include_next`, `#import`, `__has_include`/`__has_include_next` probes and
+/// invocations of probe `wrappers`. A wrapper's own parameter is not a lookup;
+/// its invocations are.
+fn include_directives(directives: &[String], wrappers: &BTreeSet<String>) -> Vec<Directive> {
     fn operand(rest: &str) -> Directive {
         let rest = rest.trim_start();
         for (open, close, quoted) in [('"', '"', true), ('<', '>', false)] {
@@ -757,33 +819,55 @@ fn include_directives(text: &str) -> Vec<Directive> {
         }
         (false, None)
     }
-    let mut directives = Vec::new();
-    for line in text.lines() {
-        let Some(directive) = line.trim_start().strip_prefix('#') else {
-            continue;
-        };
-        let directive = directive.trim_start();
-        if directive.starts_with("define") || directive.starts_with("undef") {
+    let mut lookups = Vec::new();
+    for directive in directives {
+        if directive.starts_with("undef") {
             continue;
         }
-        for keyword in ["include_next", "include", "import"] {
-            if let Some(rest) = directive.strip_prefix(keyword)
-                && rest.starts_with([' ', '\t', '"', '<'])
-            {
-                directives.push(operand(rest));
-                break;
+        let (body, parameters) = match definition(directive) {
+            Some((name, _)) if name.starts_with("__has_include") => continue,
+            Some((_, body)) => {
+                let parameters: Vec<&str> = body
+                    .strip_prefix('(')
+                    .and_then(|list| list.split_once(')'))
+                    .map(|(list, _)| list.split(',').map(str::trim).collect())
+                    .unwrap_or_default();
+                (body, Some(parameters))
             }
-        }
-        let mut rest = directive;
-        while let Some(at) = rest.find("__has_include") {
-            rest = &rest[at + "__has_include".len()..];
-            let after = rest.strip_prefix("_next").unwrap_or(rest).trim_start();
-            if let Some(argument) = after.strip_prefix('(') {
-                directives.push(operand(argument));
+            None => {
+                for keyword in ["include_next", "include", "import"] {
+                    if let Some(rest) = directive.strip_prefix(keyword)
+                        && rest.starts_with([' ', '\t', '"', '<'])
+                    {
+                        lookups.push(operand(rest));
+                        break;
+                    }
+                }
+                (directive.as_str(), None)
+            }
+        };
+        let probes = std::iter::once("__has_include").chain(wrappers.iter().map(String::as_str));
+        for probe in probes {
+            let mut rest = body;
+            while let Some(at) = rest.find(probe) {
+                rest = &rest[at + probe.len()..];
+                let after = rest.strip_prefix("_next").unwrap_or(rest).trim_start();
+                let Some(argument) = after.strip_prefix('(') else {
+                    continue;
+                };
+                let lookup = operand(argument);
+                let forwards_parameter = lookup.1.is_none()
+                    && parameters.as_ref().is_some_and(|parameters| {
+                        let name = argument.split([')', ',']).next().unwrap_or("").trim();
+                        parameters.contains(&name)
+                    });
+                if !forwards_parameter {
+                    lookups.push(lookup);
+                }
             }
         }
     }
-    directives
+    lookups
 }
 
 /// Written aside and moved into place, like verdict entries.
@@ -1666,7 +1750,7 @@ mod tests {
                     #define __has_include(x) 0\n#includes \"no.h\"\nint x; // #include \"no.h\"\n";
         let named = |quoted: bool, name: &str| (quoted, Some(name.to_string()));
         assert_eq!(
-            include_directives(text),
+            include_directives(&preprocessor_lines(text), &BTreeSet::new()),
             [
                 named(true, "a.h"),
                 named(false, "sys/b.h"),
@@ -1753,6 +1837,98 @@ mod tests {
             fixture.path("external").to_ascii_lowercase()
         )];
         assert_eq!(record(trusting).recorded, 1);
+    }
+
+    /// Lookup membership leaves build artifacts out, so a probe for one must
+    /// refuse the manifest: the probed file appearing later changes no key.
+    #[test]
+    fn probes_for_build_artifact_names_refuse_the_manifest() {
+        let fixture = Fixture::new(&["/I../libs"]);
+        fixture.write(
+            "repo/libs/a.h",
+            "#if __has_include(\"marker.obj\")\nint marker;\n#endif\n",
+        );
+        let summary = fixture.record(&["repo/libs/a.h"]);
+        assert_eq!(summary.incomplete, BTreeMap::from([("artifact_lookup", 1)]));
+        assert_eq!(super::super::cached_verdicts(&fixture.cache), 0);
+        fixture.write("repo/libs/marker.obj", "now present");
+        assert!(fixture.lookup().0.is_none());
+    }
+
+    /// A project macro can wrap `__has_include`. Its invocations are probes
+    /// like the builtin's, and a forwarded or computed argument is unknown.
+    #[test]
+    fn probe_wrapper_macros_are_followed_to_their_invocations() {
+        for (case, a_h, b_h, refusal) in [
+            (
+                "wrapper probing a covered name",
+                "#define HAS_FILE(x) __has_include(x)\n#if HAS_FILE(\"inside.h\")\n#endif\n",
+                "",
+                None,
+            ),
+            (
+                "wrapper probing outside the roots",
+                "#define HAS_FILE(x) __has_include(x)\n#if HAS_FILE(\"../../../uncovered.h\")\n#endif\n",
+                "",
+                Some("uncovered_lookup"),
+            ),
+            (
+                "wrapper defined in one file, invoked in another",
+                "#define HAS_FILE(x) __has_include(x)\n",
+                "#if HAS_FILE(<../../../uncovered.h>)\n#endif\n",
+                Some("uncovered_lookup"),
+            ),
+            (
+                "wrapper of a wrapper",
+                "#define HAS_FILE(x) __has_include(x)\n#define HAS(x) HAS_FILE(x)\n",
+                "#if HAS(\"../../../uncovered.h\")\n#endif\n",
+                Some("uncovered_lookup"),
+            ),
+            (
+                "wrapper probing an artifact name",
+                "#define HAS_FILE(x) __has_include(x)\n#if HAS_FILE(\"marker.obj\")\n#endif\n",
+                "",
+                Some("artifact_lookup"),
+            ),
+            (
+                "wrapper invoked with a macro",
+                "#define HAS_FILE(x) __has_include(x)\n#if HAS_FILE(HEADER)\n#endif\n",
+                "",
+                Some("computed_include"),
+            ),
+            (
+                "object-like macro probing a computed name",
+                "#define HAS_HEADER __has_include(HEADER)\n",
+                "",
+                Some("computed_include"),
+            ),
+            (
+                "object-like macro probing outside the roots",
+                "#define HAS_UNCOVERED __has_include(\"../../../uncovered.h\")\n",
+                "",
+                Some("uncovered_lookup"),
+            ),
+            (
+                "redefining the builtin",
+                "#define __has_include(x) 0\n",
+                "",
+                None,
+            ),
+        ] {
+            let fixture = Fixture::new(&["/I../libs"]);
+            fixture.write("repo/libs/a.h", a_h);
+            fixture.write("repo/libs/b.h", b_h);
+            let summary = fixture.record(&["repo/libs/a.h", "repo/libs/b.h"]);
+            match refusal {
+                None => assert_eq!(summary.recorded, 1, "{case}: {summary:?}"),
+                Some(reason) => {
+                    assert_eq!(summary.incomplete, BTreeMap::from([(reason, 1)]), "{case}");
+                    // Absent before, present now: nothing was stored to replay.
+                    fixture.write("uncovered.h", "int uncovered;\n");
+                    assert!(fixture.lookup().0.is_none(), "{case}");
+                }
+            }
+        }
     }
 
     #[test]
