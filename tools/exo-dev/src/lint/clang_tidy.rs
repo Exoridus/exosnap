@@ -67,10 +67,11 @@ use crate::lint::{
 /// producer's required input-validation contract becomes stricter.
 /// Scoping (which translation units get analysed) does not affect what a
 /// stored entry means and is not a reason to bump this. Neither do the
-/// include-observation flags or the dependency manifests stored beside
-/// entries: their notes are removed before output is validated or stored.
-/// Nothing else enforces the bump.
-pub const CACHE_SCHEMA: u32 = 4;
+/// include-observation flags: their notes are removed before output is
+/// validated or stored. A change to the dependency manifest format bumps
+/// `dependency_manifest::MANIFEST_SCHEMA` instead. Nothing else enforces the
+/// bump.
+pub const CACHE_SCHEMA: u32 = 5;
 
 /// Canary translation units, analysed whenever the analysis configuration
 /// itself changes rather than the code it inspects. A change to `.clang-tidy`
@@ -148,22 +149,22 @@ impl ClangTidyReport {
 /// `-ListChecks` (print the resolved check list and return without touching
 /// the build tree).
 ///
-/// A translation unit whose recorded inputs hash to an entry already in
-/// `cache_dir` is not analysed again; its stored diagnostics are replayed
-/// instead. The cache key covers every input that can change a verdict: the
-/// translation unit, the union of headers recorded for every compile command,
-/// the complete command identities, every `.clang-tidy` that can configure a
-/// project unit, [`CACHE_SCHEMA`], the check list and the tool version banner.
-/// Reuse requires complete, current Ninja records from the configured build.
-/// Unhashable inputs are cache misses. Keep inputs stable throughout analysis.
-/// Completed results are revalidated in periodic checkpoints before they are
-/// cached. Drift aborts the run and discards every result not yet checkpointed.
-/// Earlier checkpoints retain their original input keys. Before/after checks
-/// cannot detect edit-and-restore.
+/// A translation unit with a stored verdict in `cache_dir` whose dependency
+/// manifest still matches is not analysed again; its stored diagnostics are
+/// replayed instead. The lookup key covers the source content, the complete
+/// command identities, every `.clang-tidy`, [`CACHE_SCHEMA`], the check list,
+/// the tool version banner, header and include lookup directory membership,
+/// and the toolchain identity. The manifest covers the content and physical
+/// target of every file clang opened for any of the unit's commands.
+/// Unhashable or uncovered inputs are cache misses.
+/// Keep inputs stable throughout analysis. Completed results are revalidated
+/// in periodic checkpoints before they are cached. Drift aborts the run and
+/// discards every result not yet checkpointed. Earlier checkpoints retain
+/// their original input keys. Before/after checks cannot detect
+/// edit-and-restore.
 ///
-/// Each stored fresh verdict also gets a dependency manifest of the files
-/// clang opened for it, which [`ClangTidyReport::dependency_manifests`]
-/// summarizes. Manifests do not affect keys, lookups or the verdict.
+/// [`ClangTidyReport::dependency_manifests`] summarizes lookups, recorded
+/// manifests and their comparison with Ninja's dependency records.
 #[allow(clippy::too_many_arguments)]
 pub fn run_blocking(
     repo_root: &Path,
@@ -260,9 +261,11 @@ pub fn run_blocking(
         freshness_seconds: std::cell::Cell::new(0.0),
     };
 
+    let (lookup_directories, unsearchable) = lookup_directories(&entries, &all_sources);
     let mut already_read_graph: Option<HashMap<String, Vec<String>>> = None;
     let mut captured_identity = None;
-    let (sources, scope_desc) = match base {
+    let mut include_inputs_changed = false;
+    let (mut sources, mut scope_desc) = match base {
         None => (all_sources.clone(), "full tree".to_string()),
         Some(base) => {
             match scope_for_base(
@@ -271,6 +274,7 @@ pub fn run_blocking(
                 &build_dir_norm,
                 base,
                 &all_sources,
+                &lookup_directories,
                 &obj_to_source,
                 &ninja,
                 &mut timing,
@@ -287,9 +291,11 @@ pub fn run_blocking(
                     description,
                     dep_graph,
                     identity,
+                    includes_changed,
                 } => {
                     captured_identity = identity;
                     already_read_graph = dep_graph;
+                    include_inputs_changed = includes_changed;
                     (sources, description)
                 }
             }
@@ -315,62 +321,81 @@ pub fn run_blocking(
         .unwrap_or_else(|| Box::new(input_identity::Snapshot::read(repo_root, build_dir)));
     let foreign_roots = &identity.foreign_roots;
     let inventory = &identity.inventory;
+    let search = input_identity::lookup_membership(repo_root, &lookup_directories);
 
-    let configuration_hash = inventory
-        .as_ref()
-        .and_then(|inventory| inventory.configuration_hash(repo_root, &all_sources));
+    let configuration_hash = with_search_membership(
+        inventory
+            .as_ref()
+            .and_then(|inventory| inventory.configuration_hash(repo_root, &all_sources)),
+        search.as_ref().map(|(hash, _)| hash.clone()),
+    );
     let toolchain_started = Instant::now();
-    let toolchain_hash = toolchain_identity::hash_with_overrides(build_dir, environment);
+    let toolchain = toolchain_identity::identity_with_overrides(build_dir, environment);
     timing.toolchain_identity_seconds = toolchain_started.elapsed().as_secs_f64();
-    let toolchain_available = toolchain_hash.is_some();
-    let configuration_hash = combine_configuration_identity(configuration_hash, toolchain_hash);
-    let salt = compute_salt(&banner, &flags, configuration_hash.as_deref());
+    let configuration_hash = combine_configuration_identity(
+        configuration_hash,
+        toolchain.as_ref().map(|(hash, _)| hash.clone()),
+    );
+    let salt = compute_salt(&banner, &flags, configuration_hash.as_deref())
+        .filter(|_| foreign_roots.is_some());
     timing.configuration_identity_seconds = configuration_started.elapsed().as_secs_f64();
+
+    // Ninja's records miss what only clang includes, so they cannot prove
+    // which units a changed include input reaches. Every unit is looked up
+    // instead, and only those whose manifests no longer match run again.
+    if include_inputs_changed && salt.is_some() && sources.len() < all_sources.len() {
+        sources = all_sources.clone();
+        scope_desc =
+            format!("full tree with manifest replay: {scope_desc}, include inputs changed");
+    }
+
+    let hashing = Instant::now();
+    timing::progress_phase("hashing", started);
+    let mut cache_keys = salt
+        .as_deref()
+        .map(|salt| build_cache_keys(&sources, &commands, salt))
+        .unwrap_or_default();
+    cache_keys.retain(|source, _| !unsearchable.contains(source));
+    timing.hashing_seconds = hashing.elapsed().as_secs_f64();
+    let cache_enabled = !cache_keys.is_empty();
 
     timing::progress_phase("dependencies", started);
     let phase = Instant::now();
-    let mut cache_dependencies = None;
-    let (cache_enabled, cache_keys) = if salt.is_none() {
-        (false, HashMap::new())
-    } else {
-        match deps_for_sources(
+    // Ninja's records no longer key verdicts. They remain the comparison
+    // baseline for the files clang reports.
+    let cache_dependencies = if cache_enabled {
+        deps_for_sources(
             &ninja,
             &sources,
             &source_to_obj,
             &obj_to_source,
             &build_dir_norm,
             already_read_graph.as_ref(),
-        ) {
-            None => (false, HashMap::new()),
-            Some(mut dep_graph) => {
-                input_identity::retain_dependencies(
-                    &mut dep_graph,
-                    foreign_roots.as_deref(),
-                    inventory.as_ref(),
-                );
-                timing.dependencies_seconds = phase.elapsed().as_secs_f64();
-                let hashing = Instant::now();
-                timing::progress_phase("hashing", started);
-                let keys =
-                    build_cache_keys(&sources, &dep_graph, &commands, salt.as_deref().unwrap());
-                timing.hashing_seconds = hashing.elapsed().as_secs_f64();
-                cache_dependencies = Some(dep_graph);
-                (!keys.is_empty(), keys)
-            }
-        }
+        )
+        .map(|mut dep_graph| {
+            input_identity::retain_dependencies(
+                &mut dep_graph,
+                foreign_roots.as_deref(),
+                inventory.as_ref(),
+            );
+            dep_graph
+        })
+    } else {
+        None
     };
+    timing.dependencies_seconds = phase.elapsed().as_secs_f64();
 
     if !cache_enabled {
-        let reason = if !toolchain_available {
+        let reason = if toolchain.is_none() {
             "compiler environment or toolchain inputs unavailable"
         } else if inventory.is_none() {
             "header inventory unavailable or cyclic"
         } else if foreign_roots.is_none() {
             "checkout ownership unavailable"
+        } else if search.is_none() {
+            "include search directory membership unavailable"
         } else if salt.is_none() {
             "analysis configuration unavailable"
-        } else if cache_dependencies.is_none() {
-            "current Ninja dependency evidence unavailable"
         } else {
             "no complete hashable translation-unit inputs"
         };
@@ -388,19 +413,55 @@ pub fn run_blocking(
     timing.dependency_inputs = inputs;
     timing.dependency_sources = sources_count;
     timing.freshness_seconds = ninja.freshness_seconds.get();
+
+    let as_root = |root: String| format!("{}/", root.to_ascii_lowercase());
+    // The clang-tidy installation holds clang's own resource headers, which
+    // its version banner identifies.
+    let trusted: Vec<String> = toolchain
+        .iter()
+        .flat_map(|(_, roots)| roots.iter().cloned())
+        .chain(tool.parent().and_then(Path::parent).map(normalize_root))
+        .map(as_root)
+        .collect();
+    let coverage = dependency_manifest::Coverage {
+        roots: search
+            .iter()
+            .flat_map(|(_, roots)| roots.iter().cloned())
+            .map(as_root)
+            .chain(trusted.iter().cloned())
+            .collect(),
+        trusted,
+        owned: Box::new(|path: &str| {
+            foreign_roots
+                .as_deref()
+                .zip(inventory.as_ref())
+                .is_some_and(|(foreign, inventory)| {
+                    input_identity::owned_input(path, foreign, inventory)
+                })
+        }),
+    };
+    let mut manifests = dependency_manifest::Recorder::new(
+        &repo_root_norm,
+        &build_dir_norm,
+        &version,
+        &entries,
+        &commands,
+        coverage,
+        std::time::SystemTime::now(),
+    );
+
     let phase = Instant::now();
     let mut results: Vec<(String, String)> = Vec::new();
     timing::progress_phase("cache_lookup", started);
     let mut pending: Vec<String> = Vec::new();
     let mut replayed = 0;
     for src in &sources {
-        if let Some(key) = cache_keys.get(src) {
-            let entry_path = cache_entry_path(cache_dir, key);
-            if let Some(text) = read_cache_entry(&entry_path, key, src) {
-                results.push((src.clone(), text));
-                replayed += 1;
-                continue;
-            }
+        if let Some(key) = cache_keys.get(src)
+            && let Some(text) = manifests.lookup(cache_dir, key, src)
+        {
+            results.push((src.clone(), text));
+            replayed += 1;
+            continue;
         }
         pending.push(src.clone());
     }
@@ -421,14 +482,6 @@ pub fn run_blocking(
         pending.len()
     };
     let observed = dependency_manifest::Observed::new(cache_enabled);
-    let mut manifests = dependency_manifest::Recorder::new(
-        &repo_root_norm,
-        &build_dir_norm,
-        &version,
-        &entries,
-        &commands,
-        std::time::SystemTime::now(),
-    );
     let analysis_started = Instant::now();
     let completed = AtomicUsize::new(0);
     let last_completion = Mutex::new(0.0_f64);
@@ -464,8 +517,13 @@ pub fn run_blocking(
             }
             timing::progress_phase("input_revalidation", started);
             let phase = Instant::now();
-            let current_configuration =
-                configuration_identity(repo_root, build_dir, &all_sources, environment);
+            let current_configuration = configuration_identity(
+                repo_root,
+                build_dir,
+                &all_sources,
+                &lookup_directories,
+                environment,
+            );
             revalidate_cache_inputs(
                 &compile_db_path,
                 &compile_db_text,
@@ -474,29 +532,25 @@ pub fn run_blocking(
                     .context("missing captured cache configuration")?,
                 current_configuration.as_deref(),
                 &sources,
-                cache_dependencies
-                    .as_ref()
-                    .context("missing captured cache dependencies")?,
                 &commands,
                 salt.as_deref().context("missing captured cache salt")?,
                 &cache_keys,
             )?;
+            manifests.revalidate()?;
             revalidation_seconds += phase.elapsed().as_secs_f64();
             let phase = Instant::now();
             for (source, output, code, _) in batch {
-                let key = cache_keys.get(source);
-                if let Some(key) = key {
-                    store_cache_entry(cache_dir, key, source, output, *code);
-                }
                 manifests.record(
                     cache_dir,
-                    key.map(String::as_str),
+                    cache_keys.get(source).map(String::as_str),
                     source,
                     observed.take(source),
                     cache_dependencies
                         .as_ref()
                         .and_then(|dependencies| dependencies.get(source))
                         .map(Vec::as_slice),
+                    output,
+                    *code,
                 );
             }
             storage_seconds += phase.elapsed().as_secs_f64();
@@ -509,7 +563,7 @@ pub fn run_blocking(
     timing.analysis_wall_seconds = *last_completion.lock().unwrap();
     timing.input_revalidation_seconds = revalidation_seconds;
     timing.validation_and_storage_seconds = storage_seconds;
-    let dependency_manifests = manifests.summary;
+    let dependency_manifests = manifests.finish();
     for (source, output, _, unit_timing) in fresh {
         timing.units.push(unit_timing);
         results.push((source, output));
@@ -1065,6 +1119,9 @@ enum BaseScope {
         /// cache-key step does not pay to read it again.
         dep_graph: Option<HashMap<String, Vec<String>>>,
         identity: Option<Box<input_identity::Snapshot>>,
+        /// Whether a changed file other than a unit source lies where an include
+        /// lookup can find it. Ninja-recorded consumers cannot bound its effect.
+        includes_changed: bool,
     },
 }
 
@@ -1075,6 +1132,7 @@ fn scope_for_base(
     build_dir_norm: &str,
     base: &str,
     all_sources: &[String],
+    lookup_directories: &BTreeSet<String>,
     obj_to_source: &HashMap<String, String>,
     ninja: &dyn NinjaDeps,
     timing: &mut TidyTiming,
@@ -1122,6 +1180,7 @@ fn scope_for_base(
             description: format!("full tree: header added or removed since {base}"),
             dep_graph: None,
             identity: None,
+            includes_changed: false,
         });
     }
     if compile_configuration_changed {
@@ -1130,11 +1189,31 @@ fn scope_for_base(
             description: format!("full tree: compile configuration changed since {base}"),
             dep_graph: None,
             identity: None,
+            includes_changed: false,
         });
     }
+    // Any file an include lookup can reach is an analysis input, whatever its
+    // extension: a header anywhere, or any file below a lookup directory.
+    let unit_sources: HashSet<String> = all_sources
+        .iter()
+        .map(|source| source.to_ascii_lowercase())
+        .collect();
+    let lookup_roots: Vec<String> = lookup_directories
+        .iter()
+        .map(|directory| format!("{}/", directory.to_ascii_lowercase()))
+        .collect();
+    let include_inputs: Vec<String> = changed_all
+        .iter()
+        .filter(|path| {
+            let absolute = format!("{repo_root_norm}/{path}").to_ascii_lowercase();
+            !unit_sources.contains(&absolute)
+                && (is_header(path) || lookup_roots.iter().any(|root| absolute.starts_with(root)))
+        })
+        .cloned()
+        .collect();
     let changed: Vec<String> = changed_all
         .iter()
-        .filter(|f| is_source_or_header(f))
+        .filter(|f| is_source_or_header(f) || include_inputs.contains(f))
         .cloned()
         .collect();
     let canary_hit: Vec<String> = changed_all
@@ -1193,7 +1272,7 @@ fn scope_for_base(
         }
     }
 
-    let changed_headers: Vec<&String> = changed.iter().filter(|f| is_header(f)).collect();
+    let changed_headers: Vec<&String> = include_inputs.iter().collect();
     let mut dep_graph_read: Option<HashMap<String, Vec<String>>> = None;
     let mut identity = None;
     if !changed_headers.is_empty() {
@@ -1266,9 +1345,22 @@ fn scope_for_base(
     }
 
     if affected.is_empty() {
-        return Ok(BaseScope::Nothing(format!(
-            "No analysable translation unit is affected by the changes since {base}."
-        )));
+        if include_inputs.is_empty() {
+            return Ok(BaseScope::Nothing(format!(
+                "No analysable translation unit is affected by the changes since {base}."
+            )));
+        }
+        // A changed include input without a Ninja-recorded consumer may still
+        // reach a unit through an include only clang takes.
+        return Ok(BaseScope::Scoped {
+            sources: all_sources.to_vec(),
+            description: format!(
+                "full tree: include inputs changed since {base} without a recorded consumer"
+            ),
+            dep_graph: dep_graph_read,
+            identity,
+            includes_changed: true,
+        });
     }
 
     Ok(BaseScope::Scoped {
@@ -1276,6 +1368,7 @@ fn scope_for_base(
         description: format!("changed since {base}"),
         dep_graph: dep_graph_read,
         identity,
+        includes_changed: !include_inputs.is_empty(),
     })
 }
 
@@ -1314,56 +1407,81 @@ fn combine_configuration_identity(
         })
 }
 
+fn with_search_membership(configuration: Option<String>, search: Option<String>) -> Option<String> {
+    configuration.zip(search).map(|(configuration, search)| {
+        sha256_hex(format!("{configuration}\nsearch={search}").as_bytes())
+    })
+}
+
 fn configuration_identity(
     repo: &Path,
     build: &Path,
     sources: &[String],
+    lookup_directories: &BTreeSet<String>,
     environment: &[(std::ffi::OsString, std::ffi::OsString)],
 ) -> Option<String> {
-    let configuration =
-        input_identity::HeaderInventory::read(repo, build)?.configuration_hash(repo, sources);
+    let configuration = with_search_membership(
+        input_identity::HeaderInventory::read(repo, build)?.configuration_hash(repo, sources),
+        input_identity::lookup_membership(repo, lookup_directories).map(|(hash, _)| hash),
+    );
     combine_configuration_identity(
         configuration,
-        toolchain_identity::hash_with_overrides(build, environment),
+        toolchain_identity::identity_with_overrides(build, environment).map(|(hash, _)| hash),
     )
 }
 
+/// The directories an include lookup of `sources` can search: every include
+/// search directory of their compile commands and the sources' own
+/// directories. Also returns the sources with a command whose search
+/// directories are unknown.
+fn lookup_directories(
+    entries: &[CompileEntry],
+    sources: &[String],
+) -> (BTreeSet<String>, HashSet<String>) {
+    let sources: HashSet<&str> = sources.iter().map(String::as_str).collect();
+    let mut directories: BTreeSet<String> = sources
+        .iter()
+        .filter_map(|source| {
+            source
+                .rsplit_once('/')
+                .map(|(directory, _)| directory.to_string())
+        })
+        .collect();
+    let mut unsearchable = HashSet::new();
+    for entry in entries
+        .iter()
+        .filter(|entry| sources.contains(entry.file.as_str()))
+    {
+        match dependency_manifest::search_directories(&entry.command_line) {
+            Ok(found) => directories.extend(found),
+            Err(_) => {
+                unsearchable.insert(entry.file.clone());
+            }
+        }
+    }
+    (directories, unsearchable)
+}
+
+/// Lookup keys: the salt, every compile command of the unit and the
+/// source's content. A key selects stored dependency manifests. It never
+/// replays a verdict by itself.
 fn build_cache_keys(
     sources: &[String],
-    dep_graph: &HashMap<String, Vec<String>>,
     commands: &HashMap<String, String>,
     salt: &str,
 ) -> HashMap<String, String> {
-    let mut hash_cache: HashMap<String, Option<String>> = HashMap::new();
     let mut keys = HashMap::new();
     for src in sources {
-        // No recorded dependency list means the unit's true input set is
-        // unknown; hashing only the source would key a hit on a stale header.
-        let Some(deps) = dep_graph.get(src) else {
-            continue;
-        };
         let Some(command_line) = commands.get(src) else {
             continue;
         };
-        let mut parts = vec![salt.to_string(), command_line.clone()];
-        let mut usable = true;
-        for input in std::iter::once(src.clone()).chain(deps.iter().cloned()) {
-            let hash = hash_cache
-                .entry(input.clone())
-                .or_insert_with(|| hash_file(&input))
-                .clone();
-            match hash {
-                Some(h) => parts.push(format!("{input}={h}")),
-                None => {
-                    usable = false;
-                    break;
-                }
-            }
-        }
-        if !usable {
+        let Some(hash) = hash_file(src) else {
             continue;
-        }
-        keys.insert(src.clone(), sha256_hex(parts.join("\n").as_bytes()));
+        };
+        keys.insert(
+            src.clone(),
+            sha256_hex(format!("{salt}\n{command_line}\n{src}={hash}").as_bytes()),
+        );
     }
     keys
 }
@@ -1375,7 +1493,6 @@ fn revalidate_cache_inputs(
     expected_configuration: &str,
     configuration: Option<&str>,
     sources: &[String],
-    dependencies: &HashMap<String, Vec<String>>,
     commands: &HashMap<String, String>,
     salt: &str,
     keys: &HashMap<String, String>,
@@ -1386,11 +1503,13 @@ fn revalidate_cache_inputs(
     );
     anyhow::ensure!(
         configuration == Some(expected_configuration),
-        "clang-tidy inputs changed or became unavailable during analysis: configuration or toolchain"
+        "clang-tidy inputs changed or became unavailable during analysis: configuration, membership or toolchain"
     );
+    let mut current = build_cache_keys(sources, commands, salt);
+    current.retain(|source, _| keys.contains_key(source));
     anyhow::ensure!(
-        build_cache_keys(sources, dependencies, commands, salt) == *keys,
-        "clang-tidy inputs changed or became unavailable during analysis: source or dependency content"
+        current == *keys,
+        "clang-tidy inputs changed or became unavailable during analysis: source content"
     );
     Ok(())
 }
@@ -1455,9 +1574,15 @@ fn read_cache_entry(path: &Path, key: &str, source: &str) -> Option<String> {
 
 /// Written aside and moved into place: a run cancelled mid-write would
 /// otherwise leave a truncated entry that later reads as a complete verdict.
-fn store_cache_entry(cache_dir: &Path, key: &str, source: &str, output: &str, exit_code: i32) {
+fn store_cache_entry(
+    cache_dir: &Path,
+    key: &str,
+    source: &str,
+    output: &str,
+    exit_code: i32,
+) -> bool {
     if require_analysis(source, output, exit_code).is_err() {
-        return;
+        return false;
     }
     let record = CacheEntry {
         schema: CACHE_SCHEMA,
@@ -1468,18 +1593,16 @@ fn store_cache_entry(cache_dir: &Path, key: &str, source: &str, output: &str, ex
         output_sha256: sha256_hex(output.as_bytes()),
     };
     let Ok(bytes) = serde_json::to_vec(&record) else {
-        return;
+        return false;
     };
     let entry = cache_entry_path(cache_dir, key);
-    let Some(parent) = entry.parent() else { return };
-    if std::fs::create_dir_all(parent).is_err() {
-        return;
-    }
+    let Some(parent) = entry.parent() else {
+        return false;
+    };
     let temp = entry.with_extension(format!("{}.tmp", std::process::id()));
-    if std::fs::write(&temp, bytes).is_err() {
-        return;
-    }
-    let _ = std::fs::rename(&temp, &entry);
+    std::fs::create_dir_all(parent).is_ok()
+        && std::fs::write(&temp, bytes).is_ok()
+        && std::fs::rename(&temp, &entry).is_ok()
 }
 
 // ---------------------------------------------------------------------------
@@ -1840,6 +1963,7 @@ mod tests {
             &format!("{root}/build"),
             "HEAD",
             &[source],
+            &BTreeSet::new(),
             &objects,
             &ninja,
             &mut TidyTiming::default(),
@@ -2184,6 +2308,7 @@ mod tests {
             &format!("{root}/build"),
             "HEAD",
             &sources,
+            &BTreeSet::new(),
             &HashMap::new(),
             &FakeNinja {
                 whole: None,
@@ -2221,6 +2346,7 @@ mod tests {
             &format!("{root}/build"),
             "HEAD",
             &sources,
+            &BTreeSet::new(),
             &HashMap::new(),
             &FakeNinja {
                 whole: None,
@@ -2271,6 +2397,7 @@ mod tests {
             &format!("{root}/build"),
             "HEAD",
             std::slice::from_ref(&source),
+            &BTreeSet::new(),
             &objects,
             &ninja,
             &mut TidyTiming::default(),
@@ -2298,14 +2425,11 @@ mod tests {
         let source = normalize_root(&dir.path().join("a.cpp"));
         std::fs::write(&source, "int a();\n").unwrap();
         assert!(
-            build_cache_keys(
-                std::slice::from_ref(&source),
-                &HashMap::from([(source.clone(), vec![])]),
-                &HashMap::new(),
-                "salt"
-            )
-            .is_empty()
+            build_cache_keys(std::slice::from_ref(&source), &HashMap::new(), "salt").is_empty()
         );
+        let commands = HashMap::from([(source.clone(), "cl.exe /c".to_string())]);
+        std::fs::remove_file(&source).unwrap();
+        assert!(build_cache_keys(std::slice::from_ref(&source), &commands, "salt").is_empty());
     }
 
     #[test]
@@ -2337,6 +2461,7 @@ mod tests {
             &format!("{root}/build"),
             "HEAD",
             &sources,
+            &BTreeSet::new(),
             &objects,
             &FakeNinja {
                 whole: Some(vec![
@@ -2507,9 +2632,12 @@ mod tests {
             "unchanged",
             "source",
             "header",
+            "looked-up-header",
             "database",
             "configuration",
+            "nested-configuration",
             "membership",
+            "search-membership",
             "toolchain",
             "missing-source",
             "missing-configuration",
@@ -2521,7 +2649,7 @@ mod tests {
             let repo = dir.path();
             let build = repo.join("build");
             std::fs::create_dir_all(repo.join("libs")).unwrap();
-            std::fs::create_dir(&build).unwrap();
+            std::fs::create_dir_all(build.join("generated")).unwrap();
             std::fs::write(repo.join("libs/shared.h"), "int shared;\n").unwrap();
             std::fs::write(repo.join(".clang-tidy"), "Checks: '-*'\n").unwrap();
             let nested = repo.join("libs/.clang-tidy");
@@ -2540,39 +2668,94 @@ mod tests {
                     normalize_root(&path)
                 })
                 .collect();
-            let records: Vec<_> = sources.iter().map(|source| serde_json::json!({"file": source, "directory": normalize_root(&build), "command": "cl.exe /c"})).collect();
+            // Inputs written moments before analysis would read as modified during it.
+            let past = std::time::SystemTime::now() - std::time::Duration::from_secs(3600);
+            for file in ["libs/shared.h", "libs/a.cpp", "libs/b.cpp"] {
+                std::fs::File::options()
+                    .write(true)
+                    .open(repo.join(file))
+                    .unwrap()
+                    .set_modified(past)
+                    .unwrap();
+            }
+            let records: Vec<_> = sources.iter().map(|source| serde_json::json!({"file": source, "directory": normalize_root(&build), "command": "cl.exe /Igenerated /c"})).collect();
             let database = serde_json::to_string(&records).unwrap();
             let database_path = build.join("compile_commands.json");
             std::fs::write(&database_path, &database).unwrap();
-            let commands = command_identities(&parse_compile_db(&database).unwrap());
-            let dependencies: HashMap<_, _> = sources
-                .iter()
-                .map(|source| {
-                    (
-                        source.clone(),
-                        vec![normalize_root(&repo.join("libs/shared.h"))],
-                    )
-                })
-                .collect();
+            let entries = parse_compile_db(&database).unwrap();
+            let commands = command_identities(&entries);
+            let (search, _) = lookup_directories(&entries, &sources);
             let identity = || {
                 combine_configuration_identity(
-                    input_identity::HeaderInventory::read(repo, &build)
-                        .and_then(|inventory| inventory.configuration_hash(repo, &sources)),
+                    with_search_membership(
+                        input_identity::HeaderInventory::read(repo, &build)
+                            .and_then(|inventory| inventory.configuration_hash(repo, &sources)),
+                        input_identity::lookup_membership(repo, &search).map(|(hash, _)| hash),
+                    ),
                     hash_file(&normalize_root(&repo.join("compiler-input"))),
                 )
             };
             let configuration = identity().unwrap();
             let salt = compute_salt("version", &[], Some(&configuration)).unwrap();
-            let keys = build_cache_keys(&sources, &dependencies, &commands, &salt);
+            let keys = build_cache_keys(&sources, &commands, &salt);
+            let cache = repo.join("cache");
+            let shared = normalize_root(&repo.join("libs/shared.h"));
+            let repository = normalize_root(repo);
+            let build_norm = normalize_root(&build);
+            let mut recorder = dependency_manifest::Recorder::new(
+                &repository,
+                &build_norm,
+                "version",
+                &entries,
+                &commands,
+                dependency_manifest::Coverage::under(&repository),
+                std::time::SystemTime::now(),
+            );
+            if changed == "looked-up-header" {
+                // A cached manifest for another state of b.cpp made this run read shared.h.
+                let mut writer = dependency_manifest::Recorder::new(
+                    &repository,
+                    &build_norm,
+                    "version",
+                    &entries,
+                    &commands,
+                    dependency_manifest::Coverage::under(&repository),
+                    std::time::SystemTime::now(),
+                );
+                writer.record(
+                    &cache,
+                    Some(&keys[&sources[1]]),
+                    &sources[1],
+                    Some(vec![shared.clone()]),
+                    None,
+                    "",
+                    0,
+                );
+                assert_eq!(writer.finish().recorded, 1);
+                assert!(
+                    recorder
+                        .lookup(&cache, &keys[&sources[1]], &sources[1])
+                        .is_some()
+                );
+                std::fs::remove_dir_all(&cache).unwrap();
+            }
             match changed {
                 "source" => std::fs::write(&sources[1], "int changed;\n").unwrap(),
-                "header" => std::fs::write(repo.join("libs/shared.h"), "int changed;\n").unwrap(),
+                "header" | "looked-up-header" => {
+                    std::fs::write(repo.join("libs/shared.h"), "int changed;\n").unwrap()
+                }
                 "database" => std::fs::write(&database_path, "[]").unwrap(),
                 "configuration" => {
                     std::fs::write(repo.join(".clang-tidy"), "Checks: '*'\n").unwrap()
                 }
+                "nested-configuration" => {
+                    std::fs::write(repo.join("libs/.clang-tidy"), "Checks: '*'\n").unwrap()
+                }
                 "membership" => {
                     std::fs::write(repo.join("libs/new.h"), "int new_header;\n").unwrap()
+                }
+                "search-membership" => {
+                    std::fs::write(build.join("generated/new.h"), "int new_header;\n").unwrap()
                 }
                 "toolchain" => {
                     std::fs::write(repo.join("compiler-input"), "changed compiler").unwrap()
@@ -2592,33 +2775,54 @@ mod tests {
                 &configuration,
                 current.as_deref(),
                 &sources,
-                &dependencies,
                 &commands,
                 &salt,
                 &keys,
-            );
-            let cache = repo.join("cache");
+            )
+            .and_then(|()| recorder.revalidate());
             if checked.is_ok() {
                 for source in &sources {
-                    store_cache_entry(&cache, &keys[source], source, "", 0);
+                    recorder.record(
+                        &cache,
+                        Some(&keys[source]),
+                        source,
+                        Some(vec![shared.clone()]),
+                        None,
+                        "",
+                        0,
+                    );
                 }
             }
             if changed == "unchanged" {
                 checked.unwrap();
+                assert_eq!(recorder.finish().recorded, 2);
+                let mut reader = dependency_manifest::Recorder::new(
+                    &repository,
+                    &build_norm,
+                    "version",
+                    &entries,
+                    &commands,
+                    dependency_manifest::Coverage::under(&repository),
+                    std::time::SystemTime::now(),
+                );
                 for source in &sources {
-                    assert!(
-                        read_cache_entry(
-                            &cache_entry_path(&cache, &keys[source]),
-                            &keys[source],
-                            source
-                        )
-                        .is_some()
-                    );
+                    assert!(reader.lookup(&cache, &keys[source], source).is_some());
                 }
+            } else if changed == "header" {
+                // Read first after its change: the analysis may have seen either
+                // content, so no manifest can vouch for the verdict.
+                checked.unwrap();
+                assert_eq!(
+                    recorder.finish().incomplete,
+                    std::collections::BTreeMap::from([("modified_during_analysis", 2)])
+                );
+                assert_eq!(cached_verdicts(&cache), 0);
             } else {
                 assert!(checked.is_err(), "{changed}");
+            }
+            if changed != "unchanged" {
                 assert!(
-                    !cache.exists(),
+                    cached_verdicts(&cache) == 0,
                     "no earlier fresh result may be stored when another input drifts: {changed}"
                 );
             }
@@ -2676,11 +2880,10 @@ mod tests {
         let entries = parse_compile_db(&database).unwrap();
         let commands = command_identities(&entries);
         let sources = vec![source.clone()];
-        let dependencies = HashMap::from([(source.clone(), vec![source.clone()])]);
         let flags = invocation_flags(&format!("-*,{}", BLOCKING_CHECKS.join(",")), HEADER_FILTER);
         let banner = clang_tidy_version_banner(&tool).unwrap();
         let salt = compute_salt(&banner, &flags, Some("stable-configuration")).unwrap();
-        let keys = build_cache_keys(&sources, &dependencies, &commands, &salt);
+        let keys = build_cache_keys(&sources, &commands, &salt);
         let key = &keys[&source];
         let (initial_output, initial_code, _) =
             invoke_clang_tidy(&tool, &build, &flags, &source, &[]);
@@ -2719,7 +2922,6 @@ mod tests {
             "stable-configuration",
             Some("stable-configuration"),
             &sources,
-            &dependencies,
             &commands,
             &salt,
             &keys,
@@ -2732,10 +2934,7 @@ mod tests {
             "changed source must abort before storing any fresh output"
         );
         std::fs::write(&source, original).unwrap();
-        assert_eq!(
-            build_cache_keys(&sources, &dependencies, &commands, &salt),
-            keys
-        );
+        assert_eq!(build_cache_keys(&sources, &commands, &salt), keys);
         let replayed = read_cache_entry(&cache_entry_path(&cache, key), key, &source);
         if let Some(output) = &replayed {
             assert!(
@@ -2779,6 +2978,7 @@ mod tests {
                 &format!("{root}/build"),
                 "HEAD",
                 &sources,
+                &BTreeSet::new(),
                 &HashMap::new(),
                 &FakeNinja {
                     whole: None,
@@ -2910,36 +3110,30 @@ mod tests {
     }
 
     #[test]
-    fn every_object_variants_headers_contribute_to_the_key() {
+    fn lookup_keys_cover_every_command_variant_and_the_source_content() {
         let dir = tempfile::tempdir().unwrap();
         let source_path = dir.path().join("a.cpp");
-        let first_header = dir.path().join("first.h");
-        let other_header = dir.path().join("other.h");
-        for path in [&source_path, &first_header, &other_header] {
-            std::fs::write(path, "old\n").unwrap();
-        }
+        std::fs::write(&source_path, "old\n").unwrap();
         let source = normalize_root(&source_path);
-        let map = HashMap::from([
-            ("first.obj".into(), source.clone()),
-            ("other.obj".into(), source.clone()),
-        ]);
-        let graph = parse_ninja_deps(
-            &[
-                "first.obj: #deps 1, deps mtime 1 (VALID)".into(),
-                format!("    {}", first_header.display()),
-                "other.obj: #deps 1, deps mtime 1 (VALID)".into(),
-                format!("    {}", other_header.display()),
-            ],
-            &map,
-            &normalize_root(dir.path()),
-        );
-        let commands = HashMap::from([(source.clone(), "commands".into())]);
-        let before = build_cache_keys(std::slice::from_ref(&source), &graph, &commands, "salt");
-        std::fs::write(first_header, "changed\n").unwrap();
-        assert_ne!(
-            before,
-            build_cache_keys(&[source], &graph, &commands, "salt")
-        );
+        let commands = |variants: &[&str]| {
+            let records: Vec<_> = variants
+                .iter()
+                .map(|flags| serde_json::json!({"directory": normalize_root(dir.path()), "file": source, "command": format!("cl.exe {flags} /c a.cpp")}))
+                .collect();
+            command_identities(
+                &parse_compile_db(&serde_json::to_string(&records).unwrap()).unwrap(),
+            )
+        };
+        let key = |variants: &[&str]| {
+            build_cache_keys(std::slice::from_ref(&source), &commands(variants), "salt")[&source]
+                .clone()
+        };
+        let both = key(&["/DONE", "/DTWO"]);
+        assert_eq!(both, key(&["/DTWO", "/DONE"]));
+        assert_ne!(both, key(&["/DONE"]));
+        assert_ne!(both, key(&["/DONE", "/DTHREE"]));
+        std::fs::write(&source_path, "changed\n").unwrap();
+        assert_ne!(both, key(&["/DONE", "/DTWO"]));
     }
 
     #[test]
@@ -2960,6 +3154,7 @@ mod tests {
                 &format!("{root}/build"),
                 "HEAD",
                 &sources,
+                &BTreeSet::new(),
                 &HashMap::new(),
                 &FakeNinja {
                     whole: None,
@@ -2995,6 +3190,7 @@ mod tests {
             &format!("{root}/build"),
             "HEAD",
             &sources,
+            &BTreeSet::new(),
             &map,
             &ninja,
             &mut TidyTiming::default(),
@@ -3253,6 +3449,76 @@ mod tests {
         }
     }
 
+    /// Ninja records what MSVC included. A header only clang includes, such
+    /// as one behind `#ifdef __clang__`, or a non-header include input has no
+    /// recorded consumer, so a scoped run must not end at Ninja's answer.
+    #[test]
+    fn include_inputs_beyond_ninja_records_widen_the_scope() {
+        let dir = crate::test_support::fixture_repo_committed(&[
+            ("libs/a.h", "old\n"),
+            ("libs/clang_only.h", "old\n"),
+            ("libs/table.inc", "old\n"),
+            ("libs/b.cpp", "old\n"),
+            ("docs/notes.md", "old\n"),
+        ]);
+        let root = normalize_root(dir.path());
+        let sources = vec![format!("{root}/libs/a.cpp"), format!("{root}/libs/b.cpp")];
+        let objects = HashMap::from([
+            ("a.obj".into(), sources[0].clone()),
+            ("b.obj".into(), sources[1].clone()),
+        ]);
+        let ninja = FakeNinja {
+            whole: Some(vec![
+                "a.obj: #deps 1, deps mtime 1 (VALID)".into(),
+                format!("    {root}/libs/a.h"),
+                "b.obj: #deps 0, deps mtime 1 (VALID)".into(),
+            ]),
+            batched: None,
+        };
+        let lookup = BTreeSet::from([format!("{root}/libs")]);
+        let scope = |path: &str| {
+            crate::test_support::write_files(dir.path(), &[(path, "changed\n")]);
+            let scope = scope_for_base(
+                dir.path(),
+                &root,
+                &format!("{root}/build"),
+                "HEAD",
+                &sources,
+                &lookup,
+                &objects,
+                &ninja,
+                &mut TidyTiming::default(),
+            )
+            .unwrap();
+            crate::test_support::write_files(dir.path(), &[(path, "old\n")]);
+            match scope {
+                BaseScope::Scoped {
+                    sources,
+                    includes_changed,
+                    ..
+                } => Some((sources.len(), includes_changed)),
+                BaseScope::Nothing(_) => None,
+            }
+        };
+        assert_eq!(
+            scope("libs/a.h"),
+            Some((1, true)),
+            "Ninja's consumer, marked for replay of the rest"
+        );
+        assert_eq!(
+            scope("libs/clang_only.h"),
+            Some((2, true)),
+            "no recorded consumer"
+        );
+        assert_eq!(
+            scope("libs/table.inc"),
+            Some((2, true)),
+            "an include input without a header extension"
+        );
+        assert_eq!(scope("docs/notes.md"), None);
+        assert_eq!(scope("libs/b.cpp"), Some((1, false)), "a unit source only");
+    }
+
     #[test]
     fn deps_for_sources_reuses_an_already_read_whole_graph() {
         let mut already = HashMap::new();
@@ -3359,6 +3625,7 @@ mod tests {
             &build_dir_norm,
             "HEAD",
             &all_sources,
+            &BTreeSet::new(),
             &obj_to_source,
             &ninja,
             &mut TidyTiming::default(),
@@ -3402,6 +3669,7 @@ mod tests {
             &format!("{root}/build"),
             "HEAD",
             &sources,
+            &BTreeSet::new(),
             &objects,
             &ninja,
             &mut TidyTiming::default(),
@@ -3455,6 +3723,7 @@ mod tests {
             &build_dir_norm,
             "HEAD",
             &all_sources,
+            &BTreeSet::new(),
             &obj_to_source,
             &ninja,
             &mut TidyTiming::default(),
@@ -3516,6 +3785,7 @@ mod tests {
                 &format!("{repo_root_norm}/build"),
                 "HEAD",
                 &all_sources,
+                &BTreeSet::new(),
                 &HashMap::new(),
                 &FakeNinja {
                     whole: None,
@@ -3559,6 +3829,7 @@ mod tests {
             &build_dir_norm,
             "HEAD",
             &all_sources,
+            &BTreeSet::new(),
             &obj_to_source,
             &ninja,
             &mut TidyTiming::default(),
@@ -3568,10 +3839,9 @@ mod tests {
     }
 
     #[test]
-    fn build_cache_keys_skips_a_source_without_a_recorded_dependency_list() {
-        let dep_graph = HashMap::new();
+    fn build_cache_keys_skips_a_source_without_a_compile_command() {
         let commands = HashMap::new();
-        let keys = build_cache_keys(&["src.cpp".to_string()], &dep_graph, &commands, "salt");
+        let keys = build_cache_keys(&["src.cpp".to_string()], &commands, "salt");
         assert!(keys.is_empty());
     }
 
@@ -3581,51 +3851,19 @@ mod tests {
         let src = dir.path().join("a.cpp");
         std::fs::write(&src, "int a();\n").unwrap();
         let src_str = src.to_string_lossy().replace('\\', "/");
+        let commands = HashMap::from([(src_str.clone(), "cmd".to_string())]);
+        let key = |salt: &str| build_cache_keys(std::slice::from_ref(&src_str), &commands, salt);
 
-        let mut dep_graph = HashMap::new();
-        dep_graph.insert(src_str.clone(), vec![src_str.clone()]);
-        let mut commands = HashMap::new();
-        commands.insert(src_str.clone(), "cmd".to_string());
-
-        let keys_before = build_cache_keys(
-            std::slice::from_ref(&src_str),
-            &dep_graph,
-            &commands,
-            "salt",
-        );
-        let key_before = keys_before.get(&src_str).unwrap().clone();
-
+        let key_before = key("salt")[&src_str].clone();
         // Unchanged content, unchanged salt: the same key.
-        let keys_again = build_cache_keys(
-            std::slice::from_ref(&src_str),
-            &dep_graph,
-            &commands,
-            "salt",
-        );
-        assert_eq!(key_before, *keys_again.get(&src_str).unwrap());
-
+        assert_eq!(key_before, key("salt")[&src_str]);
         // A content change moves the key.
         std::fs::write(&src, "int a(); // changed\n").unwrap();
-        let keys_after = build_cache_keys(
-            std::slice::from_ref(&src_str),
-            &dep_graph,
-            &commands,
-            "salt",
-        );
-        assert_ne!(key_before, *keys_after.get(&src_str).unwrap());
-
+        let key_after = key("salt")[&src_str].clone();
+        assert_ne!(key_before, key_after);
         // A salt change (simulating a BLOCKING_CHECKS or CACHE_SCHEMA change)
         // also moves the key even though the file did not change again.
-        let keys_other_salt = build_cache_keys(
-            std::slice::from_ref(&src_str),
-            &dep_graph,
-            &commands,
-            "other-salt",
-        );
-        assert_ne!(
-            *keys_after.get(&src_str).unwrap(),
-            *keys_other_salt.get(&src_str).unwrap()
-        );
+        assert_ne!(key_after, key("other-salt")[&src_str]);
     }
 
     #[test]
@@ -3754,8 +3992,8 @@ mod tests {
     #[cfg(windows)]
     #[test]
     #[ignore = "requires cmake, ninja, Visual Studio clang-tidy and a working MSVC toolchain"]
-    fn fresh_verdicts_store_dependency_manifests_that_replays_leave_untouched() {
-        let test = "fresh_verdicts_store_dependency_manifests_that_replays_leave_untouched";
+    fn manifest_keys_replay_every_unit_whose_opened_files_are_unchanged() {
+        let test = "manifest_keys_replay_every_unit_whose_opened_files_are_unchanged";
         let Some(tool) = discover_vs2022_clang_tidy() else {
             skip(test);
             return;
@@ -3768,14 +4006,21 @@ mod tests {
             (".clang-tidy", "Checks: '-*'\n"),
             (
                 "libs/a.cpp",
-                "#include \"a.h\"\n#ifdef __clang__\n#include \"clang_only.h\"\n#endif\nint value() { return a; }\n",
+                "#include \"a.h\"\n#ifdef __clang__\n#include \"clang_only.h\"\n#endif\n\
+                 #if __has_include(\"absent.h\")\n#include \"absent.h\"\n#endif\n\
+                 #include <vector>\nint value() { return a + static_cast<int>(std::vector<int>{}.size()); }\n",
             ),
             ("libs/a.h", "static int a = 1;\n"),
+            (
+                "libs/b.cpp",
+                "#include \"b.h\"\nint other() { return b; }\n",
+            ),
+            ("libs/b.h", "static int b = 1;\n"),
             ("libs/clang_only.h", "\n"),
             (
                 "CMakeLists.txt",
                 "cmake_minimum_required(VERSION 3.20)\nproject(fixture CXX)\n\
-                 set(CMAKE_EXPORT_COMPILE_COMMANDS ON)\nadd_library(plain OBJECT libs/a.cpp)\n\
+                 set(CMAKE_EXPORT_COMPILE_COMMANDS ON)\nadd_library(plain OBJECT libs/a.cpp libs/b.cpp)\n\
                  add_library(variant OBJECT libs/a.cpp)\n\
                  target_compile_definitions(variant PRIVATE VARIANT)\n",
             ),
@@ -3813,14 +4058,26 @@ mod tests {
             }
         }
         // Inputs written moments before analysis would read as modified during it.
-        let past = std::time::SystemTime::now() - std::time::Duration::from_secs(3600);
-        for file in ["libs/a.cpp", "libs/a.h", "libs/clang_only.h"] {
+        let write = |file: &str, text: Option<&str>| {
+            let path = repo.join(file);
+            if let Some(text) = text {
+                std::fs::write(&path, text).unwrap();
+            }
             std::fs::File::options()
                 .write(true)
-                .open(repo.join(file))
+                .open(path)
                 .unwrap()
-                .set_modified(past)
+                .set_modified(std::time::SystemTime::now() - std::time::Duration::from_secs(3600))
                 .unwrap();
+        };
+        for file in [
+            "libs/a.cpp",
+            "libs/a.h",
+            "libs/b.cpp",
+            "libs/b.h",
+            "libs/clang_only.h",
+        ] {
+            write(file, None);
         }
         let cache = repo.join("cache");
         let analyze = || {
@@ -3840,38 +4097,105 @@ mod tests {
 
         let fresh = analyze();
         assert!(fresh.cache_enabled && fresh.ok(), "{fresh:?}");
-        assert_eq!((fresh.analyzed, fresh.replayed), (1, 0));
         let summary = &fresh.dependency_manifests;
-        assert_eq!(summary.recorded, 1, "{summary:?}");
-        assert_eq!(summary.compared_units, 1);
+        assert_eq!((fresh.analyzed, fresh.replayed), (2, 0));
+        assert_eq!(summary.recorded, 2, "{summary:?}");
+        assert!(summary.incomplete.is_empty(), "{summary:?}");
         assert!(
             summary
                 .clang_only_project_files
                 .contains("repository:libs/clang_only.h"),
             "{summary:?}"
         );
-        let manifests: Vec<PathBuf> = walk_files(&cache)
-            .into_iter()
-            .filter(|path| path.to_string_lossy().ends_with(".deps.json"))
-            .collect();
-        assert_eq!(manifests.len(), 1);
-        let recorded = std::fs::read(&manifests[0]).unwrap();
-        let manifest: serde_json::Value = serde_json::from_slice(&recorded).unwrap();
-        assert_eq!(manifest["compile_commands"], 2);
         assert!(
-            manifest["files"]
-                .as_array()
-                .unwrap()
-                .iter()
-                .any(|file| file["path"] == "libs/clang_only.h"),
-            "{manifest}"
+            summary.clang_only.absolute > 0,
+            "system headers: {summary:?}"
+        );
+        let manifests = || -> Vec<PathBuf> {
+            walk_files(&cache)
+                .into_iter()
+                .filter(|path| path.to_string_lossy().ends_with(".deps.json"))
+                .collect()
+        };
+        assert_eq!(manifests().len(), 2);
+        let a_manifest = manifests()
+            .into_iter()
+            .map(|path| {
+                serde_json::from_slice::<serde_json::Value>(&std::fs::read(path).unwrap()).unwrap()
+            })
+            .find(|manifest| manifest["source"].as_str().unwrap().ends_with("libs/a.cpp"))
+            .unwrap();
+        assert_eq!(a_manifest["compile_commands"], 2);
+        let opened: Vec<&str> = a_manifest["files"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .map(|file| file["path"].as_str().unwrap())
+            .collect();
+        assert!(opened.contains(&"libs/clang_only.h"), "{opened:?}");
+        assert!(
+            opened.iter().any(|path| path.ends_with("/vector")),
+            "a system header: {opened:?}"
         );
 
         let replayed = analyze();
-        assert_eq!((replayed.analyzed, replayed.replayed), (1, 1));
+        assert_eq!((replayed.analyzed, replayed.replayed), (2, 2));
         assert_eq!(replayed.dependency_manifests.recorded, 0);
-        assert_eq!(replayed.dependency_manifests.compared_units, 0);
-        assert_eq!(std::fs::read(&manifests[0]).unwrap(), recorded);
+
+        write("libs/b.h", Some("static int b = 2;\n"));
+        let header_edit = analyze();
+        assert_eq!(
+            (header_edit.analyzed, header_edit.replayed),
+            (2, 1),
+            "a header edit re-analyzes only the unit that opened it: {:?}",
+            header_edit.dependency_manifests
+        );
+        assert_eq!(header_edit.dependency_manifests.recorded, 1);
+
+        write("libs/clang_only.h", Some("static int clang_only = 1;\n"));
+        let clang_only = analyze();
+        assert_eq!(
+            (clang_only.analyzed, clang_only.replayed),
+            (2, 1),
+            "a header only clang opened, which Ninja never recorded"
+        );
+
+        write("libs/absent.h", Some("\n"));
+        let membership = analyze();
+        assert_eq!(
+            (membership.analyzed, membership.replayed),
+            (2, 0),
+            "a new header that a __has_include probe could find"
+        );
+        std::fs::remove_file(repo.join("libs/absent.h")).unwrap();
+        let restored = analyze();
+        assert_eq!(
+            (restored.analyzed, restored.replayed),
+            (2, 2),
+            "the previous membership's manifests still apply"
+        );
+
+        // A pull request scope against the committed fixture. Ninja never
+        // recorded clang_only.h, so only full replay can reach a.cpp.
+        write("libs/clang_only.h", Some("static int clang_only = 2;\n"));
+        let scoped = run_blocking(
+            repo,
+            &build,
+            Some("HEAD"),
+            &cache,
+            1,
+            None,
+            false,
+            Some(&tool),
+            &environment,
+        )
+        .unwrap();
+        assert!(scoped.scope.starts_with("full tree"), "{}", scoped.scope);
+        assert_eq!(
+            (scoped.analyzed, scoped.replayed),
+            (2, 1),
+            "the clang-only consumer runs again and the other unit replays"
+        );
     }
 
     fn walk_files(root: &Path) -> Vec<PathBuf> {
@@ -3986,14 +4310,12 @@ mod tests {
             )
             .unwrap();
             let build = normalize_root(&fixture.build_dir);
-            let (objects, sources) = object_maps(&entries, &build);
+            let (_, sources) = object_maps(&entries, &build);
             let selected: Vec<_> = sources.keys().cloned().collect();
-            let graph = deps_for_sources(&ninja, &selected, &sources, &objects, &build, None)
-                .expect("current complete dependency graph");
             let identity = input_identity::configuration_hash(root, &fixture.build_dir).unwrap();
             let salt =
                 compute_salt("fixture tool", &["fixture checks".into()], Some(&identity)).unwrap();
-            let keys = build_cache_keys(&selected, &graph, &command_identities(&entries), &salt);
+            let keys = build_cache_keys(&selected, &command_identities(&entries), &salt);
             assert_eq!(keys.len(), selected.len());
             keys
         };
@@ -4097,9 +4419,10 @@ mod tests {
         assert!(!graph.contains_key(&fixture.consumer_source));
         let other = normalize_root(&fixture.build_dir.parent().unwrap().join("other.cpp"));
         assert!(graph.contains_key(&other));
-        let keys = build_cache_keys(&selected, &graph, &command_identities(&entries), "salt");
-        assert_eq!(keys.len(), 1);
-        assert!(keys.contains_key(&other));
+        // Lookup keys no longer depend on Ninja's records: the consumer stays
+        // keyed, and its manifest covers the generated header's content.
+        let keys = build_cache_keys(&selected, &command_identities(&entries), "salt");
+        assert_eq!(keys.len(), 2);
         assert_eq!(
             std::fs::metadata(header).unwrap().modified().unwrap(),
             modified

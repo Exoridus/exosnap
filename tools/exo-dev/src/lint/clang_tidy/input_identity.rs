@@ -126,6 +126,76 @@ pub(super) fn long_path(path: &Path) -> Option<PathBuf> {
     Some(path.to_path_buf())
 }
 
+/// Repository directories whose header membership the inventory covers.
+pub(super) const SOURCE_ROOTS: [&str; 6] = ["app", "apps", "libs", "tools", "tests", "third_party"];
+
+/// Names and links found below a set of roots.
+#[derive(Default)]
+struct Walk {
+    names: BTreeSet<String>,
+    links: BTreeSet<(String, String)>,
+}
+
+/// Walks `roots` through linked directories, naming entries relative to
+/// `base` where possible. Any unreadable entry or link cycle fails the walk,
+/// because a partial membership cannot vouch for a lookup it did not see.
+fn walk(
+    base: &Path,
+    roots: Vec<PathBuf>,
+    skip: &[PathBuf],
+    member: fn(&str) -> bool,
+) -> Option<Walk> {
+    let name = |path: &Path| -> Option<String> {
+        Some(match path.strip_prefix(base) {
+            Ok(relative) if !base.as_os_str().is_empty() => relative.to_str()?.replace('\\', "/"),
+            _ => super::normalize_root(path),
+        })
+    };
+    let mut pending: Vec<(PathBuf, Vec<PathBuf>)> =
+        roots.into_iter().map(|root| (root, Vec::new())).collect();
+    let mut walk = Walk::default();
+    while let Some((directory, mut ancestors)) = pending.pop() {
+        let canonical = std::fs::canonicalize(&directory).ok()?;
+        if ancestors.contains(&canonical) {
+            return None;
+        }
+        if std::fs::symlink_metadata(&directory)
+            .ok()?
+            .file_type()
+            .is_symlink()
+        {
+            walk.links
+                .insert((name(&directory)?, super::normalize_root(&canonical)));
+        }
+        ancestors.push(canonical);
+        for entry in std::fs::read_dir(directory).ok()? {
+            let entry = entry.ok()?;
+            let path = entry.path();
+            if skip.contains(&path) {
+                continue;
+            }
+            let kind = std::fs::metadata(&path).ok()?;
+            if kind.is_dir() {
+                pending.push((path, ancestors.clone()));
+            } else if kind.is_file() {
+                let relative = name(&path)?;
+                if member(&relative) {
+                    if entry.file_type().ok()?.is_symlink() {
+                        walk.links.insert((
+                            relative.clone(),
+                            super::normalize_root(&std::fs::canonicalize(&path).ok()?),
+                        ));
+                    }
+                    walk.names.insert(relative);
+                }
+            }
+        }
+    }
+    Some(walk)
+}
+
+/// Header membership and links of the repository's source roots. Header contents are not part of it: each verdict's
+/// dependency manifest covers the contents of the files clang opened.
 #[derive(Debug)]
 pub(super) struct HeaderInventory {
     root: CheckoutRoot,
@@ -135,65 +205,24 @@ pub(super) struct HeaderInventory {
 
 impl HeaderInventory {
     pub(super) fn read(repo: &Path, build: &Path) -> Option<Self> {
-        let mut pending = Vec::new();
-        for name in ["app", "apps", "libs", "tools", "tests", "third_party"] {
+        let mut roots = Vec::new();
+        for name in SOURCE_ROOTS {
             let path = repo.join(name);
             match std::fs::metadata(&path) {
-                Ok(metadata) if metadata.is_dir() => pending.push((path, Vec::<PathBuf>::new())),
+                Ok(metadata) if metadata.is_dir() => roots.push(path),
                 Err(error) if error.kind() == std::io::ErrorKind::NotFound => {}
                 _ => return None,
             }
         }
-        let mut names = BTreeSet::new();
-        let mut contents = BTreeSet::new();
-        let mut links = BTreeSet::new();
-        while let Some((directory, mut ancestors)) = pending.pop() {
-            let canonical = std::fs::canonicalize(&directory).ok()?;
-            if ancestors.contains(&canonical) {
-                return None;
-            }
-            if std::fs::symlink_metadata(&directory)
-                .ok()?
-                .file_type()
-                .is_symlink()
-            {
-                links.insert((
-                    directory
-                        .strip_prefix(repo)
-                        .ok()?
-                        .to_str()?
-                        .replace('\\', "/"),
-                    super::normalize_root(&canonical),
-                ));
-            }
-            ancestors.push(canonical);
-            for entry in std::fs::read_dir(directory).ok()? {
-                let entry = entry.ok()?;
-                let path = entry.path();
-                if path == build || path == repo.join("tools/target") {
-                    continue;
-                }
-                let kind = std::fs::metadata(&path).ok()?;
-                if kind.is_dir() {
-                    pending.push((path, ancestors.clone()));
-                } else if kind.is_file() {
-                    let relative = path.strip_prefix(repo).ok()?.to_str()?.replace('\\', "/");
-                    if super::is_header(&relative) {
-                        if entry.file_type().ok()?.is_symlink() {
-                            links.insert((
-                                relative.clone(),
-                                super::normalize_root(&std::fs::canonicalize(&path).ok()?),
-                            ));
-                        }
-                        contents.insert((relative.clone(), super::hash_file(path.to_str()?)?));
-                        names.insert(relative);
-                    }
-                }
-            }
-        }
-        let hash = super::sha256_hex(&serde_json::to_vec(&(&contents, &links)).ok()?);
+        let walk = walk(
+            repo,
+            roots,
+            &[build.to_path_buf(), repo.join("tools/target")],
+            super::is_header,
+        )?;
+        let hash = super::sha256_hex(&serde_json::to_vec(&(&walk.names, &walk.links)).ok()?);
         let mut suffixes: HashMap<String, Vec<String>> = HashMap::new();
-        for name in names {
+        for name in walk.names {
             let relative = name.to_ascii_lowercase();
             suffixes
                 .entry(relative.rsplit('/').next()?.to_string())
@@ -275,6 +304,75 @@ fn nested_configurations(repo: &Path, sources: &[String]) -> Option<BTreeMap<Str
     Some(configurations)
 }
 
+/// Compiler and linker outputs. No include lookup names one, and a manifest
+/// that opened one is refused, so new objects of a new source leave every
+/// lookup's membership unchanged.
+pub(super) const BUILD_ARTIFACTS: [&str; 12] = [
+    "obj", "pdb", "ilk", "exe", "dll", "lib", "exp", "idb", "iobj", "ipdb", "pch", "res",
+];
+
+pub(super) fn is_build_artifact(name: &str) -> bool {
+    Path::new(name.rsplit('/').next().unwrap_or(name))
+        .extension()
+        .is_some_and(|extension| {
+            BUILD_ARTIFACTS
+                .iter()
+                .any(|artifact| extension.eq_ignore_ascii_case(artifact))
+        })
+}
+
+fn lookup_name(name: &str) -> bool {
+    !is_build_artifact(name)
+}
+
+/// Membership of the directories an include lookup searches: the compile
+/// commands' include search directories and the directories of the project
+/// sources, whose files are the first includers. Every name except
+/// [`BUILD_ARTIFACTS`] counts, so a `__has_include` probe or a shadowing file
+/// of any extension changes it. Returns the digest and the walked roots.
+/// A directory nested in another is walked once, and a missing one is
+/// recorded as absent. A directory containing the repository fails, because
+/// its walk would cover other checkouts and build trees.
+pub(super) fn lookup_membership(
+    repo: &Path,
+    directories: &BTreeSet<String>,
+) -> Option<(String, Vec<String>)> {
+    let repository = super::normalize_root(repo).to_ascii_lowercase();
+    let within =
+        |path: &str, parent: &str| path == parent || path.starts_with(&format!("{parent}/"));
+    let mut sorted: Vec<String> = directories.iter().cloned().collect();
+    sorted.sort_by_key(|directory| directory.to_ascii_lowercase());
+    let mut selected: Vec<String> = Vec::new();
+    for directory in sorted {
+        let lower = directory.to_ascii_lowercase();
+        if within(&repository, &lower) {
+            return None;
+        }
+        if !selected
+            .iter()
+            .any(|parent| within(&lower, &parent.to_ascii_lowercase()))
+        {
+            selected.push(directory);
+        }
+    }
+    let mut absent = Vec::new();
+    let mut present = Vec::new();
+    for directory in &selected {
+        match std::fs::metadata(directory) {
+            Ok(metadata) if metadata.is_dir() => present.push(PathBuf::from(directory)),
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => {
+                absent.push(directory.clone());
+            }
+            _ => return None,
+        }
+    }
+    let walk = walk(Path::new(""), present, &[], lookup_name)?;
+    let hash = super::sha256_hex(
+        &serde_json::to_vec(&(&selected, &absent, &walk.names, &walk.links)).ok()?,
+    );
+    Some((hash, selected))
+}
+
 #[cfg(test)]
 pub(super) fn configuration_hash(repo: &Path, build: &Path) -> Option<String> {
     HeaderInventory::read(repo, build)?.configuration_hash(repo, &[])
@@ -332,29 +430,81 @@ pub(super) fn retain_dependencies(
         return;
     };
     graph.retain(|_, dependencies| {
-        dependencies.iter().all(|path| {
-            if inventory.ambiguous_header(path) {
-                return false;
-            }
-            let Some(path) = checkout_name(Path::new(path)) else {
-                return false;
-            };
-            !foreign.iter().any(|root| {
-                let Some(relative) = root.relative(&path) else {
-                    return false;
-                };
-                matches!(
-                    relative.split('/').next().unwrap_or_default(),
-                    "app" | "apps" | "libs" | "tools" | "tests" | "third_party"
-                ) && super::is_header(relative)
-            })
-        })
+        dependencies
+            .iter()
+            .all(|path| owned_input(path, foreign, inventory))
     });
+}
+
+/// False for a path that may name another checkout's repository header,
+/// whose content and membership this checkout's identity does not cover.
+pub(super) fn owned_input(
+    path: &str,
+    foreign: &[CheckoutRoot],
+    inventory: &HeaderInventory,
+) -> bool {
+    if inventory.ambiguous_header(path) {
+        return false;
+    }
+    let Some(path) = checkout_name(Path::new(path)) else {
+        return false;
+    };
+    !foreign.iter().any(|root| {
+        let Some(relative) = root.relative(&path) else {
+            return false;
+        };
+        SOURCE_ROOTS.contains(&relative.split('/').next().unwrap_or_default())
+            && super::is_header(relative)
+    })
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    fn repository() -> tempfile::TempDir {
+        let dir = tempfile::tempdir().unwrap();
+        crate::test_support::write_files(
+            dir.path(),
+            &[
+                (".clang-tidy", "Checks: '-*'\n"),
+                ("libs/a.h", "int a;\n"),
+                ("libs/nested/b.h", "int b;\n"),
+            ],
+        );
+        dir
+    }
+
+    #[test]
+    fn header_content_edits_keep_the_identity_but_membership_changes_do_not() {
+        let dir = repository();
+        let identity = || configuration_hash(dir.path(), &dir.path().join("build")).unwrap();
+        let before = identity();
+        std::fs::write(dir.path().join("libs/a.h"), "int a = 2;\n").unwrap();
+        std::fs::write(dir.path().join("libs/notes.txt"), "not a header\n").unwrap();
+        assert_eq!(
+            identity(),
+            before,
+            "content belongs to each unit's dependency manifest"
+        );
+        // A header a `__has_include` probe or an earlier search directory
+        // could now find, a removed one and a renamed one.
+        for change in ["add", "remove", "rename"] {
+            let dir = repository();
+            let identity = || configuration_hash(dir.path(), &dir.path().join("build")).unwrap();
+            let before = identity();
+            match change {
+                "add" => std::fs::write(dir.path().join("libs/absent.h"), "").unwrap(),
+                "remove" => std::fs::remove_file(dir.path().join("libs/a.h")).unwrap(),
+                _ => std::fs::rename(
+                    dir.path().join("libs/nested/b.h"),
+                    dir.path().join("libs/b.h"),
+                )
+                .unwrap(),
+            }
+            assert_ne!(identity(), before, "{change}");
+        }
+    }
 
     #[test]
     fn nested_clang_tidy_files_on_a_source_path_change_the_identity() {
@@ -401,29 +551,118 @@ mod tests {
         assert_ne!(identity(), root_only, "the source's own directory counts");
     }
     #[test]
-    fn unrecorded_conditional_header_edits_invalidate_cache_keys() {
-        let dir = tempfile::tempdir().unwrap();
-        std::fs::create_dir(dir.path().join("libs")).unwrap();
-        std::fs::write(dir.path().join(".clang-tidy"), "Checks: '-*'\n").unwrap();
-        let source = super::super::normalize_root(&dir.path().join("libs/a.cpp"));
-        std::fs::write(
-            &source,
-            "#if __has_include(\"optional.h\")\n#include \"optional.h\"\n#endif\n",
-        )
-        .unwrap();
-        let header = dir.path().join("libs/optional.h");
-        std::fs::write(&header, "int optional = 1;\n").unwrap();
-        let sources = vec![source.clone()];
-        let dependencies = HashMap::from([(source.clone(), Vec::new())]);
-        let commands = HashMap::from([(source, "compiler".to_string())]);
-        let identity = || configuration_hash(dir.path(), &dir.path().join("build")).unwrap();
-        let before =
-            super::super::build_cache_keys(&sources, &dependencies, &commands, &identity());
-        std::fs::write(&header, "int optional = 2;\n").unwrap();
-        assert_ne!(
-            before,
-            super::super::build_cache_keys(&sources, &dependencies, &commands, &identity())
+    fn lookup_membership_tracks_every_name_except_build_artifacts() {
+        let dir = repository();
+        let root = dir.path();
+        crate::test_support::write_files(
+            root,
+            &[
+                ("build/generated/config.h", "int config;\n"),
+                ("build/app/CMakeFiles/app.dir/a.cpp.obj", "object"),
+                ("external/include/QtCore/QString", "class QString;\n"),
+            ],
         );
+        let directories = |names: &[&str]| -> BTreeSet<String> {
+            names
+                .iter()
+                .map(|name| super::super::normalize_root(&root.join(name)))
+                .collect()
+        };
+        let search = directories(&[
+            "build/generated",
+            "build/app",
+            "external/include",
+            "external/include/QtCore",
+            "libs",
+            "build/missing",
+        ]);
+        let membership = || lookup_membership(root, &search).unwrap();
+        let (before, walked) = membership();
+        assert_eq!(
+            walked,
+            Vec::from_iter(directories(&[
+                "build/app",
+                "build/generated",
+                "build/missing",
+                "external/include",
+                "libs",
+            ])),
+            "nested directories are walked once"
+        );
+        for (path, text) in [
+            ("build/generated/config.h", "int config = 2;\n"),
+            ("build/app/CMakeFiles/app.dir/b.cpp.obj", "object"),
+            ("build/app/app.exe", "binary"),
+            ("build/app/app.PDB", "symbols"),
+            ("unwalked/notes.txt", "text"),
+        ] {
+            crate::test_support::write_files(root, &[(path, text)]);
+            assert_eq!(membership().0, before, "{path}");
+        }
+        for (path, text) in [
+            ("build/generated/shadow.h", "int shadow;\n"),
+            ("external/include/QtCore/QList", "class QList;\n"),
+            ("build/app/x_autogen/include/moc.inc", ""),
+            ("build/app/x_autogen/include/moc_x.cpp", ""),
+            ("libs/notes.txt", "a name of any other extension"),
+            ("build/missing/now.h", ""),
+        ] {
+            let previous = membership().0;
+            crate::test_support::write_files(root, &[(path, text)]);
+            assert_ne!(membership().0, previous, "{path}");
+        }
+        let (current, _) = membership();
+        std::fs::remove_file(root.join("external/include/QtCore/QString")).unwrap();
+        assert_ne!(membership().0, current, "removed extensionless header");
+
+        assert!(
+            lookup_membership(root, &directories(&["."])).is_none(),
+            "a search directory containing the repository"
+        );
+        let parent = root.parent().unwrap();
+        assert!(
+            lookup_membership(
+                root,
+                &BTreeSet::from([super::super::normalize_root(parent)])
+            )
+            .is_none()
+        );
+    }
+
+    /// A same-named header appearing in a search directory that precedes the
+    /// one clang used changes which file a lookup finds without touching any
+    /// opened file.
+    #[test]
+    fn a_shadowing_header_in_an_earlier_search_directory_changes_the_identity() {
+        let dir = repository();
+        let root = dir.path();
+        crate::test_support::write_files(root, &[("external/later/config.h", "int later;\n")]);
+        std::fs::create_dir_all(root.join("build/earlier")).unwrap();
+        let search: BTreeSet<String> = ["build/earlier", "external/later"]
+            .iter()
+            .map(|name| super::super::normalize_root(&root.join(name)))
+            .collect();
+        let before = lookup_membership(root, &search).unwrap().0;
+        std::fs::write(root.join("build/earlier/config.h"), "int earlier;\n").unwrap();
+        assert_ne!(lookup_membership(root, &search).unwrap().0, before);
+    }
+
+    #[cfg(windows)]
+    #[test]
+    fn retargeting_a_search_directory_link_changes_its_membership() {
+        let dir = repository();
+        let root = dir.path();
+        for name in ["first", "second"] {
+            crate::test_support::write_files(root, &[(&format!("{name}/a.h"), "same\n")]);
+        }
+        std::fs::create_dir_all(root.join("build")).unwrap();
+        let link = root.join("build/linked");
+        crate::test_support::create_junction(&link, &root.join("first"));
+        let search = BTreeSet::from([super::super::normalize_root(&root.join("build"))]);
+        let before = lookup_membership(root, &search).unwrap().0;
+        std::fs::remove_dir(&link).unwrap();
+        crate::test_support::create_junction(&link, &root.join("second"));
+        assert_ne!(lookup_membership(root, &search).unwrap().0, before);
     }
 
     #[cfg(windows)]

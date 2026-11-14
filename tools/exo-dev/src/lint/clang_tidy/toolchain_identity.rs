@@ -2,10 +2,20 @@
 
 use std::path::{Path, PathBuf};
 
+#[cfg(test)]
 pub(super) fn hash_with_overrides(
     build: &Path,
     overrides: &[(std::ffi::OsString, std::ffi::OsString)],
 ) -> Option<String> {
+    identity_with_overrides(build, overrides).map(|(hash, _)| hash)
+}
+
+/// The toolchain digest and the normalized roots it covers in full: every
+/// file below them, with its content, is part of the digest.
+pub(super) fn identity_with_overrides(
+    build: &Path,
+    overrides: &[(std::ffi::OsString, std::ffi::OsString)],
+) -> Option<(String, Vec<String>)> {
     let mut environment = Vec::new();
     for name in [
         "INCLUDE",
@@ -34,9 +44,18 @@ pub(super) fn hash_with_overrides(
         };
         environment.push((name, value));
     }
-    hash_with_environment(build, &environment)
+    identity_with_environment(build, &environment)
 }
+
+#[cfg(test)]
 fn hash_with_environment(build: &Path, environment: &[(&str, Option<String>)]) -> Option<String> {
+    identity_with_environment(build, environment).map(|(hash, _)| hash)
+}
+
+fn identity_with_environment(
+    build: &Path,
+    environment: &[(&str, Option<String>)],
+) -> Option<(String, Vec<String>)> {
     // MSVC-mode Clang uses INCLUDE when supplied. Without that snapshot, SDK
     // registry discovery can diverge from CMake's cached resource-compiler path.
     if !environment.iter().any(|(name, value)| {
@@ -100,11 +119,17 @@ fn hash_with_environment(build: &Path, environment: &[(&str, Option<String>)]) -
     // Hash their trees once, including SDK version directories that can change
     // implicit include selection, rather than trusting only recorded project headers.
     let selected = select_roots(roots);
-    for root in selected {
-        collect(&root, &mut inputs)?;
+    for root in &selected {
+        collect(root, &mut inputs)?;
     }
     inputs.sort();
-    Some(super::sha256_hex(&serde_json::to_vec(&inputs).ok()?))
+    Some((
+        super::sha256_hex(&serde_json::to_vec(&inputs).ok()?),
+        selected
+            .iter()
+            .map(|root| super::normalize_root(root))
+            .collect(),
+    ))
 }
 
 fn select_roots(roots: Vec<PathBuf>) -> Vec<PathBuf> {
@@ -184,6 +209,30 @@ mod tests {
             build,
             &[("INCLUDE", Some(super::super::normalize_root(&include)))],
         )
+    }
+
+    #[test]
+    fn the_identity_names_the_roots_it_covers_in_full() {
+        let dir = fixture();
+        let include = dir.path().join("VC/Tools/MSVC/14.44/include");
+        let (hash, roots) = identity_with_environment(
+            &dir.path().join("build"),
+            &[("INCLUDE", Some(super::super::normalize_root(&include)))],
+        )
+        .unwrap();
+        assert_eq!(Some(hash), fixture_hash(&dir.path().join("build")));
+        assert!(
+            roots
+                .iter()
+                .any(|root| root.eq_ignore_ascii_case(&super::super::normalize_root(&include))),
+            "{roots:?}"
+        );
+        assert!(
+            roots.iter().any(|root| root
+                .to_ascii_lowercase()
+                .ends_with("windows kits/10/include")),
+            "{roots:?}"
+        );
     }
 
     #[test]

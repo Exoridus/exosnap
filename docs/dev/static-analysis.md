@@ -89,48 +89,72 @@ or change native build flags.
 
 A requested but missing analysis tool yields exit 3 from the quality runner. `cargo exo-dev verify` reports `TOOL_MISSING`; `--full` fails, `--fast` can report the gap and continue. Install the missing tool rather than interpreting absence as success.
 
-clang-tidy caches successful analysis output by the translation unit's complete recorded input set.
-The key includes every compile-command variant, source/header content, analyzer configuration,
-tool version and cache schema. Ninja records must have valid status, exact dependency counts,
-all object variants and current object commands before they can support reuse.
-Missing input coverage causes fresh analysis. Header membership and content are part of the global identity,
-including repository vendor include directories, so a newly available conditional header cannot
-reuse a verdict from the previous include search. Content hashing also covers optional or shadowing
-headers not yet represented in an older Ninja graph. This conservatively invalidates all unit keys
-when a repository header changes, rather than assuming the older graph proves include selection.
-Dependency paths that ambiguously belong to
-another checkout are rejected rather than remapped.
-Checkout ownership and header consumers compare physically proven Windows path aliases
-without changing recorded dependency paths.
+clang-tidy caches successful analysis output in two levels, like a direct-mode compiler cache.
+A unit's lookup key covers every compile-command variant, the source content and a global salt.
+The salt covers analyzer flags, tool version, cache schema, every `.clang-tidy` that can configure a project unit,
+repository header membership, include lookup directory membership and the toolchain identity.
+The lookup key selects stored [dependency manifests](#dependency-manifests).
+A manifest lists every file clang opened for the unit with its content digest and physical target.
+A verdict replays only through a manifest whose files all still match.
+A header content edit therefore re-analyzes exactly the units that opened that header,
+while every other unit keeps its verdict. Ninja's records are no longer part of any key.
 
-Ninja omits installed MSVC/SDK headers from its MSVC dependency records.
-Their content trees, compiler identity and include environment therefore contribute one global
-fingerprint, rechecked before fresh results are cached. Use a matching Developer PowerShell for direct lint invocations.
-Without an explicit INCLUDE environment or readable supported toolchain inputs, verdicts are
-not reused. The CI job initializes that environment before building and analysing. Header scoping includes consumers with incomplete
-coverage rather than reporting an empty successful scope. CMake/preset changes select the full tree,
-but selection does not force fresh analysis of every unit. After configuring and building the changed
-tree, adding a target with only a new source preserves cache keys for existing units whose compiler
-commands and recorded inputs remain unchanged. Changed definitions, compiler options or include
-paths change the affected units' keys. A stale or unconfigured Ninja graph cannot support reuse.
-Repository header edits still invalidate the global identity, including when the same change adds
-a target. A full selection with no cache hits must not be attributed to CMake selection alone.
-Added, removed or renamed headers select the full tree and reload current dependency records.
-The header-membership fingerprint invalidates earlier verdicts when include search changes,
-while later runs with the same verified inputs can reuse the new results.
+Header contents leave the global identity, but which files exist does not.
+A `__has_include` probe, a failed lookup or a shadowing file in an earlier search directory
+can change the analysis without opening a file that was opened before.
+Repository header membership covers names and directory/file links in
+`app`, `apps`, `libs`, `tools`, `tests` and `third_party`, including untracked headers.
+Lookup membership covers every name and link below the directories an include lookup searches:
+every `-I`, `/I`, `-external:I`, `-isystem`, `-imsvc`, `-iquote`, `-idirafter` and
+`--include-directory` directory of a project unit, and the directories of the project sources.
+That includes generated and fetched build-tree headers and external installations such as Qt.
+Any extension counts, except compiler and linker outputs such as `.obj`, `.pdb` and `.exe`,
+which no lookup names and which a manifest refuses to record.
+Installed MSVC/SDK include trees, the compiler identity and the include environment remain one global
+content fingerprint. Without an explicit INCLUDE environment or readable supported toolchain inputs,
+verdicts are not reused. Use a matching Developer PowerShell for direct lint invocations.
+The CI job initializes that environment before building and analysing.
 Every `.clang-tidy` in a directory between a project translation unit and the repository root
 belongs to the global configuration identity, so adding, editing or removing one invalidates earlier verdicts.
-A scoped run selects the translation units below a changed nested `.clang-tidy`.
-Scoping and cache-key construction share one initial ownership/header snapshot. Readable directory
-links are traversed with cycle detection, and physical link targets contribute to membership identity.
-Deleted registered worktrees are ignored; unreadable existing roots remain unavailable evidence.
+
+Any membership change invalidates every lookup key, as a header content change did before.
+Added, removed or renamed files below a lookup directory and a new search directory, such as a new target's
+generated include directory, therefore re-analyze the full selection once.
+A unit whose command adds a response file, an environment include option, `/X`, `-nostdinc`,
+a sysroot, a VFS overlay or another lookup option outside the search directories is not keyed.
+A manifest is refused, and an existing one rejected, when an opened file lies outside every covered
+root or may belong to another registered checkout. Covered roots are the lookup directories,
+the toolchain roots and the clang-tidy installation, whose resource headers its version identifies.
+A manifest is also refused when an opened file contains an include or `__has_include` lookup that could
+probe outside the covered roots: an absolute name outside them, or a parent-relative name that is not
+found beside its includer and leaves the roots from any directory it is searched in.
+An include name computed from a macro is refused unless the file belongs to the toolchain identity.
+Checkout ownership and header consumers compare physically proven Windows path aliases
+without changing recorded paths. Readable directory links are traversed with cycle detection,
+and physical link targets contribute to membership.
+Deleted registered worktrees are ignored; unreadable existing roots disable reuse.
 Build-directory aliases and UNC roots retain their filesystem meaning during target matching.
 The verification runner passes its imported MSVC environment to both analysis and identity hashing.
 A disabled cache prints the unavailable evidence category.
 
-Cached entries carry their schema, source, key, exit status and output digest.
-Before storing any fresh result, the runner rechecks compilation-database bytes,
-configuration, header membership, toolchain identity and the captured source/dependency keys.
+A scoped run selects changed translation units, the canary units for analysis configuration
+changes and the units below a changed nested `.clang-tidy`. A changed header anywhere, or any other
+changed file below a lookup directory, is an include input. Ninja's records cannot bound its effect,
+because they miss includes only clang takes, such as headers behind `#ifdef __clang__`.
+With a usable cache, such a change selects every unit, and only those whose manifests no longer match
+run again. Without one, the scope falls back to Ninja's recorded consumers, and to the full tree when
+none is recorded. Header scoping includes consumers with incomplete Ninja coverage rather than
+reporting an empty successful scope. CMake/preset changes select the full tree, but selection does
+not force fresh analysis. After configuring and building the changed tree, adding a target with only
+a new source preserves lookup keys for existing units whose commands remain unchanged.
+Changed definitions, compiler options or include paths change the affected units' keys.
+A full selection with no cache hits must not be attributed to CMake selection alone.
+Scoping and cache-key construction share one initial ownership/header snapshot.
+
+Verdict entries carry their schema, source, verdict key, exit status and output digest.
+Before storing any fresh result, the runner rechecks compilation-database bytes, configuration,
+both memberships, toolchain identity, every lookup key and every file a lookup or manifest has read.
+A file first read for a manifest must also be older than the analysis start.
 Fresh work runs in one continuous worker pool. A worker starts the next queued unit as soon as its
 previous one ends, so a slow unit does not hold back the rest of the queue.
 Completed results are checkpointed after at least 16 units or four worker waves, whichever is larger,
@@ -140,11 +164,12 @@ from starting and discards every result not yet checkpointed. Earlier checkpoint
 under their original keys. A changed input produces a different key.
 Full toolchain revalidation is retained, including selected cache hits, rather than trusting an old
 snapshot across analysis. This deliberately costs additional reads to detect persistent input drift.
-Schema 4 rejects entries from producers that did not perform this validation.
+Schema 5 rejects entries from producers that keyed verdicts without manifests.
 Keep analysis inputs stable throughout the run. Build locks do not prevent editor changes.
 Before/after checks detect persistent drift but cannot detect an edit and restoration during
-analysis, or make sequential file reads immutable. Immutable input snapshots are not provided.
-Old, malformed or damaged entries are misses. The digest detects corruption, not forgery by someone
+analysis, or make sequential file reads immutable. A copy that preserves modification times
+also evades the age check. Immutable input snapshots are not provided.
+Old, malformed or damaged entries and manifests are misses. The digests detect corruption, not forgery by someone
 already able to write a trusted cache scope. GitHub cache ref isolation remains the trust boundary.
 CI restores and saves the verdict cache in separate steps. Validated diagnostics are saved
 also when they make the analysis fail, and replaying a blocking finding still fails the check.
@@ -212,26 +237,34 @@ This measures extraction/parsing, not analysis correctness or reusable cache ver
 Blocking clang-tidy runs ask clang to report every file its preprocessor opens
 (`-Xclang --show-includes -Xclang -sys-header-deps`). This is a by-product of the analysis, not a second parse.
 The runner removes those notes before it validates, caches or reports output.
-Verdicts are therefore byte-identical to a run without the flags,
-and neither the flags nor the manifests are part of the cache key or schema.
+Verdicts are therefore byte-identical to a run without the flags.
 
-When a keyed fresh verdict is stored after checkpoint revalidation, a `<key>.deps.json` manifest is written beside it.
-It lists the source, every file clang opened for any of the unit's compile commands and every forced include,
+After checkpoint revalidation, a fresh unit's manifest is written to
+`<lookup key shard>/<lookup key>/<verdict key>.deps.json`, and its verdict to `<verdict key shard>/<verdict key>.txt`.
+The manifest lists the source, every file clang opened for any of the unit's compile commands and every forced include,
 each with its SHA-256, its root (`repository`, `build` or `absolute`), a root-relative or absolute path,
-and the physical target when a link or alias spelling resolves elsewhere.
-It also records its own schema, the verdict key, cache schema, tool version, observation flags,
-compile-command count and command-identity digest.
-A manifest is written only when complete. A noted file that is missing, unreadable or modified after analysis began,
-an unresolvable forced include, a response file, an ambiguous relative note or a unit without include notes
-leaves no manifest and is counted by reason.
-A probe for a missing file, such as `__has_include`, opens nothing. Header membership remains with the global inventory.
+how it was reached (`source`, `include` or `forced`), and the physical target when a link or junction resolves elsewhere.
+Short 8.3 spellings do not count as a different target.
+It also records its own schema, the lookup and verdict keys, cache schema, tool version, observation flags,
+roots, compile-command count and command-identity digest.
+The verdict key is the SHA-256 of the lookup key and every file's root, path, digest and target.
+One lookup key can hold manifests for several header states, such as a pull request and `next`.
 
-Manifests do not yet take part in cache lookups. The existing conservative keys stay authoritative.
-The profile's `dependency_manifests` object counts recorded, incomplete and unkeyed units, and compares
-clang's files with each unit's Ninja record. `clang_only` counts files clang opened that Ninja did not record.
+A lookup reads each manifest under the unit's lookup key. It rejects the manifest when any recorded field
+differs from the current run, when the verdict key does not match the listed files, or when a listed file
+is missing, changed, retargeted, uncovered or owned by another checkout. The first matching manifest's verdict replays.
+A manifest is written only when complete. A noted file that is missing, unreadable, uncovered, a build artifact or modified after analysis began,
+an include lookup that could probe outside the covered roots,
+an unresolvable forced include, a response file, an ambiguous relative note or a unit without include notes
+leaves the fresh verdict uncached and is counted by reason.
+A probe for a missing file, such as `__has_include`, opens nothing. Membership covers it instead.
+
+The profile's `dependency_manifests` object counts lookup candidates, rejected candidates by reason,
+recorded, incomplete and unkeyed units, and compares clang's files with each unit's Ninja record.
+`clang_only` counts files clang opened that Ninja did not record.
 Installed MSVC/SDK headers are expected there under `absolute`. `ninja_only` counts recorded files clang did not open.
 Local profiles also list the distinct project files on either side. Public profiles keep only the counts.
-The ignored fresh_verdicts_store_dependency_manifests_that_replays_leave_untouched Rust test runs this
+The ignored manifest_keys_replay_every_unit_whose_opened_files_are_unchanged Rust test runs this
 path end to end with cmake, Ninja, the MSVC toolchain and Visual Studio clang-tidy.
 
 Compiler caching is distinct. Use `sccache --show-stats` after a build to inspect the active server. Size its cache for the number of build configurations and worktrees in use; a fixed historical hit rate is not a guarantee. A changed absolute source path can change cache identity. Do not enable path rewriting merely for hits until crash symbolication against the resulting PDB has been verified.
