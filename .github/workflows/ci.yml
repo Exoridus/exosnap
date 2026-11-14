@@ -642,10 +642,25 @@ jobs:
               }
             }
           }
+          # A successful verify without a clang-tidy profile means the
+          # analyzer was not selected (for example a workflow-only PR).
+          # A failed verify without a profile remains unknown: setup may have
+          # failed before the clang-tidy step could even be reached.
+          if (-not $report.profile_present -and $report.verify_outcome -eq 'success') {
+            $report.tidy_ran = $false
+          }
+          $analysis = if ($report.profile_present -and $null -ne $report.fresh) {
+            if ($report.fresh -gt 0) { 'fresh analysis performed' } else { 'no fresh analysis (cache replay)' }
+          } elseif ($report.verify_outcome -eq 'success') {
+            'skipped (no clang-tidy profile)'
+          } else {
+            'unknown (verification incomplete)'
+          }
           $report | ConvertTo-Json -Depth 4 | Set-Content -LiteralPath $path -Encoding utf8
           @(
             ('- Verification outcome: {0}' -f $report.verify_outcome),
             ('- clang-tidy profile present: {0}' -f $report.profile_present),
+            ('- clang-tidy analysis: {0}' -f $analysis),
             ('- Selected TUs: {0}' -f $(if ($null -ne $report.selected) { $report.selected } else { '(unknown)' })),
             ('- Fresh TUs: {0}' -f $(if ($null -ne $report.fresh) { $report.fresh } else { '(unknown)' }))
           ) | Out-File -FilePath $env:GITHUB_STEP_SUMMARY -Append -Encoding utf8
