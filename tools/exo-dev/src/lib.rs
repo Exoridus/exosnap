@@ -44,6 +44,7 @@ pub mod setup;
 pub mod source_hygiene;
 pub mod step;
 pub mod test;
+pub mod toolchain_bench;
 
 /// Behind a Cargo feature, never a plain `cfg(test)`, so a file under `tests/`
 /// (a separate crate) can see it too. See `test_support`'s module doc.
