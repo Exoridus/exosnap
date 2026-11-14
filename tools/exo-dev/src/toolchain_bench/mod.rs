@@ -520,7 +520,10 @@ fn measure_scenario(
         "cold" => {
             cache_state(true)?;
             require_success(
-                timed(ninja(repo, &dir, env, jobs, &["-t", "clean", &args.target]), log)?,
+                timed(
+                    ninja(repo, &dir, env, jobs, &["-t", "clean", &args.target]),
+                    log,
+                )?,
                 "cold: ninja clean",
             )?;
             timed(build(&args.target), log)?
@@ -528,7 +531,10 @@ fn measure_scenario(
         "warm" => {
             anyhow::ensure!(variant.sccache, "warm needs a compiler cache");
             require_success(
-                timed(ninja(repo, &dir, env, jobs, &["-t", "clean", &args.target]), log)?,
+                timed(
+                    ninja(repo, &dir, env, jobs, &["-t", "clean", &args.target]),
+                    log,
+                )?,
                 "warm: ninja clean",
             )?;
             cache_state(false)?;
@@ -554,7 +560,10 @@ fn measure_scenario(
                 if variant.release { "Release" } else { "Debug" }
             );
             require_success(
-                timed(ninja(repo, &dir, env, jobs, &["-t", "clean", "-r", &rule]), log)?,
+                timed(
+                    ninja(repo, &dir, env, jobs, &["-t", "clean", "-r", &rule]),
+                    log,
+                )?,
                 "fulllink: ninja clean",
             )?;
             timed(build(&args.link_target), log)?
@@ -753,7 +762,16 @@ mod tests {
             exit_code: 1,
         };
         assert!(require_success(timing.clone(), "ninja clean").is_err());
-        assert!(require_success(Timing { exit_code: 0, ..timing }, "ninja clean").is_ok());
+        assert!(
+            require_success(
+                Timing {
+                    exit_code: 0,
+                    ..timing
+                },
+                "ninja clean"
+            )
+            .is_ok()
+        );
     }
 
     #[test]
