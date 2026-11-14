@@ -43,7 +43,10 @@ jobs:
     runs-on: windows-2022
     # First complete clang-tidy seed can take over two hours. Later runs
     # replay unchanged per-TU verdicts and refresh only invalidated inputs.
-    timeout-minutes: 180
+    # The initial uncached full-tree analysis can exceed 180 minutes once
+    # setup and compilation are included; keep the single writer alive long
+    # enough to publish a complete seed rather than depending on a partial save.
+    timeout-minutes: 240
     concurrency:
       group: cache-warm-debug-next
       # A new next push must not interrupt the sole shared-cache writer before
