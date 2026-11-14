@@ -187,11 +187,17 @@ impl super::ClangTidyReport {
             "cache_misses": self.analyzed.saturating_sub(self.replayed),
             "compiler_policy": self.compiler_policy,
             "timing": (!self.tool_path.as_os_str().is_empty()).then_some(&self.timing),
+            "dependency_manifests": self.dependency_manifests,
         });
         if public {
             let object = identity.as_object_mut().expect("profile object");
             object.remove("tool");
             object.remove("compile_database");
+            let manifests = object["dependency_manifests"]
+                .as_object_mut()
+                .expect("manifest summary object");
+            manifests.remove("clang_only_project_files");
+            manifests.remove("ninja_only_files");
             object.insert("profile_mode".into(), serde_json::json!("public"));
             object.insert(
                 "scope".into(),
@@ -257,6 +263,15 @@ mod tests {
             cpu_seconds: Some(0.5),
             peak_working_set_bytes: Some(4096),
         });
+        let manifests = &mut report.dependency_manifests;
+        manifests.recorded = 1;
+        manifests.clang_only.build = 1;
+        manifests
+            .clang_only_project_files
+            .insert("build:private/generated.h".into());
+        manifests
+            .ninja_only_files
+            .insert("absolute:C:/private/sdk.h".into());
         let rich = report
             .profile_identity(Some("abcdef"), true, false)
             .unwrap();
@@ -269,6 +284,10 @@ mod tests {
         assert!(rich.get("profile_mode").is_none());
         assert_eq!(rich["cache_entries"], 7);
         assert_eq!(rich["cache_keyed"], 6);
+        assert_eq!(
+            rich["dependency_manifests"]["clang_only_project_files"][0],
+            "build:private/generated.h"
+        );
         let public = report.profile_identity(Some("abcdef"), true, true).unwrap();
         assert!(public.get("tool").is_none());
         assert!(public.get("compile_database").is_none());
@@ -292,6 +311,15 @@ mod tests {
         for field in ["wall_seconds", "cpu_seconds", "peak_working_set_bytes"] {
             assert_eq!(
                 public["timing"]["units"][0][field], rich["timing"]["units"][0][field],
+                "{field}"
+            );
+        }
+        let public_manifests = &public["dependency_manifests"];
+        assert!(public_manifests.get("clang_only_project_files").is_none());
+        assert!(public_manifests.get("ninja_only_files").is_none());
+        for field in ["recorded", "clang_only", "ninja_only", "incomplete"] {
+            assert_eq!(
+                public_manifests[field], rich["dependency_manifests"][field],
                 "{field}"
             );
         }
