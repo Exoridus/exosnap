@@ -128,9 +128,13 @@ A disabled cache prints the unavailable evidence category.
 Cached entries carry their schema, source, key, exit status and output digest.
 Before storing any fresh result, the runner rechecks compilation-database bytes,
 configuration, header membership, toolchain identity and the captured source/dependency keys.
-Fresh work is checkpointed in batches of at least 16 units or four worker waves, whichever is larger.
-Changed or unreadable evidence aborts the current batch before its cache writes. Earlier validated
-batches remain reusable under their original keys; a changed input produces a different key.
+Fresh work runs in one continuous worker pool. A worker starts the next queued unit as soon as its
+previous one ends, so a slow unit does not hold back the rest of the queue.
+Completed results are checkpointed after at least 16 units or four worker waves, whichever is larger,
+while the workers continue. A checkpoint stores only results that completed before its revalidation began.
+Changed or unreadable evidence aborts the run before that checkpoint's cache writes, stops queued units
+from starting and discards every result not yet checkpointed. Earlier checkpoints remain reusable
+under their original keys. A changed input produces a different key.
 Full toolchain revalidation is retained, including selected cache hits, rather than trusting an old
 snapshot across analysis. This deliberately costs additional reads to detect persistent input drift.
 Schema 4 rejects entries from producers that did not perform this validation.
@@ -141,8 +145,8 @@ Old, malformed or damaged entries are misses. The digest detects corruption, not
 already able to write a trusted cache scope. GitHub cache ref isolation remains the trust boundary.
 CI restores and saves the verdict cache in separate steps. Validated diagnostics are saved
 also when they make the analysis fail, and replaying a blocking finding still fails the check.
-An interrupted analysis retains completed, validated checkpoints locally. Work in the unfinished
-batch must run again. CI reuse still depends on its separate cache upload finishing, which a hard
+An interrupted analysis retains completed, validated checkpoints locally. Results not yet
+checkpointed must run again. CI reuse still depends on its separate cache upload finishing, which a hard
 job timeout does not guarantee. Cache upload failures do not replace the analysis verdict.
 cppcheck keeps its separate build-directory cache.
 

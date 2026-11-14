@@ -32,9 +32,10 @@
 //! named in `BLOCKING_CHECKS` count as a violation here, so the extras stay
 //! out of the verdict.
 
-use std::collections::{BTreeSet, HashMap, HashSet, VecDeque};
+use std::collections::{BTreeSet, HashMap, HashSet};
 use std::path::{Path, PathBuf};
-use std::sync::Mutex;
+use std::sync::atomic::{AtomicUsize, Ordering};
+use std::sync::{Condvar, Mutex};
 use std::time::Instant;
 
 mod freshness;
@@ -146,12 +147,13 @@ impl ClangTidyReport {
 /// instead. The cache key covers every input that can change a verdict: the
 /// translation unit, the union of headers recorded for every compile command,
 /// the complete command identities, `.clang-tidy`, [`CACHE_SCHEMA`], the check
-/// list and the tool version banner. Reuse requires complete, current Ninja
-/// records from the configured build. Unhashable inputs are cache misses.
-/// Keep inputs stable throughout analysis. Each completed batch is revalidated
-/// before its results are cached. Drift aborts the current batch. Previously
-/// validated batches retain their original input keys. Before/after checks cannot
-/// detect edit-and-restore.
+/// list and the tool version banner.
+/// Reuse requires complete, current Ninja records from the configured build.
+/// Unhashable inputs are cache misses. Keep inputs stable throughout analysis.
+/// Completed results are revalidated in periodic checkpoints before they are
+/// cached. Drift aborts the run and discards every result not yet checkpointed.
+/// Earlier checkpoints retain their original input keys. Before/after checks
+/// cannot detect edit-and-restore.
 #[allow(clippy::too_many_arguments)]
 pub fn run_blocking(
     repo_root: &Path,
@@ -398,35 +400,41 @@ pub fn run_blocking(
     timing::progress(
         serde_json::json!({"event": "input-ready", "selected": sources.len(), "hits": replayed, "fresh": pending.len(), "jobs": jobs, "workers": timing.workers, "cache_available": cache_enabled, "cache_keyed": cache_keys.len(), "elapsed_seconds": started.elapsed().as_secs_f64(), "timing": timing}),
     );
-    let mut analysis_seconds = 0.0;
     let mut revalidation_seconds = 0.0;
     let mut storage_seconds = 0.0;
-    // Four worker waves amortize full input validation while preserving progress
-    // on interrupted runs. A later batch cannot publish under changed inputs.
-    let batch_size = if cache_enabled {
+    // A checkpoint every four worker waves amortizes full input revalidation
+    // while preserving progress on interrupted runs. Results completed after a
+    // revalidation began wait for the next one, so none publishes under drift.
+    let checkpoint_size = if cache_enabled {
         jobs.saturating_mul(4).max(16)
     } else {
-        pending.len().max(1)
+        pending.len()
     };
     let analysis_started = Instant::now();
-    let mut analysis_offset = 0;
-    let fresh = analyze_in_batches(
+    let completed = AtomicUsize::new(0);
+    let last_completion = Mutex::new(0.0_f64);
+    let total = pending.len();
+    let fresh = analyze_continuously(
         &pending,
-        batch_size,
-        |batch| {
-            let phase = Instant::now();
-            let fresh = analyze_pending(
-                &tool,
-                build_dir,
-                &flags,
-                batch,
-                jobs,
-                environment,
-                Some((analysis_offset, pending.len(), analysis_started)),
+        jobs,
+        checkpoint_size,
+        |index, src| {
+            timing::progress(
+                serde_json::json!({"event": "tu-start", "unit": index + 1, "total": total, "analysis_elapsed_seconds": analysis_started.elapsed().as_secs_f64()}),
             );
-            analysis_offset += fresh.len();
-            analysis_seconds += phase.elapsed().as_secs_f64();
-            fresh
+            let (output, code, mut unit_timing) =
+                invoke_clang_tidy(&tool, build_dir, &flags, src, environment);
+            unit_timing.unit = Some(index + 1);
+            let elapsed = analysis_started.elapsed().as_secs_f64();
+            {
+                let mut last = last_completion.lock().unwrap();
+                *last = last.max(elapsed);
+            }
+            let done = completed.fetch_add(1, Ordering::Relaxed) + 1;
+            timing::progress(
+                serde_json::json!({"event": "tu-complete", "unit": index + 1, "completed": done, "total": total, "analysis_elapsed_seconds": elapsed, "exit_code": code, "wall_seconds": unit_timing.wall_seconds, "cpu_seconds": unit_timing.cpu_seconds, "peak_working_set_bytes": unit_timing.peak_working_set_bytes}),
+            );
+            (src.to_string(), output, code, unit_timing)
         },
         |batch| {
             for (source, output, code, _) in batch {
@@ -467,7 +475,7 @@ pub fn run_blocking(
             Ok(())
         },
     )?;
-    timing.analysis_wall_seconds = analysis_seconds;
+    timing.analysis_wall_seconds = *last_completion.lock().unwrap();
     timing.input_revalidation_seconds = revalidation_seconds;
     timing.validation_and_storage_seconds = storage_seconds;
     for (source, output, _, unit_timing) in fresh {
@@ -1545,63 +1553,100 @@ fn invoke_clang_tidy(
     timing::invoke(&mut command, source)
 }
 
-/// Runs clang-tidy over `pending` with up to `jobs` processes in flight at
-/// once.
+/// One analysed unit: source, clang-tidy output, exit code and timing.
 type TidyUnitResult = (String, String, i32, UnitTiming);
 
-fn analyze_in_batches<A, C>(
+/// Runs `analyze(index, source)` over `pending` on up to `jobs` threads. A
+/// worker starts its next unit as soon as its previous one ends, so a slow unit
+/// never holds back units that are still queued.
+///
+/// The calling thread hands every `checkpoint_size` completed results, and the
+/// remainder at the end, to `checkpoint` while the workers keep analysing. Each
+/// checkpoint receives only results that completed before it began, so input
+/// revalidation inside it covers every input those results read. A checkpoint
+/// error stops queued units from starting, discards every result it has not
+/// accepted, and is returned once the running units end. Effects of earlier
+/// checkpoints remain.
+fn analyze_continuously<A, C>(
     pending: &[String],
-    batch_size: usize,
-    mut analyze: A,
+    jobs: usize,
+    checkpoint_size: usize,
+    analyze: A,
     mut checkpoint: C,
 ) -> anyhow::Result<Vec<TidyUnitResult>>
 where
-    A: FnMut(&[String]) -> Vec<TidyUnitResult>,
+    A: Fn(usize, &str) -> TidyUnitResult + Sync,
     C: FnMut(&[TidyUnitResult]) -> anyhow::Result<()>,
 {
-    let mut results = Vec::new();
-    for batch in pending.chunks(batch_size.max(1)) {
-        let fresh = analyze(batch);
-        checkpoint(&fresh)?;
-        results.extend(fresh);
+    struct Pool {
+        next: usize,
+        running: usize,
+        stopped: bool,
+        completed: Vec<TidyUnitResult>,
     }
-    Ok(results)
-}
-fn analyze_pending(
-    tool: &Path,
-    build_dir: &Path,
-    flags: &[String],
-    pending: &[String],
-    jobs: usize,
-    environment: &[(std::ffi::OsString, std::ffi::OsString)],
-    progress: Option<(usize, usize, Instant)>,
-) -> Vec<(String, String, i32, UnitTiming)> {
-    if pending.is_empty() {
-        return Vec::new();
+    // Leaves the pool even when `analyze` panics, so the coordinator cannot
+    // wait for a worker that no longer exists.
+    struct Departure<'a>(&'a Mutex<Pool>, &'a Condvar);
+    impl Drop for Departure<'_> {
+        fn drop(&mut self) {
+            self.0
+                .lock()
+                .unwrap_or_else(std::sync::PoisonError::into_inner)
+                .running -= 1;
+            self.1.notify_all();
+        }
     }
-    let jobs = jobs.max(1).min(pending.len());
-    let (offset, total, started) = progress.unwrap_or((0, pending.len(), Instant::now()));
-    let queue: Mutex<VecDeque<(usize, String)>> =
-        Mutex::new(pending.iter().cloned().enumerate().collect());
-    let results = Mutex::new(Vec::new());
+
+    let workers = jobs.max(1).min(pending.len());
+    let checkpoint_size = checkpoint_size.max(1);
+    let pool = Mutex::new(Pool {
+        next: 0,
+        running: workers,
+        stopped: false,
+        completed: Vec::new(),
+    });
+    let changed = Condvar::new();
     std::thread::scope(|scope| {
-        for _ in 0..jobs {
+        for _ in 0..workers {
             scope.spawn(|| {
+                let _departure = Departure(&pool, &changed);
                 loop {
-                    let next = queue.lock().unwrap().pop_front();
-                    let Some((index, src)) = next else { break };
-                    timing::progress(serde_json::json!({"event": "tu-start", "unit": offset + index + 1, "total": total, "analysis_elapsed_seconds": started.elapsed().as_secs_f64()}));
-                    let (output, code, mut unit_timing) =
-                        invoke_clang_tidy(tool, build_dir, flags, &src, environment);
-                    unit_timing.unit = Some(offset + index + 1);
-                    let mut results = results.lock().unwrap();
-                    timing::progress(serde_json::json!({"event": "tu-complete", "unit": offset + index + 1, "completed": offset + results.len() + 1, "total": total, "analysis_elapsed_seconds": started.elapsed().as_secs_f64(), "exit_code": code, "wall_seconds": unit_timing.wall_seconds, "cpu_seconds": unit_timing.cpu_seconds, "peak_working_set_bytes": unit_timing.peak_working_set_bytes}));
-                    results.push((src, output, code, unit_timing));
+                    let index = {
+                        let mut pool = pool.lock().unwrap();
+                        if pool.stopped || pool.next == pending.len() {
+                            break;
+                        }
+                        pool.next += 1;
+                        pool.next - 1
+                    };
+                    let result = analyze(index, &pending[index]);
+                    pool.lock().unwrap().completed.push(result);
+                    changed.notify_all();
                 }
             });
         }
-    });
-    results.into_inner().unwrap()
+
+        let mut accepted = Vec::with_capacity(pending.len());
+        loop {
+            let (window, finished) = {
+                let mut pool = pool.lock().unwrap();
+                while pool.running > 0 && pool.completed.len() < checkpoint_size {
+                    pool = changed.wait(pool).unwrap();
+                }
+                (std::mem::take(&mut pool.completed), pool.running == 0)
+            };
+            if !window.is_empty() {
+                if let Err(error) = checkpoint(&window) {
+                    pool.lock().unwrap().stopped = true;
+                    return Err(error);
+                }
+                accepted.extend(window);
+            }
+            if finished {
+                return Ok(accepted);
+            }
+        }
+    })
 }
 
 // ---------------------------------------------------------------------------
@@ -1801,39 +1846,62 @@ mod tests {
         assert!(objects.contains_key("a.obj"), "{objects:?}");
     }
 
+    fn analysed(source: &str, code: i32) -> TidyUnitResult {
+        (
+            source.to_string(),
+            String::new(),
+            code,
+            UnitTiming {
+                unit: None,
+                source: source.to_string(),
+                wall_seconds: 0.0,
+                cpu_seconds: None,
+                peak_working_set_bytes: None,
+            },
+        )
+    }
+
+    fn units(count: usize) -> Vec<String> {
+        (0..count).map(|index| format!("u{index:02}.cpp")).collect()
+    }
+
+    fn stored(cache: &Path, source: &str) -> bool {
+        read_cache_entry(&cache_entry_path(cache, source), source, source).is_some()
+    }
+
+    /// Waits until `condition` holds or a generous deadline passes, so a
+    /// broken scheduler fails its assertion instead of hanging the suite.
+    fn wait_until(condition: impl Fn() -> bool) -> bool {
+        let deadline = Instant::now() + std::time::Duration::from_secs(10);
+        while !condition() {
+            if Instant::now() > deadline {
+                return false;
+            }
+            std::thread::sleep(std::time::Duration::from_millis(1));
+        }
+        true
+    }
+
     #[test]
-    fn validated_batches_survive_a_later_analysis_failure() {
+    fn checkpointed_results_survive_a_later_analysis_failure() {
         let dir = tempfile::tempdir().unwrap();
-        let pending = vec!["a.cpp".to_string(), "b.cpp".to_string()];
-        let result = analyze_in_batches(
+        let pending = vec![
+            "a.cpp".to_string(),
+            "b.cpp".to_string(),
+            "c.cpp".to_string(),
+        ];
+        let checkpoints = AtomicUsize::new(0);
+        let result = analyze_continuously(
             &pending,
             1,
-            |batch| {
-                if batch[0] == "b.cpp" {
-                    assert!(
-                        read_cache_entry(&cache_entry_path(dir.path(), "a.cpp"), "a.cpp", "a.cpp")
-                            .is_some()
-                    );
-                }
-                batch
-                    .iter()
-                    .map(|source| {
-                        (
-                            source.clone(),
-                            String::new(),
-                            if source == "b.cpp" { 1 } else { 0 },
-                            UnitTiming {
-                                unit: None,
-                                source: source.clone(),
-                                wall_seconds: 0.0,
-                                cpu_seconds: None,
-                                peak_working_set_bytes: None,
-                            },
-                        )
-                    })
-                    .collect()
+            1,
+            |index, source| {
+                // One unit per window: the failure must not share a's window.
+                wait_until(|| checkpoints.load(Ordering::SeqCst) >= index);
+                analysed(source, if source == "b.cpp" { 1 } else { 0 })
             },
             |fresh| {
+                checkpoints.fetch_add(1, Ordering::SeqCst);
                 for (source, output, code, _) in fresh {
                     require_analysis(source, output, *code)?;
                 }
@@ -1844,12 +1912,137 @@ mod tests {
             },
         );
         assert!(result.is_err());
+        assert!(stored(dir.path(), "a.cpp"));
+        assert!(!stored(dir.path(), "b.cpp"));
         assert!(
-            read_cache_entry(&cache_entry_path(dir.path(), "a.cpp"), "a.cpp", "a.cpp").is_some()
+            !stored(dir.path(), "c.cpp"),
+            "a result completed after the failure was never checkpointed"
+        );
+    }
+
+    #[test]
+    fn a_slow_unit_does_not_hold_back_queued_units_and_parallelism_stays_bounded() {
+        let pending = units(9);
+        let fast_done = AtomicUsize::new(0);
+        let in_flight = AtomicUsize::new(0);
+        let peak = AtomicUsize::new(0);
+        let overtaken = std::sync::atomic::AtomicBool::new(false);
+        let results = analyze_continuously(
+            &pending,
+            2,
+            2,
+            |index, source| {
+                let now = in_flight.fetch_add(1, Ordering::SeqCst) + 1;
+                peak.fetch_max(now, Ordering::SeqCst);
+                if index == 0 {
+                    // Under a fixed batch of two, the second worker would idle
+                    // after one fast unit and this wait would expire.
+                    overtaken.store(
+                        wait_until(|| fast_done.load(Ordering::SeqCst) == 8),
+                        Ordering::SeqCst,
+                    );
+                } else {
+                    std::thread::sleep(std::time::Duration::from_millis(2));
+                    fast_done.fetch_add(1, Ordering::SeqCst);
+                }
+                in_flight.fetch_sub(1, Ordering::SeqCst);
+                analysed(source, 0)
+            },
+            |_| Ok(()),
+        )
+        .unwrap();
+        assert!(overtaken.load(Ordering::SeqCst));
+        assert_eq!(peak.load(Ordering::SeqCst), 2);
+        assert_eq!(results.len(), pending.len());
+    }
+
+    #[test]
+    fn every_result_reaches_exactly_one_checkpoint_of_at_least_the_checkpoint_size() {
+        let pending = units(37);
+        let mut windows: Vec<Vec<String>> = Vec::new();
+        let results = analyze_continuously(
+            &pending,
+            4,
+            8,
+            |_, source| analysed(source, 0),
+            |window| {
+                windows.push(window.iter().map(|(source, ..)| source.clone()).collect());
+                Ok(())
+            },
+        )
+        .unwrap();
+        let (last, earlier) = windows.split_last().unwrap();
+        assert!(!last.is_empty());
+        assert!(
+            earlier.iter().all(|window| window.len() >= 8),
+            "{windows:?}"
+        );
+        let mut checkpointed: Vec<String> = windows.concat();
+        checkpointed.sort();
+        assert_eq!(checkpointed, pending);
+        let mut returned: Vec<String> = results.into_iter().map(|(source, ..)| source).collect();
+        returned.sort();
+        assert_eq!(returned, pending);
+    }
+
+    #[test]
+    fn drift_at_a_checkpoint_discards_its_window_and_stops_queued_units() {
+        let dir = tempfile::tempdir().unwrap();
+        let pending = units(20);
+        let checkpoints = AtomicUsize::new(0);
+        let started = Mutex::new(Vec::new());
+        let result = analyze_continuously(
+            &pending,
+            1,
+            1,
+            |index, source| {
+                started.lock().unwrap().push(index);
+                // Unit i starts only after unit i-1 was checkpointed, so the
+                // failing checkpoint finds at most one unit already running.
+                wait_until(|| checkpoints.load(Ordering::SeqCst) >= index);
+                analysed(source, 0)
+            },
+            |window| {
+                let call = checkpoints.load(Ordering::SeqCst) + 1;
+                let result = if call == 2 {
+                    Err(anyhow::anyhow!("clang-tidy inputs changed"))
+                } else {
+                    for (source, output, code, _) in window {
+                        store_cache_entry(dir.path(), source, source, output, *code);
+                    }
+                    Ok(())
+                };
+                checkpoints.store(call, Ordering::SeqCst);
+                result
+            },
+        );
+        assert!(result.is_err());
+        assert!(stored(dir.path(), &pending[0]));
+        assert!(!stored(dir.path(), &pending[1]));
+        let started = started.into_inner().unwrap();
+        assert!(
+            started.len() <= 4,
+            "queued units kept starting after drift: {started:?}"
         );
         assert!(
-            read_cache_entry(&cache_entry_path(dir.path(), "b.cpp"), "b.cpp", "b.cpp").is_none()
+            pending
+                .iter()
+                .skip(1)
+                .all(|source| !stored(dir.path(), source))
         );
+    }
+
+    #[test]
+    fn an_empty_selection_runs_no_checkpoint() {
+        let results = analyze_continuously(
+            &[],
+            4,
+            16,
+            |_, source| analysed(source, 0),
+            |_| -> anyhow::Result<()> { panic!("no window to checkpoint") },
+        )
+        .unwrap();
+        assert!(results.is_empty());
     }
 
     #[test]
@@ -2425,10 +2618,11 @@ mod tests {
         let salt = compute_salt(&banner, &flags, Some("stable-configuration")).unwrap();
         let keys = build_cache_keys(&sources, &dependencies, &commands, &salt);
         let key = &keys[&source];
-        let initial = analyze_pending(&tool, &build, &flags, &sources, 1, &[], None);
-        require_analysis(&source, &initial[0].1, initial[0].2).unwrap();
+        let (initial_output, initial_code, _) =
+            invoke_clang_tidy(&tool, &build, &flags, &source, &[]);
+        require_analysis(&source, &initial_output, initial_code).unwrap();
         let findings = extract_violations(
-            &[(source.clone(), initial[0].1.clone())],
+            &[(source.clone(), initial_output.clone())],
             &normalize_root(repo),
             &normalize_root(&build),
         );
@@ -2437,22 +2631,22 @@ mod tests {
                 .iter()
                 .any(|finding| finding.contains("clang-analyzer-core.CallAndMessage")),
             "original null-pointer call must be blocking: {}",
-            initial[0].1
+            initial_output
         );
         eprintln!("original source: {} blocking finding(s)", findings.len());
 
         std::fs::write(&source, "int value() { return 1; }\n").unwrap();
-        let fresh = analyze_pending(&tool, &build, &flags, &sources, 1, &[], None);
-        require_analysis(&source, &fresh[0].1, fresh[0].2).unwrap();
+        let (fresh_output, fresh_code, _) = invoke_clang_tidy(&tool, &build, &flags, &source, &[]);
+        require_analysis(&source, &fresh_output, fresh_code).unwrap();
         assert!(
             extract_violations(
-                &[(source.clone(), fresh[0].1.clone())],
+                &[(source.clone(), fresh_output.clone())],
                 &normalize_root(repo),
                 &normalize_root(&build)
             )
             .is_empty(),
             "changed source must analyze cleanly: {}",
-            fresh[0].1
+            fresh_output
         );
         let cache = repo.join("cache");
         let checked = revalidate_cache_inputs(
@@ -2467,7 +2661,7 @@ mod tests {
             &keys,
         );
         if checked.is_ok() {
-            store_cache_entry(&cache, key, &source, &fresh[0].1, fresh[0].2);
+            store_cache_entry(&cache, key, &source, &fresh_output, fresh_code);
         }
         assert!(
             checked.is_err(),
