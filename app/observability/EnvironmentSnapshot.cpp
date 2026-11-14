@@ -203,6 +203,10 @@ QJsonObject PresentJson(const PresentObservation& present) {
     json.insert(QStringLiteral("modeFlipCount"), Metric(static_cast<double>(sample.mode_flip_count), sampled));
     json.insert(QStringLiteral("traceDrainedCount"), static_cast<double>(sample.trace_drained_count));
     json.insert(QStringLiteral("traceMatchedCount"), static_cast<double>(sample.trace_matched_count));
+    // System-wide consumer losses, not target-specific dropped frames.
+    json.insert(QStringLiteral("traceLostPresentCount"),
+                sample.trace_lost_present_count ? QJsonValue(static_cast<double>(*sample.trace_lost_present_count))
+                                                : QJsonValue(QJsonValue::Null));
     json.insert(QStringLiteral("traceLastProcessId"), static_cast<double>(sample.trace_last_process_id));
     json.insert(QStringLiteral("traceLastHwnd"), QString::number(sample.trace_last_hwnd));
     QJsonArray processIds;
