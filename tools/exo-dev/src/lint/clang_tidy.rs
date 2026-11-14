@@ -38,12 +38,14 @@ use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::{Condvar, Mutex};
 use std::time::Instant;
 
+mod dependency_manifest;
 mod freshness;
 mod input_identity;
 #[cfg(test)]
 mod measurement;
 mod timing;
 mod toolchain_identity;
+pub use dependency_manifest::{ManifestSummary, RootCounts};
 pub use timing::{CompilerPolicySummary, TidyTiming, UnitTiming};
 
 use anyhow::Context as _;
@@ -64,8 +66,10 @@ use crate::lint::{
 /// `-p`/`--quiet` form), the cache entry's stored format changes, or its
 /// producer's required input-validation contract becomes stricter.
 /// Scoping (which translation units get analysed) does not affect what a
-/// stored entry means and is not a reason to bump this. Nothing else
-/// enforces the bump.
+/// stored entry means and is not a reason to bump this. Neither do the
+/// include-observation flags or the dependency manifests stored beside
+/// entries: their notes are removed before output is validated or stored.
+/// Nothing else enforces the bump.
 pub const CACHE_SCHEMA: u32 = 4;
 
 /// Canary translation units, analysed whenever the analysis configuration
@@ -110,6 +114,7 @@ pub struct ClangTidyReport {
     pub violations: Vec<String>,
     pub timing: TidyTiming,
     pub compiler_policy: Option<CompilerPolicySummary>,
+    pub dependency_manifests: ManifestSummary,
 }
 
 impl ClangTidyReport {
@@ -132,6 +137,7 @@ impl ClangTidyReport {
             violations: Vec::new(),
             timing: TidyTiming::default(),
             compiler_policy: None,
+            dependency_manifests: ManifestSummary::default(),
         }
     }
 }
@@ -154,6 +160,10 @@ impl ClangTidyReport {
 /// cached. Drift aborts the run and discards every result not yet checkpointed.
 /// Earlier checkpoints retain their original input keys. Before/after checks
 /// cannot detect edit-and-restore.
+///
+/// Each stored fresh verdict also gets a dependency manifest of the files
+/// clang opened for it, which [`ClangTidyReport::dependency_manifests`]
+/// summarizes. Manifests do not affect keys, lookups or the verdict.
 #[allow(clippy::too_many_arguments)]
 pub fn run_blocking(
     repo_root: &Path,
@@ -410,6 +420,15 @@ pub fn run_blocking(
     } else {
         pending.len()
     };
+    let observed = dependency_manifest::Observed::new(cache_enabled);
+    let mut manifests = dependency_manifest::Recorder::new(
+        &repo_root_norm,
+        &build_dir_norm,
+        &version,
+        &entries,
+        &commands,
+        std::time::SystemTime::now(),
+    );
     let analysis_started = Instant::now();
     let completed = AtomicUsize::new(0);
     let last_completion = Mutex::new(0.0_f64);
@@ -434,7 +453,7 @@ pub fn run_blocking(
             timing::progress(
                 serde_json::json!({"event": "tu-complete", "unit": index + 1, "completed": done, "total": total, "analysis_elapsed_seconds": elapsed, "exit_code": code, "wall_seconds": unit_timing.wall_seconds, "cpu_seconds": unit_timing.cpu_seconds, "peak_working_set_bytes": unit_timing.peak_working_set_bytes}),
             );
-            (src.to_string(), output, code, unit_timing)
+            observed.strip((src.to_string(), output, code, unit_timing))
         },
         |batch| {
             for (source, output, code, _) in batch {
@@ -465,9 +484,20 @@ pub fn run_blocking(
             revalidation_seconds += phase.elapsed().as_secs_f64();
             let phase = Instant::now();
             for (source, output, code, _) in batch {
-                if let Some(key) = cache_keys.get(source) {
+                let key = cache_keys.get(source);
+                if let Some(key) = key {
                     store_cache_entry(cache_dir, key, source, output, *code);
                 }
+                manifests.record(
+                    cache_dir,
+                    key.map(String::as_str),
+                    source,
+                    observed.take(source),
+                    cache_dependencies
+                        .as_ref()
+                        .and_then(|dependencies| dependencies.get(source))
+                        .map(Vec::as_slice),
+                );
             }
             storage_seconds += phase.elapsed().as_secs_f64();
             timing::progress(
@@ -479,6 +509,7 @@ pub fn run_blocking(
     timing.analysis_wall_seconds = *last_completion.lock().unwrap();
     timing.input_revalidation_seconds = revalidation_seconds;
     timing.validation_and_storage_seconds = storage_seconds;
+    let dependency_manifests = manifests.summary;
     for (source, output, _, unit_timing) in fresh {
         timing.units.push(unit_timing);
         results.push((source, output));
@@ -507,6 +538,7 @@ pub fn run_blocking(
             &repo_root_norm,
             &build_dir_norm,
         )),
+        dependency_manifests,
     })
 }
 
@@ -1564,6 +1596,7 @@ fn invoke_clang_tidy(
     let mut command = crate::process::command(&tool.to_string_lossy());
     command.arg("-p").arg(build_dir);
     command.args(flags);
+    command.args(dependency_manifest::OBSERVATION_FLAGS);
     command.arg(source);
     command.envs(environment.iter().cloned());
     timing::invoke(&mut command, source)
@@ -3716,6 +3749,142 @@ mod tests {
                 .any(|dep| dep.eq_ignore_ascii_case(&fixture.shared_header)),
             "consumer.cpp's real recorded deps {consumer_deps:?} do not include the header it includes"
         );
+    }
+
+    #[cfg(windows)]
+    #[test]
+    #[ignore = "requires cmake, ninja, Visual Studio clang-tidy and a working MSVC toolchain"]
+    fn fresh_verdicts_store_dependency_manifests_that_replays_leave_untouched() {
+        let test = "fresh_verdicts_store_dependency_manifests_that_replays_leave_untouched";
+        let Some(tool) = discover_vs2022_clang_tidy() else {
+            skip(test);
+            return;
+        };
+        if !tool_on_path("cmake") || !tool_on_path("ninja") {
+            skip(test);
+            return;
+        }
+        let dir = crate::test_support::fixture_repo_committed(&[
+            (".clang-tidy", "Checks: '-*'\n"),
+            (
+                "libs/a.cpp",
+                "#include \"a.h\"\n#ifdef __clang__\n#include \"clang_only.h\"\n#endif\nint value() { return a; }\n",
+            ),
+            ("libs/a.h", "static int a = 1;\n"),
+            ("libs/clang_only.h", "\n"),
+            (
+                "CMakeLists.txt",
+                "cmake_minimum_required(VERSION 3.20)\nproject(fixture CXX)\n\
+                 set(CMAKE_EXPORT_COMPILE_COMMANDS ON)\nadd_library(plain OBJECT libs/a.cpp)\n\
+                 add_library(variant OBJECT libs/a.cpp)\n\
+                 target_compile_definitions(variant PRIVATE VARIANT)\n",
+            ),
+        ]);
+        let repo = dir.path();
+        let build = repo.join("build");
+        let environment: Vec<(std::ffi::OsString, std::ffi::OsString)> = crate::msvc::environment()
+            .ok()
+            .flatten()
+            .map(|(_, values)| values)
+            .unwrap_or_default()
+            .into_iter()
+            .map(|(name, value)| (name.into(), value.into()))
+            .collect();
+        for arguments in [
+            vec![
+                "-G".into(),
+                "Ninja".into(),
+                "-S".into(),
+                repo.as_os_str().to_owned(),
+                "-B".into(),
+                build.as_os_str().to_owned(),
+            ],
+            vec!["--build".into(), build.as_os_str().to_owned()],
+        ] {
+            let status = std::process::Command::new("cmake")
+                .args(arguments)
+                .envs(environment.iter().map(|(name, value)| (name, value)))
+                .status();
+            if require_or_none(status.is_ok_and(|status| status.success()), "cmake failed")
+                .is_none()
+            {
+                skip(test);
+                return;
+            }
+        }
+        // Inputs written moments before analysis would read as modified during it.
+        let past = std::time::SystemTime::now() - std::time::Duration::from_secs(3600);
+        for file in ["libs/a.cpp", "libs/a.h", "libs/clang_only.h"] {
+            std::fs::File::options()
+                .write(true)
+                .open(repo.join(file))
+                .unwrap()
+                .set_modified(past)
+                .unwrap();
+        }
+        let cache = repo.join("cache");
+        let analyze = || {
+            run_blocking(
+                repo,
+                &build,
+                None,
+                &cache,
+                1,
+                None,
+                false,
+                Some(&tool),
+                &environment,
+            )
+            .unwrap()
+        };
+
+        let fresh = analyze();
+        assert!(fresh.cache_enabled && fresh.ok(), "{fresh:?}");
+        assert_eq!((fresh.analyzed, fresh.replayed), (1, 0));
+        let summary = &fresh.dependency_manifests;
+        assert_eq!(summary.recorded, 1, "{summary:?}");
+        assert_eq!(summary.compared_units, 1);
+        assert!(
+            summary
+                .clang_only_project_files
+                .contains("repository:libs/clang_only.h"),
+            "{summary:?}"
+        );
+        let manifests: Vec<PathBuf> = walk_files(&cache)
+            .into_iter()
+            .filter(|path| path.to_string_lossy().ends_with(".deps.json"))
+            .collect();
+        assert_eq!(manifests.len(), 1);
+        let recorded = std::fs::read(&manifests[0]).unwrap();
+        let manifest: serde_json::Value = serde_json::from_slice(&recorded).unwrap();
+        assert_eq!(manifest["compile_commands"], 2);
+        assert!(
+            manifest["files"]
+                .as_array()
+                .unwrap()
+                .iter()
+                .any(|file| file["path"] == "libs/clang_only.h"),
+            "{manifest}"
+        );
+
+        let replayed = analyze();
+        assert_eq!((replayed.analyzed, replayed.replayed), (1, 1));
+        assert_eq!(replayed.dependency_manifests.recorded, 0);
+        assert_eq!(replayed.dependency_manifests.compared_units, 0);
+        assert_eq!(std::fs::read(&manifests[0]).unwrap(), recorded);
+    }
+
+    fn walk_files(root: &Path) -> Vec<PathBuf> {
+        let mut files = Vec::new();
+        for entry in std::fs::read_dir(root).into_iter().flatten().flatten() {
+            let path = entry.path();
+            if path.is_dir() {
+                files.extend(walk_files(&path));
+            } else {
+                files.push(path);
+            }
+        }
+        files
     }
 
     #[test]
