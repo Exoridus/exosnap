@@ -177,6 +177,10 @@ PresentSample PresentMonEtwSession::Latest() const {
         // first batch computes real intervals.
         qpc_freq_ = backend->TimestampFrequency();
         const unsigned long want_pid = target_pid_.load(std::memory_order_relaxed);
+        if (const auto lost = backend->DrainLostPresentCount()) {
+            std::lock_guard lk(sample_mutex_);
+            latest_.trace_lost_present_count = latest_.trace_lost_present_count.value_or(0) + *lost;
+        }
         // Counted, not just skipped. A target that presents but is never counted and
         // a target that does not present at all look identical from the outside --
         // both report zero -- and telling them apart is the difference between a
@@ -233,6 +237,9 @@ PresentSample PresentMonEtwSession::Latest() const {
             mapped.metadata.source = "PresentMon ETW";
             if (want_pid != 0)
                 mapped.metadata.process_id = want_pid;
+            // A fresh decoded sample replaces the mode but not the accumulated
+            // evidence of system-wide incomplete presents in this window.
+            mapped.trace_lost_present_count = latest_.trace_lost_present_count;
             latest_ = mapped;
         }
         {
