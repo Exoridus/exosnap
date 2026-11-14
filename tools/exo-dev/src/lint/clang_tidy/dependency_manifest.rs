@@ -757,10 +757,31 @@ impl Coverage<'_> {
 /// inactive branches count as well, which can only refuse a manifest, never
 /// admit one.
 fn preprocessor_lines(text: &str) -> Vec<String> {
-    text.lines()
-        .filter_map(|line| line.trim_start().strip_prefix('#'))
-        .map(|directive| directive.trim_start().to_string())
-        .collect()
+    // C/C++ translation phase 2 removes a backslash-newline before directives
+    // and macro bodies are parsed. Looking at physical lines separately can
+    // silently miss a wrapper whose __has_include is on the next line.
+    let mut logical = String::new();
+    let mut result = Vec::new();
+    for physical in text.lines() {
+        // CRLF and whitespace following a continuation slash are accepted by
+        // clang; conservatively join both spellings for dependency admission.
+        let trimmed = physical.trim_end_matches(['\r', ' ', '\t']);
+        if let Some(part) = trimmed.strip_suffix('\\') {
+            logical.push_str(part);
+            continue;
+        }
+        logical.push_str(physical);
+        if let Some(directive) = logical.trim_start().strip_prefix('#') {
+            result.push(directive.trim_start().to_string());
+        }
+        logical.clear();
+    }
+    // A dangling backslash at EOF is malformed preprocessor input; clang-tidy
+    // itself cannot produce a successful verdict from that input.
+    if let Some(directive) = logical.trim_start().strip_prefix('#') {
+        result.push(directive.trim_start().to_string());
+    }
+    result
 }
 
 /// The macro name and the rest of a `#define` line.
@@ -1869,6 +1890,26 @@ mod tests {
             (
                 "wrapper probing outside the roots",
                 "#define HAS_FILE(x) __has_include(x)\n#if HAS_FILE(\"../../../uncovered.h\")\n#endif\n",
+                "",
+                Some("uncovered_lookup"),
+            ),
+            (
+                "wrapper body joined across a backslash newline",
+                concat!(
+                    "#define HAS_FILE(x) \\\n",
+                    "  __has_include(x)\n",
+                    "#if HAS_FILE(\"../../../uncovered.h\")\n#endif\n",
+                ),
+                "",
+                Some("uncovered_lookup"),
+            ),
+            (
+                "probe name joined across a backslash newline",
+                concat!(
+                    "#define HAS_FILE(x) __has_incl\\\n",
+                    "ude(x)\n",
+                    "#if HAS_FILE(\"../../../uncovered.h\")\n#endif\n",
+                ),
                 "",
                 Some("uncovered_lookup"),
             ),
