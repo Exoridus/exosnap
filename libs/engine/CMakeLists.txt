@@ -525,10 +525,6 @@ exosnap_add_gtest(
     LIBRARIES exosnap_engine
 )
 
-# Capture-hub arbitration: consumer refcount, the held frame across loss and
-# unbounded reopen, and the release-before-the-engine-opens handover order that
-# the one-duplication-per-process constraint forces. Pure, GPU-free.
-
 # What a running session may adopt from its display without being rebuilt: the
 # scalars every consumer holds as a GPU constant, against the colour-space
 # change none of them can follow. Pure, GPU-free.
@@ -575,13 +571,6 @@ exosnap_add_gtest(
     LIBRARIES exosnap_engine
 )
 
-
-# The AV1CodecConfigurationRecord written as V_AV1 CodecPrivate: fixed bytes
-# plus the Sequence Header OBU as configOBUs. Pure parsing, no hardware.
-
-# Two-phase worker shutdown wait (worker_join.h): guards against the
-# max-recording-duration defect where the join budget started at recording
-# START instead of STOP. Header-only logic exercised with real std::threads.
 
 exosnap_add_gtest(
     NAME test_opus_encoder
@@ -746,9 +735,6 @@ exosnap_add_gtest(
     LIBRARIES exosnap_engine
 )
 target_include_directories(test_session_stop_reset PRIVATE src)
-
-# The per-Record() gate that keeps an abandoned worker's late callback out of
-# the caller. Plain threads, no hardware.
 
 # Worker teardown ownership: an abandoned (stalled/hung) worker keeps its
 # SessionState and capture source alive through the thread's shared ownership,
@@ -939,10 +925,6 @@ exosnap_add_gtest(
 )
 target_include_directories(test_hdr_bitstream_metadata PRIVATE src include)
 
-# test_hdr_native_reconcile: coordinator-seam tests for the native HDR10 encode
-# reconcile (ApplyHdr10NativeEncode) — pins 10-bit and snaps 4:4:4 -> 4:2:0 so an
-# HDR-active display never turns a valid UI selection into a Validate() failure.
-
 # test_nvenc_preset_guid: pure unit tests for NvencPresetToGuid (P1..P7 -> SDK
 # preset GUID mapping — no GPU needed).
 exosnap_add_gtest(
@@ -984,9 +966,6 @@ exosnap_add_gtest(
 )
 target_include_directories(test_mic_channel_mapping PRIVATE src)
 
-
-
-
 exosnap_add_gtest(
     NAME test_annexb_to_avcc
     TEST_PREFIX engine.
@@ -1010,7 +989,6 @@ exosnap_add_gtest(
     SOURCES tests/test_audio_source_semantics.cpp
     LIBRARIES exosnap_engine
 )
-
 
 # The recording clock's pause arithmetic. Reaches into src/ for the collector's
 # header, which is where the one function that answers "how long is this
