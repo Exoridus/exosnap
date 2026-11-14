@@ -530,6 +530,7 @@ jobs:
           TIDY_RESTORE_HIT: ${{ steps.tidy-cache.outputs.cache-hit }}
           TIDY_RESTORE_MATCHED_KEY: ${{ steps.tidy-cache.outputs.cache-matched-key }}
           TIDY_RESTORE_PRIMARY_KEY: ${{ steps.tidy-cache.outputs.cache-primary-key }}
+          PR_HEAD_SHA: ${{ github.event.pull_request.head.sha }}
         run: |
           $cache = Join-Path $env:RUNNER_TEMP 'clang-tidy-cache'
           $verdicts = 0
@@ -546,7 +547,8 @@ jobs:
           }
           $report = [ordered]@{
             schema = 'exo-clang-tidy-cache-restore/1'
-            head = $env:GITHUB_SHA
+            head = $(if ($env:PR_HEAD_SHA) { $env:PR_HEAD_SHA } else { $env:GITHUB_SHA })
+            github_sha = $env:GITHUB_SHA
             result = $state
             cache_hit = [string]$env:TIDY_RESTORE_HIT
             matched_key = $matched
@@ -572,6 +574,7 @@ jobs:
       # PowerShell, not bash: Git Bash puts its own link.exe ahead of MSVC's on
       # PATH, and the compiler processes inherit this step's environment.
       - name: Configure, qmllint, build, clang-tidy and tests (exo-dev ci-build-debug)
+        id: debug-verify
         env:
           EVENT: ${{ github.event_name }}
           TIDY_CACHE: ${{ runner.temp }}/clang-tidy-cache
@@ -605,6 +608,47 @@ jobs:
           path: .workspace/verify/**/clang-tidy-profile.json
           include-hidden-files: true
           if-no-files-found: ignore
+
+      # The restore snapshot is taken before verification. Complete it after
+      # verification so a workflow-only PR with zero scoped TUs is not
+      # misreported as an expensive clang-tidy cache miss.
+      - name: Complete clang-tidy cache restore provenance
+        if: always()
+        shell: pwsh
+        env:
+          DEBUG_VERIFY_OUTCOME: ${{ steps.debug-verify.outcome }}
+        run: |
+          $path = Join-Path $env:RUNNER_TEMP 'clang-tidy-cache-provenance.json'
+          if (-not (Test-Path -LiteralPath $path -PathType Leaf)) {
+            Write-Warning 'No restore provenance snapshot was created'
+            exit 0
+          }
+          $report = Get-Content -LiteralPath $path -Raw | ConvertFrom-Json
+          $report | Add-Member -NotePropertyName verify_outcome -NotePropertyValue ([string]$env:DEBUG_VERIFY_OUTCOME)
+          $report | Add-Member -NotePropertyName profile_present -NotePropertyValue $false
+          $report | Add-Member -NotePropertyName selected -NotePropertyValue $null
+          $report | Add-Member -NotePropertyName fresh -NotePropertyValue $null
+          $report | Add-Member -NotePropertyName tidy_ran -NotePropertyValue $null
+          $profiles = @(Get-ChildItem -LiteralPath '.workspace/verify' -Filter 'clang-tidy-profile.json' -Recurse -File -ErrorAction SilentlyContinue)
+          if ($profiles.Count -gt 0) {
+            $profile = $profiles | Sort-Object LastWriteTimeUtc -Descending | Select-Object -First 1
+            $data = Get-Content -LiteralPath $profile.FullName -Raw | ConvertFrom-Json
+            $report.profile_present = $true
+            if ($null -ne $data.selected) {
+              $report.selected = [int]$data.selected
+              if ($null -ne $data.cache_hits) {
+                $report.fresh = [Math]::Max(0, [int]$data.selected - [int]$data.cache_hits)
+                $report.tidy_ran = ($report.fresh -gt 0)
+              }
+            }
+          }
+          $report | ConvertTo-Json -Depth 4 | Set-Content -LiteralPath $path -Encoding utf8
+          @(
+            ('- Verification outcome: {0}' -f $report.verify_outcome),
+            ('- clang-tidy profile present: {0}' -f $report.profile_present),
+            ('- Selected TUs: {0}' -f $(if ($null -ne $report.selected) { $report.selected } else { '(unknown)' })),
+            ('- Fresh TUs: {0}' -f $(if ($null -ne $report.fresh) { $report.fresh } else { '(unknown)' }))
+          ) | Out-File -FilePath $env:GITHUB_STEP_SUMMARY -Append -Encoding utf8
 
       - name: Retain clang-tidy cache restore provenance
         if: always()
