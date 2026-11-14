@@ -393,13 +393,13 @@ TEST(PresentSession, LostPresentEvidenceSurvivesBatchesAndResetsPerRecording) {
     ASSERT_TRUE(sample.available);
     ASSERT_TRUE(sample.trace_lost_present_count.has_value());
     EXPECT_EQ(sample.trace_lost_present_count.value(), 3u);
-    EXPECT_EQ(sample.present_count, 1u)
-        << "incomplete presents must not count as successful decoded presents";
+    // Lost observations must not inflate the count of decoded presents.
+    EXPECT_EQ(sample.present_count, 1u);
 
     backend->Publish(Present(pid, 1'100'000, kModeComposedFlip));
     sample = session.Latest();
-    EXPECT_EQ(sample.trace_lost_present_count.value(), 3u)
-        << "new decoded observations must not erase loss evidence";
+    // New completed presents must preserve previously observed losses.
+    EXPECT_EQ(sample.trace_lost_present_count.value(), 3u);
 
     backend->LosePresents(2);
     sample = session.Latest();
@@ -408,8 +408,8 @@ TEST(PresentSession, LostPresentEvidenceSurvivesBatchesAndResetsPerRecording) {
     session.SetTargetProcessId(pid);
     backend->Publish(Present(pid, 2'000'000, kModeComposedFlip));
     sample = session.Latest();
-    EXPECT_EQ(sample.trace_lost_present_count.value(), 0u)
-        << "a subsequent recording must start with fresh loss accounting";
+    // A subsequent recording has a new attribution window.
+    EXPECT_EQ(sample.trace_lost_present_count.value(), 0u);
     session.Stop();
 }
 
