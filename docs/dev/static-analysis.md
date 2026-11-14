@@ -200,6 +200,33 @@ to a JSON output path, then run cargo test --locked --manifest-path tools/Cargo.
 -p exo-dev --lib compare_ninja_dependency_strategies -- --ignored --nocapture.
 This measures extraction/parsing, not analysis correctness or reusable cache verdicts.
 
+### Dependency manifests
+
+Blocking clang-tidy runs ask clang to report every file its preprocessor opens
+(`-Xclang --show-includes -Xclang -sys-header-deps`). This is a by-product of the analysis, not a second parse.
+The runner removes those notes before it validates, caches or reports output.
+Verdicts are therefore byte-identical to a run without the flags,
+and neither the flags nor the manifests are part of the cache key or schema.
+
+When a keyed fresh verdict is stored after checkpoint revalidation, a `<key>.deps.json` manifest is written beside it.
+It lists the source, every file clang opened for any of the unit's compile commands and every forced include,
+each with its SHA-256, its root (`repository`, `build` or `absolute`), a root-relative or absolute path,
+and the physical target when a link or alias spelling resolves elsewhere.
+It also records its own schema, the verdict key, cache schema, tool version, observation flags,
+compile-command count and command-identity digest.
+A manifest is written only when complete. A noted file that is missing, unreadable or modified after analysis began,
+an unresolvable forced include, a response file, an ambiguous relative note or a unit without include notes
+leaves no manifest and is counted by reason.
+A probe for a missing file, such as `__has_include`, opens nothing. Header membership remains with the global inventory.
+
+Manifests do not yet take part in cache lookups. The existing conservative keys stay authoritative.
+The profile's `dependency_manifests` object counts recorded, incomplete and unkeyed units, and compares
+clang's files with each unit's Ninja record. `clang_only` counts files clang opened that Ninja did not record.
+Installed MSVC/SDK headers are expected there under `absolute`. `ninja_only` counts recorded files clang did not open.
+Local profiles also list the distinct project files on either side. Public profiles keep only the counts.
+The ignored fresh_verdicts_store_dependency_manifests_that_replays_leave_untouched Rust test runs this
+path end to end with cmake, Ninja, the MSVC toolchain and Visual Studio clang-tidy.
+
 Compiler caching is distinct. Use `sccache --show-stats` after a build to inspect the active server. Size its cache for the number of build configurations and worktrees in use; a fixed historical hit rate is not a guarantee. A changed absolute source path can change cache identity. Do not enable path rewriting merely for hits until crash symbolication against the resulting PDB has been verified.
 
 `SCCACHE_BASEDIRS` accepts absolute roots separated by `;` on Windows, as described in [sccache's configuration reference](https://github.com/mozilla/sccache/blob/main/docs/Configuration.md). Normalizing cache keys does not establish that the object is independent of its source root. A reused object can retain another checkout's `__FILE__` strings and embedded debug paths. Check observable paths, compiler arguments, generated inputs and symbolication before adopting cross-root normalization. Keep the default unchanged when those identities differ. Measure experiments with a separate server port and cache directory so active builds retain their configuration and statistics.
