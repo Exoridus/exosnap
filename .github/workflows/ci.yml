@@ -423,10 +423,10 @@ jobs:
   build-test-debug:
     name: build-test (windows-x64-debug)
     runs-on: windows-2022
-    # A cold full-tree analysis of 664 units projects to about 117 minutes
-    # on this runner, plus roughly 20 minutes for setup, build and tests.
+    # A cold full-tree analysis of about 760 units took up to about 133 minutes
+    # on this runner, plus roughly 30 minutes for setup, build and tests.
     # Allow that pass to finish and populate the verdict cache. Fresh results
-    # are stored only after the complete batch's inputs are revalidated.
+    # are stored only at checkpoints whose inputs were revalidated.
     timeout-minutes: 180
     # Not on a branch push: the next commit is the squash of a PR whose own run
     # of this exact job just went green (see "WHAT RUNS WHERE" at the top of this
@@ -481,22 +481,19 @@ jobs:
         # zizmor: ignore[cache-poisoning] -- restored on tag pushes by decision: a cold release build is ~46 min and the key is scoped to runner image + lock files; revisiting it is an ADR, not a lint fix
 
       # Blocking static analysis runs after build and before tests in the
-      # ci-build-debug profile. Deliberately a step inside build-test-debug
-      # rather than a job of its own: build-test-debug is already a required
-      # check, so the required status-check set does not change (a brand-new
-      # job would have to be added to branch protection to block anything at
-      # all, and an unrequired one that fails is just noise — the same trap
-      # advisory-unused-checks documents in advisory-checks.yml). It also reuses the
-      # compile_commands.json the Ninja debug configure already wrote — the
-      # Release preset exports none, which is why this step lives in
-      # build-test-debug and not build-test-release.
+      # ci-build-debug profile. A step inside build-test-debug rather than a job
+      # of its own because it needs this job's build: the compile_commands.json
+      # the Ninja debug configure wrote (the Release preset exports none) and
+      # the Ninja dependency records the cache keys and header scoping read. A
+      # separate job would block merges only once it is added to ci-required's
+      # needs and policy, not to branch protection.
       #
       # Scope is what the change touches: the changed translation units plus every
       # translation unit that includes a changed header, resolved from Ninja's own
-      # recorded dependency graph. A full-tree pass of this check set measures
-      # ~5.6 CPU-hours — nearly all of it clang re-parsing Qt headers — so the full
-      # form stays a local / on-demand operation and CI runs the scoped one.
-      # Analysing one Qt-heavy translation unit costs ~44 s, nearly all of it
+      # recorded dependency graph. A cold full-tree pass of this check set measures
+      # about 6.6 CPU-hours, nearly all of it clang re-parsing Qt headers. The full
+      # form runs where its verdicts are shared, in the warmup on next, and on demand.
+      # Analysing one Qt-heavy translation unit costs tens of seconds, nearly all of it
       # clang re-parsing the same Qt headers, and a header change fans the
       # scoped set out to well over a hundred units. The cache keys each unit
       # on its full recorded input set, so the units a follow-up push did not
@@ -687,8 +684,8 @@ jobs:
   build-test-release:
     name: build-test (windows-x64-release)
     runs-on: windows-2022
-    # Measured over the last 20 runs: median 7 min at a 98 % sccache hit rate,
-    # worst 34 min on a cold cache. About 2x that worst case.
+    # Pull request runs measure a median of about 16 minutes at a 96 % sccache
+    # hit rate and about 54 minutes in the worst observed case.
     timeout-minutes: 60
     # guardrails for the same cost reason as build-test-debug; see the comment there.
     needs: [changes, guardrails]
