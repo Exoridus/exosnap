@@ -122,6 +122,12 @@ enum Command {
     /// Recomputes encode-latency and frame-time percentiles from an
     /// engine.jsonl perf log, and, given a second log, a before/after delta.
     PerfAnalyze(PerfAnalyzeArgs),
+    /// Compiler, linker and compiler-cache A/B measurements: timed builds,
+    /// translation-unit probes and cargo with sccache. Dev-only, never run in CI.
+    ToolchainBench {
+        #[command(subcommand)]
+        bench: exo_dev::toolchain_bench::ToolchainBenchCommand,
+    },
     /// Sweeps NVENC preset/rate-control combinations through
     /// probe_encode_file, scores each encode with ffmpeg/libvmaf and reports
     /// BD-rate across the sweep. Dev-only: needs real NVENC hardware and a
@@ -1266,6 +1272,10 @@ fn run_cli() -> anyhow::Result<ExitCode> {
             }
         },
         Command::PerfAnalyze(args) => perf_analyze(args),
+        Command::ToolchainBench { bench } => {
+            exo_dev::toolchain_bench::run(&repo_root, bench)?;
+            Ok(ExitCode::SUCCESS)
+        }
         Command::EncoderQualityMatrix(args) => exo_dev::encoder_quality_matrix::run(&args),
         Command::EncoderQualityCampaign(args) => {
             exo_dev::encoder_quality_matrix::campaign::run(&args)

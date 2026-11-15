@@ -105,10 +105,22 @@ class FakeTraceBackend final : public IPresentTraceBackend {
         return out;
     }
 
+    std::optional<uint64_t> DrainLostPresentCount() override {
+        std::lock_guard lk(mutex_);
+        const uint64_t lost = lost_pending_;
+        lost_pending_ = 0;
+        return lost;
+    }
+
     // --- test controls -----------------------------------------------------
     void Publish(const TracePresentEvent& event) {
         std::lock_guard lk(mutex_);
         queued_.push_back(event);
+    }
+
+    void LosePresents(uint64_t count) {
+        std::lock_guard lk(mutex_);
+        lost_pending_ += count;
     }
 
     // The trace dying under us: the consume call returns although Stop() never asked.
@@ -128,6 +140,7 @@ class FakeTraceBackend final : public IPresentTraceBackend {
     std::condition_variable closed_cv_;
     bool closed_ = false;
     std::vector<TracePresentEvent> queued_;
+    uint64_t lost_pending_ = 0;
 };
 
 std::function<std::shared_ptr<IPresentTraceBackend>()> FactoryFor(const std::shared_ptr<FakeTraceBackend>& backend) {
@@ -363,6 +376,40 @@ TEST(PresentSession, SettingATargetIsAnAttributionBoundary) {
     EXPECT_EQ(session.AccumulatorForTest().last_mode, PresentMode::Unknown)
         << "the flip counter must not compare across the boundary either";
     EXPECT_FALSE(session.Latest().available) << "the previous window's sample is not the new window's current";
+    session.Stop();
+}
+
+TEST(PresentSession, LostPresentEvidenceSurvivesBatchesAndResetsPerRecording) {
+    auto backend = std::make_shared<FakeTraceBackend>();
+    PresentMonEtwSession session(FactoryFor(backend));
+    ASSERT_TRUE(session.Start());
+    ASSERT_TRUE(WaitUntil([&] { return session.IsOpen(); }));
+
+    const auto pid = ::GetCurrentProcessId();
+    session.SetTargetProcessId(pid);
+    backend->LosePresents(3);
+    backend->Publish(Present(pid, 1'000'000, kModeComposedFlip));
+    auto sample = session.Latest();
+    ASSERT_TRUE(sample.available);
+    ASSERT_TRUE(sample.trace_lost_present_count.has_value());
+    EXPECT_EQ(sample.trace_lost_present_count.value(), 3u);
+    // Lost observations must not inflate the count of decoded presents.
+    EXPECT_EQ(sample.present_count, 1u);
+
+    backend->Publish(Present(pid, 1'100'000, kModeComposedFlip));
+    sample = session.Latest();
+    // New completed presents must preserve previously observed losses.
+    EXPECT_EQ(sample.trace_lost_present_count.value(), 3u);
+
+    backend->LosePresents(2);
+    sample = session.Latest();
+    EXPECT_EQ(sample.trace_lost_present_count.value(), 5u);
+
+    session.SetTargetProcessId(pid);
+    backend->Publish(Present(pid, 2'000'000, kModeComposedFlip));
+    sample = session.Latest();
+    // A subsequent recording has a new attribution window.
+    EXPECT_EQ(sample.trace_lost_present_count.value(), 0u);
     session.Stop();
 }
 

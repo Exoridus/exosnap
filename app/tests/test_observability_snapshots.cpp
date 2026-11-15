@@ -772,6 +772,7 @@ TEST(EnvironmentSnapshotJson, PresentUnavailabilityNamesTheProvidersOwnState) {
     EXPECT_EQ(nothing_seen.value(QStringLiteral("reason")).toString(), QStringLiteral("noPresentObserved"));
     EXPECT_TRUE(nothing_seen.value(QStringLiteral("mode")).isNull());
     EXPECT_TRUE(nothing_seen.value(QStringLiteral("tearing")).isNull());
+    EXPECT_TRUE(nothing_seen.value(QStringLiteral("traceLostPresentCount")).isNull());
 
     diagnostics::PresentSample sample;
     sample.available = true;
@@ -789,6 +790,13 @@ TEST(EnvironmentSnapshotJson, PresentUnavailabilityNamesTheProvidersOwnState) {
     EXPECT_EQ(measured.value(QStringLiteral("mode")).toString(), QStringLiteral("independentFlip"));
     EXPECT_TRUE(measured.value(QStringLiteral("tearing")).toBool());
     EXPECT_EQ(measured.value(QStringLiteral("presentCount")).toDouble(), 900.0);
+    EXPECT_TRUE(measured.value(QStringLiteral("traceLostPresentCount")).isNull())
+        << "an uninstrumented backend must not report zero losses";
+
+    sample.trace_lost_present_count = 7;
+    inputs.present.sample = sample;
+    const QJsonObject incomplete = EnvironmentSnapshotToJson(inputs).value(QStringLiteral("present")).toObject();
+    EXPECT_EQ(incomplete.value(QStringLiteral("traceLostPresentCount")).toDouble(), 7.0);
 }
 
 TEST(EnvironmentSnapshotJson, AudioEndpointsCarryNamesAndDefaultsButNoEndpointIds) {

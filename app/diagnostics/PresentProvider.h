@@ -3,6 +3,7 @@
 #include "MeasurementMetadata.h"
 
 #include <cstdint>
+#include <optional>
 #include <vector>
 
 namespace exosnap::diagnostics {
@@ -43,6 +44,9 @@ struct PresentSample {
     // unavailable PID-filtered sample without changing the user-facing verdict.
     uint32_t trace_drained_count = 0;
     uint32_t trace_matched_count = 0;
+    // Cumulative within the attribution window, but counts system-wide ETW
+    // consumer losses; never attribute these to the selected PID.
+    std::optional<uint64_t> trace_lost_present_count;
     unsigned long trace_last_process_id = 0;
     uint64_t trace_last_hwnd = 0;
     std::vector<unsigned long> trace_process_ids;

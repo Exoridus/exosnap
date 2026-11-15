@@ -101,6 +101,14 @@ class PresentMonTraceBackend final : public IPresentTraceBackend {
         return decoded;
     }
 
+    std::optional<uint64_t> DrainLostPresentCount() override {
+        // PresentMon v1.10.0 exposes this queue separately from completed
+        // events; it covers all PIDs within the named ETW trace session.
+        std::vector<std::shared_ptr<PresentEvent>> lost;
+        consumer_.DequeueLostPresentEvents(lost);
+        return static_cast<uint64_t>(lost.size());
+    }
+
   private:
     PMTraceConsumer consumer_; // default ctor: mTrackDisplay=true, mTrackGPU/Input=false
     TraceSession session_;     // PresentMon's session helper (open + enable + OpenTrace)

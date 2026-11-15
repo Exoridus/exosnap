@@ -185,6 +185,27 @@ Most developer probes require `-DEXOSNAP_BUILD_PROBES=ON`. Capture instruments u
 
 Development capture/edit/visual switches are available in non-Release configurations. An exact Release needs `EXOSNAP_BUILD_BENCHMARK_HARNESS=ON` for harness-only modes. Official release acceptance uses the opt-in production control channel, not a specially rebuilt product whose instrumentation changes its identity.
 
+## Toolchain measurements
+
+`cargo exo-dev toolchain-bench` compares compiler, linker and compiler-cache variants of one CMake target under identical settings. It is a developer tool and never runs in CI.
+
+```powershell
+cargo exo-dev toolchain-bench tools
+cargo exo-dev toolchain-bench run --variant msvc-debug --variant clangcl-debug --scenario cold --scenario fulllink --reps 3
+cargo exo-dev toolchain-bench probe --kind msvc-time --variant msvc-debug --file <source path suffix>
+cargo exo-dev toolchain-bench rust --reps 3
+```
+
+A variant id is `<msvc|clangcl>[-lld|-link][-sccache]-<debug|release>`. Each variant owns the build tree `build/toolbench-<id>`, configured once from the matching Ninja preset and then reused. A missing tool skips its variants with a reason in the report. `--llvm-dir` or `EXO_LLVM_DIR` locates a portable LLVM distribution that provides `clang-cl` and `lld-link`.
+
+`run` measures wall time and the peak committed memory of the whole build process tree for the scenarios `cold`, `warm`, `noop`, `touch-cpp`, `touch-header`, `relink` and `fulllink`, and writes `report.json` and `report.md` to `--out-dir`, which defaults to a new untracked directory inside the checkout. Memory does not include a compiler-cache server, which runs outside the measured process tree. A `touch` scenario changes only the modification time, so a content-addressed cache answers it with hits: it shows the best case, not an edit loop.
+
+`probe` compiles chosen translation units once with MSVC `/Bt+ /d1reportTime`, clang `-ftime-trace` or clang loop-vectorization remarks, using the flags recorded in the variant's `compile_commands.json`. Remarks name candidate loops only. Confirm that a loop matters at run time before changing source.
+
+clang-cl does not build the unmodified tree. The project's warning branch for clang passes `-Wall`, which clang-cl reads as `-Weverything`, and several dependencies need compiler-specific flags. Pass them with `--clang-cmake-arg` for a measurement. The runner adds a configure-time shim that restores GNU-style warnings without `-Werror` for clang-cl variants. Treat such trees as measurement trees, not as a supported build.
+
+C++ Build Insights (`vcperf`) needs an elevated ETW session and is not scripted. Start and stop the trace yourself, build in between, and analyze with `vcperf /analyze /templates <trace>.etl /timetrace <out>.json`. The trace contains local paths and stays on the machine.
+
 ## Rust tooling development
 
 `tools/` is a Cargo workspace with one lockfile. `exo-verify` owns the release scenario registry, candidate plan and report checks, and ships in the candidate bundle. `exo-dev` owns repository verification: change scope, gate order, hooks and CI profiles. It never ships.
