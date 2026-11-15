@@ -27,7 +27,7 @@ Keep capture, encoding, muxing, diagnostics, and UI responsibilities separate. U
 ## Validation and change discipline
 
 - Keep tasks within their subsystem unless a real dependency requires integration. Assign disjoint ownership to parallel workers. Do not claim planned features or unobserved hardware behavior as working.
-- Iterate with targeted tests. Before completion run the full required final-tree gate, `cargo exo-dev verify --full` (format, diff, builds, Debug/tests/static checks, and Release requirements); avoid repeating an unchanged expensive suite without new evidence. Use `cargo exo-dev test` and `cargo exo-dev verify --fast` for targeted iteration according to [build and test](docs/dev/build-and-test.md).
+- Iterate with targeted tests (`cargo exo-dev verify --fast` and focused `cargo exo-dev test` runs). Before completion, run `cargo exo-dev verify --full` once on the final tree for the local hygiene, format, packaging/privacy/egress, and Rust tooling gate. For changes affecting native code, use `cargo exo-dev test` to build and test the affected tree locally when required; disclose any checks not run. Debug/Release build and CTest coverage, blocking clang-tidy, and cppcheck are enforced by PR CI, not by `verify --full`. Never report those checks as locally verified unless they were actually run. See [build and test](docs/dev/build-and-test.md).
 - Test receipts (`Testing/last-run-receipt.json`) must match the current tree and be marked reusable. Builds share host locks. Disclose `--no-build`, `--allow-stale`, missing hardware, or any other limitation instead of presenting stale results as proof.
 
 ## Pull requests, reviews, and releases
