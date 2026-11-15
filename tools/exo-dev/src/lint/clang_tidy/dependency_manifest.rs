@@ -642,9 +642,24 @@ impl<'a> Recorder<'a> {
             every.extend(self.directives_of(path)?);
         }
         let wrappers = probe_wrappers(every.iter());
+        let mut defined: BTreeSet<String> = every
+            .iter()
+            .filter_map(|directive| definition(directive))
+            .map(|(name, _)| name.to_string())
+            .collect();
+        for entry in self.entries.get(source).ok_or("no_compile_command")? {
+            let (_, arguments) =
+                command_arguments(&entry.command_line).ok_or("unparsable_command")?;
+            defined.extend(defined_on_command_line(&arguments));
+        }
         for (path, _) in opened.values() {
             let trusted = within(&self.coverage.trusted, path);
-            for (quoted, name) in include_directives(&self.directives_of(path)?, &wrappers) {
+            let directives: Vec<String> = self
+                .directives_of(path)?
+                .into_iter()
+                .filter(|directive| !includes_an_undefined_macro(directive, &defined))
+                .collect();
+            for (quoted, name) in include_directives(&directives, &wrappers) {
                 let Some(name) = name else {
                     if trusted {
                         continue;
@@ -806,6 +821,51 @@ fn push_directives(line: &str, result: &mut Vec<String>) {
             result.push(directive.trim_start().to_string());
         }
     }
+}
+
+/// Macros defined with `-D` or `/D`, whether the name is joined or follows.
+fn defined_on_command_line(arguments: &[String]) -> BTreeSet<String> {
+    let mut names = BTreeSet::new();
+    let mut arguments = arguments.iter().skip(1);
+    while let Some(argument) = arguments.next() {
+        let Some(value) = ["/D", "-D"]
+            .into_iter()
+            .find_map(|prefix| argument.strip_prefix(prefix))
+        else {
+            continue;
+        };
+        let value = if value.is_empty() {
+            arguments.next().map_or("", String::as_str)
+        } else {
+            value
+        };
+        names.insert(value.split('=').next().unwrap_or("").to_string());
+    }
+    names
+}
+
+/// An `#include NAME` whose bare macro `NAME` nothing defines cannot run: a
+/// definition would have to be in an opened file or on the command line.
+/// Names starting with an underscore may be predefined by the compiler, so
+/// they never qualify.
+fn includes_an_undefined_macro(directive: &str, defined: &BTreeSet<String>) -> bool {
+    let Some(rest) = ["include_next", "include", "import"]
+        .into_iter()
+        .find_map(|keyword| directive.strip_prefix(keyword))
+        .filter(|rest| rest.starts_with([' ', '\t']))
+    else {
+        return false;
+    };
+    let rest = rest.trim_start();
+    let end = rest
+        .find(|character: char| !(character.is_ascii_alphanumeric() || character == '_'))
+        .unwrap_or(rest.len());
+    let (name, tail) = rest.split_at(end);
+    let tail = tail.trim_start();
+    !name.is_empty()
+        && !name.starts_with(|character: char| character == '_' || character.is_ascii_digit())
+        && (tail.is_empty() || tail.starts_with("//") || tail.starts_with("/*"))
+        && !defined.contains(name)
 }
 
 /// The macro name and the rest of a `#define` line.
@@ -1849,7 +1909,11 @@ mod tests {
                 "#if __has_include(<C:/elsewhere/x.h>)\n#endif\n",
                 false,
             ),
-            ("computed name", "#include HEADER_NAME\n", false),
+            (
+                "computed name",
+                "#define HEADER_NAME <x.h>\n#include HEADER_NAME\n",
+                false,
+            ),
         ] {
             let fixture = Fixture::new(&["/I../libs"]);
             fixture.write("repo/libs/a.h", header);
@@ -1860,6 +1924,34 @@ mod tests {
                 assert!(fixture.manifest_paths().is_empty(), "{case}");
             }
         }
+    }
+
+    #[test]
+    fn a_computed_include_of_a_macro_nothing_defines_cannot_run() {
+        let recorded = |flags: &[&str], header: &str| {
+            let fixture = Fixture::new(flags);
+            fixture.write("repo/libs/a.h", header);
+            fixture.record(&["repo/libs/a.h"]).recorded == 1
+        };
+        let flags = ["/I../libs"];
+        assert!(recorded(
+            &flags,
+            "#ifdef CONFIG_HEADER\n#include CONFIG_HEADER // optional\n#endif\n"
+        ));
+        assert!(!recorded(
+            &flags,
+            "#ifdef CONFIG_HEADER\n#define CONFIG_HEADER <x.h>\n#endif\n#include CONFIG_HEADER\n"
+        ));
+        assert!(!recorded(
+            &["/I../libs /DCONFIG_HEADER=x"],
+            "#include CONFIG_HEADER\n"
+        ));
+        assert!(!recorded(
+            &["/I../libs -D CONFIG_HEADER"],
+            "#include CONFIG_HEADER\n"
+        ));
+        assert!(!recorded(&flags, "#include _PREDEFINED_HEADER\n"));
+        assert!(!recorded(&flags, "#include HEADER_NAME(x)\n"));
     }
 
     #[test]

@@ -131,6 +131,9 @@ found beside its includer and leaves the roots from any directory it is searched
 A macro that wraps `__has_include`, directly or through another such macro, is followed to its invocations
 in every opened file, and each invocation is checked like the builtin probe.
 An include name computed from a macro is refused unless the file belongs to the toolchain identity.
+`#include NAME` with a bare macro that no opened file and no `-D` option defines cannot run, so it
+is not a lookup. A name that starts with an underscore may be predefined by the compiler and is
+never treated that way.
 A probe for a build artifact name is refused, because lookup membership leaves those names out.
 Checkout ownership and header consumers compare physically proven Windows path aliases
 without changing recorded paths. Readable directory links are traversed with cycle detection,
