@@ -440,6 +440,12 @@ pub fn run_blocking(
                 })
         }),
     };
+    timing::progress(serde_json::json!({
+        "event": "manifest-coverage",
+        "tool": tool.display().to_string(),
+        "trusted_roots": coverage.trusted,
+        "covered_roots": coverage.roots.len(),
+    }));
     let mut manifests = dependency_manifest::Recorder::new(
         &repo_root_norm,
         &build_dir_norm,
