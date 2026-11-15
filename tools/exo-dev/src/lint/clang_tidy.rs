@@ -743,6 +743,22 @@ fn is_header(path: &str) -> bool {
         || lower.ends_with(".inl")
 }
 
+/// Files that live below a lookup directory, such as `-I app`, but that no
+/// translation unit includes. An unlisted extension stays an include input, so
+/// the list can only err towards analysing more.
+fn is_resource_asset(path: &str) -> bool {
+    const EXTENSIONS: &[&str] = &[
+        "qml", "qrc", "js", "mjs", "ts", "ui", "md", "json", "yml", "yaml", "toml", "png", "jpg",
+        "jpeg", "svg", "ico", "gif", "webp", "ttf", "otf", "woff", "woff2", "wav", "mp3", "ogg",
+        "rc", "po",
+    ];
+    path.rsplit_once('.').is_some_and(|(_, extension)| {
+        EXTENSIONS
+            .iter()
+            .any(|known| extension.eq_ignore_ascii_case(known))
+    })
+}
+
 fn is_source_or_header(path: &str) -> bool {
     let lower = path.to_ascii_lowercase();
     lower.ends_with(".cpp")
@@ -1207,7 +1223,9 @@ fn scope_for_base(
         .filter(|path| {
             let absolute = format!("{repo_root_norm}/{path}").to_ascii_lowercase();
             !unit_sources.contains(&absolute)
-                && (is_header(path) || lookup_roots.iter().any(|root| absolute.starts_with(root)))
+                && (is_header(path)
+                    || (!is_resource_asset(path)
+                        && lookup_roots.iter().any(|root| absolute.starts_with(root))))
         })
         .cloned()
         .collect();
@@ -3460,6 +3478,7 @@ mod tests {
             ("libs/table.inc", "old\n"),
             ("libs/b.cpp", "old\n"),
             ("docs/notes.md", "old\n"),
+            ("libs/view.qml", "old\n"),
         ]);
         let root = normalize_root(dir.path());
         let sources = vec![format!("{root}/libs/a.cpp"), format!("{root}/libs/b.cpp")];
@@ -3516,6 +3535,11 @@ mod tests {
             "an include input without a header extension"
         );
         assert_eq!(scope("docs/notes.md"), None);
+        assert_eq!(
+            scope("libs/view.qml"),
+            None,
+            "a resource below a lookup directory is no include input"
+        );
         assert_eq!(scope("libs/b.cpp"), Some((1, false)), "a unit source only");
     }
 

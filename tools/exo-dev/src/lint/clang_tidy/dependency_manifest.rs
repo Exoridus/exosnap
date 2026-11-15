@@ -771,17 +771,25 @@ fn preprocessor_lines(text: &str) -> Vec<String> {
             continue;
         }
         logical.push_str(physical);
-        if let Some(directive) = logical.trim_start().strip_prefix('#') {
-            result.push(directive.trim_start().to_string());
-        }
+        push_directives(&logical, &mut result);
         logical.clear();
     }
     // A dangling backslash at EOF is malformed preprocessor input; clang-tidy
     // itself cannot produce a successful verdict from that input.
-    if let Some(directive) = logical.trim_start().strip_prefix('#') {
-        result.push(directive.trim_start().to_string());
-    }
+    push_directives(&logical, &mut result);
     result
+}
+
+/// A directive may follow a block comment on its line. Without tracking
+/// comment state, every position after a `*/` is tried as a line start, which
+/// can only add directives to scan.
+fn push_directives(line: &str, result: &mut Vec<String>) {
+    let after_comments = line.match_indices("*/").map(|(at, _)| &line[at + 2..]);
+    for start in std::iter::once(line).chain(after_comments) {
+        if let Some(directive) = start.trim_start().strip_prefix('#') {
+            result.push(directive.trim_start().to_string());
+        }
+    }
 }
 
 /// The macro name and the rest of a `#define` line.
@@ -1783,6 +1791,22 @@ mod tests {
                 (false, None),
             ]
         );
+    }
+
+    #[test]
+    fn directives_after_block_comments_are_still_lookups() {
+        let text = "/* note */ #include \"../a.h\"\n/* one */ /* two */ #if __has_include(<b>)\n\
+                    /* open\n   still comment */ #include \"c.h\"\nint x = 1; /* #include \"no.h\" */\n";
+        let names: Vec<String> = include_directives(&preprocessor_lines(text), &BTreeSet::new())
+            .into_iter()
+            .filter_map(|(_, name)| name)
+            .collect();
+        for expected in ["../a.h", "b", "c.h"] {
+            assert!(
+                names.iter().any(|name| name == expected),
+                "{expected} missing from {names:?}"
+            );
+        }
     }
 
     #[test]

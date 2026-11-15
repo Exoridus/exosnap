@@ -142,7 +142,8 @@ A disabled cache prints the unavailable evidence category.
 
 A scoped run selects changed translation units, the canary units for analysis configuration
 changes and the units below a changed nested `.clang-tidy`. A changed header anywhere, or any other
-changed file below a lookup directory, is an include input. Ninja's records cannot bound its effect,
+changed file below a lookup directory, is an include input. Resource files such as QML, images, JSON
+and Markdown are not, so editing them selects nothing. Ninja's records cannot bound its effect,
 because they miss includes only clang takes, such as headers behind `#ifdef __clang__`.
 With a usable cache, such a change selects every unit, and only those whose manifests no longer match
 run again. Without one, the scope falls back to Ninja's recorded consumers, and to the full tree when
