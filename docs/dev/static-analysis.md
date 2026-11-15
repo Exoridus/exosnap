@@ -207,7 +207,9 @@ Each EXO_DEV_CLANG_TIDY_PROGRESS line contains escaped JSON for a phase start,
 tool-version discovery, the input-ready counts/timings, or a translation-unit start/completion.
 Translation units use one-based positions in the fresh-work queue. Completions include
 completed/total counts and existing wall, CPU and working-set measurements.
-These records contain no source paths, compiler commands or defines, and survive in the
+A manifest-refused record names the unit, the reason and the one file or lookup that caused it,
+so a refusal in a CI environment can be diagnosed from the log. Apart from that, these records
+contain no source paths, compiler commands or defines, and survive in the
 GitHub Actions step log even when cancellation prevents a final profile. They do not constitute an analysis verdict.
 
 Discovery, version detection, database parsing, configuration/toolchain identity, git scope, header expansion, Ninja extraction/parsing,

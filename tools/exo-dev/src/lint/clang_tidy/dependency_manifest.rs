@@ -247,6 +247,7 @@ pub(super) struct Recorder<'a> {
     directives: HashMap<String, Result<Vec<String>, &'static str>>,
     contents: HashMap<String, Result<Content, &'static str>>,
     pub(super) summary: ManifestSummary,
+    refused: Option<String>,
 }
 
 impl<'a> Recorder<'a> {
@@ -276,6 +277,7 @@ impl<'a> Recorder<'a> {
             directives: HashMap::new(),
             contents: HashMap::new(),
             summary: ManifestSummary::default(),
+            refused: None,
         }
     }
 
@@ -431,7 +433,15 @@ impl<'a> Recorder<'a> {
                         self.summary.write_failures += 1;
                     }
                 }
-                Err(reason) => *self.summary.incomplete.entry(reason).or_default() += 1,
+                Err(reason) => {
+                    *self.summary.incomplete.entry(reason).or_default() += 1;
+                    super::timing::progress(serde_json::json!({
+                        "event": "manifest-refused",
+                        "reason": reason,
+                        "unit": source,
+                        "detail": self.refused.take(),
+                    }));
+                }
             },
         }
         self.summary.seconds += started.elapsed().as_secs_f64();
@@ -526,7 +536,7 @@ impl<'a> Recorder<'a> {
         let mut files = Vec::with_capacity(opened.len());
         for (path, via) in opened.values() {
             if let Some(reason) = self.admitted(path) {
-                return Err(reason);
+                return Err(self.refuse(reason, path));
             }
             self.unchanged_since_analysis(path)?;
             let (sha256, target) = self.current(path)?;
@@ -584,6 +594,12 @@ impl<'a> Recorder<'a> {
         Ok(())
     }
 
+    /// Notes the file or lookup behind a refusal for the progress stream.
+    fn refuse(&mut self, reason: &'static str, detail: &str) -> &'static str {
+        self.refused = Some(detail.to_string());
+        reason
+    }
+
     fn admitted(&mut self, path: &str) -> Option<&'static str> {
         if let Some(admission) = self.admissions.get(path) {
             return *admission;
@@ -633,17 +649,17 @@ impl<'a> Recorder<'a> {
                     if trusted {
                         continue;
                     }
-                    return Err("computed_include");
+                    return Err(self.refuse("computed_include", path));
                 };
                 let name = name.replace('\\', "/");
                 // Lookup membership leaves build artifacts out, so a probe for
                 // one could turn true without changing any key.
                 if super::input_identity::is_build_artifact(&name) {
-                    return Err("artifact_lookup");
+                    return Err(self.refuse("artifact_lookup", &format!("{path} -> {name}")));
                 }
                 if super::is_rooted(&name) {
                     if !self.coverage.covers(&super::normalize_segments(&name)) {
-                        return Err("uncovered_lookup");
+                        return Err(self.refuse("uncovered_lookup", &format!("{path} -> {name}")));
                     }
                     continue;
                 }
@@ -664,7 +680,7 @@ impl<'a> Recorder<'a> {
                     .chain(self.coverage.trusted.iter())
                     .all(|base| self.coverage.covers(&candidate(base.trim_end_matches('/'))));
                 if !covered {
-                    return Err("uncovered_lookup");
+                    return Err(self.refuse("uncovered_lookup", &format!("{path} -> {name}")));
                 }
             }
         }
