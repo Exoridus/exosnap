@@ -420,7 +420,7 @@ pub fn run_blocking(
     let trusted: Vec<String> = toolchain
         .iter()
         .flat_map(|(_, roots)| roots.iter().cloned())
-        .chain(tool.parent().and_then(Path::parent).map(normalize_root))
+        .chain(tool_installation_root(&tool))
         .map(as_root)
         .collect();
     let coverage = dependency_manifest::Coverage {
@@ -841,6 +841,15 @@ fn normalize_root(path: &Path) -> String {
         path.strip_prefix("//?/").unwrap_or(&path).to_string()
     };
     normalize_segments(&path).trim_end_matches('/').to_string()
+}
+
+/// The installation root of `tool`, spelled as clang prints the resource
+/// headers below it. A Visual Studio environment can hand over the tool in
+/// 8.3 short names or through a link, so the path is resolved first.
+fn tool_installation_root(tool: &Path) -> Option<String> {
+    tool.parent()
+        .and_then(Path::parent)
+        .map(normalize_directory)
 }
 
 fn normalize_directory(path: &Path) -> String {
@@ -1945,6 +1954,22 @@ fn require_analysis(source: &str, output: &str, code: i32) -> anyhow::Result<()>
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[cfg(windows)]
+    #[test]
+    fn the_tool_root_is_the_physical_installation_clang_reports() {
+        let dir = tempfile::tempdir().unwrap();
+        let physical = dir.path().join("physical-llvm");
+        std::fs::create_dir_all(physical.join("bin")).unwrap();
+        let alias = dir.path().join("llvm-alias");
+        crate::test_support::create_junction(&alias, &physical);
+        let root = tool_installation_root(&alias.join("bin/clang-tidy.exe")).unwrap();
+        assert_eq!(
+            root.to_ascii_lowercase(),
+            normalize_directory(&physical).to_ascii_lowercase()
+        );
+    }
+
     #[cfg(windows)]
     #[test]
     fn physical_build_paths_do_not_lose_the_configured_junction_spelling() {
