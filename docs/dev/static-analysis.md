@@ -135,7 +135,7 @@ The exception is a computed `#include` in a branch no run can enter: the first b
 A `#define` that mentions `NAME` anywhere, including its parameters and body, counts as a definition.
 Such a line is decided by the manifest's own files, the command and the keyed configuration, so a later definition of `NAME` changes one of those and misses.
 Clang's MSVC-target predefined macros are underscore-prefixed, which is why an upper-case name starts out undefined.
-Any other condition, a comment or raw string the scanner cannot follow, or unbalanced conditionals keep the refusal.
+Any other condition, a comment or raw string the scanner cannot follow, alternative directive spellings (`%:` digraph or `??=` trigraph), or unbalanced conditionals keep the refusal.
 A probe for a build artifact name is refused, because lookup membership leaves those names out.
 Checkout ownership and header consumers compare physically proven Windows path aliases
 without changing recorded paths. Readable directory links are traversed with cycle detection,
