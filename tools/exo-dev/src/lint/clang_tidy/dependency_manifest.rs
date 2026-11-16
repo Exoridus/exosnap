@@ -2423,12 +2423,12 @@ mod tests {
         // also spell '#' when enabled. A macro from either spelling can
         // activate the apparently dead computed include.
         for directive in [
-            "%:define PROJECT_CONFIG_HEADER \"x.h\"\\n",
-            "??=define PROJECT_CONFIG_HEADER \"x.h\"\\n",
-            "%:if 1\\n%:endif\\n",
+            "%:define PROJECT_CONFIG_HEADER \"x.h\"\n",
+            "??=define PROJECT_CONFIG_HEADER \"x.h\"\n",
+            "%:if 1\n%:endif\n",
         ] {
             let fixture = Fixture::new(&["/I../libs"]);
-            fixture.write("repo/libs/a.h", &format!("#pragma once\\n{directive}{DEAD_GUARD}"));
+            fixture.write("repo/libs/a.h", &format!("#pragma once\n{directive}{DEAD_GUARD}"));
             let summary = fixture.record(&["repo/libs/a.h"]);
             assert_eq!(
                 summary.incomplete,
