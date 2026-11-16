@@ -173,7 +173,7 @@ from starting and discards every result not yet checkpointed. Earlier checkpoint
 under their original keys. A changed input produces a different key.
 Full toolchain revalidation is retained, including selected cache hits, rather than trusting an old
 snapshot across analysis. This deliberately costs additional reads to detect persistent input drift.
-Schema 5 rejects entries from producers that keyed verdicts without manifests.
+Schema 6 rejects verdicts and manifests produced under earlier include-admission rules, including previous direct-cache and schema-5 entries. The first run after the upgrade is cold once.
 Keep analysis inputs stable throughout the run. Build locks do not prevent editor changes.
 Before/after checks detect persistent drift but cannot detect an edit and restoration during
 analysis, or make sequential file reads immutable. A copy that preserves modification times
