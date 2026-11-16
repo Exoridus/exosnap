@@ -811,6 +811,13 @@ fn preprocessor_lines(text: &str) -> Vec<String> {
     // silently miss a wrapper whose __has_include is on the next line.
     let mut logical = String::new();
     let mut result = Vec::new();
+    // A trigraph backslash can splice logical lines before the scanner sees
+    // them; it is not modeled here. Refuse cache admission for any opened
+    // file containing this spelling, including a different header than the
+    // computed include itself.
+    if text.contains("??/") {
+        result.push("include UNMODELED_TRIGRAPH_SPLICE".to_string());
+    }
     for physical in text.lines() {
         // CRLF and whitespace following a continuation slash are accepted by
         // clang; conservatively join both spellings for dependency admission.
@@ -835,7 +842,15 @@ fn preprocessor_lines(text: &str) -> Vec<String> {
 fn push_directives(line: &str, result: &mut Vec<String>) {
     let after_comments = line.match_indices("*/").map(|(at, _)| &line[at + 2..]);
     for start in std::iter::once(line).chain(after_comments) {
-        if let Some(directive) = start.trim_start().strip_prefix('#') {
+        let trimmed = start.trim_start();
+        if trimmed.starts_with("%:") || trimmed.starts_with("??=") {
+            // Digraph and trigraph spellings for '#' are valid preprocessing
+            // directive introducers. A literal-# parser cannot account for
+            // their definitions or includes, so force a computed-include
+            // refusal rather than silently omit the directive.
+            result.push("include UNMODELED_DIRECTIVE".to_string());
+        }
+        if let Some(directive) = trimmed.strip_prefix('#') {
             result.push(directive.trim_start().to_string());
         }
     }
@@ -2443,6 +2458,28 @@ mod tests {
                 "{directive}: {summary:?}"
             );
             assert_eq!(summary.recorded, 0, "{directive}");
+        }
+    }
+
+    #[test]
+    fn alternative_directives_in_another_opened_file_refuse_the_manifest() {
+        // The computed include is in a.h; b.h can nevertheless define its
+        // guard with an alternative directive spelling.
+        for definition in [
+            "%:define PROJECT_CONFIG_HEADER \"x.h\"\n",
+            "??=define PROJECT_CONFIG_HEADER \"x.h\"\n",
+            "#def??/\nine PROJECT_CONFIG_HEADER \"x.h\"\n",
+        ] {
+            let fixture = Fixture::new(&["/I../libs"]);
+            fixture.write("repo/libs/a.h", &format!("#pragma once\n{DEAD_GUARD}"));
+            fixture.write("repo/libs/b.h", definition);
+            let summary = fixture.record(&["repo/libs/a.h", "repo/libs/b.h"]);
+            assert_eq!(
+                summary.incomplete,
+                BTreeMap::from([("computed_include", 1)]),
+                "{definition}: {summary:?}"
+            );
+            assert_eq!(summary.recorded, 0, "{definition}");
         }
     }
 
