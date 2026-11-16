@@ -71,7 +71,7 @@ use crate::lint::{
 /// validated or stored. A change to the dependency manifest format bumps
 /// `dependency_manifest::MANIFEST_SCHEMA` instead. Nothing else enforces the
 /// bump.
-pub const CACHE_SCHEMA: u32 = 5;
+pub const CACHE_SCHEMA: u32 = 6;
 
 /// Canary translation units, analysed whenever the analysis configuration
 /// itself changes rather than the code it inspects. A change to `.clang-tidy`
