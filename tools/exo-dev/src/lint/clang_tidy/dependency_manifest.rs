@@ -2485,19 +2485,17 @@ mod tests {
 
     #[test]
     fn bom_prefixed_macro_definitions_keep_computed_includes_uncacheable() {
-        // The same-file and transitive-header cases both need to see Clang's
-        // accepted UTF-8 BOM before a #define directive.
+        // Clang accepts a UTF-8 BOM at the beginning of a source or header.
+        // Both same-file and transitive-header definitions must be visible.
         for in_other_file in [false, true] {
             let fixture = Fixture::new(&["/I../libs"]);
             let definition = "\u{feff}#define PROJECT_CONFIG_HEADER \"x.h\"\n";
-            fixture.write(
-                "repo/libs/a.h",
-                &format!(
-                    "#pragma once\n{}{}",
-                    if in_other_file { "" } else { definition },
-                    DEAD_GUARD
-                ),
-            );
+            let a_h = if in_other_file {
+                format!("#pragma once\n{DEAD_GUARD}")
+            } else {
+                format!("{definition}#pragma once\n{DEAD_GUARD}")
+            };
+            fixture.write("repo/libs/a.h", &a_h);
             fixture.write(
                 "repo/libs/b.h",
                 if in_other_file { definition } else { "" },
