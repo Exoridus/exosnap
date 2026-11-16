@@ -2049,6 +2049,22 @@ mod tests {
     }
 
     #[test]
+    fn manifests_from_earlier_admission_rules_are_not_replayed() {
+        let fixture = Fixture::new(&[""]);
+        assert_eq!(fixture.record(&["repo/libs/a.h"]).recorded, 1);
+        let mut manifest = fixture.manifest();
+        manifest["cache_schema"] = serde_json::json!(5);
+        let paths = fixture.manifest_paths();
+        std::fs::write(&paths[0], serde_json::to_vec(&manifest).unwrap()).unwrap();
+        let (hit, summary) = fixture.lookup();
+        assert!(hit.is_none(), "an older producer must not be trusted");
+        assert_eq!(
+            summary.lookup_rejected,
+            BTreeMap::from([("invalid_manifest", 1)])
+        );
+    }
+
+    #[test]
     fn several_manifests_per_lookup_key_serve_different_header_states() {
         let fixture = Fixture::new(&[""]);
         assert_eq!(fixture.record(&["repo/libs/a.h"]).recorded, 1);
