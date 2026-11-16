@@ -40,7 +40,7 @@ Keep capture, encoding, muxing, diagnostics, and UI responsibilities separate. U
 
 ## Worktrees and storage
 
-- Use `.worktrees/<short-name>/` for linked checkouts and `.workspace/` for untracked notes/evidence. Document justified exceptions for Windows path limits, isolated/cloud filesystems, or incompatible tooling in private notes. Independently managed clones retain their own ownership. Each checkout owns its writable CMake/Ninja `build/` and Cargo `tools/target/`; share compatible artifact caches, not mutable build graphs or generated QML.
+- Use `.worktrees/<short-name>/` for linked checkouts and `.workspace` for untracked notes/evidence. Document justified exceptions for Windows path limits, isolated/cloud filesystems, or incompatible tooling in private notes. Independently managed clones retain their own ownership. Each checkout owns its writable CMake/Ninja `build/` and Cargo `tools/target/`; share compatible artifact caches, not mutable build graphs or generated QML.
 - Retain active and open-PR worktrees and useful warm builds. After merge, retire the worktree once remote commits, clean state, inactivity, locks, and evidence retention are verified. If cleanup is blocked, report the exact blocker. Remove through Git, never forced removal, branch deletion, or broad recursive cleaning; never silently relocate the primary checkout. Do not delete an unmerged worktree without an explicit preserve/discard decision.
 
 ## Visual evidence for Qt Quick PRs
