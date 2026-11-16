@@ -1003,7 +1003,15 @@ fn without_unreachable_computed_includes(
     let mut once = false;
     let mut blanked = Vec::new();
     for (start, end, code) in logical_code_lines(text)? {
-        let Some(directive) = code.trim_start().strip_prefix('#') else {
+        // C++ also accepts digraph %: as '#' and, with trigraph support,
+        // ??= as '#'. This scanner only models literal '#' directives.
+        // Treat either spelling as unprovable rather than silently missing
+        // a macro definition or a conditional branch.
+        let trimmed = code.trim_start();
+        if trimmed.starts_with("%:") || trimmed.starts_with("??=") {
+            return None;
+        }
+        let Some(directive) = trimmed.strip_prefix('#') else {
             continue;
         };
         let directive = directive.trim_start();
@@ -2406,6 +2414,28 @@ mod tests {
             "#undef PROJECT_CONFIG_HEADER\n",
         ] {
             assert!(!defines_macro(text, "PROJECT_CONFIG_HEADER"), "{text}");
+        }
+    }
+
+    #[test]
+    fn alternative_preprocessor_directives_do_not_prove_unreachability() {
+        // Digraphs are standard C++ preprocessing tokens; trigraphs can
+        // also spell '#' when enabled. A macro from either spelling can
+        // activate the apparently dead computed include.
+        for directive in [
+            "%:define PROJECT_CONFIG_HEADER \"x.h\"\\n",
+            "??=define PROJECT_CONFIG_HEADER \"x.h\"\\n",
+            "%:if 1\\n%:endif\\n",
+        ] {
+            let fixture = Fixture::new(&["/I../libs"]);
+            fixture.write("repo/libs/a.h", &format!("#pragma once\\n{directive}{DEAD_GUARD}"));
+            let summary = fixture.record(&["repo/libs/a.h"]);
+            assert_eq!(
+                summary.incomplete,
+                BTreeMap::from([("computed_include", 1)]),
+                "{directive}: {summary:?}"
+            );
+            assert_eq!(summary.recorded, 0, "{directive}");
         }
     }
 
