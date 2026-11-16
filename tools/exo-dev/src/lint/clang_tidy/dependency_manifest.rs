@@ -842,7 +842,8 @@ fn preprocessor_lines(text: &str) -> Vec<String> {
 fn push_directives(line: &str, result: &mut Vec<String>) {
     let after_comments = line.match_indices("*/").map(|(at, _)| &line[at + 2..]);
     for start in std::iter::once(line).chain(after_comments) {
-        let trimmed = start.trim_start();
+        // Clang accepts an initial UTF-8 BOM before a preprocessor directive.
+        let trimmed = start.trim_start().trim_start_matches('\u{feff}').trim_start();
         if trimmed.starts_with("%:") || trimmed.starts_with("??=") {
             // Digraph and trigraph spellings for '#' are valid preprocessing
             // directive introducers. A literal-# parser cannot account for
@@ -920,6 +921,8 @@ fn defines_macro(text: &str, name: &str) -> bool {
     logical_code_lines(text).is_none_or(|lines| {
         lines.iter().any(|(_, _, code)| {
             code.trim_start()
+                .trim_start_matches('\u{feff}')
+                .trim_start()
                 .strip_prefix('#')
                 .is_some_and(|directive| mentions_definition(directive, name))
         })
@@ -1028,7 +1031,7 @@ fn without_unreachable_computed_includes(
         // ??= as '#'. This scanner only models literal '#' directives.
         // Treat either spelling as unprovable rather than silently missing
         // a macro definition or a conditional branch.
-        let trimmed = code.trim_start();
+        let trimmed = code.trim_start().trim_start_matches('\u{feff}').trim_start();
         if trimmed.starts_with("%:") || trimmed.starts_with("??=") {
             return None;
         }
@@ -2477,6 +2480,34 @@ mod tests {
                 "{directive}: {summary:?}"
             );
             assert_eq!(summary.recorded, 0, "{directive}");
+        }
+    }
+
+    #[test]
+    fn bom_prefixed_macro_definitions_keep_computed_includes_uncacheable() {
+        // The same-file and transitive-header cases both need to see Clang's
+        // accepted UTF-8 BOM before a #define directive.
+        for in_other_file in [false, true] {
+            let fixture = Fixture::new(&["/I../libs"]);
+            let definition = "\u{feff}#define PROJECT_CONFIG_HEADER \"x.h\"\n";
+            fixture.write(
+                "repo/libs/a.h",
+                &format!(
+                    "#pragma once\n{}{}",
+                    if in_other_file { "" } else { definition },
+                    DEAD_GUARD
+                ),
+            );
+            fixture.write(
+                "repo/libs/b.h",
+                if in_other_file { definition } else { "" },
+            );
+            let summary = fixture.record(&["repo/libs/a.h", "repo/libs/b.h"]);
+            assert_eq!(
+                summary.incomplete,
+                BTreeMap::from([("computed_include", 1)]),
+                "in_other_file={in_other_file}: {summary:?}"
+            );
         }
     }
 
