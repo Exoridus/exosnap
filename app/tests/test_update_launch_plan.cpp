@@ -22,7 +22,7 @@
 #include <QVariant>
 #include <QtGlobal>
 
-#include "../apps/updater/UpdaterArgs.h"
+#include "../../apps/updater/UpdaterArgs.h"
 #include "UpdaterExePath.h"
 #include "services/UpdateFeedOverride.h"
 #include "services/UpdateService.h"
