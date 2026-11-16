@@ -843,7 +843,10 @@ fn push_directives(line: &str, result: &mut Vec<String>) {
     let after_comments = line.match_indices("*/").map(|(at, _)| &line[at + 2..]);
     for start in std::iter::once(line).chain(after_comments) {
         // Clang accepts an initial UTF-8 BOM before a preprocessor directive.
-        let trimmed = start.trim_start().trim_start_matches('\u{feff}').trim_start();
+        let trimmed = start
+            .trim_start()
+            .trim_start_matches('\u{feff}')
+            .trim_start();
         if trimmed.starts_with("%:") || trimmed.starts_with("??=") {
             // Digraph and trigraph spellings for '#' are valid preprocessing
             // directive introducers. A literal-# parser cannot account for
@@ -1031,7 +1034,10 @@ fn without_unreachable_computed_includes(
         // ??= as '#'. This scanner only models literal '#' directives.
         // Treat either spelling as unprovable rather than silently missing
         // a macro definition or a conditional branch.
-        let trimmed = code.trim_start().trim_start_matches('\u{feff}').trim_start();
+        let trimmed = code
+            .trim_start()
+            .trim_start_matches('\u{feff}')
+            .trim_start();
         if trimmed.starts_with("%:") || trimmed.starts_with("??=") {
             return None;
         }
@@ -2496,10 +2502,7 @@ mod tests {
                 format!("{definition}#pragma once\n{DEAD_GUARD}")
             };
             fixture.write("repo/libs/a.h", &a_h);
-            fixture.write(
-                "repo/libs/b.h",
-                if in_other_file { definition } else { "" },
-            );
+            fixture.write("repo/libs/b.h", if in_other_file { definition } else { "" });
             let summary = fixture.record(&["repo/libs/a.h", "repo/libs/b.h"]);
             assert_eq!(
                 summary.incomplete,
