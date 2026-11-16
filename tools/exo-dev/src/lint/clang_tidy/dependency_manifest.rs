@@ -2450,7 +2450,10 @@ mod tests {
             "#def??/\nine PROJECT_CONFIG_HEADER \"x.h\"\n",
         ] {
             let fixture = Fixture::new(&["/I../libs"]);
-            fixture.write("repo/libs/a.h", &format!("#pragma once\n{directive}{DEAD_GUARD}"));
+            fixture.write(
+                "repo/libs/a.h",
+                &format!("#pragma once\n{directive}{DEAD_GUARD}"),
+            );
             let summary = fixture.record(&["repo/libs/a.h"]);
             assert_eq!(
                 summary.incomplete,
