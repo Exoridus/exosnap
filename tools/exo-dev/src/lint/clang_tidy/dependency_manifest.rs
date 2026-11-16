@@ -915,6 +915,12 @@ fn defines_macro(text: &str, name: &str) -> bool {
 /// by a space: start and end byte offsets of each logical line and its code.
 /// `None` when comment or raw string state cannot be followed reliably.
 fn logical_code_lines(text: &str) -> Option<Vec<(usize, usize, String)>> {
+    // With trigraph support, ??/ becomes a backslash before line splicing.
+    // A macro definition could then be split across lines this scanner would
+    // otherwise treat separately. Refuse the proof rather than miss it.
+    if text.contains("??/") {
+        return None;
+    }
     fn strip_comments(line: &str, in_block: &mut bool) -> Option<String> {
         let chars: Vec<char> = line.chars().collect();
         let mut code = String::new();
@@ -2426,6 +2432,7 @@ mod tests {
             "%:define PROJECT_CONFIG_HEADER \"x.h\"\n",
             "??=define PROJECT_CONFIG_HEADER \"x.h\"\n",
             "%:if 1\n%:endif\n",
+            "#def??/\nine PROJECT_CONFIG_HEADER \"x.h\"\n",
         ] {
             let fixture = Fixture::new(&["/I../libs"]);
             fixture.write("repo/libs/a.h", &format!("#pragma once\n{directive}{DEAD_GUARD}"));
