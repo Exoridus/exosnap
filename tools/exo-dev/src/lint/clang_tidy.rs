@@ -71,7 +71,7 @@ use crate::lint::{
 /// validated or stored. A change to the dependency manifest format bumps
 /// `dependency_manifest::MANIFEST_SCHEMA` instead. Nothing else enforces the
 /// bump.
-pub const CACHE_SCHEMA: u32 = 5;
+pub const CACHE_SCHEMA: u32 = 6;
 
 /// Canary translation units, analysed whenever the analysis configuration
 /// itself changes rather than the code it inspects. A change to `.clang-tidy`
@@ -423,7 +423,28 @@ pub fn run_blocking(
         .chain(tool_installation_root(&tool))
         .map(as_root)
         .collect();
+    let mut invocation = flags.join(" ");
+    for name in ["CL", "_CL_"] {
+        let supplied = environment
+            .iter()
+            .rev()
+            .find(|(key, _)| {
+                key.to_str()
+                    .is_some_and(|key| key.eq_ignore_ascii_case(name))
+            })
+            .map(|(_, value)| value.to_string_lossy().into_owned());
+        invocation.push(' ');
+        invocation.push_str(
+            &supplied
+                .or_else(|| std::env::var(name).ok())
+                .unwrap_or_default(),
+        );
+    }
+    invocation.push(' ');
+    invocation
+        .push_str(&input_identity::configuration_text(repo_root, &all_sources).unwrap_or_default());
     let coverage = dependency_manifest::Coverage {
+        invocation: invocation.to_ascii_lowercase(),
         roots: search
             .iter()
             .flat_map(|(_, roots)| roots.iter().cloned())
