@@ -216,6 +216,11 @@ pub(super) struct Coverage<'a> {
     /// names are part of the toolchain identity. Only their files may name
     /// an include through a macro.
     pub(super) trusted: Vec<String>,
+    /// Lower-case text of every analysis option and configuration file that
+    /// can define a macro for any unit besides its compile command: invocation
+    /// flags, `ExtraArgs` in `.clang-tidy` files and compiler option
+    /// environment variables.
+    pub(super) invocation: String,
     /// False for a path that may belong to another checkout.
     pub(super) owned: Box<dyn Fn(&str) -> bool + 'a>,
 }
@@ -625,8 +630,10 @@ impl<'a> Recorder<'a> {
     /// name found there needs no other location.
     fn lookups_covered(&mut self, source: &str, opened: &Opened) -> Result<(), &'static str> {
         let mut search = Vec::new();
+        let mut command_lines = Vec::new();
         for entry in self.entries.get(source).ok_or("no_compile_command")? {
             search.extend(search_directories(&entry.command_line)?);
+            command_lines.push(entry.command_line.to_ascii_lowercase());
         }
         let includers: BTreeSet<String> = opened
             .values()
@@ -637,14 +644,39 @@ impl<'a> Recorder<'a> {
             .collect();
         // A project macro can wrap `__has_include`, and another opened file
         // can invoke it, so every file's probes see every file's wrappers.
-        let mut every = Vec::new();
+        let mut per_file = Vec::new();
         for (path, _) in opened.values() {
-            every.extend(self.directives_of(path)?);
+            per_file.push((path.as_str(), self.directives_of(path)?));
         }
-        let wrappers = probe_wrappers(every.iter());
-        for (path, _) in opened.values() {
+        let wrappers = probe_wrappers(per_file.iter().flat_map(|(_, directives)| directives));
+        for (path, directives) in &per_file {
             let trusted = within(&self.coverage.trusted, path);
-            for (quoted, name) in include_directives(&self.directives_of(path)?, &wrappers) {
+            let mut lookups = include_directives(directives, &wrappers);
+            if !trusted && lookups.iter().any(|(_, name)| name.is_none()) {
+                let text = std::fs::read(path).map_err(|_| "unreadable_file")?;
+                // A macro that no option, configuration file or other opened
+                // file names is defined by nothing these inputs describe.
+                // Precompiled headers and response files, which could define
+                // one unseen, are refused before this point.
+                let defined_elsewhere = |name: &str| {
+                    let lower = name.to_ascii_lowercase();
+                    self.coverage.invocation.contains(&lower)
+                        || command_lines.iter().any(|line| line.contains(&lower))
+                        || per_file.iter().any(|(other, directives)| {
+                            other != path
+                                && directives
+                                    .iter()
+                                    .any(|directive| mentions_definition(directive, name))
+                        })
+                };
+                if let Some(reachable) = without_unreachable_computed_includes(
+                    &String::from_utf8_lossy(&text),
+                    &defined_elsewhere,
+                ) {
+                    lookups = include_directives(&preprocessor_lines(&reachable), &wrappers);
+                }
+            }
+            for (quoted, name) in lookups {
                 let Some(name) = name else {
                     if trusted {
                         continue;
@@ -764,6 +796,7 @@ impl Coverage<'_> {
         Self {
             roots: vec![format!("{}/", root.to_ascii_lowercase())],
             trusted: Vec::new(),
+            invocation: String::new(),
             owned: Box::new(|_| true),
         }
     }
@@ -806,6 +839,224 @@ fn push_directives(line: &str, result: &mut Vec<String>) {
             result.push(directive.trim_start().to_string());
         }
     }
+}
+
+/// One `#if`-family block that is open at a point of a file.
+struct Conditional {
+    /// The macro of an `#ifdef` or `#ifndef` and whether it is the negated
+    /// form. `None` for every other condition.
+    guard: Option<(String, bool)>,
+    /// Byte offset of the line that opened the block.
+    offset: usize,
+    /// Whether an `#elif` or `#else` has started a later branch.
+    later_branch: bool,
+}
+
+impl Conditional {
+    /// True when no preprocessing run can enter the current branch: the
+    /// first branch of `#ifdef NAME` or a later branch of `#ifndef NAME`,
+    /// while `NAME` is never defined when the block is evaluated.
+    fn is_unreachable(
+        &self,
+        text: &str,
+        once: bool,
+        defined_elsewhere: &dyn Fn(&str) -> bool,
+    ) -> bool {
+        let Some((name, negated)) = &self.guard else {
+            return false;
+        };
+        // Clang's MSVC-target predefines are underscore-prefixed. Targets that
+        // predefine an upper-case name, such as MinGW's `WIN32`, are not
+        // analysed here, and the tool's version is part of the cache salt, so
+        // an upper-case name starts out undefined and only a `#define` or an
+        // option defines it.
+        let project_name = name.starts_with(|first: char| first.is_ascii_uppercase())
+            && name.chars().all(is_identifier_character);
+        if self.later_branch != *negated || !project_name || defined_elsewhere(name) {
+            return false;
+        }
+        // A definition after the block can only matter when the file is
+        // entered again, which `#pragma once` rules out.
+        !defines_macro(&text[..self.offset], name)
+            && (once || !defines_macro(&text[self.offset..], name))
+    }
+}
+
+fn is_identifier_character(character: char) -> bool {
+    character.is_ascii_alphanumeric() || character == '_'
+}
+
+/// Whether a `#define` directive, without its `#`, mentions `name` as a whole
+/// identifier anywhere. The parameter list and body count too, which can only
+/// refuse a manifest.
+fn mentions_definition(directive: &str, name: &str) -> bool {
+    let Some(rest) = directive.trim_start().strip_prefix("define") else {
+        return false;
+    };
+    !rest.starts_with(is_identifier_character)
+        && rest
+            .split(|character: char| !is_identifier_character(character))
+            .any(|token| token == name)
+}
+
+/// Whether any `#define` in `text`, comments removed, mentions `name`. Text
+/// whose comments cannot be followed counts as defining it.
+fn defines_macro(text: &str, name: &str) -> bool {
+    logical_code_lines(text).is_none_or(|lines| {
+        lines.iter().any(|(_, _, code)| {
+            code.trim_start()
+                .strip_prefix('#')
+                .is_some_and(|directive| mentions_definition(directive, name))
+        })
+    })
+}
+
+/// The file's lines joined across backslash-newlines, with comments replaced
+/// by a space: start and end byte offsets of each logical line and its code.
+/// `None` when comment or raw string state cannot be followed reliably.
+fn logical_code_lines(text: &str) -> Option<Vec<(usize, usize, String)>> {
+    fn strip_comments(line: &str, in_block: &mut bool) -> Option<String> {
+        let chars: Vec<char> = line.chars().collect();
+        let mut code = String::new();
+        let mut at = 0;
+        while at < chars.len() {
+            let next = chars.get(at + 1).copied();
+            if *in_block {
+                if chars[at] == '*' && next == Some('/') {
+                    *in_block = false;
+                    code.push(' ');
+                    at += 1;
+                }
+                at += 1;
+                continue;
+            }
+            match chars[at] {
+                '/' if next == Some('/') => break,
+                '/' if next == Some('*') => {
+                    *in_block = true;
+                    at += 2;
+                }
+                quote @ ('"' | '\'') => {
+                    if quote == '"' && at > 0 && chars[at - 1] == 'R' {
+                        return None;
+                    }
+                    code.push(quote);
+                    at += 1;
+                    // A quote after a letter or digit is a digit separator
+                    // or an encoding prefix, not the start of a literal.
+                    if quote == '\'' && at > 1 && chars[at - 2].is_alphanumeric() {
+                        continue;
+                    }
+                    while at < chars.len() {
+                        let character = chars[at];
+                        code.push(character);
+                        at += 1;
+                        if character == '\\' && at < chars.len() {
+                            code.push(chars[at]);
+                            at += 1;
+                        } else if character == quote {
+                            break;
+                        }
+                    }
+                }
+                character => {
+                    code.push(character);
+                    at += 1;
+                }
+            }
+        }
+        Some(code)
+    }
+
+    let mut lines = Vec::new();
+    let mut in_block = false;
+    let (mut start, mut offset) = (0, 0);
+    let mut joined = String::new();
+    for physical in text.split_inclusive('\n') {
+        offset += physical.len();
+        let body = physical.trim_end_matches(['\n', '\r']);
+        if let Some(part) = body.trim_end_matches([' ', '\t']).strip_suffix('\\') {
+            joined.push_str(part);
+            continue;
+        }
+        joined.push_str(body);
+        lines.push((start, offset, strip_comments(&joined, &mut in_block)?));
+        joined.clear();
+        start = offset;
+    }
+    if !joined.is_empty() {
+        lines.push((start, text.len(), strip_comments(&joined, &mut in_block)?));
+    }
+    (!in_block).then_some(lines)
+}
+
+/// `text` with every `#include` or `#import` whose operand is a macro blanked
+/// when it sits in a branch no preprocessing run can enter. Such a line looks
+/// up no file in any run that the manifest's files and compile command
+/// describe, because the branch is decided by exactly those inputs. `None`
+/// when nothing is blanked or the conditional structure cannot be followed.
+fn without_unreachable_computed_includes(
+    text: &str,
+    defined_elsewhere: &dyn Fn(&str) -> bool,
+) -> Option<String> {
+    let mut open: Vec<Conditional> = Vec::new();
+    let mut once = false;
+    let mut blanked = Vec::new();
+    for (start, end, code) in logical_code_lines(text)? {
+        let Some(directive) = code.trim_start().strip_prefix('#') else {
+            continue;
+        };
+        let directive = directive.trim_start();
+        let keyword_end = directive
+            .find(|character: char| !(character.is_ascii_alphanumeric() || character == '_'))
+            .unwrap_or(directive.len());
+        let (keyword, rest) = directive.split_at(keyword_end);
+        match keyword {
+            "ifdef" | "ifndef" => {
+                let name: String = rest
+                    .trim_start()
+                    .chars()
+                    .take_while(|&character| character.is_ascii_alphanumeric() || character == '_')
+                    .collect();
+                open.push(Conditional {
+                    guard: (!name.is_empty()).then(|| (name, keyword == "ifndef")),
+                    offset: start,
+                    later_branch: false,
+                });
+            }
+            "if" => open.push(Conditional {
+                guard: None,
+                offset: start,
+                later_branch: false,
+            }),
+            "elif" | "elifdef" | "elifndef" | "else" => open.last_mut()?.later_branch = true,
+            "endif" => {
+                open.pop()?;
+            }
+            "pragma" if open.is_empty() && rest.trim() == "once" => once = true,
+            "include" | "include_next" | "import"
+                if !rest.trim_start().starts_with(['"', '<'])
+                    && open
+                        .iter()
+                        .any(|block| block.is_unreachable(text, once, defined_elsewhere)) =>
+            {
+                blanked.push((start, end));
+            }
+            _ => {}
+        }
+    }
+    if !open.is_empty() || blanked.is_empty() {
+        return None;
+    }
+    let mut result = String::with_capacity(text.len());
+    let mut copied = 0;
+    for (start, end) in blanked {
+        result.push_str(&text[copied..start]);
+        result.extend(text[start..end].matches('\n').map(|_| '\n'));
+        copied = end;
+    }
+    result.push_str(&text[copied..]);
+    Some(result)
 }
 
 /// The macro name and the rest of a `#define` line.
@@ -1189,7 +1440,23 @@ mod tests {
         }
 
         fn record(&self, included: &[&str]) -> ManifestSummary {
-            let mut recorder = self.recorder();
+            self.record_with_invocation(included, "")
+        }
+
+        /// As [`Fixture::record`], with `invocation` as the analysis options
+        /// and configuration text that can define macros.
+        fn record_with_invocation(&self, included: &[&str], invocation: &str) -> ManifestSummary {
+            let mut coverage = Coverage::under(&super::super::normalize_root(&self.root));
+            coverage.invocation = invocation.to_ascii_lowercase();
+            let mut recorder = Recorder::new(
+                &self.repository,
+                &self.build,
+                "19.1.5",
+                &self.entries,
+                &self.identities,
+                coverage,
+                SystemTime::now() + Duration::from_secs(60),
+            );
             recorder.record(
                 &self.cache,
                 Some(KEY),
@@ -1898,6 +2165,263 @@ mod tests {
             fixture.path("external").to_ascii_lowercase()
         )];
         assert_eq!(record(trusting).recorded, 1);
+    }
+
+    const DEAD_GUARD: &str =
+        "#ifdef PROJECT_CONFIG_HEADER\n#include PROJECT_CONFIG_HEADER\n#endif\n";
+
+    /// A computed include in a branch that no run enters needs no lookup. The
+    /// header mirrors a library's optional user configuration include.
+    #[test]
+    fn computed_include_in_a_never_entered_branch_does_not_refuse_the_manifest() {
+        for (case, a_h) in [
+            (
+                "macro defined only after the guard, file entered once",
+                format!(
+                    "#pragma once\n{DEAD_GUARD}#if DOCS\n#define PROJECT_CONFIG_HEADER\n#endif\n"
+                ),
+            ),
+            (
+                "later branch of ifndef",
+                "#ifndef PROJECT_CONFIG_HEADER\n#else\n#include PROJECT_CONFIG_HEADER\n#endif\n"
+                    .to_string(),
+            ),
+            (
+                "nested inside another condition",
+                format!("#if SOMETHING\n#if OTHER\n{DEAD_GUARD}#endif\n#endif\n"),
+            ),
+            (
+                "comments and literals around the directives",
+                "/* #define PROJECT_CONFIG_HEADER */ // #define PROJECT_CONFIG_HEADER\n\
+                 const char* s = \"/*\"; int n = 1'000;\n\
+                 /* x */ #ifdef PROJECT_CONFIG_HEADER\n\
+                 #  include PROJECT_CONFIG_HEADER // computed\n#endif\n"
+                    .to_string(),
+            ),
+        ] {
+            let fixture = Fixture::new(&["/I../libs"]);
+            fixture.write("repo/libs/a.h", &a_h);
+            let summary = fixture.record(&["repo/libs/a.h"]);
+            assert_eq!(summary.recorded, 1, "{case}: {summary:?}");
+            assert!(fixture.lookup().0.is_some(), "{case}");
+        }
+    }
+
+    /// Every way the macro could be defined, or the branch entered, keeps the
+    /// refusal: the lookup then depends on a name the manifest cannot key.
+    #[test]
+    fn computed_include_that_a_run_could_enter_still_refuses_the_manifest() {
+        for (case, flags, a_h, b_h) in [
+            (
+                "macro defined before the guard",
+                "/I../libs",
+                format!("#define PROJECT_CONFIG_HEADER \"x.h\"\n{DEAD_GUARD}"),
+                String::new(),
+            ),
+            (
+                "macro defined after the guard but the file can be entered again",
+                "/I../libs",
+                format!("{DEAD_GUARD}#define PROJECT_CONFIG_HEADER \"x.h\"\n"),
+                String::new(),
+            ),
+            (
+                "once pragma inside a condition does not stop re-entry",
+                "/I../libs",
+                format!("#if X\n#pragma once\n#endif\n{DEAD_GUARD}#define PROJECT_CONFIG_HEADER 1\n"),
+                String::new(),
+            ),
+            (
+                "macro defined by another opened file",
+                "/I../libs",
+                format!("#pragma once\n{DEAD_GUARD}"),
+                "#define PROJECT_CONFIG_HEADER \"x.h\"\n".to_string(),
+            ),
+            (
+                "macro defined on the command line",
+                "/I../libs /DPROJECT_CONFIG_HEADER=x.h",
+                format!("#pragma once\n{DEAD_GUARD}"),
+                String::new(),
+            ),
+            (
+                "macro undefined on the command line",
+                "/I../libs /UPROJECT_CONFIG_HEADER",
+                format!("#pragma once\n{DEAD_GUARD}"),
+                String::new(),
+            ),
+            (
+                "first branch of ifndef is entered",
+                "/I../libs",
+                "#ifndef PROJECT_CONFIG_HEADER\n#include PROJECT_CONFIG_HEADER\n#endif\n".to_string(),
+                String::new(),
+            ),
+            (
+                "else branch of ifdef is entered",
+                "/I../libs",
+                "#ifdef PROJECT_CONFIG_HEADER\n#else\n#include PROJECT_CONFIG_HEADER\n#endif\n"
+                    .to_string(),
+                String::new(),
+            ),
+            (
+                "condition is an expression",
+                "/I../libs",
+                "#if defined(PROJECT_CONFIG_HEADER)\n#include PROJECT_CONFIG_HEADER\n#endif\n"
+                    .to_string(),
+                String::new(),
+            ),
+            (
+                "compiler may predefine an underscore name",
+                "/I../libs",
+                "#ifdef _PROJECT_CONFIG_HEADER\n#include _PROJECT_CONFIG_HEADER\n#endif\n"
+                    .to_string(),
+                String::new(),
+            ),
+            (
+                "compiler may predefine a lower case name",
+                "/I../libs",
+                "#ifdef project_config_header\n#include project_config_header\n#endif\n"
+                    .to_string(),
+                String::new(),
+            ),
+            (
+                "computed include after the guarded block",
+                "/I../libs",
+                format!("#pragma once\n{DEAD_GUARD}#include OTHER_HEADER\n"),
+                String::new(),
+            ),
+            (
+                "guard hidden in a block comment",
+                "/I../libs",
+                "/*\n#ifdef PROJECT_CONFIG_HEADER\n*/\n#include PROJECT_CONFIG_HEADER\n".to_string(),
+                String::new(),
+            ),
+            (
+                "unbalanced conditional",
+                "/I../libs",
+                "#pragma once\n#endif\n#ifdef PROJECT_CONFIG_HEADER\n#include PROJECT_CONFIG_HEADER\n"
+                    .to_string(),
+                String::new(),
+            ),
+            (
+                "raw string literal defeats the lexer",
+                "/I../libs",
+                format!("#pragma once\nconst char* s = R\"(\n#endif\n)\";\n{DEAD_GUARD}"),
+                String::new(),
+            ),
+            (
+                "computed probe argument in a guarded block",
+                "/I../libs",
+                "#pragma once\n#ifdef PROJECT_CONFIG_HEADER\n#if __has_include(PROJECT_CONFIG_HEADER)\n#endif\n#endif\n"
+                    .to_string(),
+                String::new(),
+            ),
+        ] {
+            let fixture = Fixture::new(&[flags]);
+            fixture.write("repo/libs/a.h", &a_h);
+            fixture.write("repo/libs/b.h", &b_h);
+            let summary = fixture.record(&["repo/libs/a.h", "repo/libs/b.h"]);
+            assert_eq!(
+                summary.incomplete,
+                BTreeMap::from([("computed_include", 1)]),
+                "{case}: {summary:?}"
+            );
+            assert_eq!(summary.recorded, 0, "{case}");
+        }
+    }
+
+    /// Skipping an unreachable include does not skip the file's other
+    /// lookups, and a macro appearing later invalidates the manifest.
+    #[test]
+    fn unreachable_computed_include_leaves_other_checks_in_force() {
+        let fixture = Fixture::new(&["/I../libs"]);
+        fixture.write(
+            "repo/libs/a.h",
+            &format!(
+                "#pragma once\n{DEAD_GUARD}#if __has_include(\"../../../uncovered.h\")\n#endif\n"
+            ),
+        );
+        let summary = fixture.record(&["repo/libs/a.h"]);
+        assert_eq!(
+            summary.incomplete,
+            BTreeMap::from([("uncovered_lookup", 1)])
+        );
+
+        let fixture = Fixture::new(&["/I../libs"]);
+        fixture.write("repo/libs/a.h", &format!("#pragma once\n{DEAD_GUARD}"));
+        fixture.write("repo/libs/b.h", "int b;\n");
+        assert_eq!(
+            fixture.record(&["repo/libs/a.h", "repo/libs/b.h"]).recorded,
+            1
+        );
+        assert!(fixture.lookup().0.is_some());
+        fixture.write("repo/libs/b.h", "#define PROJECT_CONFIG_HEADER \"x.h\"\n");
+        assert!(
+            fixture.lookup().0.is_none(),
+            "defining the macro in an opened file must miss the stored manifest"
+        );
+    }
+
+    /// A macro defined by an analysis option or a configuration file's
+    /// `ExtraArgs` is no more visible in the compile command than one from
+    /// the environment, yet it enters the branch.
+    #[test]
+    fn macro_defined_by_the_invocation_keeps_the_refusal() {
+        for invocation in [
+            "--extra-arg-before=-DPROJECT_CONFIG_HEADER=x.h",
+            "ExtraArgs:\n  - '-DPROJECT_CONFIG_HEADER=x.h'\n",
+            "/DPROJECT_CONFIG_HEADER=x.h",
+        ] {
+            let fixture = Fixture::new(&["/I../libs"]);
+            fixture.write("repo/libs/a.h", &format!("#pragma once\n{DEAD_GUARD}"));
+            let summary = fixture.record_with_invocation(&["repo/libs/a.h"], invocation);
+            assert_eq!(
+                summary.incomplete,
+                BTreeMap::from([("computed_include", 1)]),
+                "{invocation}: {summary:?}"
+            );
+        }
+        let fixture = Fixture::new(&["/I../libs"]);
+        fixture.write("repo/libs/a.h", &format!("#pragma once\n{DEAD_GUARD}"));
+        assert_eq!(
+            fixture
+                .record_with_invocation(&["repo/libs/a.h"], "-d_xm_no_intrinsics_")
+                .recorded,
+            1
+        );
+    }
+
+    #[test]
+    fn a_definition_hidden_by_comments_still_defines_the_macro() {
+        for text in [
+            "#define/**/PROJECT_CONFIG_HEADER 1\n",
+            "/**/ #  define PROJECT_CONFIG_HEADER\n",
+            "#define \\\n  PROJECT_CONFIG_HEADER 1\n",
+            "#define OTHER(PROJECT_CONFIG_HEADER) 1\n",
+        ] {
+            assert!(defines_macro(text, "PROJECT_CONFIG_HEADER"), "{text}");
+        }
+        for text in [
+            "// #define PROJECT_CONFIG_HEADER\n",
+            "/* #define PROJECT_CONFIG_HEADER */\n",
+            "#define PROJECT_CONFIG_HEADER_2 1\n",
+            "#undef PROJECT_CONFIG_HEADER\n",
+        ] {
+            assert!(!defines_macro(text, "PROJECT_CONFIG_HEADER"), "{text}");
+        }
+    }
+
+    #[test]
+    fn blanking_unreachable_includes_keeps_every_other_line() {
+        let text = "#pragma once\n#ifdef PROJECT_CONFIG_HEADER\r\n#include \\\n  PROJECT_CONFIG_HEADER\n#endif\nint kept;\n";
+        let blanked = without_unreachable_computed_includes(text, &|_| false).unwrap();
+        assert_eq!(
+            blanked,
+            "#pragma once\n#ifdef PROJECT_CONFIG_HEADER\r\n\n\n#endif\nint kept;\n"
+        );
+        assert_eq!(blanked.lines().count(), text.lines().count());
+        assert!(
+            without_unreachable_computed_includes(text, &|name| name == "PROJECT_CONFIG_HEADER")
+                .is_none()
+        );
     }
 
     /// Lookup membership leaves build artifacts out, so a probe for one must

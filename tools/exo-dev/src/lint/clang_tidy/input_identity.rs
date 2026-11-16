@@ -272,6 +272,29 @@ impl HeaderInventory {
 /// a file in any directory between a source and the repository root can
 /// change that unit's verdict. Keyed by repository-relative directory.
 fn nested_configurations(repo: &Path, sources: &[String]) -> Option<BTreeMap<String, String>> {
+    let mut configurations = BTreeMap::new();
+    for (directory, path) in nested_configuration_files(repo, sources)? {
+        configurations.insert(directory, super::hash_file(path.to_str()?)?);
+    }
+    Some(configurations)
+}
+
+/// Lower-case text of the root `.clang-tidy` and every nested one that
+/// [`nested_configurations`] keys, so a macro an `ExtraArgs` entry defines is
+/// visible to the include scanner. `None` when one cannot be read.
+pub(super) fn configuration_text(repo: &Path, sources: &[String]) -> Option<String> {
+    let mut text = std::fs::read_to_string(repo.join(".clang-tidy")).ok()?;
+    for (_, path) in nested_configuration_files(repo, sources)? {
+        text.push('\n');
+        text.push_str(&std::fs::read_to_string(path).ok()?);
+    }
+    Some(text.to_ascii_lowercase())
+}
+
+fn nested_configuration_files(
+    repo: &Path,
+    sources: &[String],
+) -> Option<BTreeMap<String, PathBuf>> {
     let root = format!("{}/", super::normalize_root(repo));
     let mut directories = BTreeSet::new();
     for source in sources {
@@ -294,7 +317,7 @@ fn nested_configurations(repo: &Path, sources: &[String]) -> Option<BTreeMap<Str
         let path = repo.join(&directory).join(".clang-tidy");
         match std::fs::metadata(&path) {
             Ok(metadata) if metadata.is_file() => {
-                configurations.insert(directory, super::hash_file(path.to_str()?)?);
+                configurations.insert(directory, path);
             }
             Ok(_) => {}
             Err(error) if error.kind() == std::io::ErrorKind::NotFound => {}

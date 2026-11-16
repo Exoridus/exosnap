@@ -131,6 +131,11 @@ found beside its includer and leaves the roots from any directory it is searched
 A macro that wraps `__has_include`, directly or through another such macro, is followed to its invocations
 in every opened file, and each invocation is checked like the builtin probe.
 An include name computed from a macro is refused unless the file belongs to the toolchain identity.
+The exception is a computed `#include` in a branch no run can enter: the first branch of `#ifdef NAME` or a later branch of `#ifndef NAME`, where `NAME` starts with an upper-case letter, is named by no compile command, analysis flag, `.clang-tidy` file (`ExtraArgs` included), `CL` or `_CL_` value, or other opened file, is not defined earlier in its own file, and is defined later only when `#pragma once` rules out a second entry.
+A `#define` that mentions `NAME` anywhere, including its parameters and body, counts as a definition.
+Such a line is decided by the manifest's own files, the command and the keyed configuration, so a later definition of `NAME` changes one of those and misses.
+Clang's MSVC-target predefined macros are underscore-prefixed, which is why an upper-case name starts out undefined.
+Any other condition, a comment or raw string the scanner cannot follow, or unbalanced conditionals keep the refusal.
 A probe for a build artifact name is refused, because lookup membership leaves those names out.
 Checkout ownership and header consumers compare physically proven Windows path aliases
 without changing recorded paths. Readable directory links are traversed with cycle detection,
