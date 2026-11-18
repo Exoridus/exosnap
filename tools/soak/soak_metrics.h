@@ -15,6 +15,8 @@
 
 #pragma once
 
+#include "soak_storage.h"
+
 #include <cstdint>
 #include <string>
 #include <vector>
@@ -27,11 +29,12 @@ namespace exosnap::soak {
 // GUI objects). Engine enums are reduced to booleans here so this stays decoupled
 // from recorder_core.
 struct SoakSample {
-    double t_s = 0.0; // seconds since soak start (wall clock)
+    double t_s = 0.0; // seconds since soak start (monotonic clock)
+    std::optional<int64_t> unix_time_ms = std::nullopt;
 
-    double av_drift_ms = 0.0;         // clock drift; +ve = audio leads. Only meaningful when available.
-    bool av_drift_available = false;  // false until a device-backed audio track reports timing
-    double duration_skew_ms = 0.0;    // |video media time - audio media time|
+    double av_drift_ms = 0.0;        // clock drift; +ve = audio leads. Only meaningful when available.
+    bool av_drift_available = false; // false until a device-backed audio track reports timing
+    double duration_skew_ms = 0.0;   // |video media time - audio media time|
     bool duration_skew_available = false;
 
     uint64_t frames_captured = 0; // cumulative
@@ -40,8 +43,23 @@ struct SoakSample {
     uint64_t frames_dropped_cfr = 0;
     uint64_t frames_dropped_backpressure = 0;
     uint64_t frames_dropped_processing_failure = 0;
+    uint64_t frames_dropped_ring_eviction = 0;
+    uint64_t encoder_undrained_frames = 0;
+    bool encoder_flush_incomplete = false;
+    uint64_t real_frame_loss = 0;
     uint64_t frames_duplicated = 0;
     uint64_t audio_discontinuities = 0;
+    std::optional<double> audio_discontinuity_ms_total = std::nullopt;
+    std::optional<double> audio_discontinuity_ms_longest = std::nullopt;
+    std::optional<bool> audio_source_degraded = std::nullopt;
+    std::optional<bool> audio_source_degraded_occurred = std::nullopt;
+    std::vector<std::optional<uint64_t>> resampler_undrained_frames;
+    std::optional<double> seconds_without_capture = std::nullopt;
+    std::optional<bool> capture_starved = std::nullopt;
+    uint64_t encoder_backlog = 0;
+    uint32_t audio_premux_queue_depth = 0;
+    uint64_t disk_write_failures = 0;
+    uint64_t mux_failures = 0;
 
     uint32_t mux_queue_depth = 0;
     double disk_fill_eta_s = -1.0; // <0 == unavailable
@@ -51,15 +69,20 @@ struct SoakSample {
     uint32_t handle_count = 0;
     uint32_t gdi_objects = 0;
     uint32_t user_objects = 0;
+    std::optional<double> process_cpu_percent = std::nullopt;
+    std::optional<double> system_cpu_percent = std::nullopt;
+    std::optional<double> gpu_utilization_percent = std::nullopt;
+    std::optional<double> encoder_utilization_percent = std::nullopt;
+    std::optional<uint64_t> process_gpu_memory_bytes = std::nullopt;
 
     bool health_critical = false; // PipelineHealth::Critical
     bool recorder_failed = false; // a RecorderResult failure was observed
     std::string bottleneck;       // advisory, human-readable
+    std::optional<StorageCheck> storage;
 
-    // Sum of the drop counters (a convenience; not serialized separately).
     [[nodiscard]] uint64_t total_dropped() const {
         return frames_dropped_coalesced + frames_dropped_cfr + frames_dropped_backpressure +
-               frames_dropped_processing_failure;
+               frames_dropped_processing_failure + frames_dropped_ring_eviction + encoder_undrained_frames;
     }
 };
 
@@ -105,7 +128,8 @@ struct AbortDecision {
 class SoakAbortPolicy {
   public:
     SoakAbortPolicy() = default;
-    explicit SoakAbortPolicy(SoakThresholds thresholds) : t_(thresholds) {}
+    explicit SoakAbortPolicy(SoakThresholds thresholds) : t_(thresholds) {
+    }
 
     [[nodiscard]] AbortDecision Evaluate(const std::vector<SoakSample>& history) const;
 
@@ -131,10 +155,10 @@ struct SoakSummary {
     double duration_s = 0.0;
     uint64_t sample_count = 0;
 
-    MetricStats av_drift_ms;       // over available samples only
-    MetricStats duration_skew_ms;  // over available samples only
+    MetricStats av_drift_ms;      // over available samples only
+    MetricStats duration_skew_ms; // over available samples only
     MetricStats mux_queue_depth;
-    MetricStats disk_fill_eta_s;   // over available (>=0) samples only
+    MetricStats disk_fill_eta_s; // over available (>=0) samples only
     MetricStats rss_bytes;
     MetricStats private_bytes;
     MetricStats handle_count;
@@ -150,18 +174,28 @@ struct SoakSummary {
     uint64_t frames_captured = 0;
     uint64_t frames_emitted = 0;
     uint64_t total_frames_dropped = 0;
+    uint64_t real_frame_loss = 0;
+    uint64_t frames_dropped_coalesced = 0;
+    uint64_t frames_dropped_cfr = 0;
+    uint64_t frames_dropped_backpressure = 0;
+    uint64_t frames_dropped_processing_failure = 0;
+    uint64_t frames_dropped_ring_eviction = 0;
+    uint64_t encoder_undrained_frames = 0;
+    bool encoder_flush_incomplete = false;
     uint64_t total_frames_duplicated = 0;
     uint64_t total_audio_discontinuities = 0;
 
     // The abort verdict the policy would render on the full history (advisory).
     AbortDecision advisory_verdict;
+    std::optional<StorageCheck> storage;
 };
 
 // Pure aggregator. No I/O.
 class SoakMetricsAggregator {
   public:
     SoakMetricsAggregator() = default;
-    explicit SoakMetricsAggregator(SoakThresholds thresholds) : t_(thresholds) {}
+    explicit SoakMetricsAggregator(SoakThresholds thresholds) : t_(thresholds) {
+    }
 
     [[nodiscard]] SoakSummary Summarize(const std::vector<SoakSample>& history) const;
 

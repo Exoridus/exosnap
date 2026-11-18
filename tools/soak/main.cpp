@@ -204,6 +204,30 @@ MediaProbe ProbeMedia(const std::string& path) {
     return p;
 }
 
+exosnap::soak::StorageObservation ReadStorage(const std::filesystem::path& output,
+                                              const std::filesystem::path& system_volume, double elapsed) {
+    exosnap::soak::StorageObservation observation;
+    observation.t_s = elapsed;
+    std::error_code error;
+    const auto output_space = std::filesystem::space(output.parent_path(), error);
+    if (!error && output_space.available != std::numeric_limits<uint64_t>::max())
+        observation.output_free_bytes = output_space.available;
+    const auto system_space = std::filesystem::space(system_volume, error);
+    if (!error && system_space.available != std::numeric_limits<uint64_t>::max())
+        observation.system_free_bytes = system_space.available;
+    const bool exists = std::filesystem::exists(output, error);
+    if (!error) {
+        if (exists) {
+            const auto size = std::filesystem::file_size(output, error);
+            if (!error)
+                observation.file_bytes = size;
+        } else {
+            observation.file_bytes = 0;
+        }
+    }
+    return observation;
+}
+
 std::string Timestamp() {
     std::time_t t = std::time(nullptr);
     std::tm tm{};
@@ -298,6 +322,7 @@ int main(int argc, char* argv[]) {
     std::string output_fault_name;
     std::optional<exosnap::engine::testutil::SyntheticOutputFaultPoint> output_fault;
     uint64_t fault_occurrence = 1;
+    uint64_t requested_reserve_bytes = 0;
     bool fault_occurrence_set = false;
     exosnap::soak::SoakThresholds thresholds;
 
@@ -362,7 +387,16 @@ int main(int argc, char* argv[]) {
             report_dir = next();
         else if (a == "--audio-sources")
             audio_sources_s = next();
-        else if (a == "--output-fault") {
+        else if (a == "--min-free-gib") {
+            std::int64_t value = 0;
+            std::string parse_error;
+            if (!exosnap::soak::ParsePositiveInt64(next(), value, parse_error) ||
+                static_cast<uint64_t>(value) > std::numeric_limits<uint64_t>::max() / (1024ULL * 1024 * 1024)) {
+                std::fprintf(stderr, "[soak] --min-free-gib requires a positive representable GiB count\n");
+                return 64;
+            }
+            requested_reserve_bytes = static_cast<uint64_t>(value) * 1024 * 1024 * 1024;
+        } else if (a == "--output-fault") {
             output_fault_name = next();
             output_fault = exosnap::engine::testutil::ParseSyntheticOutputFault(output_fault_name);
             if (!output_fault) {
@@ -455,12 +489,52 @@ int main(int argc, char* argv[]) {
         out_s = (std::filesystem::path(tmp) / "exosnap-soak.mkv").string();
     }
 
+    std::error_code path_error;
+    const auto output = std::filesystem::absolute(out_s, path_error);
+    if (path_error) {
+        std::fprintf(stderr, "[soak] cannot resolve output path: %s\n", path_error.message().c_str());
+        return 2;
+    }
+    std::filesystem::create_directories(output.parent_path(), path_error);
+    if (path_error) {
+        std::fprintf(stderr, "[soak] cannot prepare output directory: %s\n", path_error.message().c_str());
+        return 2;
+    }
+    out_s = output.string();
+    wchar_t windows_directory[MAX_PATH]{};
+    if (GetWindowsDirectoryW(windows_directory, MAX_PATH) == 0) {
+        std::fprintf(stderr, "[soak] cannot identify the system volume\n");
+        return 2;
+    }
+    const auto system_volume = std::filesystem::path(windows_directory).root_path();
+    const bool output_on_system =
+        CompareStringOrdinal(output.root_path().c_str(), -1, system_volume.c_str(), -1, TRUE) == CSTR_EQUAL;
+    constexpr uint64_t gib = 1024ULL * 1024 * 1024;
+    exosnap::soak::StorageWatchConfig storage_config;
+    storage_config.target_seconds = duration_s;
+    storage_config.output_is_system_volume = output_on_system;
+    storage_config.output_reserve_bytes = (output_on_system ? 50ULL : 30ULL) * gib;
+    storage_config.system_reserve_bytes = 50ULL * gib;
+    if (requested_reserve_bytes != 0 && requested_reserve_bytes < storage_config.output_reserve_bytes) {
+        std::fprintf(stderr, "[soak] --min-free-gib cannot reduce the volume safety minimum\n");
+        return 64;
+    }
+    if (requested_reserve_bytes > storage_config.output_reserve_bytes)
+        storage_config.output_reserve_bytes = requested_reserve_bytes;
+
     exosnap::soak::WinProcessSampler win_sampler;
     const std::string jsonl = out_s + ".timeline.jsonl";
     exosnap::soak::SoakRunner runner(thresholds, win_sampler, jsonl, [] {
         if (auto control = g_stop_control.load())
             control->RequestStop();
     });
+
+    const bool storage_watch_enabled = !synthetic || requested_reserve_bytes != 0;
+    if (storage_watch_enabled) {
+        runner.ConfigureStorageWatch(storage_config, [output, system_volume](double elapsed) {
+            return ReadStorage(output, system_volume, elapsed);
+        });
+    }
 
     std::vector<std::pair<std::string, std::string>> metadata = {
         {"mode", synthetic ? "synthetic" : "real"},
@@ -469,6 +543,12 @@ int main(int argc, char* argv[]) {
         {"acodec", acodec_s},
         {"audio_sources", audio_sources_s.empty() ? "legacy-single-track" : audio_sources_s},
         {"target_seconds", std::to_string(duration_s)},
+        {"storage_watch", storage_watch_enabled ? "enabled" : "disabled-synthetic"},
+        {"storage_poll_seconds", std::to_string(storage_config.poll_seconds)},
+        {"output_reserve_bytes", std::to_string(storage_config.output_reserve_bytes)},
+        {"system_reserve_bytes", std::to_string(storage_config.system_reserve_bytes)},
+        {"finalization_reserve_bytes", std::to_string(storage_config.finalization_reserve_bytes)},
+        {"system_volume", system_volume.string()},
         {"output_validation", "container-demux-only"},
         {"video_decode", "not-run"},
         {"hardware_qualified", "false"},

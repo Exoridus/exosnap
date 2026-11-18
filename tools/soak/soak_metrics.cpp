@@ -40,15 +40,13 @@ MetricStats StatsOf(std::vector<double> values) {
         sum += v;
     st.mean = sum / static_cast<double>(values.size());
     // p99 by nearest-rank on the sorted vector.
-    const size_t idx =
-        static_cast<size_t>(std::ceil(0.99 * static_cast<double>(values.size())) - 1.0);
+    const size_t idx = static_cast<size_t>(std::ceil(0.99 * static_cast<double>(values.size())) - 1.0);
     st.p99 = values[std::min(idx, values.size() - 1)];
     return st;
 }
 
 // True when the trailing `window` samples all satisfy `pred`.
-template <typename Pred>
-bool SustainedTail(const std::vector<SoakSample>& h, int window, Pred pred) {
+template <typename Pred> bool SustainedTail(const std::vector<SoakSample>& h, int window, Pred pred) {
     const int n = static_cast<int>(h.size());
     if (n < window || window <= 0)
         return false;
@@ -61,7 +59,7 @@ bool SustainedTail(const std::vector<SoakSample>& h, int window, Pred pred) {
 
 double DropRatio(const SoakSample& s) {
     const uint64_t emitted = std::max<uint64_t>(1, s.frames_emitted);
-    return static_cast<double>(s.total_dropped()) / static_cast<double>(emitted);
+    return static_cast<double>(s.real_frame_loss) / static_cast<double>(emitted);
 }
 
 } // namespace
@@ -71,10 +69,15 @@ AbortDecision SoakAbortPolicy::Evaluate(const std::vector<SoakSample>& h) const 
         return {};
 
     const SoakSample& last = h.back();
+    if (last.storage && !last.storage->stop_reason.empty())
+        return {SoakVerdict::Abort, last.storage->stop_reason};
 
     // 1. A hard engine failure ends the run immediately.
     if (last.recorder_failed)
         return {SoakVerdict::Abort, "recorder session reported a failure"};
+
+    if (last.encoder_flush_incomplete || last.encoder_undrained_frames != 0)
+        return {SoakVerdict::Abort, "video encoder drain left incomplete output"};
 
     // 2. Sustained Critical health.
     if (SustainedTail(h, t_.sustained_samples, [](const SoakSample& s) { return s.health_critical; }))
@@ -104,8 +107,7 @@ AbortDecision SoakAbortPolicy::Evaluate(const std::vector<SoakSample>& h) const 
         return {SoakVerdict::Abort, "A/V clock drift over budget"};
 
     // 5. Drop ratio over budget, sustained.
-    if (SustainedTail(h, t_.sustained_samples,
-                      [&](const SoakSample& s) { return DropRatio(s) > t_.drop_ratio_abort; }))
+    if (SustainedTail(h, t_.sustained_samples, [&](const SoakSample& s) { return DropRatio(s) > t_.drop_ratio_abort; }))
         return {SoakVerdict::Abort, "frame drop ratio over budget"};
 
     // 6. Leak slope over threshold (only once a baseline window exists).
@@ -169,9 +171,18 @@ SoakSummary SoakMetricsAggregator::Summarize(const std::vector<SoakSample>& h) c
     out.handle_slope_per_s = LinearSlope(xs, hnd);
 
     const SoakSample& last = h.back();
+    out.storage = last.storage;
     out.frames_captured = last.frames_captured;
     out.frames_emitted = last.frames_emitted;
     out.total_frames_dropped = last.total_dropped();
+    out.real_frame_loss = last.real_frame_loss;
+    out.frames_dropped_coalesced = last.frames_dropped_coalesced;
+    out.frames_dropped_cfr = last.frames_dropped_cfr;
+    out.frames_dropped_backpressure = last.frames_dropped_backpressure;
+    out.frames_dropped_processing_failure = last.frames_dropped_processing_failure;
+    out.frames_dropped_ring_eviction = last.frames_dropped_ring_eviction;
+    out.encoder_undrained_frames = last.encoder_undrained_frames;
+    out.encoder_flush_incomplete = last.encoder_flush_incomplete;
     out.total_frames_duplicated = last.frames_duplicated;
     out.total_audio_discontinuities = last.audio_discontinuities;
 
@@ -179,11 +190,39 @@ SoakSummary SoakMetricsAggregator::Summarize(const std::vector<SoakSample>& h) c
     return out;
 }
 
+namespace {
+
+template <typename T> nlohmann::json OptionalJson(const std::optional<T>& value) {
+    return value ? nlohmann::json(*value) : nlohmann::json(nullptr);
+}
+
+nlohmann::json StorageJson(const std::optional<StorageCheck>& check) {
+    if (!check)
+        return nullptr;
+    const auto count = [](const std::optional<uint64_t>& value) -> nlohmann::json {
+        return value ? nlohmann::json(*value) : nlohmann::json(nullptr);
+    };
+    return {{"t_s", check->observation.t_s},
+            {"output_free_bytes", count(check->observation.output_free_bytes)},
+            {"system_free_bytes", count(check->observation.system_free_bytes)},
+            {"file_bytes", count(check->observation.file_bytes)},
+            {"growth_bytes", check->growth_bytes},
+            {"average_bytes_per_second", check->average_bytes_per_second},
+            {"peak_interval_bytes_per_second", check->peak_bytes_per_second},
+            {"output_consumption_peak_bytes_per_second", check->output_consumption_peak_bytes_per_second},
+            {"system_consumption_peak_bytes_per_second", check->system_consumption_peak_bytes_per_second},
+            {"projected_remaining_bytes", check->projected_remaining_bytes},
+            {"system_projected_remaining_bytes", check->system_projected_remaining_bytes},
+            {"stop_reason", check->stop_reason}};
+}
+
+} // namespace
 // --- Serialization ---
 
 std::string SampleToJsonLine(const SoakSample& s) {
     nlohmann::json j;
     j["t_s"] = s.t_s;
+    j["unix_time_ms"] = OptionalJson(s.unix_time_ms);
     j["av_drift_ms"] = s.av_drift_ms;
     j["av_drift_available"] = s.av_drift_available;
     j["duration_skew_ms"] = s.duration_skew_ms;
@@ -194,8 +233,25 @@ std::string SampleToJsonLine(const SoakSample& s) {
     j["frames_dropped_cfr"] = s.frames_dropped_cfr;
     j["frames_dropped_backpressure"] = s.frames_dropped_backpressure;
     j["frames_dropped_processing_failure"] = s.frames_dropped_processing_failure;
+    j["frames_dropped_ring_eviction"] = s.frames_dropped_ring_eviction;
+    j["encoder_undrained_frames"] = s.encoder_undrained_frames;
+    j["encoder_flush_incomplete"] = s.encoder_flush_incomplete;
+    j["real_frame_loss"] = s.real_frame_loss;
     j["frames_duplicated"] = s.frames_duplicated;
     j["audio_discontinuities"] = s.audio_discontinuities;
+    j["audio_discontinuity_ms_total"] = OptionalJson(s.audio_discontinuity_ms_total);
+    j["audio_discontinuity_ms_longest"] = OptionalJson(s.audio_discontinuity_ms_longest);
+    j["audio_source_degraded"] = OptionalJson(s.audio_source_degraded);
+    j["audio_source_degraded_occurred"] = OptionalJson(s.audio_source_degraded_occurred);
+    j["resampler_undrained_frames"] = nlohmann::json::array();
+    for (const auto& frames : s.resampler_undrained_frames)
+        j["resampler_undrained_frames"].push_back(OptionalJson(frames));
+    j["seconds_without_capture"] = OptionalJson(s.seconds_without_capture);
+    j["capture_starved"] = OptionalJson(s.capture_starved);
+    j["encoder_backlog"] = s.encoder_backlog;
+    j["audio_premux_queue_depth"] = s.audio_premux_queue_depth;
+    j["disk_write_failures"] = s.disk_write_failures;
+    j["mux_failures"] = s.mux_failures;
     j["mux_queue_depth"] = s.mux_queue_depth;
     j["disk_fill_eta_s"] = s.disk_fill_eta_s;
     j["rss_bytes"] = s.rss_bytes;
@@ -203,8 +259,14 @@ std::string SampleToJsonLine(const SoakSample& s) {
     j["handle_count"] = s.handle_count;
     j["gdi_objects"] = s.gdi_objects;
     j["user_objects"] = s.user_objects;
+    j["process_cpu_percent"] = OptionalJson(s.process_cpu_percent);
+    j["system_cpu_percent"] = OptionalJson(s.system_cpu_percent);
+    j["gpu_utilization_percent"] = OptionalJson(s.gpu_utilization_percent);
+    j["encoder_utilization_percent"] = OptionalJson(s.encoder_utilization_percent);
+    j["process_gpu_memory_bytes"] = OptionalJson(s.process_gpu_memory_bytes);
     j["health_critical"] = s.health_critical;
     j["bottleneck"] = s.bottleneck;
+    j["storage"] = StorageJson(s.storage);
     return j.dump() + "\n";
 }
 
@@ -214,11 +276,11 @@ nlohmann::json StatsJson(const MetricStats& m) {
 }
 } // namespace
 
-std::string SummaryToJson(const SoakSummary& s,
-                          const std::vector<std::pair<std::string, std::string>>& metadata) {
+std::string SummaryToJson(const SoakSummary& s, const std::vector<std::pair<std::string, std::string>>& metadata) {
     nlohmann::json j;
     j["duration_s"] = s.duration_s;
     j["sample_count"] = s.sample_count;
+    j["storage"] = StorageJson(s.storage);
     j["metrics"] = {
         {"av_drift_ms", StatsJson(s.av_drift_ms)},
         {"duration_skew_ms", StatsJson(s.duration_skew_ms)},
@@ -239,6 +301,14 @@ std::string SummaryToJson(const SoakSummary& s,
         {"frames_captured", s.frames_captured},
         {"frames_emitted", s.frames_emitted},
         {"frames_dropped", s.total_frames_dropped},
+        {"real_frame_loss", s.real_frame_loss},
+        {"frames_dropped_coalesced", s.frames_dropped_coalesced},
+        {"frames_dropped_cfr", s.frames_dropped_cfr},
+        {"frames_dropped_backpressure", s.frames_dropped_backpressure},
+        {"frames_dropped_processing_failure", s.frames_dropped_processing_failure},
+        {"frames_dropped_ring_eviction", s.frames_dropped_ring_eviction},
+        {"encoder_undrained_frames", s.encoder_undrained_frames},
+        {"encoder_flush_incomplete", s.encoder_flush_incomplete},
         {"frames_duplicated", s.total_frames_duplicated},
         {"audio_discontinuities", s.total_audio_discontinuities},
     };
@@ -246,9 +316,8 @@ std::string SummaryToJson(const SoakSummary& s,
         {"aborted", s.advisory_verdict.verdict == SoakVerdict::Abort},
         {"reason", s.advisory_verdict.reason},
     };
-    j["advisory_note"] =
-        "Thresholds are advisory for 0.10; a crossing is not a release gate. See "
-        "docs/dev/soak-and-recovery-drills.md.";
+    j["advisory_note"] = "Thresholds are advisory for 0.10; a crossing is not a release gate. See "
+                         "docs/dev/soak-and-recovery-drills.md.";
     nlohmann::json meta = nlohmann::json::object();
     for (const auto& [k, v] : metadata)
         meta[k] = v;
@@ -256,8 +325,7 @@ std::string SummaryToJson(const SoakSummary& s,
     return j.dump(2) + "\n";
 }
 
-std::string SummaryToMarkdown(const SoakSummary& s,
-                              const std::vector<std::pair<std::string, std::string>>& metadata) {
+std::string SummaryToMarkdown(const SoakSummary& s, const std::vector<std::pair<std::string, std::string>>& metadata) {
     std::string md;
     md += "# Soak report\n\n";
     md += "- duration: " + std::to_string(s.duration_s) + " s\n";
@@ -279,10 +347,25 @@ std::string SummaryToMarkdown(const SoakSummary& s,
     md += "- rss: " + std::to_string(s.rss_slope_bytes_per_s) + " bytes/s\n";
     md += "- private: " + std::to_string(s.private_slope_bytes_per_s) + " bytes/s\n";
     md += "- handles: " + std::to_string(s.handle_slope_per_s) + " /s\n";
+    if (s.storage) {
+        md += "\n## Storage watch\n\n";
+        md += "- latest observation (seconds): " + std::to_string(s.storage->observation.t_s) + "\n";
+        md += "- peak interval bytes/s: " + std::to_string(s.storage->peak_bytes_per_second) + "\n";
+        md += "- projected remaining bytes: " + std::to_string(s.storage->projected_remaining_bytes) + "\n";
+        md += "- stop reason: " + (s.storage->stop_reason.empty() ? "none" : s.storage->stop_reason) + "\n";
+    }
     md += "\n## Totals\n\n";
     md += "- frames captured: " + std::to_string(s.frames_captured) + "\n";
     md += "- frames emitted: " + std::to_string(s.frames_emitted) + "\n";
-    md += "- frames dropped: " + std::to_string(s.total_frames_dropped) + "\n";
+    md += "- drop events (all categories): " + std::to_string(s.total_frames_dropped) + "\n";
+    md += "- real frame loss: " + std::to_string(s.real_frame_loss) + "\n";
+    md += "- coalesced: " + std::to_string(s.frames_dropped_coalesced) + "\n";
+    md += "- CFR warmup: " + std::to_string(s.frames_dropped_cfr) + "\n";
+    md += "- backpressure: " + std::to_string(s.frames_dropped_backpressure) + "\n";
+    md += "- processing failure: " + std::to_string(s.frames_dropped_processing_failure) + "\n";
+    md += "- ring eviction: " + std::to_string(s.frames_dropped_ring_eviction) + "\n";
+    md += "- encoder undrained: " + std::to_string(s.encoder_undrained_frames) + "\n";
+    md += "- encoder flush incomplete: " + std::string(s.encoder_flush_incomplete ? "true" : "false") + "\n";
     md += "- frames duplicated: " + std::to_string(s.total_frames_duplicated) + "\n";
     md += "- audio discontinuities: " + std::to_string(s.total_audio_discontinuities) + "\n";
     md += "\n**Verdict (advisory):** ";

@@ -34,6 +34,13 @@ void SoakRunner::OnDiagnostics(const exosnap::engine::RecordingDiagnosticsSnapsh
     have_diag_ = true;
 }
 
+void SoakRunner::ConfigureStorageWatch(StorageWatchConfig config, std::function<StorageObservation(double)> observe) {
+    if (started_ || !observe || !std::isfinite(config.poll_seconds) || config.poll_seconds <= 0)
+        throw std::invalid_argument("Configure the storage watch before starting the sampler");
+    storage_config_ = config;
+    storage_observer_ = std::move(observe);
+}
+
 void SoakRunner::Start(double sample_interval_s) {
     if (started_)
         throw std::logic_error("A soak sampler can only start once");
@@ -86,9 +93,29 @@ void SoakRunner::Stop() {
 
 void SoakRunner::SampleOnce() {
     SoakSample s;
+    s.unix_time_ms =
+        std::chrono::duration_cast<std::chrono::milliseconds>(std::chrono::system_clock::now().time_since_epoch())
+            .count();
     s.t_s = std::chrono::duration<double>(std::chrono::steady_clock::now() - start_time_).count();
 
-    const ProcessMetrics pm = sampler_.Sample();
+    if (storage_config_ &&
+        (!storage_check_ || s.t_s - storage_check_->observation.t_s >= storage_config_->poll_seconds)) {
+        storage_check_ = CheckStorage(*storage_config_, storage_observer_(s.t_s), storage_check_);
+    }
+    s.storage = storage_check_;
+
+    int64_t adapter_luid = 0;
+    {
+        std::lock_guard lock(latch_mutex_);
+        if (have_diag_)
+            adapter_luid = last_diag_.capture_adapter_luid;
+    }
+    const ProcessMetrics pm = sampler_.SampleForAdapter(adapter_luid);
+    s.process_cpu_percent = pm.process_cpu_percent;
+    s.system_cpu_percent = pm.system_cpu_percent;
+    s.gpu_utilization_percent = pm.gpu_utilization_percent;
+    s.encoder_utilization_percent = pm.encoder_utilization_percent;
+    s.process_gpu_memory_bytes = pm.process_gpu_memory_bytes;
     s.rss_bytes = pm.rss_bytes;
     s.private_bytes = pm.private_bytes;
     s.handle_count = pm.handle_count;
@@ -109,8 +136,35 @@ void SoakRunner::SampleOnce() {
             s.frames_dropped_cfr = d.capture.frames_dropped_cfr;
             s.frames_dropped_backpressure = d.capture.frames_dropped_backpressure;
             s.frames_dropped_processing_failure = d.capture.frames_dropped_processing_failure;
+            s.frames_dropped_ring_eviction = d.capture.frames_dropped_ring_eviction;
+            s.encoder_undrained_frames = d.video_encoder.undrained_frames;
+            s.encoder_flush_incomplete = d.video_encoder.flush_incomplete;
+            s.real_frame_loss = d.real_frame_loss();
             s.frames_duplicated = d.capture.frames_duplicated;
             s.audio_discontinuities = d.audio.discontinuities;
+            s.encoder_backlog = d.video_encoder.backlog;
+            s.audio_premux_queue_depth = d.audio_queue.current_depth;
+            s.disk_write_failures = d.disk.write_failures;
+            s.mux_failures = d.mux.failures;
+            s.recorder_failed = s.disk_write_failures != 0 || s.mux_failures != 0;
+            if (d.valid) {
+                s.audio_source_degraded = d.audio.source_degraded;
+                s.audio_source_degraded_occurred = d.audio.source_degraded_occurred;
+                s.seconds_without_capture = d.capture.seconds_without_capture;
+                s.capture_starved = d.capture.capture_starved;
+                if (d.audio.discontinuity_availability == MetricAvailability::Available && d.audio.sample_rate != 0) {
+                    s.audio_discontinuity_ms_total = 1000.0 * d.audio.discontinuity_frames_total / d.audio.sample_rate;
+                    s.audio_discontinuity_ms_longest =
+                        1000.0 * d.audio.discontinuity_frames_longest / d.audio.sample_rate;
+                }
+                for (size_t track = 0; track < d.audio.track_count && track < d.audio.resampler_drain_recorded.size();
+                     ++track) {
+                    s.resampler_undrained_frames.push_back(
+                        d.audio.resampler_drain_recorded[track]
+                            ? std::optional(d.audio.resampler_undrained_frames[track])
+                            : std::nullopt);
+                }
+            }
             s.mux_queue_depth = d.video_queue.current_depth;
             s.disk_fill_eta_s = d.disk_fill_eta_seconds;
             s.health_critical = d.health == PipelineHealth::Critical;
@@ -192,7 +246,10 @@ std::vector<SoakSample> SoakRunner::timeline() const {
 
 SoakSummary SoakRunner::Summarize() const {
     std::lock_guard lk(timeline_mutex_);
-    return SoakMetricsAggregator(thresholds_).Summarize(timeline_);
+    auto summary = SoakMetricsAggregator(thresholds_).Summarize(timeline_);
+    if (aborted_.load())
+        summary.advisory_verdict = abort_decision();
+    return summary;
 }
 
 } // namespace exosnap::soak

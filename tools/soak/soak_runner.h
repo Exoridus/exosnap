@@ -43,6 +43,7 @@ class SoakRunner {
     // Start/stop the sampler thread. Start records t=0; Stop takes a final sample.
     void Start(double sample_interval_s);
     void Stop();
+    void ConfigureStorageWatch(StorageWatchConfig config, std::function<StorageObservation(double)> observe);
 
     // True once the abort policy has fired; `abort_decision()` carries the reason.
     [[nodiscard]] bool aborted() const {
@@ -71,6 +72,9 @@ class SoakRunner {
     std::string jsonl_path_;
     std::ofstream jsonl_;
     std::function<void()> abort_callback_;
+    std::optional<StorageWatchConfig> storage_config_;
+    std::function<StorageObservation(double)> storage_observer_;
+    std::optional<StorageCheck> storage_check_;
 
     mutable std::mutex latch_mutex_;
     exosnap::engine::SessionStats last_stats_{};

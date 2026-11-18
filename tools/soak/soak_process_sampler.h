@@ -5,6 +5,7 @@
 // tool, behind an interface the tests can substitute.
 
 #include <cstdint>
+#include <optional>
 
 namespace exosnap::soak {
 
@@ -14,20 +15,35 @@ struct ProcessMetrics {
     uint32_t handle_count = 0;
     uint32_t gdi_objects = 0;
     uint32_t user_objects = 0;
+    std::optional<double> process_cpu_percent = std::nullopt;
+    std::optional<double> system_cpu_percent = std::nullopt;
+    std::optional<double> gpu_utilization_percent = std::nullopt;
+    std::optional<double> encoder_utilization_percent = std::nullopt;
+    std::optional<uint64_t> process_gpu_memory_bytes = std::nullopt;
 };
 
 class IProcessSampler {
   public:
     virtual ~IProcessSampler() = default;
     virtual ProcessMetrics Sample() = 0;
+    virtual ProcessMetrics SampleForAdapter(int64_t) {
+        return Sample();
+    }
 };
 
-// Real sampler: psapi GetProcessMemoryInfo (PROCESS_MEMORY_COUNTERS_EX) +
-// GetProcessHandleCount + GetGuiResources on the current process. WinAPI-only;
-// exercised live (there is no CI test for it — a fake stands in for CI).
+// Real sampler: Windows process memory, handles, CPU and attributed GPU telemetry.
 class WinProcessSampler : public IProcessSampler {
   public:
     ProcessMetrics Sample() override;
+    ProcessMetrics SampleForAdapter(int64_t adapter_luid) override;
+
+  private:
+    struct CpuCounters {
+        uint64_t process;
+        uint64_t system;
+        uint64_t idle;
+    };
+    std::optional<CpuCounters> previous_cpu_;
 };
 
 } // namespace exosnap::soak
