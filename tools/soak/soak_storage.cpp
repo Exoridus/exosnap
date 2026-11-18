@@ -47,10 +47,11 @@ StorageCheck CheckStorage(const StorageWatchConfig& config, const StorageObserva
                      consumed_per_second(*previous->observation.system_free_bytes, *observation.system_free_bytes));
     }
     const double remaining = std::max(0.0, config.target_seconds - observation.t_s);
-    // The next poll and a full minute of drain remain writable even after an early stop.
-    const auto project = [&](double rate) {
+    // Competing writes need stop-response headroom, not a whole-duration bitrate forecast.
+    const auto project = [&](double media_rate, double volume_rate) {
         const long double projected =
-            std::ceil(static_cast<long double>(rate) * 2.0L * (remaining + config.poll_seconds + 60.0));
+            std::ceil(2.0L * (static_cast<long double>(media_rate) * remaining +
+                              static_cast<long double>(volume_rate) * (config.poll_seconds + 60.0)));
         const auto maximum = std::numeric_limits<uint64_t>::max();
         return projected >= static_cast<long double>(maximum) ? maximum : static_cast<uint64_t>(projected);
     };
@@ -58,8 +59,11 @@ StorageCheck CheckStorage(const StorageWatchConfig& config, const StorageObserva
         result.system_consumption_peak_bytes_per_second =
             std::max(result.system_consumption_peak_bytes_per_second, result.output_consumption_peak_bytes_per_second);
     }
-    result.projected_remaining_bytes = project(result.output_consumption_peak_bytes_per_second);
-    result.system_projected_remaining_bytes = project(result.system_consumption_peak_bytes_per_second);
+    result.projected_remaining_bytes =
+        project(result.peak_bytes_per_second, result.output_consumption_peak_bytes_per_second);
+    result.system_projected_remaining_bytes =
+        project(config.output_is_system_volume ? result.peak_bytes_per_second : 0.0,
+                result.system_consumption_peak_bytes_per_second);
     const auto enough = [&](uint64_t free, uint64_t reserve, uint64_t writes) {
         return free > reserve && free - reserve > config.finalization_reserve_bytes &&
                free - reserve - config.finalization_reserve_bytes > writes;

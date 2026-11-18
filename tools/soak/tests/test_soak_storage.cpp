@@ -87,14 +87,14 @@ TEST(SoakStorage, InvalidTimeAndOverflowingProjectionStopSafely) {
 
 TEST(SoakStorage, CompetingOutputVolumeWritesAreIncludedInTheProjection) {
     const auto first = exosnap::soak::CheckStorage(Config(), Observation(0), std::nullopt);
-    const auto next = exosnap::soak::CheckStorage(Config(), Observation(60, 90000), first);
+    const auto next = exosnap::soak::CheckStorage(Config(), Observation(60, 10000), first);
     EXPECT_FALSE(next.stop_reason.empty());
 }
 
 TEST(SoakStorage, CompetingSystemVolumeWritesCannotConsumeTheSystemReserveUnnoticed) {
     const auto first = exosnap::soak::CheckStorage(Config(), Observation(0), std::nullopt);
     auto observation = Observation(60);
-    observation.system_free_bytes = 90000;
+    observation.system_free_bytes = 10000;
     const auto next = exosnap::soak::CheckStorage(Config(), observation, first);
     EXPECT_FALSE(next.stop_reason.empty());
 }
@@ -109,4 +109,77 @@ TEST(SoakStorage, AcceptedNonDividingDiagnosticIntervalStillWakesAtTheStorageDea
     EXPECT_DOUBLE_EQ(second_wait, 1.0);
     EXPECT_DOUBLE_EQ(first_wait + second_wait, config.poll_seconds);
     EXPECT_DOUBLE_EQ(exosnap::soak::StoragePollDelay(config, last, 65.0), 0.0);
+}
+
+TEST(SoakStorage, TransientCompetingWritesRetainTheirPeakOnlyForStopResponseHeadroom) {
+    const auto first = exosnap::soak::CheckStorage(Config(), Observation(0), std::nullopt);
+    const auto burst = exosnap::soak::CheckStorage(Config(), Observation(60, 88000, 600), first);
+    EXPECT_TRUE(burst.stop_reason.empty()) << burst.stop_reason;
+    EXPECT_DOUBLE_EQ(burst.output_consumption_peak_bytes_per_second, 200.0);
+    EXPECT_EQ(burst.projected_remaining_bytes, 58800u);
+    const auto recovered = exosnap::soak::CheckStorage(Config(), Observation(120, 100000, 1200), burst);
+    EXPECT_TRUE(recovered.stop_reason.empty()) << recovered.stop_reason;
+    EXPECT_DOUBLE_EQ(recovered.output_consumption_peak_bytes_per_second, 200.0);
+    EXPECT_EQ(recovered.projected_remaining_bytes, 57600u);
+}
+
+TEST(SoakStorage, MediaGrowthIsProjectedForTheEntireRemainingDurationEvenWhenFreeSpaceRecovers) {
+    const auto first = exosnap::soak::CheckStorage(Config(), Observation(0), std::nullopt);
+    const auto next = exosnap::soak::CheckStorage(Config(), Observation(60, 100000, 6000), first);
+    EXPECT_EQ(next.projected_remaining_bytes, 132000u);
+    EXPECT_FALSE(next.stop_reason.empty());
+}
+
+TEST(SoakStorage, SustainedCompetingWritesStopWithPollDrainAndFinalizationSpaceStillAvailable) {
+    auto config = Config();
+    config.target_seconds = 3600;
+    auto check = exosnap::soak::CheckStorage(config, Observation(0, 1000000), std::nullopt);
+    for (int minute = 1; minute <= 12; ++minute) {
+        check = exosnap::soak::CheckStorage(config, Observation(minute * 60, 1000000 - minute * 60000, minute * 600),
+                                            check);
+        if (minute < 12)
+            ASSERT_TRUE(check.stop_reason.empty()) << minute << ": " << check.stop_reason;
+    }
+    EXPECT_FALSE(check.stop_reason.empty());
+    EXPECT_GT(*check.observation.output_free_bytes,
+              config.output_reserve_bytes + config.finalization_reserve_bytes + 240000u);
+}
+
+TEST(SoakStorage, SeparateSystemVolumeProjectsOnlyItsCompetingWritesDuringStopResponse) {
+    const auto first = exosnap::soak::CheckStorage(Config(), Observation(0), std::nullopt);
+    auto observation = Observation(60, 99400, 600);
+    observation.system_free_bytes = 88000;
+    const auto next = exosnap::soak::CheckStorage(Config(), observation, first);
+    EXPECT_TRUE(next.stop_reason.empty()) << next.stop_reason;
+    EXPECT_EQ(next.projected_remaining_bytes, 13200u);
+    EXPECT_EQ(next.system_projected_remaining_bytes, 48000u);
+}
+
+TEST(SoakStorage, SharedSystemVolumeRetainsTheMediaRateEvenWhenVolumeFreeSpaceRecovers) {
+    auto config = Config();
+    config.output_is_system_volume = true;
+    const auto first = exosnap::soak::CheckStorage(config, Observation(0), std::nullopt);
+    const auto next = exosnap::soak::CheckStorage(config, Observation(60, 100000, 600), first);
+    EXPECT_EQ(next.projected_remaining_bytes, 13200u);
+    EXPECT_EQ(next.system_projected_remaining_bytes, next.projected_remaining_bytes);
+}
+
+TEST(SoakStorage, ProjectedWritesAndReservesRequireOneByteOfAdditionalSpace) {
+    const auto first = exosnap::soak::CheckStorage(Config(), Observation(0, 1000), std::nullopt);
+    EXPECT_FALSE(exosnap::soak::CheckStorage(Config(), Observation(60, 13600, 600), first).stop_reason.empty());
+    EXPECT_TRUE(exosnap::soak::CheckStorage(Config(), Observation(60, 13601, 600), first).stop_reason.empty());
+}
+
+TEST(SoakStorage, CombinedProjectionSaturatesBeforeConvertingToBytes) {
+    auto config = Config();
+    config.target_seconds = 3;
+    config.poll_seconds = 1;
+    const auto maximum = std::numeric_limits<uint64_t>::max();
+    auto previous = exosnap::soak::CheckStorage(config, Observation(0, maximum), std::nullopt);
+    const auto rate = static_cast<double>(maximum) / 124.0;
+    previous.peak_bytes_per_second = rate;
+    previous.output_consumption_peak_bytes_per_second = rate;
+    const auto next = exosnap::soak::CheckStorage(config, Observation(1, maximum), previous);
+    EXPECT_EQ(next.projected_remaining_bytes, maximum);
+    EXPECT_FALSE(next.stop_reason.empty());
 }
