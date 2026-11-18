@@ -1,5 +1,8 @@
 #include "soak_process_sampler.h"
 
+#include <exosnap/engine/recorder_session.h>
+#include <limits>
+
 #include "diagnostics/DxgiVideoMemoryProvider.h"
 #include "diagnostics/NvidiaGpuTelemetryProvider.h"
 
@@ -48,6 +51,33 @@ ProcessMetrics WinProcessSampler::Sample() {
     m.gdi_objects = GetGuiResources(self, GR_GDIOBJECTS);
     m.user_objects = GetGuiResources(self, GR_USEROBJECTS);
     return m;
+}
+
+StorageObservation ReadSoakStorage(const std::filesystem::path& requested_output, exosnap::engine::Container container,
+                                   const std::filesystem::path& system_volume, double elapsed) {
+    const auto output = container == exosnap::engine::Container::Mp4
+                            ? exosnap::engine::DeriveTransientMkvPath(requested_output)
+                            : requested_output;
+    StorageObservation observation;
+    observation.t_s = elapsed;
+    std::error_code error;
+    const auto output_space = std::filesystem::space(output.parent_path(), error);
+    if (!error && output_space.available != std::numeric_limits<uint64_t>::max())
+        observation.output_free_bytes = output_space.available;
+    const auto system_space = std::filesystem::space(system_volume, error);
+    if (!error && system_space.available != std::numeric_limits<uint64_t>::max())
+        observation.system_free_bytes = system_space.available;
+    const bool exists = std::filesystem::exists(output, error);
+    if (!error) {
+        if (exists) {
+            const auto size = std::filesystem::file_size(output, error);
+            if (!error)
+                observation.file_bytes = size;
+        } else {
+            observation.file_bytes = 0;
+        }
+    }
+    return observation;
 }
 
 ProcessMetrics WinProcessSampler::SampleForAdapter(int64_t adapter_luid) {

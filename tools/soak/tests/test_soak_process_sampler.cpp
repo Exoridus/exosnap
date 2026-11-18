@@ -1,5 +1,8 @@
 #include "soak_process_sampler.h"
 
+#include <exosnap/engine/recorder_session.h>
+#include <fstream>
+
 #include <gtest/gtest.h>
 
 #include <chrono>
@@ -21,4 +24,26 @@ TEST(SoakProcessSampler, CpuNeedsARealIntervalAndGpuNeedsAnAttributedAdapter) {
     EXPECT_LE(*next.process_cpu_percent, 100.0);
     EXPECT_GE(*next.system_cpu_percent, 0.0);
     EXPECT_LE(*next.system_cpu_percent, 100.0);
+}
+
+TEST(SoakProcessSampler, StorageReadsTheActualEngineMediaForMkvAndMp4) {
+    using exosnap::engine::Container;
+    const auto prefix =
+        std::filesystem::temp_directory_path() /
+        ("exosnap-storage-" + std::to_string(std::chrono::steady_clock::now().time_since_epoch().count()));
+    for (const auto container : {Container::Matroska, Container::Mp4}) {
+        const auto output = std::filesystem::path(prefix.string() + (container == Container::Mp4 ? ".mp4" : ".mkv"));
+        const auto active = container == Container::Mp4 ? exosnap::engine::DeriveTransientMkvPath(output) : output;
+        {
+            std::ofstream stream(active, std::ios::binary);
+            ASSERT_TRUE(stream.good());
+            stream << "proof";
+        }
+        const auto observation = exosnap::soak::ReadSoakStorage(output, container, prefix.root_path(), 1.0);
+        EXPECT_EQ(observation.file_bytes, 5u) << output.string();
+        EXPECT_TRUE(observation.output_free_bytes);
+        EXPECT_TRUE(observation.system_free_bytes);
+        std::error_code error;
+        std::filesystem::remove(active, error);
+    }
 }

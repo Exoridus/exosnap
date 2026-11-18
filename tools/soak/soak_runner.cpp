@@ -46,6 +46,8 @@ void SoakRunner::Start(double sample_interval_s) {
         throw std::logic_error("A soak sampler can only start once");
     if (!std::isfinite(sample_interval_s) || sample_interval_s <= 0)
         throw std::invalid_argument("Soak sample interval must be positive and finite");
+    if (storage_config_ && sample_interval_s > storage_config_->poll_seconds)
+        throw std::invalid_argument("Soak sampling interval cannot exceed the storage watch interval");
     if (!jsonl_path_.empty() && !jsonl_.is_open())
         throw std::runtime_error("Cannot open soak timeline: " + jsonl_path_);
     started_ = true;

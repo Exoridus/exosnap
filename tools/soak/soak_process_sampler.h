@@ -4,10 +4,17 @@
 // properties of the HOST process, never the engine — so they live here, in the
 // tool, behind an interface the tests can substitute.
 
+#include "soak_storage.h"
+
 #include <cstdint>
+#include <exosnap/engine/codec_types.h>
+#include <filesystem>
 #include <optional>
 
 namespace exosnap::soak {
+
+StorageObservation ReadSoakStorage(const std::filesystem::path& output, exosnap::engine::Container container,
+                                   const std::filesystem::path& system_volume, double elapsed);
 
 struct ProcessMetrics {
     uint64_t rss_bytes = 0;     // WorkingSetSize

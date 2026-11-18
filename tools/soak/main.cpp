@@ -204,30 +204,6 @@ MediaProbe ProbeMedia(const std::string& path) {
     return p;
 }
 
-exosnap::soak::StorageObservation ReadStorage(const std::filesystem::path& output,
-                                              const std::filesystem::path& system_volume, double elapsed) {
-    exosnap::soak::StorageObservation observation;
-    observation.t_s = elapsed;
-    std::error_code error;
-    const auto output_space = std::filesystem::space(output.parent_path(), error);
-    if (!error && output_space.available != std::numeric_limits<uint64_t>::max())
-        observation.output_free_bytes = output_space.available;
-    const auto system_space = std::filesystem::space(system_volume, error);
-    if (!error && system_space.available != std::numeric_limits<uint64_t>::max())
-        observation.system_free_bytes = system_space.available;
-    const bool exists = std::filesystem::exists(output, error);
-    if (!error) {
-        if (exists) {
-            const auto size = std::filesystem::file_size(output, error);
-            if (!error)
-                observation.file_bytes = size;
-        } else {
-            observation.file_bytes = 0;
-        }
-    }
-    return observation;
-}
-
 std::string Timestamp() {
     std::time_t t = std::time(nullptr);
     std::tm tm{};
@@ -531,8 +507,12 @@ int main(int argc, char* argv[]) {
 
     const bool storage_watch_enabled = !synthetic || requested_reserve_bytes != 0;
     if (storage_watch_enabled) {
-        runner.ConfigureStorageWatch(storage_config, [output, system_volume](double elapsed) {
-            return ReadStorage(output, system_volume, elapsed);
+        if (sample_ms / 1000.0 > storage_config.poll_seconds) {
+            std::fprintf(stderr, "[soak] --sample-ms cannot exceed the storage watch interval (60000 ms)\n");
+            return 64;
+        }
+        runner.ConfigureStorageWatch(storage_config, [output, container, system_volume](double elapsed) {
+            return exosnap::soak::ReadSoakStorage(output, container, system_volume, elapsed);
         });
     }
 

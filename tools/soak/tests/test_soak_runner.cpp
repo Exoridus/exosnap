@@ -316,3 +316,13 @@ TEST(SoakRunner, ResourceAndAudioObservationsKeepAvailabilityAndAdapterIdentity)
     EXPECT_TRUE(absent["gpu_utilization_percent"].is_null());
     EXPECT_TRUE(absent["audio_discontinuity_ms_total"].is_null());
 }
+
+TEST(SoakRunner, ProtectedRunRejectsASamplerSlowerThanTheStorageDeadline) {
+    ConstantSampler sampler;
+    exosnap::soak::SoakRunner runner({}, sampler, "");
+    runner.ConfigureStorageWatch({30.0, 0.01, 300, 500, 100, false}, [](double elapsed) {
+        return exosnap::soak::StorageObservation{elapsed, 100000u, 100000u, 0u};
+    });
+    EXPECT_THROW(runner.Start(1.0), std::invalid_argument);
+    runner.Stop();
+}
