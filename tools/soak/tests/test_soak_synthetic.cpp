@@ -213,3 +213,38 @@ TEST(SoakSynthetic, DiagnosticAbortRequestsTheRunningSessionToStop) {
     std::error_code error;
     std::filesystem::remove(mkv, error);
 }
+
+TEST(SoakSynthetic, StorageSafetyStopFinalizesTheRunningSession) {
+    using namespace exosnap::engine::testutil;
+    const std::string mkv = UniqueTemp("storage-stop.mkv");
+    SyntheticSessionConfig config;
+    config.output_path = mkv;
+    config.target_seconds = 30;
+    config.realtime_pace = true;
+    config.drive_stats_collector = true;
+    SyntheticSession session(config);
+    exosnap::soak::SoakStopControl control;
+    FakeSampler sampler;
+    SoakRunner runner({}, sampler, "", [&] { control.RequestStop(); });
+    session.SetDiagnosticsCallback([&](const auto& diagnostics) { runner.OnDiagnostics(diagnostics); });
+    runner.ConfigureStorageWatch({30.0, 0.05, 300, 500, 100, false}, [](double elapsed) {
+        return exosnap::soak::StorageObservation{elapsed, elapsed < 1.0 ? 100000u : 400u, 100000u, 0u};
+    });
+    control.Start(std::chrono::seconds(30), [&] { session.RequestStop(); });
+    runner.Start(0.01);
+    const auto started = std::chrono::steady_clock::now();
+    const auto result = session.Run();
+    control.Complete();
+    runner.Stop();
+    EXPECT_TRUE(result.success) << result.error;
+    EXPECT_TRUE(result.finalized);
+    EXPECT_TRUE(runner.aborted());
+    EXPECT_NE(runner.abort_decision().reason.find("storage"), std::string::npos);
+    EXPECT_LT(std::chrono::steady_clock::now() - started, std::chrono::seconds(15));
+    const auto media = DemuxAndInspect(mkv);
+    EXPECT_TRUE(media.open_ok);
+    EXPECT_TRUE(media.clean_eof);
+    EXPECT_GT(media.packets, 0u);
+    std::error_code error;
+    std::filesystem::remove(mkv, error);
+}

@@ -69,8 +69,9 @@ impl ProfileSpec {
 // moved to PR CI (ci-build-debug, ci-build-release, ci-lint), which already
 // runs them before merge. Duplicating a several-minute build on every commit
 // and push bought no coverage the PR gate did not already have, and cost the
-// warm local targets from the developer-loop budget in section 6 of the
-// quality sweep. See docs/dev/build-and-test.md for the resulting tiers.
+// warm local targets from the developer-loop budget. The quick preflight uses
+// only direct changed sources and an existing database, without configuring or
+// building. See docs/dev/build-and-test.md for the resulting tiers.
 const LOCAL_STEPS: &[StepId] = &[
     StepId::Diff,
     StepId::Drift,
@@ -85,6 +86,7 @@ const LOCAL_STEPS: &[StepId] = &[
     StepId::PrivacyAllowlist,
     StepId::NetworkEgress,
     StepId::Rust,
+    StepId::ClangTidyQuick,
 ];
 
 const DEBUG_PRESET: &str = "windows-x64-ninja-debug";

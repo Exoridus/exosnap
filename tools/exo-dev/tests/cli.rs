@@ -290,3 +290,16 @@ fn ci_lint_plans_the_build_free_cppcheck_pass() {
     assert_eq!(code, 0);
     assert!(planned_names(&receipt).contains(&"cppcheck".to_string()));
 }
+
+#[test]
+fn quick_clang_tidy_requires_an_explicit_base() {
+    let output = Command::new(env!("CARGO_BIN_EXE_exo-dev"))
+        .args(["lint", "clang-tidy", "--quick"])
+        .current_dir(repo_root())
+        .output()
+        .unwrap();
+    assert!(!output.status.success());
+    let error = String::from_utf8_lossy(&output.stderr);
+    assert!(error.contains("--base"), "{error}");
+    assert!(!error.contains("unexpected argument"), "{error}");
+}

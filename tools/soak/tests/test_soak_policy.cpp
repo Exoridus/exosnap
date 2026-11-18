@@ -4,6 +4,7 @@
 #include "soak_metrics.h"
 
 #include <gtest/gtest.h>
+#include <nlohmann/json.hpp>
 
 #include <cmath>
 #include <vector>
@@ -192,4 +193,96 @@ TEST(Serialization, SummaryJsonCarriesMetadataAndAdvisoryNote) {
     EXPECT_NE(j.find("\"metadata\""), std::string::npos);
     EXPECT_NE(j.find("\"volume\""), std::string::npos);
     EXPECT_NE(j.find("advisory"), std::string::npos);
+}
+
+TEST(SoakAbortPolicy, HighCoalescingDoesNotAbort) {
+    auto history = HealthyTimeline(90);
+    for (auto& sample : history)
+        sample.frames_dropped_coalesced = sample.frames_emitted * 20 + 1000;
+    const auto decision = SoakAbortPolicy{}.Evaluate(history);
+    EXPECT_EQ(decision.verdict, SoakVerdict::Continue) << decision.reason;
+}
+
+TEST(SoakAbortPolicy, CfrWarmupDoesNotAbort) {
+    auto history = HealthyTimeline(90);
+    for (auto& sample : history)
+        sample.frames_dropped_cfr = 1000;
+    const auto decision = SoakAbortPolicy{}.Evaluate(history);
+    EXPECT_EQ(decision.verdict, SoakVerdict::Continue) << decision.reason;
+}
+
+TEST(SoakAbortPolicy, SustainedBackpressureAndProcessingLossStillAbort) {
+    for (const bool processing : {false, true}) {
+        auto history = HealthyTimeline(90);
+        for (auto& sample : history) {
+            sample.real_frame_loss = sample.frames_emitted / 10 + 1;
+            if (processing)
+                sample.frames_dropped_processing_failure = sample.real_frame_loss;
+            else
+                sample.frames_dropped_backpressure = sample.real_frame_loss;
+        }
+        EXPECT_EQ(SoakAbortPolicy{}.Evaluate(history).verdict, SoakVerdict::Abort) << processing;
+    }
+}
+
+TEST(SoakAbortPolicy, RingEvictionsRemainEventsWithoutBecomingOutputLoss) {
+    auto history = HealthyTimeline(90);
+    for (auto& sample : history)
+        sample.frames_dropped_ring_eviction = 100000;
+    EXPECT_EQ(SoakAbortPolicy{}.Evaluate(history).verdict, SoakVerdict::Continue);
+    EXPECT_EQ(SoakMetricsAggregator{}.Summarize(history).frames_dropped_ring_eviction, 100000u);
+}
+
+TEST(SoakAbortPolicy, MixedEventsUseOnlyCanonicalLossAndKeepTheTwoPercentBudget) {
+    auto history = HealthyTimeline(90);
+    for (auto& sample : history) {
+        sample.frames_dropped_coalesced = 100000;
+        sample.frames_dropped_cfr = 20000;
+        sample.frames_dropped_ring_eviction = 50000;
+        sample.frames_dropped_backpressure = sample.frames_emitted / 100;
+        sample.real_frame_loss = sample.frames_dropped_backpressure;
+    }
+    EXPECT_EQ(SoakAbortPolicy{}.Evaluate(history).verdict, SoakVerdict::Continue);
+    for (auto& sample : history) {
+        sample.frames_dropped_processing_failure = sample.frames_emitted / 20 + 1;
+        sample.real_frame_loss += sample.frames_dropped_processing_failure;
+    }
+    EXPECT_EQ(SoakAbortPolicy{}.Evaluate(history).verdict, SoakVerdict::Abort);
+    EXPECT_DOUBLE_EQ(SoakAbortPolicy{}.thresholds().drop_ratio_abort, 0.02);
+}
+
+TEST(SoakAbortPolicy, TerminalUndrainedEncoderOutputCannotPassAShortRun) {
+    auto history = HealthyTimeline(2);
+    history.back().encoder_undrained_frames = 1;
+    history.back().real_frame_loss = 1;
+    EXPECT_EQ(SoakAbortPolicy{}.Evaluate(history).verdict, SoakVerdict::Abort);
+    history.back().encoder_undrained_frames = 0;
+    history.back().encoder_flush_incomplete = true;
+    EXPECT_EQ(SoakAbortPolicy{}.Evaluate(history).verdict, SoakVerdict::Abort);
+}
+
+TEST(Serialization, ReportsAllEventsSeparatelyFromCanonicalPictureLoss) {
+    SoakSample sample;
+    sample.frames_dropped_coalesced = 1000;
+    sample.frames_dropped_cfr = 2000;
+    sample.frames_dropped_backpressure = 30;
+    sample.frames_dropped_processing_failure = 40;
+    sample.frames_dropped_ring_eviction = 50;
+    sample.encoder_undrained_frames = 60;
+    sample.real_frame_loss = 130;
+    const auto summary = SoakMetricsAggregator{}.Summarize({sample});
+    EXPECT_EQ(summary.total_frames_dropped, 3180u);
+    EXPECT_EQ(summary.real_frame_loss, 130u);
+    const auto json = nlohmann::json::parse(SummaryToJson(summary, {}));
+    EXPECT_EQ(json["totals"]["frames_dropped"], 3180);
+    EXPECT_EQ(json["totals"]["real_frame_loss"], 130);
+    EXPECT_EQ(json["totals"]["frames_dropped_ring_eviction"], 50);
+    EXPECT_EQ(json["totals"]["encoder_undrained_frames"], 60);
+    const auto row = nlohmann::json::parse(SampleToJsonLine(sample));
+    EXPECT_EQ(row["real_frame_loss"], 130);
+    EXPECT_EQ(row["frames_dropped_ring_eviction"], 50);
+    const auto markdown = exosnap::soak::SummaryToMarkdown(summary, {});
+    EXPECT_NE(markdown.find("drop events (all categories): 3180"), std::string::npos);
+    EXPECT_NE(markdown.find("real frame loss: 130"), std::string::npos);
+    EXPECT_NE(markdown.find("ring eviction: 50"), std::string::npos);
 }

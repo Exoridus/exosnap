@@ -11,6 +11,7 @@
 # --- Pure analysis library (no WinAPI / FFmpeg / engine) ---
 add_library(soak_metrics STATIC
     soak_metrics.cpp
+    soak_storage.cpp
 )
 target_include_directories(soak_metrics PUBLIC ${CMAKE_CURRENT_SOURCE_DIR})
 target_link_libraries(soak_metrics PUBLIC nlohmann_json::nlohmann_json)
@@ -28,11 +29,13 @@ target_compile_features(clapper_schedule PUBLIC cxx_std_20)
 # --- Host run-loop: engine-callback latch + process sampler + timeline + abort ---
 add_library(soak_runner STATIC
     soak_runner.cpp
+    soak_execution_state.cpp
     soak_process_sampler.cpp
+    ${PROJECT_SOURCE_DIR}/app/diagnostics/GpuTelemetryProviders.cpp
 )
-target_include_directories(soak_runner PUBLIC ${CMAKE_CURRENT_SOURCE_DIR})
+target_include_directories(soak_runner PUBLIC ${CMAKE_CURRENT_SOURCE_DIR} PRIVATE ${PROJECT_SOURCE_DIR}/app)
 target_link_libraries(soak_runner PUBLIC soak_metrics exosnap_engine)
-target_link_libraries(soak_runner PRIVATE exosnap::warnings)
+target_link_libraries(soak_runner PRIVATE exosnap::warnings dxgi)
 target_compile_definitions(soak_runner PRIVATE NOMINMAX)
 target_compile_features(soak_runner PUBLIC cxx_std_20)
 
@@ -53,7 +56,7 @@ set_property(TARGET exosnap-soak PROPERTY CXX_STANDARD 20)
 exosnap_add_gtest(
     NAME soak_policy_tests
     TEST_PREFIX soak.
-    SOURCES tests/test_soak_policy.cpp
+    SOURCES tests/test_soak_policy.cpp tests/test_soak_storage.cpp
     LIBRARIES soak_metrics
 )
 
@@ -79,10 +82,11 @@ exosnap_add_gtest(
     NAME soak_runner_tests
     TEST_PREFIX soak.
     PHASE cpu
-    SOURCES tests/test_soak_runner.cpp
+    SOURCES tests/test_soak_runner.cpp tests/test_soak_process_sampler.cpp
     LIBRARIES soak_runner
 )
 target_include_directories(soak_runner_tests PRIVATE ${PROJECT_SOURCE_DIR}/libs/engine/testutil)
+target_compile_definitions(soak_runner_tests PRIVATE NOMINMAX)
 
 # The A/V-sync analyzer's own unit tests live with its implementation now:
 # `cargo test -p exo-dev av_sync::`, run as part of the `rust` verification step.

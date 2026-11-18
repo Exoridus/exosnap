@@ -61,9 +61,11 @@ set(SOAK_ROOT ${CMAKE_CURRENT_SOURCE_DIR}/../../../../tools/soak)
 add_executable(exosnap_soak_control_tests
     ${SOAK_ROOT}/tests/test_soak_runner.cpp
     ${SOAK_ROOT}/tests/test_soak_policy.cpp
+    ${SOAK_ROOT}/tests/test_soak_storage.cpp
     ${SOAK_ROOT}/tests/test_clapper_schedule.cpp
     ${SOAK_ROOT}/soak_runner.cpp
     ${SOAK_ROOT}/soak_metrics.cpp
+    ${SOAK_ROOT}/soak_storage.cpp
     ${SOAK_ROOT}/clapper_schedule.cpp
 )
 target_compile_features(exosnap_soak_control_tests PRIVATE cxx_std_20)

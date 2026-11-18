@@ -674,6 +674,10 @@ enum LintCommand {
         /// translation units are analysed. Omit for a full-tree pass.
         #[arg(long)]
         base: Option<String>,
+        /// Check direct changed sources without global cache preparation.
+        /// This preflight requires an existing compilation database.
+        #[arg(long, requires = "base", conflicts_with_all = ["list_checks", "cache_dir", "profile_path"])]
+        quick: bool,
         /// Explicit path to clang-tidy.exe. Autodetected when omitted: first
         /// the LLVM toolset of the Visual Studio installation that compiled
         /// the tree, then the VS 2022 LLVM toolset, then PATH.
@@ -1026,6 +1030,7 @@ fn run_cli() -> anyhow::Result<ExitCode> {
                 require_version,
                 list_checks,
                 profile_path,
+                quick,
             } => lint_clang_tidy(
                 &repo_root,
                 build_dir,
@@ -1036,6 +1041,7 @@ fn run_cli() -> anyhow::Result<ExitCode> {
                 require_version,
                 list_checks,
                 profile_path,
+                quick,
             ),
             LintCommand::Quality {
                 only,
@@ -2611,12 +2617,50 @@ fn lint_clang_tidy(
     require_version: Option<String>,
     list_checks: bool,
     profile_path: Option<PathBuf>,
+    quick: bool,
 ) -> anyhow::Result<ExitCode> {
     let build_dir = if build_dir.is_absolute() {
         build_dir
     } else {
         repo_root.join(build_dir)
     };
+    if quick {
+        let base = base.as_deref().context("--quick requires --base")?;
+        anyhow::ensure!(
+            build_dir.join("compile_commands.json").is_file(),
+            "clang-tidy preflight requires an existing compilation database at {}; configure and build the Ninja preset first",
+            build_dir.display()
+        );
+        let changed = Git::new(repo_root).scope_files(Some(base), false)?;
+        let environment = exo_dev::msvc::environment()?
+            .map(|(_, vars)| {
+                vars.into_iter()
+                    .map(|(key, value)| (key.into(), value.into()))
+                    .collect::<Vec<_>>()
+            })
+            .unwrap_or_default();
+        let _tree = host_lock::acquire(
+            host_lock::LockKind::Tree,
+            Some(&build_dir),
+            "clang-tidy preflight",
+        )?;
+        let _build = host_lock::acquire(host_lock::LockKind::Build, None, "clang-tidy preflight")?;
+        let report = exo_dev::lint::clang_tidy::run_quick(
+            repo_root,
+            &build_dir,
+            &changed,
+            jobs,
+            require_version.as_deref(),
+            clang_tidy.as_deref(),
+            &environment,
+        )?;
+        print!("{}", report.summary());
+        return Ok(if report.unconfigured.is_empty() {
+            ExitCode::SUCCESS
+        } else {
+            ExitCode::FAILURE
+        });
+    }
     let cache_dir =
         cache_dir.unwrap_or_else(|| exo_dev::evidence::tool_cache_dir("clang-tidy", &[], None));
 

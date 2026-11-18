@@ -41,6 +41,8 @@ use std::time::Instant;
 mod dependency_manifest;
 mod freshness;
 mod input_identity;
+mod quick;
+pub use quick::{QuickReport, run_quick};
 #[cfg(test)]
 mod measurement;
 mod timing;
@@ -71,7 +73,7 @@ use crate::lint::{
 /// validated or stored. A change to the dependency manifest format bumps
 /// `dependency_manifest::MANIFEST_SCHEMA` instead. Nothing else enforces the
 /// bump.
-pub const CACHE_SCHEMA: u32 = 6;
+pub const CACHE_SCHEMA: u32 = 7;
 
 /// Canary translation units, analysed whenever the analysis configuration
 /// itself changes rather than the code it inspects. A change to `.clang-tidy`
@@ -214,23 +216,7 @@ pub fn run_blocking(
     timing.compile_database_seconds = phase.elapsed().as_secs_f64();
     timing::progress_phase("tool_discovery", started);
     let phase = Instant::now();
-    let tool = clang_tidy_path
-        .map(Path::to_path_buf)
-        .or_else(|| build_toolchain_clang_tidy(&entries))
-        .or_else(discover_vs2022_clang_tidy)
-        .or_else(|| lint::find_tool(&["clang-tidy"]))
-        .ok_or_else(|| {
-            ToolMissing(
-                "clang-tidy.exe not found (Visual Studio LLVM toolset or PATH).".to_string(),
-            )
-        })?;
-    if !tool.is_file() {
-        return Err(ToolMissing(format!(
-            "clang-tidy path '{}' does not exist.",
-            tool.display()
-        ))
-        .into());
-    }
+    let tool = discover_tool(&entries, clang_tidy_path)?;
 
     timing.tool_discovery_seconds = phase.elapsed().as_secs_f64();
     timing::progress_phase("tool_version", started);
@@ -1710,6 +1696,31 @@ fn compiler_installation(command_line: &str) -> Option<PathBuf> {
         .to_ascii_lowercase()
         .find("\\vc\\tools\\msvc\\")?;
     Some(PathBuf::from(&normalized[..marker]))
+}
+
+fn discover_tool(
+    entries: &[CompileEntry],
+    clang_tidy_path: Option<&Path>,
+) -> anyhow::Result<PathBuf> {
+    let tool = clang_tidy_path
+        .map(Path::to_path_buf)
+        .or_else(|| build_toolchain_clang_tidy(entries))
+        .or_else(discover_vs2022_clang_tidy)
+        .or_else(|| lint::find_tool(&["clang-tidy"]))
+        .ok_or_else(|| {
+            ToolMissing(
+                "clang-tidy.exe not found (Visual Studio LLVM toolset or PATH).".to_string(),
+            )
+        })?;
+    if !tool.is_file() {
+        return Err(ToolMissing(format!(
+            "clang-tidy path '{}' does not exist.",
+            tool.display()
+        ))
+        .into());
+    }
+
+    Ok(tool)
 }
 
 fn clang_tidy_version_banner(tool: &Path) -> anyhow::Result<String> {

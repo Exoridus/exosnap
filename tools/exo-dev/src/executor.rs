@@ -4,6 +4,8 @@ use std::collections::BTreeMap;
 use std::ffi::OsString;
 use std::path::{Path, PathBuf};
 
+use anyhow::Context as _;
+
 use crate::evidence;
 use crate::host_lock::{self, HostLock, LockKind};
 use crate::msvc;
@@ -722,6 +724,20 @@ impl RealExecutor {
                 };
                 Ok((log, outcome))
             }),
+            StepId::ClangTidyQuick => self.native("clang-tidy-quick", || {
+                let changed: Vec<String> = serde_json::from_value(
+                    check.evidence.get("changedFiles").cloned().context("missing quick source scope")?,
+                )?;
+                let report = crate::lint::clang_tidy::run_quick(
+                    &ctx.repo_root, &ctx.tree(), &changed, 0, None, None, &ctx.runner.env,
+                )?;
+                let outcome = if let Some(reason) = &report.skip_reason {
+                    Outcome::new(Status::Skip, reason)
+                } else {
+                    Outcome::pass(format!("{} direct translation unit(s); full analysis still required", report.analyzed))
+                };
+                Ok((report.summary(), outcome))
+            }),
             StepId::ClangTidy => {
                 // The compiler import has run (see `execute`): the fingerprint
                 // reads the toolset variables it exports, and an unqualified
@@ -746,6 +762,14 @@ impl RealExecutor {
                 let build_dir = self.ctx.tree();
                 let jobs = self.ctx.jobs;
                 self.native("clang-tidy", || {
+                    let preflight = if let Some(base) = base.as_deref() {
+                        let changed = crate::git::Git::new(&ctx.repo_root).scope_files(Some(base), false)?;
+                        Some(crate::lint::clang_tidy::run_quick(
+                            &ctx.repo_root, &build_dir, &changed, 0, None, None, &ctx.runner.env,
+                        )?)
+                    } else {
+                        None
+                    };
                     let report = crate::lint::clang_tidy::run_blocking(
                         &ctx.repo_root,
                         &build_dir,
@@ -772,6 +796,9 @@ impl RealExecutor {
                         "clang-tidy      : {}\n",
                         report.tool_path.display()
                     );
+                    if let Some(preflight) = preflight {
+                        log.push_str(&preflight.summary());
+                    }
                     log.push_str(&format!("compile database: {}\n", report.compile_db.display()));
                     log.push_str(&format!(
                         "blocking checks : {}\n",
@@ -909,7 +936,10 @@ impl Executor for RealExecutor {
     fn execute(&mut self, check: &Check) -> Outcome {
         // A step that starts compiler processes needs cl.exe. The import runs
         // before the locks so it does not lengthen their hold.
+        let quick_without_database = check.id == StepId::ClangTidyQuick
+            && !self.ctx.tree().join("compile_commands.json").is_file();
         if check.id.info().locks.build
+            && !quick_without_database
             && let Err(outcome) = self.ensure_compiler()
         {
             return outcome;
@@ -990,6 +1020,24 @@ mod tests {
     use crate::plan;
     use crate::profile::Profile;
     use crate::scope::Scope;
+
+    #[cfg(windows)]
+    #[test]
+    fn quick_without_a_database_skips_without_importing_or_building() {
+        let dir = tempfile::tempdir().unwrap();
+        let mut executor = executor(&dir.path().join("logs"));
+        executor.ctx.repo_root = dir.path().to_path_buf();
+        std::fs::write(dir.path().join("a.cpp"), "").unwrap();
+        let scope = Scope::of(&["a.cpp".into()]);
+        let plan = plan::build(&plan::tests::input(Profile::PrePush, &scope));
+        let outcome = executor.execute(plan.check(StepId::ClangTidyQuick).unwrap());
+        assert_eq!(outcome.status, Status::Skip);
+        assert!(!executor.msvc_ready);
+        assert!(!executor.ctx.tree().exists());
+        assert!(outcome.detail.contains("no existing compilation database"));
+        let log = std::fs::read_to_string(outcome.evidence["log"].as_str().unwrap()).unwrap();
+        assert!(log.contains("SKIP") && log.contains("full blocking analysis remains required"));
+    }
 
     #[test]
     fn native_output_is_fully_persisted_in_compact_mode() {

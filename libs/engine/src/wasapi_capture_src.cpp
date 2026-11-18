@@ -5,7 +5,9 @@
 
 #include "discontinuity_gap.h"
 #include "exosnap/engine/interfaces/IAudioCaptureSource.h"
+#include "wasapi_device_timing.h"
 #include "wgc_capture.h"
+#include <exosnap/engine/logging/logging.h>
 
 #include <cstdint>
 #include <functiondiscoverykeys_devpkey.h>
@@ -631,7 +633,13 @@ bool WasapiCaptureSrc::AcquireBuffer(RawAudioBuffer& out_buf, std::string& out_e
 
     // Device-clock timing for the A/V clock-drift metric. qpcPos is in 100 ns
     // units; 0 means the engine did not attribute a timestamp to this packet.
-    last_timing_valid_ = (qpcPos != 0);
+    if (!last_timing_valid_ || (captureFlags & AUDCLNT_BUFFERFLAGS_TIMESTAMP_ERROR) != 0) {
+        const logging::LogField fields[] = {{"flags", std::to_string(captureFlags)},
+                                            {"device_position", std::to_string(devicePos)},
+                                            {"qpc_100ns", std::to_string(qpcPos)}};
+        logging::log(logging::LogLevel::Info, "wasapi.microphone", "capture timestamp reference", fields);
+    }
+    last_timing_valid_ = HasReliableWasapiTimestamp(captureFlags, qpcPos);
     last_device_position_ns_ = DeviceFramesToNs(devicePos, sample_rate_);
     last_device_position_frames_ = devicePos;
     last_qpc_position_ns_ = qpcPos * 100ULL;
