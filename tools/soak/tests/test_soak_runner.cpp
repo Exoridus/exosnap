@@ -255,13 +255,19 @@ TEST(SoakRunner, SummaryRetainsTheFirstAbortAfterStorageRecovers) {
         const auto number = samples.fetch_add(1);
         if (number == 2)
             recovered.set_value();
-        return exosnap::soak::StorageObservation{elapsed, number == 1 ? 400u : 100000u, 100000u, 0u};
+        const uint64_t free = number == 0 ? 100000ULL : (number == 1 ? 400ULL : 100000000000ULL);
+        return exosnap::soak::StorageObservation{elapsed, free, 100000u, 0u};
     });
     runner.Start(0.01);
     const auto status = observed.wait_for(std::chrono::seconds(2));
     runner.Stop();
     ASSERT_EQ(status, std::future_status::ready);
     EXPECT_TRUE(runner.aborted());
+    const auto history = runner.timeline();
+    ASSERT_FALSE(history.empty());
+    ASSERT_TRUE(history.back().storage.has_value());
+    EXPECT_TRUE(history.back().storage->stop_reason.empty());
+    EXPECT_EQ(exosnap::soak::SoakAbortPolicy{}.Evaluate(history).verdict, exosnap::soak::SoakVerdict::Continue);
     EXPECT_EQ(runner.Summarize().advisory_verdict.verdict, exosnap::soak::SoakVerdict::Abort);
     EXPECT_EQ(runner.Summarize().advisory_verdict.reason, runner.abort_decision().reason);
 }
