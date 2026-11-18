@@ -2,6 +2,7 @@
 
 #include <gtest/gtest.h>
 
+#include <algorithm>
 #include <limits>
 
 namespace {
@@ -96,4 +97,16 @@ TEST(SoakStorage, CompetingSystemVolumeWritesCannotConsumeTheSystemReserveUnnoti
     observation.system_free_bytes = 90000;
     const auto next = exosnap::soak::CheckStorage(Config(), observation, first);
     EXPECT_FALSE(next.stop_reason.empty());
+}
+
+TEST(SoakStorage, AcceptedNonDividingDiagnosticIntervalStillWakesAtTheStorageDeadline) {
+    auto config = Config();
+    const auto last = Observation(0);
+    const double diagnostic_interval = 59.0;
+    const double first_wait = std::min(diagnostic_interval, exosnap::soak::StoragePollDelay(config, last, 0));
+    EXPECT_DOUBLE_EQ(first_wait, 59.0);
+    const double second_wait = std::min(diagnostic_interval, exosnap::soak::StoragePollDelay(config, last, first_wait));
+    EXPECT_DOUBLE_EQ(second_wait, 1.0);
+    EXPECT_DOUBLE_EQ(first_wait + second_wait, config.poll_seconds);
+    EXPECT_DOUBLE_EQ(exosnap::soak::StoragePollDelay(config, last, 65.0), 0.0);
 }

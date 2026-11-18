@@ -34,6 +34,8 @@ struct StorageCheck {
     std::string stop_reason;
 };
 
+[[nodiscard]] double StoragePollDelay(const StorageWatchConfig& config, const StorageObservation& last, double now_s);
+
 // Projects remaining writes from observed file growth and volume consumption, retaining reserves on both volumes.
 [[nodiscard]] StorageCheck CheckStorage(const StorageWatchConfig& config, const StorageObservation& observation,
                                         const std::optional<StorageCheck>& previous);

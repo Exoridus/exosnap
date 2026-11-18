@@ -29,6 +29,7 @@ target_compile_features(clapper_schedule PUBLIC cxx_std_20)
 # --- Host run-loop: engine-callback latch + process sampler + timeline + abort ---
 add_library(soak_runner STATIC
     soak_runner.cpp
+    soak_execution_state.cpp
     soak_process_sampler.cpp
     ${PROJECT_SOURCE_DIR}/app/diagnostics/GpuTelemetryProviders.cpp
 )
@@ -85,6 +86,7 @@ exosnap_add_gtest(
     LIBRARIES soak_runner
 )
 target_include_directories(soak_runner_tests PRIVATE ${PROJECT_SOURCE_DIR}/libs/engine/testutil)
+target_compile_definitions(soak_runner_tests PRIVATE NOMINMAX)
 
 # The A/V-sync analyzer's own unit tests live with its implementation now:
 # `cargo test -p exo-dev av_sync::`, run as part of the `rust` verification step.

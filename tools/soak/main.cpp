@@ -33,6 +33,7 @@ extern "C" {
 #include <exosnap/engine/recorder_session.h>
 
 #include "clapper_schedule.h"
+#include "soak_execution_state.h"
 #include "soak_metrics.h"
 #include "soak_process_sampler.h"
 #include "soak_runner.h"
@@ -524,6 +525,7 @@ int main(int argc, char* argv[]) {
         {"audio_sources", audio_sources_s.empty() ? "legacy-single-track" : audio_sources_s},
         {"target_seconds", std::to_string(duration_s)},
         {"storage_watch", storage_watch_enabled ? "enabled" : "disabled-synthetic"},
+        {"execution_state_guard", synthetic ? "not-requested" : "system-and-display-required"},
         {"storage_poll_seconds", std::to_string(storage_config.poll_seconds)},
         {"output_reserve_bytes", std::to_string(storage_config.output_reserve_bytes)},
         {"system_reserve_bytes", std::to_string(storage_config.system_reserve_bytes)},
@@ -600,6 +602,7 @@ int main(int argc, char* argv[]) {
                 std::fprintf(stderr, "[soak] validate rejected: %s\n", vr.error_detail.c_str());
                 return 2;
             }
+            exosnap::soak::SoakExecutionState execution_state;
             session.SetStatsCallback([&](const SessionStats& s) { runner.OnStats(s); });
             session.SetDiagnosticsCallback([&](const RecordingDiagnosticsSnapshot& d) { runner.OnDiagnostics(d); });
             control->Start(std::chrono::duration<double>(duration_s), [&] { session.Stop(); });

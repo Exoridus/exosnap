@@ -1,4 +1,8 @@
+#include "soak_execution_state.h"
 #include "soak_process_sampler.h"
+
+#define WIN32_LEAN_AND_MEAN
+#include <windows.h>
 
 #include <exosnap/engine/recorder_session.h>
 #include <fstream>
@@ -46,4 +50,18 @@ TEST(SoakProcessSampler, StorageReadsTheActualEngineMediaForMkvAndMp4) {
         std::error_code error;
         std::filesystem::remove(active, error);
     }
+}
+
+TEST(SoakExecutionState, DefersSystemAndDisplayIdleThenRestoresTheCreatingThread) {
+    const auto original = SetThreadExecutionState(ES_CONTINUOUS | ES_SYSTEM_REQUIRED);
+    ASSERT_NE(original, 0u);
+    {
+        exosnap::soak::SoakExecutionState lease;
+        const auto held = SetThreadExecutionState(ES_CONTINUOUS);
+        EXPECT_EQ(held & (ES_SYSTEM_REQUIRED | ES_DISPLAY_REQUIRED), ES_SYSTEM_REQUIRED | ES_DISPLAY_REQUIRED);
+    }
+    const auto restored = SetThreadExecutionState(ES_CONTINUOUS);
+    EXPECT_NE(restored & ES_SYSTEM_REQUIRED, 0u);
+    EXPECT_EQ(restored & ES_DISPLAY_REQUIRED, 0u);
+    EXPECT_NE(SetThreadExecutionState(original), 0u);
 }

@@ -6,6 +6,10 @@
 
 namespace exosnap::soak {
 
+double StoragePollDelay(const StorageWatchConfig& config, const StorageObservation& last, double now_s) {
+    return std::max(0.0, last.t_s + config.poll_seconds - now_s);
+}
+
 StorageCheck CheckStorage(const StorageWatchConfig& config, const StorageObservation& observation,
                           const std::optional<StorageCheck>& previous) {
     StorageCheck result;

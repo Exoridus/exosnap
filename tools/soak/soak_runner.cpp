@@ -1,5 +1,6 @@
 #include "soak_runner.h"
 
+#include <algorithm>
 #include <chrono>
 #include <cmath>
 #include <stdexcept>
@@ -60,7 +61,18 @@ void SoakRunner::Start(double sample_interval_s) {
             // One sample immediately so even a sub-interval run yields a row.
             SampleOnce();
             std::unique_lock lock(stop_mutex_);
-            while (!wake_.wait_for(lock, interval, [this] { return stop_.load(); })) {
+            while (!stop_.load()) {
+                auto wait_interval = interval;
+                if (storage_config_ && storage_check_) {
+                    const double elapsed =
+                        std::chrono::duration<double>(std::chrono::steady_clock::now() - start_time_).count();
+                    const auto storage_wait =
+                        std::chrono::duration_cast<std::chrono::steady_clock::duration>(std::chrono::duration<double>(
+                            StoragePollDelay(*storage_config_, storage_check_->observation, elapsed)));
+                    wait_interval = std::min(wait_interval, storage_wait);
+                }
+                if (wake_.wait_for(lock, wait_interval, [this] { return stop_.load(); }))
+                    break;
                 lock.unlock();
                 SampleOnce();
                 lock.lock();
