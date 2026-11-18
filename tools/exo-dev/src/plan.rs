@@ -225,6 +225,25 @@ pub fn build(input: &PlanInput) -> Plan {
                         "no C++ changed",
                     );
                 }
+                StepId::ClangTidyQuick => {
+                    skip_unless(
+                        &mut check,
+                        scope.changed_files.iter().any(|path| {
+                            matches!(
+                                path.rsplit('.')
+                                    .next()
+                                    .map(str::to_ascii_lowercase)
+                                    .as_deref(),
+                                Some("c" | "cc" | "cpp" | "cxx")
+                            )
+                        }),
+                        "no direct C/C++ source changes; full blocking analysis remains required",
+                    );
+                    check.evidence.insert(
+                        "changedFiles".into(),
+                        serde_json::json!(scope.changed_files),
+                    );
+                }
                 StepId::ClangTidy => {
                     skip_unless(
                         &mut check,
@@ -347,6 +366,40 @@ pub(crate) mod tests {
     }
 
     #[test]
+    fn local_quick_tidy_uses_exact_changed_paths_without_a_build_dependency() {
+        let scope = files(&["libs/engine/src/a.cpp", "libs/engine/include/new.h"]);
+        for profile in [Profile::PreCommit, Profile::PrePush] {
+            let plan = build(&input(profile, &scope));
+            let quick = plan
+                .checks
+                .iter()
+                .find(|check| check.name() == "clang-tidy-quick")
+                .expect("local quick preflight must be planned");
+            assert_eq!(
+                quick.evidence["changedFiles"],
+                serde_json::json!(scope.changed_files)
+            );
+            assert_eq!(quick.id.info().depends_on, &[StepId::Sanity]);
+            assert!(quick.id.info().locks.tree && quick.id.info().locks.build);
+            assert!(plan.check(StepId::Configure).is_none());
+            assert!(plan.check(StepId::ClangTidy).is_none());
+        }
+    }
+
+    #[test]
+    fn local_header_only_quick_is_explicitly_skipped() {
+        let scope = files(&["libs/engine/include/new.h"]);
+        let plan = build(&input(Profile::PreCommit, &scope));
+        let quick = plan.check(StepId::ClangTidyQuick).unwrap();
+        assert!(!quick.applicable);
+        assert!(
+            quick
+                .skip_reason
+                .contains("full blocking analysis remains required")
+        );
+    }
+
+    #[test]
     fn local_qml_smoke_is_bounded_and_requires_each_named_contract() {
         assert_eq!(
             QML_SMOKE_TARGETS,
@@ -389,7 +442,7 @@ pub(crate) mod tests {
         let scope = files(&["README.md"]);
         let plan = build(&input(Profile::PrePush, &scope));
         for check in &plan.checks {
-            if check.id == StepId::Rust {
+            if matches!(check.id, StepId::Rust | StepId::ClangTidyQuick) {
                 assert!(!check.applicable);
                 continue;
             }

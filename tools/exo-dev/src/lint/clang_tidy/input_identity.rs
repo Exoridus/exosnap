@@ -171,7 +171,12 @@ fn walk(
         for entry in std::fs::read_dir(directory).ok()? {
             let entry = entry.ok()?;
             let path = entry.path();
-            if skip.contains(&path) {
+            if skip.contains(&path)
+                || path
+                    .file_name()
+                    .and_then(|name| name.to_str())
+                    .is_some_and(git_metadata_component)
+            {
                 continue;
             }
             let kind = std::fs::metadata(&path).ok()?;
@@ -344,6 +349,17 @@ pub(super) fn is_build_artifact(name: &str) -> bool {
         })
 }
 
+fn git_metadata_component(component: &str) -> bool {
+    // Win32 also resolves trailing-dot and trailing-space aliases.
+    component
+        .trim_end_matches(['.', ' '])
+        .eq_ignore_ascii_case(".git")
+}
+
+/// Git storage layout does not identify source; metadata consumers are not cached.
+pub(super) fn is_git_metadata(path: &str) -> bool {
+    path.split(['/', '\\']).any(git_metadata_component)
+}
 fn lookup_name(name: &str) -> bool {
     !is_build_artifact(name)
 }
@@ -351,7 +367,7 @@ fn lookup_name(name: &str) -> bool {
 /// Membership of the directories an include lookup searches: the compile
 /// commands' include search directories and the directories of the project
 /// sources, whose files are the first includers. Every name except
-/// [`BUILD_ARTIFACTS`] counts, so a `__has_include` probe or a shadowing file
+/// [`BUILD_ARTIFACTS`] and Git metadata counts, so a `__has_include` probe or a shadowing file
 /// of any extension changes it. Returns the digest and the walked roots.
 /// A directory nested in another is walked once, and a missing one is
 /// recorded as absent. A directory containing the repository fails, because
@@ -368,7 +384,7 @@ pub(super) fn lookup_membership(
     let mut selected: Vec<String> = Vec::new();
     for directory in sorted {
         let lower = directory.to_ascii_lowercase();
-        if within(&repository, &lower) {
+        if is_git_metadata(&directory) || within(&repository, &lower) {
             return None;
         }
         if !selected
@@ -574,6 +590,24 @@ mod tests {
         assert_ne!(identity(), root_only, "the source's own directory counts");
     }
     #[test]
+    fn lookup_roots_inside_git_metadata_refuse_membership() {
+        let dir = repository();
+        let root = dir.path();
+        crate::test_support::write_files(
+            root,
+            &[("build/vendor/.git/objects/pack/pack-a.pack", "metadata")],
+        );
+        for path in [
+            "build/vendor/.git",
+            "build/vendor/.git/objects",
+            "build/vendor/.git.",
+            "build/vendor/.git ",
+        ] {
+            let roots = BTreeSet::from([super::super::normalize_root(&root.join(path))]);
+            assert!(lookup_membership(root, &roots).is_none(), "{path}");
+        }
+    }
+    #[test]
     fn lookup_membership_tracks_every_name_except_build_artifacts() {
         let dir = repository();
         let root = dir.path();
@@ -617,6 +651,14 @@ mod tests {
             ("build/app/CMakeFiles/app.dir/b.cpp.obj", "object"),
             ("build/app/app.exe", "binary"),
             ("build/app/app.PDB", "symbols"),
+            (
+                "build/generated/.git/objects/pack/pack-new.pack",
+                "metadata",
+            ),
+            (
+                "external/include/QtCore/.git",
+                "gitdir: repository metadata",
+            ),
             ("unwalked/notes.txt", "text"),
         ] {
             crate::test_support::write_files(root, &[(path, text)]);
@@ -628,6 +670,7 @@ mod tests {
             ("build/app/x_autogen/include/moc.inc", ""),
             ("build/app/x_autogen/include/moc_x.cpp", ""),
             ("libs/notes.txt", "a name of any other extension"),
+            ("libs/.gitignore", "an ordinary lookup name"),
             ("build/missing/now.h", ""),
         ] {
             let previous = membership().0;

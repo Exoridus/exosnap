@@ -27,6 +27,7 @@
 #include "wasapi_capture_src.h"
 #include "wasapi_device_timing.h"
 
+#include <cstdint>
 #include <gtest/gtest.h>
 
 using namespace exosnap::engine;

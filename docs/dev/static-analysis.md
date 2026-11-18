@@ -38,7 +38,11 @@ Include-cleaner checks direct standard and project dependencies. Its Windows SDK
 
 ## Manual include-cleaner repairs
 
-`cargo exo-dev lint clang-tidy` is read-only and has no `--fix` or `--apply` option. Hooks and CI do not apply clang-tidy replacements. Debug CI runs configure, focused QML contracts, `all_qmllint`, the complete build, blocking clang-tidy, then the complete CTest suite excluding `live`. The completed build supplies Ninja dependency data for changed-header scope. Blocking analysis failures stop before CTest.
+`cargo exo-dev lint clang-tidy` is read-only and has no `--fix` or `--apply` option. Hooks and CI do not apply clang-tidy replacements.
+
+Local hooks run an uncached preflight against an existing Ninja compilation database: only direct changed C/C++ sources and the canonical blocking checks, with two workers. It does not configure or build. Header-only changes and missing databases report SKIP; sources absent from the configured database report incomplete coverage with their paths. Covered sources still fail on real blocking findings. A preflight never establishes the complete blocking verdict. Debug CI runs the same preflight before the required header-aware analyzer pass. Run `cargo exo-dev lint clang-tidy --quick --base HEAD --build-dir build/windows-x64-ninja-debug` for explicit local feedback; `--jobs` overrides its two-worker default. The explicit command fails if its database is missing or a direct changed source has no compile command; configure and build a preset including the affected target first.
+
+Debug CI runs configure, focused QML contracts, `all_qmllint`, the complete build, uncached direct-source preflight, complete header-aware blocking clang-tidy, then the complete CTest suite excluding `live`. The completed build supplies Ninja dependency data for changed-header scope. Blocking analysis failures stop before CTest.
 
 For a narrow repair, first run the read-only gate against the configured and built Ninja tree. `--base HEAD` selects uncommitted changes against HEAD. Use another explicit revision when reviewing committed changes:
 

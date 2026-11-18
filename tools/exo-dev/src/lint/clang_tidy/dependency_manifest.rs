@@ -609,7 +609,9 @@ impl<'a> Recorder<'a> {
         if let Some(admission) = self.admissions.get(path) {
             return *admission;
         }
-        let admission = if super::input_identity::is_build_artifact(path) {
+        let admission = if super::input_identity::is_git_metadata(path) {
+            Some("metadata_input")
+        } else if super::input_identity::is_build_artifact(path) {
             Some("artifact_input")
         } else if !(self.coverage.owned)(path) {
             Some("foreign_input")
@@ -686,6 +688,9 @@ impl<'a> Recorder<'a> {
                 let name = name.replace('\\', "/");
                 // Lookup membership leaves build artifacts out, so a probe for
                 // one could turn true without changing any key.
+                if super::input_identity::is_git_metadata(&name) {
+                    return Err(self.refuse("metadata_lookup", &format!("{path} -> {name}")));
+                }
                 if super::input_identity::is_build_artifact(&name) {
                     return Err(self.refuse("artifact_lookup", &format!("{path} -> {name}")));
                 }
@@ -2661,6 +2666,39 @@ mod tests {
         }
     }
 
+    #[test]
+    fn opened_git_metadata_refuses_the_manifest() {
+        let fixture = Fixture::new(&[""]);
+        crate::test_support::write_files(
+            &fixture.root,
+            &[("repo/build/generated/.git/config.h", "int metadata;\n")],
+        );
+        let summary = fixture.record(&["repo/build/generated/.git/config.h"]);
+        assert_eq!(summary.incomplete, BTreeMap::from([("metadata_input", 1)]));
+        assert_eq!(super::super::cached_verdicts(&fixture.cache), 0);
+    }
+
+    #[test]
+    fn git_metadata_probes_refuse_the_manifest_before_the_name_appears() {
+        for text in [
+            "#if __has_include(\".git/MARKER\")\n#endif\n",
+            "#if __has_include(\".GiT/MARKER\")\n#endif\n",
+            "#if __has_include(\".git./MARKER\")\n#endif\n",
+            "#if __has_include(\".git /MARKER\")\n#endif\n",
+            "#define HAS_FILE(x) __has_include(x)\n#if HAS_FILE(\".git/MARKER\")\n#endif\n",
+        ] {
+            let fixture = Fixture::new(&["/I../libs"]);
+            fixture.write("repo/libs/a.h", text);
+            let summary = fixture.record(&["repo/libs/a.h"]);
+            assert_eq!(summary.incomplete, BTreeMap::from([("metadata_lookup", 1)]));
+            assert_eq!(super::super::cached_verdicts(&fixture.cache), 0);
+            crate::test_support::write_files(
+                &fixture.root,
+                &[("repo/libs/.git/MARKER", "now present")],
+            );
+            assert!(fixture.lookup().0.is_none());
+        }
+    }
     #[test]
     fn opened_build_artifacts_refuse_the_manifest() {
         let fixture = Fixture::new(&[""]);

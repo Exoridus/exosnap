@@ -50,6 +50,8 @@ pub enum StepId {
     /// step that is the decision, so a new one fails. Medium findings are backlog.
     Zizmor,
     Rust,
+    /// Direct changed-source checks against an existing compilation database.
+    ClangTidyQuick,
     Configure,
     QmlSmoke,
     /// `all_qmllint` over every QML module rather than per-module targets, so a
@@ -106,7 +108,7 @@ const TREE_AND_BUILD: Locks = Locks {
 };
 
 impl StepId {
-    pub const ALL: [StepId; 26] = [
+    pub const ALL: [StepId; 27] = [
         StepId::Sanity,
         StepId::Diff,
         StepId::Drift,
@@ -123,6 +125,7 @@ impl StepId {
         StepId::Actionlint,
         StepId::Zizmor,
         StepId::Rust,
+        StepId::ClangTidyQuick,
         StepId::Configure,
         StepId::QmlSmoke,
         StepId::QmlLint,
@@ -235,6 +238,11 @@ impl StepId {
                 ),
                 ..step("cppcheck", SANITY)
             },
+            StepId::ClangTidyQuick => StepInfo {
+                windows_only: true,
+                locks: TREE_AND_BUILD,
+                ..step("clang-tidy-quick", SANITY)
+            },
             // clang-tidy reads compile_commands.json, which configure writes and
             // the build keeps in step with the source. Changed-header scope also
             // reads Ninja dependencies recorded by the completed build. Run before
@@ -318,6 +326,7 @@ mod tests {
             StepId::Configure,
             StepId::QmlLint,
             StepId::Build,
+            StepId::ClangTidyQuick,
             StepId::ClangTidy,
         ] {
             let locks = step.info().locks;

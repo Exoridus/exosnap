@@ -17,6 +17,7 @@
 #include <cstdio>
 #include <mutex>
 #include <new>
+#include <string>
 
 namespace exosnap::engine {
 
