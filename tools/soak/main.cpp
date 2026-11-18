@@ -30,6 +30,7 @@ extern "C" {
 }
 
 #include <exosnap/engine/codec_types.h>
+#include <exosnap/engine/logging/logging.h>
 #include <exosnap/engine/recorder_session.h>
 
 #include "clapper_schedule.h"
@@ -543,6 +544,9 @@ int main(int argc, char* argv[]) {
     std::string err;
 
     try {
+        logging::LoggerConfig logger;
+        logger.filePath = out_s + ".engine.jsonl";
+        logging::initialize(logger);
         if (synthetic) {
             exosnap::engine::testutil::SyntheticSessionConfig cfg;
             cfg.video_codec = vcodec;
@@ -616,10 +620,12 @@ int main(int argc, char* argv[]) {
         }
     } catch (const std::exception& error) {
         runner.Stop();
+        logging::shutdown();
         std::fprintf(stderr, "[soak] infrastructure failure: %s\n", error.what());
         return 2;
     }
 
+    logging::shutdown();
     const MediaProbe probe = ProbeMedia(out_s);
     metadata.emplace_back("file", out_s);
     metadata.emplace_back("clean_eof", probe.ok ? "true" : "false");

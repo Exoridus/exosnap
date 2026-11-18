@@ -288,6 +288,12 @@ TEST(SoakRunner, ResourceAndAudioObservationsKeepAvailabilityAndAdapterIdentity)
     exosnap::engine::RecordingDiagnosticsSnapshot diagnostics;
     diagnostics.valid = true;
     diagnostics.capture_adapter_luid = 7;
+    diagnostics.av_drift_availability = exosnap::engine::MetricAvailability::Available;
+    diagnostics.av_drift_ms = 5.0;
+    diagnostics.av_drift_raw_ms = 70.0;
+    diagnostics.clock_slaving_ppm = 250.0;
+    diagnostics.clock_slaving_active = true;
+    diagnostics.clock_slaving_saturated = true;
     diagnostics.audio.sample_rate = 48000;
     diagnostics.audio.discontinuity_frames_total = 48;
     diagnostics.audio.discontinuity_frames_longest = 24;
@@ -300,6 +306,10 @@ TEST(SoakRunner, ResourceAndAudioObservationsKeepAvailabilityAndAdapterIdentity)
     runner.Stop();
     const auto row = nlohmann::json::parse(exosnap::soak::SampleToJsonLine(runner.timeline().back()));
     EXPECT_EQ(sampler.observed_adapter, 7);
+    EXPECT_EQ(row["av_drift_raw_ms"], 70.0);
+    EXPECT_EQ(row["clock_slaving_ppm"], 250.0);
+    EXPECT_EQ(row["clock_slaving_active"], true);
+    EXPECT_EQ(row["clock_slaving_saturated"], true);
     EXPECT_EQ(row["process_cpu_percent"], 5.0);
     EXPECT_EQ(row["system_cpu_percent"], 15.0);
     EXPECT_EQ(row["gpu_utilization_percent"], 20.0);
@@ -312,6 +322,10 @@ TEST(SoakRunner, ResourceAndAudioObservationsKeepAvailabilityAndAdapterIdentity)
     EXPECT_EQ(row["resampler_undrained_frames"][0], 0);
     EXPECT_TRUE(row["resampler_undrained_frames"][1].is_null());
     const auto absent = nlohmann::json::parse(exosnap::soak::SampleToJsonLine({}));
+    EXPECT_TRUE(absent["av_drift_raw_ms"].is_null());
+    EXPECT_TRUE(absent["clock_slaving_ppm"].is_null());
+    EXPECT_TRUE(absent["clock_slaving_active"].is_null());
+    EXPECT_TRUE(absent["clock_slaving_saturated"].is_null());
     EXPECT_TRUE(absent["process_cpu_percent"].is_null());
     EXPECT_TRUE(absent["gpu_utilization_percent"].is_null());
     EXPECT_TRUE(absent["audio_discontinuity_ms_total"].is_null());

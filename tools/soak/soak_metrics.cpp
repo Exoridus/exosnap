@@ -225,6 +225,10 @@ std::string SampleToJsonLine(const SoakSample& s) {
     j["unix_time_ms"] = OptionalJson(s.unix_time_ms);
     j["av_drift_ms"] = s.av_drift_ms;
     j["av_drift_available"] = s.av_drift_available;
+    j["av_drift_raw_ms"] = OptionalJson(s.av_drift_raw_ms);
+    j["clock_slaving_ppm"] = OptionalJson(s.clock_slaving_ppm);
+    j["clock_slaving_active"] = OptionalJson(s.clock_slaving_active);
+    j["clock_slaving_saturated"] = OptionalJson(s.clock_slaving_saturated);
     j["duration_skew_ms"] = s.duration_skew_ms;
     j["duration_skew_available"] = s.duration_skew_available;
     j["frames_captured"] = s.frames_captured;

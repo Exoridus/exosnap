@@ -34,7 +34,11 @@ struct SoakSample {
 
     double av_drift_ms = 0.0;        // clock drift; +ve = audio leads. Only meaningful when available.
     bool av_drift_available = false; // false until a device-backed audio track reports timing
-    double duration_skew_ms = 0.0;   // |video media time - audio media time|
+    std::optional<double> av_drift_raw_ms = std::nullopt;
+    std::optional<double> clock_slaving_ppm = std::nullopt;
+    std::optional<bool> clock_slaving_active = std::nullopt;
+    std::optional<bool> clock_slaving_saturated = std::nullopt;
+    double duration_skew_ms = 0.0; // |video media time - audio media time|
     bool duration_skew_available = false;
 
     uint64_t frames_captured = 0; // cumulative

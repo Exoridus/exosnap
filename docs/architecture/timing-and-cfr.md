@@ -38,7 +38,7 @@ A held-frame duplicate is not necessarily a defect. A static desktop legitimatel
 
 ## Audio clocks
 
-WASAPI device-position/QPC pairs measure clock drift against the video reference. Normalize the baseline at capture start and smooth packet observations. Queue depth, encoder latency and guessed stream duration are not substitutes for this measurement.
+WASAPI device-position/QPC pairs measure clock drift against the video reference. A packet marked `AUDCLNT_BUFFERFLAGS_TIMESTAMP_ERROR`, or carrying no QPC timestamp, cannot establish the audio epoch or a device-clock reference. Its usable PCM is still processed. Normalize the baseline at capture start and smooth packet observations. Queue depth, encoder latency and guessed stream duration are not substitutes for this measurement.
 
 Positive reported drift means audio leads video. The compensation layer reports its **actually applied** sample-count adjustment. Residual drift is raw device-clock drift minus that applied adjustment, not an integral of a requested control value.
 

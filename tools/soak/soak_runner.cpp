@@ -142,6 +142,12 @@ void SoakRunner::SampleOnce() {
             const auto& d = last_diag_;
             s.av_drift_ms = d.av_drift_ms;
             s.av_drift_available = d.av_drift_availability == MetricAvailability::Available;
+            if (s.av_drift_available) {
+                s.av_drift_raw_ms = d.av_drift_raw_ms;
+                s.clock_slaving_ppm = d.clock_slaving_ppm;
+                s.clock_slaving_active = d.clock_slaving_active;
+                s.clock_slaving_saturated = d.clock_slaving_saturated;
+            }
             s.duration_skew_ms = d.duration_skew_ms;
             s.duration_skew_available = d.duration_skew_availability == MetricAvailability::Available;
             s.frames_captured = d.capture.frames_captured;
