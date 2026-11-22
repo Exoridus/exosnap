@@ -593,8 +593,8 @@ class PhysicalOwner : public std::enable_shared_from_this<PhysicalOwner> {
     bool next_discontinuity_ = false;
 
     void MarkDegraded() {
-        loss_generation_.store(generation_.load(std::memory_order_relaxed), std::memory_order_release);
         degraded_ = true;
+        loss_generation_.store(generation_.load(std::memory_order_relaxed), std::memory_order_release);
     }
 
     // The owner lock serializes outage decisions with native publication and recovery.

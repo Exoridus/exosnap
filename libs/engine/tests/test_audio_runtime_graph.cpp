@@ -3,16 +3,21 @@
 #include "logical_audio_source.h"
 #include "shared_audio_capture.h"
 #include <algorithm>
+#include <chrono>
 #include <cstddef>
 #include <cstdint>
 #include <exosnap/engine/audio_routing_model.h>
 #include <exosnap/engine/interfaces/IAudioCaptureSource.h>
+#include <exosnap/engine/logging/logging.h>
 #include <exosnap/engine/qpc_100ns.h>
 #include <exosnap/engine/recording_media_types.h>
 #include <exosnap/engine/session_stats.h>
+#include <filesystem>
 #include <memory>
 #include <optional>
+#include <semaphore>
 #include <string>
+#include <system_error>
 #include <utility>
 #include <vector>
 
@@ -100,8 +105,9 @@ struct OutageControl {
 
 class OutageCapture final : public IAudioCaptureSource {
   public:
-    OutageCapture(uint64_t start, bool fails, std::shared_ptr<OutageControl> control)
-        : next_qpc_(start), fails_(fails), control_(std::move(control)), pcm_(960, 0.5f) {
+    OutageCapture(uint64_t start, bool fails, std::shared_ptr<OutageControl> control, float healthy_peak = 0.5f)
+        : next_qpc_(start), fails_(fails), healthy_peak_(healthy_peak), control_(std::move(control)),
+          pcm_(960, healthy_peak) {
     }
     bool Init(std::string&) override {
         return true;
@@ -127,7 +133,7 @@ class OutageCapture final : public IAudioCaptureSource {
             error = "Capture was disconnected";
             return false;
         }
-        std::fill(pcm_.begin(), pcm_.end(), fails_ ? (recovered_ ? 0.75f : 0.25f) : 0.5f);
+        std::fill(pcm_.begin(), pcm_.end(), fails_ ? (recovered_ ? 0.75f : 0.25f) : healthy_peak_);
         buffer = {};
         buffer.bytes = reinterpret_cast<const uint8_t*>(pcm_.data());
         buffer.num_frames = 480;
@@ -162,16 +168,64 @@ class OutageCapture final : public IAudioCaptureSource {
   private:
     uint64_t next_qpc_;
     bool fails_, recovered_ = false;
+    float healthy_peak_;
     std::shared_ptr<OutageControl> control_;
     std::vector<float> pcm_;
     std::string name_ = "Outage fixture";
 };
 
-void VerifyDefaultEndpointRecovery(bool default_unavailable_on_loss) {
+enum class DefaultRecoveryScenario { Immediate, Missing, ChangesWhileOpening, PointsToLostDevice, QueuedRecovery };
+
+struct BlockedEndpointOpen {
+    std::binary_semaphore entered{0};
+    std::binary_semaphore finish{0};
+};
+
+class ScopedRecoveryLogBarrier {
+  public:
+    explicit ScopedRecoveryLogBarrier(const std::shared_ptr<BlockedEndpointOpen>& barrier)
+        : path_(std::filesystem::temp_directory_path() /
+                ("exosnap-audio-recovery-" + std::to_string(GetCurrentProcessId()) + "-" + std::to_string(NowNs()) +
+                 ".jsonl")) {
+        logging::LoggerConfig config;
+        config.filePath = path_;
+        config.minimumLevel = logging::LogLevel::Warn;
+        config.sink = [barrier](const logging::LogRecord& record) {
+            if (record.component == "audio" &&
+                record.message == "Current role-default endpoint could not be reopened") {
+                barrier->entered.release();
+                (void)barrier->finish.try_acquire_for(std::chrono::seconds(4));
+            }
+        };
+        logging::initialize(config);
+    }
+
+    ~ScopedRecoveryLogBarrier() {
+        logging::shutdown();
+        std::error_code ignored;
+        std::filesystem::remove(path_, ignored);
+    }
+
+  private:
+    std::filesystem::path path_;
+};
+
+void VerifyDefaultEndpointRecovery(DefaultRecoveryScenario scenario) {
     auto control = std::make_shared<OutageControl>();
     auto lookup_calls = std::make_shared<std::atomic<uint32_t>>(0);
     auto unexpected_role = std::make_shared<std::atomic<bool>>(false);
-    auto default_available = std::make_shared<std::atomic<bool>>(!default_unavailable_on_loss);
+    const bool queued_recovery = scenario == DefaultRecoveryScenario::QueuedRecovery;
+    char initial_endpoint = 'B';
+    if (scenario == DefaultRecoveryScenario::Missing || queued_recovery)
+        initial_endpoint = '\0';
+    if (scenario == DefaultRecoveryScenario::PointsToLostDevice)
+        initial_endpoint = 'A';
+    auto role_endpoint = std::make_shared<std::atomic<char>>(initial_endpoint);
+    auto blocked_open =
+        scenario == DefaultRecoveryScenario::ChangesWhileOpening ? std::make_shared<BlockedEndpointOpen>() : nullptr;
+    auto blocked_delivery = queued_recovery ? std::make_shared<BlockedEndpointOpen>() : nullptr;
+    if (queued_recovery)
+        control->recovery_offset_ns = 0;
     const uint64_t start = NowNs();
     ResolvedAudioPlan plan;
     for (uint32_t i = 0; i < 2; ++i) {
@@ -194,23 +248,30 @@ void VerifyDefaultEndpointRecovery(bool default_unavailable_on_loss) {
     std::string error;
     auto graph = AudioRuntimeGraph::Prepare(
         plan, registry, start, 48000, 2, false, error,
-        [control, start](const ResolvedAudioSource& source) {
+        [control, start, blocked_open](const ResolvedAudioSource& source) {
             SharedAudioCaptureRequest request;
             request.key = *source.capture_key;
             request.admission.sample_rate = 48000;
             request.admission.channels = 2;
             request.admission.maximum_packet_frames = 480;
             const bool endpoint_a = request.key.endpoint_id == "endpoint-A";
-            request.native_factory = [control, endpoint_a, start] {
-                return std::make_unique<OutageCapture>(endpoint_a ? start : NowNs(), endpoint_a, control);
+            const bool endpoint_b = request.key.endpoint_id == "endpoint-B";
+            request.native_factory = [control, endpoint_a, endpoint_b, start, blocked_open] {
+                if (endpoint_b && blocked_open) {
+                    blocked_open->entered.release();
+                    (void)blocked_open->finish.try_acquire_for(std::chrono::milliseconds(1500));
+                }
+                return std::make_unique<OutageCapture>(endpoint_a ? start : NowNs(), endpoint_a, control,
+                                                       endpoint_b ? 0.5f : 0.625f);
             };
             return request;
         },
-        [lookup_calls, unexpected_role, default_available](AudioBindingKind kind, AudioEndpointRole role) {
+        [lookup_calls, unexpected_role, role_endpoint](AudioBindingKind kind, AudioEndpointRole role) {
+            const char endpoint = role_endpoint->load();
             ++*lookup_calls;
             if (kind != AudioBindingKind::PlaybackEndpoint || role != AudioEndpointRole::Communications)
                 *unexpected_role = true;
-            return default_available->load() ? std::string("endpoint-B") : std::string{};
+            return endpoint ? std::string("endpoint-") + endpoint : std::string{};
         });
     ASSERT_NE(graph, nullptr) << error;
     const auto original = graph->PhysicalMeters();
@@ -221,20 +282,35 @@ void VerifyDefaultEndpointRecovery(bool default_unavailable_on_loss) {
     ASSERT_EQ(tracks.size(), 2u);
     for (auto& track : tracks)
         ASSERT_TRUE(track->Init(error)) << error;
+    std::optional<ScopedRecoveryLogBarrier> recovery_log;
+    if (blocked_delivery)
+        recovery_log.emplace(blocked_delivery);
     graph->Start();
 
+    bool stale_endpoint_played = false;
+    bool fixed_recovery_played = false;
     auto wait_for_peak = [&](size_t index, float peak) {
         const uint64_t deadline = NowNs() + 1500000000ULL;
         while (NowNs() < deadline) {
-            for (auto& track : tracks) {
+            for (size_t output = 0; output < tracks.size(); ++output) {
+                auto& track = tracks[output];
                 while (track->PendingFrameCount()) {
                     RawAudioBuffer raw;
                     if (!track->AcquireBuffer(raw, error))
                         return false;
+                    if (queued_recovery && raw.bytes) {
+                        const auto* pcm = reinterpret_cast<const float*>(raw.bytes);
+                        const auto* end = pcm + raw.num_frames * track->Channels();
+                        const bool fixed_samples = std::find(pcm, end, 0.75f) != end;
+                        stale_endpoint_played |= output == 0 && fixed_samples;
+                        fixed_recovery_played |= output == 1 && fixed_samples;
+                    }
                     track->ReleaseBuffer();
                 }
             }
-            if (graph->TrackMeters()[index].pre_limiter_peak == peak)
+            const auto meters = graph->TrackMeters();
+            stale_endpoint_played |= blocked_open && meters[0].pre_limiter_peak == 0.5f;
+            if (meters[index].pre_limiter_peak == peak)
                 return true;
             Sleep(1);
         }
@@ -243,42 +319,90 @@ void VerifyDefaultEndpointRecovery(bool default_unavailable_on_loss) {
     EXPECT_TRUE(wait_for_peak(0, 0.25f)) << error;
     EXPECT_EQ(lookup_calls->load(), 0u);
     control->phase = 1;
-    if (default_unavailable_on_loss) {
+    if (scenario == DefaultRecoveryScenario::Missing || scenario == DefaultRecoveryScenario::PointsToLostDevice) {
         const uint64_t deadline = NowNs() + 1500000000ULL;
         while (!lookup_calls->load() && NowNs() < deadline)
             Sleep(1);
         EXPECT_GT(lookup_calls->load(), 0u);
+    }
+    if (scenario == DefaultRecoveryScenario::Missing) {
         control->phase = 2;
         EXPECT_TRUE(wait_for_peak(1, 0.75f)) << error;
         EXPECT_EQ(graph->TrackMeters()[0].pre_limiter_peak, 0.f);
         EXPECT_EQ(graph->PhysicalMeters().size(), 1u);
-        *default_available = true;
+        *role_endpoint = 'B';
     }
-    const bool recovered_on_b = wait_for_peak(0, 0.5f);
-    EXPECT_TRUE(recovered_on_b) << error;
+    if (scenario == DefaultRecoveryScenario::PointsToLostDevice)
+        *role_endpoint = 'C';
+    if (blocked_open) {
+        EXPECT_TRUE(blocked_open->entered.try_acquire_for(std::chrono::milliseconds(1500)));
+        *role_endpoint = 'C';
+        blocked_open->finish.release();
+    }
+    if (blocked_delivery) {
+        // Let the fixed capture queue recovered PCM and lose the device again before graph delivery resumes.
+        EXPECT_TRUE(blocked_delivery->entered.try_acquire_for(std::chrono::milliseconds(1500)));
+        const auto before = graph->PhysicalMeters().front().input_blocks;
+        control->phase = 2;
+        const auto deadline = NowNs() + 1500000000ULL;
+        while (graph->PhysicalMeters().front().input_blocks < before + 3 && NowNs() < deadline)
+            Sleep(1);
+        EXPECT_GE(graph->PhysicalMeters().front().input_blocks, before + 3);
+        control->reinit_entered = false;
+        control->block_reinit = true;
+        control->phase = 1;
+        const auto loss_deadline = NowNs() + 1500000000ULL;
+        while (!control->reinit_entered && NowNs() < loss_deadline)
+            Sleep(1);
+        EXPECT_TRUE(control->reinit_entered);
+        *role_endpoint = 'B';
+        blocked_delivery->finish.release();
+    }
+    const float current_peak = scenario == DefaultRecoveryScenario::ChangesWhileOpening ||
+                                       scenario == DefaultRecoveryScenario::PointsToLostDevice
+                                   ? 0.625f
+                                   : 0.5f;
+    const bool recovered_on_current_endpoint = wait_for_peak(0, current_peak);
+    EXPECT_TRUE(recovered_on_current_endpoint) << error;
     EXPECT_GT(lookup_calls->load(), 0u);
     EXPECT_FALSE(unexpected_role->load());
     const auto split = graph->SourceMeters();
     for (const auto& meter : split) {
-        if (meter.source_id == plan.sources[0].spec.id && recovered_on_b)
+        if (meter.source_id == plan.sources[0].spec.id && recovered_on_current_endpoint)
             EXPECT_NE(meter.clock_id, original.front().clock_id);
         if (meter.source_id == plan.sources[1].spec.id)
             EXPECT_EQ(meter.clock_id, original.front().clock_id);
     }
+    if (queued_recovery)
+        EXPECT_TRUE(fixed_recovery_played);
     control->phase = 2;
+    control->block_reinit = false;
     EXPECT_TRUE(wait_for_peak(1, 0.75f)) << error;
-    if (recovered_on_b)
-        EXPECT_TRUE(wait_for_peak(0, 0.5f)) << error;
+    if (recovered_on_current_endpoint)
+        EXPECT_TRUE(wait_for_peak(0, current_peak)) << error;
+    EXPECT_FALSE(stale_endpoint_played);
     graph->RequestStop(NowNs());
     EXPECT_TRUE(graph->WaitDrained(3000, error)) << error;
 }
 
 TEST(AudioRuntimeGraph, LostSharedEndpointMovesOnlyTheRoleDefaultSource) {
-    VerifyDefaultEndpointRecovery(false);
+    VerifyDefaultEndpointRecovery(DefaultRecoveryScenario::Immediate);
 }
 
 TEST(AudioRuntimeGraph, MissingRoleDoesNotUseTheRecoveredFixedEndpoint) {
-    VerifyDefaultEndpointRecovery(true);
+    VerifyDefaultEndpointRecovery(DefaultRecoveryScenario::Missing);
+}
+
+TEST(AudioRuntimeGraph, ReopenedEndpointMustStillBeTheRoleDefault) {
+    VerifyDefaultEndpointRecovery(DefaultRecoveryScenario::ChangesWhileOpening);
+}
+
+TEST(AudioRuntimeGraph, LostEndpointRemainingDefaultDoesNotEndRecovery) {
+    VerifyDefaultEndpointRecovery(DefaultRecoveryScenario::PointsToLostDevice);
+}
+
+TEST(AudioRuntimeGraph, RepeatedLossDoesNotAuthorizeQueuedFixedRecoverySamples) {
+    VerifyDefaultEndpointRecovery(DefaultRecoveryScenario::QueuedRecovery);
 }
 
 class AudioGraphOutage : public ::testing::Test {

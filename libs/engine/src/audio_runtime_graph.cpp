@@ -311,6 +311,9 @@ void AudioRuntimeGraph::PollDefaultRecovery(Node& node, bool allow_reopen) {
     auto& recovery = *node.default_recovery;
     const auto loss = SharedAudioReaderLossGeneration(*node.physical);
     if (loss != recovery.loss_generation && loss) {
+        // Another loss must not authorize packets queued during unresolved recovery.
+        if (!recovery.waiting)
+            recovery.mute_after_generation = loss;
         recovery.loss_generation = loss;
         recovery.waiting = true;
         recovery.next_retry_qpc = 0;
@@ -339,7 +342,8 @@ void AudioRuntimeGraph::PollDefaultRecovery(Node& node, bool allow_reopen) {
             recovery.loss_generation = 0;
             recovery.reported_failure = false;
             recovery.waiting = false;
-        } else if (result.endpoint == recovery.source.capture_key->endpoint_id) {
+        } else if (result.endpoint == recovery.source.capture_key->endpoint_id &&
+                   !node.physical->DegradedSourceCount()) {
             recovery.reported_failure = false;
             recovery.waiting = false;
         } else {
@@ -373,8 +377,9 @@ void AudioRuntimeGraph::PollDefaultRecovery(Node& node, bool allow_reopen) {
             const DefaultReopenSlot slot;
             ReopenedDefault reopened;
             try {
+                const auto& binding = source.spec.binding;
                 if (!stop.stop_requested())
-                    reopened.endpoint = lookup(source.spec.binding.kind, source.spec.binding.endpoint_role);
+                    reopened.endpoint = lookup(binding.kind, binding.endpoint_role);
                 if (!stop.stop_requested() && !reopened.endpoint.empty() &&
                     reopened.endpoint != source.capture_key->endpoint_id) {
                     source.capture_key->endpoint_id = reopened.endpoint;
@@ -389,8 +394,11 @@ void AudioRuntimeGraph::PollDefaultRecovery(Node& node, bool allow_reopen) {
                             detail = "Role-default endpoint exceeds the admitted audio format; reprepare required";
                             return false;
                         });
-                    if (!stop.stop_requested() && !readers.empty())
-                        reopened.reader = std::move(readers.front());
+                    if (!readers.empty() && !stop.stop_requested()) {
+                        // Native activation may block while Windows changes the default role.
+                        if (lookup(binding.kind, binding.endpoint_role) == reopened.endpoint && !stop.stop_requested())
+                            reopened.reader = std::move(readers.front());
+                    }
                 }
             } catch (const std::exception&) {
                 reopened = {};
@@ -409,7 +417,9 @@ void AudioRuntimeGraph::PrepareDefaultRouteBlock(Node& node, AudioBlockView& blo
         return;
     auto& recovery = *node.default_recovery;
     const auto loss = SharedAudioReaderLossGeneration(*node.physical);
-    if (loss && (loss != recovery.loss_generation || recovery.waiting) && block.descriptor.source_generation > loss) {
+    const auto mute_after = recovery.waiting ? recovery.mute_after_generation : loss;
+    if (loss && (loss != recovery.loss_generation || recovery.waiting) &&
+        block.descriptor.source_generation > mute_after) {
         // A shared owner can reopen its fixed endpoint before the role lookup finishes.
         block.samples = {};
         block.metadata.silence = true;

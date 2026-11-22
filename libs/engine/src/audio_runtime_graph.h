@@ -73,6 +73,7 @@ class AudioRuntimeGraph : public std::enable_shared_from_this<AudioRuntimeGraph>
         AudioCaptureDescriptor admission;
         std::future<ReopenedDefault> pending;
         uint64_t loss_generation = 0;
+        uint64_t mute_after_generation = 0;
         uint64_t pending_generation = 0;
         uint64_t next_retry_qpc = 0;
         uint64_t retry_delay_ns = 250000000;
