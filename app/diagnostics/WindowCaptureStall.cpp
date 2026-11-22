@@ -10,7 +10,7 @@ WindowStallCause EvaluateWindowStall(const WindowTargetFacts& facts, bool presen
     if (facts.minimized) {
         return WindowStallCause::Minimized;
     }
-    if (ClassifyWindowShape(facts) == WindowShape::FullscreenShaped && (facts.quns_d3d_fullscreen || present_fse)) {
+    if (ResolveExclusiveEvidence(facts, {}, present_fse) != ExclusiveEvidence::None) {
         return WindowStallCause::ExclusiveFullscreen;
     }
     return WindowStallCause::None;
