@@ -167,6 +167,120 @@ class OutageCapture final : public IAudioCaptureSource {
     std::string name_ = "Outage fixture";
 };
 
+void VerifyDefaultEndpointRecovery(bool default_unavailable_on_loss) {
+    auto control = std::make_shared<OutageControl>();
+    auto lookup_calls = std::make_shared<std::atomic<uint32_t>>(0);
+    auto unexpected_role = std::make_shared<std::atomic<bool>>(false);
+    auto default_available = std::make_shared<std::atomic<bool>>(!default_unavailable_on_loss);
+    const uint64_t start = NowNs();
+    ResolvedAudioPlan plan;
+    for (uint32_t i = 0; i < 2; ++i) {
+        ResolvedAudioSource source;
+        source.spec.id = NewId<AudioSourceId>();
+        source.spec.binding.follow_default = i == 0;
+        source.spec.binding.endpoint_role = AudioEndpointRole::Communications;
+        source.capture_key = PhysicalCaptureKey{};
+        source.capture_key->endpoint_id = "endpoint-A";
+        plan.sources.push_back(source);
+        ResolvedRoutingTrack track;
+        track.id = NewId<AudioTrackId>();
+        track.mux_index = {i};
+        track.fixed_average_divisor = 1;
+        track.limiter.enabled = false;
+        track.routes.push_back({NewId<AudioRouteId>(), source.spec.id, 1.f});
+        plan.tracks.push_back(std::move(track));
+    }
+    const auto registry = std::make_shared<SharedAudioCaptureRegistry>();
+    std::string error;
+    auto graph = AudioRuntimeGraph::Prepare(
+        plan, registry, start, 48000, 2, false, error,
+        [control, start](const ResolvedAudioSource& source) {
+            SharedAudioCaptureRequest request;
+            request.key = *source.capture_key;
+            request.admission.sample_rate = 48000;
+            request.admission.channels = 2;
+            request.admission.maximum_packet_frames = 480;
+            const bool endpoint_a = request.key.endpoint_id == "endpoint-A";
+            request.native_factory = [control, endpoint_a, start] {
+                return std::make_unique<OutageCapture>(endpoint_a ? start : NowNs(), endpoint_a, control);
+            };
+            return request;
+        },
+        [lookup_calls, unexpected_role, default_available](AudioBindingKind kind, AudioEndpointRole role) {
+            ++*lookup_calls;
+            if (kind != AudioBindingKind::PlaybackEndpoint || role != AudioEndpointRole::Communications)
+                *unexpected_role = true;
+            return default_available->load() ? std::string("endpoint-B") : std::string{};
+        });
+    ASSERT_NE(graph, nullptr) << error;
+    const auto original = graph->PhysicalMeters();
+    ASSERT_EQ(original.size(), 1u);
+    EXPECT_EQ(original.front().reader_count, 2u);
+    EXPECT_EQ(registry->Statistics().capture_opens, 1u);
+    auto tracks = graph->TakeTracks();
+    ASSERT_EQ(tracks.size(), 2u);
+    for (auto& track : tracks)
+        ASSERT_TRUE(track->Init(error)) << error;
+    graph->Start();
+
+    auto wait_for_peak = [&](size_t index, float peak) {
+        const uint64_t deadline = NowNs() + 1500000000ULL;
+        while (NowNs() < deadline) {
+            for (auto& track : tracks) {
+                while (track->PendingFrameCount()) {
+                    RawAudioBuffer raw;
+                    if (!track->AcquireBuffer(raw, error))
+                        return false;
+                    track->ReleaseBuffer();
+                }
+            }
+            if (graph->TrackMeters()[index].pre_limiter_peak == peak)
+                return true;
+            Sleep(1);
+        }
+        return false;
+    };
+    EXPECT_TRUE(wait_for_peak(0, 0.25f)) << error;
+    EXPECT_EQ(lookup_calls->load(), 0u);
+    control->phase = 1;
+    if (default_unavailable_on_loss) {
+        const uint64_t deadline = NowNs() + 1500000000ULL;
+        while (!lookup_calls->load() && NowNs() < deadline)
+            Sleep(1);
+        EXPECT_GT(lookup_calls->load(), 0u);
+        control->phase = 2;
+        EXPECT_TRUE(wait_for_peak(1, 0.75f)) << error;
+        EXPECT_EQ(graph->TrackMeters()[0].pre_limiter_peak, 0.f);
+        EXPECT_EQ(graph->PhysicalMeters().size(), 1u);
+        *default_available = true;
+    }
+    const bool recovered_on_b = wait_for_peak(0, 0.5f);
+    EXPECT_TRUE(recovered_on_b) << error;
+    EXPECT_GT(lookup_calls->load(), 0u);
+    EXPECT_FALSE(unexpected_role->load());
+    const auto split = graph->SourceMeters();
+    for (const auto& meter : split) {
+        if (meter.source_id == plan.sources[0].spec.id && recovered_on_b)
+            EXPECT_NE(meter.clock_id, original.front().clock_id);
+        if (meter.source_id == plan.sources[1].spec.id)
+            EXPECT_EQ(meter.clock_id, original.front().clock_id);
+    }
+    control->phase = 2;
+    EXPECT_TRUE(wait_for_peak(1, 0.75f)) << error;
+    if (recovered_on_b)
+        EXPECT_TRUE(wait_for_peak(0, 0.5f)) << error;
+    graph->RequestStop(NowNs());
+    EXPECT_TRUE(graph->WaitDrained(3000, error)) << error;
+}
+
+TEST(AudioRuntimeGraph, LostSharedEndpointMovesOnlyTheRoleDefaultSource) {
+    VerifyDefaultEndpointRecovery(false);
+}
+
+TEST(AudioRuntimeGraph, MissingRoleDoesNotUseTheRecoveredFixedEndpoint) {
+    VerifyDefaultEndpointRecovery(true);
+}
+
 class AudioGraphOutage : public ::testing::Test {
   protected:
     std::shared_ptr<OutageControl> control = std::make_shared<OutageControl>();

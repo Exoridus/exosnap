@@ -71,7 +71,7 @@ The selectable output rates are 44.1, 48 and 96 kHz for codecs allowed by the cu
 
 ## Source loss and silence
 
-A lost audio device degrades that source, not the video session. The typed physical owner retries with bounded backoff from 250 to 2000 ms. Fixed microphones reopen their exact endpoint. Semantic-default sources resolve the declared role's current default when reopened. An already-open stream is not automatically moved merely because the default changed; that condition is separately reported. Process loopback reopens only for the same process instance. Legacy sources retain their compatibility retry policy.
+A lost audio device degrades that source, not the video session. The typed physical owner retries with bounded backoff from 250 to 2000 ms. Fixed sources reopen their exact endpoint. Semantic-default sources resolve the declared role's current default after loss. If fixed and semantic-default sources shared the lost capture, only the semantic-default sources move to the new endpoint. A missing default or a replacement outside the prepared audio format limits leaves the semantic-default source silent while it retries. An already-open stream is not automatically moved merely because the default changed; that condition is separately reported. Process loopback reopens only for the same process instance. Legacy sources retain their compatibility retry policy.
 
 A typed track places silence on its common QPC sample grid when a source has no delivering data. Its outer audio worker does not fill that interval a second time. Reacquisition time is part of the outage. On applicable reactivation the physical device-clock baseline and compensation controller are reset; a restarted device counter must not look like enormous drift.
 

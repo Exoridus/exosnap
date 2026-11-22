@@ -104,6 +104,8 @@ class SharedAudioCaptureRegistry {
 BatchSealAudioReadersEnd(std::span<IAudioCaptureSource* const> readers, uint64_t end_qpc_ns,
                          std::chrono::milliseconds timeout = std::chrono::milliseconds(500));
 [[nodiscard]] bool AudioReaderEnded(const IAudioCaptureSource& reader);
+[[nodiscard]] uint64_t SharedAudioReaderLossGeneration(const IAudioCaptureSource& reader);
+void AdvanceSharedAudioReaderStart(IAudioCaptureSource& reader, uint64_t start_qpc_ns);
 // Timeline progress established by posted PCM and certified idle intervals.
 [[nodiscard]] uint64_t SharedAudioReaderCompletedThrough(const IAudioCaptureSource& reader);
 [[nodiscard]] bool LastSharedAudioBlock(const IAudioCaptureSource& reader, AudioBlockView& block);
