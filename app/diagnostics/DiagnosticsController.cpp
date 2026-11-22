@@ -1371,7 +1371,7 @@ uint32_t PipelineCardBuilder::lastRecentDropsForTesting() const noexcept {
 }
 
 std::vector<PipelineStage> PipelineCardBuilder::BuildStatic(bool data_ready, bool encoder_ok, bool muxer_ok,
-                                                            bool disk_ok) {
+                                                            std::optional<bool> disk_ok) {
     std::vector<PipelineStage> stages;
     stages.reserve(6);
 
@@ -1427,10 +1427,17 @@ std::vector<PipelineStage> PipelineCardBuilder::BuildStatic(bool data_ready, boo
                .toStdString(),
            QCoreApplication::translate("Diagnostics", "Selected container is not available on this system.")
                .toStdString());
-    probed("disk", QCoreApplication::translate("Diagnostics", "Disk").toStdString(), disk_ok,
-           QCoreApplication::translate("Diagnostics", "Output path is writable. Live disk throughput is not measured.")
-               .toStdString(),
-           QCoreApplication::translate("Diagnostics", "Output path is not writable.").toStdString());
+    const auto disk_title = QCoreApplication::translate("Diagnostics", "Disk").toStdString();
+    if (disk_ok.has_value()) {
+        probed(
+            "disk", disk_title, *disk_ok,
+            QCoreApplication::translate("Diagnostics", "Output path is writable. Live disk throughput is not measured.")
+                .toStdString(),
+            QCoreApplication::translate("Diagnostics", "Output path is not writable.").toStdString());
+    } else {
+        planned("disk", disk_title,
+                QCoreApplication::translate("Diagnostics", "Run a check to probe the output path.").toStdString());
+    }
     return stages;
 }
 
@@ -1629,6 +1636,14 @@ void RefreshThrottle::Reset() noexcept {
 // ── DiagnosticsController ───────────────────────────────────────────────────────
 
 void DiagnosticsController::SetConfig(Config config) {
+    if (config.output_folder != config_.output_folder) {
+        probe_.free_bytes.reset();
+        probe_.total_bytes = 0;
+        probe_.filesystem_name.clear();
+        probe_.drive_kind = DriveKind::Unknown;
+        probe_.output_path_writable.reset();
+        probe_.drive_label.clear();
+    }
     config_ = std::move(config);
     data_ready_ = true;
     config_rows_ = BuildConfigRows(config_.config_summary);
@@ -1807,7 +1822,8 @@ DiagnosticsSnapshot DiagnosticsController::Evaluate() {
                                 config_.profile_validation.succeeded, probe_.filesystem_name, live, present);
     if (dpc_.has_value())
         engine.SetDpcLatency(*dpc_);
-    engine.SetOutputPathWritable(probe_.output_path_writable);
+    if (probe_.output_path_writable.has_value())
+        engine.SetOutputPathWritable(*probe_.output_path_writable);
     engine.SetElevated(elevated_);
     engine.SetCaptureTargetHdrActive(capture_target_hdr_active_);
     if (probe_.session_generation == live_.session_generation) {
