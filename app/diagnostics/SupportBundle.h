@@ -93,13 +93,11 @@ struct BundleInputs {
 // unaffected.
 [[nodiscard]] QString RedactCaptureTargets(const QString& text);
 
-// ScrubString (paths/user/machine) followed by RedactCaptureTargets. The single
-// text-scrubbing pass every log/report entry goes through.
+// Scrubs recognized paths, names, and capture-target identifiers in logs and settings.
 [[nodiscard]] QByteArray ScrubBundleText(const QByteArray& text);
 
-// Assemble every bundle entry: the rotated text + JSONL logs (scrubbed), the last
-// N session reports (scrubbed), capability/adapters/displays JSON, a scrubbed
-// settings.txt, and bundle-manifest.json. Deterministic for fixed inputs.
+// Collects rotated logs, recent session reports, capability and display data, and settings.
+// Unreadable reports are skipped and legacy report error details are omitted.
 [[nodiscard]] std::vector<BundleEntry> CollectBundleEntries(const BundleInputs& inputs);
 
 // Write the collected entries to a .zip at zip_path (UTF-16). Returns false on any

@@ -1,5 +1,6 @@
 #include "diagnostics/SupportBundle.h"
 
+#include "diagnostics/SessionReportJson.h"
 #include "diagnostics/ZipWriter.h"
 
 #include <crash_capture/crash_scrubber.h>
@@ -98,7 +99,7 @@ std::vector<BundleEntry> CollectBundleEntries(const BundleInputs& inputs) {
     AddScrubbedFileIfPresent(dir, QStringLiteral("engine.1.jsonl"), entries);
     AddScrubbedFileIfPresent(dir, QStringLiteral("engine.2.jsonl"), entries);
 
-    // Last N session reports (newest first), scrubbed defensively.
+    // Last N session reports (newest first).
     {
         const QDir reports_dir(dir.filePath(QStringLiteral("reports")));
         if (reports_dir.exists()) {
@@ -106,8 +107,9 @@ std::vector<BundleEntry> CollectBundleEntries(const BundleInputs& inputs) {
                 reports_dir.entryInfoList({QStringLiteral("session-*.json")}, QDir::Files, QDir::Time);
             const int limit = inputs.max_reports > 0 ? inputs.max_reports : reports.size();
             for (int i = 0; i < reports.size() && i < limit; ++i) {
-                entries.push_back({QStringLiteral("reports/%1").arg(reports[i].fileName()),
-                                   ScrubBundleText(ReadFileBytes(reports[i].absoluteFilePath()))});
+                const auto report = ReadSessionReportJson(ReadFileBytes(reports[i].absoluteFilePath()));
+                if (!report.isNull())
+                    entries.push_back({QStringLiteral("reports/%1").arg(reports[i].fileName()), report.toJson()});
             }
         }
     }

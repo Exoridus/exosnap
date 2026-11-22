@@ -13,6 +13,7 @@
 #include "observability/EnvironmentSnapshot.h"
 #include "observability/EventQuery.h"
 #include "observability/PipelineSnapshotJson.h"
+#include "observability/SessionQuery.h"
 #include "observability/SettingsSnapshot.h"
 #include "observability/WindowIdentity.h"
 
@@ -23,10 +24,13 @@
 #include <gtest/gtest.h>
 
 #include <QCoreApplication>
+#include <QDir>
+#include <QFile>
 #include <QJsonArray>
 #include <QJsonDocument>
 #include <QJsonObject>
 #include <QJsonValue>
+#include <QTemporaryDir>
 
 #include <filesystem>
 #include <string>
@@ -35,6 +39,31 @@ using namespace exosnap;
 using namespace exosnap::observability;
 
 namespace {
+
+TEST(SessionQuery, LegacyFailureDetailsAreNotExposed) {
+    QTemporaryDir temporary;
+    ASSERT_TRUE(temporary.isValid());
+    ASSERT_TRUE(QDir(temporary.path()).mkdir(QStringLiteral("reports")));
+    const QJsonObject failure{{QStringLiteral("phase"), QStringLiteral("Mux")},
+                              {QStringLiteral("hresult"), QStringLiteral("0x80004005")},
+                              {QStringLiteral("detail"), QStringLiteral("Open \"D:/Private Folder/\u00e9tude.mkv\"")}};
+    QFile file(temporary.filePath(QStringLiteral("reports/session-legacy.json")));
+    ASSERT_TRUE(file.open(QIODevice::WriteOnly));
+    const auto bytes = QJsonDocument(QJsonObject{{QStringLiteral("error"), failure}}).toJson();
+    ASSERT_EQ(file.write(bytes), bytes.size());
+    file.close();
+
+    const QString original_log = diagnostics::AppLog::logFilePath();
+    diagnostics::AppLog::setLogFilePathForTesting(temporary.filePath(QStringLiteral("exosnap.log")));
+    const QJsonObject reply = SessionReportById(QStringLiteral("legacy"));
+    diagnostics::AppLog::setLogFilePathForTesting(original_log);
+
+    ASSERT_TRUE(reply.value(QStringLiteral("available")).toBool());
+    const auto error = reply.value(QStringLiteral("report")).toObject().value(QStringLiteral("error")).toObject();
+    EXPECT_EQ(error.value(QStringLiteral("phase")).toString(), QStringLiteral("Mux"));
+    EXPECT_EQ(error.value(QStringLiteral("hresult")).toString(), QStringLiteral("0x80004005"));
+    EXPECT_FALSE(error.contains(QStringLiteral("detail")));
+}
 
 QCoreApplication* EnsureApplication() {
     if (auto* existing = QCoreApplication::instance())

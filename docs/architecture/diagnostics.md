@@ -61,7 +61,7 @@ A finished session freezes its ledger into the report. Individual frame-drop cou
 
 The engine JSON-lines log appends and rotates across launches. Its launch/session identity correlates with the human-readable application stream. A recording identifier is separate from the launch identifier and remains stable across its split segments; it must not depend on whether recovery-manifest protection was available.
 
-A per-recording JSON report is written atomically alongside the logs and retains the ten newest reports. It includes resolved configuration/format, encoder initialization, duration/drop/drift/discontinuity information, segment status, failure phase and the frozen ledger. Unmeasured values stay unavailable. A failure that aborts before packet accounting must be reported by its error rather than a misleading zero metric.
+A per-recording JSON report is written atomically alongside the logs and retains the ten newest reports. It includes resolved configuration/format, encoder initialization, duration/drop/drift/discontinuity information, segment status, failure phase and HRESULT, and the frozen ledger. Unmeasured values stay unavailable. Detailed errors can contain file paths and stay in local UI and logs. The session query and support bundle omit that field from older reports when they read them.
 
 ## Structured application logging
 

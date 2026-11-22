@@ -10,6 +10,8 @@
 
 #include <QDir>
 #include <QFile>
+#include <QJsonDocument>
+#include <QJsonObject>
 #include <QTemporaryDir>
 
 #include <algorithm>
@@ -88,6 +90,34 @@ TEST(SupportBundle, ProducesExpectedEntries) {
 
     // Manifest lists the files and is honest about no telemetry.
     EXPECT_TRUE(AnyEntryContains(entries, QStringLiteral("No telemetry")));
+}
+
+TEST(SupportBundle, LegacyFailureDetailsAreNotExported) {
+    QTemporaryDir tmp;
+    ASSERT_TRUE(tmp.isValid());
+    ASSERT_TRUE(QDir(tmp.path()).mkdir(QStringLiteral("reports")));
+    const QJsonObject failure{
+        {QStringLiteral("phase"), QStringLiteral("Mux")},
+        {QStringLiteral("hresult"), QStringLiteral("0x80004005")},
+        {QStringLiteral("detail"),
+         QStringLiteral("Open \"D:/Private Folder/\u00e9tude.mkv\"; D:\\Other Folder\\secret.mkv")}};
+    const auto report = QJsonDocument(QJsonObject{{QStringLiteral("error"), failure}}).toJson();
+    WriteText(tmp.filePath(QStringLiteral("reports/session-legacy.json")), QString::fromUtf8(report));
+    WriteText(tmp.filePath(QStringLiteral("reports/session-malformed.json")),
+              QStringLiteral("{\"error\":\"D:/Private Folder/unfinished"));
+
+    const auto entries = CollectBundleEntries(MakeInputs(tmp.path()));
+    const auto entry = std::find_if(entries.begin(), entries.end(), [](const BundleEntry& candidate) {
+        return candidate.name == QStringLiteral("reports/session-legacy.json");
+    });
+    ASSERT_NE(entry, entries.end());
+    const auto document = QJsonDocument::fromJson(entry->bytes);
+    ASSERT_TRUE(document.isObject());
+    const auto error = document.object().value(QStringLiteral("error")).toObject();
+    EXPECT_EQ(error.value(QStringLiteral("phase")).toString(), QStringLiteral("Mux"));
+    EXPECT_EQ(error.value(QStringLiteral("hresult")).toString(), QStringLiteral("0x80004005"));
+    EXPECT_FALSE(error.contains(QStringLiteral("detail")));
+    EXPECT_FALSE(HasEntry(entries, QStringLiteral("reports/session-malformed.json")));
 }
 
 // a bundle taken during a verification-reinstall run says so; a normal

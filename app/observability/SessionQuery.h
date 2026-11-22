@@ -2,15 +2,9 @@
 
 // SessionQuery.h -- read-only access to the canonical session reports.
 //
-// The authoritative owner is diagnostics::SessionReport: RecordingCoordinator
-// writes one privacy-safe `session-<recording id>.json` per finished recording,
-// already scrubbed (no absolute paths, no machine or user names, only a scrubbed
-// output FILE name), and the support bundle collects exactly these files. This
-// reads them back.
-//
-// It builds no second report. A report ExoSnap generated for support and a report
-// an automation client reads have to be the same document, or one of them is
-// evidence of the other's bugs.
+// RecordingCoordinator writes one `session-<recording id>.json` per finished
+// recording. The query and support bundle both read the same report and omit
+// unstructured error details present in older reports.
 //
 // The directory is not a parameter and there is no path in the payload: reports
 // live beside the application log, this resolves that location itself, and the
