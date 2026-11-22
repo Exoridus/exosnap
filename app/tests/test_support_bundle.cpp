@@ -77,7 +77,7 @@ TEST(SupportBundle, ProducesExpectedEntries) {
     QTemporaryDir tmp;
     ASSERT_TRUE(tmp.isValid());
     WriteText(tmp.path() + QStringLiteral("/exosnap.log"),
-              QStringLiteral("2026-07-12T10:00:00.123 [info] [record] hello\n"));
+              QStringLiteral("2026-07-12T10:00:00.123 [INFO] [record] hello\n"));
     WriteText(tmp.path() + QStringLiteral("/engine.jsonl"),
               QStringLiteral("{\"timestamp_unix_ms\":123,\"level\":\"info\",\"message\":\"x\"}\n"));
 
@@ -127,9 +127,9 @@ TEST(SupportBundle, ExportsLogMetadataWithoutFreeTextOrArbitraryJsonFields) {
     ASSERT_TRUE(tmp.isValid());
     const auto app_path = tmp.filePath(QStringLiteral("exosnap.log.1"));
     const auto app_log =
-        QStringLiteral("2026-07-12T10:00:00.123 [error] [record.failure] D:/Private Folder/\u00e9tude.mkv\n"
+        QStringLiteral("2026-07-12T10:00:00.123 [ERROR] [record.failure] D:/Private Folder/\u00e9tude.mkv\n"
                        "\\\\server\\private data\\continuation.mkv\n"
-                       "2026-07-12T10:00:01.123 [info] [private-slug] identifying text\n");
+                       "2026-07-12T10:00:01.123 [INFO] [private-slug] identifying text\n");
     WriteText(app_path, app_log);
     const QJsonObject record{
         {QStringLiteral("timestamp_unix_ms"), 1'783'850'400'123.0},

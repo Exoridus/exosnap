@@ -57,6 +57,8 @@ ExoSnap provides opt-in crash reporting powered by **Sentry** (data processor) w
 
 Local crash captures (minidumps in `%LOCALAPPDATA%\ExoSnap\crashes\`) are stored on your device only, whether or not you consent to upload.
 
+The Logs view can export timestamps, levels and recognized categories to a file you choose. Messages remain in local log storage and in the in-app view.
+
 ## Support bundle (local, user-initiated, never transmitted)
 
 ExoSnap can package its diagnostics into a single `.zip` **support bundle** that you create manually and share with support however you choose. It is a local file operation only:

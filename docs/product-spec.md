@@ -561,7 +561,7 @@ Auto fixes are executable reversible changes after review/confirmation; scope/tr
 
 Reports, logs and support bundles are local. A per-recording report retains the ten newest files and leaves unmeasured counters unavailable. A support bundle contains allowlisted log metadata, scrubbed reports and structured facts in a user-chosen ZIP. Free-form log messages and arbitrary log fields remain in the local logs. Review the bundle before sharing.
 
-Logs provides a virtualized structured list with Time, Level, Category and Message, filtering/search and current-view count. Copy means the filtered visible history; Export means the full current in-memory history. Disk rotation and report retention are separate. Startup measurements are recorded milestones, not a general continuously running profiler.
+Logs provides a virtualized structured list with Time, Level, Category and Message, filtering/search and current-view count. Copy means the filtered visible history; Export saves timestamps, levels and recognized categories from the full current in-memory history. Messages are omitted from the export. Disk rotation and report retention are separate. Startup measurements are recorded milestones, not a general continuously running profiler.
 
 ## 12. Settings model (Default / Expert)
 

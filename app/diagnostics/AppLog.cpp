@@ -1,4 +1,5 @@
 #include "AppLog.h"
+#include "LogExportPolicy.h"
 
 #include <QCoreApplication>
 #include <QDir>
@@ -532,8 +533,13 @@ bool AppLog::exportHistoryToFile(const QString& path, QString* error) {
 
     QTextStream stream(&file);
     stream.setEncoding(QStringConverter::Utf8);
-    for (const LogEntry& entry : entries)
-        stream << formatEntry(entry) << '\n';
+    for (const LogEntry& entry : entries) {
+        stream << entry.timestamp.toString(QStringLiteral("yyyy-MM-ddTHH:mm:ss.zzz")) << " ["
+               << severityKey(entry.severity) << ']';
+        if (IsExportableLogComponent(entry.category))
+            stream << " [" << entry.category << ']';
+        stream << '\n';
+    }
     stream.flush();
 
     if (stream.status() != QTextStream::Ok) {

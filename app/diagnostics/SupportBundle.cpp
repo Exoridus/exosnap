@@ -1,5 +1,6 @@
 #include "diagnostics/SupportBundle.h"
 
+#include "diagnostics/LogExportPolicy.h"
 #include "diagnostics/SessionReportJson.h"
 #include "diagnostics/ZipWriter.h"
 
@@ -12,7 +13,6 @@
 #include <QJsonDocument>
 #include <QJsonObject>
 #include <QRegularExpression>
-#include <QStringList>
 
 #include <utility>
 
@@ -35,35 +35,16 @@ bool IsLogLevel(const QString& level) {
     return levels.contains(level);
 }
 
-bool IsKnownComponent(const QString& component) {
-    static const QStringList components{QStringLiteral("app"),
-                                        QStringLiteral("audio"),
-                                        QStringLiteral("capture"),
-                                        QStringLiteral("diagnostics"),
-                                        QStringLiteral("encoder"),
-                                        QStringLiteral("engine"),
-                                        QStringLiteral("mux"),
-                                        QStringLiteral("record"),
-                                        QStringLiteral("record.failure"),
-                                        QStringLiteral("recording"),
-                                        QStringLiteral("remux"),
-                                        QStringLiteral("split"),
-                                        QStringLiteral("startup"),
-                                        QStringLiteral("storage"),
-                                        QStringLiteral("video"),
-                                        QStringLiteral("recording.artifacts")};
-    return components.contains(component);
-}
-
 QByteArray ExportAppLogLine(const QByteArray& line) {
     static const QRegularExpression prefix(
-        QStringLiteral(R"(^(\d{4}-\d\d-\d\dT\d\d:\d\d:\d\d\.\d{3}) \[([a-z]+)\](?: \[([a-z._]+)\])?(?: |$))"));
+        QStringLiteral(R"(^(\d{4}-\d\d-\d\dT\d\d:\d\d:\d\d\.\d{3}) \[([A-Za-z]+)\](?: \[([a-z._]+)\])?(?: |$))"));
     const auto match = prefix.match(QString::fromUtf8(line));
-    if (!match.hasMatch() || !IsLogLevel(match.captured(2)))
+    const auto level = match.captured(2).toLower();
+    if (!IsLogLevel(level))
         return {};
-    QString result = match.captured(1) + QStringLiteral(" [") + match.captured(2) + QStringLiteral("]");
+    QString result = match.captured(1) + QStringLiteral(" [") + level + QStringLiteral("]");
     const auto component = match.captured(3);
-    if (IsKnownComponent(component))
+    if (IsExportableLogComponent(component))
         result += QStringLiteral(" [") + component + QStringLiteral("]");
     return result.toUtf8();
 }
@@ -80,7 +61,7 @@ QByteArray ExportEngineLogLine(const QByteArray& line) {
 
     QJsonObject result{{QStringLiteral("timestamp_unix_ms"), timestamp}, {QStringLiteral("level"), level}};
     const auto component = record.value(QStringLiteral("component")).toString();
-    if (IsKnownComponent(component))
+    if (IsExportableLogComponent(component))
         result.insert(QStringLiteral("component"), component);
     const auto backend = record.value(QStringLiteral("fields")).toObject().value(QStringLiteral("backend")).toString();
     if (backend == QStringLiteral("wgc") || backend == QStringLiteral("dxgi"))
