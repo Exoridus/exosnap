@@ -12,6 +12,9 @@
 #include <QJsonDocument>
 #include <QJsonObject>
 #include <QRegularExpression>
+#include <QStringList>
+
+#include <utility>
 
 namespace exosnap::diagnostics {
 namespace {
@@ -25,12 +28,79 @@ QByteArray ReadFileBytes(const QString& path) {
     return f.readAll();
 }
 
-// Append the file at <log_dir>/<name>, scrubbed, as bundle entry <name> if it exists.
-void AddScrubbedFileIfPresent(const QDir& dir, const QString& name, std::vector<BundleEntry>& out) {
-    const QString path = dir.filePath(name);
-    if (!QFileInfo::exists(path))
+bool IsLogLevel(const QString& level) {
+    static const QStringList levels{QStringLiteral("trace"),   QStringLiteral("debug"),   QStringLiteral("info"),
+                                    QStringLiteral("warn"),    QStringLiteral("warning"), QStringLiteral("error"),
+                                    QStringLiteral("critical")};
+    return levels.contains(level);
+}
+
+bool IsKnownComponent(const QString& component) {
+    static const QStringList components{QStringLiteral("app"),
+                                        QStringLiteral("audio"),
+                                        QStringLiteral("capture"),
+                                        QStringLiteral("diagnostics"),
+                                        QStringLiteral("encoder"),
+                                        QStringLiteral("engine"),
+                                        QStringLiteral("mux"),
+                                        QStringLiteral("record"),
+                                        QStringLiteral("record.failure"),
+                                        QStringLiteral("recording"),
+                                        QStringLiteral("remux"),
+                                        QStringLiteral("split"),
+                                        QStringLiteral("startup"),
+                                        QStringLiteral("storage"),
+                                        QStringLiteral("video"),
+                                        QStringLiteral("recording.artifacts")};
+    return components.contains(component);
+}
+
+QByteArray ExportAppLogLine(const QByteArray& line) {
+    static const QRegularExpression prefix(
+        QStringLiteral(R"(^(\d{4}-\d\d-\d\dT\d\d:\d\d:\d\d\.\d{3}) \[([a-z]+)\](?: \[([a-z._]+)\])?(?: |$))"));
+    const auto match = prefix.match(QString::fromUtf8(line));
+    if (!match.hasMatch() || !IsLogLevel(match.captured(2)))
+        return {};
+    QString result = match.captured(1) + QStringLiteral(" [") + match.captured(2) + QStringLiteral("]");
+    const auto component = match.captured(3);
+    if (IsKnownComponent(component))
+        result += QStringLiteral(" [") + component + QStringLiteral("]");
+    return result.toUtf8();
+}
+
+QByteArray ExportEngineLogLine(const QByteArray& line) {
+    const auto document = QJsonDocument::fromJson(line);
+    if (!document.isObject())
+        return {};
+    const auto record = document.object();
+    const auto timestamp = record.value(QStringLiteral("timestamp_unix_ms")).toInteger(-1);
+    const auto level = record.value(QStringLiteral("level")).toString();
+    if (timestamp < 0 || !IsLogLevel(level))
+        return {};
+
+    QJsonObject result{{QStringLiteral("timestamp_unix_ms"), timestamp}, {QStringLiteral("level"), level}};
+    const auto component = record.value(QStringLiteral("component")).toString();
+    if (IsKnownComponent(component))
+        result.insert(QStringLiteral("component"), component);
+    const auto backend = record.value(QStringLiteral("fields")).toObject().value(QStringLiteral("backend")).toString();
+    if (backend == QStringLiteral("wgc") || backend == QStringLiteral("dxgi"))
+        result.insert(QStringLiteral("fields"), QJsonObject{{QStringLiteral("backend"), backend}});
+    return QJsonDocument(result).toJson(QJsonDocument::Compact);
+}
+
+void AddProjectedLog(const QDir& dir, const QString& name, QByteArray (*project)(const QByteArray&),
+                     std::vector<BundleEntry>& out) {
+    QFile source(dir.filePath(name));
+    if (!source.open(QIODevice::ReadOnly))
         return;
-    out.push_back({name, ScrubBundleText(ReadFileBytes(path))});
+    QByteArray exported;
+    while (!source.atEnd()) {
+        const auto projected = project(source.readLine().trimmed());
+        if (!projected.isEmpty())
+            exported += projected + '\n';
+    }
+    if (!exported.isEmpty())
+        out.push_back({name, std::move(exported)});
 }
 
 QJsonObject BuildCapabilityJson(const BundleCapability& c) {
@@ -89,15 +159,15 @@ std::vector<BundleEntry> CollectBundleEntries(const BundleInputs& inputs) {
     std::vector<BundleEntry> entries;
     const QDir dir(inputs.log_dir);
 
-    // Text logs (current + rotated) — exosnap.log[.1][.2].
-    AddScrubbedFileIfPresent(dir, QStringLiteral("exosnap.log"), entries);
-    AddScrubbedFileIfPresent(dir, QStringLiteral("exosnap.log.1"), entries);
-    AddScrubbedFileIfPresent(dir, QStringLiteral("exosnap.log.2"), entries);
+    // Multiline messages and JSON strings can carry arbitrary private data.
+    // Export only known metadata rather than rewriting the source text.
+    AddProjectedLog(dir, QStringLiteral("exosnap.log"), ExportAppLogLine, entries);
+    AddProjectedLog(dir, QStringLiteral("exosnap.log.1"), ExportAppLogLine, entries);
+    AddProjectedLog(dir, QStringLiteral("exosnap.log.2"), ExportAppLogLine, entries);
 
-    // Engine JSONL (current + rotated) — spdlog names backups engine.1.jsonl etc.
-    AddScrubbedFileIfPresent(dir, QStringLiteral("engine.jsonl"), entries);
-    AddScrubbedFileIfPresent(dir, QStringLiteral("engine.1.jsonl"), entries);
-    AddScrubbedFileIfPresent(dir, QStringLiteral("engine.2.jsonl"), entries);
+    AddProjectedLog(dir, QStringLiteral("engine.jsonl"), ExportEngineLogLine, entries);
+    AddProjectedLog(dir, QStringLiteral("engine.1.jsonl"), ExportEngineLogLine, entries);
+    AddProjectedLog(dir, QStringLiteral("engine.2.jsonl"), ExportEngineLogLine, entries);
 
     // Last N session reports (newest first).
     {
@@ -176,9 +246,8 @@ std::vector<BundleEntry> CollectBundleEntries(const BundleInputs& inputs) {
             manifest[QStringLiteral("verify_update_reinstall")] = true;
         manifest[QStringLiteral("note")] =
             QStringLiteral("No telemetry. Created locally on user action; not transmitted anywhere.");
-        manifest[QStringLiteral("privacy")] =
-            QStringLiteral("Paths, username and machine name are scrubbed; capture-target window "
-                           "titles are redacted to [capture-target].");
+        manifest[QStringLiteral("privacy")] = QStringLiteral(
+            "Logs contain allowlisted metadata. Free-form log messages and arbitrary fields are omitted.");
         QJsonArray files;
         for (const auto& e : entries)
             files.append(e.name);

@@ -71,7 +71,7 @@ Source/window labels shown in the UI need not be safe to log. Window capture tar
 
 ## Support bundles
 
-Support bundles are user-created local ZIP files. They include rotated logs, recent session reports and allowlisted structured capability/configuration facts, not raw settings/presets/history or recordings. Crash dumps are a separate consent-controlled channel and are not included.
+Support bundles are user-created local ZIP files. They include selected log metadata, recent session reports and allowlisted capability and configuration facts. The collector parses engine JSONL one record at a time and projects approved fields and values. Application logs contribute timestamps, severity and recognized components from the prefix. Free-form messages remain in the local logs. Crash dumps use a separate consent-controlled channel.
 
 Bundle work runs off the GUI thread. A successful write is reported truthfully; reveal/open behavior belongs to the product action that follows. Scrubbing known fields and path shapes is not a proof that arbitrary user-authored text can contain no personal information. Users should review a bundle before sharing it. Nothing uploads it automatically.
 

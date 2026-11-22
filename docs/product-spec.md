@@ -559,7 +559,7 @@ Present/tearing/DPC traces are optional. Standard capture/cadence diagnosis rema
 
 Auto fixes are executable reversible changes after review/confirmation; scope/track changes always name consequences. Assisted fixes reveal the existing control/location. External fixes direct to an operation ExoSnap cannot do. Nothing applies silently. No new Windows administration interface is created through Diagnostics.
 
-Reports/logs/support bundles are local. A per-recording report retains the ten newest files and uses unavailable rather than fabricated counters. Support bundle creation gathers scrubbed logs/reports and allowlisted facts into a user-chosen ZIP, never uploads it and never includes recordings/raw configuration/crash dumps. Known-shape scrubbing is not a guarantee about arbitrary personal prose; review before sharing.
+Reports, logs and support bundles are local. A per-recording report retains the ten newest files and leaves unmeasured counters unavailable. A support bundle contains allowlisted log metadata, scrubbed reports and structured facts in a user-chosen ZIP. Free-form log messages and arbitrary log fields remain in the local logs. Review the bundle before sharing.
 
 Logs provides a virtualized structured list with Time, Level, Category and Message, filtering/search and current-view count. Copy means the filtered visible history; Export means the full current in-memory history. Disk rotation and report retention are separate. Startup measurements are recorded milestones, not a general continuously running profiler.
 

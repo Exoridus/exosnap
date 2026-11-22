@@ -93,10 +93,10 @@ struct BundleInputs {
 // unaffected.
 [[nodiscard]] QString RedactCaptureTargets(const QString& text);
 
-// Scrubs recognized paths, names, and capture-target identifiers in logs and settings.
+// Scrubs recognized paths, names, and capture-target identifiers in the settings summary.
 [[nodiscard]] QByteArray ScrubBundleText(const QByteArray& text);
 
-// Collects rotated logs, recent session reports, capability and display data, and settings.
+// Collects allowlisted log metadata, recent session reports, capability and display data, and settings.
 // Unreadable reports are skipped and legacy report error details are omitted.
 [[nodiscard]] std::vector<BundleEntry> CollectBundleEntries(const BundleInputs& inputs);
 

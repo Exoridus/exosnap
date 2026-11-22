@@ -76,8 +76,10 @@ TEST(SupportBundle, RedactsCaptureTargetsInFreetextAndJson) {
 TEST(SupportBundle, ProducesExpectedEntries) {
     QTemporaryDir tmp;
     ASSERT_TRUE(tmp.isValid());
-    WriteText(tmp.path() + QStringLiteral("/exosnap.log"), QStringLiteral("hello\n"));
-    WriteText(tmp.path() + QStringLiteral("/engine.jsonl"), QStringLiteral("{\"message\":\"x\"}\n"));
+    WriteText(tmp.path() + QStringLiteral("/exosnap.log"),
+              QStringLiteral("2026-07-12T10:00:00.123 [info] [record] hello\n"));
+    WriteText(tmp.path() + QStringLiteral("/engine.jsonl"),
+              QStringLiteral("{\"timestamp_unix_ms\":123,\"level\":\"info\",\"message\":\"x\"}\n"));
 
     const auto entries = CollectBundleEntries(MakeInputs(tmp.path()));
     EXPECT_TRUE(HasEntry(entries, QStringLiteral("exosnap.log")));
@@ -120,6 +122,51 @@ TEST(SupportBundle, LegacyFailureDetailsAreNotExported) {
     EXPECT_FALSE(HasEntry(entries, QStringLiteral("reports/session-malformed.json")));
 }
 
+TEST(SupportBundle, ExportsLogMetadataWithoutFreeTextOrArbitraryJsonFields) {
+    QTemporaryDir tmp;
+    ASSERT_TRUE(tmp.isValid());
+    const auto app_path = tmp.filePath(QStringLiteral("exosnap.log.1"));
+    const auto app_log =
+        QStringLiteral("2026-07-12T10:00:00.123 [error] [record.failure] D:/Private Folder/\u00e9tude.mkv\n"
+                       "\\\\server\\private data\\continuation.mkv\n"
+                       "2026-07-12T10:00:01.123 [info] [private-slug] identifying text\n");
+    WriteText(app_path, app_log);
+    const QJsonObject record{
+        {QStringLiteral("timestamp_unix_ms"), 1'783'850'400'123.0},
+        {QStringLiteral("level"), QStringLiteral("error")},
+        {QStringLiteral("component"), QStringLiteral("record")},
+        {QStringLiteral("message"), QStringLiteral("failed at D:/Private Folder/\u00e9tude.mkv")},
+        {QStringLiteral("fields"), QJsonObject{{QStringLiteral("backend"), QStringLiteral("wgc")},
+                                               {QStringLiteral("target"), QStringLiteral("secret \"quoted\" window")},
+                                               {QStringLiteral("arbitrary"), QStringLiteral("private-slug")}}}};
+    const auto engine_path = tmp.filePath(QStringLiteral("engine.2.jsonl"));
+    const auto engine_log = QString::fromUtf8(QJsonDocument(record).toJson(QJsonDocument::Compact)) +
+                            QStringLiteral("\n{\"message\":\"unfinished private text\n");
+    WriteText(engine_path, engine_log);
+
+    const auto entries = CollectBundleEntries(MakeInputs(tmp.path()));
+    const auto find_entry = [&](const QString& name) {
+        return std::find_if(entries.begin(), entries.end(), [&](const BundleEntry& e) { return e.name == name; });
+    };
+    const auto app = find_entry(QStringLiteral("exosnap.log.1"));
+    const auto engine = find_entry(QStringLiteral("engine.2.jsonl"));
+    ASSERT_NE(app, entries.end());
+    ASSERT_NE(engine, entries.end());
+    EXPECT_EQ(QString::fromUtf8(app->bytes), QStringLiteral("2026-07-12T10:00:00.123 [error] [record.failure]\n"
+                                                            "2026-07-12T10:00:01.123 [info]\n"));
+    const auto exported = QJsonDocument::fromJson(engine->bytes);
+    ASSERT_TRUE(exported.isObject());
+    const QJsonObject expected{
+        {QStringLiteral("timestamp_unix_ms"), 1'783'850'400'123.0},
+        {QStringLiteral("level"), QStringLiteral("error")},
+        {QStringLiteral("component"), QStringLiteral("record")},
+        {QStringLiteral("fields"), QJsonObject{{QStringLiteral("backend"), QStringLiteral("wgc")}}}};
+    EXPECT_EQ(exported.object(), expected);
+    QFile app_file(app_path);
+    ASSERT_TRUE(app_file.open(QIODevice::ReadOnly));
+    EXPECT_EQ(QString::fromUtf8(app_file.readAll()), app_log);
+}
+
 // a bundle taken during a verification-reinstall run says so; a normal
 // bundle carries no such key at all.
 TEST(SupportBundle, ManifestNotesTheVerificationReinstallModeOnlyWhileItIsOn) {
@@ -144,7 +191,8 @@ TEST(SupportBundle, NoPersonalDataOrWindowTitleSurvives) {
                                                                .arg(kWindowTitle));
     // A JSONL line carrying the window title in a target field.
     WriteText(tmp.path() + QStringLiteral("/engine.jsonl"),
-              QStringLiteral("{\"component\":\"record\",\"message\":\"record.start\","
+              QStringLiteral("{\"timestamp_unix_ms\":123,\"level\":\"info\","
+                             "\"component\":\"record\",\"message\":\"record.start\","
                              "\"fields\":{\"target\":\"%1\",\"backend\":\"wgc\"}}\n")
                   .arg(kWindowTitle));
 
@@ -157,7 +205,7 @@ TEST(SupportBundle, NoPersonalDataOrWindowTitleSurvives) {
     EXPECT_FALSE(AnyEntryContains(entries, QStringLiteral("C:\\Users")));
     EXPECT_FALSE(AnyEntryContains(entries, QStringLiteral("out.mkv")));
     // Backend context is preserved for support.
-    EXPECT_TRUE(AnyEntryContains(entries, QStringLiteral("backend=wgc")));
+    EXPECT_TRUE(AnyEntryContains(entries, QStringLiteral("\"backend\":\"wgc\"")));
 }
 
 // The product specification requires startup-trace.txt in the bundle.
