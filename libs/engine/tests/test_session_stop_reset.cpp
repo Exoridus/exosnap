@@ -1,18 +1,26 @@
 #include <cstdint>
 #include <gtest/gtest.h>
 
+#include <atomic>
 #include <barrier>
 #include <chrono>
+#include <filesystem>
+#include <functional>
 #include <future>
+#include <memory>
+#include <string>
 #include <thread>
 #include <utility>
+#include <vector>
 
 #include "exosnap/engine/codec_types.h"
 #include "exosnap/engine/error_types.h"
 #include "exosnap/engine/packet_types.h"
 #include "exosnap/engine/record_request_id.h"
+#include "exosnap/engine/recorder_session.h"
 #include "mux_queue.h"
 #include "premux_state.h"
+#include "session_callback_gate.h"
 #include "session_internal.h"
 #include "session_request_gate.h"
 #include "session_stop_reset.h"
@@ -25,6 +33,94 @@ using exosnap::engine::ResetStopRequestedForNewSession;
 using exosnap::engine::SessionState;
 using exosnap::engine::SplitRequestState;
 using exosnap::engine::UnpackSplitRequest;
+
+namespace exosnap::engine {
+class RecorderSessionTestAccess {
+  public:
+    static RecorderResult Record(RecorderSession& session, const RecorderConfig& config, RecordRequestId request_id,
+                                 const std::function<void()>& on_prepared_output) {
+        return session.RecordImpl(config, request_id, on_prepared_output);
+    }
+};
+} // namespace exosnap::engine
+
+class RecorderSessionFrameSnapshot : public ::testing::TestWithParam<bool> {};
+
+TEST_P(RecorderSessionFrameSnapshot, PreparationFailureCompletesPendingSnapshotOnce) {
+    using namespace exosnap::engine;
+
+    RecorderSession session;
+    RecorderConfig config;
+    config.output_path = std::filesystem::current_path() / "snapshot_preparation_failure.mkv";
+    config.target.kind = CaptureTarget::Kind::Monitor;
+    config.target.native_id = 1;
+    const bool stop_during_preparation = GetParam();
+    config.record_audio = !stop_during_preparation;
+    if (!stop_during_preparation) {
+        config.resolved_audio_plan.emplace();
+        config.resolved_audio_plan->tracks.emplace_back();
+    }
+    RecorderResult validation;
+    ASSERT_TRUE(session.Validate(config, &validation)) << validation.error_detail;
+
+    const auto request_id = NextRecordRequestId();
+    int completions = 0;
+    const RecorderResult result = RecorderSessionTestAccess::Record(session, config, request_id, [&] {
+        session.RequestFrameSnapshot(
+            [&](bool success, uint32_t width, uint32_t height, std::vector<uint8_t> pixels, std::string error) {
+                ++completions;
+                EXPECT_FALSE(success);
+                EXPECT_EQ(width, 0u);
+                EXPECT_EQ(height, 0u);
+                EXPECT_TRUE(pixels.empty());
+                EXPECT_FALSE(error.empty());
+            },
+            request_id);
+        if (stop_during_preparation)
+            session.Stop(request_id);
+    });
+
+    EXPECT_FALSE(result.succeeded);
+    EXPECT_EQ(result.error_phase, ErrorPhase::Prepare);
+    EXPECT_EQ(result.error_detail, stop_during_preparation
+                                       ? "Output stopped before attachment"
+                                       : "Resolved audio tracks require unique identities and dense stream indices");
+    EXPECT_EQ(completions, 1);
+}
+
+INSTANTIATE_TEST_SUITE_P(PrepareFailureAndStop, RecorderSessionFrameSnapshot, ::testing::Bool());
+
+TEST(SessionSnapshotAdmission, RetirementCancelsPendingReadbackAndRejectsLatePublisher) {
+    SessionState state;
+    state.callback_gate = std::make_shared<exosnap::engine::SessionCallbackGate>();
+    std::atomic<int> completions = 0;
+    std::atomic<int> late_completions = 0;
+    state.AdmitSnapshot([&](bool success, uint32_t, uint32_t, std::vector<uint8_t>, std::string) {
+        ++completions;
+        EXPECT_FALSE(success);
+    });
+
+    std::barrier readback_started(2);
+    std::barrier finish_readback(2);
+    std::jthread worker([&] {
+        EXPECT_TRUE(state.HasPendingSnapshot());
+        readback_started.arrive_and_wait();
+        finish_readback.arrive_and_wait();
+        state.CompleteSnapshot(true, 1, 1, {0, 0, 0, 0}, {});
+    });
+
+    readback_started.arrive_and_wait();
+    if (auto pending = state.RetireSnapshot())
+        pending(false, 0, 0, {}, "recording ended");
+    state.AdmitSnapshot([&](bool, uint32_t, uint32_t, std::vector<uint8_t>, std::string) { ++late_completions; });
+    finish_readback.arrive_and_wait();
+    worker.join();
+
+    EXPECT_FALSE(state.HasPendingSnapshot());
+    EXPECT_FALSE(state.RetireSnapshot());
+    EXPECT_EQ(completions.load(), 1);
+    EXPECT_EQ(late_completions.load(), 0);
+}
 
 // ---------------------------------------------------------------------------
 // ResetStopRequestedForNewSession — pure application of a consumed pre_stop

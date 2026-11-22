@@ -49,6 +49,7 @@
 #include <cstdio>
 #include <cstring>
 #include <filesystem>
+#include <functional>
 #include <memory>
 #include <mutex>
 #include <optional>
@@ -618,23 +619,13 @@ Outcome<MediaIndexSnapshot> RecorderSession::FreezeRecordingMediaIndex(RecordReq
 
 void RecorderSession::RequestFrameSnapshot(FrameSnapshotCallback callback, RecordRequestId request_id) {
     std::shared_ptr<SessionState> st;
-    std::shared_ptr<SessionCallbackGate> gate;
     {
         std::lock_guard lk(m_impl->state_mutex);
         if (!RecordRequestMatches(m_impl->requests.active_request, request_id) || !m_impl->gate)
             return;
         st = m_impl->state;
-        gate = m_impl->gate;
     }
-    std::lock_guard lk(st->snapshot_callback_mutex);
-    if (st->snapshot_requested.load())
-        return; // already pending -- ignore
-    // The video thread fires this; it is one of the workers Record() may abandon.
-    st->snapshot_callback = [gate, cb = std::move(callback)](bool ok, uint32_t w, uint32_t h, std::vector<uint8_t> bgra,
-                                                             const std::string& err) {
-        gate->Invoke([&] { cb(ok, w, h, std::move(bgra), err); });
-    };
-    st->snapshot_requested.store(true);
+    st->AdmitSnapshot(std::move(callback));
 }
 
 std::optional<ConfigRevision> RecorderSession::CompositedVisualSceneRevision(RecordRequestId request_id) const {
@@ -661,6 +652,11 @@ RecordRequestId NextRecordRequestId() noexcept {
 }
 
 RecorderResult RecorderSession::Record(const RecorderConfig& config, RecordRequestId request_id) {
+    return RecordImpl(config, request_id, {});
+}
+
+RecorderResult RecorderSession::RecordImpl(const RecorderConfig& config, RecordRequestId request_id,
+                                           const std::function<void()>& on_prepared_output) {
     // Validate first
     RecorderResult validationResult;
     if (!Validate(config, &validationResult)) {
@@ -710,6 +706,7 @@ RecorderResult RecorderSession::Record(const RecorderConfig& config, RecordReque
         // request is dropped by the same call.
         pre_stop = m_impl->requests.pending_stop.Consume(request_id);
         gate = m_impl->gate = std::make_shared<SessionCallbackGate>();
+        state_ptr->callback_gate = gate;
 
         // Reset session state -- still under the lock. A Stop(), Pause(), mute or
         // snapshot that lands after the consume above then cannot be wiped by the
@@ -776,10 +773,15 @@ RecorderResult RecorderSession::Record(const RecorderConfig& config, RecordReque
         st.diagnostics.Reset(++m_impl->diagnostics_generation, MakeDiagnosticsStaticConfig(engine_config));
     }
 
+    auto retireSnapshot = [&](const std::string& detail) {
+        if (auto pending = state_ptr->RetireSnapshot())
+            pending(false, 0, 0, {}, detail);
+    };
     auto failPrepare = [&](int32_t hr, const std::string& detail) -> RecorderResult {
         state_ptr->RequestCleanStop();
         if (state_ptr->audio_runtime_graph)
             state_ptr->audio_runtime_graph->Start();
+        retireSnapshot("recording preparation ended before a frame could be captured");
         RecorderResult r;
         r.succeeded = false;
         r.error_code = hr;
@@ -804,6 +806,8 @@ RecorderResult RecorderSession::Record(const RecorderConfig& config, RecordReque
         std::lock_guard lock(state_ptr->attachment_mutex);
         state_ptr->file_output = *prepared_output.value();
     }
+    if (on_prepared_output)
+        on_prepared_output();
 
     auto createAudioSource = [&](AudioSourceKind kind) -> std::unique_ptr<IAudioCaptureSource> {
         switch (kind) {
@@ -1149,19 +1153,7 @@ RecorderResult RecorderSession::Record(const RecorderConfig& config, RecordReque
         }
     }
 
-    // A snapshot nobody served (requested before the first frame of a recording
-    // that never got one) would otherwise leave its caller waiting forever.
-    {
-        FrameSnapshotCallback pending;
-        {
-            std::lock_guard lk(state_ptr->snapshot_callback_mutex);
-            pending = std::move(state_ptr->snapshot_callback);
-            state_ptr->snapshot_callback = nullptr;
-            state_ptr->snapshot_requested.store(false);
-        }
-        if (pending)
-            pending(false, 0, 0, {}, "the recording ended before a frame could be captured");
-    }
+    retireSnapshot("the recording ended before a frame could be captured");
 
     // From here no worker may reach the caller: a joined one is gone, an
     // abandoned one finds the gate closed (session_callback_gate.h).
@@ -1219,22 +1211,6 @@ RecorderResult RecorderSession::Record(const RecorderConfig& config, RecordReque
                                        ": no byte progress for " + std::to_string(kFinalizeStallWindowMs) + " ms]";
             }
         }
-    }
-
-    // Cancel any pending frame snapshot request — VideoThread has stopped so the
-    // callback will never fire from the capture loop.  Fire it with an error here.
-    {
-        FrameSnapshotCallback pending_cb;
-        {
-            std::lock_guard slk(state_ptr->snapshot_callback_mutex);
-            if (state_ptr->snapshot_requested.load()) {
-                pending_cb = std::move(state_ptr->snapshot_callback);
-                state_ptr->snapshot_callback = nullptr;
-                state_ptr->snapshot_requested.store(false);
-            }
-        }
-        if (pending_cb)
-            pending_cb(false, 0, 0, {}, "recording session ended before snapshot completed");
     }
 
     // Final stats snapshot
