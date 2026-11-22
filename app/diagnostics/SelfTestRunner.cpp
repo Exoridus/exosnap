@@ -5,11 +5,11 @@
 // clang-format on
 
 #include "SelfTestRunner.h"
+#include "models/OutputPathValidator.h"
 
 #include <chrono>
 #include <cstdio>
 #include <filesystem>
-#include <fstream>
 
 namespace exosnap::diagnostics {
 
@@ -18,6 +18,11 @@ namespace {
 uint64_t NowTimestamp() {
     return static_cast<uint64_t>(
         std::chrono::duration_cast<std::chrono::seconds>(std::chrono::system_clock::now().time_since_epoch()).count());
+}
+
+std::string PathLabel(const std::filesystem::path& path) {
+    const auto utf8 = path.u8string();
+    return std::string(utf8.begin(), utf8.end());
 }
 
 DiagnosticResult MakeResult(const std::string& id, DiagnosticGroup group, DiagnosticSeverity sev,
@@ -108,19 +113,14 @@ SelfTestResult SelfTestRunner::CheckMuxerAvailability() {
     result.category = "Muxer";
 
     namespace fs = std::filesystem;
-    std::string target = fs::temp_directory_path().string();
-    auto probe = fs::path(target) / "exosnap_muxer_probe.tmp";
     try {
-        std::ofstream f(probe, std::ios::binary);
-        if (!f) {
-            result.passed = false;
-            result.detail = "Cannot write to: " + target;
+        const auto target = fs::temp_directory_path();
+        if (!ProbeOutputDirectoryWritable(target)) {
+            result.detail = "Cannot write to: " + PathLabel(target);
             return result;
         }
-        f.close();
-        fs::remove(probe);
         result.passed = true;
-        result.detail = "Output path writable \xe2\x80\x94 muxer can write to: " + target;
+        result.detail = "Output path writable \xe2\x80\x94 muxer can write to: " + PathLabel(target);
     } catch (const std::exception& e) {
         result.passed = false;
         result.detail = std::string("Muxer path check exception: ") + e.what();
@@ -128,13 +128,13 @@ SelfTestResult SelfTestRunner::CheckMuxerAvailability() {
     return result;
 }
 
-SelfTestResult SelfTestRunner::CheckOutputPathWritable(const std::string& path) {
+SelfTestResult SelfTestRunner::CheckOutputPathWritable(const std::filesystem::path& path) {
     SelfTestResult result;
     result.category = "Output Path";
 
     namespace fs = std::filesystem;
-    const fs::path target = path.empty() ? fs::temp_directory_path() : fs::path(path);
     try {
+        const fs::path target = path.empty() ? fs::temp_directory_path() : path;
         // Recording creates the output folder on start, so one that does not exist yet is
         // not a failure. Probe the nearest existing ancestor, which is where it would be
         // created. Diagnostics only inspects; it never creates the folder itself.
@@ -147,25 +147,19 @@ SelfTestResult SelfTestRunner::CheckOutputPathWritable(const std::string& path) 
         }
         if (probe_dir.empty() || !fs::is_directory(probe_dir)) {
             result.passed = false;
-            result.detail = "Not a writable directory: " + target.string();
+            result.detail = "Not a writable directory: " + PathLabel(target);
             return result;
         }
 
-        const auto probe = probe_dir / "exosnap_selftest_write_check.tmp";
-        std::ofstream f(probe, std::ios::binary);
-        if (!f) {
-            result.passed = false;
-            result.detail = "Cannot write to: " + target.string();
+        if (!ProbeOutputDirectoryWritable(probe_dir)) {
+            result.detail = "Cannot write to: " + PathLabel(target);
             return result;
         }
-        f << "exosnap-selftest";
-        f.close();
-        fs::remove(probe);
         result.passed = true;
-        result.detail = "Output path is writable \xe2\x80\x94 probe succeeded for: " + target.string();
+        result.detail = "Output path is writable \xe2\x80\x94 probe succeeded for: " + PathLabel(target);
     } catch (...) {
         result.passed = false;
-        result.detail = "Exception during output path writability check for: " + target.string();
+        result.detail = "Exception during output path writability check.";
     }
     return result;
 }

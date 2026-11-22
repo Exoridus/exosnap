@@ -1,6 +1,10 @@
 #include <gtest/gtest.h>
 
+#include <QTemporaryDir>
+
 #include <filesystem>
+#include <fstream>
+#include <iterator>
 
 #include "diagnostics/CapabilitySummary.h"
 #include "diagnostics/ConfigSummary.h"
@@ -1381,6 +1385,27 @@ TEST(SelfTestTest, SelfTest_OutputPath_ValidTempPath_Passes) {
     EXPECT_TRUE(result.passed);
     EXPECT_EQ(result.category, "Output Path");
     EXPECT_NE(result.detail.find("Output path is writable"), std::string::npos);
+}
+
+TEST(SelfTestTest, SelfTest_OutputPath_PreservesExistingFile) {
+    const QTemporaryDir temp_dir;
+    ASSERT_TRUE(temp_dir.isValid());
+    const std::filesystem::path path(temp_dir.path().toStdWString());
+    const auto existing = path / L"exosnap_selftest_write_check.tmp";
+    {
+        std::ofstream file(existing);
+        file << "keep";
+        file.close();
+        ASSERT_TRUE(file);
+    }
+
+    EXPECT_TRUE(SelfTestRunner::CheckOutputPathWritable(path).passed);
+
+    std::ifstream file(existing);
+    std::string contents;
+    ASSERT_TRUE(file >> contents);
+    EXPECT_EQ(contents, "keep");
+    EXPECT_EQ(std::distance(std::filesystem::directory_iterator(path), std::filesystem::directory_iterator()), 1);
 }
 
 // Output path probe with a path that cannot exist — must fail gracefully, never throw.
