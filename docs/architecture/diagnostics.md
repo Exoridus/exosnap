@@ -49,7 +49,7 @@ The opt-in PresentMon consumer additionally exposes the number of presents it cl
 
 Display cadence is measured from duplication timestamps. WGC delivery timestamps supply the window/region cadence path and have different provenance/jitter. PresentMon adds presentation-mode and related attribution; it does not replace the unprivileged monitor-cadence source. Attribute a window measurement to the actual process instance and reset totals at each recording boundary even if the PID is unchanged.
 
-Process exit, trace termination or unavailable decoding clears the live reading. A generic fullscreen signal is not proof of a capture failure. Mid-session stall reporting claims absence of frame progress and names exclusive fullscreen only as a corroborated possibility.
+The DPC/ISR consumer requests raw QPC event timestamps to compare with the entry ticks in the payload. Process exit, trace termination or unavailable decoding clears the live reading. A generic fullscreen signal is not proof of a capture failure. Mid-session stall reporting claims absence of frame progress and names exclusive fullscreen only as a corroborated possibility.
 
 DPC/ISR attribution is best effort. An unresolved driver remains unidentified rather than being guessed. Compiling the provider or passing pure mapping tests is not evidence that elevated ETW delivery or driver attribution works on a particular machine.
 
