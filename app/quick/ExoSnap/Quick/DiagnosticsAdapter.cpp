@@ -516,7 +516,7 @@ void DiagnosticsAdapter::appendSeriesSamples(const exosnap::engine::RecordingDia
     };
 
     push("framePacing", snapshot.capture.actual_fps);
-    if (snapshot.video_encoder.frames_encoded > 0) {
+    if (snapshot.video_encoder.timing_availability == exosnap::engine::MetricAvailability::Available) {
         push("encoder", snapshot.video_encoder.p99_ms);
         encoder_session_worst_p99_ms_ = std::max(encoder_session_worst_p99_ms_, snapshot.video_encoder.p99_ms);
     }

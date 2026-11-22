@@ -10,6 +10,10 @@ Keep source progress, emitted CFR cadence, GPU elapsed time and CPU submission t
 
 Engine snapshots carry availability alongside values. The application must not turn unavailable into zero, count an invalid snapshot twice, or carry deltas across session generations. Real-drop summaries consistently count backpressure, processing failures and undrained encoder output, not benign coalescing or pre-first-frame slots.
 
+Compositor, encoder and buffered-write timings become unavailable when their rolling windows empty. Session totals and container capabilities do not establish that a timing sample exists. GPU query results describe individual passes. A recorder-wide GPU p99 and GPU bottleneck inference require measurements correlated by frame.
+
+Duration skew compares the latest video timestamp with the worst aligned mux timestamp among audio tracks that have progressed. The mux publishes these positions during recording and on final drain. Raw capture timestamps and the container's stored codec-delay offset do not enter the comparison.
+
 ## Measurement-domain providers
 
 Engine snapshots own capture, selection/pacing, recorder GPU passes, encoder, audio, mux/storage and preview measurements. `IPresentProvider`, `IDpcLatencyProvider`, `IGpuTelemetryProvider` and `IVideoMemoryProvider` are separate domain boundaries. Optional facts carry monotonic receipt time, source and adapter/process identity where meaningful. Missing fields remain unavailable. Background probes poll GPU/memory on the diagnostics probe cadence. Polling targets are the unique physical adapters derived from the pipeline role assignment, each tagged with the roles it serves, so one adapter carrying capture, processing and encoder roles is polled once rather than three times. Consumers reject another session/adapter and samples older than 15 seconds (three polling intervals).

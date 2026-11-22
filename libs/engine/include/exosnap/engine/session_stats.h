@@ -41,6 +41,7 @@ struct SessionStats {
     // Not an A/V sync proof. It compares where the two streams END; two streams
     // that end together can still have drifted apart and back in between.
     double duration_skew_ms = 0.0;
+    bool duration_skew_available = false;
     uint64_t dropped_or_skipped_video_frames = 0;
     uint64_t duplicated_video_frames = 0;
     FrameSize source_size;

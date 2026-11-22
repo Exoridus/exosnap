@@ -20,6 +20,8 @@
 #include "diagnostics/EngineLogBridge.h"
 #include "diagnostics/StructuredLog.h"
 
+#include "../../libs/engine/src/pipeline_diagnostics_aggregator.h"
+
 #include <gtest/gtest.h>
 
 #include <QCoreApplication>
@@ -28,6 +30,7 @@
 #include <QJsonObject>
 #include <QJsonValue>
 
+#include <chrono>
 #include <filesystem>
 #include <string>
 
@@ -87,10 +90,12 @@ exosnap::engine::RecordingDiagnosticsSnapshot HealthyRecording() {
     s.capture.acquire_peak_ms = 2.1;
 
     s.compositor.active = true;
+    s.compositor.timing_availability = exosnap::engine::MetricAvailability::Available;
     s.compositor.latest_ms = 0.5;
     s.compositor.frames_composed = 749;
 
     s.video_encoder.frames_encoded = 748;
+    s.video_encoder.timing_availability = exosnap::engine::MetricAvailability::Available;
     s.video_encoder.frames_submitted = 748;
     s.video_encoder.latest_ms = 3.0;
     s.video_encoder.p99_ms = 3.1;
@@ -222,9 +227,50 @@ TEST(PipelineSnapshotJson, TimingsAreNamedAsCpuSubmissionAndNeverAsGpuTime) {
     EXPECT_EQ(At(json, {"encoder", "timingSemantics"}).toString(), QStringLiteral("submitToBitstreamReady"));
     EXPECT_EQ(At(json, {"captureTiming", "semantics"}).toString(), QStringLiteral("cpuAcquireAndCopy"));
     EXPECT_EQ(At(json, {"disk", "latencySemantics"}).toString(), QStringLiteral("bufferedWriteCall"));
-    // This pipeline takes no GPU timestamp. If a key ever appears that claims
-    // one, it has to be backed by a real measurement first.
+    // Independent GPU pass samples cannot back a frame-wide value.
     EXPECT_FALSE(json.value(QStringLiteral("compositor")).toObject().contains(QStringLiteral("gpuTimeMs")));
+}
+
+TEST(PipelineSnapshotJson, TimingWindowsExpireIndependentlyOfRecordingActivityAndContainerSupport) {
+    using namespace exosnap::engine;
+    using namespace std::chrono_literals;
+    PipelineDiagnosticsAggregator agg;
+    DiagnosticsStaticConfig config;
+    config.split_supported = true;
+    agg.Reset(1, config);
+    SessionStats stats;
+    stats.encoded_video_packets = 1;
+    const auto start = std::chrono::steady_clock::time_point{} + 10s;
+    const auto before = PipelineSnapshotToJson(agg.BuildSnapshot(start, stats, DiagnosticsLifecycle::Recording, 0.0));
+    EXPECT_TRUE(At(before, {"disk", "latestWriteMs"}).isNull());
+
+    agg.OnCompositorSubmit(start, 0.0, true);
+    agg.OnEncodeLatency(start, 0.0);
+    agg.OnDiskWrite(start, 0.0, 512);
+    const auto measured =
+        PipelineSnapshotToJson(agg.BuildSnapshot(start + 10ms, stats, DiagnosticsLifecycle::Recording, 0.01));
+    EXPECT_TRUE(At(measured, {"compositor", "latestMs"}).isDouble());
+    EXPECT_EQ(At(measured, {"encoder", "p99Ms"}).toDouble(-1.0), 0.0);
+    EXPECT_EQ(At(measured, {"disk", "latestWriteMs"}).toDouble(-1.0), 0.0);
+
+    const auto expired =
+        PipelineSnapshotToJson(agg.BuildSnapshot(start + 2100ms, stats, DiagnosticsLifecycle::Paused, 0.01));
+    EXPECT_TRUE(At(expired, {"compositor", "active"}).toBool());
+    EXPECT_EQ(At(expired, {"encoder", "framesEncoded"}).toDouble(), 1.0);
+    EXPECT_EQ(At(expired, {"disk", "bytesWritten"}).toDouble(), 512.0);
+    EXPECT_TRUE(At(expired, {"compositor", "latestMs"}).isNull());
+    EXPECT_TRUE(At(expired, {"encoder", "p99Ms"}).isNull());
+    EXPECT_TRUE(At(expired, {"mux", "latestWriteMs"}).isNull());
+    EXPECT_TRUE(At(expired, {"disk", "latestWriteMs"}).isNull());
+    EXPECT_TRUE(At(expired, {"mux", "reorderPackets"}).isDouble());
+
+    config.split_supported = false;
+    agg.Reset(2, config);
+    agg.OnDiskWrite(start, 1.0, 512);
+    const auto without_splits =
+        PipelineSnapshotToJson(agg.BuildSnapshot(start + 10ms, stats, DiagnosticsLifecycle::Recording, 0.01));
+    EXPECT_EQ(At(without_splits, {"disk", "latestWriteMs"}).toDouble(-1.0), 1.0);
+    EXPECT_TRUE(At(without_splits, {"mux", "reorderPackets"}).isNull());
 }
 
 TEST(PipelineSnapshotJson, EncoderInitIsOmittedUntilAnEncoderWasConfigured) {

@@ -1683,9 +1683,6 @@ TEST(PipelineDiagnostics, EndpointInUseIsCarriedOnTheAudioSnapshot) {
     EXPECT_FALSE(s.audio.degraded_endpoint_in_use);
 }
 
-// GPU execution past the budget while the recorder's own submissions stay cheap
-// is the captured application's load, not the compositor's: a bottleneck of its
-// own, so the card does not blame the recorder's composition.
 TEST(PipelineDiagnostics, LateGpuExecutionWithoutOutputImpactStaysNeutral) {
     PipelineDiagnosticsAggregator agg;
     agg.Reset(1, MakeConfig());
@@ -1701,7 +1698,52 @@ TEST(PipelineDiagnostics, LateGpuExecutionWithoutOutputImpactStaysNeutral) {
         s = agg.BuildSnapshot(At(i * 1000 + 999), stats, DiagnosticsLifecycle::Recording, 2.0 + i);
     }
     EXPECT_EQ(s.bottleneck, PipelineBottleneck::None) << s.bottleneck_reason;
-    EXPECT_GT(s.compositor.gpu_exec_p99_ms, 16.7);
+    EXPECT_FALSE(s.compositor.gpu_exec_p99_ms.has_value());
+    EXPECT_EQ(agg.SamplePerfWindow(At(5999)).composition_gpu.p99_ms, 30.0);
+}
+
+TEST(PipelineDiagnostics, IndependentGpuPassPercentilesDoNotIdentifyAGpuBottleneck) {
+    PipelineDiagnosticsAggregator agg;
+    agg.Reset(1, MakeConfig());
+    auto stats = MakeStats();
+    stats.encoded_video_packets = 1;
+
+    for (int i = 0; i < 6; ++i) {
+        for (int frame = 0; frame < 20; ++frame) {
+            const auto now = At(i * 1000 + frame * 50);
+            agg.OnCompositionGpuTime(now, frame % 2 == 0 ? 12.0 : 0.0);
+            agg.OnHdrTonemapGpuTime(now, frame % 2 == 0 ? 0.0 : 12.0);
+        }
+        agg.OnFrameDroppedProcessingFailure();
+        const auto now = At(i * 1000 + 999);
+        const auto snapshot = agg.BuildSnapshot(now, stats, DiagnosticsLifecycle::Recording, 2.0 + i);
+        EXPECT_FALSE(snapshot.compositor.gpu_exec_p99_ms.has_value());
+        EXPECT_NE(snapshot.bottleneck, PipelineBottleneck::Gpu);
+        const auto stages = agg.SamplePerfWindow(now);
+        EXPECT_DOUBLE_EQ(stages.composition_gpu.p99_ms, 12.0);
+        EXPECT_DOUBLE_EQ(stages.hdr_tonemap_gpu.p99_ms, 12.0);
+    }
+}
+
+TEST(PipelineDiagnostics, DurationSkewComparesAlignedTracksInLiveAndTerminalSnapshots) {
+    PipelineDiagnosticsAggregator agg;
+    agg.Reset(1, MakeConfig());
+    auto stats = MakeStats();
+    stats.video_duration_ns = 1'000'000'000;
+    stats.audio_duration_ns = 1'200'000'000;
+
+    const auto no_audio = agg.BuildSnapshot(At(0), stats, DiagnosticsLifecycle::Recording, 1.0);
+    EXPECT_EQ(no_audio.duration_skew_availability, MetricAvailability::Unavailable);
+
+    stats.aligned_audio_duration_ns[0] = stats.video_duration_ns;
+    const auto aligned = agg.BuildSnapshot(At(50), stats, DiagnosticsLifecycle::Recording, 1.1);
+    EXPECT_EQ(aligned.duration_skew_availability, MetricAvailability::Available);
+    EXPECT_DOUBLE_EQ(aligned.duration_skew_ms, 0.0);
+
+    stats.aligned_audio_duration_ns[2] = 990'000'000;
+    const auto completed = agg.BuildSnapshot(At(100), stats, DiagnosticsLifecycle::Completed, 1.2);
+    EXPECT_EQ(completed.duration_skew_availability, MetricAvailability::Available);
+    EXPECT_DOUBLE_EQ(completed.duration_skew_ms, 10.0);
 }
 
 TEST(PacingOutcomeContract, UnselectedRingFramesAreNotRecordingLoss) {

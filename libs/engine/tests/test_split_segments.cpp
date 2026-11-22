@@ -14,6 +14,7 @@
 
 #include <array>
 #include <atomic>
+#include <chrono>
 #include <cstdint>
 #include <cstdio>
 #include <cstring>
@@ -21,9 +22,11 @@
 #include <fstream>
 #include <ios>
 #include <memory>
+#include <mutex>
 #include <optional>
 #include <string>
 #include <system_error>
+#include <thread>
 #include <utility>
 #include <vector>
 
@@ -338,6 +341,54 @@ MakeSplitState(const std::filesystem::path& output, std::vector<exosnap::engine:
         state->audio_epoch_qpc_100ns[track].store(1000000 + 200000 * (track + 1));
     }
     return state;
+}
+
+TEST(MuxSplitAudioTest, PublishesAlignedTrackEndsBeforeFinalDrain) {
+    using namespace exosnap::engine;
+    using namespace std::chrono_literals;
+    const auto output = exosnap_test::UniqueTempPath("mux_live_aligned_audio.mkv");
+    auto segments = std::make_shared<std::vector<CompletedSegment>>();
+    auto state = MakeSplitState(output, *segments);
+    state->segment_callback = [segments](const auto& segment) { segments->push_back(segment); };
+    const auto video = [&](uint64_t pts_ns) {
+        EncodedVideoPacket packet;
+        packet.bytes = SplitAccessUnit();
+        packet.pts_ns = pts_ns;
+        packet.keyframe = true;
+        ASSERT_EQ(state->PushMuxItem(MuxItem{std::move(packet)}), MuxQueueWait::Ready);
+    };
+    video(0);
+    ASSERT_EQ(state->PushMuxItem(MuxItem{AudioPacket(50'000'000, 1, 0)}), MuxQueueWait::Ready);
+    ASSERT_EQ(state->PushMuxItem(MuxItem{AudioPacket(50'000'000, 2, 1)}), MuxQueueWait::Ready);
+    video(500'000'000);
+
+    auto mux = std::make_shared<MuxThread>(state);
+    mux->Start();
+    const auto deadline = std::chrono::steady_clock::now() + 5s;
+    bool drained = false;
+    while (std::chrono::steady_clock::now() < deadline) {
+        if (state->diagnostics.SamplePerfWindow(std::chrono::steady_clock::now()).mux_process.samples > 0) {
+            drained = true;
+            break;
+        }
+        std::this_thread::sleep_for(5ms);
+    }
+    EXPECT_TRUE(drained);
+    {
+        std::lock_guard lock(state->stats_mutex);
+        EXPECT_EQ(state->stats.aligned_audio_duration_ns[0], 70'000'000u);
+        EXPECT_EQ(state->stats.aligned_audio_duration_ns[1], 90'000'000u);
+    }
+
+    state->mux_queue.PushSentinel(VideoEosSentinel{});
+    state->mux_queue.PushSentinel(AudioEosSentinel{0});
+    state->mux_queue.PushSentinel(AudioEosSentinel{1});
+    ASSERT_TRUE(mux->Join(10000));
+    EXPECT_FALSE(state->HasFailure());
+    for (const auto& segment : *segments) {
+        std::error_code ignored;
+        std::filesystem::remove(segment.path, ignored);
+    }
 }
 
 TEST(MuxSplitAudioTest, DelayedKeyframePartitionsAlignedAudioAndEosDrainsBothTracks) {

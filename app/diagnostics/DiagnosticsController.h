@@ -291,7 +291,7 @@ struct LiveTileInputs {
     bool in_depth = false;
     std::optional<PresentSample> present;
     std::optional<DpcLatencyReading> dpc;
-    double gpu_exec_p99_ms = 0.0;
+    std::optional<double> gpu_exec_p99_ms;
     GpuTelemetryReading gpu;
     VideoMemoryReading video_memory;
 };

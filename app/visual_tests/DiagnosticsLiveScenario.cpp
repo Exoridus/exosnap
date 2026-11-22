@@ -36,6 +36,7 @@ RecordingDiagnosticsSnapshot Baseline() {
     s.capture.acquire_peak_ms = 2.4;
 
     s.compositor.active = true;
+    s.compositor.timing_availability = exosnap::engine::MetricAvailability::Available;
     s.compositor.latest_ms = 0.6;
     s.compositor.average_ms = 0.6;
     s.compositor.peak_ms = 1.9;
@@ -46,6 +47,7 @@ RecordingDiagnosticsSnapshot Baseline() {
     s.video_encoder.height = 1440;
     s.video_encoder.frames_submitted = 11038;
     s.video_encoder.frames_encoded = 11036;
+    s.video_encoder.timing_availability = exosnap::engine::MetricAvailability::Available;
     s.video_encoder.latest_ms = 3.0;
     s.video_encoder.average_ms = 2.9;
     s.video_encoder.peak_ms = 4.8;
@@ -88,6 +90,7 @@ RecordingDiagnosticsSnapshot Baseline() {
     s.disk.bytes_written = 1'610'612'736;
     s.disk.throughput_mib_s = 92.0;
     s.disk.latest_write_ms = 0.4;
+    s.disk.latency_availability = exosnap::engine::MetricAvailability::Available;
     s.disk.average_write_ms = 0.3;
     s.disk.peak_write_ms = 2.2;
     s.disk.output_target = "D:\\";

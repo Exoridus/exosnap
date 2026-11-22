@@ -1295,12 +1295,10 @@ RecorderResult RecorderSession::Record(const RecorderConfig& config, RecordReque
         }
     }
 
-    // Compute skew in result stats
-    if (result.stats.video_duration_ns > 0 && result.stats.audio_duration_ns > 0) {
-        double vd = static_cast<double>(result.stats.video_duration_ns) / 1e6;
-        double ad = static_cast<double>(result.stats.audio_duration_ns) / 1e6;
-        result.stats.duration_skew_ms = (vd > ad) ? (vd - ad) : (ad - vd);
-    }
+    const DurationSkew skew =
+        ComputeDurationSkew(result.stats.video_duration_ns, result.stats.aligned_audio_duration_ns);
+    result.stats.duration_skew_ms = skew.ms;
+    result.stats.duration_skew_available = skew.available;
 
     // Final frozen diagnostics snapshot (Completed/Failed). The stats collector is
     // already stopped, so this is the single source of the terminal snapshot and no
