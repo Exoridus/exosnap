@@ -67,7 +67,8 @@ TEST_P(RecorderSessionFrameSnapshot, PreparationFailureCompletesPendingSnapshotO
     int completions = 0;
     const RecorderResult result = RecorderSessionTestAccess::Record(session, config, request_id, [&] {
         session.RequestFrameSnapshot(
-            [&](bool success, uint32_t width, uint32_t height, std::vector<uint8_t> pixels, std::string error) {
+            [&](bool success, uint32_t width, uint32_t height, const std::vector<uint8_t>& pixels,
+                const std::string& error) {
                 ++completions;
                 EXPECT_FALSE(success);
                 EXPECT_EQ(width, 0u);
