@@ -2849,16 +2849,9 @@ void QuickApplication::refreshCaptureWindowEvidence() {
     if (!snapshot.active || snapshot.hwnd != evidence_target_hwnd_ || snapshot.hwnd == 0)
         return; // the worker has not caught up with the current target yet
 
-    // Push only on a verdict change. The engine derives nothing else from these
-    // two structs, and every push re-runs the whole recommendation checklist.
-    const diagnostics::ExclusiveEvidence next =
-        diagnostics::ResolveSnapshotEvidence(snapshot, evidence_target_hwnd_, false);
-    if (pushed_window_evidence_.has_value()) {
-        const diagnostics::ExclusiveEvidence current =
-            diagnostics::ResolveSnapshotEvidence(*pushed_window_evidence_, evidence_target_hwnd_, false);
-        if (pushed_window_evidence_->hwnd == snapshot.hwnd && current == next)
-            return;
-    }
+    // Every push re-runs the recommendation checklist.
+    if (pushed_window_evidence_ && diagnostics::SameWindowEvidenceVerdicts(*pushed_window_evidence_, snapshot))
+        return;
     pushed_window_evidence_ = snapshot;
     diagnostics_adapter_.setCaptureWindowEvidence(snapshot.facts, snapshot.evidence);
 }

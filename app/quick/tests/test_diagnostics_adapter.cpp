@@ -328,17 +328,16 @@ bool HasIssueTitled(DiagnosticsAdapter& adapter, const QString& needle) {
 
 } // namespace
 
-TEST(DiagnosticsAdapterTest, ProvenBlackWindowEvidenceRaisesTheExclusiveFullscreenCard) {
+TEST(DiagnosticsAdapterTest, MissingFramesDoNotRaiseAnExclusiveFullscreenIssue) {
     EnsureApplication();
     DiagnosticsAdapter adapter;
     adapter.setDiagnosticConfig(MakeCaptureConfig());
     EXPECT_FALSE(HasIssueTitled(adapter, QStringLiteral("exclusive fullscreen")));
 
-    // FullscreenShaped and the capture API produced nothing for >= 2 s.
     adapter.setCaptureWindowEvidence(FullscreenShapedFacts(),
                                      diagnostics::WindowHubEvidence{exosnap::engine::HubFrameKind::None, 5.0, 0.0,
                                                                     /*fresh_frame_since_fullscreen_shape=*/false});
-    EXPECT_TRUE(HasIssueTitled(adapter, QStringLiteral("exclusive fullscreen")));
+    EXPECT_FALSE(HasIssueTitled(adapter, QStringLiteral("exclusive fullscreen")));
 
     // Retargeting to a monitor withdraws it — the card describes a selection.
     adapter.setCaptureWindowEvidence(std::nullopt, {});

@@ -35,30 +35,18 @@ WindowShape ClassifyWindowShape(const WindowTargetFacts& facts) noexcept {
 
 ExclusiveEvidence CombineFullscreenEvidence(WindowShape shape, const WindowHubEvidence& hub,
                                             bool fullscreen_signal) noexcept {
-    if (shape != WindowShape::FullscreenShaped) {
+    if (shape != WindowShape::FullscreenShaped || !fullscreen_signal ||
+        hub.kind == exosnap::engine::HubFrameKind::Live || hub.fresh_frame_since_fullscreen_shape) {
         return ExclusiveEvidence::None;
     }
 
-    // Proven black: the same WGC API the recording would use has demonstrably
-    // produced nothing usable for the selected window.
-    const bool never_produced =
-        hub.kind == exosnap::engine::HubFrameKind::None && hub.seconds_subscribed >= kEvidenceMinSeconds;
-    const bool froze_at_transition = hub.kind == exosnap::engine::HubFrameKind::Held &&
-                                     !hub.fresh_frame_since_fullscreen_shape &&
-                                     hub.seconds_since_fresh_frame >= kEvidenceMinSeconds;
-    if (never_produced || froze_at_transition) {
-        return ExclusiveEvidence::ProvenBlack;
-    }
-
-    if (fullscreen_signal) {
-        return ExclusiveEvidence::Suspected;
-    }
-    return ExclusiveEvidence::None;
+    // A paused, unsuccessful, or stalled WGC probe cannot establish pixel contents.
+    return ExclusiveEvidence::Suspected;
 }
 
 ExclusiveEvidence ResolveExclusiveEvidence(const WindowTargetFacts& facts, const WindowHubEvidence& hub,
                                            bool present_exclusive_fullscreen) noexcept {
-    const bool signal = facts.quns_d3d_fullscreen || present_exclusive_fullscreen;
+    const bool signal = (facts.is_foreground && facts.quns_d3d_fullscreen) || present_exclusive_fullscreen;
     return CombineFullscreenEvidence(ClassifyWindowShape(facts), hub, signal);
 }
 

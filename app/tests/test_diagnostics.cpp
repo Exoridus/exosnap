@@ -1994,18 +1994,28 @@ TEST(ExclusiveWindowCard, NoWindowFactsIsSilent) {
     EXPECT_EQ(FindResult(list, "rec.capture.exclusive_window"), nullptr);
 }
 
-TEST(ExclusiveWindowCard, ProvenBlackRaisesBlockerWithMonitorFix) {
+TEST(ExclusiveWindowCard, MissingFramesCannotRaiseAFullscreenBlocker) {
     const capability::CapabilitySet caps = ExclusiveCaps();
     const capability::UserRecorderConfig config = ExclusiveConfig();
     RecommendationEngine engine(caps, config, std::nullopt, true);
-    // FullscreenShaped + hub produced nothing for >= 2 s == ProvenBlack.
     engine.SetCaptureWindowEvidence(FullscreenShapedFacts(),
                                     WindowHubEvidence{exosnap::engine::HubFrameKind::None, 3.0, 0.0, false});
+    EXPECT_EQ(FindResult(engine.Generate(), "rec.capture.exclusive_window"), nullptr);
+}
+
+TEST(ExclusiveWindowCard, CorroboratedHintOffersMonitorFixWithoutBlocking) {
+    const capability::CapabilitySet caps = ExclusiveCaps();
+    const capability::UserRecorderConfig config = ExclusiveConfig();
+    RecommendationEngine engine(caps, config, std::nullopt, true);
+    WindowTargetFacts facts = FullscreenShapedFacts();
+    facts.is_foreground = true;
+    facts.quns_d3d_fullscreen = true;
+    engine.SetCaptureWindowEvidence(facts, WindowHubEvidence{exosnap::engine::HubFrameKind::None, 3.0, 0.0, false});
     const DiagnosticChecklist list = engine.Generate();
     const DiagnosticResult* r = FindResult(list, "rec.capture.exclusive_window");
     ASSERT_NE(r, nullptr);
-    EXPECT_EQ(r->severity, DiagnosticSeverity::Blocker);
-    EXPECT_TRUE(list.has_blocker);
+    EXPECT_EQ(r->severity, DiagnosticSeverity::Pass);
+    EXPECT_EQ(r->tier, DiagnosticTier::Optimisation);
     ASSERT_TRUE(r->fix_action.has_value());
     EXPECT_EQ(r->fix_action->id, "fix.capture.monitor_instead");
     EXPECT_EQ(r->fix_action->safety, FixAction::Safety::Auto);
@@ -2015,19 +2025,16 @@ TEST(ExclusiveWindowCard, ProvenBlackRaisesBlockerWithMonitorFix) {
     EXPECT_FALSE(r->fix_action->changes_summary.empty());
 }
 
-TEST(ExclusiveWindowCard, SuspectedWithHealthyCaptureIsAnOptionalTip) {
+TEST(ExclusiveWindowCard, HealthyCaptureSuppressesFullscreenHint) {
     const capability::CapabilitySet caps = ExclusiveCaps();
     const capability::UserRecorderConfig config = ExclusiveConfig();
     RecommendationEngine engine(caps, config, std::nullopt, true);
     WindowTargetFacts facts = FullscreenShapedFacts();
-    facts.quns_d3d_fullscreen = true; // fullscreen signal, but no measured black proof
+    facts.quns_d3d_fullscreen = true;
+    facts.is_foreground = true;
     engine.SetCaptureWindowEvidence(facts, WindowHubEvidence{exosnap::engine::HubFrameKind::Live, 5.0, 0.0, true});
     const DiagnosticChecklist list = engine.Generate();
-    const DiagnosticResult* r = FindResult(list, "rec.capture.exclusive_window");
-    ASSERT_NE(r, nullptr);
-    EXPECT_EQ(r->severity, DiagnosticSeverity::Pass);
-    EXPECT_EQ(r->tier, DiagnosticTier::Optimisation);
-    EXPECT_FALSE(list.has_notice);
+    EXPECT_EQ(FindResult(list, "rec.capture.exclusive_window"), nullptr);
 }
 
 TEST(ExclusiveWindowCard, BorderlessThatWorksIsSilent) {
@@ -2039,6 +2046,32 @@ TEST(ExclusiveWindowCard, BorderlessThatWorksIsSilent) {
                                     WindowHubEvidence{exosnap::engine::HubFrameKind::Live, 5.0, 0.1, true});
     const DiagnosticChecklist list = engine.Generate();
     EXPECT_EQ(FindResult(list, "rec.capture.exclusive_window"), nullptr);
+}
+
+TEST(ExclusiveWindowCard, UnattributedPresentSignalDoesNotDescribeTheTarget) {
+    const capability::CapabilitySet caps = ExclusiveCaps();
+    const capability::UserRecorderConfig config = ExclusiveConfig();
+    PresentSample present;
+    present.available = true;
+    present.mode = PresentMode::ExclusiveFullscreen;
+    RecommendationEngine engine(caps, config, std::nullopt, true, "", nullptr, &present);
+    engine.SetCaptureWindowEvidence(FullscreenShapedFacts(),
+                                    WindowHubEvidence{exosnap::engine::HubFrameKind::None, 3.0, 0.0, false});
+    const auto checklist = engine.Generate();
+    EXPECT_EQ(FindResult(checklist, "rec.capture.exclusive_window"), nullptr);
+    EXPECT_EQ(FindResult(checklist, "rec.present.exclusive"), nullptr);
+}
+
+TEST(ExclusiveWindowCard, UnavailablePresentSampleDoesNotDescribeTheTarget) {
+    PresentSample present;
+    present.attributed = true;
+    present.mode = PresentMode::ExclusiveFullscreen;
+    const auto caps = ExclusiveCaps();
+    const auto config = ExclusiveConfig();
+    RecommendationEngine engine(caps, config, std::nullopt, true, "", nullptr, &present);
+    const auto checklist = engine.Generate();
+    EXPECT_EQ(FindResult(checklist, "rec.capture.exclusive_window"), nullptr);
+    EXPECT_EQ(FindResult(checklist, "rec.present.exclusive"), nullptr);
 }
 
 TEST(ExclusiveWindowCard, DedupesGenericPresentExclusiveCard) {

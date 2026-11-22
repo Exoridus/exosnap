@@ -110,7 +110,7 @@ Ready-frame capture registers its own endpoint and waits on its worker for the e
 
 ## Exclusive fullscreen and stalls
 
-Window shape alone cannot distinguish borderless content from legacy exclusive fullscreen. Pre-flight classification combines shape, WGC evidence and corroborating fullscreen signals. No-frame evidence is not a pixel analysis of whether a picture is black. A failed evidence probe supplies no evidence, never proof of a blocked capture.
+Window shape alone cannot distinguish borderless content from legacy exclusive fullscreen. Pre-flight can offer a hint when a fullscreen-shaped target has a foreground Shell or target-attributed PresentMon signal and the probe has yet to establish delivery in that shape. Missing or held frames do not establish black pixels or block admission. Capture initialization handles actual source failures.
 
 The executable remedy is a confirmed change to monitor capture, with the wider recording scope and changed application-audio eligibility named before application. There is no silent window-to-monitor fallback and no capture injection or hook path.
 

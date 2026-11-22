@@ -1,7 +1,6 @@
 #pragma once
 
-// Honest, elevation-free detection of a window capture target that an
-// exclusive-fullscreen (legacy FSE) application will render black.
+// Elevation-free detection of a possible exclusive-fullscreen window.
 //
 // Two layers, kept apart so the decision logic is unit-pinned without Win32:
 //   * WindowTargetFacts   — a flat snapshot of a window's geometry/style/state,
@@ -14,9 +13,7 @@
 // The shape heuristic (window covers its monitor AND has no caption/resize
 // frame) cannot tell borderless from FSE — both look "fullscreen-shaped" — so it
 // is only ever a weak signal. A card is raised only with positive extra evidence:
-// a fullscreen signal (QUNS / PresentMon) for a Suspected notice, or measured hub
-// evidence (WGC produced nothing / froze at the shape transition) for a
-// ProvenBlack blocker.
+// a fullscreen signal (foreground QUNS or target-attributed PresentMon).
 
 #include <optional>
 
@@ -65,14 +62,8 @@ enum class WindowShape {
 enum class ExclusiveEvidence {
     None,        // nothing to report (also the borderless-that-works case)
     Suspected,   // fullscreen-shaped + a fullscreen signal (QUNS/PresentMon) -> Notice
-    ProvenBlack, // fullscreen-shaped + measured proof capture yields nothing -> Blocker
+    ProvenBlack, // explicit proof of unusable captured pixels, never inferred from delivery alone
 };
-
-// Evidence must accumulate for at least this long before it counts. WGC always
-// delivers an initial frame of the current content at session start (even for a
-// fully static window), so a window that is *still* None after this window has no
-// DWM surface — i.e. it is in FSE.
-inline constexpr double kEvidenceMinSeconds = 2.0;
 
 // PURE. FullscreenShaped iff the window is a live, visible, non-minimized window
 // whose rect covers its whole monitor and which carries neither a title-bar
@@ -80,21 +71,14 @@ inline constexpr double kEvidenceMinSeconds = 2.0;
 // are indistinguishable here by design.
 [[nodiscard]] WindowShape ClassifyWindowShape(const WindowTargetFacts& facts) noexcept;
 
-// PURE. Combine the shape with measured hub evidence and an external fullscreen
-// signal (QUNS d3d-fullscreen OR PresentMon ExclusiveFullscreen, OR'd by the
-// caller) into the severity ladder:
-//   shape != FullscreenShaped                       -> None
-//   ProvenBlack: kind==None && subscribed >= 2 s, OR
-//                kind==Held && no fresh frame since the shape transition
-//                            && seconds_since_fresh_frame >= 2 s
-//   else fullscreen_signal                          -> Suspected
-//   else                                            -> None
+// Returns a hint for positive fullscreen evidence while the probe has not
+// established delivery in the current shape.
 [[nodiscard]] ExclusiveEvidence CombineFullscreenEvidence(WindowShape shape, const WindowHubEvidence& hub,
                                                           bool fullscreen_signal) noexcept;
 
 // PURE. The whole verdict for one selected window target, from the raw probe
-// snapshot: classify the shape, OR the two fullscreen signals (the window's own
-// QUNS state and an optional PresentMon ExclusiveFullscreen observation), then
+// snapshot: classify the shape, OR foreground QUNS with an optional
+// target-attributed PresentMon ExclusiveFullscreen observation, then
 // combine. This exists so the Diagnostics card and the recording-admission gate
 // cannot drift: both consume the same probe snapshot through this one function
 // rather than each re-assembling the ladder from its parts.

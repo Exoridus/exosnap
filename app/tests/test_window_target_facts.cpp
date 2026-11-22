@@ -111,16 +111,16 @@ TEST(FullscreenEvidence, NoneUnderTwoSecondsIsNotProven) {
     EXPECT_EQ(CombineFullscreenEvidence(WindowShape::FullscreenShaped, hub, false), ExclusiveEvidence::None);
 }
 
-TEST(FullscreenEvidence, NoneAtTwoSecondsIsProvenBlack) {
+TEST(FullscreenEvidence, AnExpiredProbeWithoutAFrameDoesNotProveBlack) {
     WindowHubEvidence hub{HubFrameKind::None, 2.0, 0.0, false};
-    EXPECT_EQ(CombineFullscreenEvidence(WindowShape::FullscreenShaped, hub, false), ExclusiveEvidence::ProvenBlack);
+    EXPECT_EQ(CombineFullscreenEvidence(WindowShape::FullscreenShaped, hub, false), ExclusiveEvidence::None);
+    EXPECT_EQ(CombineFullscreenEvidence(WindowShape::FullscreenShaped, hub, true), ExclusiveEvidence::Suspected);
 }
 
-TEST(FullscreenEvidence, HeldFrozenSinceTransitionIsProvenBlack) {
-    // Window previewed windowed, then switched to FSE: the hub holds the last
-    // good frame and no fresh frame has arrived since the shape transition.
+TEST(FullscreenEvidence, HoldingAnOlderFrameWithoutASignalDoesNotProveBlack) {
     WindowHubEvidence hub{HubFrameKind::Held, 30.0, 3.0, false};
-    EXPECT_EQ(CombineFullscreenEvidence(WindowShape::FullscreenShaped, hub, false), ExclusiveEvidence::ProvenBlack);
+    EXPECT_EQ(CombineFullscreenEvidence(WindowShape::FullscreenShaped, hub, false), ExclusiveEvidence::None);
+    EXPECT_EQ(CombineFullscreenEvidence(WindowShape::FullscreenShaped, hub, true), ExclusiveEvidence::Suspected);
 }
 
 TEST(FullscreenEvidence, HeldWithFreshFrameAfterTransitionIsNotProven) {
@@ -135,10 +135,9 @@ TEST(FullscreenEvidence, HeldFrozenUnderTwoSecondsIsNotProven) {
     EXPECT_EQ(CombineFullscreenEvidence(WindowShape::FullscreenShaped, hub, false), ExclusiveEvidence::None);
 }
 
-TEST(FullscreenEvidence, ProvenBlackWinsOverMissingSignal) {
-    // Even without QUNS/PresentMon, measured black proof is a blocker.
-    WindowHubEvidence hub{HubFrameKind::None, 5.0, 0.0, false};
-    EXPECT_EQ(CombineFullscreenEvidence(WindowShape::FullscreenShaped, hub, false), ExclusiveEvidence::ProvenBlack);
+TEST(FullscreenEvidence, FreshFrameAfterTransitionClearsTheHint) {
+    WindowHubEvidence hub{HubFrameKind::Held, 5.0, 3.0, true};
+    EXPECT_EQ(CombineFullscreenEvidence(WindowShape::FullscreenShaped, hub, true), ExclusiveEvidence::None);
 }
 
 TEST(GatherFacts, NullHandleIsInvalid) {
@@ -160,17 +159,23 @@ TEST(ResolveEvidence, MatchesTheHandAssembledLadder) {
 
 TEST(ResolveEvidence, QunsSignalAloneIsSuspectedNotProven) {
     WindowTargetFacts f = fullscreenShaped();
+    f.is_foreground = true;
     f.quns_d3d_fullscreen = true;
-    // Producing frames: shaped like fullscreen and flagged by the shell, but not
-    // black. A Notice, never a start blocker.
-    const WindowHubEvidence hub{HubFrameKind::Live, 5.0, 0.0, true};
+    const WindowHubEvidence hub{HubFrameKind::None, 5.0, 0.0, false};
     EXPECT_EQ(ResolveExclusiveEvidence(f, hub, false), ExclusiveEvidence::Suspected);
+}
+
+TEST(ResolveEvidence, ShellSignalDoesNotApplyToAnotherWindow) {
+    WindowTargetFacts f = fullscreenShaped();
+    f.quns_d3d_fullscreen = true;
+    const WindowHubEvidence hub{HubFrameKind::None, 5.0, 0.0, false};
+    EXPECT_EQ(ResolveExclusiveEvidence(f, hub, false), ExclusiveEvidence::None);
 }
 
 TEST(ResolveEvidence, PresentSignalIsOredWithQuns) {
     WindowTargetFacts f = fullscreenShaped();
     f.quns_d3d_fullscreen = false;
-    const WindowHubEvidence hub{HubFrameKind::Live, 5.0, 0.0, true};
+    const WindowHubEvidence hub{HubFrameKind::None, 0.0, 0.0, false};
     EXPECT_EQ(ResolveExclusiveEvidence(f, hub, false), ExclusiveEvidence::None);
     EXPECT_EQ(ResolveExclusiveEvidence(f, hub, true), ExclusiveEvidence::Suspected);
 }
@@ -210,14 +215,26 @@ TEST(SnapshotEvidence, InactiveSnapshotIsNone) {
     EXPECT_EQ(ResolveSnapshotEvidence(snapshot, 0x1234, false), ExclusiveEvidence::None);
 }
 
-TEST(SnapshotEvidence, MatchingTargetResolvesProvenBlack) {
-    EXPECT_EQ(ResolveSnapshotEvidence(provenBlackSnapshot(0x1234), 0x1234, false), ExclusiveEvidence::ProvenBlack);
+TEST(SnapshotEvidence, MatchingTargetWithOnlyMissingFramesIsNotBlocked) {
+    EXPECT_EQ(ResolveSnapshotEvidence(provenBlackSnapshot(0x1234), 0x1234, false), ExclusiveEvidence::None);
+    EXPECT_EQ(ResolveSnapshotEvidence(provenBlackSnapshot(0x1234), 0x1234, true), ExclusiveEvidence::Suspected);
 }
 
 TEST(SnapshotEvidence, RetargetInvalidatesTheOldWindowsEvidence) {
     // The proof belongs to 0x1234. Asking about the window the user just picked
     // must not inherit it, however recent the snapshot is.
     EXPECT_EQ(ResolveSnapshotEvidence(provenBlackSnapshot(0x1234), 0x5678, false), ExclusiveEvidence::None);
+}
+
+TEST(SnapshotEvidence, RefreshesAChangedVerdictWithAttributedPresentation) {
+    const auto stalled = provenBlackSnapshot(0x1234);
+    auto live = stalled;
+    live.evidence = WindowHubEvidence{HubFrameKind::Live, 3.0, 0.0, true};
+
+    ASSERT_EQ(ResolveSnapshotEvidence(stalled, stalled.hwnd, false), ExclusiveEvidence::None);
+    ASSERT_EQ(ResolveSnapshotEvidence(live, live.hwnd, false), ExclusiveEvidence::None);
+    EXPECT_FALSE(SameWindowEvidenceVerdicts(stalled, live));
+    EXPECT_TRUE(SameWindowEvidenceVerdicts(live, live));
 }
 
 TEST(SnapshotEvidence, ZeroTargetIsNone) {
