@@ -423,11 +423,13 @@ jobs:
   build-test-debug:
     name: build-test (windows-x64-debug)
     runs-on: windows-2022
-    # A cold full-tree analysis of about 760 units took up to about 133 minutes
-    # on this runner, plus roughly 30 minutes for setup, build and tests.
-    # Allow that pass to finish and populate the verdict cache. Fresh results
-    # are stored only at checkpoints whose inputs were revalidated.
-    timeout-minutes: 180
+    # A cold full-tree pass of ~760 TUs can take 155-160 minutes on hosted
+    # Windows runners. Together with configure/build and the full native test
+    # suite this exceeded the previous 180-minute limit on several clean PRs.
+    # Give the required gate enough room to complete without weakening checks;
+    # independent cache-identity and long-source test regressions remain tracked.
+    # Cached warm runs still finish earlier. This is a hard upper bound.
+    timeout-minutes: 240
     # Not on a branch push: the next commit is the squash of a PR whose own run
     # of this exact job just went green (see "WHAT RUNS WHERE" at the top of this
     # file). Written as a positive list over the events this workflow can see
