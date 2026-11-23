@@ -135,11 +135,31 @@ Every test run writes `<BuildDir>/Testing/last-run-receipt.json`, including a fa
 
 A complete Debug Ninja tree measured 24.6 GB; the largest categories were PDBs 8.0 GB, `.ilk` files 6.36 GB, objects 5.3 GB, executables 2.0 GB and staged runtime DLLs 1.75 GB. Test executables still link incrementally. Disabling that was measured and not adopted: it removes 6.36 GB of `.ilk` and costs only 0.37 s on one test binary (7.03 s incremental against 7.40 s full on the 45 MB `record_source_picker_qml_tests`), but a change to a widely linked library then relinks about 270 test binaries in 48 s instead of 13 s. Reconsider it once the dependency replay below is clean, because a no-op build in such a tree relinks the same 270 binaries.
 
-**P1 correctness warning ([#558](https://github.com/Exoridus/exosnap/issues/558)):** A locally shared MSVC `sccache` can replay another worktree's `/showIncludes` paths into Ninja's dependency graph. **While the producing worktree still exists**, a header edit in the consuming worktree may trigger **no rebuild at all**, so a test can pass against a stale executable. Once the producer is removed, the missing dependency paths instead cause repeated no-op recompiles and relinks (about 300 edges and 13 s in one measured tree). This was independently reproduced by the [isolated probe](../../tools/exo-dev/examples/sccache_deps_replay.rs).
+MSVC sccache 0.19.0 stores compiler output with the object.
+On a hit, Ninja can receive the producer's `/showIncludes` paths.
+A consumer header edit can leave its executable stale while the producer exists.
+After the producer is removed, the missing paths can trigger recompilation on every no-op build.
+The [upstream correction](https://github.com/mozilla/sccache/commit/e67c02eece3d58620dc54802d6f9d0dfd7516034)
+takes the include lines from the consuming compile's preprocessor.
+The [isolated probe](../../tools/exo-dev/examples/sccache_deps_replay.rs)
+can qualify a new sccache version with `--verify-shared`.
 
-The local Ninja Debug/Release presets (including presets that inherit from them) therefore default to `EXOSNAP_USE_SCCACHE=OFF`. Local `cargo exo-dev test` additionally refuses an existing Windows Ninja tree configured with shared sccache (or an explicit sccache compiler launcher), instead of issuing a potentially false-green receipt. CI profiles and GitHub Actions explicitly keep their intended sccache configuration and are not changed by this local mitigation. **Previously cache-warmed local build trees are not automatically trustworthy just because sccache is switched off:** use a newly configured, isolated build directory and recompile the affected targets before relying on local test receipts. The runner enforces this, not merely advises it: a tree whose CMake cache still records the sccache executable from an earlier configuration is refused once it also has a Ninja dependency database, because switching the option off does not rewrite the includes a previous build already recorded. Do not delete an active worktree or its build outputs. `EXOSNAP_SCCACHE_ISOLATED=ON` is the supported way to keep a local compiler cache: it launches `sccache` through `cmake -E env` with `SCCACHE_DIR=<build>/sccache` and a server port derived from the build directory, so every build tree - Debug and Release of one worktree included - has a cache and a server of its own. Configuration proves the pairing before any compile: a client that finds another server on its port silently uses that server's cache, so configure queries the server and fails when it reports a different cache directory, and fails when the port does not answer within the timeout. A colliding tree can pick another port with `EXOSNAP_SCCACHE_PORT`. The runner then decides verdicts from the recorded dependencies, not from the configuration: a tree that ever configured a compiler cache is accepted only while `ninja -t deps` names no path outside its checkout, so reconfiguring an already poisoned tree from shared to isolated does not launder it. The trade-off is that every build tree starts cold.
+The local Ninja presets keep sccache opt-in.
+With `EXOSNAP_USE_SCCACHE=ON`, the managed MSVC C++ launcher adds the source and build directories to the sccache key via `SCCACHE_C_CUSTOM_CACHE_BUSTER`.
+Different build trees, including Debug and Release, start cold and can then reuse their own entries.
+They can use the same disk cache and server.
+CMake rejects a bare sccache launcher override on local MSVC Ninja.
+Hosted CI uses its configured cache and stable checkout layout.
 
-The permanent fix remains open in #558: correct the include paths emitted to Ninja on a cross-worktree hit, and verify both header invalidation while the producer exists and clean no-op behavior after its removal. `SCCACHE_BASEDIRS`, `SCCACHE_DIRECT=0` and `hash_working_directory=true` did not solve the replay in the measured setup. Disabling shared local sccache trades cache-hit performance for reliable dependencies; the local performance cost has **not yet been remeasured**.
+`EXOSNAP_SCCACHE_ISOLATED=ON` also gives the build tree a dedicated disk cache and server port.
+CMake verifies the server's reported cache directory since a client can silently connect to an existing server on the same port.
+Use `EXOSNAP_SCCACHE_PORT` if the derived port collides.
+
+For a build tree that previously used unscoped caching, use a fresh build directory and recompile before trusting test results.
+Turning sccache off cannot repair recorded dependencies.
+Reconfiguring with the scoped launcher changes Ninja's compile commands, so the next build recompiles its selected targets.
+Local `cargo exo-dev test` still audits the recorded includes and can refuse a tree with foreign paths left by earlier builds.
+Existing build trees and caches can be kept for inspection.
 
 The Rust host tools build with line-table debug information only. Function names and line tables remain, so a panic backtrace keeps its file and line unless the frame was inlined; measured on `exo-dev` alone, a clean target directory went from 1318 MB to 875 MB.
 
