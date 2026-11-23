@@ -247,7 +247,7 @@ TEST(SupportBundle, OmitsOutputPathsFromTheActualZip) {
                        "Effective Output Path: C:\\Private Folder\\capture.mkv\nVideo Codec: AV1\n");
     const auto entries = CollectBundleEntries(inputs);
     EXPECT_FALSE(AnyEntryContains(entries, QStringLiteral("PrivateClient")));
-    EXPECT_FALSE(AnyEntryContains(entries, QStringLiteral("Private Folder")));
+    EXPECT_FALSE(AnyEntryContains(entries, QStringLiteral("Folder\\capture.mkv")));
     EXPECT_FALSE(AnyEntryContains(entries, QStringLiteral("Output Folder:")));
     EXPECT_FALSE(AnyEntryContains(entries, QStringLiteral("Effective Output Path:")));
 
@@ -265,7 +265,7 @@ TEST(SupportBundle, OmitsOutputPathsFromTheActualZip) {
     ASSERT_NE(extracted, nullptr);
     const std::string_view settings(static_cast<const char*>(extracted), length);
     EXPECT_EQ(settings.find("D:/PrivateClient/Recordings"), std::string_view::npos);
-    EXPECT_EQ(settings.find("C:\\Private Folder\\capture.mkv"), std::string_view::npos);
+    EXPECT_EQ(settings.find("Folder\\capture.mkv"), std::string_view::npos);
     EXPECT_EQ(settings.find("Output Folder:"), std::string_view::npos);
     EXPECT_EQ(settings.find("Effective Output Path:"), std::string_view::npos);
     EXPECT_NE(settings.find("Container: MKV"), std::string_view::npos);

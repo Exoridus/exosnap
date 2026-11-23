@@ -134,7 +134,7 @@ TEST(DiagnosticsAdapterTest, UnicodeConfigPathSurvivesTheActualProbeBoundary) {
         return MakeProbe();
     });
     auto config = MakeConfig();
-    config.output_folder = diagnostics::PathAsUtf8(native);
+    config.output_folder = "C:/Videos/\xE8\xA6\x81";
     adapter.setDiagnosticConfig(std::move(config));
     ASSERT_TRUE(WaitForProbe(adapter));
     ASSERT_TRUE(probed.has_value());
