@@ -12,18 +12,15 @@
 //!
 //! Run from an MSVC Developer PowerShell:
 //! cargo run --manifest-path tools/Cargo.toml -p exo-dev --example sccache_deps_replay -- --keep-evidence
+//! Add `--verify-scoped` to verify the repository's local cache scoping, or
+//! `--verify-shared` to qualify an sccache binary for cross-checkout reuse.
 
 use anyhow::{Context, Result, bail};
 use serde_json::Value;
 use std::fs;
 use std::path::{Path, PathBuf};
 use std::process::Command;
-use std::time::{Duration, SystemTime, UNIX_EPOCH};
-
-/// The build directory layout a repository worktree uses, so the relative
-/// paths replayed from a cache entry are spelled the way a real tree spells
-/// them.
-const BUILD_DIR: &str = "build/windows-x64-ninja-debug";
+use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
 struct Probe {
     root: PathBuf,
@@ -121,7 +118,7 @@ impl Probe {
         }
     }
 
-    fn cache_hits(&self) -> Result<u64> {
+    fn cache_counts(&self) -> Result<(u64, u64)> {
         let text = self.run(
             "sccache",
             &["--show-stats".into(), "--stats-format=json".into()],
@@ -130,7 +127,10 @@ impl Probe {
         // The client talks to whatever server answers on the probe port. A
         // stale or foreign server would silently report another cache's
         // counters and make every later number meaningless.
-        if let Some(location) = stats["cache_location"].as_str() {
+        {
+            let location = stats["cache_location"]
+                .as_str()
+                .context("sccache did not report a cache location")?;
             let marker = self
                 .root
                 .file_name()
@@ -144,11 +144,21 @@ impl Probe {
                 );
             }
         }
-        let counts = stats
-            .pointer("/stats/cache_hits/counts")
-            .and_then(Value::as_object)
-            .context("sccache did not return cache_hits.counts")?;
-        Ok(counts.values().filter_map(Value::as_u64).sum())
+        let count = |name| {
+            let counts = stats
+                .pointer(&format!("/stats/{name}/counts"))
+                .and_then(Value::as_object)
+                .with_context(|| format!("sccache did not return {name}.counts"))?;
+            counts
+                .values()
+                .map(|value| value.as_u64().context("invalid sccache counter"))
+                .sum::<Result<u64>>()
+        };
+        Ok((count("cache_hits")?, count("cache_misses")?))
+    }
+
+    fn cache_hits(&self) -> Result<u64> {
+        Ok(self.cache_counts()?.0)
     }
 
     /// Fails before any measurement when a required tool is missing, so a
@@ -200,18 +210,31 @@ impl Drop for Probe {
 /// root, Ninja tree under `build/<preset>`.
 struct Worktree {
     root: PathBuf,
+    configuration: &'static str,
 }
 
 impl Worktree {
-    fn create(base: &Path, name: &str) -> Result<Self> {
+    fn create(base: &Path, name: &str, configuration: &'static str, scoped: bool) -> Result<Self> {
         let root = base.join(name);
         fs::create_dir_all(&root)?;
+        let launcher = if scoped {
+            let module =
+                Path::new(env!("CARGO_MANIFEST_DIR")).join("../../cmake/exosnap_sccache.cmake");
+            format!(
+                "include(\"{}\")\nexosnap_scope_sccache_launcher()\n",
+                module.display().to_string().replace('\\', "/")
+            )
+        } else {
+            String::new()
+        };
         fs::write(
             root.join("CMakeLists.txt"),
-            "cmake_minimum_required(VERSION 3.27)\n\
-             project(exosnap_sccache_replay LANGUAGES CXX)\n\
-             set(CMAKE_CXX_STANDARD 20)\n\
-             add_executable(exosnap_probe main.cpp)\n",
+            format!(
+                "cmake_minimum_required(VERSION 3.27)\n\
+                 project(exosnap_sccache_replay LANGUAGES CXX)\n\
+                 set(CMAKE_CXX_STANDARD 20)\n\
+                 {launcher}add_executable(exosnap_probe main.cpp)\n"
+            ),
         )?;
         fs::write(
             root.join("main.cpp"),
@@ -220,11 +243,17 @@ impl Worktree {
              int main() { std::printf(\"%d\\n\", marker()); return 0; }\n",
         )?;
         fs::write(root.join("marker.h"), MARKER_41)?;
-        Ok(Self { root })
+        Ok(Self {
+            root,
+            configuration,
+        })
     }
 
     fn build_dir(&self) -> PathBuf {
-        self.root.join(BUILD_DIR)
+        self.root.join(format!(
+            "build/windows-x64-ninja-{}",
+            self.configuration.to_ascii_lowercase()
+        ))
     }
 
     fn configure(&self, probe: &Probe) -> Result<()> {
@@ -238,7 +267,7 @@ impl Worktree {
                 self.build_dir().display().to_string(),
                 "-G".into(),
                 "Ninja".into(),
-                "-DCMAKE_BUILD_TYPE=Debug".into(),
+                format!("-DCMAKE_BUILD_TYPE={}", self.configuration),
                 "-DCMAKE_CXX_COMPILER_LAUNCHER=sccache".into(),
                 // sccache does not cache MSVC compiles that write a compiler
                 // PDB (`/Zi`) and passes them through instead. The repository
@@ -251,38 +280,36 @@ impl Worktree {
     }
 
     fn build(&self, probe: &Probe) -> Result<()> {
+        self.build_output(probe)?;
+        Ok(())
+    }
+
+    fn build_output(&self, probe: &Probe) -> Result<String> {
         probe.run_in(
             &self.root,
             "cmake",
             &["--build".into(), self.build_dir().display().to_string()],
-        )?;
+        )
+    }
+
+    fn clean(&self, probe: &Probe) -> Result<()> {
+        self.ninja(probe, &["-t", "clean"])?;
         Ok(())
     }
 
     fn pending_edges(&self, probe: &Probe) -> Result<usize> {
-        let output = probe.run_in(
-            &self.root,
-            "ninja",
-            &[
-                "-C".into(),
-                self.build_dir().display().to_string(),
-                "-n".into(),
-            ],
-        )?;
+        let output = self.ninja(probe, &["-n"])?;
         Ok(count_ninja_edges(&output))
     }
 
     fn dependencies(&self, probe: &Probe) -> Result<String> {
-        probe.run_in(
-            &self.root,
-            "ninja",
-            &[
-                "-C".into(),
-                self.build_dir().display().to_string(),
-                "-t".into(),
-                "deps".into(),
-            ],
-        )
+        self.ninja(probe, &["-t", "deps"])
+    }
+
+    fn ninja(&self, probe: &Probe, args: &[&str]) -> Result<String> {
+        let mut command = vec!["-C".into(), self.build_dir().display().to_string()];
+        command.extend(args.iter().map(|arg| (*arg).to_string()));
+        probe.run_in(&self.root, "ninja", &command)
     }
 
     fn run_probe_binary(&self, probe: &Probe) -> Result<String> {
@@ -455,6 +482,143 @@ fn classify(observation: &Observation) -> (Class, &'static str) {
     )
 }
 
+fn verify_build(
+    probe: &Probe,
+    tree: &Worktree,
+    step: &str,
+    expected_cache: (u64, u64),
+    expected_edges: usize,
+    failures: &mut Vec<String>,
+) -> Result<()> {
+    let (hits, misses) = probe.cache_counts()?;
+    let start = Instant::now();
+    let output = tree.build_output(probe)?;
+    let elapsed = start.elapsed();
+    let (end_hits, end_misses) = probe.cache_counts()?;
+    let cache = (
+        end_hits.checked_sub(hits).context("cache hits reset")?,
+        end_misses
+            .checked_sub(misses)
+            .context("cache misses reset")?,
+    );
+    let edges = count_ninja_edges(&output);
+    println!(
+        "{step}: {:.1} ms, hits={}, misses={}, edges={edges}",
+        elapsed.as_secs_f64() * 1000.0,
+        cache.0,
+        cache.1
+    );
+    if cache != expected_cache || edges != expected_edges {
+        failures.push(format!(
+            "{step}: expected hits/misses {expected_cache:?}, edges={expected_edges}; got {cache:?}, edges={edges}"
+        ));
+    }
+    Ok(())
+}
+
+fn verify(probe: &Probe, scoped: bool) -> Result<()> {
+    let mut failures = Vec::new();
+    let cache = if scoped { (0, 1) } else { (1, 0) };
+    for configuration in ["Debug", "Release"] {
+        println!("\n== verify {configuration} ==");
+        let base = probe.root.join(configuration);
+        let producer = Worktree::create(&base, "producer", configuration, scoped)?;
+        let consumer = Worktree::create(&base, "consumer", configuration, scoped)?;
+        let observer = Worktree::create(&base, "observer", configuration, scoped)?;
+        for tree in [&producer, &consumer, &observer] {
+            fs::write(
+                tree.root.join("marker.h"),
+                "#include \"leaf.h\"\ninline int marker() { return 40 + leaf(); }\n",
+            )?;
+            fs::write(
+                tree.root.join("leaf.h"),
+                "inline int leaf() { return 1; }\n",
+            )?;
+            tree.configure(probe)?;
+        }
+
+        verify_build(probe, &producer, "producer cold", (0, 1), 2, &mut failures)?;
+        verify_build(probe, &consumer, "consumer first", cache, 2, &mut failures)?;
+        verify_build(probe, &observer, "observer first", cache, 2, &mut failures)?;
+        for tree in [&consumer, &observer] {
+            let deps = tree.dependencies(probe)?;
+            let foreign = foreign_deps(&deps, &producer.root);
+            if !foreign.is_empty() {
+                failures.push(format!(
+                    "{}: producer dependencies {foreign:?}",
+                    tree.root.display()
+                ));
+            }
+            for header in ["marker.h", "leaf.h"] {
+                if !deps
+                    .lines()
+                    .any(|line| line.trim().replace('\\', "/") == format!("../../{header}"))
+                {
+                    failures.push(format!(
+                        "{}: missing local {header} dependency",
+                        tree.root.display()
+                    ));
+                }
+            }
+            fs::write(tree.build_dir().join("deps-first.txt"), deps)?;
+        }
+        verify_build(
+            probe,
+            &consumer,
+            "live producer no-op",
+            (0, 0),
+            0,
+            &mut failures,
+        )?;
+        for (header, content, expected) in [
+            (
+                "marker.h",
+                "#include \"leaf.h\"\ninline int marker() { return 41 + leaf(); }\n",
+                "42",
+            ),
+            ("leaf.h", "inline int leaf() { return 2; }\n", "43"),
+        ] {
+            consumer.clean(probe)?;
+            verify_build(probe, &consumer, "consumer warm", (1, 0), 2, &mut failures)?;
+            std::thread::sleep(Duration::from_millis(1100));
+            fs::write(consumer.root.join(header), content)?;
+            verify_build(probe, &consumer, header, (0, 1), 2, &mut failures)?;
+            let actual = consumer.run_probe_binary(probe)?;
+            println!("{header}: executable reports {:?}", actual.trim());
+            if actual.trim() != expected {
+                failures.push(format!(
+                    "{header}: expected {expected}, got {:?}",
+                    actual.trim()
+                ));
+            }
+        }
+
+        fs::rename(&producer.root, base.join("retired"))?;
+        let deps = observer.dependencies(probe)?;
+        let missing = missing_deps(&deps, &observer.build_dir());
+        if !missing.is_empty() {
+            failures.push(format!("after producer retirement: missing {missing:?}"));
+        }
+        for _ in 0..2 {
+            verify_build(
+                probe,
+                &observer,
+                "retired producer no-op",
+                (0, 0),
+                0,
+                &mut failures,
+            )?;
+        }
+        let deps = observer.dependencies(probe)?;
+        fs::write(observer.build_dir().join("deps-retired.txt"), deps)?;
+    }
+    if !failures.is_empty() {
+        bail!("verification failed:\n{}", failures.join("\n"));
+    }
+    println!("verification passed");
+    Ok(())
+}
+
 fn main() -> Result<()> {
     if !cfg!(windows) {
         bail!("this MSVC/Ninja experiment requires a Windows Developer PowerShell");
@@ -466,8 +630,15 @@ fn main() -> Result<()> {
     println!("Scratch: {}", probe.root.display());
     probe.describe_environment();
 
-    let producer = Worktree::create(&probe.root, "producer")?;
-    let consumer = Worktree::create(&probe.root, "consumer")?;
+    if std::env::args().any(|arg| arg == "--verify-scoped") {
+        return verify(&probe, true);
+    }
+    if std::env::args().any(|arg| arg == "--verify-shared") {
+        return verify(&probe, false);
+    }
+
+    let producer = Worktree::create(&probe.root, "producer", "Debug", false)?;
+    let consumer = Worktree::create(&probe.root, "consumer", "Debug", false)?;
 
     // The producer populates the isolated cache.
     println!("\n== populate: producer ==");
@@ -477,16 +648,7 @@ fn main() -> Result<()> {
     // Control: rebuilding the same checkout from scratch must hit. Without it,
     // a zero cross-checkout hit count cannot distinguish a root-sensitive key
     // from a fixture that sccache never caches.
-    probe.run_in(
-        &producer.root,
-        "ninja",
-        &[
-            "-C".into(),
-            producer.build_dir().display().to_string(),
-            "-t".into(),
-            "clean".into(),
-        ],
-    )?;
+    producer.clean(&probe)?;
     let before_control = probe.cache_hits()?;
     producer.build(&probe)?;
     let control_hits = probe.cache_hits()?.saturating_sub(before_control);
@@ -536,7 +698,7 @@ fn main() -> Result<()> {
     // before the producer is retired, so its cache reuse is a real cross
     // checkout reuse; afterwards nothing in it changes.
     println!("\n== scenario 2: no-op cost ==");
-    let observer = Worktree::create(&probe.root, "observer")?;
+    let observer = Worktree::create(&probe.root, "observer", "Debug", false)?;
     observer.configure(&probe)?;
     let before_observer = probe.cache_hits()?;
     observer.build(&probe)?;
