@@ -7,6 +7,11 @@
 
 namespace exosnap::diagnostics {
 
+std::string PathAsUtf8(const std::filesystem::path& path) {
+    const std::u8string utf8 = path.u8string();
+    return {reinterpret_cast<const char*>(utf8.data()), utf8.size()};
+}
+
 namespace {
 
 std::string ContainerName(capability::Container c) {
@@ -176,7 +181,7 @@ ConfigSummary ConfigSummary::FromCurrentSettings(const OutputSettingsModel& outp
                                                  const std::string& profile_name, const std::string& hotkeys_summary) {
 
     ConfigSummary summary;
-    summary.settings_file_path = settings_path.string();
+    summary.settings_file_path = PathAsUtf8(settings_path);
 
     summary.entries.push_back({"Recording Profile", profile_name});
     summary.entries.push_back(
@@ -216,10 +221,10 @@ ConfigSummary ConfigSummary::FromCurrentSettings(const OutputSettingsModel& outp
     summary.entries.push_back({"Mic Channel Mode", MicChannelModeName(audio.mic_channel_mode)});
     summary.entries.push_back({"Mic Gain", std::to_string(audio.mic_gain_linear) + "x"});
 
-    summary.entries.push_back({"Output Folder", output.output_folder.string()});
-    summary.entries.push_back({"Filename Pattern", std::filesystem::path(output.naming_pattern).string()});
+    summary.entries.push_back({"Output Folder", PathAsUtf8(output.output_folder)});
+    summary.entries.push_back({"Filename Pattern", PathAsUtf8(std::filesystem::path(output.naming_pattern))});
 
-    summary.effective_output_path = (output.output_folder / output.naming_pattern).string();
+    summary.effective_output_path = PathAsUtf8(output.output_folder / output.naming_pattern);
     summary.entries.push_back({"Effective Output Path", summary.effective_output_path});
 
     summary.entries.push_back({"Hotkeys", hotkeys_summary});
