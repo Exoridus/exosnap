@@ -15,6 +15,7 @@
 #include <optional>
 #include <ratio>
 #include <span>
+#include <stop_token>
 #include <string>
 #include <vector>
 
@@ -386,18 +387,15 @@ class PhysicalOwner : public std::enable_shared_from_this<PhysicalOwner> {
     ~PhysicalOwner() {
         if (reserved_bytes_)
             budget_->Release(reserved_bytes_);
-        if (owner_reserved_) {
-            std::lock_guard lock(budget_->mutex);
-            --budget_->owner_count;
-        }
+        ReleaseOwnerSlot();
     }
-    bool Prepare(std::string& error) {
+    bool Prepare(std::string& error, std::stop_token stop) {
         if (!budget_->ReserveOwner(error))
             return false;
         owner_reserved_ = true;
         auto result = prepared_.get_future();
         auto self = shared_from_this();
-        std::thread([self = std::move(self)] { self->Run(); }).detach();
+        std::thread([self = std::move(self), stop] { self->Run(stop); }).detach();
         if (result.wait_for(request_.preparation_timeout) != std::future_status::ready) {
             stopping_ = true;
             condition_.notify_all();
@@ -506,6 +504,24 @@ class PhysicalOwner : public std::enable_shared_from_this<PhysicalOwner> {
     bool Degraded() const {
         return degraded_;
     }
+    SharedAudioRecoveryState RecoveryState() const {
+        std::lock_guard lock(mutex_);
+        return {prepared_descriptor_.clock_id, loss_generation_, degraded_ ? 0 : prepared_descriptor_.source_generation,
+                retired_};
+    }
+    void RetireIfExclusive(PhysicalClockId clock) {
+        std::lock_guard lock(mutex_);
+        if (prepared_descriptor_.clock_id == clock && !stopping_ && tee_->ReaderCount() == 1) {
+            // The reader continues to publish outage silence while the native thread gives up its slot.
+            retired_ = true;
+            degraded_ = true;
+            stopping_ = true;
+            condition_.notify_all();
+        }
+    }
+    bool RetiredAndClosed() const {
+        return retired_ && native_closed_;
+    }
     int32_t CaptureHresult() const {
         return capture_hresult_;
     }
@@ -574,6 +590,9 @@ class PhysicalOwner : public std::enable_shared_from_this<PhysicalOwner> {
     std::atomic<bool> timeline_faulted_ = false;
     std::atomic<uint64_t> reinit_requested_ = 0;
     std::atomic<uint64_t> generation_ = 1;
+    uint64_t loss_generation_ = 0;
+    std::atomic<bool> retired_ = false;
+    std::atomic<bool> native_closed_ = false;
     std::atomic<int32_t> capture_hresult_ = 0;
     std::atomic<int32_t> init_hresult_ = 0;
     size_t reserved_bytes_ = 0;
@@ -587,6 +606,19 @@ class PhysicalOwner : public std::enable_shared_from_this<PhysicalOwner> {
     uint64_t outage_end_qpc_ns_ = 0;
     bool recovery_gap_pending_ = false;
     bool next_discontinuity_ = false;
+
+    void ReleaseOwnerSlot() {
+        if (owner_reserved_) {
+            std::lock_guard lock(budget_->mutex);
+            --budget_->owner_count;
+            owner_reserved_ = false;
+        }
+    }
+    void MarkDegraded() {
+        std::lock_guard lock(mutex_);
+        degraded_ = true;
+        loss_generation_ = generation_;
+    }
 
     // The owner lock serializes outage decisions with native publication and recovery.
     // Readers may publish gaps while native reactivation is blocked on the owner thread.
@@ -643,6 +675,8 @@ class PhysicalOwner : public std::enable_shared_from_this<PhysicalOwner> {
     void CompleteSeals(bool force = false) {
         std::lock_guard lock(mutex_);
         for (auto iterator = seals_.begin(); iterator != seals_.end();) {
+            if (retired_ && !timeline_faulted_)
+                PublishOutageSilence(iterator->qpc_ns, true);
             const bool timeout = SteadyClock::now() >= iterator->deadline;
             // Loopback can be healthy without emitting packets during silence.
             const auto latency = source_ ? source_->MaxCaptureLatencyNs() : std::nullopt;
@@ -669,7 +703,7 @@ class PhysicalOwner : public std::enable_shared_from_this<PhysicalOwner> {
     }
     bool Publish(RawAudioBuffer buffer, std::string& error) {
         std::lock_guard lock(mutex_);
-        if (!buffer.num_frames)
+        if (!buffer.num_frames || retired_)
             return true;
         uint64_t qpc = source_->LastBufferQpcNs();
         uint32_t trimmed = 0;
@@ -735,10 +769,10 @@ class PhysicalOwner : public std::enable_shared_from_this<PhysicalOwner> {
         std::unique_lock lock(mutex_);
         condition_.wait_for(lock, duration, [this] { return stopping_ || reinit_requested_; });
     }
-    void Run();
+    void Run(std::stop_token stop);
 };
 
-void PhysicalOwner::Run() {
+void PhysicalOwner::Run(std::stop_token stop) {
 #ifdef _WIN32
     const HRESULT com_result = CoInitializeEx(nullptr, COINIT_MULTITHREADED);
 #endif
@@ -746,10 +780,13 @@ void PhysicalOwner::Run() {
     bool startup_sent = false;
     try {
         std::string error;
-        if (request_.describe_native && !request_.describe_native(request_.admission, error)) {
+        if (stop.stop_requested()) {
+            prepared_.set_value("Physical audio preparation was cancelled");
+            prepared_sent = true;
+        } else if (request_.describe_native && !request_.describe_native(request_.admission, error)) {
             prepared_.set_value(error.empty() ? "Native audio format description failed" : error);
             prepared_sent = true;
-        } else if (stopping_) {
+        } else if (stopping_ || stop.stop_requested()) {
             prepared_.set_value("Physical audio preparation was cancelled");
             prepared_sent = true;
         } else if (!budget_->Reserve(AudioTee::RequiredPayloadBytes(request_.admission), error)) {
@@ -776,14 +813,14 @@ void PhysicalOwner::Run() {
                     std::unique_lock lock(mutex_);
                     condition_.wait(lock, [this] { return stopping_ || initialization_requested_; });
                 }
-                if (stopping_)
+                if (stopping_ || stop.stop_requested())
                     error = "Physical audio preparation was cancelled";
             }
             if (error.empty()) {
                 auto native = request_.native_factory();
                 if (!native) {
                     error = "Native audio source factory returned null";
-                } else if (stopping_) {
+                } else if (stopping_ || stop.stop_requested()) {
                     error = "Physical audio preparation was cancelled";
                 } else {
                     source_ = std::make_unique<PhysicalAudioClockSource>(std::move(native), request_.admission,
@@ -820,7 +857,7 @@ void PhysicalOwner::Run() {
                     const uint64_t requested_generation = reinit_requested_.exchange(0);
                     if (requested_generation && requested_generation == generation_ && !degraded_) {
                         idle_poll_qpc_ns_ = 0;
-                        degraded_ = true;
+                        MarkDegraded();
                         next_retry = SteadyClock::now();
                         backoff = std::chrono::milliseconds(250);
                     }
@@ -830,7 +867,7 @@ void PhysicalOwner::Run() {
                             bool recovered = source_->Reinit(error);
                             if (recovered) {
                                 std::lock_guard lock(mutex_);
-                                recovered = tee_->SetDescriptor(source_->Descriptor(), error);
+                                recovered = !retired_ && tee_->SetDescriptor(source_->Descriptor(), error);
                                 if (recovered) {
                                     prepared_descriptor_ = source_->Descriptor();
                                     outage_origin_qpc_ns_ = outage_frames_ = 0;
@@ -869,14 +906,14 @@ void PhysicalOwner::Run() {
                             UpdateStatistics();
                             if (!published) {
                                 SetError(error);
-                                degraded_ = true;
+                                MarkDegraded();
                                 next_retry = SteadyClock::now() + std::chrono::milliseconds(250);
                                 backoff = std::chrono::milliseconds(500);
                             }
                         } else if (!error.empty()) {
                             SetError(error);
                             capture_hresult_ = source_->LastCaptureHresult();
-                            degraded_ = true;
+                            MarkDegraded();
                             next_retry = SteadyClock::now() + std::chrono::milliseconds(250);
                             backoff = std::chrono::milliseconds(500);
                         }
@@ -905,7 +942,7 @@ void PhysicalOwner::Run() {
             }
         }
     } catch (const std::exception& exception) {
-        degraded_ = true;
+        MarkDegraded();
         if (!prepared_sent)
             prepared_.set_value(exception.what());
         if (!startup_sent)
@@ -921,7 +958,8 @@ void PhysicalOwner::Run() {
             UpdateStatistics();
         }
         CompleteSeals(true);
-        tee_->Stop();
+        if (!retired_)
+            tee_->Stop();
     }
     if (source_) {
         source_->Shutdown();
@@ -931,6 +969,8 @@ void PhysicalOwner::Run() {
     if (SUCCEEDED(com_result))
         CoUninitialize();
 #endif
+    ReleaseOwnerSlot();
+    native_closed_ = true;
 }
 
 class SharedAudioReader final : public IAudioCaptureSource {
@@ -1006,6 +1046,13 @@ class SharedAudioReader final : public IAudioCaptureSource {
     uint64_t CompletedThrough() const {
         return owner_ ? owner_->CompletedThrough() : 0;
     }
+    SharedAudioRecoveryState RecoveryState() const {
+        return owner_ ? owner_->RecoveryState() : SharedAudioRecoveryState{};
+    }
+    void AdvanceStart(uint64_t qpc_ns) {
+        if (reader_)
+            reader_->AdvanceStart(qpc_ns);
+    }
     void* BufferReadyEvent() const override {
         return reader_ ? reader_->ReadyEvent() : nullptr;
     }
@@ -1067,6 +1114,7 @@ struct SharedAudioCaptureRegistry::Impl {
         : budget(std::make_shared<RuntimePayloadBudget>((std::min)(bytes, kAudioRuntimePayloadBytes))) {
     }
     mutable std::mutex mutex;
+    std::mutex admission_mutex;
     std::shared_ptr<RuntimePayloadBudget> budget;
     std::map<PhysicalCaptureKey, std::weak_ptr<PhysicalOwner>> owners;
 };
@@ -1077,9 +1125,20 @@ SharedAudioCaptureRegistry::SharedAudioCaptureRegistry(size_t payload_budget)
 SharedAudioCaptureRegistry::~SharedAudioCaptureRegistry() = default;
 std::vector<std::unique_ptr<IAudioCaptureSource>> SharedAudioCaptureRegistry::AttachReaders(
     const std::vector<SharedAudioCaptureRequest>& requests, uint64_t start_qpc_ns, std::string& error,
-    std::function<bool(std::span<const AudioCaptureDescriptor>, std::string&)> admit) {
+    std::function<bool(std::span<const AudioCaptureDescriptor>, std::string&)> admit,
+    std::optional<SharedAudioReplacement> replacement) {
     error.clear();
-    std::lock_guard lock(impl_->mutex);
+    const auto stop = replacement ? replacement->stop : std::stop_token{};
+    // A recovery may retry on contention. Queueing it could delay the next recording after Stop.
+    std::unique_lock admission_lock(impl_->admission_mutex, std::defer_lock);
+    if (replacement) {
+        if (stop.stop_requested() || !admission_lock.try_lock()) {
+            error = "Role-default audio recovery cancelled or admission is busy";
+            return {};
+        }
+    } else {
+        admission_lock.lock();
+    }
     struct Group {
         SharedAudioCaptureRequest request;
         std::shared_ptr<PhysicalOwner> owner;
@@ -1093,13 +1152,6 @@ std::vector<std::unique_ptr<IAudioCaptureSource>> SharedAudioCaptureRegistry::At
     std::map<PhysicalCaptureKey, Group> groups;
     std::vector<std::unique_ptr<IAudioCaptureSource>> result(requests.size());
     std::vector<AudioCaptureDescriptor> descriptors(requests.size());
-    for (auto iterator = impl_->owners.begin(); iterator != impl_->owners.end();) {
-        if (iterator->second.expired())
-            iterator = impl_->owners.erase(iterator);
-        else
-            ++iterator;
-    }
-    size_t new_owners = 0;
     for (size_t index = 0; index < requests.size(); ++index) {
         auto key = requests[index].key;
         if (key.kind == AudioBindingKind::CaptureTargetProcess)
@@ -1116,31 +1168,55 @@ std::vector<std::unique_ptr<IAudioCaptureSource>> SharedAudioCaptureRegistry::At
         }
         iterator->second.positions.push_back(index);
     }
+    size_t owner_count = 0;
+    {
+        std::lock_guard lock(impl_->mutex);
+        std::erase_if(impl_->owners, [](const auto& entry) {
+            const auto owner = entry.second.lock();
+            return !owner || owner->RetiredAndClosed();
+        });
+        owner_count = impl_->owners.size();
+        for (auto& [key, group] : groups) {
+            const auto existing = impl_->owners.find(key);
+            if (existing != impl_->owners.end())
+                group.owner = existing->second.lock();
+        }
+    }
     for (auto& [key, group] : groups) {
-        const auto existing = impl_->owners.find(key);
-        group.owner = existing == impl_->owners.end() ? nullptr : existing->second.lock();
+        (void)key;
         if (group.owner && !group.owner->Compatible(group.request)) {
             error = "Requested admission or clock correction policy conflicts with the existing physical audio owner";
             return {};
         }
         if (!group.owner) {
-            if (impl_->owners.size() + new_owners >= kMaxPhysicalAudioCaptures) {
+            if (owner_count >= kMaxPhysicalAudioCaptures) {
+                if (replacement && !stop.stop_requested()) {
+                    std::lock_guard lock(impl_->mutex);
+                    const auto old = impl_->owners.find(replacement->previous_key);
+                    if (old != impl_->owners.end())
+                        if (const auto owner = old->second.lock())
+                            owner->RetireIfExclusive(replacement->previous_clock);
+                }
                 error = "Audio runtime physical capture limit exceeded";
                 return {};
             }
-            ++new_owners;
+            ++owner_count;
             if (!group.request.native_factory) {
                 error = "Native audio source factory is missing";
                 return {};
             }
             group.owner = std::make_shared<PhysicalOwner>(group.request, impl_->budget);
             group.needs_init = true;
-            if (!group.owner->Prepare(error))
+            if (!group.owner->Prepare(error, stop))
                 return {};
         }
         const auto descriptor = group.owner->PreparedDescriptor();
         for (const auto index : group.positions)
             descriptors[index] = descriptor;
+    }
+    if (stop.stop_requested()) {
+        error = "Role-default audio recovery cancelled";
+        return {};
     }
     if (admit) {
         try {
@@ -1168,9 +1244,12 @@ std::vector<std::unique_ptr<IAudioCaptureSource>> SharedAudioCaptureRegistry::At
         for (size_t index = 0; index < readers.size(); ++index)
             result[group.positions[index]] = std::make_unique<SharedAudioReader>(group.owner, readers[index]);
     }
-    for (auto& [key, group] : groups) {
-        impl_->owners[key] = group.owner;
-        group.owner->Arm();
+    {
+        std::lock_guard lock(impl_->mutex);
+        for (auto& [key, group] : groups) {
+            impl_->owners[key] = group.owner;
+            group.owner->Arm();
+        }
     }
     return result;
 }
@@ -1240,6 +1319,14 @@ std::vector<AudioReaderEnd> BatchSealAudioReadersEnd(std::span<IAudioCaptureSour
 bool AudioReaderEnded(const IAudioCaptureSource& reader) {
     const auto adapter = dynamic_cast<const SharedAudioReader*>(&reader);
     return adapter && adapter->Ended();
+}
+SharedAudioRecoveryState SharedAudioReaderRecoveryState(const IAudioCaptureSource& reader) {
+    const auto* adapter = dynamic_cast<const SharedAudioReader*>(&reader);
+    return adapter ? adapter->RecoveryState() : SharedAudioRecoveryState{};
+}
+void AdvanceSharedAudioReaderStart(IAudioCaptureSource& reader, uint64_t start_qpc_ns) {
+    if (auto* adapter = dynamic_cast<SharedAudioReader*>(&reader))
+        adapter->AdvanceStart(start_qpc_ns);
 }
 uint64_t SharedAudioReaderCompletedThrough(const IAudioCaptureSource& reader) {
     const auto adapter = dynamic_cast<const SharedAudioReader*>(&reader);

@@ -10,6 +10,13 @@ Keep source progress, emitted CFR cadence, GPU elapsed time and CPU submission t
 
 Engine snapshots carry availability alongside values. The application must not turn unavailable into zero, count an invalid snapshot twice, or carry deltas across session generations. Real-drop summaries consistently count backpressure, processing failures and undrained encoder output, not benign coalescing or pre-first-frame slots.
 
+Compositor, encoder and buffered-write timings become unavailable when their rolling windows empty. Session totals and container capabilities do not establish that a timing sample exists. GPU query results describe individual passes. A recorder-wide GPU p99 and GPU bottleneck inference require measurements correlated by frame.
+
+Duration skew compares mux video progress with each aligned audio track that has progressed and reports the greatest difference.
+Video progress advances with accepted picture timestamps and with static VFR holds the video worker has committed through the mux queue.
+The mux publishes the video and audio positions together during recording and on final drain.
+Audio positions are aligned to the session video timeline before the container's codec-delay offset is applied.
+
 ## Measurement-domain providers
 
 Engine snapshots own capture, selection/pacing, recorder GPU passes, encoder, audio, mux/storage and preview measurements. `IPresentProvider`, `IDpcLatencyProvider`, `IGpuTelemetryProvider` and `IVideoMemoryProvider` are separate domain boundaries. Optional facts carry monotonic receipt time, source and adapter/process identity where meaningful. Missing fields remain unavailable. Background probes poll GPU/memory on the diagnostics probe cadence. Polling targets are the unique physical adapters derived from the pipeline role assignment, each tagged with the roles it serves, so one adapter carrying capture, processing and encoder roles is polled once rather than three times. Consumers reject another session/adapter and samples older than 15 seconds (three polling intervals).
@@ -47,9 +54,9 @@ Core Recording Health and In-depth engine/GPU/memory evidence work without eleva
 
 The opt-in PresentMon consumer additionally exposes the number of presents it classified as lost/incomplete in this ETW session. This cumulative count is system-wide, not attributable to the captured process and not a complete ETW packet-loss measurement. An unmeasured count remains null. A nonzero count documents incomplete present observations; it does not prove a recording failure or alter readiness/incident severity. Normal recording does not open this extra trace.
 
-Display cadence is measured from duplication timestamps. WGC delivery timestamps supply the window/region cadence path and have different provenance/jitter. PresentMon adds presentation-mode and related attribution; it does not replace the unprivileged monitor-cadence source. Attribute a window measurement to the actual process instance and reset totals at each recording boundary even if the PID is unchanged.
+Display cadence is measured from duplication timestamps. WGC delivery timestamps supply the window/region cadence path and have different provenance/jitter. PresentMon adds presentation-mode and related attribution alongside the unprivileged monitor-cadence source. Window capture attributes observations to the actual process instance. Display and region capture track the foreground process on the selected display when available. Diagnostics accepts observations for the current attribution scope for up to 15 seconds from the ETW present start. Queued observations can contribute to cumulative counts within that scope after they expire as a current measurement. The capture snapshot and fullscreen stall corroboration require a classified observation for a known process. Target and recording boundaries discard cached observations and reset totals even when the PID is unchanged.
 
-Process exit, trace termination or unavailable decoding clears the live reading. A generic fullscreen signal is not proof of a capture failure. Mid-session stall reporting claims absence of frame progress and names exclusive fullscreen only as a corroborated possibility.
+The DPC/ISR consumer requests raw QPC event timestamps to compare with the entry ticks in the payload. Process exit, trace termination or unavailable decoding clears the live reading. A generic fullscreen signal is not proof of a capture failure. Mid-session stall reporting claims absence of frame progress and names exclusive fullscreen only as a corroborated possibility.
 
 DPC/ISR attribution is best effort. An unresolved driver remains unidentified rather than being guessed. Compiling the provider or passing pure mapping tests is not evidence that elevated ETW delivery or driver attribution works on a particular machine.
 
@@ -61,7 +68,7 @@ A finished session freezes its ledger into the report. Individual frame-drop cou
 
 The engine JSON-lines log appends and rotates across launches. Its launch/session identity correlates with the human-readable application stream. A recording identifier is separate from the launch identifier and remains stable across its split segments; it must not depend on whether recovery-manifest protection was available.
 
-A per-recording JSON report is written atomically alongside the logs and retains the ten newest reports. It includes resolved configuration/format, encoder initialization, duration/drop/drift/discontinuity information, segment status, failure phase and the frozen ledger. Unmeasured values stay unavailable. A failure that aborts before packet accounting must be reported by its error rather than a misleading zero metric.
+A per-recording JSON report is written atomically alongside the logs and retains the ten newest reports. It includes resolved configuration/format, encoder initialization, duration/drop/drift/discontinuity information, segment status, failure phase and HRESULT, and the frozen ledger. Unmeasured values stay unavailable. Detailed errors can contain file paths and stay in local UI and logs. The session query and support bundle omit that field from older reports when they read them.
 
 ## Structured application logging
 
@@ -71,7 +78,7 @@ Source/window labels shown in the UI need not be safe to log. Window capture tar
 
 ## Support bundles
 
-Support bundles are user-created local ZIP files. They include rotated logs, recent session reports and allowlisted structured capability/configuration facts, not raw settings/presets/history or recordings. Crash dumps are a separate consent-controlled channel and are not included.
+Support bundles are user-created local ZIP files. They include selected log metadata, recent session reports and allowlisted capability and configuration facts. The collector parses engine JSONL one record at a time and projects approved fields and values. Application logs contribute timestamps, severity and recognized components from the prefix. Free-form messages remain in the local logs. Crash dumps use a separate consent-controlled channel.
 
 Bundle work runs off the GUI thread. A successful write is reported truthfully; reveal/open behavior belongs to the product action that follows. Scrubbing known fields and path shapes is not a proof that arbitrary user-authored text can contain no personal information. Users should review a bundle before sharing it. Nothing uploads it automatically.
 

@@ -29,10 +29,10 @@ namespace exosnap::diagnostics {
 class PresentMonEtwSession {
   public:
     PresentMonEtwSession();
-    // Test seam. The factory is called once per Start(), so each session generation
-    // gets its own backend and a detached consumer from a previous generation can
-    // never be reached by the next one.
-    explicit PresentMonEtwSession(std::function<std::shared_ptr<IPresentTraceBackend>()> backend_factory);
+    // The factory supplies a new backend for each Start(). Tests with synthetic
+    // timestamps can supply a clock in the backend's QPC domain.
+    explicit PresentMonEtwSession(std::function<std::shared_ptr<IPresentTraceBackend>()> backend_factory,
+                                  std::function<uint64_t()> read_qpc = {});
     ~PresentMonEtwSession();
     PresentMonEtwSession(const PresentMonEtwSession&) = delete;
     PresentMonEtwSession& operator=(const PresentMonEtwSession&) = delete;
@@ -109,6 +109,7 @@ class PresentMonEtwSession {
     [[nodiscard]] bool TargetAlive() const;
 
     std::function<std::shared_ptr<IPresentTraceBackend>()> backend_factory_;
+    std::function<uint64_t()> read_qpc_;
     std::atomic<bool> open_{false};
     std::atomic<int> open_result_{static_cast<int>(PresentTraceOpenResult::NotBuilt)};
     std::atomic<unsigned long> target_pid_{0};
@@ -127,7 +128,8 @@ class PresentMonEtwSession {
     std::shared_ptr<FinishSignal> finish_; // guarded by sample_mutex_ for publication
     std::thread worker_;
     mutable std::mutex sample_mutex_;
-    mutable PresentSample latest_;          // guarded by sample_mutex_
+    mutable PresentSample latest_; // guarded by sample_mutex_
+    uint64_t attribution_start_qpc_ = 0;
     mutable uint64_t last_present_qpc_ = 0; // reader-side drain state (Latest())
     mutable int64_t qpc_freq_ = 0;
     // per-recording present aggregates, accumulated on the reader

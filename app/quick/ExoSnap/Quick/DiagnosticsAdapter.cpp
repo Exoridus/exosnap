@@ -196,8 +196,11 @@ constexpr std::size_t kSeriesLength = 60;
 
 } // namespace
 
-DiagnosticsAdapter::DiagnosticsAdapter(QObject* parent)
-    : QObject(parent), bundle_service_(std::make_unique<SupportBundleService>()) {
+DiagnosticsAdapter::DiagnosticsAdapter(QObject* parent) : DiagnosticsAdapter(diagnostics::RunDiagnosticsProbe, parent) {
+}
+
+DiagnosticsAdapter::DiagnosticsAdapter(OutputProbe probe, QObject* parent)
+    : QObject(parent), bundle_service_(std::make_unique<SupportBundleService>()), output_probe_(std::move(probe)) {
     controller_.SetDisplayFacts(PrimaryDisplayFacts());
 
     self_test_status_ = QCoreApplication::translate("DiagnosticsAdapter", "Status: Not run");
@@ -441,14 +444,12 @@ void DiagnosticsAdapter::refreshLiveTiles() {
     diagnostics::LiveTileInputs inputs{snapshot, controller_.ledger()};
     // Engine and unprivileged evidence remain available without optional ETW traces.
     inputs.in_depth = in_depth_enabled_;
-    inputs.present = present_sample_;
     inputs.dpc = dpc_reading_;
     inputs.gpu_exec_p99_ms = snapshot.compositor.gpu_exec_p99_ms;
     const auto& probe = controller_.probeResult();
     const auto now = std::chrono::steady_clock::now();
-    if (inputs.present && inputs.present->metadata.observed_at != std::chrono::steady_clock::time_point{} &&
-        !inputs.present->metadata.Fresh(now))
-        inputs.present.reset();
+    if (const auto* present = controller_.currentPresentSample(now))
+        inputs.present = *present;
     if (inputs.dpc && inputs.dpc->metadata.observed_at != std::chrono::steady_clock::time_point{} &&
         !inputs.dpc->metadata.Fresh(now))
         inputs.dpc.reset();
@@ -516,7 +517,7 @@ void DiagnosticsAdapter::appendSeriesSamples(const exosnap::engine::RecordingDia
     };
 
     push("framePacing", snapshot.capture.actual_fps);
-    if (snapshot.video_encoder.frames_encoded > 0) {
+    if (snapshot.video_encoder.timing_availability == exosnap::engine::MetricAvailability::Available) {
         push("encoder", snapshot.video_encoder.p99_ms);
         encoder_session_worst_p99_ms_ = std::max(encoder_session_worst_p99_ms_, snapshot.video_encoder.p99_ms);
     }
@@ -668,8 +669,11 @@ void DiagnosticsAdapter::createSupportBundle(const QUrl& destination) {
     context.launch_session_id = diagnostics::AppLog::sessionId();
     context.created_at = QDateTime::currentDateTime().toString(Qt::ISODate);
     QString settings_text;
-    for (const auto& row : controller_.configRows())
-        settings_text += QStringLiteral("%1: %2\n").arg(Text(row.label), Text(row.value));
+    for (const auto& row : controller_.configRows()) {
+        const auto label = Key(row.label);
+        if (diagnostics::IsExportableSetting(label))
+            settings_text += QStringLiteral("%1: %2\n").arg(label, Text(row.value));
+    }
     context.settings_summary = settings_text;
 
     bundle_service_->createAsync(path, std::move(context), caps_);
@@ -698,12 +702,17 @@ void DiagnosticsAdapter::openLastSessionFolder() {
 // ── Host-side input ─────────────────────────────────────────────────────────────
 
 void DiagnosticsAdapter::setDiagnosticConfig(diagnostics::DiagnosticsController::Config config) {
+    const bool output_changed = config.output_folder != controller_.outputFolder();
+    if (output_changed) {
+        ++output_revision_;
+        last_check_at_ = {};
+    }
     controller_.SetConfig(std::move(config));
     refreshSnapshot();
     refreshPipeline();
     emit environmentChanged();
-    // The config carries a new output folder, so the cached probe facts no longer
-    // describe the right volume; re-probe unless one is already running.
+    if (output_changed)
+        emit lastCheckChanged();
     if (!probe_in_flight_)
         startProbe(!probed_);
 }
@@ -732,6 +741,7 @@ void DiagnosticsAdapter::setCaptureTargetAdapter(diagnostics::RecommendationEngi
 
 void DiagnosticsAdapter::setPresentAttributionPid(unsigned long pid) {
     controller_.SetPresentAttributionPid(pid);
+    refreshLiveTiles();
 }
 
 void DiagnosticsAdapter::setSavedDisplayUnresolved(bool unresolved, const std::string& label) {
@@ -773,6 +783,8 @@ void DiagnosticsAdapter::setInDepthEnabled(bool enabled) {
     if (in_depth_enabled_ == enabled)
         return;
     in_depth_enabled_ = enabled;
+    if (!enabled)
+        controller_.SetPresentSample(std::nullopt);
     emit inDepthChanged();
     refreshLiveTiles();
     emit changed();
@@ -794,7 +806,6 @@ void DiagnosticsAdapter::setDpcLatencyProvider(diagnostics::IDpcLatencyProvider*
 }
 
 void DiagnosticsAdapter::setPresentSample(std::optional<diagnostics::PresentSample> sample) {
-    present_sample_ = sample;
     controller_.SetPresentSample(std::move(sample));
 }
 
@@ -892,7 +903,7 @@ void DiagnosticsAdapter::requestSettingsNavigation() {
 }
 
 void DiagnosticsAdapter::applyProbeResultForTest(diagnostics::DiagnosticsController::ProbeResult probe) {
-    applyProbe(std::move(probe), true);
+    applyProbe(std::move(probe), true, output_revision_);
 }
 
 const diagnostics::DiagnosticsController& DiagnosticsAdapter::controller() const noexcept {
@@ -920,7 +931,9 @@ void DiagnosticsAdapter::startProbe(bool run_self_test) {
 
     const exosnap::engine::RecordingDiagnosticsSnapshot& live = controller_.liveSnapshot();
     diagnostics::DiagnosticsProbeRequest request;
-    request.output_folder = std::filesystem::path(controller_.outputFolder());
+    // Controller carries UTF-8; reconstruct the Win32 native path through
+    // Unicode instead of interpreting bytes through the active ANSI codepage.
+    request.output_folder = std::filesystem::path(QString::fromStdString(controller_.outputFolder()).toStdWString());
     request.run_self_test = run_self_test;
     // The engine publishes one LUID per pipeline role; dedupe them into unique
     // physical polling targets so a single-GPU session reads NVML and DXGI once.
@@ -937,25 +950,29 @@ void DiagnosticsAdapter::startProbe(bool run_self_test) {
     // thread. Results are marshalled back through the application object, so the
     // QPointer check happens on the thread that would destroy this adapter.
     QPointer<DiagnosticsAdapter> guard(this);
-    probe_pool_.start([guard, request, run_self_test]() {
-        diagnostics::DiagnosticsController::ProbeResult probe = diagnostics::RunDiagnosticsProbe(request);
+    probe_pool_.start([guard, request, run_self_test, run_probe = output_probe_, output_revision = output_revision_]() {
+        diagnostics::DiagnosticsController::ProbeResult probe = run_probe(request);
         QMetaObject::invokeMethod(
             QCoreApplication::instance(),
-            [guard, probe = std::move(probe), run_self_test]() mutable {
+            [guard, probe = std::move(probe), run_self_test, output_revision]() mutable {
                 if (guard)
-                    guard->applyProbe(std::move(probe), run_self_test);
+                    guard->applyProbe(std::move(probe), run_self_test, output_revision);
             },
             Qt::QueuedConnection);
     });
 }
 
-void DiagnosticsAdapter::applyProbe(diagnostics::DiagnosticsController::ProbeResult probe, bool from_manual_check) {
+void DiagnosticsAdapter::applyProbe(diagnostics::DiagnosticsController::ProbeResult probe, bool from_manual_check,
+                                    uint64_t output_revision) {
     probe_in_flight_ = false;
+    if (output_revision != output_revision_) {
+        startProbe(from_manual_check || !probed_);
+        return;
+    }
     probed_ = true;
     controller_.SetProbeResult(std::move(probe));
-    setChecking(false);
-
     last_check_at_ = QDateTime::currentDateTime();
+    setChecking(false);
     emit lastCheckChanged();
 
     if (from_manual_check)

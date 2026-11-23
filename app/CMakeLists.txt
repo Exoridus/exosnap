@@ -888,6 +888,7 @@ exosnap_add_gtest(
     TEST_PREFIX diagnostics.
     SOURCES
         tests/test_diagnostics.cpp
+        tests/test_dpc_trace_sample.cpp
     LIBRARIES exosnap_diagnostics_test_support exosnap_capability exosnap_engine
 )
 target_include_directories(diagnostics_tests PRIVATE ${CMAKE_CURRENT_SOURCE_DIR})

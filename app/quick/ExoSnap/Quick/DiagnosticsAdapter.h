@@ -22,11 +22,17 @@
 #include <QVariantMap>
 #include <QtQmlIntegration/qqmlintegration.h>
 
+#include <cstdint>
 #include <deque>
+#include <functional>
 #include <memory>
 #include <string>
 #include <unordered_map>
 #include <vector>
+
+namespace exosnap::diagnostics {
+struct DiagnosticsProbeRequest;
+}
 
 namespace exosnap::quick {
 
@@ -115,6 +121,9 @@ class DiagnosticsAdapter : public QObject {
 
   public:
     explicit DiagnosticsAdapter(QObject* parent = nullptr);
+    using OutputProbe =
+        std::function<diagnostics::DiagnosticsController::ProbeResult(const diagnostics::DiagnosticsProbeRequest&)>;
+    explicit DiagnosticsAdapter(OutputProbe probe, QObject* parent = nullptr);
     ~DiagnosticsAdapter() override;
 
     [[nodiscard]] QString verdictState() const;
@@ -279,7 +288,8 @@ class DiagnosticsAdapter : public QObject {
 
   private:
     void startProbe(bool run_self_test);
-    void applyProbe(diagnostics::DiagnosticsController::ProbeResult probe, bool from_manual_check);
+    void applyProbe(diagnostics::DiagnosticsController::ProbeResult probe, bool from_manual_check,
+                    uint64_t output_revision);
     void refreshSnapshot();
     void refreshPipeline();
     // Rebuilds the five live tiles from the last snapshot and publishes only when
@@ -356,10 +366,10 @@ class DiagnosticsAdapter : public QObject {
     // GUI thread. Deliberately coarse: the fact it measures changes on a human scale.
     QTimer live_probe_timer_;
 
-    std::optional<diagnostics::PresentSample> present_sample_;
     std::optional<diagnostics::DpcLatencyReading> dpc_reading_;
 
     bool checking_ = false;
+    uint64_t output_revision_ = 0;
     bool probe_in_flight_ = false;
     bool probed_ = false;
     bool in_depth_enabled_ = false;
@@ -375,6 +385,7 @@ class DiagnosticsAdapter : public QObject {
     // outlived the process. The QPointer on the result callback cannot help:
     // it guards the callback, never the worker body. Same idiom as
     // EditSessionAdapter::keyframe_pool_.
+    OutputProbe output_probe_;
     QThreadPool probe_pool_;
 };
 

@@ -88,6 +88,7 @@ class AppLog final : public QObject {
     [[nodiscard]] static QString severityLabel(LogSeverity severity);
     [[nodiscard]] static QString severityKey(LogSeverity severity);
     [[nodiscard]] static QString formatEntry(const LogEntry& entry);
+    // Writes local log metadata without free-form messages or private categories.
     [[nodiscard]] static bool exportHistoryToFile(const QString& path, QString* error = nullptr);
 
     // SETTINGS-HONESTY-R1: developer log-level filter (Settings > Advanced > Developer

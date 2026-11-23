@@ -71,6 +71,10 @@ class MuxAudioHold {
         return packet;
     }
 
+    [[nodiscard]] std::optional<uint64_t> video_watermark() const noexcept {
+        return watermark_;
+    }
+
     [[nodiscard]] size_t bytes() const noexcept {
         return bytes_;
     }

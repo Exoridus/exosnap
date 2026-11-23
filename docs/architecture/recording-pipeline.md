@@ -82,6 +82,8 @@ MKV and WebM segments finalize independently. MP4 segments remux in the backgrou
 
 The recovery entry captures the intended final format and output snapshot, not whatever settings happen to be active on the next launch. A manifest write failure does not destroy a healthy recording or block its start; it produces a Recovery protection unavailable notification, and that session must no longer be represented as protected.
 
+Recovery commits each entry separately. A stalled split commit cannot hold the lock for another recording's entry or an earlier segment's remux cleanup. The original single-file manifest remains readable. Finalization and removal of its entries are recorded separately, so an interrupted update leaves the previous recovery record intact.
+
 Scanning discards missing or empty artifacts rather than offering an impossible recovery repeatedly. Recovery offers only real candidates:
 
 | Operation | Contract |

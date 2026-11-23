@@ -2,6 +2,7 @@
 
 #include "DiagnosticResult.h"
 
+#include <filesystem>
 #include <string>
 
 namespace exosnap::diagnostics {
@@ -19,7 +20,7 @@ class SelfTestRunner {
     static SelfTestResult CheckCaptureAvailability();
     static SelfTestResult CheckEncoderAvailability();
     static SelfTestResult CheckMuxerAvailability();
-    static SelfTestResult CheckOutputPathWritable(const std::string& path);
+    static SelfTestResult CheckOutputPathWritable(const std::filesystem::path& path);
     static SelfTestResult CheckAudioDeviceAvailability();
 };
 

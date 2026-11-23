@@ -26,6 +26,7 @@
 #include "diagnostics/CrashSessionContext.h"
 #include "diagnostics/ElevationProvider.h"
 #include "diagnostics/FixActionDispatcher.h"
+#include "diagnostics/PresentProvider.h"
 #include "diagnostics/PresentSnapshotOverlay.h"
 #include "diagnostics/StartupClock.h"
 #include "models/AudioMeterScale.h"
@@ -93,6 +94,7 @@
 
 #include <algorithm>
 #include <array>
+#include <chrono>
 #include <cmath>
 #include <exception>
 #include <iterator>
@@ -933,15 +935,6 @@ void QuickApplication::initializeRecordWorkflow() {
     });
     recording_coordinator_->SetDiagnosticsCallback(
         [this](const exosnap::engine::RecordingDiagnosticsSnapshot& measured) {
-            // The engine measures no presentation, so the present
-            // fields arrive Unavailable on every snapshot; the elevation- and opt-in-gated
-            // ETW consumer is the only producer and it lives here. Overlaying ONCE at the
-            // single fan-out point is what makes the Diagnostics surface, the
-            // capture-stall classifier's exclusive-fullscreen refinement and
-            // `pipeline.snapshot` answer from the same measurement instead of three.
-            //
-            // This runs on the GUI thread (PostDiagnostics queues it onto the application
-            // object), which is the thread PresentMonEtwSession::Latest() requires.
             exosnap::engine::RecordingDiagnosticsSnapshot snapshot = measured;
             if (visual_sources_ && accepted_visual_scene_) {
                 auto& rows = snapshot.visual_sources.emplace();
@@ -988,10 +981,16 @@ void QuickApplication::initializeRecordWorkflow() {
                 }
             }
             if (present_provider_ != nullptr) {
-                const diagnostics::PresentSample sample = present_provider_->Sample();
-                diagnostics::ApplyPresentSample(snapshot.capture, sample);
-                diagnostics_adapter_.setPresentSample(
-                    sample.available ? std::optional<diagnostics::PresentSample>(sample) : std::nullopt);
+                if (in_depth_diagnostics_ &&
+                    (snapshot.capture.source_type == exosnap::engine::CaptureSourceType::Display ||
+                     snapshot.capture.source_type == exosnap::engine::CaptureSourceType::Region) &&
+                    diagnostics::CaptureProgressExpected(snapshot.lifecycle))
+                    updatePresentAttribution(presentTargetPidForSelection(), /*force=*/false);
+                std::optional<diagnostics::PresentSample> sample = present_provider_->Sample();
+                // Apply the current source evidence before publishing the snapshot or classifying a stall.
+                diagnostics::ApplyPresentSample(snapshot.capture, sample, present_target_pid_,
+                                                std::chrono::steady_clock::now());
+                diagnostics_adapter_.setPresentSample(sample->available ? std::move(sample) : std::nullopt);
                 diagnostics_adapter_.setPresentProviderState(present_provider_->state());
             }
             record_view_model_.av_drift_available =
@@ -2743,7 +2742,7 @@ void QuickApplication::refreshDiagnosticsData() {
         live_config_.output, live_config_.video, config.audio,
         std::filesystem::path(settings_store_.SettingsFilePath().toStdWString()),
         preset_registry_.SelectedPreset().name, std::string());
-    config.output_folder = live_config_.output.output_folder.string();
+    config.output_folder = diagnostics::PathAsUtf8(live_config_.output.output_folder);
     config.hotkeys_ok = true;
     config.hotkeys_summary = "None configured";
     diagnostics_adapter_.setDiagnosticConfig(std::move(config));
@@ -2791,19 +2790,20 @@ void QuickApplication::updateCaptureEvidenceTarget() {
             return false;
         if (!lhs.has_value())
             return true;
-        return lhs->kind == rhs->kind && lhs->native_id == rhs->native_id && lhs->description == rhs->description;
+        return lhs->kind == rhs->kind && lhs->native_id == rhs->native_id;
     };
-    if (!same_target(pushed_selected_target_, target)) {
+    const bool target_changed = !same_target(pushed_selected_target_, target);
+    const bool description_changed =
+        target && pushed_selected_target_ && target->description != pushed_selected_target_->description;
+    if (target_changed || description_changed) {
         pushed_selected_target_ = target;
+        if (target_changed)
+            updatePresentAttribution(presentTargetPidForSelection(), /*force=*/true);
         diagnostics_adapter_.setSelectedCaptureTarget(target);
         const auto adapter_facts = captureTargetAdapterFacts(target);
         diagnostics_adapter_.setCaptureTargetAdapter(adapter_facts);
         settings_adapter_.setCaptureAdapter(static_cast<int64_t>(adapter_facts.capture_adapter_luid),
                                             adapter_facts.known);
-        // Idle attribution boundary: present statistics follow the
-        // selection, so the Diagnostics page describes the source the user is
-        // looking at rather than whatever presented last.
-        updatePresentAttribution(presentTargetPidForSelection(), /*force=*/false);
     }
     // The selection just moved, so the display-derived facts are republished for
     // the new target. One shared implementation, so the blocker and the card that
@@ -2849,16 +2849,9 @@ void QuickApplication::refreshCaptureWindowEvidence() {
     if (!snapshot.active || snapshot.hwnd != evidence_target_hwnd_ || snapshot.hwnd == 0)
         return; // the worker has not caught up with the current target yet
 
-    // Push only on a verdict change. The engine derives nothing else from these
-    // two structs, and every push re-runs the whole recommendation checklist.
-    const diagnostics::ExclusiveEvidence next =
-        diagnostics::ResolveSnapshotEvidence(snapshot, evidence_target_hwnd_, false);
-    if (pushed_window_evidence_.has_value()) {
-        const diagnostics::ExclusiveEvidence current =
-            diagnostics::ResolveSnapshotEvidence(*pushed_window_evidence_, evidence_target_hwnd_, false);
-        if (pushed_window_evidence_->hwnd == snapshot.hwnd && current == next)
-            return;
-    }
+    // Every push re-runs the recommendation checklist.
+    if (pushed_window_evidence_ && diagnostics::SameWindowEvidenceVerdicts(*pushed_window_evidence_, snapshot))
+        return;
     pushed_window_evidence_ = snapshot;
     diagnostics_adapter_.setCaptureWindowEvidence(snapshot.facts, snapshot.evidence);
 }
@@ -2893,8 +2886,6 @@ void QuickApplication::observeWindowCaptureStall(const exosnap::engine::Recordin
     sample.is_window_target = snapshot.capture.source_type == exosnap::engine::CaptureSourceType::Window;
     sample.is_display_target = snapshot.capture.source_type == exosnap::engine::CaptureSourceType::Display ||
                                snapshot.capture.source_type == exosnap::engine::CaptureSourceType::Region;
-    if (sample.is_display_target && sample.capture_expected)
-        updatePresentAttribution(presentTargetPidForSelection(), /*force=*/false);
     sample.capture_expected = diagnostics::CaptureProgressExpected(snapshot.lifecycle);
     sample.frames_captured = snapshot.capture.frames_captured;
     sample.elapsed_seconds = snapshot.elapsed_seconds;
@@ -2949,9 +2940,7 @@ void QuickApplication::observeWindowCaptureStall(const exosnap::engine::Recordin
     }
     const diagnostics::WindowTargetFacts facts =
         diagnostics::GatherWindowTargetFacts(reinterpret_cast<HWND>(evidence_target_hwnd_));
-    // PresentMon's verdict when it happens to be available (elevation- and
-    // opt-in-gated). It only ever refines the cause; it never decides whether the
-    // stall is reported.
+    // The snapshot carries the classified mode only for a fresh observation of the current process.
     const bool present_fse =
         snapshot.capture.present_mode_availability == exosnap::engine::MetricAvailability::Available &&
         snapshot.capture.source_present_mode == exosnap::engine::PresentMode::ExclusiveFullscreen;
@@ -4450,7 +4439,7 @@ void QuickApplication::applyDiagnosticsVisualScenarios() {
             live_config_.output, live_config_.video, config.audio,
             std::filesystem::path(settings_store_.SettingsFilePath().toStdWString()),
             preset_registry_.SelectedPreset().name, std::string());
-        config.output_folder = live_config_.output.output_folder.string();
+        config.output_folder = diagnostics::PathAsUtf8(live_config_.output.output_folder);
         config.profile_validation.succeeded = false;
         config.profile_validation.invalidity.push_back(
             {"video_codec", "AV1 encoding is not available on the selected adapter."});
@@ -7501,10 +7490,6 @@ QuickApplication::encoderCapabilitiesFor(const exosnap::engine::ResolvedEncoderD
 }
 
 unsigned long QuickApplication::presentTargetPidForSelection() const {
-    // Window capture attributes presents to the captured window's process. Display
-    // and Region capture have no owning process -- their presenter is whichever
-    // process dominates the screen -- so they stay on pid 0, which is the same
-    // filter the idle desktop uses.
     if (!pushed_selected_target_.has_value())
         return 0;
     if (pushed_selected_target_->kind != exosnap::engine::CaptureTarget::Kind::Window) {
@@ -7541,6 +7526,7 @@ void QuickApplication::updatePresentAttribution(unsigned long pid, bool force) {
     present_target_pid_ = pid;
     present_provider_->SetTargetProcessId(pid);
     diagnostics_adapter_.setPresentAttributionPid(pid);
+    diagnostics_adapter_.setPresentProviderState(present_provider_->state());
     diagnostics::AppLog::info(QStringLiteral("present"),
                               QStringLiteral("attribution boundary: target pid=%1 force=%2 (accumulators reset)")
                                   .arg(pid)

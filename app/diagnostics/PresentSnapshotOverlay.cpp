@@ -16,14 +16,9 @@ exosnap::engine::PresentMode ToSnapshotPresentMode(PresentMode mode) noexcept {
     return exosnap::engine::PresentMode::Unknown;
 }
 
-void ApplyPresentSample(exosnap::engine::CaptureDiagnostics& capture, const std::optional<PresentSample>& sample) {
-    if (!sample.has_value() || !sample->available)
-        return;
-    // A session that is open but has not yet decoded a present reports available ==
-    // true with mode == Unknown. Publishing that as an available measurement would
-    // put "Unknown" in front of the user as a present-mode verdict; it is the
-    // absence of one.
-    if (sample->mode == PresentMode::Unknown)
+void ApplyPresentSample(exosnap::engine::CaptureDiagnostics& capture, const std::optional<PresentSample>& sample,
+                        unsigned long target_pid, std::chrono::steady_clock::time_point now) {
+    if (target_pid == 0 || !sample || !sample->FreshForTarget(target_pid, now) || sample->mode == PresentMode::Unknown)
         return;
 
     capture.source_present_mode = ToSnapshotPresentMode(sample->mode);

@@ -6,6 +6,9 @@
 
 namespace exosnap::engine {
 
+enum class AudioBindingKind;
+enum class AudioEndpointRole;
+
 struct AudioInputDeviceInfo {
     std::string device_id;    // WASAPI endpoint ID, UTF-8
     std::string display_name; // PKEY_Device_FriendlyName, UTF-8
@@ -27,5 +30,8 @@ struct AudioInputDeviceInfo {
 // Does not throw.
 // No COM types in this public header.
 [[nodiscard]] std::vector<AudioInputDeviceInfo> EnumerateAudioOutputDevices();
+
+// Returns the current role default's UTF-8 endpoint ID, or an empty string if unavailable.
+[[nodiscard]] std::string DefaultAudioEndpointId(AudioBindingKind kind, AudioEndpointRole role);
 
 } // namespace exosnap::engine

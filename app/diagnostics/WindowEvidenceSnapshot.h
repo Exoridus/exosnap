@@ -47,4 +47,12 @@ struct WindowEvidenceSnapshot {
     return ResolveExclusiveEvidence(snapshot.facts, snapshot.evidence, present_exclusive_fullscreen);
 }
 
+[[nodiscard]] inline bool SameWindowEvidenceVerdicts(const WindowEvidenceSnapshot& before,
+                                                     const WindowEvidenceSnapshot& after) noexcept {
+    // Attributed presentation evidence can change independently of the capture probe.
+    return before.hwnd == after.hwnd &&
+           ResolveSnapshotEvidence(before, after.hwnd, false) == ResolveSnapshotEvidence(after, after.hwnd, false) &&
+           ResolveSnapshotEvidence(before, after.hwnd, true) == ResolveSnapshotEvidence(after, after.hwnd, true);
+}
+
 } // namespace exosnap::diagnostics

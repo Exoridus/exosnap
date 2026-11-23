@@ -11,6 +11,10 @@
 
 namespace exosnap::diagnostics {
 
+// The string-based diagnostic controller contract is UTF-8, not the
+// Windows active ANSI codepage. Convert native filesystem paths explicitly.
+[[nodiscard]] std::string PathAsUtf8(const std::filesystem::path& path);
+
 struct ConfigEntry {
     std::string label;
     std::string value;

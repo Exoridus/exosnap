@@ -304,13 +304,10 @@ void SessionStatsCollector::Run() {
             auto now = std::chrono::steady_clock::now();
             snapshot.elapsed_seconds = CapturedSecondsAt(now);
 
-            // Against the aligned audio end, not the encoder's raw one: see
-            // ComputeDurationSkew. Left at 0 while there is nothing to compare;
-            // the availability is carried by the snapshot's own metric plumbing.
             const DurationSkew skew =
-                ComputeDurationSkew(snapshot.video_duration_ns, snapshot.aligned_audio_duration_ns);
-            if (skew.available)
-                snapshot.duration_skew_ms = skew.ms;
+                ComputeDurationSkew(snapshot.mux_video_progress_ns, snapshot.aligned_audio_duration_ns);
+            snapshot.duration_skew_ms = skew.ms;
+            snapshot.duration_skew_available = skew.available;
 
             if (m_state.stats_callback) {
                 m_state.stats_callback(snapshot);
@@ -338,8 +335,7 @@ void SessionStatsCollector::EmitSessionPerfSummary() {
         stats_copy = m_state.stats;
     }
     const DurationSkew skew_result =
-        ComputeDurationSkew(stats_copy.video_duration_ns, stats_copy.aligned_audio_duration_ns);
-    const double duration_skew_ms = skew_result.available ? skew_result.ms : 0.0;
+        ComputeDurationSkew(stats_copy.mux_video_progress_ns, stats_copy.aligned_audio_duration_ns);
 
     std::string res =
         std::to_string(stats_copy.output_size.width) + "x" + std::to_string(stats_copy.output_size.height) + "@" +
@@ -380,7 +376,8 @@ void SessionStatsCollector::EmitSessionPerfSummary() {
     fields.push_back({"dropped_processing_failure", U64(sum.dropped_processing_failure)});
     fields.push_back({"slot_stalls", U64(sum.slot_stalls)});
     fields.push_back({"queue_saturation_events", U64(sum.queue_saturation_events)});
-    fields.push_back({"duration_skew_ms", Num(duration_skew_ms)});
+    if (skew_result.available)
+        fields.push_back({"duration_skew_ms", Num(skew_result.ms)});
     fields.push_back({"preset", std::string(sum.encoder_init.backend_preset)});
     fields.push_back({"rc_mode", RateControlToken(sum.encoder_init.rc_mode)});
     fields.push_back({"gop_length", U64(sum.encoder_init.gop_length)});

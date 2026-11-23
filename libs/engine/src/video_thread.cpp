@@ -73,7 +73,6 @@
 #include <exosnap/engine/webcam_placement.h>
 
 #include <algorithm>
-#include <functional>
 #include <inspectable.h>
 #include <ios>
 #include <limits>
@@ -3626,10 +3625,6 @@ void VideoThread::RunAttachment(const std::shared_ptr<NativeState>& native, cons
             m_state.stats.dropped_or_skipped_video_frames = droppedFrames + slotStallCount;
             m_state.stats.encoded_video_packets++;
             m_state.stats.video_bytes += pkt_bytes_count;
-            // Publish the video media duration live (previously only at teardown) so
-            // the duration-skew metric — video vs audio media time — is available to
-            // live diagnostics, not just the final snapshot. lastVideoPts is the newest
-            // emitted video PTS and is monotonic.
             m_state.stats.video_duration_ns = lastVideoPts;
         }
         return true;
@@ -3691,8 +3686,6 @@ void VideoThread::RunAttachment(const std::shared_ptr<NativeState>& native, cons
     // NV12/P010/AYUV→BGRA readback (format follows encodeFormat).
     // Lives until the encode loop exits; reused across multiple snapshot requests.
     winrt::com_ptr<ID3D11Texture2D> snapshotStagingTex;
-    // Callback type alias — must precede the lambda that uses it.
-    using SnapshotCallback = std::function<void(bool, uint32_t, uint32_t, std::vector<uint8_t>, std::string)>;
 
     // Native HDR10 monitoring decode (PQ/BT.2020 P010 -> tone-mapped SDR BGRA),
     // shared by the snapshot readback and the live preview tap. Its transfer
@@ -3712,7 +3705,7 @@ void VideoThread::RunAttachment(const std::shared_ptr<NativeState>& native, cons
     // NOTE: The Map(D3D11_MAP_READ) call below provides the minimal synchronization point;
     //       it stalls the thread until the GPU completes the CopyResource, typically <1 ms.
     auto performSnapshotIfRequested = [&](ID3D11Texture2D* source) {
-        if (!m_state.snapshot_requested.load() || source == nullptr)
+        if (!m_state.HasPendingSnapshot() || source == nullptr)
             return;
 
         // Lazily allocate the staging texture on first use. Matches encodeFormat
@@ -3735,15 +3728,7 @@ void VideoThread::RunAttachment(const std::shared_ptr<NativeState>& native, cons
                 char errbuf[80];
                 snprintf(errbuf, sizeof(errbuf), "snapshot staging tex failed 0x%08lX",
                          static_cast<unsigned long>(shr));
-                SnapshotCallback pending_cb;
-                {
-                    std::lock_guard lk(m_state.snapshot_callback_mutex);
-                    pending_cb = std::move(m_state.snapshot_callback);
-                    m_state.snapshot_callback = nullptr;
-                    m_state.snapshot_requested.store(false);
-                }
-                if (pending_cb)
-                    pending_cb(false, 0, 0, {}, errbuf);
+                m_state.CompleteSnapshot(false, 0, 0, {}, errbuf);
                 return;
             }
         }
@@ -3755,19 +3740,10 @@ void VideoThread::RunAttachment(const std::shared_ptr<NativeState>& native, cons
         D3D11_MAPPED_SUBRESOURCE mapped{};
         HRESULT mhr = d3dContext->Map(snapshotStagingTex.get(), 0, D3D11_MAP_READ, 0, &mapped);
 
-        SnapshotCallback pending_cb;
-        {
-            std::lock_guard lk(m_state.snapshot_callback_mutex);
-            pending_cb = std::move(m_state.snapshot_callback);
-            m_state.snapshot_callback = nullptr;
-            m_state.snapshot_requested.store(false);
-        }
-
         if (FAILED(mhr)) {
             char errbuf[80];
             snprintf(errbuf, sizeof(errbuf), "snapshot map failed 0x%08lX", static_cast<unsigned long>(mhr));
-            if (pending_cb)
-                pending_cb(false, 0, 0, {}, errbuf);
+            m_state.CompleteSnapshot(false, 0, 0, {}, errbuf);
             return;
         }
 
@@ -3829,8 +3805,7 @@ void VideoThread::RunAttachment(const std::shared_ptr<NativeState>& native, cons
 
         d3dContext->Unmap(snapshotStagingTex.get(), 0);
 
-        if (pending_cb)
-            pending_cb(true, encodeWidth, encodeHeight, std::move(bgra), {});
+        m_state.CompleteSnapshot(true, encodeWidth, encodeHeight, std::move(bgra), {});
     };
     int32_t lastRealFrameSlot = -1;
 

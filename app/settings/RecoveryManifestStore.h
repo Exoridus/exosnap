@@ -3,7 +3,11 @@
 #include <QString>
 #include <QVector>
 
-#include <mutex>
+#include <functional>
+#include <memory>
+#include <optional>
+
+class QJsonObject;
 
 namespace exosnap {
 
@@ -20,35 +24,20 @@ struct RecoveryManifestEntry {
                                 // (artefact is ready to rename/remux without repair)
 };
 
-// Crash-manifest store — recovery-manifest.json in the app config dir.
-// Analogous to RecordingHistoryStore in structure; minimal in scope.
-//
-// Thread-safety: every public method is safe to call from any thread. The store
-// owns a mutex that covers each mutation as one transaction, because every
-// mutation is a load → mutate → save sequence and QSaveFile only makes the
-// single file replacement atomic, not the read-modify-write around it. Two
-// unsynchronized mutations from different threads would each load the same
-// snapshot and the second save would silently discard the first one's entry.
-//
-// This is not theoretical: Add/UpdateFinalized/Remove are called from the Qt main
-// thread (start, cancel unwind), the recording thread (finalize, stop) and the mux
-// worker + segment-remux threads (split boundaries, per-segment remux completion).
-//
-// The mutex is in-process only — it does not coordinate with a second ExoSnap
-// process. Writes still flush immediately so a crash between Add and the matching
-// Remove leaves a recoverable entry.
+// Each entry commits independently, so a stalled split cannot pin the manifest
+// transaction of another recording or an earlier segment's remux. Copies
+// serialize mutations of the same entry within the process.
 class RecoveryManifestStore {
   public:
     RecoveryManifestStore();
     explicit RecoveryManifestStore(QString file_path);
 
-    // Load entries from disk. Returns empty on missing or corrupt file.
-    // Never observes a partially-applied mutation.
-    [[nodiscard]] QVector<RecoveryManifestEntry> Load() const;
+    // Copies retain the same path and serialize updates with the original store.
+    RecoveryManifestStore(const RecoveryManifestStore&) = default;
+    RecoveryManifestStore& operator=(const RecoveryManifestStore&) = delete;
 
-    // Persist the given list, replacing everything on disk. Exposed for the
-    // recovery scan, which rewrites the manifest wholesale.
-    bool Save(const QVector<RecoveryManifestEntry>& entries) const;
+    // Load committed entries, including entries from the original JSON manifest.
+    [[nodiscard]] QVector<RecoveryManifestEntry> Load() const;
 
     // Add a new entry and immediately flush to disk. Returns false when the
     // entry did NOT reach disk — the caller must not treat the recording as
@@ -66,21 +55,19 @@ class RecoveryManifestStore {
     // Return all current entries (loads from disk each time).
     [[nodiscard]] QVector<RecoveryManifestEntry> Entries() const;
 
+    // The legacy manifest path also determines the directory for current entries.
     [[nodiscard]] const QString& StorePath() const;
 
   private:
-    // Unlocked cores. Callers must already hold mutex_ — this is what lets a
-    // mutation hold the lock across its whole load → mutate → save sequence
-    // instead of taking it three separate times.
-    [[nodiscard]] QVector<RecoveryManifestEntry> LoadLocked() const;
-    bool SaveLocked(const QVector<RecoveryManifestEntry>& entries) const;
-
-    // Guards every read and every load → mutate → save transaction. Public methods
-    // take it exactly once and then work through the *Locked cores, so no path can
-    // re-enter it. Contention is a handful of writes per recording.
-    mutable std::mutex mutex_;
+    friend class RecoveryManifestStoreTestPeer;
+    struct EntryLocks;
+    std::shared_ptr<EntryLocks> locks_;
+    std::function<void(const QString&)> before_commit_;
+    [[nodiscard]] std::optional<QVector<RecoveryManifestEntry>> LoadLegacy() const;
+    [[nodiscard]] QString EntriesDirectory() const;
+    [[nodiscard]] QString EntryPath(const QString& id) const;
+    bool CommitEntry(const QString& id, const QJsonObject& record) const;
     QString file_path_;
-    static constexpr int kSchemaVersion = 1;
 };
 
 } // namespace exosnap

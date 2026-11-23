@@ -387,6 +387,13 @@ AudioCaptureDescriptor AudioTeeReader::Descriptor() const {
         return state_->Block(reader.cursor).descriptor;
     return state_->descriptor;
 }
+void AudioTeeReader::AdvanceStart(uint64_t start_qpc_ns) {
+    std::lock_guard lock(state_->mutex);
+    auto& reader = state_->readers[index_];
+    reader.start_qpc_ns = (std::max)(reader.start_qpc_ns, start_qpc_ns);
+    reader.overflow_frames = 0;
+    state_->Wake(reader);
+}
 AudioReaderEnd AudioTeeReader::SealEnd(uint64_t end_qpc_ns) {
     std::lock_guard lock(state_->mutex);
     auto& reader = state_->readers[index_];

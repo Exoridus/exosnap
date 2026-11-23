@@ -140,6 +140,19 @@ TEST_F(AppLogRotationTest, InMemoryHistoryForTheLogsPageIsUnaffectedByRotation) 
     EXPECT_TRUE(history.constLast().message.contains(QStringLiteral("line 9")));
 }
 
+TEST_F(AppLogRotationTest, ExportHistoryKeepsOnlyAllowlistedMetadata) {
+    const auto message = QStringLiteral("D:/Private Folder/\u00e9tude.mkv\nprivate continuation");
+    AppLog::warning(QStringLiteral("record.failure"), message);
+    AppLog::info(QStringLiteral("private-category"), QStringLiteral("secret window title"));
+    const auto path = temp_dir_.filePath(QStringLiteral("export.log"));
+    ASSERT_TRUE(AppLog::exportHistoryToFile(path));
+    const auto lines = ReadLines(path);
+    ASSERT_EQ(lines.size(), 2);
+    EXPECT_TRUE(lines[0].endsWith(QStringLiteral(" [warning] [record.failure]")));
+    EXPECT_TRUE(lines[1].endsWith(QStringLiteral(" [info]")));
+    EXPECT_EQ(AppLog::history().first().message, message);
+}
+
 TEST_F(AppLogRotationTest, OversizedFileFromAPreviousRunRotatesOnNextInit) {
     // Simulate a leftover from a previous process run: the log file name is
     // stable across sessions and nothing has rotated it yet in this process.

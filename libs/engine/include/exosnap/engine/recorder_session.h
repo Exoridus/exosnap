@@ -784,16 +784,18 @@ class RecorderSession {
     void SetPreviewFramePublishedCallback(PreviewFramePublishedCallback cb);
 
     // Request a one-shot BGRA frame snapshot from the next composed video frame.
-    // The callback fires from VideoThread with (success, width, height, bgra_bytes, error).
-    // No-op if request_id is not the recording Record() is running (as for
-    // Stop()) or a snapshot is already pending. Accepted from the moment Record()
-    // has taken over the session state, so a request made before the first frame
-    // is served by that frame. If the session ends while the request is pending
-    // the callback fires with success=false.
+    // Requests are accepted once Record() takes over the session state and until
+    // snapshot admission closes during shutdown. A mismatched request_id or
+    // another pending snapshot causes the request to be ignored. The video
+    // worker delivers a served request. Record() delivers a failure for a
+    // pending request when preparation fails or the session ends.
     using FrameSnapshotCallback = std::function<void(bool, uint32_t, uint32_t, std::vector<uint8_t>, std::string)>;
     void RequestFrameSnapshot(FrameSnapshotCallback callback, RecordRequestId request_id = kUnscopedRecordRequest);
 
   private:
+    friend class RecorderSessionTestAccess;
+    RecorderResult RecordImpl(const RecorderConfig& config, RecordRequestId request_id,
+                              const std::function<void()>& on_prepared_output);
     struct Impl;
     Impl* m_impl = nullptr;
 };

@@ -325,7 +325,7 @@ RecordingCoordinator::RecordingCoordinator()
     webcam_control_pool_.setMaxThreadCount(1);
     if constexpr (product::kRecordingClipsAvailable)
         clip_jobs_ = std::make_unique<RecordingClipJobs>(
-            recording_artifacts_, [this](const RecordingClipJobSnapshot&) { PostClipJobsChanged(); },
+            *recording_artifacts_, [this](const RecordingClipJobSnapshot&) { PostClipJobsChanged(); },
             [this] { return PauseClipBackground(); }, [this] { return primary_clip_reserve_bytes_.load(); },
             background_storage_);
     session_.SetBackgroundIoAdmission([storage = background_storage_](uint64_t bytes, const std::atomic<bool>* cancel) {
@@ -334,6 +334,7 @@ RecordingCoordinator::RecordingCoordinator()
 }
 
 RecordingCoordinator::~RecordingCoordinator() {
+    idle_snapshot_owner_->Retire();
     CloseClipNotifications();
     if (clip_jobs_)
         clip_jobs_->BeginShutdown();
@@ -392,6 +393,7 @@ RecordingCoordinator::~RecordingCoordinator() {
     //    real cancel signals.
     if (recording_thread_.joinable())
         recording_thread_.join();
+    RetireSegmentCallback();
 
     // 2) Single-file MP4 remux, which the recording thread may have started as its
     //    last act. Joined after (1) so it can no longer be re-assigned under us.
@@ -415,11 +417,7 @@ RecordingCoordinator::~RecordingCoordinator() {
     if (disk_monitor_thread_.joinable())
         disk_monitor_thread_.join();
 
-    // 5) Screenshot writer. Deliberately last: (1) is what could still hand the
-    //    pool new work (the engine fires a pending frame-snapshot callback with
-    //    success=false when the session stops), so waiting here — rather than
-    //    relying only on the member's destructor — guarantees the wait happens
-    //    after the last possible enqueue, not before it.
+    // Screenshot callbacks can no longer enqueue. Wait before destroying their QObject receiver.
     if (clip_jobs_)
         clip_jobs_->Shutdown();
     snapshot_pool_.waitForDone();
@@ -431,11 +429,11 @@ RecordingCoordinator::~RecordingCoordinator() {
 }
 
 void RecordingCoordinator::SetRecoveryManifestStore(RecoveryManifestStore* store) {
-    recovery_manifest_store_ = store;
+    recovery_manifest_store_ = store ? std::make_shared<RecoveryManifestStore>(*store) : nullptr;
 }
 
 RecoveryManifestStore* RecordingCoordinator::GetRecoveryManifestStore() const noexcept {
-    return recovery_manifest_store_;
+    return recovery_manifest_store_.get();
 }
 
 void RecordingCoordinator::SetRecoveryProtectionLostCallback(RecoveryProtectionLostCallback cb) {
@@ -1597,6 +1595,10 @@ void RecordingCoordinator::PrepareAndRecordThreadProc(const PrepareContext& ctx)
         session_.SetPreviewSharedHandleCallback(nullptr);
     }
     session_.SetPreviewFramePublishedCallback(on_preview_frame_published_);
+    // A failed recording can leave background remux jobs behind. Let them finish cancellation
+    // before a new session resets the results and manifest bookkeeping they reference.
+    DrainSegmentRemuxJobs(/*cancel=*/true);
+    remux_cancel_requested_.store(false);
     // Show an "initializing" diagnostics state until the engine emits live snapshots.
     EmitInitializingDiagnostics();
     {
@@ -1605,7 +1607,7 @@ void RecordingCoordinator::PrepareAndRecordThreadProc(const PrepareContext& ctx)
         edit_master_paths_.clear();
     }
     split_pending_.store(false);
-    session_.SetSegmentCallback([this](const exosnap::engine::CompletedSegment& seg) { OnSegmentCompleted(seg); });
+    session_.SetSegmentCallback(MakeSegmentCallback());
 
     // Check cancellation before acquiring the recording lease.
     if (prepare_cancel_requested_.load()) {
@@ -1621,10 +1623,8 @@ void RecordingCoordinator::PrepareAndRecordThreadProc(const PrepareContext& ctx)
         markers_limit_reported_ = false;
     }
 
-    // MP4-SPLIT-REMUX-R1: clear per-segment remux state from any prior session.
     {
         std::lock_guard<std::mutex> lock(segment_remux_mutex_);
-        segment_remux_jobs_.clear();
         pending_segment_manifest_id_.clear();
     }
     reaped_segment_remux_failed_.store(false);
@@ -1953,37 +1953,80 @@ void RecordingCoordinator::PostSplitFeedback(bool accepted, QString message) {
         Qt::QueuedConnection);
 }
 
-void RecordingCoordinator::OnSegmentCompleted(const exosnap::engine::CompletedSegment& segment) {
+void RecordingCoordinator::WorkerCallbackOwner::Retire() {
+    std::lock_guard lock(mutex);
+    coordinator = nullptr;
+}
+
+bool RecordingCoordinator::WorkerCallbackOwner::IsActive() {
+    std::lock_guard lock(mutex);
+    return coordinator != nullptr;
+}
+
+exosnap::engine::SegmentCallback RecordingCoordinator::MakeSegmentCallback(std::function<void()> before_manifest_io) {
+    auto owner = std::make_shared<WorkerCallbackOwner>(*this);
+    if (auto previous = recording_callback_owner_.exchange(owner))
+        previous->Retire();
+    return [owner = std::move(owner),
+            before_manifest_io = std::move(before_manifest_io)](const exosnap::engine::CompletedSegment& segment) {
+        OnSegmentCompleted(owner, segment, before_manifest_io);
+    };
+}
+
+void RecordingCoordinator::RetireSegmentCallback() {
+    if (auto owner = recording_callback_owner_.exchange({}))
+        owner->Retire();
+    session_.SetSegmentCallback({});
+}
+
+void RecordingCoordinator::OnSegmentCompleted(const std::shared_ptr<WorkerCallbackOwner>& owner,
+                                              const exosnap::engine::CompletedSegment& segment,
+                                              const std::function<void()>& before_manifest_io) {
+    std::shared_ptr<RecordingArtifactRegistry> artifacts;
+    std::vector<RecordingMarker> markers;
+    std::shared_ptr<RecoveryManifestStore> manifest;
+    std::filesystem::path output_path;
+    std::filesystem::path transient_path;
+    QString manifest_id;
+    bool was_split_boundary = false;
+    bool remux_split = false;
+    size_t segment_count = 0;
+    {
+        std::lock_guard lock(owner->mutex);
+        auto* coordinator = owner->coordinator;
+        if (!coordinator)
+            return;
+        artifacts = coordinator->recording_artifacts_;
+        {
+            std::lock_guard segments_lock(coordinator->segments_mutex_);
+            coordinator->segments_.push_back(segment);
+            segment_count = coordinator->segments_.size();
+        }
+        if (segment.succeeded)
+            markers = coordinator->Markers();
+
+        const bool pending_split = coordinator->split_pending_.exchange(false);
+        was_split_boundary = !segment.session_end && pending_split;
+        remux_split = was_split_boundary && segment.succeeded && coordinator->session_is_mp4_;
+        if (remux_split) {
+            output_path = coordinator->CurrentOutputPath();
+            transient_path = coordinator->session_transient_mkv_;
+            manifest = coordinator->recovery_manifest_store_;
+            manifest_id = coordinator->CurrentManifestId();
+        }
+    }
+
+    // The mux worker may outlive its Record() call while storage is stalled.
+    // All I/O below uses this segment's owned data, including the old manifest transaction.
     if (segment.media_descriptor) {
         const auto& descriptor = *segment.media_descriptor;
         const RecordingArtifactKey key{descriptor.recording_id, descriptor.segment_id, descriptor.writer_generation,
                                        descriptor.descriptor_revision};
-        (void)recording_artifacts_.MarkWriterClosed(key);
-        if (!recording_artifacts_.RegisterSource(descriptor, false))
+        (void)artifacts->MarkWriterClosed(key);
+        if (!artifacts->RegisterSource(descriptor, false))
             diagnostics::AppLog::warning(QStringLiteral("recording.artifacts"),
                                          QStringLiteral("Finalized source identity could not be registered."));
     }
-    // Fired from the mux worker thread as each segment is finalized (including the
-    // final one at session end). Accumulate for the multi-segment result and clear
-    // the pending flag — the next segment has started.
-    size_t total = 0;
-    {
-        std::lock_guard<std::mutex> lock(segments_mutex_);
-        segments_.push_back(segment);
-        total = segments_.size();
-    }
-    // True only when this finalize was triggered by a split request (a new segment
-    // follows). The final session-end finalize has no pending request, so it must
-    // not produce a spurious "Started segment N" toast.
-    // Only a boundary the engine produced counts. A request that never reached
-    // one (asked for while paused, or just before stop) would otherwise make the
-    // session-end finalize look like an intermediate segment: a manifest entry
-    // for a segment that never exists, and a second remux of the final file
-    // racing the one RecordingThreadProc schedules.
-    const bool was_split_boundary = !segment.session_end && split_pending_.exchange(false);
-    if (segment.session_end)
-        split_pending_.store(false);
-
     diagnostics::AppLog::info(QStringLiteral("split"),
                               QStringLiteral("segment finalized index=%1 duration_ms=%2 bytes=%3 ok=%4 path=%5")
                                   .arg(segment.index)
@@ -1991,145 +2034,113 @@ void RecordingCoordinator::OnSegmentCompleted(const exosnap::engine::CompletedSe
                                   .arg(segment.file_size_bytes)
                                   .arg(segment.succeeded)
                                   .arg(QString::fromStdWString(segment.path.filename().wstring())));
+    WriteSegmentMarkerSidecar(segment, markers);
 
-    // Per-segment marker sidecar (SPLIT-RECORDING-R1): partition session markers
-    // into this segment, rebased to segment-local time. Only for successfully
-    // finalized segments (a quarantined file gets no orphan sidecar).
-    if (segment.succeeded)
-        WriteSegmentMarkerSidecar(segment);
-
-    // MP4-SPLIT-REMUX-R1: for intermediate segments in an MP4 session, kick off
-    // a background remux while recording continues into the next segment.
-    //
-    // This is a split boundary (not the final segment), the engine succeeded for
-    // this segment, and the session container is MP4. The coordinator already
-    // knows this via session_is_mp4_ set at StartDiskMonitor / StartRecording time.
-    //
-    // Manifest lifecycle:
-    //   - current_manifest_id_ was created (at StartRecording or the previous
-    //     OnSegmentCompleted) and represents THIS segment's recovery entry.
-    //   - We finalize it (UpdateFinalized=true) synchronously here since the MKV
-    //     is cleanly closed by the engine before this callback fires.
-    //   - We create a NEW manifest entry for the NEXT segment (segment N+1 just
-    //     started writing) and store it in pending_segment_manifest_id_.
-    //   - The recording thread will read pending_segment_manifest_id_ and use it
-    //     as current_manifest_id_ when it processes the final segment.
-    if (was_split_boundary && segment.succeeded && session_is_mp4_) {
-        // Derive the expected MP4 output path for this segment from the transient MKV path.
-        // segment.path is a valuable .partial artifact; derive the final .mp4 sibling.
-        // The base output path is the session's output path (the .mp4 path the user
-        // asked for). Taken through the accessor, not off the member: this runs on
-        // the mux worker thread, which the engine does not always join before
-        // Record() returns (QCR-106).
-        const std::filesystem::path session_output_path = CurrentOutputPath();
-        const std::optional<std::filesystem::path> mp4_segment =
-            DeriveSegmentPathLogged(session_output_path, segment.index, "intermediate segment remux target");
-
-        // Capture the manifest ID for this segment before mutating current_manifest_id_.
-        QString this_segment_manifest_id;
-        QString next_segment_manifest_id;
-
-        {
-            // The manifest ID for THIS segment is the one current at this point.
-            // For segment 0 this is current_manifest_id_ set at StartRecording.
-            // For segment N (N>0) this was stored in pending_segment_manifest_id_
-            // when segment N-1 completed, and adopted below. Read under the lock,
-            // then released: the manifest store writes below are disk I/O, and the
-            // disk monitor blocks on this same mutex in PendingRemuxReserveBytes.
-            {
-                std::lock_guard<std::mutex> lock(segment_remux_mutex_);
-                this_segment_manifest_id = current_manifest_id_;
+    std::optional<std::filesystem::path> mp4_segment;
+    QString next_manifest_id;
+    std::vector<QString> recovery_errors;
+    if (remux_split) {
+        mp4_segment = DeriveSegmentPathLogged(output_path, segment.index, "intermediate segment remux target");
+        if (before_manifest_io)
+            before_manifest_io();
+        if (manifest) {
+            // The old mux can proceed to open its next partial after this callback resumes.
+            // Keep that partial eligible for recovery even if the coordinator has already retired the session.
+            if (!manifest_id.isEmpty() && !manifest->UpdateFinalized(manifest_id, true)) {
+                recovery_errors.push_back(
+                    QStringLiteral("could not mark segment %1 as finalized in the recovery manifest")
+                        .arg(segment.index));
             }
-
-            // Finalize the manifest entry: the MKV is clean (engine closed it).
-            // A failed update leaves the entry at finalized=false, which recovery
-            // reads as "needs repair" — conservative, never a false success — but
-            // it is still a write that did not happen, so it is reported.
-            if (recovery_manifest_store_ != nullptr && !this_segment_manifest_id.isEmpty()) {
-                if (!recovery_manifest_store_->UpdateFinalized(this_segment_manifest_id, true)) {
-                    PostRecoveryProtectionLost(
-                        QStringLiteral("could not mark segment %1 as finalized in the recovery manifest")
-                            .arg(segment.index));
+            const auto next_mkv = DeriveSegmentPathLogged(transient_path, segment.index + 1, "next transient MKV");
+            const auto next_final = DeriveSegmentPathLogged(output_path, segment.index + 1, "next segment final MP4");
+            if (next_mkv && next_final) {
+                RecoveryManifestEntry entry;
+                entry.id = QUuid::createUuid().toString(QUuid::WithoutBraces);
+                entry.artefact_path = QString::fromStdWString(next_mkv->wstring());
+                entry.intended_container = QStringLiteral("mp4");
+                entry.final_output_path = QString::fromStdWString(next_final->wstring());
+                entry.started_at = QDateTime::currentDateTimeUtc().toString(Qt::ISODate);
+                if (manifest->Add(entry)) {
+                    next_manifest_id = entry.id;
+                } else {
+                    recovery_errors.push_back(
+                        QStringLiteral("could not write the recovery manifest entry for segment %1")
+                            .arg(segment.index + 1));
                 }
-            }
-
-            // Create a recovery manifest entry for the NEXT segment (now recording).
-            if (recovery_manifest_store_ != nullptr) {
-                const std::optional<std::filesystem::path> next_mkv = DeriveSegmentPathLogged(
-                    session_transient_mkv_, segment.index + 1, "next segment transient MKV (manifest)");
-                const std::optional<std::filesystem::path> next_final = DeriveSegmentPathLogged(
-                    session_output_path, segment.index + 1, "next segment final MP4 (manifest)");
-                // Only record a recovery entry when BOTH paths for the next segment were
-                // derived successfully -- a half-populated manifest entry (e.g. a valid
-                // artefact_path but an empty/stale final_output_path) would be worse than
-                // no entry at all for crash recovery.
-                if (next_mkv.has_value() && next_final.has_value()) {
-                    RecoveryManifestEntry next_entry;
-                    next_entry.id = QUuid::createUuid().toString(QUuid::WithoutBraces);
-                    next_entry.artefact_path = QString::fromStdWString(next_mkv->wstring());
-                    next_entry.intended_container = QStringLiteral("mp4");
-                    next_entry.final_output_path = QString::fromStdWString(next_final->wstring());
-                    next_entry.started_at = QDateTime::currentDateTimeUtc().toString(Qt::ISODate);
-                    next_entry.finalized = false;
-                    // QCR-103: same invariant as at StartRecording — the next
-                    // segment's id is adopted only if its entry reached disk.
-                    // Otherwise current_manifest_id_ stays empty and the segment
-                    // simply records without a recovery entry, honestly.
-                    if (recovery_manifest_store_->Add(next_entry)) {
-                        next_segment_manifest_id = next_entry.id;
-                    } else {
-                        PostRecoveryProtectionLost(
-                            QStringLiteral("could not write the recovery manifest entry for segment %1")
-                                .arg(segment.index + 1));
-                    }
-                }
-            }
-
-            // segment_remux_jobs_ and pending_segment_manifest_id_ are shared with
-            // the recording thread; from here on nothing under the lock touches disk.
-            std::lock_guard<std::mutex> lock(segment_remux_mutex_);
-
-            // Update current_manifest_id_ so the recording thread sees the next segment's ID.
-            current_manifest_id_ = next_segment_manifest_id;
-            pending_segment_manifest_id_ = next_segment_manifest_id;
-
-            // Schedule the background remux for THIS segment. Skipped (logged above) if
-            // the MP4 target path could not be derived -- the segment stays as an
-            // un-remuxed transient MKV rather than being written to a wrong/guessed path.
-            if (mp4_segment.has_value()) {
-                auto job = std::make_unique<SegmentRemuxJob>();
-                job->transient_mkv = segment.path;
-                job->output_mp4 = *mp4_segment;
-                job->manifest_id = this_segment_manifest_id;
-                QueueSegmentRemux(*job, [this, transient = job->transient_mkv, out = job->output_mp4,
-                                         id = job->manifest_id] { return RunSegmentRemuxWork(transient, out, id); });
-                segment_remux_jobs_.push_back(std::move(job));
             }
         }
+    }
+    for (const auto& error : recovery_errors) {
+        diagnostics::AppLog::error(QStringLiteral("recovery.manifest"),
+                                   QStringLiteral("recovery protection unavailable: %1").arg(error));
+    }
 
-        // Collect the handles of segments whose remux already finished. Done after
-        // the scheduling block so the lock is not held across the joins, and here
-        // rather than at session end so a long split recording does not carry every
-        // job handle it ever created (QCR-107).
-        ReapFinishedSegmentRemuxJobs();
+    size_t reaped_jobs = 0;
+    {
+        std::lock_guard lock(owner->mutex);
+        auto* coordinator = owner->coordinator;
+        if (!coordinator)
+            return;
+        if (remux_split) {
+            {
+                std::lock_guard remux_lock(coordinator->segment_remux_mutex_);
+                coordinator->current_manifest_id_ = next_manifest_id;
+                coordinator->pending_segment_manifest_id_ = next_manifest_id;
+                if (mp4_segment) {
+                    auto job = std::make_unique<SegmentRemuxJob>();
+                    job->transient_mkv = segment.path;
+                    job->output_mp4 = *mp4_segment;
+                    job->manifest_id = manifest_id;
+                    coordinator->QueueSegmentRemux(
+                        *job, [coordinator, transient = job->transient_mkv, out = job->output_mp4,
+                               id = job->manifest_id] { return coordinator->RunSegmentRemuxWork(transient, out, id); });
+                    coordinator->segment_remux_jobs_.push_back(std::move(job));
+                }
+            }
+            reaped_jobs = coordinator->ReapFinishedSegmentRemuxJobs();
+        }
 
-        if (mp4_segment.has_value()) {
-            diagnostics::AppLog::info(
-                QStringLiteral("remux"),
-                QStringLiteral("split segment remux scheduled index=%1 transient=\"%2\" output=\"%3\"")
-                    .arg(segment.index)
-                    .arg(QString::fromStdWString(segment.path.filename().wstring()),
-                         QString::fromStdWString(mp4_segment->filename().wstring())));
+        // Post to an owned QObject; teardown discards notifications that have not reached the UI.
+        if (QCoreApplication::instance() != nullptr && !QCoreApplication::closingDown()) {
+            if (coordinator->on_recovery_protection_lost_ && !recovery_errors.empty()) {
+                QMetaObject::invokeMethod(
+                    &coordinator->segment_remux_pool_,
+                    [owner, cb = coordinator->on_recovery_protection_lost_, errors = std::move(recovery_errors)] {
+                        for (const auto& error : errors) {
+                            if (!owner->IsActive())
+                                return;
+                            cb(error);
+                        }
+                    },
+                    Qt::QueuedConnection);
+            }
+            if (was_split_boundary && segment.succeeded && coordinator->is_recording_.load() &&
+                coordinator->on_split_feedback_) {
+                QMetaObject::invokeMethod(
+                    &coordinator->segment_remux_pool_,
+                    [owner, cb = coordinator->on_split_feedback_, segment_count] {
+                        if (!owner->IsActive())
+                            return;
+                        cb(true, QCoreApplication::translate("RecordingActions", "Started segment %1")
+                                     .arg(static_cast<qulonglong>(segment_count + 1)));
+                    },
+                    Qt::QueuedConnection);
+            }
         }
     }
 
-    // Feedback names the segment that just *started* (the one after the boundary).
-    // Only on an actual split boundary (not the final session-end finalize) and
-    // only for a successfully finalized prior segment. total counts finalized
-    // segments; the new live segment's human-friendly part number is total+1.
-    if (was_split_boundary && is_recording_.load() && segment.succeeded) {
-        const qulonglong next_part = static_cast<qulonglong>(total) + 1;
-        PostSplitFeedback(true, QCoreApplication::translate("RecordingActions", "Started segment %1").arg(next_part));
+    if (reaped_jobs > 0) {
+        diagnostics::AppLog::info(
+            QStringLiteral("remux"),
+            QStringLiteral("reaped %1 finished segment remux job(s)").arg(static_cast<qulonglong>(reaped_jobs)));
+    }
+    if (mp4_segment) {
+        diagnostics::AppLog::info(
+            QStringLiteral("remux"),
+            QStringLiteral("split segment remux scheduled index=%1 transient=\"%2\" output=\"%3\"")
+                .arg(segment.index)
+                .arg(QString::fromStdWString(segment.path.filename().wstring()),
+                     QString::fromStdWString(mp4_segment->filename().wstring())));
     }
 }
 
@@ -2237,6 +2248,7 @@ bool RecordingCoordinator::IsAppMeterRunning() const noexcept {
 void RecordingCoordinator::RecordingThreadProc(const exosnap::engine::RecorderConfig& config,
                                                const std::filesystem::path& output_path) {
     auto result = session_.Record(config, record_request_.load());
+    RetireSegmentCallback();
     is_recording_ = false;
     is_paused_.store(false);
 
@@ -2543,10 +2555,10 @@ void RecordingCoordinator::RecordingThreadProc(const exosnap::engine::RecorderCo
             }
             if (completed && completed->media_descriptor) {
                 const auto& descriptor = *completed->media_descriptor;
-                if (recording_artifacts_.RebindClosedSource({descriptor.recording_id, descriptor.segment_id,
-                                                             descriptor.writer_generation,
-                                                             descriptor.descriptor_revision},
-                                                            final) != ArtifactDisposition::Completed)
+                if (recording_artifacts_->RebindClosedSource({descriptor.recording_id, descriptor.segment_id,
+                                                              descriptor.writer_generation,
+                                                              descriptor.descriptor_revision},
+                                                             final) != ArtifactDisposition::Completed)
                     diagnostics::AppLog::warning(QStringLiteral("recording.artifacts"),
                                                  QStringLiteral("Published source locator could not be rebound."));
                 std::lock_guard lock(segments_mutex_);
@@ -2811,7 +2823,7 @@ std::filesystem::path RecordingCoordinator::RetainEditMaster(const std::filesyst
                             written == static_cast<DWORD>(marker_bytes.size()) && FlushFileBuffers(marker_reservation));
         }
     }
-    const bool renamed = marker_ready && recording_artifacts_.RenameClosed(
+    const bool renamed = marker_ready && recording_artifacts_->RenameClosed(
                                              {descriptor->recording_id, descriptor->segment_id,
                                               descriptor->writer_generation, descriptor->descriptor_revision},
                                              master, true) == ArtifactDisposition::Completed;
@@ -2854,9 +2866,9 @@ RecordingCoordinator::AcquireEditMasterLease(const std::filesystem::path& path) 
     }
     if (!descriptor)
         return std::nullopt;
-    return recording_artifacts_.AcquireSourceLease({descriptor->recording_id, descriptor->segment_id,
-                                                    descriptor->writer_generation, descriptor->descriptor_revision},
-                                                   descriptor->file_identity);
+    return recording_artifacts_->AcquireSourceLease({descriptor->recording_id, descriptor->segment_id,
+                                                     descriptor->writer_generation, descriptor->descriptor_revision},
+                                                    descriptor->file_identity);
 }
 
 bool RecordingCoordinator::RunSegmentRemuxWork(const std::filesystem::path& transient_mkv,
@@ -2955,7 +2967,7 @@ bool RecordingCoordinator::RunSegmentRemuxWork(const std::filesystem::path& tran
     return result.success;
 }
 
-void RecordingCoordinator::ReapFinishedSegmentRemuxJobs() {
+size_t RecordingCoordinator::ReapFinishedSegmentRemuxJobs() {
     // Opportunistic, never a barrier: only jobs that have already published
     // `completed` are taken, so removal never blocks and a running
     // remux is left alone. Called at each split boundary, which is the natural
@@ -2982,11 +2994,7 @@ void RecordingCoordinator::ReapFinishedSegmentRemuxJobs() {
         }
     }
 
-    if (!finished.empty()) {
-        diagnostics::AppLog::info(
-            QStringLiteral("remux"),
-            QStringLiteral("reaped %1 finished segment remux job(s)").arg(static_cast<qulonglong>(finished.size())));
-    }
+    return finished.size();
 }
 
 bool RecordingCoordinator::DrainSegmentRemuxJobs(bool cancel) {
@@ -3286,43 +3294,29 @@ void RecordingCoordinator::SetReadyFrameRequester(ReadyFrameRequester requester)
     ready_frame_requester_ = std::move(requester);
 }
 
-void RecordingCoordinator::WriteSnapshotAndNotify(QThreadPool& pool, FrameCapturedCallback cb,
-                                                  const std::wstring& folder, bool has_target_context,
-                                                  const FilenameTargetContext& target_context,
+void RecordingCoordinator::WriteSnapshotAndNotify(const std::shared_ptr<WorkerCallbackOwner>& owner,
+                                                  FrameCapturedCallback cb, const std::wstring& folder,
+                                                  bool has_target_context, const FilenameTargetContext& target_context,
                                                   const QString& log_context_suffix, bool ok, uint32_t width,
                                                   uint32_t height, std::vector<uint8_t> bgra, const QString& error) {
-    using diagnostics::AppLog;
+    if (!owner)
+        return;
+    std::lock_guard lock(owner->mutex);
+    if (!owner->coordinator)
+        return;
 
-    if (!ok) {
-        AppLog::warning(QStringLiteral("capture_frame"),
-                        QStringLiteral("readback failed") + log_context_suffix + QStringLiteral(": ") + error);
-        QCoreApplication* application = QCoreApplication::instance();
-        if (application == nullptr) {
-            if (!QCoreApplication::closingDown() && cb)
-                cb(false, {}, error);
+    auto* pool = &owner->coordinator->snapshot_pool_;
+    pool->start([pool, cb = std::move(cb), folder, has_target_context, target_context, log_context_suffix, ok, width,
+                 height, bgra = std::move(bgra), error]() mutable {
+        using diagnostics::AppLog;
+        if (!ok) {
+            AppLog::warning(QStringLiteral("capture_frame"),
+                            QStringLiteral("readback failed") + log_context_suffix + QStringLiteral(": ") + error);
+            if (QCoreApplication::instance() && !QCoreApplication::closingDown() && cb)
+                QMetaObject::invokeMethod(pool, [cb, error] { cb(false, {}, error); }, Qt::QueuedConnection);
             return;
         }
-        QMetaObject::invokeMethod(
-            application,
-            [cb, error]() mutable {
-                if (cb)
-                    cb(false, {}, error);
-            },
-            Qt::QueuedConnection);
-        return;
-    }
 
-    // Build output path (collision-safe) from folder and context. Runs off the
-    // caller's thread (VideoThread for Recording/Paused, the DXGI preview render
-    // thread for Ready) — capture everything needed by value, never `this`.
-    //
-    // The pool, not a detached thread: everything below touches Qt (QDateTime,
-    // QDir, QImage, QFile, a function-static QRegularExpression, and finally
-    // QCoreApplication::instance()), so it must not be running once Qt's statics
-    // are torn down. A detached thread has no owner and nothing to wait on it;
-    // the pool's owner joins it in ~RecordingCoordinator.
-    pool.start([cb, folder, has_target_context, target_context, log_context_suffix, width, height,
-                bgra = std::move(bgra)]() mutable {
         const QString dir_path = QString::fromStdWString(folder);
         const QString datetime = QDateTime::currentDateTime().toString(QStringLiteral("yyyy-MM-dd_HH-mm-ss"));
         QString name_base = datetime;
@@ -3371,7 +3365,7 @@ void RecordingCoordinator::WriteSnapshotAndNotify(QThreadPool& pool, FrameCaptur
         if (application == nullptr || QCoreApplication::closingDown())
             return;
         QMetaObject::invokeMethod(
-            application,
+            pool,
             [cb, saved, out_path, log_context_suffix]() mutable {
                 if (saved) {
                     AppLog::info(QStringLiteral("capture_frame"),
@@ -3397,24 +3391,16 @@ void RecordingCoordinator::CaptureFrame() {
     if (st == UiRecordingState::Recording || st == UiRecordingState::Paused) {
         AppLog::info(QStringLiteral("capture_frame"), QStringLiteral("snapshot requested"));
 
-        // Capture everything needed by value — the callback fires from VideoThread;
-        // the coordinator is alive because the recording thread is joined before
-        // destruction, but we still avoid capturing 'this' for safety.
         const FrameCapturedCallback cb_copy = on_frame_captured_;
         const std::wstring folder = EffectiveOutputFolder().wstring();
         const bool has_ctx = has_output_target_context_;
         const FilenameTargetContext ctx = output_target_context_;
-        // The one thing the callback needs from the coordinator: the pool that owns
-        // the PNG write. Safe on this path because session_ is a member and the
-        // destructor joins the recording thread (which is what makes Record() —
-        // and with it VideoThread, the only firer of this callback) finish before
-        // any member is destroyed.
-        QThreadPool* pool = &snapshot_pool_;
+        const auto owner = recording_callback_owner_.load();
 
         session_.RequestFrameSnapshot(
-            [cb_copy, folder, has_ctx, ctx, pool](bool ok, uint32_t w, uint32_t h, std::vector<uint8_t> bgra,
-                                                  const std::string& err) mutable {
-                WriteSnapshotAndNotify(*pool, cb_copy, folder, has_ctx, ctx, QString(), ok, w, h, std::move(bgra),
+            [cb_copy, folder, has_ctx, ctx, owner](bool ok, uint32_t w, uint32_t h, std::vector<uint8_t> bgra,
+                                                   const std::string& err) mutable {
+                WriteSnapshotAndNotify(owner, cb_copy, folder, has_ctx, ctx, QString(), ok, w, h, std::move(bgra),
                                        QString::fromStdString(err));
             },
             record_request_.load());
@@ -3438,20 +3424,9 @@ void RecordingCoordinator::CaptureFrame() {
         const std::wstring folder = EffectiveOutputFolder().wstring();
         const bool has_ctx = has_output_target_context_;
         const FilenameTargetContext ctx = output_target_context_;
-        // Unlike the engine path above, the requester's callback fires on the DXGI
-        // preview render thread, which this class does not own and cannot join: the
-        // pool pointer is only sound while the coordinator outlives the pending
-        // request. That is one readback frame (~16 ms) and it is strictly narrower
-        // than what the detached thread exposed before (the whole PNG encode and
-        // write, on Qt statics). Closing it properly means the preview renderer
-        // has to be quiesced before the coordinator is destroyed, which is the
-        // owner's ordering to fix, not this class's.
-        QThreadPool* pool = &snapshot_pool_;
-
-        ready_frame_requester_([cb_copy, folder, has_ctx, ctx, pool](bool ok, uint32_t w, uint32_t h,
-                                                                     std::vector<uint8_t> bgra,
-                                                                     const QString& err) mutable {
-            WriteSnapshotAndNotify(*pool, cb_copy, folder, has_ctx, ctx, QStringLiteral(" (Ready)"), ok, w, h,
+        ready_frame_requester_([cb_copy, folder, has_ctx, ctx, owner = idle_snapshot_owner_](
+                                   bool ok, uint32_t w, uint32_t h, std::vector<uint8_t> bgra, const QString& err) {
+            WriteSnapshotAndNotify(owner, cb_copy, folder, has_ctx, ctx, QStringLiteral(" (Ready)"), ok, w, h,
                                    std::move(bgra), err);
         });
         return;
@@ -3827,49 +3802,34 @@ void RecordingCoordinator::AddMarker(RecordingMarkerType type) {
         return;
     }
 
-    // The lock is SCOPED, and that is the whole point of this block.
-    //
-    // WriteMarkerSidecar() takes markers_mutex_ itself to snapshot the list, and
-    // markers_mutex_ is a plain std::mutex. Calling it from inside this critical
-    // section is a self-deadlock on the calling thread — which is the GUI thread,
-    // so the application hangs permanently on the FIRST marker of a recording.
-    //
-    // No test reached it: test_recording_markers.cpp says so out loud ("we can't
-    // reach real recording") and exercises the data model instead. The
-    // control-channel product journey is what finally pressed the same button a
-    // user presses, and it timed out here.
-    //
-    // The sidecar write must stay outside for a second reason as well: it is
-    // filesystem I/O, and holding a lock the stats thread also takes across a
-    // disk write puts the recording's own cadence behind it.
+    size_t count = 0;
+    uint64_t time_ms = 0;
+    bool report_limit = false;
     {
-        std::lock_guard<std::mutex> lock(markers_mutex_);
-
+        std::lock_guard lock(markers_mutex_);
         if (markers_.size() >= kMaxRecordingMarkers) {
-            if (!markers_limit_reported_) {
-                diagnostics::AppLog::warning(
-                    QStringLiteral("marker"),
-                    QStringLiteral("rejected: marker limit %1 reached").arg(kMaxRecordingMarkers));
-                markers_limit_reported_ = true;
-            }
-            return;
+            report_limit = !std::exchange(markers_limit_reported_, true);
+        } else {
+            time_ms = last_media_time_ns_ / 1000000ULL;
+            RecordingMarker marker;
+            marker.time_ms = time_ms;
+            marker.type = type;
+            marker.label = RecordingMarkerTypeDefaultLabel(type);
+            markers_.push_back(std::move(marker));
+            count = markers_.size();
         }
-
-        const uint64_t time_ms = last_media_time_ns_ / 1000000ULL;
-
-        RecordingMarker marker;
-        marker.time_ms = time_ms;
-        marker.type = type;
-        marker.label = RecordingMarkerTypeDefaultLabel(type);
-
-        markers_.push_back(marker);
-
-        diagnostics::AppLog::info(QStringLiteral("marker"), QStringLiteral("added id=%1 time_ms=%2 type=%3")
-                                                                .arg(markers_.size())
-                                                                .arg(time_ms)
-                                                                .arg(QLatin1String(RecordingMarkerTypeToString(type))));
     }
-
+    // A stalled log or sidecar write must not pin the snapshot lock used by the mux callback.
+    if (count == 0) {
+        if (report_limit)
+            diagnostics::AppLog::warning(QStringLiteral("marker"),
+                                         QStringLiteral("rejected: marker limit %1 reached").arg(kMaxRecordingMarkers));
+        return;
+    }
+    diagnostics::AppLog::info(QStringLiteral("marker"), QStringLiteral("added id=%1 time_ms=%2 type=%3")
+                                                            .arg(count)
+                                                            .arg(time_ms)
+                                                            .arg(QLatin1String(RecordingMarkerTypeToString(type))));
     WriteMarkerSidecar();
 }
 
@@ -3906,13 +3866,9 @@ void RecordingCoordinator::WriteMarkerSidecar() {
     }
 }
 
-void RecordingCoordinator::WriteSegmentMarkerSidecar(const exosnap::engine::CompletedSegment& segment) {
-    std::vector<RecordingMarker> snapshot;
-    {
-        std::lock_guard<std::mutex> lock(markers_mutex_);
-        snapshot = markers_;
-    }
-    if (snapshot.empty())
+void RecordingCoordinator::WriteSegmentMarkerSidecar(const exosnap::engine::CompletedSegment& segment,
+                                                     const std::vector<RecordingMarker>& markers) {
+    if (markers.empty())
         return;
 
     // Partition + rebase to segment-local time. The half-open window excludes the
@@ -3920,7 +3876,7 @@ void RecordingCoordinator::WriteSegmentMarkerSidecar(const exosnap::engine::Comp
     // segments (it lands in the next segment at 0 ms). duration_ms == 0 yields an
     // empty window -> no sidecar.
     const std::vector<RecordingMarker> local =
-        PartitionSegmentMarkers(snapshot, segment.session_start_ms, segment.duration_ms);
+        PartitionSegmentMarkers(markers, segment.session_start_ms, segment.duration_ms);
 
     // Zero-marker segment => no sidecar at all (no orphan files).
     if (local.empty())

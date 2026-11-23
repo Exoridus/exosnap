@@ -136,9 +136,9 @@ class RecordingCoordinator {
     RecordingCoordinator(const RecordingCoordinator&) = delete;
     RecordingCoordinator& operator=(const RecordingCoordinator&) = delete;
 
-    // Inject the recovery manifest store. Must be called before StartRecording.
-    // The store must outlive this object. When nullptr the manifest integration
-    // is silently disabled (tests that do not care about recovery can omit this).
+    // Set before StartRecording. The coordinator retains a copy of the store handle
+    // so an admitted completion can finish its recovery transaction during teardown.
+    // A null store disables manifest integration.
     void SetRecoveryManifestStore(RecoveryManifestStore* store);
     [[nodiscard]] RecoveryManifestStore* GetRecoveryManifestStore() const noexcept;
 
@@ -540,22 +540,24 @@ class RecordingCoordinator {
 
   private:
     friend class RecordingCoordinatorTestPeer;
+    struct WorkerCallbackOwner {
+        explicit WorkerCallbackOwner(RecordingCoordinator& coordinator) : coordinator(&coordinator) {
+        }
+        void Retire();
+        [[nodiscard]] bool IsActive();
+        // Only nonblocking coordinator operations are allowed while holding this mutex.
+        std::mutex mutex;
+        RecordingCoordinator* coordinator;
+    };
+
     // Shared tail of CaptureFrame()'s Recording/Paused and Ready paths: converts
     // a raw BGRA readback (or a failure) into a saved PNG + FrameCapturedCallback
-    // notification. Static and parameter-only (no captured `this`) so it stays
-    // safe to invoke from a background-thread-fired snapshot callback — matches
-    // this class's existing convention of never capturing `this` into a callback
-    // that fires off a worker thread it does not own the lifetime of.
-    // `pool` is the only exception to that rule and is passed explicitly rather
-    // than reached through `this`: the PNG encode must not run on the caller's
-    // thread (VideoThread / the DXGI preview render thread would drop frames),
-    // and it must have an owner that waits for it — see snapshot_pool_.
-    // log_context_suffix distinguishes the two call sites in the app log only
-    // (e.g. " (Ready)").
-    static void WriteSnapshotAndNotify(QThreadPool& pool, FrameCapturedCallback cb, const std::wstring& folder,
-                                       bool has_target_context, const FilenameTargetContext& target_context,
-                                       const QString& log_context_suffix, bool ok, uint32_t width, uint32_t height,
-                                       std::vector<uint8_t> bgra, const QString& error);
+    // notification. The guard protects admission to the coordinator-owned pool.
+    static void WriteSnapshotAndNotify(const std::shared_ptr<WorkerCallbackOwner>& owner, FrameCapturedCallback cb,
+                                       const std::wstring& folder, bool has_target_context,
+                                       const FilenameTargetContext& target_context, const QString& log_context_suffix,
+                                       bool ok, uint32_t width, uint32_t height, std::vector<uint8_t> bgra,
+                                       const QString& error);
 
     // Immutable snapshot of every input and config model StartRecording's device
     // work reads, copied by value on the UI thread before the preparation worker
@@ -637,12 +639,12 @@ class RecordingCoordinator {
     // Write a per-segment marker sidecar adjacent to `segment_media_path`,
     // containing only markers whose session time falls in this segment, rebased to
     // segment-local time. No sidecar is written when the segment has zero markers.
-    void WriteSegmentMarkerSidecar(const exosnap::engine::CompletedSegment& segment);
+    static void WriteSegmentMarkerSidecar(const exosnap::engine::CompletedSegment& segment,
+                                          const std::vector<RecordingMarker>& markers);
     static std::wstring FormatHResult(int32_t hr);
     static std::wstring FormatErrorPhase(exosnap::engine::ErrorPhase phase);
 
-    // Recovery manifest store (nullable — injected by MainWindow via SetRecoveryManifestStore).
-    RecoveryManifestStore* recovery_manifest_store_ = nullptr;
+    std::shared_ptr<RecoveryManifestStore> recovery_manifest_store_;
     // UUID of the manifest entry for the currently active or most recent recording.
     // Empty when no session is in flight.
     //
@@ -824,7 +826,9 @@ class RecordingCoordinator {
     // Segments accumulated from the engine SegmentCallback (mux worker thread).
     mutable std::mutex segments_mutex_;
     std::vector<exosnap::engine::CompletedSegment> segments_;
-    RecordingArtifactRegistry recording_artifacts_;
+    std::shared_ptr<RecordingArtifactRegistry> recording_artifacts_ = std::make_shared<RecordingArtifactRegistry>();
+    std::atomic<std::shared_ptr<WorkerCallbackOwner>> recording_callback_owner_;
+    std::shared_ptr<WorkerCallbackOwner> idle_snapshot_owner_ = std::make_shared<WorkerCallbackOwner>(*this);
     std::shared_ptr<BackgroundStorageBudget> background_storage_ = std::make_shared<BackgroundStorageBudget>();
     std::unique_ptr<RecordingClipJobs> clip_jobs_;
     struct ClipNotificationState;
@@ -839,7 +843,11 @@ class RecordingCoordinator {
     std::filesystem::path RetainEditMaster(const std::filesystem::path& source);
     SplitFeedbackCallback on_split_feedback_;
     void PostSplitFeedback(bool accepted, QString message);
-    void OnSegmentCompleted(const exosnap::engine::CompletedSegment& segment);
+    exosnap::engine::SegmentCallback MakeSegmentCallback(std::function<void()> before_manifest_io = {});
+    void RetireSegmentCallback();
+    static void OnSegmentCompleted(const std::shared_ptr<WorkerCallbackOwner>& owner,
+                                   const exosnap::engine::CompletedSegment& segment,
+                                   const std::function<void()>& before_manifest_io);
 
     // remux-on-stop state.
     std::jthread remux_thread_;
@@ -929,7 +937,7 @@ class RecordingCoordinator {
     // failure into reaped_segment_remux_failed_. Opportunistic: it never waits on
     // a running job, so it is not a barrier at a split boundary. Called from
     // OnSegmentCompleted, which is the natural rhythm of a split session.
-    void ReapFinishedSegmentRemuxJobs();
+    size_t ReapFinishedSegmentRemuxJobs();
 
     // Wait for all segment remux jobs and return false if any failed (including the
     // ones already reaped). cancel=true requests cancellation of any running remux.
@@ -978,27 +986,8 @@ class RecordingCoordinator {
     exosnap::engine::MicChannelMode mic_meter_channel_mode_ = exosnap::engine::MicChannelMode::Auto;
     bool mic_meter_config_valid_ = false;
 
-    // Runs the screenshot PNG encode + write off the thread that delivered the
-    // readback (VideoThread, or the DXGI preview render thread).
-    //
-    // Declared LAST so it is destroyed FIRST: members are destroyed in reverse
-    // declaration order, and the pool's destructor waits for the worker. This
-    // used to be a detached std::thread — nobody owned it, nobody waited, and
-    // its body touches QDateTime/QDir/QImage/QFile, a function-static
-    // QRegularExpression and QCoreApplication::instance(). At process teardown
-    // those Qt statics go away underneath it, which is a 0xC0000005 after the
-    // last test has already passed. The QCoreApplication::closingDown() check
-    // in the worker is a sampled race, not a barrier: it can be false at the
-    // check and true one instruction later.
-    //
-    // Single thread: only one snapshot is ever in flight per source (the engine
-    // ignores a second request while one is pending), and serialising the
-    // writes also removes the race between two workers running the same
-    // collision scan over the same output directory.
-    //
-    // ~RecordingCoordinator additionally calls waitForDone() explicitly, after
-    // the engine threads are joined — see the destructor for why the order
-    // matters.
+    // Admission closes before the destructor waits for queued writes. The single worker also
+    // serializes filename collision checks within the output directory.
     QThreadPool snapshot_pool_;
 };
 

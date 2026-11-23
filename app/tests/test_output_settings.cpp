@@ -364,13 +364,6 @@ TEST(OutputSettingsTest, EmptyPath) {
     EXPECT_EQ(ValidateOutputFolder(std::filesystem::path{}), FolderValidationResult::InvalidPath);
 }
 
-// QCR-108: the writability probe is only honest if the bytes are flushed and the
-// stream is closed successfully before Ok is returned. A buffered write that the
-// destructor silently drops on a full/quota-bound/offline volume would otherwise
-// report a folder as writable that cannot hold a recording.
-
-// A folder that passes must leave nothing behind: a probe file surviving would
-// mean the probe never completed its own cleanup.
 TEST(OutputSettingsTest, WritableFolderLeavesNoProbeFileBehind) {
     const std::filesystem::path dir = UniqueTempPath(L"probe_clean");
     std::error_code ec;
@@ -378,23 +371,54 @@ TEST(OutputSettingsTest, WritableFolderLeavesNoProbeFileBehind) {
     ASSERT_FALSE(ec);
 
     EXPECT_EQ(ValidateOutputFolder(dir), FolderValidationResult::Ok);
-    EXPECT_FALSE(std::filesystem::exists(dir / L".exosnap_write_test"));
+    EXPECT_TRUE(std::filesystem::is_empty(dir));
 
     std::filesystem::remove_all(dir, ec);
 }
 
-// Probe open failure: a DIRECTORY occupying the probe's own path. std::ofstream
-// cannot open it, and the folder must be reported as not writable rather than
-// waved through.
-TEST(OutputSettingsTest, ProbeOpenFailureReportsNotWritable) {
-    const std::filesystem::path dir = UniqueTempPath(L"probe_open_fail");
+TEST(OutputSettingsTest, PreservesExistingProbeName) {
+    const std::filesystem::path dir = UniqueTempPath(L"probe_existing");
     std::error_code ec;
-    std::filesystem::create_directories(dir / L".exosnap_write_test", ec);
+    std::filesystem::create_directories(dir, ec);
     ASSERT_FALSE(ec);
+    const auto existing = dir / L".exosnap_write_test";
+    {
+        std::ofstream file(existing);
+        file << "keep";
+        file.close();
+        ASSERT_TRUE(file);
+    }
 
-    EXPECT_EQ(ValidateOutputFolder(dir), FolderValidationResult::NotWritable);
+    EXPECT_EQ(ValidateOutputFolder(dir), FolderValidationResult::Ok);
+    {
+        std::ifstream file(existing);
+        std::string contents;
+        file >> contents;
+        EXPECT_EQ(contents, "keep");
+    }
 
     std::filesystem::remove_all(dir, ec);
+}
+
+TEST(OutputSettingsTest, ProbeFailsWithoutCreatingMissingDirectory) {
+    const auto missing = UniqueTempPath(L"probe_missing");
+    EXPECT_FALSE(ProbeOutputDirectoryWritable(missing));
+    EXPECT_FALSE(std::filesystem::exists(missing));
+}
+
+TEST(OutputSettingsTest, ProbeFitsPreviouslySupportedPathLength) {
+    constexpr size_t folder_length = 239;
+    const auto base = UniqueTempPath(L"probe_path_length");
+    ASSERT_LT(base.native().size() + 1, folder_length);
+    const auto folder = base / std::wstring(folder_length - base.native().size() - 1, L'x');
+    std::error_code ec;
+    std::filesystem::create_directories(folder, ec);
+    ASSERT_FALSE(ec);
+
+    EXPECT_EQ(ValidateOutputFolder(folder), FolderValidationResult::Ok);
+    EXPECT_TRUE(std::filesystem::is_empty(folder));
+
+    std::filesystem::remove_all(base, ec);
 }
 
 // The validator must never mistake a regular file for a folder — the gate the

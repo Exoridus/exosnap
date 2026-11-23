@@ -1,11 +1,11 @@
 #include "observability/SessionQuery.h"
 
 #include "diagnostics/AppLog.h"
+#include "diagnostics/SessionReportJson.h"
 
 #include <QDir>
 #include <QFile>
 #include <QFileInfo>
-#include <QJsonDocument>
 #include <QRegularExpression>
 
 namespace exosnap::observability {
@@ -23,16 +23,12 @@ QJsonObject ReadReport(const QString& path) {
     if (!file.open(QIODevice::ReadOnly))
         return Unavailable(QStringLiteral("unreadable"));
 
-    QJsonParseError parse_error{};
-    const QJsonDocument document = QJsonDocument::fromJson(file.readAll(), &parse_error);
-    if (parse_error.error != QJsonParseError::NoError || !document.isObject())
+    const auto document = diagnostics::ReadSessionReportJson(file.readAll());
+    if (document.isNull())
         return Unavailable(QStringLiteral("malformed"));
 
     QJsonObject json;
     json.insert(QStringLiteral("available"), true);
-    // The report verbatim. It is already the scrubbed document the support
-    // bundle ships; re-shaping it here would produce a second vocabulary for the
-    // same facts.
     json.insert(QStringLiteral("report"), document.object());
     return json;
 }

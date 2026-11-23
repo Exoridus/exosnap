@@ -19,6 +19,7 @@
 #include <QJsonArray>
 #include <QJsonDocument>
 #include <QJsonObject>
+#include <QJsonValue>
 #include <QPointer>
 #include <QQuickWindow>
 #include <QSGRendererInterface>
@@ -140,11 +141,8 @@ class OverlayPresentationProbe final : public QObject {
         if (coordinator_ != nullptr && !coordinator_->LastDiagnosticsSnapshot(&snapshot))
             snapshot = {};
         QJsonObject result = observability::PipelineSnapshotToJson(snapshot);
-        // The aggregate has no availability bit. Zero cannot distinguish absent
-        // timestamp samples from zero work, so only positive samples are reported.
-        result.insert(QStringLiteral("recorderGpuPassP99Ms"), snapshot.compositor.gpu_exec_p99_ms > 0.0
-                                                                  ? QJsonValue(snapshot.compositor.gpu_exec_p99_ms)
-                                                                  : QJsonValue(QJsonValue::Null));
+        const auto& gpu_p99 = snapshot.compositor.gpu_exec_p99_ms;
+        result.insert(QStringLiteral("recorderGpuPassP99Ms"), gpu_p99 ? QJsonValue(*gpu_p99) : QJsonValue());
         return result;
     }
 

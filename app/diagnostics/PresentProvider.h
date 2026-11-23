@@ -2,6 +2,7 @@
 
 #include "MeasurementMetadata.h"
 
+#include <chrono>
 #include <cstdint>
 #include <optional>
 #include <vector>
@@ -27,11 +28,12 @@ struct PresentSample {
     bool tearing = false;
     double present_interval_ms = 0.0;
     bool available = false;
-    // True when the sample was filtered to the captured process. Display and
-    // Region capture have no process to attribute to, so their samples span the
-    // whole desktop and the per-source checks (discarded presents, mode flips)
-    // must not read them as a statement about the recorded content.
+    // True when the sample was filtered to the selected process.
     bool attributed = false;
+
+    [[nodiscard]] bool FreshForTarget(unsigned long pid, std::chrono::steady_clock::time_point now) const noexcept {
+        return available && metadata.Fresh(now) && (pid == 0 ? !metadata.process_id : metadata.process_id == pid);
+    }
 
     // Session-cumulative aggregates, accumulated by PresentMonEtwSession across the drain
     // (NOT per-event — the drain otherwise keeps only the latest present). `present_count`

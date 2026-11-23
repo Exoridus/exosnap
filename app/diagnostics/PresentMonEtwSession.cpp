@@ -2,20 +2,43 @@
 #include "diagnostics/PresentModeMapping.h"
 
 #define WIN32_LEAN_AND_MEAN
-#include <windows.h> // OpenProcess / WaitForSingleObject / CloseHandle -- target liveness only.
+#include <windows.h>
 
 #include <algorithm>
+#include <chrono>
+#include <cstdint>
+#include <functional>
 #include <utility>
 
 #include <QtCore/QtGlobal> // qWarning -> the installed Qt handler -> exosnap.log
 
 namespace exosnap::diagnostics {
+namespace {
 
-PresentMonEtwSession::PresentMonEtwSession() : backend_factory_(&MakePresentTraceBackend) {
+uint64_t ReadQpc() {
+    LARGE_INTEGER now{};
+    ::QueryPerformanceCounter(&now);
+    return static_cast<uint64_t>(now.QuadPart);
 }
 
-PresentMonEtwSession::PresentMonEtwSession(std::function<std::shared_ptr<IPresentTraceBackend>()> backend_factory)
-    : backend_factory_(std::move(backend_factory)) {
+std::chrono::steady_clock::time_point PresentObservedAt(std::chrono::steady_clock::time_point drained_at,
+                                                        uint64_t age_ticks, int64_t frequency) {
+    if (frequency <= 0)
+        return {};
+    const std::chrono::duration<double> age(static_cast<double>(age_ticks) / static_cast<double>(frequency));
+    if (age >= drained_at.time_since_epoch())
+        return {};
+    return drained_at - std::chrono::ceil<std::chrono::steady_clock::duration>(age);
+}
+
+} // namespace
+
+PresentMonEtwSession::PresentMonEtwSession() : PresentMonEtwSession(&MakePresentTraceBackend, &ReadQpc) {
+}
+
+PresentMonEtwSession::PresentMonEtwSession(std::function<std::shared_ptr<IPresentTraceBackend>()> backend_factory,
+                                           std::function<uint64_t()> read_qpc)
+    : backend_factory_(std::move(backend_factory)), read_qpc_(std::move(read_qpc)) {
 }
 
 bool PresentMonEtwSession::Start() {
@@ -89,6 +112,7 @@ bool PresentMonEtwSession::Start() {
 }
 
 void PresentMonEtwSession::SetTargetProcessId(unsigned long pid) {
+    attribution_start_qpc_ = read_qpc_ ? read_qpc_() : 0;
     target_pid_.store(pid, std::memory_order_relaxed);
     accumulator_.Reset();
     last_present_qpc_ = 0;
@@ -192,7 +216,10 @@ PresentSample PresentMonEtwSession::Latest() const {
         size_t attributed = 0;
         std::vector<unsigned long> process_ids;
         std::vector<unsigned long> related_process_ids;
-        for (const TracePresentEvent& present : backend->Drain()) {
+        const auto presents = backend->Drain();
+        const auto drained_at = std::chrono::steady_clock::now();
+        const uint64_t drain_qpc = read_qpc_ ? read_qpc_() : 0;
+        for (const TracePresentEvent& present : presents) {
             ++drained;
             if (std::find(process_ids.begin(), process_ids.end(), present.process_id) == process_ids.end())
                 process_ids.push_back(present.process_id);
@@ -205,6 +232,11 @@ PresentSample PresentMonEtwSession::Latest() const {
                 latest_.trace_last_process_id = present.process_id;
                 latest_.trace_last_hwnd = present.hwnd;
             }
+            // Presents can finish after a reset. Their start tick must be strictly after the boundary.
+            if (attribution_start_qpc_ != 0 && present.present_qpc <= attribution_start_qpc_)
+                continue;
+            if (read_qpc_ && (present.present_qpc == 0 || present.present_qpc > drain_qpc))
+                continue;
             const bool related_to_target =
                 want_pid == 0 || present.process_id == want_pid ||
                 std::any_of(present.related_process_ids.begin(), present.related_process_ids.end(),
@@ -219,21 +251,23 @@ PresentSample PresentMonEtwSession::Latest() const {
             raw.tearing_flag = present.tearing_flag;
             // The inter-present gap; 0 for the first present of an attribution window,
             // and 0 whenever the frequency is unknown -- never a fabricated number.
-            raw.interval_ms = (last_present_qpc_ != 0 && present.present_qpc > last_present_qpc_ && qpc_freq_ != 0)
+            raw.interval_ms = (last_present_qpc_ != 0 && present.present_qpc > last_present_qpc_ && qpc_freq_ > 0)
                                   ? static_cast<double>(present.present_qpc - last_present_qpc_) * 1000.0 /
                                         static_cast<double>(qpc_freq_)
                                   : 0.0;
-            last_present_qpc_ = present.present_qpc;
             PresentSample mapped = MapPresentEvent(raw);
             // fold into the per-recording aggregates. The accumulator
             // counts flips on the CLASSIFIED mode so sub-variant changes (e.g. Composed_Flip
             // -> Composed_Copy) do not register as a present-mode flip.
             accumulator_.Observe(mapped.mode, present.discarded);
-            mapped.present_count = static_cast<uint32_t>(accumulator_.present_count);
-            mapped.discarded_count = static_cast<uint32_t>(accumulator_.discarded_count);
-            mapped.mode_flip_count = static_cast<uint32_t>(accumulator_.mode_flip_count);
+            // Completion order is chronological only within each swap chain.
+            if (last_present_qpc_ != 0 && present.present_qpc <= last_present_qpc_)
+                continue;
+            last_present_qpc_ = present.present_qpc;
             std::lock_guard lk(sample_mutex_);
-            mapped.metadata.observed_at = std::chrono::steady_clock::now();
+            // The queue can delay delivery, so freshness starts at the present's ETW timestamp.
+            mapped.metadata.observed_at =
+                read_qpc_ ? PresentObservedAt(drained_at, drain_qpc - present.present_qpc, qpc_freq_) : drained_at;
             mapped.metadata.source = "PresentMon ETW";
             if (want_pid != 0)
                 mapped.metadata.process_id = want_pid;
@@ -244,6 +278,9 @@ PresentSample PresentMonEtwSession::Latest() const {
         }
         {
             std::lock_guard lk(sample_mutex_);
+            latest_.present_count = static_cast<uint32_t>(accumulator_.present_count);
+            latest_.discarded_count = static_cast<uint32_t>(accumulator_.discarded_count);
+            latest_.mode_flip_count = static_cast<uint32_t>(accumulator_.mode_flip_count);
             latest_.trace_drained_count = static_cast<uint32_t>(drained);
             latest_.trace_matched_count = static_cast<uint32_t>(attributed);
             latest_.trace_process_ids = std::move(process_ids);
@@ -262,7 +299,9 @@ PresentSample PresentMonEtwSession::Latest() const {
         }
     }
     std::lock_guard lk(sample_mutex_);
-    return latest_;
+    PresentSample sample = latest_;
+    sample.available = sample.available && sample.metadata.Fresh(std::chrono::steady_clock::now());
+    return sample;
 }
 
 void PresentMonEtwSession::Stop() {

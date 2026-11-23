@@ -2,6 +2,8 @@
 
 #ifdef EXOSNAP_HAS_PRESENTMON
 
+#include "diagnostics/DpcTraceSample.h"
+
 #define WIN32_LEAN_AND_MEAN
 // clang-format off
 // Order matters: evntrace.h / evntcons.h depend on TRACEHANDLE et al. from windows.h.
@@ -17,6 +19,7 @@
 #include <condition_variable>
 #include <cstdint>
 #include <cstring>
+#include <span>
 #include <string>
 #include <vector>
 
@@ -39,20 +42,6 @@ constexpr GUID kImageLoadGuid = {0x2cb15d1d, 0x5fc1, 0x11d2, {0xab, 0xe1, 0x00, 
 
 bool GuidEq(const GUID& a, const GUID& b) {
     return std::memcmp(&a, &b, sizeof(GUID)) == 0;
-}
-
-// Read a pointer-sized field from a raw kernel event payload. The traced kernel's
-// pointer width comes from the logfile header (PointerSize); a 32-bit field on a
-// 64-bit consumer is still read as 4 bytes.
-uint64_t ReadPtr(const uint8_t* p, uint32_t ptr_size) {
-    if (ptr_size >= 8) {
-        uint64_t v = 0;
-        std::memcpy(&v, p, 8);
-        return v;
-    }
-    uint32_t v = 0;
-    std::memcpy(&v, p, 4);
-    return static_cast<uint64_t>(v);
 }
 
 struct ImageRange {
@@ -96,10 +85,7 @@ struct SessionImpl {
 };
 
 // =====================================================================================
-// DECODE SECTION — fiddly, NOT headless-verifiable. Opcodes/struct offsets below are the
-// documented values; runtime correctness is dev-machine-verified (recording under load).
-// Uncertainties are flagged inline. Everything here is bounds-checked and degrades to an
-// empty/zero reading rather than misbehaving on an unexpected layout.
+// Kernel image attribution is best effort. Keep the latency sample when the driver name is unavailable.
 // =====================================================================================
 
 // Best-effort kernel-image basename extraction. The Image_Load FileName is a trailing
@@ -150,29 +136,17 @@ void WINAPI DpcEventRecordCallback(EVENT_RECORD* record) {
     const uint32_t ps = s->pointer_size;
 
     if (GuidEq(provider, kPerfInfoGuid)) {
-        // DPC/ISR variants (DPC, ThreadedDPC, TimerDPC, ISR). Opcodes 66..69 [DEV-VERIFY:
-        // exact opcode->variant mapping]. All of these share the same leading payload
-        // layout { InitialTime: uint64 QPC; Routine: pointer }, so we treat the whole
-        // band uniformly and only read that common prefix — robust to the exact opcode.
-        if (opcode < 66 || opcode > 69)
+        const auto sample =
+            DecodeDpcTraceSample(std::span(data, len), opcode, ps, record->EventHeader.TimeStamp.QuadPart, s->qpc_freq);
+        if (!sample)
             return;
-        if (len < 8u + ps)
-            return;
-        uint64_t initial = 0;
-        std::memcpy(&initial, data, 8); // InitialTime (QPC) — start of the DPC/ISR
-        const uint64_t routine = ReadPtr(data + 8, ps);
-        const int64_t end = record->EventHeader.TimeStamp.QuadPart; // QPC at event emit
-        if (s->qpc_freq <= 0 || initial == 0 || static_cast<uint64_t>(end) < initial)
-            return;
-        const double us =
-            static_cast<double>(end - static_cast<int64_t>(initial)) * 1e6 / static_cast<double>(s->qpc_freq);
         std::lock_guard<std::mutex> lk(s->acc_mutex);
-        s->sum_us += us;
+        s->sum_us += sample->elapsed_us;
         ++s->count;
         s->observed_at = std::chrono::steady_clock::now();
-        if (us > s->max_us) {
-            s->max_us = us;
-            s->worst_routine = routine;
+        if (sample->elapsed_us > s->max_us) {
+            s->max_us = sample->elapsed_us;
+            s->worst_routine = sample->routine;
         }
         return;
     }
@@ -184,8 +158,8 @@ void WINAPI DpcEventRecordCallback(EVENT_RECORD* record) {
             return;
         if (len < 2u * ps)
             return;
-        const uint64_t base = ReadPtr(data, ps);
-        const uint64_t size = ReadPtr(data + ps, ps);
+        const uint64_t base = ReadTracePointer(data, ps);
+        const uint64_t size = ReadTracePointer(data + ps, ps);
         std::string name = ExtractImageBasename(data, len, ps);
         std::lock_guard<std::mutex> lk(s->acc_mutex);
         s->images.push_back(ImageRange{base, size, std::move(name)});
@@ -241,7 +215,9 @@ bool DpcLatencyProvider::Start() {
 
     EVENT_TRACE_LOGFILEW log = {};
     log.LoggerName = const_cast<wchar_t*>(kSessionName);
-    log.ProcessTraceMode = PROCESS_TRACE_MODE_REAL_TIME | PROCESS_TRACE_MODE_EVENT_RECORD;
+    // ProcessTrace would otherwise convert the header timestamp to system time while InitialTime stays in QPC ticks.
+    log.ProcessTraceMode =
+        PROCESS_TRACE_MODE_REAL_TIME | PROCESS_TRACE_MODE_EVENT_RECORD | PROCESS_TRACE_MODE_RAW_TIMESTAMP;
     log.EventRecordCallback = &DpcEventRecordCallback;
     log.Context = s.get(); // raw ptr; impl_ keeps SessionImpl alive for the worker's life
     const TRACEHANDLE trace = ::OpenTraceW(&log);
@@ -256,7 +232,7 @@ bool DpcLatencyProvider::Start() {
         ::QueryPerformanceFrequency(&f);
         s->qpc_freq = f.QuadPart;
     }
-    if (log.LogfileHeader.PointerSize != 0)
+    if (log.LogfileHeader.PointerSize == 4 || log.LogfileHeader.PointerSize == 8)
         s->pointer_size = log.LogfileHeader.PointerSize;
 
     {

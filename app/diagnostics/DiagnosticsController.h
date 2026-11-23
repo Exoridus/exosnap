@@ -291,7 +291,7 @@ struct LiveTileInputs {
     bool in_depth = false;
     std::optional<PresentSample> present;
     std::optional<DpcLatencyReading> dpc;
-    double gpu_exec_p99_ms = 0.0;
+    std::optional<double> gpu_exec_p99_ms;
     GpuTelemetryReading gpu;
     VideoMemoryReading video_memory;
 };
@@ -438,7 +438,7 @@ class PipelineCardBuilder {
     // Idle / pre-check readiness. Stages 0-2 are only meaningful while recording;
     // 3-5 report the static encoder / muxer / output-path probes.
     [[nodiscard]] static std::vector<PipelineStage> BuildStatic(bool data_ready, bool encoder_ok, bool muxer_ok,
-                                                                bool disk_ok);
+                                                                std::optional<bool> disk_ok);
 
     // Called when the pipeline leaves the recording/paused lifecycle so the next
     // session starts from a clean baseline rather than inheriting the old one.
@@ -556,7 +556,7 @@ class DiagnosticsController {
         uint64_t total_bytes = 0;
         std::string filesystem_name;
         DriveKind drive_kind = DriveKind::Unknown;
-        bool output_path_writable = true;
+        std::optional<bool> output_path_writable;
         std::string drive_label;
         DiagnosticChecklist self_test;
         bool self_test_valid = false;
@@ -582,13 +582,15 @@ class DiagnosticsController {
     void SetHasLastRecording(bool has_last_recording) noexcept;
     void SetCaptureTargetHdrActive(bool active) noexcept;
     void SetCaptureTargetAdapter(RecommendationEngine::CaptureTargetAdapterFacts facts);
-    // Process the present accumulator is filtered to; 0 means unfiltered.
+    // Starts a new attribution window and invalidates the cached observation.
+    // A PID of 0 selects desktop-wide observations.
     void SetPresentAttributionPid(unsigned long pid);
     // nullopt == "not being measured", and it is the value the host pushes whenever the
     // kernel trace is not consuming: the recommendation must then come from no reading
     // at all rather than from a default-zero one. Same shape as SetPresentSample.
     void SetDpcLatency(std::optional<DpcLatencyReading> reading);
     void SetPresentSample(std::optional<PresentSample> sample);
+    [[nodiscard]] const PresentSample* currentPresentSample(std::chrono::steady_clock::time_point now) const noexcept;
     void SetLiveSnapshot(const exosnap::engine::RecordingDiagnosticsSnapshot& snapshot);
 
     // The structured checklist the last Evaluate() produced, and the environment

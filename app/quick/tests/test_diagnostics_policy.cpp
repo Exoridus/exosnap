@@ -7,6 +7,7 @@
 #include "diagnostics/DiagnosticsController.h"
 #include "diagnostics/DiagnosticsProbe.h"
 #include "diagnostics/FixActionDispatcher.h"
+#include "diagnostics/PresentProvider.h"
 #include "diagnostics/SessionLedger.h"
 #include "viewmodels/RecordViewModel.h"
 #include "visual_tests/CanonicalMachine.h"
@@ -15,6 +16,7 @@
 #include <gtest/gtest.h>
 
 #include <algorithm>
+#include <chrono>
 #include <cstddef>
 #include <cstdint>
 #include <string>
@@ -396,6 +398,32 @@ TEST(PipelineCards, FirstSampleReportsNoRecentDrops) {
     EXPECT_EQ(builder.lastRecentDropsForTesting(), 0U);
 }
 
+TEST(PipelineCards, DistinguishesMeasuredZeroFromMissingStageTimings) {
+    using exosnap::engine::MetricAvailability;
+    PipelineCardBuilder builder;
+    auto snapshot = MakeLiveSnapshot(1, 0);
+    snapshot.compositor.active = true;
+    snapshot.video_encoder.frames_encoded = 100;
+    const auto unavailable = builder.BuildLive(snapshot);
+    ASSERT_EQ(unavailable.size(), 6U);
+    EXPECT_EQ(unavailable[3].tip.find("0 ms"), std::string::npos);
+    EXPECT_EQ(unavailable[4].tip.find("0 ms"), std::string::npos);
+    EXPECT_EQ(unavailable[5].tip.find("0 ms"), std::string::npos);
+
+    snapshot.compositor.timing_availability = MetricAvailability::Available;
+    snapshot.video_encoder.timing_availability = MetricAvailability::Available;
+    snapshot.mux.process_availability = MetricAvailability::Available;
+    snapshot.disk.latency_availability = MetricAvailability::Available;
+    const auto measured = builder.BuildLive(snapshot);
+    ASSERT_EQ(measured.size(), unavailable.size());
+    for (const auto index : {2U, 3U, 4U, 5U}) {
+        EXPECT_NE(unavailable[index].value, "0.0 ms") << unavailable[index].key;
+        EXPECT_EQ(measured[index].value, "0.0 ms") << measured[index].key;
+    }
+    for (const auto index : {3U, 4U, 5U})
+        EXPECT_NE(measured[index].tip.find("0 ms"), std::string::npos) << measured[index].key;
+}
+
 // The counter is session-cumulative; the capture stage needs drops SINCE THE LAST
 // SAMPLE. Losing this baseline reports every drop since session start as "recent".
 TEST(PipelineCards, RecentDropsAreADeltaNotACumulativeTotal) {
@@ -617,6 +645,40 @@ exosnap::engine::RecordingDiagnosticsSnapshot JudderSnapshot(double elapsed_s) {
 }
 
 } // namespace
+
+TEST(DiagnosticsController, CachedPresentFromPreviousPidDoesNotDescribeTheNewTarget) {
+    DiagnosticsController controller;
+    controller.SetConfig(MinimalConfig());
+    controller.SetPresentAttributionPid(123);
+
+    PresentSample sample;
+    sample.available = true;
+    sample.mode = PresentMode::Composed;
+    sample.metadata.observed_at = std::chrono::steady_clock::now();
+    sample.metadata.process_id = 123;
+    sample.present_count = 300;
+    sample.discarded_count = 30;
+    controller.SetPresentSample(sample);
+
+    const auto has_discard_fact = [&controller] {
+        [[maybe_unused]] const auto diagnostics = controller.Evaluate();
+        return std::ranges::any_of(controller.lastChecklist().results,
+                                   [](const DiagnosticResult& result) { return result.id == "rec.present.discarded"; });
+    };
+    ASSERT_TRUE(has_discard_fact());
+
+    controller.SetPresentAttributionPid(456);
+    EXPECT_FALSE(has_discard_fact());
+    controller.SetPresentSample(sample);
+    EXPECT_FALSE(has_discard_fact());
+
+    sample.metadata.process_id = 456;
+    controller.SetPresentSample(sample);
+    ASSERT_TRUE(has_discard_fact());
+
+    controller.SetPresentAttributionPid(456);
+    EXPECT_FALSE(has_discard_fact());
+}
 
 TEST(DiagnosticsController, EvaluateFeedsTheLedgerOnlyWhileRecording) {
     DiagnosticsController controller;

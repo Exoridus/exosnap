@@ -108,9 +108,10 @@ QJsonObject CaptureTimingJson(const exosnap::engine::CaptureDiagnostics& c) {
 QJsonObject CompositorJson(const exosnap::engine::CompositorDiagnostics& c) {
     QJsonObject json;
     json.insert(QStringLiteral("active"), c.active);
-    json.insert(QStringLiteral("latestMs"), Metric(c.latest_ms, c.active));
-    json.insert(QStringLiteral("averageMs"), Metric(c.average_ms, c.active));
-    json.insert(QStringLiteral("peakMs"), Metric(c.peak_ms, c.active));
+    json.insert(QStringLiteral("latestMs"), Metric(c.latest_ms, c.timing_availability));
+    json.insert(QStringLiteral("averageMs"), Metric(c.average_ms, c.timing_availability));
+    json.insert(QStringLiteral("peakMs"), Metric(c.peak_ms, c.timing_availability));
+    json.insert(QStringLiteral("availability"), AvailabilityKey(c.timing_availability));
     json.insert(QStringLiteral("framesComposed"), Count(c.frames_composed));
 
     json.insert(QStringLiteral("vpBltLatestMs"), Metric(c.vpblt_latest_ms, c.vpblt_availability));
@@ -118,23 +119,18 @@ QJsonObject CompositorJson(const exosnap::engine::CompositorDiagnostics& c) {
     json.insert(QStringLiteral("vpBltPeakMs"), Metric(c.vpblt_peak_ms, c.vpblt_availability));
     json.insert(QStringLiteral("vpBltAvailability"), AvailabilityKey(c.vpblt_availability));
 
-    // The one thing a reader must not get wrong about these numbers. There is no
-    // GPU timestamp query in this pipeline, so nothing here is GPU execution
-    // time, and no field may ever be renamed to suggest that it is.
     json.insert(QStringLiteral("timingSemantics"), QStringLiteral("cpuSubmission"));
     return json;
 }
 
 QJsonObject EncoderJson(const exosnap::engine::EncoderDiagnostics& e) {
     QJsonObject json;
-    const bool sampled = e.frames_encoded > 0;
-    json.insert(QStringLiteral("latestMs"), Metric(e.latest_ms, sampled));
-    json.insert(QStringLiteral("averageMs"), Metric(e.average_ms, sampled));
-    json.insert(QStringLiteral("peakMs"), Metric(e.peak_ms, sampled));
-    json.insert(QStringLiteral("p50Ms"), Metric(e.p50_ms, sampled));
-    json.insert(QStringLiteral("p99Ms"), Metric(e.p99_ms, sampled));
-    json.insert(QStringLiteral("availability"),
-                QString::fromLatin1(sampled ? availability::kAvailable : availability::kUnavailable));
+    json.insert(QStringLiteral("latestMs"), Metric(e.latest_ms, e.timing_availability));
+    json.insert(QStringLiteral("averageMs"), Metric(e.average_ms, e.timing_availability));
+    json.insert(QStringLiteral("peakMs"), Metric(e.peak_ms, e.timing_availability));
+    json.insert(QStringLiteral("p50Ms"), Metric(e.p50_ms, e.timing_availability));
+    json.insert(QStringLiteral("p99Ms"), Metric(e.p99_ms, e.timing_availability));
+    json.insert(QStringLiteral("availability"), AvailabilityKey(e.timing_availability));
     json.insert(QStringLiteral("outputFps"), e.output_fps);
     json.insert(QStringLiteral("framesSubmitted"), Count(e.frames_submitted));
     json.insert(QStringLiteral("framesEncoded"), Count(e.frames_encoded));
@@ -281,16 +277,18 @@ QJsonObject QueueJson(const exosnap::engine::QueueDiagnostics& q, const char* id
     return json;
 }
 
-QJsonObject MuxJson(const exosnap::engine::MuxDiagnostics& m) {
+QJsonObject MuxJson(const exosnap::engine::RecordingDiagnosticsSnapshot& s) {
+    const auto& m = s.mux;
     const bool available = IsAvailable(m.availability);
     QJsonObject json;
     json.insert(QStringLiteral("packetsProcessed"), Count(m.packets_processed));
     json.insert(QStringLiteral("bytesWritten"), Count(m.bytes_written));
     json.insert(QStringLiteral("throughputMiBs"), m.throughput_mib_s);
 
-    json.insert(QStringLiteral("latestWriteMs"), Metric(m.latest_write_ms, available));
-    json.insert(QStringLiteral("averageWriteMs"), Metric(m.average_write_ms, available));
-    json.insert(QStringLiteral("peakWriteMs"), Metric(m.peak_write_ms, available));
+    json.insert(QStringLiteral("latestWriteMs"), Metric(m.latest_write_ms, s.disk.latency_availability));
+    json.insert(QStringLiteral("averageWriteMs"), Metric(m.average_write_ms, s.disk.latency_availability));
+    json.insert(QStringLiteral("peakWriteMs"), Metric(m.peak_write_ms, s.disk.latency_availability));
+    json.insert(QStringLiteral("writeAvailability"), AvailabilityKey(s.disk.latency_availability));
 
     // Segment-local streaming Matroska reorder window. Unavailable for MP4, which
     // is what `availability` reports.
@@ -529,7 +527,7 @@ QJsonObject PipelineSnapshotToJson(const RecordingDiagnosticsSnapshot& snapshot)
     json.insert(QStringLiteral("avTiming"), AvTimingJson(snapshot));
     json.insert(QStringLiteral("videoQueue"), QueueJson(snapshot.video_queue, "encodedMux"));
     json.insert(QStringLiteral("audioQueue"), QueueJson(snapshot.audio_queue, "audioPremux"));
-    json.insert(QStringLiteral("mux"), MuxJson(snapshot.mux));
+    json.insert(QStringLiteral("mux"), MuxJson(snapshot));
     json.insert(QStringLiteral("disk"), DiskJson(snapshot));
     json.insert(QStringLiteral("split"), SplitJson(snapshot.split));
     const auto& producer = snapshot.video_queue.producer_wait;
