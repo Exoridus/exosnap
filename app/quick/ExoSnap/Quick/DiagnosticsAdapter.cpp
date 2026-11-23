@@ -670,11 +670,9 @@ void DiagnosticsAdapter::createSupportBundle(const QUrl& destination) {
     context.created_at = QDateTime::currentDateTime().toString(Qt::ISODate);
     QString settings_text;
     for (const auto& row : controller_.configRows()) {
-        // Export only presentation facts: never hand the user's absolute output
-        // paths to a free-text scrubber, even in a translated UI locale.
-        if (row.label == "Output Folder" || row.label == "Effective Output Path")
-            continue;
-        settings_text += QStringLiteral("%1: %2\n").arg(Text(row.label), Text(row.value));
+        const auto label = Key(row.label);
+        if (diagnostics::IsExportableSetting(label))
+            settings_text += QStringLiteral("%1: %2\n").arg(label, Text(row.value));
     }
     context.settings_summary = settings_text;
 

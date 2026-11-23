@@ -1,6 +1,7 @@
 #include <array>
 #include <cstddef>
 #include <exosnap/engine/audio_input_device.h>
+#include <exosnap/engine/audio_routing_model.h>
 
 // clang-format off
 #include <string>
@@ -11,8 +12,11 @@
 #include <propkey.h>
 #include <functiondiscoverykeys_devpkey.h>
 #include <propsys.h>
+#include <wrl/client.h>
 // clang-format on
 
+#include <exosnap/engine/util/com_apartment.h>
+#include <memory>
 #include <string_view>
 #include <utility>
 #include <vector>
@@ -41,6 +45,17 @@ std::string WideToUtf8(std::wstring_view value) {
     return converted;
 }
 
+std::string DefaultEndpointId(IMMDeviceEnumerator& enumerator, EDataFlow flow, ERole role) {
+    Microsoft::WRL::ComPtr<IMMDevice> device;
+    if (FAILED(enumerator.GetDefaultAudioEndpoint(flow, role, device.GetAddressOf())) || !device) {
+        return {};
+    }
+    LPWSTR raw_id = nullptr;
+    const HRESULT result = device->GetId(&raw_id);
+    const std::unique_ptr<wchar_t, decltype(&CoTaskMemFree)> id(raw_id, CoTaskMemFree);
+    return SUCCEEDED(result) && id ? WideToUtf8(id.get()) : std::string{};
+}
+
 // Shared helper: enumerate WASAPI endpoints for a given data flow direction.
 // flow must be eCapture or eRender. Returns {} on any COM failure.
 std::vector<AudioInputDeviceInfo> EnumerateAudioEndpoints(EDataFlow flow) {
@@ -61,20 +76,8 @@ std::vector<AudioInputDeviceInfo> EnumerateAudioEndpoints(EDataFlow flow) {
     }
 
     std::array<std::string, 3> default_device_ids;
-    for (size_t role = 0; role < default_device_ids.size(); ++role) {
-        IMMDevice* default_device = nullptr;
-        LPWSTR default_id_wide = nullptr;
-        hr = enumerator->GetDefaultAudioEndpoint(flow, static_cast<ERole>(role), &default_device);
-        if (SUCCEEDED(hr) && default_device != nullptr) {
-            hr = default_device->GetId(&default_id_wide);
-            if (SUCCEEDED(hr) && default_id_wide != nullptr)
-                default_device_ids[role] = WideToUtf8(default_id_wide);
-        }
-        if (default_id_wide != nullptr)
-            CoTaskMemFree(default_id_wide);
-        if (default_device != nullptr)
-            default_device->Release();
-    }
+    for (size_t role = 0; role < default_device_ids.size(); ++role)
+        default_device_ids[role] = DefaultEndpointId(*enumerator, flow, static_cast<ERole>(role));
 
     IMMDeviceCollection* collection = nullptr;
     hr = enumerator->EnumAudioEndpoints(flow, DEVICE_STATE_ACTIVE, &collection);
@@ -164,6 +167,24 @@ std::vector<AudioInputDeviceInfo> EnumerateAudioInputDevices() {
 
 std::vector<AudioInputDeviceInfo> EnumerateAudioOutputDevices() {
     return EnumerateAudioEndpoints(eRender);
+}
+
+std::string DefaultAudioEndpointId(AudioBindingKind kind, AudioEndpointRole role) {
+    if (kind != AudioBindingKind::MicrophoneEndpoint && kind != AudioBindingKind::PlaybackEndpoint)
+        return {};
+
+    const ComApartment apartment(COINIT_MULTITHREADED);
+    if (!apartment.usable())
+        return {};
+
+    Microsoft::WRL::ComPtr<IMMDeviceEnumerator> enumerator;
+    if (FAILED(CoCreateInstance(__uuidof(MMDeviceEnumerator), nullptr, CLSCTX_ALL,
+                                IID_PPV_ARGS(enumerator.GetAddressOf()))) ||
+        !enumerator)
+        return {};
+
+    const auto flow = kind == AudioBindingKind::MicrophoneEndpoint ? eCapture : eRender;
+    return DefaultEndpointId(*enumerator.Get(), flow, static_cast<ERole>(role));
 }
 
 } // namespace exosnap::engine

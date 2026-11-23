@@ -4,6 +4,7 @@
 
 #include <QByteArray>
 #include <QString>
+#include <QStringView>
 #include <QVector>
 
 #include <cstdint>
@@ -62,7 +63,7 @@ struct BundleInputs {
     std::vector<BundleAdapter> adapters;
     std::vector<BundleDisplay> displays;
 
-    // Human-readable settings summary (ConfigSummary). Scrubbed before inclusion.
+    // Canonical settings labels and display values, filtered and scrubbed before inclusion.
     QString settings_summary;
 
     // Startup milestones for startup-trace.txt. Passed in rather than
@@ -95,6 +96,8 @@ struct BundleInputs {
 
 // Scrubs recognized paths, names, and capture-target identifiers in the settings summary.
 [[nodiscard]] QByteArray ScrubBundleText(const QByteArray& text);
+
+[[nodiscard]] bool IsExportableSetting(QStringView label);
 
 // Collects allowlisted log metadata, recent session reports, capability and display data, and settings.
 // Unreadable reports are skipped and legacy report error details are omitted.

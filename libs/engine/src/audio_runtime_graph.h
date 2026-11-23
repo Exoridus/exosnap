@@ -83,6 +83,7 @@ class AudioRuntimeGraph : public std::enable_shared_from_this<AudioRuntimeGraph>
         uint64_t last_packet_end_qpc = 0;
         std::optional<uint64_t> handoff_qpc;
         bool waiting = false;
+        bool confirming = false;
         bool reported_failure = false;
     };
     struct Node {

@@ -255,15 +255,15 @@ PresentSample PresentMonEtwSession::Latest() const {
                                   ? static_cast<double>(present.present_qpc - last_present_qpc_) * 1000.0 /
                                         static_cast<double>(qpc_freq_)
                                   : 0.0;
-            last_present_qpc_ = present.present_qpc;
             PresentSample mapped = MapPresentEvent(raw);
             // fold into the per-recording aggregates. The accumulator
             // counts flips on the CLASSIFIED mode so sub-variant changes (e.g. Composed_Flip
             // -> Composed_Copy) do not register as a present-mode flip.
             accumulator_.Observe(mapped.mode, present.discarded);
-            mapped.present_count = static_cast<uint32_t>(accumulator_.present_count);
-            mapped.discarded_count = static_cast<uint32_t>(accumulator_.discarded_count);
-            mapped.mode_flip_count = static_cast<uint32_t>(accumulator_.mode_flip_count);
+            // Completion order is chronological only within each swap chain.
+            if (last_present_qpc_ != 0 && present.present_qpc <= last_present_qpc_)
+                continue;
+            last_present_qpc_ = present.present_qpc;
             std::lock_guard lk(sample_mutex_);
             // The queue can delay delivery, so freshness starts at the present's ETW timestamp.
             mapped.metadata.observed_at =
@@ -278,6 +278,9 @@ PresentSample PresentMonEtwSession::Latest() const {
         }
         {
             std::lock_guard lk(sample_mutex_);
+            latest_.present_count = static_cast<uint32_t>(accumulator_.present_count);
+            latest_.discarded_count = static_cast<uint32_t>(accumulator_.discarded_count);
+            latest_.mode_flip_count = static_cast<uint32_t>(accumulator_.mode_flip_count);
             latest_.trace_drained_count = static_cast<uint32_t>(drained);
             latest_.trace_matched_count = static_cast<uint32_t>(attributed);
             latest_.trace_process_ids = std::move(process_ids);

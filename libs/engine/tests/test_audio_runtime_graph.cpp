@@ -193,6 +193,8 @@ enum class DefaultRecoveryScenario {
     Immediate,
     Missing,
     ChangesWhileOpening,
+    ChangesBeforeAcceptance,
+    StopsDuringConfirmation,
     PointsToLostDevice,
     QueuedRecovery,
     StaleSameEndpoint,
@@ -250,6 +252,12 @@ void VerifyDefaultEndpointRecovery(DefaultRecoveryScenario scenario) {
         scenario == DefaultRecoveryScenario::ChangesWhileOpening ? std::make_shared<BlockedEndpointOpen>() : nullptr;
     auto blocked_delivery = queued_recovery ? std::make_shared<BlockedEndpointOpen>() : nullptr;
     auto blocked_lookup = stale_same_endpoint ? std::make_shared<BlockedEndpointOpen>() : nullptr;
+    auto blocked_confirmation = scenario == DefaultRecoveryScenario::ChangesBeforeAcceptance
+                                    ? std::make_shared<BlockedEndpointOpen>()
+                                    : nullptr;
+    auto blocked_stop = scenario == DefaultRecoveryScenario::StopsDuringConfirmation
+                            ? std::make_shared<BlockedEndpointOpen>()
+                            : nullptr;
     if (queued_recovery || losses_before_start || stale_same_endpoint)
         control->recovery_offset_ns = 0;
     const uint64_t start = NowNs();
@@ -292,11 +300,17 @@ void VerifyDefaultEndpointRecovery(DefaultRecoveryScenario scenario) {
             };
             return request;
         },
-        [lookup_calls, unexpected_role, role_endpoint, blocked_lookup](AudioBindingKind kind, AudioEndpointRole role) {
+        [lookup_calls, unexpected_role, role_endpoint, blocked_lookup, blocked_confirmation,
+         blocked_stop](AudioBindingKind kind, AudioEndpointRole role) {
             const char endpoint = role_endpoint->load();
-            if (++*lookup_calls == 1 && blocked_lookup) {
-                blocked_lookup->entered.release();
-                (void)blocked_lookup->finish.try_acquire_for(std::chrono::seconds(4));
+            const auto call = ++*lookup_calls;
+            const auto barrier = call == 1   ? blocked_lookup
+                                 : call == 2 ? blocked_confirmation
+                                 : call == 3 ? blocked_stop
+                                             : nullptr;
+            if (barrier) {
+                barrier->entered.release();
+                (void)barrier->finish.try_acquire_for(std::chrono::seconds(4));
             }
             if (kind != AudioBindingKind::PlaybackEndpoint || role != AudioEndpointRole::Communications)
                 *unexpected_role = true;
@@ -359,7 +373,7 @@ void VerifyDefaultEndpointRecovery(DefaultRecoveryScenario scenario) {
                 }
             }
             const auto meters = graph->TrackMeters();
-            stale_endpoint_played |= blocked_open && meters[0].pre_limiter_peak == 0.5f;
+            stale_endpoint_played |= (blocked_open || blocked_confirmation) && meters[0].pre_limiter_peak == 0.5f;
             if (meters[index].pre_limiter_peak == peak)
                 return true;
             Sleep(1);
@@ -398,6 +412,22 @@ void VerifyDefaultEndpointRecovery(DefaultRecoveryScenario scenario) {
         *role_endpoint = 'C';
         blocked_open->finish.release();
     }
+    if (blocked_confirmation) {
+        EXPECT_TRUE(blocked_confirmation->entered.try_acquire_for(std::chrono::milliseconds(1500)));
+        *role_endpoint = 'C';
+        blocked_confirmation->finish.release();
+    }
+    if (blocked_stop) {
+        EXPECT_TRUE(blocked_stop->entered.try_acquire_for(std::chrono::milliseconds(1500)));
+        control->phase = 2;
+        graph->RequestStop(NowNs());
+        const bool drained = graph->WaitDrained(2000, error);
+        blocked_stop->finish.release();
+        EXPECT_TRUE(drained) << error;
+        if (!drained)
+            EXPECT_TRUE(graph->WaitDrained(3000, error)) << error;
+        return;
+    }
     if (blocked_delivery) {
         // Let the fixed capture queue recovered PCM and lose the device again before graph delivery resumes.
         EXPECT_TRUE(blocked_delivery->entered.try_acquire_for(std::chrono::milliseconds(1500)));
@@ -418,6 +448,7 @@ void VerifyDefaultEndpointRecovery(DefaultRecoveryScenario scenario) {
         blocked_delivery->finish.release();
     }
     const float current_peak = scenario == DefaultRecoveryScenario::ChangesWhileOpening ||
+                                       scenario == DefaultRecoveryScenario::ChangesBeforeAcceptance ||
                                        scenario == DefaultRecoveryScenario::PointsToLostDevice
                                    ? 0.625f
                                    : 0.5f;
@@ -454,6 +485,14 @@ TEST(AudioRuntimeGraph, MissingRoleDoesNotUseTheRecoveredFixedEndpoint) {
 
 TEST(AudioRuntimeGraph, ReopenedEndpointMustStillBeTheRoleDefault) {
     VerifyDefaultEndpointRecovery(DefaultRecoveryScenario::ChangesWhileOpening);
+}
+
+TEST(AudioRuntimeGraph, ReopenedEndpointMustStillBeDefaultWhenAccepted) {
+    VerifyDefaultEndpointRecovery(DefaultRecoveryScenario::ChangesBeforeAcceptance);
+}
+
+TEST(AudioRuntimeGraph, StopDrainsWhileFinalRoleConfirmationIsStalled) {
+    VerifyDefaultEndpointRecovery(DefaultRecoveryScenario::StopsDuringConfirmation);
 }
 
 TEST(AudioRuntimeGraph, LostEndpointRemainingDefaultDoesNotEndRecovery) {

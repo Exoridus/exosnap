@@ -58,16 +58,6 @@ uint64_t NowNs() {
     QueryPerformanceFrequency(&frequency);
     return QpcTicksTo100ns(static_cast<uint64_t>(ticks.QuadPart), static_cast<uint64_t>(frequency.QuadPart)) * 100;
 }
-std::string CurrentDefaultEndpoint(AudioBindingKind kind, AudioEndpointRole role) {
-    const auto role_index = static_cast<size_t>(role);
-    const auto endpoints =
-        kind == AudioBindingKind::MicrophoneEndpoint ? EnumerateAudioInputDevices() : EnumerateAudioOutputDevices();
-    for (const auto& endpoint : endpoints) {
-        if (role_index < endpoint.is_default_by_role.size() && endpoint.is_default_by_role[role_index])
-            return endpoint.device_id;
-    }
-    return {};
-}
 bool FitsRecoveryAdmission(const ResolvedAudioSource& source, const AudioCaptureDescriptor& admission,
                            const AudioCaptureDescriptor& incoming, uint32_t rate, uint32_t channels) {
     if (incoming.sample_rate > admission.sample_rate || incoming.channels > admission.channels ||
@@ -173,7 +163,7 @@ std::shared_ptr<AudioRuntimeGraph> AudioRuntimeGraph::Prepare(const ResolvedAudi
     if (!factory) {
         factory = NativeRequest;
         if (!lookup)
-            lookup = CurrentDefaultEndpoint;
+            lookup = DefaultAudioEndpointId;
     }
     graph->lookup_default_ = std::move(lookup);
     graph->request_factory_ = std::move(factory);
@@ -325,14 +315,67 @@ void AudioRuntimeGraph::PollDefaultRecovery(Node& node, bool allow_reopen) {
     if (!recovery.waiting)
         return;
 
+    const auto stop = default_recovery_stop_.get_token();
+    const auto launch = [&recovery, stop](auto task) {
+        if (stop.stop_requested())
+            return false;
+        if (active_default_reopens.fetch_add(1, std::memory_order_relaxed) >= kMaxAudioSources) {
+            active_default_reopens.fetch_sub(1, std::memory_order_relaxed);
+            recovery.next_retry_qpc = NowNs() + kDefaultRetryMinNs;
+            return false;
+        }
+        try {
+            std::promise<ReopenedDefault> result;
+            recovery.pending = result.get_future();
+            std::thread([result = std::move(result), task = std::move(task)]() mutable {
+                ReopenedDefault reopened;
+                {
+                    const DefaultReopenSlot slot;
+                    try {
+                        reopened = task();
+                    } catch (const std::exception&) {
+                    }
+                }
+                result.set_value(std::move(reopened));
+            }).detach();
+            return true;
+        } catch (const std::exception&) {
+            active_default_reopens.fetch_sub(1, std::memory_order_relaxed);
+            recovery.pending = {};
+            recovery.next_retry_qpc = NowNs() + kDefaultRetryMinNs;
+            return false;
+        }
+    };
     if (recovery.pending.valid()) {
         if (recovery.pending.wait_for(std::chrono::milliseconds(0)) != std::future_status::ready ||
-            node.physical->PendingFrameCount())
+            (!recovery.confirming && node.physical->PendingFrameCount()))
             return;
         auto result = recovery.pending.get();
+        const bool confirming = std::exchange(recovery.confirming, false);
         if (recovery.pending_generation != recovery.loss_generation)
             return;
-        if (result.reader) {
+        if (!confirming && result.confirmed.healthy_generation) {
+            // Resolve at handoff after the old queue drains, without blocking finite Stop on WASAPI.
+            const auto& binding = recovery.source.spec.binding;
+            recovery.confirming = launch([stop, lookup = lookup_default_, kind = binding.kind,
+                                          role = binding.endpoint_role, candidate = std::move(result)]() mutable {
+                if (stop.stop_requested() || lookup(kind, role) != candidate.endpoint || stop.stop_requested())
+                    return ReopenedDefault{};
+                return std::move(candidate);
+            });
+            return;
+        }
+        bool confirmed = false;
+        if (result.confirmed.healthy_generation) {
+            const auto old_state = SharedAudioReaderRecoveryState(*node.physical);
+            const auto state = result.reader ? SharedAudioReaderRecoveryState(*result.reader) : old_state;
+            confirmed = old_state.loss_generation == recovery.pending_generation && !state.retired &&
+                        state.healthy_generation == result.confirmed.healthy_generation &&
+                        state.loss_generation == result.confirmed.loss_generation;
+        }
+        if (stop.stop_requested())
+            return;
+        if (confirmed && result.reader) {
             const auto cutoff =
                 (std::max)(node.completed_through->load(std::memory_order_acquire), recovery.last_packet_end_qpc);
             AdvanceSharedAudioReaderStart(*result.reader, cutoff);
@@ -346,9 +389,8 @@ void AudioRuntimeGraph::PollDefaultRecovery(Node& node, bool allow_reopen) {
             recovery.authorized_generation = result.confirmed.healthy_generation;
             recovery.reported_failure = false;
             recovery.waiting = false;
-        } else if (result.endpoint == recovery.source.capture_key->endpoint_id && current.healthy_generation &&
-                   result.confirmed.healthy_generation == current.healthy_generation) {
-            recovery.authorized_generation = current.healthy_generation;
+        } else if (confirmed && result.endpoint == recovery.source.capture_key->endpoint_id) {
+            recovery.authorized_generation = result.confirmed.healthy_generation;
             recovery.reported_failure = false;
             recovery.waiting = false;
         } else {
@@ -363,68 +405,46 @@ void AudioRuntimeGraph::PollDefaultRecovery(Node& node, bool allow_reopen) {
     }
     if (NowNs() < recovery.next_retry_qpc)
         return;
-    const auto stop = default_recovery_stop_.get_token();
-    if (stop.stop_requested())
-        return;
-    if (active_default_reopens.fetch_add(1, std::memory_order_relaxed) >= kMaxAudioSources) {
-        active_default_reopens.fetch_sub(1, std::memory_order_relaxed);
-        recovery.next_retry_qpc = NowNs() + kDefaultRetryMinNs;
-        return;
-    }
 
     recovery.pending_generation = recovery.loss_generation;
-    try {
-        std::promise<ReopenedDefault> result;
-        recovery.pending = result.get_future();
-        std::thread([result = std::move(result), stop, registry = registry_, lookup = lookup_default_,
-                     factory = request_factory_, source = recovery.source, admission = recovery.admission, current,
-                     rate = output_rate_, channels = output_channels_, correction = correction_enabled_]() mutable {
-            const DefaultReopenSlot slot;
-            ReopenedDefault reopened;
-            try {
-                const auto& binding = source.spec.binding;
-                if (!stop.stop_requested())
-                    reopened.endpoint = lookup(binding.kind, binding.endpoint_role);
-                if (reopened.endpoint == source.capture_key->endpoint_id && !current.retired) {
-                    // Only a generation already healthy before this lookup can reuse the old reader.
-                    if (current.healthy_generation && !stop.stop_requested() &&
-                        lookup(binding.kind, binding.endpoint_role) == reopened.endpoint)
-                        reopened.confirmed = current;
-                } else if (!stop.stop_requested() && !reopened.endpoint.empty()) {
-                    const SharedAudioReplacement replacement{*source.capture_key, current.clock, stop};
-                    source.capture_key->endpoint_id = reopened.endpoint;
-                    auto request = factory(source);
-                    request.correction_enabled = correction;
-                    std::string error;
-                    auto readers = registry->AttachReaders(
-                        {request}, 0, error,
-                        [&](std::span<const AudioCaptureDescriptor> descriptors, std::string& detail) {
-                            if (FitsRecoveryAdmission(source, admission, descriptors.front(), rate, channels))
-                                return true;
-                            detail = "Role-default endpoint exceeds the admitted audio format; reprepare required";
-                            return false;
-                        },
-                        replacement);
-                    if (!readers.empty() && !stop.stop_requested()) {
-                        const auto state = SharedAudioReaderRecoveryState(*readers.front());
-                        if (state.healthy_generation &&
-                            lookup(binding.kind, binding.endpoint_role) == reopened.endpoint &&
-                            !stop.stop_requested()) {
-                            reopened.confirmed = state;
-                            reopened.reader = std::move(readers.front());
-                        }
-                    }
+    launch([stop, registry = registry_, lookup = lookup_default_, factory = request_factory_, source = recovery.source,
+            admission = recovery.admission, current, rate = output_rate_, channels = output_channels_,
+            correction = correction_enabled_]() mutable {
+        ReopenedDefault reopened;
+        const auto& binding = source.spec.binding;
+        if (!stop.stop_requested())
+            reopened.endpoint = lookup(binding.kind, binding.endpoint_role);
+        if (reopened.endpoint == source.capture_key->endpoint_id && !current.retired) {
+            // Only a generation already healthy before this lookup can reuse the old reader.
+            if (current.healthy_generation && !stop.stop_requested() &&
+                lookup(binding.kind, binding.endpoint_role) == reopened.endpoint)
+                reopened.confirmed = current;
+        } else if (!stop.stop_requested() && !reopened.endpoint.empty()) {
+            const SharedAudioReplacement replacement{*source.capture_key, current.clock, stop};
+            source.capture_key->endpoint_id = reopened.endpoint;
+            auto request = factory(source);
+            request.correction_enabled = correction;
+            std::string error;
+            auto readers = registry->AttachReaders(
+                {request}, 0, error,
+                [&](std::span<const AudioCaptureDescriptor> descriptors, std::string& detail) {
+                    if (FitsRecoveryAdmission(source, admission, descriptors.front(), rate, channels))
+                        return true;
+                    detail = "Role-default endpoint exceeds the admitted audio format; reprepare required";
+                    return false;
+                },
+                replacement);
+            if (!readers.empty() && !stop.stop_requested()) {
+                const auto state = SharedAudioReaderRecoveryState(*readers.front());
+                if (state.healthy_generation && lookup(binding.kind, binding.endpoint_role) == reopened.endpoint &&
+                    !stop.stop_requested()) {
+                    reopened.confirmed = state;
+                    reopened.reader = std::move(readers.front());
                 }
-            } catch (const std::exception&) {
-                reopened = {};
             }
-            result.set_value(std::move(reopened));
-        }).detach();
-    } catch (const std::exception&) {
-        active_default_reopens.fetch_sub(1, std::memory_order_relaxed);
-        recovery.pending = {};
-        recovery.next_retry_qpc = NowNs() + kDefaultRetryMinNs;
-    }
+        }
+        return reopened;
+    });
 }
 
 void AudioRuntimeGraph::PrepareDefaultRouteBlock(Node& node, AudioBlockView& block) {

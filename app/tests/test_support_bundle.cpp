@@ -47,7 +47,7 @@ BundleInputs MakeInputs(const QString& log_dir) {
     d.name = QStringLiteral("DELL U2720Q");
     d.hdr_active = true;
     in.displays.push_back(d);
-    in.settings_summary = QStringLiteral("container: MKV\nvideo: AV1\naudio: Opus\n");
+    in.settings_summary = QStringLiteral("Container: MKV\nVideo Codec: AV1\nAudio Codec: Opus\n");
     in.app_version = QStringLiteral("0.9.0");
     in.launch_session_id = QStringLiteral("launch-xyz");
     in.scrubber_version = QStringLiteral("1");
@@ -238,13 +238,18 @@ TEST(SupportBundle, OmitsTheStartupTraceWhenNoMilestonesWereRecorded) {
                              [](const BundleEntry& e) { return e.name == QStringLiteral("startup-trace.txt"); }));
 }
 
-TEST(SupportBundle, OmitsOutputPathsFromTheActualZip) {
+TEST(SupportBundle, OmitsPrivateSettingsFromTheActualZip) {
     QTemporaryDir tmp;
     ASSERT_TRUE(tmp.isValid());
     BundleInputs inputs = MakeInputs(tmp.path());
-    inputs.settings_summary =
-        QStringLiteral("Container: MKV\nOutput Folder: D:/PrivateClient/Recordings\n"
-                       "Effective Output Path: C:\\Private Folder\\capture.mkv\nVideo Codec: AV1\n");
+    inputs.settings_summary = QStringLiteral("Container: MKV\nOutput Folder: D:/PrivateClient/Recordings\n"
+                                             "Effective Output Path: C:\\Private Folder\\capture.mkv\n"
+                                             "Filename Pattern: D:/Private Pattern/{datetime}\n"
+                                             "  filename pattern : CustomerName-{datetime}\n"
+                                             "Recording Profile: PrivatePresetName\n"
+                                             "Mic Device ID: PrivateEndpointId\n"
+                                             "Unrecognized Field: PrivateContinuation\n"
+                                             "UnlabeledPatternContinuation\nVideo Codec: AV1\n");
     const auto entries = CollectBundleEntries(inputs);
     EXPECT_FALSE(AnyEntryContains(entries, QStringLiteral("PrivateClient")));
     EXPECT_FALSE(AnyEntryContains(entries, QStringLiteral("Folder\\capture.mkv")));
@@ -268,6 +273,14 @@ TEST(SupportBundle, OmitsOutputPathsFromTheActualZip) {
     EXPECT_EQ(settings.find("Folder\\capture.mkv"), std::string_view::npos);
     EXPECT_EQ(settings.find("Output Folder:"), std::string_view::npos);
     EXPECT_EQ(settings.find("Effective Output Path:"), std::string_view::npos);
+    EXPECT_EQ(settings.find("Filename Pattern:"), std::string_view::npos);
+    EXPECT_EQ(settings.find("filename pattern"), std::string_view::npos);
+    EXPECT_EQ(settings.find("Private Pattern"), std::string_view::npos);
+    EXPECT_EQ(settings.find("CustomerName"), std::string_view::npos);
+    EXPECT_EQ(settings.find("PrivatePresetName"), std::string_view::npos);
+    EXPECT_EQ(settings.find("PrivateEndpointId"), std::string_view::npos);
+    EXPECT_EQ(settings.find("PrivateContinuation"), std::string_view::npos);
+    EXPECT_EQ(settings.find("UnlabeledPatternContinuation"), std::string_view::npos);
     EXPECT_NE(settings.find("Container: MKV"), std::string_view::npos);
     EXPECT_NE(settings.find("Video Codec: AV1"), std::string_view::npos);
     mz_free(extracted);

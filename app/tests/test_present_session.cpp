@@ -501,6 +501,41 @@ TEST(PresentSession, QueuedPresentDoesNotBecomeFreshWhenDrained) {
     EXPECT_EQ(invalid.trace_matched_count, 0u);
 }
 
+TEST(PresentSession, OlderCompletionDoesNotReplaceTheLatestPresent) {
+    auto backend = std::make_shared<FakeTraceBackend>();
+    const auto ticks_per_second = static_cast<uint64_t>(backend->frequency);
+    uint64_t current_qpc = 100 * ticks_per_second;
+    PresentMonEtwSession session(FactoryFor(backend), [&current_qpc] { return current_qpc; });
+    ASSERT_TRUE(session.Start());
+    ASSERT_TRUE(WaitUntil([&] { return session.IsOpen(); }));
+
+    const auto pid = ::GetCurrentProcessId();
+    session.SetTargetProcessId(pid);
+    current_qpc += 17 * ticks_per_second;
+    backend->Publish(Present(pid, current_qpc, kModeComposedFlip));
+    backend->Publish(Present(pid, current_qpc - 16 * ticks_per_second, kModeHardwareLegacyFlip, true));
+
+    const auto latest = session.Latest();
+    EXPECT_TRUE(latest.available);
+    EXPECT_EQ(latest.mode, PresentMode::Composed);
+    EXPECT_EQ(latest.trace_drained_count, 2u);
+    EXPECT_EQ(latest.trace_matched_count, 2u);
+    EXPECT_EQ(latest.present_count, 2u);
+    EXPECT_EQ(latest.discarded_count, 1u);
+
+    backend->Publish(Present(pid, current_qpc - 1, kModeHardwareIndependentFlip));
+    const auto later_drain = session.Latest();
+    EXPECT_EQ(later_drain.mode, PresentMode::Composed);
+    EXPECT_EQ(later_drain.metadata.observed_at, latest.metadata.observed_at);
+    EXPECT_EQ(later_drain.trace_drained_count, 1u);
+    EXPECT_EQ(later_drain.trace_matched_count, 1u);
+    EXPECT_EQ(later_drain.present_count, 3u);
+
+    current_qpc += ticks_per_second / 100;
+    backend->Publish(Present(pid, current_qpc, kModeComposedFlip));
+    EXPECT_DOUBLE_EQ(session.Latest().present_interval_ms, 10.0);
+}
+
 TEST(PresentSession, PresentsFromAnotherProcessNeverEnterTheAttributionWindow) {
     auto backend = std::make_shared<FakeTraceBackend>();
     PresentMonEtwSession session(FactoryFor(backend));
