@@ -8,6 +8,7 @@
 #include "PipelineStageModel.h"
 #include "SessionLedgerModel.h"
 
+#include "diagnostics/ConfigSummary.h"
 #include "diagnostics/DiagnosticsProbe.h"
 #include "diagnostics/WindowTargetFacts.h"
 #include "notifications/NotificationEvent.h"
@@ -26,6 +27,7 @@
 #include <algorithm>
 #include <atomic>
 #include <filesystem>
+#include <optional>
 #include <vector>
 
 using namespace exosnap;
@@ -121,6 +123,22 @@ bool HasUnwritableOutput(const DiagnosticsAdapter& adapter) {
     const auto& results = adapter.controller().lastChecklist().results;
     return std::any_of(results.begin(), results.end(),
                        [](const diagnostics::DiagnosticResult& result) { return result.id == "rec.output.writable"; });
+}
+
+TEST(DiagnosticsAdapterTest, UnicodeConfigPathSurvivesTheActualProbeBoundary) {
+    EnsureApplication();
+    const std::filesystem::path native(L"C:/Videos/\u8981");
+    std::optional<std::filesystem::path> probed;
+    DiagnosticsAdapter adapter([&](const diagnostics::DiagnosticsProbeRequest& request) {
+        probed = request.output_folder;
+        return MakeProbe();
+    });
+    auto config = MakeConfig();
+    config.output_folder = diagnostics::PathAsUtf8(native);
+    adapter.setDiagnosticConfig(std::move(config));
+    ASSERT_TRUE(WaitForProbe(adapter));
+    ASSERT_TRUE(probed.has_value());
+    EXPECT_EQ(*probed, native);
 }
 
 TEST(DiagnosticsAdapterTest, SupersededProbeIsDiscardedEvenWhenThePathChangesBack) {
