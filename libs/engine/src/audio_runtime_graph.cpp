@@ -228,6 +228,8 @@ std::shared_ptr<AudioRuntimeGraph> AudioRuntimeGraph::Prepare(const ResolvedAudi
                 node.default_recovery.emplace();
                 node.default_recovery->source = source;
                 node.default_recovery->admission = descriptor;
+                // An existing fixed owner may have recovered since this role was resolved.
+                node.default_recovery->authorized_generation = requests[i].admission.source_generation;
             }
             graph->nodes_.push_back(std::move(node));
         }
@@ -309,17 +311,18 @@ void AudioRuntimeGraph::PollDefaultRecovery(Node& node, bool allow_reopen) {
     if (!node.default_recovery)
         return;
     auto& recovery = *node.default_recovery;
-    const auto loss = SharedAudioReaderLossGeneration(*node.physical);
-    if (loss != recovery.loss_generation && loss) {
-        // Another loss must not authorize packets queued during unresolved recovery.
-        if (!recovery.waiting)
-            recovery.mute_after_generation = loss;
-        recovery.loss_generation = loss;
+    const auto current = SharedAudioReaderRecoveryState(*node.physical);
+    if (current.loss_generation != recovery.loss_generation && current.loss_generation) {
+        recovery.loss_generation = current.loss_generation;
         recovery.waiting = true;
         recovery.next_retry_qpc = 0;
         recovery.retry_delay_ns = kDefaultRetryMinNs;
     }
-    if (!allow_reopen || !recovery.waiting)
+    if (!allow_reopen || default_recovery_stop_.stop_requested()) {
+        recovery.pending = {};
+        return;
+    }
+    if (!recovery.waiting)
         return;
 
     if (recovery.pending.valid()) {
@@ -339,11 +342,13 @@ void AudioRuntimeGraph::PollDefaultRecovery(Node& node, bool allow_reopen) {
             recovery.handoff_qpc = cutoff;
             node.physical = std::move(result.reader);
             recovery.source.capture_key->endpoint_id = std::move(result.endpoint);
-            recovery.loss_generation = 0;
+            recovery.loss_generation = result.confirmed.loss_generation;
+            recovery.authorized_generation = result.confirmed.healthy_generation;
             recovery.reported_failure = false;
             recovery.waiting = false;
-        } else if (result.endpoint == recovery.source.capture_key->endpoint_id &&
-                   !node.physical->DegradedSourceCount()) {
+        } else if (result.endpoint == recovery.source.capture_key->endpoint_id && current.healthy_generation &&
+                   result.confirmed.healthy_generation == current.healthy_generation) {
+            recovery.authorized_generation = current.healthy_generation;
             recovery.reported_failure = false;
             recovery.waiting = false;
         } else {
@@ -372,7 +377,7 @@ void AudioRuntimeGraph::PollDefaultRecovery(Node& node, bool allow_reopen) {
         std::promise<ReopenedDefault> result;
         recovery.pending = result.get_future();
         std::thread([result = std::move(result), stop, registry = registry_, lookup = lookup_default_,
-                     factory = request_factory_, source = recovery.source, admission = recovery.admission,
+                     factory = request_factory_, source = recovery.source, admission = recovery.admission, current,
                      rate = output_rate_, channels = output_channels_, correction = correction_enabled_]() mutable {
             const DefaultReopenSlot slot;
             ReopenedDefault reopened;
@@ -380,8 +385,13 @@ void AudioRuntimeGraph::PollDefaultRecovery(Node& node, bool allow_reopen) {
                 const auto& binding = source.spec.binding;
                 if (!stop.stop_requested())
                     reopened.endpoint = lookup(binding.kind, binding.endpoint_role);
-                if (!stop.stop_requested() && !reopened.endpoint.empty() &&
-                    reopened.endpoint != source.capture_key->endpoint_id) {
+                if (reopened.endpoint == source.capture_key->endpoint_id && !current.retired) {
+                    // Only a generation already healthy before this lookup can reuse the old reader.
+                    if (current.healthy_generation && !stop.stop_requested() &&
+                        lookup(binding.kind, binding.endpoint_role) == reopened.endpoint)
+                        reopened.confirmed = current;
+                } else if (!stop.stop_requested() && !reopened.endpoint.empty()) {
+                    const SharedAudioReplacement replacement{*source.capture_key, current.clock, stop};
                     source.capture_key->endpoint_id = reopened.endpoint;
                     auto request = factory(source);
                     request.correction_enabled = correction;
@@ -393,11 +403,16 @@ void AudioRuntimeGraph::PollDefaultRecovery(Node& node, bool allow_reopen) {
                                 return true;
                             detail = "Role-default endpoint exceeds the admitted audio format; reprepare required";
                             return false;
-                        });
+                        },
+                        replacement);
                     if (!readers.empty() && !stop.stop_requested()) {
-                        // Native activation may block while Windows changes the default role.
-                        if (lookup(binding.kind, binding.endpoint_role) == reopened.endpoint && !stop.stop_requested())
+                        const auto state = SharedAudioReaderRecoveryState(*readers.front());
+                        if (state.healthy_generation &&
+                            lookup(binding.kind, binding.endpoint_role) == reopened.endpoint &&
+                            !stop.stop_requested()) {
+                            reopened.confirmed = state;
                             reopened.reader = std::move(readers.front());
+                        }
                     }
                 }
             } catch (const std::exception&) {
@@ -416,10 +431,7 @@ void AudioRuntimeGraph::PrepareDefaultRouteBlock(Node& node, AudioBlockView& blo
     if (!node.default_recovery)
         return;
     auto& recovery = *node.default_recovery;
-    const auto loss = SharedAudioReaderLossGeneration(*node.physical);
-    const auto mute_after = recovery.waiting ? recovery.mute_after_generation : loss;
-    if (loss && (loss != recovery.loss_generation || recovery.waiting) &&
-        block.descriptor.source_generation > mute_after) {
+    if (block.descriptor.source_generation != recovery.authorized_generation) {
         // A shared owner can reopen its fixed endpoint before the role lookup finishes.
         block.samples = {};
         block.metadata.silence = true;

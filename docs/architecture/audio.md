@@ -73,6 +73,9 @@ The selectable output rates are 44.1, 48 and 96 kHz for codecs allowed by the cu
 
 A lost audio device degrades that source, not the video session. The typed physical owner retries with bounded backoff from 250 to 2000 ms. Fixed sources reopen their exact endpoint.
 Semantic-default sources resolve the declared role after loss and check it again after activating a replacement. If fixed and semantic-default sources shared the lost capture, only the semantic-default sources move to the new endpoint.
+Only a physical generation verified against the role can resume default-source PCM, including when the fixed owner recovers the same endpoint.
+At the physical capture limit an exclusive old endpoint releases its slot after native shutdown. Its reader retains its charged tee to supply timed outage silence until the replacement is ready. Shared endpoints retain their native owner for the remaining readers. If the retained and replacement tees cannot fit together within the payload budget, the default source stays silent and retries.
+Recovery retries a busy registry. Stop cancels pending recovery admission, and a native operation already in progress retains its resources through cleanup.
 A missing default or a replacement outside the prepared audio format limits leaves the semantic-default source silent while it retries.
 An already-open stream is not automatically moved merely because the default changed; that condition is separately reported. Process loopback reopens only for the same process instance. Legacy sources retain their compatibility retry policy.
 

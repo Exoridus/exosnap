@@ -8,6 +8,7 @@
 #include <chrono>
 #include <functional>
 #include <memory>
+#include <stop_token>
 #include <string>
 #include <vector>
 
@@ -79,6 +80,19 @@ struct SharedAudioCaptureRequest {
     std::chrono::milliseconds preparation_timeout{2000};
 };
 
+struct SharedAudioRecoveryState {
+    PhysicalClockId clock;
+    uint64_t loss_generation = 0;
+    uint64_t healthy_generation = 0;
+    bool retired = false;
+};
+
+struct SharedAudioReplacement {
+    PhysicalCaptureKey previous_key;
+    PhysicalClockId previous_clock;
+    std::stop_token stop;
+};
+
 class SharedAudioCaptureRegistry {
   public:
     explicit SharedAudioCaptureRegistry(size_t payload_budget = kAudioRuntimePayloadBytes);
@@ -88,7 +102,8 @@ class SharedAudioCaptureRegistry {
     // call registry operations that acquire the registry lock, including AttachReaders.
     std::vector<std::unique_ptr<IAudioCaptureSource>>
     AttachReaders(const std::vector<SharedAudioCaptureRequest>& requests, uint64_t start_qpc_ns, std::string& error,
-                  std::function<bool(std::span<const AudioCaptureDescriptor>, std::string&)> admit = {});
+                  std::function<bool(std::span<const AudioCaptureDescriptor>, std::string&)> admit = {},
+                  std::optional<SharedAudioReplacement> replacement = {});
     [[nodiscard]] std::shared_ptr<void> ReservePayload(size_t bytes, std::string& error);
     [[nodiscard]] size_t ReservedPayloadBytes() const;
     [[nodiscard]] PhysicalAudioStatistics Statistics() const;
@@ -104,7 +119,7 @@ class SharedAudioCaptureRegistry {
 BatchSealAudioReadersEnd(std::span<IAudioCaptureSource* const> readers, uint64_t end_qpc_ns,
                          std::chrono::milliseconds timeout = std::chrono::milliseconds(500));
 [[nodiscard]] bool AudioReaderEnded(const IAudioCaptureSource& reader);
-[[nodiscard]] uint64_t SharedAudioReaderLossGeneration(const IAudioCaptureSource& reader);
+[[nodiscard]] SharedAudioRecoveryState SharedAudioReaderRecoveryState(const IAudioCaptureSource& reader);
 void AdvanceSharedAudioReaderStart(IAudioCaptureSource& reader, uint64_t start_qpc_ns);
 // Timeline progress established by posted PCM and certified idle intervals.
 [[nodiscard]] uint64_t SharedAudioReaderCompletedThrough(const IAudioCaptureSource& reader);
