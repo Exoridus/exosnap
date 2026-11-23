@@ -3,6 +3,7 @@
 #include <capability/translatable.h>
 
 #include "DiagnosticsPresentation.h"
+#include "PresentProvider.h"
 
 // Qt Core arrives with this header (it carries UiRecordingResult); nothing below
 // may use `signals` as an identifier while its moc keyword macro is defined.
@@ -14,6 +15,7 @@
 #include <algorithm>
 #include <array>
 #include <cctype>
+#include <chrono>
 #include <cmath>
 #include <cstdio>
 #include <filesystem>
@@ -1669,6 +1671,7 @@ void DiagnosticsController::SetCaptureTargetAdapter(RecommendationEngine::Captur
 
 void DiagnosticsController::SetPresentAttributionPid(unsigned long pid) {
     present_attribution_pid_ = pid;
+    present_.reset();
 }
 
 void DiagnosticsController::SetSelectedCaptureTarget(std::optional<exosnap::engine::CaptureTarget> target,
@@ -1706,6 +1709,13 @@ void DiagnosticsController::SetDpcLatency(std::optional<DpcLatencyReading> readi
 
 void DiagnosticsController::SetPresentSample(std::optional<PresentSample> sample) {
     present_ = std::move(sample);
+    if (present_)
+        present_->attributed = present_->metadata.process_id.has_value();
+}
+
+const PresentSample*
+DiagnosticsController::currentPresentSample(std::chrono::steady_clock::time_point now) const noexcept {
+    return present_ && present_->FreshForTarget(present_attribution_pid_, now) ? &*present_ : nullptr;
 }
 
 void DiagnosticsController::SetLiveSnapshot(const exosnap::engine::RecordingDiagnosticsSnapshot& snapshot) {
@@ -1805,21 +1815,12 @@ DiagnosticsSnapshot DiagnosticsController::Evaluate() {
         return out;
     }
 
+    const auto now = std::chrono::steady_clock::now();
     const exosnap::engine::RecordingDiagnosticsSnapshot* live = live_.valid ? &live_ : nullptr;
-    // Present samples are attributed to a process only for a window target; for a
-    // display or region the accumulator saw every process on the machine.
-    PresentSample present_sample;
-    const PresentSample* present = nullptr;
-    if (present_.has_value() && present_->available) {
-        present_sample = *present_;
-        // Attributed when the accumulator filtered to a process: the captured
-        // window's, or for a display the process presenting on that display.
-        present_sample.attributed = present_attribution_pid_ != 0;
-        present = &present_sample;
-    }
 
     RecommendationEngine engine(config_.caps, config_.user_config, probe_.free_bytes,
-                                config_.profile_validation.succeeded, probe_.filesystem_name, live, present);
+                                config_.profile_validation.succeeded, probe_.filesystem_name, live,
+                                currentPresentSample(now));
     if (dpc_.has_value())
         engine.SetDpcLatency(*dpc_);
     if (probe_.output_path_writable.has_value())
@@ -1827,7 +1828,6 @@ DiagnosticsSnapshot DiagnosticsController::Evaluate() {
     engine.SetElevated(elevated_);
     engine.SetCaptureTargetHdrActive(capture_target_hdr_active_);
     if (probe_.session_generation == live_.session_generation) {
-        const auto now = std::chrono::steady_clock::now();
         engine.SetGpuEvidence(
             probe_.gpu.metadata.FreshForAdapter(live_.encoder_adapter_luid, now) ? probe_.gpu : GpuTelemetryReading{},
             probe_.video_memory.metadata.FreshForAdapter(live_.encoder_adapter_luid, now) ? probe_.video_memory

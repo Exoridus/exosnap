@@ -12,7 +12,10 @@ Engine snapshots carry availability alongside values. The application must not t
 
 Compositor, encoder and buffered-write timings become unavailable when their rolling windows empty. Session totals and container capabilities do not establish that a timing sample exists. GPU query results describe individual passes. A recorder-wide GPU p99 and GPU bottleneck inference require measurements correlated by frame.
 
-Duration skew compares the latest video timestamp with the worst aligned mux timestamp among audio tracks that have progressed. The mux publishes these positions during recording and on final drain. Raw capture timestamps and the container's stored codec-delay offset do not enter the comparison.
+Duration skew compares mux video progress with each aligned audio track that has progressed and reports the greatest difference.
+Video progress advances with accepted picture timestamps and with static VFR holds the video worker has committed through the mux queue.
+The mux publishes the video and audio positions together during recording and on final drain.
+Audio positions are aligned to the session video timeline before the container's codec-delay offset is applied.
 
 ## Measurement-domain providers
 
@@ -51,7 +54,7 @@ Core Recording Health and In-depth engine/GPU/memory evidence work without eleva
 
 The opt-in PresentMon consumer additionally exposes the number of presents it classified as lost/incomplete in this ETW session. This cumulative count is system-wide, not attributable to the captured process and not a complete ETW packet-loss measurement. An unmeasured count remains null. A nonzero count documents incomplete present observations; it does not prove a recording failure or alter readiness/incident severity. Normal recording does not open this extra trace.
 
-Display cadence is measured from duplication timestamps. WGC delivery timestamps supply the window/region cadence path and have different provenance/jitter. PresentMon adds presentation-mode and related attribution; it does not replace the unprivileged monitor-cadence source. Attribute a window measurement to the actual process instance and reset totals at each recording boundary even if the PID is unchanged.
+Display cadence is measured from duplication timestamps. WGC delivery timestamps supply the window/region cadence path and have different provenance/jitter. PresentMon adds presentation-mode and related attribution alongside the unprivileged monitor-cadence source. Window capture attributes observations to the actual process instance. Display and region capture track the foreground process on the selected display when available. Diagnostics accepts observations for the current attribution scope for up to 15 seconds. The capture snapshot and fullscreen stall corroboration require a classified observation for a known process. Target and recording boundaries discard cached observations and reset totals even when the PID is unchanged.
 
 The DPC/ISR consumer requests raw QPC event timestamps to compare with the entry ticks in the payload. Process exit, trace termination or unavailable decoding clears the live reading. A generic fullscreen signal is not proof of a capture failure. Mid-session stall reporting claims absence of frame progress and names exclusive fullscreen only as a corroborated possibility.
 

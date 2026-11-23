@@ -535,7 +535,7 @@ The top bar retains three noninteractive source-health indicators across every p
 
 ## 11. Diagnostics and fix actions
 
-Diagnostics keeps four main live tiles: Frame pacing, Encoder, Storage and Audio sync. The recording verdict and ledger describe measured impact. Raw timing, presentation, GPU/memory and kernel evidence stays in grouped In-depth details; missing PresentMon is neutral. Compensated condition periods stay in In-depth/reports. Diagnostics is state-ordered, not a separate Simple/Expert mode. The shared Expert preference is edited in Settings.
+Diagnostics keeps four main live tiles: Frame pacing, Encoder, Storage and Audio sync. The recording verdict and ledger describe measured impact. Raw timing, presentation, GPU/memory and kernel evidence stays in grouped In-depth details. Presentation evidence follows the current target while the observation is fresh. Missing PresentMon is neutral. Compensated condition periods stay in In-depth/reports. Diagnostics is state-ordered, not a separate Simple/Expert mode. The shared Expert preference is edited in Settings.
 
 | State | Main contents |
 |---|---|

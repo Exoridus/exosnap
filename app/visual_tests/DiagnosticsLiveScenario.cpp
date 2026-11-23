@@ -1,5 +1,6 @@
 #include "visual_tests/DiagnosticsLiveScenario.h"
 
+#include <chrono>
 #include <cmath>
 
 namespace exosnap::visual {
@@ -337,7 +338,7 @@ DiagnosticsLiveExtras MakeDiagnosticsLiveExtras(const QString& kind) {
 
     diagnostics::PresentSample present;
     present.available = true;
-    present.attributed = true;
+    present.metadata.observed_at = std::chrono::steady_clock::now();
     present.mode = diagnostics::PresentMode::IndependentFlip;
     present.tearing = false;
     present.present_interval_ms = 6.9;

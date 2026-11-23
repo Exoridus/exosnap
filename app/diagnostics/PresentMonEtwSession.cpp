@@ -2,20 +2,32 @@
 #include "diagnostics/PresentModeMapping.h"
 
 #define WIN32_LEAN_AND_MEAN
-#include <windows.h> // OpenProcess / WaitForSingleObject / CloseHandle -- target liveness only.
+#include <windows.h>
 
 #include <algorithm>
+#include <cstdint>
+#include <functional>
 #include <utility>
 
 #include <QtCore/QtGlobal> // qWarning -> the installed Qt handler -> exosnap.log
 
 namespace exosnap::diagnostics {
+namespace {
 
-PresentMonEtwSession::PresentMonEtwSession() : backend_factory_(&MakePresentTraceBackend) {
+uint64_t ReadQpc() {
+    LARGE_INTEGER now{};
+    ::QueryPerformanceCounter(&now);
+    return static_cast<uint64_t>(now.QuadPart);
 }
 
-PresentMonEtwSession::PresentMonEtwSession(std::function<std::shared_ptr<IPresentTraceBackend>()> backend_factory)
-    : backend_factory_(std::move(backend_factory)) {
+} // namespace
+
+PresentMonEtwSession::PresentMonEtwSession() : PresentMonEtwSession(&MakePresentTraceBackend, &ReadQpc) {
+}
+
+PresentMonEtwSession::PresentMonEtwSession(std::function<std::shared_ptr<IPresentTraceBackend>()> backend_factory,
+                                           std::function<uint64_t()> read_qpc)
+    : backend_factory_(std::move(backend_factory)), read_qpc_(std::move(read_qpc)) {
 }
 
 bool PresentMonEtwSession::Start() {
@@ -89,6 +101,7 @@ bool PresentMonEtwSession::Start() {
 }
 
 void PresentMonEtwSession::SetTargetProcessId(unsigned long pid) {
+    attribution_start_qpc_ = read_qpc_ ? read_qpc_() : 0;
     target_pid_.store(pid, std::memory_order_relaxed);
     accumulator_.Reset();
     last_present_qpc_ = 0;
@@ -205,6 +218,9 @@ PresentSample PresentMonEtwSession::Latest() const {
                 latest_.trace_last_process_id = present.process_id;
                 latest_.trace_last_hwnd = present.hwnd;
             }
+            // Presents can finish after a reset. Their start tick must be strictly after the boundary.
+            if (attribution_start_qpc_ != 0 && present.present_qpc <= attribution_start_qpc_)
+                continue;
             const bool related_to_target =
                 want_pid == 0 || present.process_id == want_pid ||
                 std::any_of(present.related_process_ids.begin(), present.related_process_ids.end(),

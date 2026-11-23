@@ -7,6 +7,7 @@
 #include "diagnostics/DiagnosticsController.h"
 #include "diagnostics/DiagnosticsProbe.h"
 #include "diagnostics/FixActionDispatcher.h"
+#include "diagnostics/PresentProvider.h"
 #include "diagnostics/SessionLedger.h"
 #include "viewmodels/RecordViewModel.h"
 #include "visual_tests/CanonicalMachine.h"
@@ -15,6 +16,7 @@
 #include <gtest/gtest.h>
 
 #include <algorithm>
+#include <chrono>
 #include <cstddef>
 #include <cstdint>
 #include <string>
@@ -643,6 +645,40 @@ exosnap::engine::RecordingDiagnosticsSnapshot JudderSnapshot(double elapsed_s) {
 }
 
 } // namespace
+
+TEST(DiagnosticsController, CachedPresentFromPreviousPidDoesNotDescribeTheNewTarget) {
+    DiagnosticsController controller;
+    controller.SetConfig(MinimalConfig());
+    controller.SetPresentAttributionPid(123);
+
+    PresentSample sample;
+    sample.available = true;
+    sample.mode = PresentMode::Composed;
+    sample.metadata.observed_at = std::chrono::steady_clock::now();
+    sample.metadata.process_id = 123;
+    sample.present_count = 300;
+    sample.discarded_count = 30;
+    controller.SetPresentSample(sample);
+
+    const auto has_discard_fact = [&controller] {
+        [[maybe_unused]] const auto diagnostics = controller.Evaluate();
+        return std::ranges::any_of(controller.lastChecklist().results,
+                                   [](const DiagnosticResult& result) { return result.id == "rec.present.discarded"; });
+    };
+    ASSERT_TRUE(has_discard_fact());
+
+    controller.SetPresentAttributionPid(456);
+    EXPECT_FALSE(has_discard_fact());
+    controller.SetPresentSample(sample);
+    EXPECT_FALSE(has_discard_fact());
+
+    sample.metadata.process_id = 456;
+    controller.SetPresentSample(sample);
+    ASSERT_TRUE(has_discard_fact());
+
+    controller.SetPresentAttributionPid(456);
+    EXPECT_FALSE(has_discard_fact());
+}
 
 TEST(DiagnosticsController, EvaluateFeedsTheLedgerOnlyWhileRecording) {
     DiagnosticsController controller;

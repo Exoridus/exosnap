@@ -55,6 +55,7 @@ using exosnap::diagnostics::TracePresentEvent;
 // that is not a flip/fullscreen variant classifies as Composed.
 constexpr int kModeComposedFlip = 4;            // PresentMode::Composed_Flip -> Composed
 constexpr int kModeHardwareIndependentFlip = 3; // PresentMode::Hardware_Independent_Flip -> IndependentFlip
+constexpr int kModeHardwareLegacyFlip = 1;      // PresentMode::Hardware_Legacy_Flip -> ExclusiveFullscreen
 
 // A bounded poll of an actual condition -- not a synchronisation sleep. The predicate
 // is the measurement; the ceiling only bounds a hang.
@@ -435,6 +436,33 @@ TEST(PresentSession, TheBoundaryIsUnconditionalSoAStopToPidZeroStillResets) {
         << "a finished recording's totals must not describe the idle desktop";
     EXPECT_FALSE(session.Latest().available);
     session.Stop();
+}
+
+TEST(PresentSession, DelayedPresentFromBeforeASamePidBoundaryStaysUnavailable) {
+    auto backend = std::make_shared<FakeTraceBackend>();
+    uint64_t current_qpc = 1'000'000;
+    PresentMonEtwSession session(FactoryFor(backend), [&current_qpc] { return current_qpc; });
+    ASSERT_TRUE(session.Start());
+    ASSERT_TRUE(WaitUntil([&] { return session.IsOpen(); }));
+
+    const auto pid = ::GetCurrentProcessId();
+    session.SetTargetProcessId(pid);
+    current_qpc = 2'000'000;
+    session.SetTargetProcessId(pid);
+
+    // The consumer can complete a previous present after the reader resets attribution.
+    backend->Publish(Present(pid, current_qpc - 1, kModeHardwareLegacyFlip, true));
+    EXPECT_FALSE(session.Latest().available);
+    backend->Publish(Present(pid, current_qpc, kModeHardwareLegacyFlip, true));
+    EXPECT_FALSE(session.Latest().available);
+
+    backend->Publish(Present(pid, current_qpc + 1, kModeComposedFlip));
+    const auto sample = session.Latest();
+    ASSERT_TRUE(sample.available);
+    EXPECT_EQ(sample.mode, PresentMode::Composed);
+    EXPECT_EQ(sample.present_count, 1u);
+    EXPECT_EQ(sample.discarded_count, 0u);
+    EXPECT_EQ(sample.mode_flip_count, 0u);
 }
 
 TEST(PresentSession, PresentsFromAnotherProcessNeverEnterTheAttributionWindow) {

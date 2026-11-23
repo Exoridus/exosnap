@@ -444,14 +444,12 @@ void DiagnosticsAdapter::refreshLiveTiles() {
     diagnostics::LiveTileInputs inputs{snapshot, controller_.ledger()};
     // Engine and unprivileged evidence remain available without optional ETW traces.
     inputs.in_depth = in_depth_enabled_;
-    inputs.present = present_sample_;
     inputs.dpc = dpc_reading_;
     inputs.gpu_exec_p99_ms = snapshot.compositor.gpu_exec_p99_ms;
     const auto& probe = controller_.probeResult();
     const auto now = std::chrono::steady_clock::now();
-    if (inputs.present && inputs.present->metadata.observed_at != std::chrono::steady_clock::time_point{} &&
-        !inputs.present->metadata.Fresh(now))
-        inputs.present.reset();
+    if (const auto* present = controller_.currentPresentSample(now))
+        inputs.present = *present;
     if (inputs.dpc && inputs.dpc->metadata.observed_at != std::chrono::steady_clock::time_point{} &&
         !inputs.dpc->metadata.Fresh(now))
         inputs.dpc.reset();
@@ -745,6 +743,7 @@ void DiagnosticsAdapter::setCaptureTargetAdapter(diagnostics::RecommendationEngi
 
 void DiagnosticsAdapter::setPresentAttributionPid(unsigned long pid) {
     controller_.SetPresentAttributionPid(pid);
+    refreshLiveTiles();
 }
 
 void DiagnosticsAdapter::setSavedDisplayUnresolved(bool unresolved, const std::string& label) {
@@ -786,6 +785,8 @@ void DiagnosticsAdapter::setInDepthEnabled(bool enabled) {
     if (in_depth_enabled_ == enabled)
         return;
     in_depth_enabled_ = enabled;
+    if (!enabled)
+        controller_.SetPresentSample(std::nullopt);
     emit inDepthChanged();
     refreshLiveTiles();
     emit changed();
@@ -807,7 +808,6 @@ void DiagnosticsAdapter::setDpcLatencyProvider(diagnostics::IDpcLatencyProvider*
 }
 
 void DiagnosticsAdapter::setPresentSample(std::optional<diagnostics::PresentSample> sample) {
-    present_sample_ = sample;
     controller_.SetPresentSample(std::move(sample));
 }
 

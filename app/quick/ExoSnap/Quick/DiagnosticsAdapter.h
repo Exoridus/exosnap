@@ -366,7 +366,6 @@ class DiagnosticsAdapter : public QObject {
     // GUI thread. Deliberately coarse: the fact it measures changes on a human scale.
     QTimer live_probe_timer_;
 
-    std::optional<diagnostics::PresentSample> present_sample_;
     std::optional<diagnostics::DpcLatencyReading> dpc_reading_;
 
     bool checking_ = false;
