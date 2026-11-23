@@ -33,6 +33,7 @@ Popup {
 
     property int currentTab: 0
     property string windowQuery: ""
+    property bool windowSearchAvailable: false
     property var hideCandidate: null
 
     readonly property var regionPresetRows: recordViewModel.regionPresetOptions
@@ -46,6 +47,10 @@ Popup {
             const second = root.sessionWindowOrder.indexOf(b.identity);
             return (first < 0 ? root.sessionWindowOrder.length : first) - (second < 0 ? root.sessionWindowOrder.length : second);
         });
+    }
+    // Keep keyboard focus and the query when a refresh leaves fewer searchable windows.
+    onWindowRowsChanged: if (root.windowRows.length > 3) {
+        root.windowSearchAvailable = true;
     }
     function updateWindowOrder(): void {
         const order = root.sessionWindowOrder.slice();
@@ -510,6 +515,7 @@ Popup {
         root.windowQuery = "";
         root.recordViewModel.setWindowSearchQuery("");
         windowSearchField.text = "";
+        root.windowSearchAvailable = root.windowRows.length > 3;
         const mode = root.recordViewModel.captureMode;
         root.pendingCaptureMode = mode;
         root.pendingTargetIndex = root.recordViewModel.selectedTargetIndex;
@@ -682,7 +688,7 @@ Popup {
             Layout.fillWidth: true
             Layout.leftMargin: root.contentPadding
             Layout.rightMargin: root.contentPadding
-            columns: width >= tabsControl.implicitWidth + 450 + ExoTheme.spacingLg ? 2 : 1
+            columns: width >= tabsControl.implicitWidth + (root.windowSearchAvailable ? 450 : windowOptions.implicitWidth) + ExoTheme.spacingLg ? 2 : 1
             columnSpacing: ExoTheme.spacingLg
             rowSpacing: ExoTheme.spacingMd
 
@@ -700,13 +706,14 @@ Popup {
                 objectName: "windowSearchRow"
                 visible: root.currentTab === 1
                 Layout.fillWidth: true
-                Layout.minimumWidth: 360
+                Layout.minimumWidth: root.windowSearchAvailable ? 360 : windowOptions.implicitWidth
                 spacing: ExoTheme.spacingMd
 
                 ExoSearchField {
                     id: windowSearchField
 
                     objectName: "windowSearch"
+                    visible: root.windowSearchAvailable
                     Layout.fillWidth: true
                     Layout.minimumWidth: 180
                     placeholderText: qsTr("Search windows...")
@@ -715,7 +722,7 @@ Popup {
 
                 Label {
                     objectName: "searchMatchCount"
-                    visible: searchRow.width >= 490
+                    visible: root.windowSearchAvailable && searchRow.width >= 490
                     text: qsTr("%1 search matches").arg(root.windowSearchMatchCount)
                     color: ExoTheme.textSecondary
                     font.family: ExoTheme.sansFamily
@@ -725,6 +732,7 @@ Popup {
                 ExoButton {
                     id: windowOptions
                     objectName: "windowFiltersButton"
+                    Layout.alignment: Qt.AlignRight
                     text: qsTr("Window filters")
                     quiet: true
                     onClicked: filtersPopup.opened ? filtersPopup.close() : filtersPopup.open()

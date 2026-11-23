@@ -193,10 +193,46 @@ TestCase {
         compare(page.picker.windowRows.length, 5);
     }
 
+    function test_small_window_lists_keep_filters_without_search() {
+        recordDriver.seedTargets(2, ["Claude Design - Brave", "Task Manager", "Steam Library", "Terminal"]);
+        const terminal = recordDriver.adapter.windowTargetOptions[3].identity;
+        recordDriver.adapter.hideWindowInstance(terminal);
+        const page = makePage();
+        showTab(page, 1);
+
+        const search = pick(page, "windowSearch");
+        verify(!search.visible);
+        verify(pick(page, "windowFiltersButton").visible);
+        compare(page.picker.windowRows.length, 3);
+
+        recordDriver.adapter.setShowHiddenWindows(true);
+        tryCompare(search, "visible", true);
+        const input = findChild(search, "searchInput");
+        verify(input);
+        input.forceActiveFocus(Qt.TabFocusReason);
+        tryCompare(input, "activeFocus", true);
+        keyClick(Qt.Key_T);
+        tryCompare(page.picker, "windowQuery", "t");
+
+        recordDriver.adapter.setShowHiddenWindows(false);
+        tryVerify(() => !page.picker.windowRows.some(row => row.identity === terminal));
+        verify(search.visible);
+        tryCompare(input, "activeFocus", true);
+        keyClick(Qt.Key_A);
+        tryCompare(page.picker, "windowQuery", "ta");
+
+        page.picker.close();
+        tryCompare(page.picker, "opened", false);
+        page.picker.open();
+        showTab(page, 1);
+        verify(!search.visible);
+        compare(page.picker.windowRows.length, 3);
+    }
+
     // Search narrows only the window tab; the dialog stays in place.
     function test_window_search_filters_by_title_and_app() {
         let page = makePage();
-        recordDriver.seedTargets(1, ["Claude Design - Brave", "Task Manager", "Steam Library"]);
+        recordDriver.seedTargets(1, ["Claude Design - Brave", "Task Manager", "Steam Library", "Terminal"]);
         showTab(page, 1);
         const heightBefore = page.picker.height;
 
@@ -587,6 +623,7 @@ TestCase {
 
     function test_window_toolbar_wide_and_narrow_search_minimum() {
         const page = makePage();
+        recordDriver.seedTargets(2, ["Claude Design - Brave", "Task Manager", "Steam Library", "Terminal"]);
         showTab(page, 1);
         const tabs = pick(page, "tabs");
         const search = pick(page, "windowSearchRow");
