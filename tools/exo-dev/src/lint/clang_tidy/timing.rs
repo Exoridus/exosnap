@@ -183,6 +183,7 @@ impl super::ClangTidyReport {
             "cache_enabled": self.cache_enabled,
             "cache_entries": self.cache_entries,
             "cache_keyed": self.cache_keyed,
+            "cache_identity": self.cache_identity,
             "cache_hits": self.replayed,
             "cache_misses": self.analyzed.saturating_sub(self.replayed),
             "compiler_policy": self.compiler_policy,
@@ -255,6 +256,13 @@ mod tests {
         report.analyzed = 2;
         report.cache_entries = 7;
         report.cache_keyed = 6;
+        report.cache_identity = super::super::CacheIdentitySummary {
+            header_configuration_sha256: Some("a".repeat(64)),
+            include_membership_sha256: Some("b".repeat(64)),
+            toolchain_sha256: Some("c".repeat(64)),
+            combined_configuration_sha256: Some("d".repeat(64)),
+            salt_sha256: Some("e".repeat(64)),
+        };
         report.replayed = 1;
         report.timing.units.push(super::UnitTiming {
             unit: Some(2),
@@ -293,6 +301,7 @@ mod tests {
         assert!(public.get("compile_database").is_none());
         assert_eq!(public["profile_mode"], "public");
         assert_eq!(public["scope"], "scoped");
+        assert_eq!(public["cache_identity"]["salt_sha256"], "e".repeat(64));
         assert!(public["timing"]["units"][0].get("source").is_none());
         assert_eq!(public["timing"]["units"][0]["unit"], 2);
         for field in [
@@ -304,6 +313,7 @@ mod tests {
             "cache_enabled",
             "cache_hits",
             "cache_misses",
+            "cache_identity",
             "compiler_policy",
         ] {
             assert_eq!(public[field], rich[field], "{field}");
