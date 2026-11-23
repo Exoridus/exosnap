@@ -933,7 +933,9 @@ void DiagnosticsAdapter::startProbe(bool run_self_test) {
 
     const exosnap::engine::RecordingDiagnosticsSnapshot& live = controller_.liveSnapshot();
     diagnostics::DiagnosticsProbeRequest request;
-    request.output_folder = std::filesystem::path(controller_.outputFolder());
+    // Controller carries UTF-8; reconstruct the Win32 native path through
+    // Unicode instead of interpreting bytes through the active ANSI codepage.
+    request.output_folder = std::filesystem::path(QString::fromStdString(controller_.outputFolder()).toStdWString());
     request.run_self_test = run_self_test;
     // The engine publishes one LUID per pipeline role; dedupe them into unique
     // physical polling targets so a single-GPU session reads NVML and DXGI once.
