@@ -165,14 +165,44 @@ fn protected_cache_configuration(cache: &Path) -> bool {
     }
     // Regenerating with an older checkout can leave the cache marker behind
     // while replacing the actual Ninja launcher with bare sccache.
-    let Some(rules) = cache
-        .parent()
-        .and_then(|dir| std::fs::read_to_string(dir.join("CMakeFiles/rules.ninja")).ok())
-    else {
+    let Some(build) = cache.parent() else {
         return false;
     };
-    (scoped && rules.contains("SCCACHE_C_CUSTOM_CACHE_BUSTER=exosnap-msvc-ninja-v1-"))
-        || (isolated && rules.contains("SCCACHE_DIR=") && rules.contains("SCCACHE_SERVER_PORT="))
+    let has_protected_launcher = |file: PathBuf| {
+        File::open(file).is_ok_and(|file| {
+            BufReader::new(file)
+                .lines()
+                .map_while(Result::ok)
+                .any(|line| {
+                    let line = line.trim_start();
+                    (line.starts_with("command = ") || line.starts_with("LAUNCHER = "))
+                        && ((scoped
+                            && line
+                                .contains("SCCACHE_C_CUSTOM_CACHE_BUSTER=exosnap-msvc-ninja-v1-"))
+                            || (isolated
+                                && line.contains("SCCACHE_DIR=")
+                                && line.contains("SCCACHE_SERVER_PORT=")))
+                })
+        })
+    };
+    // CMake can expand the launcher in the rule or put it on the object edge.
+    [
+        build.join("build.ninja"),
+        build.join("CMakeFiles/rules.ninja"),
+    ]
+    .into_iter()
+    .any(has_protected_launcher)
+        || std::fs::read_dir(build.join("CMakeFiles")).is_ok_and(|entries| {
+            entries
+                .filter_map(Result::ok)
+                .filter(|entry| {
+                    entry
+                        .file_name()
+                        .to_str()
+                        .is_some_and(|name| name.starts_with("impl-") && name.ends_with(".ninja"))
+                })
+                .any(|entry| has_protected_launcher(entry.path()))
+        })
 }
 
 /// CMake retains find_program results when their option is turned off.
@@ -1547,32 +1577,38 @@ mod tests {
 
     #[test]
     fn cache_protection_requires_the_generated_launcher() {
-        let dir = tempfile::tempdir().unwrap();
-        let cache = dir.path().join("CMakeCache.txt");
-        let rules = dir.path().join("CMakeFiles/rules.ninja");
-        std::fs::create_dir(rules.parent().unwrap()).unwrap();
-        for (protection, launcher) in [
-            (
-                "EXOSNAP_SCCACHE_ISOLATED:BOOL=ON",
-                "cmake -E env SCCACHE_DIR=cache SCCACHE_SERVER_PORT=41000 sccache",
-            ),
-            (
-                "EXOSNAP_SCCACHE_SCOPED:INTERNAL=ON",
-                "cmake -E env SCCACHE_C_CUSTOM_CACHE_BUSTER=exosnap-msvc-ninja-v1-hash sccache",
-            ),
+        for (manifest, binding) in [
+            ("CMakeFiles/rules.ninja", "command"),
+            ("build.ninja", "LAUNCHER"),
+            ("CMakeFiles/impl-Release.ninja", "LAUNCHER"),
         ] {
-            let configured = format!("EXOSNAP_USE_SCCACHE:BOOL=TRUE\n{protection}\n");
-            std::fs::write(&cache, &configured).unwrap();
-            std::fs::write(&rules, "  command = sccache cl.exe").unwrap();
-            assert!(shared_cache_reason(&cache).is_some());
-            std::fs::write(&rules, format!("  command = {launcher} cl.exe")).unwrap();
-            assert!(shared_cache_reason(&cache).is_none());
-            std::fs::write(
-                &cache,
-                format!("{configured}EXOSNAP_COMPILER_LAUNCHER:STRING=C:/tools/sccache.exe\n"),
-            )
-            .unwrap();
-            assert!(shared_cache_reason(&cache).is_some());
+            let dir = tempfile::tempdir().unwrap();
+            let cache = dir.path().join("CMakeCache.txt");
+            let manifest = dir.path().join(manifest);
+            std::fs::create_dir_all(manifest.parent().unwrap()).unwrap();
+            for (protection, launcher) in [
+                (
+                    "EXOSNAP_SCCACHE_ISOLATED:BOOL=ON",
+                    "cmake -E env SCCACHE_DIR=cache SCCACHE_SERVER_PORT=41000 sccache",
+                ),
+                (
+                    "EXOSNAP_SCCACHE_SCOPED:INTERNAL=ON",
+                    "cmake -E env SCCACHE_C_CUSTOM_CACHE_BUSTER=exosnap-msvc-ninja-v1-hash sccache",
+                ),
+            ] {
+                let configured = format!("EXOSNAP_USE_SCCACHE:BOOL=TRUE\n{protection}\n");
+                std::fs::write(&cache, &configured).unwrap();
+                std::fs::write(&manifest, format!("  {binding} = sccache cl.exe")).unwrap();
+                assert!(shared_cache_reason(&cache).is_some());
+                std::fs::write(&manifest, format!("  {binding} = {launcher} cl.exe")).unwrap();
+                assert!(shared_cache_reason(&cache).is_none());
+                std::fs::write(
+                    &cache,
+                    format!("{configured}EXOSNAP_COMPILER_LAUNCHER:STRING=C:/tools/sccache.exe\n"),
+                )
+                .unwrap();
+                assert!(shared_cache_reason(&cache).is_some());
+            }
         }
     }
 
