@@ -100,6 +100,17 @@ const CANARY_SOURCES: &[&str] = &[
 /// exclusion pattern is not expressible here.
 const HEADER_FILTER: &str = r"[/\\](app|apps|libs|tools|tests)[/\\]";
 
+/// Hash-only fingerprints for cross-run cache identity comparison.
+/// Never export the source paths or unredacted environment values.
+#[derive(Clone, Debug, Default, serde::Serialize)]
+pub struct CacheIdentitySummary {
+    pub header_configuration_sha256: Option<String>,
+    pub include_membership_sha256: Option<String>,
+    pub toolchain_sha256: Option<String>,
+    pub combined_configuration_sha256: Option<String>,
+    pub salt_sha256: Option<String>,
+}
+
 #[derive(Debug)]
 pub struct ClangTidyReport {
     pub tool_path: PathBuf,
@@ -113,6 +124,7 @@ pub struct ClangTidyReport {
     pub cache_entries: u64,
     /// Translation units the run could key, that is, the cache candidates.
     pub cache_keyed: usize,
+    pub cache_identity: CacheIdentitySummary,
     pub replayed: usize,
     pub violations: Vec<String>,
     pub timing: TidyTiming,
@@ -136,6 +148,7 @@ impl ClangTidyReport {
             cache_dir: cache_dir.to_path_buf(),
             cache_entries: 0,
             cache_keyed: 0,
+            cache_identity: CacheIdentitySummary::default(),
             replayed: 0,
             violations: Vec::new(),
             timing: TidyTiming::default(),
@@ -309,21 +322,33 @@ pub fn run_blocking(
     let inventory = &identity.inventory;
     let search = input_identity::lookup_membership(repo_root, &lookup_directories);
 
-    let configuration_hash = with_search_membership(
-        inventory
-            .as_ref()
-            .and_then(|inventory| inventory.configuration_hash(repo_root, &all_sources)),
-        search.as_ref().map(|(hash, _)| hash.clone()),
-    );
+    let header_configuration = inventory
+        .as_ref()
+        .and_then(|inventory| inventory.configuration_hash(repo_root, &all_sources));
+    let include_membership = search.as_ref().map(|(hash, _)| hash.clone());
+    let configuration_hash =
+        with_search_membership(header_configuration.clone(), include_membership.clone());
     let toolchain_started = Instant::now();
     let toolchain = toolchain_identity::identity_with_overrides(build_dir, environment);
     timing.toolchain_identity_seconds = toolchain_started.elapsed().as_secs_f64();
-    let configuration_hash = combine_configuration_identity(
-        configuration_hash,
-        toolchain.as_ref().map(|(hash, _)| hash.clone()),
-    );
+    let toolchain_hash = toolchain.as_ref().map(|(hash, _)| hash.clone());
+    let configuration_hash =
+        combine_configuration_identity(configuration_hash, toolchain_hash.clone());
     let salt = compute_salt(&banner, &flags, configuration_hash.as_deref())
         .filter(|_| foreign_roots.is_some());
+    let cache_identity = CacheIdentitySummary {
+        header_configuration_sha256: header_configuration,
+        include_membership_sha256: include_membership,
+        toolchain_sha256: toolchain_hash,
+        combined_configuration_sha256: configuration_hash.clone(),
+        salt_sha256: salt.as_deref().map(|value| sha256_hex(value.as_bytes())),
+    };
+    // Emit before the expensive analysis, so a job timeout still leaves
+    // hash-only producer/consumer evidence in the CI log.
+    timing::progress(serde_json::json!({
+        "event": "cache-identity",
+        "fingerprints": &cache_identity,
+    }));
     timing.configuration_identity_seconds = configuration_started.elapsed().as_secs_f64();
 
     // Ninja's records miss what only clang includes, so they cannot prove
@@ -597,6 +622,7 @@ pub fn run_blocking(
         cache_dir: cache_dir.to_path_buf(),
         cache_entries,
         cache_keyed: cache_keys.len(),
+        cache_identity,
         replayed,
         violations: violations.into_iter().collect(),
         timing,
