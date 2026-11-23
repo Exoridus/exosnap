@@ -123,7 +123,7 @@ pub const AUTO_BUILD_TARGETS: &str = "auto";
 /// Refuses a local Windows Ninja tree whose compiler cache is shared with other
 /// build trees. A shared cache may replay another checkout's `/showIncludes`
 /// paths, which no amount of care in this tree can detect from its own state.
-fn shared_cache_reason(cache: &Path) -> Option<&'static str> {
+fn shared_cache_reason(cache: &Path, config: &str) -> Option<&'static str> {
     let enabled = freshness::cache_value(cache, "EXOSNAP_USE_SCCACHE").is_some_and(|value| {
         ["ON", "TRUE", "YES", "1"]
             .iter()
@@ -133,12 +133,11 @@ fn shared_cache_reason(cache: &Path) -> Option<&'static str> {
         freshness::cache_value(cache, name)
             .is_some_and(|value| value.to_ascii_lowercase().contains("sccache"))
     };
-    if protected_cache_configuration(cache) {
-        return None;
-    }
-    if enabled
-        || uses_sccache("EXOSNAP_COMPILER_LAUNCHER")
-        || uses_sccache("CMAKE_CXX_COMPILER_LAUNCHER")
+    if uses_sccache("CMAKE_C_COMPILER_LAUNCHER")
+        || (!protected_cache_configuration(cache, config)
+            && (enabled
+                || uses_sccache("EXOSNAP_COMPILER_LAUNCHER")
+                || uses_sccache("CMAKE_CXX_COMPILER_LAUNCHER")))
     {
         return Some(concat!(
             "unsafe local sccache in this Ninja build tree: foreign /showIncludes ",
@@ -152,7 +151,7 @@ fn shared_cache_reason(cache: &Path) -> Option<&'static str> {
 
 /// A managed launcher with scoped keys or the earlier dedicated cache/server.
 /// The dependency audit still checks recorded paths after either configuration.
-fn protected_cache_configuration(cache: &Path) -> bool {
+fn protected_cache_configuration(cache: &Path, config: &str) -> bool {
     let on = |name| {
         freshness::cache_value(cache, name).is_some_and(|value| value.eq_ignore_ascii_case("ON"))
     };
@@ -185,24 +184,17 @@ fn protected_cache_configuration(cache: &Path) -> bool {
                 })
         })
     };
+    let manifest = if freshness::cache_value(cache, "CMAKE_GENERATOR").as_deref()
+        == Some("Ninja Multi-Config")
+    {
+        build.join(format!("CMakeFiles/impl-{config}.ninja"))
+    } else {
+        build.join("build.ninja")
+    };
     // CMake can expand the launcher in the rule or put it on the object edge.
-    [
-        build.join("build.ninja"),
-        build.join("CMakeFiles/rules.ninja"),
-    ]
-    .into_iter()
-    .any(has_protected_launcher)
-        || std::fs::read_dir(build.join("CMakeFiles")).is_ok_and(|entries| {
-            entries
-                .filter_map(Result::ok)
-                .filter(|entry| {
-                    entry
-                        .file_name()
-                        .to_str()
-                        .is_some_and(|name| name.starts_with("impl-") && name.ends_with(".ninja"))
-                })
-                .any(|entry| has_protected_launcher(entry.path()))
-        })
+    [manifest, build.join("CMakeFiles/rules.ninja")]
+        .into_iter()
+        .any(has_protected_launcher)
 }
 
 /// CMake retains find_program results when their option is turned off.
@@ -636,9 +628,9 @@ impl Run<'_> {
         // that can silently omit this worktree's changed headers on a cache hit.
         // Hosted CI keeps its explicit cache configuration and fixed checkout.
         if local_windows_ninja {
-            let reason = shared_cache_reason(&cache).or_else(|| {
+            let reason = shared_cache_reason(&cache, &self.options.config).or_else(|| {
                 (cache_history
-                    && !protected_cache_configuration(&cache)
+                    && !protected_cache_configuration(&cache, &self.options.config)
                     && self.build_dir.join(".ninja_deps").is_file())
                 .then_some(concat!(
                     "this Ninja build tree was configured with a shared sccache before: its ",
@@ -742,13 +734,15 @@ impl Run<'_> {
         // is the proof either way: configuration says nothing about the objects
         // that already exist, so verdicts depend on the record, not on the option.
         if local_windows_ninja {
-            let reason = shared_cache_reason(&cache).map(str::to_string).or_else(|| {
-                if cache_history || configured_with_sccache_before(&cache) {
-                    self.unproven_dependencies(&cache).err()
-                } else {
-                    None
-                }
-            });
+            let reason = shared_cache_reason(&cache, &self.options.config)
+                .map(str::to_string)
+                .or_else(|| {
+                    if cache_history || configured_with_sccache_before(&cache) {
+                        self.unproven_dependencies(&cache).err()
+                    } else {
+                        None
+                    }
+                });
             if let Some(reason) = reason {
                 self.console.line(&reason);
                 self.invalid(reason);
@@ -1571,16 +1565,20 @@ mod tests {
             ("EXOSNAP_COMPILER_LAUNCHER:STRING=\n", false),
         ] {
             std::fs::write(&cache, contents).unwrap();
-            assert_eq!(shared_cache_reason(&cache).is_some(), refused);
+            assert_eq!(shared_cache_reason(&cache, "Debug").is_some(), refused);
         }
     }
 
     #[test]
     fn cache_protection_requires_the_generated_launcher() {
-        for (manifest, binding) in [
-            ("CMakeFiles/rules.ninja", "command"),
-            ("build.ninja", "LAUNCHER"),
-            ("CMakeFiles/impl-Release.ninja", "LAUNCHER"),
+        for (manifest, binding, generator) in [
+            ("CMakeFiles/rules.ninja", "command", "Ninja"),
+            ("build.ninja", "LAUNCHER", "Ninja"),
+            (
+                "CMakeFiles/impl-Release.ninja",
+                "LAUNCHER",
+                "Ninja Multi-Config",
+            ),
         ] {
             let dir = tempfile::tempdir().unwrap();
             let cache = dir.path().join("CMakeCache.txt");
@@ -1596,18 +1594,29 @@ mod tests {
                     "cmake -E env SCCACHE_C_CUSTOM_CACHE_BUSTER=exosnap-msvc-ninja-v1-hash sccache",
                 ),
             ] {
-                let configured = format!("EXOSNAP_USE_SCCACHE:BOOL=TRUE\n{protection}\n");
+                let configured = format!(
+                    "EXOSNAP_USE_SCCACHE:BOOL=TRUE\nCMAKE_GENERATOR:INTERNAL={generator}\n{protection}\n"
+                );
                 std::fs::write(&cache, &configured).unwrap();
+                if generator == "Ninja Multi-Config" {
+                    std::fs::write(
+                        dir.path().join("CMakeFiles/impl-Debug.ninja"),
+                        format!("  {binding} = {launcher} cl.exe"),
+                    )
+                    .unwrap();
+                }
                 std::fs::write(&manifest, format!("  {binding} = sccache cl.exe")).unwrap();
-                assert!(shared_cache_reason(&cache).is_some());
+                assert!(shared_cache_reason(&cache, "Release").is_some());
                 std::fs::write(&manifest, format!("  {binding} = {launcher} cl.exe")).unwrap();
-                assert!(shared_cache_reason(&cache).is_none());
-                std::fs::write(
-                    &cache,
-                    format!("{configured}EXOSNAP_COMPILER_LAUNCHER:STRING=C:/tools/sccache.exe\n"),
-                )
-                .unwrap();
-                assert!(shared_cache_reason(&cache).is_some());
+                assert!(shared_cache_reason(&cache, "Release").is_none());
+                for override_name in ["EXOSNAP_COMPILER_LAUNCHER", "CMAKE_C_COMPILER_LAUNCHER"] {
+                    std::fs::write(
+                        &cache,
+                        format!("{configured}{override_name}:STRING=C:/tools/sccache.exe\n"),
+                    )
+                    .unwrap();
+                    assert!(shared_cache_reason(&cache, "Release").is_some());
+                }
             }
         }
     }
@@ -1625,10 +1634,10 @@ mod tests {
         )
         .unwrap();
         assert!(configured_with_sccache_before(&cache));
-        assert!(shared_cache_reason(&cache).is_none());
+        assert!(shared_cache_reason(&cache, "Debug").is_none());
         // Not isolated, so the pre-build refusal for a tree with cache history
         // has to catch it; the dependency scan would not run otherwise.
-        assert!(!protected_cache_configuration(&cache));
+        assert!(!protected_cache_configuration(&cache, "Debug"));
     }
 
     #[test]

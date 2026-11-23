@@ -145,7 +145,7 @@ The [isolated probe](../../tools/exo-dev/examples/sccache_deps_replay.rs)
 can qualify a new sccache version with `--verify-shared`.
 
 The local Ninja presets keep sccache opt-in.
-With `EXOSNAP_USE_SCCACHE=ON`, the managed MSVC launcher adds the source and build directories to the sccache key via `SCCACHE_C_CUSTOM_CACHE_BUSTER`.
+With `EXOSNAP_USE_SCCACHE=ON`, the managed MSVC C++ launcher adds the source and build directories to the sccache key via `SCCACHE_C_CUSTOM_CACHE_BUSTER`.
 Different build trees, including Debug and Release, start cold and can then reuse their own entries.
 They can use the same disk cache and server.
 CMake rejects a bare sccache launcher override on local MSVC Ninja.

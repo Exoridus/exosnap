@@ -158,9 +158,11 @@ elseif(EXOSNAP_USE_SCCACHE)
         message(WARNING "EXOSNAP_USE_SCCACHE is ON, but sccache was not found. Configure continues without a compiler launcher.")
     endif()
 endif()
-if(_exosnap_local_msvc_ninja AND NOT EXOSNAP_SCCACHE_SCOPED)
-    string(TOLOWER "${CMAKE_CXX_COMPILER_LAUNCHER}" _exosnap_launcher_lower)
-    if(_exosnap_launcher_lower MATCHES "sccache")
+if(_exosnap_local_msvc_ninja)
+    string(TOLOWER "${CMAKE_C_COMPILER_LAUNCHER}" _exosnap_c_launcher_lower)
+    string(TOLOWER "${CMAKE_CXX_COMPILER_LAUNCHER}" _exosnap_cxx_launcher_lower)
+    if(_exosnap_c_launcher_lower MATCHES "sccache"
+       OR (NOT EXOSNAP_SCCACHE_SCOPED AND _exosnap_cxx_launcher_lower MATCHES "sccache"))
         message(FATAL_ERROR
             "An explicit sccache launcher can replay another worktree's /showIncludes paths. "
             "Clear the launcher override and use EXOSNAP_USE_SCCACHE=ON to scope the cache keys.")
