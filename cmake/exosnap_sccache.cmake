@@ -32,6 +32,16 @@ function(exosnap_sccache_normalized_path out_var path)
   set(${out_var} "${_lower}" PARENT_SCOPE)
 endfunction()
 
+# The command changes when either root changes, so Ninja also recompiles
+# existing objects once instead of keeping their pre-scoping dependency paths.
+function(exosnap_scope_sccache_launcher)
+  string(SHA256 _scope "${CMAKE_SOURCE_DIR}\n${CMAKE_BINARY_DIR}\n$ENV{SCCACHE_C_CUSTOM_CACHE_BUSTER}")
+  set(CMAKE_CXX_COMPILER_LAUNCHER
+    "${CMAKE_COMMAND};-E;env;SCCACHE_C_CUSTOM_CACHE_BUSTER=exosnap-msvc-ninja-v1-${_scope};${CMAKE_CXX_COMPILER_LAUNCHER}"
+    PARENT_SCOPE)
+  set(EXOSNAP_SCCACHE_SCOPED ON CACHE INTERNAL "The generated launcher scopes local sccache keys")
+endfunction()
+
 # Records that this build tree has configured a compiler cache. CMake keeps an
 # INTERNAL cache entry, so the marker survives turning the option or launcher
 # off; a tree that once cached objects can then never be mistaken for one that

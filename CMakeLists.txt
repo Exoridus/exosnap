@@ -68,9 +68,8 @@ endif()
 # Worktree-shared local sccache may replay MSVC /showIncludes paths from the
 # producer checkout into the consumer's Ninja deps. With both worktrees present,
 # changing a header in the consumer can leave its object and tests stale.
-# The local Ninja presets default to OFF until that correctness bug is fixed.
-# Hosted CI still enables a separate GitHub cache explicitly with a stable
-# checkout layout. A locally supplied compiler launcher is an explicit override.
+# Keep local caching opt-in. A managed local launcher scopes cache keys to
+# the build tree, while hosted CI keeps its stable checkout layout.
 option(EXOSNAP_USE_SCCACHE "Use sccache as the C++ compiler launcher when it is available." OFF)
 # A cache and server of its own per build tree cannot replay another checkout's
 # include paths. It also cannot share objects with another worktree, which is
@@ -80,14 +79,11 @@ option(EXOSNAP_SCCACHE_ISOLATED
 set(EXOSNAP_SCCACHE_PORT "" CACHE STRING
     "Fixed sccache server port for this build tree. Empty derives one from the build directory; set it explicitly when two build trees derive the same port.")
 set(EXOSNAP_COMPILER_LAUNCHER "" CACHE STRING "Optional C++ compiler launcher executable, such as sccache.")
-if(WIN32 AND EXOSNAP_USE_SCCACHE AND NOT EXOSNAP_SCCACHE_ISOLATED AND NOT DEFINED ENV{GITHUB_ACTIONS})
-    message(WARNING
-        "Local sccache can replay another worktree's /showIncludes paths and miss "
-        "required header rebuilds (ExoSnap issue #558). Local exo-dev test "
-        "runs refuse such configurations until a verified correction exists. "
-        "EXOSNAP_SCCACHE_ISOLATED=ON gives this tree its own cache and server. "
-        "Previously affected build trees require fresh compilation.")
+set(_exosnap_local_msvc_ninja OFF)
+if(WIN32 AND MSVC AND CMAKE_GENERATOR MATCHES "^Ninja" AND NOT "$ENV{GITHUB_ACTIONS}" STREQUAL "true")
+    set(_exosnap_local_msvc_ninja ON)
 endif()
+unset(EXOSNAP_SCCACHE_SCOPED CACHE)
 
 include(cmake/exosnap_sccache.cmake)
 
@@ -155,8 +151,21 @@ elseif(EXOSNAP_USE_SCCACHE)
             set(CMAKE_CXX_COMPILER_LAUNCHER "${EXOSNAP_SCCACHE_EXE}")
             message(STATUS "Compiler launcher: sccache (${EXOSNAP_SCCACHE_EXE})")
         endif()
+        if(_exosnap_local_msvc_ninja)
+            exosnap_scope_sccache_launcher()
+        endif()
     else()
         message(WARNING "EXOSNAP_USE_SCCACHE is ON, but sccache was not found. Configure continues without a compiler launcher.")
+    endif()
+endif()
+if(_exosnap_local_msvc_ninja)
+    string(TOLOWER "${CMAKE_C_COMPILER_LAUNCHER}" _exosnap_c_launcher_lower)
+    string(TOLOWER "${CMAKE_CXX_COMPILER_LAUNCHER}" _exosnap_cxx_launcher_lower)
+    if(_exosnap_c_launcher_lower MATCHES "sccache"
+       OR (NOT EXOSNAP_SCCACHE_SCOPED AND _exosnap_cxx_launcher_lower MATCHES "sccache"))
+        message(FATAL_ERROR
+            "An explicit sccache launcher can replay another worktree's /showIncludes paths. "
+            "Clear the launcher override and use EXOSNAP_USE_SCCACHE=ON to scope the cache keys.")
     endif()
 endif()
 enable_testing()
