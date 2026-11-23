@@ -2,6 +2,7 @@
 
 #include <QTemporaryDir>
 
+#include <algorithm>
 #include <filesystem>
 #include <fstream>
 #include <iterator>
@@ -160,6 +161,24 @@ TEST(CapabilitySummaryTest, FromCapabilitySet_ReportsContainers) {
 }
 
 // --- ConfigSummary tests ---
+
+TEST(ConfigSummaryTest, UnicodeOutputPathsUseUtf8RatherThanTheActiveWindowsCodepage) {
+    const std::filesystem::path native(L"C:/Videos/\u8981");
+    OutputSettingsModel output;
+    output.output_folder = native;
+    output.naming_pattern = L"\u8981.mkv";
+    const auto summary =
+        ConfigSummary::FromCurrentSettings(output, VideoSettingsModel{}, capability::AudioUiState{},
+                                           native / L"settings.ini", "UTF-8", "");
+    EXPECT_EQ(PathAsUtf8(native), std::string("C:/Videos/\xE8\xA6\x81"));
+    EXPECT_EQ(summary.settings_file_path, PathAsUtf8(native / L"settings.ini"));
+    EXPECT_EQ(summary.effective_output_path, PathAsUtf8(native / output.naming_pattern));
+    const auto folder = std::find_if(summary.entries.begin(), summary.entries.end(), [](const ConfigEntry& entry) {
+        return entry.label == "Output Folder";
+    });
+    ASSERT_NE(folder, summary.entries.end());
+    EXPECT_EQ(folder->value, PathAsUtf8(native));
+}
 
 TEST(ConfigSummaryTest, FromCurrentSettings_HasExpectedFields) {
     OutputSettingsModel output;
