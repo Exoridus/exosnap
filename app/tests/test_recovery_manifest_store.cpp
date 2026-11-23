@@ -1,6 +1,7 @@
 #include <gtest/gtest.h>
 #include <windows.h>
 
+#include <QByteArray>
 #include <QDir>
 #include <QFile>
 #include <QFileInfo>
@@ -216,6 +217,27 @@ TEST(RecoveryManifestStoreTest, FutureSchemaVersionResetsToEmpty) {
     EXPECT_TRUE(store.Entries().isEmpty());
 
     QFile::remove(path);
+}
+
+TEST(RecoveryManifestStoreTest, NewEntriesCanBeRemovedWhenLegacyManifestIsInvalid) {
+    for (const QByteArray& legacy : {QByteArrayLiteral("{"), QByteArrayLiteral("{\"schema_version\":999}")}) {
+        const QString path = UniqueTempStorePath();
+        QFile file(path);
+        ASSERT_TRUE(file.open(QIODevice::WriteOnly));
+        ASSERT_EQ(file.write(legacy), legacy.size());
+        file.close();
+
+        RecoveryManifestStore store(path);
+        const auto entry = MakeEntry(QStringLiteral("new-recording"));
+        ASSERT_TRUE(store.Add(entry));
+        ASSERT_TRUE(store.UpdateFinalized(entry.id, true));
+        ASSERT_EQ(store.Entries().size(), 1);
+        EXPECT_TRUE(store.Remove(entry.id));
+        EXPECT_TRUE(RecoveryManifestStore(path).Entries().isEmpty());
+
+        ASSERT_TRUE(file.open(QIODevice::ReadOnly));
+        EXPECT_EQ(file.readAll(), legacy);
+    }
 }
 
 // =============================================================================

@@ -238,6 +238,7 @@ bool RecoveryManifestStore::UpdateFinalized(const QString& id, bool finalized) {
             return true;
         }
         record = EntryToJson(*found);
+        record->insert(QStringLiteral("legacy_override"), true);
     }
     if (record->value(QStringLiteral("removed")).toBool())
         return true;
@@ -251,12 +252,18 @@ bool RecoveryManifestStore::Remove(const QString& id) {
     const auto path = EntryPath(id);
     const auto entry_lock = locks_->ForFile(path);
     std::lock_guard lock(*entry_lock);
-    const auto legacy = LoadLegacy();
-    if (!legacy)
-        return false;
-    if (std::any_of(legacy->begin(), legacy->end(), [&](const auto& entry) { return entry.id == id; })) {
-        // Suppress the legacy entry without rewriting other recordings' recovery data.
-        return CommitEntry(id, {{QStringLiteral("id"), id}, {QStringLiteral("removed"), true}});
+    const auto record = ReadEntry(path);
+    const bool known_record = record && record->value(QStringLiteral("id")).toString() == id;
+    if (known_record && record->value(QStringLiteral("removed")).toBool())
+        return true;
+
+    // A recording that was added directly owns its entry file. A legacy override still hides a separate record.
+    if (!known_record || record->value(QStringLiteral("legacy_override")).toBool()) {
+        const auto legacy = LoadLegacy();
+        if (!legacy)
+            return false;
+        if (std::any_of(legacy->begin(), legacy->end(), [&](const auto& entry) { return entry.id == id; }))
+            return CommitEntry(id, {{QStringLiteral("id"), id}, {QStringLiteral("removed"), true}});
     }
     if (!QFile::exists(path) || QFile::remove(path))
         return true;
