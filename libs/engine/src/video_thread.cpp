@@ -3625,10 +3625,6 @@ void VideoThread::RunAttachment(const std::shared_ptr<NativeState>& native, cons
             m_state.stats.dropped_or_skipped_video_frames = droppedFrames + slotStallCount;
             m_state.stats.encoded_video_packets++;
             m_state.stats.video_bytes += pkt_bytes_count;
-            // Publish the video media duration live (previously only at teardown) so
-            // the duration-skew metric — video vs audio media time — is available to
-            // live diagnostics, not just the final snapshot. lastVideoPts is the newest
-            // emitted video PTS and is monotonic.
             m_state.stats.video_duration_ns = lastVideoPts;
         }
         return true;

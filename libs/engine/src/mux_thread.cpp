@@ -533,18 +533,20 @@ void MuxThread::Run() {
     MuxAudioHold segment_pending_audio(audio_hold_limits);
     // Audio that belonged to a segment already closed. Counted, not just dropped.
     uint64_t trimmed_audio_packets = 0;
-    // Highest aligned session PTS actually WRITTEN per audio track, so the
-    // duration reported for audio describes the file rather than the encoder.
+    MuxAudioHold audio_hold(audio_hold_limits);
     std::array<uint64_t, CodecPrivateData::kMaxAudioTracks> aligned_audio_end_ns{};
     bool aligned_audio_advanced = false;
-    const auto publish_aligned_audio = [&]() {
-        if (!aligned_audio_advanced)
+    uint64_t published_video_progress_ns = 0;
+    const auto publish_timeline_progress = [&]() {
+        const uint64_t video_progress_ns = audio_hold.video_watermark().value_or(0);
+        if (!aligned_audio_advanced && video_progress_ns == published_video_progress_ns)
             return;
         std::lock_guard lk(m_state.stats_mutex);
+        m_state.stats.mux_video_progress_ns = video_progress_ns;
         m_state.stats.aligned_audio_duration_ns = aligned_audio_end_ns;
+        published_video_progress_ns = video_progress_ns;
         aligned_audio_advanced = false;
     };
-    MuxAudioHold audio_hold(audio_hold_limits);
     std::optional<SplitSentinel> pending_split;
 
     auto align_audio = [&](EncodedAudioPacket& payload) -> bool {
@@ -679,6 +681,7 @@ void MuxThread::Run() {
             m_state.diagnostics.OnMuxFailure();
             return;
         }
+        audio_hold.AdvanceVideo(payload.pts_ns);
     };
 
     auto drain_audio_hold = [&](bool all) {
@@ -822,9 +825,7 @@ void MuxThread::Run() {
                     begin_new_segment(*pending_split, payload.pts_ns);
                     pending_split.reset();
                 }
-                const uint64_t video_pts_ns = payload.pts_ns;
                 push_video(std::move(payload));
-                audio_hold.AdvanceVideo(video_pts_ns);
                 drain_pending_audio();
                 drain_audio_hold(false);
                 drain_segment_pending_audio();
@@ -848,7 +849,8 @@ void MuxThread::Run() {
                 m_state.RecordFailure(E_FAIL, ErrorPhase::Mux, "Video progress interrupted a split boundary");
                 return;
             }
-            audio_hold.AdvanceVideo(payload.safe_before_pts_ns);
+            if (!write_error && audio_hold.video_watermark().has_value())
+                audio_hold.AdvanceVideo(payload.safe_before_pts_ns);
             drain_pending_audio();
             drain_audio_hold(false);
         } else if constexpr (std::is_same_v<T, SplitSentinel>) {
@@ -877,9 +879,7 @@ void MuxThread::Run() {
             if (pkt.bytes.empty())
                 continue;
             resolve_epoch();
-            const uint64_t video_pts_ns = pkt.pts_ns;
             push_video(std::move(pkt));
-            audio_hold.AdvanceVideo(video_pts_ns);
             drain_pending_audio();
             drain_audio_hold(false);
             drain_segment_pending_audio();
@@ -896,7 +896,7 @@ void MuxThread::Run() {
                 buffer_pending_audio(std::move(pkt));
             }
         }
-        publish_aligned_audio();
+        publish_timeline_progress();
     }
 
     // Size-split threshold (SPLIT-BY-SIZE-R1): 0 means disabled.
@@ -971,7 +971,7 @@ void MuxThread::Run() {
                        item->payload);
             processed_any = true;
         }
-        publish_aligned_audio();
+        publish_timeline_progress();
         if (processed_any) {
             const auto mux_t1 = std::chrono::steady_clock::now();
             m_state.diagnostics.OnMuxLatency(mux_t1,
@@ -1017,7 +1017,7 @@ void MuxThread::Run() {
     while (segment_pending_audio.Pop())
         ++trimmed_audio_packets;
 
-    publish_aligned_audio();
+    publish_timeline_progress();
 
     // What the splits cost, stated once. Audio the muxer could not place is
     // audio the file does not contain; a report that said nothing about it would

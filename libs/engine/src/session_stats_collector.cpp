@@ -305,7 +305,7 @@ void SessionStatsCollector::Run() {
             snapshot.elapsed_seconds = CapturedSecondsAt(now);
 
             const DurationSkew skew =
-                ComputeDurationSkew(snapshot.video_duration_ns, snapshot.aligned_audio_duration_ns);
+                ComputeDurationSkew(snapshot.mux_video_progress_ns, snapshot.aligned_audio_duration_ns);
             snapshot.duration_skew_ms = skew.ms;
             snapshot.duration_skew_available = skew.available;
 
@@ -335,7 +335,7 @@ void SessionStatsCollector::EmitSessionPerfSummary() {
         stats_copy = m_state.stats;
     }
     const DurationSkew skew_result =
-        ComputeDurationSkew(stats_copy.video_duration_ns, stats_copy.aligned_audio_duration_ns);
+        ComputeDurationSkew(stats_copy.mux_video_progress_ns, stats_copy.aligned_audio_duration_ns);
 
     std::string res =
         std::to_string(stats_copy.output_size.width) + "x" + std::to_string(stats_copy.output_size.height) + "@" +

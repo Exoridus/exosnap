@@ -551,7 +551,7 @@ struct RecordingDiagnosticsSnapshot {
     // merge mixes several device clocks and does not report. Deliberately NOT the
     // difference of the two pipelines' most recent output PTS — that only sees
     // encoder/queue latency. Division of labour: av_drift_ms / av_drift_raw_ms
-    // are the clocks; duration_skew_ms below is encoder starvation.
+    // describe clock timing. duration_skew_ms below compares mux progress.
     double av_drift_ms = 0.0;
     MetricAvailability av_drift_availability = MetricAvailability::Unavailable;
 
@@ -583,10 +583,9 @@ struct RecordingDiagnosticsSnapshot {
     // Encoder initialization parameters, captured once at configure time.
     EncoderInitInfo encoder_init;
 
-    // Total media-duration skew: |video media time - audio media time| (ms). Unlike
-    // av_drift_ms (an instantaneous PTS lead/lag), this is the accumulated difference
-    // in how much video vs audio the file holds — the signal that a starving encoder
-    // is compressing the video timeline. Unavailable until both streams have duration.
+    // Worst difference in mux progress between the video timeline and an aligned
+    // audio track (ms). Video progress includes committed static VFR holds.
+    // Unavailable until both video and at least one audio track have progressed.
     double duration_skew_ms = 0.0;
     MetricAvailability duration_skew_availability = MetricAvailability::Unavailable;
 

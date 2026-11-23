@@ -1163,7 +1163,7 @@ RecordingDiagnosticsSnapshot PipelineDiagnosticsAggregator::BuildSnapshot(time_p
     s.encoder_init = encoder_init_;
 
     // ---- Duration skew ----
-    const DurationSkew skew = ComputeDurationSkew(stats.video_duration_ns, stats.aligned_audio_duration_ns);
+    const DurationSkew skew = ComputeDurationSkew(stats.mux_video_progress_ns, stats.aligned_audio_duration_ns);
     s.duration_skew_ms = skew.ms;
     s.duration_skew_availability = skew.available ? MetricAvailability::Available : MetricAvailability::Unavailable;
 

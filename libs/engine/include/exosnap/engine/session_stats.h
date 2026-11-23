@@ -21,25 +21,19 @@ struct SessionStats {
     uint64_t audio_bytes = 0;
     uint64_t output_file_bytes = 0; // best-effort; 0 if not yet known
     double elapsed_seconds = 0.0;
+    // Latest video PTS reported by the video worker for recording progress.
     uint64_t video_duration_ns = 0;
-    // The audio encoder's own last PTS, on the AUDIO capture timeline. Kept
-    // because it is the honest raw figure for diagnosing the audio path, and
-    // deliberately NOT comparable with video_duration_ns: the muxer shifts every
-    // audio track onto the video timeline before writing it, so this differs from
-    // what the file contains by exactly that shift.
+    // Latest audio encoder PTS on the audio capture timeline.
     uint64_t audio_duration_ns = 0;
-    // The last audio end the MUXER actually wrote, on the same aligned timeline
-    // video_duration_ns is on, per track. This is the figure the file's own
-    // timestamps agree with, and the only one duration_skew_ms may be computed
-    // from. Zero for a track that had nothing written.
+    // Latest picture PTS accepted by the muxer or committed VFR hold progress,
+    // whichever is later, on the session video timeline.
+    uint64_t mux_video_progress_ns = 0;
+    // Latest audio PTS accepted by the muxer per track, aligned to the session
+    // video timeline before applying container codec delay. Zero if a track has
+    // not progressed.
     std::array<uint64_t, exosnap::engine::kMaxAudioTracks> aligned_audio_duration_ns{};
-    // |video end - aligned audio end| on one timeline. Comparing video against
-    // the unshifted audio_duration_ns reported the epoch offset as skew: a
-    // correctly aligned recording whose audio clock started 200 ms after the
-    // video clock read as 200 ms of drift.
-    //
-    // Not an A/V sync proof. It compares where the two streams END; two streams
-    // that end together can still have drifted apart and back in between.
+    // Largest endpoint difference between mux video progress and aligned audio
+    // tracks. Matching endpoints alone do not establish sync throughout a recording.
     double duration_skew_ms = 0.0;
     bool duration_skew_available = false;
     uint64_t dropped_or_skipped_video_frames = 0;
@@ -90,36 +84,23 @@ struct SessionStats {
     uint64_t audio_packets_trimmed_at_split = 0;
 };
 
-// The A/V duration skew, from the two ends that are on the same timeline.
-//
-// One function so the live snapshot and the end-of-session summary cannot drift
-// apart -- they had the same computation written twice, against the wrong audio
-// figure both times.
-//
-// The aligned audio end is what the MUXER wrote; `audio_duration_ns` is the
-// encoder's own last PTS on the capture timeline and differs from it by the
-// track's alignment shift. Comparing that against the video end reported a
-// correctly aligned recording as skewed by exactly its epoch offset.
-//
-// Unavailable rather than 0 when either end is missing: "no skew" and "nothing
-// to compare" are different, and a caller that cannot tell them apart publishes
-// a zero it did not measure. Multi-track sessions take the worst track -- the
-// question is whether ANY audio ends away from the picture.
+// Compare mux video progress against each aligned audio track that has
+// progressed. The worst track determines skew. Zero input means unmeasured.
 struct DurationSkew {
     bool available = false;
     double ms = 0.0;
 };
 
 [[nodiscard]] inline DurationSkew
-ComputeDurationSkew(uint64_t video_duration_ns,
+ComputeDurationSkew(uint64_t mux_video_progress_ns,
                     const std::array<uint64_t, kMaxAudioTracks>& aligned_audio_duration_ns) noexcept {
-    if (video_duration_ns == 0)
+    if (mux_video_progress_ns == 0)
         return {};
     DurationSkew worst;
     for (const uint64_t audio_end : aligned_audio_duration_ns) {
         if (audio_end == 0)
-            continue; // this track had nothing written; it is not a zero skew
-        const double vd = static_cast<double>(video_duration_ns) / 1e6;
+            continue;
+        const double vd = static_cast<double>(mux_video_progress_ns) / 1e6;
         const double ad = static_cast<double>(audio_end) / 1e6;
         const double skew = vd > ad ? vd - ad : ad - vd;
         if (!worst.available || skew > worst.ms) {

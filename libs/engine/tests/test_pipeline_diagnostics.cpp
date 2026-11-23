@@ -1729,19 +1729,24 @@ TEST(PipelineDiagnostics, DurationSkewComparesAlignedTracksInLiveAndTerminalSnap
     PipelineDiagnosticsAggregator agg;
     agg.Reset(1, MakeConfig());
     auto stats = MakeStats();
-    stats.video_duration_ns = 1'000'000'000;
+    stats.video_duration_ns = 800'000'000;
     stats.audio_duration_ns = 1'200'000'000;
+    stats.aligned_audio_duration_ns[0] = 1'000'000'000;
+    const auto no_video = agg.BuildSnapshot(At(0), stats, DiagnosticsLifecycle::Recording, 1.0);
+    EXPECT_EQ(no_video.duration_skew_availability, MetricAvailability::Unavailable);
 
-    const auto no_audio = agg.BuildSnapshot(At(0), stats, DiagnosticsLifecycle::Recording, 1.0);
+    stats.mux_video_progress_ns = 1'000'000'000;
+    stats.aligned_audio_duration_ns[0] = 0;
+    const auto no_audio = agg.BuildSnapshot(At(50), stats, DiagnosticsLifecycle::Recording, 1.05);
     EXPECT_EQ(no_audio.duration_skew_availability, MetricAvailability::Unavailable);
 
-    stats.aligned_audio_duration_ns[0] = stats.video_duration_ns;
-    const auto aligned = agg.BuildSnapshot(At(50), stats, DiagnosticsLifecycle::Recording, 1.1);
+    stats.aligned_audio_duration_ns[0] = 1'000'000'000;
+    const auto aligned = agg.BuildSnapshot(At(100), stats, DiagnosticsLifecycle::Recording, 1.1);
     EXPECT_EQ(aligned.duration_skew_availability, MetricAvailability::Available);
     EXPECT_DOUBLE_EQ(aligned.duration_skew_ms, 0.0);
 
     stats.aligned_audio_duration_ns[2] = 990'000'000;
-    const auto completed = agg.BuildSnapshot(At(100), stats, DiagnosticsLifecycle::Completed, 1.2);
+    const auto completed = agg.BuildSnapshot(At(150), stats, DiagnosticsLifecycle::Completed, 1.2);
     EXPECT_EQ(completed.duration_skew_availability, MetricAvailability::Available);
     EXPECT_DOUBLE_EQ(completed.duration_skew_ms, 10.0);
 }

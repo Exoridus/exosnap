@@ -1272,7 +1272,7 @@ RecorderResult RecorderSession::RecordImpl(const RecorderConfig& config, RecordR
     }
 
     const DurationSkew skew =
-        ComputeDurationSkew(result.stats.video_duration_ns, result.stats.aligned_audio_duration_ns);
+        ComputeDurationSkew(result.stats.mux_video_progress_ns, result.stats.aligned_audio_duration_ns);
     result.stats.duration_skew_ms = skew.ms;
     result.stats.duration_skew_available = skew.available;
 
