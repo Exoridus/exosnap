@@ -116,6 +116,22 @@ QByteArray ToJsonBytes(const QJsonArray& arr) {
     return QJsonDocument(arr).toJson(QJsonDocument::Indented);
 }
 
+// Defense in depth for callers which supply a settings summary directly.
+// The production adapter rejects these labels *before* localization; this
+// second boundary also protects an English legacy/raw summary.
+QByteArray ExportSettingsSummary(const QString& text) {
+    QString filtered;
+    for (const QString& line : text.split(QLatin1Char('\n'))) {
+        const QString name = line.left(line.indexOf(QLatin1Char(':'))).trimmed();
+        if (name.compare(QStringLiteral("Output Folder"), Qt::CaseInsensitive) == 0 ||
+            name.compare(QStringLiteral("Effective Output Path"), Qt::CaseInsensitive) == 0)
+            continue;
+        if (!line.isEmpty())
+            filtered += line + QLatin1Char('\n');
+    }
+    return ScrubBundleText(filtered.toUtf8());
+}
+
 } // namespace
 
 QString RedactCaptureTargets(const QString& text) {
@@ -210,8 +226,9 @@ std::vector<BundleEntry> CollectBundleEntries(const BundleInputs& inputs) {
         entries.push_back({QStringLiteral("displays.json"), ToJsonBytes(arr)});
     }
 
-    // settings.txt — the ConfigSummary text, scrubbed (never a raw settings.ini dump).
-    entries.push_back({QStringLiteral("settings.txt"), ScrubBundleText(inputs.settings_summary.toUtf8())});
+    // settings.txt: omit absolute output paths structurally before scrubbing
+    // rather than depending on a free-text path regex.
+    entries.push_back({QStringLiteral("settings.txt"), ExportSettingsSummary(inputs.settings_summary)});
 
     // bundle-manifest.json — created last so it can list every included file.
     {
