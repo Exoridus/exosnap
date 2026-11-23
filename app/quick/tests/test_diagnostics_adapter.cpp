@@ -1,6 +1,5 @@
 // The QML boundary: probe results in, already-resolved presentation values out.
-// The adapter never performs I/O here — probe results are injected — so these tests
-// exercise the boundary shape, not the filesystem.
+// Most cases inject probe results. The path regression also runs the production worker.
 
 #include "DiagnosticIssueModel.h"
 #include "DiagnosticsAdapter.h"
@@ -20,6 +19,7 @@
 #include <QEventLoop>
 #include <QTimer>
 #include <QUrl>
+#include <QUuid>
 #include <QVariantMap>
 
 #include <gtest/gtest.h>
@@ -139,6 +139,28 @@ TEST(DiagnosticsAdapterTest, UnicodeConfigPathSurvivesTheActualProbeBoundary) {
     ASSERT_TRUE(WaitForProbe(adapter));
     ASSERT_TRUE(probed.has_value());
     EXPECT_EQ(*probed, native);
+}
+
+TEST(DiagnosticsAdapterTest, RealProbeCompletesForMissingUnicodeRelativeFolder) {
+    EnsureApplication();
+    const auto suffix = QUuid::createUuid().toString(QUuid::WithoutBraces);
+    const auto folder = QStringLiteral("\u8981-%1").arg(suffix);
+    const std::filesystem::path relative(folder.toStdWString());
+    ASSERT_FALSE(std::filesystem::exists(relative));
+
+    DiagnosticsAdapter adapter([](diagnostics::DiagnosticsProbeRequest request) {
+        request.run_self_test = false;
+        return diagnostics::RunDiagnosticsProbe(request);
+    });
+    auto config = MakeConfig();
+    config.output_folder = folder.toStdString();
+    adapter.setDiagnosticConfig(config);
+
+    ASSERT_TRUE(WaitForProbe(adapter));
+    const auto& probe = adapter.controller().probeResult();
+    EXPECT_EQ(probe.drive_label, config.output_folder);
+    EXPECT_EQ(probe.output_path_writable, std::optional<bool>{false});
+    EXPECT_FALSE(std::filesystem::exists(relative));
 }
 
 TEST(DiagnosticsAdapterTest, SupersededProbeIsDiscardedEvenWhenThePathChangesBack) {

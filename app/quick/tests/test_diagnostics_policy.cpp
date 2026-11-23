@@ -306,6 +306,14 @@ TEST(DiagnosticsHelpers, DriveLabelPrefersTheVolumeRoot) {
     EXPECT_EQ(DriveLabelForPath(std::filesystem::path("relative/path")), "relative/path");
 }
 
+TEST(DiagnosticsHelpers, DriveLabelPreservesUnicodeRelativePathAsUtf8) {
+    EXPECT_EQ(DriveLabelForPath(std::filesystem::path(L"\u8981/Recordings")), "\xE8\xA6\x81/Recordings");
+}
+
+TEST(DiagnosticsHelpers, DriveLabelPreservesUnicodeUncRootAsUtf8) {
+    EXPECT_EQ(DriveLabelForPath(std::filesystem::path(L"\\\\\u8981\\Recordings")), "\\\\\xE8\xA6\x81");
+}
+
 // ── Self-test ───────────────────────────────────────────────────────────────────
 
 TEST(DiagnosticsSelfTest, AllPassIsPass) {

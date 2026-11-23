@@ -1002,6 +1002,18 @@ set_tests_properties(quick.qml.about_smoke PROPERTIES
 exosnap_set_test_phase(quick.qml.about_smoke desktop)
 set_tests_properties(quick.qml.about_smoke PROPERTIES EXOSNAP_BUILD_TARGET exosnap)
 
+set(_unicode_recovery_config_dir "${CMAKE_CURRENT_BINARY_DIR}/test-config/unicode_recovery_startup")
+file(MAKE_DIRECTORY "${_unicode_recovery_config_dir}/要")
+file(GENERATE OUTPUT "${_unicode_recovery_config_dir}/presets.toml" CONTENT
+    "[live.output]\nfolder = \"${_unicode_recovery_config_dir}/要\"\n")
+add_test(NAME quick.qml.unicode_recovery_startup COMMAND exosnap --smoke-test)
+set_tests_properties(quick.qml.unicode_recovery_startup PROPERTIES
+    LABELS "quick"
+    ENVIRONMENT "EXOSNAP_CONFIG_DIR=${_unicode_recovery_config_dir};EXOSNAP_OUTPUT_DIR=;QT_QPA_PLATFORM=offscreen;QT_QUICK_BACKEND=software"
+    EXOSNAP_BUILD_TARGET exosnap
+)
+exosnap_set_test_phase(quick.qml.unicode_recovery_startup desktop)
+
 # The four non-Record destinations are loaded by URL so their documents stay out
 # of the startup compile (QCR-615). That the pages are absent until navigation,
 # that setSource() actually delivered every adapter, and that Diagnostics' two
