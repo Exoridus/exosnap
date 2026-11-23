@@ -2743,7 +2743,7 @@ void QuickApplication::refreshDiagnosticsData() {
         live_config_.output, live_config_.video, config.audio,
         std::filesystem::path(settings_store_.SettingsFilePath().toStdWString()),
         preset_registry_.SelectedPreset().name, std::string());
-    config.output_folder = live_config_.output.output_folder.string();
+    config.output_folder = diagnostics::PathAsUtf8(live_config_.output.output_folder);
     config.hotkeys_ok = true;
     config.hotkeys_summary = "None configured";
     diagnostics_adapter_.setDiagnosticConfig(std::move(config));
@@ -4443,7 +4443,7 @@ void QuickApplication::applyDiagnosticsVisualScenarios() {
             live_config_.output, live_config_.video, config.audio,
             std::filesystem::path(settings_store_.SettingsFilePath().toStdWString()),
             preset_registry_.SelectedPreset().name, std::string());
-        config.output_folder = live_config_.output.output_folder.string();
+        config.output_folder = diagnostics::PathAsUtf8(live_config_.output.output_folder);
         config.profile_validation.succeeded = false;
         config.profile_validation.invalidity.push_back(
             {"video_codec", "AV1 encoding is not available on the selected adapter."});
