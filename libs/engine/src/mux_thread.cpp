@@ -536,6 +536,14 @@ void MuxThread::Run() {
     // Highest aligned session PTS actually WRITTEN per audio track, so the
     // duration reported for audio describes the file rather than the encoder.
     std::array<uint64_t, CodecPrivateData::kMaxAudioTracks> aligned_audio_end_ns{};
+    bool aligned_audio_advanced = false;
+    const auto publish_aligned_audio = [&]() {
+        if (!aligned_audio_advanced)
+            return;
+        std::lock_guard lk(m_state.stats_mutex);
+        m_state.stats.aligned_audio_duration_ns = aligned_audio_end_ns;
+        aligned_audio_advanced = false;
+    };
     MuxAudioHold audio_hold(audio_hold_limits);
     std::optional<SplitSentinel> pending_split;
 
@@ -599,14 +607,11 @@ void MuxThread::Run() {
             m_state.diagnostics.OnMuxFailure();
             return;
         }
-        // The end of the audio this file actually contains, on the same aligned
-        // timeline the video duration is on. The audio thread's own last PTS is
-        // on the capture timeline and differs from this by the track's shift, so
-        // comparing that against the video duration reported the epoch offset as
-        // drift.
-        const uint64_t aligned_end = payload.pts_ns + seg.codec_delay_ns[payload.track_id];
-        if (aligned_end > aligned_audio_end_ns[payload.track_id])
-            aligned_audio_end_ns[payload.track_id] = aligned_end;
+        // CodecDelay offsets the stored block timestamp. Compare the session PTS heard after it is subtracted.
+        if (payload.pts_ns > aligned_audio_end_ns[payload.track_id]) {
+            aligned_audio_end_ns[payload.track_id] = payload.pts_ns;
+            aligned_audio_advanced = true;
+        }
     };
 
     auto push_video = [&](EncodedVideoPacket&& payload) {
@@ -891,6 +896,7 @@ void MuxThread::Run() {
                 buffer_pending_audio(std::move(pkt));
             }
         }
+        publish_aligned_audio();
     }
 
     // Size-split threshold (SPLIT-BY-SIZE-R1): 0 means disabled.
@@ -965,6 +971,7 @@ void MuxThread::Run() {
                        item->payload);
             processed_any = true;
         }
+        publish_aligned_audio();
         if (processed_any) {
             const auto mux_t1 = std::chrono::steady_clock::now();
             m_state.diagnostics.OnMuxLatency(mux_t1,
@@ -1010,13 +1017,7 @@ void MuxThread::Run() {
     while (segment_pending_audio.Pop())
         ++trimmed_audio_packets;
 
-    // The aligned audio ends, published where the collector can compare them
-    // against the video duration on the same timeline.
-    {
-        std::lock_guard lk(m_state.stats_mutex);
-        for (uint32_t i = 0; i < track_count && i < m_state.stats.aligned_audio_duration_ns.size(); ++i)
-            m_state.stats.aligned_audio_duration_ns[i] = aligned_audio_end_ns[i];
-    }
+    publish_aligned_audio();
 
     // What the splits cost, stated once. Audio the muxer could not place is
     // audio the file does not contain; a report that said nothing about it would

@@ -38,7 +38,7 @@ DiagnosticsController::ProbeResult RunDiagnosticsProbe(const DiagnosticsProbeReq
         result.total_bytes = static_cast<uint64_t>(storage.bytesTotal());
 
     result.drive_label = DriveLabelForPath(request.output_folder);
-    result.output_path_writable = SelfTestRunner::CheckOutputPathWritable(request.output_folder.string()).passed;
+    result.output_path_writable = SelfTestRunner::CheckOutputPathWritable(request.output_folder).passed;
 
     if (request.run_self_test) {
         SelfTestRunner runner;

@@ -218,13 +218,9 @@ struct CompositorDiagnostics {
     double average_ms = 0.0;
     double peak_ms = 0.0;
     uint64_t frames_composed = 0;
-    // Sum of the p99 GPU execution times of the recorder's own passes
-    // (composition, HDR tone-map, RGB->YUV) over the rolling window, from D3D11
-    // timestamp queries. The CPU submission times above say nothing about
-    // when the GPU actually ran them.
-    double gpu_exec_p99_ms = 0.0;
-    // CPU command-submission time, NOT GPU execution time. GPU execution timing is
-    // Unavailable (no timestamp-query infrastructure; no synchronous readback allowed).
+    MetricAvailability timing_availability = MetricAvailability::Unavailable;
+    // A combined GPU percentile requires measurements correlated by frame.
+    std::optional<double> gpu_exec_p99_ms;
 
     // VideoProcessorBlt (BGRA->NV12) CPU submission duration, folded into the Compositor
     // card. steady_clock bracket around VideoProcessorBlt; NOT GPU execution time.
@@ -244,6 +240,7 @@ struct EncoderDiagnostics {
     // deferred until the measurement campaign shows whether it is product-relevant).
     double p50_ms = 0.0;
     double p99_ms = 0.0;
+    MetricAvailability timing_availability = MetricAvailability::Unavailable;
     double output_fps = 0.0; // encoded packets Δ / elapsed Δ
     uint64_t frames_submitted = 0;
     uint64_t frames_encoded = 0;
@@ -425,7 +422,7 @@ struct DiskDiagnostics {
     double peak_write_ms = 0.0;
     std::string output_target; // drive / root only (privacy-safe)
     uint64_t write_failures = 0;
-    MetricAvailability latency_availability = MetricAvailability::Available;
+    MetricAvailability latency_availability = MetricAvailability::Unavailable;
 };
 
 struct SplitDiagnostics {

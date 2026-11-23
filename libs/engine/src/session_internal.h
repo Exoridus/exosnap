@@ -20,6 +20,7 @@
 #include "pipeline_diagnostics_aggregator.h"
 #include "premux_state.h"
 #include "qpc_100ns.h"
+#include "session_callback_gate.h"
 #include "session_failure.h"
 
 #include <algorithm>
@@ -195,9 +196,39 @@ struct SessionState {
     // or from the last completed encode surface while paused, performs a one-shot
     // NV12→BGRA readback, fires the callback, then clears the flag.
     // At most one pending request is allowed; a second request while one is pending is ignored.
-    std::atomic<bool> snapshot_requested{false};
-    std::mutex snapshot_callback_mutex;
-    std::function<void(bool, uint32_t, uint32_t, std::vector<uint8_t>, std::string)> snapshot_callback;
+    std::shared_ptr<SessionCallbackGate> callback_gate;
+
+    [[nodiscard]] bool HasPendingSnapshot() const noexcept {
+        return snapshot_requested_.load(std::memory_order_acquire);
+    }
+
+    void AdmitSnapshot(RecorderSession::FrameSnapshotCallback callback) {
+        std::lock_guard lock(snapshot_callback_mutex_);
+        if (snapshot_retired_ || snapshot_callback_ || !callback)
+            return;
+        snapshot_callback_ = std::move(callback);
+        snapshot_requested_.store(true, std::memory_order_release);
+    }
+
+    void CompleteSnapshot(bool succeeded, uint32_t width, uint32_t height, std::vector<uint8_t> bgra,
+                          std::string error) {
+        // Keep the request available to terminal cancellation until the worker can deliver it.
+        callback_gate->Invoke([&] {
+            RecorderSession::FrameSnapshotCallback callback;
+            {
+                std::lock_guard lock(snapshot_callback_mutex_);
+                callback = TakeSnapshotLocked();
+            }
+            if (callback)
+                callback(succeeded, width, height, std::move(bgra), std::move(error));
+        });
+    }
+
+    RecorderSession::FrameSnapshotCallback RetireSnapshot() {
+        std::lock_guard lock(snapshot_callback_mutex_);
+        snapshot_retired_ = true;
+        return TakeSnapshotLocked();
+    }
 
     PremuxState premux;
 
@@ -321,9 +352,9 @@ struct SessionState {
         // made yet.
         mux_bytes_written.store(0, std::memory_order_relaxed);
         {
-            std::lock_guard lk(snapshot_callback_mutex);
-            snapshot_requested.store(false);
-            snapshot_callback = nullptr;
+            std::lock_guard lock(snapshot_callback_mutex_);
+            snapshot_retired_ = false;
+            (void)TakeSnapshotLocked();
         }
         failure_state_.Reset();
         premux.Reset();
@@ -389,6 +420,15 @@ struct SessionState {
     }
 
   private:
+    RecorderSession::FrameSnapshotCallback TakeSnapshotLocked() {
+        snapshot_requested_.store(false, std::memory_order_release);
+        return std::exchange(snapshot_callback_, nullptr);
+    }
+
+    std::atomic<bool> snapshot_requested_{false};
+    std::mutex snapshot_callback_mutex_;
+    bool snapshot_retired_{false};
+    RecorderSession::FrameSnapshotCallback snapshot_callback_;
     SessionFailureState failure_state_;
 };
 

@@ -382,12 +382,11 @@ QByteArray BuildSessionReportJson(const SessionReportInputs& inputs) {
         root[QStringLiteral("segments")] = segments;
     }
 
-    // ---- Error phase (only on failure) ----
+    // Error details may carry paths. Keep the stable failure fields in the report.
     if (!inputs.result.succeeded) {
         QJsonObject err;
         err[QStringLiteral("phase")] = QString::fromStdWString(inputs.result.error_phase);
         err[QStringLiteral("hresult")] = QString::fromStdWString(inputs.result.hresult_text);
-        err[QStringLiteral("detail")] = QString::fromStdWString(inputs.result.error_detail);
         root[QStringLiteral("error")] = err;
     }
 

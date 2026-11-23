@@ -71,6 +71,7 @@ class AudioTeeReader {
     void Release();
     [[nodiscard]] uint32_t PendingFrames() const;
     [[nodiscard]] AudioCaptureDescriptor Descriptor() const;
+    void AdvanceStart(uint64_t start_qpc_ns);
     [[nodiscard]] AudioReaderEnd SealEnd(uint64_t end_qpc_ns);
     [[nodiscard]] bool Ended() const;
     [[nodiscard]] void* ReadyEvent() const;

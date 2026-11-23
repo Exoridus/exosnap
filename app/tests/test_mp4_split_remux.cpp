@@ -18,6 +18,7 @@
 
 #include <QCoreApplication>
 #include <QDir>
+#include <QEvent>
 #include <QFile>
 #include <QString>
 #include <QTemporaryDir>
@@ -28,10 +29,13 @@
 #include <filesystem>
 #include <fstream>
 #include <functional>
+#include <future>
 #include <iterator>
+#include <memory>
 #include <mutex>
 #include <string>
 #include <thread>
+#include <utility>
 
 #include <exosnap/engine/recorder_session.h>
 
@@ -44,9 +48,41 @@
 namespace exosnap {
 class RecordingCoordinatorTestPeer {
   public:
+    static engine::SegmentCallback BeginSplit(RecordingCoordinator& coordinator, const std::filesystem::path& target,
+                                              QString manifest_id, std::function<void()> before_manifest_io = {}) {
+        {
+            std::lock_guard lock(coordinator.output_path_mutex_);
+            coordinator.current_output_path_ = target;
+        }
+        coordinator.session_is_mp4_ = true;
+        coordinator.session_transient_mkv_ = engine::DeriveTransientMkvPath(target);
+        coordinator.split_pending_.store(true);
+        coordinator.SetCurrentManifestId(std::move(manifest_id));
+        return coordinator.MakeSegmentCallback(std::move(before_manifest_io));
+    }
+
+    static void RetireSplit(RecordingCoordinator& coordinator) {
+        coordinator.RetireSegmentCallback();
+    }
+
+    static engine::SegmentCallback BeginSplitFeedback(RecordingCoordinator& coordinator) {
+        coordinator.session_is_mp4_ = false;
+        coordinator.is_recording_.store(true);
+        coordinator.split_pending_.store(true);
+        return coordinator.MakeSegmentCallback();
+    }
+
+    static void DeliverSplitFeedback(RecordingCoordinator& coordinator) {
+        QCoreApplication::sendPostedEvents(&coordinator.segment_remux_pool_, QEvent::MetaCall);
+    }
+
+    static QString ActiveManifestId(const RecordingCoordinator& coordinator) {
+        return coordinator.CurrentManifestId();
+    }
+
     static std::filesystem::path Retain(RecordingCoordinator& coordinator,
                                         const engine::RecordingMediaDescriptor& descriptor) {
-        if (!coordinator.recording_artifacts_.RegisterSource(descriptor, false))
+        if (!coordinator.recording_artifacts_->RegisterSource(descriptor, false))
             return {};
         engine::CompletedSegment segment;
         segment.path = descriptor.path;
@@ -112,6 +148,92 @@ static RecoveryManifestEntry MakeManifestEntry(const QString& id, const QString&
 
 TEST_F(Mp4SplitRemuxTest, ComputeHardStopThreshold_ZeroReserve_EqualsBase) {
     EXPECT_EQ(diagnostics::ComputeHardStopThreshold(0), diagnostics::kHardStopFreeBytes);
+}
+
+TEST_F(Mp4SplitRemuxTest, RetiredCompletionCannotPublishIntoNextRecording) {
+    QTemporaryDir directory;
+    ASSERT_TRUE(directory.isValid());
+    RecordingCoordinator coordinator;
+    const std::filesystem::path old_path(directory.filePath(QStringLiteral("old.mp4")).toStdWString());
+    const std::filesystem::path next_path(directory.filePath(QStringLiteral("new.mp4")).toStdWString());
+    RecoveryManifestStore store(directory.filePath(QStringLiteral("recovery.json")));
+    coordinator.SetRecoveryManifestStore(&store);
+    const auto old_partial = engine::DeriveTransientMkvPath(old_path);
+    ASSERT_TRUE(store.Add(MakeManifestEntry(QStringLiteral("old"), QString::fromStdWString(old_partial.wstring()),
+                                            QStringLiteral("mp4"))));
+    ASSERT_TRUE(store.Add(MakeManifestEntry(
+        QStringLiteral("new"), QString::fromStdWString(engine::DeriveTransientMkvPath(next_path).wstring()),
+        QStringLiteral("mp4"))));
+    std::promise<void> entered;
+    std::promise<void> resume;
+    auto entered_future = entered.get_future();
+    auto resume_future = resume.get_future();
+    const auto old_callback =
+        RecordingCoordinatorTestPeer::BeginSplit(coordinator, old_path, QStringLiteral("old"), [&] {
+            entered.set_value();
+            resume_future.wait();
+        });
+    engine::CompletedSegment segment;
+    segment.path = old_partial;
+    segment.succeeded = true;
+    std::jthread delayed([&] { old_callback(segment); });
+    if (entered_future.wait_for(std::chrono::seconds(10)) != std::future_status::ready) {
+        resume.set_value();
+        FAIL() << "segment did not reach the manifest I/O boundary";
+    }
+
+    auto retire = std::async(std::launch::async, [&] {
+        RecordingCoordinatorTestPeer::RetireSplit(coordinator);
+        (void)RecordingCoordinatorTestPeer::BeginSplit(coordinator, next_path, QStringLiteral("new"));
+    });
+    const auto retirement = retire.wait_for(std::chrono::seconds(2));
+    resume.set_value();
+    retire.get();
+    delayed.join();
+
+    EXPECT_EQ(retirement, std::future_status::ready);
+    EXPECT_EQ(RecordingCoordinatorTestPeer::ActiveManifestId(coordinator), QStringLiteral("new"));
+    EXPECT_EQ(coordinator.SegmentRemuxJobCountForTest(), 0u);
+
+    const auto entries = store.Entries();
+    ASSERT_EQ(entries.size(), 3);
+    const auto next_old_partial = engine::DeriveSegmentPath(old_partial, 1);
+    ASSERT_TRUE(next_old_partial.success);
+    const auto old_entry = std::find_if(entries.begin(), entries.end(),
+                                        [](const auto& entry) { return entry.id == QStringLiteral("old"); });
+    ASSERT_NE(old_entry, entries.end());
+    EXPECT_TRUE(old_entry->finalized);
+    EXPECT_TRUE(std::any_of(entries.begin(), entries.end(), [&](const auto& entry) {
+        return std::filesystem::path(entry.artefact_path.toStdWString()) == next_old_partial.path;
+    }));
+}
+
+TEST_F(Mp4SplitRemuxTest, QueuedSplitFeedbackRequiresItsRecordingGeneration) {
+    unsigned accepted_feedback = 0;
+    RecordingCoordinator coordinator;
+    coordinator.SetSplitFeedbackCallback([&](bool accepted, const QString&) {
+        EXPECT_TRUE(accepted);
+        ++accepted_feedback;
+    });
+    engine::CompletedSegment segment;
+    segment.succeeded = true;
+
+    const auto previous = RecordingCoordinatorTestPeer::BeginSplitFeedback(coordinator);
+    previous(segment);
+    EXPECT_EQ(accepted_feedback, 0u);
+    RecordingCoordinatorTestPeer::DeliverSplitFeedback(coordinator);
+    ASSERT_EQ(accepted_feedback, 1u);
+
+    const auto delayed = RecordingCoordinatorTestPeer::BeginSplitFeedback(coordinator);
+    delayed(segment);
+    RecordingCoordinatorTestPeer::RetireSplit(coordinator);
+    const auto next = RecordingCoordinatorTestPeer::BeginSplitFeedback(coordinator);
+    RecordingCoordinatorTestPeer::DeliverSplitFeedback(coordinator);
+    EXPECT_EQ(accepted_feedback, 1u);
+
+    next(segment);
+    RecordingCoordinatorTestPeer::DeliverSplitFeedback(coordinator);
+    EXPECT_EQ(accepted_feedback, 2u);
 }
 
 TEST_F(Mp4SplitRemuxTest, EditMasterRetentionPreservesSourceWhenTargetIsOccupied) {

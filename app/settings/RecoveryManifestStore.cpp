@@ -63,12 +63,12 @@ RecoveryManifestStore::RecoveryManifestStore(QString file_path) : file_path_(std
 }
 
 QVector<RecoveryManifestEntry> RecoveryManifestStore::Load() const {
-    std::lock_guard<std::mutex> lock(mutex_);
+    std::lock_guard<std::mutex> lock(*mutex_);
     return LoadLocked();
 }
 
 bool RecoveryManifestStore::Save(const QVector<RecoveryManifestEntry>& entries) const {
-    std::lock_guard<std::mutex> lock(mutex_);
+    std::lock_guard<std::mutex> lock(*mutex_);
     return SaveLocked(entries);
 }
 
@@ -161,14 +161,14 @@ bool RecoveryManifestStore::SaveLocked(const QVector<RecoveryManifestEntry>& ent
 // change, no matter how atomic each individual file replacement is.
 
 bool RecoveryManifestStore::Add(const RecoveryManifestEntry& entry) {
-    std::lock_guard<std::mutex> lock(mutex_);
+    std::lock_guard<std::mutex> lock(*mutex_);
     auto entries = LoadLocked();
     entries.append(entry);
     return SaveLocked(entries);
 }
 
 bool RecoveryManifestStore::UpdateFinalized(const QString& id, bool finalized) {
-    std::lock_guard<std::mutex> lock(mutex_);
+    std::lock_guard<std::mutex> lock(*mutex_);
     auto entries = LoadLocked();
     for (auto& e : entries) {
         if (e.id == id) {
@@ -180,7 +180,7 @@ bool RecoveryManifestStore::UpdateFinalized(const QString& id, bool finalized) {
 }
 
 bool RecoveryManifestStore::Remove(const QString& id) {
-    std::lock_guard<std::mutex> lock(mutex_);
+    std::lock_guard<std::mutex> lock(*mutex_);
     auto entries = LoadLocked();
     const int before = entries.size();
     entries.removeIf([&id](const RecoveryManifestEntry& e) { return e.id == id; });

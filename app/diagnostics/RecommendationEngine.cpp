@@ -85,9 +85,10 @@ RecommendationEngine::RecommendationEngine(const capability::CapabilitySet& caps
         live_target_fps_ = live_snapshot->capture.target_fps;
     }
     if (live_snapshot != nullptr && live_snapshot->valid &&
-        live_snapshot->bottleneck == exosnap::engine::PipelineBottleneck::Gpu) {
+        live_snapshot->bottleneck == exosnap::engine::PipelineBottleneck::Gpu &&
+        live_snapshot->compositor.gpu_exec_p99_ms) {
         live_gpu_contention_ = true;
-        live_gpu_exec_p99_ms_ = live_snapshot->compositor.gpu_exec_p99_ms;
+        live_gpu_exec_p99_ms_ = *live_snapshot->compositor.gpu_exec_p99_ms;
         live_target_fps_for_gpu_ = live_snapshot->capture.target_fps;
     }
     if (live_snapshot != nullptr && live_snapshot->valid &&
@@ -794,7 +795,8 @@ ExclusiveEvidence RecommendationEngine::exclusiveWindowEvidence() const {
     if (!capture_window_facts_.has_value()) {
         return ExclusiveEvidence::None;
     }
-    const bool present_fse = present_.has_value() && present_->mode == PresentMode::ExclusiveFullscreen;
+    const bool present_fse = present_.has_value() && present_->available && present_->attributed &&
+                             present_->mode == PresentMode::ExclusiveFullscreen;
     return ResolveExclusiveEvidence(*capture_window_facts_, capture_window_hub_, present_fse);
 }
 
@@ -862,7 +864,7 @@ void RecommendationEngine::checkExclusiveWindowTarget(DiagnosticChecklist& check
 }
 
 void RecommendationEngine::checkExclusiveFullscreen(DiagnosticChecklist& checklist) const {
-    if (!present_.has_value() || present_->mode != PresentMode::ExclusiveFullscreen) {
+    if (!present_ || !present_->attributed || present_->mode != PresentMode::ExclusiveFullscreen) {
         return;
     }
     // Dedupe: while the selected-window card is speaking, suppress this generic

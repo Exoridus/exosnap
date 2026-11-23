@@ -362,7 +362,7 @@ TEST(SessionReport, SegmentsAndErrorPhase) {
     in.result.succeeded = false;
     in.result.error_phase = L"VideoEncode";
     in.result.hresult_text = L"0x80004005";
-    in.result.error_detail = L"NVENC configure failed";
+    in.result.error_detail = L"Output open failed: \"D:/Private Folder/\u00e9tude.mkv\"";
     CompletedRecordingSegment seg;
     seg.index = 0;
     seg.duration_seconds = 30.0;
@@ -378,7 +378,8 @@ TEST(SessionReport, SegmentsAndErrorPhase) {
 
     const QJsonObject err = o[QStringLiteral("error")].toObject();
     EXPECT_EQ(err[QStringLiteral("phase")].toString(), QStringLiteral("VideoEncode"));
-    EXPECT_EQ(err[QStringLiteral("detail")].toString(), QStringLiteral("NVENC configure failed"));
+    EXPECT_EQ(err[QStringLiteral("hresult")].toString(), QStringLiteral("0x80004005"));
+    EXPECT_FALSE(err.contains(QStringLiteral("detail")));
 }
 
 TEST(SessionReport, DeterministicForFixedInputs) {

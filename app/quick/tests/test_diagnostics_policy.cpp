@@ -396,6 +396,32 @@ TEST(PipelineCards, FirstSampleReportsNoRecentDrops) {
     EXPECT_EQ(builder.lastRecentDropsForTesting(), 0U);
 }
 
+TEST(PipelineCards, DistinguishesMeasuredZeroFromMissingStageTimings) {
+    using exosnap::engine::MetricAvailability;
+    PipelineCardBuilder builder;
+    auto snapshot = MakeLiveSnapshot(1, 0);
+    snapshot.compositor.active = true;
+    snapshot.video_encoder.frames_encoded = 100;
+    const auto unavailable = builder.BuildLive(snapshot);
+    ASSERT_EQ(unavailable.size(), 6U);
+    EXPECT_EQ(unavailable[3].tip.find("0 ms"), std::string::npos);
+    EXPECT_EQ(unavailable[4].tip.find("0 ms"), std::string::npos);
+    EXPECT_EQ(unavailable[5].tip.find("0 ms"), std::string::npos);
+
+    snapshot.compositor.timing_availability = MetricAvailability::Available;
+    snapshot.video_encoder.timing_availability = MetricAvailability::Available;
+    snapshot.mux.process_availability = MetricAvailability::Available;
+    snapshot.disk.latency_availability = MetricAvailability::Available;
+    const auto measured = builder.BuildLive(snapshot);
+    ASSERT_EQ(measured.size(), unavailable.size());
+    for (const auto index : {2U, 3U, 4U, 5U}) {
+        EXPECT_NE(unavailable[index].value, "0.0 ms") << unavailable[index].key;
+        EXPECT_EQ(measured[index].value, "0.0 ms") << measured[index].key;
+    }
+    for (const auto index : {3U, 4U, 5U})
+        EXPECT_NE(measured[index].tip.find("0 ms"), std::string::npos) << measured[index].key;
+}
+
 // The counter is session-cumulative; the capture stage needs drops SINCE THE LAST
 // SAMPLE. Losing this baseline reports every drop since session start as "recent".
 TEST(PipelineCards, RecentDropsAreADeltaNotACumulativeTotal) {

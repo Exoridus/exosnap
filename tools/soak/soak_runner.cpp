@@ -193,7 +193,7 @@ void SoakRunner::SampleOnce() {
         if (have_stats_) {
             // SessionStats carries the authoritative media-duration skew and dup/drop
             // counters; prefer it when diagnostics has not populated skew yet.
-            if (!s.duration_skew_available && last_stats_.duration_skew_ms != 0.0) {
+            if (!s.duration_skew_available && last_stats_.duration_skew_available) {
                 s.duration_skew_ms = last_stats_.duration_skew_ms;
                 s.duration_skew_available = true;
             }

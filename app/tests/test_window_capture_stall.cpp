@@ -310,10 +310,18 @@ TEST(WindowStallCauseTest, MinimizedIsMinimized) {
     EXPECT_EQ(EvaluateWindowStall(f, false), WindowStallCause::Minimized);
 }
 
-TEST(WindowStallCauseTest, FullscreenShapedWithQunsIsExclusive) {
+TEST(WindowStallCauseTest, ForegroundFullscreenShapedWithQunsIsExclusive) {
     WindowTargetFacts f = fullscreenShaped();
+    f.is_foreground = true;
     f.quns_d3d_fullscreen = true;
     EXPECT_EQ(EvaluateWindowStall(f, false), WindowStallCause::ExclusiveFullscreen);
+}
+
+TEST(WindowStallCauseTest, BackgroundWindowIgnoresTheShellSignal) {
+    WindowTargetFacts f = fullscreenShaped();
+    f.quns_d3d_fullscreen = true;
+    EXPECT_EQ(EvaluateWindowStall(f, false), WindowStallCause::None);
+    EXPECT_EQ(ClassifyConfirmedStall(f, false), WindowStallVerdict::Stalled);
 }
 
 TEST(WindowStallCauseTest, FullscreenShapedWithPresentFseIsExclusive) {

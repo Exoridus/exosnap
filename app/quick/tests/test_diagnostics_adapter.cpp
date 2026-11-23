@@ -8,6 +8,7 @@
 #include "PipelineStageModel.h"
 #include "SessionLedgerModel.h"
 
+#include "diagnostics/DiagnosticsProbe.h"
 #include "diagnostics/WindowTargetFacts.h"
 #include "notifications/NotificationEvent.h"
 #include "notifications/NotificationManager.h"
@@ -15,11 +16,16 @@
 #include "visual_tests/DiagnosticsLiveScenario.h"
 
 #include <QCoreApplication>
+#include <QEventLoop>
+#include <QTimer>
 #include <QUrl>
 #include <QVariantMap>
 
 #include <gtest/gtest.h>
 
+#include <algorithm>
+#include <atomic>
+#include <filesystem>
 #include <vector>
 
 using namespace exosnap;
@@ -96,6 +102,77 @@ diagnostics::DiagnosticsController::ProbeResult MakeProbe() {
     probe.output_path_writable = true;
     probe.drive_label = "C:";
     return probe;
+}
+
+bool WaitForProbe(DiagnosticsAdapter& adapter) {
+    if (!adapter.checking())
+        return true;
+    QEventLoop loop;
+    QObject::connect(&adapter, &DiagnosticsAdapter::checkingChanged, &loop, [&]() {
+        if (!adapter.checking())
+            loop.quit();
+    });
+    QTimer::singleShot(5000, &loop, &QEventLoop::quit);
+    loop.exec();
+    return !adapter.checking();
+}
+
+bool HasUnwritableOutput(const DiagnosticsAdapter& adapter) {
+    const auto& results = adapter.controller().lastChecklist().results;
+    return std::any_of(results.begin(), results.end(),
+                       [](const diagnostics::DiagnosticResult& result) { return result.id == "rec.output.writable"; });
+}
+
+TEST(DiagnosticsAdapterTest, SupersededProbeIsDiscardedEvenWhenThePathChangesBack) {
+    EnsureApplication();
+    std::atomic_int requests{0};
+    std::atomic_int self_tests{0};
+    DiagnosticsAdapter adapter([&](const diagnostics::DiagnosticsProbeRequest& request) {
+        if (request.run_self_test)
+            ++self_tests;
+        auto result = MakeProbe();
+        result.output_path_writable = requests.fetch_add(1) != 0;
+        return result;
+    });
+    bool stale_failure_published = false;
+    QObject::connect(&adapter, &DiagnosticsAdapter::verdictChanged, &adapter,
+                     [&]() { stale_failure_published |= HasUnwritableOutput(adapter); });
+    auto config = MakeConfig();
+    config.output_folder = "C:/OutputA";
+    adapter.setDiagnosticConfig(config);
+    config.output_folder = "D:/OutputB";
+    adapter.setDiagnosticConfig(config);
+    config.output_folder = "C:/OutputA";
+    adapter.setDiagnosticConfig(config);
+
+    ASSERT_TRUE(WaitForProbe(adapter));
+    EXPECT_EQ(requests.load(), 2);
+    EXPECT_EQ(self_tests.load(), 2);
+    EXPECT_FALSE(stale_failure_published);
+    EXPECT_FALSE(HasUnwritableOutput(adapter));
+}
+
+TEST(DiagnosticsAdapterTest, PathChangeClearsAlreadyPublishedOutputFacts) {
+    EnsureApplication();
+    DiagnosticsAdapter adapter([](const diagnostics::DiagnosticsProbeRequest& request) {
+        auto result = MakeProbe();
+        result.output_path_writable = request.output_folder != std::filesystem::path("C:/OutputA");
+        return result;
+    });
+    auto config = MakeConfig();
+    config.output_folder = "C:/OutputA";
+    adapter.setDiagnosticConfig(config);
+    ASSERT_TRUE(WaitForProbe(adapter));
+    ASSERT_TRUE(HasUnwritableOutput(adapter));
+    config.output_folder = "D:/OutputB";
+    adapter.setDiagnosticConfig(config);
+    EXPECT_FALSE(HasUnwritableOutput(adapter));
+    auto stages = adapter.controllerForTest().BuildPipelineStages();
+    const auto disk = std::find_if(stages.begin(), stages.end(),
+                                   [](const diagnostics::PipelineStage& stage) { return stage.key == "disk"; });
+    ASSERT_NE(disk, stages.end());
+    EXPECT_EQ(disk->status, diagnostics::StageStatus::Planned);
+    EXPECT_TRUE(WaitForProbe(adapter));
 }
 
 QVariantMap TileWithKey(const QVariantList& tiles, const QString& key) {
@@ -328,17 +405,16 @@ bool HasIssueTitled(DiagnosticsAdapter& adapter, const QString& needle) {
 
 } // namespace
 
-TEST(DiagnosticsAdapterTest, ProvenBlackWindowEvidenceRaisesTheExclusiveFullscreenCard) {
+TEST(DiagnosticsAdapterTest, MissingFramesDoNotRaiseAnExclusiveFullscreenIssue) {
     EnsureApplication();
     DiagnosticsAdapter adapter;
     adapter.setDiagnosticConfig(MakeCaptureConfig());
     EXPECT_FALSE(HasIssueTitled(adapter, QStringLiteral("exclusive fullscreen")));
 
-    // FullscreenShaped and the capture API produced nothing for >= 2 s.
     adapter.setCaptureWindowEvidence(FullscreenShapedFacts(),
                                      diagnostics::WindowHubEvidence{exosnap::engine::HubFrameKind::None, 5.0, 0.0,
                                                                     /*fresh_frame_since_fullscreen_shape=*/false});
-    EXPECT_TRUE(HasIssueTitled(adapter, QStringLiteral("exclusive fullscreen")));
+    EXPECT_FALSE(HasIssueTitled(adapter, QStringLiteral("exclusive fullscreen")));
 
     // Retargeting to a monitor withdraws it — the card describes a selection.
     adapter.setCaptureWindowEvidence(std::nullopt, {});

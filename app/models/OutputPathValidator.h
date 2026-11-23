@@ -13,6 +13,7 @@ enum class FolderValidationResult {
     CreationFailed,
 };
 
+bool ProbeOutputDirectoryWritable(const std::filesystem::path& folder);
 FolderValidationResult ValidateOutputFolder(const std::filesystem::path& folder);
 
 std::wstring FolderValidationMessage(FolderValidationResult result);

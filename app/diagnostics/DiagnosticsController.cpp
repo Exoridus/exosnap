@@ -391,13 +391,13 @@ LiveTile EncoderTile(const LiveTileInputs& in) {
     // configured -- never to the configured preset, which is a request.
     tile.value = CodecName(s.encoder_init.valid ? s.encoder_init.codec : s.video_encoder.codec);
 
-    if (s.video_encoder.frames_encoded > 0) {
+    if (s.video_encoder.timing_availability == exosnap::engine::MetricAvailability::Available) {
         tile.sub_tinted = "p99 " + Number(s.video_encoder.p99_ms, 1) + " ms";
         tile.sub = tile.sub_tinted;
         if (s.video_timing.budget_ms > 0.0)
             tile.sub = Join(tile.sub, "budget " + Number(s.video_timing.budget_ms, 2) + " ms");
         tile.sub_tone = OwnedTone(in.ledger, {"rec.gpu.contention"}, /*sticky=*/true);
-    } else {
+    } else if (s.video_encoder.frames_encoded == 0) {
         tile.sub = QCoreApplication::translate("Diagnostics", "No frame encoded yet").toStdString();
     }
     tile.detail =
@@ -590,7 +590,7 @@ LiveTile GpuTimeTile(const LiveTileInputs& in) {
     LiveTile tile;
     tile.key = "gpuTime";
     tile.title = QCoreApplication::translate("Diagnostics", "GPU / Recorder execution").toStdString();
-    tile.value = in.gpu_exec_p99_ms > 0.0 ? Number(in.gpu_exec_p99_ms, 2) + " ms" : kDash;
+    tile.value = in.gpu_exec_p99_ms ? Number(*in.gpu_exec_p99_ms, 2) + " ms" : kDash;
     tile.value_tone = OwnedTone(in.ledger, {"rec.gpu.contention"}, /*sticky=*/false);
     const double budget = FrameBudgetMs(in.snapshot);
     if (budget > 0.0) {
@@ -1371,7 +1371,7 @@ uint32_t PipelineCardBuilder::lastRecentDropsForTesting() const noexcept {
 }
 
 std::vector<PipelineStage> PipelineCardBuilder::BuildStatic(bool data_ready, bool encoder_ok, bool muxer_ok,
-                                                            bool disk_ok) {
+                                                            std::optional<bool> disk_ok) {
     std::vector<PipelineStage> stages;
     stages.reserve(6);
 
@@ -1427,10 +1427,17 @@ std::vector<PipelineStage> PipelineCardBuilder::BuildStatic(bool data_ready, boo
                .toStdString(),
            QCoreApplication::translate("Diagnostics", "Selected container is not available on this system.")
                .toStdString());
-    probed("disk", QCoreApplication::translate("Diagnostics", "Disk").toStdString(), disk_ok,
-           QCoreApplication::translate("Diagnostics", "Output path is writable. Live disk throughput is not measured.")
-               .toStdString(),
-           QCoreApplication::translate("Diagnostics", "Output path is not writable.").toStdString());
+    const auto disk_title = QCoreApplication::translate("Diagnostics", "Disk").toStdString();
+    if (disk_ok.has_value()) {
+        probed(
+            "disk", disk_title, *disk_ok,
+            QCoreApplication::translate("Diagnostics", "Output path is writable. Live disk throughput is not measured.")
+                .toStdString(),
+            QCoreApplication::translate("Diagnostics", "Output path is not writable.").toStdString());
+    } else {
+        planned("disk", disk_title,
+                QCoreApplication::translate("Diagnostics", "Run a check to probe the output path.").toStdString());
+    }
     return stages;
 }
 
@@ -1477,14 +1484,14 @@ std::vector<PipelineStage> PipelineCardBuilder::BuildLive(const exosnap::engine:
 
     StageSignals comp{};
     comp.id = StageId::Compositor;
-    comp.available = s.compositor.active;
+    comp.available = s.compositor.timing_availability == MetricAvailability::Available;
     comp.is_duration_stage = true;
     comp.can_bottleneck = true;
     comp.avg_ms = s.compositor.average_ms;
 
     StageSignals enc{};
     enc.id = StageId::Encoder;
-    enc.available = s.video_encoder.average_ms > 0.0 || s.video_encoder.frames_encoded > 0;
+    enc.available = s.video_encoder.timing_availability == MetricAvailability::Available;
     enc.is_duration_stage = true;
     enc.can_bottleneck = true;
     enc.avg_ms = s.video_encoder.average_ms;
@@ -1515,8 +1522,8 @@ std::vector<PipelineStage> PipelineCardBuilder::BuildLive(const exosnap::engine:
         }
         return exosnap::engine::StageHealth::Healthy;
     };
-    const auto ms = [&](double value, bool available) {
-        return available ? Number(value, 1) + " ms" : std::string(kDash);
+    const auto ms = [&](double value, bool available, int decimals = 1) {
+        return available ? Number(value, decimals) + " ms" : std::string(kDash);
     };
 
     std::vector<PipelineStage> stages;
@@ -1560,7 +1567,7 @@ std::vector<PipelineStage> PipelineCardBuilder::BuildLive(const exosnap::engine:
         stage.title = "Compositor";
         stage.lane = "GPU";
         stage.status = StatusOf(health_of(StageId::Compositor));
-        stage.value = ms(s.compositor.average_ms, s.compositor.average_ms > 0.0);
+        stage.value = ms(comp.avg_ms, comp.available);
         stage.tip = QCoreApplication::translate("Diagnostics",
                                                 "CPU submit (GPU execution time not measured in this view). VPBlt ")
                         .toStdString() +
@@ -1576,10 +1583,10 @@ std::vector<PipelineStage> PipelineCardBuilder::BuildLive(const exosnap::engine:
         stage.title = "Encoder";
         stage.lane = "GPU (NVENC)";
         stage.status = StatusOf(health_of(StageId::Encoder));
-        stage.value = ms(s.video_encoder.average_ms, s.video_encoder.average_ms > 0.0);
+        stage.value = ms(enc.avg_ms, enc.available);
         stage.tip = std::string(QCoreApplication::translate("Diagnostics", "CPU submit").toStdString()) + kRightArrow +
                     QCoreApplication::translate("Diagnostics", "ready latency (peak ").toStdString() +
-                    Number(s.video_encoder.peak_ms, 1) + " ms)";
+                    ms(s.video_encoder.peak_ms, enc.available) + ")";
         stages.push_back(std::move(stage));
     }
 
@@ -1591,7 +1598,7 @@ std::vector<PipelineStage> PipelineCardBuilder::BuildLive(const exosnap::engine:
         stage.status = StatusOf(health_of(StageId::Muxer));
         stage.value = ms(s.mux.process_average_ms, mux.available);
         stage.tip = QCoreApplication::translate("Diagnostics", "Mux drain processing (peak ").toStdString() +
-                    Number(s.mux.process_peak_ms, 2) + " ms)";
+                    ms(s.mux.process_peak_ms, mux.available, 2) + ")";
         stages.push_back(std::move(stage));
     }
 
@@ -1603,7 +1610,7 @@ std::vector<PipelineStage> PipelineCardBuilder::BuildLive(const exosnap::engine:
         stage.status = StatusOf(health_of(StageId::Disk));
         stage.value = ms(s.disk.average_write_ms, disk.available);
         stage.tip = QCoreApplication::translate("Diagnostics", "Filesystem write-call latency (peak ").toStdString() +
-                    Number(s.disk.peak_write_ms, 1) + " ms)";
+                    ms(s.disk.peak_write_ms, disk.available) + ")";
         stages.push_back(std::move(stage));
     }
 
@@ -1629,6 +1636,14 @@ void RefreshThrottle::Reset() noexcept {
 // ── DiagnosticsController ───────────────────────────────────────────────────────
 
 void DiagnosticsController::SetConfig(Config config) {
+    if (config.output_folder != config_.output_folder) {
+        probe_.free_bytes.reset();
+        probe_.total_bytes = 0;
+        probe_.filesystem_name.clear();
+        probe_.drive_kind = DriveKind::Unknown;
+        probe_.output_path_writable.reset();
+        probe_.drive_label.clear();
+    }
     config_ = std::move(config);
     data_ready_ = true;
     config_rows_ = BuildConfigRows(config_.config_summary);
@@ -1807,7 +1822,8 @@ DiagnosticsSnapshot DiagnosticsController::Evaluate() {
                                 config_.profile_validation.succeeded, probe_.filesystem_name, live, present);
     if (dpc_.has_value())
         engine.SetDpcLatency(*dpc_);
-    engine.SetOutputPathWritable(probe_.output_path_writable);
+    if (probe_.output_path_writable.has_value())
+        engine.SetOutputPathWritable(*probe_.output_path_writable);
     engine.SetElevated(elevated_);
     engine.SetCaptureTargetHdrActive(capture_target_hdr_active_);
     if (probe_.session_generation == live_.session_generation) {

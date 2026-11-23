@@ -3,6 +3,7 @@
 #include <QString>
 #include <QVector>
 
+#include <memory>
 #include <mutex>
 
 namespace exosnap {
@@ -42,6 +43,10 @@ class RecoveryManifestStore {
     RecoveryManifestStore();
     explicit RecoveryManifestStore(QString file_path);
 
+    // Copies retain the same path and serialize updates with the original store.
+    RecoveryManifestStore(const RecoveryManifestStore&) = default;
+    RecoveryManifestStore& operator=(const RecoveryManifestStore&) = delete;
+
     // Load entries from disk. Returns empty on missing or corrupt file.
     // Never observes a partially-applied mutation.
     [[nodiscard]] QVector<RecoveryManifestEntry> Load() const;
@@ -78,7 +83,7 @@ class RecoveryManifestStore {
     // Guards every read and every load → mutate → save transaction. Public methods
     // take it exactly once and then work through the *Locked cores, so no path can
     // re-enter it. Contention is a handful of writes per recording.
-    mutable std::mutex mutex_;
+    std::shared_ptr<std::mutex> mutex_ = std::make_shared<std::mutex>();
     QString file_path_;
     static constexpr int kSchemaVersion = 1;
 };

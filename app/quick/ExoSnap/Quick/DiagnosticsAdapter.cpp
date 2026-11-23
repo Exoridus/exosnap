@@ -196,8 +196,11 @@ constexpr std::size_t kSeriesLength = 60;
 
 } // namespace
 
-DiagnosticsAdapter::DiagnosticsAdapter(QObject* parent)
-    : QObject(parent), bundle_service_(std::make_unique<SupportBundleService>()) {
+DiagnosticsAdapter::DiagnosticsAdapter(QObject* parent) : DiagnosticsAdapter(diagnostics::RunDiagnosticsProbe, parent) {
+}
+
+DiagnosticsAdapter::DiagnosticsAdapter(OutputProbe probe, QObject* parent)
+    : QObject(parent), bundle_service_(std::make_unique<SupportBundleService>()), output_probe_(std::move(probe)) {
     controller_.SetDisplayFacts(PrimaryDisplayFacts());
 
     self_test_status_ = QCoreApplication::translate("DiagnosticsAdapter", "Status: Not run");
@@ -516,7 +519,7 @@ void DiagnosticsAdapter::appendSeriesSamples(const exosnap::engine::RecordingDia
     };
 
     push("framePacing", snapshot.capture.actual_fps);
-    if (snapshot.video_encoder.frames_encoded > 0) {
+    if (snapshot.video_encoder.timing_availability == exosnap::engine::MetricAvailability::Available) {
         push("encoder", snapshot.video_encoder.p99_ms);
         encoder_session_worst_p99_ms_ = std::max(encoder_session_worst_p99_ms_, snapshot.video_encoder.p99_ms);
     }
@@ -698,12 +701,17 @@ void DiagnosticsAdapter::openLastSessionFolder() {
 // ── Host-side input ─────────────────────────────────────────────────────────────
 
 void DiagnosticsAdapter::setDiagnosticConfig(diagnostics::DiagnosticsController::Config config) {
+    const bool output_changed = config.output_folder != controller_.outputFolder();
+    if (output_changed) {
+        ++output_revision_;
+        last_check_at_ = {};
+    }
     controller_.SetConfig(std::move(config));
     refreshSnapshot();
     refreshPipeline();
     emit environmentChanged();
-    // The config carries a new output folder, so the cached probe facts no longer
-    // describe the right volume; re-probe unless one is already running.
+    if (output_changed)
+        emit lastCheckChanged();
     if (!probe_in_flight_)
         startProbe(!probed_);
 }
@@ -892,7 +900,7 @@ void DiagnosticsAdapter::requestSettingsNavigation() {
 }
 
 void DiagnosticsAdapter::applyProbeResultForTest(diagnostics::DiagnosticsController::ProbeResult probe) {
-    applyProbe(std::move(probe), true);
+    applyProbe(std::move(probe), true, output_revision_);
 }
 
 const diagnostics::DiagnosticsController& DiagnosticsAdapter::controller() const noexcept {
@@ -937,25 +945,29 @@ void DiagnosticsAdapter::startProbe(bool run_self_test) {
     // thread. Results are marshalled back through the application object, so the
     // QPointer check happens on the thread that would destroy this adapter.
     QPointer<DiagnosticsAdapter> guard(this);
-    probe_pool_.start([guard, request, run_self_test]() {
-        diagnostics::DiagnosticsController::ProbeResult probe = diagnostics::RunDiagnosticsProbe(request);
+    probe_pool_.start([guard, request, run_self_test, run_probe = output_probe_, output_revision = output_revision_]() {
+        diagnostics::DiagnosticsController::ProbeResult probe = run_probe(request);
         QMetaObject::invokeMethod(
             QCoreApplication::instance(),
-            [guard, probe = std::move(probe), run_self_test]() mutable {
+            [guard, probe = std::move(probe), run_self_test, output_revision]() mutable {
                 if (guard)
-                    guard->applyProbe(std::move(probe), run_self_test);
+                    guard->applyProbe(std::move(probe), run_self_test, output_revision);
             },
             Qt::QueuedConnection);
     });
 }
 
-void DiagnosticsAdapter::applyProbe(diagnostics::DiagnosticsController::ProbeResult probe, bool from_manual_check) {
+void DiagnosticsAdapter::applyProbe(diagnostics::DiagnosticsController::ProbeResult probe, bool from_manual_check,
+                                    uint64_t output_revision) {
     probe_in_flight_ = false;
+    if (output_revision != output_revision_) {
+        startProbe(from_manual_check || !probed_);
+        return;
+    }
     probed_ = true;
     controller_.SetProbeResult(std::move(probe));
-    setChecking(false);
-
     last_check_at_ = QDateTime::currentDateTime();
+    setChecking(false);
     emit lastCheckChanged();
 
     if (from_manual_check)

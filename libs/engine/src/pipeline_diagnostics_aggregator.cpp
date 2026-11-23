@@ -229,7 +229,6 @@ void PipelineDiagnosticsAggregator::Reset(uint64_t generation, const Diagnostics
     sustain_audio_ = 0;
     sustain_muxer_ = 0;
     sustain_disk_ = 0;
-    sustain_gpu_ = 0;
     last_dropped_total_ = 0;
     last_audio_disc_ = 0;
 
@@ -929,6 +928,7 @@ RecordingDiagnosticsSnapshot PipelineDiagnosticsAggregator::BuildSnapshot(time_p
     s.compositor.average_ms = comp.average;
     s.compositor.peak_ms = comp.peak;
     s.compositor.frames_composed = frames_composed_;
+    s.compositor.timing_availability = comp.count > 0 ? MetricAvailability::Available : MetricAvailability::Unavailable;
 
     if (vpblt_observed_) {
         const RollingTimeWindow::Aggregate vp = vpblt_window_.Compute(now);
@@ -947,6 +947,7 @@ RecordingDiagnosticsSnapshot PipelineDiagnosticsAggregator::BuildSnapshot(time_p
     enc.peak_ms = el.peak;
     enc.p50_ms = encode_window_.Percentile(now, 0.50);
     enc.p99_ms = encode_window_.Percentile(now, 0.99);
+    enc.timing_availability = el.count > 0 ? MetricAvailability::Available : MetricAvailability::Unavailable;
     enc.frames_submitted = frames_submitted_;
     enc.frames_encoded = stats.encoded_video_packets;
     // Post-flight facts owned by the video worker, passed through unchanged: the
@@ -1074,9 +1075,7 @@ RecordingDiagnosticsSnapshot PipelineDiagnosticsAggregator::BuildSnapshot(time_p
     disk.peak_write_ms = wl.peak;
     disk.output_target = cfg_.output_target;
     disk.write_failures = mux_failures_;
-    // Only the streaming Matroska writer exposes a measurable filesystem write boundary;
-    // the MP4 path (IMFSinkWriter) buffers internally with no measurable write call.
-    disk.latency_availability = cfg_.split_supported ? MetricAvailability::Available : MetricAvailability::Unavailable;
+    disk.latency_availability = wl.count > 0 ? MetricAvailability::Available : MetricAvailability::Unavailable;
 
     s.preview_tap = preview_tap_;
 
@@ -1164,19 +1163,9 @@ RecordingDiagnosticsSnapshot PipelineDiagnosticsAggregator::BuildSnapshot(time_p
     s.encoder_init = encoder_init_;
 
     // ---- Duration skew ----
-    // Total media-duration mismatch between the video and audio timelines, from the
-    // live SessionStats durations. A large, sustained skew means one timeline is being
-    // compressed relative to the other (e.g. a starving encoder) — the honest
-    // counterpart to the CFR scheduler's wall-clock resync. Distinct from av_drift_ms.
-    if (stats.video_duration_ns > 0 && stats.audio_duration_ns > 0) {
-        const double vd = static_cast<double>(stats.video_duration_ns) / 1e6;
-        const double ad = static_cast<double>(stats.audio_duration_ns) / 1e6;
-        s.duration_skew_ms = (vd > ad) ? (vd - ad) : (ad - vd);
-        s.duration_skew_availability = MetricAvailability::Available;
-    } else {
-        s.duration_skew_ms = 0.0;
-        s.duration_skew_availability = MetricAvailability::Unavailable;
-    }
+    const DurationSkew skew = ComputeDurationSkew(stats.video_duration_ns, stats.aligned_audio_duration_ns);
+    s.duration_skew_ms = skew.ms;
+    s.duration_skew_availability = skew.available ? MetricAvailability::Available : MetricAvailability::Unavailable;
 
     // ---- Disk-fill ETA ----
     // throughput is the interval MiB/s already computed above.
@@ -1202,9 +1191,6 @@ RecordingDiagnosticsSnapshot PipelineDiagnosticsAggregator::BuildSnapshot(time_p
     // ---- Classification ----
     std::string reason;
     PipelineHealth health = PipelineHealth::Idle;
-    gpu_exec_p99_ms_ = composition_gpu_window_.Percentile(now, 0.99) + hdr_tonemap_gpu_window_.Percentile(now, 0.99) +
-                       rgb_to_yuv_gpu_window_.Percentile(now, 0.99);
-    s.compositor.gpu_exec_p99_ms = gpu_exec_p99_ms_;
     s.bottleneck = Classify(s, recording, reason, health);
     s.bottleneck_reason = reason;
     s.health = health;
@@ -1290,7 +1276,6 @@ PipelineBottleneck PipelineDiagnosticsAggregator::Classify(const RecordingDiagno
 
     if (!recording) {
         sustain_capture_ = sustain_compositor_ = sustain_encoder_ = 0;
-        sustain_gpu_ = 0;
         sustain_audio_ = sustain_muxer_ = sustain_disk_ = 0;
         last_dropped_total_ = problem_drops;
         last_audio_disc_ = s.audio.discontinuities;
@@ -1321,8 +1306,6 @@ PipelineBottleneck PipelineDiagnosticsAggregator::Classify(const RecordingDiagno
                           !downstream_saturated;
     const bool comp_cond = output_affected && s.compositor.active &&
                            s.compositor.average_ms > budget_ms * thresholds_.compositor_budget_ratio;
-    // Recorder GPU timestamps locate delay, but cannot identify another process as its cause.
-    const bool gpu_cond = gpu_exec_p99_ms_ > budget_ms && (drops_rising || s.pacing.recent_affected_slots > 0);
     const bool enc_cond =
         (s.video_encoder.backlog >= thresholds_.encoder_backlog && slot_pressure) ||
         (output_affected && s.video_encoder.average_ms > budget_ms * thresholds_.encoder_budget_ratio);
@@ -1336,7 +1319,6 @@ PipelineBottleneck PipelineDiagnosticsAggregator::Classify(const RecordingDiagno
     auto bump = [](int& c, bool cond) { c = cond ? c + 1 : 0; };
     bump(sustain_capture_, cap_cond);
     bump(sustain_compositor_, comp_cond);
-    bump(sustain_gpu_, gpu_cond);
     bump(sustain_encoder_, enc_cond);
     bump(sustain_disk_, disk_cond);
     bump(sustain_muxer_, mux_cond);
@@ -1364,9 +1346,6 @@ PipelineBottleneck PipelineDiagnosticsAggregator::Classify(const RecordingDiagno
     } else if (sustain_encoder_ >= n) {
         bottleneck = PipelineBottleneck::VideoEncoder;
         reason = "Encoder backlog rising";
-    } else if (sustain_gpu_ >= n) {
-        bottleneck = PipelineBottleneck::Gpu;
-        reason = "Recorder GPU work completed late while output was affected";
     } else if (sustain_compositor_ >= n) {
         bottleneck = PipelineBottleneck::Compositor;
         reason = "Composition near frame budget";
