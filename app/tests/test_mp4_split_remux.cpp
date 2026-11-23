@@ -37,6 +37,7 @@
 #include <thread>
 #include <utility>
 
+#include <capability/capability_builder.h>
 #include <exosnap/engine/recorder_session.h>
 
 #include "diagnostics/DiskSpaceThresholds.h"
@@ -46,6 +47,13 @@
 #include "settings/RecoveryManifestStore.h"
 
 namespace exosnap {
+class RecoveryManifestStoreTestPeer {
+  public:
+    static void BeforeCommit(RecoveryManifestStore& store, std::function<void(const QString&)> hook) {
+        store.before_commit_ = std::move(hook);
+    }
+};
+
 class RecordingCoordinatorTestPeer {
   public:
     static engine::SegmentCallback BeginSplit(RecordingCoordinator& coordinator, const std::filesystem::path& target,
@@ -63,6 +71,17 @@ class RecordingCoordinatorTestPeer {
 
     static void RetireSplit(RecordingCoordinator& coordinator) {
         coordinator.RetireSegmentCallback();
+    }
+
+    static void SetRecordingState(RecordingCoordinator& coordinator, UiRecordingState state) {
+        coordinator.is_recording_.store(state == UiRecordingState::Recording);
+        coordinator.state_.store(state);
+    }
+
+    static void FinishTimedOutRecording(RecordingCoordinator& coordinator) {
+        coordinator.RetireSegmentCallback();
+        (void)coordinator.TakeCurrentManifestId();
+        SetRecordingState(coordinator, UiRecordingState::Failed);
     }
 
     static engine::SegmentCallback BeginSplitFeedback(RecordingCoordinator& coordinator) {
@@ -113,23 +132,9 @@ class Mp4SplitRemuxTest : public ::testing::Test {
 // ─── Helper: unique temp store path ──────────────────────────────────────────
 
 static QString UniqueTempStorePath() {
-    const QString temp = QDir::tempPath();
+    static QTemporaryDir directory;
     static int s_counter = 0;
-    // Fold the current test name into the filename. ctest runs each test in its own
-    // process (a separate --gtest_filter invocation), which resets s_counter to 0,
-    // so a bare counter collides across tests on the same shared file. Then delete
-    // any residue from a prior crashed/aborted run before handing the path out:
-    // RecoveryManifestStore loads pre-existing entries on construction, so a stale
-    // file would silently accumulate entries and fail size assertions
-    // (Harness-History-Pollution). A clean slate per call makes the suite
-    // order- and history-independent.
-    QString test_name = QStringLiteral("anon");
-    if (const ::testing::TestInfo* info = ::testing::UnitTest::GetInstance()->current_test_info())
-        test_name = QString::fromLatin1(info->name());
-    const QString path =
-        QDir(temp).filePath(QStringLiteral("exosnap_mp4split_test_%1_%2.json").arg(test_name).arg(++s_counter));
-    QFile::remove(path);
-    return path;
+    return directory.filePath(QStringLiteral("manifest_%1.json").arg(++s_counter));
 }
 
 static RecoveryManifestEntry MakeManifestEntry(const QString& id, const QString& artefact, const QString& container,
@@ -205,6 +210,114 @@ TEST_F(Mp4SplitRemuxTest, RetiredCompletionCannotPublishIntoNextRecording) {
     EXPECT_TRUE(old_entry->finalized);
     EXPECT_TRUE(std::any_of(entries.begin(), entries.end(), [&](const auto& entry) {
         return std::filesystem::path(entry.artefact_path.toStdWString()) == next_old_partial.path;
+    }));
+}
+
+TEST_F(Mp4SplitRemuxTest, StalledManifestCommitDoesNotPinEarlierRemuxRestartOrDestruction) {
+    using namespace std::chrono_literals;
+
+    QTemporaryDir directory;
+    ASSERT_TRUE(directory.isValid());
+    RecoveryManifestStore store(directory.filePath(QStringLiteral("manifest.json")));
+    const QString earlier_id = QStringLiteral("earlier");
+    const QString active_id = QStringLiteral("active");
+    const std::filesystem::path folder(directory.path().toStdWString());
+    const auto active_path = folder / L"active.mp4";
+    const auto active_partial = engine::DeriveTransientMkvPath(active_path);
+    ASSERT_TRUE(store.Add(
+        MakeManifestEntry(earlier_id, directory.filePath(QStringLiteral("earlier.mkv")), QStringLiteral("mp4"), true)));
+    ASSERT_TRUE(store.Add(
+        MakeManifestEntry(active_id, QString::fromStdWString(active_partial.wstring()), QStringLiteral("mp4"))));
+
+    std::promise<void> commit_entered;
+    const auto committing = commit_entered.get_future().share();
+    std::promise<void> release_commit;
+    const auto commit_released = release_commit.get_future().share();
+    RecoveryManifestStoreTestPeer::BeforeCommit(store, [&](const QString& id) {
+        if (id == active_id) {
+            commit_entered.set_value();
+            commit_released.wait();
+        }
+    });
+
+    std::promise<bool> remux_removed;
+    auto removed = remux_removed.get_future();
+    std::promise<void> restart_prepared;
+    const auto prepared = restart_prepared.get_future().share();
+    std::promise<void> resume_preparation;
+    const auto preparation_resumed = resume_preparation.get_future().share();
+    std::promise<void> coordinator_destroyed;
+    auto destroyed = coordinator_destroyed.get_future();
+    std::jthread lifecycle([&] {
+        auto coordinator = std::make_unique<RecordingCoordinator>();
+        coordinator->SetRecoveryManifestStore(&store);
+        OutputSettingsModel settings;
+        settings.output_folder = folder;
+        settings.container = capability::Container::Mp4;
+        settings.video_codec = capability::VideoCodec::H264;
+        settings.audio_codec = capability::AudioCodec::Aac;
+        coordinator->SetOutputSettings(settings);
+        auto caps = capability::CapabilityBuilder::BuildStaticValidatedBaseline();
+        caps.probed = true;
+        coordinator->OnCapabilitiesReady(caps);
+        coordinator->SetDisplayFactsProvider([] { return std::vector<capability::DisplayHdrFacts>{}; });
+        coordinator->SetPreviewCaptureReleaseHook([&] {
+            restart_prepared.set_value();
+            preparation_resumed.wait();
+        });
+
+        RecordingCoordinatorTestPeer::SetRecordingState(*coordinator, UiRecordingState::Recording);
+        auto callback = RecordingCoordinatorTestPeer::BeginSplit(*coordinator, active_path, active_id);
+        engine::CompletedSegment segment;
+        segment.path = active_partial;
+        segment.succeeded = true;
+        std::jthread mux([&] { callback(segment); });
+        if (committing.wait_for(10s) == std::future_status::ready) {
+            coordinator->ScheduleSegmentRemuxForTest({}, {}, earlier_id, [&] {
+                const bool ok = store.Remove(earlier_id);
+                remux_removed.set_value(ok);
+                return ok;
+            });
+            coordinator->StopRecording();
+            // The engine's bounded mux drain has returned while the callback is still in commit.
+            RecordingCoordinatorTestPeer::FinishTimedOutRecording(*coordinator);
+
+            engine::CaptureTarget target;
+            target.kind = engine::CaptureTarget::Kind::Monitor;
+            target.native_id = 1;
+            target.description = "unavailable-test-display";
+            EXPECT_TRUE(coordinator->StartRecording(target, capability::AudioUiState{}, std::nullopt));
+            (void)prepared.wait_for(5s);
+            coordinator->CancelPreparing();
+        }
+        resume_preparation.set_value();
+        coordinator.reset();
+        coordinator_destroyed.set_value();
+    });
+
+    const bool reached_commit = committing.wait_for(10s) == std::future_status::ready;
+    const bool restarted = prepared.wait_for(5s) == std::future_status::ready;
+    const bool exited = destroyed.wait_for(5s) == std::future_status::ready;
+    const bool removed_before_release = removed.wait_for(0s) == std::future_status::ready;
+    release_commit.set_value();
+    lifecycle.join();
+
+    EXPECT_TRUE(reached_commit);
+    EXPECT_TRUE(restarted);
+    EXPECT_TRUE(exited);
+    EXPECT_TRUE(removed_before_release);
+    ASSERT_EQ(removed.wait_for(0s), std::future_status::ready);
+    EXPECT_TRUE(removed.get());
+    const auto entries = store.Entries();
+    ASSERT_EQ(entries.size(), 2);
+    const auto active =
+        std::find_if(entries.begin(), entries.end(), [&](const auto& entry) { return entry.id == active_id; });
+    ASSERT_NE(active, entries.end());
+    EXPECT_TRUE(active->finalized);
+    const auto next_partial = engine::DeriveSegmentPath(active_partial, 1);
+    ASSERT_TRUE(next_partial.success);
+    EXPECT_TRUE(std::any_of(entries.begin(), entries.end(), [&](const auto& entry) {
+        return std::filesystem::path(entry.artefact_path.toStdWString()) == next_partial.path;
     }));
 }
 

@@ -1,12 +1,19 @@
 #include "RecoveryManifestStore.h"
 
+#include <QCryptographicHash>
 #include <QDir>
 #include <QFile>
 #include <QFileInfo>
 #include <QJsonArray>
 #include <QJsonDocument>
 #include <QJsonObject>
+#include <QMap>
 #include <QSaveFile>
+
+#include <algorithm>
+#include <map>
+#include <mutex>
+#include <optional>
 
 #include "diagnostics/AppLog.h"
 #include "settings/ConfigPaths.h"
@@ -47,9 +54,35 @@ bool EntryFromJson(const QJsonObject& obj, RecoveryManifestEntry& out) {
     return true;
 }
 
+std::optional<QJsonObject> ReadEntry(const QString& path) {
+    QFile file(path);
+    if (!file.open(QIODevice::ReadOnly))
+        return std::nullopt;
+    const auto document = QJsonDocument::fromJson(file.readAll());
+    return document.isObject() ? std::optional(document.object()) : std::nullopt;
+}
+
 } // namespace
 
-RecoveryManifestStore::RecoveryManifestStore() {
+struct RecoveryManifestStore::EntryLocks {
+    std::shared_ptr<std::mutex> ForFile(const QString& path) {
+        const auto name = QFileInfo(path).fileName();
+        std::lock_guard lock(mutex);
+        std::erase_if(by_file, [](const auto& item) { return item.second.expired(); });
+        auto& weak = by_file[name];
+        auto entry = weak.lock();
+        if (!entry) {
+            entry = std::make_shared<std::mutex>();
+            weak = entry;
+        }
+        return entry;
+    }
+
+    std::mutex mutex;
+    std::map<QString, std::weak_ptr<std::mutex>> by_file;
+};
+
+RecoveryManifestStore::RecoveryManifestStore() : locks_(std::make_shared<EntryLocks>()) {
     const QString config_dir = settings::ResolveAppConfigDir();
     if (!config_dir.isEmpty()) {
         QDir().mkpath(config_dir);
@@ -59,20 +92,42 @@ RecoveryManifestStore::RecoveryManifestStore() {
     }
 }
 
-RecoveryManifestStore::RecoveryManifestStore(QString file_path) : file_path_(std::move(file_path)) {
+RecoveryManifestStore::RecoveryManifestStore(QString file_path)
+    : locks_(std::make_shared<EntryLocks>()), file_path_(std::move(file_path)) {
 }
 
 QVector<RecoveryManifestEntry> RecoveryManifestStore::Load() const {
-    std::lock_guard<std::mutex> lock(*mutex_);
-    return LoadLocked();
+    QMap<QString, RecoveryManifestEntry> entries;
+    if (const auto legacy = LoadLegacy())
+        for (const auto& entry : *legacy)
+            entries.insert(entry.id, entry);
+    if (!file_path_.isEmpty()) {
+        const QDir directory(EntriesDirectory());
+        for (const auto& file : directory.entryInfoList({QStringLiteral("*.json")}, QDir::Files)) {
+            const auto path = file.absoluteFilePath();
+            // A Windows reader without delete sharing can deny QSaveFile's replacement of this entry.
+            const auto entry_lock = locks_->ForFile(path);
+            const std::lock_guard lock(*entry_lock);
+            const auto record = ReadEntry(path);
+            if (!record)
+                continue;
+            const auto id = record->value(QStringLiteral("id")).toString();
+            if (id.isEmpty() || file.fileName() != QFileInfo(EntryPath(id)).fileName())
+                continue;
+            if (record->value(QStringLiteral("removed")).toBool()) {
+                entries.remove(id);
+            } else if (RecoveryManifestEntry entry; EntryFromJson(*record, entry)) {
+                entries.insert(id, entry);
+            }
+        }
+    }
+    auto ordered = entries.values();
+    std::stable_sort(ordered.begin(), ordered.end(),
+                     [](const auto& a, const auto& b) { return a.started_at < b.started_at; });
+    return ordered;
 }
 
-bool RecoveryManifestStore::Save(const QVector<RecoveryManifestEntry>& entries) const {
-    std::lock_guard<std::mutex> lock(*mutex_);
-    return SaveLocked(entries);
-}
-
-QVector<RecoveryManifestEntry> RecoveryManifestStore::LoadLocked() const {
+std::optional<QVector<RecoveryManifestEntry>> RecoveryManifestStore::LoadLegacy() const {
     QVector<RecoveryManifestEntry> result;
 
     if (file_path_.isEmpty())
@@ -86,19 +141,21 @@ QVector<RecoveryManifestEntry> RecoveryManifestStore::LoadLocked() const {
     if (!file.open(QIODevice::ReadOnly)) {
         diagnostics::AppLog::warning(QStringLiteral("recovery.manifest"),
                                      QStringLiteral("Cannot open manifest for reading: %1").arg(file_path_));
-        return result;
+        return std::nullopt;
     }
 
     const QByteArray data = file.readAll();
+    if (file.error() != QFileDevice::NoError)
+        return std::nullopt;
     file.close();
 
     QJsonParseError parse_error;
     const QJsonDocument doc = QJsonDocument::fromJson(data, &parse_error);
     if (parse_error.error != QJsonParseError::NoError || !doc.isObject()) {
-        // Corrupt manifest — reset silently (pre-v1 policy: no migration).
-        diagnostics::AppLog::warning(QStringLiteral("recovery.manifest"),
-                                     QStringLiteral("Corrupt manifest — resetting: %1").arg(parse_error.errorString()));
-        return result;
+        diagnostics::AppLog::warning(
+            QStringLiteral("recovery.manifest"),
+            QStringLiteral("Corrupt legacy recovery manifest: %1").arg(parse_error.errorString()));
+        return std::nullopt;
     }
 
     const QJsonObject root = doc.object();
@@ -106,8 +163,8 @@ QVector<RecoveryManifestEntry> RecoveryManifestStore::LoadLocked() const {
     if (version < 1 || version > kSchemaVersion) {
         diagnostics::AppLog::warning(
             QStringLiteral("recovery.manifest"),
-            QStringLiteral("Incompatible manifest schema version %1 — resetting").arg(version));
-        return result;
+            QStringLiteral("Incompatible legacy recovery manifest schema version %1").arg(version));
+        return std::nullopt;
     }
 
     const QJsonArray entries = root.value(QStringLiteral("entries")).toArray();
@@ -123,70 +180,89 @@ QVector<RecoveryManifestEntry> RecoveryManifestStore::LoadLocked() const {
     return result;
 }
 
-bool RecoveryManifestStore::SaveLocked(const QVector<RecoveryManifestEntry>& entries) const {
+QString RecoveryManifestStore::EntriesDirectory() const {
+    return file_path_ + QStringLiteral(".entries");
+}
+
+QString RecoveryManifestStore::EntryPath(const QString& id) const {
+    const auto digest = QCryptographicHash::hash(id.toUtf8(), QCryptographicHash::Sha256).toHex();
+    return QDir(EntriesDirectory()).filePath(QString::fromLatin1(digest) + QStringLiteral(".json"));
+}
+
+bool RecoveryManifestStore::CommitEntry(const QString& id, const QJsonObject& record) const {
     if (file_path_.isEmpty())
         return false;
 
-    QDir().mkpath(QFileInfo(file_path_).absolutePath());
-
-    QJsonArray arr;
-    for (const auto& e : entries)
-        arr.append(EntryToJson(e));
-
-    QJsonObject root;
-    root[QStringLiteral("schema_version")] = kSchemaVersion;
-    root[QStringLiteral("entries")] = arr;
-
-    QSaveFile file(file_path_);
-    if (!file.open(QIODevice::WriteOnly | QIODevice::Truncate)) {
+    const auto path = EntryPath(id);
+    const auto bytes = QJsonDocument(record).toJson(QJsonDocument::Compact);
+    QSaveFile file(path);
+    if (!QDir().mkpath(EntriesDirectory()) || !file.open(QIODevice::WriteOnly) || file.write(bytes) != bytes.size()) {
         diagnostics::AppLog::warning(QStringLiteral("recovery.manifest"),
-                                     QStringLiteral("Cannot open manifest for atomic write: %1").arg(file_path_));
+                                     QStringLiteral("Cannot write recovery entry: %1").arg(path));
         return false;
     }
 
-    file.write(QJsonDocument(root).toJson(QJsonDocument::Indented));
-
-    if (!file.commit()) {
-        diagnostics::AppLog::warning(QStringLiteral("recovery.manifest"),
-                                     QStringLiteral("Atomic manifest save commit failed: %1").arg(file_path_));
-        return false;
-    }
-
-    return true;
+    if (before_commit_)
+        before_commit_(id);
+    if (file.commit())
+        return true;
+    diagnostics::AppLog::warning(QStringLiteral("recovery.manifest"),
+                                 QStringLiteral("Atomic recovery entry commit failed: %1").arg(path));
+    return false;
 }
 
-// The three mutations below each hold mutex_ for the WHOLE load → mutate → save
-// sequence. Splitting the lock per step would still lose updates: two threads
-// would load the same snapshot and the later save would drop the earlier one's
-// change, no matter how atomic each individual file replacement is.
-
 bool RecoveryManifestStore::Add(const RecoveryManifestEntry& entry) {
-    std::lock_guard<std::mutex> lock(*mutex_);
-    auto entries = LoadLocked();
-    entries.append(entry);
-    return SaveLocked(entries);
+    if (entry.id.isEmpty())
+        return false;
+    const auto entry_lock = locks_->ForFile(EntryPath(entry.id));
+    std::lock_guard lock(*entry_lock);
+    return CommitEntry(entry.id, EntryToJson(entry));
 }
 
 bool RecoveryManifestStore::UpdateFinalized(const QString& id, bool finalized) {
-    std::lock_guard<std::mutex> lock(*mutex_);
-    auto entries = LoadLocked();
-    for (auto& e : entries) {
-        if (e.id == id) {
-            e.finalized = finalized;
-            return SaveLocked(entries);
+    if (file_path_.isEmpty())
+        return true;
+    const auto path = EntryPath(id);
+    const auto entry_lock = locks_->ForFile(path);
+    std::lock_guard lock(*entry_lock);
+    auto record = ReadEntry(path);
+    if (!record) {
+        if (QFile::exists(path))
+            return false;
+        const auto legacy = LoadLegacy();
+        if (!legacy)
+            return false;
+        const auto found =
+            std::find_if(legacy->begin(), legacy->end(), [&](const auto& entry) { return entry.id == id; });
+        if (found == legacy->end()) {
+            return true;
         }
+        record = EntryToJson(*found);
     }
-    return true; // not found — benign
+    if (record->value(QStringLiteral("removed")).toBool())
+        return true;
+    record->insert(QStringLiteral("finalized"), finalized);
+    return CommitEntry(id, *record);
 }
 
 bool RecoveryManifestStore::Remove(const QString& id) {
-    std::lock_guard<std::mutex> lock(*mutex_);
-    auto entries = LoadLocked();
-    const int before = entries.size();
-    entries.removeIf([&id](const RecoveryManifestEntry& e) { return e.id == id; });
-    if (entries.size() == before)
+    if (file_path_.isEmpty())
         return true; // not found — benign
-    return SaveLocked(entries);
+    const auto path = EntryPath(id);
+    const auto entry_lock = locks_->ForFile(path);
+    std::lock_guard lock(*entry_lock);
+    const auto legacy = LoadLegacy();
+    if (!legacy)
+        return false;
+    if (std::any_of(legacy->begin(), legacy->end(), [&](const auto& entry) { return entry.id == id; })) {
+        // Suppress the legacy entry without rewriting other recordings' recovery data.
+        return CommitEntry(id, {{QStringLiteral("id"), id}, {QStringLiteral("removed"), true}});
+    }
+    if (!QFile::exists(path) || QFile::remove(path))
+        return true;
+    diagnostics::AppLog::warning(QStringLiteral("recovery.manifest"),
+                                 QStringLiteral("Cannot remove recovery entry: %1").arg(path));
+    return false;
 }
 
 QVector<RecoveryManifestEntry> RecoveryManifestStore::Entries() const {
@@ -194,8 +270,6 @@ QVector<RecoveryManifestEntry> RecoveryManifestStore::Entries() const {
 }
 
 const QString& RecoveryManifestStore::StorePath() const {
-    // Immutable after construction; no lock needed, and returning a reference
-    // under one would be a lie anyway.
     return file_path_;
 }
 
