@@ -14,7 +14,10 @@
 #include <QJsonObject>
 #include <QTemporaryDir>
 
+#include <miniz.h>
+
 #include <algorithm>
+#include <string_view>
 
 namespace exosnap::diagnostics {
 namespace {
@@ -233,6 +236,42 @@ TEST(SupportBundle, OmitsTheStartupTraceWhenNoMilestonesWereRecorded) {
     const auto entries = CollectBundleEntries(MakeInputs(tmp.path()));
     EXPECT_TRUE(std::none_of(entries.begin(), entries.end(),
                              [](const BundleEntry& e) { return e.name == QStringLiteral("startup-trace.txt"); }));
+}
+
+TEST(SupportBundle, OmitsOutputPathsFromTheActualZip) {
+    QTemporaryDir tmp;
+    ASSERT_TRUE(tmp.isValid());
+    BundleInputs inputs = MakeInputs(tmp.path());
+    inputs.settings_summary =
+        QStringLiteral("Container: MKV\nOutput Folder: D:/PrivateClient/Recordings\n"
+                       "Effective Output Path: C:\\Private Folder\\capture.mkv\nVideo Codec: AV1\n");
+    const auto entries = CollectBundleEntries(inputs);
+    EXPECT_FALSE(AnyEntryContains(entries, QStringLiteral("PrivateClient")));
+    EXPECT_FALSE(AnyEntryContains(entries, QStringLiteral("Private Folder")));
+    EXPECT_FALSE(AnyEntryContains(entries, QStringLiteral("Output Folder:")));
+    EXPECT_FALSE(AnyEntryContains(entries, QStringLiteral("Effective Output Path:")));
+
+    const QString path = tmp.filePath(QStringLiteral("support-sensitive.zip"));
+    QString error;
+    ASSERT_TRUE(WriteBundleZip(path, entries, &error)) << error.toStdString();
+    QFile file(path);
+    ASSERT_TRUE(file.open(QIODevice::ReadOnly));
+    const QByteArray archive = file.readAll();
+    mz_zip_archive zip{};
+    mz_zip_zero_struct(&zip);
+    ASSERT_NE(mz_zip_reader_init_mem(&zip, archive.constData(), static_cast<size_t>(archive.size()), 0), MZ_FALSE);
+    size_t length = 0;
+    void* extracted = mz_zip_reader_extract_file_to_heap(&zip, "settings.txt", &length, 0);
+    ASSERT_NE(extracted, nullptr);
+    const std::string_view settings(static_cast<const char*>(extracted), length);
+    EXPECT_EQ(settings.find("D:/PrivateClient/Recordings"), std::string_view::npos);
+    EXPECT_EQ(settings.find("C:\\Private Folder\\capture.mkv"), std::string_view::npos);
+    EXPECT_EQ(settings.find("Output Folder:"), std::string_view::npos);
+    EXPECT_EQ(settings.find("Effective Output Path:"), std::string_view::npos);
+    EXPECT_NE(settings.find("Container: MKV"), std::string_view::npos);
+    EXPECT_NE(settings.find("Video Codec: AV1"), std::string_view::npos);
+    mz_free(extracted);
+    EXPECT_NE(mz_zip_reader_end(&zip), MZ_FALSE);
 }
 
 TEST(SupportBundle, WritesAValidZip) {
