@@ -5,6 +5,7 @@
 #include <windows.h>
 
 #include <algorithm>
+#include <chrono>
 #include <cstdint>
 #include <functional>
 #include <utility>
@@ -18,6 +19,16 @@ uint64_t ReadQpc() {
     LARGE_INTEGER now{};
     ::QueryPerformanceCounter(&now);
     return static_cast<uint64_t>(now.QuadPart);
+}
+
+std::chrono::steady_clock::time_point PresentObservedAt(std::chrono::steady_clock::time_point drained_at,
+                                                        uint64_t age_ticks, int64_t frequency) {
+    if (frequency <= 0)
+        return {};
+    const std::chrono::duration<double> age(static_cast<double>(age_ticks) / static_cast<double>(frequency));
+    if (age >= drained_at.time_since_epoch())
+        return {};
+    return drained_at - std::chrono::ceil<std::chrono::steady_clock::duration>(age);
 }
 
 } // namespace
@@ -205,7 +216,10 @@ PresentSample PresentMonEtwSession::Latest() const {
         size_t attributed = 0;
         std::vector<unsigned long> process_ids;
         std::vector<unsigned long> related_process_ids;
-        for (const TracePresentEvent& present : backend->Drain()) {
+        const auto presents = backend->Drain();
+        const auto drained_at = std::chrono::steady_clock::now();
+        const uint64_t drain_qpc = read_qpc_ ? read_qpc_() : 0;
+        for (const TracePresentEvent& present : presents) {
             ++drained;
             if (std::find(process_ids.begin(), process_ids.end(), present.process_id) == process_ids.end())
                 process_ids.push_back(present.process_id);
@@ -221,6 +235,8 @@ PresentSample PresentMonEtwSession::Latest() const {
             // Presents can finish after a reset. Their start tick must be strictly after the boundary.
             if (attribution_start_qpc_ != 0 && present.present_qpc <= attribution_start_qpc_)
                 continue;
+            if (read_qpc_ && (present.present_qpc == 0 || present.present_qpc > drain_qpc))
+                continue;
             const bool related_to_target =
                 want_pid == 0 || present.process_id == want_pid ||
                 std::any_of(present.related_process_ids.begin(), present.related_process_ids.end(),
@@ -235,7 +251,7 @@ PresentSample PresentMonEtwSession::Latest() const {
             raw.tearing_flag = present.tearing_flag;
             // The inter-present gap; 0 for the first present of an attribution window,
             // and 0 whenever the frequency is unknown -- never a fabricated number.
-            raw.interval_ms = (last_present_qpc_ != 0 && present.present_qpc > last_present_qpc_ && qpc_freq_ != 0)
+            raw.interval_ms = (last_present_qpc_ != 0 && present.present_qpc > last_present_qpc_ && qpc_freq_ > 0)
                                   ? static_cast<double>(present.present_qpc - last_present_qpc_) * 1000.0 /
                                         static_cast<double>(qpc_freq_)
                                   : 0.0;
@@ -249,7 +265,9 @@ PresentSample PresentMonEtwSession::Latest() const {
             mapped.discarded_count = static_cast<uint32_t>(accumulator_.discarded_count);
             mapped.mode_flip_count = static_cast<uint32_t>(accumulator_.mode_flip_count);
             std::lock_guard lk(sample_mutex_);
-            mapped.metadata.observed_at = std::chrono::steady_clock::now();
+            // The queue can delay delivery, so freshness starts at the present's ETW timestamp.
+            mapped.metadata.observed_at =
+                read_qpc_ ? PresentObservedAt(drained_at, drain_qpc - present.present_qpc, qpc_freq_) : drained_at;
             mapped.metadata.source = "PresentMon ETW";
             if (want_pid != 0)
                 mapped.metadata.process_id = want_pid;
@@ -278,7 +296,9 @@ PresentSample PresentMonEtwSession::Latest() const {
         }
     }
     std::lock_guard lk(sample_mutex_);
-    return latest_;
+    PresentSample sample = latest_;
+    sample.available = sample.available && sample.metadata.Fresh(std::chrono::steady_clock::now());
+    return sample;
 }
 
 void PresentMonEtwSession::Stop() {

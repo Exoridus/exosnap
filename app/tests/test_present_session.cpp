@@ -456,13 +456,49 @@ TEST(PresentSession, DelayedPresentFromBeforeASamePidBoundaryStaysUnavailable) {
     backend->Publish(Present(pid, current_qpc, kModeHardwareLegacyFlip, true));
     EXPECT_FALSE(session.Latest().available);
 
-    backend->Publish(Present(pid, current_qpc + 1, kModeComposedFlip));
+    ++current_qpc;
+    backend->Publish(Present(pid, current_qpc, kModeComposedFlip));
     const auto sample = session.Latest();
     ASSERT_TRUE(sample.available);
     EXPECT_EQ(sample.mode, PresentMode::Composed);
     EXPECT_EQ(sample.present_count, 1u);
     EXPECT_EQ(sample.discarded_count, 0u);
     EXPECT_EQ(sample.mode_flip_count, 0u);
+}
+
+TEST(PresentSession, QueuedPresentDoesNotBecomeFreshWhenDrained) {
+    auto backend = std::make_shared<FakeTraceBackend>();
+    const auto ticks_per_second = static_cast<uint64_t>(backend->frequency);
+    uint64_t current_qpc = 100 * ticks_per_second;
+    PresentMonEtwSession session(FactoryFor(backend), [&current_qpc] { return current_qpc; });
+    ASSERT_TRUE(session.Start());
+    ASSERT_TRUE(WaitUntil([&] { return session.IsOpen(); }));
+
+    const auto pid = ::GetCurrentProcessId();
+    session.SetTargetProcessId(pid);
+    backend->Publish(Present(pid, current_qpc + ticks_per_second, kModeHardwareLegacyFlip, true));
+    current_qpc += 17 * ticks_per_second;
+
+    const auto stale = session.Latest();
+    EXPECT_FALSE(stale.available);
+    EXPECT_FALSE(stale.FreshForTarget(pid, std::chrono::steady_clock::now()));
+    EXPECT_EQ(stale.trace_matched_count, 1u);
+    EXPECT_EQ(stale.present_count, 1u);
+
+    backend->Publish(Present(pid, current_qpc - ticks_per_second, kModeComposedFlip));
+    const auto fresh = session.Latest();
+    EXPECT_TRUE(fresh.FreshForTarget(pid, std::chrono::steady_clock::now()));
+    EXPECT_EQ(fresh.mode, PresentMode::Composed);
+    EXPECT_EQ(fresh.present_count, 2u);
+    EXPECT_EQ(fresh.discarded_count, 1u);
+    EXPECT_EQ(fresh.mode_flip_count, 1u);
+
+    backend->Publish(Present(pid, current_qpc + ticks_per_second, kModeHardwareLegacyFlip, true));
+    const auto invalid = session.Latest();
+    EXPECT_EQ(invalid.mode, PresentMode::Composed);
+    EXPECT_EQ(invalid.present_count, 2u);
+    EXPECT_EQ(invalid.trace_drained_count, 1u);
+    EXPECT_EQ(invalid.trace_matched_count, 0u);
 }
 
 TEST(PresentSession, PresentsFromAnotherProcessNeverEnterTheAttributionWindow) {
