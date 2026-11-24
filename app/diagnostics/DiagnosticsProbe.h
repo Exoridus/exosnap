@@ -30,7 +30,7 @@ struct DiagnosticsProbeRequest {
 // Blocking. Never call from the GUI thread.
 [[nodiscard]] DiagnosticsController::ProbeResult RunDiagnosticsProbe(const DiagnosticsProbeRequest& request);
 
-// The drive label shown on the Disk tile: the volume root ("C:") when the path has
+// The UTF-8 drive label shown on the Disk tile: the volume root ("C:") when the path has
 // one, otherwise the path itself. Pure, so the tile text is unit-testable without
 // touching a filesystem.
 [[nodiscard]] std::string DriveLabelForPath(const std::filesystem::path& path);

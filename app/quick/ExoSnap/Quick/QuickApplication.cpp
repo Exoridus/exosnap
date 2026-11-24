@@ -5795,7 +5795,7 @@ void QuickApplication::initializeRecovery() {
     // The stored destination folder may be gone by the time a recovery runs (an
     // unplugged drive, a folder the user has since moved). The service falls
     // back to the currently configured output folder rather than failing.
-    recovery_service_.SetFallbackOutputFolder(QString::fromStdString(live_config_.output.output_folder.string()));
+    recovery_service_.SetFallbackOutputFolder(QString::fromStdWString(live_config_.output.output_folder.wstring()));
     recovery_adapter_.setService(&recovery_service_);
 
     // "Continue" is the coordinator's business, not the adapter's — same
