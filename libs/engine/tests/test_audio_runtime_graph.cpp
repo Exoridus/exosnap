@@ -36,13 +36,37 @@ uint64_t NowNs() {
     QueryPerformanceFrequency(&frequency);
     return QpcTicksTo100ns(static_cast<uint64_t>(ticks.QuadPart), static_cast<uint64_t>(frequency.QuadPart)) * 100;
 }
+bool WaitForGraphCondition(auto condition) {
+    const auto deadline = std::chrono::steady_clock::now() + std::chrono::seconds(2);
+    while (!condition()) {
+        if (std::chrono::steady_clock::now() >= deadline)
+            return false;
+        Sleep(1);
+    }
+    return true;
+}
+
+struct StopGraphOnExit {
+    AudioRuntimeGraph& graph;
+    ~StopGraphOnExit() {
+        graph.RequestStop(NowNs());
+        std::string error;
+        graph.WaitDrained(1500, error);
+    }
+};
+
+struct FiniteCapturePacketGate {
+    std::atomic<bool> released{false};
+    std::atomic<uint32_t> empty_polls{0};
+};
+
 class FiniteCapture final : public IAudioCaptureSource {
   public:
     explicit FiniteCapture(std::shared_ptr<std::atomic<uint32_t>> opens, uint64_t start, uint32_t packet_limit = 20,
                            uint64_t delivery_delay_ns = 0, bool latency_known = true,
-                           std::shared_ptr<std::atomic<bool>> release_next = {})
+                           std::shared_ptr<FiniteCapturePacketGate> gate = {})
         : opens_(std::move(opens)), start_(start), packet_limit_(packet_limit), delivery_delay_ns_(delivery_delay_ns),
-          latency_known_(latency_known), release_next_(std::move(release_next)), pcm_(960, 0.25f) {
+          latency_known_(latency_known), gate_(std::move(gate)), pcm_(960, 0.25f) {
     }
     bool Init(std::string&) override {
         ++*opens_;
@@ -52,10 +76,13 @@ class FiniteCapture final : public IAudioCaptureSource {
         return latency_known_ ? std::optional<uint64_t>{50000000ULL} : std::nullopt;
     }
     uint32_t PendingFrameCount() override {
-        return packets_ < packet_limit_ && NowNs() >= start_ + delivery_delay_ns_ &&
-                       (!packets_ || !release_next_ || release_next_->load())
-                   ? 480
-                   : 0;
+        if (packets_ >= packet_limit_ || NowNs() < start_ + delivery_delay_ns_)
+            return 0;
+        if (packets_ && gate_ && !gate_->released.load()) {
+            ++gate_->empty_polls;
+            return 0;
+        }
+        return 480;
     }
     bool AcquireBuffer(RawAudioBuffer& buffer, std::string&) override {
         if (!PendingFrameCount())
@@ -93,10 +120,29 @@ class FiniteCapture final : public IAudioCaptureSource {
     uint32_t packet_limit_ = 20;
     uint64_t delivery_delay_ns_ = 0;
     bool latency_known_ = true;
-    std::shared_ptr<std::atomic<bool>> release_next_;
+    std::shared_ptr<FiniteCapturePacketGate> gate_;
     std::vector<float> pcm_;
     std::string name_ = "Finite fixture";
 };
+
+AudioRuntimeGraph::RequestFactory MakeGatedFiniteCaptureRequest(std::shared_ptr<std::atomic<uint32_t>> opens,
+                                                                uint64_t start, bool latency_known,
+                                                                std::shared_ptr<FiniteCapturePacketGate> gate) {
+    return
+        [opens = std::move(opens), start, latency_known, gate = std::move(gate)](const ResolvedAudioSource& resolved) {
+            SharedAudioCaptureRequest request;
+            request.key = *resolved.capture_key;
+            request.correction_enabled = false;
+            request.admission.sample_rate = 48000;
+            request.admission.channels = 2;
+            request.admission.maximum_packet_frames = 480;
+            request.native_factory = [opens, start, latency_known, gate] {
+                return std::make_unique<FiniteCapture>(opens, start, 2, 0, latency_known, gate);
+            };
+            return request;
+        };
+}
+
 struct OutageControl {
     std::atomic<uint32_t> phase{0};
     std::atomic<uint32_t> active_captures{0};
@@ -1001,7 +1047,8 @@ TEST(AudioRuntimeGraph, SharedCaptureProcessesEachSourceOnceAndFansOutToTwoTrack
 }
 
 TEST(AudioRuntimeGraph, DelayedSharedProducerPreservesPcmAcrossUnequalTrackSchedules) {
-    const uint64_t start = NowNs();
+    // Put both packets behind the wall-clock playback horizon. Only the producer's frontier should withhold them.
+    const uint64_t start = NowNs() - 100000000ULL;
     ResolvedAudioPlan plan;
     ResolvedAudioSource source;
     source.spec.id = NewId<AudioSourceId>();
@@ -1016,39 +1063,21 @@ TEST(AudioRuntimeGraph, DelayedSharedProducerPreservesPcmAcrossUnequalTrackSched
         plan.tracks.push_back(track);
     }
     auto opens = std::make_shared<std::atomic<uint32_t>>(0);
-    auto release_next = std::make_shared<std::atomic<bool>>(false);
+    auto gate = std::make_shared<FiniteCapturePacketGate>();
     auto registry = std::make_shared<SharedAudioCaptureRegistry>();
     std::string error;
-    auto graph = AudioRuntimeGraph::Prepare(plan, registry, start, 48000, 2, false, error,
-                                            [opens, start, release_next](const ResolvedAudioSource& resolved) {
-                                                SharedAudioCaptureRequest request;
-                                                request.key = *resolved.capture_key;
-                                                request.admission.sample_rate = 48000;
-                                                request.admission.channels = 2;
-                                                request.admission.maximum_packet_frames = 480;
-                                                request.native_factory = [opens, start, release_next] {
-                                                    return std::make_unique<FiniteCapture>(opens, start, 2, 0, false,
-                                                                                           release_next);
-                                                };
-                                                return request;
-                                            });
+    const auto make_request = MakeGatedFiniteCaptureRequest(opens, start, false, gate);
+    auto graph = AudioRuntimeGraph::Prepare(plan, registry, start, 48000, 2, false, error, make_request);
     ASSERT_NE(graph, nullptr) << error;
+    const auto observer = registry->AttachReaders({make_request(source)}, start, error);
+    ASSERT_EQ(observer.size(), 1u) << error;
+    ASSERT_EQ(opens->load(), 1u);
     auto tracks = graph->TakeTracks();
     ASSERT_EQ(tracks.size(), 2u);
     for (auto& track : tracks)
         ASSERT_TRUE(track->Init(error)) << error;
     graph->Start();
-    auto wait_for_frames = [&](uint64_t frames) {
-        for (uint32_t wait = 0; wait < 2000; ++wait) {
-            if (graph->SourceMeters().front().processed_frames == frames)
-                return true;
-            Sleep(1);
-        }
-        return false;
-    };
-    ASSERT_TRUE(wait_for_frames(480));
-    for (uint32_t wait = 0; wait < 2000 && !tracks[0]->PendingFrameCount(); ++wait)
-        Sleep(1);
+    const StopGraphOnExit stop{*graph};
     std::vector<float> pcm[2];
     auto consume = [&](size_t index) {
         RawAudioBuffer raw;
@@ -1059,15 +1088,19 @@ TEST(AudioRuntimeGraph, DelayedSharedProducerPreservesPcmAcrossUnequalTrackSched
         tracks[index]->ReleaseBuffer();
         return true;
     };
-    for (size_t i = 0; i < 2; ++i)
-        ASSERT_TRUE(consume(i)) << error;
-    Sleep(50);
+    ASSERT_TRUE(WaitForGraphCondition([&] { return tracks[0]->PendingFrameCount() == 480; }));
+    ASSERT_TRUE(consume(0)) << error;
+    ASSERT_EQ(pcm[0].size(), 960u);
+    const auto empty_polls = gate->empty_polls.load();
+    // The second subsequent empty poll proves the owner processed the first while packet two was held.
+    ASSERT_TRUE(WaitForGraphCondition([&] { return gate->empty_polls.load() >= empty_polls + 2; }));
+    EXPECT_EQ(SharedAudioReaderCompletedThrough(*observer.front()), start + 10000000ULL);
     const auto premature_frames = tracks[0]->PendingFrameCount();
     EXPECT_EQ(premature_frames, 0u);
     if (premature_frames)
         ASSERT_TRUE(consume(0)) << error;
-    release_next->store(true);
-    ASSERT_TRUE(wait_for_frames(960));
+    gate->released.store(true);
+    ASSERT_TRUE(WaitForGraphCondition([&] { return graph->SourceMeters().front().processed_frames == 960; }));
     const uint64_t end = start + 20000000ULL;
     graph->RequestStop(end);
     ASSERT_TRUE(graph->WaitDrained(1500, error)) << error;
@@ -1098,60 +1131,39 @@ TEST(AudioRuntimeGraph, NativePacketBeforeCertifiedIdleFrontierFailsGraph) {
         plan.tracks.push_back(track);
     }
     auto opens = std::make_shared<std::atomic<uint32_t>>(0);
-    auto release_next = std::make_shared<std::atomic<bool>>(false);
+    auto gate = std::make_shared<FiniteCapturePacketGate>();
     auto registry = std::make_shared<SharedAudioCaptureRegistry>();
     std::string error;
-    auto graph = AudioRuntimeGraph::Prepare(plan, registry, start, 48000, 2, false, error,
-                                            [opens, start, release_next](const ResolvedAudioSource& resolved) {
-                                                SharedAudioCaptureRequest request;
-                                                request.key = *resolved.capture_key;
-                                                request.admission.sample_rate = 48000;
-                                                request.admission.channels = 2;
-                                                request.admission.maximum_packet_frames = 480;
-                                                request.native_factory = [opens, start, release_next] {
-                                                    return std::make_unique<FiniteCapture>(opens, start, 2, 0, true,
-                                                                                           release_next);
-                                                };
-                                                return request;
-                                            });
+    const auto make_request = MakeGatedFiniteCaptureRequest(opens, start, true, gate);
+    auto graph = AudioRuntimeGraph::Prepare(plan, registry, start, 48000, 2, false, error, make_request);
     ASSERT_NE(graph, nullptr) << error;
+    // Observe the same physical owner directly. A pending track buffer can still be first-packet PCM.
+    const auto observer = registry->AttachReaders({make_request(source)}, start, error);
+    ASSERT_EQ(observer.size(), 1u) << error;
+    ASSERT_EQ(opens->load(), 1u);
     auto tracks = graph->TakeTracks();
     ASSERT_EQ(tracks.size(), 2u);
     for (auto& track : tracks)
         ASSERT_TRUE(track->Init(error)) << error;
     graph->Start();
-    auto wait_for_frames = [&](uint64_t frames) {
-        for (uint32_t wait = 0; wait < 2000; ++wait) {
-            if (graph->SourceMeters().front().processed_frames == frames)
-                return true;
-            Sleep(1);
-        }
-        return false;
-    };
-    ASSERT_TRUE(wait_for_frames(480));
-    for (uint32_t wait = 0; wait < 2000 && !tracks[0]->PendingFrameCount(); ++wait)
-        Sleep(1);
-    std::vector<float> pcm[2];
-    auto consume = [&](size_t index) {
+    const StopGraphOnExit stop{*graph};
+    for (auto& track : tracks) {
+        ASSERT_TRUE(WaitForGraphCondition([&] { return track->PendingFrameCount() == 480; }));
         RawAudioBuffer raw;
-        if (!tracks[index]->AcquireBuffer(raw, error))
-            return false;
-        const auto* samples = reinterpret_cast<const float*>(raw.bytes);
-        pcm[index].insert(pcm[index].end(), samples, samples + static_cast<size_t>(raw.num_frames) * 2);
-        tracks[index]->ReleaseBuffer();
-        return true;
-    };
-    for (size_t i = 0; i < 2; ++i)
-        ASSERT_TRUE(consume(i)) << error;
-    for (uint32_t wait = 0; wait < 2000 && !tracks[0]->PendingFrameCount(); ++wait)
-        Sleep(1);
-    ASSERT_GT(tracks[0]->PendingFrameCount(), 0u);
-    release_next->store(true);
+        ASSERT_TRUE(track->AcquireBuffer(raw, error)) << error;
+        EXPECT_FALSE(raw.silent);
+        const auto frames = raw.num_frames;
+        track->ReleaseBuffer();
+        ASSERT_EQ(frames, 480u);
+    }
+    const uint64_t second_packet_qpc = start + 10000000ULL;
+    ASSERT_TRUE(WaitForGraphCondition([&] {
+        return SharedAudioReaderCompletedThrough(*observer.front()) > second_packet_qpc &&
+               tracks[0]->PendingFrameCount() > 0;
+    }));
+    gate->released.store(true);
     EXPECT_FALSE(graph->WaitDrained(1500, error));
     EXPECT_EQ(error, "Physical audio packet precedes its certified idle frontier");
-    graph->RequestStop(NowNs());
-    std::string cleanup_error;
-    graph->WaitDrained(1500, cleanup_error);
 }
 TEST(AudioRuntimeGraph, HealthyIdleCaptureSealsAndPadsTheFiniteTrackWithoutPackets) {
     const uint64_t start = NowNs();
