@@ -409,6 +409,36 @@ TEST(RecoveryDrill, RemuxMp4ProcessKill_ReplacesStalePartialAtTargetPath) {
     EXPECT_TRUE(store.Entries().isEmpty());
 }
 
+TEST(RecoveryDrill, RemuxMp4KeepsFileOccupyingGeneratedSegmentName) {
+    QTemporaryDir temp;
+    ASSERT_TRUE(temp.isValid());
+    const QDir folder(temp.path());
+    RecoveryManifestStore store(folder.filePath(QStringLiteral("manifest.json")));
+    RecoveryService service(store);
+
+    const auto artefact = folder.filePath(QStringLiteral("rec_part-002.partial"));
+    const auto occupied = folder.filePath(QStringLiteral("rec_part-002.mp4"));
+    ASSERT_TRUE(WriteSyntheticMkv(artefact, exosnap::engine::VideoCodec::H264, exosnap::engine::AudioCodec::Aac, 2.0));
+    {
+        QFile unrelated(occupied);
+        ASSERT_TRUE(unrelated.open(QIODevice::WriteOnly));
+        ASSERT_EQ(unrelated.write("unrelated file"), 14);
+    }
+
+    auto entry = MakeEntry(QStringLiteral("next-segment"), artefact, QStringLiteral("mp4"), occupied, true);
+    entry.final_output_is_preferred = true;
+    store.Add(entry);
+
+    const auto result = service.Finish(entry);
+    ASSERT_TRUE(result.success) << result.message;
+    QFile unrelated(occupied);
+    ASSERT_TRUE(unrelated.open(QIODevice::ReadOnly));
+    EXPECT_EQ(unrelated.readAll(), QByteArray("unrelated file"));
+    EXPECT_TRUE(CanDemux(folder.filePath(QStringLiteral("rec_part-002 (2).mp4"))));
+    EXPECT_FALSE(QFileInfo::exists(artefact));
+    EXPECT_TRUE(store.Entries().isEmpty());
+}
+
 // =============================================================================
 // LIVE remux (RecordingCoordinator) durability. The live remux-on-stop and the
 // per-segment background remux both write to a sibling ".tmp" staging file on the

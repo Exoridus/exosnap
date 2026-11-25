@@ -100,6 +100,16 @@ class RecordingCoordinatorTestPeer {
         return coordinator.CurrentManifestId();
     }
 
+    static void SetPublishedSegmentPath(RecordingCoordinator& coordinator, const std::filesystem::path& source,
+                                        const std::filesystem::path& published) {
+        std::lock_guard lock(coordinator.segments_mutex_);
+        coordinator.published_segment_paths_.insert_or_assign(source, published);
+    }
+
+    static bool ApplyPublishedSegmentPaths(RecordingCoordinator& coordinator, UiRecordingResult& result) {
+        return coordinator.ApplyPublishedSegmentPaths(result);
+    }
+
     static std::filesystem::path Retain(RecordingCoordinator& coordinator,
                                         const engine::RecordingMediaDescriptor& descriptor) {
         if (!coordinator.recording_artifacts_->RegisterSource(descriptor, false))
@@ -180,10 +190,40 @@ TEST_F(Mp4SplitRemuxTest, AutomaticBoundaryQueuesDeliveryAndProtectsTheNextSegme
     EXPECT_NE(next_id, first_id);
     const auto entries = store.Entries();
     EXPECT_TRUE(std::ranges::any_of(entries, [&](const auto& entry) {
-        return entry.id == next_id && std::filesystem::path(entry.artefact_path.toStdWString()) == next_partial.path;
+        return entry.id == next_id && entry.final_output_is_preferred &&
+               std::filesystem::path(entry.artefact_path.toStdWString()) == next_partial.path;
     }));
     // No source file exists. A queued remux must surface its failure.
     EXPECT_FALSE(coordinator.DrainSegmentRemuxJobsForTest(false));
+}
+
+TEST_F(Mp4SplitRemuxTest, UsesPublishedPathAfterCollisionAvoidance) {
+    QTemporaryDir directory;
+    ASSERT_TRUE(directory.isValid());
+    const auto base = directory.filePath(QStringLiteral("recording.mp4"));
+    const auto existing = directory.filePath(QStringLiteral("recording_part-002.mp4"));
+    const auto fallback = directory.filePath(QStringLiteral("recording_part-002_1.mp4"));
+    for (const auto& path : {base, existing, fallback}) {
+        QFile output(path);
+        ASSERT_TRUE(output.open(QIODevice::WriteOnly));
+        ASSERT_EQ(output.write("media"), 5);
+    }
+
+    RecordingCoordinator coordinator;
+    UiRecordingResult result;
+    for (const auto& published : {base, fallback}) {
+        const auto source = published + QStringLiteral(".partial");
+        RecordingCoordinatorTestPeer::SetPublishedSegmentPath(coordinator, source.toStdWString(),
+                                                              published.toStdWString());
+        auto& segment = result.segments.emplace_back();
+        segment.file_path = source;
+    }
+
+    ASSERT_TRUE(RecordingCoordinatorTestPeer::ApplyPublishedSegmentPaths(coordinator, result));
+    ASSERT_EQ(result.segments.size(), 2u);
+    EXPECT_EQ(result.segments[0].file_path, base);
+    EXPECT_EQ(result.segments[1].file_path, fallback);
+    EXPECT_EQ(result.output_file_bytes, 10u);
 }
 
 TEST_F(Mp4SplitRemuxTest, RetiredCompletionCannotPublishIntoNextRecording) {

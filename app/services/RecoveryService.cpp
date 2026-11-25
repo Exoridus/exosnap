@@ -125,14 +125,9 @@ RecoveryActionResult RecoveryService::Finish(const RecoveryManifestEntry& entry,
 
     const bool is_mp4 = (entry.intended_container.toLower() == QStringLiteral("mp4"));
 
-    // Decide the destination for a remux-produced file. Recovery owns exactly
-    // entry.final_output_path: a file already sitting there is this recording's own
-    // half-written remux (a crash/powerloss mid-remux) and is replaced in place. A
-    // collision at any *other* derived path is a stranger's file and is side-stepped
-    // to "(N)". Combined with the temp+atomic-rename below, this guarantees the user
-    // never finds a corrupt half-file where their recording should be.
+    // A generated segment name is a preference, so recovery must choose an unused path.
     auto resolve_remux_target = [&](const std::filesystem::path& preferred) -> std::filesystem::path {
-        if (!entry.final_output_path.isEmpty()) {
+        if (!entry.final_output_is_preferred && !entry.final_output_path.isEmpty()) {
             const std::filesystem::path own(entry.final_output_path.toStdWString());
             if (PathsEqual(preferred, own))
                 return preferred;
@@ -221,9 +216,7 @@ RecoveryActionResult RecoveryService::Finish(const RecoveryManifestEntry& entry,
     //
     // Remux to a sibling temp on the target's own volume, then atomically rename it
     // onto the target. A kill/powerloss mid-remux leaves only the ".tmp" staging file - the
-    // user-visible target path never holds a half-written MP4. When a corrupt partial
-    // from an earlier interrupted remux already sits at the target, the atomic replace
-    // overwrites it in place instead of side-stepping to a fresh name and stranding it.
+    // user-visible target path never holds a half-written MP4.
     const std::filesystem::path preferred = dest_folder / (stem + L".mp4");
     const std::filesystem::path target = resolve_remux_target(preferred);
     const std::filesystem::path temp = MakeSiblingTempPath(target);
@@ -246,7 +239,8 @@ RecoveryActionResult RecoveryService::Finish(const RecoveryManifestEntry& entry,
         (void)DescribeFailedStagingRemoval(temp);
         return {false, metadata_error};
     }
-    if (const unsigned long move_err = PublishMediaAndIdentitySidecar(temp, target); move_err != 0) {
+    if (const unsigned long move_err = PublishMediaAndIdentitySidecar(temp, target, !entry.final_output_is_preferred);
+        move_err != 0) {
         if (const std::string left = DescribeFailedStagingRemoval(temp); !left.empty())
             diagnostics::AppLog::warning(QStringLiteral("recovery"), QString::fromStdString(left));
         const std::string msg = "Atomic move to final output failed (Win32 error " + std::to_string(move_err) + ")";

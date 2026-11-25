@@ -1605,6 +1605,7 @@ void RecordingCoordinator::PrepareAndRecordThreadProc(const PrepareContext& ctx)
         std::lock_guard<std::mutex> lock(segments_mutex_);
         segments_.clear();
         edit_master_paths_.clear();
+        published_segment_paths_.clear();
     }
     split_pending_.store(false);
     session_.SetSegmentCallback(MakeSegmentCallback());
@@ -2060,6 +2061,7 @@ void RecordingCoordinator::OnSegmentCompleted(const std::shared_ptr<WorkerCallba
                 entry.artefact_path = QString::fromStdWString(next_mkv->wstring());
                 entry.intended_container = QStringLiteral("mp4");
                 entry.final_output_path = QString::fromStdWString(next_final->wstring());
+                entry.final_output_is_preferred = true;
                 entry.started_at = QDateTime::currentDateTimeUtc().toString(Qt::ISODate);
                 if (manifest->Add(entry)) {
                     next_manifest_id = entry.id;
@@ -2092,9 +2094,11 @@ void RecordingCoordinator::OnSegmentCompleted(const std::shared_ptr<WorkerCallba
                     job->transient_mkv = segment.path;
                     job->output_mp4 = *mp4_segment;
                     job->manifest_id = manifest_id;
-                    coordinator->QueueSegmentRemux(
-                        *job, [coordinator, transient = job->transient_mkv, out = job->output_mp4,
-                               id = job->manifest_id] { return coordinator->RunSegmentRemuxWork(transient, out, id); });
+                    coordinator->QueueSegmentRemux(*job, [coordinator, transient = job->transient_mkv,
+                                                          out = job->output_mp4, id = job->manifest_id,
+                                                          replace = segment.index == 0] {
+                        return coordinator->RunSegmentRemuxWork(transient, out, id, replace);
+                    });
                     coordinator->segment_remux_jobs_.push_back(std::move(job));
                 }
             }
@@ -2426,9 +2430,10 @@ void RecordingCoordinator::RecordingThreadProc(const exosnap::engine::RecorderCo
                     job->transient_mkv = final_seg.path;
                     job->output_mp4 = *mp4_final;
                     job->manifest_id = current_manifest_id_;
-                    QueueSegmentRemux(*job,
-                                      [this, transient = job->transient_mkv, out = job->output_mp4,
-                                       id = job->manifest_id] { return RunSegmentRemuxWork(transient, out, id); });
+                    QueueSegmentRemux(
+                        *job, [this, transient = job->transient_mkv, out = job->output_mp4, id = job->manifest_id] {
+                            return RunSegmentRemuxWork(transient, out, id, false);
+                        });
                     segment_remux_jobs_.push_back(std::move(job));
                     current_manifest_id_.clear(); // now owned by the job
                 }
@@ -2445,34 +2450,9 @@ void RecordingCoordinator::RecordingThreadProc(const exosnap::engine::RecorderCo
         PostStateChange(UiRecordingState::Saving);
 
         // Drain: join all segment remux jobs (intermediate + final).
-        bool all_ok = DrainSegmentRemuxJobs(/*cancel=*/false);
-
-        // Build the final UI result.
-        if (all_ok) {
-            // Rewrite each segment's file_path from the transient MKV to the output MP4,
-            // and accumulate the total output bytes across all segments.
-            uint64_t total_bytes = 0;
-            for (auto& seg : ui_result.segments) {
-                {
-                    std::lock_guard lock(segments_mutex_);
-                    const auto master = edit_master_paths_.find(std::filesystem::path(seg.file_path.toStdWString()));
-                    if (master != edit_master_paths_.end())
-                        seg.edit_master_path = QString::fromStdWString(master->second.wstring());
-                }
-                const std::optional<std::filesystem::path> seg_mp4 = DeriveSegmentPathLogged(
-                    output_path, static_cast<uint32_t>(seg.index), "final result segment path rewrite");
-                std::error_code size_error;
-                const auto size = seg_mp4 ? std::filesystem::file_size(*seg_mp4, size_error) : 0;
-                if (size_error || size == 0) {
-                    all_ok = false;
-                    continue;
-                }
-                seg.file_path = QString::fromStdWString(seg_mp4->wstring());
-                total_bytes += static_cast<uint64_t>(size);
-            }
-            ui_result.output_file_bytes = total_bytes;
-        }
-        if (all_ok) {
+        const bool remux_ok = DrainSegmentRemuxJobs(/*cancel=*/false);
+        const bool delivery_ok = ApplyPublishedSegmentPaths(ui_result);
+        if (remux_ok && delivery_ok) {
             // Point the top-level output_path at the first segment for UI consistency
             // (same convention as single-file: the path the user asked for).
             ui_result.output_path = output_path.wstring();
@@ -2864,8 +2844,36 @@ RecordingCoordinator::AcquireEditMasterLease(const std::filesystem::path& path) 
                                                     descriptor->file_identity);
 }
 
+bool RecordingCoordinator::ApplyPublishedSegmentPaths(UiRecordingResult& result) {
+    bool complete = true;
+    uint64_t total_bytes = 0;
+    for (auto& segment : result.segments) {
+        const std::filesystem::path transient(segment.file_path.toStdWString());
+        std::filesystem::path published;
+        {
+            std::lock_guard lock(segments_mutex_);
+            if (const auto path = published_segment_paths_.find(transient); path != published_segment_paths_.end())
+                published = path->second;
+            if (const auto master = edit_master_paths_.find(transient); master != edit_master_paths_.end())
+                segment.edit_master_path = QString::fromStdWString(master->second.wstring());
+        }
+        std::error_code size_error;
+        const auto size = published.empty() ? 0 : std::filesystem::file_size(published, size_error);
+        if (size_error || size == 0) {
+            complete = false;
+            continue;
+        }
+        segment.file_path = QString::fromStdWString(published.wstring());
+        segment.file_size_bytes = static_cast<qint64>(size);
+        total_bytes += static_cast<uint64_t>(size);
+    }
+    result.output_file_bytes = total_bytes;
+    return complete;
+}
+
 bool RecordingCoordinator::RunSegmentRemuxWork(const std::filesystem::path& transient_mkv,
-                                               const std::filesystem::path& output_mp4, const QString& manifest_id) {
+                                               const std::filesystem::path& output_mp4, const QString& manifest_id,
+                                               bool replace_existing) {
     diagnostics::AppLog::info(QStringLiteral("remux"),
                               QStringLiteral("segment start transient=\"%1\" output=\"%2\"")
                                   .arg(QString::fromStdWString(transient_mkv.filename().wstring()),
@@ -2896,7 +2904,8 @@ bool RecordingCoordinator::RunSegmentRemuxWork(const std::filesystem::path& tran
     if (result.success && remux_cancel_requested_.load())
         result = exosnap::engine::RemuxResult::Fail(0, "Metadata publication cancelled");
     if (result.success) {
-        if (const unsigned long move_err = PublishMediaAndIdentitySidecar(segment_temp, output_mp4); move_err != 0) {
+        if (const unsigned long move_err = PublishMediaAndIdentitySidecar(segment_temp, output_mp4, replace_existing);
+            move_err != 0) {
             if (const std::string left = DescribeFailedStagingRemoval(segment_temp); !left.empty())
                 diagnostics::AppLog::warning(QStringLiteral("remux"), QString::fromStdString(left));
             result = exosnap::engine::RemuxResult::Fail(0, "Atomic move to segment output failed (Win32 error " +
@@ -2912,6 +2921,11 @@ bool RecordingCoordinator::RunSegmentRemuxWork(const std::filesystem::path& tran
 
     if (result.success) {
         (void)RetainEditMaster(transient_mkv);
+        {
+            std::lock_guard lock(segments_mutex_);
+            // Deriving the name again would skip this file once it exists.
+            published_segment_paths_.insert_or_assign(transient_mkv, output_mp4);
+        }
 
         std::error_code size_ec;
         const auto mp4_size = std::filesystem::file_size(output_mp4, size_ec);

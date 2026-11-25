@@ -840,6 +840,8 @@ class RecordingCoordinator {
     void PostClipJobsChanged();
     [[nodiscard]] bool PauseClipBackground();
     std::map<std::filesystem::path, std::filesystem::path> edit_master_paths_;
+    std::map<std::filesystem::path, std::filesystem::path> published_segment_paths_;
+    bool ApplyPublishedSegmentPaths(UiRecordingResult& result);
     std::filesystem::path RetainEditMaster(const std::filesystem::path& source);
     SplitFeedbackCallback on_split_feedback_;
     void PostSplitFeedback(bool accepted, QString message);
@@ -931,7 +933,7 @@ class RecordingCoordinator {
     // The production remux body for one segment (remux → atomic move → transient
     // cleanup → manifest removal), as handed to QueueSegmentRemux.
     bool RunSegmentRemuxWork(const std::filesystem::path& transient_mkv, const std::filesystem::path& output_mp4,
-                             const QString& manifest_id);
+                             const QString& manifest_id, bool replace_existing);
 
     // Drop every completed job after acquiring its completion flag, latching any
     // failure into reaped_segment_remux_failed_. Opportunistic: it never waits on
