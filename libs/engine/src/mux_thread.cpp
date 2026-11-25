@@ -263,6 +263,7 @@ void MuxThread::Run() {
 
     bool write_error = false;
     bool any_segment_opened = false;
+    uint64_t finalized_output_bytes = 0;
     // Live-diagnostics baselines for per-segment write deltas (reset on each open).
     uint64_t diag_prev_bytes = 0;
     uint64_t diag_prev_flush = 0;
@@ -413,6 +414,8 @@ void MuxThread::Run() {
         // still leaves the file on disk (see below), and any clusters flushed
         // before the failure are genuine bytes, not zero.
         const uint64_t file_bytes = QueryFileSizeBytes(seg.path);
+        // The completion callback may move the segment before the session ends.
+        finalized_output_bytes += file_bytes;
 
         CompletedSegment info;
         info.path = seg.path;
@@ -1042,13 +1045,9 @@ void MuxThread::Run() {
         }
     }
 
-    // Update output file size in stats from the (final) base segment if present.
     {
-        const uint64_t sz = QueryFileSizeBytes(base_output_path);
-        if (sz > 0) {
-            std::lock_guard lk(m_state.stats_mutex);
-            m_state.stats.output_file_bytes = sz;
-        }
+        std::lock_guard lk(m_state.stats_mutex);
+        m_state.stats.output_file_bytes = finalized_output_bytes;
     }
 }
 
