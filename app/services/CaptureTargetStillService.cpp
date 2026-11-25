@@ -8,6 +8,7 @@
 #include <algorithm>
 #include <chrono>
 #include <cstring>
+#include <memory>
 #include <stop_token>
 #include <string>
 #include <thread>
@@ -33,6 +34,15 @@ constexpr auto kFrameWait = 150ms;
 // the wait blocks until WGC delivers, and this cadence never applies.
 constexpr auto kPollSlice = 5ms;
 constexpr int kFailuresBeforeUnavailable = 2;
+constexpr std::size_t kMaxCachedItems = 32;
+
+void pumpCaptureMessages() {
+    MSG message{};
+    while (PeekMessageW(&message, nullptr, 0, 0, PM_REMOVE) != FALSE) {
+        TranslateMessage(&message);
+        DispatchMessageW(&message);
+    }
+}
 
 winrt::com_ptr<ID3D11Device> createDevice() {
     winrt::com_ptr<ID3D11Device> device;
@@ -155,7 +165,8 @@ QImage stillFromTexture(ID3D11Device* device, ID3D11DeviceContext* context, ID3D
 
 } // namespace
 
-CaptureTargetStillService::CaptureTargetStillService(QObject* parent) : QObject(parent) {
+CaptureTargetStillService::CaptureTargetStillService(QObject* parent)
+    : QObject(parent), activity_event_(CreateEventW(nullptr, FALSE, FALSE, nullptr)) {
 }
 
 CaptureTargetStillService::~CaptureTargetStillService() {
@@ -172,33 +183,53 @@ void CaptureTargetStillService::stop() {
     if (!worker_.joinable())
         return;
     worker_.request_stop();
-    wake_.notify_all();
+    wakeWorker();
     worker_.join();
     std::lock_guard lock(mutex_);
     visible_.clear();
     cursor_ = 0;
     consecutive_failures_.clear();
+    ++targets_revision_;
 }
 
 void CaptureTargetStillService::setVisibleTargets(std::vector<Request> targets) {
     {
         std::lock_guard lock(mutex_);
         visible_ = std::move(targets);
+        ++targets_revision_;
+        std::erase_if(consecutive_failures_, [this](const auto& entry) {
+            return std::ranges::none_of(visible_,
+                                        [&entry](const auto& request) { return request.identity == entry.first; });
+        });
         if (cursor_ >= visible_.size())
             cursor_ = 0;
     }
+    wakeWorker();
+}
+
+void CaptureTargetStillService::wakeWorker() {
+    if (activity_event_)
+        SetEvent(activity_event_.get());
     wake_.notify_all();
 }
 
-bool CaptureTargetStillService::nextRequest(Request& out_request) {
+bool CaptureTargetStillService::isCurrent(std::uint64_t revision) const {
     std::lock_guard lock(mutex_);
-    if (visible_.empty())
-        return false;
-    if (cursor_ >= visible_.size())
-        cursor_ = 0;
-    out_request = visible_[cursor_];
-    cursor_ = (cursor_ + 1) % visible_.size();
-    return true;
+    return revision == targets_revision_;
+}
+
+void CaptureTargetStillService::publish(Request request, std::uint64_t revision, QImage still) {
+    QMetaObject::invokeMethod(
+        this,
+        [this, request = std::move(request), revision, still = std::move(still)] {
+            if (!isCurrent(revision))
+                return;
+            if (still.isNull() || (request.valid && !request.valid()))
+                emit stillUnavailable(request.identity);
+            else
+                emit stillReady(request.identity, still);
+        },
+        Qt::QueuedConnection);
 }
 
 void CaptureTargetStillService::workerProc(std::stop_token stop_token) {
@@ -206,32 +237,81 @@ void CaptureTargetStillService::workerProc(std::stop_token stop_token) {
     // queue, so the grab loop below pumps it. Same contract WgcSourceProducer
     // documents and the capture hub already satisfies.
     winrt::init_apartment(winrt::apartment_type::single_threaded);
-    winrt::com_ptr<ID3D11Device> device = createDevice();
-    if (!device) {
-        diagnostics::AppLog::warning(QStringLiteral("target-stills"),
-                                     QStringLiteral("could not create D3D11 device; picker keeps its placeholders"));
-        winrt::uninit_apartment();
-        return;
-    }
-
+    winrt::com_ptr<ID3D11Device> device;
+    std::unordered_map<QString, std::shared_ptr<WgcCaptureItem>> cached_items;
+    std::uint64_t cache_revision = 0;
+    const HANDLE activity = activity_event_.get();
     while (!stop_token.stop_requested()) {
+        Request request;
+        std::vector<Request> updated_targets;
+        std::uint64_t revision = 0;
+        bool idle = false;
         {
             std::unique_lock lock(mutex_);
-            wake_.wait_for(lock, stop_token, std::chrono::milliseconds(kGrabIntervalMs),
-                           [&] { return stop_token.stop_requested(); });
+            if (!visible_.empty())
+                wake_.wait_for(lock, stop_token, std::chrono::milliseconds(kGrabIntervalMs),
+                               [&] { return visible_.empty(); });
+            if (stop_token.stop_requested())
+                break;
+            revision = targets_revision_;
+            idle = visible_.empty();
+            if (!idle) {
+                if (cache_revision != revision) {
+                    updated_targets = visible_;
+                    cache_revision = revision;
+                }
+                request = visible_[cursor_];
+                cursor_ = (cursor_ + 1) % visible_.size();
+            }
         }
-        if (stop_token.stop_requested())
-            break;
 
-        Request request;
-        if (!nextRequest(request))
+        pumpCaptureMessages();
+        std::erase_if(cached_items, [&updated_targets](const auto& entry) {
+            return entry.second->IsClosed() ||
+                   (!updated_targets.empty() && std::ranges::none_of(updated_targets, [&entry](const auto& current) {
+                       return current.identity == entry.first && entry.second->Matches(keyFor(current.target));
+                   }));
+        });
+        if (idle) {
+            // WGC can close a retained item while the picker has no capture session or D3D device.
+            device = nullptr;
+            if (activity != nullptr)
+                MsgWaitForMultipleObjectsEx(1, &activity, INFINITE, QS_ALLINPUT, MWMO_INPUTAVAILABLE);
+            else {
+                std::unique_lock lock(mutex_);
+                wake_.wait(lock, stop_token, [&] { return !visible_.empty(); });
+            }
             continue;
+        }
+        if (!device) {
+            device = createDevice();
+            if (!device) {
+                diagnostics::AppLog::warning(
+                    QStringLiteral("target-stills"),
+                    QStringLiteral("could not create D3D11 device; picker keeps its placeholders"));
+                std::unique_lock lock(mutex_);
+                wake_.wait(lock, stop_token, [&] { return revision != targets_revision_; });
+                continue;
+            }
+        }
 
         if (request.valid && !request.valid()) {
-            emit stillUnavailable(request.identity);
+            cached_items.erase(request.identity);
+            publish(std::move(request), revision, {});
             continue;
         }
-        WgcSourceProducer producer(keyFor(request.target), device);
+
+        const auto key = keyFor(request.target);
+        std::shared_ptr<WgcCaptureItem> item;
+        const bool is_window = key.kind == CaptureSourceKey::Kind::Window;
+        const HWND window = is_window ? reinterpret_cast<HWND>(key.native_id) : nullptr;
+        const bool may_reuse = is_window && static_cast<bool>(request.valid);
+        if (may_reuse) {
+            if (const auto found = cached_items.find(request.identity); found != cached_items.end())
+                item = found->second;
+        }
+
+        WgcSourceProducer producer(key, device);
         // Asked for before Open, which is when the producer can still subscribe.
         const HANDLE frame_signal = producer.FrameSignal();
         // A stop request sets the same event, so teardown does not have to sit
@@ -243,14 +323,13 @@ void CaptureTargetStillService::workerProc(std::stop_token stop_token) {
         std::string error;
         QImage still;
         bool device_lost = false;
-        if (producer.Open(error) && (!request.valid || request.valid())) {
+        const bool capturable = !is_window || (IsWindowVisible(window) && !IsIconic(window));
+        const bool opened = capturable && isCurrent(revision) && producer.Open(error, item);
+        bool source_lost = capturable && !opened && !error.empty();
+        if (opened) {
             const auto deadline = std::chrono::steady_clock::now() + kFrameWait;
-            for (;;) {
-                MSG message{};
-                while (PeekMessageW(&message, nullptr, 0, 0, PM_REMOVE) != FALSE) {
-                    TranslateMessage(&message);
-                    DispatchMessageW(&message);
-                }
+            while (!stop_token.stop_requested() && isCurrent(revision)) {
+                pumpCaptureMessages();
                 HubFrame frame;
                 const ProducerPoll poll = producer.PollFrame(frame);
                 if (request.valid && !request.valid())
@@ -261,8 +340,10 @@ void CaptureTargetStillService::workerProc(std::stop_token stop_token) {
                         still = {};
                     break;
                 }
-                if (poll == ProducerPoll::Lost)
+                if (poll == ProducerPoll::Lost) {
+                    source_lost = true;
                     break;
+                }
                 if (poll == ProducerPoll::Fatal) {
                     device_lost = true;
                     break;
@@ -279,7 +360,9 @@ void CaptureTargetStillService::workerProc(std::stop_token stop_token) {
                 // wake on messages as well -- the event only tells a frame apart
                 // from any other wake.
                 if (frame_signal != nullptr) {
-                    MsgWaitForMultipleObjectsEx(1, &frame_signal, static_cast<DWORD>(remaining.count()), QS_ALLINPUT,
+                    const HANDLE wait_handles[] = {frame_signal, activity};
+                    MsgWaitForMultipleObjectsEx(activity != nullptr ? 2 : 1, wait_handles,
+                                                static_cast<DWORD>(remaining.count()), QS_ALLINPUT,
                                                 MWMO_INPUTAVAILABLE);
                 } else {
                     std::this_thread::sleep_for(std::min(kPollSlice, remaining));
@@ -288,35 +371,52 @@ void CaptureTargetStillService::workerProc(std::stop_token stop_token) {
         }
         producer.Close();
 
-        if (device_lost) {
-            device = createDevice();
-            if (!device) {
-                diagnostics::AppLog::warning(QStringLiteral("target-stills"),
-                                             QStringLiteral("D3D11 device lost and not recreatable; stills stop"));
-                break;
-            }
+        if (stop_token.stop_requested())
+            break;
+        if (device_lost || FAILED(device->GetDeviceRemovedReason())) {
+            device = nullptr;
+            still = {};
+        }
+
+        if (request.valid && !request.valid()) {
+            cached_items.erase(request.identity);
+            publish(std::move(request), revision, {});
+            continue;
+        }
+        if (source_lost || (item && item->IsClosed())) {
+            cached_items.erase(request.identity);
+            still = {};
+        } else if (may_reuse && item &&
+                   (cached_items.size() < kMaxCachedItems || cached_items.contains(request.identity))) {
+            cached_items.insert_or_assign(request.identity, item);
         }
 
         if (!still.isNull()) {
             {
                 std::lock_guard lock(mutex_);
+                if (revision != targets_revision_)
+                    continue;
                 consecutive_failures_.erase(request.identity);
             }
-            emit stillReady(request.identity, still);
+            publish(std::move(request), revision, std::move(still));
             continue;
         }
 
         int failures = 0;
         {
             std::lock_guard lock(mutex_);
+            if (revision != targets_revision_)
+                continue;
             failures = ++consecutive_failures_[request.identity];
         }
         // Reported once on the transition. Repeating it every pass would make
         // the card's state churn for a target that is simply not capturable.
         if (failures == kFailuresBeforeUnavailable)
-            emit stillUnavailable(request.identity);
+            publish(std::move(request), revision, {});
     }
 
+    cached_items.clear();
+    device = nullptr;
     winrt::uninit_apartment();
 }
 

@@ -11,8 +11,14 @@
 // Labelled `live`: it needs a real desktop session with DWM composition.
 
 #include "services/CaptureTargetStillService.h"
+#include "services/WgcSourceProducer.h"
+
+#include "../../diagnostics/AppLog.h"
 
 #include <gtest/gtest.h>
+
+#include <algorithm>
+#include <utility>
 
 #include <QCoreApplication>
 #include <QElapsedTimer>
@@ -42,12 +48,12 @@ constexpr int kGrabTimeoutMs = 8000;
 // running a test.
 class ColourWindow {
   public:
-    ColourWindow() {
+    explicit ColourWindow(COLORREF colour = kWindowColour) {
         WNDCLASSEXW cls{};
         cls.cbSize = sizeof(cls);
         cls.lpfnWndProc = DefWindowProcW;
         cls.hInstance = GetModuleHandleW(nullptr);
-        cls.hbrBackground = CreateSolidBrush(kWindowColour);
+        cls.hbrBackground = CreateSolidBrush(colour);
         cls.lpszClassName = L"ExoSnapStillProbeWindow";
         atom_ = RegisterClassExW(&cls);
         brush_ = cls.hbrBackground;
@@ -65,12 +71,20 @@ class ColourWindow {
     }
 
     ~ColourWindow() {
-        if (window_ != nullptr)
-            DestroyWindow(window_);
-        if (atom_ != 0)
-            UnregisterClassW(reinterpret_cast<LPCWSTR>(atom_), GetModuleHandleW(nullptr));
+        close();
         if (brush_ != nullptr)
             DeleteObject(brush_);
+    }
+
+    void close() {
+        if (window_ != nullptr) {
+            DestroyWindow(window_);
+            window_ = nullptr;
+        }
+        if (atom_ != 0) {
+            UnregisterClassW(reinterpret_cast<LPCWSTR>(atom_), GetModuleHandleW(nullptr));
+            atom_ = 0;
+        }
     }
 
     ColourWindow(const ColourWindow&) = delete;
@@ -104,16 +118,31 @@ bool wgcAvailable() {
     }
 }
 
-} // namespace
-
-TEST(CaptureTargetStillServiceTest, GrabsTheColourOfARealWindow) {
-    // Built here rather than in a custom main: the service delivers its result
-    // through a queued connection, which needs an event loop, and this binary
-    // holds one test.
+void ensureApplication() {
     static char program_name[] = "capture_target_still_tests";
     static char* argv[] = {program_name, nullptr};
     static int argc = 1;
-    QCoreApplication app(argc, argv);
+    static const QCoreApplication app(argc, argv);
+}
+
+auto captureItemsCreated() {
+    const auto log = exosnap::diagnostics::AppLog::history();
+    return std::count_if(log.begin(), log.end(), [](const auto& entry) {
+        return entry.category == QStringLiteral("wgc-producer") &&
+               entry.message == QStringLiteral("capture item created");
+    });
+}
+
+exosnap::CaptureTargetStillService::Request probeRequest(QString identity, HWND handle) {
+    return {std::move(identity),
+            {exosnap::engine::CaptureTarget::Kind::Window, reinterpret_cast<uintptr_t>(handle), "ExoSnap still probe"},
+            [handle] { return IsWindow(handle) != FALSE; }};
+}
+
+} // namespace
+
+TEST(CaptureTargetStillServiceTest, GrabsTheColourOfARealWindow) {
+    ensureApplication();
 
     if (!wgcAvailable())
         GTEST_SKIP() << "Windows.Graphics.Capture is not available in this session";
@@ -121,14 +150,18 @@ TEST(CaptureTargetStillServiceTest, GrabsTheColourOfARealWindow) {
     ColourWindow probe;
     ASSERT_NE(probe.handle(), nullptr) << "could not create the probe window";
 
+    exosnap::diagnostics::AppLog::clear();
     exosnap::CaptureTargetStillService service;
+    constexpr int kExpectedStills = 5;
+    int delivered_stills = 0;
     QImage still;
     QString failed_identity;
     QEventLoop loop;
     QObject::connect(&service, &exosnap::CaptureTargetStillService::stillReady, &service,
-                     [&still, &loop](const QString&, const QImage& image) {
+                     [&still, &loop, &delivered_stills](const QString&, const QImage& image) {
                          still = image;
-                         loop.quit();
+                         if (++delivered_stills == kExpectedStills)
+                             loop.quit();
                      });
     QObject::connect(&service, &exosnap::CaptureTargetStillService::stillUnavailable, &service,
                      [&failed_identity, &loop](const QString& identity) {
@@ -136,11 +169,7 @@ TEST(CaptureTargetStillServiceTest, GrabsTheColourOfARealWindow) {
                          loop.quit();
                      });
 
-    exosnap::engine::CaptureTarget target;
-    target.kind = exosnap::engine::CaptureTarget::Kind::Window;
-    target.native_id = reinterpret_cast<uintptr_t>(probe.handle());
-    target.description = "ExoSnap still probe";
-    service.setVisibleTargets({{QStringLiteral("window:probe"), target}});
+    service.setVisibleTargets({probeRequest(QStringLiteral("window:probe"), probe.handle())});
     service.start();
 
     // The probe's own message pump has to keep running while the service's
@@ -155,6 +184,8 @@ TEST(CaptureTargetStillServiceTest, GrabsTheColourOfARealWindow) {
     service.stop();
 
     ASSERT_TRUE(failed_identity.isEmpty()) << "the service reported the probe window as uncapturable";
+    ASSERT_EQ(delivered_stills, kExpectedStills);
+    EXPECT_EQ(captureItemsCreated(), 1);
     ASSERT_FALSE(still.isNull()) << "no still arrived within " << kGrabTimeoutMs << " ms";
     EXPECT_GT(still.width(), 0);
     EXPECT_GT(still.height(), 0);
@@ -166,4 +197,92 @@ TEST(CaptureTargetStillServiceTest, GrabsTheColourOfARealWindow) {
     EXPECT_NEAR(centre.red(), kColourRed, 8);
     EXPECT_NEAR(centre.green(), kColourGreen, 8);
     EXPECT_NEAR(centre.blue(), kColourBlue, 8);
+}
+
+TEST(CaptureTargetStillServiceTest, ObservesClosureWithoutAnActiveCaptureSession) {
+    ensureApplication();
+    if (!wgcAvailable())
+        GTEST_SKIP() << "Windows.Graphics.Capture is not available in this session";
+
+    ColourWindow probe;
+    ASSERT_NE(probe.handle(), nullptr);
+    winrt::init_apartment(winrt::apartment_type::single_threaded);
+    try {
+        exosnap::CaptureSourceKey key;
+        key.kind = exosnap::CaptureSourceKey::Kind::Window;
+        key.native_id = reinterpret_cast<uintptr_t>(probe.handle());
+        exosnap::WgcCaptureItem item(key);
+        EXPECT_FALSE(item.IsClosed());
+        probe.close();
+
+        QEventLoop loop;
+        QTimer check;
+        QObject::connect(&check, &QTimer::timeout, &loop, [&] {
+            if (item.IsClosed())
+                loop.quit();
+        });
+        check.start(10);
+        QTimer::singleShot(kGrabTimeoutMs, &loop, &QEventLoop::quit);
+        loop.exec();
+        EXPECT_TRUE(item.IsClosed());
+    } catch (const winrt::hresult_error& error) {
+        ADD_FAILURE() << winrt::to_string(error.message());
+    }
+    winrt::uninit_apartment();
+}
+
+TEST(CaptureTargetStillServiceTest, ReplacesItemsAfterWindowDestructionAndWorkerStop) {
+    ensureApplication();
+    if (!wgcAvailable())
+        GTEST_SKIP() << "Windows.Graphics.Capture is not available in this session";
+
+    exosnap::diagnostics::AppLog::clear();
+    exosnap::CaptureTargetStillService service;
+    const auto grab = [&service](const QString& identity, HWND handle) {
+        QImage still;
+        QEventLoop loop;
+        const auto connection = QObject::connect(&service, &exosnap::CaptureTargetStillService::stillReady, &loop,
+                                                 [&](const QString& source, const QImage& image) {
+                                                     EXPECT_EQ(source, identity);
+                                                     still = image;
+                                                     loop.quit();
+                                                 });
+        service.setVisibleTargets({probeRequest(identity, handle)});
+        service.start();
+        QTimer::singleShot(kGrabTimeoutMs, &loop, &QEventLoop::quit);
+        loop.exec();
+        QObject::disconnect(connection);
+        return still;
+    };
+
+    ColourWindow original;
+    ASSERT_NE(original.handle(), nullptr);
+    const auto original_still = grab(QStringLiteral("original"), original.handle());
+    ASSERT_FALSE(original_still.isNull());
+    ASSERT_EQ(captureItemsCreated(), 1);
+    original.close();
+
+    ColourWindow replacement(RGB(255, 32, 0));
+    ASSERT_NE(replacement.handle(), nullptr);
+    const auto replacement_still = grab(QStringLiteral("replacement"), replacement.handle());
+    ASSERT_FALSE(replacement_still.isNull());
+    const auto centre = replacement_still.pixelColor(replacement_still.width() / 2, replacement_still.height() / 2);
+    EXPECT_NEAR(centre.red(), 255, 8);
+    EXPECT_NEAR(centre.green(), 32, 8);
+    EXPECT_NEAR(centre.blue(), 0, 8);
+    EXPECT_EQ(captureItemsCreated(), 2);
+
+    // Closing the picker removes its requests. Reopening the same target must
+    // not depend on a new item, even when the worker has released its device.
+    service.setVisibleTargets({});
+    QEventLoop idle;
+    QTimer::singleShot(exosnap::CaptureTargetStillService::kGrabIntervalMs * 2, &idle, &QEventLoop::quit);
+    idle.exec();
+    EXPECT_FALSE(grab(QStringLiteral("replacement"), replacement.handle()).isNull());
+    EXPECT_EQ(captureItemsCreated(), 2);
+
+    service.stop();
+    EXPECT_FALSE(grab(QStringLiteral("replacement"), replacement.handle()).isNull());
+    service.stop();
+    EXPECT_EQ(captureItemsCreated(), 3);
 }
