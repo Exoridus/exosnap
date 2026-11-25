@@ -1988,7 +1988,7 @@ void RecordingCoordinator::OnSegmentCompleted(const std::shared_ptr<WorkerCallba
     std::filesystem::path output_path;
     std::filesystem::path transient_path;
     QString manifest_id;
-    bool was_split_boundary = false;
+    bool report_manual_split = false;
     bool remux_split = false;
     size_t segment_count = 0;
     {
@@ -2006,8 +2006,9 @@ void RecordingCoordinator::OnSegmentCompleted(const std::shared_ptr<WorkerCallba
             markers = coordinator->Markers();
 
         const bool pending_split = coordinator->split_pending_.exchange(false);
-        was_split_boundary = !segment.session_end && pending_split;
-        remux_split = was_split_boundary && segment.succeeded && coordinator->session_is_mp4_;
+        report_manual_split = !segment.session_end && pending_split;
+        // The manual request flag is unset for automatic splits. Use the muxer's boundary for delivery.
+        remux_split = !segment.session_end && segment.succeeded && coordinator->session_is_mp4_;
         if (remux_split) {
             output_path = coordinator->CurrentOutputPath();
             transient_path = coordinator->session_transient_mkv_;
@@ -2114,7 +2115,7 @@ void RecordingCoordinator::OnSegmentCompleted(const std::shared_ptr<WorkerCallba
                     },
                     Qt::QueuedConnection);
             }
-            if (was_split_boundary && segment.succeeded && coordinator->is_recording_.load() &&
+            if (report_manual_split && segment.succeeded && coordinator->is_recording_.load() &&
                 coordinator->on_split_feedback_) {
                 QMetaObject::invokeMethod(
                     &coordinator->segment_remux_pool_,
@@ -2368,14 +2369,7 @@ void RecordingCoordinator::RecordingThreadProc(const exosnap::engine::RecorderCo
     // also remux the FINAL segment and then wait for ALL jobs to complete.
     const bool needs_remux = result.succeeded && (config.container == exosnap::engine::Container::Mp4);
     if (needs_remux) {
-        // Determine whether any intermediate segments were already scheduled.
-        bool has_split_segments = false;
-        {
-            std::lock_guard<std::mutex> lock(segment_remux_mutex_);
-            has_split_segments = !segment_remux_jobs_.empty();
-        }
-
-        if (!has_split_segments) {
+        if (!multi_segment) {
             // ── Single-file MP4 path (no splits) — unchanged from the original flow ──
             const std::filesystem::path transient_mkv = exosnap::engine::DeriveTransientMkvPath(output_path);
             // Mark the manifest entry as finalized before remux. A failed write is
@@ -2451,7 +2445,7 @@ void RecordingCoordinator::RecordingThreadProc(const exosnap::engine::RecorderCo
         PostStateChange(UiRecordingState::Saving);
 
         // Drain: join all segment remux jobs (intermediate + final).
-        const bool all_ok = DrainSegmentRemuxJobs(/*cancel=*/false);
+        bool all_ok = DrainSegmentRemuxJobs(/*cancel=*/false);
 
         // Build the final UI result.
         if (all_ok) {
@@ -2467,19 +2461,18 @@ void RecordingCoordinator::RecordingThreadProc(const exosnap::engine::RecorderCo
                 }
                 const std::optional<std::filesystem::path> seg_mp4 = DeriveSegmentPathLogged(
                     output_path, static_cast<uint32_t>(seg.index), "final result segment path rewrite");
-                if (!seg_mp4.has_value()) {
-                    // Leave this segment's file_path/size as-is (still the transient
-                    // MKV path set earlier) rather than guess at a possibly-wrong MP4
-                    // path; the failure is already logged.
+                std::error_code size_error;
+                const auto size = seg_mp4 ? std::filesystem::file_size(*seg_mp4, size_error) : 0;
+                if (size_error || size == 0) {
+                    all_ok = false;
                     continue;
                 }
                 seg.file_path = QString::fromStdWString(seg_mp4->wstring());
-                std::error_code sz_ec;
-                const auto sz = std::filesystem::file_size(*seg_mp4, sz_ec);
-                if (!sz_ec)
-                    total_bytes += static_cast<uint64_t>(sz);
+                total_bytes += static_cast<uint64_t>(size);
             }
             ui_result.output_file_bytes = total_bytes;
+        }
+        if (all_ok) {
             // Point the top-level output_path at the first segment for UI consistency
             // (same convention as single-file: the path the user asked for).
             ui_result.output_path = output_path.wstring();

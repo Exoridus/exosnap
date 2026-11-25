@@ -57,14 +57,15 @@ class RecoveryManifestStoreTestPeer {
 class RecordingCoordinatorTestPeer {
   public:
     static engine::SegmentCallback BeginSplit(RecordingCoordinator& coordinator, const std::filesystem::path& target,
-                                              QString manifest_id, std::function<void()> before_manifest_io = {}) {
+                                              QString manifest_id, std::function<void()> before_manifest_io = {},
+                                              bool manual_pending = true) {
         {
             std::lock_guard lock(coordinator.output_path_mutex_);
             coordinator.current_output_path_ = target;
         }
         coordinator.session_is_mp4_ = true;
         coordinator.session_transient_mkv_ = engine::DeriveTransientMkvPath(target);
-        coordinator.split_pending_.store(true);
+        coordinator.split_pending_.store(manual_pending);
         coordinator.SetCurrentManifestId(std::move(manifest_id));
         return coordinator.MakeSegmentCallback(std::move(before_manifest_io));
     }
@@ -153,6 +154,36 @@ static RecoveryManifestEntry MakeManifestEntry(const QString& id, const QString&
 
 TEST_F(Mp4SplitRemuxTest, ComputeHardStopThreshold_ZeroReserve_EqualsBase) {
     EXPECT_EQ(diagnostics::ComputeHardStopThreshold(0), diagnostics::kHardStopFreeBytes);
+}
+
+TEST_F(Mp4SplitRemuxTest, AutomaticBoundaryQueuesDeliveryAndProtectsTheNextSegment) {
+    QTemporaryDir directory;
+    ASSERT_TRUE(directory.isValid());
+    RecoveryManifestStore store(directory.filePath(QStringLiteral("recovery.json")));
+    RecordingCoordinator coordinator;
+    coordinator.SetRecoveryManifestStore(&store);
+    const std::filesystem::path output(directory.filePath(QStringLiteral("recording.mp4")).toStdWString());
+    const auto partial = engine::DeriveTransientMkvPath(output);
+    const auto next_partial = engine::DeriveSegmentPath(partial, 1);
+    ASSERT_TRUE(next_partial.success);
+    const QString first_id = QStringLiteral("first");
+    ASSERT_TRUE(
+        store.Add(MakeManifestEntry(first_id, QString::fromStdWString(partial.wstring()), QStringLiteral("mp4"))));
+    const auto completed = RecordingCoordinatorTestPeer::BeginSplit(coordinator, output, first_id, {}, false);
+    engine::CompletedSegment segment;
+    segment.path = partial;
+    segment.succeeded = true;
+    completed(segment);
+
+    const auto next_id = RecordingCoordinatorTestPeer::ActiveManifestId(coordinator);
+    EXPECT_FALSE(next_id.isEmpty());
+    EXPECT_NE(next_id, first_id);
+    const auto entries = store.Entries();
+    EXPECT_TRUE(std::ranges::any_of(entries, [&](const auto& entry) {
+        return entry.id == next_id && std::filesystem::path(entry.artefact_path.toStdWString()) == next_partial.path;
+    }));
+    // No source file exists. A queued remux must surface its failure.
+    EXPECT_FALSE(coordinator.DrainSegmentRemuxJobsForTest(false));
 }
 
 TEST_F(Mp4SplitRemuxTest, RetiredCompletionCannotPublishIntoNextRecording) {
