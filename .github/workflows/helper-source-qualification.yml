@@ -14,7 +14,7 @@ jobs:
     steps:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
         with:
-          ref: fca2bd35ccce24b2028dd19af80f40f0e3552dee
+          ref: 7a8a377b6266c3bdc301f04ad7c791824684da23
           persist-credentials: false
       - name: Capture exact pinned formatter changes
         shell: bash
@@ -45,7 +45,7 @@ jobs:
     steps:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
         with:
-          ref: fca2bd35ccce24b2028dd19af80f40f0e3552dee
+          ref: 7a8a377b6266c3bdc301f04ad7c791824684da23
           persist-credentials: false
       - run: cargo exo-dev setup cppcheck
       - run: cargo test --manifest-path tools/exo-dev/Cargo.toml tracks_the_privileged_helper_without_widening_other_app_roots
