@@ -77,3 +77,16 @@ jobs:
               print(name)
               for line in found[:30]:
                   print("  | " + line[:800])
+          for index in (0, 1):
+              path = base / f"install-0.10.1_{index:03d}_ExoSnapMsi.log"
+              if not path.is_file():
+                  continue
+              data = path.read_bytes()
+              if len(data) > 32 * 1024 * 1024:
+                  raise RuntimeError("Unexpected MSI log size")
+              encoding = "utf-16" if data.startswith((b"\xff\xfe", b"\xfe\xff")) else "utf-8-sig"
+              lines = data.decode(encoding, errors="replace").splitlines()
+              pattern = r"DisableMSI|DisableUserInstalls|AlwaysInstallElevated|prohibit|restricted|forbidden|1625|MSI_LUA|software restriction|AppLocker|signature"
+              print(path.name)
+              for line in [line for line in lines if re.search(pattern, line, re.I)][:40]:
+                  print("  | " + line[:800])
