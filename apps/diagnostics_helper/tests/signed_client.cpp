@@ -74,7 +74,7 @@ bool RejectDifferentRegistration() {
     consumer.join();
     const auto status = QueryDpcSession();
     std::cout << "Different registered package state=" << static_cast<int>(state) << ", DPC query=" << status << '\n';
-    return state == DiagnosticsHelperState::Unavailable &&
+    return ipc::fixture_footprint_mismatch.load() && state == DiagnosticsHelperState::Unavailable &&
            backend->HelperState() == DiagnosticsHelperState::Unavailable && status == ERROR_WMI_INSTANCE_NOT_FOUND;
 }
 } // namespace

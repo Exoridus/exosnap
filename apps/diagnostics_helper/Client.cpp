@@ -1,4 +1,5 @@
 #include "Channel.h"
+#include "FileAcePolicy.h"
 #include "FixtureStatus.h"
 #include "ImagePath.h"
 #include "MsixAcquisition.h"
@@ -45,7 +46,7 @@ bool Protected(HANDLE object, bool children) {
         ReportFixtureStatus("GetSecurityInfo", status);
         return false;
     }
-    bool safe = owner && acl && TrustedOwner(owner);
+    bool safe = owner && acl && IsValidAcl(acl) && TrustedOwner(owner);
     if (!safe)
         ReportFixtureStatus("untrusted owner or missing DACL", ERROR_ACCESS_DENIED);
     const DWORD danger = WRITE_DAC | WRITE_OWNER | DELETE | FILE_DELETE_CHILD | FILE_WRITE_ATTRIBUTES | FILE_WRITE_EA |
@@ -56,15 +57,18 @@ bool Protected(HANDLE object, bool children) {
             safe = false;
             break;
         }
+        auto* header = static_cast<ACE_HEADER*>(entry);
+        const auto grant = InspectFileAce(*header, danger);
+        if (grant == FileAceGrant::Invalid) {
+            ReportFixtureStatus("DACL rejected ACE type or rights", header->AceType);
+            safe = false;
+            break;
+        }
+        const bool inherit_only = (header->AceFlags & INHERIT_ONLY_ACE) != 0;
+        if ((inherit_only && !children) || grant != FileAceGrant::CheckTrustee)
+            continue;
         auto* ace = static_cast<ACCESS_ALLOWED_ACE*>(entry);
-        const bool inherit_only = (ace->Header.AceFlags & INHERIT_ONLY_ACE) != 0;
-        if (inherit_only && !children)
-            continue;
-        if (ace->Header.AceType == ACCESS_DENIED_ACE_TYPE)
-            continue;
-        safe = ace->Header.AceType == ACCESS_ALLOWED_ACE_TYPE &&
-               (!(ace->Mask & danger) || TrustedOwner(&ace->SidStart) ||
-                (inherit_only && IsWellKnownSid(&ace->SidStart, WinCreatorOwnerSid)));
+        safe = TrustedOwner(&ace->SidStart) || (inherit_only && IsWellKnownSid(&ace->SidStart, WinCreatorOwnerSid));
         if (!safe)
             ReportFixtureStatus("DACL rejected ACE rights", ace->Mask);
     }
@@ -171,14 +175,21 @@ bool LockFootprint(LockedPath& image, const fs::path& directory, const wchar_t* 
     LARGE_INTEGER length{};
     if (!file || !GetFileInformationByHandleEx(file.get(), FileAttributeTagInfo, &attributes, sizeof(attributes)) ||
         (attributes.FileAttributes & (FILE_ATTRIBUTE_REPARSE_POINT | FILE_ATTRIBUTE_DIRECTORY)) ||
-        !Protected(file.get(), true) || !GetFileSizeEx(file.get(), &length) ||
-        length.QuadPart != static_cast<LONGLONG>(expected.size()))
+        !Protected(file.get(), true) || !GetFileSizeEx(file.get(), &length))
         return false;
+    if (length.QuadPart != static_cast<LONGLONG>(expected.size())) {
+        NoteFootprintMismatch();
+        return false;
+    }
     std::vector<unsigned char> actual(expected.size());
     DWORD read = 0;
     if (!ReadFile(file.get(), actual.data(), static_cast<DWORD>(actual.size()), &read, nullptr) ||
-        read != actual.size() || !std::equal(actual.begin(), actual.end(), expected.begin()))
+        read != actual.size())
         return false;
+    if (!std::equal(actual.begin(), actual.end(), expected.begin())) {
+        NoteFootprintMismatch();
+        return false;
+    }
     image.handles.push_back(std::move(file));
     return true;
 }
@@ -473,31 +484,47 @@ void ProbeInstalledHelperLaunch() {
                                Spelling{device(locked.canonical), "device volume GUID launch matrix"},
                                Spelling{device(global), "device global native launch matrix"},
                                Spelling{MachineImage(), "fixture-only DOS positive control"}};
+    const auto probe = [](const fs::path& path, const char* label, const wchar_t* parent, HKEY class_key) {
+        SHELLEXECUTEINFOW exec{};
+        exec.cbSize = sizeof(exec);
+        exec.fMask = SEE_MASK_NOCLOSEPROCESS | SEE_MASK_NOASYNC | SEE_MASK_FLAG_NO_UI;
+        exec.lpVerb = L"runas";
+        exec.lpFile = path.c_str();
+        exec.lpDirectory = parent;
+        if (class_key) {
+            exec.fMask |= SEE_MASK_CLASSKEY;
+            exec.hkeyClass = class_key;
+        }
+        exec.nShow = SW_HIDE;
+        const BOOL launched = ShellExecuteExW(&exec);
+        const DWORD status = launched ? ERROR_SUCCESS : GetLastError();
+        ReportFixtureStatus(label, status);
+        ReportFixtureStatus("matrix supplies working directory", parent != nullptr);
+        if (launched && exec.hProcess) {
+            StartingGuardian child{Handle(exec.hProcess)};
+            const auto wait = WaitForSingleObject(child.get(), 5000);
+            ReportFixtureStatus("matrix child wait", wait);
+            DWORD exit_code = 0;
+            if (GetExitCodeProcess(child.get(), &exit_code))
+                ReportFixtureStatus("matrix child exit", exit_code);
+        }
+    };
     for (const auto& [path, label] : spellings) {
         if (path.empty())
             continue;
         const auto parent = path.parent_path();
-        for (const bool set_parent : {false, true}) {
-            SHELLEXECUTEINFOW exec{};
-            exec.cbSize = sizeof(exec);
-            exec.fMask = SEE_MASK_NOCLOSEPROCESS | SEE_MASK_NOASYNC | SEE_MASK_FLAG_NO_UI;
-            exec.lpVerb = L"runas";
-            exec.lpFile = path.c_str();
-            exec.lpDirectory = set_parent ? parent.c_str() : nullptr;
-            exec.nShow = SW_HIDE;
-            const BOOL launched = ShellExecuteExW(&exec);
-            const DWORD status = launched ? ERROR_SUCCESS : GetLastError();
-            ReportFixtureStatus(label, status);
-            ReportFixtureStatus("matrix supplies working directory", set_parent);
-            if (launched && exec.hProcess) {
-                StartingGuardian child{Handle(exec.hProcess)};
-                const auto wait = WaitForSingleObject(child.get(), 5000);
-                ReportFixtureStatus("matrix child wait", wait);
-                DWORD exit_code = 0;
-                if (GetExitCodeProcess(child.get(), &exit_code))
-                    ReportFixtureStatus("matrix child exit", exit_code);
-            }
-        }
+        probe(path, label, nullptr, nullptr);
+        probe(path, label, parent.c_str(), nullptr);
+    }
+    HKEY class_key = nullptr;
+    const auto opened = RegOpenKeyExW(HKEY_LOCAL_MACHINE, L"Software\\Classes\\exefile", 0, KEY_READ | KEY_WOW64_64KEY,
+                                      &class_key);
+    if (opened == ERROR_SUCCESS) {
+        probe(locked.canonical, "HKLM exefile volume GUID", nullptr, class_key);
+        probe(global, "HKLM exefile global native", nullptr, class_key);
+        RegCloseKey(class_key);
+    } else {
+        ReportFixtureStatus("HKLM exefile class unavailable", static_cast<DWORD>(opened));
     }
 }
 #endif

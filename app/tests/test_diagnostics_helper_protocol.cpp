@@ -3,6 +3,7 @@
 #include <gtest/gtest.h>
 
 #ifdef _WIN32
+#include "../../apps/diagnostics_helper/FileAcePolicy.h"
 #include "../../apps/diagnostics_helper/StartingGuardian.h"
 #include <string>
 #endif
@@ -76,6 +77,35 @@ TEST(DiagnosticsHelperProtocol, DpcOnlyBeginCannotSpecifyProviderOrParameters) {
 }
 
 #ifdef _WIN32
+TEST(DiagnosticsHelperWindowsAcl, AcceptsOnlyReadOnlyConditionalAllows) {
+    struct Entry {
+        ACCESS_ALLOWED_CALLBACK_ACE ace{};
+        std::array<DWORD, 4> space{};
+    } entry;
+    auto& header = entry.ace.Header;
+    header.AceType = ACCESS_ALLOWED_CALLBACK_ACE_TYPE;
+    header.AceSize = sizeof(entry);
+    auto& sid = *reinterpret_cast<SID*>(&entry.ace.SidStart);
+    sid.Revision = SID_REVISION;
+    sid.SubAuthorityCount = 1;
+    entry.ace.Mask = FILE_GENERIC_READ | FILE_GENERIC_EXECUTE;
+    EXPECT_EQ(InspectFileAce(header, 0), FileAceGrant::ReadOnly);
+    for (const DWORD right : {static_cast<DWORD>(FILE_WRITE_DATA), static_cast<DWORD>(DELETE),
+                              static_cast<DWORD>(WRITE_DAC), static_cast<DWORD>(FILE_DELETE_CHILD)}) {
+        entry.ace.Mask = right;
+        EXPECT_EQ(InspectFileAce(header, 0), FileAceGrant::Invalid);
+    }
+    entry.ace.Mask = FILE_GENERIC_READ;
+    header.AceType = ACCESS_ALLOWED_OBJECT_ACE_TYPE;
+    EXPECT_EQ(InspectFileAce(header, 0), FileAceGrant::Invalid);
+    header.AceType = ACCESS_ALLOWED_CALLBACK_ACE_TYPE;
+    header.AceSize = sizeof(ACE_HEADER);
+    EXPECT_EQ(InspectFileAce(header, 0), FileAceGrant::Invalid);
+    header.AceSize = sizeof(entry);
+    sid.SubAuthorityCount = SID_MAX_SUB_AUTHORITIES;
+    EXPECT_EQ(InspectFileAce(header, 0), FileAceGrant::Invalid);
+}
+
 TEST(DiagnosticsHelperGuardian, FailedHandoffReapsChildButSuccessfulHandoffTransfersIt) {
     std::wstring image(32768, L'\0');
     const auto size = GetModuleFileNameW(nullptr, image.data(), static_cast<DWORD>(image.size()));
