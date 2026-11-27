@@ -104,7 +104,7 @@ pub fn assemble(
     // one commit per merged pull request. Without it a branch that was
     // merged rather than squashed would contribute every commit it ever had.
     let unit = '\u{1f}';
-    let format_arg = format!("--format=%H{unit}%s");
+    let format_arg = format!("--format=%H{unit}%P{unit}%s");
     let (_, subjects) = git.run(&["log", "--first-parent", &format_arg, &range]);
 
     let mut sections: Vec<(&'static str, Vec<String>)> = commit_policy::SECTION_ORDER
@@ -120,8 +120,9 @@ pub fn assemble(
         if line.is_empty() {
             continue;
         }
-        let mut parts = line.splitn(2, unit);
+        let mut parts = line.splitn(3, unit);
         let hash = parts.next().unwrap_or_default();
+        let parents = parts.next().unwrap_or_default();
         let subject = parts.next().unwrap_or_default();
 
         let parsed = commit_policy::parse(subject, false, None);
@@ -130,7 +131,7 @@ pub fn assemble(
                 older += 1;
                 continue;
             }
-            if is_merge_subject(subject) {
+            if parents.split_ascii_whitespace().nth(1).is_some() {
                 merges += 1;
                 continue;
             }
@@ -162,17 +163,6 @@ pub fn assemble(
         older,
         unreadable,
     })
-}
-
-/// True for the subjects git itself writes for an explicit merge. On a
-/// squash-merging repository the only such commit is a deliberate merge such
-/// as a back-merge of a released branch, and its content is either already in
-/// an earlier release or lives on a second-parent line the changelog does not
-/// walk, so it must not be reported as an unreadable subject.
-fn is_merge_subject(subject: &str) -> bool {
-    subject.starts_with("Merge pull request #")
-        || subject.starts_with("Merge branch ")
-        || subject.starts_with("Merge remote-tracking branch ")
 }
 
 fn resolve_since(git: &Git) -> Option<String> {
@@ -664,9 +654,11 @@ mod tests {
     fn an_unreadable_subject_is_reported_not_silently_dropped() {
         let fx = new_fixture();
         add_commit(fx.path(), "made the drains better");
+        add_commit(fx.path(), "Merge branch 'not-an-integration'");
         let assembly = assemble_all(&fx);
-        assert_eq!(assembly.unreadable.len(), 1);
-        assert!(assembly.unreadable[0].contains("made the drains better"));
+        assert_eq!(assembly.unreadable.len(), 2);
+        assert!(assembly.unreadable[0].contains("not-an-integration"));
+        assert!(assembly.unreadable[1].contains("made the drains better"));
     }
 
     #[test]
@@ -687,7 +679,7 @@ mod tests {
                 "--no-ff",
                 "-q",
                 "-m",
-                "Merge pull request #449 from Exoridus/back-merge",
+                "Merge PR #19: restore release ancestry",
                 "back-merge",
             ],
         );
@@ -696,7 +688,11 @@ mod tests {
         assert!(assembly.unreadable.is_empty(), "{:?}", assembly.unreadable);
         assert_eq!(assembly.merges, 1);
         let text = rendered_text(&assembly, None, None);
-        assert!(!text.contains("back-merge"), "{text}");
+        assert!(!text.contains("restore release ancestry"), "{text}");
+        assert!(
+            !text.contains("arrives through the merged branch"),
+            "{text}"
+        );
         assert!(text.contains("after the merge"), "{text}");
     }
 
