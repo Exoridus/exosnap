@@ -275,10 +275,7 @@ jobs:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
 
       - name: Provision ffmpeg and ffprobe
-        run: |
-          choco install ffmpeg -y --no-progress
-          ffmpeg -version
-          ffprobe -version
+        uses: ./.github/actions/setup-test-ffmpeg
 
       - name: Format
         run: cargo fmt --all --check
@@ -307,13 +304,7 @@ jobs:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
 
       - name: Provision + verify system ffmpeg
-        # Explicit install so the job is not silently green/red on runner-image
-        # drift. The analyzer's drift math is version-robust (PTS come from a
-        # filter graph, not the codec), so a version print is a sufficient pin.
-        run: |
-          choco install ffmpeg -y --no-progress
-          ffmpeg -version
-          ffprobe -version
+        uses: ./.github/actions/setup-test-ffmpeg
 
       # The analyzer against the golden clapper clip (its budget and marker count
       # are explained at the av-sync-golden step in tools/exo-dev/src/step.rs),
