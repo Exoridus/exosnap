@@ -22,6 +22,9 @@
 #include <string>
 #include <vector>
 
+#include <QCoreApplication>
+#include <QEvent>
+
 #include <update/package_verifier.h>
 
 #include "UpdaterWorker.h"
@@ -652,6 +655,49 @@ TEST_F(ResolveStagedRootTest, DirectPortableTargetRetainsDownloadPlan) {
     EXPECT_EQ(detail, QStringLiteral("base URL must be https://"));
     EXPECT_TRUE(fs::exists(root_ / "exosnap.exe"));
 }
+
+TEST_F(ManagedTargetWorkerTest, CancellationBeforeQueuedDispatchSkipsUpdaterWork) {
+    int argc = 1;
+    char program[] = "test_updater_worker_plan";
+    char* argv[] = {program, nullptr};
+    const QCoreApplication app(argc, argv);
+    Touch(root_ / "exosnap.exe");
+
+    using exosnap::update::InstallMode;
+    using exosnap::update::UpdaterMode;
+    const auto expect_cancelled = [&](const char* name, UpdaterMode mode, auto invoke) {
+        SCOPED_TRACE(name);
+        UpdaterWorker worker(Args(mode, InstallMode::Portable));
+        int cancellations = 0;
+        int steps = 0;
+        int failures = 0;
+        QObject::connect(&worker, &UpdaterWorker::cancelled, [&] { ++cancellations; });
+        QObject::connect(&worker, &UpdaterWorker::stepStarted, [&](UpStep) { ++steps; });
+        QObject::connect(&worker, &UpdaterWorker::checkStarted, [&] { ++steps; });
+        QObject::connect(&worker, &UpdaterWorker::failed, [&](FailureCase, const QString&) { ++failures; });
+
+        bool dispatched = false;
+        ASSERT_TRUE(QMetaObject::invokeMethod(
+            &worker,
+            [&] {
+                dispatched = true;
+                invoke(worker);
+            },
+            Qt::QueuedConnection));
+        ASSERT_FALSE(dispatched);
+        worker.requestCancel();
+        QCoreApplication::sendPostedEvents(&worker, QEvent::MetaCall);
+        ASSERT_TRUE(dispatched);
+        EXPECT_EQ(cancellations, 1);
+        EXPECT_EQ(steps, 0);
+        EXPECT_EQ(failures, 0);
+    };
+
+    expect_cancelled("handoff", UpdaterMode::AppHandoff, [](UpdaterWorker& worker) { worker.run(UpStep::Download); });
+    expect_cancelled("download", UpdaterMode::Manual, [](UpdaterWorker& worker) { worker.download(); });
+    expect_cancelled("check", UpdaterMode::Manual, [](UpdaterWorker& worker) { worker.check(); });
+}
+
 TEST(UpdaterWorkerSmoke, InvalidBaseUrlEmitsDownloadFailed) {
     UpdaterArgs args;
     args.channel = exosnap::update::UpdateChannel::Stable;

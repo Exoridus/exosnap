@@ -292,8 +292,7 @@ void UpdaterWorker::repair() {
 }
 
 void UpdaterWorker::run(UpStep entry) {
-    cancel_.store(false);
-    if (!selfUpdateAllowed()) {
+    if (abortedByCancel() || !selfUpdateAllowed()) {
         return;
     }
 
@@ -378,7 +377,9 @@ bool UpdaterWorker::selfUpdateAllowed() {
 // download, no second verification and no second swap.
 
 void UpdaterWorker::check() {
-    cancel_.store(false);
+    if (abortedByCancel()) {
+        return;
+    }
     emit checkStarted();
 
     // The official-build gate is an update-check POLICY (update_checker.h), and
@@ -418,8 +419,7 @@ void UpdaterWorker::check() {
 }
 
 void UpdaterWorker::download() {
-    cancel_.store(false);
-    if (!selfUpdateAllowed()) {
+    if (abortedByCancel() || !selfUpdateAllowed()) {
         return;
     }
     emit stepStarted(UpStep::Download);
