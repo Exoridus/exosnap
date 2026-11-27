@@ -1,4 +1,5 @@
 #include "Guardian.h"
+#include "ImagePath.h"
 #include "SessionIdentity.h"
 #include "StartingGuardian.h"
 #include "diagnostics/DpcLatencyProvider.h"
@@ -9,7 +10,6 @@
 #include <array>
 #include <cstddef>
 #include <string>
-#include <string_view>
 #include <vector>
 
 namespace exosnap::diagnostics::ipc {
@@ -20,22 +20,6 @@ struct TraceQuery {
 };
 
 } // namespace
-
-std::wstring GlobalProcessImagePath(HANDLE process) {
-    std::wstring path(32768, L'\0');
-    auto size = static_cast<DWORD>(path.size());
-    if (!QueryFullProcessImageNameW(process, PROCESS_NAME_NATIVE, path.data(), &size))
-        return {};
-    path.resize(size);
-    constexpr std::wstring_view prefix = LR"(\Device\HarddiskVolume)";
-    if (!path.starts_with(prefix))
-        return {};
-    const auto separator = path.find_first_not_of(L"0123456789", prefix.size());
-    if (separator == prefix.size() || separator == std::wstring::npos || path[separator] != L'\\' ||
-        separator + 1 == path.size())
-        return {};
-    return LR"(\\?\GLOBALROOT)" + path;
-}
 
 void StopOwnedSession(const wchar_t* name, const GUID& id) {
     TraceQuery query{};

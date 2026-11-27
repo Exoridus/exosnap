@@ -1,3 +1,4 @@
+#include "ImagePath.h"
 #include "Peer.h"
 
 #include <softpub.h>
@@ -55,11 +56,7 @@ bool ApprovedClient(HANDLE process) {
         !ProcessIdToSessionId(GetCurrentProcessId(), &ours) || owner_session != ours ||
         WaitForSingleObject(process, 0) != WAIT_TIMEOUT)
         return false;
-    std::wstring image(32768, L'\0');
-    DWORD length = static_cast<DWORD>(image.size());
-    if (!QueryFullProcessImageNameW(process, 0, image.data(), &length))
-        return false;
-    image.resize(length);
+    const auto image = GlobalProcessImagePath(process);
     const auto slash = image.find_last_of(L'\\');
     if (slash == image.npos || _wcsicmp(image.c_str() + slash + 1, L"exosnap.exe") != 0)
         return false;

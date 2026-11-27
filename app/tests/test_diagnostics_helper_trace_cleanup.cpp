@@ -1,4 +1,5 @@
 #include "../../apps/diagnostics_helper/Guardian.h"
+#include "../../apps/diagnostics_helper/ImagePath.h"
 #include "../../apps/diagnostics_helper/StartingGuardian.h"
 
 #include <evntrace.h>
