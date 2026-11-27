@@ -1,0 +1,91 @@
+name: Refresh v0.12 mission and protected PR comparisons
+
+on:
+  push:
+    branches: [verify/v012-protected-refresh]
+
+permissions:
+  contents: read
+
+jobs:
+  merge-trees:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+      - name: Compare exact mission and protected PR trees without updating refs
+        shell: python
+        run: |
+          import itertools
+          import json
+          import pathlib
+          import subprocess
+          import sys
+
+          base = "73b1e3811b2c349ef38cbb7f49abdb89fa9be73f"
+          missions = {
+              "600": "a1ea6ddab878228eee9673eef06996b1900fd024",
+              "601": "433712b4fd0afd4dd00d7fcfdd4a596a30937f28",
+              "602": "751b2abb3b0d182423412e99f482ca34fbc6c131",
+          }
+          protected = {
+              "596": "2b1e09e5270188e79294b93786bbf7494d177fb2",
+              "598": "052e600b56c8c7bc2a42680af2a6d8ab71b14c62",
+              "599": "d9379f72bdab1e613bc159eaadc8377095591cbf",
+          }
+          def git(*args):
+              return subprocess.run(
+                  ["git", *args], text=True, capture_output=True, check=False, timeout=60
+              )
+
+          current_next = "73b1e3811b2c349ef38cbb7f49abdb89fa9be73f"
+          actual_parent = git("rev-parse", "HEAD^")
+          changed = git("diff", "--name-only", missions["602"], "HEAD")
+          if actual_parent.returncode or actual_parent.stdout.strip() != missions["602"]:
+              raise RuntimeError("Unexpected qualification parent")
+          if changed.returncode or changed.stdout.splitlines() != [".github/workflows/v012-protected-refresh.yml"]:
+              raise RuntimeError("Qualification must change only its own workflow")
+          all_heads = {**missions, **protected}
+          for number, sha in all_heads.items():
+              exists = git("cat-file", "-t", sha)
+              ancestor = git("merge-base", "--is-ancestor", base, sha)
+              if exists.returncode or exists.stdout.strip() != "commit" or ancestor.returncode:
+                  raise RuntimeError("Missing commit or unexpected base ancestry for PR " + number)
+
+          pairs = list(itertools.combinations(missions, 2))
+          pairs.extend(itertools.product(missions, protected))
+          all_heads['next'] = current_next
+          pairs.extend((mission, 'next') for mission in missions)
+          results = []
+          for left, right in pairs:
+              result = git("merge-tree", "--write-tree", "--name-only", all_heads[left], all_heads[right])
+              clean = result.returncode == 0
+              print("PR " + left + " + PR " + right + ": " + ("clean" if clean else "conflict/error"), flush=True)
+              results.append({
+                  "leftPr": left, "leftSha": all_heads[left],
+                  "rightPr": right, "rightSha": all_heads[right],
+                  "clean": clean, "exitCode": result.returncode,
+                  "stdout": result.stdout[:131072], "stderr": result.stderr[:32768],
+              })
+          target = pathlib.Path(".workspace/v012-integration")
+          target.mkdir(parents=True, exist_ok=True)
+          receipt = {
+              "base": base, "currentNext": current_next, "workflowCommit": git("rev-parse", "HEAD").stdout.strip(),
+              "missionHeads": missions, "protectedHeads": protected,
+              "pairCount": len(results), "pairs": results,
+              "boundary": "Textual merge-tree analysis only; no checkout merge, ref update, build or runtime verification.",
+          }
+          (target / "report.json").write_text(json.dumps(receipt, indent=2) + "\n", encoding="utf-8")
+          if len(results) != 15 or not all(item["clean"] for item in results):
+              sys.exit(1)
+      - name: Retain exact-source integration report
+        if: always()
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        with:
+          name: v012-protected-refresh
+          path: .workspace/v012-integration/report.json
+          include-hidden-files: true
+          if-no-files-found: error
