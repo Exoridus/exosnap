@@ -78,14 +78,16 @@ bool ApprovedClient(HANDLE process) {
             return false;
         auto locked = OpenNativeRead(std::wstring_view(image).substr(0, next), leaf);
         FILE_ATTRIBUTE_TAG_INFO attributes{};
-        if (!locked || !GetFileInformationByHandleEx(locked.get(), FileAttributeTagInfo, &attributes, sizeof(attributes)) ||
+        if (!locked ||
+            !GetFileInformationByHandleEx(locked.get(), FileAttributeTagInfo, &attributes, sizeof(attributes)) ||
             (attributes.FileAttributes & FILE_ATTRIBUTE_REPARSE_POINT) ||
             ((attributes.FileAttributes & FILE_ATTRIBUTE_DIRECTORY) != 0) == leaf)
             return false;
         if (leaf) {
             std::wstring physical(32768, L'\0');
-            const auto length = GetFinalPathNameByHandleW(locked.get(), physical.data(), static_cast<DWORD>(physical.size()),
-                                                          FILE_NAME_NORMALIZED | VOLUME_NAME_NT);
+            const auto length =
+                GetFinalPathNameByHandleW(locked.get(), physical.data(), static_cast<DWORD>(physical.size()),
+                                          FILE_NAME_NORMALIZED | VOLUME_NAME_NT);
             if (!length || length >= physical.size())
                 return false;
             physical.resize(length);

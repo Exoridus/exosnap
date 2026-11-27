@@ -43,7 +43,8 @@ inline Handle OpenNativeRead(std::wstring_view path, bool read_contents) {
     const auto status = open(&file, access, &attributes, &io, FILE_SHARE_READ,
                              FILE_OPEN_REPARSE_POINT | FILE_OPEN_FOR_BACKUP_INTENT | FILE_SYNCHRONOUS_IO_NONALERT);
     if (status < 0) {
-        const auto error = std::bit_cast<decltype(&RtlNtStatusToDosError)>(GetProcAddress(ntdll, "RtlNtStatusToDosError"));
+        const auto error =
+            std::bit_cast<decltype(&RtlNtStatusToDosError)>(GetProcAddress(ntdll, "RtlNtStatusToDosError"));
         SetLastError(error ? error(status) : ERROR_OPEN_FAILED);
         return {};
     }

@@ -106,13 +106,12 @@ GuardedSession StartGuardian() {
     const auto path = GlobalLaunchPath(identity);
     auto args = L"\"" + path + L"\" --guard";
     PROCESS_INFORMATION child{};
-    const bool launched =
-        !path.empty() &&
-        UpdateProcThreadAttribute(list, 0, PROC_THREAD_ATTRIBUTE_HANDLE_LIST, inherited, sizeof(inherited), nullptr,
-                                  nullptr) &&
-        CreateProcessW(path.c_str(), args.data(), nullptr, nullptr, TRUE,
-                       EXTENDED_STARTUPINFO_PRESENT | CREATE_NO_WINDOW | CREATE_SUSPENDED, nullptr, nullptr,
-                       &startup.StartupInfo, &child);
+    const bool launched = !path.empty() &&
+                          UpdateProcThreadAttribute(list, 0, PROC_THREAD_ATTRIBUTE_HANDLE_LIST, inherited,
+                                                    sizeof(inherited), nullptr, nullptr) &&
+                          CreateProcessW(path.c_str(), args.data(), nullptr, nullptr, TRUE,
+                                         EXTENDED_STARTUPINFO_PRESENT | CREATE_NO_WINDOW | CREATE_SUSPENDED, nullptr,
+                                         nullptr, &startup.StartupInfo, &child);
     DeleteProcThreadAttributeList(list);
     if (!launched)
         return {};
