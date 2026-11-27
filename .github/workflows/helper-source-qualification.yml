@@ -14,7 +14,7 @@ jobs:
     steps:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
         with:
-          ref: ce7b38aa2971dedd60605356735641f2ff20a50f
+          ref: 61e3c6e7e8ffaf21d9e019cc18cdaf622610f3f0
           persist-credentials: false
       - name: Capture exact pinned formatter changes
         shell: bash
@@ -25,10 +25,10 @@ jobs:
           formatter="$RUNNER_TEMP/helper-format/bin/clang-format"
           "$formatter" --version
           "$formatter" --version | grep -F '19.1.7'
-          git ls-files -z -- 'apps/diagnostics_helper/*.cpp' 'apps/diagnostics_helper/*.h' 'app/tests/test_diagnostics_helper_protocol.cpp' | xargs -0 -r "$formatter" --style=file -i
+          git ls-files -z -- 'apps/diagnostics_helper/*.cpp' 'apps/diagnostics_helper/*.h' 'app/tests/test_diagnostics_helper_protocol.cpp' 'app/tests/test_diagnostics_helper_trace_cleanup.cpp' | xargs -0 -r "$formatter" --style=file -i
           git diff --check
           echo FORMAT-DIFF-BEGIN
-          git -c color.ui=false diff --no-ext-diff -- apps/diagnostics_helper/ app/tests/test_diagnostics_helper_protocol.cpp
+          git -c color.ui=false diff --no-ext-diff -- apps/diagnostics_helper/ app/tests/test_diagnostics_helper_protocol.cpp app/tests/test_diagnostics_helper_trace_cleanup.cpp
           echo FORMAT-DIFF-END
       - name: Check helper with the repository cppcheck options
         shell: bash
@@ -45,7 +45,7 @@ jobs:
     steps:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
         with:
-          ref: ce7b38aa2971dedd60605356735641f2ff20a50f
+          ref: 61e3c6e7e8ffaf21d9e019cc18cdaf622610f3f0
           persist-credentials: false
       - run: cargo exo-dev setup cppcheck
       - run: cargo test --manifest-path tools/exo-dev/Cargo.toml tracks_the_privileged_helper_without_widening_other_app_roots
