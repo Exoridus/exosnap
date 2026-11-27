@@ -60,13 +60,26 @@ jobs:
             signtool sign /fd SHA256 /sha1 $thumb $client
             $bundle = New-Item -ItemType Directory -Path "$out/signed-fixture/diagnostics"
             Copy-Item $signedMsi "$($bundle.FullName)/helper.msi"
-            $process = Start-Process -FilePath $client -PassThru -NoNewWindow
-            if (!$process.WaitForExit(300000)) {
-              $process.Kill()
-              $process.WaitForExit()
-              throw "Signed diagnostics fixture timed out"
+            function Invoke-SignedFixture {
+              $process = Start-Process -FilePath $client -PassThru -NoNewWindow
+              if (!$process.WaitForExit(300000)) {
+                $process.Kill()
+                $process.WaitForExit()
+                throw "Signed diagnostics fixture timed out"
+              }
+              return $process.ExitCode
             }
-            if ($process.ExitCode -ne 0) { throw "Signed diagnostics fixture returned $($process.ExitCode)" }
+            $firstExit = Invoke-SignedFixture
+            Write-Host "Automatic provisioning and lifecycle exit: $firstExit"
+            if ($firstExit -ne 0) {
+              # An independently installed fixture distinguishes acquisition from the runtime protocol.
+              $setup = Start-Process msiexec.exe -ArgumentList "/i ""$signedMsi"" /qn /norestart" -Wait -PassThru
+              if ($setup.ExitCode -ne 0) { throw "Controlled fixture installation returned $($setup.ExitCode)" }
+              if ((Get-FileHash $installed).Hash -ne (Get-FileHash $signedImage).Hash) { throw "Controlled image digest mismatch" }
+              $preinstalledExit = Invoke-SignedFixture
+              Write-Host "Controlled preinstalled lifecycle exit: $preinstalledExit"
+              if ($preinstalledExit -ne 0) { throw "Automatic acquisition and preinstalled lifecycle failed" }
+            }
             if ((Get-FileHash $installed).Hash -ne (Get-FileHash $signedImage).Hash) { throw "Provisioned image digest mismatch" }
             $deadline = (Get-Date).AddSeconds(30)
             do {
@@ -75,6 +88,7 @@ jobs:
               Start-Sleep -Milliseconds 100
             } while ((Get-Date) -lt $deadline)
             if ($remaining.Count) { throw "Installed collector or guardian still running after disable" }
+            if ($firstExit -ne 0) { throw "Required automatic acquisition returned $firstExit" }
           } finally {
             try {
               if (Test-Path $msi) {
