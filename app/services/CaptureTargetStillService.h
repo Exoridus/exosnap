@@ -67,7 +67,7 @@ class CaptureTargetStillService final : public QObject {
 
   private:
     void workerProc(std::stop_token stop_token);
-    void publish(Request request, std::uint64_t revision, QImage still);
+    void publish(Request request, std::uint64_t revision, QImage still, bool invalid_identity = false);
     [[nodiscard]] bool isCurrent(std::uint64_t revision) const;
     void wakeWorker();
 

@@ -218,12 +218,20 @@ bool CaptureTargetStillService::isCurrent(std::uint64_t revision) const {
     return revision == targets_revision_;
 }
 
-void CaptureTargetStillService::publish(Request request, std::uint64_t revision, QImage still) {
+void CaptureTargetStillService::publish(Request request, std::uint64_t revision, QImage still, bool invalid_identity) {
     QMetaObject::invokeMethod(
         this,
-        [this, request = std::move(request), revision, still = std::move(still)] {
+        [this, request = std::move(request), revision, still = std::move(still), invalid_identity] {
+            // A superseded queued result must not consume the unavailable transition.
             if (!isCurrent(revision))
                 return;
+            if (!still.isNull()) {
+                consecutive_failures_.erase(request.identity);
+            } else if (!invalid_identity) {
+                int& failures = consecutive_failures_[request.identity];
+                if (failures == kFailuresBeforeUnavailable || ++failures < kFailuresBeforeUnavailable)
+                    return;
+            }
             if (still.isNull() || (request.valid && !request.valid()))
                 emit stillUnavailable(request.identity);
             else
@@ -238,12 +246,17 @@ void CaptureTargetStillService::workerProc(std::stop_token stop_token) {
     // documents and the capture hub already satisfies.
     winrt::init_apartment(winrt::apartment_type::single_threaded);
     winrt::com_ptr<ID3D11Device> device;
-    std::unordered_map<QString, std::shared_ptr<WgcCaptureItem>> cached_items;
-    std::uint64_t cache_revision = 0;
+    struct CachedItem {
+        QString identity;
+        std::shared_ptr<WgcCaptureItem> item;
+    };
+    // Retain recently used items across viewport changes because WGC can retain
+    // a port after each creation and release.
+    std::vector<CachedItem> cached_items;
+    cached_items.reserve(kMaxCachedItems);
     const HANDLE activity = activity_event_.get();
     while (!stop_token.stop_requested()) {
         Request request;
-        std::vector<Request> updated_targets;
         std::uint64_t revision = 0;
         bool idle = false;
         {
@@ -256,22 +269,13 @@ void CaptureTargetStillService::workerProc(std::stop_token stop_token) {
             revision = targets_revision_;
             idle = visible_.empty();
             if (!idle) {
-                if (cache_revision != revision) {
-                    updated_targets = visible_;
-                    cache_revision = revision;
-                }
                 request = visible_[cursor_];
                 cursor_ = (cursor_ + 1) % visible_.size();
             }
         }
 
         pumpCaptureMessages();
-        std::erase_if(cached_items, [&updated_targets](const auto& entry) {
-            return entry.second->IsClosed() ||
-                   (!updated_targets.empty() && std::ranges::none_of(updated_targets, [&entry](const auto& current) {
-                       return current.identity == entry.first && entry.second->Matches(keyFor(current.target));
-                   }));
-        });
+        std::erase_if(cached_items, [](const auto& entry) { return entry.item->IsClosed(); });
         if (idle) {
             // WGC can close a retained item while the picker has no capture session or D3D device.
             device = nullptr;
@@ -295,20 +299,20 @@ void CaptureTargetStillService::workerProc(std::stop_token stop_token) {
             }
         }
 
-        if (request.valid && !request.valid()) {
-            cached_items.erase(request.identity);
-            publish(std::move(request), revision, {});
-            continue;
-        }
-
         const auto key = keyFor(request.target);
         std::shared_ptr<WgcCaptureItem> item;
         const bool is_window = key.kind == CaptureSourceKey::Kind::Window;
         const HWND window = is_window ? reinterpret_cast<HWND>(key.native_id) : nullptr;
         const bool may_reuse = is_window && static_cast<bool>(request.valid);
-        if (may_reuse) {
-            if (const auto found = cached_items.find(request.identity); found != cached_items.end())
-                item = found->second;
+        const auto found = std::ranges::find(cached_items, request.identity, &CachedItem::identity);
+        if (found != cached_items.end()) {
+            if (may_reuse)
+                item = std::move(found->item);
+            cached_items.erase(found);
+        }
+        if (request.valid && !request.valid()) {
+            publish(std::move(request), revision, {}, true);
+            continue;
         }
 
         WgcSourceProducer producer(key, device);
@@ -379,40 +383,17 @@ void CaptureTargetStillService::workerProc(std::stop_token stop_token) {
         }
 
         if (request.valid && !request.valid()) {
-            cached_items.erase(request.identity);
-            publish(std::move(request), revision, {});
+            publish(std::move(request), revision, {}, true);
             continue;
         }
         if (source_lost || (item && item->IsClosed())) {
-            cached_items.erase(request.identity);
             still = {};
-        } else if (may_reuse && item &&
-                   (cached_items.size() < kMaxCachedItems || cached_items.contains(request.identity))) {
-            cached_items.insert_or_assign(request.identity, item);
+        } else if (may_reuse && item) {
+            if (cached_items.size() == kMaxCachedItems)
+                cached_items.erase(cached_items.begin());
+            cached_items.push_back({request.identity, std::move(item)});
         }
-
-        if (!still.isNull()) {
-            {
-                std::lock_guard lock(mutex_);
-                if (revision != targets_revision_)
-                    continue;
-                consecutive_failures_.erase(request.identity);
-            }
-            publish(std::move(request), revision, std::move(still));
-            continue;
-        }
-
-        int failures = 0;
-        {
-            std::lock_guard lock(mutex_);
-            if (revision != targets_revision_)
-                continue;
-            failures = ++consecutive_failures_[request.identity];
-        }
-        // Reported once on the transition. Repeating it every pass would make
-        // the card's state churn for a target that is simply not capturable.
-        if (failures == kFailuresBeforeUnavailable)
-            publish(std::move(request), revision, {});
+        publish(std::move(request), revision, std::move(still));
     }
 
     cached_items.clear();
