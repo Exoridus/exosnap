@@ -23,8 +23,8 @@
 namespace exosnap::diagnostics::ipc {
 namespace {
 using namespace winrt;
-using namespace Windows::Foundation;
-using namespace Windows::Management::Deployment;
+using namespace winrt::Windows::Foundation;
+using namespace winrt::Windows::Management::Deployment;
 
 struct TaskString {
     wchar_t* value = nullptr;
