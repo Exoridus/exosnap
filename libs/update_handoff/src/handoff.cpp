@@ -12,6 +12,8 @@
 #include <QJsonValue>
 #include <QRandomGenerator>
 #include <QSaveFile>
+#include <optional>
+#include <string>
 
 #include <update/install_mode_detector.h>
 #include <update/swap_engine.h>

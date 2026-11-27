@@ -27,6 +27,8 @@
 #include <filesystem>
 #include <fstream>
 #include <sstream>
+#include <string>
+#include <system_error>
 #include <variant>
 
 #include <update/distribution_context.h>

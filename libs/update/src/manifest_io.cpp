@@ -10,6 +10,7 @@
 #include <optional>
 #include <string>
 #include <string_view>
+#include <system_error>
 #include <update/ed25519_verify.h>
 #include <update/manifest_io.h>
 #include <update/update_types.h>
