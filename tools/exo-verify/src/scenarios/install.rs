@@ -1356,8 +1356,10 @@ mod tests {
             successful(&cached, &remove, &log("cached-remove"))?;
             assert!(!exe.exists() && !shortcut.exists() && !reg_key_exists(key)?);
             assert!(exosnap_arp_rows()?.is_empty());
-            results.push(json!({"scope": scope, "msiCustomPath": custom, "setupPath": default,
-                "repairedSha256": hash, "oppositeScopeExit": refused, "uninstalled": true}));
+            results.push(
+                json!({"scope": scope, "msiCustomPath": custom, "setupPath": default,
+                "repairedSha256": hash, "oppositeScopeExit": refused, "uninstalled": true}),
+            );
         }
         let receipt = serde_json::to_vec_pretty(&results)?;
         fs::write(out.join("result.json"), receipt)?;
