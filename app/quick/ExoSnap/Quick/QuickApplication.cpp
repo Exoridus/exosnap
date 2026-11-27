@@ -19,6 +19,7 @@
 #include "services/RecordingCoordinator.h"
 #include "services/TargetDisplayFacts.h"
 #include "services/UpdateService.h"
+#include "settings/ConfigPaths.h"
 
 #include "EditTrackLayoutModel.h"
 #include "diagnostics/AppLog.h"
@@ -544,6 +545,7 @@ class QuickConsoleDisplayStateFilter final : public QAbstractNativeEventFilter {
 } // namespace
 
 QuickApplication::~QuickApplication() {
+    edit_session_adapter_.finishProjectRecovery();
     shutting_down_visual_sources_ = true;
     settings_adapter_.setWebcamSourceStatus(std::nullopt);
     edit_export_adapter_.cancelAndWait();
@@ -5098,6 +5100,7 @@ bool QuickApplication::applyEditVisualLayout() {
 }
 
 void QuickApplication::initializeEditArea() {
+    edit_session_adapter_.enableProjectRecovery(settings::ResolveAppDataDir());
     edit_timeline_adapter_.setTileProvider(edit_tile_provider_);
     edit_timeline_adapter_.setSession(&edit_session_adapter_);
     edit_player_adapter_.setSession(&edit_session_adapter_);
@@ -6547,8 +6550,10 @@ void QuickApplication::initializeShell() {
                      [this]() { recording_coordinator_->StopRecording(); });
     // The close is approved only after every guard cleared, so this is the last
     // moment anything can still be written to disk.
-    QObject::connect(&shell_adapter_, &ShellAdapter::closeApproved, &shell_adapter_,
-                     [this]() { flushPendingPersists(); });
+    QObject::connect(&shell_adapter_, &ShellAdapter::closeApproved, &shell_adapter_, [this]() {
+        edit_session_adapter_.finishProjectRecovery(true);
+        flushPendingPersists();
+    });
     // The other half of the tray-Quit story. Together the two lines say what was
     // asked for and what answered it, which is the difference between "the product
     // refused, correctly" and "the product hung" — indistinguishable to a user, and

@@ -12,6 +12,7 @@
 
 #include <QDir>
 #include <QFileInfo>
+#include <QLockFile>
 #include <QPointer>
 #include <QThread>
 #include <QVariantMap>
@@ -32,13 +33,15 @@ namespace {
 
 // Only authored output participates. Source verification, audition, locks and
 // selection can change independently without creating work to discard.
-bool SameAuthoredWorkspace(const edit::EditSnapshot& before, const edit::EditSnapshot& after) {
+bool SameAuthoredWorkspace(const edit::EditSnapshot& before, const edit::EditSnapshot& after, bool project) {
     if (&before == &after)
         return true;
     if (before.tracks != after.tracks || before.junctions != after.junctions || before.spacers != after.spacers ||
         before.result_range != after.result_range || before.timeline_end != after.timeline_end ||
         before.output_fps != after.output_fps || before.output_width != after.output_width ||
         before.output_height != after.output_height || before.clips.size() != after.clips.size())
+        return false;
+    if (project && (before.assets.size() != after.assets.size() || before.locked_track_ids != after.locked_track_ids))
         return false;
     const auto find_asset = [](const auto& snapshot, edit::Id id) -> const edit::Asset* {
         const auto found = std::find_if(snapshot.assets.begin(), snapshot.assets.end(),
@@ -47,13 +50,11 @@ bool SameAuthoredWorkspace(const edit::EditSnapshot& before, const edit::EditSna
     };
     auto clips = before.clips;
     std::set<edit::Id> checked;
-    for (const auto& clip : after.clips) {
-        if (!checked.insert(clip.asset).second)
-            continue;
-        const auto* old_asset = find_asset(before, clip.asset);
-        const auto* asset = find_asset(after, clip.asset);
+    const auto same_asset = [&](const edit::Asset* old_asset, const edit::Asset* asset) {
         if (!old_asset || !asset || old_asset->path != asset->path ||
-            old_asset->source_version != asset->source_version)
+            old_asset->source_version != asset->source_version ||
+            (project &&
+             (old_asset->id != asset->id || old_asset->name != asset->name || old_asset->markers != asset->markers)))
             return false;
         const auto& old_mix = old_asset->input_mix_selection;
         const auto& mix = asset->input_mix_selection;
@@ -62,12 +63,23 @@ bool SameAuthoredWorkspace(const edit::EditSnapshot& before, const edit::EditSna
         // choice or a changed source binding.
         if (old_asset->mix_decision_required && mix &&
             mix->authority == edit::InputMixAuthority::VerifiedRecordedDefault) {
-            edit::RebaseImportedAudioDefaults(clips, clip.asset, *mix);
+            edit::RebaseImportedAudioDefaults(clips, asset->id, *mix);
         } else if (bool(old_mix) != bool(mix) ||
                    (mix && (old_mix->selected_stream_identities != mix->selected_stream_identities ||
                             old_mix->authority != mix->authority))) {
             return false;
         }
+        return true;
+    };
+    if (project) {
+        for (size_t i = 0; i < after.assets.size(); ++i)
+            if (!same_asset(before.assets[i].get(), after.assets[i].get()))
+                return false;
+    } else {
+        for (const auto& clip : after.clips)
+            if (checked.insert(clip.asset).second &&
+                !same_asset(find_asset(before, clip.asset), find_asset(after, clip.asset)))
+                return false;
     }
     return clips == after.clips;
 }
@@ -109,6 +121,12 @@ EditSessionAdapter::EditSessionAdapter(QObject* parent) : QObject(parent) {
         (void)closeGuardRevision();
         emit unsavedEditsChanged();
     });
+    connect(this, &EditSessionAdapter::interactionSettingsChanged, this, [this] {
+        if (project_tracking_) {
+            (void)closeGuardRevision();
+            emit unsavedEditsChanged();
+        }
+    });
     track_layout_ = new EditTrackLayoutModel(this);
     media_model_ = new EditTimelineClipModel(this);
     folder_model_ = new EditFolderModel(layoutSettingsLocation().toLocalFile(), this);
@@ -141,6 +159,8 @@ EditSessionAdapter::EditSessionAdapter(QObject* parent) : QObject(parent) {
     verification_pool_.setMaxThreadCount(1);
     keyframe_pool_.setThreadPriority(QThread::LowestPriority);
     verification_pool_.setThreadPriority(QThread::LowestPriority);
+    project_pool_.setMaxThreadCount(1);
+    project_pool_.setThreadPriority(QThread::LowPriority);
 }
 
 EditSessionAdapter::~EditSessionAdapter() {
@@ -482,18 +502,22 @@ void EditSessionAdapter::setExportRunning(bool running) {
 }
 
 bool EditSessionAdapter::hasUnsavedEdits() const {
-    return !SameAuthoredWorkspace(*initial_workspace_, *workspace_.snapshot());
+    return recovered_project_ || (project_tracking_ && editingOptions() != saved_options_) ||
+           !SameAuthoredWorkspace(*initial_workspace_, *workspace_.snapshot(), project_tracking_);
 }
 
 bool EditSessionAdapter::canEstablishInitialWorkspace() const {
-    return initial_workspace_->clips.empty() && workspace_.clips().empty() && !hasUnsavedEdits();
+    return !project_tracking_ && initial_workspace_->clips.empty() && workspace_.clips().empty() && !hasUnsavedEdits();
 }
 
 quint64 EditSessionAdapter::closeGuardRevision() const {
     const auto current = workspace_.snapshot();
-    if (!SameAuthoredWorkspace(*observed_workspace_, *current))
+    const auto options = editingOptions();
+    if ((project_tracking_ && observed_options_ != options) ||
+        !SameAuthoredWorkspace(*observed_workspace_, *current, project_tracking_))
         ++close_guard_revision_;
     observed_workspace_ = current;
+    observed_options_ = options;
     return close_guard_revision_;
 }
 
@@ -576,6 +600,17 @@ void EditSessionAdapter::setPositionUs(qint64 position_us) {
 
 // Explicitly clear the workspace and release decoder resources. Navigation never calls this.
 void EditSessionAdapter::close() {
+    if (project_tracking_) {
+        newProject(closeGuardRevision());
+        if (project_busy_)
+            return;
+    } else {
+        resetWorkspace();
+    }
+    emit closeRequested();
+}
+
+void EditSessionAdapter::resetWorkspace() {
     cancelSourceReplacement();
     cancelSourceAudioChoice();
     source_cancelled_->store(true, std::memory_order_relaxed);
@@ -596,12 +631,10 @@ void EditSessionAdapter::close() {
     media_revision_ = (std::numeric_limits<edit::Revision>::max)();
     // A fixture context carries a duration but no master path, and must close
     // just as completely as a real clip -- hence not `open_` alone.
-    const bool had_clip = open_ || duration_ms_ > 0 || !context_.output_path.isEmpty() ||
+    const bool had_clip = project_tracking_ || open_ || duration_ms_ > 0 || !context_.output_path.isEmpty() ||
                           !workspace_.assets().empty() || !workspace_.clips().empty() || hasUnsavedEdits();
-    if (!had_clip) {
-        emit closeRequested();
+    if (!had_clip)
         return;
-    }
 
     const bool was_open = open_;
     // A keyframe scan still running for this clip belongs to a generation nobody
@@ -615,6 +648,10 @@ void EditSessionAdapter::close() {
         emit auditionChanged();
     }
     selection_.clear();
+    if (clip_clipboard_) {
+        clip_clipboard_.reset();
+        emit clipboardChanged();
+    }
     time_selection_in_us_ = time_selection_out_us_ = -1;
     selected_gap_ = {};
     selected_gap_track_ = selected_spacer_ = selected_transition_ = 0;
@@ -647,7 +684,6 @@ void EditSessionAdapter::close() {
         emit openChanged();
 
     emit clipClosed();
-    emit closeRequested();
 }
 
 QString EditSessionAdapter::formatTimestamp(qint64 position_ms) const {

@@ -1,6 +1,7 @@
 pragma ComponentBehavior: Bound
 import QtQuick
 import QtQuick.Controls
+import QtQuick.Dialogs
 import QtQuick.Layouts
 import QtCore
 
@@ -27,6 +28,8 @@ FocusScope {
     property int sourceTab: 0
     property Item mediaInvoker: null
     property Item detailsInvoker: null
+    property string pendingProjectAction: ""
+    property var projectConsentRevision: 0
     readonly property real maximumPanelWidth: Math.max(240, Math.min(560, width * 0.45))
     readonly property real mediaWidth: Math.max(240, Math.min(maximumPanelWidth, layoutPreferences.mediaWidth))
     readonly property real detailsWidth: Math.max(240, Math.min(maximumPanelWidth, layoutPreferences.detailsWidth))
@@ -53,6 +56,35 @@ FocusScope {
     onDetailsPinPreferredChanged: layoutPreferences.detailsPinned = detailsPinPreferred
     onMediaPinnedLastChanged: layoutPreferences.mediaPinnedLast = mediaPinnedLast
     objectName: "quickEditPage"
+
+    function requestProjectAction(action: string): void {
+        if (session.projectBusy || !session.preflightPendingDraft())
+            return;
+        pendingProjectAction = action;
+        projectConsentRevision = session.closeGuardRevision();
+        if (session.hasUnsavedEdits)
+            projectDiscard.open();
+        else
+            performProjectAction();
+    }
+
+    function performProjectAction(): void {
+        if (pendingProjectAction === "new")
+            session.newProject(projectConsentRevision);
+        else if (pendingProjectAction === "recover")
+            session.recoverProject(projectConsentRevision);
+        else
+            openProjectFile.open();
+    }
+
+    function requestProjectSave(saveAs: bool): void {
+        if (!session.projectBusy && session.preflightPendingDraft()) {
+            if (saveAs || !session.projectHasPath)
+                saveProjectFile.open();
+            else
+                session.saveProject();
+        }
+    }
 
     function revealRequestedRecording(): void {
         if (!root.visible || root.recordings.pendingRecordingIdentity === "")
@@ -794,6 +826,26 @@ FocusScope {
                             onClicked: editOverflow.popup()
                             ExoMenu {
                                 id: editOverflow
+                                ExoMenu {
+                                    title: qsTr("Project") + (root.session.hasUnsavedEdits ? " *" : "")
+                                    ExoMenuItem { text: root.session.projectName; enabled: false }
+                                    ExoMenuItem { text: qsTr("New Project"); enabled: !root.session.projectBusy; onTriggered: root.requestProjectAction("new") }
+                                    ExoMenuItem { text: qsTr("Open Project"); enabled: !root.session.projectBusy; onTriggered: root.requestProjectAction("open") }
+                                    ExoMenuItem { text: qsTr("Save Project"); enabled: !root.session.projectBusy; onTriggered: root.requestProjectSave(false) }
+                                    ExoMenuItem { text: qsTr("Save Project As"); enabled: !root.session.projectBusy; onTriggered: root.requestProjectSave(true) }
+                                    ExoMenuItem {
+                                        text: qsTr("Recover Project")
+                                        visible: root.session.projectRecoveryAvailable
+                                        enabled: !root.session.projectBusy
+                                        onTriggered: root.requestProjectAction("recover")
+                                    }
+                                    ExoMenuItem {
+                                        text: qsTr("Discard Recovery Snapshot")
+                                        visible: root.session.projectRecoveryAvailable
+                                        enabled: !root.session.projectBusy
+                                        onTriggered: discardRecovery.open()
+                                    }
+                                }
                                 EditingToggle { text: qsTr("Snapping"); visible: root.width < 1100; checked: root.session.snapping; onTriggered: root.session.snapping = !root.session.snapping }
                                 EditingToggle { text: qsTr("Ripple"); visible: root.width < 1100; checked: root.session.ripple; onTriggered: root.session.ripple = !root.session.ripple }
                                 EditingToggle { text: qsTr("Auto Crossfade"); visible: root.width < 1100; checked: root.session.autoCrossfade; onTriggered: root.session.autoCrossfade = !root.session.autoCrossfade }
@@ -937,7 +989,7 @@ FocusScope {
                     objectName: "editSelectionStatus"
                     readonly property string failureText: root.session.rangeGestureActive && !root.session.rangeGestureValid
                         ? root.session.rangeGestureReason : root.session.dragActive && !root.session.dragValid
-                            ? root.session.dragReason : root.session.workspaceError
+                            ? root.session.dragReason : root.session.workspaceError || root.session.projectMessage
                     // A transient line for refusals and imports, not a permanent
                     // status bar: it takes no room while there is nothing to say.
                     visible: text.length > 0
@@ -955,6 +1007,8 @@ FocusScope {
                             return failureText;
                         if (root.session.importPending)
                             return qsTr("Importing media…");
+                        if (root.session.projectRecoveryAvailable)
+                            return qsTr("A recovery snapshot is available in the Project menu.");
                         return "";
                     }
                     Accessible.name: text
@@ -967,6 +1021,54 @@ FocusScope {
     }
 
     EditSourceChoice { id: sourceChoice; session: root.session }
+    Shortcut {
+        sequences: [StandardKey.New]
+        enabled: root.visible && !projectDiscard.visible
+        onActivated: root.requestProjectAction("new")
+    }
+    Shortcut {
+        sequences: [StandardKey.Open]
+        enabled: root.visible && !projectDiscard.visible
+        onActivated: root.requestProjectAction("open")
+    }
+    Shortcut {
+        sequences: [StandardKey.Save]
+        enabled: root.visible && !projectDiscard.visible
+        onActivated: root.requestProjectSave(false)
+    }
+    Shortcut {
+        sequences: [StandardKey.SaveAs]
+        enabled: root.visible && !projectDiscard.visible
+        onActivated: root.requestProjectSave(true)
+    }
+    FileDialog {
+        id: openProjectFile
+        title: qsTr("Open Project")
+        fileMode: FileDialog.OpenFile
+        nameFilters: [qsTr("ExoSnap projects (*.exosnap)")]
+        onAccepted: root.session.openProject(selectedFile, root.projectConsentRevision)
+    }
+    FileDialog {
+        id: saveProjectFile
+        title: qsTr("Save Project As")
+        fileMode: FileDialog.SaveFile
+        defaultSuffix: "exosnap"
+        nameFilters: openProjectFile.nameFilters
+        onAccepted: root.session.saveProject(selectedFile)
+    }
+    ExoConfirmDialog {
+        id: projectDiscard
+        objectName: "editProjectDiscard"
+        title: qsTr("Discard unsaved project changes?")
+        proceedText: qsTr("Discard")
+        onAccepted: root.performProjectAction()
+    }
+    ExoConfirmDialog {
+        id: discardRecovery
+        title: qsTr("Discard the recovery snapshot?")
+        proceedText: qsTr("Discard")
+        onAccepted: root.session.discardProjectRecovery()
+    }
     Dialog {
         id: shortcutHelp
         title: qsTr("Editor shortcuts")

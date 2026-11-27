@@ -649,6 +649,12 @@ struct EditSnapshot {
     uint64_t source_version_high_watermark = 0;
 };
 
+inline bool ProjectEntityCountFits(const EditSnapshot& snapshot) {
+    constexpr size_t limit = 4096;
+    return snapshot.assets.size() <= limit && snapshot.tracks.size() <= limit && snapshot.clips.size() <= limit &&
+           snapshot.junctions.size() <= limit && snapshot.spacers.size() <= limit;
+}
+
 struct EditPreview {
     Revision base_revision = 0;
     bool valid = false;

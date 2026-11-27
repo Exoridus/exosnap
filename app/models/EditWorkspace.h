@@ -103,6 +103,90 @@ class Workspace {
         snapshot_cache_ = value;
         return value;
     }
+
+    bool restoreProject(const EditSnapshot& snapshot) {
+        // Bound times before validation, which assumes safe end-time arithmetic for live edits.
+        constexpr Time max_project_time = (Time{1} << 53) - 1;
+        const auto valid_span = [](Time start, Time length) {
+            return start >= 0 && length > 0 && start <= max_project_time && length <= max_project_time - start;
+        };
+        std::set<Id> ids;
+        const auto register_id = [&](Id id) {
+            return id != 0 && id <= snapshot.id_high_watermark && ids.insert(id).second;
+        };
+        if (!ProjectEntityCountFits(snapshot) || snapshot.id_high_watermark >= (Id{1} << 53) ||
+            snapshot.timeline_end.end_us < 0 || snapshot.timeline_end.end_us > max_project_time ||
+            snapshot.output_width < 0 || snapshot.output_height < 0 ||
+            snapshot.output_fps.num > static_cast<uint32_t>((std::numeric_limits<int>::max)()) ||
+            snapshot.output_fps.den > static_cast<uint32_t>((std::numeric_limits<int>::max)()))
+            return false;
+        for (const auto& track : snapshot.tracks)
+            if (!register_id(track.id) || track.gain_db < -60 || track.gain_db > 12)
+                return false;
+        for (const auto& asset : snapshot.assets)
+            if (!asset || !register_id(asset->id) || asset->duration < 0 || asset->duration > max_project_time ||
+                asset->source_version > snapshot.source_version_high_watermark ||
+                std::any_of(asset->markers.begin(), asset->markers.end(),
+                            [&](const auto& marker) { return marker.time_ms > max_project_time / 1000; }))
+                return false;
+        for (const auto& clip : snapshot.clips)
+            if (!register_id(clip.id) || clip.group > snapshot.id_high_watermark || clip.source_in < 0 ||
+                clip.source_out <= clip.source_in || clip.source_out > max_project_time ||
+                !valid_span(clip.start, clip.source_out - clip.source_in) || clip.gain_db < -60 || clip.gain_db > 24)
+                return false;
+        for (const auto& spacer : snapshot.spacers)
+            if (!register_id(spacer.id) || !valid_span(spacer.start_us, spacer.duration_us))
+                return false;
+        for (const auto& junction : snapshot.junctions)
+            if (!register_id(junction.id) || junction.in_us < 0 || junction.in_us > max_project_time ||
+                junction.out_us < 0 || junction.out_us > max_project_time || junction.cut_us < 0 ||
+                junction.cut_us > max_project_time || junction.duration < 0 || junction.duration > max_project_time ||
+                junction.incoming_anchor_us < 0 || junction.incoming_anchor_us > max_project_time)
+                return false;
+        auto candidate = fromSnapshot(snapshot);
+        if (candidate.locked_tracks_.size() != snapshot.locked_track_ids.size() ||
+            std::any_of(candidate.locked_tracks_.begin(), candidate.locked_tracks_.end(),
+                        [&](Id id) { return !candidate.mutableTrack(id); }) ||
+            !candidate.validate() || candidate.tracks_ != snapshot.tracks || candidate.clips_ != snapshot.clips ||
+            candidate.transitions_ != snapshot.junctions || candidate.result_range_ != snapshot.result_range ||
+            candidate.timeline_end_ != snapshot.timeline_end)
+            return false;
+        candidate.revision_ = revision_ + 1;
+        *this = std::move(candidate);
+        return true;
+    }
+
+    bool bindProjectAsset(Id id, uint64_t version, std::shared_ptr<ValidatedSourceDescriptor> verified) {
+        const auto found =
+            std::find_if(assets_.begin(), assets_.end(), [id](const auto& asset) { return asset.id == id; });
+        if (found == assets_.end() || found->source_version != version || found->state != AssetState::Missing ||
+            !found->source_descriptor || !verified)
+            return false;
+        const auto& expected = *found->source_descriptor;
+        if (expected.asset_identity_fingerprint != verified->asset_identity_fingerprint ||
+            expected.audio_identities_verified != verified->audio_identities_verified ||
+            expected.streams.size() != verified->streams.size())
+            return false;
+        for (size_t i = 0; i < expected.streams.size(); ++i) {
+            auto& stream = verified->streams[i];
+            const auto& saved = expected.streams[i];
+            stream.ref.asset_id = saved.ref.asset_id;
+            // Raw audio track IDs are assigned on each probe. On proven identical bytes,
+            // the physical stream position identifies the saved timeline's audio lane.
+            if (!expected.audio_identities_verified && saved.ref.kind == engine::TimelineStreamKind::Audio)
+                stream.ref.stream_identity = saved.ref.stream_identity;
+            if (stream.ref != saved.ref || stream.source_span != saved.source_span ||
+                stream.timeline_offset_us != saved.timeline_offset_us ||
+                stream.codec.channels != saved.codec.channels ||
+                stream.codec.channel_layout != saved.codec.channel_layout)
+                return false;
+        }
+        found->state = AssetState::Available;
+        found->source_descriptor = std::move(verified);
+        ++monitoring_revision_;
+        snapshot_cache_.reset();
+        return true;
+    }
     CommandResult apply(const EditCommand& command, Revision expected_revision) {
         if (expected_revision != revision_)
             return rejected(EditErrorCode::StaleRevision);
@@ -630,6 +714,8 @@ class Workspace {
     }
 
   private:
+    static Workspace fromSnapshot(const EditSnapshot& snapshot);
+
     CommandResult rejected(EditErrorCode code, std::vector<Id> ids = {}) const {
         return {CommandStatus::Rejected, revision_, EditError{code, std::move(ids), {}}, {}, {}};
     }
@@ -3202,7 +3288,7 @@ class Workspace {
     size_t cursor_ = 0;
 };
 
-inline EditPreview PreviewEdit(const EditSnapshot& snapshot, const EditCommand& command) {
+inline Workspace Workspace::fromSnapshot(const EditSnapshot& snapshot) {
     Workspace candidate;
     candidate.next_id_ = snapshot.id_high_watermark;
     candidate.tracks_ = snapshot.tracks;
@@ -3217,9 +3303,14 @@ inline EditPreview PreviewEdit(const EditSnapshot& snapshot, const EditCommand& 
     candidate.output_height_ = snapshot.output_height;
     candidate.revision_ = snapshot.revision;
     candidate.source_version_high_watermark_ = snapshot.source_version_high_watermark;
-    candidate.candidate_mode_ = true;
     for (const auto& asset : snapshot.assets)
         candidate.assets_.push_back(*asset);
+    return candidate;
+}
+
+inline EditPreview PreviewEdit(const EditSnapshot& snapshot, const EditCommand& command) {
+    auto candidate = Workspace::fromSnapshot(snapshot);
+    candidate.candidate_mode_ = true;
     std::visit([&](const auto& value) { candidate.execute(value); }, command);
     const auto valid = !candidate.last_error_ && candidate.validate() && candidate.checkLocks(snapshot);
     std::vector<std::shared_ptr<const Asset>> source_bindings;

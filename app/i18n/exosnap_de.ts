@@ -4462,6 +4462,54 @@ Das Original kann danach nicht wiederhergestellt werden.</translation>
 <context>
     <name>EditPage</name>
     <message>
+        <source>Discard</source>
+        <translation>Verwerfen</translation>
+    </message>
+    <message>
+        <source>Project</source>
+        <translation>Projekt</translation>
+    </message>
+    <message>
+        <source>New Project</source>
+        <translation>Neues Projekt</translation>
+    </message>
+    <message>
+        <source>Open Project</source>
+        <translation>Projekt öffnen</translation>
+    </message>
+    <message>
+        <source>Save Project</source>
+        <translation>Projekt speichern</translation>
+    </message>
+    <message>
+        <source>Save Project As</source>
+        <translation>Projekt speichern unter</translation>
+    </message>
+    <message>
+        <source>Recover Project</source>
+        <translation>Projekt wiederherstellen</translation>
+    </message>
+    <message>
+        <source>Discard Recovery Snapshot</source>
+        <translation>Wiederherstellungskopie verwerfen</translation>
+    </message>
+    <message>
+        <source>A recovery snapshot is available in the Project menu.</source>
+        <translation>Im Projektmenü ist eine Wiederherstellungskopie verfügbar.</translation>
+    </message>
+    <message>
+        <source>ExoSnap projects (*.exosnap)</source>
+        <translation>ExoSnap-Projekte (*.exosnap)</translation>
+    </message>
+    <message>
+        <source>Discard unsaved project changes?</source>
+        <translation>Ungespeicherte Projektänderungen verwerfen?</translation>
+    </message>
+    <message>
+        <source>Discard the recovery snapshot?</source>
+        <translation>Wiederherstellungskopie verwerfen?</translation>
+    </message>
+    <message>
         <location filename="../quick/ExoSnap/Quick/EditPage.qml" line="+731"/>
         <source>Pause</source>
         <translation>Pause</translation>
@@ -12325,6 +12373,10 @@ Kleiner Text auf dem Bildschirm verliert früher an Qualität als Videoinhalte. 
 <context>
     <name>exosnap::quick::EditExportAdapter</name>
     <message>
+        <source>An export source is unavailable. Verify or relink it in Project media.</source>
+        <translation>Eine Exportquelle ist nicht verfügbar. Überprüfen oder verknüpfen Sie sie erneut in den Projektmedien.</translation>
+    </message>
+    <message>
         <location filename="../quick/ExoSnap/Quick/EditExportAdapter.cpp" line="-730"/>
         <source>No probed encoder adapter supports this render format.</source>
         <translation>Kein geprüfter Encoder-Adapter unterstützt dieses Renderformat.</translation>
@@ -12514,6 +12566,46 @@ Kleiner Text auf dem Bildschirm verliert früher an Qualität als Videoinhalte. 
 </context>
 <context>
     <name>exosnap::quick::EditSessionAdapter</name>
+    <message>
+        <source>The project recovery snapshot could not be removed.</source>
+        <translation>Die Wiederherstellungskopie des Projekts konnte nicht entfernt werden.</translation>
+    </message>
+    <message>
+        <source>Untitled project</source>
+        <translation>Unbenanntes Projekt</translation>
+    </message>
+    <message>
+        <source>Automatic project recovery is unavailable.</source>
+        <translation>Die automatische Projektwiederherstellung ist nicht verfügbar.</translation>
+    </message>
+    <message>
+        <source>Automatic project recovery is in use by another ExoSnap instance.</source>
+        <translation>Eine andere ExoSnap-Instanz verwendet die automatische Projektwiederherstellung.</translation>
+    </message>
+    <message>
+        <source>The project file could not be read or written.</source>
+        <translation>Die Projektdatei konnte nicht gelesen oder geschrieben werden.</translation>
+    </message>
+    <message>
+        <source>The project is damaged or contains unsupported edit data.</source>
+        <translation>Das Projekt ist beschädigt oder enthält nicht unterstützte Bearbeitungsdaten.</translation>
+    </message>
+    <message>
+        <source>This project was saved in an unsupported format version.</source>
+        <translation>Dieses Projekt wurde in einer nicht unterstützten Formatversion gespeichert.</translation>
+    </message>
+    <message>
+        <source>The project changed on disk. Save As to keep your edits in a separate file.</source>
+        <translation>Die Projektdatei wurde geändert. Speichern Sie Ihre Bearbeitungen über „Speichern unter“ in einer separaten Datei.</translation>
+    </message>
+    <message>
+        <source>The timeline changed while opening the project. Open it again to replace it.</source>
+        <translation>Die Zeitleiste wurde beim Öffnen des Projekts geändert. Öffnen Sie das Projekt erneut, um sie zu ersetzen.</translation>
+    </message>
+    <message>
+        <source>The automatic project recovery snapshot could not be written.</source>
+        <translation>Die automatische Wiederherstellungskopie des Projekts konnte nicht geschrieben werden.</translation>
+    </message>
     <message>
         <location filename="../quick/ExoSnap/Quick/EditWorkspaceSession.cpp" line="+2134"/>
         <source>The edit would overlap another clip or exceed the source.</source>

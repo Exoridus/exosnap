@@ -48,6 +48,10 @@ Replace the elevated application relaunch for PresentMon and other privileged di
 
 Define authenticated, bounded IPC, permitted operations, process ownership, crash cleanup and update compatibility before implementation. Review executable and DLL loading from user-writable installations, and do not expose arbitrary elevated execution or file writes. Qualify repeated enable/disable, UAC refusal, helper failure and application exit without leaving privileged processes or tracing sessions behind.
 
+### Editor project qualification (v0.12)
+
+Qualify crash recovery, external modification conflicts, moved project folders and relinking with real recordings. Exercise large project files, slow storage and compatibility across future schema revisions independently of GPU decode and export acceptance.
+
 ### Overlay presentation policy (post-v0.10)
 
 Overlay publication is change-driven and coalesced, and the recording indicator is static. Focused HCIF acceptance covers the qualified configuration. Extend qualification to other hardware, VRR and PresentModes, and distinguish physical tearing/scanout behavior from presentation telemetry. Do not promise VRR, Independent Flip or DWM neutrality solely because an overlay is capture-excluded or redraws infrequently.

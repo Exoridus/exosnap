@@ -282,6 +282,7 @@ qt_add_qml_module(exosnap
         EditPlayerWorker.cpp
         EditPlayerWorker.h
         EditWorkspaceSession.cpp
+        EditProjectSession.cpp
         EditSessionAdapter.cpp
         EditSessionAdapter.h
         EditThumbnailImageProvider.cpp
@@ -1366,6 +1367,7 @@ qt_add_qml_module(edit_timeline_qml_tests
         EditPlayerWorker.cpp
         EditPlayerWorker.h
         EditWorkspaceSession.cpp
+        EditProjectSession.cpp
         EditSessionAdapter.cpp
         EditSessionAdapter.h
         EditThumbnailImageProvider.cpp
@@ -1483,7 +1485,10 @@ target_link_libraries(edit_timeline_qml_tests
         FFmpeg::mux
 )
 
-target_sources(edit_timeline_qml_tests PRIVATE ${PROJECT_SOURCE_DIR}/app/services/AtomicFileOps.cpp)
+target_sources(exosnap PRIVATE ${PROJECT_SOURCE_DIR}/app/models/EditProjectFile.cpp)
+target_sources(edit_timeline_qml_tests PRIVATE
+    ${PROJECT_SOURCE_DIR}/app/services/AtomicFileOps.cpp
+    ${PROJECT_SOURCE_DIR}/app/models/EditProjectFile.cpp)
 
 add_test(NAME quick.qml.edit_timeline COMMAND edit_timeline_qml_tests
     -o "${CMAKE_CURRENT_BINARY_DIR}/edit-timeline-test.txt,txt")
@@ -2386,6 +2391,7 @@ exosnap_add_gtest(
     TEST_PREFIX quick_edit_adapter.
     SOURCES
         ${EXOSNAP_QUICK_TESTS_DIR}/test_edit_adapters.cpp
+        ${EXOSNAP_QUICK_TESTS_DIR}/test_edit_project_session.cpp
         ${EXOSNAP_QUICK_TESTS_DIR}/test_edit_export_text.cpp
         ${EXOSNAP_QUICK_TESTS_DIR}/test_edit_visual_seeds.cpp
         ${PROJECT_SOURCE_DIR}/app/visual_tests/EditVisualMedia.cpp
@@ -2395,6 +2401,8 @@ exosnap_add_gtest(
         EditExportAdapter.cpp
         EditExportAdapter.h
         EditWorkspaceSession.cpp
+        EditProjectSession.cpp
+        ${PROJECT_SOURCE_DIR}/app/models/EditProjectFile.cpp
         EditSessionAdapter.cpp
         EditSessionAdapter.h
         EditTimelineAdapter.cpp

@@ -3,6 +3,7 @@
 #include "models/EditClipboard.h"
 #include "models/EditContext.h"
 #include "models/EditPointerGeometry.h"
+#include "models/EditProjectFile.h"
 #include "models/EditSelection.h"
 #include "models/EditSourceImport.h"
 #include "models/EditWorkspace.h"
@@ -11,6 +12,7 @@
 #include <QPointer>
 #include <QString>
 #include <QThreadPool>
+#include <QTimer>
 #include <QUrl>
 #include <QVariantList>
 #include <QVariantMap>
@@ -18,6 +20,7 @@
 
 #include <exosnap/engine/mp4_remuxer.h>
 
+#include <array>
 #include <atomic>
 #include <cstdint>
 #include <functional>
@@ -31,6 +34,7 @@
 #include <vector>
 
 class QMimeData;
+class QLockFile;
 
 namespace exosnap {
 class BackgroundStorageBudget;
@@ -112,6 +116,11 @@ class EditSessionAdapter : public QObject {
     Q_PROPERTY(QString workspaceError READ workspaceError NOTIFY workspaceChanged FINAL)
     Q_PROPERTY(bool hasPendingImportedMedia READ hasPendingImportedMedia NOTIFY pendingPlacementChanged FINAL)
     Q_PROPERTY(bool importPending READ importPending NOTIFY importPendingChanged FINAL)
+    Q_PROPERTY(QString projectName READ projectName NOTIFY projectChanged FINAL)
+    Q_PROPERTY(QString projectMessage READ projectMessage NOTIFY projectChanged FINAL)
+    Q_PROPERTY(bool projectBusy READ projectBusy NOTIFY projectChanged FINAL)
+    Q_PROPERTY(bool projectHasPath READ projectHasPath NOTIFY projectChanged FINAL)
+    Q_PROPERTY(bool projectRecoveryAvailable READ projectRecoveryAvailable NOTIFY projectChanged FINAL)
     Q_PROPERTY(QVariantList transitions READ transitions NOTIFY workspaceChanged FINAL)
     Q_PROPERTY(qulonglong selectedTransition READ selectedTransition NOTIFY workspaceChanged FINAL)
     Q_PROPERTY(bool snapping READ snappingEnabled WRITE setSnapping NOTIFY interactionSettingsChanged FINAL)
@@ -477,6 +486,27 @@ class EditSessionAdapter : public QObject {
     [[nodiscard]] bool importPending() const noexcept {
         return pending_imports_ > 0;
     }
+
+    void enableProjectRecovery(const QString& configuration_directory);
+    void finishProjectRecovery(bool discard = false);
+    Q_INVOKABLE void newProject(qulonglong consent_revision);
+    Q_INVOKABLE void openProject(const QUrl& url, qulonglong consent_revision);
+    Q_INVOKABLE void saveProject(const QUrl& destination = {});
+    Q_INVOKABLE void recoverProject(qulonglong consent_revision);
+    Q_INVOKABLE void discardProjectRecovery();
+    [[nodiscard]] QString projectName() const;
+    [[nodiscard]] QString projectMessage() const {
+        return project_message_;
+    }
+    [[nodiscard]] bool projectBusy() const {
+        return project_busy_;
+    }
+    [[nodiscard]] bool projectHasPath() const {
+        return !project_path_.isEmpty();
+    }
+    [[nodiscard]] bool projectRecoveryAvailable() const {
+        return project_recovery_available_;
+    }
     // Advances once per timeline edit attempt that reached the model or was
     // refused by it, whether or not anything changed. Compared before and after
     // an intent, it separates "the edit was refused" from "nothing was
@@ -586,7 +616,7 @@ class EditSessionAdapter : public QObject {
     void setExportRunning(bool running);
     [[nodiscard]] bool hasUnsavedEdits() const;
     // Changes whenever authored content changes, including undo and reset.
-    [[nodiscard]] quint64 closeGuardRevision() const;
+    Q_INVOKABLE [[nodiscard]] quint64 closeGuardRevision() const;
 
     // A trim handle was released at these millisecond positions. Clamps against
     // the other handle and the clip length, snaps, stores, and reports the frame
@@ -635,6 +665,7 @@ class EditSessionAdapter : public QObject {
     void selectedClipSummaryChanged();
     void sourceVerificationChanged(qulonglong asset);
     void importPendingChanged();
+    void projectChanged();
     void pendingPlacementChanged();
     void directoryDropRequested(qulonglong request_id, const QVariantList& roots, const QVariantList& candidates,
                                 qint64 at_us, const QString& reason);
@@ -847,12 +878,36 @@ class EditSessionAdapter : public QObject {
     void startKeyframeScan(std::shared_ptr<const engine::MediaReadCapability> source = {});
     void setTrimUs(int64_t start_us, int64_t end_us);
     bool canEstablishInitialWorkspace() const;
+    void resetWorkspace();
+    using EditingOptions = std::array<bool, 4>;
+    [[nodiscard]] EditingOptions editingOptions() const;
+    void setProjectOptions(const EditingOptions& options);
+    void readProject(const QString& path, quint64 consent_revision, bool recovery);
+    void restoreProjectSources();
+    void scheduleProjectRecovery();
+    void clearOwnedRecovery(bool discard_pending = false);
+    void projectError(edit::ProjectFileError error);
 
     EditContext context_;
     edit::Workspace workspace_;
     std::shared_ptr<const edit::EditSnapshot> initial_workspace_;
     mutable std::shared_ptr<const edit::EditSnapshot> observed_workspace_;
     mutable quint64 close_guard_revision_ = 0;
+    bool project_tracking_ = false;
+    bool recovered_project_ = false;
+    bool project_busy_ = false;
+    bool project_recovery_available_ = false;
+    bool project_recovery_write_pending_ = false;
+    quint64 project_recovery_revision_ = 0;
+    std::shared_ptr<const edit::EditSnapshot> project_recovery_snapshot_;
+    QString project_path_;
+    QString project_message_;
+    QString project_recovery_path_;
+    QByteArray project_digest_;
+    EditingOptions saved_options_{true, false, true, true};
+    mutable EditingOptions observed_options_{saved_options_};
+    std::unique_ptr<QLockFile> project_recovery_lock_;
+    QTimer project_recovery_timer_;
     EditTrackLayoutModel* track_layout_ = nullptr;
     QString workspace_error_;
     QVariantList facts_;
@@ -878,6 +933,7 @@ class EditSessionAdapter : public QObject {
     QThreadPool keyframe_pool_;
     QThreadPool metadata_pool_;
     QThreadPool verification_pool_;
+    QThreadPool project_pool_;
 };
 
 } // namespace exosnap::quick
