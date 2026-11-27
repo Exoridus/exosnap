@@ -1,0 +1,96 @@
+name: Diagnose editor navigation focus
+
+on:
+  push:
+    branches: [verify/v012-navigation-diagnosis]
+
+permissions:
+  contents: read
+
+env:
+  SCCACHE_GHA_ENABLED: "true"
+  SCCACHE_GHA_RW_MODE: READ_ONLY
+  SCCACHE_IDLE_TIMEOUT: "0"
+
+jobs:
+  navigation:
+    runs-on: windows-2022
+    timeout-minutes: 60
+    strategy:
+      fail-fast: false
+      matrix:
+        product: [73b1e3811b2c349ef38cbb7f49abdb89fa9be73f, 751b2abb3b0d182423412e99f482ca34fbc6c131]
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+        with:
+          ref: ${{ matrix.product }}
+          persist-credentials: false
+      - name: Add failure-only navigation geometry logging
+        shell: python
+        env:
+          EXPECTED: ${{ matrix.product }}
+        run: |
+          import os
+          from pathlib import Path
+          import subprocess
+          
+          if subprocess.check_output(["git", "rev-parse", "HEAD"], text=True).strip() != os.environ["EXPECTED"]:
+              raise ValueError("Unexpected product commit")
+          source = Path("app/quick/ExoSnap/Quick/main.cpp")
+          before = r'''
+                      if (!fully_visible || !label || label->property("truncated").toBool() ||
+                          label->width() + 0.5 < label->implicitWidth())
+                          return failNavigationLifecycle("focused navigation destination is clipped or truncated");
+          '''.strip("\n")
+          after = r'''
+                      if (!fully_visible || !label || label->property("truncated").toBool() ||
+                          label->width() + 0.5 < label->implicitWidth()) {
+                          const auto origin = delegate->mapToItem(nav_strip, QPointF());
+                          auto* focus = window->activeFocusItem();
+                          std::fprintf(stderr,
+                                       "navigation-detail: window=%dx%d tab=%d text=%s focus=%d focusItem=%s focusType=%s "
+                                       "origin=%.3f delegateWidth=%.3f stripWidth=%.3f contentX=%.3f "
+                                       "labelPresent=%d truncated=%d labelWidth=%.3f labelImplicit=%.3f fullyVisible=%d\n",
+                                       window->width(), window->height(), tab, qPrintable(delegate->property("text").toString()),
+                                       int(delegate->hasActiveFocus()), focus ? qPrintable(focus->objectName()) : "(none)",
+                                       focus ? focus->metaObject()->className() : "(none)", double(origin.x()),
+                                       double(delegate->width()), double(nav_strip->width()),
+                                       nav_strip->property("contentX").toDouble(), int(label != nullptr),
+                                       int(label && label->property("truncated").toBool()),
+                                       label ? double(label->width()) : -1.0, label ? double(label->implicitWidth()) : -1.0,
+                                       int(fully_visible));
+                          return failNavigationLifecycle("focused navigation destination is clipped or truncated");
+                      }
+          '''.strip("\n")
+          with source.open(encoding="utf-8", newline="") as file:
+              original = file.read()
+          newline = "\r\n" if "\r\n" in original else "\n"
+          before = before.replace("\n", newline)
+          after = after.replace("\n", newline)
+          if original.count(before) != 1:
+              raise ValueError("Unexpected navigation assertion")
+          with source.open("w", encoding="utf-8", newline="") as file:
+              file.write(original.replace(before, after))
+      - uses: ilammy/msvc-dev-cmd@0b201ec74fa43914dc39ae48a89fd1d8cb592756 # v1.13.0
+      - uses: ./.github/actions/setup-qt
+        with:
+          profile: quick
+      - uses: mozilla-actions/sccache-action@9e7fa8a12102821edf02ca5dbea1acd0f89a2696 # v0.0.10
+      - name: Build Debug application
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $PSNativeCommandUseErrorActionPreference = $true
+          cmake --preset windows-x64-ninja-debug
+          cmake --build build/windows-x64-ninja-debug --target exosnap --parallel $([Environment]::ProcessorCount)
+      - name: Run registered native navigation test twice
+        shell: pwsh
+        run: |
+          $PSNativeCommandUseErrorActionPreference = $false
+          $results = @()
+          foreach ($iteration in 1..2) {
+            ctest --test-dir build/windows-x64-ninja-debug -C Debug -R '^quick[.]qml[.]navigation_lifecycle$' --no-tests=error --output-on-failure
+            $results += $LASTEXITCODE
+            Write-Host "navigation iteration=$iteration exit=$LASTEXITCODE"
+          }
+          if (@($results | Where-Object { $_ -ne 0 }).Count -gt 0) { exit 1 }
