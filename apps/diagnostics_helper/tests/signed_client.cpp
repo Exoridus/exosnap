@@ -1,4 +1,5 @@
 #include "../FixtureStatus.h"
+#include "signed_failure.h"
 #include "diagnostics/PrivilegedPresentBackend.h"
 
 #include <windows.h>
@@ -17,15 +18,7 @@ namespace {
 using namespace exosnap::diagnostics;
 using namespace std::chrono_literals;
 
-ULONG QueryDpcSession() {
-    struct Query {
-        EVENT_TRACE_PROPERTIES properties{};
-        std::array<wchar_t, 256> name{};
-    } query;
-    query.properties.Wnode.BufferSize = sizeof(query);
-    query.properties.LoggerNameOffset = offsetof(Query, name);
-    return ControlTraceW(0, kDpcSessionName, &query.properties, EVENT_TRACE_CONTROL_QUERY);
-}
+using exosnap::diagnostics::fixture::QueryDpcSession;
 
 bool RunCycle() {
     if (QueryDpcSession() != ERROR_WMI_INSTANCE_NOT_FOUND) {
@@ -68,6 +61,10 @@ bool MissingMachineHelper() {
 } // namespace
 
 int main(int argc, char** argv) {
+    if (argc == 3 && std::string_view(argv[1]) == "--hold-owned-cycle")
+        return exosnap::diagnostics::fixture::HoldOwnedCycle(argv[2]) ? 0 : 1;
+    if (argc == 2 && std::string_view(argv[1]) == "--forced-exit-cases")
+        return exosnap::diagnostics::fixture::RunForcedExitCases() ? 0 : 1;
     if (argc == 2) {
         const std::string_view mode(argv[1]);
         if (mode == "--expect-machine-unavailable")

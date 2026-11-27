@@ -473,6 +473,26 @@ PresentProviderState RemoteBackend::Run() {
         ReportFixtureStatus("pipe peer identity rejected", ERROR_ACCESS_DENIED);
         return PresentProviderState::Failed;
     }
+#ifdef EXOSNAP_SIGNED_FIXTURE_STATUS
+    ObserveFixtureCollector(helper.get());
+    const auto token_facts = [](HANDLE process, const char* elevation_label, const char* low_label, const char* high_label) {
+        HANDLE raw = nullptr;
+        if (!OpenProcessToken(process, TOKEN_QUERY, &raw))
+            return;
+        Handle token(raw);
+        TOKEN_ELEVATION elevation{};
+        TOKEN_STATISTICS statistics{};
+        DWORD bytes = 0;
+        if (GetTokenInformation(token.get(), TokenElevation, &elevation, sizeof(elevation), &bytes))
+            ReportFixtureStatus(elevation_label, elevation.TokenIsElevated);
+        if (GetTokenInformation(token.get(), TokenStatistics, &statistics, sizeof(statistics), &bytes)) {
+            ReportFixtureStatus(low_label, statistics.AuthenticationId.LowPart);
+            ReportFixtureStatus(high_label, static_cast<DWORD>(statistics.AuthenticationId.HighPart));
+        }
+    };
+    token_facts(GetCurrentProcess(), "fixture recorder token elevation", "fixture recorder auth ID low", "fixture recorder auth ID high");
+    token_facts(helper.get(), "fixture helper token elevation", "fixture helper auth ID low", "fixture helper auth ID high");
+#endif
     Record begin{};
     begin.kind = collect_presents_ ? Kind::Begin : Kind::BeginDpcOnly;
     Record ready{};
@@ -527,7 +547,8 @@ PresentProviderState RemoteBackend::Run() {
             return PresentProviderState::Failed;
         }
     }
-    return PresentProviderState::Stopped;
+    return WaitForSingleObject(stop_.get(), 0) == WAIT_OBJECT_0 ? PresentProviderState::Stopped
+                                                               : PresentProviderState::Failed;
 }
 } // namespace
 
