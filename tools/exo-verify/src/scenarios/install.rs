@@ -1466,11 +1466,15 @@ mod tests {
             let contexts = installed_contexts(code)?;
             println!("{scope} original Windows Installer contexts: {contexts:?}");
             assert_eq!(contexts, expected);
-            let expected_hive = if scope == "user" { "HKCU" } else { "HKLM" };
-            assert_eq!(
-                original.registry_key.split('\\').next(),
-                Some(expected_hive)
-            );
+            // Windows Installer may also place its Uninstall metadata under HKLM
+            // for a USERUNMANAGED product. Its API reports the installation context.
+            // Compare the actual ARP key across rollback and check our scoped hive.
+            let hive = original.registry_key.split('\\').next().unwrap();
+            if scope == "machine" {
+                assert_eq!(hive, "HKLM");
+            } else {
+                assert!(matches!(hive, "HKCU" | "HKLM"));
+            }
             assert!(original.registry_key.ends_with(code));
             assert_eq!(original.display_version, version);
             let exe = custom.join("exosnap.exe");
