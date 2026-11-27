@@ -106,6 +106,8 @@ pub fn scenarios() -> Vec<Scenario> {
 
 /// One Add/Remove Programs row, from either registry view.
 struct ArpRow {
+    registry_key: String,
+    display_version: String,
     display_name: String,
     publisher: String,
     system_component: bool,
@@ -148,6 +150,8 @@ fn arp_rows() -> Result<Vec<ArpRow>> {
             }
             let value = |key: &str| parse_reg_value(&props.stdout, key).unwrap_or_default();
             rows.push(ArpRow {
+                registry_key: subkey,
+                display_version: value("DisplayVersion"),
                 display_name: value("DisplayName"),
                 publisher: value("Publisher"),
                 system_component: value("SystemComponent").trim() == "0x1",
@@ -267,6 +271,11 @@ fn setup_cycle(ctx: &mut Context) -> Step {
         "scope refusal changed the installation"
     );
     let rows = exosnap_arp_rows()?;
+    let registrations: BTreeMap<_, _> = rows
+        .iter()
+        .map(|row| (&row.registry_key, &row.display_version))
+        .collect();
+    ctx.evidence.put("setupRegistrations", json!(registrations));
     let visible: Vec<&ArpRow> = rows.iter().filter(|row| !row.system_component).collect();
     let hidden = rows.iter().filter(|row| row.system_component).count();
     product_ensure!(
@@ -1403,6 +1412,12 @@ mod tests {
             let rows = exosnap_arp_rows()?;
             assert_eq!(rows.len(), 1);
             assert!(!rows[0].system_component);
+            let original = &rows[0];
+            println!(
+                "{scope} original ARP: {} version {}",
+                original.registry_key, original.display_version
+            );
+            assert_eq!(original.display_version, version);
             let exe = custom.join("exosnap.exe");
             let hash = sha256_file(&exe)?.0;
             fs::remove_file(&exe)?;
@@ -1414,9 +1429,9 @@ mod tests {
             let start = original_arp.find('{').unwrap();
             let code = &original_arp[start..start + 38];
             assert!(is_product_code(code));
-            let hive = key.split_once('\\').unwrap().0;
-            let arp = r"SOFTWARE\Microsoft\Windows\CurrentVersion\Uninstall";
-            let arp_key = format!(r"{hive}\{arp}\{code}");
+            let expected_hive = if scope == "user" { "HKCU" } else { "HKLM" };
+            assert_eq!(original.registry_key.split('\\').next(), Some(expected_hive));
+            assert!(original.registry_key.ends_with(code));
             let upgrade = rollback.to_str().unwrap();
             let failed_upgrade = ["/i", upgrade, "/qn", "/norestart", &request];
             let status = invoke(msi, &failed_upgrade, &log("rollback"))?;
@@ -1447,8 +1462,12 @@ mod tests {
             assert_eq!(restored.len(), 1);
             assert_eq!(restored[0].uninstall_string, *original_arp);
             assert!(!restored[0].system_component);
-            let registered = scoped_reg_value(&arp_key, "DisplayVersion")?;
-            assert_eq!(registered.as_deref(), Some(version));
+            println!(
+                "{scope} restored ARP: {} version {}",
+                restored[0].registry_key, restored[0].display_version
+            );
+            assert_eq!(restored[0].registry_key, original.registry_key);
+            assert_eq!(restored[0].display_version, version);
             let actual = scoped_reg_value(key, "InstallPath")?.unwrap();
             assert_eq!(Path::new(&actual), custom);
             let owner = scoped_reg_value(key, "DistributionOwner")?;
