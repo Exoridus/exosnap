@@ -99,3 +99,11 @@ jobs:
               print(path.name)
               for line in [line for line in lines if re.search(pattern, line, re.I)][:40]:
                   print("  | " + line[:800])
+              opened = ""
+              emitted = 0
+              for line in lines:
+                  if "Executing op: RegOpenKey(" in line:
+                      opened = line
+                  elif re.search(r"Executing op: RegAddValue\(Name=(?:SystemComponent|DisplayVersion|InstallPath|DistributionOwner),", line, re.I) and emitted < 20:
+                      print("  | Registry operation: " + opened[:600] + " -> " + line[:600])
+                      emitted += 1
