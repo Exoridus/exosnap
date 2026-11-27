@@ -1457,6 +1457,18 @@ mod tests {
                 "{scope} original ARP: {} version {}",
                 original.registry_key, original.display_version
             );
+            let original_arp = &rows[0].uninstall_string;
+            let start = original_arp.find('{').unwrap();
+            let code = &original_arp[start..start + 38];
+            assert!(is_product_code(code));
+            let expected_context = if scope == "user" { 2 } else { 4 };
+            let expected = vec![(expected_context, version.to_string())];
+            let contexts = installed_contexts(code)?;
+            println!("{scope} original Windows Installer contexts: {contexts:?}");
+            assert_eq!(contexts, expected);
+            let expected_hive = if scope == "user" { "HKCU" } else { "HKLM" };
+            assert_eq!(original.registry_key.split('\\').next(), Some(expected_hive));
+            assert!(original.registry_key.ends_with(code));
             assert_eq!(original.display_version, version);
             let exe = custom.join("exosnap.exe");
             let hash = sha256_file(&exe)?.0;
@@ -1465,18 +1477,6 @@ mod tests {
             successful(msi, &repair, &log("repair"))?;
             assert_eq!(sha256_file(&exe)?.0, hash);
             fs::write(custom.join("unrelated.txt"), b"preserve")?;
-            let original_arp = &rows[0].uninstall_string;
-            let start = original_arp.find('{').unwrap();
-            let code = &original_arp[start..start + 38];
-            assert!(is_product_code(code));
-            let expected_hive = if scope == "user" { "HKCU" } else { "HKLM" };
-            assert_eq!(original.registry_key.split('\\').next(), Some(expected_hive));
-            assert!(original.registry_key.ends_with(code));
-            let expected_context = if scope == "user" { 2 } else { 4 };
-            let expected = vec![(expected_context, version.to_string())];
-            let contexts = installed_contexts(code)?;
-            println!("{scope} original Windows Installer contexts: {contexts:?}");
-            assert_eq!(contexts, expected);
             let upgrade = rollback.to_str().unwrap();
             let failed_upgrade = ["/i", upgrade, "/qn", "/norestart", &request];
             let status = invoke(msi, &failed_upgrade, &log("rollback"))?;
