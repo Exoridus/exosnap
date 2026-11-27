@@ -457,7 +457,25 @@ void ProbeInstalledHelperLaunch() {
     const fs::path global = GlobalLocalVolumePath(native);
     if (global.empty())
         return;
-    for (const auto& path : {locked.canonical, global}) {
+    struct Spelling {
+        fs::path path;
+        const char* label;
+    };
+    auto device = [](const fs::path& path) {
+        auto name = path.native();
+        if (!name.starts_with(LR"(\\?\)"))
+            return fs::path{};
+        name[2] = L'.';
+        return fs::path(name);
+    };
+    const std::array spellings{Spelling{locked.canonical, "volume GUID launch matrix"},
+                               Spelling{global, "global native launch matrix"},
+                               Spelling{device(locked.canonical), "device volume GUID launch matrix"},
+                               Spelling{device(global), "device global native launch matrix"},
+                               Spelling{MachineImage(), "fixture-only DOS positive control"}};
+    for (const auto& [path, label] : spellings) {
+        if (path.empty())
+            continue;
         const auto parent = path.parent_path();
         for (const bool set_parent : {false, true}) {
             SHELLEXECUTEINFOW exec{};
@@ -469,7 +487,7 @@ void ProbeInstalledHelperLaunch() {
             exec.nShow = SW_HIDE;
             const BOOL launched = ShellExecuteExW(&exec);
             const DWORD status = launched ? ERROR_SUCCESS : GetLastError();
-            ReportFixtureStatus(path == global ? "global native launch matrix" : "volume GUID launch matrix", status);
+            ReportFixtureStatus(label, status);
             ReportFixtureStatus("matrix supplies working directory", set_parent);
             if (launched && exec.hProcess) {
                 StartingGuardian child{Handle(exec.hProcess)};
