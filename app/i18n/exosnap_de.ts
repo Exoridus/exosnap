@@ -12299,8 +12299,8 @@ Kleiner Text auf dem Bildschirm verliert früher an Qualität als Videoinhalte. 
     </message>
     <message>
         <location line="+3"/>
-        <source>Trusted helper unavailable. Ask an administrator to install the matching ExoSnap Diagnostics Helper MSI.</source>
-        <translation>Vertrauenswürdiger Helfer nicht verfügbar. Bitten Sie einen Administrator, das passende MSI-Paket für die ExoSnap-Diagnosehilfe zu installieren.</translation>
+        <source>Install the helper MSI as administrator</source>
+        <translation>Installieren Sie das passende Helfer-MSI als Administrator.</translation>
     </message>
     <message>
         <source>Administrator consent declined</source>

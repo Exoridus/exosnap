@@ -721,7 +721,7 @@ TEST(DiagnosticsAdapterTest, DpcHelperOutcomeIsIndependentOfLocalPresentation) {
     using diagnostics::DiagnosticsHelperState;
     for (const auto& outcome :
          {std::pair{DiagnosticsHelperState::ConsentDeclined, QStringLiteral("Administrator consent declined")},
-          std::pair{DiagnosticsHelperState::Unavailable, QStringLiteral("Trusted helper unavailable. Ask an administrator to install the matching ExoSnap Diagnostics Helper MSI.")}}) {
+          std::pair{DiagnosticsHelperState::Unavailable, QStringLiteral("Install the helper MSI as administrator")}}) {
         provider.state = DiagnosticsHelperState::Starting;
         adapter.setDpcLatencyProvider(&provider);
         EXPECT_TRUE(adapter.privilegedRequested());

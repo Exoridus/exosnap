@@ -416,7 +416,7 @@ QVariantList DiagnosticsAdapter::measurementSources() const {
         add(tr("Presentation"), tr("Stopped"), QStringLiteral("unavailable"));
         break;
     case PresentProviderState::HelperUnavailable:
-        add(tr("Presentation"), tr("Trusted helper unavailable. Ask an administrator to install the matching ExoSnap Diagnostics Helper MSI."), QStringLiteral("unavailable"));
+        add(tr("Presentation"), tr("Install the helper MSI as administrator"), QStringLiteral("unavailable"));
         break;
     case PresentProviderState::ConsentDeclined:
         add(tr("Presentation"), tr("Administrator consent declined"), QStringLiteral("unavailable"));
@@ -435,7 +435,7 @@ QVariantList DiagnosticsAdapter::measurementSources() const {
     else if (helper_state_ == diagnostics::DiagnosticsHelperState::ConsentDeclined)
         add(tr("DPC / ISR"), tr("Administrator consent declined"), QStringLiteral("unavailable"));
     else if (helper_state_ == diagnostics::DiagnosticsHelperState::Unavailable)
-        add(tr("DPC / ISR"), tr("Trusted helper unavailable. Ask an administrator to install the matching ExoSnap Diagnostics Helper MSI."), QStringLiteral("unavailable"));
+        add(tr("DPC / ISR"), tr("Install the helper MSI as administrator"), QStringLiteral("unavailable"));
     else if (helper_state_ == diagnostics::DiagnosticsHelperState::Failed)
         add(tr("DPC / ISR"), tr("Unavailable - trace error"), QStringLiteral("unavailable"));
     else if (helper_state_ == diagnostics::DiagnosticsHelperState::Stopped)
