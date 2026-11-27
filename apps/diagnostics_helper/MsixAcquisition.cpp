@@ -5,6 +5,7 @@
 #include <sdkddkver.h>
 
 #if defined(__IAppxDigestProvider_INTERFACE_DEFINED__) && defined(NTDDI_WIN11_GE)
+#include <roapi.h>
 #include <shlwapi.h>
 #include <winrt/Windows.ApplicationModel.h>
 #include <winrt/Windows.Foundation.Collections.h>
