@@ -38,9 +38,11 @@ Evaluate draw-on-start, explicit reuse of the previous region and optional saved
 
 ### Installation scope and optional privileged diagnostics helper (v0.12)
 
-Status: Scope-aware Setup and update routing are implemented on the v0.12 development line, with native lifecycle acceptance pending. The separately planned diagnostics helper replaces the elevated diagnostic relaunch.
+Status: Target v0.12. Installation scope and privileged diagnostics have separate implementation and native qualification gates.
 
 Default new direct installations to the current user under `%LOCALAPPDATA%\Programs\ExoSnap`, with an optional all-users installation under `C:\Program Files\ExoSnap`. Use matching user or machine registration and Start Menu entries, and retain normal Installed Apps management. Preserve the existing installation scope, path and distribution ownership through updates, repairs and removal. Do not silently migrate a machine installation or create a duplicate user installation. Keep application data separate from program files.
+
+Scope-aware Setup and update routing are implemented. Native installation, maintenance and migration-boundary acceptance remain pending.
 
 User-scope updates should run without elevation when no system prerequisite needs changing. Define the VC++ runtime deployment policy before implementation. If retaining a shared runtime, detect a sufficient version, explain any required elevation, and install the prerequisite before application changes. A denied UAC request must produce a clear cancellation result and preserve an existing working installation. Never report installation success without usable dependencies. Validate both scopes through native install, upgrade, repair and uninstall scenarios, including missing prerequisites and UAC refusal.
 
