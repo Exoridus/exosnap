@@ -20,6 +20,10 @@ Atomic save uses a temporary sibling and commit/rename. A failed save is a repor
 
 `settings.ini` load distinguishes absence, successful read and an existing unreadable file. Automatic housekeeping must not overwrite an unreadable file with defaults. The first explicit user change may move the unreadable file aside to `settings.ini.corrupt` and write a fresh state. Window geometry or a one-time startup flag is not such consent.
 
+## Editable projects
+
+The editor owns user-selected `.exoproj` documents and its separate local recovery directory. Timeline content and source bindings do not belong to recording presets, the history database or editor layout preferences. See [editable projects](edit-and-export.md#editable-projects) for the file, revision, recovery and media identity contracts.
+
 ## Visual configuration
 
 `RecordingPresetConfig::visual_scene` is the sole editable authority for visual sources and ordered scene items. Webcam and gamepad settings are typed projections for existing callers. Descriptor edits update the scene through pure codecs; provider state and availability never become a second saved configuration. Node operations are host-owned pure edits on one item: moving it to the front or back renumbers every item's `order` densely in the current stable stacking order, hiding sets its `output_visible`, and removal deletes the item and disables its source when no item references it any longer. The host addresses a source without items with a null item ID; projecting it reports default presentation and editing it creates one new item on top. Source and item IDs survive save/load and native imports. Legacy conversion chooses one identity mapping per document or import transaction so an unchanged selected preset still matches live state.

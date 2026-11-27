@@ -7,10 +7,12 @@
 #include "models/EditSourceImport.h"
 #include "models/EditWorkspace.h"
 
+#include <QLockFile>
 #include <QObject>
 #include <QPointer>
 #include <QString>
 #include <QThreadPool>
+#include <QTimer>
 #include <QUrl>
 #include <QVariantList>
 #include <QVariantMap>
@@ -71,6 +73,10 @@ class EditSessionAdapter : public QObject {
     Q_MOC_INCLUDE("EditTrackLayoutModel.h")
     Q_MOC_INCLUDE("EditTimelineModels.h")
 
+    Q_PROPERTY(QString projectPath READ projectPath NOTIFY projectChanged FINAL)
+    Q_PROPERTY(bool projectBusy READ projectBusy NOTIFY projectChanged FINAL)
+    Q_PROPERTY(bool projectDirty READ projectDirty NOTIFY projectChanged FINAL)
+    Q_PROPERTY(QStringList recoverableProjects READ recoverableProjects NOTIFY projectChanged FINAL)
     Q_PROPERTY(bool open READ open NOTIFY openChanged FINAL)
     Q_PROPERTY(QUrl layoutSettingsLocation READ layoutSettingsLocation CONSTANT FINAL)
     Q_PROPERTY(bool deliveryPending READ deliveryPending NOTIFY clipChanged FINAL)
@@ -151,6 +157,26 @@ class EditSessionAdapter : public QObject {
     Q_PROPERTY(bool fixedTimelineEnd READ fixedTimelineEnd NOTIFY workspaceChanged FINAL)
 
   public:
+    Q_INVOKABLE void initializeProjects();
+    Q_INVOKABLE void preserveProjectRecovery();
+    Q_INVOKABLE void newProject(bool discard);
+    Q_INVOKABLE void openProject(const QUrl& url, bool discard);
+    Q_INVOKABLE void saveProject(const QUrl& url);
+    Q_INVOKABLE void saveCurrentProject() {
+        saveProject(QUrl::fromLocalFile(project_path_));
+    }
+    Q_INVOKABLE void recoverProject(const QString& path, bool discard);
+    QString projectPath() const {
+        return project_path_;
+    }
+    bool projectBusy() const {
+        return project_busy_;
+    }
+    bool projectDirty() const;
+    QStringList recoverableProjects() const {
+        return recoverable_projects_;
+    }
+
     enum RangeBandTarget {
         RangeBandNone = static_cast<int>(edit::RangePointerTarget::None),
         RangeBandCreate = static_cast<int>(edit::RangePointerTarget::Create),
@@ -617,6 +643,9 @@ class EditSessionAdapter : public QObject {
     edit::Id addProbedMediaForHarness(const QString& path, const engine::EditMediaMetadata& metadata, bool append);
 
   signals:
+    void projectChanged();
+    void projectSaved();
+    void projectError(const QString& message);
     void selectionChanged();
     void editRangeCommitted(qint64 start_us, qint64 end_us);
     void editRangeCleared();
@@ -662,6 +691,39 @@ class EditSessionAdapter : public QObject {
     void closeRequested();
 
   private:
+    QString project_path_;
+    QByteArray project_digest_;
+    bool project_busy_ = false;
+    bool recovered_project_ = false;
+    QString recovery_path_;
+    QString recovered_from_;
+    QByteArray recovered_digest_;
+    QStringList recoverable_projects_;
+    bool projects_active_ = false;
+    std::unique_ptr<QLockFile> recovery_lock_;
+    QTimer project_timer_;
+    QThreadPool project_pool_;
+    bool recovery_busy_ = false;
+    std::shared_ptr<const edit::EditSnapshot> project_baseline_;
+    std::shared_ptr<const edit::EditSnapshot> recovery_snapshot_;
+    edit::ProjectSessionState project_state_;
+    edit::ProjectSessionState recovery_state_;
+    mutable edit::ProjectSessionState observed_project_state_;
+    uint64_t recovery_generation_ = 0;
+    bool preserve_checkpoint_ = false;
+    edit::ProjectSessionState projectSessionState() const {
+        return {markers_, autoCrossfade};
+    }
+    bool matchesProjectState(const edit::ProjectSessionState& state) const {
+        return autoCrossfade == state.auto_crossfade && markers_ == state.markers;
+    }
+    void resetProject();
+    void resetWorkspace(bool force);
+    void loadProject(const QString& path, bool discard, bool recovery);
+    void checkpointProject();
+    void retireCheckpoint();
+    void refreshRecoveries();
+    void initializeProjectRecovery(const QString& location);
     bool auto_key_ = false;
     friend class EditSessionAdapterTestPeer;
     void scheduleSourceVerification(std::function<void()> task);

@@ -3555,6 +3555,10 @@ Das Original kann danach nicht wiederhergestellt werden.</translation>
         <source>MP4 audio encoding is unavailable. Choose MKV.</source>
         <translation>Die MP4-Audiokodierung ist nicht verfügbar. MKV auswählen.</translation>
     </message>
+    <message>
+        <source>Relink the unavailable source before exporting.</source>
+        <translation>Verknüpfe die nicht verfügbare Quelle vor dem Export erneut.</translation>
+    </message>
 </context>
 <context>
     <name>EditExportPanel</name>
@@ -12956,6 +12960,18 @@ Kleiner Text auf dem Bildschirm verliert früher an Qualität als Videoinhalte. 
         <source>The editor was closed.</source>
         <translation>Der Editor wurde geschlossen.</translation>
     </message>
+    <message>
+        <source>The editor recovery folder is unavailable.</source>
+        <translation>Der Wiederherstellungsordner des Editors ist nicht verfügbar.</translation>
+    </message>
+    <message>
+        <source>Choose a filename ending in .exoproj.</source>
+        <translation>Wähle einen Dateinamen mit der Endung .exoproj.</translation>
+    </message>
+    <message>
+        <source>The workspace changed while opening the project. Open it again to continue.</source>
+        <translation>Der Arbeitsbereich wurde beim Öffnen des Projekts geändert. Öffne das Projekt erneut, um fortzufahren.</translation>
+    </message>
 </context>
 <context>
     <name>exosnap::quick::GamepadOverlay</name>
@@ -14571,6 +14587,120 @@ Kleiner Text auf dem Bildschirm verliert früher an Qualität als Videoinhalte. 
         <location line="+2"/>
         <source>Close</source>
         <translation>Schließen</translation>
+    </message>
+</context>
+<context>
+    <name>EditProjectStore</name>
+    <message>
+        <source>The project exceeds the supported file limits.</source>
+        <translation>Das Projekt überschreitet die unterstützten Dateigrenzen.</translation>
+    </message>
+    <message>
+        <source>A project media path is invalid.</source>
+        <translation>Ein Medienpfad im Projekt ist ungültig.</translation>
+    </message>
+    <message>
+        <source>Another editor is writing this project.</source>
+        <translation>Ein anderer Editor schreibt gerade in dieses Projekt.</translation>
+    </message>
+    <message>
+        <source>Choose a new project filename to preserve the existing file.</source>
+        <translation>Wähle einen neuen Projektnamen, um die vorhandene Datei zu behalten.</translation>
+    </message>
+    <message>
+        <source>This project changed outside the editor. Use Save As to keep your edits.</source>
+        <translation>Dieses Projekt wurde außerhalb des Editors geändert. Verwende „Speichern unter“, um deine Änderungen zu behalten.</translation>
+    </message>
+    <message>
+        <source>The project is unreadable or damaged.</source>
+        <translation>Das Projekt ist nicht lesbar oder beschädigt.</translation>
+    </message>
+    <message>
+        <source>This project uses an unsupported file version.</source>
+        <translation>Dieses Projekt verwendet eine nicht unterstützte Dateiversion.</translation>
+    </message>
+    <message>
+        <source>The project contains invalid editor data.</source>
+        <translation>Das Projekt enthält ungültige Editordaten.</translation>
+    </message>
+</context>
+<context>
+    <name>EditProjectActions</name>
+    <message>
+        <source>Save</source>
+        <translation>Speichern</translation>
+    </message>
+    <message>
+        <source>Discard</source>
+        <translation>Verwerfen</translation>
+    </message>
+    <message>
+        <source>Cancel</source>
+        <translation>Abbrechen</translation>
+    </message>
+    <message>
+        <source>Open</source>
+        <translation>Öffnen</translation>
+    </message>
+    <message>
+        <source>OK</source>
+        <translation>OK</translation>
+    </message>
+    <message>
+        <source>Project (unsaved changes)</source>
+        <translation>Projekt (ungespeicherte Änderungen)</translation>
+    </message>
+    <message>
+        <source>Untitled project</source>
+        <translation>Unbenanntes Projekt</translation>
+    </message>
+    <message>
+        <source>New project</source>
+        <translation>Neues Projekt</translation>
+    </message>
+    <message>
+        <source>Open project…</source>
+        <translation>Projekt öffnen…</translation>
+    </message>
+    <message>
+        <source>Save project</source>
+        <translation>Projekt speichern</translation>
+    </message>
+    <message>
+        <source>Save project as…</source>
+        <translation>Projekt speichern unter…</translation>
+    </message>
+    <message>
+        <source>Recover project…</source>
+        <translation>Projekt wiederherstellen…</translation>
+    </message>
+    <message>
+        <source>Open project</source>
+        <translation>Projekt öffnen</translation>
+    </message>
+    <message>
+        <source>ExoSnap projects (*.exoproj)</source>
+        <translation>ExoSnap-Projekte (*.exoproj)</translation>
+    </message>
+    <message>
+        <source>Save project as</source>
+        <translation>Projekt speichern unter</translation>
+    </message>
+    <message>
+        <source>Save changes before continuing?</source>
+        <translation>Änderungen vor dem Fortfahren speichern?</translation>
+    </message>
+    <message>
+        <source>Recover an editor project</source>
+        <translation>Editorprojekt wiederherstellen</translation>
+    </message>
+    <message>
+        <source>Editor project</source>
+        <translation>Editorprojekt</translation>
+    </message>
+    <message>
+        <source>Project</source>
+        <translation>Projekt</translation>
     </message>
 </context>
 </TS>

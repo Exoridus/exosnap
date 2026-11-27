@@ -2,6 +2,7 @@
 #include "EditTimelineModels.h"
 #include "EditTrackLayoutModel.h"
 #include <QCoreApplication>
+#include <QFile>
 
 #include "diagnostics/AppLog.h"
 #include "models/EditTimelineModel.h"
@@ -72,6 +73,23 @@ bool SameAuthoredWorkspace(const edit::EditSnapshot& before, const edit::EditSna
     return clips == after.clips;
 }
 
+bool SameProject(const edit::EditSnapshot& before, const edit::EditSnapshot& after) {
+    if (&before == &after)
+        return true;
+    if (before.assets.size() != after.assets.size() || before.locked_track_ids != after.locked_track_ids ||
+        !SameAuthoredWorkspace(before, after))
+        return false;
+    for (size_t i = 0; i < after.assets.size(); ++i) {
+        const auto& a = *before.assets[i];
+        const auto& b = *after.assets[i];
+        if (a.id != b.id || a.path != b.path || a.source_version != b.source_version || a.markers != b.markers ||
+            (b.input_mix_selection && b.input_mix_selection->authority == edit::InputMixAuthority::UserConfirmed &&
+             a.input_mix_selection != b.input_mix_selection))
+            return false;
+    }
+    return true;
+}
+
 const QString kEmptyValue = QStringLiteral("\xe2\x80\x94");
 
 QVariantMap factRow(const QString& label, const QString& value) {
@@ -105,9 +123,13 @@ int64_t SnapTrimBoundaryUs(int64_t requested_us, const std::vector<int64_t>& key
 EditSessionAdapter::EditSessionAdapter(QObject* parent) : QObject(parent) {
     initial_workspace_ = workspace_.snapshot();
     observed_workspace_ = initial_workspace_;
+    project_baseline_ = initial_workspace_;
     connect(this, &EditSessionAdapter::workspaceChanged, this, [this] {
         (void)closeGuardRevision();
         emit unsavedEditsChanged();
+        emit projectChanged();
+        if (recovery_lock_ && !project_timer_.isActive())
+            project_timer_.start();
     });
     track_layout_ = new EditTrackLayoutModel(this);
     media_model_ = new EditTimelineClipModel(this);
@@ -151,6 +173,11 @@ EditSessionAdapter::~EditSessionAdapter() {
     import_cancelled_->store(true, std::memory_order_relaxed);
     keyframe_cancelled_->store(true, std::memory_order_relaxed);
     optional_io_budget_->Close();
+    if (preserve_checkpoint_)
+        preserveProjectRecovery();
+    project_pool_.waitForDone();
+    if (recovery_lock_ && !preserve_checkpoint_)
+        QFile::remove(recovery_path_);
     keyframe_pool_.clear();
     metadata_pool_.clear();
     verification_pool_.clear();
@@ -481,7 +508,14 @@ void EditSessionAdapter::setExportRunning(bool running) {
     emit exportRunningChanged();
 }
 
+bool EditSessionAdapter::projectDirty() const {
+    return recovered_project_ || !matchesProjectState(project_state_) ||
+           !SameProject(*project_baseline_, *workspace_.snapshot());
+}
+
 bool EditSessionAdapter::hasUnsavedEdits() const {
+    if (projects_active_)
+        return projectDirty();
     return !SameAuthoredWorkspace(*initial_workspace_, *workspace_.snapshot());
 }
 
@@ -491,8 +525,11 @@ bool EditSessionAdapter::canEstablishInitialWorkspace() const {
 
 quint64 EditSessionAdapter::closeGuardRevision() const {
     const auto current = workspace_.snapshot();
-    if (!SameAuthoredWorkspace(*observed_workspace_, *current))
+    if (projects_active_ ? !SameProject(*observed_workspace_, *current) || !matchesProjectState(observed_project_state_)
+                         : !SameAuthoredWorkspace(*observed_workspace_, *current))
         ++close_guard_revision_;
+    if (projects_active_ && !matchesProjectState(observed_project_state_))
+        observed_project_state_ = projectSessionState();
     observed_workspace_ = current;
     return close_guard_revision_;
 }
@@ -576,6 +613,11 @@ void EditSessionAdapter::setPositionUs(qint64 position_us) {
 
 // Explicitly clear the workspace and release decoder resources. Navigation never calls this.
 void EditSessionAdapter::close() {
+    resetWorkspace(false);
+    resetProject();
+}
+
+void EditSessionAdapter::resetWorkspace(bool force) {
     cancelSourceReplacement();
     cancelSourceAudioChoice();
     source_cancelled_->store(true, std::memory_order_relaxed);
@@ -598,7 +640,7 @@ void EditSessionAdapter::close() {
     // just as completely as a real clip -- hence not `open_` alone.
     const bool had_clip = open_ || duration_ms_ > 0 || !context_.output_path.isEmpty() ||
                           !workspace_.assets().empty() || !workspace_.clips().empty() || hasUnsavedEdits();
-    if (!had_clip) {
+    if (!had_clip && !force) {
         emit closeRequested();
         return;
     }

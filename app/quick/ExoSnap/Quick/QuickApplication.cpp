@@ -4980,6 +4980,10 @@ void QuickApplication::applyEditVisualScenario() {
         layout.insert(QStringLiteral("popup"), QStringLiteral("crossfade"));
     else if (scenario == QStringLiteral("edit-volume-popup"))
         layout.insert(QStringLiteral("popup"), QStringLiteral("volume"));
+    else if (scenario == QStringLiteral("edit-project-menu"))
+        layout.insert(QStringLiteral("popup"), QStringLiteral("project"));
+    else if (scenario == QStringLiteral("edit-project-discard"))
+        layout.insert(QStringLiteral("popup"), QStringLiteral("project-discard"));
     if (scenario == QStringLiteral("edit-video-automation"))
         layout.insert(QStringLiteral("inspectorField"), QStringLiteral("animation"));
     if (scenario == QStringLiteral("edit-clip-fades")) {
