@@ -1467,7 +1467,10 @@ mod tests {
             println!("{scope} original Windows Installer contexts: {contexts:?}");
             assert_eq!(contexts, expected);
             let expected_hive = if scope == "user" { "HKCU" } else { "HKLM" };
-            assert_eq!(original.registry_key.split('\\').next(), Some(expected_hive));
+            assert_eq!(
+                original.registry_key.split('\\').next(),
+                Some(expected_hive)
+            );
             assert!(original.registry_key.ends_with(code));
             assert_eq!(original.display_version, version);
             let exe = custom.join("exosnap.exe");
