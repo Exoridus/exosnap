@@ -12969,6 +12969,10 @@ Kleiner Text auf dem Bildschirm verliert früher an Qualität als Videoinhalte. 
         <translation>Wähle einen Dateinamen mit der Endung .exoproj.</translation>
     </message>
     <message>
+        <source>The project was saved, but its recovery snapshot could not be removed. Save again to retry.</source>
+        <translation>Das Projekt wurde gespeichert, aber die Wiederherstellungsdatei konnte nicht entfernt werden. Speichere erneut, um es noch einmal zu versuchen.</translation>
+    </message>
+    <message>
         <source>The workspace changed while opening the project. Open it again to continue.</source>
         <translation>Der Arbeitsbereich wurde beim Öffnen des Projekts geändert. Öffne das Projekt erneut, um fortzufahren.</translation>
     </message>

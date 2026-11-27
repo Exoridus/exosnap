@@ -33,6 +33,7 @@
 #include <QJsonArray>
 #include <QJsonDocument>
 #include <QJsonObject>
+#include <QLockFile>
 #include <QMimeData>
 #include <QPersistentModelIndex>
 #include <QPointer>
@@ -360,6 +361,57 @@ TEST(EditProjectSession, ActiveRecoveryIsExcludedAndOrphanRecoveryRequiresSaveAs
     reader.saveProject(output);
     ASSERT_TRUE(EditSessionAdapterTestPeer::finishProjectIo(reader));
     EXPECT_FALSE(reader.projectDirty());
+    EXPECT_FALSE(QFileInfo::exists(orphan));
+    EXPECT_TRUE(QFileInfo::exists(checkpoint));
+}
+
+TEST(EditProjectSession, SuccessfulSaveReportsLockedRecoveryAndRetriesCleanup) {
+    EnsureApplication();
+    QTemporaryDir temp;
+    ASSERT_TRUE(temp.isValid());
+    EditSessionAdapter author;
+    EditSessionAdapterTestPeer::initializeRecovery(author, temp.path());
+    author.setAutoCrossfade(false);
+    const auto checkpoint = EditSessionAdapterTestPeer::checkpoint(author);
+    ASSERT_TRUE(EditSessionAdapterTestPeer::finishProjectIo(author));
+    ASSERT_TRUE(QFileInfo::exists(checkpoint));
+    const auto orphan = QFileInfo(checkpoint).absoluteDir().filePath(QStringLiteral("interrupted.exorecovery"));
+    ASSERT_TRUE(QFile::copy(checkpoint, orphan));
+
+    EditSessionAdapter reader;
+    EditSessionAdapterTestPeer::initializeRecovery(reader, temp.path());
+    ASSERT_TRUE(reader.recoverableProjects().contains(orphan));
+    reader.recoverProject(orphan, false);
+    ASSERT_TRUE(EditSessionAdapterTestPeer::finishProjectIo(reader));
+    ASSERT_TRUE(reader.projectDirty());
+    ASSERT_FALSE(reader.autoCrossfadeEnabled());
+
+    QLockFile blocker(orphan + QStringLiteral(".lock"));
+    blocker.setStaleLockTime(0);
+    ASSERT_TRUE(blocker.tryLock(0));
+    QString error;
+    int saves = 0;
+    QObject::connect(&reader, &EditSessionAdapter::projectError, &reader,
+                     [&](const QString& reason) { error = reason; });
+    QObject::connect(&reader, &EditSessionAdapter::projectSaved, &reader, [&] { ++saves; });
+
+    const auto output = QUrl::fromLocalFile(temp.filePath(QStringLiteral("recovered.exoproj")));
+    reader.saveProject(output);
+    ASSERT_TRUE(EditSessionAdapterTestPeer::finishProjectIo(reader));
+    EXPECT_EQ(saves, 1);
+    EXPECT_FALSE(reader.projectDirty());
+    EXPECT_EQ(reader.projectPath(), output.toLocalFile());
+    EXPECT_TRUE(QFileInfo::exists(output.toLocalFile()));
+    EXPECT_TRUE(QFileInfo::exists(orphan));
+    EXPECT_FALSE(error.isEmpty());
+
+    blocker.unlock();
+    error.clear();
+    reader.saveCurrentProject();
+    ASSERT_TRUE(EditSessionAdapterTestPeer::finishProjectIo(reader));
+    EXPECT_EQ(saves, 2);
+    EXPECT_FALSE(reader.projectDirty());
+    EXPECT_TRUE(error.isEmpty());
     EXPECT_FALSE(QFileInfo::exists(orphan));
     EXPECT_TRUE(QFileInfo::exists(checkpoint));
 }
