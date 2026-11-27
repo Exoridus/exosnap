@@ -263,6 +263,7 @@ void MuxThread::Run() {
 
     bool write_error = false;
     bool any_segment_opened = false;
+    uint64_t finalized_output_bytes = 0;
     // Live-diagnostics baselines for per-segment write deltas (reset on each open).
     uint64_t diag_prev_bytes = 0;
     uint64_t diag_prev_flush = 0;
@@ -377,10 +378,9 @@ void MuxThread::Run() {
         return true;
     };
 
-    // Finalize the current segment and report it via the segment callback.
-    const auto finalize_segment = [&](bool session_end) {
+    const auto finalize_segment = [&](bool session_end) -> std::optional<CompletedSegment> {
         if (!seg.writer)
-            return;
+            return std::nullopt;
         // Read as late as possible, because both only rise: the last observation
         // before the header is patched is the one that covers the most frames.
         // A split session finalises its earlier segments mid-recording, so those
@@ -413,6 +413,8 @@ void MuxThread::Run() {
         // still leaves the file on disk (see below), and any clusters flushed
         // before the failure are genuine bytes, not zero.
         const uint64_t file_bytes = QueryFileSizeBytes(seg.path);
+        // The completion callback may move the segment before the session ends.
+        finalized_output_bytes += file_bytes;
 
         CompletedSegment info;
         info.path = seg.path;
@@ -456,9 +458,12 @@ void MuxThread::Run() {
                          std::span<const logging::LogField>(fields, std::size(fields)));
         }
 
-        if (m_state.segment_callback) {
-            m_state.segment_callback(info);
-        }
+        return info;
+    };
+
+    const auto report_completed = [&](std::optional<CompletedSegment> completed) {
+        if (completed && m_state.segment_callback)
+            m_state.segment_callback(*completed);
     };
 
     // --- Open the first segment (index 0 keeps the base path) ---
@@ -752,13 +757,15 @@ void MuxThread::Run() {
             push_audio(std::move(*packet));
         }
         drain_segment_pending_audio();
-        finalize_segment(/*session_end=*/false);
+        auto completed = finalize_segment(/*session_end=*/false);
         // finalize_segment() sets write_error on a finalize/I-O failure (failure
         // isolation: quarantine the incomplete current file, keep prior segments).
         // cppcheck cannot see the captured-by-ref mutation through the lambda call.
         // cppcheck-suppress identicalConditionAfterEarlyExit
-        if (write_error)
+        if (write_error) {
+            report_completed(std::move(completed));
             return;
+        }
         // The keyframe boundary also freezes the origin in the immutable header
         // and index descriptor before any segment media is published.
         m_state.diagnostics.OnSplitTransition(ToDiagnosticsSplitTrigger(s.trigger));
@@ -772,6 +779,7 @@ void MuxThread::Run() {
                 if (history.empty() || history.back().pts_ns > UINT64_MAX - packet_duration_ns) {
                     write_error = true;
                     m_state.RecordFailure(E_FAIL, ErrorPhase::Mux, "Opus split has no contiguous decoder preroll");
+                    report_completed(std::move(completed));
                     return;
                 }
                 split_preroll[track] = SelectOpusPreroll(history, track, history.back().pts_ns + packet_duration_ns,
@@ -779,12 +787,18 @@ void MuxThread::Run() {
                 if (!split_preroll[track] || sw_config_template.audio_tracks[track].codec_private.size() < 12) {
                     write_error = true;
                     m_state.RecordFailure(E_FAIL, ErrorPhase::Mux, "Opus split has insufficient decoder preroll");
+                    report_completed(std::move(completed));
                     return;
                 }
                 segment_origin_ns = (std::min)(segment_origin_ns, split_preroll[track]->origin_r_ns);
             }
         }
-        if (!open_segment(s.new_segment_index, segment_origin_ns, true)) {
+        const bool opened = open_segment(s.new_segment_index, segment_origin_ns, true);
+        if (opened && completed)
+            completed->next_path = seg.path;
+        // Recovery must see the writer's own path before the first media packet is pushed.
+        report_completed(std::move(completed));
+        if (!opened) {
             write_error = true;
             return;
         }
@@ -1034,7 +1048,7 @@ void MuxThread::Run() {
     }
 
     // --- Step 3: Finalize the final segment ---
-    finalize_segment(/*session_end=*/true);
+    report_completed(finalize_segment(/*session_end=*/true));
 
     if (write_error || !any_segment_opened) {
         if (!m_state.HasFailure()) {
@@ -1042,13 +1056,9 @@ void MuxThread::Run() {
         }
     }
 
-    // Update output file size in stats from the (final) base segment if present.
     {
-        const uint64_t sz = QueryFileSizeBytes(base_output_path);
-        if (sz > 0) {
-            std::lock_guard lk(m_state.stats_mutex);
-            m_state.stats.output_file_bytes = sz;
-        }
+        std::lock_guard lk(m_state.stats_mutex);
+        m_state.stats.output_file_bytes = finalized_output_bytes;
     }
 }
 
