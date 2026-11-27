@@ -7,6 +7,7 @@
 #include <QFile>
 #include <QLockFile>
 #include <QTemporaryDir>
+#include <filesystem>
 #include <gtest/gtest.h>
 
 namespace exosnap::edit {
@@ -47,6 +48,37 @@ TEST(EditProjectStore, MovingProjectRebasesChildrenAndPreservesExternalReference
     EXPECT_EQ(reopened.assets[0]->path, QDir(new_dir).filePath(QStringLiteral("media/Grüße.mkv")).toStdWString());
     EXPECT_EQ(reopened.assets[1]->path, source.path);
     EXPECT_EQ(reopened.clips, workspace.clips());
+}
+
+TEST(EditProjectStore, AnExternalDirectoryLinkRoundTripsAsAnAbsoluteReference) {
+    QTemporaryDir temp;
+    ASSERT_TRUE(temp.isValid());
+    const auto external = temp.filePath(QStringLiteral("external"));
+    const auto folder = temp.filePath(QStringLiteral("project"));
+    ASSERT_TRUE(QDir().mkpath(external));
+    ASSERT_TRUE(QDir().mkpath(folder));
+    QFile media(QDir(external).filePath(QStringLiteral("source.mkv")));
+    ASSERT_TRUE(media.open(QIODevice::WriteOnly));
+    media.close();
+    const auto link = QDir(folder).filePath(QStringLiteral("media"));
+    std::error_code error;
+    std::filesystem::create_directory_symlink(QDir(external).filesystemAbsolutePath(),
+                                              QFileInfo(link).filesystemAbsoluteFilePath(), error);
+    if (error)
+        GTEST_SKIP() << "Directory symlink unavailable: " << error.message();
+    Asset asset;
+    asset.path = QDir(link).filePath(QStringLiteral("source.mkv")).toStdWString();
+    asset.duration = 1000000;
+    Workspace workspace;
+    ASSERT_TRUE(workspace.insert(workspace.addAsset(asset)));
+    const auto path = QDir(folder).filePath(QStringLiteral("saved.exoproj"));
+    QByteArray digest;
+    ASSERT_TRUE(EditProjectStore::Write(path, {}, *workspace.snapshot(), digest, false, {}).isEmpty());
+    EditSnapshot restored;
+    ProjectSessionState state;
+    ASSERT_TRUE(EditProjectStore::Read(path, restored, state, digest).isEmpty());
+    ASSERT_EQ(restored.assets.size(), 1U);
+    EXPECT_EQ(restored.assets.front()->path, asset.path);
 }
 
 TEST(EditProjectStore, ConflictsAndWriteLocksPreservePublishedFile) {

@@ -166,14 +166,14 @@ class EditSessionAdapter : public QObject {
         saveProject(QUrl::fromLocalFile(project_path_));
     }
     Q_INVOKABLE void recoverProject(const QString& path, bool discard);
-    QString projectPath() const {
+    const QString& projectPath() const {
         return project_path_;
     }
     bool projectBusy() const {
         return project_busy_;
     }
     bool projectDirty() const;
-    QStringList recoverableProjects() const {
+    const QStringList& recoverableProjects() const {
         return recoverable_projects_;
     }
 

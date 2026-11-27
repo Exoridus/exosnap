@@ -1,10 +1,45 @@
 #include "models/EditProjectCodec.h"
+#include "models/EditProjectMedia.h"
 #include "models/EditWorkspace.h"
 
 #include <gtest/gtest.h>
 
 namespace exosnap::edit {
 namespace {
+
+TEST(EditProject, RebindsOnlyForeignAudioIdentitiesAfterMatchingStreamLayout) {
+    engine::EditMediaMetadata metadata;
+    metadata.content_identity_valid = true;
+    metadata.content_sha256[0] = 8;
+    metadata.duration_us = 1000000;
+    engine::EditSourceStream audio;
+    audio.kind = engine::TimelineStreamKind::Audio;
+    audio.codec.channels = 2;
+    audio.codec.sample_rate = 48000;
+    audio.stream_identity.emplace().bytes[0] = 17;
+    metadata.streams.push_back(audio);
+    const auto saved = DescribeSourceImport(metadata);
+    ASSERT_TRUE(saved.descriptor);
+    metadata.streams.front().stream_identity->bytes[0] = 24;
+    engine::ContainerAudioTrack track;
+    track.track_id = *metadata.streams.front().stream_identity;
+    metadata.audio_metadata.actual_tracks.push_back(track);
+    auto binding = std::make_shared<engine::UnverifiedAudioAssetBinding>();
+    binding->actual_tracks.push_back(track);
+    metadata.audio_metadata.unverified_asset_binding = binding;
+    auto observed = *DescribeSourceImport(metadata).descriptor;
+    observed.audio_identities_verified = true;
+    EXPECT_FALSE(BindProjectStreamLayout(*saved.descriptor, observed, metadata));
+    observed.audio_identities_verified = false;
+    observed.streams.front().codec.sample_rate = 44100;
+    EXPECT_FALSE(BindProjectStreamLayout(*saved.descriptor, observed, metadata));
+    observed.streams.front().codec.sample_rate = 48000;
+    ASSERT_TRUE(BindProjectStreamLayout(*saved.descriptor, observed, metadata));
+    EXPECT_EQ(metadata.streams.front().stream_identity, audio.stream_identity);
+    EXPECT_EQ(metadata.audio_metadata.actual_tracks.front().track_id, audio.stream_identity);
+    EXPECT_EQ(metadata.audio_metadata.unverified_asset_binding->actual_tracks.front().track_id, audio.stream_identity);
+    EXPECT_EQ(binding->actual_tracks.front().track_id, track.track_id);
+}
 
 TEST(EditProject, RoundTripsTheAuthoredTimelineWithFreshHistory) {
     Workspace workspace;

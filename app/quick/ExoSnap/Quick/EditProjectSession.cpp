@@ -1,4 +1,5 @@
 #include "EditSessionAdapter.h"
+#include "models/EditProjectMedia.h"
 #include "services/EditProjectStore.h"
 #include "settings/ConfigPaths.h"
 
@@ -22,41 +23,27 @@ bool KnownIdentity(const std::array<uint8_t, 32>& identity) {
     return std::any_of(identity.begin(), identity.end(), [](uint8_t byte) { return byte != 0; });
 }
 
-bool CompatibleStreams(const edit::ValidatedSourceDescriptor& saved, const edit::ValidatedSourceDescriptor& observed) {
-    if (saved.streams.size() != observed.streams.size())
-        return false;
-    for (const auto& stream : saved.streams) {
-        const auto found = std::find_if(observed.streams.begin(), observed.streams.end(), [&](const auto& value) {
-            return stream.ref.container_index == value.ref.container_index && stream.ref.kind == value.ref.kind &&
-                   stream.ref.stream_identity == value.ref.stream_identity;
-        });
-        if (found == observed.streams.end() || stream.source_span.in_us < found->source_span.in_us ||
-            stream.source_span.out_us > found->source_span.out_us ||
-            stream.timeline_offset_us != found->timeline_offset_us || stream.fps != found->fps ||
-            stream.codec.codec_id != found->codec.codec_id || stream.codec.channels != found->codec.channels ||
-            stream.codec.sample_rate != found->codec.sample_rate)
-            return false;
-    }
-    return true;
-}
-
 template <class Publications>
 void BindProjectIdentities(edit::EditSnapshot& captured, const Publications& sources, bool verify_pending,
                            const engine::BackgroundIoAdmission& admission,
                            const std::shared_ptr<std::atomic<bool>>& generation) {
     for (auto& source : captured.assets) {
         const auto publication = sources.find(source->id);
-        if (KnownIdentity(ExpectedIdentity(*source)) || publication == sources.end() || !publication->second.access ||
+        if ((KnownIdentity(ExpectedIdentity(*source)) && !source->mix_decision_required) ||
+            publication == sources.end() || !publication->second.access ||
             publication->second.version != source->source_version)
             continue;
         auto proof = publication->second.proof;
         if (!proof && verify_pending) {
-            const auto verified =
-                engine::VerifyMediaIdentity(publication->second.access, {}, {}, admission, generation.get());
+            const auto verified = engine::VerifyMediaIdentity(
+                publication->second.access,
+                KnownIdentity(ExpectedIdentity(*source)) ? std::optional{ExpectedIdentity(*source)} : std::nullopt, {},
+                admission, generation.get());
             if (verified.succeeded())
                 proof = *verified.value();
         }
-        if (!proof)
+        if (!proof ||
+            (KnownIdentity(ExpectedIdentity(*source)) && ExpectedIdentity(*source) != proof->Identity().sha256))
             continue;
         auto asset = std::make_shared<edit::Asset>(*source);
         if (asset->source_descriptor) {
@@ -67,6 +54,18 @@ void BindProjectIdentities(edit::EditSnapshot& captured, const Publications& sou
                 asset->input_mix_selection->asset_identity_fingerprint = proof->Identity().sha256;
         } else {
             asset->legacy_content_sha256 = proof->Identity().sha256;
+        }
+        if (asset->mix_decision_required) {
+            auto metadata = publication->second.metadata;
+            if (verify_pending &&
+                (!metadata || metadata->audio_metadata.status == engine::AudioMetadataStatus::Pending))
+                metadata = std::make_shared<engine::EditMediaMetadata>(
+                    engine::ProbeEditMedia(publication->second.access, {}, admission, generation.get(), true));
+            if (metadata && metadata->audio_metadata.status == engine::AudioMetadataStatus::Verified &&
+                metadata->audio_metadata.manifest && !metadata->audio_metadata.monitoring_confirmation_required)
+                edit::FinalizeProjectRecordedDefault(
+                    *asset, captured.clips,
+                    edit::DescribeSourceImport(*metadata, asset->duration, publication->second.access));
         }
         source = std::move(asset);
     }
@@ -322,12 +321,16 @@ void EditSessionAdapter::loadProject(const QString& path, bool discard, bool rec
                     continue;
                 auto imported = edit::DescribeSourceImport(metadata, asset->duration, access);
                 if (asset->source_descriptor) {
-                    if (!imported.descriptor || !CompatibleStreams(*asset->source_descriptor, *imported.descriptor))
+                    if (!imported.descriptor ||
+                        !edit::BindProjectStreamLayout(*asset->source_descriptor, *imported.descriptor, metadata))
                         continue;
                     auto descriptor = std::make_shared<edit::ValidatedSourceDescriptor>(*asset->source_descriptor);
                     descriptor->file_identity = imported.descriptor->file_identity;
                     descriptor->asset_identity_fingerprint = expected;
                     asset->source_descriptor = std::move(descriptor);
+                    if (metadata.audio_metadata.status == engine::AudioMetadataStatus::Verified &&
+                        metadata.audio_metadata.manifest && !metadata.audio_metadata.monitoring_confirmation_required)
+                        edit::FinalizeProjectRecordedDefault(*asset, snapshot.clips, imported);
                 }
                 asset->state = edit::AssetState::Available;
                 publications.emplace(

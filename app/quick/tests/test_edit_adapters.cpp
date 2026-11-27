@@ -466,6 +466,16 @@ TEST(EditProjectSession, RecoveryReopensVerifiedOriginalAndLeavesReplacedBytesOf
         EXPECT_EQ(bool(reader.sourceProof(asset)), !replaced);
         EXPECT_EQ(bool(reader.sourceAccess(asset)), !replaced);
         EXPECT_EQ(bool(reader.sourceMetadata(asset)), !replaced);
+        if (!replaced) {
+            const auto metadata = reader.sourceMetadata(asset);
+            for (const auto& clip : clips) {
+                if (!clip.stream || clip.stream->kind != engine::TimelineStreamKind::Audio)
+                    continue;
+                EXPECT_TRUE(std::any_of(
+                    metadata->audio_metadata.actual_tracks.begin(), metadata->audio_metadata.actual_tracks.end(),
+                    [&](const auto& track) { return track.track_id == clip.stream->stream_identity; }));
+            }
+        }
     }
 }
 
@@ -6676,6 +6686,58 @@ std::optional<engine::AudioManifest1> WriteRecordedDefaultFixture(const QString&
     if (!engine::WriteMediaIdentitySidecar(std::filesystem::path(path.toStdWString()), manifest).succeeded())
         return std::nullopt;
     return manifest;
+}
+
+TEST(EditProjectSession, SaveWhileRecordedDefaultIsPendingRestoresTheVerifiedMixAndExplicitChoices) {
+    EnsureApplication();
+    QTemporaryDir directory;
+    ASSERT_TRUE(directory.isValid());
+    const auto path = directory.filePath(QStringLiteral("recorded-default.mkv"));
+    ASSERT_TRUE(QFile::copy(test::TransportAmbiguousFixture(), path));
+    const auto manifest = WriteRecordedDefaultFixture(path);
+    ASSERT_TRUE(manifest);
+    for (bool explicit_choice : {false, true}) {
+        const auto project =
+            QUrl::fromLocalFile(directory.filePath(explicit_choice ? "explicit.exoproj" : "default.exoproj"));
+        edit::Id id = 0;
+        std::vector<edit::Clip> clips;
+        std::optional<edit::InputMixSelection> mix;
+        {
+            EditSessionAdapter session;
+            EditSessionAdapterTestPeer::initializeRecovery(session, directory.path());
+            session.setBackgroundAnalysisSuspended(true);
+            session.importMedia(QUrl::fromLocalFile(path), true);
+            ASSERT_TRUE(WaitForMediaCondition([&] { return !session.importPending(); }));
+            ASSERT_EQ(session.workspace().assets().size(), 1U);
+            id = session.workspace().assets().front().id;
+            ASSERT_TRUE(session.workspace().asset(id)->mix_decision_required);
+            if (explicit_choice) {
+                ASSERT_TRUE(session.beginSourceAudioChoice(id));
+                const auto alternative =
+                    session.sourceAudioChoice().value(QStringLiteral("tracks")).toList().back().toMap();
+                session.setSourceAudioTrack(alternative.value(QStringLiteral("id")).toString(), true);
+                ASSERT_TRUE(session.applySourceAudioChoice());
+            }
+            session.saveProject(project);
+            ASSERT_TRUE(EditSessionAdapterTestPeer::finishProjectIo(session));
+            ASSERT_FALSE(session.projectDirty());
+            session.setBackgroundAnalysisSuspended(false);
+            ASSERT_TRUE(WaitForMediaCondition([&] { return bool(session.sourceProof(id)); }));
+            ASSERT_FALSE(session.projectDirty());
+            ASSERT_FALSE(session.workspace().asset(id)->mix_decision_required);
+            clips = session.workspace().clips();
+            mix = session.workspace().asset(id)->input_mix_selection;
+        }
+        EditSessionAdapter reopened;
+        EditSessionAdapterTestPeer::initializeRecovery(reopened, directory.path());
+        reopened.openProject(project, false);
+        ASSERT_TRUE(EditSessionAdapterTestPeer::finishProjectIo(reopened));
+        ASSERT_TRUE(reopened.sourceProof(id));
+        EXPECT_FALSE(reopened.projectDirty());
+        EXPECT_FALSE(reopened.workspace().asset(id)->mix_decision_required);
+        EXPECT_EQ(reopened.workspace().asset(id)->input_mix_selection, mix);
+        EXPECT_EQ(reopened.workspace().clips(), clips);
+    }
 }
 
 TEST(EditRecordedDefault, VerifiedStartingDefaultFinalizesWithoutAnAuthoredStepAndSurvivesMoveUndoRedo) {

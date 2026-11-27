@@ -27,6 +27,16 @@ QByteArray Digest(QByteArrayView bytes) {
     return QCryptographicHash::hash(bytes, QCryptographicHash::Sha256);
 }
 
+bool IsDescendant(const QString& relative) {
+    return !QDir::isAbsolutePath(relative) && relative != QStringLiteral("..") &&
+           !relative.startsWith(QStringLiteral("../"));
+}
+
+bool StaysInProject(const QDir& directory, const QString& media) {
+    const auto actual = QFileInfo(media).canonicalFilePath();
+    return actual.isEmpty() || IsDescendant(QDir(directory.canonicalPath()).relativeFilePath(actual));
+}
+
 bool ResolveReferences(edit::EditSnapshot& snapshot, const QString& path, bool writing) {
     const QDir dir = QFileInfo(path).absoluteDir();
     for (auto& source : snapshot.assets) {
@@ -41,19 +51,14 @@ bool ResolveReferences(edit::EditSnapshot& snapshot, const QString& path, bool w
             if (!QDir::isAbsolutePath(media))
                 return false;
             const auto relative = dir.relativeFilePath(media);
-            if (relative != QStringLiteral("..") && !relative.startsWith(QStringLiteral("../")))
+            if (IsDescendant(relative) && StaysInProject(dir, media))
                 media = relative;
         } else if (!QDir::isAbsolutePath(media)) {
             if (media.contains(QLatin1Char(':')) || media.split(QLatin1Char('/')).contains(QStringLiteral("..")))
                 return false;
             media = dir.absoluteFilePath(media);
-            const auto actual = QFileInfo(media).canonicalFilePath();
-            if (!actual.isEmpty()) {
-                const auto relative = QDir(dir.canonicalPath()).relativeFilePath(actual);
-                if (QDir::isAbsolutePath(relative) || relative == QStringLiteral("..") ||
-                    relative.startsWith(QStringLiteral("../")))
-                    return false;
-            }
+            if (!StaysInProject(dir, media))
+                return false;
         }
         asset->path = media.toStdWString();
         source = std::move(asset);
