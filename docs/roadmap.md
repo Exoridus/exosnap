@@ -38,13 +38,13 @@ Evaluate draw-on-start, explicit reuse of the previous region and optional saved
 
 ### Installation scope and optional privileged diagnostics helper (v0.12)
 
-Status: Installation scope remains accepted for v0.12. The diagnostics helper implementation requires release signing and Windows qualification before distribution.
+Status: Target v0.12. Installation scope and privileged diagnostics have separate implementation and native qualification gates.
 
 Default new direct installations to the current user under `%LOCALAPPDATA%\Programs\ExoSnap`, with an optional all-users installation under `C:\Program Files\ExoSnap`. Use matching user or machine registration and Start Menu entries, and retain normal Installed Apps management. Preserve the existing installation scope, path and distribution ownership through updates, repairs and removal. Do not silently migrate a machine installation or create a duplicate user installation. Keep application data separate from program files.
 
 User-scope updates should run without elevation when no system prerequisite needs changing. Define the VC++ runtime deployment policy before implementation. If retaining a shared runtime, detect a sufficient version, explain any required elevation, and install the prerequisite before application changes. A denied UAC request must produce a clear cancellation result and preserve an existing working installation. Never report installation success without usable dependencies. Validate both scopes through native install, upgrade, repair and uninstall scenarios, including missing prerequisites and UAC refusal.
 
-Qualify the optional presentation helper with signed production binaries in both installation scopes. Cover first-use provisioning, repeated activation, UAC refusal, helper failure and application exit with no leftover privileged processes or ETW sessions. See [diagnostics architecture](architecture/diagnostics.md#present-and-latency-observation) and [helper trust and delivery](architecture/update-and-security.md#privileged-diagnostics-helper).
+The diagnostics helper is implemented and requires release signing and Windows qualification before distribution. Qualify the optional helper with signed production binaries in both installation scopes. Cover first-use provisioning, repeated activation, UAC refusal, helper failure and application exit with no leftover privileged processes or ETW sessions. See [diagnostics architecture](architecture/diagnostics.md#present-and-latency-observation) and [helper trust and delivery](architecture/update-and-security.md#privileged-diagnostics-helper).
 
 ### Overlay presentation policy (post-v0.10)
 
