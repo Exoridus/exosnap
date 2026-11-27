@@ -1,0 +1,38 @@
+name: Read editor navigation CTest failure
+
+on:
+  push:
+    branches: [verify/v012-editor-ctest-review]
+
+permissions:
+  contents: read
+  actions: read
+
+jobs:
+  read-ctest:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 5
+    steps:
+      - name: Download Debug CTest evidence
+        uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4.3.0
+        with:
+          github-token: ${{ github.token }}
+          run-id: 45989519945
+          artifact-ids: 15196508421
+          merge-multiple: true
+          path: evidence
+      - name: Extract native navigation test diagnostics
+        shell: python
+        run: |
+          from pathlib import Path
+
+          root = Path("evidence/build/windows-x64-ninja-debug/Testing/Temporary")
+          log = root / "LastTest.log"
+          if not log.is_file() or log.stat().st_size > 32 * 1024 * 1024:
+              raise ValueError("Unexpected CTest log")
+          lines = log.read_text(encoding="utf-8", errors="replace").splitlines()
+          name = "quick.qml.navigation_lifecycle"
+          start = next(i for i, line in enumerate(lines) if line.endswith("Testing: " + name))
+          stop = next(i for i in range(start + 1, len(lines)) if lines[i].startswith("----------------------------------------------------------") and i > start + 3 and any("Test time =" in row for row in lines[start:i]))
+          for line in lines[start:min(start + 240, stop + 1)]:
+              print("CTest | " + line[:1500])
