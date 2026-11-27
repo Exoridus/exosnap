@@ -1002,6 +1002,19 @@ set_tests_properties(quick.qml.about_smoke PROPERTIES
 exosnap_set_test_phase(quick.qml.about_smoke desktop)
 set_tests_properties(quick.qml.about_smoke PROPERTIES EXOSNAP_BUILD_TARGET exosnap)
 
+# Runtime fixtures belong outside the compiler's include search roots.
+set(_unicode_recovery_config_dir "${CMAKE_BINARY_DIR}/test-config/unicode_recovery_startup")
+file(MAKE_DIRECTORY "${_unicode_recovery_config_dir}/要")
+file(GENERATE OUTPUT "${_unicode_recovery_config_dir}/presets.toml" CONTENT
+    "[live.output]\nfolder = \"${_unicode_recovery_config_dir}/要\"\n")
+add_test(NAME quick.qml.unicode_recovery_startup COMMAND exosnap --smoke-test)
+set_tests_properties(quick.qml.unicode_recovery_startup PROPERTIES
+    LABELS "quick"
+    ENVIRONMENT "EXOSNAP_CONFIG_DIR=${_unicode_recovery_config_dir};EXOSNAP_OUTPUT_DIR=;QT_QPA_PLATFORM=offscreen;QT_QUICK_BACKEND=software"
+    EXOSNAP_BUILD_TARGET exosnap
+)
+exosnap_set_test_phase(quick.qml.unicode_recovery_startup desktop)
+
 # The four non-Record destinations are loaded by URL so their documents stay out
 # of the startup compile (QCR-615). That the pages are absent until navigation,
 # that setSource() actually delivered every adapter, and that Diagnostics' two
@@ -1294,11 +1307,12 @@ set_tests_properties(quick.qml.record_controls PROPERTIES
 exosnap_set_test_phase(quick.qml.record_controls desktop)
 set_tests_properties(quick.qml.record_controls PROPERTIES EXOSNAP_BUILD_TARGET record_controls_qml_tests)
 
+# Keep early contract reports outside compiler include roots so they do not change clang-tidy cache identity.
 add_test(NAME quick.qml.record_controls_contracts COMMAND record_controls_qml_tests
     ExoSettingRow::test_hint_outranks_readout
     WindowChromeButton::test_clearing_the_non_client_state_restores_the_resting_button
     ExoButtonTests::test_selectsFromAuthoritativeState
-    -o "${CMAKE_CURRENT_BINARY_DIR}/record-controls-contracts-test.txt,txt")
+    -o "${CMAKE_BINARY_DIR}/Testing/record-controls-contracts-test.txt,txt")
 set_tests_properties(quick.qml.record_controls_contracts PROPERTIES
     LABELS "quick;quicktest"
     ENVIRONMENT "QT_QPA_PLATFORM=offscreen;QML_IMPORT_PATH=${_exosnap_quick_qt_prefix}/qml"
@@ -1541,7 +1555,7 @@ add_test(NAME quick.qml.edit_timeline_contracts COMMAND edit_timeline_qml_tests
     EditPage::test_EmptyViewerStable
     EditGainField::test_decimal_comma_applies_exact_tenths_then_restores_canvas
     EditTimeField::test_unchanged_timecode_does_not_quantize_legacy_microseconds
-    -o "${CMAKE_CURRENT_BINARY_DIR}/edit-timeline-contracts-test.txt,txt")
+    -o "${CMAKE_BINARY_DIR}/Testing/edit-timeline-contracts-test.txt,txt")
 set_tests_properties(quick.qml.edit_timeline_contracts PROPERTIES
     LABELS "quick;quicktest"
     ENVIRONMENT "QT_QPA_PLATFORM=offscreen;QML_IMPORT_PATH=${_exosnap_quick_qt_prefix}/qml"
@@ -1706,7 +1720,7 @@ add_test(NAME quick.qml.record_source_picker_contracts COMMAND record_source_pic
     RecordingProfileReveal::test_empty_audio_details_do_not_create_a_source
     RecordingWorkspace::test_inspector_active_and_next_use_one_settings_plan
     RecordSourcePicker::test_zero_windows_keep_display_and_region_sections_available
-    -o "${CMAKE_CURRENT_BINARY_DIR}/record-source-picker-contracts-test.txt,txt")
+    -o "${CMAKE_BINARY_DIR}/Testing/record-source-picker-contracts-test.txt,txt")
 set_tests_properties(quick.qml.record_source_picker_contracts PROPERTIES
     LABELS "quick;quicktest"
     ENVIRONMENT "QT_QPA_PLATFORM=offscreen;QML_IMPORT_PATH=${_exosnap_quick_qt_prefix}/qml"

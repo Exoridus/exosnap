@@ -443,7 +443,9 @@ TEST(RecoveryServiceTest, FinishFallsBackToConfiguredOutputFolder) {
     const QString store_path = QDir(tmp_artefact.path()).filePath(QStringLiteral("manifest.json"));
     RecoveryManifestStore store(store_path);
     RecoveryService service(store);
-    service.SetFallbackOutputFolder(tmp_fallback.path());
+    const auto fallback = QDir(tmp_fallback.path()).filePath(QStringLiteral("\u8981"));
+    ASSERT_TRUE(QDir().mkpath(fallback));
+    service.SetFallbackOutputFolder(fallback);
 
     // Create artefact in artefact dir.
     const QString artefact = QDir(tmp_artefact.path()).filePath(QStringLiteral("rec.mkv.partial"));
@@ -458,7 +460,7 @@ TEST(RecoveryServiceTest, FinishFallsBackToConfiguredOutputFolder) {
     EXPECT_TRUE(result.success) << result.message;
     // The renamed file should be in the fallback folder.
     EXPECT_FALSE(QFileInfo::exists(artefact));
-    const QString expected_in_fallback = QDir(tmp_fallback.path()).filePath(QStringLiteral("rec.mkv"));
+    const QString expected_in_fallback = QDir(fallback).filePath(QStringLiteral("rec.mkv"));
     EXPECT_TRUE(QFileInfo::exists(expected_in_fallback));
 }
 

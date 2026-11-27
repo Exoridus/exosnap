@@ -1,5 +1,6 @@
 #include "DiagnosticsProbe.h"
 
+#include "ConfigSummary.h"
 #include "DiskSpaceProvider.h"
 #include "DxgiVideoMemoryProvider.h"
 #include "FilesystemProvider.h"
@@ -12,10 +13,8 @@
 namespace exosnap::diagnostics {
 
 std::string DriveLabelForPath(const std::filesystem::path& path) {
-    std::string drive = path.root_name().string();
-    if (drive.empty())
-        drive = path.string();
-    return drive;
+    const auto root = path.root_name();
+    return PathAsUtf8(root.empty() ? path : root);
 }
 
 DiagnosticsController::ProbeResult RunDiagnosticsProbe(const DiagnosticsProbeRequest& request) {
