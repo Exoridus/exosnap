@@ -1221,6 +1221,141 @@ mod tests {
         Ok(())
     }
 
+    #[cfg(windows)]
+    #[test]
+    #[ignore = "installs real packages on a disposable GitHub-hosted Windows runner"]
+    fn hosted_installer_lifecycle() -> Result<()> {
+        anyhow::ensure!(std::env::var("EXOSNAP_RUNNER_ENVIRONMENT").as_deref() == Ok("github-hosted"));
+        anyhow::ensure!(std::env::var("GITHUB_ACTIONS").as_deref() == Ok("true"));
+        let output = PathBuf::from(std::env::var("EXOSNAP_INSTALLER_SMOKE")?);
+        let report: serde_json::Value =
+            serde_json::from_slice(&fs::read(output.join("package.json"))?)?;
+        let artifact = |key: &str| -> Result<PathBuf> {
+            let path = PathBuf::from(
+                report[key]
+                    .as_str()
+                    .ok_or_else(|| anyhow::anyhow!("missing artifact: {key}"))?,
+            );
+            anyhow::ensure!(path.is_file() && path.parent() == Some(output.as_path()));
+            Ok(path)
+        };
+        let installer = artifact("installer")?;
+        let user_setup = artifact("setup")?;
+        let machine_setup = artifact("setupAllUsers")?;
+        let out = output.join("lifecycle");
+        fs::create_dir(&out)?;
+        let invoke = |program: &Path, args: &[&str], log: &str| -> Result<i32> {
+            let mut command = Command::new(program);
+            command.args(args);
+            command.arg(if program == Path::new("msiexec.exe") {
+                "/l*v"
+            } else {
+                "/log"
+            });
+            command.arg(out.join(format!("{log}.log")));
+            let result = crate::tools::run(&mut command, secs(360.0))?;
+            result
+                .code()
+                .ok_or_else(|| anyhow::anyhow!("{log}: process did not exit"))
+        };
+        let successful = |program: &Path, args: &[&str], log: &str| -> Result<()> {
+            let code = invoke(program, args, log)?;
+            anyhow::ensure!(matches!(code, 0 | 3010), "{log}: exit {code}");
+            Ok(())
+        };
+        let msi = Path::new("msiexec.exe");
+        let package = installer.to_str().unwrap();
+        let local = PathBuf::from(std::env::var("LOCALAPPDATA")?);
+        let program_files = PathBuf::from(std::env::var("ProgramFiles")?);
+        let user_menu = PathBuf::from(std::env::var("APPDATA")?);
+        let machine_menu = PathBuf::from(std::env::var("ProgramData")?);
+        let mut results = Vec::new();
+        for (scope, key, other_key, default, menu, setup, opposite) in [
+            (
+                "user",
+                USER_KEY,
+                INSTALL_KEY,
+                local.join(r"Programs\ExoSnap"),
+                user_menu,
+                &user_setup,
+                &machine_setup,
+            ),
+            (
+                "machine",
+                INSTALL_KEY,
+                USER_KEY,
+                program_files.join("ExoSnap"),
+                machine_menu,
+                &machine_setup,
+                &user_setup,
+            ),
+        ] {
+            let shortcut = menu.join(r"Microsoft\Windows\Start Menu\Programs\ExoSnap.lnk");
+            anyhow::ensure!(!reg_key_exists(key)? && !reg_key_exists(other_key)?);
+            anyhow::ensure!(!reg_key_exists(r"HKLM\SOFTWARE\Codexo\ExoSnap")?);
+            anyhow::ensure!(exosnap_arp_rows()?.is_empty());
+            anyhow::ensure!(!default.exists() && !shortcut.exists());
+            let custom = out.join(format!("{scope} custom")).join("ExoSnap");
+            let request = format!("EXOSNAP_REQUESTED_SCOPE={scope}");
+            let folder = format!("INSTALLFOLDER={}", custom.display());
+            let log = |stage: &str| format!("{scope}-{stage}");
+            successful(
+                msi,
+                &["/i", package, "/qn", "/norestart", &request, &folder],
+                &log("install"),
+            )?;
+            let actual = scoped_reg_value(key, "InstallPath")?.unwrap();
+            assert_eq!(Path::new(&actual), custom);
+            assert_eq!(scoped_reg_value(key, "DistributionOwner")?.as_deref(), Some("direct"));
+            assert!(!reg_key_exists(other_key)? && shortcut.is_file());
+            let rows = exosnap_arp_rows()?;
+            assert_eq!(rows.len(), 1);
+            assert!(!rows[0].system_component);
+            let exe = custom.join("exosnap.exe");
+            let hash = sha256_file(&exe)?.0;
+            fs::remove_file(&exe)?;
+            successful(msi, &["/fvamus", package, "/qn", "/norestart"], &log("repair"))?;
+            assert_eq!(sha256_file(&exe)?.0, hash);
+            fs::write(custom.join("unrelated.txt"), b"preserve")?;
+            successful(msi, &["/x", package, "/qn", "/norestart"], &log("uninstall"))?;
+            assert_eq!(fs::read(custom.join("unrelated.txt"))?, b"preserve");
+            assert!(!exe.exists() && !shortcut.exists() && !reg_key_exists(key)?);
+            assert!(exosnap_arp_rows()?.is_empty());
+
+            successful(setup, &["/install", "/quiet", "/norestart"], &log("setup"))?;
+            let exe = default.join("exosnap.exe");
+            let hash = sha256_file(&exe)?.0;
+            assert_eq!(Path::new(&scoped_reg_value(key, "InstallPath")?.unwrap()), default);
+            assert!(shortcut.is_file() && !reg_key_exists(other_key)?);
+            let rows = exosnap_arp_rows()?;
+            assert_eq!(rows.iter().filter(|r| r.system_component).count(), 1);
+            let visible: Vec<_> = rows.iter().filter(|r| !r.system_component).collect();
+            assert_eq!(visible.len(), 1);
+            let cached = quoted_exe(&visible[0].uninstall_string).unwrap();
+            let cache_root = if scope == "user" {
+                local.join("Package Cache")
+            } else {
+                PathBuf::from(std::env::var("ProgramData")?).join("Package Cache")
+            };
+            anyhow::ensure!(cached.starts_with(cache_root) && cached.is_file());
+            let quiet_install = ["/install", "/quiet", "/norestart"];
+            let refused = invoke(opposite, &quiet_install, &log("conflict"))?;
+            assert_eq!(refused, 1638);
+            assert_eq!(sha256_file(&exe)?.0, hash);
+            assert!(!reg_key_exists(other_key)?);
+            fs::remove_file(&exe)?;
+            successful(&cached, &["/repair", "/quiet", "/norestart"], &log("cached-repair"))?;
+            assert_eq!(sha256_file(&exe)?.0, hash);
+            successful(&cached, &["/uninstall", "/quiet", "/norestart"], &log("cached-remove"))?;
+            assert!(!exe.exists() && !shortcut.exists() && !reg_key_exists(key)?);
+            assert!(exosnap_arp_rows()?.is_empty());
+            results.push(json!({"scope": scope, "msiCustomPath": custom, "setupPath": default,
+                "repairedSha256": hash, "oppositeScopeExit": refused, "uninstalled": true}));
+        }
+        fs::write(out.join("result.json"), serde_json::to_vec_pretty(&results)?)?;
+        Ok(())
+    }
+
     #[test]
     fn install_scenario_is_restricted_to_disposable_machine() {
         let scenario = &scenarios()[0];

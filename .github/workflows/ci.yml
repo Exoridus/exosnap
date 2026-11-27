@@ -383,6 +383,7 @@ jobs:
           filters: |
             installer:
               - '.github/workflows/ci.yml'
+              - 'tools/exo-verify/src/scenarios/install.rs'
               - 'apps/setup/**'
               - 'packaging/msi/**'
               - 'packaging/burn/**'
@@ -825,6 +826,15 @@ jobs:
             if (-not $file -or -not (Test-Path -LiteralPath $file -PathType Leaf)) { throw "Missing installer artifact: $file" }
           }
 
+      - name: Exercise MSI and cached Setup lifecycle on the disposable runner
+        if: github.event_name == 'pull_request' && needs.changes.outputs.installer == 'true'
+        env:
+          EXOSNAP_RUNNER_ENVIRONMENT: ${{ runner.environment }}
+        shell: pwsh
+        run: |
+          $env:EXOSNAP_INSTALLER_SMOKE = (Resolve-Path '.workspace/installer-smoke').Path
+          cargo test --locked --manifest-path tools/Cargo.toml -p exo-verify hosted_installer_lifecycle -- --ignored --nocapture
+
       - name: Upload installer authoring report
         if: github.event_name == 'pull_request' && needs.changes.outputs.installer == 'true'
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
@@ -833,6 +843,7 @@ jobs:
           path: |
             .workspace/installer-smoke/package.json
             .workspace/installer-smoke/package-size.md
+            .workspace/installer-smoke/lifecycle/result.json
           include-hidden-files: true
           if-no-files-found: error
 
