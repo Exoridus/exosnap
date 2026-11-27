@@ -157,13 +157,12 @@ class UpdaterWorker : public QObject {
     // it, cancelling a download surfaced as FailureCase::DownloadFailed and
     // cancelling the msiexec wait as "The installer did not finish in time" --
     // both of which describe a fault that did not happen.
-    //
-    // Cleared by every run()/check() entry, so a cancellation cannot leak into
-    // the next attempt.
     void requestCancel() {
         cancel_.store(true);
     }
     [[nodiscard]] bool tryCancelDownload();
+    // Reset before queuing a new operation so its worker entry cannot erase an accepted cancellation.
+    void prepareOperation();
 
   public slots:
     // Run the pipeline from `entry` to the end (initial run: Download; retries
@@ -225,7 +224,6 @@ class UpdaterWorker : public QObject {
     // upToDate and the handoff path reports as A1.
     // Report cancellation only at a point that honors the request.
     [[nodiscard]] bool abortedByCancel(bool installer_started = false);
-    void resetCancellation();
     [[nodiscard]] bool admitInstallerLaunch();
     [[nodiscard]] bool selfUpdateAllowed();
 

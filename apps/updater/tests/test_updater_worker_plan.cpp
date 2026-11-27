@@ -351,6 +351,26 @@ TEST(UpdaterWorker, RepairRefusesMissingVerifiedPackageWithoutStartingAnyStep) {
     }
 }
 
+TEST(UpdaterWorker, CancellationBeforeQueuedDownloadIsHonored) {
+    for (const bool manual : {false, true}) {
+        UpdaterWorker worker(UpdaterArgs{});
+        int cancellations = 0;
+        int steps = 0;
+        QObject::connect(&worker, &UpdaterWorker::cancelled, [&](bool installer_started) {
+            ++cancellations;
+            EXPECT_FALSE(installer_started);
+        });
+        QObject::connect(&worker, &UpdaterWorker::stepStarted, [&](UpStep) { ++steps; });
+        ASSERT_TRUE(worker.tryCancelDownload());
+        if (manual)
+            worker.download();
+        else
+            worker.run(UpStep::Download);
+        EXPECT_EQ(cancellations, 1);
+        EXPECT_EQ(steps, 0);
+    }
+}
+
 TEST(UpdaterWorker, DownloadCancellationAndInstallerAdmissionExcludeEachOther) {
     UpdaterWorker cancelled(UpdaterArgs{});
     ASSERT_TRUE(cancelled.tryCancelDownload());

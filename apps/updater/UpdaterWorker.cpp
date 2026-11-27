@@ -319,8 +319,7 @@ void UpdaterWorker::repair() {
 }
 
 void UpdaterWorker::run(UpStep entry) {
-    resetCancellation();
-    if (!selfUpdateAllowed()) {
+    if (abortedByCancel() || !selfUpdateAllowed()) {
         return;
     }
 
@@ -398,7 +397,7 @@ bool UpdaterWorker::tryCancelDownload() {
     return true;
 }
 
-void UpdaterWorker::resetCancellation() {
+void UpdaterWorker::prepareOperation() {
     std::lock_guard lock(installer_launch_mutex_);
     cancel_.store(false);
     installer_launch_admitted_ = false;
@@ -451,7 +450,8 @@ bool UpdaterWorker::selfUpdateAllowed() {
 // download, no second verification and no second swap.
 
 void UpdaterWorker::check() {
-    resetCancellation();
+    if (abortedByCancel())
+        return;
     emit checkStarted();
 
     // The official-build gate is an update-check POLICY (update_checker.h), and
@@ -491,8 +491,7 @@ void UpdaterWorker::check() {
 }
 
 void UpdaterWorker::download() {
-    resetCancellation();
-    if (!selfUpdateAllowed()) {
+    if (abortedByCancel() || !selfUpdateAllowed()) {
         return;
     }
     emit stepStarted(UpStep::Download);
