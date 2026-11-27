@@ -17,6 +17,7 @@
 #include <QString>
 #include <atomic>
 #include <chrono>
+#include <filesystem>
 #include <memory>
 #include <optional>
 #include <string>
@@ -84,7 +85,7 @@ namespace exosnap::updater {
 // A repair/reinstall may only recache the MSI registered for this scope and directory.
 // The caller retains the authenticated package lock across this check and handoff.
 [[nodiscard]] bool MatchesRegisteredMsi(const std::wstring& package, exosnap::update::InstallScope scope,
-                                       const std::wstring& directory);
+                                        const std::wstring& directory);
 
 // Terminal meaning of an msiexec process exit code for the silent
 // (/qn /norestart) install this app performs.
@@ -194,9 +195,8 @@ class UpdaterWorker : public QObject {
     void allDone();
     void failed(FailureCase c, QString detail);
     void installerLogAvailable(QString path);
-    // The run stopped because requestCancel() was observed. Terminal, and NOT a
-    // failure: nothing was installed and nothing broke. Emitted instead of
-    // failed(...) at the points where the engine actually honours cancellation.
+    // The updater stopped at a point that honors requestCancel(). Windows
+    // Installer can continue independently if its process has already started.
     void cancelled();
 
     // Manual-mode results.
@@ -229,6 +229,7 @@ class UpdaterWorker : public QObject {
     [[nodiscard]] bool resolveRelease(bool* no_release);
     // Manifest + signature + gates + package + hash + portable staging.
     [[nodiscard]] bool fetchAndStage();
+    [[nodiscard]] bool fetchPackage(const exosnap::update::PackageEntry& package, const std::filesystem::path& path);
     [[nodiscard]] bool runDownload();
     [[nodiscard]] bool runCloseApp();
     [[nodiscard]] bool runInstallPortable();

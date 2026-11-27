@@ -121,8 +121,6 @@ void UpdaterViewAdapter::render(const UpdaterUiState& state) {
     } else if (prompting) {
         eyebrow_ = state.prompt == PromptKind::UpToDate
                        ? QCoreApplication::translate("UpdaterViewAdapter", "EXOSNAP IS UP TO DATE")
-                   : state.prompt == PromptKind::Cancelled
-                       ? QCoreApplication::translate("UpdaterViewAdapter", "EXOSNAP WAS NOT UPDATED")
                        : QCoreApplication::translate("UpdaterViewAdapter", "EXOSNAP UPDATER");
     } else {
         eyebrow_ = state.verification_reinstall

@@ -257,9 +257,33 @@ void UpdaterController::onCancelled() {
     state_.status_line.clear();
     state_.determinate = false;
     state_.ring = 0.0;
+    if (flow_.phase == UpdatePhase::Applying && flow_.install_mode == exosnap::update::InstallMode::Installed) {
+        state_.repairing = false;
+        state_.headline = QCoreApplication::translate("UpdaterController", "Installation state unknown");
+        state_.detail_text =
+            QCoreApplication::translate("UpdaterController", "Windows Installer may still be running.");
+        state_.safety_text = QCoreApplication::translate(
+            "UpdaterController", "The installation is still unconfirmed. Repair ExoSnap before you use it.");
+        state_.primary_action = QCoreApplication::translate("UpdaterController", "Close");
+        state_.secondary_action.clear();
+        flow_.install_state = exosnap::update::InstallState::Unknown;
+        setPhase(UpdatePhase::Cancelled);
+        return;
+    }
     state_.headline = QCoreApplication::translate("UpdaterController", "Update canceled");
     state_.detail_text = QCoreApplication::translate("UpdaterController",
                                                      "The download was stopped and its partial files were discarded.");
+    if (state_.repairing && flow_.phase == UpdatePhase::Downloading) {
+        state_.repairing = false;
+        state_.headline = QCoreApplication::translate("UpdaterController", "Repair download canceled");
+        state_.safety_text = QCoreApplication::translate(
+            "UpdaterController", "The installation is still unconfirmed. Repair ExoSnap before you use it.");
+        state_.primary_action = QCoreApplication::translate("UpdaterController", "Repair ExoSnap");
+        state_.secondary_action = QCoreApplication::translate("UpdaterController", "Close");
+        setPhase(UpdatePhase::Cancelled);
+        flow_.retry_entry_step = UpStep::CloseApp;
+        return;
+    }
     state_.safety_text =
         state_.from_version.isEmpty()
             ? QCoreApplication::translate("UpdaterController", "Nothing was installed and nothing was changed.")

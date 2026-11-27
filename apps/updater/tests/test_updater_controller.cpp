@@ -563,6 +563,33 @@ TEST(UpdaterCancel, AFreshCheckLeavesTheCancelledStateBehind) {
     EXPECT_EQ(c.state().prompt, PromptKind::None);
 }
 
+TEST(UpdaterCancel, ARepairDownloadCanBeRetriedWithoutConfirmingTheInstallation) {
+    UpdaterController c = MakeManualController();
+    c.setContext(exosnap::update::InstallMode::Installed, true);
+    c.onRepairStarted();
+    c.onStepStarted(UpStep::Download);
+    c.onCancelled();
+
+    EXPECT_EQ(c.flowState().phase, UpdatePhase::Cancelled);
+    EXPECT_EQ(c.flowState().install_state, exosnap::update::InstallState::Unknown);
+    EXPECT_EQ(c.flowState().retry_entry_step, UpStep::CloseApp);
+    EXPECT_EQ(c.state().primary_action, QStringLiteral("Repair ExoSnap"));
+    EXPECT_FALSE(c.state().safety_text.contains(QStringLiteral("unchanged")));
+}
+
+TEST(UpdaterCancel, StoppingAnInstallerWaitLeavesTheInstallationUnconfirmed) {
+    UpdaterController c = MakeController();
+    c.setContext(exosnap::update::InstallMode::Installed, true);
+    c.onStepStarted(UpStep::Install);
+    c.onCancelled();
+
+    EXPECT_EQ(c.flowState().phase, UpdatePhase::Cancelled);
+    EXPECT_EQ(c.flowState().install_state, exosnap::update::InstallState::Unknown);
+    EXPECT_FALSE(c.flowState().retry_entry_step.has_value());
+    EXPECT_EQ(c.state().primary_action, QStringLiteral("Close"));
+    EXPECT_FALSE(c.state().safety_text.contains(QStringLiteral("unchanged")));
+}
+
 // ---------------------------------------------------------------------------
 // The pinned-target failure
 // ---------------------------------------------------------------------------

@@ -275,8 +275,7 @@ bool MatchesRegisteredMsi(const std::wstring& package, InstallScope scope, const
         return false;
     wchar_t location[32768]{};
     DWORD length = _countof(location);
-    const auto context =
-        scope == InstallScope::Machine ? MSIINSTALLCONTEXT_MACHINE : MSIINSTALLCONTEXT_USERUNMANAGED;
+    const auto context = scope == InstallScope::Machine ? MSIINSTALLCONTEXT_MACHINE : MSIINSTALLCONTEXT_USERUNMANAGED;
     if (MsiGetProductInfoExW(product, nullptr, context, L"InstallLocation", location, &length) != ERROR_SUCCESS ||
         length == 0)
         return false;
@@ -340,7 +339,20 @@ void UpdaterWorker::run(UpStep entry) {
         entry = UpStep::Download;
     }
 
-    if (int(entry) <= int(UpStep::Download)) {
+    if (repair_msi_) {
+        if (!locked_package_) {
+            const auto* package = SelectPackage(manifest_, args_.install_mode, install_scope_);
+            if (!package) {
+                emit failed(FailureCase::VerifyInstallFailedMsi,
+                            QStringLiteral("The verified MSI package is unavailable for repair."));
+                return;
+            }
+            emit stepStarted(UpStep::Download);
+            if (!fetchPackage(*package, fs::path(download_dir_) / L"package.msi"))
+                return;
+            emit stepDone(UpStep::Download);
+        }
+    } else if (int(entry) <= int(UpStep::Download)) {
         if (!runDownload()) {
             return;
         }
@@ -699,41 +711,9 @@ bool UpdaterWorker::fetchAndStage() {
         return false;
     }
 
-    // Package download, with byte progress (throttled to ~12 Hz).
     const bool portable = args_.install_mode == InstallMode::Portable;
-    const fs::path package_path = download_dir / (portable ? L"package.zip" : L"package.msi");
-    QElapsedTimer throttle;
-    throttle.start();
-    const auto on_progress = [this, &throttle](const DownloadProgress& p) {
-        if (throttle.elapsed() >= 80 || (p.bytes_total != 0 && p.bytes_received >= p.bytes_total)) {
-            throttle.restart();
-            emit downloadProgress(p.bytes_received, p.bytes_total);
-        }
-    };
-    // Release any lock from a previous attempt so a retry's re-download can
-    // overwrite the file (a held deny-write/deny-delete handle would block it).
-    locked_package_.reset();
-    if (const auto err = DownloadToFile(package->url, package_path.wstring(), on_progress, cancel_)) {
-        // The one abort a person can cause on purpose. DownloadToFile deletes
-        // its partial file either way, so the installation is untouched and
-        // there is nothing to report as broken.
-        if (abortedByCancel())
-            return false;
-        emit failed(FailureCase::DownloadFailed, QString::fromStdString(*err)); // A1
+    if (!fetchPackage(*package, download_dir / (portable ? L"package.zip" : L"package.msi")))
         return false;
-    }
-
-    // SHA-256 gate. Lock the downloaded file (deny-write/deny-delete) and hash it
-    // THROUGH that handle, then keep the handle open through consumption: the
-    // verified bytes cannot be swapped before the (elevated) installer / extractor
-    // reads them. A mismatch deletes the file inside LockAndVerifyPackage.
-    package_path_ = package_path.wstring();
-    package_sha256_ = package->sha256_hex;
-    QString verify_error;
-    if (!LockAndVerifyPackage(package_sha256_, &verify_error)) {
-        emit failed(FailureCase::VerifyDownloadFailed, verify_error); // A2 -- hard stop
-        return false;
-    }
 
     manifest_ = std::move(manifest);
     have_package_ = true;
@@ -760,6 +740,43 @@ bool UpdaterWorker::fetchAndStage() {
     }
 
     emit stepDone(UpStep::Download);
+    return true;
+}
+
+bool UpdaterWorker::fetchPackage(const exosnap::update::PackageEntry& package, const fs::path& path) {
+    QElapsedTimer throttle;
+    throttle.start();
+    const auto on_progress = [this, &throttle](const DownloadProgress& p) {
+        if (throttle.elapsed() >= 80 || (p.bytes_total != 0 && p.bytes_received >= p.bytes_total)) {
+            throttle.restart();
+            emit downloadProgress(p.bytes_received, p.bytes_total);
+        }
+    };
+    // Release any lock from a previous attempt so a retry's re-download can
+    // overwrite the file (a held deny-write/deny-delete handle would block it).
+    locked_package_.reset();
+    if (const auto err = DownloadToFile(package.url, path.wstring(), on_progress, cancel_)) {
+        // The one abort a person can cause on purpose. DownloadToFile deletes
+        // its partial file either way, so the installation is untouched and
+        // there is nothing to report as broken.
+        if (abortedByCancel())
+            return false;
+        emit failed(FailureCase::DownloadFailed, QString::fromStdString(*err)); // A1
+        return false;
+    }
+
+    // SHA-256 gate. Lock the downloaded file (deny-write/deny-delete) and hash it
+    // THROUGH that handle, then keep the handle open through consumption: the
+    // verified bytes cannot be swapped before the (elevated) installer / extractor
+    // reads them. A mismatch deletes the file inside LockAndVerifyPackage.
+    package_path_ = path.wstring();
+    package_sha256_ = package.sha256_hex;
+    QString verify_error;
+    if (!LockAndVerifyPackage(package_sha256_, &verify_error)) {
+        emit failed(FailureCase::VerifyDownloadFailed, verify_error); // A2 -- hard stop
+        return false;
+    }
+
     return true;
 }
 
@@ -989,7 +1006,8 @@ bool UpdaterWorker::runInstallMsi() {
         !MatchesRegisteredMsi(package_path_, install_scope_, args_.install_dir.toStdWString())) {
         emit failed(FailureCase::MsiFailed,
                     QCoreApplication::translate(
-                        "UpdaterWorker", "The verified repair MSI does not match the registered product and install location."));
+                        "UpdaterWorker",
+                        "The verified repair MSI does not match the registered product and install location."));
         return false;
     }
     const std::wstring params = BuildMsiexecParams(package_path_, args_.verify_reinstall, repair_msi_);

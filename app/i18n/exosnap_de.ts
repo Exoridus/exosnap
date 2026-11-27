@@ -10917,6 +10917,14 @@ Kleiner Text auf dem Bildschirm verliert früher an Qualität als Videoinhalte. 
         <translation>Update abgebrochen</translation>
     </message>
     <message>
+        <source>Repair download canceled</source>
+        <translation>Download für Reparatur abgebrochen</translation>
+    </message>
+    <message>
+        <source>Windows Installer may still be running.</source>
+        <translation>Windows Installer wird möglicherweise noch ausgeführt.</translation>
+    </message>
+    <message>
         <location line="+1"/>
         <source>The download was stopped and its partial files were discarded.</source>
         <translation>Der Download wurde gestoppt und seine Teildateien wurden verworfen.</translation>

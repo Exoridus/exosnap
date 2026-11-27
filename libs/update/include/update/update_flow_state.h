@@ -80,10 +80,8 @@ enum class UpdatePhase : std::uint8_t {
     RebootRequired,   // terminal success; Windows must restart to finish (C3)
     Completed,        // terminal success; the new version is up
     Failed,           // terminal failure; failure_case says which one
-    // Terminal, and deliberately NEITHER of the two above: the operation stopped
-    // because it was asked to. Nothing was installed and nothing broke, so
-    // reporting it as a failure would send a runner (and a user) looking for a
-    // fault that does not exist. It carries no failureCase for the same reason.
+    // The updater honored a stop request. If Windows Installer was already
+    // running, it can continue independently and the install state is unknown.
     Cancelled,
 };
 
