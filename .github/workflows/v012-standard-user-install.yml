@@ -19,11 +19,11 @@ jobs:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
         with:
           persist-credentials: false
-          fetch-depth: 4
+          fetch-depth: 5
       - name: Verify qualification source
         shell: pwsh
         run: |
-          $parent = git rev-parse HEAD~3
+          $parent = git rev-parse HEAD~4
           if ($LASTEXITCODE -or $parent -ne 'fdfc7def6bca7f9367f7a447d20810ccabdbe8ae') { throw 'Unexpected product parent' }
           $changed = @(git diff --name-only $parent HEAD)
           if ($LASTEXITCODE -or $changed.Count -ne 1 -or $changed[0] -ne '.github/workflows/v012-standard-user-install.yml') { throw 'Unexpected qualification diff' }
@@ -142,8 +142,24 @@ jobs:
             $dest = Join-Path $local 'Programs\ExoSnap'
             $exe = Join-Path $dest 'exosnap.exe'
             $link = Join-Path ([Environment]::GetFolderPath('Programs')) 'ExoSnap.lnk'
-            $arp = 'HKCU:\SOFTWARE\Microsoft\Windows\CurrentVersion\Uninstall\*'
-            function Entries { @(Get-ItemProperty $arp -ErrorAction SilentlyContinue | Where-Object { $_.Publisher -eq 'Codexo' -and $_.DisplayName -like 'ExoSnap*' }) }
+            $arp = 'SOFTWARE\Microsoft\Windows\CurrentVersion\Uninstall\*'
+            function Entries {
+              foreach ($hive in 'HKCU','HKLM') {
+                Get-ItemProperty ("{0}:\{1}" -f $hive,$arp) -ErrorAction SilentlyContinue |
+                  Where-Object { $_.Publisher -eq 'Codexo' -and $_.DisplayName -like 'ExoSnap*' }
+              }
+            }
+            Add-Type 'using System.Runtime.InteropServices; using System.Text; public static class NativeMsi { [DllImport("msi.dll", CharSet=CharSet.Unicode, ExactSpelling=true)] private static extern uint MsiGetProductInfoExW(string product, string sid, uint context, string property, StringBuilder value, ref uint length); public static uint CurrentVersion(string product, uint context, StringBuilder value, ref uint length) { return MsiGetProductInfoExW(product, null, context, "VersionString", value, ref length); } }'
+            function Assert-MsiContexts([string]$product,[string]$version) {
+              foreach ($context in 1,2,4) {
+                $value = [Text.StringBuilder]::new(64)
+                [uint32]$length = $value.Capacity
+                $rc = [NativeMsi]::CurrentVersion($product,$context,$value,[ref]$length)
+                if ($version -and $context -eq 2) {
+                  if ($rc -ne 0 -or $value.ToString() -ne $version) { throw "Product $product context $context expected $version, got $rc/$value" }
+                } elseif ($rc -ne 1605) { throw "Product $product context $context expected unknown product, got $rc/$value" }
+              }
+            }
             function Invoke-Setup([string]$file,[string]$verb,[string]$stage) {
               $log = Join-Path $out "$stage.log"
               $p = Start-Process -FilePath $file -ArgumentList "$verb /quiet /norestart /log `"$log`"" -PassThru
@@ -156,14 +172,22 @@ jobs:
               $registered = Get-ItemProperty $userKey
               $visible = @(Entries | Where-Object SystemComponent -ne 1)
               $hidden = @(Entries | Where-Object SystemComponent -eq 1)
-              if (-not (Test-Path $exe) -or -not (Test-Path $link) -or (Test-Path $machineKey) -or
-                  $registered.InstallPath.TrimEnd('\') -ne $dest -or $registered.DistributionOwner -ne 'direct' -or
-                  $visible.Count -ne 1 -or $hidden.Count -ne 1 -or [version]$hidden[0].DisplayVersion -ne [version]$v) { throw "Invalid $v installation or owner" }
+              $summary = "visible=$($visible.Count), hidden=$($hidden.Count), expectedVersion=$v"
+              if (-not (Test-Path $exe -PathType Leaf)) { throw "Missing installed executable ($summary)" }
+              if (-not (Test-Path $link -PathType Leaf)) { throw "Missing user Start Menu shortcut ($summary)" }
+              if (Test-Path $machineKey) { throw "Unexpected machine registration ($summary)" }
+              if ($registered.InstallPath.TrimEnd('\') -ne $dest) { throw "Unexpected install path ($summary)" }
+              if ($registered.DistributionOwner -ne 'direct') { throw "Unexpected distribution owner ($summary)" }
+              if ($visible.Count -ne 1 -or $hidden.Count -ne 1) { throw "Unexpected Apps entry counts ($summary)" }
+              if ($visible[0].PSPath -notlike '*::HKEY_CURRENT_USER\*') { throw "Visible bundle registered outside user hive ($summary)" }
+              if ([version]$hidden[0].DisplayVersion -ne [version]$v) { throw "Wrong hidden MSI version ($summary)" }
+              Assert-MsiContexts $hidden[0].PSChildName $v
               if ($visible[0].UninstallString -notmatch '^"([^"]+)"') { throw 'Expected cached bundle maintenance command' }
               $cached = $Matches[1]
               if (-not $cached.StartsWith("$local\Package Cache\",[StringComparison]::OrdinalIgnoreCase)) { throw 'Unexpected cached bundle location' }
               if ($v -eq '0.10.1') { $oldProduct = $hidden[0].PSChildName }
               elseif ($oldProduct -eq $hidden[0].PSChildName) { throw 'Upgrade retained the old ProductCode' }
+              if ($v -eq '0.10.2') { Assert-MsiContexts $oldProduct '' }
             }
             $hash = (Get-FileHash $exe).Hash
             Remove-Item -LiteralPath $exe
@@ -171,6 +195,7 @@ jobs:
             if ((Get-FileHash $exe).Hash -ne $hash) { throw 'Repair did not restore executable' }
             Invoke-Setup $cached '/uninstall' 'cached-uninstall'
             if ((Test-Path $exe) -or (Test-Path $userKey) -or (Test-Path $machineKey) -or (Test-Path $link) -or @(Entries).Count) { throw 'Uninstall residue' }
+            Assert-MsiContexts $hidden[0].PSChildName ''
             [ordered]@{ standardAccountSid=$ExpectedSid; elevated=$false; administratorsSidPresent=$false; runtime="$runtime"; sourceVersions=@('0.10.1','0.10.2'); originalProductCode=$oldProduct; upgradedProductCode=$hidden[0].PSChildName; repairedSha256=$hash; uninstallClean=$true } |
               ConvertTo-Json | Set-Content "$out\result.json"
           } catch {
