@@ -1,0 +1,248 @@
+name: Standard-user installer qualification
+
+on:
+  push:
+    branches: [verify/v012-standard-user-install]
+
+permissions:
+  contents: read
+
+env:
+  SCCACHE_GHA_ENABLED: 'true'
+  SCCACHE_GHA_RW_MODE: READ_ONLY
+
+jobs:
+  qualify:
+    runs-on: windows-2022
+    timeout-minutes: 90
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
+        with:
+          persist-credentials: false
+          fetch-depth: 2
+      - name: Verify qualification source
+        shell: pwsh
+        run: |
+          $parent = git rev-parse HEAD^
+          if ($LASTEXITCODE -or $parent -ne 'fdfc7def6bca7f9367f7a447d20810ccabdbe8ae') { throw 'Unexpected product parent' }
+          $changed = @(git diff --name-only $parent HEAD)
+          if ($LASTEXITCODE -or $changed.Count -ne 1 -or $changed[0] -ne '.github/workflows/v012-standard-user-install.yml') { throw 'Unexpected qualification diff' }
+      - uses: ilammy/msvc-dev-cmd@0b201ec74fa43914dc39ae48a89fd1d8cb592756
+      - uses: ./.github/actions/setup-qt
+        with:
+          profile: quick
+      - uses: mozilla-actions/sccache-action@9e7fa8a12102821edf02ca5dbea1acd0f89a2696
+      - name: Build two unsigned fixture versions with the production packager
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $PSNativeCommandUseErrorActionPreference = $true
+          $env:PATH = "$(Join-Path $env:USERPROFILE '.dotnet/tools');$env:PATH"
+          dotnet tool install --global wix --version 4.0.5
+          wix extension add -g WixToolset.Util.wixext/4.0.5
+          wix extension add -g WixToolset.Bal.wixext/4.0.5
+          $redist = Join-Path $env:RUNNER_TEMP 'vc_redist.x64.exe'
+          curl.exe -sSfL -o $redist https://aka.ms/vs/17/release/vc_redist.x64.exe
+          $file = (Resolve-Path CMakeLists.txt).Path
+          $source = [IO.File]::ReadAllText($file)
+          $declaration = 'project(exosnap VERSION 0.10.1 LANGUAGES C CXX)'
+          if (-not $source.Contains($declaration)) { throw 'Unexpected fixture source version' }
+          try {
+            foreach ($version in '0.10.1','0.10.2') {
+              # The higher version exists only in this disposable checkout. Keep binaries,
+              # MSI and Burn versions consistent through the ordinary build and validator.
+              [IO.File]::WriteAllText($file, $source.Replace($declaration, $declaration.Replace('0.10.1',$version)))
+              cmake --preset windows-x64-ninja-release -DEXOSNAP_USE_SCCACHE=ON
+              cmake --build --preset windows-x64-ninja-release-exosnap --parallel 4
+              cargo run --locked --manifest-path tools/Cargo.toml -p exo-verify -- package --build-dir build/windows-x64-ninja-release --out ".workspace/standard-$version" --repo-root . --vc-redist $redist
+            }
+          } finally {
+            [IO.File]::WriteAllText($file, $source)
+          }
+      - name: Install, upgrade, repair and uninstall as a distinct standard account
+        shell: pwsh
+        env:
+          HOSTED_RUNNER_KIND: ${{ runner.environment }}
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $PSNativeCommandUseErrorActionPreference = $true
+          if ($env:HOSTED_RUNNER_KIND -ne 'github-hosted') { throw 'Disposable hosted runner required' }
+          $id = [Guid]::NewGuid().ToString('N')
+          $name = 'exo' + $id.Substring(0,14)
+          $root = Join-Path $env:ProgramData "ExoSnapQualifier-$id"
+          $out = Join-Path $root 'results'
+          $runnerSid = [Security.Principal.WindowsIdentity]::GetCurrent().User.Value
+          $adminSid = [Security.Principal.SecurityIdentifier]'S-1-5-32-544'
+          $usersSid = [Security.Principal.SecurityIdentifier]'S-1-5-32-545'
+          $account = $null
+          $secret = $null
+          $proc = $null
+          $ownedRoot = $false
+          try {
+            if ((Get-LocalUser -Name $name -ErrorAction SilentlyContinue) -or (Test-Path $root)) { throw 'Fixture collision' }
+            # Construct the credential only in process memory. No password-bearing command line,
+            # environment variable, generated child script, console output or evidence file.
+            $secret = ConvertTo-SecureString ('Az1!' + [Convert]::ToHexString([Security.Cryptography.RandomNumberGenerator]::GetBytes(32))) -AsPlainText -Force
+            $account = New-LocalUser -Name $name -Password $secret
+            $sid = $account.SID.Value
+            if ($sid -eq $runnerSid) { throw 'Expected a distinct account' }
+            if (-not (Get-LocalGroupMember -SID $usersSid | Where-Object { $_.SID.Value -eq $sid })) {
+              Add-LocalGroupMember -SID $usersSid -Member $account
+            }
+            if (Get-LocalGroupMember -SID $adminSid | Where-Object { $_.SID.Value -eq $sid }) { throw 'Test account is an administrator' }
+            New-Item -ItemType Directory -Path $root | Out-Null
+            $ownedRoot = $true
+            icacls.exe $root /inheritance:r /grant:r '*S-1-5-18:(OI)(CI)F' '*S-1-5-32-544:(OI)(CI)F' "*$($sid):(OI)(CI)RX"
+            New-Item -ItemType Directory -Path $out | Out-Null
+            icacls.exe $out /grant "*$($sid):(OI)(CI)M"
+            foreach ($v in '0.10.1','0.10.2') {
+              $metadata = Get-Content ".workspace/standard-$v/package.json" -Raw | ConvertFrom-Json
+              if ($metadata.baseVersion -ne $v) { throw 'Fixture version mismatch' }
+              Copy-Item -LiteralPath $metadata.setup -Destination "$root\$v.exe"
+            }
+            $child = @'
+          param([string]$ExpectedSid)
+          $ErrorActionPreference = 'Stop'
+          $out = Join-Path $PSScriptRoot 'results'
+          try {
+            if ($env:GITHUB_ACTIONS -or $env:GITHUB_WORKSPACE) { throw 'Inherited CI environment in alternate logon' }
+            $identity = [Security.Principal.WindowsIdentity]::GetCurrent()
+            $groups = whoami.exe /groups /fo csv /nh
+            if ($LASTEXITCODE -or $identity.User.Value -ne $ExpectedSid -or
+                ($groups -match 'S-1-5-32-544') -or -not ($groups -match 'S-1-5-32-545')) { throw 'Expected distinct Users-only token' }
+            Add-Type 'using System; using System.Runtime.InteropServices; public static class NativeToken { [DllImport("advapi32.dll", SetLastError=true)] public static extern bool GetTokenInformation(IntPtr token, int info, out int value, int length, out int returned); }'
+            $elevated = 0
+            $bytes = 0
+            if (-not [NativeToken]::GetTokenInformation($identity.Token,20,[ref]$elevated,4,[ref]$bytes) -or $elevated -ne 0) { throw 'Expected non-elevated token' }
+            $profileKey = "HKLM:\SOFTWARE\Microsoft\Windows NT\CurrentVersion\ProfileList\$ExpectedSid"
+            $profile = [Environment]::ExpandEnvironmentVariables((Get-ItemPropertyValue $profileKey ProfileImagePath))
+            $local = [Environment]::GetFolderPath('LocalApplicationData')
+            if ($env:USERPROFILE -ne $profile -or -not $local.StartsWith("$profile\",[StringComparison]::OrdinalIgnoreCase) -or
+                -not (Test-Path "Registry::HKEY_USERS\$ExpectedSid")) { throw 'Test account profile/HKCU is not loaded' }
+            $runtime = [version]((Get-ItemPropertyValue 'HKLM:\SOFTWARE\Microsoft\VisualStudio\14.0\VC\Runtimes\x64' Version).TrimStart('v','V'))
+            if ($runtime -lt [version]'14.44.35211.0') { throw 'Missing runtime prerequisite' }
+            foreach ($policy in 'HKLM:\SOFTWARE\Policies\Microsoft\Windows\Installer','HKCU:\SOFTWARE\Policies\Microsoft\Windows\Installer') {
+              if ((Test-Path $policy) -and (Get-ItemProperty $policy).AlwaysInstallElevated -eq 1) { throw 'AlwaysInstallElevated policy is enabled' }
+            }
+            $userKey = 'HKCU:\SOFTWARE\ExoSnap'
+            $machineKey = 'HKLM:\SOFTWARE\ExoSnap'
+            $dest = Join-Path $local 'Programs\ExoSnap'
+            $exe = Join-Path $dest 'exosnap.exe'
+            $link = Join-Path ([Environment]::GetFolderPath('Programs')) 'ExoSnap.lnk'
+            $arp = 'HKCU:\SOFTWARE\Microsoft\Windows\CurrentVersion\Uninstall\*'
+            function Entries { @(Get-ItemProperty $arp -ErrorAction SilentlyContinue | Where-Object { $_.Publisher -eq 'Codexo' -and $_.DisplayName -like 'ExoSnap*' }) }
+            function Invoke-Setup([string]$file,[string]$verb,[string]$stage) {
+              $log = Join-Path $out "$stage.log"
+              $p = Start-Process -FilePath $file -ArgumentList "$verb /quiet /norestart /log `"$log`"" -PassThru
+              if (-not $p.WaitForExit(360000)) { $p.Kill(); throw "$stage timed out" }
+              if ($p.ExitCode -notin 0,3010) { throw "$stage failed: $($p.ExitCode)" }
+            }
+            if ((Test-Path $userKey) -or (Test-Path $machineKey) -or (Test-Path $dest) -or (Test-Path $link) -or @(Entries).Count) { throw 'Existing installation' }
+            foreach ($v in '0.10.1','0.10.2') {
+              Invoke-Setup "$PSScriptRoot\$v.exe" '/install' "install-$v"
+              $registered = Get-ItemProperty $userKey
+              $visible = @(Entries | Where-Object SystemComponent -ne 1)
+              $hidden = @(Entries | Where-Object SystemComponent -eq 1)
+              if (-not (Test-Path $exe) -or -not (Test-Path $link) -or (Test-Path $machineKey) -or
+                  $registered.InstallPath.TrimEnd('\') -ne $dest -or $registered.DistributionOwner -ne 'direct' -or
+                  $visible.Count -ne 1 -or $hidden.Count -ne 1 -or [version]$hidden[0].DisplayVersion -ne [version]$v) { throw "Invalid $v installation or owner" }
+              if ($visible[0].UninstallString -notmatch '^"([^"]+)"') { throw 'Expected cached bundle maintenance command' }
+              $cached = $Matches[1]
+              if (-not $cached.StartsWith("$local\Package Cache\",[StringComparison]::OrdinalIgnoreCase)) { throw 'Unexpected cached bundle location' }
+              if ($v -eq '0.10.1') { $oldProduct = $hidden[0].PSChildName }
+              elseif ($oldProduct -eq $hidden[0].PSChildName) { throw 'Upgrade retained the old ProductCode' }
+            }
+            $hash = (Get-FileHash $exe).Hash
+            Remove-Item -LiteralPath $exe
+            Invoke-Setup $cached '/repair' 'cached-repair'
+            if ((Get-FileHash $exe).Hash -ne $hash) { throw 'Repair did not restore executable' }
+            Invoke-Setup $cached '/uninstall' 'cached-uninstall'
+            if ((Test-Path $exe) -or (Test-Path $userKey) -or (Test-Path $machineKey) -or (Test-Path $link) -or @(Entries).Count) { throw 'Uninstall residue' }
+            [ordered]@{ standardAccountSid=$ExpectedSid; elevated=$false; administratorsSidPresent=$false; runtime="$runtime"; sourceVersions=@('0.10.1','0.10.2'); originalProductCode=$oldProduct; upgradedProductCode=$hidden[0].PSChildName; repairedSha256=$hash; uninstallClean=$true } |
+              ConvertTo-Json | Set-Content "$out\result.json"
+          } catch {
+            $_.Exception.Message | Set-Content "$out\failure.txt"
+            exit 1
+          }
+          '@
+            $scriptFile = Join-Path $root 'qualify.ps1'
+            Set-Content -LiteralPath $scriptFile -Value $child
+            $credential = [Management.Automation.PSCredential]::new("$env:COMPUTERNAME\$name",$secret)
+            $powershell = "$env:SystemRoot\System32\WindowsPowerShell\v1.0\powershell.exe"
+            $proc = Start-Process -FilePath $powershell -Credential $credential -LoadUserProfile -UseNewEnvironment -WorkingDirectory $root -ArgumentList "-NoProfile -NonInteractive -ExecutionPolicy RemoteSigned -File `"$scriptFile`" $sid" -PassThru
+            if (-not $proc.WaitForExit(1500000)) { throw 'Standard-user child timed out' }
+            if ($proc.ExitCode -ne 0) {
+              throw "Standard-user qualification failed: $($proc.ExitCode)"
+            }
+          } finally {
+
+            if ($secret) { $secret.Dispose() }
+            try {
+              if ($proc) {
+                try {
+                  if (-not $proc.HasExited) { $proc.Kill($true) }
+                  if (-not $proc.WaitForExit(30000)) { throw 'Owned child failed to terminate' }
+                } finally {
+                  $proc.Dispose()
+                }
+              }
+              if ($ownedRoot) {
+                # Both paths are administrator-selected. The account has RX on root
+                # and modify on results only. Validate both before evidence access.
+                foreach ($directory in $root,$out) {
+                  $entry = Get-Item -LiteralPath $directory -Force -ErrorAction Stop
+                  if (-not $entry.PSIsContainer -or ($entry.Attributes -band [IO.FileAttributes]::ReparsePoint)) { throw 'Unexpected evidence directory' }
+                }
+                $evidence = New-Item -ItemType Directory -Path '.workspace/standard-user-result' -Force
+                $receipt = [ordered]@{ workflowCommit=$env:GITHUB_SHA; productCommit='fdfc7def6bca7f9367f7a447d20810ccabdbe8ae'; versionEdit='0.10.1 -> 0.10.2' }
+                foreach ($v in '0.10.1','0.10.2') {
+                  if (Test-Path "$root\$v.exe") { $receipt[$v] = (Get-FileHash "$root\$v.exe").Hash }
+                }
+                $receipt | ConvertTo-Json | Set-Content (Join-Path $evidence.FullName 'source.json')
+                $chainLogs = @(Get-ChildItem -LiteralPath $out -File | Where-Object { $_.Name -match '^(install-0\.10\.[12]|cached-(repair|uninstall))_\d{3}_(ExoSnapMsi|VCRedistX64)(?:_rollback)?\.log$' })
+                if ($chainLogs.Count -gt 24) { throw 'Unexpected number of child MSI logs' }
+                foreach ($file in $chainLogs) {
+                  if ($file.Attributes -band [IO.FileAttributes]::ReparsePoint -or $file.Length -gt 32MB) { throw 'Unexpected child MSI log size or link' }
+                  Copy-Item -LiteralPath $file.FullName -Destination $evidence.FullName
+                }
+                foreach ($item in 'result.json','failure.txt','install-0.10.1.log','install-0.10.2.log','cached-repair.log','cached-uninstall.log') {
+                  $source = Join-Path $out $item
+                  if (Test-Path -LiteralPath $source -PathType Leaf) {
+                    $file = Get-Item -LiteralPath $source -Force
+                    $limit = if ($item -eq 'failure.txt') { 16KB } else { 32MB }
+                    if (($file.Attributes -band [IO.FileAttributes]::ReparsePoint) -or $file.Length -gt $limit) { throw 'Unexpected evidence file' }
+                    Copy-Item -LiteralPath $source -Destination $evidence.FullName
+                  }
+                }
+              }
+            } finally {
+              try {
+                if ($ownedRoot) { Remove-Item -LiteralPath $root -Recurse -Force }
+              } finally {
+                if ($account) {
+                  try {
+                    $deadline = [DateTime]::UtcNow.AddSeconds(60)
+                    do {
+                      $ownedProfile = Get-CimInstance Win32_UserProfile -Filter "SID='$($account.SID.Value)'"
+                      if (-not $ownedProfile -or -not $ownedProfile.Loaded) { break }
+                      Start-Sleep -Milliseconds 500
+                    } while ([DateTime]::UtcNow -lt $deadline)
+                    if ($ownedProfile) {
+                      if ($ownedProfile.Special -or $ownedProfile.Loaded) { throw 'Owned profile is special or still loaded' }
+                      $ownedProfile | Remove-CimInstance
+                    }
+                  } finally {
+                    Remove-LocalUser -SID $account.SID
+                  }
+                }
+              }
+            }
+          }
+      - name: Retain standard-user qualification evidence
+        if: always()
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+        with:
+          name: standard-user-installer
+          path: .workspace/standard-user-result/
+          include-hidden-files: true
+          if-no-files-found: warn
