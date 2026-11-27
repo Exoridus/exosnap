@@ -68,6 +68,14 @@ int RunGuardian() {
 }
 
 GuardedSession StartGuardian() {
+    HANDLE raw_token = nullptr;
+    if (OpenThreadToken(GetCurrentThread(), TOKEN_QUERY, TRUE, &raw_token)) {
+        Handle unexpected(raw_token);
+        return {};
+    }
+    if (GetLastError() != ERROR_NO_TOKEN)
+        return {};
+
     SECURITY_ATTRIBUTES security{sizeof(security), nullptr, TRUE};
     HANDLE reader_raw = nullptr;
     HANDLE writer_raw = nullptr;

@@ -1,6 +1,7 @@
 #include "Peer.h"
 #include "FixtureStatus.h"
 #include "ImagePath.h"
+#include "NativeRead.h"
 
 #include <softpub.h>
 #include <wincrypt.h>
@@ -59,12 +60,41 @@ bool ApprovedClient(HANDLE process) {
         !ProcessIdToSessionId(GetCurrentProcessId(), &ours) || owner_session != ours ||
         WaitForSingleObject(process, 0) != WAIT_TIMEOUT)
         return false;
-    const auto image = GlobalProcessImagePath(process);
+    const auto image = NativeProcessImagePath(process);
+    const auto root = LocalVolumeRootEnd(image);
     const auto slash = image.find_last_of(L'\\');
-    if (slash == image.npos || _wcsicmp(image.c_str() + slash + 1, L"exosnap.exe") != 0)
+    if (root == image.npos || slash == image.npos || _wcsicmp(image.c_str() + slash + 1, L"exosnap.exe") != 0)
         return false;
-    Handle locked(CreateFileW(image.c_str(), GENERIC_READ, FILE_SHARE_READ, nullptr, OPEN_EXISTING,
-                              FILE_ATTRIBUTE_NORMAL | FILE_FLAG_OPEN_REPARSE_POINT, nullptr));
-    return ApprovedPublisher(image, locked);
+    // The recorder can live in a per-user directory. Hold each physical
+    // ancestor against rename and reject reparse points before taking the next.
+    std::array<Handle, 128> ancestors;
+    size_t held = 0;
+    for (size_t first = root + 1;;) {
+        const auto next = image.find(L'\\', first);
+        const bool leaf = next == image.npos;
+        const auto component = std::wstring_view(image).substr(first, next == image.npos ? next : next - first);
+        if (component.empty() || component == L"." || component == L".." || component.find(L':') != component.npos ||
+            (!leaf && held == ancestors.size()))
+            return false;
+        auto locked = OpenNativeRead(std::wstring_view(image).substr(0, next), leaf);
+        FILE_ATTRIBUTE_TAG_INFO attributes{};
+        if (!locked || !GetFileInformationByHandleEx(locked.get(), FileAttributeTagInfo, &attributes, sizeof(attributes)) ||
+            (attributes.FileAttributes & FILE_ATTRIBUTE_REPARSE_POINT) ||
+            ((attributes.FileAttributes & FILE_ATTRIBUTE_DIRECTORY) != 0) == leaf)
+            return false;
+        if (leaf) {
+            std::wstring physical(32768, L'\0');
+            const auto length = GetFinalPathNameByHandleW(locked.get(), physical.data(), static_cast<DWORD>(physical.size()),
+                                                          FILE_NAME_NORMALIZED | VOLUME_NAME_NT);
+            if (!length || length >= physical.size())
+                return false;
+            physical.resize(length);
+            return _wcsicmp(physical.c_str(), image.c_str()) == 0 && NativeProcessImagePath(process) == image &&
+                   ApprovedPublisher(GlobalLocalVolumePath(physical), locked) &&
+                   WaitForSingleObject(process, 0) == WAIT_TIMEOUT;
+        }
+        ancestors[held++] = std::move(locked);
+        first = next + 1;
+    }
 }
 } // namespace exosnap::diagnostics::ipc

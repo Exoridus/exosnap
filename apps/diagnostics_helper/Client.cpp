@@ -3,6 +3,7 @@
 #include "FileAcePolicy.h"
 #include "FixtureStatus.h"
 #include "ImagePath.h"
+#include "NativeRead.h"
 #include "Peer.h"
 #include "RegistryAcePolicy.h"
 #ifdef EXOSNAP_SIGNED_FIXTURE_STATUS
@@ -103,12 +104,15 @@ struct LockedPath {
             current /= part;
             const bool leaf = current == path;
             // Walk top-down, retaining all handles until the OS consumer is done.
-            const std::wstring native =
-                protected_image ? L"\\\\?\\GLOBALROOT\\GLOBAL??\\" + current.native() : current.native();
-            Handle handle(CreateFileW(native.c_str(),
-                                      leaf ? GENERIC_READ | READ_CONTROL : FILE_READ_ATTRIBUTES | READ_CONTROL,
-                                      FILE_SHARE_READ, nullptr, OPEN_EXISTING,
-                                      FILE_FLAG_OPEN_REPARSE_POINT | FILE_FLAG_BACKUP_SEMANTICS, nullptr));
+            Handle handle;
+            if (protected_image) {
+                handle = OpenNativeRead(LR"(\GLOBAL??\)" + current.native(), leaf);
+            } else {
+                handle = Handle(CreateFileW(current.c_str(),
+                                            leaf ? GENERIC_READ | READ_CONTROL : FILE_READ_ATTRIBUTES | READ_CONTROL,
+                                            FILE_SHARE_READ, nullptr, OPEN_EXISTING,
+                                            FILE_FLAG_OPEN_REPARSE_POINT | FILE_FLAG_BACKUP_SEMANTICS, nullptr));
+            }
             FILE_ATTRIBUTE_TAG_INFO attr{};
             if (!handle || !GetFileInformationByHandleEx(handle.get(), FileAttributeTagInfo, &attr, sizeof(attr))) {
                 ReportFixtureStatus(leaf ? "leaf open or attributes" : "ancestor open or attributes", GetLastError());

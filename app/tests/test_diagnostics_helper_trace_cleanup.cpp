@@ -1,10 +1,12 @@
 #include "../../apps/diagnostics_helper/Guardian.h"
 #include "../../apps/diagnostics_helper/ImagePath.h"
+#include "../../apps/diagnostics_helper/NativeRead.h"
 #include "../../apps/diagnostics_helper/StartingGuardian.h"
 
 #include <evntrace.h>
 #include <objbase.h>
 
+#include <algorithm>
 #include <array>
 #include <cstddef>
 #include <string>
@@ -23,6 +25,29 @@ struct TraceProperties {
         properties.LoggerNameOffset = offsetof(TraceProperties, name);
     }
 };
+
+TEST(DiagnosticsHelperTraceCleanup, AbsoluteNativeReadsBindThePhysicalImage) {
+    std::wstring dos(32768, L'\0');
+    const auto length = GetModuleFileNameW(nullptr, dos.data(), static_cast<DWORD>(dos.size()));
+    ASSERT_GT(length, 0u);
+    ASSERT_LT(length, dos.size());
+    dos.resize(length);
+    const auto native = NativeProcessImagePath(GetCurrentProcess());
+    ASSERT_NE(LocalVolumeRootEnd(native), native.npos);
+    auto global_file = OpenNativeRead(LR"(\GLOBAL??\)" + dos, true);
+    auto kernel_file = OpenNativeRead(native, true);
+    ASSERT_TRUE(global_file);
+    ASSERT_TRUE(kernel_file);
+    FILE_ID_INFO global_id{}, kernel_id{};
+    ASSERT_TRUE(GetFileInformationByHandleEx(global_file.get(), FileIdInfo, &global_id, sizeof(global_id)));
+    ASSERT_TRUE(GetFileInformationByHandleEx(kernel_file.get(), FileIdInfo, &kernel_id, sizeof(kernel_id)));
+    EXPECT_EQ(global_id.VolumeSerialNumber, kernel_id.VolumeSerialNumber);
+    EXPECT_TRUE(std::equal(std::begin(global_id.FileId.Identifier), std::end(global_id.FileId.Identifier),
+                           std::begin(kernel_id.FileId.Identifier)));
+    EXPECT_FALSE(OpenNativeRead(LR"(\??\GLOBALROOT)" + native, true));
+    EXPECT_FALSE(OpenNativeRead(GlobalLocalVolumePath(native), true));
+    EXPECT_FALSE(OpenNativeRead(dos, true));
+}
 
 TEST(DiagnosticsHelperTraceCleanup, GuardianLaunchUsesTheSameGlobalImage) {
     const auto path = GlobalProcessImagePath(GetCurrentProcess());
