@@ -1,0 +1,86 @@
+name: Signed diagnostics integration
+
+on:
+  pull_request:
+    branches: [next]
+    paths:
+      - '.github/workflows/signed-diagnostics.yml'
+      - 'apps/diagnostics_helper/**'
+      - 'app/diagnostics/**'
+      - 'libs/update/**'
+
+permissions:
+  contents: read
+
+jobs:
+  signed-diagnostics:
+    runs-on: windows-2022
+    timeout-minutes: 45
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+        with:
+          persist-credentials: false
+      - uses: ilammy/msvc-dev-cmd@0b201ec74fa43914dc39ae48a89fd1d8cb592756 # v1.13.0
+      - uses: ./.github/actions/setup-qt
+        with:
+          profile: quick
+      - name: Install WiX
+        run: dotnet tool install --global wix --version 4.0.5
+      - name: Exercise the signed production client on this disposable administrator VM
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $PSNativeCommandUseErrorActionPreference = $true
+          $build = Join-Path $PWD 'build/windows-x64-ninja-release'
+          $out = Join-Path $build 'apps/diagnostics_helper'
+          $image = Join-Path $out 'exosnap-diagnostics.exe'
+          $msi = Join-Path $out 'exosnap-diagnostics.msi'
+          $client = Join-Path $out 'signed-fixture/exosnap.exe'
+          $installed = Join-Path $env:ProgramFiles 'ExoSnap Diagnostics/exosnap-diagnostics.exe'
+          if (Test-Path $installed) { throw "Expected a clean diagnostics installation" }
+          if (Get-Process -Name exosnap-diagnostics -ErrorAction SilentlyContinue) { throw "Expected no diagnostics processes" }
+          $certificate = New-SelfSignedCertificate -Type CodeSigningCert -Subject 'CN=Disposable ExoSnap CI' -KeyExportPolicy NonExportable -CertStoreLocation Cert:\CurrentUser\My
+          $thumb = $certificate.Thumbprint
+          try {
+            $public = Export-Certificate -Cert $certificate -FilePath "$env:RUNNER_TEMP/diagnostics-ci.cer"
+            Import-Certificate -FilePath $public.FullName -CertStoreLocation Cert:\LocalMachine\Root | Out-Null
+            $pin = [Convert]::ToHexString([Security.Cryptography.SHA256]::HashData($certificate.RawData)).ToLowerInvariant()
+            cmake --preset windows-x64-ninja-release "-DEXOSNAP_DIAGNOSTICS_PUBLISHER_SHA256=$pin"
+            cmake --build $build --target exosnap-diagnostics
+            signtool sign /fd SHA256 /sha1 $thumb $image
+            cmake --build $build --target diagnostics-helper-msi
+            signtool sign /fd SHA256 /sha1 $thumb $msi
+            cmake --preset windows-x64-ninja-release "-DEXOSNAP_DIAGNOSTICS_SIGNED_IMAGE=$image" "-DEXOSNAP_DIAGNOSTICS_SIGNED_MSI=$msi" -DEXOSNAP_SIGNED_DIAGNOSTICS_FIXTURE=ON
+            cmake --build $build --target diagnostics_signed_fixture
+            signtool sign /fd SHA256 /sha1 $thumb $client
+            $bundle = New-Item -ItemType Directory -Path "$out/signed-fixture/diagnostics"
+            Copy-Item $msi "$($bundle.FullName)/helper.msi"
+            $process = Start-Process -FilePath $client -PassThru -NoNewWindow
+            if (!$process.WaitForExit(300000)) {
+              $process.Kill()
+              $process.WaitForExit()
+              throw "Signed diagnostics fixture timed out"
+            }
+            if ($process.ExitCode -ne 0) { throw "Signed diagnostics fixture returned $($process.ExitCode)" }
+            if ((Get-FileHash $installed).Hash -ne (Get-FileHash $image).Hash) { throw "Provisioned image digest mismatch" }
+            $deadline = (Get-Date).AddSeconds(30)
+            do {
+              $remaining = @(Get-Process -Name exosnap-diagnostics -ErrorAction SilentlyContinue)
+              if (!$remaining.Count) { break }
+              Start-Sleep -Milliseconds 100
+            } while ((Get-Date) -lt $deadline)
+            if ($remaining.Count) { throw "Installed collector or guardian still running after disable" }
+          } finally {
+            try {
+              if (Test-Path $msi) {
+                $remove = Start-Process msiexec.exe -ArgumentList "/x ""$msi"" /qn /norestart" -PassThru -Wait
+                if ($remove.ExitCode -notin 0,1605) { throw "MSI cleanup returned $($remove.ExitCode)" }
+              }
+            } finally {
+              try {
+                if (Test-Path "Cert:\LocalMachine\Root\$thumb") { Remove-Item "Cert:\LocalMachine\Root\$thumb" }
+              } finally {
+                Remove-Item "Cert:\CurrentUser\My\$thumb" -DeleteKey
+              }
+            }
+          }
