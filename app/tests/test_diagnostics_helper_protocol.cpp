@@ -4,6 +4,7 @@
 
 #ifdef _WIN32
 #include "../../apps/diagnostics_helper/FileAcePolicy.h"
+#include "../../apps/diagnostics_helper/RegistryAcePolicy.h"
 #include "../../apps/diagnostics_helper/StartingGuardian.h"
 #include <string>
 #endif
@@ -104,6 +105,43 @@ TEST(DiagnosticsHelperWindowsAcl, AcceptsOnlyReadOnlyConditionalAllows) {
     header.AceSize = sizeof(entry);
     sid.SubAuthorityCount = SID_MAX_SUB_AUTHORITIES;
     EXPECT_EQ(InspectFileAce(header, 0), FileAceGrant::Invalid);
+}
+
+TEST(DiagnosticsHelperWindowsAcl, RecognizesOnlyTheRegistryCreatorInheritanceTemplate) {
+    struct Entry {
+        ACCESS_ALLOWED_ACE ace{};
+        std::array<DWORD, 4> space{};
+    } entry;
+    auto& header = entry.ace.Header;
+    header.AceType = ACCESS_ALLOWED_ACE_TYPE;
+    header.AceFlags = CONTAINER_INHERIT_ACE;
+    header.AceSize = sizeof(entry);
+    entry.ace.Mask = KEY_ALL_ACCESS;
+    auto& sid = *reinterpret_cast<SID*>(&entry.ace.SidStart);
+    sid.Revision = SID_REVISION;
+    sid.IdentifierAuthority = SECURITY_CREATOR_SID_AUTHORITY;
+    sid.SubAuthorityCount = 1;
+    sid.SubAuthority[0] = SECURITY_CREATOR_OWNER_RID;
+    EXPECT_TRUE(IsRegistryCreatorTemplate(header));
+    for (const BYTE flags : {BYTE{0}, BYTE{OBJECT_INHERIT_ACE}, BYTE{INHERITED_ACE}}) {
+        header.AceFlags = flags;
+        EXPECT_FALSE(IsRegistryCreatorTemplate(header));
+    }
+    header.AceFlags = CONTAINER_INHERIT_ACE;
+    entry.ace.Mask |= MAXIMUM_ALLOWED;
+    EXPECT_FALSE(IsRegistryCreatorTemplate(header));
+    entry.ace.Mask = KEY_ALL_ACCESS;
+    header.AceType = ACCESS_ALLOWED_CALLBACK_ACE_TYPE;
+    EXPECT_FALSE(IsRegistryCreatorTemplate(header));
+    header.AceType = ACCESS_ALLOWED_ACE_TYPE;
+    header.AceSize = sizeof(ACE_HEADER);
+    EXPECT_FALSE(IsRegistryCreatorTemplate(header));
+    header.AceSize = sizeof(entry);
+    sid.SubAuthority[0] = SECURITY_CREATOR_OWNER_RIGHTS_RID;
+    EXPECT_FALSE(IsRegistryCreatorTemplate(header));
+    sid.IdentifierAuthority = SECURITY_WORLD_SID_AUTHORITY;
+    sid.SubAuthority[0] = SECURITY_WORLD_RID;
+    EXPECT_FALSE(IsRegistryCreatorTemplate(header));
 }
 
 TEST(DiagnosticsHelperGuardian, FailedHandoffReapsChildButSuccessfulHandoffTransfersIt) {

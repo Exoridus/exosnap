@@ -4,6 +4,7 @@
 #include "FixtureStatus.h"
 #include "ImagePath.h"
 #include "Peer.h"
+#include "RegistryAcePolicy.h"
 #ifdef EXOSNAP_SIGNED_FIXTURE_STATUS
 #include "MsixAcquisition.h"
 #include "StartingGuardian.h"
@@ -74,7 +75,8 @@ bool Protected(HANDLE object, bool children, SE_OBJECT_TYPE type = SE_FILE_OBJEC
         if ((inherit_only && !children) || grant != FileAceGrant::CheckTrustee)
             continue;
         auto* ace = static_cast<ACCESS_ALLOWED_ACE*>(entry);
-        safe = TrustedOwner(&ace->SidStart) || (inherit_only && IsWellKnownSid(&ace->SidStart, WinCreatorOwnerSid));
+        safe = TrustedOwner(&ace->SidStart) || (inherit_only && IsWellKnownSid(&ace->SidStart, WinCreatorOwnerSid)) ||
+               (type == SE_REGISTRY_KEY && IsRegistryCreatorTemplate(*header));
         if (!safe) {
             ReportFixtureStatus("DACL rejected ACE rights", ace->Mask);
 #ifdef EXOSNAP_SIGNED_FIXTURE_STATUS
@@ -668,22 +670,54 @@ HRESULT ProbeMachineBootstrap(ULONG version, bool invoke) {
             DWORD bytes = 0;
             if (GetTokenInformation(token.get(), TokenElevation, &elevation, sizeof(elevation), &bytes) &&
                 elevation.TokenIsElevated) {
-                auto command = L"\"" + physical + L"\" -Embedding";
-                STARTUPINFOW startup{};
-                startup.cb = sizeof(startup);
-                PROCESS_INFORMATION process{};
-                const BOOL created = CreateProcessW(physical.c_str(), command.data(), nullptr, nullptr, FALSE, 0,
-                                                    nullptr, nullptr, &startup, &process);
-                const DWORD direct = created ? ERROR_SUCCESS : GetLastError();
-                ReportFixtureStatus("fixture explicit machine image CreateProcessW", direct);
-                if (created) {
+                std::wstring native(32768, L'\0');
+                const auto size = GetFinalPathNameByHandleW(locked.handles.back().get(), native.data(),
+                                                            static_cast<DWORD>(native.size()), VOLUME_NAME_NT);
+                if (!size || size >= native.size())
+                    return result;
+                native.resize(size);
+                const auto kernel = GlobalLocalVolumePath(native);
+                const auto volume = locked.canonical.native();
+                if (kernel.empty() || !volume.starts_with(LR"(\\?\Volume{)"))
+                    return result;
+                const auto global_volume = LR"(\\?\GLOBALROOT\GLOBAL??\)" + volume.substr(4);
+                const auto device = [](std::wstring path) {
+                    path[2] = L'.';
+                    return path;
+                };
+                struct Form { std::wstring path; const char* label; };
+                const std::array forms{
+                    Form{physical, "direct global DOS drive"},
+                    Form{device(physical), "direct device global DOS drive"},
+                    Form{kernel, "direct kernel image"},
+                    Form{device(kernel), "direct device kernel image"},
+                    Form{volume, "direct volume GUID"},
+                    Form{device(volume), "direct device volume GUID"},
+                    Form{global_volume, "direct global volume GUID"},
+                    Form{device(global_volume), "direct device global volume GUID"},
+                };
+                for (const auto& form : forms) {
+                    auto command = L"\"" + form.path + L"\"";
+                    STARTUPINFOW startup{};
+                    startup.cb = sizeof(startup);
+                    PROCESS_INFORMATION process{};
+                    const BOOL created = CreateProcessW(form.path.c_str(), command.data(), nullptr, nullptr, FALSE,
+                                                        CREATE_SUSPENDED, nullptr, nullptr, &startup, &process);
+                    const DWORD status = created ? ERROR_SUCCESS : GetLastError();
+                    ReportFixtureStatus(form.label, status);
+                    if (!created)
+                        continue;
                     Handle thread(process.hThread);
                     StartingGuardian child{Handle(process.hProcess)};
-                    const auto wait = WaitForSingleObject(child.get(), 25000);
-                    ReportFixtureStatus("fixture direct empty server wait", wait);
+                    const bool matched = GlobalProcessImagePath(child.get()) == kernel;
+                    ReportFixtureStatus("fixture suspended kernel image matched", matched);
+                    if (!matched || ResumeThread(thread.get()) == MAXDWORD)
+                        continue;
+                    const auto wait = WaitForSingleObject(child.get(), 5000);
+                    ReportFixtureStatus("fixture owned no-argument child wait", wait);
                     DWORD exit_code = 0;
                     if (GetExitCodeProcess(child.get(), &exit_code))
-                        ReportFixtureStatus("fixture direct empty server exit", exit_code);
+                        ReportFixtureStatus("fixture fixed no-argument child exit", exit_code);
                 }
             }
         }

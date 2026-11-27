@@ -66,6 +66,22 @@ jobs:
             $signedMsix = (Copy-Item $msix $inputs.FullName -PassThru).FullName
             cmake --preset windows-x64-ninja-release "-DEXOSNAP_DIAGNOSTICS_SIGNED_IMAGE=$signedImage" "-DEXOSNAP_DIAGNOSTICS_SIGNED_MSIX=$signedMsix" -DEXOSNAP_SIGNED_DIAGNOSTICS_FIXTURE=ON
             cmake --build $build --target diagnostics_signed_fixture
+            cmake --build $build --target present_provider_tests
+            $savedFilter = $env:GTEST_FILTER
+            try {
+              $env:GTEST_FILTER = 'DiagnosticsHelperWindowsAcl.*'
+              $aclReceipt = @(ctest --test-dir $build --verbose --no-tests=error -R '^present\.present_provider_tests$')
+              $aclExit = $LASTEXITCODE
+              $aclReceipt | ForEach-Object { Write-Host $_ }
+              if ($aclExit -ne 0) { throw "ACL CTest entry failed: $aclExit" }
+              foreach ($name in 'AcceptsOnlyReadOnlyConditionalAllows','RecognizesOnlyTheRegistryCreatorInheritanceTemplate') {
+                if (-not ($aclReceipt -match "\[\s*OK\s*\] DiagnosticsHelperWindowsAcl\.$name\b")) {
+                  throw "Missing successful native ACL regression: $name"
+                }
+              }
+            } finally {
+              $env:GTEST_FILTER = $savedFilter
+            }
             signtool sign /fd SHA256 /sha1 $thumb $client
             $bundle = New-Item -ItemType Directory -Path "$out/signed-fixture/diagnostics"
             Copy-Item $signedMsix "$($bundle.FullName)/helper.msix"
