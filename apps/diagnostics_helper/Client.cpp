@@ -413,13 +413,14 @@ PresentProviderState RemoteBackend::Run() {
     if (FAILED(status))
         return PresentProviderState::Failed;
     const auto created = CreationTime(GetCurrentProcess());
-    ULONG restricted = 0;
-    status = bootstrap->Begin(kBootstrapVersion, words[0], words[1], words[2], words[3], GetCurrentProcessId(),
-                              static_cast<ULONG>(created), static_cast<ULONG>(created >> 32), &restricted);
+    LONG restricted = 0;
+    status = bootstrap->Begin(kBootstrapVersion, WireLong(words[0]), WireLong(words[1]), WireLong(words[2]),
+                              WireLong(words[3]), WireLong(GetCurrentProcessId()), WireLong(static_cast<ULONG>(created)),
+                              WireLong(static_cast<ULONG>(created >> 32)), &restricted);
     ReportFixtureStatus("authenticated machine bootstrap", static_cast<DWORD>(status));
     if (FAILED(status) || !restricted)
         return PresentProviderState::Failed;
-    Handle helper(ULongToHandle(restricted));
+    Handle helper(ULongToHandle(WireBits(restricted)));
     Handle connected(CreateEventW(nullptr, TRUE, FALSE, nullptr));
     OVERLAPPED operation{};
     operation.hEvent = connected.get();
@@ -535,10 +536,10 @@ HRESULT ProbeMachineBootstrap(ULONG version, bool invoke) {
     if (FAILED(result))
         return result;
     const auto created = CreationTime(GetCurrentProcess());
-    ULONG restricted = 0;
-    result = bootstrap->Begin(version, 1, 2, 3, 4, GetCurrentProcessId(), static_cast<ULONG>(created),
-                              static_cast<ULONG>(created >> 32), &restricted);
-    Handle unexpected(ULongToHandle(restricted));
+    LONG restricted = 0;
+    result = bootstrap->Begin(WireLong(version), 1, 2, 3, 4, WireLong(GetCurrentProcessId()),
+                              WireLong(static_cast<ULONG>(created)), WireLong(static_cast<ULONG>(created >> 32)), &restricted);
+    Handle unexpected(ULongToHandle(WireBits(restricted)));
     return result;
 }
 #endif

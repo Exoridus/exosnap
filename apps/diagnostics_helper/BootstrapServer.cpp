@@ -26,13 +26,14 @@ class Bootstrap final : public RuntimeClass<RuntimeClassFlags<ClassicCom>, IExoS
 public:
     explicit Bootstrap(std::shared_ptr<Activation> activation) : activation_(std::move(activation)) {}
 
-    HRESULT STDMETHODCALLTYPE Begin(ULONG version, ULONG a, ULONG b, ULONG c, ULONG d, ULONG requested_pid,
-                                    ULONG low, ULONG high, ULONG* result) override {
+    HRESULT STDMETHODCALLTYPE Begin(LONG version, LONG a, LONG b, LONG c, LONG d, LONG pid,
+                                    LONG low, LONG high, LONG* result) override {
         if (!result)
             return E_POINTER;
         *result = 0;
         if (version != kBootstrapVersion)
             return E_INVALIDARG;
+        const ULONG requested_pid = WireBits(pid);
         RPC_CALL_ATTRIBUTES_V2_W call{};
         call.Version = 2;
         call.Flags = RPC_QUERY_CLIENT_PID | RPC_QUERY_IS_CLIENT_LOCAL;
@@ -42,7 +43,7 @@ public:
         Handle caller(OpenProcess(SYNCHRONIZE | PROCESS_QUERY_LIMITED_INFORMATION | PROCESS_DUP_HANDLE,
                                   FALSE, requested_pid));
         DWORD caller_session = 0, own_session = 0;
-        const uint64_t creation = (static_cast<uint64_t>(high) << 32) | low;
+        const uint64_t creation = (static_cast<uint64_t>(WireBits(high)) << 32) | WireBits(low);
         if (!caller || !creation || CreationTime(caller.get()) != creation || !ApprovedClient(caller.get()) ||
             !ProcessIdToSessionId(requested_pid, &caller_session) ||
             !ProcessIdToSessionId(GetCurrentProcessId(), &own_session) || caller_session != own_session ||
@@ -52,7 +53,7 @@ public:
         if (activation_->closed || activation_->caller)
             return HRESULT_FROM_WIN32(ERROR_INVALID_STATE);
         try {
-            activation_->nonce = BootstrapNonce({a, b, c, d});
+            activation_->nonce = BootstrapNonce({WireBits(a), WireBits(b), WireBits(c), WireBits(d)});
         } catch (const std::bad_alloc&) {
             return E_OUTOFMEMORY;
         }
@@ -62,7 +63,7 @@ public:
             return HRESULT_FROM_WIN32(GetLastError());
         activation_->caller = std::move(caller);
         activation_->creation = creation;
-        *result = HandleToULong(restricted);
+        *result = WireLong(HandleToULong(restricted));
         SetEvent(activation_->ready.get());
         return S_OK;
     }
