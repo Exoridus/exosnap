@@ -18,6 +18,16 @@ struct TraceQuery {
     std::array<wchar_t, 256> logger{};
 };
 
+std::wstring ImagePath(HANDLE process) {
+    std::wstring path(32768, L'\0');
+    auto size = static_cast<DWORD>(path.size());
+    if (!QueryFullProcessImageNameW(process, 0, path.data(), &size))
+        return {};
+    path.resize(size);
+    return path;
+}
+} // namespace
+
 void StopOwnedSession(const wchar_t* name, const GUID& id) {
     TraceQuery query{};
     query.properties.Wnode.BufferSize = sizeof(query);
@@ -29,16 +39,6 @@ void StopOwnedSession(const wchar_t* name, const GUID& id) {
     if (handle)
         ControlTraceW(handle, nullptr, &query.properties, EVENT_TRACE_CONTROL_STOP);
 }
-
-std::wstring ImagePath(HANDLE process) {
-    std::wstring path(32768, L'\0');
-    auto size = static_cast<DWORD>(path.size());
-    if (!QueryFullProcessImageNameW(process, 0, path.data(), &size))
-        return {};
-    path.resize(size);
-    return path;
-}
-} // namespace
 
 int RunGuardian() {
     Handle owner(GetStdHandle(STD_INPUT_HANDLE));

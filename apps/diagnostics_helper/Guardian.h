@@ -12,6 +12,9 @@ struct GuardedSession {
     Handle heartbeat;
 };
 
+// Stop a trace only when its name and pre-armed generation both match.
+void StopOwnedSession(const wchar_t* name, const GUID& id);
+
 GuardedSession StartGuardian();
 int RunGuardian();
 

@@ -936,6 +936,20 @@ exosnap_add_gtest(
 target_include_directories(elevation_tests PRIVATE ${CMAKE_CURRENT_SOURCE_DIR})
 target_compile_definitions(elevation_tests PRIVATE NOMINMAX)
 
+# Native ownership test: open an isolated empty ETW session, never a product session.
+exosnap_add_gtest(
+    NAME diagnostics_helper_trace_cleanup_tests
+    TEST_PREFIX diagnostics_helper_trace_cleanup.
+    PHASE vm
+    LABELS live
+    SOURCES
+        tests/test_diagnostics_helper_trace_cleanup.cpp
+        ../apps/diagnostics_helper/Guardian.cpp
+    LIBRARIES advapi32 ole32
+)
+target_include_directories(diagnostics_helper_trace_cleanup_tests PRIVATE ${CMAKE_CURRENT_SOURCE_DIR})
+target_compile_definitions(diagnostics_helper_trace_cleanup_tests PRIVATE NOMINMAX UNICODE _UNICODE)
+
 # present-diagnostics provider. PresentMonProvider owns a
 # PresentMonEtwSession and attempts the trace when the session opt-in asks for
 # it; the OS answer (opened, access denied, session conflict, not built) is what
