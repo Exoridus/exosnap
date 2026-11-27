@@ -47,17 +47,26 @@ jobs:
       - name: Download exact standard-account evidence
         uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093
         with:
-          artifact-ids: '15211862205'
-          run-id: '46020290997'
+          artifact-ids: '15215445245'
+          run-id: '46027499869'
           github-token: ${{ github.token }}
           path: standard
           merge-multiple: true
       - name: Inspect standard-account outcome
         shell: python
         run: |
+          import json
           import pathlib
           import re
           base = pathlib.Path("standard")
+          for name in ("policy.json", "source.json"):
+              data = (base / name).read_bytes()
+              if len(data) > 16384:
+                  raise RuntimeError("Unexpected receipt size")
+              values = json.loads(data.decode("utf-8-sig"))
+              keys = ("previousValuePresent", "previousDword", "previousKeyPresent", "permittedDword", "restored",
+                      "workflowCommit", "productCommit", "0.10.1", "0.10.2")
+              print("  | " + name + " " + json.dumps({k: values[k] for k in keys if k in values})[:1000])
           failure = base / "failure.txt"
           data = failure.read_bytes()
           if len(data) > 16384:
@@ -77,8 +86,8 @@ jobs:
               print(name)
               for line in found[:30]:
                   print("  | " + line[:800])
-          for index in (0, 1):
-              path = base / f"install-0.10.1_{index:03d}_ExoSnapMsi.log"
+          for stage, index in [(s, i) for s in ("install-0.10.1", "install-0.10.2", "cached-repair", "cached-uninstall") for i in (0, 1)]:
+              path = base / f"{stage}_{index:03d}_ExoSnapMsi.log"
               if not path.is_file():
                   continue
               data = path.read_bytes()
@@ -86,7 +95,7 @@ jobs:
                   raise RuntimeError("Unexpected MSI log size")
               encoding = "utf-16" if data.startswith((b"\xff\xfe", b"\xfe\xff")) else "utf-8-sig"
               lines = data.decode(encoding, errors="replace").splitlines()
-              pattern = r"DisableMSI|DisableUserInstalls|AlwaysInstallElevated|prohibit|restricted|forbidden|1625|MSI_LUA|software restriction|AppLocker|signature"
+              pattern = r"DisableMSI|DisableUserInstalls|AlwaysInstallElevated|MSI_LUA|Property\([CS]\): (?:ProductVersion|ProductCode|ALLUSERS) =|Executing op: ProductRegister\(|exiting|returning [1-9]|status: [0-9]+|return value 3|Error [0-9]{4}"
               print(path.name)
               for line in [line for line in lines if re.search(pattern, line, re.I)][:40]:
                   print("  | " + line[:800])
