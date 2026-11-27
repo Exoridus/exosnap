@@ -32,7 +32,7 @@ jobs:
               data = path.read_bytes()
               encoding = "utf-16" if data.startswith((b"\xff\xfe", b"\xfe\xff")) else "utf-8-sig"
               lines = data.decode(encoding, errors="replace").splitlines()
-              pattern = r"(?:Action (?:start|ended) .*?(?:RemoveExistingProducts|ForceFixtureRollback)|(?:Product: ExoSnap --|WIX_UPGRADE_DETECTED property|RemoveExistingProducts: Application|Removal (?:success|completed)|remov(?:ing|ed) application|Deliberate rollback fixture failure|Rollback:|RollbackInfo|returned actual error code|MainEngineThread is returning|InstallValidate: Full uninstall))"
+              pattern = r"(?:Executing op: (?:FileRemove|FileCopy|FileRestore|FileRename).*?exosnap\.exe|Executing op: (?:ProductUnpublish|ProductPublish|ProductRegister|ProductUnregister)|UPGRADINGPRODUCTCODE property|Action (?:start|ended) .*?(?:RemoveExistingProducts|ForceFixtureRollback|UnpublishProduct)|Executing op: .*?Rollback.*?exosnap\.exe)"
               selected = [line for line in lines if re.search(pattern, line, re.I)]
               print(f"{name}: {len(lines)} lines, {len(selected)} matches")
               for line in selected[:80]:
