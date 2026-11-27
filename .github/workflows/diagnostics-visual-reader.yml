@@ -1,0 +1,74 @@
+name: Read diagnostics qualification captures
+
+on:
+  push:
+    branches: [verify/v012-diagnostics-visual-review]
+
+permissions:
+  contents: read
+  actions: read
+
+jobs:
+  read-captures:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    strategy:
+      fail-fast: false
+      max-parallel: 4
+      matrix:
+        state: [helper-opt-in, helper-unavailable, helper-refused]
+        size: [860x700, 1600x1000]
+    steps:
+      - name: Read the fixed Windows capture artifact
+        uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4.3.0
+        with:
+          github-token: ${{ github.token }}
+          run-id: 46022104792
+          artifact-ids: 15211042853
+          merge-multiple: true
+          path: captures
+      - name: Verify and emit two bounded PNGs
+        shell: python
+        env:
+          CAPTURE_STATE: ${{ matrix.state }}
+          CAPTURE_SIZE: ${{ matrix.size }}
+        run: |
+          import base64
+          import hashlib
+          import json
+          import os
+          from pathlib import Path
+          import struct
+
+          root = Path("captures").resolve()
+          state = os.environ["CAPTURE_STATE"]
+          size = os.environ["CAPTURE_SIZE"]
+          if state not in {"helper-opt-in", "helper-unavailable", "helper-refused"} or size not in {"860x700", "1600x1000"}:
+              raise ValueError("Unexpected capture")
+          def read_checked(path, limit):
+              if path.is_symlink() or not path.resolve().is_relative_to(root) or not path.is_file() or not 0 < path.stat().st_size <= limit:
+                  raise ValueError("Unexpected artifact file")
+              return path.read_bytes()
+          source = json.loads(read_checked(root / "source.json", 4096).decode("utf-8-sig"))
+          if source["productCommit"] != "433712b4fd0afd4dd00d7fcfdd4a596a30937f28" or source["captureCommit"] != "856fb27ff4ccad6e9a8e2ef29b32ec3902036710":
+              raise ValueError("Capture provenance mismatch")
+          receipts = json.loads(read_checked(root / "captures.json", 16384).decode("utf-8-sig"))
+          if len(receipts) != 12:
+              raise ValueError("Expected twelve capture receipts")
+          for theme in ("dark", "light"):
+              rows = [r for r in receipts if r["state"] == state and r["appearance"] == theme and r["size"] == size]
+              if len(rows) != 1:
+                  raise ValueError("Capture receipt not unique")
+              row = rows[0]
+              filename = f"live-{state}_{theme}-aqua_{size}.png"
+              if row["file"] != filename:
+                  raise ValueError("Unexpected capture filename")
+              data = read_checked(root / state / "diagnostics" / filename, 1024 * 1024)
+              digest = hashlib.sha256(data).hexdigest()
+              if digest.upper() != row["sha256"] or data[:16] != b"\x89PNG\r\n\x1a\n\x00\x00\x00\rIHDR" or struct.unpack(">II", data[16:24]) != tuple(map(int, size.split("x"))):
+                  raise ValueError("Invalid capture checksum, header or dimensions")
+              print("DIAGNOSTICS_PNG_BEGIN", filename, len(data), digest)
+              encoded = base64.b64encode(data).decode("ascii")
+              for offset in range(0, len(encoded), 3000):
+                  print("DIAGNOSTICS_PNG_DATA", encoded[offset:offset + 3000])
+              print("DIAGNOSTICS_PNG_END", filename)
