@@ -129,7 +129,13 @@ bool RunCycle() {
 
 int main(int argc, char** argv) {
     if (argc == 2 && std::string_view(argv[1]) == "--probe-installed-launch") {
+        const HRESULT com = CoInitializeEx(nullptr, COINIT_APARTMENTTHREADED);
+        if (FAILED(com)) {
+            std::cerr << "Launch probe COM initialization failed: " << com << '\n';
+            return 1;
+        }
         exosnap::diagnostics::ProbeInstalledHelperLaunch();
+        CoUninitialize();
         return 0;
     }
     if (!ProbePackagePaths())
