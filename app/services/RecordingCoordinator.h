@@ -522,7 +522,7 @@ class RecordingCoordinator {
     void ScheduleSegmentRemuxForTest(std::filesystem::path transient_mkv, std::filesystem::path output_mp4,
                                      QString manifest_id, std::function<bool()> work);
     [[nodiscard]] size_t SegmentRemuxJobCountForTest() const;
-    [[nodiscard]] uint64_t PendingRemuxReserveBytesForTest() const;
+    [[nodiscard]] uint64_t RemuxReserveBytesForTest() const;
     void ReapFinishedSegmentRemuxJobsForTest();
     bool DrainSegmentRemuxJobsForTest(bool cancel);
 
@@ -726,7 +726,6 @@ class RecordingCoordinator {
     // True when the active session targets MP4 (requires remux reserve in threshold).
     bool session_is_mp4_ = false;
     // Path of the transient MKV for the active MP4 session (used to size remux reserve).
-    std::filesystem::path session_transient_mkv_;
 
     // The monitor is bound to the recording it was started for: a verdict it
     // reaches after that recording ended (its query can outlast the session) is
@@ -840,6 +839,8 @@ class RecordingCoordinator {
     void PostClipJobsChanged();
     [[nodiscard]] bool PauseClipBackground();
     std::map<std::filesystem::path, std::filesystem::path> edit_master_paths_;
+    std::map<std::filesystem::path, std::filesystem::path> published_segment_paths_;
+    bool ApplyPublishedSegmentPaths(UiRecordingResult& result);
     std::filesystem::path RetainEditMaster(const std::filesystem::path& source);
     SplitFeedbackCallback on_split_feedback_;
     void PostSplitFeedback(bool accepted, QString message);
@@ -906,6 +907,8 @@ class RecordingCoordinator {
     // transaction between the same two threads, and splitting them across two
     // locks would let a job be queued against an id nobody owns yet.
     mutable std::mutex segment_remux_mutex_;
+    // Updated with the job queue so a reserve sample counts the handoff once.
+    std::filesystem::path active_remux_source_;
     std::vector<std::unique_ptr<SegmentRemuxJob>> segment_remux_jobs_;
     QThreadPool segment_remux_pool_;
     std::atomic<uint64_t> pending_segment_remux_jobs_{0};
@@ -931,7 +934,7 @@ class RecordingCoordinator {
     // The production remux body for one segment (remux → atomic move → transient
     // cleanup → manifest removal), as handed to QueueSegmentRemux.
     bool RunSegmentRemuxWork(const std::filesystem::path& transient_mkv, const std::filesystem::path& output_mp4,
-                             const QString& manifest_id);
+                             const QString& manifest_id, bool replace_existing);
 
     // Drop every completed job after acquiring its completion flag, latching any
     // failure into reaped_segment_remux_failed_. Opportunistic: it never waits on
@@ -945,11 +948,8 @@ class RecordingCoordinator {
     // wait that guarantees no remux job outlives the session.
     bool DrainSegmentRemuxJobs(bool cancel);
 
-    // Total bytes across all transient MKV files whose remux job is pending or running.
-    // Used by the disk monitor for a conservative reserve. A finished job — success
-    // or failure — is not transient work and must not inflate the reserve.
-    // Thread-safe (acquires segment_remux_mutex_).
-    uint64_t PendingRemuxReserveBytes() const;
+    // Bytes needed for remux output of the active partial and unfinished jobs.
+    uint64_t RemuxReserveBytes() const;
 
     StateChangedCallback on_state_changed_;
     StatsUpdatedCallback on_stats_updated_;
