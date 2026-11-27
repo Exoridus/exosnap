@@ -1,0 +1,122 @@
+name: German project controls at editor source
+
+on:
+  push:
+    branches: [verify/v012-editor-german]
+
+permissions:
+  contents: read
+
+env:
+  SCCACHE_GHA_ENABLED: "true"
+  SCCACHE_GHA_RW_MODE: READ_ONLY
+  SCCACHE_IDLE_TIMEOUT: "0"
+
+jobs:
+  capture:
+    runs-on: windows-2022
+    timeout-minutes: 60
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+        with:
+          fetch-depth: 2
+          persist-credentials: false
+      - name: Verify product source
+        shell: pwsh
+        run: |
+          $expected = '751b2abb3b0d182423412e99f482ca34fbc6c131'
+          $parent = git rev-parse 'HEAD^'
+          if ($LASTEXITCODE -ne 0 -or $parent -ne $expected) { throw 'Unexpected product source commit' }
+          $files = @(git diff --name-only $expected HEAD)
+          if ($LASTEXITCODE -ne 0 -or $files.Count -ne 1 -or $files[0] -ne '.github/workflows/v012-editor-german.yml') {
+            throw 'Qualification must differ from product source only by this workflow'
+          }
+      - uses: ilammy/msvc-dev-cmd@0b201ec74fa43914dc39ae48a89fd1d8cb592756 # v1.13.0
+      - uses: ./.github/actions/setup-qt
+        with:
+          profile: quick
+      - uses: mozilla-actions/sccache-action@9e7fa8a12102821edf02ca5dbea1acd0f89a2696 # v0.0.10
+      - name: Build the shipping Qt Quick application
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $PSNativeCommandUseErrorActionPreference = $true
+          cmake --preset windows-x64-ninja-release -DEXOSNAP_USE_SCCACHE=ON
+          cmake --build build/windows-x64-ninja-release --target exosnap --parallel $([Environment]::ProcessorCount)
+      - name: Capture German project controls
+        id: visuals
+        shell: python
+        run: |
+          import hashlib
+          import json
+          import os
+          from pathlib import Path
+          import re
+          import shutil
+          import struct
+          import subprocess
+          import tempfile
+
+          temp = Path(os.environ["RUNNER_TEMP"])
+          output = temp / "v012-editor-de"
+          output.mkdir()
+          product = "751b2abb3b0d182423412e99f482ca34fbc6c131"
+          source_tree = subprocess.check_output(["git", "rev-parse", "HEAD~1^{tree}"], text=True).strip()
+          app = Path("build/windows-x64-ninja-release/app/exosnap.exe").resolve(strict=True)
+          evidence = {"sourceCommit": product, "sourceTree": source_tree,
+                      "executableSha256": hashlib.sha256(app.read_bytes()).hexdigest(),
+                      "workflowCommit": os.environ["GITHUB_SHA"], "language": "de", "rendering": "Qt Quick software/offscreen", "cases": []}
+          warning = re.compile(r"--(?:visual|record-visual|overlay-visual|settings-visual)[a-z-]*:|SAVE FAILED|"
+                               r"\.qml:\d+.*(?:Error|Unable|Cannot|polish\(\) loop)|(?:Warning|QWARN).*\.qml:\d+", re.I)
+          try:
+              for scene in ("edit-project-menu", "edit-project-discard"):
+                  for theme in ("dark", "light"):
+                      name = f"{scene}-{theme}"
+                      case = {"scene": scene, "theme": theme, "ok": False}
+                      evidence["cases"].append(case)
+                      png = output / (name + ".png")
+                      logs = [output / (name + suffix) for suffix in (".stdout.log", ".stderr.log", ".app.log")]
+                      with tempfile.TemporaryDirectory(dir=temp, prefix="v012-editor-de-") as config:
+                          env = dict(os.environ, QT_QPA_PLATFORM="offscreen", QT_QUICK_BACKEND="software",
+                                     QT_FORCE_STDERR_LOGGING="1", EXOSNAP_CONFIG_DIR=config,
+                                     EXOSNAP_VISUAL_EDIT_SCENARIO=scene)
+                          with logs[0].open("wb") as stdout, logs[1].open("wb") as stderr:
+                              try:
+                                  run = subprocess.run([str(app), "--ui-language", "de", "--visual-test", str(png),
+                                      "--visual-test-size", "860x700", "--visual-page", "5",
+                                      "--visual-appearance", theme, "--visual-accent", "aqua"],
+                                      stdout=stdout, stderr=stderr, env=env, timeout=90, check=False)
+                                  case["exit"] = run.returncode
+                              except subprocess.TimeoutExpired:
+                                  case["timeout"] = True
+                          app_log = Path(config) / "logs" / "exosnap.log"
+                          if app_log.is_file():
+                              shutil.copyfile(app_log, logs[2])
+                      warnings = [line for file in logs if file.is_file()
+                                  for line in file.read_text(encoding="utf-8", errors="replace").splitlines()
+                                  if warning.search(line)]
+                      case["warningCount"] = len(warnings)
+                      for line in warnings[:10]:
+                          print("VISUAL_WARNING", name, line[:1000])
+                      case["ready"] = logs[2].is_file() and ("Edit visual scenario ready: " + scene + ";") in logs[2].read_text(encoding="utf-8", errors="replace")
+                      data = png.read_bytes() if png.is_file() else b""
+                      if len(data) >= 24 and data[:16] == bytes.fromhex("89504e470d0a1a0a0000000d49484452"):
+                          case["size"] = list(struct.unpack(">II", data[16:24]))
+                          case["sha256"] = hashlib.sha256(data).hexdigest()
+                      case["ok"] = (case.get("exit") == 0 and case.get("size") == [860, 700]
+                                    and case["ready"] and not warnings)
+                      print(name, json.dumps(case), flush=True)
+              if len({case.get("sha256") for case in evidence["cases"]}) != 4:
+                  raise RuntimeError("Expected four distinct pictures of both scenes and themes")
+              if not all(case["ok"] for case in evidence["cases"]):
+                  raise RuntimeError("German visual qualification failed; inspect retained case logs")
+          finally:
+              (output / "source.json").write_text(json.dumps(evidence, indent=2) + "\n", encoding="utf-8")
+
+      - name: Retain German project screenshots, logs and provenance
+        if: always()
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        with:
+          name: v012-editor-german-751b2abb
+          path: ${{ runner.temp }}/v012-editor-de/
+          if-no-files-found: error
