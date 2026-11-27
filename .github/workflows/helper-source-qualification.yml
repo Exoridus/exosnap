@@ -1,0 +1,40 @@
+name: Diagnostics helper source ownership qualification
+
+on:
+  push:
+    branches: [verify/v012-diagnostics-source-ownership]
+
+permissions:
+  contents: read
+
+jobs:
+  scope:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
+        with:
+          ref: d1ee3b61d19e5a548a35ddb7eda2d9a6502368b7
+          persist-credentials: false
+      - name: Capture exact pinned formatter changes
+        shell: bash
+        run: |
+          set -euo pipefail
+          python3 -m venv "$RUNNER_TEMP/helper-format"
+          "$RUNNER_TEMP/helper-format/bin/python" -m pip install --disable-pip-version-check --no-deps --only-binary=:all: clang-format==19.1.7
+          formatter="$RUNNER_TEMP/helper-format/bin/clang-format"
+          "$formatter" --version
+          "$formatter" --version | grep -F '19.1.7'
+          git ls-files -z -- 'apps/diagnostics_helper/*.cpp' 'apps/diagnostics_helper/*.h' | xargs -0 -r "$formatter" --style=file -i
+          git diff --check
+          echo FORMAT-DIFF-BEGIN
+          git -c color.ui=false diff --no-ext-diff -- apps/diagnostics_helper/
+          echo FORMAT-DIFF-END
+      - name: Check helper with the repository cppcheck options
+        shell: bash
+        run: |
+          set -euo pipefail
+          sudo apt-get update -qq
+          sudo apt-get install -y --no-install-recommends cppcheck
+          cppcheck --version
+          cppcheck --enable=warning,performance,portability --std=c++20 --error-exitcode=1 --inline-suppr --suppressions-list=.cppcheck-suppress --library=windows --library=qt '-DQ_MOC_INCLUDE(x)=' -q -I libs/engine/include -I libs/capability/include -i libs/update/third_party apps/diagnostics_helper/
