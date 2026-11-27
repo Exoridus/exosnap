@@ -61,24 +61,29 @@ EditActionButton {
     }
     property bool continueAfterSave: false
     property string projectAction: ""
+    property var projectDiscardRevision: 0
     property url projectTarget
     property string recoveryTarget: ""
     function performProjectAction(discard: bool): void {
         const action = projectAction;
         projectAction = "";
         if (action === "new")
-            session.newProject(discard);
+            session.newProject(projectDiscardRevision, discard);
         else if (action === "open")
-            session.openProject(projectTarget, discard);
+            session.openProject(projectTarget, projectDiscardRevision, discard);
         else if (action === "recover")
-            session.recoverProject(recoveryTarget, discard);
+            session.recoverProject(recoveryTarget, projectDiscardRevision, discard);
+    }
+    function confirmProjectDiscard(): void {
+        projectDiscardRevision = session.closeGuardRevision();
+        projectDiscard.open();
     }
     function requestProjectAction(action: string): void {
         if (session.projectBusy || !session.preflightPendingDraft())
             return;
         projectAction = action;
         if (session.projectDirty)
-            projectDiscard.open();
+            confirmProjectDiscard();
         else
             performProjectAction(false);
     }
@@ -214,7 +219,7 @@ EditActionButton {
                 return;
             root.continueAfterSave = false;
             if (root.session.projectDirty)
-                projectDiscard.open();
+                root.confirmProjectDiscard();
             else
                 root.performProjectAction(false);
         }

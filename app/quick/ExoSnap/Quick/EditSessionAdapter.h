@@ -159,13 +159,14 @@ class EditSessionAdapter : public QObject {
   public:
     Q_INVOKABLE void initializeProjects();
     Q_INVOKABLE void preserveProjectRecovery();
-    Q_INVOKABLE void newProject(bool discard);
-    Q_INVOKABLE void openProject(const QUrl& url, bool discard);
+    void discardProjectRecoveryOnQuit();
+    Q_INVOKABLE void newProject(qulonglong discard_revision = 0, bool discard = false);
+    Q_INVOKABLE void openProject(const QUrl& url, qulonglong discard_revision = 0, bool discard = false);
     Q_INVOKABLE void saveProject(const QUrl& url);
     Q_INVOKABLE void saveCurrentProject() {
         saveProject(QUrl::fromLocalFile(project_path_));
     }
-    Q_INVOKABLE void recoverProject(const QString& path, bool discard);
+    Q_INVOKABLE void recoverProject(const QString& path, qulonglong discard_revision = 0, bool discard = false);
     const QString& projectPath() const {
         return project_path_;
     }
@@ -612,7 +613,7 @@ class EditSessionAdapter : public QObject {
     void setExportRunning(bool running);
     [[nodiscard]] bool hasUnsavedEdits() const;
     // Changes whenever authored content changes, including undo and reset.
-    [[nodiscard]] quint64 closeGuardRevision() const;
+    [[nodiscard]] Q_INVOKABLE quint64 closeGuardRevision() const;
 
     // A trim handle was released at these millisecond positions. Clamps against
     // the other handle and the clip length, snaps, stores, and reports the frame
@@ -711,6 +712,7 @@ class EditSessionAdapter : public QObject {
     mutable edit::ProjectSessionState observed_project_state_;
     uint64_t recovery_generation_ = 0;
     bool preserve_checkpoint_ = false;
+    bool discard_checkpoint_on_quit_ = false;
     edit::ProjectSessionState projectSessionState() const {
         return {markers_, autoCrossfade};
     }
@@ -719,7 +721,8 @@ class EditSessionAdapter : public QObject {
     }
     void resetProject();
     void resetWorkspace(bool force);
-    void loadProject(const QString& path, bool discard, bool recovery);
+    bool allowProjectReplacement(qulonglong discard_revision, bool discard);
+    void loadProject(const QString& path, qulonglong discard_revision, bool discard, bool recovery);
     void checkpointProject();
     void retireCheckpoint();
     void refreshRecoveries();

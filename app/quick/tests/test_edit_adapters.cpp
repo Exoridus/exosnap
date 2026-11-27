@@ -304,9 +304,9 @@ TEST(EditProjectSession, SaveOpenOfflineUndoAndExternalConflictUseTheLiveWorkspa
     ASSERT_TRUE(EditSessionAdapterTestPeer::finishProjectIo(session));
     EXPECT_FALSE(session.projectDirty());
     EXPECT_EQ(session.projectPath(), url.toLocalFile());
-    session.newProject(false);
+    session.newProject();
     ASSERT_TRUE(session.workspace().clips().empty());
-    session.openProject(url, false);
+    session.openProject(url);
     ASSERT_TRUE(EditSessionAdapterTestPeer::finishProjectIo(session));
     EXPECT_EQ(clips, session.workspace().clips());
     ASSERT_NE(session.workspace().asset(asset), nullptr);
@@ -328,7 +328,7 @@ TEST(EditProjectSession, SaveOpenOfflineUndoAndExternalConflictUseTheLiveWorkspa
     EXPECT_EQ(changed.readAll(), QByteArray("external"));
     changed.close();
     error.clear();
-    session.openProject(url, true);
+    session.openProject(url, session.closeGuardRevision(), true);
     ASSERT_TRUE(EditSessionAdapterTestPeer::finishProjectIo(session));
     EXPECT_FALSE(error.isEmpty());
     EXPECT_EQ(clips, session.workspace().clips());
@@ -351,7 +351,7 @@ TEST(EditProjectSession, ActiveRecoveryIsExcludedAndOrphanRecoveryRequiresSaveAs
     EditSessionAdapter reader;
     EditSessionAdapterTestPeer::initializeRecovery(reader, temp.path());
     EXPECT_EQ(reader.recoverableProjects(), QStringList{orphan});
-    reader.recoverProject(orphan, false);
+    reader.recoverProject(orphan);
     ASSERT_TRUE(EditSessionAdapterTestPeer::finishProjectIo(reader));
     EXPECT_TRUE(reader.projectPath().isEmpty());
     EXPECT_TRUE(reader.projectDirty());
@@ -381,7 +381,7 @@ TEST(EditProjectSession, SuccessfulSaveReportsLockedRecoveryAndRetriesCleanup) {
     EditSessionAdapter reader;
     EditSessionAdapterTestPeer::initializeRecovery(reader, temp.path());
     ASSERT_TRUE(reader.recoverableProjects().contains(orphan));
-    reader.recoverProject(orphan, false);
+    reader.recoverProject(orphan);
     ASSERT_TRUE(EditSessionAdapterTestPeer::finishProjectIo(reader));
     ASSERT_TRUE(reader.projectDirty());
     ASSERT_FALSE(reader.autoCrossfadeEnabled());
@@ -430,7 +430,10 @@ TEST(EditProjectSession, LateCheckpointCannotRestoreRetiredStateAndMarkerChanges
     EditSessionAdapterTestPeer::replaceMarkers(session, {{200, RecordingMarkerType::Highlight, "two"}});
     EXPECT_GT(session.closeGuardRevision(), consent);
     const auto path = EditSessionAdapterTestPeer::checkpoint(session);
-    session.newProject(true);
+    session.newProject(consent, true);
+    EXPECT_TRUE(session.projectDirty());
+    EXPECT_GT(session.closeGuardRevision(), consent);
+    session.newProject(session.closeGuardRevision(), true);
     ASSERT_TRUE(EditSessionAdapterTestPeer::finishProjectIo(session));
     EXPECT_FALSE(QFileInfo::exists(path));
     EXPECT_FALSE(session.projectDirty());
@@ -461,11 +464,37 @@ TEST(EditProjectSession, FailedOrCancelledSaveLeavesRecoverableAuthorshipAfterSh
         ASSERT_TRUE(QFileInfo::exists(path));
         EditSessionAdapter reader;
         EditSessionAdapterTestPeer::initializeRecovery(reader, temp.path());
-        reader.recoverProject(path, false);
+        reader.recoverProject(path);
         ASSERT_TRUE(EditSessionAdapterTestPeer::finishProjectIo(reader));
         EXPECT_TRUE(reader.projectDirty());
         EXPECT_FALSE(reader.autoCrossfadeEnabled());
     }
+}
+
+TEST(EditProjectSession, QuitDiscardRetiresOnlyTheCurrentRecovery) {
+    EnsureApplication();
+    QTemporaryDir temp;
+    ASSERT_TRUE(temp.isValid());
+    QString checkpoint;
+    QString earlier;
+    {
+        EditSessionAdapter session;
+        EditSessionAdapterTestPeer::initializeRecovery(session, temp.path());
+        session.setAutoCrossfade(false);
+        session.preserveProjectRecovery();
+        checkpoint = EditSessionAdapterTestPeer::checkpoint(session);
+        ASSERT_TRUE(EditSessionAdapterTestPeer::finishProjectIo(session));
+        earlier = QFileInfo(checkpoint).absoluteDir().filePath(QStringLiteral("earlier.exorecovery"));
+        ASSERT_TRUE(QFile::copy(checkpoint, earlier));
+
+        session.saveProject(QUrl::fromLocalFile(temp.filePath(QStringLiteral("missing/unsaved.exoproj"))));
+        session.discardProjectRecoveryOnQuit();
+        ASSERT_TRUE(EditSessionAdapterTestPeer::finishProjectIo(session));
+    }
+    EXPECT_FALSE(QFileInfo::exists(checkpoint));
+    EditSessionAdapter reader;
+    EditSessionAdapterTestPeer::initializeRecovery(reader, temp.path());
+    EXPECT_EQ(reader.recoverableProjects(), QStringList{earlier});
 }
 
 TEST(EditProjectSession, RecoveryReopensVerifiedOriginalAndLeavesReplacedBytesOffline) {
@@ -509,7 +538,7 @@ TEST(EditProjectSession, RecoveryReopensVerifiedOriginalAndLeavesReplacedBytesOf
         }
         EditSessionAdapter reader;
         EditSessionAdapterTestPeer::initializeRecovery(reader, temp.path());
-        reader.recoverProject(orphan, false);
+        reader.recoverProject(orphan);
         ASSERT_TRUE(EditSessionAdapterTestPeer::finishProjectIo(reader));
         EXPECT_EQ(reader.workspace().clips(), clips);
         ASSERT_NE(reader.workspace().asset(asset), nullptr);
@@ -4068,7 +4097,7 @@ TEST(EditWorkspaceAdapter, RealEditingHistoryAndBlankTimeReachScopedExportsWitho
     session.close();
     ASSERT_TRUE(session.projectPath().isEmpty());
     ASSERT_TRUE(session.workspace().clips().empty());
-    session.openProject(project, false);
+    session.openProject(project);
     ASSERT_TRUE(EditSessionAdapterTestPeer::finishProjectIo(session));
     ASSERT_EQ(session.projectPath(), project.toLocalFile());
     EXPECT_EQ(session.workspace().clips(), blank->clips);
@@ -6803,7 +6832,7 @@ TEST(EditProjectSession, SaveWhileRecordedDefaultIsPendingRestoresTheVerifiedMix
         }
         EditSessionAdapter reopened;
         EditSessionAdapterTestPeer::initializeRecovery(reopened, directory.path());
-        reopened.openProject(project, false);
+        reopened.openProject(project);
         ASSERT_TRUE(EditSessionAdapterTestPeer::finishProjectIo(reopened));
         ASSERT_TRUE(reopened.sourceProof(id));
         EXPECT_FALSE(reopened.projectDirty());

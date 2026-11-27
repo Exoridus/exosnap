@@ -182,7 +182,7 @@ EditSessionAdapter::~EditSessionAdapter() {
     if (preserve_checkpoint_)
         preserveProjectRecovery();
     project_pool_.waitForDone();
-    if (recovery_lock_ && !preserve_checkpoint_)
+    if (recovery_lock_ && (!preserve_checkpoint_ || discard_checkpoint_on_quit_))
         QFile::remove(recovery_path_);
     keyframe_pool_.clear();
     metadata_pool_.clear();

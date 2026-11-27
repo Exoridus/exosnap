@@ -149,7 +149,7 @@ void EditSessionAdapter::retireCheckpoint() {
 }
 
 void EditSessionAdapter::preserveProjectRecovery() {
-    if (!recovery_lock_ || !projectDirty())
+    if (!recovery_lock_ || discard_checkpoint_on_quit_ || !projectDirty())
         return;
     preserve_checkpoint_ = true;
     ++recovery_generation_;
@@ -158,8 +158,14 @@ void EditSessionAdapter::preserveProjectRecovery() {
     checkpointProject();
 }
 
+void EditSessionAdapter::discardProjectRecoveryOnQuit() {
+    // A save failure already queued on the UI thread can still request preservation.
+    discard_checkpoint_on_quit_ = true;
+    retireCheckpoint();
+}
+
 void EditSessionAdapter::checkpointProject() {
-    if (!recovery_lock_ || recovery_busy_)
+    if (!recovery_lock_ || discard_checkpoint_on_quit_ || recovery_busy_)
         return;
     if (!projectDirty()) {
         if (recovery_snapshot_)
@@ -192,8 +198,19 @@ void EditSessionAdapter::checkpointProject() {
     });
 }
 
-void EditSessionAdapter::newProject(bool discard) {
-    if (project_busy_ || (projectDirty() && !discard))
+bool EditSessionAdapter::allowProjectReplacement(qulonglong discard_revision, bool discard) {
+    if (project_busy_)
+        return false;
+    if (!discard)
+        return !projectDirty();
+    if (discard_revision == closeGuardRevision())
+        return true;
+    emit projectError(tr("The project changed before discard was confirmed. Review it and try again."));
+    return false;
+}
+
+void EditSessionAdapter::newProject(qulonglong discard_revision, bool discard) {
+    if (!allowProjectReplacement(discard_revision, discard))
         return;
     resetWorkspace(true);
     resetProject();
@@ -280,18 +297,18 @@ void EditSessionAdapter::saveProject(const QUrl& url) {
     });
 }
 
-void EditSessionAdapter::openProject(const QUrl& url, bool discard) {
+void EditSessionAdapter::openProject(const QUrl& url, qulonglong discard_revision, bool discard) {
     if (url.isLocalFile())
-        loadProject(QFileInfo(url.toLocalFile()).absoluteFilePath(), discard, false);
+        loadProject(QFileInfo(url.toLocalFile()).absoluteFilePath(), discard_revision, discard, false);
 }
 
-void EditSessionAdapter::recoverProject(const QString& path, bool discard) {
+void EditSessionAdapter::recoverProject(const QString& path, qulonglong discard_revision, bool discard) {
     if (recoverable_projects_.contains(path))
-        loadProject(path, discard, true);
+        loadProject(path, discard_revision, discard, true);
 }
 
-void EditSessionAdapter::loadProject(const QString& path, bool discard, bool recovery) {
-    if (project_busy_ || (projectDirty() && !discard))
+void EditSessionAdapter::loadProject(const QString& path, qulonglong discard_revision, bool discard, bool recovery) {
+    if (!allowProjectReplacement(discard_revision, discard))
         return;
     const auto before = closeGuardRevision();
     const auto session = source_cancelled_;
@@ -359,7 +376,7 @@ void EditSessionAdapter::loadProject(const QString& path, bool discard, bool rec
             else if (before != closeGuardRevision() || session != source_cancelled_)
                 emit projectError(tr("The workspace changed while opening the project. Open it again to continue."));
             else {
-                newProject(true);
+                newProject(before, true);
                 workspace_ = std::move(*candidate);
                 source_publications_ = std::move(publications);
                 initial_workspace_ = workspace_.snapshot();

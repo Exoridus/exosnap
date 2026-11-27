@@ -12965,6 +12965,10 @@ Kleiner Text auf dem Bildschirm verliert früher an Qualität als Videoinhalte. 
         <translation>Der Wiederherstellungsordner des Editors ist nicht verfügbar.</translation>
     </message>
     <message>
+        <source>The project changed before discard was confirmed. Review it and try again.</source>
+        <translation>Das Projekt wurde geändert, bevor du das Verwerfen bestätigt hast. Prüfe es und versuche es erneut.</translation>
+    </message>
+    <message>
         <source>Choose a filename ending in .exoproj.</source>
         <translation>Wähle einen Dateinamen mit der Endung .exoproj.</translation>
     </message>
