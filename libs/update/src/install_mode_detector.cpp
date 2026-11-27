@@ -12,6 +12,7 @@
 #include <string>
 #include <system_error>
 #include <update/update_types.h>
+#include <utility>
 
 #include "install_mode_classify.h"
 
