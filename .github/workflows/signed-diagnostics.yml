@@ -21,7 +21,7 @@ jobs:
     steps:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
         with:
-          ref: 12cd9b51c61d3bf8957c02237c3fa601a7826023
+          ref: 433712b4fd0afd4dd00d7fcfdd4a596a30937f28
           persist-credentials: false
       - uses: ilammy/msvc-dev-cmd@0b201ec74fa43914dc39ae48a89fd1d8cb592756 # v1.13.0
       - uses: ./.github/actions/setup-qt
