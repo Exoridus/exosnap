@@ -57,9 +57,31 @@ bool RunCycle() {
     return state == DiagnosticsHelperState::Connected && active == ERROR_SUCCESS &&
            final_state == DiagnosticsHelperState::Stopped && stopped == ERROR_WMI_INSTANCE_NOT_FOUND;
 }
+bool RejectDifferentRegistration() {
+    if (QueryDpcSession() != ERROR_WMI_INSTANCE_NOT_FOUND)
+        return false;
+    const auto backend = MakePrivilegedDiagnosticsBackend(false);
+    if (backend->Open() != PresentTraceOpenResult::Opened)
+        return false;
+    std::thread consumer([&backend] { backend->Consume(); });
+    const auto deadline = std::chrono::steady_clock::now() + 90s;
+    auto state = backend->HelperState();
+    while (state == DiagnosticsHelperState::Starting && std::chrono::steady_clock::now() < deadline) {
+        std::this_thread::sleep_for(100ms);
+        state = backend->HelperState();
+    }
+    backend->Close();
+    consumer.join();
+    const auto status = QueryDpcSession();
+    std::cout << "Different registered package state=" << static_cast<int>(state) << ", DPC query=" << status << '\n';
+    return state == DiagnosticsHelperState::Unavailable &&
+           backend->HelperState() == DiagnosticsHelperState::Unavailable && status == ERROR_WMI_INSTANCE_NOT_FOUND;
+}
 } // namespace
 
 int main(int argc, char** argv) {
+    if (argc == 2 && std::string_view(argv[1]) == "--expect-registration-rejection")
+        return RejectDifferentRegistration() ? 0 : 1;
     if (argc == 2 && std::string_view(argv[1]) == "--probe-installed-launch") {
         const HRESULT com = CoInitializeEx(nullptr, COINIT_APARTMENTTHREADED);
         if (FAILED(com)) {

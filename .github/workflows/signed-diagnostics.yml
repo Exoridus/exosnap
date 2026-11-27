@@ -67,14 +67,39 @@ jobs:
             signtool sign /fd SHA256 /sha1 $thumb $client
             $bundle = New-Item -ItemType Directory -Path "$out/signed-fixture/diagnostics"
             Copy-Item $signedMsix "$($bundle.FullName)/helper.msix"
-            function Invoke-SignedFixture {
-              $process = Start-Process -FilePath $client -PassThru -NoNewWindow
+            function Invoke-SignedFixture([string]$mode) {
+              $start = @{ FilePath = $client; PassThru = $true; NoNewWindow = $true }
+              if ($mode) { $start.ArgumentList = $mode }
+              $process = Start-Process @start
               if (!$process.WaitForExit(300000)) {
                 $process.Kill()
                 $process.WaitForExit()
                 throw "Signed diagnostics fixture timed out"
               }
               return $process.ExitCode
+            }
+            # Change only display metadata. The signer, package full name and protected helper image stay identical.
+            $variantLayout = Join-Path $env:RUNNER_TEMP 'diagnostics-variant-layout'
+            Copy-Item "$out/msix-layout" $variantLayout -Recurse
+            $manifest = Join-Path $variantLayout 'AppxManifest.xml'
+            $original = [IO.File]::ReadAllText($manifest)
+            $variant = $original.Replace('<DisplayName>ExoSnap Diagnostics</DisplayName>', '<DisplayName>Fixture Variant</DisplayName>')
+            if ($variant -eq $original) { throw "Variant did not change display metadata" }
+            [IO.File]::WriteAllText($manifest, $variant)
+            $other = Join-Path $env:RUNNER_TEMP 'diagnostics-registration-variant.msix'
+            makeappx pack /o /d $variantLayout /p $other
+            signtool sign /fd SHA256 /sha1 $thumb $other
+            Add-AppxPackage -Path $other
+            $registration = Get-AppxPackage -Name Exoridus.ExoSnap.Diagnostics
+            if (!$registration -or $registration.Publisher -ne $certificate.Subject) { throw "Fixture registration mismatch" }
+            $variantImage = Join-Path $registration.InstallLocation 'exosnap-diagnostics.exe'
+            if ((Get-FileHash $variantImage).Hash -ne (Get-FileHash $signedImage).Hash) { throw "Fixture helper changed" }
+            try {
+              $negative = Invoke-SignedFixture '--expect-registration-rejection'
+              if ($negative -ne 0) { throw "Same-full-name registration was not rejected" }
+              if (Get-Process -Name exosnap-diagnostics -ErrorAction SilentlyContinue) { throw "Rejected package launched a helper" }
+            } finally {
+              Remove-AppxPackage -Package $registration.PackageFullName
             }
             $firstExit = Invoke-SignedFixture
             Write-Host "Automatic provisioning and lifecycle exit: $firstExit"
