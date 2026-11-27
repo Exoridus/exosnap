@@ -1,21 +1,11 @@
-// The source picker's still pipeline, end to end against a real window.
-//
-// Everything else about the picker can be tested against seeded rows, but the
-// one question those cannot answer is whether a grab produces pixels: the
-// visual harness seeds capture targets with invented native ids, so a WGC grab
-// there fails by construction and every card shows its placeholder. This test
-// creates a window of a known colour and asserts that colour comes back out of
-// the service, which exercises the WGC session, the mip downscale and the
-// readback in one pass.
-//
-// Labelled `live`: it needs a real desktop session with DWM composition.
+// Native WGC still capture for a window with known pixels and a physical display.
+// A real desktop session with DWM composition is required.
 
 #include "services/CaptureTargetStillService.h"
 
 #include <gtest/gtest.h>
 
 #include <QCoreApplication>
-#include <QElapsedTimer>
 #include <QEventLoop>
 #include <QImage>
 #include <QTimer>
@@ -23,6 +13,8 @@
 #include <windows.h>
 
 #include <winrt/Windows.Graphics.Capture.h>
+
+#include <algorithm>
 
 namespace {
 
@@ -104,60 +96,59 @@ bool wgcAvailable() {
     }
 }
 
-} // namespace
-
-TEST(CaptureTargetStillServiceTest, GrabsTheColourOfARealWindow) {
-    // Built here rather than in a custom main: the service delivers its result
-    // through a queued connection, which needs an event loop, and this binary
-    // holds one test.
+void EnsureApplication() {
     static char program_name[] = "capture_target_still_tests";
     static char* argv[] = {program_name, nullptr};
     static int argc = 1;
-    QCoreApplication app(argc, argv);
+    static const QCoreApplication app(argc, argv);
+}
 
+QImage GrabStill(const QString& identity, const exosnap::engine::CaptureTarget& target) {
+    exosnap::CaptureTargetStillService service;
+    QImage still;
+    QEventLoop loop;
+    QObject::connect(&service, &exosnap::CaptureTargetStillService::stillReady, &loop,
+                     [&](const QString& actual_identity, const QImage& image) {
+                         EXPECT_EQ(actual_identity, identity);
+                         still = image;
+                         loop.quit();
+                     });
+    QObject::connect(&service, &exosnap::CaptureTargetStillService::stillUnavailable, &loop,
+                     [&](const QString& actual_identity) {
+                         EXPECT_EQ(actual_identity, identity);
+                         ADD_FAILURE() << "The WGC target was reported unavailable";
+                         loop.quit();
+                     });
+
+    service.setVisibleTargets({{identity, target}});
+    service.start();
+    QTimer::singleShot(kGrabTimeoutMs, &loop, &QEventLoop::quit);
+    loop.exec();
+    service.stop();
+    return still;
+}
+
+} // namespace
+
+TEST(CaptureTargetStillServiceTest, GrabsTheColourOfARealWindow) {
+    EnsureApplication();
     if (!wgcAvailable())
         GTEST_SKIP() << "Windows.Graphics.Capture is not available in this session";
 
     ColourWindow probe;
     ASSERT_NE(probe.handle(), nullptr) << "could not create the probe window";
 
-    exosnap::CaptureTargetStillService service;
-    QImage still;
-    QString failed_identity;
-    QEventLoop loop;
-    QObject::connect(&service, &exosnap::CaptureTargetStillService::stillReady, &service,
-                     [&still, &loop](const QString&, const QImage& image) {
-                         still = image;
-                         loop.quit();
-                     });
-    QObject::connect(&service, &exosnap::CaptureTargetStillService::stillUnavailable, &service,
-                     [&failed_identity, &loop](const QString& identity) {
-                         failed_identity = identity;
-                         loop.quit();
-                     });
+    // The probe needs message dispatch while the worker waits for the first frame.
+    QTimer pump;
+    QObject::connect(&pump, &QTimer::timeout, &pump, [&probe]() { probe.pump(); });
+    pump.start(10);
 
     exosnap::engine::CaptureTarget target;
     target.kind = exosnap::engine::CaptureTarget::Kind::Window;
     target.native_id = reinterpret_cast<uintptr_t>(probe.handle());
     target.description = "ExoSnap still probe";
-    service.setVisibleTargets({{QStringLiteral("window:probe"), target}});
-    service.start();
-
-    // The probe's own message pump has to keep running while the service's
-    // worker waits for a frame, or the window never paints and the grab times
-    // out against a blank surface.
-    QTimer pump;
-    QObject::connect(&pump, &QTimer::timeout, &pump, [&probe]() { probe.pump(); });
-    pump.start(10);
-
-    QTimer::singleShot(kGrabTimeoutMs, &loop, &QEventLoop::quit);
-    loop.exec();
-    service.stop();
-
-    ASSERT_TRUE(failed_identity.isEmpty()) << "the service reported the probe window as uncapturable";
+    const QImage still = GrabStill(QStringLiteral("window:probe"), target);
     ASSERT_FALSE(still.isNull()) << "no still arrived within " << kGrabTimeoutMs << " ms";
-    EXPECT_GT(still.width(), 0);
-    EXPECT_GT(still.height(), 0);
 
     const QColor centre = still.pixelColor(still.width() / 2, still.height() / 2);
     // Not an exact compare: the mip chain filters, and a window edge inside the
@@ -166,4 +157,37 @@ TEST(CaptureTargetStillServiceTest, GrabsTheColourOfARealWindow) {
     EXPECT_NEAR(centre.red(), kColourRed, 8);
     EXPECT_NEAR(centre.green(), kColourGreen, 8);
     EXPECT_NEAR(centre.blue(), kColourBlue, 8);
+}
+
+TEST(CaptureTargetStillServiceTest, GrabsARealDisplay) {
+    EnsureApplication();
+    if (!wgcAvailable())
+        GTEST_SKIP() << "Windows.Graphics.Capture is not available in this session";
+
+    const HMONITOR monitor = MonitorFromPoint(POINT{0, 0}, MONITOR_DEFAULTTOPRIMARY);
+    ASSERT_NE(monitor, nullptr);
+    MONITORINFO info{};
+    info.cbSize = sizeof(info);
+    ASSERT_TRUE(GetMonitorInfoW(monitor, &info));
+    const auto width = info.rcMonitor.right - info.rcMonitor.left;
+    const auto height = info.rcMonitor.bottom - info.rcMonitor.top;
+    ASSERT_GT(width, 0);
+    ASSERT_GT(height, 0);
+
+    exosnap::engine::CaptureTarget target;
+    target.kind = exosnap::engine::CaptureTarget::Kind::Monitor;
+    target.native_id = reinterpret_cast<uintptr_t>(monitor);
+    target.description = "ExoSnap display probe";
+    const QImage still = GrabStill(QStringLiteral("display:probe"), target);
+    ASSERT_FALSE(still.isNull()) << "no still arrived within " << kGrabTimeoutMs << " ms";
+
+    const auto max_edge = exosnap::CaptureTargetStillService::kMaxStillEdge;
+    const double scale = std::min(1.0, static_cast<double>(max_edge) / std::max(width, height));
+    EXPECT_EQ(still.format(), QImage::Format_RGB32);
+    EXPECT_GT(still.width(), 0);
+    EXPECT_GT(still.height(), 0);
+    EXPECT_LE(std::max(still.width(), still.height()), max_edge);
+    // The GPU mip and the final Qt resize round dimensions independently.
+    EXPECT_NEAR(still.width(), width * scale, 2.0);
+    EXPECT_NEAR(still.height(), height * scale, 2.0);
 }
