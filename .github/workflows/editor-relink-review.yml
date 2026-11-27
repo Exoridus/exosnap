@@ -1,0 +1,79 @@
+name: Read unavailable-source relink captures
+
+on:
+  push:
+    branches: [verify/v012-editor-relink-review]
+
+permissions:
+  contents: read
+  actions: read
+
+jobs:
+  read-captures:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    strategy:
+      fail-fast: false
+      matrix:
+        width: [860, 1600]
+    steps:
+      - name: Download fixed qualification artifact
+        uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4.3.0
+        with:
+          github-token: ${{ github.token }}
+          run-id: 46007830826
+          artifact-ids: 15203833122
+          merge-multiple: true
+          path: captures
+      - name: Read two verified missing-source captures
+        env:
+          WIDTH: ${{ matrix.width }}
+        shell: python
+        run: |
+          import base64
+          import hashlib
+          import json
+          import os
+          from pathlib import Path
+          import struct
+
+          root = Path("captures")
+          receipt = json.loads((root / "source.json").read_text(encoding="utf-8-sig"))
+          if receipt.get("productCommit") != "751b2abb3b0d182423412e99f482ca34fbc6c131":
+              raise ValueError("Unexpected editor product source")
+          if receipt.get("workflowCommit") != "97dde6d4358a3fbaefc95e917d3ccc4e569771ab":
+              raise ValueError("Unexpected capture workflow source")
+          diff = (root / "fixture.diff").read_bytes()
+          if hashlib.sha256(diff).hexdigest().lower() != receipt.get("fixtureDiffSha256", "").lower():
+              raise ValueError("Unexpected fixture diff")
+          if (len(diff) > 8192 or b'edit::AssetState::Missing' not in diff
+                  or b'QMetaObject::invokeMethod(actions, "clicked")' not in diff
+                  or b'property("opened").toBool()' not in diff):
+              raise ValueError("Missing fixture evidence")
+          for field in ("productCommit", "workflowCommit", "executableSha256", "fixtureDiffSha256", "rendering"):
+              print("EDITOR_RECEIPT", field, str(receipt[field])[:250])
+          for line in diff.decode("utf-8-sig").splitlines():
+              print("EDITOR_FIXTURE_DIFF", line)
+          scene = "edit-missing-media"
+          width = int(os.environ["WIDTH"])
+          height = {860: 700, 1600: 1000}[width]
+          for theme in ("dark", "light"):
+              filename = f"{scene}_{theme}-aqua_{width}x{height}.png"
+              candidates = list((root / scene).rglob(filename))
+              if len(candidates) != 1:
+                  raise ValueError(f"Expected one capture for {filename}")
+              path = candidates[0]
+              if not path.resolve().is_relative_to(root.resolve()) or path.is_symlink() or not path.is_file():
+                  raise ValueError("Invalid capture path")
+              if not 32 <= path.stat().st_size <= 500 * 1024:
+                  raise ValueError("Invalid capture size")
+              data = path.read_bytes()
+              if data[:8] != b"\x89PNG\r\n\x1a\n" or data[8:16] != b"\x00\x00\x00\rIHDR":
+                  raise ValueError("Invalid PNG header")
+              if struct.unpack(">II", data[16:24]) != (width, height):
+                  raise ValueError("Invalid PNG dimensions")
+              encoded = base64.b64encode(data).decode("ascii")
+              print("EDITOR_PNG_BEGIN", filename, len(data), hashlib.sha256(data).hexdigest())
+              for offset in range(0, len(encoded), 3000):
+                  print("EDITOR_PNG_DATA", encoded[offset:offset + 3000])
+              print("EDITOR_PNG_END", filename)
