@@ -1,0 +1,68 @@
+name: Read editor qualification captures
+
+on:
+  push:
+    branches: [verify/v012-editor-visual-review]
+
+permissions:
+  contents: read
+  actions: read
+
+jobs:
+  read-captures:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    strategy:
+      fail-fast: false
+      matrix:
+        scene: [edit-project-menu, edit-project-discard, edit-missing-media, edit-source-relink-review]
+    steps:
+      - name: Download fixed qualification artifact
+        uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4.3.0
+        with:
+          github-token: ${{ github.token }}
+          run-id: 45993744750
+          name: editor-native-visual-751b2abb
+          path: captures
+      - name: Read two verified narrow captures
+        env:
+          SCENE: ${{ matrix.scene }}
+        shell: python
+        run: |
+          import base64
+          import hashlib
+          import json
+          import os
+          from pathlib import Path
+          import struct
+
+          root = Path("captures")
+          receipt = json.loads((root / "source.json").read_text(encoding="utf-8-sig"))
+          if receipt.get("productCommit") != "751b2abb3b0d182423412e99f482ca34fbc6c131":
+              raise ValueError("Unexpected editor product source")
+          if receipt.get("workflowCommit") != "da1f223fe84c1690a691d0c340998b39de796881":
+              raise ValueError("Unexpected capture workflow source")
+          scenes = {"edit-project-menu", "edit-project-discard", "edit-missing-media", "edit-source-relink-review"}
+          scene = os.environ["SCENE"]
+          if scene not in scenes:
+              raise ValueError("Unknown scene")
+          for theme in ("dark", "light"):
+              filename = f"{scene}_{theme}-aqua_860x700.png"
+              candidates = list((root / scene).rglob(filename))
+              if len(candidates) != 1:
+                  raise ValueError(f"Expected one capture for {filename}")
+              path = candidates[0]
+              if not path.resolve().is_relative_to(root.resolve()) or path.is_symlink() or not path.is_file():
+                  raise ValueError("Invalid capture path")
+              if not 32 <= path.stat().st_size <= 500 * 1024:
+                  raise ValueError("Invalid capture size")
+              data = path.read_bytes()
+              if data[:8] != b"\x89PNG\r\n\x1a\n" or data[8:16] != b"\x00\x00\x00\rIHDR":
+                  raise ValueError("Invalid PNG header")
+              if struct.unpack(">II", data[16:24]) != (860, 700):
+                  raise ValueError("Invalid PNG dimensions")
+              encoded = base64.b64encode(data).decode("ascii")
+              print("EDITOR_PNG_BEGIN", filename, len(data), hashlib.sha256(data).hexdigest())
+              for offset in range(0, len(encoded), 3000):
+                  print("EDITOR_PNG_DATA", encoded[offset:offset + 3000])
+              print("EDITOR_PNG_END", filename)
