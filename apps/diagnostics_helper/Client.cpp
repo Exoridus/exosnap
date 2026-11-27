@@ -1,4 +1,5 @@
 #include "Channel.h"
+#include "FixtureStatus.h"
 #include "Peer.h"
 #include "diagnostics/PrivilegedPresentBackend.h"
 
@@ -34,10 +35,15 @@ bool Protected(HANDLE object, bool children) {
     PSID owner = nullptr;
     PACL acl = nullptr;
     PSECURITY_DESCRIPTOR descriptor = nullptr;
-    if (GetSecurityInfo(object, SE_FILE_OBJECT, OWNER_SECURITY_INFORMATION | DACL_SECURITY_INFORMATION, &owner, nullptr,
-                        &acl, nullptr, &descriptor) != ERROR_SUCCESS)
+    const auto status = GetSecurityInfo(object, SE_FILE_OBJECT, OWNER_SECURITY_INFORMATION | DACL_SECURITY_INFORMATION,
+                                        &owner, nullptr, &acl, nullptr, &descriptor);
+    if (status != ERROR_SUCCESS) {
+        ReportFixtureStatus("GetSecurityInfo", status);
         return false;
+    }
     bool safe = owner && acl && TrustedOwner(owner);
+    if (!safe)
+        ReportFixtureStatus("untrusted owner or missing DACL", ERROR_ACCESS_DENIED);
     const DWORD danger = WRITE_DAC | WRITE_OWNER | DELETE | FILE_DELETE_CHILD | FILE_WRITE_ATTRIBUTES | FILE_WRITE_EA |
                          GENERIC_ALL | GENERIC_WRITE | (children ? FILE_WRITE_DATA | FILE_APPEND_DATA : 0);
     for (DWORD i = 0; safe && i < acl->AceCount; ++i) {
@@ -55,6 +61,8 @@ bool Protected(HANDLE object, bool children) {
         safe = ace->Header.AceType == ACCESS_ALLOWED_ACE_TYPE &&
                (!(ace->Mask & danger) || TrustedOwner(&ace->SidStart) ||
                 (inherit_only && IsWellKnownSid(&ace->SidStart, WinCreatorOwnerSid)));
+        if (!safe)
+            ReportFixtureStatus("DACL rejected ACE rights", ace->Mask);
     }
     LocalFree(descriptor);
     return safe;
@@ -82,11 +90,20 @@ struct LockedPath {
                                       FILE_SHARE_READ, nullptr, OPEN_EXISTING,
                                       FILE_FLAG_OPEN_REPARSE_POINT | FILE_FLAG_BACKUP_SEMANTICS, nullptr));
             FILE_ATTRIBUTE_TAG_INFO attr{};
-            if (!handle || !GetFileInformationByHandleEx(handle.get(), FileAttributeTagInfo, &attr, sizeof(attr)) ||
-                (attr.FileAttributes & FILE_ATTRIBUTE_REPARSE_POINT) ||
-                ((attr.FileAttributes & FILE_ATTRIBUTE_DIRECTORY) != 0) != (!leaf || directory) ||
-                (protected_image && !Protected(handle.get(), leaf || current == path.parent_path())))
+            if (!handle || !GetFileInformationByHandleEx(handle.get(), FileAttributeTagInfo, &attr, sizeof(attr))) {
+                ReportFixtureStatus(leaf ? "leaf open or attributes" : "ancestor open or attributes", GetLastError());
                 return false;
+            }
+            if ((attr.FileAttributes & FILE_ATTRIBUTE_REPARSE_POINT) ||
+                ((attr.FileAttributes & FILE_ATTRIBUTE_DIRECTORY) != 0) != (!leaf || directory)) {
+                ReportFixtureStatus("unexpected file attributes", attr.FileAttributes);
+                return false;
+            }
+            if (protected_image && !Protected(handle.get(), leaf || current == path.parent_path())) {
+                ReportFixtureStatus(leaf ? "leaf security descriptor rejected" : "ancestor security descriptor rejected",
+                                    ERROR_ACCESS_DENIED);
+                return false;
+            }
             handles.push_back(std::move(handle));
         }
         if (handles.empty())
@@ -97,8 +114,10 @@ struct LockedPath {
         const DWORD count =
             GetFinalPathNameByHandleW(handles.back().get(), resolved.data(), static_cast<DWORD>(resolved.size()),
                                       FILE_NAME_NORMALIZED | VOLUME_NAME_GUID);
-        if (!count || count >= resolved.size())
+        if (!count || count >= resolved.size()) {
+            ReportFixtureStatus("GetFinalPathNameByHandleW", GetLastError());
             return false;
+        }
         resolved.resize(count);
         canonical = std::move(resolved);
         return true;
@@ -115,9 +134,22 @@ fs::path MachineImage() {
 }
 
 bool Verified(const fs::path& path, const char* hash, LockedPath& locked, bool system) {
-    return std::string_view(hash).size() == 64 && locked.Open(path, system) &&
-           update::VerifyPackageHandle(locked.handles.back().get(), hash) == update::VerifyResult::Ok &&
-           ApprovedPublisher(locked.canonical.native(), locked.handles.back().get());
+    if (std::string_view(hash).size() != 64) {
+        ReportFixtureStatus("missing build digest", ERROR_INVALID_DATA);
+        return false;
+    }
+    if (!locked.Open(path, system)) {
+        ReportFixtureStatus(system ? "protected image path" : "MSI path", GetLastError());
+        return false;
+    }
+    const auto digest = update::VerifyPackageHandle(locked.handles.back().get(), hash);
+    if (digest != update::VerifyResult::Ok) {
+        ReportFixtureStatus("digest", static_cast<DWORD>(digest));
+        return false;
+    }
+    const bool approved = ApprovedPublisher(locked.canonical.native(), locked.handles.back().get());
+    ReportFixtureStatus(system ? "image publisher accepted" : "MSI publisher accepted", approved);
+    return approved;
 }
 
 // Retain the trusted destination chain while Windows Installer owns its
@@ -146,8 +178,10 @@ bool LockInstallDestination(const fs::path& image, LockedPath& program_files, Lo
 UINT InstallPackage(HANDLE stop, const fs::path& image) {
     LockedPath program_files;
     LockedPath directory;
-    if (!LockInstallDestination(image, program_files, directory))
+    if (!LockInstallDestination(image, program_files, directory)) {
+        ReportFixtureStatus("destination preflight", GetLastError());
         return ERROR_INSTALL_FAILURE;
+    }
     std::wstring app(32768, L'\0');
     const auto size = GetModuleFileNameW(nullptr, app.data(), static_cast<DWORD>(app.size()));
     if (!size || size >= app.size())
@@ -161,10 +195,13 @@ UINT InstallPackage(HANDLE stop, const fs::path& image) {
     // action. Windows Installer owns package elevation and execution. No elevated
     // process is handed a still-unopened package path.
     PMSIHANDLE package;
-    if (MsiOpenPackageExW(locked.canonical.c_str(), 0, &package) != ERROR_SUCCESS ||
-        WaitForSingleObject(stop, 0) != WAIT_TIMEOUT)
+    const auto opened = MsiOpenPackageExW(locked.canonical.c_str(), 0, &package);
+    ReportFixtureStatus("MsiOpenPackageExW", opened);
+    if (opened != ERROR_SUCCESS || WaitForSingleObject(stop, 0) != WAIT_TIMEOUT)
         return ERROR_INSTALL_FAILURE;
-    return MsiDoActionW(package, L"INSTALL");
+    const auto installed = MsiDoActionW(package, L"INSTALL");
+    ReportFixtureStatus("MsiDoActionW INSTALL", installed);
+    return installed;
 }
 
 class RemoteBackend final : public IPrivilegedDiagnosticsBackend {

@@ -1,4 +1,5 @@
 #include "Peer.h"
+#include "FixtureStatus.h"
 #include "ImagePath.h"
 
 #include <softpub.h>
@@ -27,7 +28,9 @@ bool ApprovedPublisher(const std::wstring& image, HANDLE locked_file) {
     data.dwProvFlags = WTD_CACHE_ONLY_URL_RETRIEVAL | WTD_REVOCATION_CHECK_CHAIN_EXCLUDE_ROOT;
     GUID policy = WINTRUST_ACTION_GENERIC_VERIFY_V2;
     bool accepted = false;
-    if (WinVerifyTrust(nullptr, &policy, &data) == ERROR_SUCCESS) {
+    const auto trust = WinVerifyTrust(nullptr, &policy, &data);
+    ReportFixtureStatus("WinVerifyTrust", static_cast<DWORD>(trust));
+    if (trust == ERROR_SUCCESS) {
         auto* provider = WTHelperProvDataFromStateData(data.hWVTStateData);
         auto* signer = provider ? WTHelperGetProvSignerFromChain(provider, 0, FALSE, 0) : nullptr;
         auto* leaf = signer ? WTHelperGetProvCertFromChain(signer, 0) : nullptr;
