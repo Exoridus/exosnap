@@ -45,7 +45,8 @@ jobs:
             $public = Export-Certificate -Cert $certificate -FilePath "$env:RUNNER_TEMP/diagnostics-ci.cer"
             Import-Certificate -FilePath $public.FullName -CertStoreLocation Cert:\LocalMachine\Root | Out-Null
             $pin = [Convert]::ToHexString([Security.Cryptography.SHA256]::HashData($certificate.RawData)).ToLowerInvariant()
-            cmake --preset windows-x64-ninja-release "-DEXOSNAP_DIAGNOSTICS_PUBLISHER_SHA256=$pin"
+            $wix = Join-Path $env:USERPROFILE '.dotnet/tools/wix.exe'
+            cmake --preset windows-x64-ninja-release "-DEXOSNAP_DIAGNOSTICS_PUBLISHER_SHA256=$pin" "-DEXOSNAP_WIX_EXECUTABLE=$wix"
             cmake --build $build --target exosnap-diagnostics
             signtool sign /fd SHA256 /sha1 $thumb $image
             cmake --build $build --target diagnostics-helper-msi
