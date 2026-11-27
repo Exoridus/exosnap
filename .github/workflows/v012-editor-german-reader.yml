@@ -1,0 +1,70 @@
+name: Inspect German editor project controls
+
+on:
+  push:
+    branches: [verify/v012-editor-german-reader]
+
+permissions:
+  actions: read
+  contents: read
+
+jobs:
+  read:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 5
+    strategy:
+      matrix:
+        scene: [edit-project-menu, edit-project-discard]
+    steps:
+      - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4.3.0
+        with:
+          github-token: ${{ github.token }}
+          run-id: 46042112703
+          artifact-ids: 15221598934
+          merge-multiple: true
+          path: captures
+      - name: Verify and read the two images for this editor state
+        env:
+          SCENE: ${{ matrix.scene }}
+        shell: python
+        run: |
+          import base64
+          import hashlib
+          import json
+          import os
+          from pathlib import Path
+          import struct
+
+          root = Path("captures")
+          receipt = json.loads((root / "source.json").read_text(encoding="utf-8"))
+          if (receipt["sourceCommit"] != "751b2abb3b0d182423412e99f482ca34fbc6c131"
+                  or receipt["sourceTree"] != "7f57914c6a318a297f103806baa039ebf4212c74"
+                  or receipt["workflowCommit"] != "a7e5cf59113de6a02de6013f534b4d93832adb4b"
+                  or receipt["language"] != "de" or receipt["rendering"] != "Qt Quick software/offscreen"):
+              raise ValueError("Unexpected source or capture environment")
+          scene = os.environ["SCENE"]
+          scenes = {"edit-project-menu", "edit-project-discard"}
+          if scene not in scenes:
+              raise ValueError("Unknown scene")
+          cases = {(c["scene"], c["theme"]): c for c in receipt["cases"]}
+          if set(cases) != {(s, t) for s in scenes for t in ("dark", "light")} or len({c["sha256"] for c in cases.values()}) != 4:
+              raise ValueError("Unexpected fixture set or duplicate capture")
+          print("EDITOR_RECEIPT", receipt["sourceCommit"], receipt["executableSha256"])
+          for theme in ("dark", "light"):
+              case = cases[(scene, theme)]
+              filename = f"{scene}-{theme}.png"
+              path = root / filename
+              if (not case["ok"] or not case["ready"] or case["exit"] != 0 or case["warningCount"] != 0
+                      or case["size"] != [860, 700] or path.is_symlink() or not path.is_file()
+                      or not 32 <= path.stat().st_size <= 500 * 1024):
+                  raise ValueError("Invalid case receipt or PNG path")
+              data = path.read_bytes()
+              digest = hashlib.sha256(data).hexdigest()
+              if (data[:16] != bytes.fromhex("89504e470d0a1a0a0000000d49484452")
+                      or struct.unpack(">II", data[16:24]) != (860, 700) or digest != case["sha256"]):
+                  raise ValueError("PNG mismatch")
+              encoded = base64.b64encode(data).decode("ascii")
+              print("EDITOR_PNG_BEGIN", filename, len(data), digest)
+              for offset in range(0, len(encoded), 3000):
+                  print("EDITOR_PNG_DATA", encoded[offset:offset + 3000])
+              print("EDITOR_PNG_END", filename)
