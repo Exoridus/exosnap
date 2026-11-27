@@ -409,7 +409,7 @@ TEST(RecoveryDrill, RemuxMp4ProcessKill_ReplacesStalePartialAtTargetPath) {
     EXPECT_TRUE(store.Entries().isEmpty());
 }
 
-TEST(RecoveryDrill, RemuxMp4KeepsFileOccupyingGeneratedSegmentName) {
+TEST(RecoveryDrill, RemuxMp4SkipsOccupiedGeneratedMediaAndCompanionNames) {
     QTemporaryDir temp;
     ASSERT_TRUE(temp.isValid());
     const QDir folder(temp.path());
@@ -418,9 +418,11 @@ TEST(RecoveryDrill, RemuxMp4KeepsFileOccupyingGeneratedSegmentName) {
 
     const auto artefact = folder.filePath(QStringLiteral("rec_part-002.partial"));
     const auto occupied = folder.filePath(QStringLiteral("rec_part-002.mp4"));
+    const auto markers = folder.filePath(QStringLiteral("rec_part-002 (2).markers.json"));
+    const auto identity = folder.filePath(QStringLiteral("rec_part-002 (3).mp4.exosnap.json"));
     ASSERT_TRUE(WriteSyntheticMkv(artefact, exosnap::engine::VideoCodec::H264, exosnap::engine::AudioCodec::Aac, 2.0));
-    {
-        QFile unrelated(occupied);
+    for (const auto& path : {occupied, markers, identity}) {
+        QFile unrelated(path);
         ASSERT_TRUE(unrelated.open(QIODevice::WriteOnly));
         ASSERT_EQ(unrelated.write("unrelated file"), 14);
     }
@@ -431,10 +433,12 @@ TEST(RecoveryDrill, RemuxMp4KeepsFileOccupyingGeneratedSegmentName) {
 
     const auto result = service.Finish(entry);
     ASSERT_TRUE(result.success) << result.message;
-    QFile unrelated(occupied);
-    ASSERT_TRUE(unrelated.open(QIODevice::ReadOnly));
-    EXPECT_EQ(unrelated.readAll(), QByteArray("unrelated file"));
-    EXPECT_TRUE(CanDemux(folder.filePath(QStringLiteral("rec_part-002 (2).mp4"))));
+    for (const auto& path : {occupied, markers, identity}) {
+        QFile unrelated(path);
+        ASSERT_TRUE(unrelated.open(QIODevice::ReadOnly));
+        EXPECT_EQ(unrelated.readAll(), QByteArray("unrelated file"));
+    }
+    EXPECT_TRUE(CanDemux(folder.filePath(QStringLiteral("rec_part-002 (4).mp4"))));
     EXPECT_FALSE(QFileInfo::exists(artefact));
     EXPECT_TRUE(store.Entries().isEmpty());
 }

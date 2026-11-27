@@ -4,6 +4,7 @@
 #include "AtomicFileOps.h"
 
 #include <algorithm>
+#include <array>
 #include <cstddef>
 #include <cwctype>
 #include <string>
@@ -28,6 +29,12 @@
 namespace {
 std::mutex publication_mutex;
 constexpr qint64 kJournalByteLimit = 64 * 1024;
+
+std::array<std::filesystem::path, 2> PublicationCompanions(const std::filesystem::path& media) {
+    auto markers = media;
+    markers.replace_extension(L".markers.json");
+    return {std::filesystem::path(media.wstring() + L".exosnap.json"), std::move(markers)};
+}
 
 QString PublicationDirectory() {
     const auto root = exosnap::settings::ResolveAppConfigDir();
@@ -264,6 +271,16 @@ unsigned long StageCompletedMediaForPublication(const std::filesystem::path& sou
     return ERROR_SUCCESS;
 }
 
+bool MediaPublicationPathOccupied(const std::filesystem::path& target, std::error_code& error) {
+    if (const bool occupied = std::filesystem::exists(target, error); occupied || error)
+        return occupied;
+    for (const auto& companion : PublicationCompanions(target)) {
+        if (const bool occupied = std::filesystem::exists(companion, error); occupied || error)
+            return occupied;
+    }
+    return false;
+}
+
 unsigned long PublishMediaAndIdentitySidecar(const std::filesystem::path& from, const std::filesystem::path& to,
                                              bool replace_existing, std::function<void()> rename_committed) {
     if (from.native().size() > 4096 || to.native().size() > 4096)
@@ -295,15 +312,11 @@ unsigned long PublishMediaAndIdentitySidecar(const std::filesystem::path& from, 
         return error;
     if (!replace_existing && !files.front().previous.isEmpty())
         return ERROR_FILE_EXISTS;
-    auto source_markers = source;
-    auto target_markers = target;
-    source_markers.replace_extension(L".markers.json");
-    target_markers.replace_extension(L".markers.json");
-    const std::pair<std::filesystem::path, std::filesystem::path> candidates[] = {
-        {std::filesystem::path(source.wstring() + L".exosnap.json"),
-         std::filesystem::path(target.wstring() + L".exosnap.json")},
-        {source_markers, target_markers}};
-    for (const auto& [staged, final] : candidates) {
+    const auto staged_companions = PublicationCompanions(source);
+    const auto final_companions = PublicationCompanions(target);
+    for (size_t index = 0; index < staged_companions.size(); ++index) {
+        const auto& staged = staged_companions[index];
+        const auto& final = final_companions[index];
         PublicationFile file{staged, final};
         if (const auto error = FileIdentity(staged, file.fresh))
             return error;

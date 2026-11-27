@@ -132,7 +132,7 @@ RecoveryActionResult RecoveryService::Finish(const RecoveryManifestEntry& entry,
             if (PathsEqual(preferred, own))
                 return preferred;
         }
-        return ResolveUniqueOutputPath(preferred);
+        return ResolveUniqueOutputPath(preferred, entry.final_output_is_preferred);
     };
 
     if (!is_mp4) {
@@ -301,8 +301,15 @@ RecoveryActionResult RecoveryService::Discard(const RecoveryManifestEntry& entry
 }
 
 // static
-std::filesystem::path RecoveryService::ResolveUniqueOutputPath(const std::filesystem::path& preferred) {
-    if (!std::filesystem::exists(preferred))
+std::filesystem::path RecoveryService::ResolveUniqueOutputPath(const std::filesystem::path& preferred,
+                                                               bool include_companions) {
+    const auto occupied = [include_companions](const std::filesystem::path& path) {
+        if (!include_companions)
+            return std::filesystem::exists(path);
+        std::error_code error;
+        return MediaPublicationPathOccupied(path, error) || error;
+    };
+    if (!occupied(preferred))
         return preferred;
 
     const auto parent = preferred.parent_path();
@@ -311,7 +318,7 @@ std::filesystem::path RecoveryService::ResolveUniqueOutputPath(const std::filesy
 
     for (int n = 2; n < 1000; ++n) {
         const auto candidate = parent / (stem + L" (" + std::to_wstring(n) + L")" + ext);
-        if (!std::filesystem::exists(candidate))
+        if (!occupied(candidate))
             return candidate;
     }
 

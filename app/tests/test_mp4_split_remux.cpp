@@ -20,6 +20,7 @@
 #include <QDir>
 #include <QEvent>
 #include <QFile>
+#include <QFileInfo>
 #include <QString>
 #include <QTemporaryDir>
 
@@ -99,6 +100,14 @@ class RecordingCoordinatorTestPeer {
         return coordinator.CurrentManifestId();
     }
 
+    static void SetPublishedStorageReserve(RecordingCoordinator& coordinator, uint64_t bytes) {
+        coordinator.primary_clip_reserve_bytes_.store(bytes);
+    }
+
+    static void StopDiskMonitor(RecordingCoordinator& coordinator) {
+        coordinator.StopDiskMonitor();
+    }
+
     static void SetPublishedSegmentPath(RecordingCoordinator& coordinator, const std::filesystem::path& source,
                                         const std::filesystem::path& published) {
         std::lock_guard lock(coordinator.segments_mutex_);
@@ -165,6 +174,14 @@ TEST_F(Mp4SplitRemuxTest, ComputeHardStopThreshold_ZeroReserve_EqualsBase) {
     EXPECT_EQ(diagnostics::ComputeHardStopThreshold(0), diagnostics::kHardStopFreeBytes);
 }
 
+TEST_F(Mp4SplitRemuxTest, StoppingDiskMonitorClearsPublishedStorageReserve) {
+    RecordingCoordinator coordinator;
+    RecordingCoordinatorTestPeer::SetPublishedStorageReserve(coordinator, 4096);
+    ASSERT_EQ(coordinator.RecordingStorageReserveBytes(), diagnostics::kHardStopFreeBytes + 4096);
+    RecordingCoordinatorTestPeer::StopDiskMonitor(coordinator);
+    EXPECT_EQ(coordinator.RecordingStorageReserveBytes(), diagnostics::kHardStopFreeBytes);
+}
+
 TEST_F(Mp4SplitRemuxTest, AutomaticBoundaryQueuesDeliveryAndProtectsTheNextSegment) {
     QTemporaryDir directory;
     ASSERT_TRUE(directory.isValid());
@@ -179,12 +196,18 @@ TEST_F(Mp4SplitRemuxTest, AutomaticBoundaryQueuesDeliveryAndProtectsTheNextSegme
     ASSERT_TRUE(
         store.Add(MakeManifestEntry(first_id, QString::fromStdWString(partial.wstring()), QStringLiteral("mp4"))));
     const auto completed = RecordingCoordinatorTestPeer::BeginSplit(coordinator, output, first_id, {}, false);
+    QFile occupied(directory.filePath(QStringLiteral("recording_part-002.markers.json")));
+    ASSERT_TRUE(occupied.open(QIODevice::WriteOnly | QIODevice::NewOnly));
+    ASSERT_EQ(occupied.write("unrelated"), 9);
+    occupied.close();
     engine::CompletedSegment segment;
     segment.path = partial;
     segment.succeeded = true;
     segment.next_path = next_partial.path;
     QFile admitted(QString::fromStdWString(segment.next_path.wstring()));
     ASSERT_TRUE(admitted.open(QIODevice::WriteOnly | QIODevice::NewOnly));
+    ASSERT_EQ(admitted.write("live partial"), 12);
+    admitted.close();
     completed(segment);
 
     const auto next_id = RecordingCoordinatorTestPeer::ActiveManifestId(coordinator);
@@ -195,8 +218,13 @@ TEST_F(Mp4SplitRemuxTest, AutomaticBoundaryQueuesDeliveryAndProtectsTheNextSegme
         return entry.id == next_id && entry.final_output_is_preferred &&
                std::filesystem::path(entry.artefact_path.toStdWString()) == next_partial.path;
     }));
+    EXPECT_TRUE(std::ranges::any_of(entries, [&](const auto& entry) {
+        return entry.id == next_id &&
+               QFileInfo(entry.final_output_path).fileName() == QStringLiteral("recording_part-002_1.mp4");
+    }));
     // No source file exists. A queued remux must surface its failure.
     EXPECT_FALSE(coordinator.DrainSegmentRemuxJobsForTest(false));
+    EXPECT_EQ(coordinator.RemuxReserveBytesForTest(), 12u);
 }
 
 TEST_F(Mp4SplitRemuxTest, UsesPublishedPathAfterCollisionAvoidance) {
@@ -1066,12 +1094,12 @@ TEST_F(Mp4SplitRemuxTest, PendingReserveCountsRunningJobsOnly) {
     ReleasableWork work;
     coordinator.ScheduleSegmentRemuxForTest(transient, dir / L"seg.mp4", QString(), work.Body(true));
     work.WaitStarted();
-    EXPECT_EQ(coordinator.PendingRemuxReserveBytesForTest(), kBytes);
+    EXPECT_EQ(coordinator.RemuxReserveBytesForTest(), kBytes);
 
     work.Release();
     // The file is left in place on purpose: the point is that a COMPLETED job
     // stops being reserved for, whether or not its artefact is still on disk.
-    ASSERT_TRUE(ReapUntil(coordinator, [&] { return coordinator.PendingRemuxReserveBytesForTest() == 0u; }));
+    ASSERT_TRUE(ReapUntil(coordinator, [&] { return coordinator.RemuxReserveBytesForTest() == 0u; }));
 
     std::error_code ec;
     std::filesystem::remove_all(dir, ec);
@@ -1091,7 +1119,7 @@ TEST_F(Mp4SplitRemuxTest, FailedRemuxRetainedMkvIsNotReservedForever) {
 
     ASSERT_TRUE(ReapUntil(coordinator, [&] { return coordinator.SegmentRemuxJobCountForTest() == 0u; }));
     EXPECT_TRUE(std::filesystem::exists(transient)) << "the retained artefact must survive a failed remux";
-    EXPECT_EQ(coordinator.PendingRemuxReserveBytesForTest(), 0u);
+    EXPECT_EQ(coordinator.RemuxReserveBytesForTest(), 0u);
 
     std::error_code ec;
     std::filesystem::remove_all(dir, ec);
