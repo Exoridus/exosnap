@@ -19,6 +19,7 @@
 #include <chrono>
 #include <filesystem>
 #include <memory>
+#include <mutex>
 #include <optional>
 #include <string>
 
@@ -162,6 +163,7 @@ class UpdaterWorker : public QObject {
     void requestCancel() {
         cancel_.store(true);
     }
+    [[nodiscard]] bool tryCancelDownload();
 
   public slots:
     // Run the pipeline from `entry` to the end (initial run: Download; retries
@@ -197,7 +199,7 @@ class UpdaterWorker : public QObject {
     void installerLogAvailable(QString path);
     // The updater stopped at a point that honors requestCancel(). Windows
     // Installer can continue independently if its process has already started.
-    void cancelled();
+    void cancelled(bool installer_started);
 
     // Manual-mode results.
     void checkStarted();
@@ -214,16 +216,17 @@ class UpdaterWorker : public QObject {
     void selfUpdateBlocked(QString reason);
 
   private:
+    friend struct UpdaterWorkerTestPeer;
+
     // Resolve the newest qualifying release for the channel into release_.
     // Emits failed(A1) and returns false when the feed cannot be read; sets
     // `no_release` (without emitting) when the feed is fine and simply carries
     // nothing for this channel, which is a result the manual check reports as
     // upToDate and the handoff path reports as A1.
-    // True when a step just aborted because cancellation was requested, and the
-    // cancelled() signal has been emitted in place of failed(...). Used only at
-    // the four sites where the engine honours the flag; everywhere else a
-    // failure is a failure even if a cancel happens to be pending.
-    [[nodiscard]] bool abortedByCancel();
+    // Report cancellation only at a point that honors the request.
+    [[nodiscard]] bool abortedByCancel(bool installer_started = false);
+    void resetCancellation();
+    [[nodiscard]] bool admitInstallerLaunch();
     [[nodiscard]] bool selfUpdateAllowed();
 
     [[nodiscard]] bool resolveRelease(bool* no_release);
@@ -255,6 +258,8 @@ class UpdaterWorker : public QObject {
     const UpdaterArgs args_;
     exosnap::update::InstallScope install_scope_ = exosnap::update::InstallScope::None;
     std::atomic<bool> cancel_{false};
+    std::mutex installer_launch_mutex_;
+    bool installer_launch_admitted_ = false;
 
     // Pipeline state kept across retries (B1/B2/B3/C1 re-enter mid-pipeline).
     // The release resolved for this run; the manual flow resolves it in check()

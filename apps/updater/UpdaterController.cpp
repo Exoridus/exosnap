@@ -244,7 +244,7 @@ void UpdaterController::onSelfUpdateBlocked(const QString& reason) {
     flow_.retry_entry_step.reset();
 }
 
-void UpdaterController::onCancelled() {
+void UpdaterController::onCancelled(bool installer_started) {
     // The step that was running goes back to Queued rather than to Failed: it
     // did not fail, it was stopped, and a red cross in the checklist would say
     // the opposite of what happened.
@@ -257,7 +257,7 @@ void UpdaterController::onCancelled() {
     state_.status_line.clear();
     state_.determinate = false;
     state_.ring = 0.0;
-    if (flow_.phase == UpdatePhase::Applying && flow_.install_mode == exosnap::update::InstallMode::Installed) {
+    if (installer_started) {
         state_.repairing = false;
         state_.headline = QCoreApplication::translate("UpdaterController", "Installation state unknown");
         state_.detail_text =

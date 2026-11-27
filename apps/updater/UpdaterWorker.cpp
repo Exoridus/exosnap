@@ -319,7 +319,7 @@ void UpdaterWorker::repair() {
 }
 
 void UpdaterWorker::run(UpStep entry) {
-    cancel_.store(false);
+    resetCancellation();
     if (!selfUpdateAllowed()) {
         return;
     }
@@ -382,11 +382,34 @@ void UpdaterWorker::run(UpStep entry) {
     (void)runLaunch();
 }
 
-bool UpdaterWorker::abortedByCancel() {
+bool UpdaterWorker::abortedByCancel(bool installer_started) {
     if (!cancel_.load()) {
         return false;
     }
-    emit cancelled();
+    emit cancelled(installer_started);
+    return true;
+}
+
+bool UpdaterWorker::tryCancelDownload() {
+    std::lock_guard lock(installer_launch_mutex_);
+    if (installer_launch_admitted_)
+        return false;
+    requestCancel();
+    return true;
+}
+
+void UpdaterWorker::resetCancellation() {
+    std::lock_guard lock(installer_launch_mutex_);
+    cancel_.store(false);
+    installer_launch_admitted_ = false;
+}
+
+bool UpdaterWorker::admitInstallerLaunch() {
+    std::lock_guard lock(installer_launch_mutex_);
+    // GUI progress is queued, so cancel and MSI admission must be ordered here.
+    if (cancel_.load())
+        return false;
+    installer_launch_admitted_ = true;
     return true;
 }
 
@@ -428,7 +451,7 @@ bool UpdaterWorker::selfUpdateAllowed() {
 // download, no second verification and no second swap.
 
 void UpdaterWorker::check() {
-    cancel_.store(false);
+    resetCancellation();
     emit checkStarted();
 
     // The official-build gate is an update-check POLICY (update_checker.h), and
@@ -468,7 +491,7 @@ void UpdaterWorker::check() {
 }
 
 void UpdaterWorker::download() {
-    cancel_.store(false);
+    resetCancellation();
     if (!selfUpdateAllowed()) {
         return;
     }
@@ -1033,8 +1056,10 @@ bool UpdaterWorker::runInstallMsi() {
     sei.lpDirectory = system_directory;
     sei.nShow = SW_HIDE;
 
-    if (repair_msi_ && abortedByCancel())
+    if (!admitInstallerLaunch()) {
+        (void)abortedByCancel();
         return false;
+    }
     if (::ShellExecuteExW(&sei) == 0) {
         if (elevate && ::GetLastError() == ERROR_CANCELLED) {
             emit failed(FailureCase::UacDeclined, QString()); // C1 -- Retry re-handoffs
@@ -1061,7 +1086,7 @@ bool UpdaterWorker::runInstallMsi() {
         // truths. msiexec keeps running in either case -- this process only
         // stops WATCHING it -- so the honest report for a requested stop is a
         // cancellation, not "the installer did not finish in time".
-        if (abortedByCancel())
+        if (abortedByCancel(true))
             return false;
         emit failed(FailureCase::VerifyInstallFailedMsi,
                     QCoreApplication::translate("UpdaterWorker", "Windows Installer did not report an outcome."));

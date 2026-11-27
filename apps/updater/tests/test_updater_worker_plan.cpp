@@ -35,6 +35,14 @@ using namespace exosnap::updater;
 
 namespace fs = std::filesystem;
 
+namespace exosnap::updater {
+struct UpdaterWorkerTestPeer {
+    static bool admitInstallerLaunch(UpdaterWorker& worker) {
+        return worker.admitInstallerLaunch();
+    }
+};
+} // namespace exosnap::updater
+
 namespace {
 
 // ---------------------------------------------------------------------------
@@ -305,9 +313,9 @@ TEST(MatchesRegisteredMsi, RejectsMissingInvalidAndUnregisteredPackagesWithoutIn
                   ERROR_SUCCESS);
         ASSERT_EQ(MsiViewExecute(create, 0), ERROR_SUCCESS);
         ASSERT_EQ(MsiViewClose(create), ERROR_SUCCESS);
-        ASSERT_EQ(MsiDatabaseOpenViewW(database, L"INSERT INTO `Property` (`Property`, `Value`) VALUES (?, ?)",
-                                       &insert),
-                  ERROR_SUCCESS);
+        ASSERT_EQ(
+            MsiDatabaseOpenViewW(database, L"INSERT INTO `Property` (`Property`, `Value`) VALUES (?, ?)", &insert),
+            ERROR_SUCCESS);
         PMSIHANDLE record(MsiCreateRecord(2));
         ASSERT_EQ(MsiRecordSetStringW(record, 1, L"ProductCode"), ERROR_SUCCESS);
         const auto product = QUuid::createUuid().toString().toUpper().toStdWString();
@@ -341,6 +349,16 @@ TEST(UpdaterWorker, RepairRefusesMissingVerifiedPackageWithoutStartingAnyStep) {
         EXPECT_EQ(failures, 1);
         EXPECT_EQ(steps, 0);
     }
+}
+
+TEST(UpdaterWorker, DownloadCancellationAndInstallerAdmissionExcludeEachOther) {
+    UpdaterWorker cancelled(UpdaterArgs{});
+    ASSERT_TRUE(cancelled.tryCancelDownload());
+    EXPECT_FALSE(UpdaterWorkerTestPeer::admitInstallerLaunch(cancelled));
+
+    UpdaterWorker admitted(UpdaterArgs{});
+    ASSERT_TRUE(UpdaterWorkerTestPeer::admitInstallerLaunch(admitted));
+    EXPECT_FALSE(admitted.tryCancelDownload());
 }
 
 // ---------------------------------------------------------------------------

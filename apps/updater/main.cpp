@@ -682,9 +682,9 @@ int main(int argc, char** argv) {
         render();
     });
 
-    QObject::connect(&worker, &UpdaterWorker::cancelled, &view_adapter, [&] {
+    QObject::connect(&worker, &UpdaterWorker::cancelled, &view_adapter, [&](bool installer_started) {
         in_flight = false;
-        controller->onCancelled();
+        controller->onCancelled(installer_started);
         render();
     });
 
@@ -796,7 +796,7 @@ int main(int argc, char** argv) {
     const auto exitNow = [] { QCoreApplication::exit(0); };
     QObject::connect(&view_adapter, &UpdaterViewAdapter::closeRequested, &app, exitNow);
     QObject::connect(&view_adapter, &UpdaterViewAdapter::cancelDownloadRequested, &app,
-                     [&] { worker.requestCancel(); });
+                     [&] { (void)worker.tryCancelDownload(); });
     const auto openAndQuit = [&] {
         (void)LaunchExoSnapFrom(ResolveOpenDir(args));
         exitNow();
@@ -837,11 +837,11 @@ int main(int argc, char** argv) {
             }
             return true;
         };
-        intents.cancel = [&](QString*) {
-            // Cooperative, and only meaningful where the engine observes it --
-            // the policy has already refused every phase where it would not.
-            worker.requestCancel();
-            return true;
+        intents.cancel = [&](QString* error) {
+            if (worker.tryCancelDownload())
+                return true;
+            *error = QStringLiteral("Installer handoff has already started");
+            return false;
         };
         intents.close = [&](QString*) {
             // Accepted, then the process ends. The client sees the response and
