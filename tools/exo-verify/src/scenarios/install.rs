@@ -1225,6 +1225,8 @@ mod tests {
     #[test]
     #[ignore = "installs real packages on a disposable GitHub-hosted Windows runner"]
     fn hosted_installer_lifecycle() -> Result<()> {
+        use std::os::windows::process::CommandExt;
+
         let runner = std::env::var("EXOSNAP_RUNNER_ENVIRONMENT")?;
         anyhow::ensure!(runner == "github-hosted");
         anyhow::ensure!(std::env::var("GITHUB_ACTIONS").as_deref() == Ok("true"));
@@ -1247,9 +1249,19 @@ mod tests {
         fs::create_dir(&out)?;
         let invoke = |program: &Path, args: &[&str], log: &str| -> Result<i32> {
             let mut command = Command::new(program);
-            command.args(args);
+            for &arg in args {
+                if let Some(folder) = arg.strip_prefix("INSTALLFOLDER=") {
+                    // msiexec parses NAME="value with spaces" itself. Command::arg
+                    // would put the opening quote before the property name.
+                    anyhow::ensure!(program == Path::new("msiexec.exe"));
+                    anyhow::ensure!(!folder.contains('"'));
+                    command.raw_arg(format!(r#"INSTALLFOLDER="{folder}""#));
+                } else {
+                    command.arg(arg);
+                }
+            }
             command.arg(if program == Path::new("msiexec.exe") {
-                "/l*v"
+                "/l*v!"
             } else {
                 "/log"
             });
