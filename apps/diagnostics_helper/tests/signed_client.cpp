@@ -1,4 +1,5 @@
 #include "../Handle.h"
+#include "../ImagePath.h"
 #include "diagnostics/PrivilegedPresentBackend.h"
 
 #include <windows.h>
@@ -31,9 +32,15 @@ std::wstring FinalPath(HANDLE file, DWORD spelling) {
 
 void Probe(const char* spelling, const wchar_t* path, bool locked) {
     UINT database_status;
+    UINT bound_status = ERROR_INVALID_HANDLE;
     {
         PMSIHANDLE database;
         database_status = MsiOpenDatabaseW(path, MSIDBOPEN_READONLY, &database);
+        if (database_status == ERROR_SUCCESS) {
+            const auto reference = L"#" + std::to_wstring(static_cast<MSIHANDLE>(database));
+            PMSIHANDLE bound;
+            bound_status = MsiOpenPackageExW(reference.c_str(), MSIOPENPACKAGEFLAGS_IGNOREMACHINESTATE, &bound);
+        }
     }
     UINT package_status;
     {
@@ -41,7 +48,7 @@ void Probe(const char* spelling, const wchar_t* path, bool locked) {
         package_status = MsiOpenPackageExW(path, MSIOPENPACKAGEFLAGS_IGNOREMACHINESTATE, &package);
     }
     std::cout << "MSI read probe " << spelling << " locked=" << locked << " database=" << database_status
-              << " restricted package=" << package_status << '\n';
+              << " restricted bound package=" << bound_status << " restricted package=" << package_status << '\n';
 }
 
 bool ProbePackagePaths() {
@@ -59,7 +66,9 @@ bool ProbePackagePaths() {
     const auto native = FinalPath(file.get(), VOLUME_NAME_NT);
     if (volume.empty() || native.empty())
         return false;
-    const auto global = LR"(\\?\GLOBALROOT)" + native;
+    const auto global = ipc::GlobalLocalVolumePath(native);
+    if (global.empty())
+        return false;
     const auto com = CoInitializeEx(nullptr, COINIT_APARTMENTTHREADED);
     if (FAILED(com))
         return false;

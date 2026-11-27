@@ -1,5 +1,6 @@
 #include "Channel.h"
 #include "FixtureStatus.h"
+#include "ImagePath.h"
 #include "Peer.h"
 #include "diagnostics/PrivilegedPresentBackend.h"
 
@@ -191,12 +192,26 @@ UINT InstallPackage(HANDLE stop, const fs::path& image) {
     LockedPath locked;
     if (!Verified(msi, EXOSNAP_DIAGNOSTICS_MSI_SHA256, locked, false) || WaitForSingleObject(stop, 0) != WAIT_TIMEOUT)
         return ERROR_INSTALL_FAILURE;
-    // Open the verified database in this process before requesting the INSTALL
-    // action. Windows Installer owns package elevation and execution. No elevated
-    // process is handed a still-unopened package path.
+    // The installer accepts the physical filename for read-only database access.
+    // Bind the package session to that open database before requesting INSTALL.
+    std::wstring native(32768, L'\0');
+    const auto length = GetFinalPathNameByHandleW(locked.handles.back().get(), native.data(),
+                                                  static_cast<DWORD>(native.size()), VOLUME_NAME_NT);
+    if (!length || length >= native.size())
+        return ERROR_INSTALL_FAILURE;
+    native.resize(length);
+    const auto physical = GlobalLocalVolumePath(native);
+    if (physical.empty())
+        return ERROR_INSTALL_FAILURE;
+    PMSIHANDLE database;
+    const auto db_status = MsiOpenDatabaseW(physical.c_str(), MSIDBOPEN_READONLY, &database);
+    ReportFixtureStatus("MsiOpenDatabaseW", db_status);
+    if (db_status != ERROR_SUCCESS)
+        return ERROR_INSTALL_FAILURE;
+    const auto reference = L"#" + std::to_wstring(static_cast<MSIHANDLE>(database));
     PMSIHANDLE package;
-    const auto opened = MsiOpenPackageExW(locked.canonical.c_str(), 0, &package);
-    ReportFixtureStatus("MsiOpenPackageExW", opened);
+    const auto opened = MsiOpenPackageW(reference.c_str(), &package);
+    ReportFixtureStatus("MsiOpenPackageW database handle", opened);
     if (opened != ERROR_SUCCESS || WaitForSingleObject(stop, 0) != WAIT_TIMEOUT)
         return ERROR_INSTALL_FAILURE;
     const auto installed = MsiDoActionW(package, L"INSTALL");
