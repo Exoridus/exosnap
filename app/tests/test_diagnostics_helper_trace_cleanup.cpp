@@ -1,4 +1,5 @@
 #include "../../apps/diagnostics_helper/Guardian.h"
+#include "../../apps/diagnostics_helper/StartingGuardian.h"
 
 #include <evntrace.h>
 #include <objbase.h>
@@ -21,6 +22,27 @@ struct TraceProperties {
         properties.LoggerNameOffset = offsetof(TraceProperties, name);
     }
 };
+
+TEST(DiagnosticsHelperTraceCleanup, GuardianLaunchUsesTheSameGlobalImage) {
+    const auto path = GlobalProcessImagePath(GetCurrentProcess());
+    ASSERT_TRUE(path.starts_with(LR"(\\?\GLOBALROOT\Device\HarddiskVolume)"));
+    STARTUPINFOW startup{};
+    startup.cb = sizeof(startup);
+    PROCESS_INFORMATION child{};
+    ASSERT_TRUE(CreateProcessW(path.c_str(), nullptr, nullptr, nullptr, FALSE, CREATE_SUSPENDED | CREATE_NO_WINDOW,
+                               nullptr, nullptr, &startup, &child));
+    Handle observer;
+    {
+        StartingGuardian pending{Handle(child.hProcess)};
+        Handle thread(child.hThread);
+        HANDLE duplicate = nullptr;
+        ASSERT_TRUE(DuplicateHandle(GetCurrentProcess(), pending.get(), GetCurrentProcess(), &duplicate, SYNCHRONIZE,
+                                    FALSE, 0));
+        observer = Handle(duplicate);
+        EXPECT_EQ(GlobalProcessImagePath(pending.get()), path);
+    }
+    EXPECT_EQ(WaitForSingleObject(observer.get(), 0), WAIT_OBJECT_0);
+}
 
 TEST(DiagnosticsHelperTraceCleanup, StopsOnlyThePrearmedIdentityWithoutAPublishedHandle) {
     GUID expected{};

@@ -9,6 +9,7 @@
 #include <array>
 #include <cstddef>
 #include <string>
+#include <string_view>
 #include <vector>
 
 namespace exosnap::diagnostics::ipc {
@@ -18,15 +19,23 @@ struct TraceQuery {
     std::array<wchar_t, 256> logger{};
 };
 
-std::wstring ImagePath(HANDLE process) {
+} // namespace
+
+std::wstring GlobalProcessImagePath(HANDLE process) {
     std::wstring path(32768, L'\0');
     auto size = static_cast<DWORD>(path.size());
-    if (!QueryFullProcessImageNameW(process, 0, path.data(), &size))
+    if (!QueryFullProcessImageNameW(process, PROCESS_NAME_NATIVE, path.data(), &size))
         return {};
     path.resize(size);
-    return path;
+    constexpr std::wstring_view prefix = LR"(\Device\HarddiskVolume)";
+    if (!path.starts_with(prefix))
+        return {};
+    const auto separator = path.find_first_not_of(L"0123456789", prefix.size());
+    if (separator == prefix.size() || separator == std::wstring::npos || path[separator] != L'\\' ||
+        separator + 1 == path.size())
+        return {};
+    return LR"(\\?\GLOBALROOT)" + path;
 }
-} // namespace
 
 void StopOwnedSession(const wchar_t* name, const GUID& id) {
     TraceQuery query{};
@@ -46,8 +55,9 @@ int RunGuardian() {
     Handle heartbeat(GetStdHandle(STD_ERROR_HANDLE));
     if (!owner || !identity_pipe || !heartbeat || GetFileType(identity_pipe.get()) != FILE_TYPE_PIPE)
         return 1;
-    const auto own_path = ImagePath(GetCurrentProcess());
-    if (own_path.empty() || own_path != ImagePath(owner.get()) || GetProcessId(owner.get()) == GetCurrentProcessId())
+    const auto own_path = GlobalProcessImagePath(GetCurrentProcess());
+    if (own_path.empty() || own_path != GlobalProcessImagePath(owner.get()) ||
+        GetProcessId(owner.get()) == GetCurrentProcessId())
         return 1;
     GUID id{};
     DWORD written = 0;
@@ -100,7 +110,7 @@ GuardedSession StartGuardian() {
     startup.StartupInfo.hStdError = heartbeat.get();
     startup.lpAttributeList = list;
     HANDLE inherited[] = {owner.get(), writer.get(), heartbeat.get()};
-    const auto path = ImagePath(GetCurrentProcess());
+    const auto path = GlobalProcessImagePath(GetCurrentProcess());
     auto args = L"\"" + path + L"\" --guard";
     PROCESS_INFORMATION child{};
     const bool launched =
