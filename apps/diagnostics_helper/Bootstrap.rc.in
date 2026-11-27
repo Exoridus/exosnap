@@ -1,0 +1,7 @@
+#include <windows.h>
+
+1 TYPELIB "@_bootstrap_dir@/Bootstrap.tlb"
+STRINGTABLE
+BEGIN
+    101 "ExoSnap Diagnostics Helper"
+END

@@ -30,6 +30,7 @@ inline void NoteFootprintMismatch() {
 
 #ifdef EXOSNAP_SIGNED_FIXTURE_STATUS
 namespace exosnap::diagnostics {
-void ProbeInstalledHelperLaunch();
+bool ProbeSignedPackageAcquisition();
+HRESULT ProbeMachineBootstrap(ULONG version, bool invoke);
 }
 #endif

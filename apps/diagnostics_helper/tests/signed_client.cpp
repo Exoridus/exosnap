@@ -57,40 +57,38 @@ bool RunCycle() {
     return state == DiagnosticsHelperState::Connected && active == ERROR_SUCCESS &&
            final_state == DiagnosticsHelperState::Stopped && stopped == ERROR_WMI_INSTANCE_NOT_FOUND;
 }
-bool RejectDifferentRegistration() {
-    if (QueryDpcSession() != ERROR_WMI_INSTANCE_NOT_FOUND)
-        return false;
+bool MissingMachineHelper() {
     const auto backend = MakePrivilegedDiagnosticsBackend(false);
     if (backend->Open() != PresentTraceOpenResult::Opened)
         return false;
-    std::thread consumer([&backend] { backend->Consume(); });
-    const auto deadline = std::chrono::steady_clock::now() + 90s;
-    auto state = backend->HelperState();
-    while (state == DiagnosticsHelperState::Starting && std::chrono::steady_clock::now() < deadline) {
-        std::this_thread::sleep_for(100ms);
-        state = backend->HelperState();
-    }
-    backend->Close();
-    consumer.join();
-    const auto status = QueryDpcSession();
-    std::cout << "Different registered package state=" << static_cast<int>(state) << ", DPC query=" << status << '\n';
-    return ipc::fixture_footprint_mismatch.load() && state == DiagnosticsHelperState::Unavailable &&
-           backend->HelperState() == DiagnosticsHelperState::Unavailable && status == ERROR_WMI_INSTANCE_NOT_FOUND;
+    backend->Consume();
+    return backend->HelperState() == DiagnosticsHelperState::Unavailable &&
+           QueryDpcSession() == ERROR_WMI_INSTANCE_NOT_FOUND;
 }
 } // namespace
 
 int main(int argc, char** argv) {
-    if (argc == 2 && std::string_view(argv[1]) == "--expect-registration-rejection")
-        return RejectDifferentRegistration() ? 0 : 1;
-    if (argc == 2 && std::string_view(argv[1]) == "--probe-installed-launch") {
+    if (argc == 2) {
+        const std::string_view mode(argv[1]);
+        if (mode == "--expect-machine-unavailable")
+            return MissingMachineHelper() ? 0 : 1;
         const HRESULT com = CoInitializeEx(nullptr, COINIT_APARTMENTTHREADED);
-        if (FAILED(com)) {
-            std::cerr << "Launch probe COM initialization failed: " << com << '\n';
+        if (FAILED(com))
             return 1;
-        }
-        exosnap::diagnostics::ProbeInstalledHelperLaunch();
+        bool passed = false;
+        if (mode == "--expect-registration-rejection")
+            passed = !exosnap::diagnostics::ProbeSignedPackageAcquisition() &&
+                     exosnap::diagnostics::ipc::fixture_footprint_mismatch.load();
+        else if (mode == "--verify-package-acquisition")
+            passed = exosnap::diagnostics::ProbeSignedPackageAcquisition();
+        else if (mode == "--expect-invalid-version")
+            passed = exosnap::diagnostics::ProbeMachineBootstrap(0, true) == E_INVALIDARG;
+        else if (mode == "--expect-wrong-caller")
+            passed = exosnap::diagnostics::ProbeMachineBootstrap(1, true) == E_ACCESSDENIED;
+        else if (mode == "--empty-activation")
+            passed = exosnap::diagnostics::ProbeMachineBootstrap(1, false) == S_OK;
         CoUninitialize();
-        return 0;
+        return passed && QueryDpcSession() == ERROR_WMI_INSTANCE_NOT_FOUND ? 0 : 1;
     }
     for (int cycle = 1; cycle <= 2; ++cycle) {
         std::cout << "Signed provisioning and DPC cycle " << cycle << std::endl;

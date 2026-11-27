@@ -101,20 +101,41 @@ jobs:
             } finally {
               Remove-AppxPackage -Package $registration.PackageFullName
             }
-            $firstExit = Invoke-SignedFixture
-            Write-Host "Automatic provisioning and lifecycle exit: $firstExit"
-            if ($firstExit -eq 0) {
-              $package = Get-AppxPackage -Name Exoridus.ExoSnap.Diagnostics
-              if (!$package -or $package.Publisher -ne $certificate.Subject) { throw "Expected fixture MSIX registration" }
-              $packagedImage = Join-Path $package.InstallLocation 'exosnap-diagnostics.exe'
-              if ((Get-FileHash $packagedImage).Hash -ne (Get-FileHash $signedImage).Hash) { throw "MSIX image digest mismatch" }
-            }
+            if ((Invoke-SignedFixture '--expect-machine-unavailable') -ne 0) { throw "Missing machine helper did not fail closed" }
+            if (Get-AppxPackage -Name Exoridus.ExoSnap.Diagnostics) { throw "Production entry installed a package" }
+            if ((Invoke-SignedFixture '--verify-package-acquisition') -ne 0) { throw "Explicit MSIX acquisition proof failed" }
             # Machine-managed installations must also work without an MSIX beside the recorder.
             Remove-Item "$($bundle.FullName)/helper.msix"
             $setup = Start-Process msiexec.exe -ArgumentList "/i ""$signedMsi"" /qn /norestart" -Wait -PassThru
             if ($setup.ExitCode -ne 0) { throw "Controlled fixture installation returned $($setup.ExitCode)" }
             if ((Get-FileHash $installed).Hash -ne (Get-FileHash $signedImage).Hash) { throw "Controlled image digest mismatch" }
-            & $client --probe-installed-launch
+            $marker = 'HKCU:\Software\Classes\CLSID\{70E064CA-A7D4-43EA-A075-CE4303BF12E5}'
+            if (Test-Path $marker) { throw "Unexpected preexisting fixture marker" }
+            try {
+              New-Item $marker -Force | Out-Null
+              if ((Invoke-SignedFixture '--expect-machine-unavailable') -ne 0) { throw "Per-user class conflict accepted" }
+            } finally {
+              if (Test-Path $marker) { Remove-Item $marker }
+            }
+            function Assert-NoHelper {
+              $limit = (Get-Date).AddSeconds(30)
+              while ((Get-Process -Name exosnap-diagnostics -ErrorAction SilentlyContinue) -and (Get-Date) -lt $limit) {
+                Start-Sleep -Milliseconds 100
+              }
+              if (Get-Process -Name exosnap-diagnostics -ErrorAction SilentlyContinue) { throw "Activation remained alive" }
+            }
+            foreach ($mode in '--empty-activation','--expect-invalid-version') {
+              if ((Invoke-SignedFixture $mode) -ne 0) { throw "Machine activation fixture failed: $mode" }
+              Assert-NoHelper
+            }
+            $originalClient = $client
+            $client = (Copy-Item $client (Join-Path (Split-Path $client) 'unapproved-client.exe') -PassThru).FullName
+            try {
+              if ((Invoke-SignedFixture '--expect-wrong-caller') -ne 0) { throw "Incorrect client identity accepted" }
+              Assert-NoHelper
+            } finally {
+              $client = $originalClient
+            }
             $preinstalledExit = Invoke-SignedFixture
             Write-Host "Controlled preinstalled lifecycle exit: $preinstalledExit"
             if ($preinstalledExit -ne 0) { throw "Preinstalled lifecycle failed" }
@@ -125,7 +146,6 @@ jobs:
               Start-Sleep -Milliseconds 100
             } while ((Get-Date) -lt $deadline)
             if ($remaining.Count) { throw "Installed collector or guardian still running after disable" }
-            if ($firstExit -ne 0) { throw "Required automatic acquisition returned $firstExit" }
           } finally {
             try {
               if (Test-Path $msi) {

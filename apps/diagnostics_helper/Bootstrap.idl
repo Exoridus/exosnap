@@ -1,0 +1,19 @@
+import "unknwn.idl";
+import "oaidl.idl";
+
+[
+    object, oleautomation, pointer_default(unique),
+    uuid(F9405F36-29C5-4393-8C0F-74D1B6613E21)
+]
+interface IExoSnapDiagnosticsBootstrap : IUnknown {
+    HRESULT Begin([in] ULONG version, [in] ULONG nonce0, [in] ULONG nonce1,
+                  [in] ULONG nonce2, [in] ULONG nonce3, [in] ULONG ownerPid,
+                  [in] ULONG createdLow, [in] ULONG createdHigh,
+                  [out, retval] ULONG* restrictedHandle);
+};
+
+[uuid(27962A35-7DED-411F-A679-CDD671A2A4B6), version(1.0)]
+library ExoSnapDiagnosticsBootstrap {
+    importlib("stdole2.tlb");
+    interface IExoSnapDiagnosticsBootstrap;
+};

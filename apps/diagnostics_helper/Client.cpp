@@ -1,11 +1,11 @@
+#include "Bootstrap.h"
 #include "Channel.h"
 #include "FileAcePolicy.h"
 #include "FixtureStatus.h"
 #include "ImagePath.h"
-#include "MsixAcquisition.h"
 #include "Peer.h"
 #ifdef EXOSNAP_SIGNED_FIXTURE_STATUS
-#include "StartingGuardian.h"
+#include "MsixAcquisition.h"
 #endif
 #include "diagnostics/PrivilegedPresentBackend.h"
 
@@ -15,7 +15,11 @@
 #include <shlobj.h>
 #include <update/package_verifier.h>
 
+#include <wrl/client.h>
+
 #include <algorithm>
+#include <bit>
+#include <cstring>
 #include <array>
 #include <atomic>
 #include <filesystem>
@@ -36,11 +40,11 @@ bool TrustedOwner(PSID sid) {
     return trusted;
 }
 
-bool Protected(HANDLE object, bool children) {
+bool Protected(HANDLE object, bool children, SE_OBJECT_TYPE type = SE_FILE_OBJECT) {
     PSID owner = nullptr;
     PACL acl = nullptr;
     PSECURITY_DESCRIPTOR descriptor = nullptr;
-    const auto status = GetSecurityInfo(object, SE_FILE_OBJECT, OWNER_SECURITY_INFORMATION | DACL_SECURITY_INFORMATION,
+    const auto status = GetSecurityInfo(object, type, OWNER_SECURITY_INFORMATION | DACL_SECURITY_INFORMATION,
                                         &owner, nullptr, &acl, nullptr, &descriptor);
     if (status != ERROR_SUCCESS) {
         ReportFixtureStatus("GetSecurityInfo", status);
@@ -49,7 +53,7 @@ bool Protected(HANDLE object, bool children) {
     bool safe = owner && acl && IsValidAcl(acl) && TrustedOwner(owner);
     if (!safe)
         ReportFixtureStatus("untrusted owner or missing DACL", ERROR_ACCESS_DENIED);
-    const DWORD danger = WRITE_DAC | WRITE_OWNER | DELETE | FILE_DELETE_CHILD | FILE_WRITE_ATTRIBUTES | FILE_WRITE_EA |
+    const DWORD danger = type == SE_REGISTRY_KEY ? WRITE_DAC | WRITE_OWNER | DELETE | KEY_SET_VALUE | KEY_CREATE_LINK | KEY_CREATE_SUB_KEY | GENERIC_WRITE | GENERIC_ALL : WRITE_DAC | WRITE_OWNER | DELETE | FILE_DELETE_CHILD | FILE_WRITE_ATTRIBUTES | FILE_WRITE_EA |
                          GENERIC_ALL | GENERIC_WRITE | (children ? FILE_WRITE_DATA | FILE_APPEND_DATA : 0);
     for (DWORD i = 0; safe && i < acl->AceCount; ++i) {
         void* entry = nullptr;
@@ -58,7 +62,8 @@ bool Protected(HANDLE object, bool children) {
             break;
         }
         auto* header = static_cast<ACE_HEADER*>(entry);
-        const auto grant = InspectFileAce(*header, danger);
+        const auto grant = type == SE_REGISTRY_KEY && header->AceType == ACCESS_ALLOWED_CALLBACK_ACE_TYPE
+                               ? FileAceGrant::Invalid : InspectFileAce(*header, danger);
         if (grant == FileAceGrant::Invalid) {
             ReportFixtureStatus("DACL rejected ACE type or rights", header->AceType);
             safe = false;
@@ -165,6 +170,63 @@ bool Verified(const fs::path& path, const char* hash, LockedPath& locked, bool s
     return approved;
 }
 
+bool RegistrationValue(const wchar_t* subkey, const wchar_t* value, DWORD type, const void* expected, DWORD bytes) {
+    HKEY key = nullptr;
+    const std::wstring path(subkey);
+    for (size_t separator = path.find(L'\\');; separator = path.find(L'\\', separator + 1)) {
+        const auto prefix = path.substr(0, separator);
+        if (RegOpenKeyExW(HKEY_LOCAL_MACHINE, prefix.c_str(), REG_OPTION_OPEN_LINK, KEY_READ | KEY_WOW64_64KEY,
+                          &key) != ERROR_SUCCESS)
+            return false;
+        DWORD link_type = 0, link_size = 0;
+        const auto link = RegQueryValueExW(key, L"SymbolicLinkValue", nullptr, &link_type, nullptr, &link_size);
+        if (link != ERROR_FILE_NOT_FOUND || !Protected(reinterpret_cast<HANDLE>(key), true, SE_REGISTRY_KEY)) {
+            RegCloseKey(key);
+            return false;
+        }
+        if (separator == path.npos)
+            break;
+        RegCloseKey(key);
+        key = nullptr;
+    }
+    std::vector<BYTE> data(bytes);
+    DWORD length = bytes, actual = 0;
+    const auto status = RegQueryValueExW(key, value, nullptr, &actual, data.data(), &length);
+    RegCloseKey(key);
+    return status == ERROR_SUCCESS && actual == type && length == bytes &&
+           std::memcmp(data.data(), expected, bytes) == 0;
+}
+
+bool BootstrapRegistered(const std::filesystem::path& machine_image) {
+    const std::wstring class_key = L"SOFTWARE\\Classes\\CLSID\\{70E064CA-A7D4-43EA-A075-CE4303BF12E5}";
+    const std::wstring iface = L"SOFTWARE\\Classes\\Interface\\{F9405F36-29C5-4393-8C0F-74D1B6613E21}";
+    const std::wstring typelib = L"SOFTWARE\\Classes\\TypeLib\\{27962A35-7DED-411F-A679-CDD671A2A4B6}\\1.0\\0\\win64";
+    // A per-user override has no role in this machine-managed protocol.
+    // Its absence here is a conflict check, never authority for elevated activation.
+    for (const auto* path : {class_key.c_str(), iface.c_str(), typelib.c_str()}) {
+        HKEY user = nullptr;
+        const auto status = RegOpenKeyExW(HKEY_CURRENT_USER, path, 0, KEY_READ | KEY_WOW64_64KEY, &user);
+        if (status == ERROR_SUCCESS)
+            RegCloseKey(user);
+        if (status != ERROR_FILE_NOT_FOUND && status != ERROR_PATH_NOT_FOUND)
+            return false;
+    }
+    const auto text = [](const std::wstring& key, const wchar_t* name, const std::wstring& expected) {
+        return RegistrationValue(key.c_str(), name, REG_SZ, expected.c_str(),
+                                 static_cast<DWORD>((expected.size() + 1) * sizeof(wchar_t)));
+    };
+    const auto physical = L"\\\\?\\GLOBALROOT\\GLOBAL??\\" + machine_image.native();
+    const DWORD enabled = 1;
+    return text(class_key, L"LocalizedString", L"@" + physical + L",-101") &&
+           RegistrationValue((class_key + L"\\Elevation").c_str(), L"Enabled", REG_DWORD, &enabled, sizeof(enabled)) &&
+           text(class_key + L"\\LocalServer32", nullptr, L"\"" + physical + L"\"") &&
+           text(class_key + L"\\LocalServer32", L"ServerExecutable", physical) &&
+           text(iface + L"\\ProxyStubClsid32", nullptr, L"{00020424-0000-0000-C000-000000000046}") &&
+           text(iface + L"\\TypeLib", nullptr, L"{27962A35-7DED-411F-A679-CDD671A2A4B6}") &&
+           text(iface + L"\\TypeLib", L"Version", L"1.0") && text(typelib, nullptr, physical);
+}
+
+#ifdef EXOSNAP_SIGNED_FIXTURE_STATUS
 bool LockFootprint(LockedPath& image, const fs::path& directory, const wchar_t* filename,
                    std::span<const unsigned char> expected) {
     // The image verification has already locked every ancestor in this directory.
@@ -220,6 +282,8 @@ bool AcquireMsix(HANDLE stop, LockedPath& image) {
     };
     return AcquireRegisteredMsix(locked.handles.back().get(), source, stop, verify);
 }
+
+#endif
 
 class RemoteBackend final : public IPrivilegedDiagnosticsBackend {
   public:
@@ -307,20 +371,14 @@ PresentProviderState RemoteBackend::Run() {
     if (std::string_view(EXOSNAP_DIAGNOSTICS_IMAGE_SHA256).size() != 64)
         return PresentProviderState::HelperUnavailable;
     LockedPath verified;
-    if (!Verified(MachineImage(), EXOSNAP_DIAGNOSTICS_IMAGE_SHA256, verified, true)) {
-        verified.handles.clear();
-        if (!AcquireMsix(stop_.get(), verified))
-            return PresentProviderState::HelperUnavailable;
-    }
+    const auto machine = MachineImage();
+    if (!Verified(machine, EXOSNAP_DIAGNOSTICS_IMAGE_SHA256, verified, true) || !BootstrapRegistered(machine))
+        return PresentProviderState::HelperUnavailable;
     GUID id{};
-    std::array<wchar_t, 39> guid{};
-    if (FAILED(CoCreateGuid(&id)) || !StringFromGUID2(id, guid.data(), static_cast<int>(guid.size())))
+    if (FAILED(CoCreateGuid(&id)))
         return PresentProviderState::Failed;
-    std::wstring nonce;
-    for (auto c : guid) {
-        if (iswxdigit(c))
-            nonce += static_cast<wchar_t>(towlower(c));
-    }
+    const auto words = std::bit_cast<std::array<ULONG, 4>>(id);
+    const auto nonce = BootstrapNonce(words);
     PSECURITY_DESCRIPTOR descriptor = nullptr;
     // Only elevated administrators may open the client end, including an
     // alternate administrator credential entered on the consent desktop.
@@ -337,26 +395,31 @@ PresentProviderState RemoteBackend::Run() {
         ReportFixtureStatus("pipe create or cancelled", GetLastError());
         return PresentProviderState::Failed;
     }
-    const auto args = nonce + L" " + std::to_wstring(GetCurrentProcessId()) + L" " +
-                      std::to_wstring(CreationTime(GetCurrentProcess()));
-    const auto directory = verified.canonical.parent_path();
-    SHELLEXECUTEINFOW exec{};
-    exec.cbSize = sizeof(exec);
-    exec.fMask = SEE_MASK_NOCLOSEPROCESS | SEE_MASK_NOASYNC | SEE_MASK_FLAG_NO_UI;
-    exec.lpVerb = L"runas";
-    exec.lpFile = verified.canonical.c_str();
-    exec.lpParameters = args.c_str();
-    exec.lpDirectory = directory.c_str();
-    exec.nShow = SW_HIDE;
+    BIND_OPTS3 options{};
+    options.cbStruct = sizeof(options);
+    options.dwClassContext = CLSCTX_LOCAL_SERVER;
+    Microsoft::WRL::ComPtr<IExoSnapDiagnosticsBootstrap> bootstrap;
     if (WaitForSingleObject(stop_.get(), 0) != WAIT_TIMEOUT)
         return PresentProviderState::Stopped;
-    if (!ShellExecuteExW(&exec)) {
-        const auto error = GetLastError();
-        ReportFixtureStatus("ShellExecuteExW", error);
-        return error == ERROR_CANCELLED ? PresentProviderState::ConsentDeclined : PresentProviderState::Failed;
-    }
-    ReportFixtureStatus("ShellExecuteExW", ERROR_SUCCESS);
-    Handle helper(exec.hProcess);
+    auto status = CoGetObject(kBootstrapMoniker, &options, IID_PPV_ARGS(&bootstrap));
+    ReportFixtureStatus("machine bootstrap activation", static_cast<DWORD>(status));
+    if (FAILED(status))
+        return status == HRESULT_FROM_WIN32(ERROR_CANCELLED) ? PresentProviderState::ConsentDeclined
+                                                              : PresentProviderState::HelperUnavailable;
+    if (WaitForSingleObject(stop_.get(), 0) != WAIT_TIMEOUT)
+        return PresentProviderState::Stopped;
+    status = CoSetProxyBlanket(bootstrap.Get(), RPC_C_AUTHN_DEFAULT, RPC_C_AUTHZ_DEFAULT, nullptr,
+                              RPC_C_AUTHN_LEVEL_PKT_PRIVACY, RPC_C_IMP_LEVEL_IDENTIFY, nullptr, EOAC_NONE);
+    if (FAILED(status))
+        return PresentProviderState::Failed;
+    const auto created = CreationTime(GetCurrentProcess());
+    ULONG restricted = 0;
+    status = bootstrap->Begin(kBootstrapVersion, words[0], words[1], words[2], words[3], GetCurrentProcessId(),
+                              static_cast<ULONG>(created), static_cast<ULONG>(created >> 32), &restricted);
+    ReportFixtureStatus("authenticated machine bootstrap", static_cast<DWORD>(status));
+    if (FAILED(status) || !restricted)
+        return PresentProviderState::Failed;
+    Handle helper(ULongToHandle(restricted));
     Handle connected(CreateEventW(nullptr, TRUE, FALSE, nullptr));
     OVERLAPPED operation{};
     operation.hEvent = connected.get();
@@ -453,79 +516,30 @@ PresentProviderState RemoteBackend::Run() {
 } // namespace
 
 #ifdef EXOSNAP_SIGNED_FIXTURE_STATUS
-void ProbeInstalledHelperLaunch() {
-    LockedPath locked;
-    if (!Verified(MachineImage(), EXOSNAP_DIAGNOSTICS_IMAGE_SHA256, locked, true)) {
-        ReportFixtureStatus("launch matrix rejected image", ERROR_ACCESS_DENIED);
-        return;
-    }
-    std::wstring native(32768, L'\0');
-    const auto count = GetFinalPathNameByHandleW(locked.handles.back().get(), native.data(),
-                                                 static_cast<DWORD>(native.size()), VOLUME_NAME_NT);
-    if (!count || count >= native.size())
-        return;
-    native.resize(count);
-    const fs::path global = GlobalLocalVolumePath(native);
-    if (global.empty())
-        return;
-    struct Spelling {
-        fs::path path;
-        const char* label;
-    };
-    auto device = [](const fs::path& path) {
-        auto name = path.native();
-        if (!name.starts_with(LR"(\\?\)"))
-            return fs::path{};
-        name[2] = L'.';
-        return fs::path(name);
-    };
-    const std::array spellings{Spelling{locked.canonical, "volume GUID launch matrix"},
-                               Spelling{global, "global native launch matrix"},
-                               Spelling{device(locked.canonical), "device volume GUID launch matrix"},
-                               Spelling{device(global), "device global native launch matrix"},
-                               Spelling{MachineImage(), "fixture-only DOS positive control"}};
-    const auto probe = [](const fs::path& path, const char* label, const wchar_t* parent, HKEY class_key) {
-        SHELLEXECUTEINFOW exec{};
-        exec.cbSize = sizeof(exec);
-        exec.fMask = SEE_MASK_NOCLOSEPROCESS | SEE_MASK_NOASYNC | SEE_MASK_FLAG_NO_UI;
-        exec.lpVerb = L"runas";
-        exec.lpFile = path.c_str();
-        exec.lpDirectory = parent;
-        if (class_key) {
-            exec.fMask |= SEE_MASK_CLASSKEY;
-            exec.hkeyClass = class_key;
-        }
-        exec.nShow = SW_HIDE;
-        const BOOL launched = ShellExecuteExW(&exec);
-        const DWORD status = launched ? ERROR_SUCCESS : GetLastError();
-        ReportFixtureStatus(label, status);
-        ReportFixtureStatus("matrix supplies working directory", parent != nullptr);
-        if (launched && exec.hProcess) {
-            StartingGuardian child{Handle(exec.hProcess)};
-            const auto wait = WaitForSingleObject(child.get(), 5000);
-            ReportFixtureStatus("matrix child wait", wait);
-            DWORD exit_code = 0;
-            if (GetExitCodeProcess(child.get(), &exit_code))
-                ReportFixtureStatus("matrix child exit", exit_code);
-        }
-    };
-    for (const auto& [path, label] : spellings) {
-        if (path.empty())
-            continue;
-        const auto parent = path.parent_path();
-        probe(path, label, nullptr, nullptr);
-        probe(path, label, parent.c_str(), nullptr);
-    }
-    HKEY class_key = nullptr;
-    const auto opened = RegOpenKeyExW(HKEY_LOCAL_MACHINE, L"Software\\Classes\\exefile", 0, KEY_READ | KEY_WOW64_64KEY,
-                                      &class_key);
-    if (opened == ERROR_SUCCESS) {
-        probe(locked.canonical, "HKLM exefile volume GUID", nullptr, class_key);
-        probe(global, "HKLM exefile global native", nullptr, class_key);
-        RegCloseKey(class_key);
-    } else {
-        ReportFixtureStatus("HKLM exefile class unavailable", static_cast<DWORD>(opened));
-    }
+bool ProbeSignedPackageAcquisition() {
+    Handle stop(CreateEventW(nullptr, TRUE, FALSE, nullptr));
+    LockedPath image;
+    return stop && AcquireMsix(stop.get(), image);
+}
+
+HRESULT ProbeMachineBootstrap(ULONG version, bool invoke) {
+    BIND_OPTS3 options{};
+    options.cbStruct = sizeof(options);
+    options.dwClassContext = CLSCTX_LOCAL_SERVER;
+    Microsoft::WRL::ComPtr<IExoSnapDiagnosticsBootstrap> bootstrap;
+    auto result = CoGetObject(kBootstrapMoniker, &options, IID_PPV_ARGS(&bootstrap));
+    if (FAILED(result) || !invoke)
+        return result;
+    result = CoSetProxyBlanket(bootstrap.Get(), RPC_C_AUTHN_DEFAULT, RPC_C_AUTHZ_DEFAULT, nullptr,
+                               RPC_C_AUTHN_LEVEL_PKT_PRIVACY, RPC_C_IMP_LEVEL_IDENTIFY, nullptr, EOAC_NONE);
+    if (FAILED(result))
+        return result;
+    const auto created = CreationTime(GetCurrentProcess());
+    ULONG restricted = 0;
+    result = bootstrap->Begin(version, 1, 2, 3, 4, GetCurrentProcessId(), static_cast<ULONG>(created),
+                              static_cast<ULONG>(created >> 32), &restricted);
+    Handle unexpected(ULongToHandle(restricted));
+    return result;
 }
 #endif
 

@@ -1,3 +1,4 @@
+#include "Bootstrap.h"
 #include "Channel.h"
 #include "Guardian.h"
 #include "Peer.h"
@@ -186,15 +187,8 @@ int WINAPI wWinMain(HINSTANCE, HINSTANCE, LPWSTR, int) {
     int result = 1;
     if (count == 2 && std::wstring_view(args[1]) == L"--guard") {
         result = RunGuardian();
-    } else if (count == 4) {
-        const std::wstring created(args[3]);
-        const std::wstring pid_text(args[2]);
-        if (!pid_text.empty() && pid_text.size() <= 10 && pid_text.find_first_not_of(L"0123456789") == pid_text.npos) {
-            const auto pid = wcstoull(pid_text.c_str(), nullptr, 10);
-            if (pid <= MAXDWORD && !created.empty() && created.size() <= 19 &&
-                created.find_first_not_of(L"0123456789") == created.npos)
-                result = Collect(args[1], static_cast<DWORD>(pid), wcstoull(created.c_str(), nullptr, 10));
-        }
+    } else if (count == 2 && _wcsicmp(args[1], L"-Embedding") == 0) {
+        result = RunBootstrapServer(Collect);
     }
     LocalFree(args);
     return result;
