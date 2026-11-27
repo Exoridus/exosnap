@@ -1,0 +1,87 @@
+name: Diagnostics helper visual qualification
+
+on:
+  push:
+    branches: [verify/v012-diagnostics-visual]
+
+permissions:
+  contents: read
+
+env:
+  SCCACHE_GHA_ENABLED: "true"
+  SCCACHE_GHA_RW_MODE: READ_ONLY
+  SCCACHE_IDLE_TIMEOUT: "0"
+
+jobs:
+  capture:
+    runs-on: windows-2022
+    timeout-minutes: 60
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+        with:
+          fetch-depth: 2
+          persist-credentials: false
+      - name: Verify product source
+        shell: pwsh
+        run: |
+          $expected = '433712b4fd0afd4dd00d7fcfdd4a596a30937f28'
+          $parent = git rev-parse 'HEAD^'
+          if ($LASTEXITCODE -ne 0 -or $parent -ne $expected) { throw 'Unexpected product source commit' }
+          $files = @(git diff --name-only $expected HEAD)
+          $allowed = @('.github/workflows/diagnostics-native-visual.yml','app/quick/ExoSnap/Quick/QuickApplication.cpp')
+          if ($LASTEXITCODE -ne 0 -or @(Compare-Object $allowed $files).Count -ne 0) { throw 'Unexpected product or fixture changes' }
+      - uses: ilammy/msvc-dev-cmd@0b201ec74fa43914dc39ae48a89fd1d8cb592756 # v1.13.0
+      - uses: ./.github/actions/setup-qt
+        with:
+          profile: quick
+      - uses: mozilla-actions/sccache-action@9e7fa8a12102821edf02ca5dbea1acd0f89a2696 # v0.0.10
+      - name: Build the shipping Qt Quick application
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $PSNativeCommandUseErrorActionPreference = $true
+          cmake --preset windows-x64-ninja-release
+          cmake --build build/windows-x64-ninja-release --target exosnap --parallel $([Environment]::ProcessorCount)
+      - name: Capture the helper switch and both recoverable states
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $PSNativeCommandUseErrorActionPreference = $true
+          $images = @(Get-ChildItem build/windows-x64-ninja-release -Filter exosnap.exe -Recurse -File)
+          if ($images.Count -ne 1) { throw 'Expected one application executable' }
+          $exe = $images[0].FullName
+          $out = '.workspace/diagnostics-native-visual'
+          New-Item -ItemType Directory -Force -Path $out | Out-Null
+          [ordered]@{
+            productCommit = git rev-parse 'HEAD^'
+            captureCommit = git rev-parse HEAD
+            executableSha256 = (Get-FileHash -Algorithm SHA256 -LiteralPath $exe).Hash
+            windowsUICulture = (Get-UICulture).Name
+            rendering = 'Qt Quick software, offscreen; recorded helper states, product adapter and QML'
+          } | ConvertTo-Json | Set-Content "$out/source.json" -Encoding utf8
+          Add-Type -AssemblyName System.Drawing
+          $receipts = @()
+          foreach ($state in 'helper-opt-in','helper-unavailable','helper-refused') {
+            cargo exo-dev screenshot shot --exe $exe --page diagnostics --diag-live $state --appearance dark,light --accent aqua --size 1600x1000,860x700 --out-dir "$out/$state"
+            foreach ($theme in 'dark','light') {
+              foreach ($size in '1600x1000','860x700') {
+                $png = @(Get-ChildItem "$out/$state/diagnostics" -Filter "*${theme}-aqua_${size}.png" -File)
+                if ($png.Count -ne 1) { throw "Missing unique $state $theme $size capture" }
+                $bitmap = [Drawing.Bitmap]::FromFile($png[0].FullName)
+                try {
+                  if ("$($bitmap.Width)x$($bitmap.Height)" -ne $size) { throw "Incorrect capture size: $($png[0].Name)" }
+                } finally { $bitmap.Dispose() }
+                $receipts += [ordered]@{ state=$state; appearance=$theme; size=$size; file=$png[0].Name; sha256=(Get-FileHash $png[0].FullName).Hash }
+              }
+            }
+          }
+          if (@($receipts | ForEach-Object { $_.sha256 } | Sort-Object -Unique).Count -ne 12) { throw 'Expected twelve distinct state, appearance and size captures' }
+          $receipts | ConvertTo-Json | Set-Content "$out/captures.json" -Encoding utf8
+      - name: Upload diagnostics captures and provenance
+        if: always()
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        with:
+          name: diagnostics-native-visual-433712b4
+          path: .workspace/diagnostics-native-visual/
+          include-hidden-files: true
+          if-no-files-found: error
