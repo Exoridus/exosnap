@@ -12307,9 +12307,36 @@ Kleiner Text auf dem Bildschirm verliert früher an Qualität als Videoinhalte. 
         <translation>DPC / ISR</translation>
     </message>
     <message>
-        <location line="-4"/>
-        <source>Not running - elevated kernel trace required</source>
-        <translation>Nicht aktiv: Kernel-Trace mit Administratorrechten erforderlich</translation>
+        <source>Privileged diagnostics off</source>
+        <translation>Diagnose mit Administratorrechten ist aus</translation>
+    </message>
+    <message>
+        <source>Start privileged diagnostics</source>
+        <translation>Diagnose mit Administratorrechten starten</translation>
+    </message>
+    <message>
+        <source>Stop privileged diagnostics</source>
+        <translation>Diagnose mit Administratorrechten stoppen</translation>
+    </message>
+    <message>
+        <source>Waiting for kernel trace data</source>
+        <translation>Warten auf Kernel-Trace-Daten</translation>
+    </message>
+    <message>
+        <source>Install the ExoSnap Diagnostics companion</source>
+        <translation>Installiere die Zusatzkomponente ExoSnap Diagnostics</translation>
+    </message>
+    <message>
+        <source>Administrator approval declined</source>
+        <translation>Administratorfreigabe abgelehnt</translation>
+    </message>
+    <message>
+        <source>Diagnostics companion stopped or incompatible</source>
+        <translation>Zusatzkomponente beendet oder inkompatibel</translation>
+    </message>
+    <message>
+        <source>Stopping</source>
+        <translation>Wird beendet</translation>
     </message>
     <message>
         <location line="+4"/>

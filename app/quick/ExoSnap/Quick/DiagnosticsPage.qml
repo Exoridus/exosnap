@@ -279,6 +279,15 @@ Item {
                     }
                 }
             }
+
+            ExoButton {
+                objectName: "privilegedDiagnosticsButton"
+                Layout.alignment: Qt.AlignRight
+                compact: true
+                text: root.diagnostics.privilegedActionText
+                enabled: root.diagnostics.privilegedActionAvailable
+                onClicked: root.diagnostics.togglePrivilegedDiagnostics()
+            }
         }
 
         ExoScrollView {

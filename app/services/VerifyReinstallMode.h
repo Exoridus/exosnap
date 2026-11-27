@@ -13,7 +13,7 @@
 // gone after a restart. There is no settings key, no environment variable and no
 // UI switch, so a user cannot end up stuck in it.
 //
-// Pure parse seam (mirrors ElevatedRelaunch): no Win32, no I/O.
+// Pure parse seam with no Win32 or I/O.
 
 #include <QStringList>
 

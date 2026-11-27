@@ -421,12 +421,37 @@ QVariantList DiagnosticsAdapter::measurementSources() const {
     // failure of the recording and never turns into a zero reading.
     if (!in_depth_enabled_)
         add(tr("DPC / ISR"), tr("Not requested"), QStringLiteral("idle"));
-    else if (!elevated())
-        add(tr("DPC / ISR"), tr("Not running - elevated kernel trace required"), QStringLiteral("unavailable"));
     else if (dpc_reading_.has_value() && dpc_reading_->available)
         add(tr("DPC / ISR"), tr("Measuring"), QStringLiteral("measuring"));
-    else
-        add(tr("DPC / ISR"), tr("Unavailable - kernel trace not running"), QStringLiteral("unavailable"));
+    else {
+        using diagnostics::PrivilegedDiagnosticsState;
+        switch (privileged_state_) {
+        case PrivilegedDiagnosticsState::Starting:
+            add(tr("DPC / ISR"), tr("Starting"), QStringLiteral("partial"));
+            break;
+        case PrivilegedDiagnosticsState::Running:
+            if (privileged_kernel_trace_open_)
+                add(tr("DPC / ISR"), tr("Waiting for kernel trace data"), QStringLiteral("partial"));
+            else
+                add(tr("DPC / ISR"), tr("Unavailable - kernel trace not running"), QStringLiteral("unavailable"));
+            break;
+        case PrivilegedDiagnosticsState::Missing:
+            add(tr("DPC / ISR"), tr("Install the ExoSnap Diagnostics companion"), QStringLiteral("unavailable"));
+            break;
+        case PrivilegedDiagnosticsState::Declined:
+            add(tr("DPC / ISR"), tr("Administrator approval declined"), QStringLiteral("unavailable"));
+            break;
+        case PrivilegedDiagnosticsState::Failed:
+            add(tr("DPC / ISR"), tr("Diagnostics companion stopped or incompatible"), QStringLiteral("unavailable"));
+            break;
+        case PrivilegedDiagnosticsState::Stopping:
+            add(tr("DPC / ISR"), tr("Stopping"), QStringLiteral("partial"));
+            break;
+        case PrivilegedDiagnosticsState::Idle:
+            add(tr("DPC / ISR"), tr("Privileged diagnostics off"), QStringLiteral("idle"));
+            break;
+        }
+    }
 
     return rows;
 }
@@ -770,6 +795,36 @@ void DiagnosticsAdapter::setElevated(bool elevated) {
     emit environmentChanged();
     emit inDepthChanged();
     emit changed();
+}
+
+QString DiagnosticsAdapter::privilegedActionText() const {
+    using diagnostics::PrivilegedDiagnosticsState;
+    return privileged_state_ == PrivilegedDiagnosticsState::Running ||
+                   privileged_state_ == PrivilegedDiagnosticsState::Starting
+               ? tr("Stop privileged diagnostics")
+               : tr("Start privileged diagnostics");
+}
+
+bool DiagnosticsAdapter::privilegedActionAvailable() const noexcept {
+    return in_depth_enabled_ && privileged_state_ != diagnostics::PrivilegedDiagnosticsState::Stopping;
+}
+
+void DiagnosticsAdapter::togglePrivilegedDiagnostics() {
+    if (!privilegedActionAvailable())
+        return;
+    using diagnostics::PrivilegedDiagnosticsState;
+    emit privilegedDiagnosticsToggled(privileged_state_ != PrivilegedDiagnosticsState::Running &&
+                                      privileged_state_ != PrivilegedDiagnosticsState::Starting);
+}
+
+void DiagnosticsAdapter::setPrivilegedDiagnosticsState(diagnostics::PrivilegedDiagnosticsState state,
+                                                       bool kernel_trace_open) {
+    if (privileged_state_ == state && privileged_kernel_trace_open_ == kernel_trace_open)
+        return;
+    privileged_state_ = state;
+    privileged_kernel_trace_open_ = kernel_trace_open;
+    emit inDepthChanged();
+    refreshSnapshot();
 }
 
 void DiagnosticsAdapter::setPresentProviderState(diagnostics::PresentProviderState state) {

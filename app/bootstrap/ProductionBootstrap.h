@@ -17,16 +17,8 @@
 // or page types. The frontend owns its window; this owns the process. Anything
 // that needs a window handle takes it as an opaque native handle.
 //
-// Deliberately NOT wrapped here: exosnap::services::ParseRelaunchArgs and
-// exosnap::services::HasVerifyUpdateReinstallRequest. Both are already pure,
-// UI-agnostic argv parsers; a forwarding wrapper would only add a second name
-// for the same thing. Both frontends call them directly. What *is* here is the
-// part that cannot live in a pure parser: executing the relaunch, which has to
-// hand the single-instance mutex over to the elevated successor.
-
 #include <QIcon>
 #include <QString>
-#include <QStringList>
 
 #include <string>
 
@@ -180,8 +172,7 @@ class ProductionBootstrap {
     void RecordStartupMilestone(const QString& label, qint64 elapsed_ms);
 
     // Takes the named single-instance mutex, or activates the already-running
-    // instance's window and reports AlreadyRunning. The mutex handle is kept so
-    // an elevated relaunch can hand it to its successor.
+    // instance's window and reports AlreadyRunning. The mutex is held until process exit.
     [[nodiscard]] SingleInstanceOutcome AcquireSingleInstance();
 
     // Resolves + creates the crash directory and starts the capture engine
@@ -201,35 +192,13 @@ class ProductionBootstrap {
     // build without a compiled-in DSN.
     [[nodiscard]] SentryTestEventOutcome RunSentryTestEventIfRequested();
 
-    // arm an elevated relaunch to run once the event loop has ended.
-    // Doing it at shutdown rather than on the spot means the current instance
-    // has already released its files and its single-instance claim before the
-    // successor asks for them.
-    void requestElevatedRelaunch(const QStringList& args);
-    [[nodiscard]] bool elevatedRelaunchRequested() const noexcept {
-        return elevated_relaunch_requested_;
-    }
-
-    // Releases the single-instance mutex and relaunches via ShellExecuteEx
-    // ("runas", UAC). A UAC decline is a normal, graceful outcome -- no retry
-    // loop, and the process withdraws the present-diagnostics opt-in that
-    // triggered the relaunch before coming back non-elevated with the
-    // same handoff, so the user is never left with no ExoSnap running and the
-    // switch reads Off again. A ShellExecuteEx failure is handled the same way.
-    // No-op when nothing was requested.
-    void RunPendingElevatedRelaunch();
-
     // The normal-shutdown sequence. Idempotent; the destructor calls it.
     void Shutdown();
 
   private:
-    void ReleaseSingleInstance();
-
     BootstrapOptions options_;
     std::string crash_dir_;
     void* single_instance_mutex_ = nullptr; // HANDLE; void* keeps windows.h out of this header
-    QStringList elevated_relaunch_args_;
-    bool elevated_relaunch_requested_ = false;
     bool logging_initialized_ = false;
     bool crash_capture_attempted_ = false;
     bool shut_down_ = false;

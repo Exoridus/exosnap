@@ -8,7 +8,6 @@
 
 #include <string>
 
-#include "services/ElevatedRelaunch.h"
 #include "settings/AppSettingsStore.h"
 
 namespace exosnap {

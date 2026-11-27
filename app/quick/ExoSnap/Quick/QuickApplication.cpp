@@ -15,7 +15,6 @@
 
 #include "services/DisplayIdentityEnumerator.h"
 #include "services/DisplayIdentityResolver.h"
-#include "services/ElevatedRelaunch.h"
 #include "services/RecordingCoordinator.h"
 #include "services/TargetDisplayFacts.h"
 #include "services/UpdateService.h"
@@ -544,6 +543,7 @@ class QuickConsoleDisplayStateFilter final : public QAbstractNativeEventFilter {
 } // namespace
 
 QuickApplication::~QuickApplication() {
+    privileged_diagnostics_.Stop();
     shutting_down_visual_sources_ = true;
     settings_adapter_.setWebcamSourceStatus(std::nullopt);
     edit_export_adapter_.cancelAndWait();
@@ -562,9 +562,7 @@ QuickApplication::~QuickApplication() {
     // FIRST, before anything else can be freed. QCoreApplication holds a raw
     // pointer to this filter, and the destruction order here is the wrong way
     // round: QGuiApplication in main() outlives QuickApplication, so a Win32
-    // message dispatched during Qt's own teardown -- or by the ShellExecuteEx in
-    // ProductionBootstrap's pending elevated relaunch, which pumps -- would reach
-    // a freed filter. Same shape QuickWindowChrome::detach() already uses.
+    // message dispatched during Qt teardown would reach a freed filter.
     if (hotkey_event_filter_)
         QCoreApplication::instance()->removeNativeEventFilter(hotkey_event_filter_.get());
     if (updater_handoff_filter_)
@@ -624,30 +622,39 @@ void QuickApplication::applyShowNotifications() {
     notifications_adapter_.applyShowNotifications(settings_.show_notifications);
 }
 
-void QuickApplication::applyDpcLatencyGate() {
-    // The kernel DPC/ISR session is its own privilege boundary: opening it means
-    // a system trace, which needs elevation and is NOT implied by the present
-    // opt-in (or by a token that happens to hold the present trace right). It is
-    // applied here so the gate is one place, and a refused or absent DPC reading
-    // leaves every other diagnostic source untouched.
-    const bool elevated = elevation_provider_.IsElevated();
-    const bool gate_open = in_depth_diagnostics_ && elevated;
-    // Start() is itself idempotent (it returns true for an already-open session), and
-    // this runs on the startup path plus on an actual opt-in change, never per refresh.
-    // Stop() likewise releases the session and, with it, the reading.
-    bool started = false;
-    if (gate_open) {
-        started = dpc_provider_.Start();
+void QuickApplication::setPrivilegedDiagnostics(bool enabled) {
+    if (enabled) {
+        if (!in_depth_diagnostics_ || !present_provider_)
+            return;
+        privileged_diagnostics_.Start(present_provider_->openResult() ==
+                                      diagnostics::PresentTraceOpenResult::AccessDenied);
     } else {
-        dpc_provider_.Stop();
+        privileged_diagnostics_.Stop();
     }
-    // Logged in both directions, and it is the only way to tell the three states apart
-    // from the outside: gate closed (nothing opened), gate open but the session refused
-    // (ETW said no), gate open and measuring.
-    diagnostics::AppLog::info(QStringLiteral("dpc"), QStringLiteral("kernel trace optIn=%1 elevated=%2 started=%3")
-                                                         .arg(in_depth_diagnostics_ ? 1 : 0)
-                                                         .arg(elevated ? 1 : 0)
-                                                         .arg(started ? 1 : 0));
+    privileged_diagnostics_timer_.start();
+    refreshPrivilegedDiagnostics();
+}
+
+void QuickApplication::refreshPrivilegedDiagnostics() {
+    using diagnostics::PrivilegedDiagnosticsState;
+    const auto state = privileged_diagnostics_.Status();
+    diagnostics_adapter_.setPrivilegedDiagnosticsState(state, privileged_diagnostics_.KernelTraceOpen());
+    if (state == PrivilegedDiagnosticsState::Running && present_provider_ && !using_privileged_present_) {
+        if (auto backend = privileged_diagnostics_.MakePresentBackend()) {
+            using_privileged_present_ = present_provider_->AttachPrivilegedBackend(std::move(backend));
+            if (using_privileged_present_)
+                updatePresentAttribution(present_target_pid_, /*force=*/true);
+        }
+    } else if (state != PrivilegedDiagnosticsState::Running && using_privileged_present_) {
+        using_privileged_present_ = false;
+        present_provider_->SetOptIn(false);
+        present_provider_->SetOptIn(in_depth_diagnostics_);
+        diagnostics_adapter_.setPresentSample(std::nullopt);
+        diagnostics_adapter_.setPresentProviderState(present_provider_->state());
+    }
+    if (state != PrivilegedDiagnosticsState::Starting && state != PrivilegedDiagnosticsState::Running &&
+        state != PrivilegedDiagnosticsState::Stopping)
+        privileged_diagnostics_timer_.stop();
 }
 
 void QuickApplication::applyCrashReportPolicy() {
@@ -2616,13 +2623,12 @@ void QuickApplication::initializeDiagnosticsArea() {
             .arg(QString::fromLatin1(diagnostics::PresentProviderStateKey(present_provider_->state())))
             .arg(present_provider_->IsAvailable() ? 1 : 0));
 
-    // DPC/ISR latency. The producer existed in this tree since the ETW slice
-    // landed but was compiled by no target at all and driven by nobody, so
-    // RecommendationEngine::checkDpcLatency evaluated an absent reading forever while
-    // the spec promised the check. The adapter samples this on every evaluation; the
-    // gate below decides whether there is anything to sample.
-    diagnostics_adapter_.setDpcLatencyProvider(&dpc_provider_);
-    applyDpcLatencyGate();
+    diagnostics_adapter_.setDpcLatencyProvider(&privileged_diagnostics_);
+    privileged_diagnostics_timer_.setInterval(250);
+    QObject::connect(&privileged_diagnostics_timer_, &QTimer::timeout, &diagnostics_adapter_,
+                     [this]() { refreshPrivilegedDiagnostics(); });
+    QObject::connect(&diagnostics_adapter_, &DiagnosticsAdapter::privilegedDiagnosticsToggled, &diagnostics_adapter_,
+                     [this](bool enabled) { setPrivilegedDiagnostics(enabled); });
 
     // The switch asks, this decides. The answer is session state and never
     // reaches the settings store.
@@ -5535,57 +5541,6 @@ void QuickApplication::presentPostUpdateWhatsNew(const QVector<WhatsNewNote>& no
     whats_new_adapter_.present(notes, /*post_update_mode=*/true, last_releases_page_url_);
 }
 
-namespace {
-
-// The nav labels the elevated relaunch hands across, in both
-// directions. One table, so the page a relaunch is asked for and the page it
-// lands on cannot drift apart.
-constexpr std::array<std::pair<const char*, ShellAdapter::Page>, 6> kRelaunchNavLabels{{
-    {"Record", ShellAdapter::RecordPage},
-    {"Edit", ShellAdapter::EditPage},
-    {"Settings", ShellAdapter::SettingsPage},
-    {"Diagnostics", ShellAdapter::DiagnosticsPage},
-    {"Logs", ShellAdapter::LogsPage},
-    {"About", ShellAdapter::AboutPage},
-}};
-
-QString RelaunchNavLabel(ShellAdapter::Page page) {
-    for (const auto& [label, value] : kRelaunchNavLabels) {
-        if (value == page)
-            return QString::fromLatin1(label);
-    }
-    return {};
-}
-
-} // namespace
-
-void QuickApplication::setElevatedRelaunchHandler(std::function<void(const QStringList&)> handler) {
-    elevated_relaunch_handler_ = std::move(handler);
-}
-
-void QuickApplication::applyStartupRelaunchHandoff(const QString& page_name, bool arm_in_depth_diagnostics) {
-    // Land on the page the pre-elevation instance was showing.
-    for (const auto& [label, page] : kRelaunchNavLabels) {
-        if (page_name.compare(QLatin1StringView(label), Qt::CaseInsensitive) == 0) {
-            pending_landing_page_ = page;
-            break;
-        }
-    }
-
-    // The opt-in is session state and nothing on disk carries it across the
-    // relaunch, so this argument IS the handoff: without it an accepted UAC
-    // prompt would produce an elevated process with the feature off, which reads
-    // as the restart having done nothing at all. Applied through the ordinary
-    // setter, which is what opens the two traces -- the diagnostics area was
-    // constructed with the flag off, before this argument was parsed.
-    if (arm_in_depth_diagnostics && !in_depth_diagnostics_) {
-        setInDepthDiagnostics(true);
-        diagnostics::AppLog::info(QStringLiteral("diagnostics"),
-                                  QStringLiteral("In-depth diagnostics armed for this session by the "
-                                                 "elevated relaunch handoff."));
-    }
-}
-
 void QuickApplication::setInDepthDiagnostics(bool enabled) {
     if (in_depth_diagnostics_ == enabled) {
         // Still pushed back: the switch's own binding is the adapter's copy, and
@@ -5593,30 +5548,15 @@ void QuickApplication::setInDepthDiagnostics(bool enabled) {
         diagnostics_adapter_.setInDepthEnabled(in_depth_diagnostics_);
         return;
     }
-    const bool was_enabled = in_depth_diagnostics_;
     in_depth_diagnostics_ = enabled;
     diagnostics_adapter_.setInDepthEnabled(in_depth_diagnostics_);
 
-    // Both traces follow the one flag. Turning it off stops them and the readings
-    // go back to unavailable in the same step -- a peak measured a moment ago is
-    // not a measurement of this machine now. The present provider opens on the
-    // request and reports what the OS actually answered; the kernel DPC trace has
-    // its own privilege boundary (see applyDpcLatencyGate()).
+    if (!enabled)
+        setPrivilegedDiagnostics(false);
     if (present_provider_)
-        present_provider_->SetOptIn(in_depth_diagnostics_);
+        present_provider_->SetOptIn(enabled);
     diagnostics_adapter_.setPresentProviderState(present_provider_ ? present_provider_->state()
                                                                    : diagnostics::PresentProviderState::NotBuilt);
-    applyDpcLatencyGate();
-
-    // Not a prompt: the toast has to be pressed, and declining the UAC prompt
-    // behind it leaves the switch on and this process running, which is the
-    // "not measuring, needs an admin relaunch" state the sub-text then reports.
-    if (!record_view_model_adapter_.recording() && !record_view_model_adapter_.paused() &&
-        notifications::ShouldOfferElevatedRelaunch(in_depth_diagnostics_, was_enabled,
-                                                   elevation_provider_.IsElevated())) {
-        notifications::NotificationEvent event = notifications::MakeElevatedRelaunchOfferEvent();
-        notifications_adapter_.manager().Enqueue(std::move(event));
-    }
 }
 
 void QuickApplication::applyTraySuppression(bool suppressed) {
@@ -6401,9 +6341,6 @@ void QuickApplication::dispatchNotificationAction(notifications::NotificationAct
         // was not looking at when they pressed the button.
         sendNonFatalReport(QStringLiteral("notification"), payload);
         break;
-    case NotificationAction::RelaunchElevated:
-        requestElevatedRelaunch();
-        break;
     case NotificationAction::None:
     case NotificationAction::Discard:
     case NotificationAction::UndoPresetSwitch:
@@ -6414,41 +6351,6 @@ void QuickApplication::dispatchNotificationAction(notifications::NotificationAct
         // subsystem is still missing.
         break;
     }
-}
-
-void QuickApplication::requestElevatedRelaunch() {
-    if (!elevated_relaunch_handler_) {
-        diagnostics::AppLog::warning(QStringLiteral("shell"),
-                                     QStringLiteral("Elevated relaunch requested but no handler is installed."));
-        return;
-    }
-
-    // The guard first, and the arming only afterwards. Asking the shell to close
-    // is what makes a recording refuse the restart -- the same chain the window
-    // close and the tray Quit pass through -- and doing it before anything is
-    // armed means a refused close leaves no pending relaunch behind to fire on
-    // some later, unrelated exit.
-    if (!shell_adapter_.requestClose()) {
-        diagnostics::AppLog::info(
-            QStringLiteral("shell"),
-            QStringLiteral("Elevated relaunch refused by a close guard; staying in this process."));
-        return;
-    }
-
-    services::RelaunchHandoff handoff;
-    // The page the user is on, so the elevated instance comes back where they
-    // left it rather than on Record.
-    handoff.page_name = RelaunchNavLabel(static_cast<ShellAdapter::Page>(shell_adapter_.currentPage()));
-    handoff.reenable_present_diag = in_depth_diagnostics_;
-    elevated_relaunch_handler_(services::BuildRelaunchArgs(handoff));
-
-    // requestClose() answering "allow" quits through closeDecided rather than
-    // closeApproved, so the debounced writes have to be flushed here -- the same
-    // reason the tray Quit does it.
-    flushPendingPersists();
-    diagnostics::AppLog::info(QStringLiteral("shell"),
-                              QStringLiteral("Elevated relaunch armed (page=%1); restarting after shutdown.")
-                                  .arg(handoff.page_name.isEmpty() ? QStringLiteral("none") : handoff.page_name));
 }
 
 void QuickApplication::publishRecordingResultNotification(const UiRecordingResult& result) {
@@ -7124,8 +7026,7 @@ bool QuickApplication::load(bool no_activate) {
         // up, and the single navigation edge (QCR-001) refuses a navigation
         // behind a blocking surface -- which would silently drop a restore that
         // is not a navigation at all.
-        {QStringLiteral("landingPage"),
-         QVariant::fromValue(static_cast<int>(pending_landing_page_.value_or(ShellAdapter::RecordPage)))},
+        {QStringLiteral("landingPage"), QVariant::fromValue(static_cast<int>(ShellAdapter::RecordPage))},
     });
     applyThemeFromSettings();
     applyDiagnosticsVisualScenarios();
@@ -7141,7 +7042,6 @@ bool QuickApplication::load(bool no_activate) {
 
     // Consumed by the initial property above; cleared so a second load() in the
     // same process cannot re-apply it.
-    pending_landing_page_.reset();
 
     if (auto* root_window = qobject_cast<QQuickWindow*>(engine_.rootObjects().constFirst())) {
         root_window_ = root_window;

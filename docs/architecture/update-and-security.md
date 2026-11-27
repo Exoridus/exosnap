@@ -114,6 +114,8 @@ DLL search policy is established before Qt/plugin loading. PATH is not a trusted
 
 The optional local automation endpoint is dormant unless explicitly armed by its argv run ID. Per-user DACL plus rejection of remote named-pipe clients constrains transport. The allowlist exposes product operations, not arbitrary methods, file reads, shell commands or Windows administration. A same-user process with the credential can drive the allowed real actions; it is not a sandbox against that user. Full control-channel invariants are in [verification boundaries](verification-boundaries.md#product-control-channel).
 
+The independently installed [privileged diagnostics companion](diagnostics.md#present-and-latency-observation) is outside the application MSI, portable tree and self-update payloads. Its protected installation and system DLL policy are separate from update manifest verification. Its local protocol version must match the application; an incompatible companion fails closed and can be upgraded independently.
+
 ## Crash capture and reporting
 
 Official crash capture uses an out-of-process Crashpad handler. A local fallback exists for builds without that component. A missing clean-exit marker identifies an interrupted previous session, not necessarily a known exception or culprit module. Read previous-session context before starting a new sidecar and do not substitute current machine facts as crash evidence.

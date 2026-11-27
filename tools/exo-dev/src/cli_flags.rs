@@ -34,7 +34,6 @@ const PARSER_SOURCES: &[&str] = &[
     "app/auto_record/AutoRecordOptions.cpp",
     "app/quick/ExoSnap/Quick/main.cpp",
     "app/quick/ExoSnap/Quick/QuickAutoEditHarness.cpp",
-    "app/services/ElevatedRelaunch.h",
     "app/services/UpdateFeedOverride.h",
     "app/services/VerifyReinstallMode.h",
 ];
@@ -325,7 +324,6 @@ mod tests {
             ),
             ("app/quick/ExoSnap/Quick/main.cpp", ""),
             ("app/quick/ExoSnap/Quick/QuickAutoEditHarness.cpp", ""),
-            ("app/services/ElevatedRelaunch.h", ""),
             ("app/services/UpdateFeedOverride.h", ""),
             ("app/services/VerifyReinstallMode.h", ""),
             (
@@ -393,7 +391,6 @@ mod tests {
             ("app/auto_record/AutoRecordOptions.cpp", ""),
             ("app/quick/ExoSnap/Quick/main.cpp", ""),
             ("app/quick/ExoSnap/Quick/QuickAutoEditHarness.cpp", ""),
-            ("app/services/ElevatedRelaunch.h", ""),
             ("app/services/UpdateFeedOverride.h", ""),
             ("app/services/VerifyReinstallMode.h", ""),
             (
@@ -418,7 +415,6 @@ mod tests {
             ("app/auto_record/AutoRecordOptions.cpp", ""),
             ("app/quick/ExoSnap/Quick/main.cpp", ""),
             ("app/quick/ExoSnap/Quick/QuickAutoEditHarness.cpp", ""),
-            ("app/services/ElevatedRelaunch.h", ""),
             ("app/services/UpdateFeedOverride.h", ""),
             ("app/services/VerifyReinstallMode.h", ""),
             (

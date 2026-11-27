@@ -7,6 +7,7 @@
 #include "diagnostics/DiagnosticsController.h"
 #include "diagnostics/DpcLatencyProvider.h"
 #include "diagnostics/PresentProvider.h"
+#include "diagnostics/PrivilegedDiagnosticsClient.h"
 #include "services/SupportBundleService.h"
 
 #include <capability/capability_set.h>
@@ -109,6 +110,8 @@ class DiagnosticsAdapter : public QObject {
     Q_PROPERTY(bool inDepthEnabled READ inDepthEnabled WRITE setInDepthEnabledFromUi NOTIFY inDepthChanged FINAL)
     Q_PROPERTY(QString inDepthStateText READ inDepthStateText NOTIFY inDepthChanged FINAL)
     Q_PROPERTY(bool inDepthAvailable READ inDepthAvailable NOTIFY inDepthChanged FINAL)
+    Q_PROPERTY(QString privilegedActionText READ privilegedActionText NOTIFY inDepthChanged FINAL)
+    Q_PROPERTY(bool privilegedActionAvailable READ privilegedActionAvailable NOTIFY inDepthChanged FINAL)
     // The honest four-source projection under the switch. Each row is
     // {title, state, tone}; sources measure independently, so a refused optional
     // trace never turns another source's availability into a failure.
@@ -159,6 +162,9 @@ class DiagnosticsAdapter : public QObject {
     void setInDepthEnabledFromUi(bool enabled);
     [[nodiscard]] QString inDepthStateText() const;
     [[nodiscard]] bool inDepthAvailable() const noexcept;
+    [[nodiscard]] QString privilegedActionText() const;
+    [[nodiscard]] bool privilegedActionAvailable() const noexcept;
+    Q_INVOKABLE void togglePrivilegedDiagnostics();
     [[nodiscard]] QVariantList measurementSources() const;
     [[nodiscard]] QString presentProviderState() const;
     [[nodiscard]] bool bundleBusy() const noexcept;
@@ -202,6 +208,7 @@ class DiagnosticsAdapter : public QObject {
     // rate the display now supports.
     void refreshDisplayFacts();
     void setElevated(bool elevated);
+    void setPrivilegedDiagnosticsState(diagnostics::PrivilegedDiagnosticsState state, bool kernel_trace_open = false);
     // Pushed by the composition root from the real provider, so the page reports
     // what the OS answered rather than inferring it from the process token.
     void setPresentProviderState(diagnostics::PresentProviderState state);
@@ -265,6 +272,7 @@ class DiagnosticsAdapter : public QObject {
     // The user moved the in-depth switch. The composition root owns the setting
     // and the elevation gate behind it.
     void inDepthToggled(bool enabled);
+    void privilegedDiagnosticsToggled(bool enabled);
     void tilesChanged();
     void liveTilesChanged();
     void issuesChanged();
@@ -315,6 +323,8 @@ class DiagnosticsAdapter : public QObject {
     // Borrowed from the composition root, which must outlive this adapter (see
     // QuickApplication's member declaration order).
     diagnostics::IDpcLatencyProvider* dpc_provider_ = nullptr;
+    diagnostics::PrivilegedDiagnosticsState privileged_state_ = diagnostics::PrivilegedDiagnosticsState::Idle;
+    bool privileged_kernel_trace_open_ = false;
     DiagnosticIssueModel issue_model_;
     PipelineStageModel pipeline_stage_model_;
     SessionLedgerModel ledger_model_;

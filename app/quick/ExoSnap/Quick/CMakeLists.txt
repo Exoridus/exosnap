@@ -401,15 +401,13 @@ target_sources(exosnap
         PseudoLocalization.h
         # Process-level startup/shutdown contract, shared with the Widgets entry
         # point: DLL-search hardening, interrupted-swap self-heal, startup clock,
-        # log sink, crash capture, single-instance guard, elevated relaunch.
+        # Log sink, crash capture and single-instance guard.
         ${PROJECT_SOURCE_DIR}/app/bootstrap/ProductionBootstrap.cpp
         ${PROJECT_SOURCE_DIR}/app/bootstrap/ProductionBootstrap.h
         ${PROJECT_SOURCE_DIR}/app/diagnostics/EngineLogBridge.cpp
         ${PROJECT_SOURCE_DIR}/app/diagnostics/EngineLogBridge.h
         ${PROJECT_SOURCE_DIR}/app/diagnostics/StartupClock.h
         ${PROJECT_SOURCE_DIR}/app/diagnostics/StartupTrace.h
-        ${PROJECT_SOURCE_DIR}/app/services/ElevatedRelaunch.cpp
-        ${PROJECT_SOURCE_DIR}/app/services/ElevatedRelaunch.h
         # --verify-update-reinstall argv gate, shared with the Widgets
         # entry point.
         ${PROJECT_SOURCE_DIR}/app/services/VerifyReinstallMode.cpp
@@ -519,8 +517,9 @@ target_sources(exosnap
         # defect: this file was compiled by NO target at all, so the check that names
         # the kernel driver behind "smooth game, stuttery recording" evaluated an
         # absent reading in every build there has ever been.
-        ${PROJECT_SOURCE_DIR}/app/diagnostics/DpcLatencyProvider.cpp
         ${PROJECT_SOURCE_DIR}/app/diagnostics/DpcLatencyProvider.h
+        ${PROJECT_SOURCE_DIR}/app/diagnostics/PrivilegedDiagnosticsClient.cpp
+        ${PROJECT_SOURCE_DIR}/app/diagnostics/PrivilegedDiagnosticsPath.cpp
         ${PROJECT_SOURCE_DIR}/app/diagnostics/PresentSnapshotOverlay.cpp
         ${PROJECT_SOURCE_DIR}/app/diagnostics/PresentSnapshotOverlay.h
         ${PROJECT_SOURCE_DIR}/app/diagnostics/SupportBundle.cpp
@@ -776,8 +775,9 @@ target_link_libraries(exosnap
         mf
         mfuuid
         ole32
+        bcrypt
         runtimeobject
-        # ShellExecuteExW (Shell32) for the elevated relaunch plus the
+        # ShellExecuteExW (Shell32) for the protected diagnostics companion and
         # token APIs behind the elevation check (Advapi32); Version.lib backs the
         # file-version queries the update/diagnostics paths make.
         Shell32
@@ -811,19 +811,22 @@ add_dependencies(exosnap exosnap_build_info)
 # binary at all" is a build fact, so it is asserted at configure time rather than left
 # to review.
 #
-# The two targets that may own such a file are the application itself and the
-# diagnostics support library it links. A producer that belongs in neither has to say so
-# in EXOSNAP_UNSHIPPED_DIAGNOSTICS_PRODUCERS below, with a reason -- the point is that
-# the decision is explicit and visible, never silent.
-set(EXOSNAP_UNSHIPPED_DIAGNOSTICS_PRODUCERS
-    # (empty: every diagnostics producer currently ships)
-)
+# A producer must ship in the application, its diagnostics support
+# library or the separately installed privileged companion.
+set(EXOSNAP_UNSHIPPED_DIAGNOSTICS_PRODUCERS "")
+set(_exosnap_diagnostics_shipping_targets exosnap exosnap_diagnostics_test_support)
+if(TARGET exosnap_diagnostics)
+    list(APPEND _exosnap_diagnostics_shipping_targets exosnap_diagnostics)
+else()
+    # Builds without ETW tracing intentionally omit the companion.
+    list(APPEND EXOSNAP_UNSHIPPED_DIAGNOSTICS_PRODUCERS DpcLatencyProvider.cpp)
+endif()
 file(GLOB _exosnap_diag_producers CONFIGURE_DEPENDS
     "${PROJECT_SOURCE_DIR}/app/diagnostics/*Provider.cpp"
     "${PROJECT_SOURCE_DIR}/app/services/*Probe.cpp"
 )
 set(_exosnap_shipped_sources "")
-foreach(_shipping_target IN ITEMS exosnap exosnap_diagnostics_test_support)
+foreach(_shipping_target IN LISTS _exosnap_diagnostics_shipping_targets)
     get_target_property(_target_sources ${_shipping_target} SOURCES)
     get_target_property(_target_dir ${_shipping_target} SOURCE_DIR)
     foreach(_source IN LISTS _target_sources)
@@ -843,9 +846,7 @@ foreach(_producer IN LISTS _exosnap_diag_producers)
     if(NOT "${_producer}" IN_LIST _exosnap_shipped_sources)
         message(FATAL_ERROR
             "${_producer_name} produces diagnostics data but is compiled by no shipping target. "
-            "Whatever reads it can only ever see the absent/no-op answer. Add it to the exosnap "
-            "target (app/quick/ExoSnap/Quick/CMakeLists.txt) or to exosnap_diagnostics_test_support "
-            "(app/CMakeLists.txt) -- or, if it deliberately does not ship, to "
+            "Add it to the responsible shipping target or, if it deliberately does not ship, to "
             "EXOSNAP_UNSHIPPED_DIAGNOSTICS_PRODUCERS with the reason."
         )
     endif()

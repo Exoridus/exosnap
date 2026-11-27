@@ -11,7 +11,6 @@
 #include "diagnostics/DiagnosticsProbe.h"
 #include "diagnostics/WindowTargetFacts.h"
 #include "notifications/NotificationEvent.h"
-#include "notifications/NotificationManager.h"
 #include "services/SupportBundleService.h"
 #include "visual_tests/DiagnosticsLiveScenario.h"
 
@@ -689,7 +688,7 @@ TEST(DiagnosticsAdapterTest, MeasurementSourcesSeparateTheOptionalProviders) {
 
     EXPECT_EQ(adapter.presentProviderState(), QStringLiteral("accessDenied"));
     EXPECT_TRUE(stateOf(QStringLiteral("Presentation")).contains(QStringLiteral("access denied")));
-    EXPECT_TRUE(stateOf(QStringLiteral("DPC / ISR")).contains(QStringLiteral("elevated kernel trace required")));
+    EXPECT_TRUE(stateOf(QStringLiteral("DPC / ISR")).contains(QStringLiteral("Privileged diagnostics off")));
     // The core sources remain their own states; a refused optional trace does
     // not turn them into failures.
     EXPECT_FALSE(stateOf(QStringLiteral("Recording pipeline")).isEmpty());
@@ -700,52 +699,40 @@ TEST(DiagnosticsAdapterTest, MeasurementSourcesSeparateTheOptionalProviders) {
     EXPECT_EQ(adapter.presentProviderState(), QStringLiteral("measuring"));
 }
 
-// The switch is session state: off at every start, and the offer to restart
-// elevated hangs off its off -> on edge. This drives the adapter through the
-// same edge the composition root wires up, so the three facts the product
-// promises are pinned end to end rather than one predicate at a time.
-TEST(DiagnosticsAdapterTest, TurningInDepthOnOffersTheRestartOnlyInAStandardProcess) {
+TEST(DiagnosticsAdapterTest, PrivilegedCollectionRequiresAnExplicitActionAndSupportsRetry) {
     EnsureApplication();
     DiagnosticsAdapter adapter;
-    notifications::NotificationManager manager;
-    int offers = 0;
-    QObject::connect(&manager, &notifications::NotificationManager::eventRecorded, &manager,
-                     [&offers](const notifications::NotificationEvent& event) {
-                         if (event.type == notifications::NotificationType::ElevationRequired)
-                             ++offers;
-                     });
-    // The composition root's own edge: the switch asks, the answer comes back,
-    // and the offer is raised from the transition.
-    QObject::connect(&adapter, &DiagnosticsAdapter::inDepthToggled, &adapter, [&](bool enabled) {
-        const bool before = adapter.inDepthEnabled();
-        adapter.setInDepthEnabled(enabled);
-        if (notifications::ShouldOfferElevatedRelaunch(enabled, before, adapter.elevated()))
-            manager.Enqueue(notifications::MakeElevatedRelaunchOfferEvent());
-    });
+    BoolSignalCounter requested(&adapter, &DiagnosticsAdapter::privilegedDiagnosticsToggled);
+    using diagnostics::PrivilegedDiagnosticsState;
 
-    // Off at every start. Nothing seeds this from disk any more.
-    EXPECT_FALSE(adapter.inDepthEnabled());
-    EXPECT_EQ(offers, 0);
+    EXPECT_FALSE(adapter.privilegedActionAvailable());
+    adapter.togglePrivilegedDiagnostics();
+    EXPECT_EQ(requested.count(), 0);
 
-    adapter.setInDepthEnabledFromUi(true);
-    // The switch stays ON -- the offer is not a precondition, it is an offer.
+    adapter.setInDepthEnabled(true);
+    EXPECT_TRUE(adapter.privilegedActionAvailable());
+    EXPECT_EQ(requested.count(), 0);
+    adapter.togglePrivilegedDiagnostics();
+    EXPECT_EQ(requested.count(), 1);
+    EXPECT_TRUE(requested.last());
+
+    adapter.setPrivilegedDiagnosticsState(PrivilegedDiagnosticsState::Declined);
     EXPECT_TRUE(adapter.inDepthEnabled());
-    EXPECT_EQ(offers, 1);
-    // A second look at a switch that is already on is not an edge.
-    adapter.setInDepthEnabledFromUi(true);
-    EXPECT_EQ(offers, 1);
+    EXPECT_TRUE(adapter.privilegedActionAvailable());
+    adapter.togglePrivilegedDiagnostics();
+    EXPECT_EQ(requested.count(), 2);
+    EXPECT_TRUE(requested.last());
 
-    adapter.setInDepthEnabledFromUi(false);
-    EXPECT_FALSE(adapter.inDepthEnabled());
-    EXPECT_EQ(offers, 1);
+    adapter.setPrivilegedDiagnosticsState(PrivilegedDiagnosticsState::Running);
+    adapter.togglePrivilegedDiagnostics();
+    EXPECT_EQ(requested.count(), 3);
+    EXPECT_FALSE(requested.last());
 
-    // Elevated: the traces start on the spot and there is nothing to offer.
-    adapter.setElevated(true);
-    adapter.setInDepthEnabledFromUi(true);
-    EXPECT_TRUE(adapter.inDepthEnabled());
-    EXPECT_EQ(offers, 1);
+    adapter.setPrivilegedDiagnosticsState(PrivilegedDiagnosticsState::Stopping);
+    EXPECT_FALSE(adapter.privilegedActionAvailable());
+    adapter.togglePrivilegedDiagnostics();
+    EXPECT_EQ(requested.count(), 3);
 }
-
 TEST(DiagnosticsAdapterTest, InDepthCanBeViewedWhileRecording) {
     EnsureApplication();
     DiagnosticsAdapter adapter;

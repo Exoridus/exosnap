@@ -151,6 +151,28 @@ Install/update tests should run in a disposable OS with copied artifacts and iso
 
 A Chocolatey rehearsal can install/upgrade its `vcredist140` dependency. Do not attempt an unsafe system runtime downgrade to undo it. Record that footprint. The package source is not edited in place for a rehearsal; use a scratch copy with the tested MSI/hash.
 
+### Privileged diagnostics companion
+
+Use a disposable Windows 11 x64 VM with an interactive standard ExoSnap session and a human operator for consent. Build the app and companion from the same source revision using the regular Developer PowerShell:
+
+```powershell
+cmake --preset windows-x64-ninja-release
+cmake --build --preset windows-x64-ninja-release --target exosnap exosnap_diagnostics_msi
+cargo exo-dev test --build-dir build/windows-x64-ninja-release --config Release --filter '^elevation\.'
+cargo exo-dev test --build-dir build/windows-x64-ninja-release --config Release --build-target privileged_diagnostics_trace_guard_tests --filter '^privileged_diagnostics_trace_guard\.'
+$companion = Get-ChildItem build/windows-x64-ninja-release/apps/diagnostics/ExoSnap-*-Diagnostics-windows-x64.msi
+msiexec.exe /i $companion.FullName
+```
+
+1. With the companion absent, open Diagnostics and turn on In-depth. There should be no UAC request. Press **Start privileged diagnostics**. The DPC/ISR row should report the missing companion while core measurements remain available. Repeat from a user-writable installation with a copy of the helper placed beside the main executable. The copy should not be used.
+2. Install the companion and launch the main app without elevation. Enable In-depth and decline its explicit privileged request. The DPC/ISR row should report refusal, the application PID and integrity level should stay unchanged, and core diagnostics should continue.
+3. Start privileged diagnostics again and approve. Use Task Manager's Details view with the **Elevated** column. Only the two temporary `exosnap-diagnostics.exe` processes should be elevated; the `exosnap.exe` PID and elevation should stay unchanged. Start and stop a recording with active presentation. Verify that present evidence follows the selected process, and independently confirm that an unavailable DPC/ISR trace leaves presentation and recording usable.
+4. Repeat start and stop three times while leaving In-depth enabled. After each stop, the helper processes and the two owned sessions should disappear, and recording should continue. Repeat by switching off In-depth and by quitting. Compare `logman.exe query -ets` before and after each pass and check for the `ExoSnapDiagnosticsPresent-` and `ExoSnapDiagnosticsDpc-` prefixes. Check that pre-existing sessions remain.
+5. From the VM's approved administrative context, use Task Manager to end only the collector process. Distinguish it from its guard by the command line `--collect`. The guard should exit and remove its owned sessions, and the live app should withdraw the readings and stay usable. Repeat by ending only the app and then only the guard, verifying that no companion process or owned session remains. Re-enable successfully after each pass.
+6. Repeat consent with alternate administrator credentials in the same interactive session. Verify the same process and trace behavior or record the exact process-access failure. Uninstall only the companion from Installed Apps and confirm the main application remains available.
+
+If an orphaned diagnostic session is left after both processes have exited, regard qualification as failed. Preserve the session listing and reboot the disposable VM to clear the session before another run.
+
 ## Operator protocol and faults
 
 `--attest operator` declares that an operator is available for a named scenario. It does not attest that a result passed. The operator follows the scenario prompt and the independent measurement decides the result. Desktop input requires current coordination.
