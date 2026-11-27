@@ -1,6 +1,8 @@
 name: Signed diagnostics integration
 
 on:
+  push:
+    branches: [verify/v012-diagnostics-com-activation]
   pull_request:
     branches: [next]
     paths:

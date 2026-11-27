@@ -531,6 +531,81 @@ HRESULT ProbeMachineBootstrap(ULONG version, bool invoke) {
     auto result = CoGetObject(kBootstrapMoniker, &options, IID_PPV_ARGS(&bootstrap));
     ReportFixtureStatus("fixture CoGetObject vendor interface", static_cast<DWORD>(result));
     if (FAILED(result) && !invoke) {
+        const auto image = MachineImage();
+        LockedPath locked;
+        if (!Verified(image, EXOSNAP_DIAGNOSTICS_IMAGE_SHA256, locked, true))
+            return result;
+        const bool registered = BootstrapRegistered(image);
+        ReportFixtureStatus("fixture machine registry preflight matched", registered);
+        const auto physical = std::wstring(LR"(\\?\GLOBALROOT\GLOBAL??\)") + image.native();
+        HMODULE resource = LoadLibraryExW(physical.c_str(), nullptr, LOAD_LIBRARY_AS_DATAFILE_EXCLUSIVE |
+                                                                     LOAD_LIBRARY_AS_IMAGE_RESOURCE);
+        const DWORD load_status = resource ? ERROR_SUCCESS : GetLastError();
+        ReportFixtureStatus("fixture locked machine image resource load", load_status);
+        if (resource) {
+            std::array<wchar_t, 128> display{};
+            const int length = LoadStringW(resource, 101, display.data(), static_cast<int>(display.size()));
+            ReportFixtureStatus("fixture fixed display resource matched", length > 0 &&
+                                std::wstring_view(display.data()) == L"ExoSnap Diagnostics Helper");
+            FreeLibrary(resource);
+        }
+        HKEY class_key = nullptr;
+        const auto opened = RegOpenKeyExW(HKEY_LOCAL_MACHINE, LR"(SOFTWARE\Classes\CLSID\{70E064CA-A7D4-43EA-A075-CE4303BF12E5})",
+                                          0, KEY_READ | KEY_WOW64_64KEY, &class_key);
+        ReportFixtureStatus("fixture HKLM display key", static_cast<DWORD>(opened));
+        if (opened == ERROR_SUCCESS) {
+            std::array<wchar_t, 128> display{};
+            DWORD bytes = 0;
+            std::array<wchar_t, 1024> indirect{};
+            DWORD indirect_bytes = sizeof(indirect);
+            const auto source = RegGetValueW(class_key, nullptr, L"LocalizedString", RRF_RT_REG_SZ, nullptr,
+                                             indirect.data(), &indirect_bytes);
+            const bool exact_source = source == ERROR_SUCCESS &&
+                                      std::wstring_view(indirect.data()) == L"@" + physical + L",-101";
+            ReportFixtureStatus("fixture exact display resource string", exact_source);
+            const auto read = exact_source ? RegLoadMUIStringW(class_key, L"LocalizedString", display.data(),
+                                                sizeof(display), &bytes, 0, nullptr) : ERROR_INVALID_DATA;
+            ReportFixtureStatus("fixture RegLoadMUIStringW", static_cast<DWORD>(read));
+            ReportFixtureStatus("fixture indirect display text matched", read == ERROR_SUCCESS &&
+                                std::wstring_view(display.data()) == L"ExoSnap Diagnostics Helper");
+            RegCloseKey(class_key);
+        }
+        Microsoft::WRL::ComPtr<IBindCtx> context;
+        HRESULT stage = CreateBindCtx(0, &context);
+        ReportFixtureStatus("fixture CreateBindCtx", static_cast<DWORD>(stage));
+        if (SUCCEEDED(stage)) {
+            stage = context->SetBindOptions(&options);
+            ReportFixtureStatus("fixture SetBindOptions", static_cast<DWORD>(stage));
+        }
+        Microsoft::WRL::ComPtr<IMoniker> moniker;
+        ULONG consumed = 0;
+        if (SUCCEEDED(stage)) {
+            stage = MkParseDisplayName(context.Get(), kBootstrapMoniker, &consumed, &moniker);
+            ReportFixtureStatus("fixture MkParseDisplayName", static_cast<DWORD>(stage));
+            ReportFixtureStatus("fixture parsed whole fixed moniker", consumed == std::size(kBootstrapMoniker) - 1);
+        }
+        if (SUCCEEDED(stage) && registered) {
+            Microsoft::WRL::ComPtr<IUnknown> bound;
+            stage = moniker->BindToObject(context.Get(), nullptr, IID_PPV_ARGS(&bound));
+            ReportFixtureStatus("fixture elevation BindToObject", static_cast<DWORD>(stage));
+        }
+        HANDLE raw_token = nullptr;
+        if (OpenProcessToken(GetCurrentProcess(), TOKEN_QUERY, &raw_token)) {
+            Handle token(raw_token);
+            TOKEN_ELEVATION elevation{};
+            DWORD returned = 0;
+            if (GetTokenInformation(token.get(), TokenElevation, &elevation, sizeof(elevation), &returned) &&
+                elevation.TokenIsElevated && registered) {
+                Microsoft::WRL::ComPtr<IUnknown> local;
+                const auto ordinary = CoCreateInstance(kBootstrapClass, nullptr, CLSCTX_LOCAL_SERVER, IID_PPV_ARGS(&local));
+                ReportFixtureStatus("fixture already-elevated local class control", static_cast<DWORD>(ordinary));
+                if (SUCCEEDED(ordinary)) {
+                    Microsoft::WRL::ComPtr<IExoSnapDiagnosticsBootstrap> typed;
+                    const auto query = local.As(&typed);
+                    ReportFixtureStatus("fixture local class vendor interface control", static_cast<DWORD>(query));
+                }
+            }
+        }
         // Distinguish class activation from marshaling this vendor interface.
         Microsoft::WRL::ComPtr<IUnknown> identity;
         const HRESULT base = CoGetObject(kBootstrapMoniker, &options, IID_PPV_ARGS(&identity));
