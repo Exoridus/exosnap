@@ -1,0 +1,35 @@
+diff --git a/PresentData/TraceSession.cpp b/PresentData/TraceSession.cpp
+index f8445b7..b8b92d3 100644
+--- a/PresentData/TraceSession.cpp
++++ b/PresentData/TraceSession.cpp
+@@ -481,7 +481,8 @@ ULONG TraceSession::Start(
+     PMTraceConsumer* pmConsumer,
+     MRTraceConsumer* mrConsumer,
+     wchar_t const* etlPath,
+-    wchar_t const* sessionName)
++    wchar_t const* sessionName,
++    GUID const* sessionGuid)
+ {
+     assert(mSessionHandle == 0);
+     assert(mTraceHandle == INVALID_PROCESSTRACE_HANDLE);
+@@ -556,6 +557,7 @@ ULONG TraceSession::Start(
+         sessionProps.LoggerThreadId           // tracing session identifier
+         */
+ 
++        if (sessionGuid != nullptr) sessionProps.Wnode.Guid = *sessionGuid;
+         auto status = StartTraceW(&mSessionHandle, sessionName, &sessionProps);
+         if (status != ERROR_SUCCESS) {
+             mSessionHandle = 0;
+diff --git a/PresentData/TraceSession.hpp b/PresentData/TraceSession.hpp
+index 85d4563..9aa5e18 100644
+--- a/PresentData/TraceSession.hpp
++++ b/PresentData/TraceSession.hpp
+@@ -26,6 +26,7 @@ struct TraceSession {
+         PMTraceConsumer* pmConsumer,  // Required PMTraceConsumer instance
+         MRTraceConsumer* mrConsumer,  // If nullptr, no WinMR tracing
+         wchar_t const* etlPath,       // If nullptr, live/realtime tracing session
+-        wchar_t const* sessionName);  // Required session name
++        wchar_t const* sessionName,   // Required session name
++        GUID const* sessionGuid = nullptr);
+ 
+     void Stop();
