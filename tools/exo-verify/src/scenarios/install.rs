@@ -1250,9 +1250,17 @@ mod tests {
                  </Package>"#,
             ),
         )?;
-        let (prefix, patch) = version.rsplit_once('.').unwrap();
-        let next_patch = patch.parse::<u16>()?.checked_add(1).unwrap();
-        let higher = format!("{prefix}.{next_patch}");
+        let fields: Vec<_> = version.split('.').collect();
+        let [major, minor, patch] = fields.as_slice() else {
+            anyhow::bail!("expected a numeric three-field MSI ProductVersion, got {version}");
+        };
+        let major = major.parse::<u8>()?;
+        let minor = minor.parse::<u8>()?;
+        let patch = patch.parse::<u16>()?;
+        let next = patch
+            .checked_add(1)
+            .ok_or_else(|| anyhow::anyhow!("no higher MSI patch version after {version}"))?;
+        let higher = format!("{major}.{minor}.{next}");
         let fixture = out.join("rollback-fixture.msi");
         let wix = PathBuf::from(std::env::var("USERPROFILE")?).join(".dotnet/tools/wix.exe");
         let icon = root.join("app/assets/brand/exosnap-app.ico");
@@ -1316,7 +1324,9 @@ mod tests {
         let machine_setup = artifact("setupAllUsers")?;
         let out = output.join("lifecycle");
         fs::create_dir(&out)?;
-        let version = report["baseVersion"].as_str().unwrap();
+        let version = report["baseVersion"]
+            .as_str()
+            .ok_or_else(|| anyhow::anyhow!("package report has no baseVersion"))?;
         let rollback = build_rollback_fixture(&output, &out, version)?;
         let invoke = |program: &Path, args: &[&str], log: &str| -> Result<i32> {
             let mut command = Command::new(program);
@@ -1413,16 +1423,15 @@ mod tests {
             assert_eq!(status, 1603);
             let rollback_log = out.join(format!("{scope}-rollback.log"));
             let trace = crate::tools::read_diagnostic_log(&rollback_log, "msiexec")?;
-            let removed = trace
-                .find("RemoveExistingProducts. Return value 1.")
-                .unwrap();
+            let success = "RemoveExistingProducts. Return value 1.";
+            let removed = trace.find(success).unwrap();
             assert!(trace[removed..].contains("Deliberate rollback fixture failure."));
             let upper_code = code.to_ascii_uppercase();
             let related = trace[..removed].lines().any(|line| {
-                line.contains("WIX_UPGRADE_DETECTED")
-                    && line.to_ascii_uppercase().contains(&upper_code)
+                let identifies_product = line.to_ascii_uppercase().contains(&upper_code);
+                identifies_product && line.contains("WIX_UPGRADE_DETECTED")
             });
-            assert!(related, "the upgrade did not detect the original ProductCode");
+            assert!(related, "missing original product in upgrade detection");
             assert!(trace[..removed].contains("Removal success or error status: 0."));
             let restored = exosnap_arp_rows()?;
             assert_eq!(restored.len(), 1);
