@@ -641,6 +641,25 @@ TestCase {
         }
     }
 
+    function test_short_window_list_keeps_filters_beside_tabs() {
+        testCase.width = 1600;
+        const page = makePage();
+        page.width = testCase.width;
+        showTab(page, 1);
+        const tabs = pick(page, "tabs");
+        const filters = pick(page, "windowFiltersButton");
+        const toolbar = tabs.parent;
+        for (const width of [1600, 860]) {
+            testCase.width = width;
+            page.width = width;
+            waitForRendering(page);
+            const position = filters.mapToItem(tabs, 0, 0);
+            verify(Math.abs(position.y + (filters.height - tabs.height) / 2) <= 1,
+                   `filters must share the tab row at ${width}px (${toolbar.width}px toolbar, ${toolbar.columns} columns, filter y=${position.y})`);
+            verify(position.x >= tabs.width);
+        }
+    }
+
     function test_partial_card_glyphs_stay_inside_list_viewport() {
         recordDriver.seedWindowTargets(refreshWindows());
         const page = makePage();

@@ -707,6 +707,8 @@ Popup {
                 visible: root.currentTab === 1
                 Layout.fillWidth: true
                 Layout.minimumWidth: root.windowSearchAvailable ? 360 : windowOptions.implicitWidth
+                // The lone fixed-width filter button must not cap the toolbar width.
+                Layout.maximumWidth: Infinity
                 spacing: ExoTheme.spacingMd
 
                 ExoSearchField {
