@@ -15,7 +15,7 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        scene: [edit-project-menu, edit-project-discard, edit-missing-media, edit-source-relink-review]
+        scene: [edit-missing-media]
     steps:
       - name: Download fixed qualification artifact
         uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4.3.0
@@ -24,7 +24,7 @@ jobs:
           run-id: 45993744750
           name: editor-native-visual-751b2abb
           path: captures
-      - name: Read two verified narrow captures
+      - name: Read the two verified wide missing-media captures
         env:
           SCENE: ${{ matrix.scene }}
         shell: python
@@ -47,7 +47,7 @@ jobs:
           if scene not in scenes:
               raise ValueError("Unknown scene")
           for theme in ("dark", "light"):
-              filename = f"{scene}_{theme}-aqua_860x700.png"
+              filename = f"{scene}_{theme}-aqua_1600x1000.png"
               candidates = list((root / scene).rglob(filename))
               if len(candidates) != 1:
                   raise ValueError(f"Expected one capture for {filename}")
@@ -59,7 +59,7 @@ jobs:
               data = path.read_bytes()
               if data[:8] != b"\x89PNG\r\n\x1a\n" or data[8:16] != b"\x00\x00\x00\rIHDR":
                   raise ValueError("Invalid PNG header")
-              if struct.unpack(">II", data[16:24]) != (860, 700):
+              if struct.unpack(">II", data[16:24]) != (1600, 1000):
                   raise ValueError("Invalid PNG dimensions")
               encoded = base64.b64encode(data).decode("ascii")
               print("EDITOR_PNG_BEGIN", filename, len(data), hashlib.sha256(data).hexdigest())
