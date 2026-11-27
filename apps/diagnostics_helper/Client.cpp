@@ -2,6 +2,9 @@
 #include "FixtureStatus.h"
 #include "ImagePath.h"
 #include "Peer.h"
+#ifdef EXOSNAP_SIGNED_FIXTURE_STATUS
+#include "StartingGuardian.h"
+#endif
 #include "diagnostics/PrivilegedPresentBackend.h"
 
 #include <aclapi.h>
@@ -451,6 +454,49 @@ PresentProviderState RemoteBackend::Run() {
     return PresentProviderState::Stopped;
 }
 } // namespace
+
+#ifdef EXOSNAP_SIGNED_FIXTURE_STATUS
+void ProbeInstalledHelperLaunch() {
+    LockedPath locked;
+    if (!Verified(MachineImage(), EXOSNAP_DIAGNOSTICS_IMAGE_SHA256, locked, true)) {
+        ReportFixtureStatus("launch matrix rejected image", ERROR_ACCESS_DENIED);
+        return;
+    }
+    std::wstring native(32768, L'\0');
+    const auto count = GetFinalPathNameByHandleW(locked.handles.back().get(), native.data(),
+                                                 static_cast<DWORD>(native.size()), VOLUME_NAME_NT);
+    if (!count || count >= native.size())
+        return;
+    native.resize(count);
+    const fs::path global = GlobalLocalVolumePath(native);
+    if (global.empty())
+        return;
+    for (const auto& path : {locked.canonical, global}) {
+        const auto parent = path.parent_path();
+        for (const bool set_parent : {false, true}) {
+            SHELLEXECUTEINFOW exec{};
+            exec.cbSize = sizeof(exec);
+            exec.fMask = SEE_MASK_NOCLOSEPROCESS | SEE_MASK_NOASYNC | SEE_MASK_FLAG_NO_UI;
+            exec.lpVerb = L"runas";
+            exec.lpFile = path.c_str();
+            exec.lpDirectory = set_parent ? parent.c_str() : nullptr;
+            exec.nShow = SW_HIDE;
+            const BOOL launched = ShellExecuteExW(&exec);
+            const DWORD status = launched ? ERROR_SUCCESS : GetLastError();
+            ReportFixtureStatus(path == global ? "global native launch matrix" : "volume GUID launch matrix", status);
+            ReportFixtureStatus("matrix supplies working directory", set_parent);
+            if (launched && exec.hProcess) {
+                StartingGuardian child{Handle(exec.hProcess)};
+                const auto wait = WaitForSingleObject(child.get(), 5000);
+                ReportFixtureStatus("matrix child wait", wait);
+                DWORD exit_code = 0;
+                if (GetExitCodeProcess(child.get(), &exit_code))
+                    ReportFixtureStatus("matrix child exit", exit_code);
+            }
+        }
+    }
+}
+#endif
 
 std::shared_ptr<IPrivilegedDiagnosticsBackend> MakePrivilegedDiagnosticsBackend(bool collect_presents) {
     return std::make_shared<RemoteBackend>(collect_presents);

@@ -76,6 +76,7 @@ jobs:
               $setup = Start-Process msiexec.exe -ArgumentList "/i ""$signedMsi"" /qn /norestart" -Wait -PassThru
               if ($setup.ExitCode -ne 0) { throw "Controlled fixture installation returned $($setup.ExitCode)" }
               if ((Get-FileHash $installed).Hash -ne (Get-FileHash $signedImage).Hash) { throw "Controlled image digest mismatch" }
+              & $client --probe-installed-launch
               $preinstalledExit = Invoke-SignedFixture
               Write-Host "Controlled preinstalled lifecycle exit: $preinstalledExit"
               if ($preinstalledExit -ne 0) { throw "Automatic acquisition and preinstalled lifecycle failed" }

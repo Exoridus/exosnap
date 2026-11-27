@@ -13,3 +13,9 @@ inline void ReportFixtureStatus([[maybe_unused]] const char* stage, [[maybe_unus
 }
 
 } // namespace exosnap::diagnostics::ipc
+
+#ifdef EXOSNAP_SIGNED_FIXTURE_STATUS
+namespace exosnap::diagnostics {
+void ProbeInstalledHelperLaunch();
+}
+#endif

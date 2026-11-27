@@ -1,3 +1,4 @@
+#include "../FixtureStatus.h"
 #include "../Handle.h"
 #include "../ImagePath.h"
 #include "diagnostics/PrivilegedPresentBackend.h"
@@ -15,6 +16,7 @@
 #include <filesystem>
 #include <iostream>
 #include <string>
+#include <string_view>
 #include <thread>
 
 namespace {
@@ -125,7 +127,11 @@ bool RunCycle() {
 }
 } // namespace
 
-int main() {
+int main(int argc, char** argv) {
+    if (argc == 2 && std::string_view(argv[1]) == "--probe-installed-launch") {
+        exosnap::diagnostics::ProbeInstalledHelperLaunch();
+        return 0;
+    }
     if (!ProbePackagePaths())
         return 1;
     for (int cycle = 1; cycle <= 2; ++cycle) {
