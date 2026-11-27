@@ -541,7 +541,6 @@ void RecordingCoordinator::StartDiskMonitor(const std::filesystem::path& output_
                                             const std::filesystem::path& transient_mkv,
                                             exosnap::engine::RecordRequestId request) {
     session_is_mp4_ = is_mp4;
-    session_transient_mkv_ = transient_mkv;
     disk_stop_triggered_.store(false);
 
     // Lazily construct the Win32 provider if no stub was injected.
@@ -1987,7 +1986,6 @@ void RecordingCoordinator::OnSegmentCompleted(const std::shared_ptr<WorkerCallba
     std::vector<RecordingMarker> markers;
     std::shared_ptr<RecoveryManifestStore> manifest;
     std::filesystem::path output_path;
-    std::filesystem::path transient_path;
     QString manifest_id;
     bool report_manual_split = false;
     bool remux_split = false;
@@ -2007,12 +2005,11 @@ void RecordingCoordinator::OnSegmentCompleted(const std::shared_ptr<WorkerCallba
             markers = coordinator->Markers();
 
         const bool pending_split = coordinator->split_pending_.exchange(false);
-        report_manual_split = !segment.session_end && pending_split;
+        report_manual_split = !segment.next_path.empty() && pending_split;
         // The manual request flag is unset for automatic splits. Use the muxer's boundary for delivery.
         remux_split = !segment.session_end && segment.succeeded && coordinator->session_is_mp4_;
         if (remux_split) {
             output_path = coordinator->CurrentOutputPath();
-            transient_path = coordinator->session_transient_mkv_;
             manifest = coordinator->recovery_manifest_store_;
             manifest_id = coordinator->CurrentManifestId();
         }
@@ -2046,21 +2043,22 @@ void RecordingCoordinator::OnSegmentCompleted(const std::shared_ptr<WorkerCallba
         if (before_manifest_io)
             before_manifest_io();
         if (manifest) {
-            // The old mux can proceed to open its next partial after this callback resumes.
-            // Keep that partial eligible for recovery even if the coordinator has already retired the session.
+            // The old mux can write to the admitted partial after this callback resumes,
+            // even if the coordinator has already retired the session.
             if (!manifest_id.isEmpty() && !manifest->UpdateFinalized(manifest_id, true)) {
                 recovery_errors.push_back(
                     QStringLiteral("could not mark segment %1 as finalized in the recovery manifest")
                         .arg(segment.index));
             }
-            const auto next_mkv = DeriveSegmentPathLogged(transient_path, segment.index + 1, "next transient MKV");
-            const auto next_final = DeriveSegmentPathLogged(output_path, segment.index + 1, "next segment final MP4");
-            if (next_mkv && next_final) {
+            if (!segment.next_path.empty()) {
+                const auto next_final =
+                    DeriveSegmentPathLogged(output_path, segment.index + 1, "next segment final MP4");
                 RecoveryManifestEntry entry;
                 entry.id = QUuid::createUuid().toString(QUuid::WithoutBraces);
-                entry.artefact_path = QString::fromStdWString(next_mkv->wstring());
+                entry.artefact_path = QString::fromStdWString(segment.next_path.wstring());
                 entry.intended_container = QStringLiteral("mp4");
-                entry.final_output_path = QString::fromStdWString(next_final->wstring());
+                if (next_final)
+                    entry.final_output_path = QString::fromStdWString(next_final->wstring());
                 entry.final_output_is_preferred = true;
                 entry.started_at = QDateTime::currentDateTimeUtc().toString(Qt::ISODate);
                 if (manifest->Add(entry)) {
@@ -2291,8 +2289,10 @@ void RecordingCoordinator::RecordingThreadProc(const exosnap::engine::RecorderCo
         ui_result.marker_sidecar_path = MarkerSidecarPath().wstring();
     }
 
+    bool reached_split = false;
     {
         std::lock_guard<std::mutex> lock(segments_mutex_);
+        reached_split = !segments_.empty() && segments_.front().succeeded && !segments_.front().session_end;
         ui_result.segments.reserve(segments_.size());
         for (const auto& seg : segments_) {
             CompletedRecordingSegment out;
@@ -2470,6 +2470,12 @@ void RecordingCoordinator::RecordingThreadProc(const exosnap::engine::RecorderCo
             PostStateChange(UiRecordingState::Failed);
         }
         return;
+    }
+
+    if (!result.succeeded && reached_split && config.container == exosnap::engine::Container::Mp4) {
+        PostStateChange(UiRecordingState::Saving);
+        (void)DrainSegmentRemuxJobs(/*cancel=*/false);
+        (void)ApplyPublishedSegmentPaths(ui_result);
     }
 
     if (result.succeeded) {

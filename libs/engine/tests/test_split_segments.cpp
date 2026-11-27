@@ -451,6 +451,11 @@ TEST(MuxSplitTest, CountsFinalizedOutputAfterOwnershipTransfer) {
     using namespace exosnap::engine;
     const auto output = exosnap_test::UniqueTempPath("mux_split_handoff.mkv");
     const auto delivered = exosnap_test::UniqueTempPath("mux_split_handoff_delivered.mkv");
+    const auto occupied = DeriveSegmentPath(output, 1).path;
+    {
+        std::ofstream existing(occupied, std::ios::binary);
+        ASSERT_TRUE(existing << "unrelated");
+    }
     std::vector<CompletedSegment> segments;
     auto state = MakeSplitState(output, segments);
     state->segment_callback = [&](const CompletedSegment& segment) {
@@ -480,11 +485,15 @@ TEST(MuxSplitTest, CountsFinalizedOutputAfterOwnershipTransfer) {
     ASSERT_TRUE(mux->Join(10000));
     ASSERT_FALSE(state->HasFailure());
     ASSERT_EQ(segments.size(), 2u);
+    EXPECT_EQ(segments[0].next_path, segments[1].path);
+    EXPECT_NE(segments[0].next_path, occupied);
+    EXPECT_TRUE(segments[1].next_path.empty());
     ASSERT_GT(segments[0].file_size_bytes, 0u);
     ASSERT_GT(segments[1].file_size_bytes, 0u);
     EXPECT_EQ(state->stats.output_file_bytes, segments[0].file_size_bytes + segments[1].file_size_bytes);
 
     std::error_code ignored;
+    std::filesystem::remove(occupied, ignored);
     std::filesystem::remove(delivered, ignored);
     std::filesystem::remove(segments[1].path, ignored);
 }

@@ -726,7 +726,6 @@ class RecordingCoordinator {
     // True when the active session targets MP4 (requires remux reserve in threshold).
     bool session_is_mp4_ = false;
     // Path of the transient MKV for the active MP4 session (used to size remux reserve).
-    std::filesystem::path session_transient_mkv_;
 
     // The monitor is bound to the recording it was started for: a verdict it
     // reaches after that recording ended (its query can outlast the session) is

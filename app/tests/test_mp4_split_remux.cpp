@@ -64,7 +64,6 @@ class RecordingCoordinatorTestPeer {
             coordinator.current_output_path_ = target;
         }
         coordinator.session_is_mp4_ = true;
-        coordinator.session_transient_mkv_ = engine::DeriveTransientMkvPath(target);
         coordinator.split_pending_.store(manual_pending);
         coordinator.SetCurrentManifestId(std::move(manifest_id));
         return coordinator.MakeSegmentCallback(std::move(before_manifest_io));
@@ -183,6 +182,9 @@ TEST_F(Mp4SplitRemuxTest, AutomaticBoundaryQueuesDeliveryAndProtectsTheNextSegme
     engine::CompletedSegment segment;
     segment.path = partial;
     segment.succeeded = true;
+    segment.next_path = next_partial.path;
+    QFile admitted(QString::fromStdWString(segment.next_path.wstring()));
+    ASSERT_TRUE(admitted.open(QIODevice::WriteOnly | QIODevice::NewOnly));
     completed(segment);
 
     const auto next_id = RecordingCoordinatorTestPeer::ActiveManifestId(coordinator);
@@ -252,6 +254,7 @@ TEST_F(Mp4SplitRemuxTest, RetiredCompletionCannotPublishIntoNextRecording) {
     engine::CompletedSegment segment;
     segment.path = old_partial;
     segment.succeeded = true;
+    segment.next_path = engine::DeriveSegmentPath(old_partial, 1).path;
     std::jthread delayed([&] { old_callback(segment); });
     if (entered_future.wait_for(std::chrono::seconds(10)) != std::future_status::ready) {
         resume.set_value();
@@ -342,6 +345,7 @@ TEST_F(Mp4SplitRemuxTest, StalledManifestCommitDoesNotPinEarlierRemuxRestartOrDe
         engine::CompletedSegment segment;
         segment.path = active_partial;
         segment.succeeded = true;
+        segment.next_path = engine::DeriveSegmentPath(active_partial, 1).path;
         std::jthread mux([&] { callback(segment); });
         if (committing.wait_for(10s) == std::future_status::ready) {
             coordinator->ScheduleSegmentRemuxForTest({}, {}, earlier_id, [&] {
@@ -401,6 +405,7 @@ TEST_F(Mp4SplitRemuxTest, QueuedSplitFeedbackRequiresItsRecordingGeneration) {
     });
     engine::CompletedSegment segment;
     segment.succeeded = true;
+    segment.next_path = L"next.mkv";
 
     const auto previous = RecordingCoordinatorTestPeer::BeginSplitFeedback(coordinator);
     previous(segment);
