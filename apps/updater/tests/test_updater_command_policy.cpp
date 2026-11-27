@@ -218,6 +218,15 @@ TEST(UpdaterCommandPolicy, ACancelledRunCanStartOverButHasNothingToRetry) {
     EXPECT_FALSE(VerdictFor("updater.cancel", state).allowed());
 }
 
+TEST(UpdaterCommandPolicy, AnUnconfirmedInstallationCannotStartAFreshCheck) {
+    auto state = Manual(UpdatePhase::Cancelled);
+    state.install_state = InstallState::Unknown;
+    state.retry_entry_step = UpStep::CloseApp;
+    EXPECT_EQ(VerdictFor("updater.check", state).code, QLatin1String(kBlocked));
+    EXPECT_TRUE(VerdictFor("updater.retry", state).allowed());
+    EXPECT_TRUE(VerdictFor("updater.close", state).allowed());
+}
+
 // -- close --------------------------------------------------------------------
 
 TEST(UpdaterCommandPolicy, CloseFollowsTheWindowsOwnRefusalToExit) {

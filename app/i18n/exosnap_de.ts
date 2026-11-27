@@ -11257,6 +11257,14 @@ Kleiner Text auf dem Bildschirm verliert früher an Qualität als Videoinhalte. 
 <context>
     <name>UpdaterViewAdapter</name>
     <message>
+        <source>Cancel download</source>
+        <translation>Download abbrechen</translation>
+    </message>
+    <message>
+        <source>Installation state unknown</source>
+        <translation>Installationszustand unbekannt</translation>
+    </message>
+    <message>
         <location filename="../../apps/updater/UpdaterViewAdapter.cpp" line="+579"/>
         <source>Repair ExoSnap</source>
         <translation>ExoSnap reparieren</translation>

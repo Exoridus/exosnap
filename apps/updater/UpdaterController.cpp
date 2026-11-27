@@ -273,7 +273,7 @@ void UpdaterController::onCancelled() {
     state_.headline = QCoreApplication::translate("UpdaterController", "Update canceled");
     state_.detail_text = QCoreApplication::translate("UpdaterController",
                                                      "The download was stopped and its partial files were discarded.");
-    if (state_.repairing && flow_.phase == UpdatePhase::Downloading) {
+    if (state_.repairing) {
         state_.repairing = false;
         state_.headline = QCoreApplication::translate("UpdaterController", "Repair download canceled");
         state_.safety_text = QCoreApplication::translate(
@@ -323,6 +323,8 @@ void UpdaterController::onStepStarted(UpStep s) {
         return;
     }
     if (s == UpStep::Download) {
+        if (state_.repairing && state_.steps[size_t(UpStep::CloseApp)] == StepStatus::Working)
+            state_.steps[size_t(UpStep::CloseApp)] = StepStatus::Queued;
         state_.downloaded_bytes = 0;
         state_.total_bytes = 0;
         flow_.downloaded_bytes = 0;

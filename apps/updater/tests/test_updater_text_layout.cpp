@@ -66,6 +66,24 @@ TEST(UpdaterRepairProjection, PreparationBlocksCloseBeforeTheWorkerStarts) {
     EXPECT_FALSE(adapter.cancelConfirmationVisible());
 }
 
+TEST(UpdaterRepairProjection, DownloadCanBeCancelledWithoutClosingTheUpdater) {
+    UpdaterController controller("0.10.1", "0.11.0");
+    controller.onRepairStarted();
+    controller.onStepStarted(UpStep::Download);
+    EXPECT_EQ(controller.state().steps[size_t(UpStep::CloseApp)], StepStatus::Queued);
+    UpdaterViewAdapter adapter;
+    adapter.render(controller.state());
+    int cancellations = 0;
+    int exits = 0;
+    QObject::connect(&adapter, &UpdaterViewAdapter::cancelDownloadRequested, [&] { ++cancellations; });
+    QObject::connect(&adapter, &UpdaterViewAdapter::closeRequested, [&] { ++exits; });
+    EXPECT_TRUE(adapter.closeEnabled());
+    EXPECT_FALSE(adapter.requestClose());
+    EXPECT_FALSE(adapter.cancelConfirmationVisible());
+    EXPECT_EQ(cancellations, 1);
+    EXPECT_EQ(exits, 0);
+}
+
 namespace {
 
 UpdaterUiState DownloadInFlight() {

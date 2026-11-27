@@ -725,7 +725,7 @@ int main(int argc, char** argv) {
         return true;
     };
     const auto doCheck = [&] {
-        if (in_flight)
+        if (in_flight || controller->flowState().install_state == exosnap::update::InstallState::Unknown)
             return false;
         // A re-check starts from a clean slate: the previous answer's step marks
         // and target version describe a resolution that is being replaced.
@@ -795,6 +795,8 @@ int main(int argc, char** argv) {
     // time these fire, so the decision to leave has been made.
     const auto exitNow = [] { QCoreApplication::exit(0); };
     QObject::connect(&view_adapter, &UpdaterViewAdapter::closeRequested, &app, exitNow);
+    QObject::connect(&view_adapter, &UpdaterViewAdapter::cancelDownloadRequested, &app,
+                     [&] { worker.requestCancel(); });
     const auto openAndQuit = [&] {
         (void)LaunchExoSnapFrom(ResolveOpenDir(args));
         exitNow();

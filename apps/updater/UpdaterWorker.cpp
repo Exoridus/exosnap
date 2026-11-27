@@ -352,6 +352,8 @@ void UpdaterWorker::run(UpStep entry) {
                 return;
             emit stepDone(UpStep::Download);
         }
+        if (abortedByCancel())
+            return;
     } else if (int(entry) <= int(UpStep::Download)) {
         if (!runDownload()) {
             return;
@@ -366,6 +368,8 @@ void UpdaterWorker::run(UpStep entry) {
     if (int(entry) <= int(UpStep::CloseApp) && !runCloseApp()) {
         return;
     }
+    if (repair_msi_ && abortedByCancel())
+        return;
     if (int(entry) <= int(UpStep::Install)) {
         const bool ok = args_.install_mode == InstallMode::Portable ? runInstallPortable() : runInstallMsi();
         if (!ok) {
@@ -773,11 +777,13 @@ bool UpdaterWorker::fetchPackage(const exosnap::update::PackageEntry& package, c
     package_sha256_ = package.sha256_hex;
     QString verify_error;
     if (!LockAndVerifyPackage(package_sha256_, &verify_error)) {
+        if (abortedByCancel())
+            return false;
         emit failed(FailureCase::VerifyDownloadFailed, verify_error); // A2 -- hard stop
         return false;
     }
 
-    return true;
+    return !abortedByCancel();
 }
 
 // Wipe + extract + descend. ExtractZip leaves partial output on a mid-fail, so
@@ -1027,6 +1033,8 @@ bool UpdaterWorker::runInstallMsi() {
     sei.lpDirectory = system_directory;
     sei.nShow = SW_HIDE;
 
+    if (repair_msi_ && abortedByCancel())
+        return false;
     if (::ShellExecuteExW(&sei) == 0) {
         if (elevate && ::GetLastError() == ERROR_CANCELLED) {
             emit failed(FailureCase::UacDeclined, QString()); // C1 -- Retry re-handoffs
