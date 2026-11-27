@@ -13,6 +13,8 @@
 #define WIN32_LEAN_AND_MEAN
 #include <windows.h>
 #include <shellapi.h>
+#include <msi.h>
+#include <msiquery.h>
 // clang-format on
 
 #include <QCoreApplication>
@@ -255,6 +257,31 @@ bool WaitForProcessOrCancel(void* process_handle, std::chrono::milliseconds time
             return false;
         }
     }
+}
+
+bool MatchesRegisteredMsi(const std::wstring& package, InstallScope scope, const std::wstring& directory) {
+    if (scope != InstallScope::Machine && scope != InstallScope::User)
+        return false;
+    PMSIHANDLE database, view, row;
+    if (MsiOpenDatabaseW(package.c_str(), nullptr, &database) != ERROR_SUCCESS ||
+        MsiDatabaseOpenViewW(database, L"SELECT `Value` FROM `Property` WHERE `Property`='ProductCode'", &view) !=
+            ERROR_SUCCESS ||
+        MsiViewExecute(view, 0) != ERROR_SUCCESS || MsiViewFetch(view, &row) != ERROR_SUCCESS)
+        return false;
+
+    wchar_t product[39]{};
+    DWORD product_length = _countof(product);
+    if (MsiRecordGetStringW(row, 1, product, &product_length) != ERROR_SUCCESS || product_length != 38)
+        return false;
+    wchar_t location[32768]{};
+    DWORD length = _countof(location);
+    const auto context =
+        scope == InstallScope::Machine ? MSIINSTALLCONTEXT_MACHINE : MSIINSTALLCONTEXT_USERUNMANAGED;
+    if (MsiGetProductInfoExW(product, nullptr, context, L"InstallLocation", location, &length) != ERROR_SUCCESS ||
+        length == 0)
+        return false;
+    std::error_code error;
+    return fs::equivalent(fs::path(location), fs::path(directory), error);
 }
 
 bool LaunchExoSnapFrom(const std::wstring& install_dir) {
@@ -956,6 +983,15 @@ bool UpdaterWorker::runInstallMsi() {
         return false;
     }
 
+    // A repair recaches the installed product, not a different signed product.
+    // Normal version upgrades may intentionally carry a new ProductCode.
+    if ((repair_msi_ || args_.verify_reinstall) &&
+        !MatchesRegisteredMsi(package_path_, install_scope_, args_.install_dir.toStdWString())) {
+        emit failed(FailureCase::MsiFailed,
+                    QCoreApplication::translate(
+                        "UpdaterWorker", "The verified repair MSI does not match the registered product and install location."));
+        return false;
+    }
     const std::wstring params = BuildMsiexecParams(package_path_, args_.verify_reinstall, repair_msi_);
     wchar_t system_directory[MAX_PATH]{};
     const UINT system_directory_length = ::GetSystemDirectoryW(system_directory, MAX_PATH);

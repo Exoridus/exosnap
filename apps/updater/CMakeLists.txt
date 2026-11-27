@@ -76,7 +76,7 @@ target_compile_definitions(exosnap_updater_logic PUBLIC NOMINMAX)
 # UpdaterControlDispatcher.h. Inert without --automation-control.
 target_link_libraries(exosnap_updater_logic
     PUBLIC Qt6::Core exosnap::update exosnap::control exosnap::update_handoff
-    PRIVATE exosnap::warnings
+    PRIVATE exosnap::warnings msi
 )
 
 # ---- Quick UI: the QML module lives on the executable ----

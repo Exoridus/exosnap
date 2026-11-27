@@ -81,6 +81,11 @@ namespace exosnap::updater {
 [[nodiscard]] std::wstring BuildMsiexecParams(const std::wstring& msi_path, bool verification_reinstall,
                                               bool repair = false);
 
+// A repair/reinstall may only recache the MSI registered for this scope and directory.
+// The caller retains the authenticated package lock across this check and handoff.
+[[nodiscard]] bool MatchesRegisteredMsi(const std::wstring& package, exosnap::update::InstallScope scope,
+                                       const std::wstring& directory);
+
 // Terminal meaning of an msiexec process exit code for the silent
 // (/qn /norestart) install this app performs.
 enum class MsiExitClass {

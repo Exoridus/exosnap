@@ -11585,6 +11585,10 @@ Kleiner Text auf dem Bildschirm verliert früher an Qualität als Videoinhalte. 
         <translation>Der Installationsbereich oder der Installationsort hat sich geändert.</translation>
     </message>
     <message>
+        <source>The verified repair MSI does not match the registered product and install location.</source>
+        <translation>Das geprüfte Reparatur-MSI stimmt nicht mit dem registrierten Produkt und Installationsort überein.</translation>
+    </message>
+    <message>
         <location filename="../../apps/updater/UpdaterWorker.cpp" line="+355"/>
         <source>This installation is managed by %1. Update it with %2.</source>
         <translation>Diese Installation wird durch %1 verwaltet. Aktualisieren Sie sie mit %2.</translation>
