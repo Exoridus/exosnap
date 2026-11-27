@@ -7,7 +7,7 @@
 
 namespace exosnap::diagnostics::ipc {
 
-// Use the object-manager root so resolving this local path never consults a drive-letter mapping.
+// Validate a local kernel volume path before spelling it for a Win32 consumer.
 inline size_t LocalVolumeRootEnd(std::wstring_view path) {
     constexpr std::wstring_view prefix = LR"(\Device\HarddiskVolume)";
     if (!path.starts_with(prefix))
@@ -25,8 +25,8 @@ inline std::wstring GlobalLocalVolumePath(std::wstring_view path) {
     return LR"(\\?\GLOBALROOT)" + std::wstring(path);
 }
 
-// CreateProcess consumes the Win32 device spelling. Keep GLOBALROOT so a
-// different logon's drive mapping cannot select another executable.
+// CreateProcess consumes the Win32 device spelling. GLOBALROOT resolution
+// requires a trusted consumer device map; file reads use absolute NT names.
 inline std::wstring GlobalLaunchPath(std::wstring path) {
     if (!path.starts_with(LR"(\\?\GLOBALROOT\)"))
         return {};
