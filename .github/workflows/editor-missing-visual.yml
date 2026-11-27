@@ -1,0 +1,139 @@
+name: Editor missing-source panel qualification
+
+on:
+  push:
+    branches: [verify/v012-editor-missing-relink]
+
+permissions:
+  contents: read
+
+env:
+  SCCACHE_GHA_ENABLED: "true"
+  SCCACHE_GHA_RW_MODE: READ_ONLY
+  SCCACHE_IDLE_TIMEOUT: "0"
+
+jobs:
+  capture:
+    runs-on: windows-2022
+    timeout-minutes: 60
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+        with:
+          fetch-depth: 2
+          persist-credentials: false
+      - name: Verify product source
+        shell: pwsh
+        run: |
+          $expected = '751b2abb3b0d182423412e99f482ca34fbc6c131'
+          $parent = git rev-parse 'HEAD^'
+          if ($LASTEXITCODE -ne 0 -or $parent -ne $expected) { throw 'Unexpected product source commit' }
+          $files = @(git diff --name-only $expected HEAD)
+          if ($LASTEXITCODE -ne 0 -or $files.Count -ne 1 -or $files[0] -ne '.github/workflows/editor-missing-visual.yml') {
+            throw 'Qualification must differ from product source only by this workflow'
+          }
+      - name: Open the existing sources panel in the missing-media fixture
+        shell: python
+        run: |
+          from pathlib import Path
+          source = Path("app/quick/ExoSnap/Quick/QuickApplication.cpp")
+          with source.open(encoding="utf-8", newline="") as file:
+              original = file.read()
+          before = 'if (scenario == QStringLiteral("edit-media-panel"))'
+          after = 'if (scenario == QStringLiteral("edit-media-panel") || scenario == QStringLiteral("edit-missing-media"))'
+          if original.count(before) != 1:
+              raise ValueError("Unexpected edit-media fixture")
+          with source.open("w", encoding="utf-8", newline="") as file:
+              file.write(original.replace(before, after))
+          def splice(file, before, after):
+              path = Path(file)
+              with path.open(encoding="utf-8", newline="") as stream:
+                  body = stream.read()
+              newline = "\r\n" if "\r\n" in body else "\n"
+              before = before.replace("\n", newline)
+              after = after.replace("\n", newline)
+              if body.count(before) != 1:
+                  raise ValueError("Unexpected fixture source: " + file)
+              with path.open("w", encoding="utf-8", newline="") as stream:
+                  stream.write(body.replace(before, after))
+          quick = str(source)
+          splice(quick, "#include <QQuickWindow>", "#include <QQuickItem>\n#include <QQuickWindow>")
+          splice(quick, r'''    if (choice || relink) {
+                  const auto dialog = page->findChild<QObject*>''', r'''    if (edit_visual_scenario_ == QStringLiteral("edit-missing-media")) {
+                  const auto& assets = session.workspace().assets();
+                  if (assets.empty() || session.media().isEmpty() || assets.back().state != edit::AssetState::Missing ||
+                      session.media().constLast().toMap().value(QStringLiteral("available")).toBool()) {
+                      edit_visual_error_ = QStringLiteral("The fixture did not publish an unavailable source.");
+                      return false;
+                  }
+                  auto* list = page->findChild<QObject*>(QStringLiteral("editSourceItems"));
+                  QQuickItem* row = nullptr;
+                  const int index = static_cast<int>(assets.size() - 1);
+                  if (!list || !QMetaObject::invokeMethod(list, "itemAtIndex", Q_RETURN_ARG(QQuickItem*, row), Q_ARG(int, index)) || !row)
+                      return false;
+                  const auto suffix = QString::number(assets.back().id);
+                  auto* actions = row->findChild<QObject*>(QStringLiteral("editSourceActions-") + suffix);
+                  auto* item = row->findChild<QObject*>(QStringLiteral("editSourceRelink-") + suffix);
+                  if (!actions || !item)
+                      return false;
+                  if (!edit_visual_source_started_) {
+                      if (!QMetaObject::invokeMethod(actions, "clicked"))
+                          return false;
+                      edit_visual_source_started_ = true;
+                  }
+                  auto* menu = item->property("menu").value<QObject*>();
+                  if (!menu || !menu->property("opened").toBool() || !item->property("visible").toBool())
+                      return false;
+              }
+              if (choice || relink) {
+                  const auto dialog = page->findChild<QObject*>''')
+          session = "app/quick/ExoSnap/Quick/EditWorkspaceSession.cpp"
+          splice(session, "    const auto id = workspace_.addAsset(AssetFromProbe(path, metadata));", r'''    auto fixture_asset = AssetFromProbe(path, metadata);
+              if (QFileInfo(path).fileName() == QStringLiteral("2026-08-09 22-47-10 Practice.mkv"))
+                  fixture_asset.state = edit::AssetState::Missing;
+              const auto id = workspace_.addAsset(std::move(fixture_asset));''')
+      - uses: ilammy/msvc-dev-cmd@0b201ec74fa43914dc39ae48a89fd1d8cb592756 # v1.13.0
+      - uses: ./.github/actions/setup-qt
+        with:
+          profile: quick
+      - uses: mozilla-actions/sccache-action@9e7fa8a12102821edf02ca5dbea1acd0f89a2696 # v0.0.10
+      - name: Build the shipping Qt Quick application
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $PSNativeCommandUseErrorActionPreference = $true
+          cmake --preset windows-x64-ninja-release
+          cmake --build build/windows-x64-ninja-release --target exosnap --parallel $([Environment]::ProcessorCount)
+      - name: Capture editor project surfaces
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $PSNativeCommandUseErrorActionPreference = $true
+          $images = @(Get-ChildItem build/windows-x64-ninja-release -Filter exosnap.exe -Recurse -File)
+          if ($images.Count -ne 1) { throw 'Expected exactly one built shipping executable' }
+          $exe = $images[0].FullName
+          $out = '.workspace/editor-native-visual'
+          New-Item -ItemType Directory -Force -Path $out | Out-Null
+          $changed = @(git diff --name-only)
+          if ($changed.Count -ne 2 -or $changed -notcontains 'app/quick/ExoSnap/Quick/QuickApplication.cpp' -or $changed -notcontains 'app/quick/ExoSnap/Quick/EditWorkspaceSession.cpp') { throw 'Unexpected runtime fixture edit' }
+          git diff --no-ext-diff --color=never -- app/quick/ExoSnap/Quick/QuickApplication.cpp app/quick/ExoSnap/Quick/EditWorkspaceSession.cpp | Set-Content "$out/fixture.diff" -Encoding utf8
+          [ordered]@{
+            fixtureDiffSha256 = (Get-FileHash -Algorithm SHA256 -LiteralPath "$out/fixture.diff").Hash
+            fixtureChange = 'Set the visual fixture source Missing, open Sources and click its existing overflow action'
+            productCommit = git rev-parse 'HEAD^'
+            workflowCommit = git rev-parse HEAD
+            executableSha256 = (Get-FileHash -Algorithm SHA256 -LiteralPath $exe).Hash
+            windowsCulture = (Get-Culture).Name
+            windowsUICulture = (Get-UICulture).Name
+            rendering = 'Qt Quick software, offscreen'
+          } | ConvertTo-Json | Set-Content "$out/source.json" -Encoding utf8
+          foreach ($state in @('edit-missing-media')) {
+            cargo exo-dev screenshot shot --exe $exe --page edit --edit $state --appearance dark,light --size 1600x1000,860x700 --out-dir "$out/$state"
+          }
+      - name: Upload editor scene captures and provenance
+        if: always()
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        with:
+          name: editor-missing-media-relink-751b2abb
+          path: .workspace/editor-native-visual/
+          include-hidden-files: true
+          if-no-files-found: error
