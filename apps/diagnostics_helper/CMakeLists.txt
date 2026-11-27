@@ -63,7 +63,7 @@ if(EXOSNAP_SIGNED_DIAGNOSTICS_FIXTURE)
     add_executable(diagnostics_signed_fixture EXCLUDE_FROM_ALL tests/signed_client.cpp)
     target_include_directories(diagnostics_signed_fixture PRIVATE "${PROJECT_SOURCE_DIR}/app")
     target_compile_definitions(diagnostics_signed_fixture PRIVATE NOMINMAX UNICODE _UNICODE)
-    target_link_libraries(diagnostics_signed_fixture PRIVATE exosnap::warnings exosnap_diagnostics_client advapi32)
+    target_link_libraries(diagnostics_signed_fixture PRIVATE exosnap::warnings exosnap_diagnostics_client advapi32 msi ole32)
     set_target_properties(diagnostics_signed_fixture PROPERTIES OUTPUT_NAME exosnap
         RUNTIME_OUTPUT_DIRECTORY "${CMAKE_CURRENT_BINARY_DIR}/signed-fixture")
 endif()

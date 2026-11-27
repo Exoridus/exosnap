@@ -1,18 +1,78 @@
+#include "../Handle.h"
 #include "diagnostics/PrivilegedPresentBackend.h"
 
 #include <windows.h>
 
 #include <evntrace.h>
+#include <msi.h>
+#include <msiquery.h>
+#include <objbase.h>
 
 #include <array>
 #include <chrono>
 #include <cstddef>
+#include <filesystem>
 #include <iostream>
+#include <string>
 #include <thread>
 
 namespace {
 using namespace exosnap::diagnostics;
 using namespace std::chrono_literals;
+
+std::wstring FinalPath(HANDLE file, DWORD spelling) {
+    std::wstring path(32768, L'\0');
+    const auto size = GetFinalPathNameByHandleW(file, path.data(), static_cast<DWORD>(path.size()), spelling);
+    if (!size || size >= path.size())
+        return {};
+    path.resize(size);
+    return path;
+}
+
+void Probe(const char* spelling, const wchar_t* path, bool locked) {
+    UINT database_status;
+    {
+        PMSIHANDLE database;
+        database_status = MsiOpenDatabaseW(path, MSIDBOPEN_READONLY, &database);
+    }
+    UINT package_status;
+    {
+        PMSIHANDLE package;
+        package_status = MsiOpenPackageExW(path, MSIOPENPACKAGEFLAGS_IGNOREMACHINESTATE, &package);
+    }
+    std::cout << "MSI read probe " << spelling << " locked=" << locked << " database=" << database_status
+              << " restricted package=" << package_status << '\n';
+}
+
+bool ProbePackagePaths() {
+    std::wstring image(32768, L'\0');
+    const auto size = GetModuleFileNameW(nullptr, image.data(), static_cast<DWORD>(image.size()));
+    if (!size || size >= image.size())
+        return false;
+    image.resize(size);
+    const auto source = std::filesystem::path(image).parent_path() / L"diagnostics" / L"helper.msi";
+    ipc::Handle file(CreateFileW(source.c_str(), GENERIC_READ | READ_CONTROL, FILE_SHARE_READ, nullptr, OPEN_EXISTING,
+                                 FILE_FLAG_OPEN_REPARSE_POINT | FILE_FLAG_BACKUP_SEMANTICS, nullptr));
+    if (!file)
+        return false;
+    const auto volume = FinalPath(file.get(), VOLUME_NAME_GUID);
+    const auto native = FinalPath(file.get(), VOLUME_NAME_NT);
+    if (volume.empty() || native.empty())
+        return false;
+    const auto global = LR"(\\?\GLOBALROOT)" + native;
+    const auto com = CoInitializeEx(nullptr, COINIT_APARTMENTTHREADED);
+    if (FAILED(com))
+        return false;
+    for (const bool locked : {true, false}) {
+        if (!locked)
+            file.reset();
+        Probe("DOS", source.c_str(), locked);
+        Probe("volume GUID", volume.c_str(), locked);
+        Probe("global native", global.c_str(), locked);
+    }
+    CoUninitialize();
+    return true;
+}
 
 ULONG QueryDpcSession() {
     struct Query {
@@ -57,6 +117,8 @@ bool RunCycle() {
 } // namespace
 
 int main() {
+    if (!ProbePackagePaths())
+        return 1;
     for (int cycle = 1; cycle <= 2; ++cycle) {
         std::cout << "Signed provisioning and DPC cycle " << cycle << std::endl;
         if (!RunCycle())
