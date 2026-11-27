@@ -145,7 +145,11 @@ impl RegistryFixture {
     }
 
     fn set_value(&self, kind: u32, value: &[u8]) {
-        let mut name = wide("DistributionOwner");
+        self.set_named_value("DistributionOwner", kind, value);
+    }
+
+    fn set_named_value(&self, name: &str, kind: u32, value: &[u8]) {
+        let mut name = wide(name);
         let name = native_value_name(&mut name);
         // Win32 string writes may append a NUL. Native writes preserve exact
         // malformed bytes so the probe cannot pass against normalized fixtures.
@@ -183,10 +187,14 @@ impl ProbeLibrary {
     }
 
     fn run(&self, session: &Handle) {
+        assert_eq!(self.result(session), 0);
+    }
+
+    fn result(&self, session: &Handle) -> u32 {
         let address = unsafe { GetProcAddress(self.0, c"ProbeDistributionOwner".as_ptr().cast()) };
         assert!(!address.is_null());
         let probe: unsafe extern "system" fn(u32) -> u32 = unsafe { std::mem::transmute(address) };
-        assert_eq!(unsafe { probe(session.0) }, 0);
+        unsafe { probe(session.0) }
     }
 }
 impl Drop for ProbeLibrary {
@@ -944,4 +952,44 @@ fn compiled_msi_probe_preserves_empty_and_unknown_owners_without_installing() {
         get(&session, "EXOSNAP_RESOLVED_DISTRIBUTION_OWNER"),
         "direct"
     );
+}
+
+#[test]
+#[ignore = "requires x64 MSVC and WiX 4; reads only a unique HKCU test key"]
+fn compiled_probe_reads_private_setup_state_without_installing() {
+    let _session_lock = MSI_SESSION_LOCK.lock().unwrap();
+    assert!(unsafe { CoInitializeEx(std::ptr::null_mut(), 2) } >= 0);
+    let _com = Com;
+    let registry = RegistryFixture::create();
+    let root = Path::new(env!("CARGO_MANIFEST_DIR")).join("../..");
+    let scratch = tempfile::tempdir().unwrap();
+    let dll = build_probe(&root, scratch.path(), Some(&registry.path));
+    let probe = ProbeLibrary::open(&dll);
+    let msi = build_registry_msi(&root, scratch.path(), &registry, &dll, false);
+    let mut session = 0;
+    assert_eq!(
+        unsafe { MsiOpenPackageExW(wide(&msi.to_string_lossy()).as_ptr(), 1, &mut session) },
+        0
+    );
+    let session = Handle(session);
+
+    set(&session, "ExoSnapUserSetupManaged", "stale");
+    set(&session, "ExoSnapUserInstallPath", "stale");
+    probe.run(&session);
+    assert_eq!(get(&session, "ExoSnapUserSetupManaged"), "");
+    assert_eq!(get(&session, "ExoSnapUserInstallPath"), "");
+
+    let path = format!(r"C:\Custom\{}ExoSnap", "directory\\".repeat(50));
+    registry.set_named_value("SetupManaged", 1, &registry_string("1"));
+    registry.set_named_value("InstallPath", 1, &registry_string(&path));
+    probe.run(&session);
+    assert_eq!(get(&session, "ExoSnapUserSetupManaged"), "1");
+    assert_eq!(get(&session, "ExoSnapUserInstallPath"), path);
+    assert_eq!(get(&session, "ExoSnapLegacyMachineInstallPath"), "");
+
+    registry.set_named_value("InstallPath", 4, &1u32.to_le_bytes());
+    assert_eq!(probe.result(&session), 1603);
+    registry.set_named_value("InstallPath", 1, &registry_string(&path));
+    registry.set_named_value("SetupManaged", 4, &1u32.to_le_bytes());
+    assert_eq!(probe.result(&session), 1603);
 }

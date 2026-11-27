@@ -815,6 +815,8 @@ jobs:
           $redist = Join-Path $env:RUNNER_TEMP 'vc_redist.x64.exe'
           curl.exe -sSfL -o $redist https://aka.ms/vs/17/release/vc_redist.x64.exe
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          cargo test --locked --manifest-path tools/Cargo.toml -p exo-dev compiled_probe_reads_private_setup_state_without_installing -- --ignored
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
           $out = '.workspace/installer-smoke'
           cargo run --locked --manifest-path tools/Cargo.toml -p exo-verify -- package --build-dir build/windows-x64-ninja-release --repo-root . --out $out --vc-redist $redist
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
