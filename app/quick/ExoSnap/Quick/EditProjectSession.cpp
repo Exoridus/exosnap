@@ -246,8 +246,8 @@ void EditSessionAdapter::saveProject(const QUrl& url) {
         QByteArray digest;
         const auto error = edit::EditProjectStore::Write(path, expected, std::move(captured), digest, false, state);
         const bool recovery_retired =
-            error.isEmpty() && (recovered_path.isEmpty() ||
-                                edit::EditProjectStore::RemoveCheckpoint(recovered_path, recovered_digest));
+            error.isEmpty() &&
+            (recovered_path.isEmpty() || edit::EditProjectStore::RemoveCheckpoint(recovered_path, recovered_digest));
         QMetaObject::invokeMethod(this, [this, path, snapshot, generation, error, digest, state, recovery_retired] {
             project_busy_ = false;
             if (!error.isEmpty()) {
@@ -265,7 +265,8 @@ void EditSessionAdapter::saveProject(const QUrl& url) {
                         recovered_from_.clear();
                         recovered_digest_.clear();
                     } else {
-                        emit projectError(tr("The project was saved, but its recovery snapshot could not be removed. Save again to retry."));
+                        emit projectError(tr("The project was saved, but its recovery snapshot could not be removed. "
+                                             "Save again to retry."));
                     }
                     refreshRecoveries();
                 }
