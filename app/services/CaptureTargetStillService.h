@@ -8,12 +8,15 @@
 
 #include <condition_variable>
 #include <cstddef>
+#include <cstdint>
 #include <functional>
 #include <mutex>
 #include <stop_token>
 #include <thread>
 #include <unordered_map>
 #include <vector>
+
+#include <winrt/base.h>
 
 namespace exosnap {
 
@@ -32,7 +35,7 @@ class CaptureTargetStillService final : public QObject {
     struct Request {
         QString identity;
         exosnap::engine::CaptureTarget target;
-        // Invoked on the worker before capture and before publishing. Must be thread-safe.
+        // Invoked on the worker and on the owning Qt thread. Must be thread-safe.
         std::function<bool()> valid;
     };
 
@@ -48,13 +51,12 @@ class CaptureTargetStillService final : public QObject {
     CaptureTargetStillService(const CaptureTargetStillService&) = delete;
     CaptureTargetStillService& operator=(const CaptureTargetStillService&) = delete;
 
-    // Idle until start(); stop() ends the worker and drops its D3D11 device, so
-    // a closed picker costs nothing.
+    // Called on the owning Qt thread. stop() synchronously releases the worker and its resources.
     void start();
     void stop();
 
-    // Replaces the round-robin set. Order is the order the cards are laid out
-    // in, which is what makes the first pass after opening follow the eye.
+    // Called on the owning Qt thread. An empty set suspends capture and releases the D3D
+    // device. Validated window identities may retain an item for the next opening.
     void setVisibleTargets(std::vector<Request> targets);
 
   signals:
@@ -65,13 +67,16 @@ class CaptureTargetStillService final : public QObject {
 
   private:
     void workerProc(std::stop_token stop_token);
-    // Returns the next target to grab, or false when the visible set is empty.
-    bool nextRequest(Request& out_request);
+    void publish(Request request, std::uint64_t revision, QImage still, bool invalid_identity = false);
+    [[nodiscard]] bool isCurrent(std::uint64_t revision) const;
+    void wakeWorker();
 
     mutable std::mutex mutex_;
     std::condition_variable_any wake_;
+    winrt::handle activity_event_;
     std::vector<Request> visible_;
     std::size_t cursor_ = 0;
+    std::uint64_t targets_revision_ = 0;
     std::unordered_map<QString, int> consecutive_failures_;
 
     std::jthread worker_;
