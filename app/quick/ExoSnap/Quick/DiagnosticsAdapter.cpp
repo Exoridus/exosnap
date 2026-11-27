@@ -205,6 +205,9 @@ DiagnosticsAdapter::DiagnosticsAdapter(OutputProbe probe, QObject* parent)
 
     self_test_status_ = QCoreApplication::translate("DiagnosticsAdapter", "Status: Not run");
 
+    helper_state_timer_.setInterval(250);
+    connect(&helper_state_timer_, &QTimer::timeout, this, &DiagnosticsAdapter::refreshHelperState);
+
     live_probe_timer_.setInterval(kLiveProbeIntervalMs);
     connect(&live_probe_timer_, &QTimer::timeout, this, [this]() {
         if (!probe_in_flight_)
@@ -427,7 +430,17 @@ QVariantList DiagnosticsAdapter::measurementSources() const {
     // failure of the recording and never turns into a zero reading.
     if (!in_depth_enabled_)
         add(tr("DPC / ISR"), tr("Not requested"), QStringLiteral("idle"));
-    else if (!elevated() && !dpc_from_helper_)
+    else if (helper_state_ == diagnostics::DiagnosticsHelperState::Starting)
+        add(tr("DPC / ISR"), tr("Starting"), QStringLiteral("partial"));
+    else if (helper_state_ == diagnostics::DiagnosticsHelperState::ConsentDeclined)
+        add(tr("DPC / ISR"), tr("Administrator consent declined"), QStringLiteral("unavailable"));
+    else if (helper_state_ == diagnostics::DiagnosticsHelperState::Unavailable)
+        add(tr("DPC / ISR"), tr("Trusted helper unavailable"), QStringLiteral("unavailable"));
+    else if (helper_state_ == diagnostics::DiagnosticsHelperState::Failed)
+        add(tr("DPC / ISR"), tr("Unavailable - trace error"), QStringLiteral("unavailable"));
+    else if (helper_state_ == diagnostics::DiagnosticsHelperState::Stopped)
+        add(tr("DPC / ISR"), tr("Stopped"), QStringLiteral("unavailable"));
+    else if (!elevated() && !privilegedRequested())
         add(tr("DPC / ISR"), tr("Not running - elevated kernel trace required"), QStringLiteral("unavailable"));
     else if (dpc_reading_.has_value() && dpc_reading_->available)
         add(tr("DPC / ISR"), tr("Measuring"), QStringLiteral("measuring"));
@@ -806,9 +819,23 @@ void DiagnosticsAdapter::setHasLastRecording(bool has_last_recording) {
     refreshSnapshot();
 }
 
-void DiagnosticsAdapter::setDpcLatencyProvider(diagnostics::IDpcLatencyProvider* provider, bool from_helper) {
-    dpc_from_helper_ = from_helper;
+void DiagnosticsAdapter::refreshHelperState() {
+    using diagnostics::DiagnosticsHelperState;
+    const auto state = dpc_provider_ ? dpc_provider_->HelperState() : DiagnosticsHelperState::Local;
+    if (state == helper_state_)
+        return;
+    helper_state_ = state;
+    // Consent may complete with the recorder idle and no presentation samples.
+    if (state == DiagnosticsHelperState::Starting || state == DiagnosticsHelperState::Connected)
+        helper_state_timer_.start();
+    else
+        helper_state_timer_.stop();
+    emit changed();
+}
+
+void DiagnosticsAdapter::setDpcLatencyProvider(diagnostics::IDpcLatencyProvider* provider) {
     dpc_provider_ = provider;
+    refreshHelperState();
     refreshSnapshot();
 }
 

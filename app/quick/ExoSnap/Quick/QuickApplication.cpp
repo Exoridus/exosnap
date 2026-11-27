@@ -6376,7 +6376,7 @@ void QuickApplication::startDiagnosticsHelper() {
     privileged_backend_ = diagnostics::MakePrivilegedDiagnosticsBackend(need_presents);
     auto session =
         std::make_unique<diagnostics::PresentMonProvider>(true, [backend = privileged_backend_] { return backend; });
-    diagnostics_adapter_.setDpcLatencyProvider(privileged_backend_.get(), true);
+    diagnostics_adapter_.setDpcLatencyProvider(privileged_backend_.get());
     if (need_presents) {
         present_provider_ = std::move(session);
         updatePresentAttribution(present_target_pid_, true);

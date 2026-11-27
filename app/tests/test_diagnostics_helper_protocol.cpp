@@ -2,6 +2,11 @@
 
 #include <gtest/gtest.h>
 
+#ifdef _WIN32
+#include "../../apps/diagnostics_helper/StartingGuardian.h"
+#include <string>
+#endif
+
 namespace {
 using namespace exosnap::diagnostics::ipc;
 
@@ -69,5 +74,37 @@ TEST(DiagnosticsHelperProtocol, DpcOnlyBeginCannotSpecifyProviderOrParameters) {
     r.window = 3;
     EXPECT_FALSE(Valid(r, sizeof(r)));
 }
+
+#ifdef _WIN32
+TEST(DiagnosticsHelperGuardian, FailedHandoffReapsChildButSuccessfulHandoffTransfersIt) {
+    std::wstring image(32768, L'\0');
+    const auto size = GetModuleFileNameW(nullptr, image.data(), static_cast<DWORD>(image.size()));
+    ASSERT_GT(size, 0u);
+    ASSERT_LT(size, image.size());
+    image.resize(size);
+    STARTUPINFOW startup{};
+    startup.cb = sizeof(startup);
+    PROCESS_INFORMATION child{};
+    // Nothing runs in the child. This exercises failure before its entry point,
+    // without elevation, UAC, desktop interaction or opening an ETW session.
+    ASSERT_TRUE(CreateProcessW(image.c_str(), nullptr, nullptr, nullptr, FALSE, CREATE_SUSPENDED | CREATE_NO_WINDOW,
+                               nullptr, nullptr, &startup, &child));
+    Handle thread(child.hThread);
+    StartingGuardian cleanup{Handle(child.hProcess)};
+    HANDLE duplicated = nullptr;
+    ASSERT_TRUE(DuplicateHandle(GetCurrentProcess(), cleanup.get(), GetCurrentProcess(), &duplicated, 0, FALSE,
+                                DUPLICATE_SAME_ACCESS));
+    Handle transferred;
+    {
+        StartingGuardian starting{Handle(duplicated)};
+        transferred = starting.handoff();
+    }
+    EXPECT_EQ(WaitForSingleObject(cleanup.get(), 0), WAIT_TIMEOUT);
+    {
+        StartingGuardian failed(std::move(transferred));
+    }
+    EXPECT_EQ(WaitForSingleObject(cleanup.get(), 0), WAIT_OBJECT_0);
+}
+#endif
 
 } // namespace

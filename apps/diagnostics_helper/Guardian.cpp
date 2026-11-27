@@ -1,5 +1,6 @@
 #include "Guardian.h"
 #include "SessionIdentity.h"
+#include "StartingGuardian.h"
 #include "diagnostics/DpcLatencyProvider.h"
 
 #include <evntrace.h>
@@ -111,7 +112,7 @@ GuardedSession StartGuardian() {
     DeleteProcThreadAttributeList(list);
     if (!launched)
         return {};
-    Handle process(child.hProcess);
+    StartingGuardian process{Handle(child.hProcess)};
     Handle thread(child.hThread);
     writer.reset();
     // The writer is an inherited allowlisted pipe held only by the pinned child.
@@ -124,7 +125,7 @@ GuardedSession StartGuardian() {
             GUID id{};
             DWORD received = 0;
             if (ReadFile(reader.get(), &id, sizeof(id), &received, nullptr) && received == sizeof(id))
-                return {std::move(process), id, std::move(heartbeat)};
+                return {process.handoff(), id, std::move(heartbeat)};
             return {};
         }
         if (WaitForSingleObject(process.get(), 50) != WAIT_TIMEOUT)

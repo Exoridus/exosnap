@@ -171,12 +171,20 @@ class RemoteBackend final : public IPrivilegedDiagnosticsBackend {
   public:
     explicit RemoteBackend(bool collect_presents) : collect_presents_(collect_presents) {
     }
+    DiagnosticsHelperState HelperState() const override {
+        return helper_state_.load();
+    }
     DpcLatencyReading Read() const override {
         std::lock_guard lock(mutex_);
-        return connected_ && dpc_.metadata.Fresh(std::chrono::steady_clock::now()) ? dpc_ : DpcLatencyReading{};
+        return HelperState() == DiagnosticsHelperState::Connected &&
+                       dpc_.metadata.Fresh(std::chrono::steady_clock::now())
+                   ? dpc_
+                   : DpcLatencyReading{};
     }
     PresentTraceOpenResult Open() override {
         stop_ = Handle(CreateEventW(nullptr, TRUE, FALSE, nullptr));
+        if (!stop_)
+            helper_state_.store(DiagnosticsHelperState::Failed);
         return stop_ ? PresentTraceOpenResult::Opened : PresentTraceOpenResult::Failed;
     }
     void Close() override {
@@ -200,6 +208,7 @@ class RemoteBackend final : public IPrivilegedDiagnosticsBackend {
     void Consume() override {
         static std::atomic_flag active;
         if (active.test_and_set()) {
+            helper_state_.store(DiagnosticsHelperState::Failed);
             state_.store(PresentProviderState::SessionConflict);
             return;
         }
@@ -210,7 +219,20 @@ class RemoteBackend final : public IPrivilegedDiagnosticsBackend {
         } else {
             state_.store(PresentProviderState::Failed);
         }
-        connected_.store(false);
+        switch (state_.load()) {
+        case PresentProviderState::ConsentDeclined:
+            helper_state_.store(DiagnosticsHelperState::ConsentDeclined);
+            break;
+        case PresentProviderState::HelperUnavailable:
+            helper_state_.store(DiagnosticsHelperState::Unavailable);
+            break;
+        case PresentProviderState::Stopped:
+            helper_state_.store(DiagnosticsHelperState::Stopped);
+            break;
+        default:
+            helper_state_.store(DiagnosticsHelperState::Failed);
+            break;
+        }
         active.clear();
     }
 
@@ -220,7 +242,7 @@ class RemoteBackend final : public IPrivilegedDiagnosticsBackend {
     std::atomic<int64_t> frequency_{0};
     Handle stop_;
     const bool collect_presents_;
-    std::atomic<bool> connected_{false};
+    std::atomic<DiagnosticsHelperState> helper_state_{DiagnosticsHelperState::Starting};
     mutable std::mutex mutex_;
     DpcLatencyReading dpc_;
     std::vector<TracePresentEvent> events_;
@@ -319,7 +341,7 @@ PresentProviderState RemoteBackend::Run() {
     } else {
         return PresentProviderState::Failed;
     }
-    connected_.store(true);
+    helper_state_.store(DiagnosticsHelperState::Connected);
     Record r{};
     while (Transfer(pipe.get(), stop_.get(), r, false, INFINITE)) {
         std::lock_guard lock(mutex_);

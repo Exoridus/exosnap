@@ -159,10 +159,10 @@ class DiagnosticsAdapter : public QObject {
     // composition root, which pushes the result back through setInDepthEnabled().
     void setInDepthEnabledFromUi(bool enabled);
     [[nodiscard]] bool privilegedRequested() const {
-        return dpc_from_helper_;
+        return helper_state_ != diagnostics::DiagnosticsHelperState::Local;
     }
     Q_INVOKABLE void requestPrivilegedCollection(bool enabled) {
-        if (enabled != dpc_from_helper_ && (!enabled || in_depth_enabled_))
+        if (enabled != privilegedRequested() && (!enabled || in_depth_enabled_))
             emit privilegedToggled(enabled);
     }
     [[nodiscard]] QString inDepthStateText() const;
@@ -219,7 +219,7 @@ class DiagnosticsAdapter : public QObject {
     // sampling where the recommendation engine runs is what keeps a peak that stopped
     // being measured from standing on the page. nullptr means no producer is installed,
     // which reports exactly as an unavailable one does -- nothing.
-    void setDpcLatencyProvider(diagnostics::IDpcLatencyProvider* provider, bool from_helper = false);
+    void setDpcLatencyProvider(diagnostics::IDpcLatencyProvider* provider);
     void setPresentSample(std::optional<diagnostics::PresentSample> sample);
     // The present/DPC opt-in as this session holds it. Does not emit
     // inDepthToggled -- that signal is the UI asking for a change, this is the
@@ -323,7 +323,9 @@ class DiagnosticsAdapter : public QObject {
     capability::CapabilitySet caps_;
     // Borrowed from the composition root, which must outlive this adapter (see
     // QuickApplication's member declaration order).
-    bool dpc_from_helper_ = false;
+    void refreshHelperState();
+    diagnostics::DiagnosticsHelperState helper_state_ = diagnostics::DiagnosticsHelperState::Local;
+    QTimer helper_state_timer_;
     diagnostics::IDpcLatencyProvider* dpc_provider_ = nullptr;
     DiagnosticIssueModel issue_model_;
     PipelineStageModel pipeline_stage_model_;

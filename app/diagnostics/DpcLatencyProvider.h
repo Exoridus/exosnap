@@ -23,9 +23,14 @@ struct DpcLatencyReading {
 // concrete class so the wiring stays assertable without a real kernel trace --
 // opening one needs elevation, and a unit test may not tear a machine-wide named
 // ETW session out from under a running ExoSnap.
+enum class DiagnosticsHelperState { Local, Starting, Connected, ConsentDeclined, Unavailable, Failed, Stopped };
+
 class IDpcLatencyProvider {
   public:
     virtual ~IDpcLatencyProvider() = default;
+    [[nodiscard]] virtual DiagnosticsHelperState HelperState() const {
+        return DiagnosticsHelperState::Local;
+    }
     // `available == false` means "not being measured right now" -- never a zero
     // reading to be reported as if it had been measured.
     [[nodiscard]] virtual DpcLatencyReading Read() const = 0;
