@@ -335,8 +335,10 @@ PresentProviderState RemoteBackend::Run() {
                                  PIPE_TYPE_MESSAGE | PIPE_READMODE_MESSAGE | PIPE_WAIT | PIPE_REJECT_REMOTE_CLIENTS, 1,
                                  65536, 65536, 0, &security));
     LocalFree(descriptor);
-    if (!pipe || WaitForSingleObject(stop_.get(), 0) != WAIT_TIMEOUT)
+    if (!pipe || WaitForSingleObject(stop_.get(), 0) != WAIT_TIMEOUT) {
+        ReportFixtureStatus("pipe create or cancelled", GetLastError());
         return PresentProviderState::Failed;
+    }
     const auto args = nonce + L" " + std::to_wstring(GetCurrentProcessId()) + L" " +
                       std::to_wstring(CreationTime(GetCurrentProcess()));
     const auto directory = verified.canonical.parent_path();
@@ -348,8 +350,12 @@ PresentProviderState RemoteBackend::Run() {
     exec.lpParameters = args.c_str();
     exec.lpDirectory = directory.c_str();
     exec.nShow = SW_HIDE;
-    if (!ShellExecuteExW(&exec))
-        return GetLastError() == ERROR_CANCELLED ? PresentProviderState::ConsentDeclined : PresentProviderState::Failed;
+    if (!ShellExecuteExW(&exec)) {
+        const auto error = GetLastError();
+        ReportFixtureStatus("ShellExecuteExW", error);
+        return error == ERROR_CANCELLED ? PresentProviderState::ConsentDeclined : PresentProviderState::Failed;
+    }
+    ReportFixtureStatus("ShellExecuteExW", ERROR_SUCCESS);
     Handle helper(exec.hProcess);
     Handle connected(CreateEventW(nullptr, TRUE, FALSE, nullptr));
     OVERLAPPED operation{};
@@ -361,27 +367,44 @@ PresentProviderState RemoteBackend::Run() {
         if (error == ERROR_IO_PENDING) {
             HANDLE waits[] = {stop_.get(), helper.get(), connected.get()};
             DWORD bytes = 0;
-            if (WaitForMultipleObjects(3, waits, FALSE, 10000) != WAIT_OBJECT_0 + 2) {
+            const auto wait = WaitForMultipleObjects(3, waits, FALSE, 10000);
+            if (wait != WAIT_OBJECT_0 + 2) {
+                ReportFixtureStatus("pipe connect wait", wait);
+#ifdef EXOSNAP_SIGNED_FIXTURE_STATUS
+                DWORD exit_code = 0;
+                if (GetExitCodeProcess(helper.get(), &exit_code))
+                    ReportFixtureStatus("helper exit at connect", exit_code);
+#endif
                 CancelIoEx(pipe.get(), &operation);
                 GetOverlappedResult(pipe.get(), &operation, &bytes, TRUE);
                 return PresentProviderState::Failed;
             }
-            if (!GetOverlappedResult(pipe.get(), &operation, &bytes, FALSE))
+            if (!GetOverlappedResult(pipe.get(), &operation, &bytes, FALSE)) {
+                ReportFixtureStatus("pipe connect completion", GetLastError());
                 return PresentProviderState::Failed;
+            }
         } else if (error != ERROR_PIPE_CONNECTED) {
+            ReportFixtureStatus("ConnectNamedPipe", error);
             return PresentProviderState::Failed;
         }
     }
     ULONG pid = 0;
     if (!GetNamedPipeClientProcessId(pipe.get(), &pid) || pid != GetProcessId(helper.get()) ||
-        WaitForSingleObject(stop_.get(), 0) != WAIT_TIMEOUT)
+        WaitForSingleObject(stop_.get(), 0) != WAIT_TIMEOUT) {
+        ReportFixtureStatus("pipe peer identity rejected", ERROR_ACCESS_DENIED);
         return PresentProviderState::Failed;
+    }
     Record begin{};
     begin.kind = collect_presents_ ? Kind::Begin : Kind::BeginDpcOnly;
     Record ready{};
-    if (!Transfer(pipe.get(), stop_.get(), begin, true, 2000) ||
-        !Transfer(pipe.get(), stop_.get(), ready, false, 15000))
+    if (!Transfer(pipe.get(), stop_.get(), begin, true, 2000)) {
+        ReportFixtureStatus("initial pipe write rejected", ERROR_INVALID_DATA);
         return PresentProviderState::Failed;
+    }
+    if (!Transfer(pipe.get(), stop_.get(), ready, false, 15000)) {
+        ReportFixtureStatus("initial pipe response rejected", ERROR_INVALID_DATA);
+        return PresentProviderState::Failed;
+    }
     if (ready.kind == Kind::Failure) {
         constexpr std::array states{PresentProviderState::Failed,       PresentProviderState::NotBuilt,
                                     PresentProviderState::AccessDenied, PresentProviderState::SessionConflict,
