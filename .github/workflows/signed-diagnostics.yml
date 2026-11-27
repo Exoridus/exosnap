@@ -51,11 +51,15 @@ jobs:
             signtool sign /fd SHA256 /sha1 $thumb $image
             cmake --build $build --target diagnostics-helper-msi
             signtool sign /fd SHA256 /sha1 $thumb $msi
-            cmake --preset windows-x64-ninja-release "-DEXOSNAP_DIAGNOSTICS_SIGNED_IMAGE=$image" "-DEXOSNAP_DIAGNOSTICS_SIGNED_MSI=$msi" -DEXOSNAP_SIGNED_DIAGNOSTICS_FIXTURE=ON
+            # Keep signed configure inputs separate from Ninja's generated helper outputs.
+            $inputs = New-Item -ItemType Directory -Path "$env:RUNNER_TEMP/signed-diagnostics-inputs"
+            $signedImage = (Copy-Item $image $inputs.FullName -PassThru).FullName
+            $signedMsi = (Copy-Item $msi $inputs.FullName -PassThru).FullName
+            cmake --preset windows-x64-ninja-release "-DEXOSNAP_DIAGNOSTICS_SIGNED_IMAGE=$signedImage" "-DEXOSNAP_DIAGNOSTICS_SIGNED_MSI=$signedMsi" -DEXOSNAP_SIGNED_DIAGNOSTICS_FIXTURE=ON
             cmake --build $build --target diagnostics_signed_fixture
             signtool sign /fd SHA256 /sha1 $thumb $client
             $bundle = New-Item -ItemType Directory -Path "$out/signed-fixture/diagnostics"
-            Copy-Item $msi "$($bundle.FullName)/helper.msi"
+            Copy-Item $signedMsi "$($bundle.FullName)/helper.msi"
             $process = Start-Process -FilePath $client -PassThru -NoNewWindow
             if (!$process.WaitForExit(300000)) {
               $process.Kill()
@@ -63,7 +67,7 @@ jobs:
               throw "Signed diagnostics fixture timed out"
             }
             if ($process.ExitCode -ne 0) { throw "Signed diagnostics fixture returned $($process.ExitCode)" }
-            if ((Get-FileHash $installed).Hash -ne (Get-FileHash $image).Hash) { throw "Provisioned image digest mismatch" }
+            if ((Get-FileHash $installed).Hash -ne (Get-FileHash $signedImage).Hash) { throw "Provisioned image digest mismatch" }
             $deadline = (Get-Date).AddSeconds(30)
             do {
               $remaining = @(Get-Process -Name exosnap-diagnostics -ErrorAction SilentlyContinue)
