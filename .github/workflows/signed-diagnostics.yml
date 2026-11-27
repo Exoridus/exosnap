@@ -21,6 +21,7 @@ jobs:
     steps:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
         with:
+          ref: d7b888372e6d161df54686fc8f3f52ab39730c74
           persist-credentials: false
       - uses: ilammy/msvc-dev-cmd@0b201ec74fa43914dc39ae48a89fd1d8cb592756 # v1.13.0
       - uses: ./.github/actions/setup-qt
@@ -66,7 +67,8 @@ jobs:
             $signedMsix = (Copy-Item $msix $inputs.FullName -PassThru).FullName
             cmake --preset windows-x64-ninja-release "-DEXOSNAP_DIAGNOSTICS_SIGNED_IMAGE=$signedImage" "-DEXOSNAP_DIAGNOSTICS_SIGNED_MSIX=$signedMsix" -DEXOSNAP_SIGNED_DIAGNOSTICS_FIXTURE=ON
             cmake --build $build --target diagnostics_signed_fixture
-            cmake --build $build --target present_provider_tests
+            cmake --build $build --target present_provider_tests diagnostics_helper_trace_cleanup_tests
+            ctest --test-dir $build --verbose --no-tests=error -R '^diagnostics_helper_trace_cleanup\.diagnostics_helper_trace_cleanup_tests$'
             $savedFilter = $env:GTEST_FILTER
             try {
               $env:GTEST_FILTER = 'DiagnosticsHelperWindowsAcl.*'
