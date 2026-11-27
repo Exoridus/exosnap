@@ -475,7 +475,8 @@ PresentProviderState RemoteBackend::Run() {
     }
 #ifdef EXOSNAP_SIGNED_FIXTURE_STATUS
     ObserveFixtureCollector(helper.get());
-    const auto token_facts = [](HANDLE process, const char* elevation_label, const char* low_label, const char* high_label) {
+    const auto token_facts = [](HANDLE process, const char* elevation_label, const char* low_label,
+                                const char* high_label) {
         HANDLE raw = nullptr;
         if (!OpenProcessToken(process, TOKEN_QUERY, &raw))
             return;
@@ -490,8 +491,10 @@ PresentProviderState RemoteBackend::Run() {
             ReportFixtureStatus(high_label, static_cast<DWORD>(statistics.AuthenticationId.HighPart));
         }
     };
-    token_facts(GetCurrentProcess(), "fixture recorder token elevation", "fixture recorder auth ID low", "fixture recorder auth ID high");
-    token_facts(helper.get(), "fixture helper token elevation", "fixture helper auth ID low", "fixture helper auth ID high");
+    token_facts(GetCurrentProcess(), "fixture recorder token elevation", "fixture recorder auth ID low",
+                "fixture recorder auth ID high");
+    token_facts(helper.get(), "fixture helper token elevation", "fixture helper auth ID low",
+                "fixture helper auth ID high");
 #endif
     Record begin{};
     begin.kind = collect_presents_ ? Kind::Begin : Kind::BeginDpcOnly;
@@ -548,7 +551,7 @@ PresentProviderState RemoteBackend::Run() {
         }
     }
     return WaitForSingleObject(stop_.get(), 0) == WAIT_OBJECT_0 ? PresentProviderState::Stopped
-                                                               : PresentProviderState::Failed;
+                                                                : PresentProviderState::Failed;
 }
 } // namespace
 

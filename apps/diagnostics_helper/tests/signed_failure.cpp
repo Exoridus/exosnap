@@ -116,7 +116,7 @@ bool Retired(Pair& pair) {
 }
 
 class Active {
-public:
+  public:
     bool Start(Pair& result) {
         if (QueryDpcSession() != ERROR_WMI_INSTANCE_NOT_FOUND || backend_->Open() != PresentTraceOpenResult::Opened)
             return false;
@@ -139,7 +139,8 @@ public:
         if (worker_.joinable())
             worker_.join();
     }
-private:
+
+  private:
     std::shared_ptr<IPrivilegedDiagnosticsBackend> backend_ = MakePrivilegedDiagnosticsBackend(false);
     std::thread worker_;
 };
@@ -151,7 +152,8 @@ bool ForceMember(bool guardian) {
         return false;
     const bool retired = Retired(pair);
     const bool failed = active.Failed();
-    std::cout << (guardian ? "Guardian" : "Collector") << " forced exit, unsolicited disconnect reported failure=" << failed << '\n';
+    std::cout << (guardian ? "Guardian" : "Collector")
+              << " forced exit, unsolicited disconnect reported failure=" << failed << '\n';
     return retired && failed;
 }
 
@@ -176,10 +178,12 @@ bool ForceRecorder() {
     PROCESS_INFORMATION process{};
     const auto image = GlobalLaunchPath(GlobalProcessImagePath(GetCurrentProcess()));
     auto command = L"\"" + image + L"\" --hold-owned-cycle " + std::to_wstring(HandleToULong(inherited));
-    const bool launched = !image.empty() &&
-        UpdateProcThreadAttribute(list, 0, PROC_THREAD_ATTRIBUTE_HANDLE_LIST, &inherited, sizeof(inherited), nullptr, nullptr) &&
-        CreateProcessW(image.c_str(), command.data(), nullptr, nullptr, TRUE, EXTENDED_STARTUPINFO_PRESENT,
-                       nullptr, nullptr, &startup.StartupInfo, &process);
+    const bool launched =
+        !image.empty() &&
+        UpdateProcThreadAttribute(list, 0, PROC_THREAD_ATTRIBUTE_HANDLE_LIST, &inherited, sizeof(inherited), nullptr,
+                                  nullptr) &&
+        CreateProcessW(image.c_str(), command.data(), nullptr, nullptr, TRUE, EXTENDED_STARTUPINFO_PRESENT, nullptr,
+                       nullptr, &startup.StartupInfo, &process);
     DeleteProcThreadAttributeList(list);
     if (!launched)
         return false;
@@ -187,10 +191,13 @@ bool ForceRecorder() {
     Handle main_thread(process.hThread);
     writer.reset();
     DWORD available = 0;
-    if (!Until([&] {
-            return !PeekNamedPipe(reader.get(), nullptr, 0, nullptr, &available, nullptr) ||
-                   available >= sizeof(Receipt) || WaitForSingleObject(child.get(), 0) != WAIT_TIMEOUT;
-        }, 100s) || available < sizeof(Receipt))
+    if (!Until(
+            [&] {
+                return !PeekNamedPipe(reader.get(), nullptr, 0, nullptr, &available, nullptr) ||
+                       available >= sizeof(Receipt) || WaitForSingleObject(child.get(), 0) != WAIT_TIMEOUT;
+            },
+            100s) ||
+        available < sizeof(Receipt))
         return false;
     Receipt receipt{};
     DWORD read = 0;

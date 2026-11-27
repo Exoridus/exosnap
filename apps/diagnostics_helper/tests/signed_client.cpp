@@ -1,6 +1,6 @@
 #include "../FixtureStatus.h"
-#include "signed_failure.h"
 #include "diagnostics/PrivilegedPresentBackend.h"
+#include "signed_failure.h"
 
 #include <windows.h>
 
