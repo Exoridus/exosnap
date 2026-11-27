@@ -1,6 +1,7 @@
 #include "Channel.h"
 #include "FixtureStatus.h"
 #include "ImagePath.h"
+#include "MsixAcquisition.h"
 #include "Peer.h"
 #ifdef EXOSNAP_SIGNED_FIXTURE_STATUS
 #include "StartingGuardian.h"
@@ -8,13 +9,12 @@
 #include "diagnostics/PrivilegedPresentBackend.h"
 
 #include <aclapi.h>
-#include <msi.h>
-#include <msiquery.h>
 #include <sddl.h>
 #include <shellapi.h>
 #include <shlobj.h>
 #include <update/package_verifier.h>
 
+#include <algorithm>
 #include <array>
 #include <atomic>
 #include <filesystem>
@@ -143,8 +143,13 @@ bool Verified(const fs::path& path, const char* hash, LockedPath& locked, bool s
         return false;
     }
     if (!locked.Open(path, system)) {
-        ReportFixtureStatus(system ? "protected image path" : "MSI path", GetLastError());
+        ReportFixtureStatus(system ? "protected image path" : "MSIX path", GetLastError());
         return false;
+    }
+    if (!system) {
+        LARGE_INTEGER size{};
+        if (!GetFileSizeEx(locked.handles.back().get(), &size) || size.QuadPart <= 0 || size.QuadPart > 64 * 1024 * 1024)
+            return false;
     }
     const auto digest = update::VerifyPackageHandle(locked.handles.back().get(), hash);
     if (digest != update::VerifyResult::Ok) {
@@ -152,74 +157,57 @@ bool Verified(const fs::path& path, const char* hash, LockedPath& locked, bool s
         return false;
     }
     const bool approved = ApprovedPublisher(locked.canonical.native(), locked.handles.back().get());
-    ReportFixtureStatus(system ? "image publisher accepted" : "MSI publisher accepted", approved);
+    ReportFixtureStatus(system ? "image publisher accepted" : "MSIX publisher accepted", approved);
     return approved;
 }
 
-// Retain the trusted destination chain while Windows Installer owns its
-// transaction. Only a genuinely absent child of a protected directory may be
-// created. A junction, an inaccessible entry or a writable installation is a
-// terminal refusal, including when the bundled MSI itself is authentic.
-bool LockInstallDestination(const fs::path& image, LockedPath& program_files, LockedPath& directory) {
-    if (image.empty() || !program_files.Open(image.parent_path().parent_path(), true, true))
+bool LockFootprint(LockedPath& image, const fs::path& directory, const wchar_t* filename,
+                   std::span<const unsigned char> expected) {
+    // The image verification has already locked every ancestor in this directory.
+    // Resolve the sibling from the exact physical parent, never another DOS mapping.
+    Handle file(CreateFileW((directory / filename).c_str(), GENERIC_READ | READ_CONTROL, FILE_SHARE_READ, nullptr,
+                            OPEN_EXISTING, FILE_FLAG_OPEN_REPARSE_POINT, nullptr));
+    FILE_ATTRIBUTE_TAG_INFO attributes{};
+    LARGE_INTEGER length{};
+    if (!file || !GetFileInformationByHandleEx(file.get(), FileAttributeTagInfo, &attributes, sizeof(attributes)) ||
+        (attributes.FileAttributes & (FILE_ATTRIBUTE_REPARSE_POINT | FILE_ATTRIBUTE_DIRECTORY)) ||
+        !Protected(file.get(), true) || !GetFileSizeEx(file.get(), &length) ||
+        length.QuadPart != static_cast<LONGLONG>(expected.size()))
         return false;
-    const auto folder = program_files.canonical / image.parent_path().filename();
-    if (GetFileAttributesW(folder.c_str()) == INVALID_FILE_ATTRIBUTES)
-        return GetLastError() == ERROR_FILE_NOT_FOUND;
-    if (!directory.Open(image.parent_path(), true, true))
+    std::vector<unsigned char> actual(expected.size());
+    DWORD read = 0;
+    if (!ReadFile(file.get(), actual.data(), static_cast<DWORD>(actual.size()), &read, nullptr) ||
+        read != actual.size() || !std::equal(actual.begin(), actual.end(), expected.begin()))
         return false;
-    const auto executable = directory.canonical / image.filename();
-    if (GetFileAttributesW(executable.c_str()) == INVALID_FILE_ATTRIBUTES)
-        return GetLastError() == ERROR_FILE_NOT_FOUND;
-    LockedPath previous;
-    if (!previous.Open(image, true))
-        return false;
-    BY_HANDLE_FILE_INFORMATION info{};
-    return GetFileInformationByHandle(previous.handles.back().get(), &info) && info.nNumberOfLinks == 1 &&
-           ApprovedPublisher(previous.canonical.native(), previous.handles.back().get());
+    image.handles.push_back(std::move(file));
+    return true;
 }
 
-UINT InstallPackage(HANDLE stop, const fs::path& image) {
-    LockedPath program_files;
-    LockedPath directory;
-    if (!LockInstallDestination(image, program_files, directory)) {
-        ReportFixtureStatus("destination preflight", GetLastError());
-        return ERROR_INSTALL_FAILURE;
-    }
+bool AcquireMsix(HANDLE stop, LockedPath& image) {
     std::wstring app(32768, L'\0');
     const auto size = GetModuleFileNameW(nullptr, app.data(), static_cast<DWORD>(app.size()));
     if (!size || size >= app.size())
-        return ERROR_INSTALL_FAILURE;
+        return {};
     app.resize(size);
-    auto msi = fs::path(app).parent_path() / L"diagnostics" / L"helper.msi";
+    const auto source = fs::path(app).parent_path() / L"diagnostics" / L"helper.msix";
     LockedPath locked;
-    if (!Verified(msi, EXOSNAP_DIAGNOSTICS_MSI_SHA256, locked, false) || WaitForSingleObject(stop, 0) != WAIT_TIMEOUT)
-        return ERROR_INSTALL_FAILURE;
-    // The installer accepts the physical filename for read-only database access.
-    // Bind the package session to that open database before requesting INSTALL.
-    std::wstring native(32768, L'\0');
-    const auto length = GetFinalPathNameByHandleW(locked.handles.back().get(), native.data(),
-                                                  static_cast<DWORD>(native.size()), VOLUME_NAME_NT);
-    if (!length || length >= native.size())
-        return ERROR_INSTALL_FAILURE;
-    native.resize(length);
-    const auto physical = GlobalLocalVolumePath(native);
-    if (physical.empty())
-        return ERROR_INSTALL_FAILURE;
-    PMSIHANDLE database;
-    const auto db_status = MsiOpenDatabaseW(physical.c_str(), MSIDBOPEN_READONLY, &database);
-    ReportFixtureStatus("MsiOpenDatabaseW", db_status);
-    if (db_status != ERROR_SUCCESS)
-        return ERROR_INSTALL_FAILURE;
-    const auto reference = L"#" + std::to_wstring(static_cast<MSIHANDLE>(database));
-    PMSIHANDLE package;
-    const auto opened = MsiOpenPackageW(reference.c_str(), &package);
-    ReportFixtureStatus("MsiOpenPackageW database handle", opened);
-    if (opened != ERROR_SUCCESS || WaitForSingleObject(stop, 0) != WAIT_TIMEOUT)
-        return ERROR_INSTALL_FAILURE;
-    const auto installed = MsiDoActionW(package, L"INSTALL");
-    ReportFixtureStatus("MsiDoActionW INSTALL", installed);
-    return installed;
+    if (!Verified(source, EXOSNAP_DIAGNOSTICS_MSIX_SHA256, locked, false))
+        return {};
+    const auto verify = [&](const fs::path& executable, std::span<const unsigned char> manifest,
+                            std::span<const unsigned char> block_map) {
+        if (!Verified(executable, EXOSNAP_DIAGNOSTICS_IMAGE_SHA256, image, true))
+            return false;
+        std::wstring native(32768, L'\0');
+        const auto length = GetFinalPathNameByHandleW(image.handles.back().get(), native.data(),
+                                                      static_cast<DWORD>(native.size()), VOLUME_NAME_NT);
+        if (!length || length >= native.size())
+            return false;
+        native.resize(length);
+        const fs::path physical = GlobalLocalVolumePath(native);
+        return !physical.empty() && LockFootprint(image, physical.parent_path(), L"AppxManifest.xml", manifest) &&
+               LockFootprint(image, physical.parent_path(), L"AppxBlockMap.xml", block_map);
+    };
+    return AcquireRegisteredMsix(locked.handles.back().get(), source, stop, verify);
 }
 
 class RemoteBackend final : public IPrivilegedDiagnosticsBackend {
@@ -307,14 +295,10 @@ class RemoteBackend final : public IPrivilegedDiagnosticsBackend {
 PresentProviderState RemoteBackend::Run() {
     if (std::string_view(EXOSNAP_DIAGNOSTICS_IMAGE_SHA256).size() != 64)
         return PresentProviderState::HelperUnavailable;
-    const auto image = MachineImage();
     LockedPath verified;
-    if (!Verified(image, EXOSNAP_DIAGNOSTICS_IMAGE_SHA256, verified, true)) {
+    if (!Verified(MachineImage(), EXOSNAP_DIAGNOSTICS_IMAGE_SHA256, verified, true)) {
         verified.handles.clear();
-        const auto status = InstallPackage(stop_.get(), image);
-        if (status == ERROR_INSTALL_USEREXIT || status == ERROR_CANCELLED)
-            return PresentProviderState::ConsentDeclined;
-        if (status != ERROR_SUCCESS || !Verified(image, EXOSNAP_DIAGNOSTICS_IMAGE_SHA256, verified, true))
+        if (!AcquireMsix(stop_.get(), verified))
             return PresentProviderState::HelperUnavailable;
     }
     GUID id{};
@@ -353,6 +337,8 @@ PresentProviderState RemoteBackend::Run() {
     exec.lpParameters = args.c_str();
     exec.lpDirectory = directory.c_str();
     exec.nShow = SW_HIDE;
+    if (WaitForSingleObject(stop_.get(), 0) != WAIT_TIMEOUT)
+        return PresentProviderState::Stopped;
     if (!ShellExecuteExW(&exec)) {
         const auto error = GetLastError();
         ReportFixtureStatus("ShellExecuteExW", error);

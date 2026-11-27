@@ -6906,8 +6906,8 @@ Ermittelte SHA-256: %2</translation>
     </message>
     <message>
         <location filename="../notifications/NotificationEvent.h" line="+1"/>
-        <source>Collect presentation and kernel latency measurements for this session. First use may also ask permission to install the helper.</source>
-        <translation>Präsentations- und Kernellatenzmessungen für diese Sitzung starten. Beim ersten Start kann eine zusätzliche Bestätigung für die Installation erforderlich sein.</translation>
+        <source>Collect presentation and kernel latency measurements for this session. First use registers the signed helper when supported.</source>
+        <translation>Präsentations- und Kernellatenzmessungen für diese Sitzung starten. Auf unterstützten Systemen wird das signierte Hilfsprogramm beim ersten Start registriert.</translation>
     </message>
 </context>
 <context>

@@ -329,7 +329,7 @@ struct NotificationEvent {
     event.title = QCoreApplication::translate("Notifications", "Start diagnostics helper");
     event.body = QCoreApplication::translate("Notifications",
                                              "Collect presentation and kernel latency measurements for this session. "
-                                             "First use may also ask permission to install the helper.");
+                                             "First use registers the signed helper when supported.");
     event.action = NotificationAction::StartDiagnosticsHelper;
     return event;
 }

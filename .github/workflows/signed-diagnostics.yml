@@ -14,7 +14,7 @@ permissions:
 
 jobs:
   signed-diagnostics:
-    runs-on: windows-2022
+    runs-on: windows-2025
     timeout-minutes: 45
     steps:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
@@ -31,35 +31,42 @@ jobs:
         run: |
           $ErrorActionPreference = 'Stop'
           $PSNativeCommandUseErrorActionPreference = $true
+          Import-Module Appx -UseWindowsPowerShell
           $build = Join-Path $PWD 'build/windows-x64-ninja-release'
           $out = Join-Path $build 'apps/diagnostics_helper'
           $image = Join-Path $out 'exosnap-diagnostics.exe'
           $msi = Join-Path $out 'exosnap-diagnostics.msi'
+          $msix = Join-Path $out 'exosnap-diagnostics.msix'
           $client = Join-Path $out 'signed-fixture/exosnap.exe'
           $installed = Join-Path $env:ProgramFiles 'ExoSnap Diagnostics/exosnap-diagnostics.exe'
           if (Test-Path $installed) { throw "Expected a clean diagnostics installation" }
           if (Get-Process -Name exosnap-diagnostics -ErrorAction SilentlyContinue) { throw "Expected no diagnostics processes" }
+          if (Get-AppxPackage -Name Exoridus.ExoSnap.Diagnostics) { throw "Expected no registered helper package" }
           $certificate = New-SelfSignedCertificate -Type CodeSigningCert -Subject 'CN=Disposable ExoSnap CI' -KeyExportPolicy NonExportable -CertStoreLocation Cert:\CurrentUser\My
           $thumb = $certificate.Thumbprint
           try {
             $public = Export-Certificate -Cert $certificate -FilePath "$env:RUNNER_TEMP/diagnostics-ci.cer"
             Import-Certificate -FilePath $public.FullName -CertStoreLocation Cert:\LocalMachine\Root | Out-Null
+            Import-Certificate -FilePath $public.FullName -CertStoreLocation Cert:\LocalMachine\TrustedPeople | Out-Null
             $pin = [Convert]::ToHexString([Security.Cryptography.SHA256]::HashData($certificate.RawData)).ToLowerInvariant()
             $wix = Join-Path $env:USERPROFILE '.dotnet/tools/wix.exe'
-            cmake --preset windows-x64-ninja-release "-DEXOSNAP_DIAGNOSTICS_PUBLISHER_SHA256=$pin" "-DEXOSNAP_WIX_EXECUTABLE=$wix"
+            cmake --preset windows-x64-ninja-release "-DEXOSNAP_DIAGNOSTICS_PUBLISHER_SHA256=$pin" "-DEXOSNAP_WIX_EXECUTABLE=$wix" "-DEXOSNAP_DIAGNOSTICS_MSIX_PUBLISHER=$($certificate.Subject)"
             cmake --build $build --target exosnap-diagnostics
             signtool sign /fd SHA256 /sha1 $thumb $image
             cmake --build $build --target diagnostics-helper-msi
             signtool sign /fd SHA256 /sha1 $thumb $msi
+            cmake --build $build --target diagnostics-helper-msix
+            signtool sign /fd SHA256 /sha1 $thumb $msix
             # Keep signed configure inputs separate from Ninja's generated helper outputs.
             $inputs = New-Item -ItemType Directory -Path "$env:RUNNER_TEMP/signed-diagnostics-inputs"
             $signedImage = (Copy-Item $image $inputs.FullName -PassThru).FullName
             $signedMsi = (Copy-Item $msi $inputs.FullName -PassThru).FullName
-            cmake --preset windows-x64-ninja-release "-DEXOSNAP_DIAGNOSTICS_SIGNED_IMAGE=$signedImage" "-DEXOSNAP_DIAGNOSTICS_SIGNED_MSI=$signedMsi" -DEXOSNAP_SIGNED_DIAGNOSTICS_FIXTURE=ON
+            $signedMsix = (Copy-Item $msix $inputs.FullName -PassThru).FullName
+            cmake --preset windows-x64-ninja-release "-DEXOSNAP_DIAGNOSTICS_SIGNED_IMAGE=$signedImage" "-DEXOSNAP_DIAGNOSTICS_SIGNED_MSIX=$signedMsix" -DEXOSNAP_SIGNED_DIAGNOSTICS_FIXTURE=ON
             cmake --build $build --target diagnostics_signed_fixture
             signtool sign /fd SHA256 /sha1 $thumb $client
             $bundle = New-Item -ItemType Directory -Path "$out/signed-fixture/diagnostics"
-            Copy-Item $signedMsi "$($bundle.FullName)/helper.msi"
+            Copy-Item $signedMsix "$($bundle.FullName)/helper.msix"
             function Invoke-SignedFixture {
               $process = Start-Process -FilePath $client -PassThru -NoNewWindow
               if (!$process.WaitForExit(300000)) {
@@ -71,17 +78,21 @@ jobs:
             }
             $firstExit = Invoke-SignedFixture
             Write-Host "Automatic provisioning and lifecycle exit: $firstExit"
-            if ($firstExit -ne 0) {
-              # An independently installed fixture distinguishes acquisition from the runtime protocol.
-              $setup = Start-Process msiexec.exe -ArgumentList "/i ""$signedMsi"" /qn /norestart" -Wait -PassThru
-              if ($setup.ExitCode -ne 0) { throw "Controlled fixture installation returned $($setup.ExitCode)" }
-              if ((Get-FileHash $installed).Hash -ne (Get-FileHash $signedImage).Hash) { throw "Controlled image digest mismatch" }
-              & $client --probe-installed-launch
-              $preinstalledExit = Invoke-SignedFixture
-              Write-Host "Controlled preinstalled lifecycle exit: $preinstalledExit"
-              if ($preinstalledExit -ne 0) { throw "Automatic acquisition and preinstalled lifecycle failed" }
+            if ($firstExit -eq 0) {
+              $package = Get-AppxPackage -Name Exoridus.ExoSnap.Diagnostics
+              if (!$package -or $package.Publisher -ne $certificate.Subject) { throw "Expected fixture MSIX registration" }
+              $packagedImage = Join-Path $package.InstallLocation 'exosnap-diagnostics.exe'
+              if ((Get-FileHash $packagedImage).Hash -ne (Get-FileHash $signedImage).Hash) { throw "MSIX image digest mismatch" }
             }
-            if ((Get-FileHash $installed).Hash -ne (Get-FileHash $signedImage).Hash) { throw "Provisioned image digest mismatch" }
+            # Machine-managed installations must also work without an MSIX beside the recorder.
+            Remove-Item "$($bundle.FullName)/helper.msix"
+            $setup = Start-Process msiexec.exe -ArgumentList "/i ""$signedMsi"" /qn /norestart" -Wait -PassThru
+            if ($setup.ExitCode -ne 0) { throw "Controlled fixture installation returned $($setup.ExitCode)" }
+            if ((Get-FileHash $installed).Hash -ne (Get-FileHash $signedImage).Hash) { throw "Controlled image digest mismatch" }
+            & $client --probe-installed-launch
+            $preinstalledExit = Invoke-SignedFixture
+            Write-Host "Controlled preinstalled lifecycle exit: $preinstalledExit"
+            if ($preinstalledExit -ne 0) { throw "Preinstalled lifecycle failed" }
             $deadline = (Get-Date).AddSeconds(30)
             do {
               $remaining = @(Get-Process -Name exosnap-diagnostics -ErrorAction SilentlyContinue)
@@ -98,9 +109,18 @@ jobs:
               }
             } finally {
               try {
-                if (Test-Path "Cert:\LocalMachine\Root\$thumb") { Remove-Item "Cert:\LocalMachine\Root\$thumb" }
+                $registered = Get-AppxPackage -Name Exoridus.ExoSnap.Diagnostics
+                if ($registered) { Remove-AppxPackage -Package $registered.PackageFullName }
               } finally {
-                Remove-Item "Cert:\CurrentUser\My\$thumb" -DeleteKey
+                try {
+                  if (Test-Path "Cert:\LocalMachine\TrustedPeople\$thumb") { Remove-Item "Cert:\LocalMachine\TrustedPeople\$thumb" }
+                } finally {
+                  try {
+                    if (Test-Path "Cert:\LocalMachine\Root\$thumb") { Remove-Item "Cert:\LocalMachine\Root\$thumb" }
+                  } finally {
+                    Remove-Item "Cert:\CurrentUser\My\$thumb" -DeleteKey
+                  }
+                }
               }
             }
           }
