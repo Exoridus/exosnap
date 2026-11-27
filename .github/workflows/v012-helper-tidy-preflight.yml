@@ -1,0 +1,73 @@
+name: Helper production translation-unit preflight
+
+on:
+  push:
+    branches: [verify/v012-helper-tidy-preflight]
+
+permissions:
+  contents: read
+
+jobs:
+  helper-preflight:
+    runs-on: windows-2022
+    timeout-minutes: 60
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+        with:
+          ref: 433712b4fd0afd4dd00d7fcfdd4a596a30937f28
+          fetch-depth: 0
+          persist-credentials: false
+      - name: Select added helper production sources in an isolated comparison tree
+        shell: python
+        run: |
+          import os
+          from pathlib import Path
+          import subprocess
+          import tempfile
+
+          head = "433712b4fd0afd4dd00d7fcfdd4a596a30937f28"
+          base = "73b1e3811b2c349ef38cbb7f49abdb89fa9be73f"
+          directory = "apps/diagnostics_helper"
+          names = ["BootstrapServer.cpp", "Client.cpp", "Guardian.cpp", "Peer.cpp", "main.cpp"]
+          selected = [f"{directory}/{name}" for name in names]
+
+          def git(*args, env=None):
+              return subprocess.check_output(["git", *args], text=True, env=env).strip()
+
+          if git("rev-parse", "HEAD") != head or git("status", "--porcelain"):
+              raise RuntimeError("Expected a clean, exact helper checkout")
+          actual = git("diff", "--diff-filter=A", "--name-only", base, head, "--", directory).splitlines()
+          if sorted(p for p in actual if Path(p).parent.as_posix() == directory and p.endswith(".cpp")) != sorted(selected):
+              raise RuntimeError("Expected the five newly added helper production sources")
+          with tempfile.TemporaryDirectory(dir=os.environ["RUNNER_TEMP"]) as scratch:
+              env = dict(os.environ, GIT_INDEX_FILE=str(Path(scratch) / "index"))
+              git("read-tree", head, env=env)
+              git("update-index", "--force-remove", "--", *selected, env=env)
+              comparison = git("write-tree", env=env)
+          if sorted(git("diff", "--name-only", "--no-renames", comparison, "HEAD").splitlines()) != sorted(selected):
+              raise RuntimeError("Unexpected preflight comparison")
+          with open(os.environ["GITHUB_ENV"], "a", encoding="utf-8") as output:
+              output.write(f"HELPER_PREFLIGHT_TREE={comparison}\n")
+          print(f"Product source {head}; local comparison tree {comparison}")
+          print("\n".join(selected))
+      - uses: ilammy/msvc-dev-cmd@0b201ec74fa43914dc39ae48a89fd1d8cb592756 # v1.13.0
+      - uses: ./.github/actions/setup-qt
+        with:
+          profile: quick
+      - name: Configure the normal Debug preset and generate its MIDL interface
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $PSNativeCommandUseErrorActionPreference = $true
+          cmake --preset windows-x64-ninja-debug
+          cmake --build build/windows-x64-ninja-debug --target diagnostics-bootstrap-interface --parallel 2
+      - name: Run the existing uncached canonical-check preflight
+        shell: pwsh
+        run: |
+          $output = @(cargo exo-dev lint clang-tidy --quick --base $env:HELPER_PREFLIGHT_TREE --build-dir build/windows-x64-ninja-debug --jobs 2 2>&1)
+          $status = $LASTEXITCODE
+          $output | ForEach-Object { Write-Host $_ }
+          if ($status -ne 0) { exit $status }
+          if (-not ($output -match 'clean \(5 direct translation unit\(s\), 2 worker\(s\), canonical checks\)')) {
+            throw 'Expected explicit preflight coverage of all five translation units'
+          }
