@@ -76,7 +76,7 @@ class IPresentProvider {
 // elevated process may still meet a session conflict.
 enum class PresentProviderState {
     NotRequested,    // the in-depth opt-in is off
-    Starting,        // reserved for a future asynchronous open; not observed today
+    Starting,        // consent or the remote ETW open is pending
     OpenNoData,      // the trace is open and no fresh present has arrived yet
     Measuring,       // the trace is open and a fresh present is attributed
     NotBuilt,        // no consumer in this build
@@ -85,6 +85,8 @@ enum class PresentProviderState {
     NotSupported,    // this system has no usable trace facility
     Failed,          // any other open failure
     Stopped,         // it opened before; the trace then ended
+    HelperUnavailable,
+    ConsentDeclined,
 };
 
 [[nodiscard]] inline constexpr const char* PresentProviderStateKey(PresentProviderState state) noexcept {
@@ -109,6 +111,10 @@ enum class PresentProviderState {
         return "failed";
     case PresentProviderState::Stopped:
         return "stopped";
+    case PresentProviderState::HelperUnavailable:
+        return "helperUnavailable";
+    case PresentProviderState::ConsentDeclined:
+        return "consentDeclined";
     }
     return "failed";
 }

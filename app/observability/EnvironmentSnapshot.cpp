@@ -170,6 +170,14 @@ QJsonObject PresentJson(const PresentObservation& present) {
             state = QString::fromLatin1(availability::kAccessDenied);
             reason = QStringLiteral("traceAccessDenied");
             break;
+        case diagnostics::PresentProviderState::ConsentDeclined:
+            state = QString::fromLatin1(availability::kAccessDenied);
+            reason = QStringLiteral("consentDeclined");
+            break;
+        case diagnostics::PresentProviderState::HelperUnavailable:
+            state = QString::fromLatin1(availability::kUnavailable);
+            reason = QStringLiteral("trustedHelperUnavailable");
+            break;
         case diagnostics::PresentProviderState::SessionConflict:
             state = QString::fromLatin1(availability::kConflict);
             reason = QStringLiteral("traceSessionConflict");

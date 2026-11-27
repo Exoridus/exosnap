@@ -412,6 +412,12 @@ QVariantList DiagnosticsAdapter::measurementSources() const {
     case PresentProviderState::Stopped:
         add(tr("Presentation"), tr("Stopped"), QStringLiteral("unavailable"));
         break;
+    case PresentProviderState::HelperUnavailable:
+        add(tr("Presentation"), tr("Trusted helper unavailable"), QStringLiteral("unavailable"));
+        break;
+    case PresentProviderState::ConsentDeclined:
+        add(tr("Presentation"), tr("Administrator consent declined"), QStringLiteral("unavailable"));
+        break;
     case PresentProviderState::Failed:
         add(tr("Presentation"), tr("Unavailable - trace error"), QStringLiteral("unavailable"));
         break;
@@ -421,7 +427,7 @@ QVariantList DiagnosticsAdapter::measurementSources() const {
     // failure of the recording and never turns into a zero reading.
     if (!in_depth_enabled_)
         add(tr("DPC / ISR"), tr("Not requested"), QStringLiteral("idle"));
-    else if (!elevated())
+    else if (!elevated() && !dpc_from_helper_)
         add(tr("DPC / ISR"), tr("Not running - elevated kernel trace required"), QStringLiteral("unavailable"));
     else if (dpc_reading_.has_value() && dpc_reading_->available)
         add(tr("DPC / ISR"), tr("Measuring"), QStringLiteral("measuring"));
@@ -800,7 +806,8 @@ void DiagnosticsAdapter::setHasLastRecording(bool has_last_recording) {
     refreshSnapshot();
 }
 
-void DiagnosticsAdapter::setDpcLatencyProvider(diagnostics::IDpcLatencyProvider* provider) {
+void DiagnosticsAdapter::setDpcLatencyProvider(diagnostics::IDpcLatencyProvider* provider, bool from_helper) {
+    dpc_from_helper_ = from_helper;
     dpc_provider_ = provider;
     refreshSnapshot();
 }

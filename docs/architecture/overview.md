@@ -8,7 +8,7 @@ ExoSnap is a Windows x64 application with a C++20 recording engine and a Qt Quic
 
 | Owner | Responsibility | Must not own |
 |---|---|---|
-| Process bootstrap | DLL search policy, install self-heal, application identity, logging lifetime, clean-exit bookkeeping and relaunch | Page state or recording policy |
+| Process bootstrap | DLL search policy, install self-heal, application identity, logging lifetime and clean-exit bookkeeping | Page state or recording policy |
 | `QuickApplication` | Composition, service lifetime, persistence, propagation between models and adapters | A second encoder, mixer or compatibility resolver |
 | QObject adapters and list models | Typed presentation state, narrow actions, transient input state | Independently derived capabilities, track resolution or storage formats |
 | Application services | Recording orchestration, diagnostics, edit/export, notifications, update and recovery workflows | QML layout or engine-thread UI access |
@@ -63,7 +63,7 @@ Edit opens a recording as a temporary in-memory recipe. Playback decodes the med
 
 The frontend reads the previous session's crash context before beginning a new session. Otherwise a new clean context could overwrite the evidence needed by the next-launch crash surface. Recovery and crash-report prompts are separate concerns.
 
-QML loads the main window hidden. C++ applies final native style and resolved geometry before the first show. A correction after the first rendered frame cannot satisfy the first-frame geometry contract. Shutdown destroys scene-graph consumers before the producer services and resources they reference. The bootstrap's RAII cleanup detaches logging, records clean termination and handles an approved relaunch.
+QML loads the main window hidden. C++ applies final native style and resolved geometry before the first show. A correction after the first rendered frame cannot satisfy the first-frame geometry contract. Shutdown destroys scene-graph consumers before the producer services and resources they reference. The bootstrap's RAII cleanup detaches logging and records clean termination.
 
 A worker that outlives a bounded join must retain everything it can still access. Engine workers hold shared session state rather than borrowing stack or destroyed coordinator storage. Timeouts report incomplete work; they do not authorize destroying live resources or claiming a complete file.
 

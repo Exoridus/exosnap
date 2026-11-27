@@ -24,12 +24,16 @@ bool PresentMonProvider::GateOpen() const {
 }
 
 bool PresentMonProvider::IsAvailable() const {
+    if (auto remote = session_.RuntimeState(); remote && *remote != PresentProviderState::OpenNoData)
+        return false;
     return GateOpen() && session_.IsOpen();
 }
 
 PresentProviderState PresentMonProvider::state() const {
     if (!GateOpen())
         return PresentProviderState::NotRequested;
+    if (auto state = session_.RuntimeState(); state && *state != PresentProviderState::OpenNoData)
+        return *state;
     if (session_.IsOpen()) {
         const PresentSample sample = session_.Latest();
         if (sample.available && sample.metadata.Fresh(std::chrono::steady_clock::now()))

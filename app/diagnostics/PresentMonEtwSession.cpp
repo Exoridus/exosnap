@@ -154,6 +154,11 @@ bool PresentMonEtwSession::TargetAlive() const {
     return false;
 }
 
+std::optional<PresentProviderState> PresentMonEtwSession::RuntimeState() const {
+    std::lock_guard lock(sample_mutex_);
+    return backend_ ? backend_->RuntimeState() : std::nullopt;
+}
+
 bool PresentMonEtwSession::IsOpen() const {
     if (!open_.load(std::memory_order_acquire)) {
         return false;
@@ -331,7 +336,8 @@ void PresentMonEtwSession::Stop() {
         // end it. A quit that does not quit is a worse failure than a thread that
         // outlives its owner, so the wait has a ceiling.
         bool finished = false;
-        if (signal) {
+        const bool consent_pending = backend && backend->RuntimeState() == PresentProviderState::Starting;
+        if (signal && !consent_pending) {
             std::unique_lock lk(signal->mutex);
             finished = signal->cv.wait_for(lk, std::chrono::seconds(5), [&signal] { return signal->finished; });
         }
@@ -346,8 +352,9 @@ void PresentMonEtwSession::Stop() {
             // and the process is a little less tidy at exit than the code claims.
             // Silent, it looks exactly like the clean path -- and the only evidence
             // that the ceiling was ever reached would be a shutdown that felt slow.
-            qWarning("[presentmon] the consumer did not return within 5s of closing the trace; "
-                     "detaching the consumer thread so shutdown can finish");
+            if (!consent_pending)
+                qWarning("[presentmon] the consumer did not return within 5s of closing the trace; "
+                         "detaching the consumer thread so shutdown can finish");
             worker_.detach();
         }
     }

@@ -98,8 +98,6 @@ constexpr std::array kFlags = {
     KnownFlag{"--live-verify-static-webcam", FlagArity::None},
     KnownFlag{"--update-base-url", FlagArity::Value},
     KnownFlag{"--verify-update-reinstall", FlagArity::None},
-    KnownFlag{"--relaunch-page", FlagArity::Value},
-    KnownFlag{"--reenable-present-diag", FlagArity::None},
 };
 
 const KnownFlag* Find(const QString& name) noexcept {

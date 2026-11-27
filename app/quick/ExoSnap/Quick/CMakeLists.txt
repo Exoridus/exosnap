@@ -401,15 +401,13 @@ target_sources(exosnap
         PseudoLocalization.h
         # Process-level startup/shutdown contract, shared with the Widgets entry
         # point: DLL-search hardening, interrupted-swap self-heal, startup clock,
-        # log sink, crash capture, single-instance guard, elevated relaunch.
+        # log sink, crash capture and single-instance guard.
         ${PROJECT_SOURCE_DIR}/app/bootstrap/ProductionBootstrap.cpp
         ${PROJECT_SOURCE_DIR}/app/bootstrap/ProductionBootstrap.h
         ${PROJECT_SOURCE_DIR}/app/diagnostics/EngineLogBridge.cpp
         ${PROJECT_SOURCE_DIR}/app/diagnostics/EngineLogBridge.h
         ${PROJECT_SOURCE_DIR}/app/diagnostics/StartupClock.h
         ${PROJECT_SOURCE_DIR}/app/diagnostics/StartupTrace.h
-        ${PROJECT_SOURCE_DIR}/app/services/ElevatedRelaunch.cpp
-        ${PROJECT_SOURCE_DIR}/app/services/ElevatedRelaunch.h
         # --verify-update-reinstall argv gate, shared with the Widgets
         # entry point.
         ${PROJECT_SOURCE_DIR}/app/services/VerifyReinstallMode.cpp
@@ -727,6 +725,7 @@ endif()
 target_link_libraries(exosnap
     PRIVATE
         exosnap_controller3d_sceneplugin
+        exosnap_diagnostics_client
         Qt6::Core
         Qt6::Gui
         # The brand marks are SVG assets recoloured at load, so the renderer

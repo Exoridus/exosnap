@@ -242,6 +242,30 @@ Item {
                 Layout.fillWidth: true
             }
 
+            RowLayout {
+                visible: !root.diagnostics.elevated
+                Layout.fillWidth: true
+                spacing: ExoTheme.spacingSm
+
+                Label {
+                    Layout.fillWidth: true
+                    text: qsTr("Privileged diagnostics")
+                    textFormat: Text.PlainText
+                    color: ExoTheme.textSecondary
+                    font.family: ExoTheme.sansFamily
+                    font.pixelSize: ExoTheme.fontCaption
+                }
+
+                ExoSwitch {
+                    objectName: "diagnosticsPrivilegedSwitch"
+                    checked: root.diagnostics.privilegedRequested
+                    Accessible.name: qsTr("Privileged diagnostics")
+                    onToggledByUser: function (value) {
+                        root.diagnostics.requestPrivilegedCollection(value);
+                    }
+                }
+            }
+
             Repeater {
                 model: root.diagnostics.measurementSources
 

@@ -877,7 +877,6 @@ exosnap_add_gtest(
     SOURCES
         tests/test_app_settings_store.cpp
         settings/AppSettingsStore.cpp
-        services/ElevatedRelaunch.cpp
     LIBRARIES exosnap_capability exosnap_engine exosnap_app_log_test_support Qt6::Core Shell32.lib
 )
 target_include_directories(app_settings_store_tests PRIVATE ${CMAKE_CURRENT_SOURCE_DIR})
@@ -932,7 +931,6 @@ exosnap_add_gtest(
     TEST_PREFIX elevation.
     SOURCES
         tests/test_elevation.cpp
-        services/ElevatedRelaunch.cpp
     LIBRARIES exosnap_capability exosnap_engine exosnap_app_log_test_support Qt6::Core Shell32.lib
 )
 target_include_directories(elevation_tests PRIVATE ${CMAKE_CURRENT_SOURCE_DIR})
@@ -951,6 +949,7 @@ exosnap_add_gtest(
     TEST_PREFIX present.
     SOURCES
         tests/test_present_provider.cpp
+        tests/test_diagnostics_helper_protocol.cpp
         tests/test_present_session.cpp
         diagnostics/PresentMonProvider.cpp
         diagnostics/PresentMonEtwSession.cpp

@@ -55,6 +55,7 @@ class PresentMonEtwSession {
     // trace nobody is reading yet has nothing to report, and Latest() has no sample to
     // return in it either.
     [[nodiscard]] bool IsOpen() const;
+    [[nodiscard]] std::optional<PresentProviderState> RuntimeState() const;
     [[nodiscard]] PresentSample Latest() const;
     // Scope reporting to a capture target's process (0 = dominant non-composed presenter).
     // Every call marks an attribution boundary (recording start/stop, or an idle

@@ -10,6 +10,8 @@
 // implementation. MakePresentTraceBackend has one real implementation; without
 // the vendored consumer it returns nullptr and the caller reports unavailable.
 
+#include "PresentProvider.h"
+
 #include <cstdint>
 #include <memory>
 #include <optional>
@@ -84,6 +86,11 @@ class IPresentTraceBackend {
     // must block for the whole life of the trace -- returning early is precisely the
     // event the session reports as "the trace ended without a stop request".
     virtual void Consume() = 0;
+
+    // A remote collector negotiates consent and opens ETW on its consumer thread.
+    virtual std::optional<PresentProviderState> RuntimeState() const {
+        return std::nullopt;
+    }
 
     // Unblocks Consume(). Called from another thread, and safe to call more than once.
     virtual void Close() = 0;

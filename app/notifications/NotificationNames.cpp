@@ -39,7 +39,7 @@ constexpr std::array<std::pair<NotificationAction, const char*>, 13> kActionName
     {NotificationAction::Discard, "discard"},
     {NotificationAction::OpenUpdate, "openUpdate"},
     {NotificationAction::Edit, "edit"},
-    {NotificationAction::RelaunchElevated, "relaunchElevated"},
+    {NotificationAction::StartDiagnosticsHelper, "startDiagnosticsHelper"},
     {NotificationAction::OpenDiagnostics, "openDiagnostics"},
     {NotificationAction::UndoPresetSwitch, "undoPresetSwitch"},
     {NotificationAction::OpenHotkeys, "openHotkeys"},

@@ -2,6 +2,7 @@
 
 #include "MeasurementMetadata.h"
 
+#include <array>
 #include <atomic>
 #include <memory>
 #include <mutex>
@@ -47,6 +48,8 @@ class IDpcLatencyProvider {
 // Threading: Start()/Stop()/Read() are called from the GUI thread. The only blocking
 // call in the class -- ProcessTrace -- runs on worker_, and Read() takes a short
 // accumulator lock, so the Diagnostics refresh never waits on the kernel.
+inline constexpr wchar_t kDpcSessionName[] = L"ExoSnapDpcLatency";
+
 class DpcLatencyProvider final : public IDpcLatencyProvider {
   public:
     DpcLatencyProvider();
@@ -55,6 +58,7 @@ class DpcLatencyProvider final : public IDpcLatencyProvider {
     DpcLatencyProvider& operator=(const DpcLatencyProvider&) = delete;
 
     [[nodiscard]] bool Start();
+    [[nodiscard]] bool StartWithIdentity(const std::array<uint8_t, 16>& session_id);
     void Stop();
     // True while a consumer is actually consuming, not merely "Start() succeeded".
     // Same reasoning as PresentMonEtwSession::IsOpen(): a ProcessTrace that returned

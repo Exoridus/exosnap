@@ -719,8 +719,8 @@ TEST(DiagnosticsAdapterTest, TurningInDepthOnOffersTheRestartOnlyInAStandardProc
     QObject::connect(&adapter, &DiagnosticsAdapter::inDepthToggled, &adapter, [&](bool enabled) {
         const bool before = adapter.inDepthEnabled();
         adapter.setInDepthEnabled(enabled);
-        if (notifications::ShouldOfferElevatedRelaunch(enabled, before, adapter.elevated()))
-            manager.Enqueue(notifications::MakeElevatedRelaunchOfferEvent());
+        if (notifications::ShouldOfferDiagnosticsHelper(enabled, before, adapter.elevated()))
+            manager.Enqueue(notifications::MakeDiagnosticsHelperOfferEvent());
     });
 
     // Off at every start. Nothing seeds this from disk any more.
