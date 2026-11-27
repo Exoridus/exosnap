@@ -14,7 +14,7 @@ jobs:
     steps:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
         with:
-          ref: d1ee3b61d19e5a548a35ddb7eda2d9a6502368b7
+          ref: ce7b38aa2971dedd60605356735641f2ff20a50f
           persist-credentials: false
       - name: Capture exact pinned formatter changes
         shell: bash
@@ -25,10 +25,10 @@ jobs:
           formatter="$RUNNER_TEMP/helper-format/bin/clang-format"
           "$formatter" --version
           "$formatter" --version | grep -F '19.1.7'
-          git ls-files -z -- 'apps/diagnostics_helper/*.cpp' 'apps/diagnostics_helper/*.h' | xargs -0 -r "$formatter" --style=file -i
+          git ls-files -z -- 'apps/diagnostics_helper/*.cpp' 'apps/diagnostics_helper/*.h' 'app/tests/test_diagnostics_helper_protocol.cpp' | xargs -0 -r "$formatter" --style=file -i
           git diff --check
           echo FORMAT-DIFF-BEGIN
-          git -c color.ui=false diff --no-ext-diff -- apps/diagnostics_helper/
+          git -c color.ui=false diff --no-ext-diff -- apps/diagnostics_helper/ app/tests/test_diagnostics_helper_protocol.cpp
           echo FORMAT-DIFF-END
       - name: Check helper with the repository cppcheck options
         shell: bash
@@ -38,3 +38,15 @@ jobs:
           sudo apt-get install -y --no-install-recommends cppcheck
           cppcheck --version
           cppcheck --enable=warning,performance,portability --std=c++20 --error-exitcode=1 --inline-suppr --suppressions-list=.cppcheck-suppress --library=windows --library=qt '-DQ_MOC_INCLUDE(x)=' -q -I libs/engine/include -I libs/capability/include -i libs/update/third_party apps/diagnostics_helper/
+
+  windows-cppcheck:
+    runs-on: windows-2022
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
+        with:
+          ref: ce7b38aa2971dedd60605356735641f2ff20a50f
+          persist-credentials: false
+      - run: cargo exo-dev setup cppcheck
+      - run: cargo test --manifest-path tools/exo-dev/Cargo.toml tracks_the_privileged_helper_without_widening_other_app_roots
+      - run: cargo exo-dev lint quality --only cppcheck
