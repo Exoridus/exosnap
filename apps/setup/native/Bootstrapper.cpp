@@ -303,6 +303,7 @@ class Bootstrapper final : public CBalBaseBootstrapperApplication {
 
     void Run() {
         CoInitializeEx(nullptr, COINIT_MULTITHREADED);
+        HWND applyOwner = nullptr;
         MSG message{};
         PeekMessageW(&message, nullptr, WM_USER, WM_USER, PM_NOREMOVE);
         workerId_ = GetCurrentThreadId();
@@ -342,7 +343,17 @@ class Bootstrapper final : public CBalBaseBootstrapperApplication {
                 break;
             }
             case ApplyMessage:
-                status = engine_->Apply(window_);
+                // Burn requires an owner even for quiet Apply. Keep this hidden
+                // window alive on its message-pumping thread until shutdown.
+                if (!window_ && !applyOwner) {
+                    applyOwner = CreateWindowExW(WS_EX_TOOLWINDOW, L"STATIC", L"ExoSnap Setup", WS_POPUP, 0, 0, 0, 0,
+                                                 nullptr, nullptr, nullptr, nullptr);
+                    if (!applyOwner) {
+                        status = HRESULT_FROM_WIN32(GetLastError());
+                        break;
+                    }
+                }
+                status = engine_->Apply(window_ ? window_ : applyOwner);
                 break;
             case LaunchMessage: {
                 const auto executable = installPath_ + L"\\exosnap.exe";
@@ -369,6 +380,8 @@ class Bootstrapper final : public CBalBaseBootstrapperApplication {
                 Finish(status, false);
             }
         }
+        if (applyOwner)
+            DestroyWindow(applyOwner);
         CoUninitialize();
     }
 

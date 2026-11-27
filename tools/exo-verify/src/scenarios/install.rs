@@ -956,6 +956,16 @@ mod tests {
     use super::*;
 
     #[cfg(windows)]
+    fn set_msi_install_folder(command: &mut Command, folder: &str) -> Result<()> {
+        use std::os::windows::process::CommandExt;
+
+        // msiexec requires the quotes around the property value, after '='.
+        anyhow::ensure!(!folder.contains('"'));
+        command.raw_arg(format!(r#"INSTALLFOLDER="{folder}""#));
+        Ok(())
+    }
+
+    #[cfg(windows)]
     fn smoke_msi(
         path: &Path,
         verb: &str,
@@ -1155,7 +1165,7 @@ mod tests {
                 .arg(path)
                 .args(["/qn", "/norestart", "EXOSNAP_REQUESTED_SCOPE=user"]);
             if index == 0 {
-                command.arg(format!("INSTALLFOLDER={}", custom.display()));
+                set_msi_install_folder(&mut command, custom.to_str().unwrap())?;
             }
             let log = out.join(format!("user-scope-{index}.log"));
             command.arg("/l*v").arg(&log);
@@ -1225,8 +1235,6 @@ mod tests {
     #[test]
     #[ignore = "installs real packages on a disposable GitHub-hosted Windows runner"]
     fn hosted_installer_lifecycle() -> Result<()> {
-        use std::os::windows::process::CommandExt;
-
         let runner = std::env::var("EXOSNAP_RUNNER_ENVIRONMENT")?;
         anyhow::ensure!(runner == "github-hosted");
         anyhow::ensure!(std::env::var("GITHUB_ACTIONS").as_deref() == Ok("true"));
@@ -1251,11 +1259,8 @@ mod tests {
             let mut command = Command::new(program);
             for &arg in args {
                 if let Some(folder) = arg.strip_prefix("INSTALLFOLDER=") {
-                    // msiexec parses NAME="value with spaces" itself. Command::arg
-                    // would put the opening quote before the property name.
                     anyhow::ensure!(program == Path::new("msiexec.exe"));
-                    anyhow::ensure!(!folder.contains('"'));
-                    command.raw_arg(format!(r#"INSTALLFOLDER="{folder}""#));
+                    set_msi_install_folder(&mut command, folder)?;
                 } else {
                     command.arg(arg);
                 }
