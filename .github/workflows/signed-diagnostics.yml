@@ -136,6 +136,12 @@ jobs:
                   if ($event.Message -like "*$class*") {
                     $codes = @($event.Properties | ForEach-Object { [string]$_.Value } | Where-Object { $_ -match '^(0x[0-9a-f]+|[0-9]+)$' })
                     Write-Host "Diagnostics class DCOM event $($event.Id), numeric fields $($codes -join ', ')"
+                    $physical = '\\?\GLOBALROOT\GLOBAL??\' + $installed
+                    $command = '"' + $physical + '" -Embedding'
+                    $values = @($event.Properties | ForEach-Object { [string]$_.Value })
+                    Write-Host "DCOM exact canonical command field: $($values -contains $command)"
+                    Write-Host "DCOM canonical image appears: $($event.Message.IndexOf($physical,[StringComparison]::OrdinalIgnoreCase) -ge 0)"
+                    Write-Host "DCOM embedding switch appears: $($event.Message.IndexOf('-Embedding',[StringComparison]::OrdinalIgnoreCase) -ge 0)"
                   }
                 }
                 throw "Machine activation fixture failed: $mode"

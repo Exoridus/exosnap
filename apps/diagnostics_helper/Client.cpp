@@ -6,6 +6,7 @@
 #include "Peer.h"
 #ifdef EXOSNAP_SIGNED_FIXTURE_STATUS
 #include "MsixAcquisition.h"
+#include "StartingGuardian.h"
 #endif
 #include "diagnostics/PrivilegedPresentBackend.h"
 
@@ -74,8 +75,36 @@ bool Protected(HANDLE object, bool children, SE_OBJECT_TYPE type = SE_FILE_OBJEC
             continue;
         auto* ace = static_cast<ACCESS_ALLOWED_ACE*>(entry);
         safe = TrustedOwner(&ace->SidStart) || (inherit_only && IsWellKnownSid(&ace->SidStart, WinCreatorOwnerSid));
-        if (!safe)
+        if (!safe) {
             ReportFixtureStatus("DACL rejected ACE rights", ace->Mask);
+#ifdef EXOSNAP_SIGNED_FIXTURE_STATUS
+            if (type == SE_REGISTRY_KEY) {
+                PSID trustee = &ace->SidStart;
+                ReportFixtureStatus("fixture rejected registry ACE flags", header->AceFlags);
+                ReportFixtureStatus("fixture rejected registry ACE index", i);
+                for (const auto kind : {WinCreatorOwnerSid, WinCreatorGroupSid, WinCreatorOwnerServerSid, WinWorldSid,
+                        WinBuiltinUsersSid, WinBuiltinPowerUsersSid, WinAuthenticatedUserSid, WinInteractiveSid,
+                        WinLocalServiceSid, WinNetworkServiceSid, WinLocalSid, WinBuiltinAdministratorsSid,
+                        WinLocalSystemSid, WinBuiltinAccountOperatorsSid}) {
+                    if (IsWellKnownSid(trustee, kind))
+                        ReportFixtureStatus("fixture recognized trustee WELL_KNOWN_SID_TYPE", static_cast<DWORD>(kind));
+                }
+                const SID_IDENTIFIER_AUTHORITY authority = *GetSidIdentifierAuthority(trustee);
+                ReportFixtureStatus("fixture registry trustee authority low byte", authority.Value[5]);
+                if (*GetSidSubAuthorityCount(trustee))
+                    ReportFixtureStatus("fixture registry trustee SID family", *GetSidSubAuthority(trustee, 0));
+                HANDLE raw_token = nullptr;
+                if (OpenProcessToken(GetCurrentProcess(), TOKEN_QUERY, &raw_token)) {
+                    Handle token(raw_token);
+                    alignas(TOKEN_USER) std::array<BYTE, sizeof(TOKEN_USER) + SECURITY_MAX_SID_SIZE> buffer{};
+                    DWORD size = 0;
+                    if (GetTokenInformation(token.get(), TokenUser, buffer.data(), static_cast<DWORD>(buffer.size()), &size))
+                        ReportFixtureStatus("fixture rejected trustee equals current user",
+                                            EqualSid(trustee, reinterpret_cast<TOKEN_USER*>(buffer.data())->User.Sid));
+                }
+            }
+#endif
+        }
     }
     LocalFree(descriptor);
     return safe;
@@ -181,6 +210,10 @@ bool RegistrationValue(const wchar_t* subkey, const wchar_t* value, DWORD type, 
         DWORD link_type = 0, link_size = 0;
         const auto link = RegQueryValueExW(key, L"SymbolicLinkValue", nullptr, &link_type, nullptr, &link_size);
         if (link != ERROR_FILE_NOT_FOUND || !Protected(reinterpret_cast<HANDLE>(key), true, SE_REGISTRY_KEY)) {
+#ifdef EXOSNAP_SIGNED_FIXTURE_STATUS
+            ReportFixtureStatus("fixture rejected HKLM path component (Software=1, Classes=2)",
+                                static_cast<DWORD>(std::count(prefix.begin(), prefix.end(), L'\\') + 1));
+#endif
             RegCloseKey(key);
             return false;
         }
@@ -549,6 +582,19 @@ HRESULT ProbeMachineBootstrap(ULONG version, bool invoke) {
                                 std::wstring_view(display.data()) == L"ExoSnap Diagnostics Helper");
             FreeLibrary(resource);
         }
+        HKEY server_key = nullptr;
+        if (RegOpenKeyExW(HKEY_LOCAL_MACHINE, LR"(SOFTWARE\Classes\CLSID\{70E064CA-A7D4-43EA-A075-CE4303BF12E5}\LocalServer32)",
+                          0, KEY_READ | KEY_WOW64_64KEY, &server_key) == ERROR_SUCCESS) {
+            const auto matches = [&](const wchar_t* name, const std::wstring& expected) {
+                std::array<wchar_t, 1024> value{};
+                DWORD bytes = sizeof(value);
+                return RegGetValueW(server_key, nullptr, name, RRF_RT_REG_SZ, nullptr, value.data(), &bytes) ==
+                           ERROR_SUCCESS && std::wstring_view(value.data()) == expected;
+            };
+            ReportFixtureStatus("fixture exact machine ServerExecutable", matches(L"ServerExecutable", physical));
+            ReportFixtureStatus("fixture exact machine LocalServer32 command", matches(nullptr, L"\"" + physical + L"\""));
+            RegCloseKey(server_key);
+        }
         HKEY class_key = nullptr;
         const auto opened = RegOpenKeyExW(HKEY_LOCAL_MACHINE, LR"(SOFTWARE\Classes\CLSID\{70E064CA-A7D4-43EA-A075-CE4303BF12E5})",
                                           0, KEY_READ | KEY_WOW64_64KEY, &class_key);
@@ -614,6 +660,32 @@ HRESULT ProbeMachineBootstrap(ULONG version, bool invoke) {
             Microsoft::WRL::ComPtr<IExoSnapDiagnosticsBootstrap> typed;
             const HRESULT query = identity.As(&typed);
             ReportFixtureStatus("fixture vendor QueryInterface control", static_cast<DWORD>(query));
+        }
+        HANDLE raw_direct_token = nullptr;
+        if (OpenProcessToken(GetCurrentProcess(), TOKEN_QUERY, &raw_direct_token)) {
+            Handle token(raw_direct_token);
+            TOKEN_ELEVATION elevation{};
+            DWORD bytes = 0;
+            if (GetTokenInformation(token.get(), TokenElevation, &elevation, sizeof(elevation), &bytes) &&
+                elevation.TokenIsElevated) {
+                auto command = L"\"" + physical + L"\" -Embedding";
+                STARTUPINFOW startup{};
+                startup.cb = sizeof(startup);
+                PROCESS_INFORMATION process{};
+                const BOOL created = CreateProcessW(physical.c_str(), command.data(), nullptr, nullptr, FALSE, 0,
+                                                    nullptr, nullptr, &startup, &process);
+                const DWORD direct = created ? ERROR_SUCCESS : GetLastError();
+                ReportFixtureStatus("fixture explicit machine image CreateProcessW", direct);
+                if (created) {
+                    Handle thread(process.hThread);
+                    StartingGuardian child{Handle(process.hProcess)};
+                    const auto wait = WaitForSingleObject(child.get(), 25000);
+                    ReportFixtureStatus("fixture direct empty server wait", wait);
+                    DWORD exit_code = 0;
+                    if (GetExitCodeProcess(child.get(), &exit_code))
+                        ReportFixtureStatus("fixture direct empty server exit", exit_code);
+                }
+            }
         }
     }
     if (FAILED(result) || !invoke)
