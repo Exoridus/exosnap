@@ -79,6 +79,15 @@ TEST(EditProjectStore, AnExternalDirectoryLinkRoundTripsAsAnAbsoluteReference) {
     ASSERT_TRUE(EditProjectStore::Read(path, restored, state, digest).isEmpty());
     ASSERT_EQ(restored.assets.size(), 1U);
     EXPECT_EQ(restored.assets.front()->path, asset.path);
+    ASSERT_TRUE(media.remove());
+    const auto offline = QDir(folder).filePath(QStringLiteral("offline.exoproj"));
+    ASSERT_TRUE(EditProjectStore::Write(offline, {}, *workspace.snapshot(), digest, false, {}).isEmpty());
+    ASSERT_TRUE(EditProjectStore::Read(offline, restored, state, digest).isEmpty());
+    EXPECT_EQ(restored.assets.front()->path, asset.path);
+    ASSERT_TRUE(media.open(QIODevice::WriteOnly));
+    media.close();
+    ASSERT_TRUE(EditProjectStore::Read(offline, restored, state, digest).isEmpty());
+    EXPECT_EQ(restored.assets.front()->path, asset.path);
 }
 
 TEST(EditProjectStore, ConflictsAndWriteLocksPreservePublishedFile) {

@@ -33,8 +33,22 @@ bool IsDescendant(const QString& relative) {
 }
 
 bool StaysInProject(const QDir& directory, const QString& media) {
-    const auto actual = QFileInfo(media).canonicalFilePath();
-    return actual.isEmpty() || IsDescendant(QDir(directory.canonicalPath()).relativeFilePath(actual));
+    const auto project = directory.canonicalPath();
+    if (project.isEmpty())
+        return false;
+    QFileInfo ancestor(media);
+    // Offline media may have no canonical leaf. Resolve the nearest existing
+    // ancestor so a containing junction or symlink still classifies the path.
+    while (!ancestor.exists()) {
+        if (ancestor.isSymLink() || ancestor.isJunction())
+            return false;
+        const auto parent = ancestor.absolutePath();
+        if (parent == ancestor.absoluteFilePath())
+            return false;
+        ancestor.setFile(parent);
+    }
+    const auto actual = ancestor.canonicalFilePath();
+    return !actual.isEmpty() && IsDescendant(QDir(project).relativeFilePath(actual));
 }
 
 bool ResolveReferences(edit::EditSnapshot& snapshot, const QString& path, bool writing) {

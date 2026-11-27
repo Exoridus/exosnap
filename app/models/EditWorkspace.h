@@ -107,13 +107,13 @@ class Workspace {
     // the live timeline, and undo commands from another project never cross over.
     bool restoreProject(const EditSnapshot& saved) {
         constexpr Time max_time = 10LL * 366 * 24 * 60 * 60 * 1'000'000;
+        constexpr auto max_fps_component = static_cast<uint32_t>((std::numeric_limits<int>::max)());
         const auto time = [](Time value) { return value >= 0 && value <= max_time; };
         if (saved.assets.size() > 2048 || saved.tracks.size() > 256 || saved.clips.size() > 4096 ||
             saved.junctions.size() > 4096 || saved.spacers.size() > 2048 ||
             saved.id_high_watermark == (std::numeric_limits<Id>::max)() ||
             saved.source_version_high_watermark == (std::numeric_limits<uint64_t>::max)() || !saved.output_fps.den ||
-            saved.output_fps.den > (std::numeric_limits<int>::max)() ||
-            saved.output_fps.num > (std::numeric_limits<int>::max)() ||
+            saved.output_fps.den > max_fps_component || saved.output_fps.num > max_fps_component ||
             static_cast<uint64_t>(saved.output_fps.num) > 1000ULL * saved.output_fps.den || saved.output_width < 0 ||
             saved.output_width > 32768 || saved.output_height < 0 || saved.output_height > 32768 ||
             !time(saved.timeline_end.end_us) || !time(saved.result_range.in_us) || !time(saved.result_range.out_us))
