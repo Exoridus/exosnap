@@ -827,6 +827,7 @@ jobs:
           }
 
       - name: Exercise MSI and cached Setup lifecycle on the disposable runner
+        id: installer-lifecycle
         if: github.event_name == 'pull_request' && needs.changes.outputs.installer == 'true'
         env:
           EXOSNAP_RUNNER_ENVIRONMENT: ${{ runner.environment }}
@@ -834,6 +835,15 @@ jobs:
         run: |
           $env:EXOSNAP_INSTALLER_SMOKE = (Resolve-Path '.workspace/installer-smoke').Path
           cargo test --locked --manifest-path tools/Cargo.toml -p exo-verify hosted_installer_lifecycle -- --ignored --nocapture
+
+      - name: Upload failed installer lifecycle logs
+        if: failure() && steps.installer-lifecycle.outcome == 'failure'
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        with:
+          name: installer-lifecycle-failure-logs
+          path: .workspace/installer-smoke/lifecycle/*.log
+          include-hidden-files: true
+          if-no-files-found: warn
 
       - name: Upload installer authoring report
         if: github.event_name == 'pull_request' && needs.changes.outputs.installer == 'true'

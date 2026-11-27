@@ -1225,7 +1225,8 @@ mod tests {
     #[test]
     #[ignore = "installs real packages on a disposable GitHub-hosted Windows runner"]
     fn hosted_installer_lifecycle() -> Result<()> {
-        anyhow::ensure!(std::env::var("EXOSNAP_RUNNER_ENVIRONMENT").as_deref() == Ok("github-hosted"));
+        let runner = std::env::var("EXOSNAP_RUNNER_ENVIRONMENT")?;
+        anyhow::ensure!(runner == "github-hosted");
         anyhow::ensure!(std::env::var("GITHUB_ACTIONS").as_deref() == Ok("true"));
         let output = PathBuf::from(std::env::var("EXOSNAP_INSTALLER_SMOKE")?);
         let report: serde_json::Value =
@@ -1306,7 +1307,8 @@ mod tests {
             )?;
             let actual = scoped_reg_value(key, "InstallPath")?.unwrap();
             assert_eq!(Path::new(&actual), custom);
-            assert_eq!(scoped_reg_value(key, "DistributionOwner")?.as_deref(), Some("direct"));
+            let owner = scoped_reg_value(key, "DistributionOwner")?;
+            assert_eq!(owner.as_deref(), Some("direct"));
             assert!(!reg_key_exists(other_key)? && shortcut.is_file());
             let rows = exosnap_arp_rows()?;
             assert_eq!(rows.len(), 1);
@@ -1314,18 +1316,22 @@ mod tests {
             let exe = custom.join("exosnap.exe");
             let hash = sha256_file(&exe)?.0;
             fs::remove_file(&exe)?;
-            successful(msi, &["/fvamus", package, "/qn", "/norestart"], &log("repair"))?;
+            let repair = ["/fvamus", package, "/qn", "/norestart"];
+            successful(msi, &repair, &log("repair"))?;
             assert_eq!(sha256_file(&exe)?.0, hash);
             fs::write(custom.join("unrelated.txt"), b"preserve")?;
-            successful(msi, &["/x", package, "/qn", "/norestart"], &log("uninstall"))?;
+            let uninstall = ["/x", package, "/qn", "/norestart"];
+            successful(msi, &uninstall, &log("uninstall"))?;
             assert_eq!(fs::read(custom.join("unrelated.txt"))?, b"preserve");
             assert!(!exe.exists() && !shortcut.exists() && !reg_key_exists(key)?);
             assert!(exosnap_arp_rows()?.is_empty());
 
-            successful(setup, &["/install", "/quiet", "/norestart"], &log("setup"))?;
+            let quiet_install = ["/install", "/quiet", "/norestart"];
+            successful(setup, &quiet_install, &log("setup"))?;
             let exe = default.join("exosnap.exe");
             let hash = sha256_file(&exe)?.0;
-            assert_eq!(Path::new(&scoped_reg_value(key, "InstallPath")?.unwrap()), default);
+            let actual = scoped_reg_value(key, "InstallPath")?.unwrap();
+            assert_eq!(Path::new(&actual), default);
             assert!(shortcut.is_file() && !reg_key_exists(other_key)?);
             let rows = exosnap_arp_rows()?;
             assert_eq!(rows.iter().filter(|r| r.system_component).count(), 1);
@@ -1338,21 +1344,23 @@ mod tests {
                 PathBuf::from(std::env::var("ProgramData")?).join("Package Cache")
             };
             anyhow::ensure!(cached.starts_with(cache_root) && cached.is_file());
-            let quiet_install = ["/install", "/quiet", "/norestart"];
             let refused = invoke(opposite, &quiet_install, &log("conflict"))?;
             assert_eq!(refused, 1638);
             assert_eq!(sha256_file(&exe)?.0, hash);
             assert!(!reg_key_exists(other_key)?);
             fs::remove_file(&exe)?;
-            successful(&cached, &["/repair", "/quiet", "/norestart"], &log("cached-repair"))?;
+            let repair = ["/repair", "/quiet", "/norestart"];
+            successful(&cached, &repair, &log("cached-repair"))?;
             assert_eq!(sha256_file(&exe)?.0, hash);
-            successful(&cached, &["/uninstall", "/quiet", "/norestart"], &log("cached-remove"))?;
+            let remove = ["/uninstall", "/quiet", "/norestart"];
+            successful(&cached, &remove, &log("cached-remove"))?;
             assert!(!exe.exists() && !shortcut.exists() && !reg_key_exists(key)?);
             assert!(exosnap_arp_rows()?.is_empty());
             results.push(json!({"scope": scope, "msiCustomPath": custom, "setupPath": default,
                 "repairedSha256": hash, "oppositeScopeExit": refused, "uninstalled": true}));
         }
-        fs::write(out.join("result.json"), serde_json::to_vec_pretty(&results)?)?;
+        let receipt = serde_json::to_vec_pretty(&results)?;
+        fs::write(out.join("result.json"), receipt)?;
         Ok(())
     }
 
