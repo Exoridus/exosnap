@@ -95,3 +95,27 @@ TEST(ManifestParse, EmptyJsonFails) {
     auto result = ParseManifest("{}");
     EXPECT_TRUE(std::holds_alternative<std::string>(result));
 }
+
+TEST(ManifestParse, ScopeSpecificSetupIsOptionalAndRejectsAmbiguousOrInvalidEntries) {
+    const std::string base =
+        R"({"version":"1.2.3","minimum_accepted_version":"1.0.0","packages":[],"setup_packages":[)";
+    const std::string hash(64, 'a');
+    const auto user = R"({"kind":"user","url":"https://example.test/setup.exe","sha256":")" + hash + R"("})";
+    auto result = ParseManifest(base + user + "]}");
+    ASSERT_TRUE(std::holds_alternative<UpdateManifest>(result));
+    EXPECT_TRUE(std::get<UpdateManifest>(result).user_setup.has_value());
+    EXPECT_FALSE(std::get<UpdateManifest>(result).machine_setup.has_value());
+    EXPECT_TRUE(std::holds_alternative<std::string>(ParseManifest(base + user + "," + user + "]}")));
+    auto invalid = user;
+    invalid[invalid.find(hash)] = 'z';
+    EXPECT_TRUE(std::holds_alternative<std::string>(ParseManifest(base + invalid + "]}")));
+}
+
+TEST(ManifestParse, RuntimeFloorRequiresFourNumericVersionFields) {
+    const std::string base =
+        R"({"version":"1.2.3","minimum_accepted_version":"1.0.0","packages":[],"vc_runtime_minimum":")";
+    EXPECT_TRUE(std::holds_alternative<UpdateManifest>(ParseManifest(base + R"(14.44.35211.0"})")));
+    for (const auto* invalid : {"", "14.44", "14.44.35211.0junk", "14.44.65536.0"}) {
+        EXPECT_TRUE(std::holds_alternative<std::string>(ParseManifest(base + invalid + R"("})")));
+    }
+}

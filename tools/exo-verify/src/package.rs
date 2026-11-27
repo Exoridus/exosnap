@@ -58,6 +58,7 @@ pub struct PackageResult {
     pub portable: PathBuf,
     pub installer: Option<PathBuf>,
     pub setup: Option<PathBuf>,
+    pub setup_all_users: Option<PathBuf>,
     pub staging: PathBuf,
     pub file_count: usize,
     pub dependency_audit: BTreeMap<String, usize>,
@@ -631,7 +632,7 @@ fn build_setup(
     base: &str,
     msi: &Path,
     vc_redist: &Path,
-) -> Result<PathBuf> {
+) -> Result<(PathBuf, PathBuf)> {
     let wix = crate::tools::require("wix")?;
     let (hash, size) = crate::bundle::sha256_file(vc_redist)?;
     ensure!(
@@ -697,42 +698,64 @@ fn build_setup(
         &payloads,
         setup_payload_xml(&payload_root, &walk_files(&payload_root)?),
     )?;
-    let bundle = out.join(format!("ExoSnap-{base}-Setup.exe"));
-    println!("==> {}", bundle.display());
-    println!(
-        "  embedding {VC_REDIST_URL} ({size} bytes, {hash}); minimum runtime {VC_REDIST_MIN_VERSION}"
-    );
-    run_checked(
-        Command::new(wix)
-            .args([
-                "build",
-                "-arch",
-                "x64",
-                "-ext",
-                "WixToolset.Util.wixext/4.0.5",
-                "-ext",
-                "WixToolset.Bal.wixext/4.0.5",
-                "-o",
-            ])
-            .arg(&bundle)
-            .arg("-d")
-            .arg(format!("BundleVersion={base}.0"))
-            .arg("-d")
-            .arg(format!("VCRedistPath={}", vc_redist.display()))
-            .arg("-d")
-            .arg(format!("VCRedistMinVersion={VC_REDIST_MIN_VERSION}"))
-            .arg("-d")
-            .arg(format!("MsiPath={}", msi.display()))
-            .arg("-d")
-            .arg(format!("IconPath={}", icon.display()))
-            .arg("-d")
-            .arg(format!("BootstrapperPath={}", bootstrapper.display()))
-            .arg(&payloads)
-            .arg(repo_root.join("packaging/burn/Setup.wxs")),
-        "wix build (Setup)",
-        Duration::from_secs(900),
-    )?;
-    Ok(bundle)
+    let user = out.join(crate::bundle::setup_name(base));
+    let machine = out.join(crate::bundle::setup_all_users_name(base));
+    for (bundle, scope, is_machine, upgrade_code) in [
+        (
+            &user,
+            "user",
+            "no",
+            "{5069646F-83F6-4B85-AC4C-901ADDAA1226}",
+        ),
+        (
+            &machine,
+            "machine",
+            "yes",
+            "{15DD5AFF-4C08-4549-BB4E-ECBF10913E77}",
+        ),
+    ] {
+        println!("==> {}", bundle.display());
+        println!(
+            "  embedding {VC_REDIST_URL} ({size} bytes, {hash}); minimum runtime {VC_REDIST_MIN_VERSION}"
+        );
+        run_checked(
+            Command::new(&wix)
+                .args([
+                    "build",
+                    "-arch",
+                    "x64",
+                    "-ext",
+                    "WixToolset.Util.wixext/4.0.5",
+                    "-ext",
+                    "WixToolset.Bal.wixext/4.0.5",
+                    "-o",
+                ])
+                .arg(bundle)
+                .arg("-d")
+                .arg(format!("BundleUpgradeCode={upgrade_code}"))
+                .arg("-d")
+                .arg(format!("InstallScope={scope}"))
+                .arg("-d")
+                .arg(format!("IsMachine={is_machine}"))
+                .arg("-d")
+                .arg(format!("BundleVersion={base}.0"))
+                .arg("-d")
+                .arg(format!("VCRedistPath={}", vc_redist.display()))
+                .arg("-d")
+                .arg(format!("VCRedistMinVersion={VC_REDIST_MIN_VERSION}"))
+                .arg("-d")
+                .arg(format!("MsiPath={}", msi.display()))
+                .arg("-d")
+                .arg(format!("IconPath={}", icon.display()))
+                .arg("-d")
+                .arg(format!("BootstrapperPath={}", bootstrapper.display()))
+                .arg(&payloads)
+                .arg(repo_root.join("packaging/burn/Setup.wxs")),
+            "wix build (Setup)",
+            Duration::from_secs(900),
+        )?;
+    }
+    Ok((user, machine))
 }
 
 fn setup_build_file(build_dir: &Path, name: &str) -> Result<PathBuf> {
@@ -1014,7 +1037,8 @@ pub fn run(args: &PackageArgs) -> Result<PackageResult> {
         base_version: base,
         portable,
         installer,
-        setup,
+        setup: setup.as_ref().map(|pair| pair.0.clone()),
+        setup_all_users: setup.map(|pair| pair.1),
         staging,
         file_count,
         dependency_audit: BTreeMap::from([

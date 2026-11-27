@@ -518,10 +518,15 @@ fn load_evidence(args: &EvidenceArgs) -> Result<(Bundle, Qualification)> {
 /// The release package roles present in the bundle, in the order the release
 /// page lists them. Setup is optional until the Burn toolchain produces one.
 fn package_roles(bundle: &Bundle) -> Vec<FileRole> {
-    [FileRole::Installer, FileRole::Setup, FileRole::Portable]
-        .into_iter()
-        .filter(|role| bundle.inventory.file(*role).is_some())
-        .collect()
+    [
+        FileRole::Installer,
+        FileRole::Setup,
+        FileRole::SetupAllUsers,
+        FileRole::Portable,
+    ]
+    .into_iter()
+    .filter(|role| bundle.inventory.file(*role).is_some())
+    .collect()
 }
 
 fn verify_packages(bundle: &Bundle, assets: &Path) -> Result<()> {

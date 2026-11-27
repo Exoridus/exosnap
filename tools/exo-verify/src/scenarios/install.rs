@@ -125,6 +125,7 @@ fn is_product_code(name: &str) -> bool {
 /// Every Uninstall-registry row on the machine, both views.
 fn arp_rows() -> Result<Vec<ArpRow>> {
     let roots = [
+        r"HKCU\SOFTWARE\Microsoft\Windows\CurrentVersion\Uninstall",
         r"HKLM\SOFTWARE\Microsoft\Windows\CurrentVersion\Uninstall",
         r"HKLM\SOFTWARE\WOW6432Node\Microsoft\Windows\CurrentVersion\Uninstall",
     ];
@@ -219,6 +220,7 @@ fn setup_cycle(ctx: &mut Context) -> Step {
     );
     fs::copy(&setup_source, &setup)?;
 
+    let user_desktop = PathBuf::from(std::env::var("USERPROFILE")?).join(r"Desktop\ExoSnap.lnk");
     let runtime_before = vc_runtime_version();
     ctx.evidence.put("vcRuntimeBefore", json!(runtime_before));
 
@@ -234,12 +236,12 @@ fn setup_cycle(ctx: &mut Context) -> Step {
         json!(install.code().map(|code| code.to_string())),
     );
 
-    let exe = PathBuf::from(r"C:\Program Files\ExoSnap\exosnap.exe");
-    let shortcut = PathBuf::from(std::env::var("ProgramData")?)
+    let exe = PathBuf::from(std::env::var("LOCALAPPDATA")?).join(r"Programs\ExoSnap\exosnap.exe");
+    let shortcut = PathBuf::from(std::env::var("APPDATA")?)
         .join(r"Microsoft\Windows\Start Menu\Programs\ExoSnap.lnk");
     product_ensure!(exe.is_file(), "Setup did not install exosnap.exe");
     product_ensure!(
-        reg_value("installed")?.is_some(),
+        scoped_reg_value(USER_KEY, "installed")?.is_some(),
         "Setup did not write the product registry marker"
     );
     product_ensure!(
@@ -247,8 +249,22 @@ fn setup_cycle(ctx: &mut Context) -> Step {
         "Setup did not create the Start Menu shortcut"
     );
     product_ensure!(
-        !desktop_shortcut()?.exists(),
+        !user_desktop.exists(),
         "a silent Setup created a desktop shortcut without the option"
+    );
+    product_ensure!(
+        reg_value("installed")?.is_none(),
+        "current-user Setup wrote machine registration"
+    );
+    let opposite = ctx.package(FileRole::SetupAllUsers)?;
+    let conflict = run_setup(ctx, &opposite, "/install", "/quiet", "opposite-scope.log")?;
+    product_ensure!(
+        conflict.code() == Some(1638),
+        "all-users Setup did not refuse the existing user registration"
+    );
+    product_ensure!(
+        exe.is_file() && reg_value("installed")?.is_none(),
+        "scope refusal changed the installation"
     );
     let rows = exosnap_arp_rows()?;
     let visible: Vec<&ArpRow> = rows.iter().filter(|row| !row.system_component).collect();
@@ -320,7 +336,7 @@ fn setup_cycle(ctx: &mut Context) -> Step {
         ctx.scenario_dir.join("setup-repair.log").display()
     );
     product_ensure!(
-        exe.is_file() && reg_value("installed")?.is_some(),
+        exe.is_file() && scoped_reg_value(USER_KEY, "installed")?.is_some(),
         "repair did not leave the product installed"
     );
 
@@ -339,9 +355,9 @@ fn setup_cycle(ctx: &mut Context) -> Step {
     );
     product_ensure!(
         !exe.exists()
-            && reg_value("installed")?.is_none()
+            && scoped_reg_value(USER_KEY, "installed")?.is_none()
             && !shortcut.exists()
-            && !desktop_shortcut()?.exists(),
+            && !user_desktop.exists(),
         "uninstall left application files, registry or shortcuts"
     );
     product_ensure!(
@@ -376,7 +392,9 @@ fn setup_cycle(ctx: &mut Context) -> Step {
         passive_install.code()
     );
     product_ensure!(
-        exe.is_file() && reg_value("installed")?.is_some() && !desktop_shortcut()?.exists(),
+        exe.is_file()
+            && scoped_reg_value(USER_KEY, "installed")?.is_some()
+            && !user_desktop.exists(),
         "a passive install did not leave the expected product state"
     );
     let passive_uninstall = run_setup(
@@ -392,7 +410,7 @@ fn setup_cycle(ctx: &mut Context) -> Step {
         passive_uninstall.code()
     );
     product_ensure!(
-        !exe.exists() && reg_value("installed")?.is_none(),
+        !exe.exists() && scoped_reg_value(USER_KEY, "installed")?.is_none(),
         "a passive uninstall left the product installed"
     );
 
@@ -478,7 +496,7 @@ fn setup_interactive(ctx: &mut Context) -> Step {
         "the disposable machine is not clean: {}",
         residue.join("; ")
     );
-    let setup = ctx.package(FileRole::Setup)?;
+    let setup = ctx.package(FileRole::SetupAllUsers)?;
     let screenshots = ctx.scenario_dir.join("screenshots");
     let install_log = ctx.scenario_dir.join("setup-ui-install.log");
     let uninstall_log = ctx.scenario_dir.join("setup-ui-uninstall.log");
@@ -594,8 +612,12 @@ fn setup_interactive(ctx: &mut Context) -> Step {
 
 /// Reads one value from [`INSTALL_KEY`], the product's own registry state.
 pub(crate) fn reg_value(name: &str) -> Result<Option<String>> {
+    scoped_reg_value(INSTALL_KEY, name)
+}
+
+fn scoped_reg_value(key: &str, name: &str) -> Result<Option<String>> {
     let out = crate::tools::run(
-        Command::new("reg.exe").args(["query", INSTALL_KEY, "/v", name]),
+        Command::new("reg.exe").args(["query", key, "/v", name]),
         secs(10.0),
     )?;
     if !out.success() {
@@ -648,7 +670,13 @@ fn msi(ctx: &mut Context, verb: &str, path: &Path, log_name: &str) -> Step {
         Command::new("msiexec.exe")
             .arg(verb)
             .arg(path)
-            .args(["/qn", "/norestart", "/l*v"])
+            .args([
+                "/qn",
+                "/norestart",
+                "ALLUSERS=1",
+                "EXOSNAP_REQUESTED_SCOPE=machine",
+                "/l*v",
+            ])
             .arg(&log),
         secs(360.0),
     )?;
@@ -893,7 +921,13 @@ mod tests {
         command
             .arg(verb)
             .arg(path)
-            .args(["/qn", "/norestart", "/l*v"])
+            .args([
+                "/qn",
+                "/norestart",
+                "ALLUSERS=1",
+                "EXOSNAP_REQUESTED_SCOPE=machine",
+                "/l*v",
+            ])
             .arg(log);
         if let Some(owner) = owner {
             command.arg(format!("EXOSNAP_DISTRIBUTION_OWNER={owner}"));
@@ -1065,6 +1099,47 @@ mod tests {
         );
         assert!(!reg_key_exists(INSTALL_KEY)?);
         assert!(!root.exists());
+        assert!(exosnap_arp_rows()?.is_empty());
+        // Exercise a real change of ProductCode in the user context, retaining a
+        // non-default destination. The second install deliberately supplies no path.
+        let custom = out.join("user programs").join("ExoSnap");
+        for (index, path) in paths.iter().enumerate() {
+            let mut command = Command::new("msiexec.exe");
+            command
+                .arg("/i")
+                .arg(path)
+                .args(["/qn", "/norestart", "EXOSNAP_REQUESTED_SCOPE=user"]);
+            if index == 0 {
+                command.arg(format!("INSTALLFOLDER={}", custom.display()));
+            }
+            let log = out.join(format!("user-scope-{index}.log"));
+            command.arg("/l*v").arg(&log);
+            let result = crate::tools::run(&mut command, secs(360.0))?;
+            assert!(
+                matches!(result.code(), Some(0 | 3010)),
+                "user install or upgrade: {result:?}"
+            );
+            assert!(custom.join("exosnap.exe").is_file());
+            assert_eq!(
+                scoped_reg_value(USER_KEY, "DistributionOwner")?.as_deref(),
+                Some("direct")
+            );
+            assert!(reg_value("installed")?.is_none());
+            assert_eq!(exosnap_arp_rows()?.len(), 1);
+        }
+        let opposite = smoke_msi(&paths[0], "/i", None, &out.join("machine-conflict.log"))?;
+        assert_eq!(opposite.code(), Some(1603));
+        assert!(custom.join("exosnap.exe").is_file());
+        let removed = crate::tools::run(
+            Command::new("msiexec.exe")
+                .arg("/x")
+                .arg(&paths[1])
+                .args(["/qn", "/norestart"]),
+            secs(360.0),
+        )?;
+        assert!(matches!(removed.code(), Some(0 | 3010)));
+        assert!(!custom.join("exosnap.exe").exists());
+        assert!(scoped_reg_value(USER_KEY, "installed")?.is_none());
         assert!(exosnap_arp_rows()?.is_empty());
         let residue = super::super::clean::residue()?;
         assert!(residue.is_empty(), "uninstall residue: {residue:?}");

@@ -25,6 +25,8 @@ struct SetupEvent {
     bool can_cancel = false;
     const wchar_t* text = nullptr;
     const wchar_t* version = nullptr;
+    bool machine_scope = false;
+    bool runtime_required = false;
 };
 
 using SetupEventCallback = void (*)(void* context, const SetupEvent* event);

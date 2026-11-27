@@ -21,6 +21,7 @@ pub const INVENTORY_NAME: &str = "bundle.json";
 pub enum FileRole {
     Installer,
     Setup,
+    SetupAllUsers,
     Portable,
     Runtime,
     Metadata,
@@ -59,7 +60,11 @@ impl Inventory {
     pub fn packages(&self) -> BTreeMap<String, String> {
         self.files
             .iter()
-            .filter(|f| matches!(f.role, FileRole::Installer | FileRole::Portable))
+            .filter(|f| {
+                matches!(f.role, FileRole::Installer | FileRole::Portable)
+                    || (self.file(FileRole::SetupAllUsers).is_some()
+                        && matches!(f.role, FileRole::Setup | FileRole::SetupAllUsers))
+            })
             .map(|f| (file_name(&f.path).to_string(), f.sha256.clone()))
             .collect()
     }
@@ -103,6 +108,7 @@ pub struct CreateRequest {
     /// The offline Setup bootstrapper; optional so a bundle can be assembled
     /// before the Burn toolchain exists.
     pub setup: Option<PathBuf>,
+    pub setup_all_users: Option<PathBuf>,
     pub portable: PathBuf,
     pub runtimes: Vec<PathBuf>,
     pub metadata: Vec<PathBuf>,
@@ -150,6 +156,10 @@ pub fn setup_name(version: &str) -> String {
     format!("ExoSnap-{version}-Setup.exe")
 }
 
+pub fn setup_all_users_name(version: &str) -> String {
+    format!("ExoSnap-{version}-Setup-AllUsers.exe")
+}
+
 pub fn portable_name(version: &str) -> String {
     format!("ExoSnap-{version}-windows-x64-portable.zip")
 }
@@ -191,6 +201,9 @@ pub fn create(request: &CreateRequest) -> Result<Bundle> {
     if let Some(setup) = &request.setup {
         check_name(setup, &setup_name(&request.product_version))?;
     }
+    if let Some(setup) = &request.setup_all_users {
+        check_name(setup, &setup_all_users_name(&request.product_version))?;
+    }
 
     let mut files = Vec::new();
     let mut place = |source: &Path, dir: &str, role: FileRole| -> Result<()> {
@@ -218,6 +231,9 @@ pub fn create(request: &CreateRequest) -> Result<Bundle> {
     place(&request.installer, "packages", FileRole::Installer)?;
     if let Some(setup) = &request.setup {
         place(setup, "packages", FileRole::Setup)?;
+    }
+    if let Some(setup) = &request.setup_all_users {
+        place(setup, "packages", FileRole::SetupAllUsers)?;
     }
     place(&request.portable, "packages", FileRole::Portable)?;
     for runtime in &request.runtimes {
@@ -418,6 +434,7 @@ pub mod tests {
             source_commit: "0123456789abcdef0123456789abcdef01234567".to_string(),
             candidate_id: format!("{version}-test"),
             installer,
+            setup_all_users: None,
             setup: None,
             portable,
             runtimes: vec![],
@@ -429,13 +446,15 @@ pub mod tests {
     }
 
     #[test]
-    fn an_optional_setup_bootstrapper_is_inventoried_and_verified() {
+    fn scoped_bootstrappers_are_inventoried_and_bound_to_the_signed_manifest() {
         let dir = tempfile::tempdir().unwrap();
         let src = dir.path().join("src");
         fs::create_dir_all(&src).unwrap();
         let installer = src.join(installer_name("0.10.1"));
         let portable = src.join(portable_name("0.10.1"));
         let setup = src.join(setup_name("0.10.1"));
+        let all_users = src.join(setup_all_users_name("0.10.1"));
+        fs::write(&all_users, b"machine setup bytes").unwrap();
         fs::write(&installer, b"msi bytes").unwrap();
         fs::write(&portable, b"zip bytes").unwrap();
         fs::write(&setup, b"setup bytes").unwrap();
@@ -445,6 +464,7 @@ pub mod tests {
             source_commit: "0123456789abcdef0123456789abcdef01234567".to_string(),
             candidate_id: "0.10.1-test".to_string(),
             installer,
+            setup_all_users: Some(all_users),
             setup: Some(setup),
             portable,
             runtimes: vec![],
@@ -457,13 +477,29 @@ pub mod tests {
             bundle.require(FileRole::Setup).unwrap(),
             bundle.root.join("packages").join(setup_name("0.10.1"))
         );
-        assert!(
-            !bundle
-                .inventory
-                .packages()
-                .contains_key("ExoSnap-0.10.1-Setup.exe"),
-            "the updater package identity stays the MSI and the portable ZIP"
-        );
+        let manifest = crate::manifest::for_bundle(
+            &bundle,
+            "https://updates.test/release/app.msi",
+            "https://updates.test/release/portable.zip",
+        )
+        .unwrap();
+        assert_eq!(manifest.packages.len(), 2);
+        assert_eq!(manifest.setup_packages.len(), 2);
+        for (entry, role, scope) in [
+            (&manifest.setup_packages[0], FileRole::Setup, "user"),
+            (
+                &manifest.setup_packages[1],
+                FileRole::SetupAllUsers,
+                "machine",
+            ),
+        ] {
+            let path = bundle.require(role).unwrap();
+            let name = path.file_name().unwrap().to_str().unwrap();
+            assert_eq!(entry.kind, scope);
+            assert_eq!(entry.url, format!("https://updates.test/release/{name}"));
+            assert_eq!(entry.sha256, sha256_file(&path).unwrap().0);
+            assert_eq!(bundle.inventory.packages()[name], entry.sha256);
+        }
     }
 
     #[test]
@@ -528,6 +564,7 @@ pub mod tests {
             source_commit: "0123456789abcdef0123456789abcdef01234567".into(),
             candidate_id: "c".into(),
             installer: src.clone(),
+            setup_all_users: None,
             setup: None,
             portable: src,
             runtimes: vec![],

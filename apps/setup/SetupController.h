@@ -86,6 +86,8 @@ class SetupController : public QObject {
     bool uninstall_requested_ = false;
     bool repair_requested_ = false;
     bool installed_ = false;
+    bool machine_scope_ = false;
+    bool runtime_required_ = false;
     bool can_cancel_ = false;
     bool measured_ = false;
     bool cancelling_ = false;

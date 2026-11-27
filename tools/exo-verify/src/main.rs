@@ -169,6 +169,8 @@ enum BundleCommand {
         #[arg(long)]
         setup: Option<PathBuf>,
         #[arg(long)]
+        setup_all_users: Option<PathBuf>,
+        #[arg(long)]
         portable: PathBuf,
         #[arg(long = "runtime")]
         runtimes: Vec<PathBuf>,
@@ -588,6 +590,7 @@ fn real_main() -> Result<ExitCode> {
             candidate_id,
             installer,
             setup,
+            setup_all_users,
             portable,
             runtimes,
             metadata,
@@ -601,6 +604,7 @@ fn real_main() -> Result<ExitCode> {
                 candidate_id,
                 installer,
                 setup,
+                setup_all_users,
                 portable,
                 runtimes,
                 metadata,

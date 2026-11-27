@@ -442,7 +442,7 @@ fn compiled_msi_preserves_distribution_ownership_without_installing() {
     assert_eq!(
         &owner[..4],
         [
-            "2",
+            "-1",
             "Software\\ExoSnap",
             "DistributionOwner",
             "[EXOSNAP_RESOLVED_DISTRIBUTION_OWNER]"

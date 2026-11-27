@@ -38,7 +38,7 @@ Evaluate draw-on-start, explicit reuse of the previous region and optional saved
 
 ### Installation scope and optional privileged diagnostics helper (v0.12)
 
-Status: Accepted, not implemented. Target v0.12; v0.11 retains its per-machine installation and elevated diagnostic relaunch.
+Status: Scope-aware Setup and update routing are implemented on the v0.12 development line, with native lifecycle acceptance pending. The separately planned diagnostics helper replaces the elevated diagnostic relaunch.
 
 Default new direct installations to the current user under `%LOCALAPPDATA%\Programs\ExoSnap`, with an optional all-users installation under `C:\Program Files\ExoSnap`. Use matching user or machine registration and Start Menu entries, and retain normal Installed Apps management. Preserve the existing installation scope, path and distribution ownership through updates, repairs and removal. Do not silently migrate a machine installation or create a duplicate user installation. Keep application data separate from program files.
 

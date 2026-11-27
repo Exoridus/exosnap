@@ -21,6 +21,7 @@
 #include <optional>
 #include <string>
 
+#include <update/install_mode_detector.h>
 #include <update/release_locator.h>
 #include <update/swap_engine.h>
 #include <update/update_types.h>
@@ -271,6 +272,7 @@ class UpdaterWorker : public QObject {
     std::wstring download_dir_;
     bool have_package_ = false; // Download completed at least once
     bool repair_msi_ = false;
+    std::optional<exosnap::update::MsiInstallScope> setup_scope_;
 
     // Deny-write / deny-delete lock on package_path_, held from verification
     // until the package is consumed (closes the verify->consume TOCTOU window).

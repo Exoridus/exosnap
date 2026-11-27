@@ -25,6 +25,26 @@ TEST(SetupControllerTest, FreshInstallHasFixedPathAndOptInShortcut) {
     EXPECT_EQ(controller.primaryText(), "Install");
 }
 
+TEST(SetupControllerTest, ExplainsScopeRuntimeAndDeniedConsent) {
+    SetupController controller("0.12.0", "initial");
+    SetupEvent detected = Detected();
+    detected.text = L"D:\\Apps\\ExoSnap";
+    controller.receive(detected);
+    EXPECT_EQ(controller.installPath(), "D:\\Apps\\ExoSnap");
+    EXPECT_TRUE(controller.description().contains("your Windows account"));
+    EXPECT_FALSE(controller.description().contains("administrator"));
+    detected.machine_scope = true;
+    detected.runtime_required = true;
+    controller.receive(detected);
+    EXPECT_TRUE(controller.description().contains("everyone"));
+    EXPECT_TRUE(controller.description().contains("administrator approval"));
+    SetupEvent cancelled{SetupEventKind::Completed};
+    cancelled.status = static_cast<std::int32_t>(0x800704C7U);
+    controller.receive(cancelled);
+    EXPECT_EQ(controller.page(), "cancelled");
+    EXPECT_TRUE(controller.description().contains("declined"));
+}
+
 TEST(SetupControllerTest, ExistingInstallOpensManageAndKeepsDataByDefault) {
     SetupController controller("0.11.0", "C:/Program Files/ExoSnap");
     controller.receive(Detected(true));

@@ -67,7 +67,7 @@ pub(super) fn validate(text: &str, report: &mut ValidationReport) {
     );
     require(
         find("RegistryValue", "Name", "DistributionOwner").is_some_and(|owner| {
-            owner.attribute("Root") == Some("HKLM")
+            owner.attribute("Root") == Some("HKMU")
                 && owner.attribute("Key") == Some("Software\\ExoSnap")
                 && owner.attribute("Type") == Some("string")
                 && owner.attribute("Value") == Some("[EXOSNAP_RESOLVED_DISTRIBUTION_OWNER]")
@@ -77,13 +77,13 @@ pub(super) fn validate(text: &str, report: &mut ValidationReport) {
                             component.children().any(|node| {
                                 node.has_tag_name("RegistryValue")
                                     && node.attribute("Name") == Some(name)
-                                    && node.attribute("Root") == Some("HKLM")
+                                    && node.attribute("Root") == Some("HKMU")
                                     && node.attribute("Key") == Some("Software\\ExoSnap")
                             })
                         })
                 })
         }),
-        "distribution owner must be persisted with installed and InstallPath in the same HKLM product component",
+        "distribution owner must be persisted with installed and InstallPath in the same scope-relative product component",
     );
     require(
         find("Binary", "Id", "DistributionOwnerProbe").is_some_and(|node| {
@@ -164,12 +164,9 @@ pub(super) fn validate(text: &str, report: &mut ValidationReport) {
     require(
         doc.descendants().any(|node| {
             node.has_tag_name("MajorUpgrade")
-                && matches!(
-                    node.attribute("Schedule"),
-                    None | Some("afterInstallValidate")
-                )
+                && node.attribute("Schedule") == Some("afterInstallInitialize")
         }),
-        "distribution ownership resolution requires product removal after launch validation",
+        "major upgrades must remove the previous product inside the rollback transaction",
     );
 }
 
@@ -269,7 +266,7 @@ mod tests {
             validate(&PACKAGE.replace(from, to), &mut report);
             assert!(!report.ok(), "mutation escaped: {from} -> {to}");
         }
-        let marker_start = PACKAGE.find("        <RegistryValue Root=\"HKLM\"\n                       Key=\"Software\\ExoSnap\"\n                       Name=\"DistributionOwner\"").unwrap();
+        let marker_start = PACKAGE.find("        <RegistryValue Root=\"HKMU\"\n                       Key=\"Software\\ExoSnap\"\n                       Name=\"DistributionOwner\"").unwrap();
         let marker_end = marker_start + PACKAGE[marker_start..].find("/>").unwrap() + 2;
         let marker = &PACKAGE[marker_start..marker_end];
         let moved = PACKAGE.replace(marker, "").replace("    <Component Id=\"LegacyHandoff\"", &format!("    <Component Id=\"WrongOwner\" Directory=\"INSTALLFOLDER\">{marker}</Component>\n    <Component Id=\"LegacyHandoff\""));

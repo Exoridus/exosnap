@@ -289,7 +289,8 @@ void PlaceNearAppWindow(QWindow& w, quint32 app_pid) {
 // registry-stamped InstallPath, falling back to --install-dir.
 std::wstring ResolveOpenDir(const UpdaterArgs& args) {
     if (args.install_mode == exosnap::update::InstallMode::Installed) {
-        if (const auto path = exosnap::update::ReadInstallPath(); path.has_value() && !path->empty()) {
+        if (const auto path = exosnap::update::ReadInstallPath(args.install_dir.toStdWString());
+            path.has_value() && !path->empty()) {
             return *path;
         }
     }
@@ -384,7 +385,7 @@ QString AcceptHandoff(const QString& path, UpdaterArgs* args, const UpdaterComma
 // Everything a manual start has to work out for itself, because no launcher told
 // it: which install this is, where it lives, and what version is actually there.
 void FillManualContext(UpdaterArgs& args) {
-    const auto registry_path = exosnap::update::ReadInstallPath();
+    const auto registry_path = exosnap::update::ReadInstallPath(QCoreApplication::applicationDirPath().toStdWString());
     const ManualContext context =
         ResolveManualContext(exosnap::update::DetectDistributionContext().install_mode,
                              registry_path.has_value() ? QString::fromStdWString(*registry_path) : QString(),

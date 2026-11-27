@@ -55,14 +55,18 @@ class Bootstrapper final : public CBalBaseBootstrapperApplication {
                 Restart} {
         version_ = Variable(L"WixBundleVersion");
         logPath_ = Variable(L"WixBundleLog");
+        machineScope_ = Variable(L"ExoSnapScope") == L"machine";
         wchar_t path[32768]{};
         SIZE_T length = _countof(path);
-        if (SUCCEEDED(engine_->FormatString(L"[ProgramFiles64Folder]ExoSnap", path, &length))) {
+        if (SUCCEEDED(engine_->FormatString(machineScope_ ? L"[ProgramFiles64Folder]ExoSnap"
+                                                          : L"[LocalAppDataFolder]Programs\\ExoSnap",
+                                            path, &length))) {
             installPath_ = path;
         }
         host_.version = version_.c_str();
         host_.log_path = logPath_.c_str();
-        host_.install_path = installPath_.c_str();
+        defaultInstallPath_ = installPath_;
+        host_.install_path = defaultInstallPath_.c_str();
         host_.runtime_path = workingDirectory_.c_str();
     }
 
@@ -88,6 +92,8 @@ class Bootstrapper final : public CBalBaseBootstrapperApplication {
     }
 
     STDMETHODIMP OnDetectPackageComplete(LPCWSTR id, HRESULT status, BOOTSTRAPPER_PACKAGE_STATE state, BOOL) override {
+        if (SUCCEEDED(status) && wcscmp(id, L"VCRedistX64") == 0)
+            runtimeRequired_ = state != BOOTSTRAPPER_PACKAGE_STATE_PRESENT;
         if (SUCCEEDED(status) && wcscmp(id, L"ExoSnapMsi") == 0) {
             installed_ = state == BOOTSTRAPPER_PACKAGE_STATE_PRESENT;
         }
@@ -115,7 +121,23 @@ class Bootstrapper final : public CBalBaseBootstrapperApplication {
             Finish(status, false);
             return S_OK;
         }
-        Emit(SetupEventKind::Detected, status);
+        const auto userPath = Variable(L"UserInstallPath");
+        const auto machinePath = Variable(L"MachineInstallPath");
+        const auto legacyMachinePath = Variable(L"LegacyMachineInstallPath");
+        if (action_ != BOOTSTRAPPER_ACTION_UNINSTALL &&
+            (machineScope_ ? !userPath.empty() : (!machinePath.empty() || !legacyMachinePath.empty()))) {
+            const auto failure = HRESULT_FROM_WIN32(ERROR_PRODUCT_VERSION);
+            const auto message = machineScope_ ? L"ExoSnap is installed for this user. Use the current-user Setup."
+                                               : L"ExoSnap is installed for all users. Use Setup-AllUsers.exe.";
+            engine_->Log(BOOTSTRAPPER_LOG_LEVEL_ERROR, message);
+            Emit(SetupEventKind::Error, failure, 0, message);
+            Finish(failure, false);
+            return S_OK;
+        }
+        const auto& recordedPath = machineScope_ ? machinePath : userPath;
+        if (!recordedPath.empty())
+            installPath_ = recordedPath;
+        Emit(SetupEventKind::Detected, status, 0, installPath_.c_str());
         if (display_ != BOOTSTRAPPER_DISPLAY_FULL ||
             (action_ != BOOTSTRAPPER_ACTION_INSTALL && action_ != BOOTSTRAPPER_ACTION_MODIFY &&
              action_ != BOOTSTRAPPER_ACTION_REPAIR && action_ != BOOTSTRAPPER_ACTION_UNINSTALL)) {
@@ -242,7 +264,9 @@ class Bootstrapper final : public CBalBaseBootstrapperApplication {
                 restart,
                 canCancel_,
                 text,
-                installed_ ? version_.c_str() : previousVersion_.empty() ? nullptr : previousVersion_.c_str()};
+                installed_ ? version_.c_str() : previousVersion_.empty() ? nullptr : previousVersion_.c_str(),
+                machineScope_,
+                runtimeRequired_};
             callback_(callbackContext_, &event);
         }
     }
@@ -419,6 +443,8 @@ class Bootstrapper final : public CBalBaseBootstrapperApplication {
     IBootstrapperEngine* engine_;
     BOOTSTRAPPER_ACTION action_;
     BOOTSTRAPPER_DISPLAY display_;
+    bool machineScope_ = false, runtimeRequired_ = false;
+    std::wstring defaultInstallPath_;
     std::wstring workingDirectory_, version_, logPath_, installPath_, previousVersion_;
     SetupHost host_;
     std::thread worker_, ui_;

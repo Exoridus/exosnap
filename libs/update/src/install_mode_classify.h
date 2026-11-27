@@ -31,6 +31,7 @@ struct InstallStamp {
     std::wstring install_dir;
     // Missing is a legacy direct installation. Present but invalid fails closed.
     std::optional<std::wstring> distribution_owner;
+    bool setup_managed = false;
 };
 
 // The install-mode rule: this copy is Installed only when a hive stamped an

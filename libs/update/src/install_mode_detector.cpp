@@ -21,7 +21,7 @@
 namespace exosnap::update {
 namespace {
 
-// The installer (MSI) writes both values under HKLM\Software\ExoSnap:
+// The MSI writes these values under Software\ExoSnap in the installation hive:
 //   "installed"   (REG_DWORD == 1)   -- presence marker
 //   "InstallPath" (REG_SZ)           -- [INSTALLFOLDER]
 // v0.10.0 wrote the same values under HKLM\Software\Codexo\ExoSnap; that key
@@ -192,6 +192,7 @@ std::optional<InstallStamp> ReadStamp(HKEY root) {
         try {
             stamp.install_dir = ReadStringValue(key, L"InstallPath").value_or(std::wstring{});
             stamp.distribution_owner = ReadOwnerMarker(key);
+            stamp.setup_managed = ReadStringValue(key, L"SetupManaged") == L"1";
         } catch (...) {
             RegCloseKey(key);
             throw;
@@ -202,27 +203,49 @@ std::optional<InstallStamp> ReadStamp(HKEY root) {
     return std::nullopt;
 }
 
+struct MatchingRecord {
+    MsiInstallScope scope;
+    InstallStamp stamp;
+};
+
+std::optional<MatchingRecord> MatchingInstallation(const std::wstring& directory) {
+    for (const auto scope : {MsiInstallScope::Machine, MsiInstallScope::User}) {
+        auto stamp = ReadStamp(scope == MsiInstallScope::Machine ? HKEY_LOCAL_MACHINE : HKEY_CURRENT_USER);
+        if (ClassifyInstallMode(stamp, directory) == InstallMode::Installed)
+            return MatchingRecord{scope, std::move(*stamp)};
+    }
+    return std::nullopt;
+}
+
 } // namespace
 
 DistributionContext DetectDistributionContext(const std::wstring& application_directory) noexcept {
     try {
-        // The first stamped record owns all installation facts. A portable copy
-        // must not inherit its ownership unless the executable directory matches.
-        std::optional<InstallStamp> stamp = ReadStamp(HKEY_LOCAL_MACHINE);
-        if (!stamp)
-            stamp = ReadStamp(HKEY_CURRENT_USER);
         const std::wstring directory = application_directory.empty() ? RunningExecutableDir() : application_directory;
-        return ClassifyDistributionContext(stamp, directory, HasAdjacentScoopMetadata(directory));
+        if (const auto installation = MatchingInstallation(directory))
+            return ClassifyDistributionContext(installation->stamp, directory);
+        return ClassifyDistributionContext(std::nullopt, directory, HasAdjacentScoopMetadata(directory));
     } catch (...) {
         return {InstallMode::Portable, DistributionOwner::UnknownManaged};
     }
+}
+
+std::optional<RegisteredInstallation> ReadRegisteredInstallation(const std::wstring& application_directory) {
+    if (const auto installation = MatchingInstallation(application_directory))
+        return RegisteredInstallation{installation->scope, installation->stamp.setup_managed};
+    return std::nullopt;
 }
 
 InstallMode DetectInstallMode() noexcept {
     return DetectDistributionContext().install_mode;
 }
 
-std::optional<std::wstring> ReadInstallPath() {
+std::optional<std::wstring> ReadInstallPath(const std::wstring& matching_directory) {
+    if (!matching_directory.empty()) {
+        if (const auto installation = MatchingInstallation(matching_directory))
+            return installation->stamp.install_dir;
+        return std::nullopt;
+    }
     auto try_key = [](HKEY root) -> std::optional<std::wstring> {
         for (const wchar_t* key_path : kKeyPaths) {
             HKEY key = nullptr;

@@ -17,6 +17,8 @@
 
 #include <QCoreApplication>
 #include <QElapsedTimer>
+#include <QSettings>
+#include <QVersionNumber>
 
 #include <chrono>
 #include <cstdio>
@@ -49,9 +51,10 @@ using exosnap::update::IsDowngrade;
 using exosnap::update::IsInstanceMutexPresent;
 using exosnap::update::LocateRelease;
 using exosnap::update::MakeSwapPlan;
+using exosnap::update::MsiInstallScope;
 using exosnap::update::ParseManifest;
 using exosnap::update::ParseSemVer;
-using exosnap::update::ReadInstallPath;
+using exosnap::update::ReadRegisteredInstallation;
 using exosnap::update::RenameOutcome;
 using exosnap::update::RepairOrphanedSwap;
 using exosnap::update::RestoreBackup;
@@ -656,6 +659,23 @@ bool UpdaterWorker::fetchAndStage() {
     }
 
     const exosnap::update::PackageEntry* package = SelectPackage(manifest, args_.install_mode);
+    setup_scope_.reset();
+    if (args_.install_mode == InstallMode::Installed) {
+        const auto registered = ReadRegisteredInstallation(args_.install_dir.toStdWString());
+        if (registered && registered->setup_managed) {
+            const auto& setup =
+                registered->scope == MsiInstallScope::Machine ? manifest.machine_setup : manifest.user_setup;
+            if (!setup) {
+                emit failed(
+                    FailureCase::DownloadFailed,
+                    QCoreApplication::translate(
+                        "UpdaterWorker", "The signed update manifest has no Setup for this installation scope."));
+                return false;
+            }
+            package = &*setup;
+            setup_scope_ = registered->scope;
+        }
+    }
     if (package == nullptr) {
         emit failed(FailureCase::DownloadFailed, // A1
                     QStringLiteral("The update manifest has no %1 package.")
@@ -666,7 +686,9 @@ bool UpdaterWorker::fetchAndStage() {
 
     // Package download, with byte progress (throttled to ~12 Hz).
     const bool portable = args_.install_mode == InstallMode::Portable;
-    const fs::path package_path = download_dir / (portable ? L"package.zip" : L"package.msi");
+    const fs::path package_path = download_dir / (portable       ? L"package.zip"
+                                                  : setup_scope_ ? L"package.exe"
+                                                                 : L"package.msi");
     QElapsedTimer throttle;
     throttle.start();
     const auto on_progress = [this, &throttle](const DownloadProgress& p) {
@@ -945,14 +967,48 @@ bool UpdaterWorker::runInstallMsi() {
         return false;
     }
 
-    const std::wstring params = BuildMsiexecParams(package_path_, args_.verify_reinstall, repair_msi_);
+    const auto scope = ReadRegisteredInstallation(args_.install_dir.toStdWString());
+    if (!scope || scope->setup_managed != setup_scope_.has_value() || (setup_scope_ && scope->scope != *setup_scope_)) {
+        emit failed(FailureCase::MsiFailed,
+                    QCoreApplication::translate(
+                        "UpdaterWorker", "The registered installation no longer matches the selected directory."));
+        return false;
+    }
+    bool needs_runtime = false;
+    if (!manifest_.vc_runtime_minimum.empty()) {
+        QSettings runtime(
+            QStringLiteral("HKEY_LOCAL_MACHINE\\SOFTWARE\\Microsoft\\VisualStudio\\14.0\\VC\\Runtimes\\x64"),
+            QSettings::Registry64Format);
+        const auto version = runtime.value(QStringLiteral("Version")).toString();
+        const auto actual = QVersionNumber::fromString(
+            QStringView(version).sliced(version.startsWith(u'v', Qt::CaseInsensitive) ? 1 : 0));
+        const auto minimum = QVersionNumber::fromString(QString::fromStdString(manifest_.vc_runtime_minimum));
+        needs_runtime = actual.isNull() || actual < minimum;
+        if (needs_runtime && !setup_scope_) {
+            emit failed(
+                FailureCase::MsiFailed,
+                QCoreApplication::translate(
+                    "UpdaterWorker", "Install the Microsoft Visual C++ x64 Runtime %1 or newer, then retry the update.")
+                    .arg(minimum.toString()));
+            return false;
+        }
+    }
+    const bool machine = scope->scope == MsiInstallScope::Machine;
+    auto params = BuildMsiexecParams(package_path_, args_.verify_reinstall, repair_msi_);
+    params += machine ? L" ALLUSERS=1 EXOSNAP_REQUESTED_SCOPE=machine" : L" EXOSNAP_REQUESTED_SCOPE=user";
+    if (setup_scope_) {
+        params = repair_msi_ || args_.verify_reinstall ? L"/repair" : L"/install";
+        if (!needs_runtime)
+            params += L" /quiet";
+        params += L" /norestart /log \"" + (fs::path(package_path_).parent_path() / L"msiexec.log").wstring() + L"\"";
+    }
     SHELLEXECUTEINFOW sei{};
     sei.cbSize = sizeof(sei);
     sei.fMask = SEE_MASK_NOCLOSEPROCESS;
-    sei.lpVerb = L"runas"; // UAC elevation
-    sei.lpFile = L"msiexec.exe";
+    sei.lpVerb = machine && !setup_scope_ ? L"runas" : L"open";
+    sei.lpFile = setup_scope_ ? package_path_.c_str() : L"msiexec.exe";
     sei.lpParameters = params.c_str();
-    sei.nShow = SW_HIDE;
+    sei.nShow = needs_runtime && setup_scope_ ? SW_SHOWNORMAL : SW_HIDE;
 
     if (::ShellExecuteExW(&sei) == 0) {
         if (::GetLastError() == ERROR_CANCELLED) {
@@ -988,6 +1044,10 @@ bool UpdaterWorker::runInstallMsi() {
     DWORD exit_code = 0;
     ::GetExitCodeProcess(sei.hProcess, &exit_code);
     ::CloseHandle(sei.hProcess);
+    if (exit_code == ERROR_CANCELLED || exit_code == ERROR_INSTALL_USEREXIT) {
+        emit failed(FailureCase::UacDeclined, QString());
+        return false;
+    }
     switch (ClassifyMsiExit(exit_code)) {
     case MsiExitClass::Success:
         break;
@@ -1022,8 +1082,8 @@ bool UpdaterWorker::runVerify() {
     } else {
         // The MSI stamps [INSTALLFOLDER] (may carry a trailing backslash --
         // MakeSwapPlan normalises it) into the registry post-install.
-        const std::wstring install_dir = ReadInstallPath().value_or(args_.install_dir.toStdWString());
-        if (install_dir.empty()) {
+        const std::wstring install_dir = args_.install_dir.toStdWString();
+        if (!ReadRegisteredInstallation(install_dir)) {
             emit failed(FailureCase::VerifyInstallFailedMsi,
                         QStringLiteral("The installer did not record an install location.")); // B3-MSI
             return false;

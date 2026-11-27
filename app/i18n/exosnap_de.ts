@@ -11574,6 +11574,18 @@ Kleiner Text auf dem Bildschirm verliert früher an Qualität als Videoinhalte. 
         <source>This installation is managed externally. Update it with the package manager that installed ExoSnap.</source>
         <translation>Diese Installation wird extern verwaltet. Aktualisieren Sie sie mit dem Paketmanager, der ExoSnap installiert hat.</translation>
     </message>
+    <message>
+        <source>The signed update manifest has no Setup for this installation scope.</source>
+        <translation>Das signierte Update-Manifest enthält kein Setup für diesen Installationsbereich.</translation>
+    </message>
+    <message>
+        <source>The registered installation no longer matches the selected directory.</source>
+        <translation>Die registrierte Installation stimmt nicht mehr mit dem ausgewählten Verzeichnis überein.</translation>
+    </message>
+    <message>
+        <source>Install the Microsoft Visual C++ x64 Runtime %1 or newer, then retry the update.</source>
+        <translation>Installiere die Microsoft Visual C++ x64 Runtime %1 oder neuer und versuche das Update erneut.</translation>
+    </message>
 </context>
 <context>
     <name>VisualSources</name>
@@ -14459,8 +14471,8 @@ Kleiner Text auf dem Bildschirm verliert früher an Qualität als Videoinhalte. 
     </message>
     <message>
         <location line="+4"/>
-        <source>For everyone on this computer. Everything Setup needs is included.</source>
-        <translation>Für alle Benutzer dieses Computers. Alles für die Installation ist enthalten.</translation>
+        <source>For everyone on this computer.</source>
+        <translation>Für alle Benutzer dieses Computers.</translation>
     </message>
     <message>
         <location line="+2"/>
@@ -14571,6 +14583,18 @@ Kleiner Text auf dem Bildschirm verliert früher an Qualität als Videoinhalte. 
         <location line="+2"/>
         <source>Close</source>
         <translation>Schließen</translation>
+    </message>
+    <message>
+        <source>For your Windows account.</source>
+        <translation>Für dein Windows-Konto.</translation>
+    </message>
+    <message>
+        <source>The included Microsoft Visual C++ Runtime requires administrator approval before ExoSnap can be installed.</source>
+        <translation>Die mitgelieferte Microsoft Visual C++ Runtime benötigt die Zustimmung eines Administrators, bevor ExoSnap installiert werden kann.</translation>
+    </message>
+    <message>
+        <source>Administrator approval was declined. Setup stopped.</source>
+        <translation>Die Administratorfreigabe wurde abgelehnt. Setup wurde beendet.</translation>
     </message>
 </context>
 </TS>
