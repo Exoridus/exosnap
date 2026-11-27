@@ -583,6 +583,17 @@ jobs:
           cargo exo-dev verify --profile ci-build-debug --event $env:EVENT
           --tidy-cache-dir $env:TIDY_CACHE --jobs $([Environment]::ProcessorCount)
 
+      # Hosted Windows runners are disposable administrator VMs. This one
+      # live test creates a GUID-named empty logger with no enabled providers;
+      # it cannot stop product traces or require capture/GPU hardware. Keep
+      # all other live tests excluded from the ordinary PR suite.
+      - name: Verify isolated ETW session ownership
+        if: github.event_name == 'pull_request'
+        run: >-
+          ctest --test-dir build/windows-x64-ninja-debug -C Debug
+          -L '^live$' -R '^diagnostics_helper_trace_cleanup[.]diagnostics_helper_trace_cleanup_tests$'
+          --no-tests=error --output-on-failure
+
       # Validated diagnostics remain blocking when replayed. Retain them even
       # when an analysis finding or a later step fails, so a follow-up run can
       # reuse unchanged inputs without repeating the completed analysis.
