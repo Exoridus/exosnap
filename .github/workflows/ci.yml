@@ -371,6 +371,7 @@ jobs:
       group: ci-${{ github.workflow }}-changes-${{ github.event.pull_request.number || github.run_id }}
       cancel-in-progress: true
     outputs:
+      installer: ${{ steps.filter.outputs.installer }}
       packaging: ${{ steps.filter.outputs.packaging }}
       build: ${{ steps.build-filter.outputs.build }}
     steps:
@@ -380,6 +381,12 @@ jobs:
         id: filter
         with:
           filters: |
+            installer:
+              - 'apps/setup/**'
+              - 'packaging/msi/**'
+              - 'packaging/burn/**'
+              - 'tools/exo-verify/src/package.rs'
+              - 'tools/exo-verify/src/package/**'
             packaging:
               - 'packaging/**'
               - 'tools/exo-verify/src/package.rs'
@@ -790,6 +797,40 @@ jobs:
         uses: ./.github/actions/sccache-report
         with:
           label: windows-x64-ninja-release
+
+      # Build unsigned installer artifacts on this runner. Installation, rollback
+      # and UAC behavior are qualified separately on disposable Windows guests.
+      - name: Build the MSI and both offline Setup bundles
+        if: github.event_name == 'pull_request' && needs.changes.outputs.installer == 'true'
+        shell: pwsh
+        run: |
+          dotnet tool install --global wix --version 4.0.5
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          wix extension add -g WixToolset.Util.wixext/4.0.5
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          wix extension add -g WixToolset.Bal.wixext/4.0.5
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          $redist = Join-Path $env:RUNNER_TEMP 'vc_redist.x64.exe'
+          curl.exe -sSfL -o $redist https://aka.ms/vs/17/release/vc_redist.x64.exe
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          $out = '.workspace/installer-smoke'
+          cargo exo-verify package --build-dir build/windows-x64-ninja-release --repo-root . --out $out --vc-redist $redist
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          $report = Get-Content "$out/package.json" -Raw | ConvertFrom-Json
+          foreach ($file in @($report.installer, $report.setup, $report.setupAllUsers)) {
+            if (-not $file -or -not (Test-Path -LiteralPath $file -PathType Leaf)) { throw "Missing installer artifact: $file" }
+          }
+
+      - name: Upload installer authoring report
+        if: github.event_name == 'pull_request' && needs.changes.outputs.installer == 'true'
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        with:
+          name: installer-authoring-report
+          path: |
+            .workspace/installer-smoke/package.json
+            .workspace/installer-smoke/package-size.md
+          include-hidden-files: true
+          if-no-files-found: error
 
       - name: Upload test logs (windows-x64-ninja-release)
         if: failure()
