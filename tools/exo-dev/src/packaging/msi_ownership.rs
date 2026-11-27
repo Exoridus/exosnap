@@ -32,6 +32,41 @@ pub(super) fn validate(text: &str, report: &mut ValidationReport) {
                 .push(format!("packaging/msi/Package.wxs: {message}"));
         }
     };
+    let scope_definitions = doc
+        .root_element()
+        .children()
+        .filter_map(|node| node.pi())
+        .filter_map(|pi| {
+            match (
+                pi.target,
+                pi.value.map(str::trim).filter(|value| !value.is_empty()),
+            ) {
+                ("define", Some(value))
+                    if value.starts_with("ProductHive ") || value.starts_with("PackageScope ") =>
+                {
+                    Some(value)
+                }
+                ("if" | "else" | "endif", value) => Some(value.unwrap_or(pi.target)),
+                _ => None,
+            }
+        })
+        .collect::<Vec<_>>();
+    const PRODUCT_HIVE: &str = "$(var.ProductHive)";
+    require(
+        scope_definitions
+            == [
+                "endif",
+                "$(var.ExoSnapPerUser) = 1",
+                "PackageScope = perUser",
+                "ProductHive = HKCU",
+                "else",
+                "PackageScope = perMachine",
+                "ProductHive = HKLM",
+                "endif",
+            ]
+            && find("Package", "Scope", "$(var.PackageScope)").is_some(),
+        "the fixed per-user and machine package branches must resolve to their matching hives",
+    );
     for id in [
         "EXOSNAP_DISTRIBUTION_OWNER",
         "EXOSNAP_DISTRIBUTION_OWNER_REMEMBERED",
@@ -48,7 +83,7 @@ pub(super) fn validate(text: &str, report: &mut ValidationReport) {
     }
     require(
         find("RegistrySearch", "Id", "ExoSnapDistributionOwnerRemembered").is_some_and(|node| {
-            node.attribute("Root") == Some("HKLM")
+            node.attribute("Root") == Some(PRODUCT_HIVE)
                 && node.attribute("Key") == Some("Software\\ExoSnap")
                 && node.attribute("Name") == Some("DistributionOwner")
                 && node.attribute("Type") == Some("raw")
@@ -56,7 +91,7 @@ pub(super) fn validate(text: &str, report: &mut ValidationReport) {
                 && node.parent().and_then(|parent| parent.attribute("Id"))
                     == Some("EXOSNAP_DISTRIBUTION_OWNER_REMEMBERED")
         }),
-        "distribution owner AppSearch must read the authoritative 64-bit HKLM product marker",
+        "distribution owner AppSearch must read the authoritative 64-bit product marker for this scope",
     );
     let caller_condition = "NOT EXOSNAP_DISTRIBUTION_OWNER OR EXOSNAP_DISTRIBUTION_OWNER = \"direct\" OR EXOSNAP_DISTRIBUTION_OWNER = \"winget\" OR EXOSNAP_DISTRIBUTION_OWNER = \"chocolatey\"";
     require(
@@ -67,7 +102,7 @@ pub(super) fn validate(text: &str, report: &mut ValidationReport) {
     );
     require(
         find("RegistryValue", "Name", "DistributionOwner").is_some_and(|owner| {
-            owner.attribute("Root") == Some("HKLM")
+            owner.attribute("Root") == Some(PRODUCT_HIVE)
                 && owner.attribute("Key") == Some("Software\\ExoSnap")
                 && owner.attribute("Type") == Some("string")
                 && owner.attribute("Value") == Some("[EXOSNAP_RESOLVED_DISTRIBUTION_OWNER]")
@@ -77,13 +112,13 @@ pub(super) fn validate(text: &str, report: &mut ValidationReport) {
                             component.children().any(|node| {
                                 node.has_tag_name("RegistryValue")
                                     && node.attribute("Name") == Some(name)
-                                    && node.attribute("Root") == Some("HKLM")
+                                    && node.attribute("Root") == Some(PRODUCT_HIVE)
                                     && node.attribute("Key") == Some("Software\\ExoSnap")
                             })
                         })
                 })
         }),
-        "distribution owner must be persisted with installed and InstallPath in the same HKLM product component",
+        "distribution owner must be persisted with installed and InstallPath in the same product scope and component",
     );
     require(
         find("Binary", "Id", "DistributionOwnerProbe").is_some_and(|node| {
@@ -164,12 +199,9 @@ pub(super) fn validate(text: &str, report: &mut ValidationReport) {
     require(
         doc.descendants().any(|node| {
             node.has_tag_name("MajorUpgrade")
-                && matches!(
-                    node.attribute("Schedule"),
-                    None | Some("afterInstallValidate")
-                )
+                && node.attribute("Schedule") == Some("afterInstallInitialize")
         }),
-        "distribution ownership resolution requires product removal after launch validation",
+        "distribution ownership resolution and rollback require product removal inside the installation transaction",
     );
 }
 
@@ -239,6 +271,13 @@ mod tests {
                 "AND EXOSNAP_DISTRIBUTION_OWNER_PRESENT",
             ),
             ("Bitness=\"always64\"", "Bitness=\"always32\""),
+            ("ProductHive = HKCU", "ProductHive = HKLM"),
+            ("ProductHive = HKLM", "ProductHive = HKCU"),
+            (
+                "Schedule=\"afterInstallInitialize\"",
+                "Schedule=\"afterInstallValidate\"",
+            ),
+            ("Root=\"$(var.ProductHive)\"", "Root=\"HKLM\""),
             ("Name=\"DistributionOwner\"", "Name=\"OtherOwner\""),
             (
                 "Value=\"[EXOSNAP_RESOLVED_DISTRIBUTION_OWNER]\"",
@@ -269,9 +308,15 @@ mod tests {
             validate(&PACKAGE.replace(from, to), &mut report);
             assert!(!report.ok(), "mutation escaped: {from} -> {to}");
         }
-        let marker_start = PACKAGE.find("        <RegistryValue Root=\"HKLM\"\n                       Key=\"Software\\ExoSnap\"\n                       Name=\"DistributionOwner\"").unwrap();
-        let marker_end = marker_start + PACKAGE[marker_start..].find("/>").unwrap() + 2;
-        let marker = &PACKAGE[marker_start..marker_end];
+        let doc = roxmltree::Document::parse(PACKAGE).unwrap();
+        let marker = &PACKAGE[doc
+            .descendants()
+            .find(|node| {
+                node.has_tag_name("RegistryValue")
+                    && node.attribute("Name") == Some("DistributionOwner")
+            })
+            .unwrap()
+            .range()];
         let moved = PACKAGE.replace(marker, "").replace("    <Component Id=\"LegacyHandoff\"", &format!("    <Component Id=\"WrongOwner\" Directory=\"INSTALLFOLDER\">{marker}</Component>\n    <Component Id=\"LegacyHandoff\""));
         let mut report = ValidationReport::default();
         validate(&moved, &mut report);

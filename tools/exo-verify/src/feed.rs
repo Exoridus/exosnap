@@ -10,7 +10,9 @@ use std::net::TcpListener;
 use std::path::PathBuf;
 use std::sync::Arc;
 
-use crate::bundle::{Bundle, FileRole, installer_name, portable_name, sha256_file};
+use crate::bundle::{
+    Bundle, FileRole, installer_name, portable_name, sha256_file, user_installer_name,
+};
 use crate::manifest;
 
 #[derive(clap::Args)]
@@ -43,6 +45,7 @@ struct Response {
     body: Body,
 }
 
+#[derive(Clone)]
 enum Body {
     Bytes(Vec<u8>),
     File(PathBuf, String, u64),
@@ -69,6 +72,7 @@ struct Feed {
     installer_size: u64,
     portable_size: u64,
     installer_path: String,
+    user_installer: Option<(String, Body)>,
     portable_path: String,
 }
 
@@ -125,7 +129,7 @@ impl Feed {
         };
         let installer = read_bound(FileRole::Installer)?;
         let portable = read_bound(FileRole::Portable)?;
-        let assets = [
+        let mut assets = vec![
             (
                 manifest::MANIFEST_NAME.to_string(),
                 "/update-manifest.json".to_string(),
@@ -137,6 +141,21 @@ impl Feed {
             (installer_name(version), installer_path.clone()),
             (portable_name(version), portable_path.clone()),
         ];
+        let user_installer = if let Some(entry) = bundle.inventory.file(FileRole::UserInstaller) {
+            let name = user_installer_name(version);
+            let path = format!("/{name}");
+            assets.push((name, path.clone()));
+            Some((
+                path,
+                Body::File(
+                    read_bound(FileRole::UserInstaller)?,
+                    entry.sha256.clone(),
+                    entry.size,
+                ),
+            ))
+        } else {
+            None
+        };
         let listing = serde_json::to_vec(&json!([{
             "tag_name": format!("v{version}"), "draft": false, "prerelease": false,
             "html_url": format!("https://api.github.com/releases/tag/v{version}"),
@@ -152,6 +171,7 @@ impl Feed {
             installer,
             portable,
             installer_path,
+            user_installer,
             portable_path,
             installer_hash: installer_entry.sha256.clone(),
             portable_hash: portable_entry.sha256.clone(),
@@ -186,7 +206,10 @@ impl Feed {
                     self.portable_size,
                 ),
             ),
-            _ => return None,
+            p => match &self.user_installer {
+                Some((path, body)) if p == path => ("application/octet-stream", body.clone()),
+                _ => return None,
+            },
         };
         Some(Response { content_type, body })
     }

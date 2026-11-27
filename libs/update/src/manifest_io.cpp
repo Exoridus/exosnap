@@ -85,20 +85,24 @@ ParseResult ParseManifest(std::string_view json) noexcept {
         m.minimum_accepted_version = *minver;
 
         // packages
+        const auto read_package = [](const nlohmann::json& pkg, PackageKind kind) {
+            return PackageEntry{kind, pkg.at("url").get<std::string>(), pkg.at("sha256").get<std::string>()};
+        };
         for (const auto& pkg : j.at("packages")) {
-            PackageEntry e;
             auto kind_str = pkg.at("kind").get<std::string>();
-            if (kind_str == "installer")
-                e.kind = PackageKind::Installer;
-            else if (kind_str == "portable")
-                e.kind = PackageKind::Portable;
-            else
+            if (kind_str != "installer" && kind_str != "portable")
                 return std::string{"unknown package kind: "} + kind_str;
-            e.url = pkg.at("url").get<std::string>();
-            e.sha256_hex = pkg.at("sha256").get<std::string>();
+            auto e = read_package(pkg, kind_str == "installer" ? PackageKind::Installer : PackageKind::Portable);
             if (e.sha256_hex.size() != 64)
                 return std::string{"sha256 must be 64 hex chars"};
             m.packages.push_back(std::move(e));
+        }
+        // Older clients reject unfamiliar kinds in packages, but ignore new top-level fields.
+        if (const auto user = j.find("user_installer"); user != j.end()) {
+            auto entry = read_package(*user, PackageKind::Installer);
+            if (entry.sha256_hex.size() != 64)
+                return std::string{"sha256 must be 64 hex chars"};
+            m.user_installer = std::move(entry);
         }
 
         return m;

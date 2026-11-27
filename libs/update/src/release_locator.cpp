@@ -160,7 +160,9 @@ std::vector<ReleaseNote> CollectAllReleaseNotesForChannel(std::string_view relea
     return CollectNotesMatching(releases_json, channel, [](const SemVer&) { return true; });
 }
 
-const PackageEntry* SelectPackage(const UpdateManifest& m, InstallMode mode) {
+const PackageEntry* SelectPackage(const UpdateManifest& m, InstallMode mode, InstallScope scope) {
+    if (mode == InstallMode::Installed && scope == InstallScope::User)
+        return m.user_installer ? &*m.user_installer : nullptr;
     const PackageKind want = (mode == InstallMode::Installed) ? PackageKind::Installer : PackageKind::Portable;
     for (const auto& pkg : m.packages) {
         if (pkg.kind == want)

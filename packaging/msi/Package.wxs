@@ -1,5 +1,25 @@
-<Wix xmlns="http://wixtoolset.org/schemas/v4/wxs"
-     xmlns:util="http://wixtoolset.org/schemas/v4/wxs/util">
+<Wix xmlns="http://wixtoolset.org/schemas/v4/wxs">
+
+  <?ifndef ExoSnapPerUser ?><?define ExoSnapPerUser = 0 ?><?endif ?>
+  <?if $(var.ExoSnapPerUser) = 1 ?>
+    <?define PackageScope = perUser ?>
+    <?define ProductUpgradeCode = "{8D129210-E66F-46F7-A558-D77D9151F0A8}" ?>
+    <?define ProductHive = HKCU ?>
+    <?define OtherHive = HKLM ?>
+    <?define StartMenuComponent = "{BEF8F134-25DD-4330-86E7-C01AAE1435FB}" ?>
+    <?define StartMenuDirectoryKeyPath = no ?>
+    <?define StartMenuRegistryKeyPath = yes ?>
+    <?define DesktopComponent = "{28CB691A-C6D0-474D-ACDE-E21DCC1BD3A9}" ?>
+  <?else ?>
+    <?define PackageScope = perMachine ?>
+    <?define ProductUpgradeCode = "{8988DAFC-3AE4-4788-BA6D-62E3F73C7A7D}" ?>
+    <?define ProductHive = HKLM ?>
+    <?define OtherHive = HKCU ?>
+    <?define StartMenuComponent = "{C1D2E3F4-A5B6-7890-CDEF-1234567890AB}" ?>
+    <?define StartMenuDirectoryKeyPath = yes ?>
+    <?define StartMenuRegistryKeyPath = no ?>
+    <?define DesktopComponent = "{9BEDB693-BF11-4589-B5A4-AD17A96F1F7E}" ?>
+  <?endif ?>
 
   <!--
     ExoSnap MSI Installer
@@ -23,25 +43,55 @@
     The build script also runs a post-build MSI content assertion (msiexec /a
     extraction) to catch any drift before a release can ship.
 
-    User data is never installed by this MSI and is preserved on uninstall
-    unless the caller explicitly sets EXOSNAP_REMOVE_USER_DATA=1.
+    The MSI never removes local user data. Setup may remove it unelevated.
   -->
 
   <Package Name="ExoSnap"
            Manufacturer="Codexo"
            Version="$(var.ProductVersion)"
-           UpgradeCode="8988DAFC-3AE4-4788-BA6D-62E3F73C7A7D"
-           Scope="perMachine"
+           UpgradeCode="$(var.ProductUpgradeCode)"
+           Scope="$(var.PackageScope)"
            Language="1033"
            Codepage="1252">
 
     <MajorUpgrade DowngradeErrorMessage="A newer version of ExoSnap is already installed."
+                  Schedule="afterInstallInitialize"
                   AllowSameVersionUpgrades="yes" />
+
+    <Property Id="EXOSNAP_OTHER_SCOPE_INSTALLED">
+      <RegistrySearch Id="OtherScopeMarker" Root="$(var.OtherHive)" Key="Software\ExoSnap"
+                      Name="installed" Type="raw" Bitness="always64" />
+    </Property>
+    <Property Id="EXOSNAP_OTHER_SCOPE_LEGACY">
+      <RegistrySearch Id="OtherScopeLegacyMarker" Root="$(var.OtherHive)" Key="Software\Codexo\ExoSnap"
+                      Name="installed" Type="raw" Bitness="always64" />
+    </Property>
+    <Launch Condition='Installed OR (EXOSNAP_OTHER_SCOPE_INSTALLED &lt;&gt; "#1" AND EXOSNAP_OTHER_SCOPE_LEGACY &lt;&gt; "#1")'
+            Message="ExoSnap is installed in a different scope. Use its original installer to upgrade, or uninstall it before changing scope." />
+    <?if $(var.ExoSnapPerUser) = 1 ?>
+      <Launch Condition="NOT ALLUSERS" Message="Use the all-users installer to install ExoSnap for all users." />
+    <?else ?>
+      <Launch Condition="ALLUSERS = 1" Message="Use ExoSnap Setup to install ExoSnap for your Windows account." />
+    <?endif ?>
+
+    <Property Id="EXOSNAP_EXISTING_INSTALL_PATH">
+      <RegistrySearch Id="ExistingInstallPath" Root="$(var.ProductHive)" Key="Software\ExoSnap"
+                      Name="InstallPath" Type="raw" Bitness="always64" />
+    </Property>
+    <Property Id="EXOSNAP_LEGACY_INSTALL_PATH">
+      <RegistrySearch Id="LegacyInstallPath" Root="$(var.ProductHive)" Key="Software\Codexo\ExoSnap"
+                      Name="InstallPath" Type="raw" Bitness="always64" />
+    </Property>
+    <SetProperty Id="INSTALLFOLDER" Action="RestoreExistingInstallPath" Value="[EXOSNAP_EXISTING_INSTALL_PATH]"
+                 Before="CostFinalize" Condition="(Installed OR WIX_UPGRADE_DETECTED) AND EXOSNAP_EXISTING_INSTALL_PATH" />
+    <SetProperty Id="INSTALLFOLDER" Action="RestoreLegacyInstallPath" Value="[EXOSNAP_LEGACY_INSTALL_PATH]"
+                 Before="RestoreExistingInstallPath" Condition="WIX_UPGRADE_DETECTED AND NOT EXOSNAP_EXISTING_INSTALL_PATH AND EXOSNAP_LEGACY_INSTALL_PATH" />
 
     <!-- Detects an upgrade from the 0.10.0 product or older. The legacy
          handoff component below needs exactly that transition, not every
          future upgrade. -->
-    <Upgrade Id="8988DAFC-3AE4-4788-BA6D-62E3F73C7A7D">
+    <?if $(var.ExoSnapPerUser) = 0 ?>
+    <Upgrade Id="$(var.ProductUpgradeCode)">
       <UpgradeVersion Minimum="0.0.0"
                       Maximum="0.10.0"
                       IncludeMinimum="yes"
@@ -49,6 +99,7 @@
                       OnlyDetect="yes"
                       Property="EXOSNAP_V010_OR_OLDER" />
     </Upgrade>
+    <?endif ?>
 
     <Media Id="1" Cabinet="exosnap.cab" EmbedCab="yes" />
 
@@ -60,7 +111,7 @@
     <Property Id="EXOSNAP_DISTRIBUTION_OWNER_REMEMBERED" Secure="yes">
       <RegistrySearch Id="ExoSnapDistributionOwnerRemembered"
                       Type="raw"
-                      Root="HKLM"
+                      Root="$(var.ProductHive)"
                       Key="Software\ExoSnap"
                       Name="DistributionOwner"
                       Bitness="always64" />
@@ -68,6 +119,9 @@
     <Property Id="EXOSNAP_DISTRIBUTION_OWNER_PRESENT" Secure="yes" />
     <Property Id="EXOSNAP_DISTRIBUTION_OWNER_STRING" Secure="yes" />
     <Property Id="EXOSNAP_RESOLVED_DISTRIBUTION_OWNER" Secure="yes" />
+    <?if $(var.ExoSnapPerUser) = 1 ?>
+    <Property Id="ExoSnapPackageIsPerUser" Value="1" />
+    <?endif ?>
     <Launch Condition='NOT EXOSNAP_DISTRIBUTION_OWNER OR EXOSNAP_DISTRIBUTION_OWNER = "direct" OR EXOSNAP_DISTRIBUTION_OWNER = "winget" OR EXOSNAP_DISTRIBUTION_OWNER = "chocolatey"'
             Message="EXOSNAP_DISTRIBUTION_OWNER must be direct, winget or chocolatey." />
     <!-- AppSearch skips an empty REG_SZ, so a read-only presence probe must
@@ -78,6 +132,20 @@
                   DllEntry="ProbeDistributionOwner"
                   Execute="immediate"
                   Return="check" />
+    <?if $(var.ExoSnapPerUser) = 0 ?>
+    <Property Id="EXOSNAP_SETUP_MAINTENANCE" Secure="yes" />
+    <Property Id="EXOSNAP_LEGACY_SETUP_PRODUCT" Secure="yes" />
+    <CustomAction Id="ProbeLegacySetupProduct" BinaryRef="DistributionOwnerProbe" DllEntry="ProbeLegacySetupProduct"
+                  Execute="immediate" Return="check" />
+    <Launch Condition="NOT EXOSNAP_LEGACY_SETUP_PRODUCT OR EXOSNAP_SETUP_MAINTENANCE = 1"
+            Message="This installation is managed by an earlier ExoSnap Setup. Run the current ExoSnap Setup to upgrade it." />
+    <InstallUISequence>
+      <Custom Action="ProbeLegacySetupProduct" Before="LaunchConditions" />
+    </InstallUISequence>
+    <InstallExecuteSequence>
+      <Custom Action="ProbeLegacySetupProduct" Before="LaunchConditions" />
+    </InstallExecuteSequence>
+    <?endif ?>
     <CustomAction Id="ResolveDistributionOwnerFromCaller"
                   Property="EXOSNAP_RESOLVED_DISTRIBUTION_OWNER"
                   Value="[EXOSNAP_DISTRIBUTION_OWNER]" />
@@ -140,30 +208,41 @@
     <!-- Install-root directory skeleton. The product installs directly under
          Program Files; there is no vendor directory and no repeated ExoSnap
          layer. Subdirectories (plugins/, licenses/, …) come from _harvest.wxs. -->
+    <?if $(var.ExoSnapPerUser) = 1 ?>
+    <StandardDirectory Id="LocalAppDataFolder">
+      <Directory Id="UserProgramsFolder" Name="Programs">
+        <Directory Id="INSTALLFOLDER" Name="ExoSnap" />
+      </Directory>
+    </StandardDirectory>
+    <?else ?>
     <StandardDirectory Id="ProgramFiles64Folder">
       <Directory Id="INSTALLFOLDER" Name="ExoSnap" />
     </StandardDirectory>
+    <?endif ?>
 
     <!-- Start Menu shortcut (all-users, per-machine) — stable component GUID across releases -->
     <StandardDirectory Id="ProgramMenuFolder">
-      <Component Id="StartMenuShortcut" Guid="{C1D2E3F4-A5B6-7890-CDEF-1234567890AB}" KeyPath="yes">
+      <Component Id="StartMenuShortcut" Guid="$(var.StartMenuComponent)" KeyPath="$(var.StartMenuDirectoryKeyPath)">
+        <?if $(var.ExoSnapPerUser) = 1 ?>
+        <RemoveFolder Id="ExoSnapUserProgramsFolder" Directory="UserProgramsFolder" On="uninstall" />
+        <?endif ?>
         <Shortcut Id="StartMenuExoSnap"
                   Name="ExoSnap"
                   Description="Windows-native screen, window and region recorder"
                   Target="[INSTALLFOLDER]exosnap.exe"
                   WorkingDirectory="INSTALLFOLDER"
                   Icon="ExoSnapAppIcon" />
-        <RegistryValue Root="HKLM"
+        <RegistryValue Root="$(var.ProductHive)"
                        Key="Software\ExoSnap"
                        Name="installed"
                        Value="1"
-                       Type="integer" />
-        <RegistryValue Root="HKLM"
+                       Type="integer" KeyPath="$(var.StartMenuRegistryKeyPath)" />
+        <RegistryValue Root="$(var.ProductHive)"
                        Key="Software\ExoSnap"
                        Name="InstallPath"
                        Value="[INSTALLFOLDER]"
                        Type="string" />
-        <RegistryValue Root="HKLM"
+        <RegistryValue Root="$(var.ProductHive)"
                        Key="Software\ExoSnap"
                        Name="DistributionOwner"
                        Value="[EXOSNAP_RESOLVED_DISTRIBUTION_OWNER]"
@@ -173,7 +252,7 @@
              immutable v0.10.0 updater reads after its handoff; the runtime's
              installed-mode detection also accepts the legacy key as a fallback
              while an old version is still present. -->
-        <RemoveRegistryKey Root="HKLM" Key="Software\Codexo\ExoSnap" Action="removeOnInstall" />
+        <RemoveRegistryKey Root="$(var.ProductHive)" Key="Software\Codexo\ExoSnap" Action="removeOnInstall" />
       </Component>
     </StandardDirectory>
 
@@ -185,22 +264,24 @@
          0.10.0 or older, after the stale key was cleared above; the v0.10.1
          runtime always prefers HKLM\Software\ExoSnap. The values are removed
          when the product is uninstalled. -->
+    <?if $(var.ExoSnapPerUser) = 0 ?>
     <Component Id="LegacyHandoff"
                Guid="{EA1AE131-D32E-422C-A610-3BFB1C4E642A}"
                Directory="INSTALLFOLDER"
                Condition="EXOSNAP_V010_OR_OLDER">
-      <RegistryValue Root="HKLM"
+      <RegistryValue Root="$(var.ProductHive)"
                      Key="Software\Codexo\ExoSnap"
                      Name="installed"
                      Value="1"
                      Type="integer"
                      KeyPath="yes" />
-      <RegistryValue Root="HKLM"
+      <RegistryValue Root="$(var.ProductHive)"
                      Key="Software\Codexo\ExoSnap"
                      Name="InstallPath"
                      Value="[INSTALLFOLDER]"
                      Type="string" />
     </Component>
+    <?endif ?>
 
     <!-- Optional desktop shortcut. The offline Setup renders an unchecked
          "Create a desktop shortcut" option; the raw MSI and every package
@@ -211,14 +292,14 @@
     <Property Id="EXOSNAP_DESKTOP_SHORTCUT_REMEMBERED">
       <RegistrySearch Id="ExoSnapDesktopShortcutRemembered"
                       Type="raw"
-                      Root="HKLM"
+                      Root="$(var.ProductHive)"
                       Key="Software\ExoSnap"
                       Name="DesktopShortcut"
                       Bitness="always64" />
     </Property>
     <StandardDirectory Id="DesktopFolder">
       <Component Id="DesktopShortcut"
-                 Guid="{9BEDB693-BF11-4589-B5A4-AD17A96F1F7E}"
+                 Guid="$(var.DesktopComponent)"
                  Condition='EXOSNAP_DESKTOP_SHORTCUT = 1 OR EXOSNAP_DESKTOP_SHORTCUT_REMEMBERED = "#1"'>
         <Shortcut Id="DesktopExoSnap"
                   Name="ExoSnap"
@@ -226,7 +307,7 @@
                   Target="[INSTALLFOLDER]exosnap.exe"
                   WorkingDirectory="INSTALLFOLDER"
                   Icon="ExoSnapAppIcon" />
-        <RegistryValue Root="HKLM"
+        <RegistryValue Root="$(var.ProductHive)"
                        Key="Software\ExoSnap"
                        Name="DesktopShortcut"
                        Value="1"
@@ -235,40 +316,10 @@
       </Component>
     </StandardDirectory>
 
-    <!-- Optional local-data removal on uninstall. The offline Setup renders an
-         unchecked option and is the only caller that passes the flag; the raw
-         MSI and every package manager preserve user data unless an
-         administrator explicitly sets EXOSNAP_REMOVE_USER_DATA=1.
-
-         The elevated MSI must never delete a caller-supplied path. The
-         property setter below overwrites EXOSNAP_USER_DATA_DIR with the fixed
-         %LOCALAPPDATA%\ExoSnap template before RemoveFolderEx reads it, so a
-         command-line override can never redirect the removal. The directory is
-         removed only while this component is being uninstalled, which keeps
-         install, repair and major upgrades non-destructive. Recordings live
-         under the Videos known folder and are never this target. -->
+    <!-- Maintenance of immutable program files must not recursively delete a mutable profile directory. -->
     <Property Id="EXOSNAP_REMOVE_USER_DATA" Value="0" Secure="yes" />
-    <Property Id="EXOSNAP_USER_DATA_DIR" Secure="yes" />
-    <CustomAction Id="SetExoSnapUserDataDir"
-                  Property="EXOSNAP_USER_DATA_DIR"
-                  Value="%LOCALAPPDATA%\ExoSnap" />
-    <InstallExecuteSequence>
-      <Custom Action="SetExoSnapUserDataDir" Before="CostInitialize" Condition="EXOSNAP_REMOVE_USER_DATA = 1" />
-    </InstallExecuteSequence>
-    <Component Id="ExoSnapUserDataCleanup"
-               Guid="{E8E337A2-AAEA-43AE-AC1F-9FB82D6377B5}"
-               Directory="INSTALLFOLDER">
-      <RegistryValue Root="HKLM"
-                     Key="Software\ExoSnap"
-                     Name="UserDataCleanup"
-                     Value="1"
-                     Type="integer"
-                     KeyPath="yes" />
-      <util:RemoveFolderEx Id="ExoSnapUserDataFolder"
-                           On="uninstall"
-                           Property="EXOSNAP_USER_DATA_DIR"
-                           Condition="EXOSNAP_REMOVE_USER_DATA = 1" />
-    </Component>
+    <Launch Condition="EXOSNAP_REMOVE_USER_DATA &lt;&gt; 1"
+            Message="Use ExoSnap Setup without administrator elevation to remove your local data during uninstall." />
 
     <!-- ARP (Add/Remove Programs) metadata.
          The description matches docs/product-spec.md and the other package
@@ -303,9 +354,10 @@
              Description="ExoSnap recording application">
       <ComponentGroupRef Id="StagingFiles" />
       <ComponentRef Id="StartMenuShortcut" />
+      <?if $(var.ExoSnapPerUser) = 0 ?>
       <ComponentRef Id="LegacyHandoff" />
+      <?endif ?>
       <ComponentRef Id="DesktopShortcut" />
-      <ComponentRef Id="ExoSnapUserDataCleanup" />
     </Feature>
 
   </Package>

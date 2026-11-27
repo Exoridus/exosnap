@@ -57,6 +57,7 @@ pub struct PackageResult {
     pub base_version: String,
     pub portable: PathBuf,
     pub installer: Option<PathBuf>,
+    pub user_installer: Option<PathBuf>,
     pub setup: Option<PathBuf>,
     pub staging: PathBuf,
     pub file_count: usize,
@@ -476,10 +477,24 @@ fn xml_attr(value: &str) -> String {
         .replace('>', "&gt;")
 }
 
+fn user_file_component_guid(path: &str) -> String {
+    let hash = crate::bundle::sha256_bytes(
+        format!("ExoSnap per-user MSI file:{}", path.to_lowercase()).as_bytes(),
+    );
+    format!(
+        "{{{}-{}-8{}-a{}-{}}}",
+        &hash[..8],
+        &hash[8..12],
+        &hash[13..16],
+        &hash[17..20],
+        &hash[20..32]
+    )
+}
+
 /// A WiX v4 fragment listing every staged file, referenced from Package.wxs
 /// as the `StagingFiles` component group. Generated because WiX v4 has no
 /// harvest command and no `<Files>` glob.
-pub fn harvest_fragment(root: &Path) -> Result<String> {
+pub fn harvest_fragment(root: &Path, per_user: bool) -> Result<String> {
     let files = walk_files(root)?;
     let mut by_dir: BTreeMap<String, Vec<PathBuf>> = BTreeMap::new();
     let mut dirs: BTreeSet<String> = BTreeSet::new();
@@ -498,6 +513,12 @@ pub fn harvest_fragment(root: &Path) -> Result<String> {
                 .unwrap_or_default();
         }
         by_dir.entry(dir).or_default().push(f.clone());
+    }
+    if per_user {
+        for dir in &dirs {
+            by_dir.entry(dir.clone()).or_default();
+        }
+        by_dir.entry(String::new()).or_default();
     }
     fn children<'a>(parent: &str, dirs: &'a BTreeSet<String>) -> Vec<&'a String> {
         dirs.iter()
@@ -532,6 +553,12 @@ pub fn harvest_fragment(root: &Path) -> Result<String> {
         lines.push("    </DirectoryRef>".into());
     }
     let mut groups = Vec::new();
+    let file_key_path = if per_user { "no" } else { "yes" };
+    let user_key_path = |name: &str| {
+        format!(
+            r#"        <RegistryValue Root="HKCU" Key="Software\ExoSnap\InstalledComponents" Name="{name}" Type="integer" Value="1" KeyPath="yes" />"#
+        )
+    };
     for (dir, files) in &by_dir {
         let (dir_id, suffix) = if dir.is_empty() {
             ("INSTALLFOLDER".to_string(), "root".to_string())
@@ -542,15 +569,31 @@ pub fn harvest_fragment(root: &Path) -> Result<String> {
         lines.push(format!(
             "    <ComponentGroup Id=\"{group}\" Directory=\"{dir_id}\">"
         ));
-        for f in files {
+        if per_user {
+            let cleanup = format!("cleanup_{suffix}");
+            lines.push(format!(r#"      <Component Id="{cleanup}" Guid="*">"#));
+            lines.push(user_key_path(&cleanup));
             lines.push(format!(
-                "      <Component Id=\"comp_{}\" Guid=\"*\">",
-                wix_id(&relative(root, f))
+                r#"        <RemoveFolder Id="{cleanup}" On="uninstall" />"#
             ));
+            lines.push("      </Component>".into());
+        }
+        for f in files {
+            let relative_path = relative(root, f);
+            let id = format!("comp_{}", wix_id(&relative_path));
+            let guid = if per_user {
+                user_file_component_guid(&relative_path)
+            } else {
+                "*".into()
+            };
+            lines.push(format!("      <Component Id=\"{id}\" Guid=\"{guid}\">"));
             lines.push(format!(
-                "        <File Source=\"{}\" KeyPath=\"yes\" />",
+                "        <File Source=\"{}\" KeyPath=\"{file_key_path}\" />",
                 xml_attr(&f.display().to_string())
             ));
+            if per_user {
+                lines.push(user_key_path(&id));
+            }
             lines.push("      </Component>".into());
         }
         lines.push("    </ComponentGroup>".into());
@@ -629,7 +672,7 @@ fn build_setup(
     staging: &Path,
     out: &Path,
     base: &str,
-    msi: &Path,
+    msi: (&Path, &Path),
     vc_redist: &Path,
 ) -> Result<PathBuf> {
     let wix = crate::tools::require("wix")?;
@@ -722,7 +765,9 @@ fn build_setup(
             .arg("-d")
             .arg(format!("VCRedistMinVersion={VC_REDIST_MIN_VERSION}"))
             .arg("-d")
-            .arg(format!("MsiPath={}", msi.display()))
+            .arg(format!("MsiPath={}", msi.0.display()))
+            .arg("-d")
+            .arg(format!("UserMsiPath={}", msi.1.display()))
             .arg("-d")
             .arg(format!("IconPath={}", icon.display()))
             .arg("-d")
@@ -942,67 +987,72 @@ pub fn run(args: &PackageArgs) -> Result<PackageResult> {
         launch_smoke(&staging)?;
     }
 
-    let installer = if args.skip_msi {
-        None
+    let (installer, user_installer) = if args.skip_msi {
+        (None, None)
     } else {
         let wix = crate::tools::require("wix")?;
         let owner_probe = ownership_probe_path(&args.build_dir)?;
         let msi = out.join(format!("ExoSnap-{version}-{PLATFORM}.msi"));
+        let user_msi = out.join(crate::bundle::user_installer_name(&version));
         let fragment = out.join("_harvest.wxs");
-        fs::write(&fragment, harvest_fragment(&staging)?)?;
-        println!("==> {}", msi.display());
         // The Windows Installer ProductVersion is numeric; the full identity
         // lives in the file name and the executables' ProductVersion string.
-        run_checked(
-            Command::new(wix)
-                .args([
-                    "build",
-                    "-arch",
-                    "x64",
-                    "-ext",
-                    "WixToolset.Util.wixext/4.0.5",
-                    "-o",
-                ])
-                .arg(&msi)
-                .arg("-d")
-                .arg(format!("ProductVersion={base}"))
-                .arg("-d")
-                .arg(format!("VCRedistMinVersion={}", vc_redist_floor()))
-                .arg("-d")
-                .arg(format!(
-                    "AppIconPath={}",
-                    repo_root.join("app/assets/brand/exosnap-app.ico").display()
-                ))
-                .arg("-d")
-                .arg(format!(
-                    "DistributionOwnerProbePath={}",
-                    owner_probe.display()
-                ))
-                .arg(repo_root.join("packaging/msi/Package.wxs"))
-                .arg(&fragment),
-            "wix build",
-            Duration::from_secs(900),
-        )?;
-        let extracted = out.join("msi-extract");
-        msi_extract(&msi, &extracted)?;
-        let missing = msi_missing_binaries(&staging, &extracted)?;
-        fs::remove_dir_all(&extracted).ok();
-        ensure!(
-            missing.is_empty(),
-            "the MSI lacks staged binaries: {}",
-            missing.join(", ")
-        );
-        Some(msi)
+        for (artifact, per_user) in [(&msi, false), (&user_msi, true)] {
+            fs::write(&fragment, harvest_fragment(&staging, per_user)?)?;
+            println!("==> {}", artifact.display());
+            run_checked(
+                Command::new(&wix)
+                    .args([
+                        "build",
+                        "-arch",
+                        "x64",
+                        "-ext",
+                        "WixToolset.Util.wixext/4.0.5",
+                        "-o",
+                    ])
+                    .arg(artifact)
+                    .arg("-d")
+                    .arg(format!("ExoSnapPerUser={}", u8::from(per_user)))
+                    .arg("-d")
+                    .arg(format!("ProductVersion={base}"))
+                    .arg("-d")
+                    .arg(format!("VCRedistMinVersion={}", vc_redist_floor()))
+                    .arg("-d")
+                    .arg(format!(
+                        "AppIconPath={}",
+                        repo_root.join("app/assets/brand/exosnap-app.ico").display()
+                    ))
+                    .arg("-d")
+                    .arg(format!(
+                        "DistributionOwnerProbePath={}",
+                        owner_probe.display()
+                    ))
+                    .arg(repo_root.join("packaging/msi/Package.wxs"))
+                    .arg(&fragment),
+                "wix build",
+                Duration::from_secs(900),
+            )?;
+            let extracted = out.join("msi-extract");
+            msi_extract(artifact, &extracted)?;
+            let missing = msi_missing_binaries(&staging, &extracted)?;
+            fs::remove_dir_all(&extracted)?;
+            ensure!(
+                missing.is_empty(),
+                "the MSI lacks staged binaries: {}",
+                missing.join(", ")
+            );
+        }
+        (Some(msi), Some(user_msi))
     };
 
-    let setup = match (&installer, &args.vc_redist) {
-        (Some(msi), Some(vc_redist)) => Some(build_setup(
+    let setup = match (&installer, &user_installer, &args.vc_redist) {
+        (Some(msi), Some(user_msi), Some(vc_redist)) => Some(build_setup(
             &repo_root,
             &args.build_dir,
             &staging,
             &out,
             &base,
-            msi,
+            (msi, user_msi),
             vc_redist,
         )?),
         _ => None,
@@ -1014,6 +1064,7 @@ pub fn run(args: &PackageArgs) -> Result<PackageResult> {
         base_version: base,
         portable,
         installer,
+        user_installer,
         setup,
         staging,
         file_count,
@@ -1200,7 +1251,7 @@ mod tests {
         fs::create_dir_all(dir.path().join("plugins/platforms")).unwrap();
         fs::write(dir.path().join("exosnap.exe"), "x").unwrap();
         fs::write(dir.path().join("plugins/platforms/qwindows.dll"), "x").unwrap();
-        let xml = harvest_fragment(dir.path()).unwrap();
+        let xml = harvest_fragment(dir.path(), false).unwrap();
         assert_eq!(xml.matches("<File ").count(), 2);
         assert!(xml.contains("<Directory Id=\"dir_plugins\" Name=\"plugins\">"));
         assert!(xml.contains("<Directory Id=\"dir_plugins_platforms\" Name=\"platforms\">"));
@@ -1273,7 +1324,7 @@ mod tests {
     fn the_msi_identity_floor_and_off_by_default_options_are_pinned() {
         let package = packaging_source("packaging/msi/Package.wxs");
         assert!(
-            package.contains(r#"UpgradeCode="8988DAFC-3AE4-4788-BA6D-62E3F73C7A7D""#),
+            package.contains(r#"ProductUpgradeCode = "{8988DAFC-3AE4-4788-BA6D-62E3F73C7A7D}""#),
             "the permanent MSI UpgradeCode moved"
         );
         assert!(
@@ -1286,7 +1337,8 @@ mod tests {
         );
         assert!(package.contains(r#"Property Id="EXOSNAP_DESKTOP_SHORTCUT" Value="0""#));
         assert!(package.contains(r#"Property Id="EXOSNAP_REMOVE_USER_DATA" Value="0""#));
-        assert!(package.contains(r#"Value="%LOCALAPPDATA%\ExoSnap""#));
+        assert!(!package.contains("RemoveFolderEx"));
+        assert!(package.contains(r#"Condition="EXOSNAP_REMOVE_USER_DATA &lt;&gt; 1""#));
         assert!(
             !package.contains("VCREDISTX64_INSTALLED"),
             "presence without a version floor is not a sufficient prerequisite check"
@@ -1296,15 +1348,18 @@ mod tests {
     #[test]
     fn the_setup_passes_the_direct_options_and_keeps_the_runtime_for_repair() {
         let setup = packaging_source("packaging/burn/Setup.wxs");
-        assert!(setup.contains(r#"<MsiProperty Name="ARPSYSTEMCOMPONENT" Value="1" />"#));
+        assert!(setup.contains(r#"DisableModify="yes""#));
+        assert!(setup.contains(r#"DisableRemove="yes""#));
+        assert!(!setup.contains("ARPSYSTEMCOMPONENT"));
+        assert_eq!(setup.matches(r#"Visible="yes""#).count(), 2);
+        assert!(setup.contains(r#"InstallCondition="ExoSnapAllUsers = 0""#));
+        assert!(setup.contains(r#"InstallCondition="ExoSnapAllUsers = 1""#));
+        assert!(setup.contains(r#"Path="[System64Folder]vcruntime140.dll""#));
         assert!(setup.contains(
             r#"<MsiProperty Name="EXOSNAP_DESKTOP_SHORTCUT" Value="[ExoSnapDesktopShortcut]" />"#
         ));
-        assert!(setup.contains(
-            r#"<MsiProperty Name="EXOSNAP_REMOVE_USER_DATA" Value="[ExoSnapRemoveUserData]" />"#
-        ));
+        assert!(!setup.contains("EXOSNAP_REMOVE_USER_DATA"));
         assert!(setup.contains(r#"Name="ExoSnapDesktopShortcut" Type="numeric" Value="0""#));
-        assert!(setup.contains(r#"Name="ExoSnapRemoveUserData" Type="numeric" Value="0""#));
         assert!(setup.contains(r#"Permanent="yes""#));
         assert!(
             !setup.contains(r#"Cache="remove""#),

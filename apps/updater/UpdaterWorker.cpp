@@ -45,6 +45,7 @@ using exosnap::update::ExtractZip;
 using exosnap::update::FetchReleasesJson;
 using exosnap::update::FindTopLevelWindowForProcess;
 using exosnap::update::InstallMode;
+using exosnap::update::InstallScope;
 using exosnap::update::IsDowngrade;
 using exosnap::update::IsInstanceMutexPresent;
 using exosnap::update::LocateRelease;
@@ -363,13 +364,19 @@ QString SelfUpdateRefusalReason(exosnap::update::DistributionContext distributio
 
 bool UpdaterWorker::selfUpdateAllowed() {
     // A staged updater runs outside the installation it would replace.
-    const QString reason =
-        SelfUpdateRefusalReason(exosnap::update::DetectDistributionContext(args_.install_dir.toStdWString()));
-    if (reason.isEmpty()) {
-        return true;
+    const auto distribution = exosnap::update::DetectDistributionContext(args_.install_dir.toStdWString());
+    const QString reason = SelfUpdateRefusalReason(distribution);
+    if (!reason.isEmpty()) {
+        emit selfUpdateBlocked(reason);
+        return false;
     }
-    emit selfUpdateBlocked(reason);
-    return false;
+    if (distribution.install_mode != args_.install_mode || (have_package_ && distribution.scope != install_scope_)) {
+        emit selfUpdateBlocked(QCoreApplication::translate(
+            "UpdaterWorker", "The installation changed. Open ExoSnap and check for updates again."));
+        return false;
+    }
+    install_scope_ = distribution.scope;
+    return true;
 }
 
 // ── Manual mode ──────────────────────────────────────────────────────────────
@@ -655,11 +662,12 @@ bool UpdaterWorker::fetchAndStage() {
         return false;
     }
 
-    const exosnap::update::PackageEntry* package = SelectPackage(manifest, args_.install_mode);
+    const exosnap::update::PackageEntry* package = SelectPackage(manifest, args_.install_mode, install_scope_);
     if (package == nullptr) {
         emit failed(FailureCase::DownloadFailed, // A1
                     QStringLiteral("The update manifest has no %1 package.")
                         .arg(args_.install_mode == InstallMode::Portable ? QStringLiteral("portable")
+                             : install_scope_ == InstallScope::User      ? QStringLiteral("per-user installer")
                                                                          : QStringLiteral("installer")));
         return false;
     }
@@ -920,6 +928,8 @@ bool UpdaterWorker::runInstallPortable() {
 // ── Step 3b: Install (MSI handoff) ───────────────────────────────────────────
 bool UpdaterWorker::runInstallMsi() {
     emit stepStarted(UpStep::Install);
+    if (!selfUpdateAllowed())
+        return false;
 
     // The deny-write lock must be held across the elevated handoff so the exact
     // verified bytes are what msiexec reads. It is normally taken at Download and
@@ -940,22 +950,31 @@ bool UpdaterWorker::runInstallMsi() {
     // recovery -- and is read here rather than earlier so it applies to this
     // elevation attempt and not to a retry that was never armed. See
     // UpdaterFaultInjection.h for why the seam is limited to failures.
-    if (CurrentInjectedFault() == InjectedFault::UacDeclined) {
+    const bool elevate = install_scope_ == InstallScope::Machine;
+    if (elevate && CurrentInjectedFault() == InjectedFault::UacDeclined) {
         emit failed(FailureCase::UacDeclined, QString()); // C1 -- Retry re-handoffs
         return false;
     }
 
     const std::wstring params = BuildMsiexecParams(package_path_, args_.verify_reinstall, repair_msi_);
+    wchar_t system_directory[MAX_PATH]{};
+    const UINT system_directory_length = ::GetSystemDirectoryW(system_directory, MAX_PATH);
+    if (system_directory_length == 0 || system_directory_length >= MAX_PATH) {
+        emit failed(FailureCase::MsiFailed, QString::number(::GetLastError()));
+        return false;
+    }
+    const auto msiexec = (fs::path(system_directory) / L"msiexec.exe").wstring();
     SHELLEXECUTEINFOW sei{};
     sei.cbSize = sizeof(sei);
     sei.fMask = SEE_MASK_NOCLOSEPROCESS;
-    sei.lpVerb = L"runas"; // UAC elevation
-    sei.lpFile = L"msiexec.exe";
+    sei.lpVerb = elevate ? L"runas" : L"open";
+    sei.lpFile = msiexec.c_str();
     sei.lpParameters = params.c_str();
+    sei.lpDirectory = system_directory;
     sei.nShow = SW_HIDE;
 
     if (::ShellExecuteExW(&sei) == 0) {
-        if (::GetLastError() == ERROR_CANCELLED) {
+        if (elevate && ::GetLastError() == ERROR_CANCELLED) {
             emit failed(FailureCase::UacDeclined, QString()); // C1 -- Retry re-handoffs
         } else {
             emit failed(FailureCase::MsiFailed, QString::number(::GetLastError())); // C2
@@ -982,12 +1001,18 @@ bool UpdaterWorker::runInstallMsi() {
         // cancellation, not "the installer did not finish in time".
         if (abortedByCancel())
             return false;
-        emit failed(FailureCase::MsiFailed, QStringLiteral("The installer did not finish in time.")); // C2
+        emit failed(FailureCase::VerifyInstallFailedMsi,
+                    QCoreApplication::translate("UpdaterWorker", "Windows Installer did not report an outcome."));
         return false;
     }
     DWORD exit_code = 0;
-    ::GetExitCodeProcess(sei.hProcess, &exit_code);
+    const BOOL have_exit_code = ::GetExitCodeProcess(sei.hProcess, &exit_code);
     ::CloseHandle(sei.hProcess);
+    if (!have_exit_code) {
+        emit failed(FailureCase::VerifyInstallFailedMsi,
+                    QCoreApplication::translate("UpdaterWorker", "Windows Installer did not report an outcome."));
+        return false;
+    }
     switch (ClassifyMsiExit(exit_code)) {
     case MsiExitClass::Success:
         break;
@@ -1022,13 +1047,14 @@ bool UpdaterWorker::runVerify() {
     } else {
         // The MSI stamps [INSTALLFOLDER] (may carry a trailing backslash --
         // MakeSwapPlan normalises it) into the registry post-install.
-        const std::wstring install_dir = ReadInstallPath().value_or(args_.install_dir.toStdWString());
-        if (install_dir.empty()) {
+        const auto target = args_.install_dir.toStdWString();
+        const auto install_dir = ReadInstallPath(target);
+        if (!install_dir || exosnap::update::DetectDistributionContext(target).scope != install_scope_) {
             emit failed(FailureCase::VerifyInstallFailedMsi,
-                        QStringLiteral("The installer did not record an install location.")); // B3-MSI
+                        QCoreApplication::translate("UpdaterWorker", "The installation changed scope or location."));
             return false;
         }
-        const exosnap::update::SwapPlan msi_plan = MakeSwapPlan(install_dir, manifest_.version);
+        const exosnap::update::SwapPlan msi_plan = MakeSwapPlan(*install_dir, manifest_.version);
         if (!VerifyInstalledVersion(msi_plan)) {
             emit failed(FailureCase::VerifyInstallFailedMsi, QString()); // B3-MSI
             return false;

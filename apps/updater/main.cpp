@@ -289,7 +289,7 @@ void PlaceNearAppWindow(QWindow& w, quint32 app_pid) {
 // registry-stamped InstallPath, falling back to --install-dir.
 std::wstring ResolveOpenDir(const UpdaterArgs& args) {
     if (args.install_mode == exosnap::update::InstallMode::Installed) {
-        if (const auto path = exosnap::update::ReadInstallPath(); path.has_value() && !path->empty()) {
+        if (const auto path = exosnap::update::ReadInstallPath(args.install_dir.toStdWString()); path.has_value()) {
             return *path;
         }
     }

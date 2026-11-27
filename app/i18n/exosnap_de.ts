@@ -10548,6 +10548,14 @@ Kleiner Text auf dem Bildschirm verliert früher an Qualität als Videoinhalte. 
 <context>
     <name>SetupDecision</name>
     <message>
+        <source>Install for all users</source>
+        <translation>Für alle Benutzer installieren</translation>
+    </message>
+    <message>
+        <source>Open Setup without administrator elevation to remove your local data.</source>
+        <translation>Öffne Setup ohne Administratorrechte, um deine lokalen Daten zu entfernen.</translation>
+    </message>
+    <message>
         <location filename="../../apps/setup/quick/SetupDecision.qml" line="+68"/>
         <source>Create a desktop shortcut</source>
         <translation>Desktopverknüpfung erstellen</translation>
@@ -11564,6 +11572,18 @@ Kleiner Text auf dem Bildschirm verliert früher an Qualität als Videoinhalte. 
 </context>
 <context>
     <name>UpdaterWorker</name>
+    <message>
+        <source>Windows Installer did not report an outcome.</source>
+        <translation>Windows Installer hat kein Ergebnis gemeldet.</translation>
+    </message>
+    <message>
+        <source>The installation changed. Open ExoSnap and check for updates again.</source>
+        <translation>Die Installation hat sich geändert. Öffne ExoSnap und suche erneut nach Updates.</translation>
+    </message>
+    <message>
+        <source>The installation changed scope or location.</source>
+        <translation>Der Installationsbereich oder der Installationsort hat sich geändert.</translation>
+    </message>
     <message>
         <location filename="../../apps/updater/UpdaterWorker.cpp" line="+355"/>
         <source>This installation is managed by %1. Update it with %2.</source>
@@ -14358,6 +14378,30 @@ Kleiner Text auf dem Bildschirm verliert früher an Qualität als Videoinhalte. 
 <context>
     <name>exosnap::setup::SetupController</name>
     <message>
+        <source>Setup needs administrator approval to install the Microsoft Visual C++ Runtime first.</source>
+        <translation>Setup benötigt die Zustimmung eines Administrators, um zuerst die Microsoft Visual C++ Runtime zu installieren.</translation>
+    </message>
+    <message>
+        <source>Installation for all users requires administrator approval.</source>
+        <translation>Die Installation für alle Benutzer erfordert die Zustimmung eines Administrators.</translation>
+    </message>
+    <message>
+        <source>ExoSnap will be installed for your Windows account.</source>
+        <translation>ExoSnap wird für dein Windows-Konto installiert.</translation>
+    </message>
+    <message>
+        <source>Administrator approval was canceled. Setup made no changes to ExoSnap.</source>
+        <translation>Die Administratorabfrage wurde abgebrochen. Setup hat ExoSnap nicht verändert.</translation>
+    </message>
+    <message>
+        <source>ExoSnap is registered for your account and for all users. Uninstall one copy before using Setup.</source>
+        <translation>ExoSnap ist für dein Konto und für alle Benutzer registriert. Deinstalliere eine Kopie, bevor du Setup startest.</translation>
+    </message>
+    <message>
+        <source>ExoSnap was removed, but Setup could not delete all of your local ExoSnap data.</source>
+        <translation>ExoSnap wurde entfernt, aber Setup konnte nicht alle lokalen ExoSnap-Daten löschen.</translation>
+    </message>
+    <message>
         <location filename="../../apps/setup/SetupController.cpp" line="+174"/>
         <source>This step can&apos;t be interrupted.</source>
         <translation>Dieser Schritt kann nicht unterbrochen werden.</translation>
@@ -14460,12 +14504,12 @@ Kleiner Text auf dem Bildschirm verliert früher an Qualität als Videoinhalte. 
     <message>
         <location line="+4"/>
         <source>For everyone on this computer. Everything Setup needs is included.</source>
-        <translation>Für alle Benutzer dieses Computers. Alles für die Installation ist enthalten.</translation>
+        <translation type="vanished">Für alle Benutzer dieses Computers. Alles für die Installation ist enthalten.</translation>
     </message>
     <message>
         <location line="+2"/>
-        <source>Removes the app, its Start menu entry and its shortcut. Recordings and exported files are never touched.</source>
-        <translation>Entfernt die App, ihren Startmenüeintrag und ihre Verknüpfung. Aufnahmen und exportierte Dateien bleiben immer erhalten.</translation>
+        <source>Removes ExoSnap and its shortcuts. Recordings and exports outside the local data directory are kept.</source>
+        <translation>Entfernt ExoSnap und seine Verknüpfungen. Aufnahmen und Exporte außerhalb des lokalen Datenordners bleiben erhalten.</translation>
     </message>
     <message>
         <location line="+4"/>
@@ -14489,8 +14533,8 @@ Kleiner Text auf dem Bildschirm verliert früher an Qualität als Videoinhalte. 
     </message>
     <message>
         <location line="+6"/>
-        <source>Your ExoSnap data was deleted. Recordings were kept.</source>
-        <translation>Deine ExoSnap-Daten wurden gelöscht. Aufnahmen wurden beibehalten.</translation>
+        <source>Your local ExoSnap data was deleted.</source>
+        <translation>Deine lokalen ExoSnap-Daten wurden gelöscht.</translation>
     </message>
     <message>
         <location line="+1"/>

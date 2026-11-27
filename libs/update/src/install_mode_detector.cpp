@@ -3,7 +3,6 @@
 #include <update/install_mode_detector.h>
 
 #include <cstddef>
-#include <cwchar>
 #include <filesystem>
 #include <fstream>
 #include <nlohmann/json.hpp>
@@ -12,6 +11,7 @@
 #include <string>
 #include <system_error>
 #include <update/update_types.h>
+#include <utility>
 
 #include "install_mode_classify.h"
 
@@ -55,25 +55,29 @@ std::wstring RunningExecutableDir() {
 }
 
 // A REG_SZ value from an already-open key. Nothing when the value is absent, is
-// another type, or cannot be read -- which stays distinct from a value that IS
-// present and empty, because ReadInstallPath's callers rely on that difference.
+// another type, malformed, or cannot be read.
 std::optional<std::wstring> ReadStringValue(HKEY key, const wchar_t* value_name) {
     DWORD type = 0;
     DWORD size = 0;
     // First query the size (in bytes, including the terminating NUL for REG_SZ).
     if (RegQueryValueExW(key, value_name, nullptr, &type, nullptr, &size) != ERROR_SUCCESS || type != REG_SZ ||
-        size == 0) {
+        size == 0 || size % sizeof(wchar_t) != 0 || size > 32768 * sizeof(wchar_t)) {
         return std::nullopt;
     }
 
     std::wstring value(size / sizeof(wchar_t), L'\0');
-    if (RegQueryValueExW(key, value_name, nullptr, nullptr, reinterpret_cast<LPBYTE>(value.data()), &size) !=
-        ERROR_SUCCESS) {
+    if (RegQueryValueExW(key, value_name, nullptr, &type, reinterpret_cast<LPBYTE>(value.data()), &size) !=
+            ERROR_SUCCESS ||
+        type != REG_SZ || size == 0 || size % sizeof(wchar_t) != 0 || size > value.size() * sizeof(wchar_t)) {
         return std::nullopt;
     }
 
-    // Trim any trailing NUL characters that REG_SZ may include in the count.
-    value.resize(wcslen(value.c_str()));
+    value.resize(size / sizeof(wchar_t));
+    if (value.back() != L'\0')
+        return std::nullopt;
+    value.pop_back();
+    if (value.find(L'\0') != std::wstring::npos)
+        return std::nullopt;
     return value;
 }
 
@@ -171,10 +175,10 @@ bool HasAdjacentScoopMetadata(const std::wstring& directory) {
 // cannot come from different hives. Reading them independently allowed a marker
 // found in HKLM to be compared against a path found in HKCU, i.e. against a
 // different installation's directory, and nothing downstream could tell.
-std::optional<InstallStamp> ReadStamp(HKEY root) {
+std::optional<InstallStamp> ReadStamp(HKEY root, const std::wstring& directory) {
     for (const wchar_t* key_path : kKeyPaths) {
         HKEY key = nullptr;
-        if (RegOpenKeyExW(root, key_path, 0, KEY_READ, &key) != ERROR_SUCCESS)
+        if (RegOpenKeyExW(root, key_path, 0, KEY_QUERY_VALUE | KEY_WOW64_64KEY, &key) != ERROR_SUCCESS)
             continue;
 
         DWORD type = 0;
@@ -188,16 +192,21 @@ std::optional<InstallStamp> ReadStamp(HKEY root) {
             continue;
         }
 
-        InstallStamp stamp;
+        std::optional<InstallStamp> stamp;
         try {
-            stamp.install_dir = ReadStringValue(key, L"InstallPath").value_or(std::wstring{});
-            stamp.distribution_owner = ReadOwnerMarker(key);
+            stamp.emplace(InstallStamp{ReadStringValue(key, L"InstallPath").value_or(std::wstring{}), std::nullopt,
+                                       root == HKEY_LOCAL_MACHINE ? InstallScope::Machine : InstallScope::User});
+            if (MatchInstallStamp(stamp, directory))
+                stamp->distribution_owner = ReadOwnerMarker(key);
+            else
+                stamp.reset();
         } catch (...) {
             RegCloseKey(key);
             throw;
         }
         RegCloseKey(key);
-        return stamp;
+        if (stamp)
+            return stamp;
     }
     return std::nullopt;
 }
@@ -206,13 +215,11 @@ std::optional<InstallStamp> ReadStamp(HKEY root) {
 
 DistributionContext DetectDistributionContext(const std::wstring& application_directory) noexcept {
     try {
-        // The first stamped record owns all installation facts. A portable copy
-        // must not inherit its ownership unless the executable directory matches.
-        std::optional<InstallStamp> stamp = ReadStamp(HKEY_LOCAL_MACHINE);
-        if (!stamp)
-            stamp = ReadStamp(HKEY_CURRENT_USER);
         const std::wstring directory = application_directory.empty() ? RunningExecutableDir() : application_directory;
-        return ClassifyDistributionContext(stamp, directory, HasAdjacentScoopMetadata(directory));
+        const auto machine = ReadStamp(HKEY_LOCAL_MACHINE, directory);
+        const auto user = machine ? std::nullopt : ReadStamp(HKEY_CURRENT_USER, directory);
+        return ClassifyDistributionContext(machine, user, directory,
+                                           !machine && !user && HasAdjacentScoopMetadata(directory));
     } catch (...) {
         return {InstallMode::Portable, DistributionOwner::UnknownManaged};
     }
@@ -222,23 +229,13 @@ InstallMode DetectInstallMode() noexcept {
     return DetectDistributionContext().install_mode;
 }
 
-std::optional<std::wstring> ReadInstallPath() {
-    auto try_key = [](HKEY root) -> std::optional<std::wstring> {
-        for (const wchar_t* key_path : kKeyPaths) {
-            HKEY key = nullptr;
-            if (RegOpenKeyExW(root, key_path, 0, KEY_READ, &key) != ERROR_SUCCESS)
-                continue;
-            std::optional<std::wstring> value = ReadStringValue(key, L"InstallPath");
-            RegCloseKey(key);
-            if (value.has_value())
-                return value;
-        }
-        return std::nullopt;
-    };
-
-    if (auto v = try_key(HKEY_LOCAL_MACHINE))
-        return v;
-    return try_key(HKEY_CURRENT_USER);
+std::optional<std::wstring> ReadInstallPath(const std::wstring& application_directory) {
+    const std::wstring directory = application_directory.empty() ? RunningExecutableDir() : application_directory;
+    if (auto stamp = ReadStamp(HKEY_LOCAL_MACHINE, directory))
+        return std::move(stamp->install_dir);
+    if (auto stamp = ReadStamp(HKEY_CURRENT_USER, directory))
+        return std::move(stamp->install_dir);
+    return std::nullopt;
 }
 
 } // namespace exosnap::update

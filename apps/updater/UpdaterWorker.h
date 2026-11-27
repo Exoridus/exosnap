@@ -247,6 +247,7 @@ class UpdaterWorker : public QObject {
     [[nodiscard]] bool LockAndVerifyPackage(const std::string& expected_sha256, QString* error);
 
     const UpdaterArgs args_;
+    exosnap::update::InstallScope install_scope_ = exosnap::update::InstallScope::None;
     std::atomic<bool> cancel_{false};
 
     // Pipeline state kept across retries (B1/B2/B3/C1 re-enter mid-pipeline).

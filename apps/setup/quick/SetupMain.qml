@@ -8,7 +8,7 @@ Window {
     required property SetupController controller
     property bool screenshotMode: false
     property bool detailsPreview: false
-    readonly property int pageHeight: controller.decision ? 300 : 176
+    readonly property int pageHeight: controller.scopeSelectable ? 340 : controller.decision ? 300 : 176
     Component.onCompleted: if (detailsPreview) details.open()
     title: qsTr("ExoSnap Setup")
     flags: Qt.Window | Qt.FramelessWindowHint
@@ -131,7 +131,7 @@ Window {
                 text: window.controller.primaryText
                 tone: window.controller.page === "uninstall" && window.controller.removeUserData ? "destructive" : "primary"
                 compact: true
-                leadingGlyph: window.controller.decision ? ExoGlyph.Shield : ExoGlyph.Invalid
+                leadingGlyph: window.controller.decision && window.controller.administratorRequired ? ExoGlyph.Shield : ExoGlyph.Invalid
                 Layout.preferredHeight: footer.height
                 background: Rectangle {
                     radius: 7

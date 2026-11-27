@@ -95,6 +95,17 @@ TEST(ReleaseLocator, SelectPackageByInstallMode) {
     EXPECT_EQ(SelectPackage(m, InstallMode::Portable), nullptr);
 }
 
+TEST(ReleaseLocator, UserInstallationRequiresItsOwnSignedInstaller) {
+    UpdateManifest manifest;
+    manifest.packages = {{PackageKind::Installer, "https://dl/machine.msi", "aa"},
+                         {PackageKind::Portable, "https://dl/portable.zip", "bb"}};
+    EXPECT_EQ(SelectPackage(manifest, InstallMode::Installed, InstallScope::User), nullptr);
+    manifest.user_installer = PackageEntry{PackageKind::Installer, "https://dl/user.msi", "cc"};
+    ASSERT_NE(SelectPackage(manifest, InstallMode::Installed, InstallScope::User), nullptr);
+    EXPECT_EQ(SelectPackage(manifest, InstallMode::Installed, InstallScope::User)->url, "https://dl/user.msi");
+    EXPECT_EQ(SelectPackage(manifest, InstallMode::Installed, InstallScope::Machine)->url, "https://dl/machine.msi");
+}
+
 // ---------------------------------------------------------------------------
 // CollectReleaseNotes -- gap-aware release-note aggregation for the What's-new
 // overlay. Fixture covers: an exclusive lower bound, an inclusive upper bound,

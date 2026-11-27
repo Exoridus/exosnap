@@ -26,7 +26,7 @@ TEST(SetupWindowLifecycleTest, NativeWindowResizesAfterDetectionWithoutTakingFoc
         const QByteArray errors = process.readAllStandardError();
         ASSERT_EQ(process.exitCode(), 0) << errors.constData();
         const QByteArray trace = process.readAllStandardOutput();
-        EXPECT_TRUE(trace.contains("decision 480x300 min=300 max=300 focused=0")) << trace.constData();
+        EXPECT_TRUE(trace.contains("decision 480x340 min=340 max=340 focused=0")) << trace.constData();
         EXPECT_TRUE(trace.contains("applying 480x176 min=176 max=176 focused=0")) << trace.constData();
         EXPECT_TRUE(trace.contains("success 480x176 min=176 max=176 focused=0")) << trace.constData();
     }

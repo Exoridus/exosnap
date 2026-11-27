@@ -17,7 +17,10 @@ class SetupController : public QObject {
     Q_PROPERTY(QString primaryText READ primaryText NOTIFY changed FINAL)
     Q_PROPERTY(QString secondaryText READ secondaryText NOTIFY changed FINAL)
     Q_PROPERTY(QString statusTone READ statusTone NOTIFY changed FINAL)
-    Q_PROPERTY(QString installPath READ installPath CONSTANT FINAL)
+    Q_PROPERTY(QString installPath READ installPath NOTIFY changed FINAL)
+    Q_PROPERTY(bool allUsers READ allUsers WRITE setAllUsers NOTIFY changed FINAL)
+    Q_PROPERTY(bool scopeSelectable READ scopeSelectable NOTIFY changed FINAL)
+    Q_PROPERTY(bool administratorRequired READ administratorRequired NOTIFY changed FINAL)
     Q_PROPERTY(QString licenseText READ licenseText CONSTANT FINAL)
     Q_PROPERTY(bool decision READ decision NOTIFY changed FINAL)
     Q_PROPERTY(bool closeEnabled READ closeEnabled NOTIFY changed FINAL)
@@ -26,6 +29,7 @@ class SetupController : public QObject {
     Q_PROPERTY(bool indeterminate READ indeterminate NOTIFY changed FINAL)
     Q_PROPERTY(bool desktopShortcut READ desktopShortcut WRITE setDesktopShortcut NOTIFY changed FINAL)
     Q_PROPERTY(bool removeUserData READ removeUserData WRITE setRemoveUserData NOTIFY changed FINAL)
+    Q_PROPERTY(bool canRemoveUserData READ canRemoveUserData CONSTANT FINAL)
     Q_PROPERTY(qreal progress READ progress NOTIFY changed FINAL)
 
   public:
@@ -33,6 +37,8 @@ class SetupController : public QObject {
                              bool uninstall_requested = false, bool repair_requested = false);
     void receive(const SetupEvent& event);
     void setLicenseText(QString text);
+    void setScopeOptions(QString machine_path, bool scope_locked, bool all_users, bool scope_conflict);
+    void setCanRemoveUserData(bool allowed);
     [[nodiscard]] QString page() const;
     [[nodiscard]] QString versionText() const;
     [[nodiscard]] QString headline() const;
@@ -50,9 +56,14 @@ class SetupController : public QObject {
     [[nodiscard]] bool indeterminate() const;
     [[nodiscard]] bool desktopShortcut() const;
     [[nodiscard]] bool removeUserData() const;
+    [[nodiscard]] bool canRemoveUserData() const;
+    [[nodiscard]] bool allUsers() const;
+    [[nodiscard]] bool scopeSelectable() const;
+    [[nodiscard]] bool administratorRequired() const;
     [[nodiscard]] qreal progress() const;
     void setDesktopShortcut(bool enabled);
     void setRemoveUserData(bool enabled);
+    void setAllUsers(bool enabled);
     Q_INVOKABLE void activatePrimary();
     Q_INVOKABLE void activateSecondary();
     Q_INVOKABLE void chooseRepair();
@@ -63,7 +74,7 @@ class SetupController : public QObject {
 
   signals:
     void changed();
-    void applyRequested(SetupAction action, bool desktop_shortcut, bool remove_user_data);
+    void applyRequested(SetupAction action, bool desktop_shortcut, bool remove_user_data, bool all_users);
     void cancelRequested();
     void launchRequested();
     void restartRequested();
@@ -75,6 +86,7 @@ class SetupController : public QObject {
     QString version_;
     QString installed_version_;
     QString install_path_;
+    QString machine_install_path_;
     QString license_;
     QString page_ = QStringLiteral("detecting");
     QString detail_;
@@ -95,6 +107,12 @@ class SetupController : public QObject {
     bool cancel_confirmation_ = false;
     bool files_in_use_ = false;
     bool launch_failed_ = false;
+    bool scope_locked_ = true;
+    bool all_users_ = false;
+    bool scope_conflict_ = false;
+    bool runtime_missing_ = false;
+    bool allow_data_cleanup_ = true;
+    bool data_cleanup_failed_ = false;
 };
 
 } // namespace exosnap::setup

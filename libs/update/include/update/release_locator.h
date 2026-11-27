@@ -66,6 +66,7 @@ struct ReleaseAssets {
                                                                         UpdateChannel channel);
 
 // Installed -> PackageKind::Installer, Portable -> PackageKind::Portable; nullptr if absent.
-[[nodiscard]] const PackageEntry* SelectPackage(const UpdateManifest& m, InstallMode mode);
+[[nodiscard]] const PackageEntry* SelectPackage(const UpdateManifest& m, InstallMode mode,
+                                                InstallScope scope = InstallScope::Machine);
 
 } // namespace exosnap::update

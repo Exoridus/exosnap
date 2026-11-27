@@ -32,6 +32,7 @@ void SetupController::receive(const SetupEvent& event) {
             break;
         }
         installed_ = event.installed;
+        runtime_missing_ = event.runtime_missing;
         installed_version_ = QString::fromWCharArray(event.version ? event.version : L"");
         page_ = passive_               ? QStringLiteral("applying")
                 : !installed_          ? QStringLiteral("install")
@@ -67,12 +68,13 @@ void SetupController::receive(const SetupEvent& event) {
         break;
     case SetupEventKind::Completed:
         exit_code_ = ExitCode(event.status);
+        data_cleanup_failed_ = event.data_cleanup_failed;
         can_cancel_ = false;
         restart_pending_ = event.restart_required;
         if ((event.restart_required && exit_code_ == 0) || exit_code_ == 3010U || exit_code_ == 1641U) {
             exit_code_ = 3010U;
             page_ = QStringLiteral("restart");
-        } else if (exit_code_ == 1602U && !files_in_use_) {
+        } else if ((exit_code_ == 1602U || exit_code_ == 1223U) && !files_in_use_) {
             page_ = QStringLiteral("cancelled");
         } else {
             page_ = exit_code_ == 0 ? QStringLiteral("success") : QStringLiteral("failure");
@@ -90,11 +92,20 @@ void SetupController::receive(const SetupEvent& event) {
 void SetupController::setLicenseText(QString text) {
     license_ = std::move(text);
 }
+void SetupController::setScopeOptions(QString machine_path, bool scope_locked, bool all_users, bool scope_conflict) {
+    machine_install_path_ = std::move(machine_path);
+    scope_locked_ = scope_locked;
+    all_users_ = all_users;
+    scope_conflict_ = scope_conflict;
+}
+void SetupController::setCanRemoveUserData(bool allowed) {
+    allow_data_cleanup_ = allowed;
+}
 QString SetupController::page() const {
     return page_;
 }
 QString SetupController::installPath() const {
-    return install_path_;
+    return all_users_ && !machine_install_path_.isEmpty() ? machine_install_path_ : install_path_;
 }
 QString SetupController::licenseText() const {
     return license_;
@@ -113,6 +124,18 @@ bool SetupController::desktopShortcut() const {
 }
 bool SetupController::removeUserData() const {
     return remove_user_data_;
+}
+bool SetupController::canRemoveUserData() const {
+    return allow_data_cleanup_;
+}
+bool SetupController::allUsers() const {
+    return all_users_;
+}
+bool SetupController::scopeSelectable() const {
+    return page_ == QStringLiteral("install") && !scope_locked_;
+}
+bool SetupController::administratorRequired() const {
+    return all_users_ || (runtime_missing_ && page_ != QStringLiteral("uninstall"));
 }
 bool SetupController::cancelConfirmationVisible() const {
     return cancel_confirmation_;
@@ -161,11 +184,15 @@ QString SetupController::headline() const {
     return tr("Checking installation");
 }
 QString SetupController::description() const {
-    if (page_ == QStringLiteral("install"))
-        return tr("For everyone on this computer. Everything Setup needs is included.");
+    if (page_ == QStringLiteral("install")) {
+        if (runtime_missing_)
+            return tr("Setup needs administrator approval to install the Microsoft Visual C++ Runtime first.");
+        return all_users_ ? tr("Installation for all users requires administrator approval.")
+                          : tr("ExoSnap will be installed for your Windows account.");
+    }
     if (page_ == QStringLiteral("uninstall"))
         return tr(
-            "Removes the app, its Start menu entry and its shortcut. Recordings and exported files are never touched.");
+            "Removes ExoSnap and its shortcuts. Recordings and exports outside the local data directory are kept.");
     if (page_ == QStringLiteral("applying")) {
         if (cancelling_)
             return tr("Cancelling. Waiting for Windows Installer to finish safely.");
@@ -179,15 +206,21 @@ QString SetupController::description() const {
     if (page_ == QStringLiteral("success")) {
         if (launch_failed_)
             return tr("ExoSnap is installed but couldn't be started. Launch it from the Start menu.");
+        if (data_cleanup_failed_)
+            return tr("ExoSnap was removed, but Setup could not delete all of your local ExoSnap data.");
         if (action_ == SetupAction::Uninstall)
-            return remove_user_data_ ? tr("Your ExoSnap data was deleted. Recordings were kept.")
+            return remove_user_data_ ? tr("Your local ExoSnap data was deleted.")
                                      : tr("Your ExoSnap data and recordings were kept.");
         return tr("You'll find it in the Start menu.");
     }
     if (page_ == QStringLiteral("restart"))
         return tr("Restart Windows to complete the operation.");
+    if (page_ == QStringLiteral("cancelled") && exit_code_ == 1223U)
+        return tr("Administrator approval was canceled. Setup made no changes to ExoSnap.");
     if (page_ == QStringLiteral("cancelled"))
         return tr("Setup stopped. Recordings and exported files were kept.");
+    if (page_ == QStringLiteral("failure") && scope_conflict_)
+        return tr("ExoSnap is registered for your account and for all users. Uninstall one copy before using Setup.");
     if (page_ == QStringLiteral("failure") && files_in_use_)
         return tr("Close ExoSnap and any apps using its files, then try Setup again.");
     if (page_ == QStringLiteral("failure"))
@@ -238,8 +271,14 @@ void SetupController::setDesktopShortcut(bool enabled) {
     }
 }
 void SetupController::setRemoveUserData(bool enabled) {
-    if (page_ == QStringLiteral("uninstall") && remove_user_data_ != enabled) {
+    if (page_ == QStringLiteral("uninstall") && allow_data_cleanup_ && remove_user_data_ != enabled) {
         remove_user_data_ = enabled;
+        emit changed();
+    }
+}
+void SetupController::setAllUsers(bool enabled) {
+    if (scopeSelectable() && all_users_ != enabled) {
+        all_users_ = enabled;
         emit changed();
     }
 }
@@ -251,7 +290,7 @@ void SetupController::begin(SetupAction action) {
     cancelling_ = false;
     detail_.clear();
     emit changed();
-    emit applyRequested(action, desktop_shortcut_, action == SetupAction::Uninstall && remove_user_data_);
+    emit applyRequested(action, desktop_shortcut_, action == SetupAction::Uninstall && remove_user_data_, all_users_);
 }
 void SetupController::activatePrimary() {
     if (passive_)

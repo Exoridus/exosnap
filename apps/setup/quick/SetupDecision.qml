@@ -61,6 +61,14 @@ Item {
             }
         }
         ExoCheckBox {
+            visible: root.controller.scopeSelectable
+            Layout.topMargin: 10
+            objectName: "setupAllUsers"
+            text: qsTr("Install for all users")
+            checked: root.controller.allUsers
+            onToggledByUser: function(value) { root.controller.allUsers = value }
+        }
+        ExoCheckBox {
             id: shortcut
             objectName: "setupDesktopShortcut"
             visible: root.controller.page === "install"
@@ -83,6 +91,7 @@ Item {
             ExoCheckBox {
                 id: deleteData
                 objectName: "setupRemoveUserData"
+                enabled: root.controller.canRemoveUserData
                 text: qsTr("Also delete my ExoSnap data")
                 Accessible.description: deleteDescription.text
                 checked: root.controller.removeUserData
@@ -109,7 +118,9 @@ Item {
                     id: deleteDescription
                     Layout.fillWidth: true
                     Layout.leftMargin: 26
-                    text: qsTr("Settings, presets, history, caches, recovery data, logs and crash reports. This can't be undone.")
+                    text: root.controller.canRemoveUserData
+                          ? qsTr("Settings, presets, history, caches, recovery data, logs and crash reports. This can't be undone.")
+                          : qsTr("Open Setup without administrator elevation to remove your local data.")
                     wrapMode: Text.WordWrap
                     color: ExoTheme.textMuted
                     font.family: ExoTheme.sansFamily

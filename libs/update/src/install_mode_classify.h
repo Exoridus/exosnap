@@ -31,6 +31,7 @@ struct InstallStamp {
     std::wstring install_dir;
     // Missing is a legacy direct installation. Present but invalid fails closed.
     std::optional<std::wstring> distribution_owner;
+    InstallScope scope = InstallScope::Machine;
 };
 
 // The install-mode rule: this copy is Installed only when a hive stamped an
@@ -48,6 +49,14 @@ struct InstallStamp {
                                               const std::wstring& running_exe_dir) noexcept;
 
 [[nodiscard]] DistributionContext ClassifyDistributionContext(const std::optional<InstallStamp>& stamp,
+                                                              const std::wstring& running_exe_dir,
+                                                              bool adjacent_scoop_metadata = false);
+
+[[nodiscard]] const InstallStamp* MatchInstallStamp(const std::optional<InstallStamp>& stamp,
+                                                    const std::wstring& directory);
+
+[[nodiscard]] DistributionContext ClassifyDistributionContext(const std::optional<InstallStamp>& machine_stamp,
+                                                              const std::optional<InstallStamp>& user_stamp,
                                                               const std::wstring& running_exe_dir,
                                                               bool adjacent_scoop_metadata = false);
 

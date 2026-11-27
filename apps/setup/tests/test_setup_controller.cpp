@@ -15,14 +15,54 @@ SetupEvent Detected(bool installed = false) {
 
 } // namespace
 
-TEST(SetupControllerTest, FreshInstallHasFixedPathAndOptInShortcut) {
-    SetupController controller("0.11.0", "C:/Program Files/ExoSnap");
+TEST(SetupControllerTest, FreshInstallDefaultsToCurrentUserAndAllowsAllUsers) {
+    SetupController controller("0.12.0", "C:/Users/Person/AppData/Local/Programs/ExoSnap");
+    controller.setScopeOptions("C:/Program Files/ExoSnap", false, false, false);
     controller.receive(Detected());
     EXPECT_EQ(controller.page(), "install");
     EXPECT_TRUE(controller.decision());
     EXPECT_FALSE(controller.desktopShortcut());
     EXPECT_FALSE(controller.removeUserData());
     EXPECT_EQ(controller.primaryText(), "Install");
+    EXPECT_TRUE(controller.scopeSelectable());
+    EXPECT_FALSE(controller.allUsers());
+    EXPECT_FALSE(controller.administratorRequired());
+    EXPECT_EQ(controller.installPath(), "C:/Users/Person/AppData/Local/Programs/ExoSnap");
+    controller.setAllUsers(true);
+    EXPECT_TRUE(controller.administratorRequired());
+    EXPECT_EQ(controller.installPath(), "C:/Program Files/ExoSnap");
+}
+
+TEST(SetupControllerTest, ExistingScopeAndLocationCannotBeChangedDuringUpgrade) {
+    SetupController controller("0.12.0", "C:/Users/Person/AppData/Local/Programs/ExoSnap");
+    controller.setScopeOptions("D:/Custom/ExoSnap", true, true, false);
+    auto event = Detected();
+    event.version = L"0.11.0";
+    controller.receive(event);
+    controller.setAllUsers(false);
+    EXPECT_FALSE(controller.scopeSelectable());
+    EXPECT_TRUE(controller.allUsers());
+    EXPECT_EQ(controller.installPath(), "D:/Custom/ExoSnap");
+
+    EXPECT_EQ(ResolveSetupScope(false, false, false), SetupScope::User);
+    EXPECT_EQ(ResolveSetupScope(false, false, true), SetupScope::Machine);
+    EXPECT_EQ(ResolveSetupScope(false, true, true), SetupScope::User);
+    EXPECT_EQ(ResolveSetupScope(true, false, false), SetupScope::Machine);
+    EXPECT_EQ(ResolveSetupScope(true, true, false), SetupScope::Conflict);
+}
+
+TEST(SetupControllerTest, MissingRuntimeExplainsApprovalAndDeclineIsCancellation) {
+    SetupController controller("0.12.0", "C:/Users/Person/AppData/Local/Programs/ExoSnap");
+    auto event = Detected();
+    event.runtime_missing = true;
+    controller.receive(event);
+    EXPECT_TRUE(controller.administratorRequired());
+    EXPECT_TRUE(controller.description().contains("Visual C++ Runtime"));
+    event = SetupEvent{SetupEventKind::Completed};
+    event.status = 1223;
+    controller.receive(event);
+    EXPECT_EQ(controller.page(), "cancelled");
+    EXPECT_TRUE(controller.description().contains("Administrator approval was canceled"));
 }
 
 TEST(SetupControllerTest, ExistingInstallOpensManageAndKeepsDataByDefault) {
