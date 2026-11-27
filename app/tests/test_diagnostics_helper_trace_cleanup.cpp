@@ -27,10 +27,13 @@ struct TraceProperties {
 TEST(DiagnosticsHelperTraceCleanup, GuardianLaunchUsesTheSameGlobalImage) {
     const auto path = GlobalProcessImagePath(GetCurrentProcess());
     ASSERT_TRUE(path.starts_with(LR"(\\?\GLOBALROOT\Device\HarddiskVolume)"));
+    const auto launch = GlobalLaunchPath(path);
+    ASSERT_TRUE(launch.starts_with(LR"(\\.\GLOBALROOT\Device\HarddiskVolume)"));
+    EXPECT_TRUE(GlobalLaunchPath(LR"(C:\untrusted.exe)").empty());
     STARTUPINFOW startup{};
     startup.cb = sizeof(startup);
     PROCESS_INFORMATION child{};
-    ASSERT_TRUE(CreateProcessW(path.c_str(), nullptr, nullptr, nullptr, FALSE, CREATE_SUSPENDED | CREATE_NO_WINDOW,
+    ASSERT_TRUE(CreateProcessW(launch.c_str(), nullptr, nullptr, nullptr, FALSE, CREATE_SUSPENDED | CREATE_NO_WINDOW,
                                nullptr, nullptr, &startup, &child));
     Handle observer;
     {

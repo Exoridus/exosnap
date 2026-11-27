@@ -19,6 +19,15 @@ inline std::wstring GlobalLocalVolumePath(std::wstring_view path) {
     return LR"(\\?\GLOBALROOT)" + std::wstring(path);
 }
 
+// CreateProcess consumes the Win32 device spelling. Keep GLOBALROOT so a
+// different logon's drive mapping cannot select another executable.
+inline std::wstring GlobalLaunchPath(std::wstring path) {
+    if (!path.starts_with(LR"(\\?\GLOBALROOT\)"))
+        return {};
+    path[2] = L'.';
+    return path;
+}
+
 inline std::wstring GlobalProcessImagePath(HANDLE process) {
     std::wstring path(32768, L'\0');
     auto size = static_cast<DWORD>(path.size());

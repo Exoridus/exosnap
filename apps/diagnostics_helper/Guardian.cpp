@@ -94,7 +94,8 @@ GuardedSession StartGuardian() {
     startup.StartupInfo.hStdError = heartbeat.get();
     startup.lpAttributeList = list;
     HANDLE inherited[] = {owner.get(), writer.get(), heartbeat.get()};
-    const auto path = GlobalProcessImagePath(GetCurrentProcess());
+    const auto identity = GlobalProcessImagePath(GetCurrentProcess());
+    const auto path = GlobalLaunchPath(identity);
     auto args = L"\"" + path + L"\" --guard";
     PROCESS_INFORMATION child{};
     const bool launched =
@@ -102,12 +103,15 @@ GuardedSession StartGuardian() {
         UpdateProcThreadAttribute(list, 0, PROC_THREAD_ATTRIBUTE_HANDLE_LIST, inherited, sizeof(inherited), nullptr,
                                   nullptr) &&
         CreateProcessW(path.c_str(), args.data(), nullptr, nullptr, TRUE,
-                       EXTENDED_STARTUPINFO_PRESENT | CREATE_NO_WINDOW, nullptr, nullptr, &startup.StartupInfo, &child);
+                       EXTENDED_STARTUPINFO_PRESENT | CREATE_NO_WINDOW | CREATE_SUSPENDED, nullptr, nullptr,
+                       &startup.StartupInfo, &child);
     DeleteProcThreadAttributeList(list);
     if (!launched)
         return {};
     StartingGuardian process{Handle(child.hProcess)};
     Handle thread(child.hThread);
+    if (GlobalProcessImagePath(process.get()) != identity || ResumeThread(thread.get()) == MAXDWORD)
+        return {};
     writer.reset();
     // The writer is an inherited allowlisted pipe held only by the pinned child.
     // Polling bounds initialization even if image startup stalls before main.

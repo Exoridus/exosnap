@@ -225,11 +225,12 @@ bool BootstrapRegistered(const std::filesystem::path& machine_image) {
                                  static_cast<DWORD>((expected.size() + 1) * sizeof(wchar_t)));
     };
     const auto physical = L"\\\\?\\GLOBALROOT\\GLOBAL??\\" + machine_image.native();
+    const auto launch = GlobalLaunchPath(physical);
     const DWORD enabled = 1;
-    return text(class_key, L"LocalizedString", L"@" + physical + L",-101") &&
+    return !launch.empty() && text(class_key, L"LocalizedString", L"@" + physical + L",-101") &&
            RegistrationValue((class_key + L"\\Elevation").c_str(), L"Enabled", REG_DWORD, &enabled, sizeof(enabled)) &&
-           text(class_key + L"\\LocalServer32", nullptr, L"\"" + physical + L"\"") &&
-           text(class_key + L"\\LocalServer32", L"ServerExecutable", physical) &&
+           text(class_key + L"\\LocalServer32", nullptr, L"\"" + launch + L"\"") &&
+           text(class_key + L"\\LocalServer32", L"ServerExecutable", launch) &&
            text(iface + L"\\ProxyStubClsid32", nullptr, L"{00020424-0000-0000-C000-000000000046}") &&
            text(iface + L"\\TypeLib", nullptr, L"{27962A35-7DED-411F-A679-CDD671A2A4B6}") &&
            text(iface + L"\\TypeLib", L"Version", L"1.0") && text(typelib, nullptr, physical);
