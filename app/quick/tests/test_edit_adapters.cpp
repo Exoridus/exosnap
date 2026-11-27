@@ -4058,6 +4058,24 @@ TEST(EditWorkspaceAdapter, RealEditingHistoryAndBlankTimeReachScopedExportsWitho
     EXPECT_EQ(reopened.decoderOpensForTest(), 0u);
     EXPECT_EQ(reopened.decodeCallsForTest(), 0u);
     EXPECT_EQ(reopened.decoderSeeksForTest(), 0u);
+    const auto project = QUrl::fromLocalFile(output.filePath(QStringLiteral("render.exoproj")));
+    const std::vector<RecordingMarker> markers{{1250, RecordingMarkerType::Highlight, "Trimmed source"}};
+    EditSessionAdapterTestPeer::replaceMarkers(session, markers);
+    session.saveProject(project);
+    ASSERT_TRUE(EditSessionAdapterTestPeer::finishProjectIo(session));
+    ASSERT_EQ(session.projectPath(), project.toLocalFile());
+    ASSERT_FALSE(session.projectDirty());
+    session.close();
+    ASSERT_TRUE(session.projectPath().isEmpty());
+    ASSERT_TRUE(session.workspace().clips().empty());
+    session.openProject(project, false);
+    ASSERT_TRUE(EditSessionAdapterTestPeer::finishProjectIo(session));
+    ASSERT_EQ(session.projectPath(), project.toLocalFile());
+    EXPECT_EQ(session.workspace().clips(), blank->clips);
+    EXPECT_EQ(session.workspace().snapshot()->spacers, blank->spacers);
+    EXPECT_EQ(session.markers(), markers);
+    EXPECT_FALSE(session.workspace().canUndo());
+    ASSERT_EQ(session.durationMs(), 6000);
     const auto timeline = session.workspace().timeline();
     for (const auto& [time_us, asset, source_us] :
          {std::tuple{250'000ll, edit::Id{0}, 0ll}, std::tuple{1'250'000ll, red_asset, 1'250'000ll},
@@ -6749,6 +6767,7 @@ TEST(EditProjectSession, SaveWhileRecordedDefaultIsPendingRestoresTheVerifiedMix
     const auto manifest = WriteRecordedDefaultFixture(path);
     ASSERT_TRUE(manifest);
     for (bool explicit_choice : {false, true}) {
+        SCOPED_TRACE(explicit_choice);
         const auto project =
             QUrl::fromLocalFile(directory.filePath(explicit_choice ? "explicit.exoproj" : "default.exoproj"));
         edit::Id id = 0;
@@ -6769,6 +6788,8 @@ TEST(EditProjectSession, SaveWhileRecordedDefaultIsPendingRestoresTheVerifiedMix
                     session.sourceAudioChoice().value(QStringLiteral("tracks")).toList().back().toMap();
                 session.setSourceAudioTrack(alternative.value(QStringLiteral("id")).toString(), true);
                 ASSERT_TRUE(session.applySourceAudioChoice());
+                ASSERT_TRUE(
+                    WaitForMediaCondition([&] { return !session.workspace().asset(id)->mix_decision_required; }));
             }
             session.saveProject(project);
             ASSERT_TRUE(EditSessionAdapterTestPeer::finishProjectIo(session));

@@ -82,9 +82,15 @@ bool SameProject(const edit::EditSnapshot& before, const edit::EditSnapshot& aft
     for (size_t i = 0; i < after.assets.size(); ++i) {
         const auto& a = *before.assets[i];
         const auto& b = *after.assets[i];
+        const bool a_confirmed = !a.mix_decision_required && a.input_mix_selection &&
+                                 a.input_mix_selection->authority == edit::InputMixAuthority::UserConfirmed;
+        const bool b_confirmed = !b.mix_decision_required && b.input_mix_selection &&
+                                 b.input_mix_selection->authority == edit::InputMixAuthority::UserConfirmed;
+        // Verification can bind a content digest after a user choice was saved.
         if (a.id != b.id || a.path != b.path || a.source_version != b.source_version || a.markers != b.markers ||
-            (b.input_mix_selection && b.input_mix_selection->authority == edit::InputMixAuthority::UserConfirmed &&
-             a.input_mix_selection != b.input_mix_selection))
+            a_confirmed != b_confirmed ||
+            (a_confirmed &&
+             a.input_mix_selection->selected_stream_identities != b.input_mix_selection->selected_stream_identities))
             return false;
     }
     return true;
