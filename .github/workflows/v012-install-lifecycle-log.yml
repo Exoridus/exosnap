@@ -47,8 +47,8 @@ jobs:
       - name: Download exact standard-account evidence
         uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093
         with:
-          artifact-ids: '15215445245'
-          run-id: '46027499869'
+          artifact-ids: '15217788177'
+          run-id: '46033159278'
           github-token: ${{ github.token }}
           path: standard
           merge-multiple: true
@@ -67,12 +67,13 @@ jobs:
               keys = ("previousValuePresent", "previousDword", "previousKeyPresent", "permittedDword", "restored",
                       "workflowCommit", "productCommit", "0.10.1", "0.10.2")
               print("  | " + name + " " + json.dumps({k: values[k] for k in keys if k in values})[:1000])
-          failure = base / "failure.txt"
-          data = failure.read_bytes()
+          data = (base / "result.json").read_bytes()
           if len(data) > 16384:
-              raise RuntimeError("Unexpected failure receipt size")
-          encoding = "utf-16" if data.startswith((b"\xff\xfe", b"\xfe\xff")) else "utf-8-sig"
-          print("  | Standard-account failure: " + data.decode(encoding, errors="replace").strip()[:800])
+              raise RuntimeError("Unexpected result size")
+          fields = json.loads(data.decode("utf-8-sig"))
+          keys = ("standardAccountSid", "elevated", "administratorsSidPresent", "runtime", "sourceVersions",
+                  "originalProductCode", "upgradedProductCode", "repairedSha256", "uninstallClean")
+          print("  | result.json " + json.dumps({k: fields[k] for k in keys})[:1500])
           for name in ("install-0.10.1.log", "install-0.10.2.log", "cached-repair.log", "cached-uninstall.log"):
               log = base / name
               if not log.is_file():
