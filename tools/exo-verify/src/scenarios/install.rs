@@ -1241,6 +1241,46 @@ mod tests {
     }
 
     #[cfg(windows)]
+    fn installed_contexts(code: &str) -> Result<Vec<(u32, String)>> {
+        #[link(name = "msi")]
+        unsafe extern "system" {
+            fn MsiGetProductInfoExW(
+                code: *const u16,
+                sid: *const u16,
+                context: u32,
+                property: *const u16,
+                value: *mut u16,
+                length: *mut u32,
+            ) -> u32;
+        }
+        let wide = |text: &str| text.encode_utf16().chain([0]).collect::<Vec<_>>();
+        let code = wide(code);
+        let property = wide("VersionString");
+        let mut installed = Vec::new();
+        // USERMANAGED, USERUNMANAGED, MACHINE. A null SID selects the current user.
+        for context in [1, 2, 4] {
+            let mut value = [0u16; 64];
+            let mut length = value.len() as u32;
+            let status = unsafe {
+                MsiGetProductInfoExW(
+                    code.as_ptr(),
+                    std::ptr::null(),
+                    context,
+                    property.as_ptr(),
+                    value.as_mut_ptr(),
+                    &mut length,
+                )
+            };
+            if status == 1605 {
+                continue;
+            }
+            anyhow::ensure!(status == 0, "query product context {context}: {status}");
+            installed.push((context, String::from_utf16(&value[..length as usize])?));
+        }
+        Ok(installed)
+    }
+
+    #[cfg(windows)]
     fn build_rollback_fixture(output: &Path, out: &Path, version: &str) -> Result<PathBuf> {
         let root = Path::new(env!("CARGO_MANIFEST_DIR")).join("../..");
         let source = root.join("packaging/msi/Package.wxs");
@@ -1432,6 +1472,11 @@ mod tests {
             let expected_hive = if scope == "user" { "HKCU" } else { "HKLM" };
             assert_eq!(original.registry_key.split('\\').next(), Some(expected_hive));
             assert!(original.registry_key.ends_with(code));
+            let expected_context = if scope == "user" { 2 } else { 4 };
+            let expected = vec![(expected_context, version.to_string())];
+            let contexts = installed_contexts(code)?;
+            println!("{scope} original Windows Installer contexts: {contexts:?}");
+            assert_eq!(contexts, expected);
             let upgrade = rollback.to_str().unwrap();
             let failed_upgrade = ["/i", upgrade, "/qn", "/norestart", &request];
             let status = invoke(msi, &failed_upgrade, &log("rollback"))?;
@@ -1468,6 +1513,9 @@ mod tests {
             );
             assert_eq!(restored[0].registry_key, original.registry_key);
             assert_eq!(restored[0].display_version, version);
+            let contexts = installed_contexts(code)?;
+            println!("{scope} restored Windows Installer contexts: {contexts:?}");
+            assert_eq!(contexts, expected);
             let actual = scoped_reg_value(key, "InstallPath")?.unwrap();
             assert_eq!(Path::new(&actual), custom);
             let owner = scoped_reg_value(key, "DistributionOwner")?;
