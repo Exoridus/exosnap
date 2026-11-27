@@ -328,12 +328,12 @@
     <message>
         <location line="+9"/>
         <source>Gain</source>
-        <translation>Pegel</translation>
+        <translation>Verstärkung</translation>
     </message>
     <message>
         <location line="+16"/>
         <source>Gain for %1 on %2</source>
-        <translation>Pegel von %1 auf %2</translation>
+        <translation>Verstärkung von %1 auf %2</translation>
     </message>
     <message>
         <location line="+8"/>
@@ -3618,7 +3618,7 @@ Das Original kann danach nicht wiederhergestellt werden.</translation>
     <message>
         <location line="+1"/>
         <source>Occupied content</source>
-        <translation>Belegter Inhalt</translation>
+        <translation>Bereich mit Inhalt</translation>
     </message>
     <message>
         <location line="+1"/>
@@ -3628,7 +3628,7 @@ Das Original kann danach nicht wiederhergestellt werden.</translation>
     <message>
         <location line="+1"/>
         <source>I/O time range</source>
-        <translation>I/O-Zeitbereich</translation>
+        <translation>In-/Out-Bereich</translation>
     </message>
     <message>
         <location line="+1"/>
@@ -5660,7 +5660,7 @@ Ermittelte SHA-256: %2</translation>
     <message>
         <location line="+1"/>
         <source>Smooth</source>
-        <translation>Glatt</translation>
+        <translation>Weich</translation>
     </message>
     <message>
         <location line="+1"/>
@@ -5692,7 +5692,7 @@ Ermittelte SHA-256: %2</translation>
         <location line="-8"/>
         <location line="+11"/>
         <source>Audio gain law</source>
-        <translation>Audio-Überblendgesetz</translation>
+        <translation>Audiokennlinie</translation>
     </message>
     <message>
         <location line="-225"/>
@@ -7935,7 +7935,7 @@ Ermittelte SHA-256: %2</translation>
     <message>
         <location line="+15"/>
         <source>Window title text</source>
-        <translation>Fenstertiteltext</translation>
+        <translation>Fenstertitel</translation>
     </message>
     <message>
         <location line="+9"/>
@@ -10085,7 +10085,7 @@ Die Farben für Aufnahme, Vorsicht und Bereitschaft bleiben fest, damit ein Stat
     <message>
         <location line="+11"/>
         <source>Save as new…</source>
-        <translation>Als neu speichern…</translation>
+        <translation>Kopie speichern…</translation>
     </message>
     <message>
         <location line="+7"/>
@@ -10312,7 +10312,7 @@ Kleiner Text auf dem Bildschirm verliert früher an Qualität als Videoinhalte. 
         <location line="+23"/>
         <location line="+29"/>
         <source>Encoding on</source>
-        <translation>Encoding auf</translation>
+        <translation>Grafikkarte</translation>
     </message>
     <message>
         <location line="-24"/>
@@ -12367,7 +12367,7 @@ Kleiner Text auf dem Bildschirm verliert früher an Qualität als Videoinhalte. 
     <message>
         <location line="+2"/>
         <source>Occupied Content</source>
-        <translation>Belegter Bereich</translation>
+        <translation>Bereich mit Inhalt</translation>
     </message>
     <message>
         <location line="+2"/>
@@ -12377,7 +12377,7 @@ Kleiner Text auf dem Bildschirm verliert früher an Qualität als Videoinhalte. 
     <message>
         <location line="+1"/>
         <source>I/O time range</source>
-        <translation>I/O-Zeitbereich</translation>
+        <translation>In-/Out-Bereich</translation>
     </message>
     <message>
         <location line="+2"/>
