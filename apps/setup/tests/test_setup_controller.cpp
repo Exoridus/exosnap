@@ -15,6 +15,13 @@ SetupEvent Detected(bool installed = false) {
 
 } // namespace
 
+TEST(SetupInstallPath, LegacyCustomDirectoryBelongsToTheMachineScopeOnly) {
+    EXPECT_EQ(RegisteredSetupPath(true, L"", L"", L"D:\\Legacy"), L"D:\\Legacy");
+    EXPECT_EQ(RegisteredSetupPath(true, L"", L"E:\\Current", L"D:\\Legacy"), L"E:\\Current");
+    EXPECT_EQ(RegisteredSetupPath(false, L"F:\\User", L"", L"D:\\Legacy"), L"F:\\User");
+    EXPECT_TRUE(RegisteredSetupPath(false, L"", L"", L"D:\\Legacy").empty());
+}
+
 TEST(SetupControllerTest, FreshInstallHasFixedPathAndOptInShortcut) {
     SetupController controller("0.11.0", "C:/Program Files/ExoSnap");
     controller.receive(Detected());

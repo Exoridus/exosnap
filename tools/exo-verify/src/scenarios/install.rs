@@ -328,6 +328,51 @@ fn setup_cycle(ctx: &mut Context) -> Step {
         "the cached bundle is the deleted original"
     );
 
+    // A newer-version foreign executable distinguishes forced replacement
+    // from Windows Installer's usual equal-or-older version repair. Never start
+    // the altered file; the hash of the original installed bytes is the oracle.
+    let original_hash = sha256_file(&exe)?.0;
+    let higher_version = PathBuf::from(std::env::var("SystemRoot")?).join(r"System32\cmd.exe");
+    fs::copy(&higher_version, &exe)?;
+    product_ensure!(
+        sha256_file(&exe)?.0 != original_hash,
+        "repair fixture did not change the installed executable"
+    );
+    let verified_msi = ctx.package(FileRole::Installer)?;
+    let repair_log = ctx.scenario_dir.join("verified-msi-recache.log");
+    let forced = crate::tools::run(
+        Command::new("msiexec.exe")
+            .arg("/i")
+            .arg(&verified_msi)
+            .args([
+                "/qn",
+                "/norestart",
+                "EXOSNAP_REQUESTED_SCOPE=user",
+                "ARPSYSTEMCOMPONENT=1",
+                "EXOSNAP_SETUP_REPAIR=1",
+                "REINSTALL=ALL",
+                "REINSTALLMODE=vamus",
+                "/l*v",
+            ])
+            .arg(&repair_log),
+        secs(360.0),
+    )?;
+    ctx.keep(&repair_log);
+    product_ensure!(
+        matches!(forced.code(), Some(0 | 3010)) && sha256_file(&exe)?.0 == original_hash,
+        "the verified release MSI did not restore the full executable; see {}",
+        repair_log.display()
+    );
+    let visible_after_repair: Vec<_> = exosnap_arp_rows()?
+        .into_iter()
+        .filter(|r| !r.system_component)
+        .collect();
+    product_ensure!(
+        visible_after_repair.len() == 1
+            && quoted_exe(&visible_after_repair[0].uninstall_string).as_ref() == Some(&cached),
+        "verified MSI repair changed the cached bundle's Installed Apps ownership"
+    );
+    fs::copy(&higher_version, &exe)?;
     let repair = run_setup(ctx, &cached, "/repair", "/quiet", "setup-repair.log")?;
     product_ensure!(
         matches!(repair.code(), Some(0 | 3010)),
@@ -336,8 +381,8 @@ fn setup_cycle(ctx: &mut Context) -> Step {
         ctx.scenario_dir.join("setup-repair.log").display()
     );
     product_ensure!(
-        exe.is_file() && scoped_reg_value(USER_KEY, "installed")?.is_some(),
-        "repair did not leave the product installed"
+        sha256_file(&exe)?.0 == original_hash && scoped_reg_value(USER_KEY, "installed")?.is_some(),
+        "cached Setup repair did not restore the original executable"
     );
 
     // The quiet uninstall below removes Burn's cached bundle, and the passive
@@ -1126,6 +1171,27 @@ mod tests {
             );
             assert!(reg_value("installed")?.is_none());
             assert_eq!(exosnap_arp_rows()?.len(), 1);
+            if index == 0 {
+                let original = tree_hashes(&custom)?;
+                let wrong_product = crate::tools::run(
+                    Command::new("msiexec.exe").arg("/i").arg(&paths[1]).args([
+                        "/qn",
+                        "/norestart",
+                        "EXOSNAP_REQUESTED_SCOPE=user",
+                        "ARPSYSTEMCOMPONENT=1",
+                        "EXOSNAP_SETUP_REPAIR=1",
+                        "REINSTALL=ALL",
+                        "REINSTALLMODE=vamus",
+                    ]),
+                    secs(360.0),
+                )?;
+                assert!(
+                    matches!(wrong_product.code(), Some(1603 | 1605)),
+                    "repair must reject a different ProductCode: {wrong_product:?}"
+                );
+                assert_eq!(tree_hashes(&custom)?, original);
+                assert_eq!(exosnap_arp_rows()?.len(), 1);
+            }
         }
         let opposite = smoke_msi(&paths[0], "/i", None, &out.join("machine-conflict.log"))?;
         assert_eq!(opposite.code(), Some(1603));

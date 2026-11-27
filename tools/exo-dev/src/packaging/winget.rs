@@ -105,6 +105,11 @@ pub fn validate_winget(repo_root: &Path, version: &str) -> anyhow::Result<Valida
     let installer_text = std::fs::read_to_string(&installer_path)?;
     let locale_text = std::fs::read_to_string(&locale_path)?;
 
+    if !requires_machine_elevation(&installer_text) {
+        report
+            .errors
+            .push("installer manifest: machine Scope must require elevationRequired".into());
+    }
     if !has_distribution_owner_switch(&installer_text) {
         report.errors.push("installer manifest: InstallerSwitches.Custom must be EXOSNAP_DISTRIBUTION_OWNER=winget".into());
     }
@@ -297,6 +302,19 @@ pub fn validate_winget(repo_root: &Path, version: &str) -> anyhow::Result<Valida
     Ok(report)
 }
 
+pub(crate) fn requires_machine_elevation(text: &str) -> bool {
+    let only_setting = |key: &str, expected: &str| {
+        text.lines()
+            .filter(|line| line.trim_start().trim_start_matches("- ").starts_with(key))
+            .eq([expected])
+    };
+    only_setting("Scope:", "Scope: machine")
+        && only_setting(
+            "ElevationRequirement:",
+            "ElevationRequirement: elevationRequired",
+        )
+}
+
 pub(crate) fn has_distribution_owner_switch(text: &str) -> bool {
     let mut in_switches = false;
     let mut blocks = 0;
@@ -335,6 +353,8 @@ mod tests {
         "PackageIdentifier: Codexo.ExoSnap\n",
         "PackageVersion: 0.10.0\n",
         "InstallerType: wix\n",
+        "Scope: machine\n",
+        "ElevationRequirement: elevationRequired\n",
         "InstallerSwitches:\n",
         "  Custom: EXOSNAP_DISTRIBUTION_OWNER=winget\n",
         "Dependencies:\n",
@@ -404,6 +424,22 @@ mod tests {
         let report = validate_winget(dir.path(), VERSION).unwrap();
         assert!(!report.ok());
         assert!(report.errors.iter().any(|e| e.contains("ManifestVersion")));
+    }
+
+    #[test]
+    fn machine_installer_requires_elevation_without_per_installer_overrides() {
+        assert!(requires_machine_elevation(INSTALLER_MANIFEST));
+        for replacement in [
+            "",
+            "ElevationRequirement: elevationProhibited",
+            "  ElevationRequirement: elevationRequired",
+            "ElevationRequirement: elevationRequired\n    ElevationRequirement: elevatesSelf",
+        ] {
+            assert!(!requires_machine_elevation(&INSTALLER_MANIFEST.replace(
+                "ElevationRequirement: elevationRequired",
+                replacement
+            )));
+        }
     }
 
     #[test]

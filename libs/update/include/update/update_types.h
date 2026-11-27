@@ -132,6 +132,8 @@ enum class InstallMode : uint8_t {
     Portable = 1,  // extracted ZIP -> staged swap via external updater
 };
 
+enum class MsiInstallScope { User, Machine };
+
 enum class DistributionOwner : uint8_t {
     Direct = 0,
     WinGet = 1,

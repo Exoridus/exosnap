@@ -134,7 +134,7 @@ class Bootstrapper final : public CBalBaseBootstrapperApplication {
             Finish(failure, false);
             return S_OK;
         }
-        const auto& recordedPath = machineScope_ ? machinePath : userPath;
+        const auto recordedPath = RegisteredSetupPath(machineScope_, userPath, machinePath, legacyMachinePath);
         if (!recordedPath.empty())
             installPath_ = recordedPath;
         Emit(SetupEventKind::Detected, status, 0, installPath_.c_str());
@@ -144,6 +144,18 @@ class Bootstrapper final : public CBalBaseBootstrapperApplication {
             PostThreadMessageW(workerId_, PlanMessage, 0, 0);
         }
         return S_OK;
+    }
+
+    STDMETHODIMP OnPlanMsiPackage(LPCWSTR id, BOOL execute, BOOTSTRAPPER_ACTION_STATE action,
+                                  BOOTSTRAPPER_MSI_FILE_VERSIONING recommended, BOOL* cancel,
+                                  BURN_MSI_PROPERTY* property, INSTALLUILEVEL* ui, BOOL* disableExternalUi,
+                                  BOOTSTRAPPER_MSI_FILE_VERSIONING* versioning) override {
+        const auto result = CBalBaseBootstrapperApplication::OnPlanMsiPackage(
+            id, execute, action, recommended, cancel, property, ui, disableExternalUi, versioning);
+        if (SUCCEEDED(result) && execute && action == BOOTSTRAPPER_ACTION_STATE_REPAIR &&
+            wcscmp(id, L"ExoSnapMsi") == 0)
+            *versioning = BOOTSTRAPPER_MSI_FILE_VERSIONING_ALL;
+        return result;
     }
 
     STDMETHODIMP OnPlanComplete(HRESULT status) override {

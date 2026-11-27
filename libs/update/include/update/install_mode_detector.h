@@ -12,8 +12,6 @@ namespace exosnap::update {
 // Empty application_directory uses the running executable directory.
 [[nodiscard]] DistributionContext DetectDistributionContext(const std::wstring& application_directory = {}) noexcept;
 
-enum class MsiInstallScope { User, Machine };
-
 struct RegisteredInstallation {
     MsiInstallScope scope;
     bool setup_managed;

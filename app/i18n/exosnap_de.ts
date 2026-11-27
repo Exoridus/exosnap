@@ -11586,6 +11586,14 @@ Kleiner Text auf dem Bildschirm verliert früher an Qualität als Videoinhalte. 
         <source>Install the Microsoft Visual C++ x64 Runtime %1 or newer, then retry the update.</source>
         <translation>Installiere die Microsoft Visual C++ x64 Runtime %1 oder neuer und versuche das Update erneut.</translation>
     </message>
+    <message>
+        <source>The signed update manifest has no MSI for repair.</source>
+        <translation>Das signierte Update-Manifest enthält kein MSI-Paket für die Reparatur.</translation>
+    </message>
+    <message>
+        <source>The verified repair MSI does not match the registered product and install location.</source>
+        <translation>Das verifizierte Reparaturpaket stimmt nicht mit dem registrierten Produkt und seinem Installationsverzeichnis überein.</translation>
+    </message>
 </context>
 <context>
     <name>VisualSources</name>

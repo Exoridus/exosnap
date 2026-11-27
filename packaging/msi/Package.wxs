@@ -86,6 +86,9 @@
             Message="This installation is managed by ExoSnap Setup. Use the Setup package for its installation scope to update it." />
     <SetProperty Id="ARPSYSTEMCOMPONENT" Value="1" Before="CostInitialize" Sequence="both"
                  Condition='Installed AND ((ALLUSERS AND ExoSnapMachineSetupManaged = "1") OR (NOT ALLUSERS AND ExoSnapUserSetupManaged = "1"))' />
+    <Property Id="EXOSNAP_SETUP_REPAIR" Secure="yes" />
+    <Launch Condition="NOT EXOSNAP_SETUP_REPAIR OR Installed"
+            Message="Repair requires this MSI product to be installed in the selected scope. Run the matching ExoSnap Setup to install or upgrade it." />
     <Property Id="EXOSNAP_REQUESTED_SCOPE" Secure="yes" />
     <CustomAction Id="SelectInstallScope" BinaryRef="DistributionOwnerProbe"
                   DllEntry="SelectInstallScope" Execute="immediate" Return="check" />

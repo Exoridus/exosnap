@@ -245,6 +245,7 @@ class UpdaterWorker : public QObject {
     // consumed (elevated msiexec / portable extraction). On a hash mismatch the
     // file is deleted (no partial binary retained). Any prior lock is released
     // first so a re-download can replace the file.
+    [[nodiscard]] bool downloadVerifiedPackage(const exosnap::update::PackageEntry& package, const std::wstring& path);
     [[nodiscard]] bool LockAndVerifyPackage(const std::string& expected_sha256, QString* error);
 
     const UpdaterArgs args_;
@@ -272,6 +273,7 @@ class UpdaterWorker : public QObject {
     std::wstring download_dir_;
     bool have_package_ = false; // Download completed at least once
     bool repair_msi_ = false;
+    bool package_is_setup_ = false;
     std::optional<exosnap::update::MsiInstallScope> setup_scope_;
 
     // Deny-write / deny-delete lock on package_path_, held from verification

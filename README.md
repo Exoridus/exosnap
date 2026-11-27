@@ -31,7 +31,7 @@ A Windows screen recorder for gameplay, software demos and everyday capture. NVI
 
 ## Your first recording
 
-1. Download **ExoSnap Setup** (`ExoSnap-<version>-Setup.exe`) from [Releases](https://github.com/Exoridus/exosnap/releases) and run it. Setup installs ExoSnap for your Windows account by default. For everyone on the computer, choose **Setup for all users** (`ExoSnap-<version>-Setup-AllUsers.exe`). Both packages work offline and install the shared Microsoft Visual C++ runtime first when required. Administrators and package managers use the **MSI** (`ExoSnap-<version>-windows-x64.msi`); for a no-install build use the **portable ZIP** and keep its files together.
+1. Download **ExoSnap Setup** (`ExoSnap-<version>-Setup.exe`) from [Releases](https://github.com/Exoridus/exosnap/releases) and run it. Setup installs ExoSnap for your Windows account by default. For everyone on the computer, choose **Setup for all users** (`ExoSnap-<version>-Setup-AllUsers.exe`). Both packages work offline and install the shared Microsoft Visual C++ runtime first when required. For a machine-wide raw MSI installation, run `msiexec /i <package.msi> ALLUSERS=1` from an elevated terminal. Administrators and package managers use the **MSI** (`ExoSnap-<version>-windows-x64.msi`); for a no-install build use the **portable ZIP** and keep its files together.
 2. Choose a screen, window or region. Select the application/system audio and microphone sources you want.
 3. Review the readiness status. ExoSnap explains blockers before you start and offers a fix where possible.
 4. Press **Record**, or use the default **Alt+Shift+R** start/stop hotkey. Hotkeys are configurable.
