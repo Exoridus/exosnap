@@ -313,7 +313,11 @@ UpdaterWorker::UpdaterWorker(UpdaterArgs args, QObject* parent) : QObject(parent
 }
 
 void UpdaterWorker::repair() {
-    if (args_.install_mode != InstallMode::Installed || !have_package_) {
+    // A failed repair download releases the Setup file lock. Its authenticated
+    // manifest still identifies the exact MSI that runDownload must verify.
+    const bool pending_setup_repair = repair_msi_ && package_is_setup_ && setup_scope_ &&
+                                      exosnap::update::SelectSetupManagedPackage(manifest_, *setup_scope_, true);
+    if (args_.install_mode != InstallMode::Installed || (!have_package_ && !pending_setup_repair)) {
         emit failed(FailureCase::VerifyInstallFailedMsi,
                     QStringLiteral("The verified MSI package is unavailable for repair."));
         return;

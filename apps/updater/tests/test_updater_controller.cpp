@@ -527,6 +527,34 @@ TEST(UpdaterCancel, IsTerminalAndCarriesNoFailure) {
     EXPECT_FALSE(c.flowState().reboot_required);
 }
 
+TEST(UpdaterCancel, FailedOrCanceledRepairDownloadCanResumeWithoutClaimingAnIntactInstall) {
+    for (auto mode : {UpdaterMode::Manual, UpdaterMode::AppHandoff}) {
+        for (bool cancel : {false, true}) {
+            UpdaterController controller = MakeController();
+            controller.setMode(mode);
+            controller.onFailure(FailureCase::VerifyInstallFailedMsi, {});
+            controller.onRepairStarted();
+            controller.onStepStarted(UpStep::Download);
+            if (cancel) {
+                controller.onCancelled();
+                EXPECT_EQ(controller.flowState().phase, UpdatePhase::Cancelled);
+                EXPECT_FALSE(controller.flowState().failure_case);
+            } else {
+                controller.onFailure(FailureCase::DownloadFailed, {});
+            }
+            EXPECT_EQ(controller.flowState().install_state, InstallState::Unknown);
+            EXPECT_EQ(controller.state().primary_action, QStringLiteral("Repair ExoSnap"));
+            EXPECT_TRUE(controller.state().safety_text.contains("still unconfirmed"));
+            EXPECT_EQ(controller.flowState().retry_entry_step, UpStep::CloseApp);
+            controller.onRepairStarted();
+            controller.onStepStarted(UpStep::Download);
+            EXPECT_EQ(controller.flowState().phase, UpdatePhase::Downloading);
+            EXPECT_EQ(controller.flowState().install_state, InstallState::Unknown);
+            EXPECT_FALSE(controller.flowState().retry_entry_step);
+        }
+    }
+}
+
 TEST(UpdaterCancel, TheStoppedStepIsNotMarkedFailed) {
     // A red cross in the checklist would say the step broke. It was stopped.
     UpdaterController c = MakeManualController();

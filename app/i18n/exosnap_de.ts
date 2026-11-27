@@ -10905,6 +10905,10 @@ Kleiner Text auf dem Bildschirm verliert früher an Qualität als Videoinhalte. 
     </message>
     <message>
         <location line="+19"/>
+        <source>Repair download canceled</source>
+        <translation>Reparaturdownload abgebrochen</translation>
+    </message>
+    <message>
         <source>Update canceled</source>
         <translation>Update abgebrochen</translation>
     </message>
