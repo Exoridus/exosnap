@@ -1,0 +1,27 @@
+name: Set up test FFmpeg
+description: Provision the pinned Windows FFmpeg and ffprobe used by verification
+runs:
+  using: composite
+  steps:
+    - name: Download and verify FFmpeg
+      shell: pwsh
+      run: |
+        $ErrorActionPreference = 'Stop'
+        $PSNativeCommandUseErrorActionPreference = $true
+        $ProgressPreference = 'SilentlyContinue'
+        $version = '9.1'
+        $name = "ffmpeg-$version-essentials_build"
+        $sha256 = '835b9a733445ba7a56a37a26cf7bde84e2f3ce7da2a8ec984276bb2abb1b922c'
+        $archive = Join-Path $env:RUNNER_TEMP "$name.7z"
+        $url = "https://github.com/GyanD/codexffmpeg/releases/download/$version/$name.7z"
+        Invoke-WebRequest -Uri $url -OutFile $archive -MaximumRetryCount 2
+        if ((Get-FileHash -LiteralPath $archive -Algorithm SHA256).Hash -ne $sha256) {
+          throw 'FFmpeg archive SHA-256 mismatch'
+        }
+        7z x -y -bso0 -bsp0 "-o$env:RUNNER_TEMP" $archive
+        $bin = Join-Path $env:RUNNER_TEMP "$name/bin"
+        foreach ($tool in @('ffmpeg', 'ffprobe')) {
+          $versionOutput = & (Join-Path $bin "$tool.exe") -version
+          $versionOutput[0]
+        }
+        Add-Content -LiteralPath $env:GITHUB_PATH -Value $bin -Encoding utf8
