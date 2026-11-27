@@ -145,6 +145,15 @@ target_include_directories(exosnap_controller3d_native PRIVATE ../Quick ${PROJEC
 target_compile_definitions(exosnap_controller3d_native PRIVATE NOMINMAX)
 target_link_libraries(exosnap_controller3d_native PRIVATE exosnap_controller3d_sceneplugin Qt6::Quick3D Qt6::Svg Qt6::Xml
     exosnap::gamepad tomlplusplus::tomlplusplus exosnap::warnings d3d11.lib dxgi.lib d3dcompiler.lib runtimeobject.lib)
+# The probe deploys a different Qt runtime from the application.
+set_target_properties(exosnap_controller3d_native PROPERTIES
+    RUNTIME_OUTPUT_DIRECTORY "${CMAKE_BINARY_DIR}/controller3d-native")
+add_custom_command(TARGET exosnap_controller3d_native POST_BUILD
+    COMMAND ${CMAKE_COMMAND} -E copy_if_different
+        "$<TARGET_FILE:SDL3::SDL3>" "$<TARGET_FILE_DIR:exosnap_controller3d_native>"
+    VERBATIM
+)
+exosnap_stage_asan_runtime(exosnap_controller3d_native)
 qt_add_resources(exosnap_controller3d_native "native_mapping"
     PREFIX "/gamepad"
     BASE "${PROJECT_SOURCE_DIR}/app/assets/gamepad"
