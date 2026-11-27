@@ -495,7 +495,7 @@ class EditSessionAdapter : public QObject {
     Q_INVOKABLE void recoverProject(qulonglong consent_revision);
     Q_INVOKABLE void discardProjectRecovery();
     [[nodiscard]] QString projectName() const;
-    [[nodiscard]] QString projectMessage() const {
+    [[nodiscard]] const QString& projectMessage() const {
         return project_message_;
     }
     [[nodiscard]] bool projectBusy() const {

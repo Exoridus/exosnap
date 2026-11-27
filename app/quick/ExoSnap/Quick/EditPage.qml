@@ -22,6 +22,7 @@ FocusScope {
     readonly property real stageWidth: stage.width - 2 * railWidth
     readonly property bool exportVisible: detailsOpen && rightContext === "export"
     readonly property bool canOpenExport: session.durationUs > 0 || exporter.state !== EditExportAdapter.Options
+    readonly property bool projectShortcutsActive: visible && !projectDiscard.visible && !discardRecovery.visible
     property bool mediaPinPreferred: layoutPreferences.mediaPinned
     property bool detailsPinPreferred: layoutPreferences.detailsPinned
     property bool mediaPinnedLast: layoutPreferences.mediaPinnedLast
@@ -1023,22 +1024,22 @@ FocusScope {
     EditSourceChoice { id: sourceChoice; session: root.session }
     Shortcut {
         sequences: [StandardKey.New]
-        enabled: root.visible && !projectDiscard.visible
+        enabled: root.projectShortcutsActive
         onActivated: root.requestProjectAction("new")
     }
     Shortcut {
         sequences: [StandardKey.Open]
-        enabled: root.visible && !projectDiscard.visible
+        enabled: root.projectShortcutsActive
         onActivated: root.requestProjectAction("open")
     }
     Shortcut {
         sequences: [StandardKey.Save]
-        enabled: root.visible && !projectDiscard.visible
+        enabled: root.projectShortcutsActive
         onActivated: root.requestProjectSave(false)
     }
     Shortcut {
         sequences: [StandardKey.SaveAs]
-        enabled: root.visible && !projectDiscard.visible
+        enabled: root.projectShortcutsActive
         onActivated: root.requestProjectSave(true)
     }
     FileDialog {

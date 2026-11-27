@@ -287,12 +287,20 @@ struct EditExportAdapter::PreparedExport {
             QVariantMap row{{QStringLiteral("asset"), QVariant::fromValue<qulonglong>(clip.asset)},
                             {QStringLiteral("position"), position}};
             QString name;
-            if (source != snapshot.sources.end())
-                for (const auto& track : source->metadata.audio_metadata.actual_tracks)
-                    if (track.track_id == clip.stream->stream_identity) {
-                        name = QString::fromStdString(track.name);
-                        row.insert(QStringLiteral("role"), QString::fromStdString(track.role));
-                    }
+            if (source != snapshot.sources.end()) {
+                const auto& streams = source->metadata.streams;
+                const auto physical = std::find_if(streams.begin(), streams.end(), [&](const auto& stream) {
+                    return stream.kind == engine::TimelineStreamKind::Audio &&
+                           stream.container_index == clip.stream->container_index;
+                });
+                if (physical != streams.end() && physical->stream_identity)
+                    for (const auto& track : source->metadata.audio_metadata.actual_tracks)
+                        if (track.track_id == *physical->stream_identity) {
+                            name = QString::fromStdString(track.name);
+                            row.insert(QStringLiteral("role"), QString::fromStdString(track.role));
+                            break;
+                        }
+            }
             // Foreign media rarely names its streams; the reviewer still has to
             // tell which file and stream a row stands for.
             if (name.isEmpty())
