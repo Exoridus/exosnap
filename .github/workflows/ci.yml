@@ -382,6 +382,7 @@ jobs:
         with:
           filters: |
             installer:
+              - '.github/workflows/ci.yml'
               - 'apps/setup/**'
               - 'packaging/msi/**'
               - 'packaging/burn/**'
@@ -804,6 +805,7 @@ jobs:
         if: github.event_name == 'pull_request' && needs.changes.outputs.installer == 'true'
         shell: pwsh
         run: |
+          $env:PATH = "$(Join-Path $env:USERPROFILE '.dotnet/tools');$env:PATH"
           dotnet tool install --global wix --version 4.0.5
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
           wix extension add -g WixToolset.Util.wixext/4.0.5
