@@ -1232,6 +1232,67 @@ mod tests {
     }
 
     #[cfg(windows)]
+    fn build_rollback_fixture(output: &Path, out: &Path, version: &str) -> Result<PathBuf> {
+        let root = Path::new(env!("CARGO_MANIFEST_DIR")).join("../..");
+        let source = root.join("packaging/msi/Package.wxs");
+        let production = fs::read_to_string(&source)?;
+        anyhow::ensure!(production.matches("</Package>").count() == 1);
+        anyhow::ensure!(production.contains("Schedule=\"afterInstallInitialize\""));
+        let fixture_source = out.join("Rollback.wxs");
+        fs::write(
+            &fixture_source,
+            production.replace(
+                "</Package>",
+                r#"<CustomAction Id="ForceFixtureRollback" Error="Deliberate rollback fixture failure." />
+                   <InstallExecuteSequence>
+                     <Custom Action="ForceFixtureRollback" After="RemoveExistingProducts" />
+                   </InstallExecuteSequence>
+                 </Package>"#,
+            ),
+        )?;
+        let (prefix, patch) = version.rsplit_once('.').unwrap();
+        let next_patch = patch.parse::<u16>()?.checked_add(1).unwrap();
+        let higher = format!("{prefix}.{next_patch}");
+        let fixture = out.join("rollback-fixture.msi");
+        let wix = PathBuf::from(std::env::var("USERPROFILE")?).join(".dotnet/tools/wix.exe");
+        let icon = root.join("app/assets/brand/exosnap-app.ico");
+        let probe = root
+            .join("build/windows-x64-ninja-release/packaging/msi")
+            .join("exosnap-msi-owner-probe.dll");
+        let floor = crate::package::VC_REDIST_MIN_VERSION.trim_start_matches('v');
+        let built = crate::tools::run(
+            Command::new(wix)
+                .args(["build", "-arch", "x64", "-ext"])
+                .arg("WixToolset.Util.wixext/4.0.5")
+                .arg("-d")
+                .arg(format!("ProductVersion={higher}"))
+                .arg("-d")
+                .arg(format!("VCRedistMinVersion={floor}"))
+                .arg("-d")
+                .arg(format!("AppIconPath={}", icon.display()))
+                .arg("-d")
+                .arg(format!("DistributionOwnerProbePath={}", probe.display()))
+                .arg(&fixture_source)
+                .arg(output.join("_harvest.wxs"))
+                .arg("-o")
+                .arg(&fixture),
+            secs(360.0),
+        )?;
+        anyhow::ensure!(built.success(), "rollback fixture build: {built:?}");
+        let receipt = json!({
+            "productionWxsSha256": sha256_file(&source)?.0,
+            "fixtureWxsSha256": sha256_file(&fixture_source)?.0,
+            "fixtureMsiSha256": sha256_file(&fixture)?.0,
+            "installedVersion": version,
+            "attemptedVersion": higher,
+            "injectedAction": "ForceFixtureRollback after RemoveExistingProducts",
+        });
+        let evidence = serde_json::to_vec_pretty(&receipt)?;
+        fs::write(out.join("fixture.json"), evidence)?;
+        Ok(fixture)
+    }
+
+    #[cfg(windows)]
     #[test]
     #[ignore = "installs real packages on a disposable GitHub-hosted Windows runner"]
     fn hosted_installer_lifecycle() -> Result<()> {
@@ -1255,6 +1316,8 @@ mod tests {
         let machine_setup = artifact("setupAllUsers")?;
         let out = output.join("lifecycle");
         fs::create_dir(&out)?;
+        let version = report["baseVersion"].as_str().unwrap();
+        let rollback = build_rollback_fixture(&output, &out, version)?;
         let invoke = |program: &Path, args: &[&str], log: &str| -> Result<i32> {
             let mut command = Command::new(program);
             for &arg in args {
@@ -1337,6 +1400,43 @@ mod tests {
             successful(msi, &repair, &log("repair"))?;
             assert_eq!(sha256_file(&exe)?.0, hash);
             fs::write(custom.join("unrelated.txt"), b"preserve")?;
+            let original_arp = &rows[0].uninstall_string;
+            let start = original_arp.find('{').unwrap();
+            let code = &original_arp[start..start + 38];
+            assert!(is_product_code(code));
+            let hive = key.split_once('\\').unwrap().0;
+            let arp = r"SOFTWARE\Microsoft\Windows\CurrentVersion\Uninstall";
+            let arp_key = format!(r"{hive}\{arp}\{code}");
+            let upgrade = rollback.to_str().unwrap();
+            let failed_upgrade = ["/i", upgrade, "/qn", "/norestart", &request];
+            let status = invoke(msi, &failed_upgrade, &log("rollback"))?;
+            assert_eq!(status, 1603);
+            let rollback_log = out.join(format!("{scope}-rollback.log"));
+            let trace = crate::tools::read_diagnostic_log(&rollback_log, "msiexec")?;
+            let removed = trace
+                .find("RemoveExistingProducts. Return value 1.")
+                .unwrap();
+            assert!(trace[removed..].contains("Deliberate rollback fixture failure."));
+            let upper_code = code.to_ascii_uppercase();
+            let related = trace[..removed].lines().any(|line| {
+                line.contains("WIX_UPGRADE_DETECTED")
+                    && line.to_ascii_uppercase().contains(&upper_code)
+            });
+            assert!(related, "the upgrade did not detect the original ProductCode");
+            assert!(trace[..removed].contains("Removal success or error status: 0."));
+            let restored = exosnap_arp_rows()?;
+            assert_eq!(restored.len(), 1);
+            assert_eq!(restored[0].uninstall_string, *original_arp);
+            assert!(!restored[0].system_component);
+            let registered = scoped_reg_value(&arp_key, "DisplayVersion")?;
+            assert_eq!(registered.as_deref(), Some(version));
+            let actual = scoped_reg_value(key, "InstallPath")?.unwrap();
+            assert_eq!(Path::new(&actual), custom);
+            let owner = scoped_reg_value(key, "DistributionOwner")?;
+            assert_eq!(owner.as_deref(), Some("direct"));
+            assert!(!reg_key_exists(other_key)? && shortcut.is_file());
+            assert_eq!(sha256_file(&exe)?.0, hash);
+            assert_eq!(fs::read(custom.join("unrelated.txt"))?, b"preserve");
             let uninstall = ["/x", package, "/qn", "/norestart"];
             successful(msi, &uninstall, &log("uninstall"))?;
             assert_eq!(fs::read(custom.join("unrelated.txt"))?, b"preserve");
@@ -1375,7 +1475,8 @@ mod tests {
             assert!(exosnap_arp_rows()?.is_empty());
             results.push(
                 json!({"scope": scope, "msiCustomPath": custom, "setupPath": default,
-                "repairedSha256": hash, "oppositeScopeExit": refused, "uninstalled": true}),
+                "repairedSha256": hash, "oppositeScopeExit": refused, "uninstalled": true,
+                "rolledBackProductCode": code, "failedUpgradeExit": status}),
             );
         }
         let receipt = serde_json::to_vec_pretty(&results)?;

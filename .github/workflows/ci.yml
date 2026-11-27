@@ -854,6 +854,8 @@ jobs:
             .workspace/installer-smoke/package.json
             .workspace/installer-smoke/package-size.md
             .workspace/installer-smoke/lifecycle/result.json
+            .workspace/installer-smoke/lifecycle/fixture.json
+            .workspace/installer-smoke/lifecycle/Rollback.wxs
           include-hidden-files: true
           if-no-files-found: error
 
