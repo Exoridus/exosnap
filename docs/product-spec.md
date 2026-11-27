@@ -379,9 +379,9 @@ Manifest failure does not abort a good recording. It raises Recovery protection 
 
 ### Recording clips
 
-Recording Clip creation is enabled in the development build for qualification. The clip panel offers the last 30 seconds, 5 minutes or 30 minutes and a custom duration in whole seconds. A request first plans the range: the panel shows the requested and the available range, which follows safe GOP boundaries, and the included tracks. Save this range starts an MKV stream copy while the recording continues; a planned or running clip can be cancelled. A completed clip opens in Edit through Edit saved clip. A compile-time C++ product capability decides availability. QML methods, stale adapter state and control-channel requests cannot change it, and there is no configuration, runtime switch or production development bypass.
+Recording Clip creation is unavailable. Previously saved clips remain accessible through media import and History. A compile-time C++ product capability controls availability. QML methods and control-channel requests refuse creation even if transport state is stale. There is no runtime override.
 
-Release of the capability requires proof of the inclusive 33,554,432-byte per-active-job memory contract and complete codec, long-duration and recording/isolation qualification, including the required `clip.recording-live` scenario. The memory contract is unresolved, not passed or waived. No HEVC, AV1 or audio-only clip-creation profile is qualified.
+Enabling creation requires proof of the inclusive 33,554,432-byte per-active-job memory contract and complete codec, long-duration and recording isolation qualification, including `clip.recording-live`. No HEVC, AV1 or audio-only clip-creation profile is qualified.
 
 Previously saved standalone clips remain ordinary media files. Import, playback, History, editing, stream-copy trim and supported render/export use their existing media rules. This availability boundary changes creation only. Normal recording, splits, markers, recovery, MKV/WebM writing, MKV-to-MP4 delivery and shared background I/O admission remain active.
 

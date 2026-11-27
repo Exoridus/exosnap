@@ -15,10 +15,9 @@ use crate::product_ensure;
 use crate::scenario::{Lane, Scenario, ScenarioClass, Step, Stop};
 
 pub fn scenarios() -> Vec<Scenario> {
-    vec![recording_live_scenario()]
+    vec![creation_unavailable_scenario()]
 }
 
-#[allow(dead_code, reason = "Retained for a source-level Clip deactivation")]
 fn creation_unavailable_scenario() -> Scenario {
     Scenario {
         id: "clip.creation-unavailable",
@@ -93,6 +92,7 @@ fn creation_unavailable(ctx: &mut Context) -> Step {
     Ok(())
 }
 
+#[allow(dead_code, reason = "Retained for Recording Clip qualification")]
 fn recording_live_scenario() -> Scenario {
     Scenario {
         id: "clip.recording-live",
@@ -631,14 +631,16 @@ mod tests {
     }
 
     #[test]
-    fn retained_negative_oracle_keeps_its_historical_identity() {
-        let scenario = creation_unavailable_scenario();
+    fn clip_refusal_keeps_its_frozen_identity() {
+        let registered = scenarios();
+        let [scenario] = registered.as_slice() else {
+            panic!("expected one registered Recording Clip scenario");
+        };
         assert_eq!(scenario.id, "clip.creation-unavailable");
         assert_eq!(scenario.revision, 1);
         assert_eq!(scenario.tier, Tier::Required);
         assert_eq!(scenario.lane, Lane::CiCore);
         assert!(scenario.also.contains(&Lane::Preflight));
-        assert!(!scenarios().iter().any(|s| s.id == scenario.id));
     }
 
     #[test]

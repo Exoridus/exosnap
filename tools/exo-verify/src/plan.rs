@@ -342,16 +342,17 @@ mod tests {
     }
 
     #[test]
-    fn offered_clip_plan_requires_live_creation_and_preserves_frozen_validation() {
+    fn clip_plan_requires_unavailable_contract_and_preserves_frozen_validation() {
         let bundle = fixture_bundle();
         let registry = crate::scenarios::registry();
         let plan = ReleasePlan::create(&bundle, &registry);
         plan.verify_against(&bundle, &registry).unwrap();
-        let clip = plan.entry("clip.recording-live").unwrap();
-        assert_eq!(clip.scenario_revision, 4);
+        let clip = plan.entry("clip.creation-unavailable").unwrap();
+        assert_eq!(clip.scenario_revision, 1);
         assert_eq!(clip.tier, Tier::Required);
-        assert!(plan.entry("clip.creation-unavailable").is_none());
-        for mutation in ["omit", "demote", "revision", "historical-negative"] {
+        assert_eq!(clip.lane, Lane::CiCore.name());
+        assert!(plan.entry("clip.recording-live").is_none());
+        for mutation in ["omit", "demote", "revision", "historical-positive"] {
             let mut changed = plan.clone();
             let index = changed
                 .scenarios
@@ -365,8 +366,9 @@ mod tests {
                 "demote" => changed.scenarios[index].tier = Tier::Recommended,
                 "revision" => changed.scenarios[index].scenario_revision += 1,
                 _ => {
-                    changed.scenarios[index].id = "clip.creation-unavailable".into();
-                    changed.scenarios[index].scenario_revision = 1;
+                    changed.scenarios[index].id = "clip.recording-live".into();
+                    changed.scenarios[index].scenario_revision = 4;
+                    changed.scenarios[index].lane = Lane::Gpu.name().into();
                 }
             }
             assert!(
