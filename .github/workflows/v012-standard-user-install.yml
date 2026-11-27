@@ -19,11 +19,11 @@ jobs:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
         with:
           persist-credentials: false
-          fetch-depth: 3
+          fetch-depth: 4
       - name: Verify qualification source
         shell: pwsh
         run: |
-          $parent = git rev-parse HEAD^^
+          $parent = git rev-parse HEAD~3
           if ($LASTEXITCODE -or $parent -ne 'fdfc7def6bca7f9367f7a447d20810ccabdbe8ae') { throw 'Unexpected product parent' }
           $changed = @(git diff --name-only $parent HEAD)
           if ($LASTEXITCODE -or $changed.Count -ne 1 -or $changed[0] -ne '.github/workflows/v012-standard-user-install.yml') { throw 'Unexpected qualification diff' }
@@ -64,7 +64,7 @@ jobs:
             [IO.File]::WriteAllText($file, $source)
             [IO.File]::WriteAllText($noticeFile, $notice)
           }
-      - name: Install, upgrade, repair and uninstall as a distinct standard account
+      - name: Qualify a distinct standard account with unmanaged MSI installation permitted
         shell: pwsh
         env:
           HOSTED_RUNNER_KIND: ${{ runner.environment }}
@@ -82,6 +82,13 @@ jobs:
           $account = $null
           $secret = $null
           $proc = $null
+          $policyBranch = 'HKLM:\SOFTWARE\Policies\Microsoft\Windows\Installer'
+          $policyName = 'DisableMSI'
+          $policyChanged = $false
+          $policyCreated = $false
+          $policyPresent = $false
+          $policyPrevious = $null
+          $policyReceipt = [ordered]@{ fixture='hosted Windows with unmanaged MSI permitted'; priorDefaultRun='46020290997'; restored=$false }
           $ownedRoot = $false
           try {
             if ((Get-LocalUser -Name $name -ErrorAction SilentlyContinue) -or (Test-Path $root)) { throw 'Fixture collision' }
@@ -126,6 +133,7 @@ jobs:
                 -not (Test-Path "Registry::HKEY_USERS\$ExpectedSid")) { throw 'Test account profile/HKCU is not loaded' }
             $runtime = [version]((Get-ItemPropertyValue 'HKLM:\SOFTWARE\Microsoft\VisualStudio\14.0\VC\Runtimes\x64' Version).TrimStart('v','V'))
             if ($runtime -lt [version]'14.44.35211.0') { throw 'Missing runtime prerequisite' }
+            if ((Get-ItemPropertyValue 'HKLM:\SOFTWARE\Policies\Microsoft\Windows\Installer' DisableMSI) -ne 0) { throw 'Unmanaged MSI is not permitted in fixture' }
             foreach ($policy in 'HKLM:\SOFTWARE\Policies\Microsoft\Windows\Installer','HKCU:\SOFTWARE\Policies\Microsoft\Windows\Installer') {
               if ((Test-Path $policy) -and (Get-ItemProperty $policy).AlwaysInstallElevated -eq 1) { throw 'AlwaysInstallElevated policy is enabled' }
             }
@@ -174,6 +182,26 @@ jobs:
             Set-Content -LiteralPath $scriptFile -Value $child
             $credential = [Management.Automation.PSCredential]::new("$env:COMPUTERNAME\$name",$secret)
             $powershell = "$env:SystemRoot\System32\WindowsPowerShell\v1.0\powershell.exe"
+            # Only the disposable runner's unmanaged-MSI policy is varied.
+            # DisableMSI=0 grants no MSI elevation and no group membership.
+            if (-not (Test-Path -LiteralPath $policyBranch)) {
+              New-Item -Path $policyBranch -ErrorAction Stop | Out-Null
+              $policyCreated = $true
+            }
+            $policyKey = Get-Item -LiteralPath $policyBranch
+            $policyPresent = $policyKey.GetValueNames() -contains $policyName
+            if ($policyPresent) {
+              if ($policyKey.GetValueKind($policyName) -ne [Microsoft.Win32.RegistryValueKind]::DWord) { throw 'Unexpected DisableMSI type' }
+              $policyPrevious = $policyKey.GetValue($policyName)
+              if ($policyPrevious -notin 0,1) { throw 'Unexpected DisableMSI override; refusing fixture' }
+            }
+            $policyReceipt.previousValuePresent = $policyPresent
+            $policyReceipt.previousDword = $policyPrevious
+            $policyReceipt.previousKeyPresent = -not $policyCreated
+            $policyChanged = $true
+            New-ItemProperty -LiteralPath $policyBranch -Name $policyName -PropertyType DWord -Value 0 -Force | Out-Null
+            if ((Get-ItemPropertyValue -LiteralPath $policyBranch -Name $policyName) -ne 0) { throw 'Could not enable unmanaged MSI in fixture' }
+            $policyReceipt.permittedDword = 0
             $proc = Start-Process -FilePath $powershell -Credential $credential -LoadUserProfile -UseNewEnvironment -WorkingDirectory $root -ArgumentList "-NoProfile -NonInteractive -ExecutionPolicy RemoteSigned -File `"$scriptFile`" $sid" -PassThru
             if (-not $proc.WaitForExit(1500000)) { throw 'Standard-user child timed out' }
             if ($proc.ExitCode -ne 0) {
@@ -183,13 +211,33 @@ jobs:
 
             if ($secret) { $secret.Dispose() }
             try {
-              if ($proc) {
-                try {
-                  if (-not $proc.HasExited) { $proc.Kill($true) }
-                  if (-not $proc.WaitForExit(30000)) { throw 'Owned child failed to terminate' }
-                } finally {
-                  $proc.Dispose()
+              try {
+                if ($proc) {
+                  try {
+                    if (-not $proc.HasExited) { $proc.Kill($true) }
+                    if (-not $proc.WaitForExit(30000)) { throw 'Owned child failed to terminate' }
+                  } finally {
+                    $proc.Dispose()
+                  }
                 }
+              } finally {
+                if ($policyChanged) {
+                  if ($policyPresent) {
+                    New-ItemProperty -LiteralPath $policyBranch -Name $policyName -PropertyType DWord -Value $policyPrevious -Force | Out-Null
+                  } else {
+                    Remove-ItemProperty -LiteralPath $policyBranch -Name $policyName -ErrorAction Stop
+                  }
+                  $after = Get-Item -LiteralPath $policyBranch
+                  $presentAfter = $after.GetValueNames() -contains $policyName
+                  if ($presentAfter -ne $policyPresent -or ($policyPresent -and
+                      ($after.GetValueKind($policyName) -ne [Microsoft.Win32.RegistryValueKind]::DWord -or $after.GetValue($policyName) -ne $policyPrevious))) { throw 'DisableMSI restoration failed' }
+                }
+                if ($policyCreated) {
+                  $emptyKey = Get-Item -LiteralPath $policyBranch
+                  if ($emptyKey.ValueCount -or $emptyKey.SubKeyCount) { throw 'Unexpected contents in fixture-created policy key' }
+                  Remove-Item -LiteralPath $policyBranch -ErrorAction Stop
+                }
+                $policyReceipt.restored = $true
               }
               if ($ownedRoot) {
                 # Both paths are administrator-selected. The account has RX on root
@@ -199,6 +247,7 @@ jobs:
                   if (-not $entry.PSIsContainer -or ($entry.Attributes -band [IO.FileAttributes]::ReparsePoint)) { throw 'Unexpected evidence directory' }
                 }
                 $evidence = New-Item -ItemType Directory -Path '.workspace/standard-user-result' -Force
+                 $policyReceipt | ConvertTo-Json | Set-Content (Join-Path $evidence.FullName 'policy.json')
                 $receipt = [ordered]@{ workflowCommit=$env:GITHUB_SHA; productCommit='fdfc7def6bca7f9367f7a447d20810ccabdbe8ae'; versionEdit='0.10.1 -> 0.10.2 in project version and packaged limitations notice' }
                 foreach ($v in '0.10.1','0.10.2') {
                   if (Test-Path "$root\$v.exe") { $receipt[$v] = (Get-FileHash "$root\$v.exe").Hash }
