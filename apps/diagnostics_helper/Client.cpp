@@ -4,6 +4,7 @@
 #include "FixtureStatus.h"
 #include "ImagePath.h"
 #include "Peer.h"
+#include "RegistryAcePolicy.h"
 #ifdef EXOSNAP_SIGNED_FIXTURE_STATUS
 #include "MsixAcquisition.h"
 #endif
@@ -78,7 +79,8 @@ bool Protected(HANDLE object, bool children, SE_OBJECT_TYPE type = SE_FILE_OBJEC
         if ((inherit_only && !children) || grant != FileAceGrant::CheckTrustee)
             continue;
         auto* ace = static_cast<ACCESS_ALLOWED_ACE*>(entry);
-        safe = TrustedOwner(&ace->SidStart) || (inherit_only && IsWellKnownSid(&ace->SidStart, WinCreatorOwnerSid));
+        safe = TrustedOwner(&ace->SidStart) || (inherit_only && IsWellKnownSid(&ace->SidStart, WinCreatorOwnerSid)) ||
+               (type == SE_REGISTRY_KEY && IsRegistryCreatorTemplate(*header));
         if (!safe)
             ReportFixtureStatus("DACL rejected ACE rights", ace->Mask);
     }
