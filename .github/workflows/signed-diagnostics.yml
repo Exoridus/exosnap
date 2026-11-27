@@ -125,7 +125,19 @@ jobs:
               if (Get-Process -Name exosnap-diagnostics -ErrorAction SilentlyContinue) { throw "Activation remained alive" }
             }
             foreach ($mode in '--empty-activation','--expect-invalid-version') {
-              if ((Invoke-SignedFixture $mode) -ne 0) { throw "Machine activation fixture failed: $mode" }
+              if ((Invoke-SignedFixture $mode) -ne 0) {
+                $ids = 10000,10001,10010,10016
+                $since = (Get-Date).AddMinutes(-2)
+                $class = '70e064ca-a7d4-43ea-a075-ce4303bf12e5'
+                $events = @(Get-WinEvent -FilterHashtable @{LogName='System'; ProviderName='Microsoft-Windows-DistributedCOM'; Id=$ids; StartTime=$since} -ErrorAction SilentlyContinue)
+                foreach ($event in $events) {
+                  if ($event.Message -like "*$class*") {
+                    $codes = @($event.Properties | ForEach-Object { [string]$_.Value } | Where-Object { $_ -match '^(0x[0-9a-f]+|[0-9]+)$' })
+                    Write-Host "Diagnostics class DCOM event $($event.Id), numeric fields $($codes -join ', ')"
+                  }
+                }
+                throw "Machine activation fixture failed: $mode"
+              }
               Assert-NoHelper
             }
             $originalClient = $client

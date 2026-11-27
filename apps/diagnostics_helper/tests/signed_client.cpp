@@ -87,8 +87,10 @@ int main(int argc, char** argv) {
             passed = exosnap::diagnostics::ProbeMachineBootstrap(1, true) == E_ACCESSDENIED;
         else if (mode == "--empty-activation")
             passed = exosnap::diagnostics::ProbeMachineBootstrap(1, false) == S_OK;
+        const auto trace = QueryDpcSession();
+        exosnap::diagnostics::ipc::ReportFixtureStatus("fixture DPC query after control", trace);
         CoUninitialize();
-        return passed && QueryDpcSession() == ERROR_WMI_INSTANCE_NOT_FOUND ? 0 : 1;
+        return passed && trace == ERROR_WMI_INSTANCE_NOT_FOUND ? 0 : 1;
     }
     for (int cycle = 1; cycle <= 2; ++cycle) {
         std::cout << "Signed provisioning and DPC cycle " << cycle << std::endl;

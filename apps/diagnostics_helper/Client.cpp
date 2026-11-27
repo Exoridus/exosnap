@@ -529,16 +529,30 @@ HRESULT ProbeMachineBootstrap(ULONG version, bool invoke) {
     options.dwClassContext = CLSCTX_LOCAL_SERVER;
     Microsoft::WRL::ComPtr<IExoSnapDiagnosticsBootstrap> bootstrap;
     auto result = CoGetObject(kBootstrapMoniker, &options, IID_PPV_ARGS(&bootstrap));
+    ReportFixtureStatus("fixture CoGetObject vendor interface", static_cast<DWORD>(result));
+    if (FAILED(result) && !invoke) {
+        // Distinguish class activation from marshaling this vendor interface.
+        Microsoft::WRL::ComPtr<IUnknown> identity;
+        const HRESULT base = CoGetObject(kBootstrapMoniker, &options, IID_PPV_ARGS(&identity));
+        ReportFixtureStatus("fixture CoGetObject IUnknown control", static_cast<DWORD>(base));
+        if (SUCCEEDED(base)) {
+            Microsoft::WRL::ComPtr<IExoSnapDiagnosticsBootstrap> typed;
+            const HRESULT query = identity.As(&typed);
+            ReportFixtureStatus("fixture vendor QueryInterface control", static_cast<DWORD>(query));
+        }
+    }
     if (FAILED(result) || !invoke)
         return result;
     result = CoSetProxyBlanket(bootstrap.Get(), RPC_C_AUTHN_DEFAULT, RPC_C_AUTHZ_DEFAULT, nullptr,
                                RPC_C_AUTHN_LEVEL_PKT_PRIVACY, RPC_C_IMP_LEVEL_IDENTIFY, nullptr, EOAC_NONE);
+    ReportFixtureStatus("fixture proxy authentication", static_cast<DWORD>(result));
     if (FAILED(result))
         return result;
     const auto created = CreationTime(GetCurrentProcess());
     LONG restricted = 0;
     result = bootstrap->Begin(WireLong(version), 1, 2, 3, 4, WireLong(GetCurrentProcessId()),
                               WireLong(static_cast<ULONG>(created)), WireLong(static_cast<ULONG>(created >> 32)), &restricted);
+    ReportFixtureStatus("fixture Begin returned", static_cast<DWORD>(result));
     Handle unexpected(ULongToHandle(WireBits(restricted)));
     return result;
 }
