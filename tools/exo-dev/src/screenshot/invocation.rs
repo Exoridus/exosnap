@@ -370,6 +370,8 @@ impl ShotSpec {
     /// The app command line and environment for this spec at one variant.
     pub fn invocation(&self, variant: &Variant, png: &str) -> (Vec<String>, Vec<(String, String)>) {
         let mut args = vec![
+            "--ui-language".to_string(),
+            "de".to_string(),
             "--visual-test".to_string(),
             png.to_string(),
             "--visual-test-size".to_string(),

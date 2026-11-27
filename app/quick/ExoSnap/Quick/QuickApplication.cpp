@@ -4328,7 +4328,9 @@ namespace {
 // standing in for a kernel trace a capture run must never open.
 class FixedDpcLatencyProvider final : public diagnostics::IDpcLatencyProvider {
   public:
-    explicit FixedDpcLatencyProvider(diagnostics::DpcLatencyReading reading) : reading_(std::move(reading)) {
+    explicit FixedDpcLatencyProvider(diagnostics::DpcLatencyReading reading,
+                                     diagnostics::DiagnosticsHelperState state = diagnostics::DiagnosticsHelperState::Local)
+        : reading_(std::move(reading)), state_(state) {
     }
 
     [[nodiscard]] diagnostics::DpcLatencyReading Read() const override {
@@ -4336,7 +4338,9 @@ class FixedDpcLatencyProvider final : public diagnostics::IDpcLatencyProvider {
     }
 
   private:
+    diagnostics::DiagnosticsHelperState HelperState() const override { return state_; }
     diagnostics::DpcLatencyReading reading_;
+    diagnostics::DiagnosticsHelperState state_;
 };
 
 // The finished recording the after-stop scenario reports on. Deliberately not a
@@ -4465,6 +4469,35 @@ void QuickApplication::applyDiagnosticsVisualScenarios() {
     const QByteArray diag_live = qgetenv("EXOSNAP_VISUAL_DIAG_LIVE");
     if (!diag_live.isEmpty()) {
         const QString kind = QString::fromUtf8(diag_live);
+
+        if (kind == QLatin1String("helper-opt-in") || kind == QLatin1String("helper-unavailable") ||
+            kind == QLatin1String("helper-refused")) {
+            using diagnostics::DiagnosticsHelperState;
+            const bool requested = kind != QLatin1String("helper-opt-in");
+            const bool refused = kind == QLatin1String("helper-refused");
+            const auto state = !requested ? DiagnosticsHelperState::Local :
+                               refused ? DiagnosticsHelperState::ConsentDeclined : DiagnosticsHelperState::Unavailable;
+            diagnostics_adapter_.setElevated(false);
+            diagnostics_adapter_.setInDepthEnabled(true);
+            diagnostics_adapter_.setPresentProviderState(diagnostics::PresentProviderState::OpenNoData);
+            visual_dpc_provider_ = std::make_unique<FixedDpcLatencyProvider>(diagnostics::DpcLatencyReading{}, state);
+            diagnostics_adapter_.setDpcLatencyProvider(visual_dpc_provider_.get());
+            const QString expected = !requested ? QStringLiteral("Nicht aktiv: Kernel-Trace mit Administratorrechten erforderlich") :
+                                     refused ? QStringLiteral("Administratorfreigabe abgelehnt") :
+                                               QStringLiteral("Installieren Sie das passende Helfer-MSI als Administrator.");
+            bool found = false;
+            for (const auto& row : diagnostics_adapter_.measurementSources()) {
+                const auto values = row.toMap();
+                if (values.value(QStringLiteral("title")).toString() == QStringLiteral("DPC / ISR") &&
+                    values.value(QStringLiteral("state")).toString() == expected)
+                    found = true;
+            }
+            if (!found || diagnostics_adapter_.elevated() || !diagnostics_adapter_.inDepthEnabled() ||
+                diagnostics_adapter_.privilegedRequested() != requested)
+                qFatal("Diagnostics capture fixture did not reach its requested production state");
+            diagnostics_visual_scenario_active_ = true;
+            return;
+        }
 
         const visual::DiagnosticsLiveExtras extras = visual::MakeDiagnosticsLiveExtras(kind);
         if (extras.elevated)
