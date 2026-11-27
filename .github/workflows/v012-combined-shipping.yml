@@ -1,0 +1,244 @@
+name: Combined v0.12 shipping targets and portable smoke
+
+on:
+  push:
+    branches: [verify/v012-combined-shipping]
+
+permissions:
+  contents: read
+
+env:
+  SCCACHE_GHA_ENABLED: "true"
+  SCCACHE_GHA_RW_MODE: READ_ONLY
+  SCCACHE_IDLE_TIMEOUT: "0"
+
+jobs:
+  combined-release:
+    runs-on: windows-2022
+    timeout-minutes: 60
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+      - name: Compare exact PR trees and check out the combined mission source
+        shell: python
+        run: |
+          import itertools
+          import json
+          import os
+          from pathlib import Path
+          import subprocess
+
+          base = "73b1e3811b2c349ef38cbb7f49abdb89fa9be73f"
+          current_next = "b493d44a30bd5c835c70a63aae2674f18dee01d1"
+          missions = {
+              "600": "a1ea6ddab878228eee9673eef06996b1900fd024",
+              "601": "433712b4fd0afd4dd00d7fcfdd4a596a30937f28",
+              "602": "751b2abb3b0d182423412e99f482ca34fbc6c131",
+          }
+          protected = {
+              "596": "2b1e09e5270188e79294b93786bbf7494d177fb2",
+              "598": "be483ea9bf1c40b472fabb9effcb94671f84327e",
+              "599": "d9379f72bdab1e613bc159eaadc8377095591cbf",
+          }
+          receipt = {
+              "base": base, "currentNext": current_next, "missionHeads": missions, "protectedHeads": protected,
+              "workflowCommit": os.environ["GITHUB_SHA"], "pairwise": [], "combined": [],
+              "boundary": "Pairwise textual checks for the six pinned PRs. Shipping targets and portable package/launch smoke use the three mission heads combined with pinned current next. The combined all-target Release run reached its 60-minute limit; this supplement does not run that full profile or CTest. Temporary commits and detached checkout stay in this runner. No remote ref updates, signing, publishing or installation.",
+          }
+          target = Path(os.environ["RUNNER_TEMP"]) / "v012-combined-shipping.json"
+          os.environ.update({
+              "GIT_AUTHOR_NAME": "ExoSnap integration qualification",
+              "GIT_COMMITTER_NAME": "ExoSnap integration qualification",
+              "GIT_AUTHOR_EMAIL": "qualification@invalid.example",
+              "GIT_COMMITTER_EMAIL": "qualification@invalid.example",
+              "GIT_AUTHOR_DATE": "2000-01-01T00:00:00+00:00",
+              "GIT_COMMITTER_DATE": "2000-01-01T00:00:00+00:00",
+          })
+
+          def git(*args, check=True):
+              return subprocess.run(["git", *args], capture_output=True, text=True, encoding="utf-8",
+                                    errors="replace", timeout=120, check=check)
+
+          try:
+              receipt["gitVersion"] = git("--version").stdout.strip()
+              workflow = ".github/workflows/v012-combined-shipping.yml"
+              if (git("rev-parse", "HEAD").stdout.strip() != receipt["workflowCommit"]
+                      or git("rev-parse", "HEAD^").stdout.strip() != missions["602"]
+                      or git("diff", "--name-only", missions["602"], "HEAD").stdout.splitlines() != [workflow]):
+                  raise RuntimeError("Unexpected verification source or diff")
+              heads = {**missions, **protected}
+              for number, sha in heads.items():
+                  if git("cat-file", "-t", sha).stdout.strip() != "commit":
+                      raise RuntimeError("Expected a commit for PR " + number)
+                  git("merge-base", "--is-ancestor", base, sha)
+
+              pairs = [*itertools.combinations(missions, 2), *itertools.product(missions, protected)]
+              if git("cat-file", "-t", current_next).stdout.strip() != "commit":
+                  raise RuntimeError("Expected a commit for current next")
+              git("merge-base", "--is-ancestor", base, current_next)
+              heads["next"] = current_next
+              pairs.extend((mission, "next") for mission in missions)
+              for left, right in pairs:
+                  result = git("merge-tree", "--write-tree", "--name-only", heads[left], heads[right], check=False)
+                  receipt["pairwise"].append({
+                      "leftPr": left, "leftSha": heads[left], "rightPr": right, "rightSha": heads[right],
+                      "exitCode": result.returncode, "stdout": result.stdout[:131072], "stderr": result.stderr[:32768],
+                  })
+                  print(f"PR {left} + #{right}: Git exit {result.returncode}", flush=True)
+              if len(pairs) != 15 or any(row["exitCode"] for row in receipt["pairwise"]):
+                  raise RuntimeError("Pairwise comparison failed")
+
+              current = missions["600"]
+              for number in ("601", "602"):
+                  other = missions[number]
+                  merged = git("merge-tree", "--write-tree", "--name-only", current, other, check=False)
+                  row = {"left": current, "right": other, "exitCode": merged.returncode,
+                         "stdout": merged.stdout[:131072], "stderr": merged.stderr[:32768]}
+                  receipt["combined"].append(row)
+                  if merged.returncode:
+                      raise RuntimeError("Combined tree conflicts at PR " + number)
+                  tree = merged.stdout.strip()
+                  if git("cat-file", "-t", tree).stdout.strip() != "tree":
+                      raise RuntimeError("Expected one clean Git tree")
+                  current = git("-c", "commit.gpgsign=false", "commit-tree", tree, "-p", current, "-p", other,
+                                "-m", "Local v0.12 integration through PR " + number).stdout.strip()
+                  row.update({"tree": tree, "commit": current})
+              if tree != "0a6b5d8f6758f756d30525fca1cfaa322e7479ee" or current != "ca45766d8eb1897ee8ba00a3dd5ecfe508e5da7f":
+                  raise RuntimeError("Different combined source from the original Release qualification")
+              receipt["missionCommit"] = current
+              receipt["missionTree"] = tree
+              result = git("merge-tree", "--write-tree", "--name-only", current, current_next, check=False)
+              final = {"left": current, "right": current_next, "exitCode": result.returncode,
+                       "stdout": result.stdout[:131072], "stderr": result.stderr[:32768]}
+              receipt["currentNextIntegration"] = final
+              if result.returncode:
+                  raise RuntimeError("Three-mission integration conflicts with current next")
+              tree = result.stdout.strip()
+              if git("cat-file", "-t", tree).stdout.strip() != "tree":
+                  raise RuntimeError("Expected one clean next-plus-missions tree")
+              current = git("-c", "commit.gpgsign=false", "commit-tree", tree, "-p", current, "-p", current_next,
+                            "-m", "Local v0.12 integration with pinned current next").stdout.strip()
+              final.update({"tree": tree, "commit": current})
+              git("checkout", "--detach", current)
+              if git("rev-parse", "HEAD^{tree}").stdout.strip() != tree or git("status", "--porcelain").stdout:
+                  raise RuntimeError("Combined checkout differs from the computed tree")
+              receipt["checkedOutCommit"] = current
+              receipt["checkedOutTree"] = tree
+              print(f"Combined source {current} tree {tree}", flush=True)
+          finally:
+              target.write_text(json.dumps(receipt, indent=2) + "\n", encoding="utf-8")
+
+      - uses: ilammy/msvc-dev-cmd@0b201ec74fa43914dc39ae48a89fd1d8cb592756 # v1.13.0
+      - uses: ./.github/actions/setup-qt
+        with:
+          profile: quick
+      - uses: mozilla-actions/sccache-action@9e7fa8a12102821edf02ca5dbea1acd0f89a2696 # v0.0.10
+      - name: Compile and link the five shipping targets
+        id: shipping
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $PSNativeCommandUseErrorActionPreference = $true
+          $jobs = [Math]::Min(4, [Environment]::ProcessorCount)
+          cmake --preset windows-x64-ninja-release -DEXOSNAP_USE_SCCACHE=ON
+          cmake --build build/windows-x64-ninja-release --parallel $jobs --target exosnap exosnap_updater exosnap-diagnostics exosnap_setup_ui exosnap_setup_ba
+      - name: Stage the portable package and launch it in a clean environment
+        id: portable
+        shell: pwsh
+        run: |
+          cargo run --locked --manifest-path tools/Cargo.toml -p exo-verify -- package --build-dir build/windows-x64-ninja-release --out .workspace/combined-shipping-package --repo-root . --skip-msi --launch-smoke
+          exit $LASTEXITCODE
+      - name: Capture German project controls on the combined Release build
+        id: visuals
+        if: steps.portable.outcome == 'success'
+        shell: python
+        run: |
+          import hashlib
+          import json
+          import os
+          from pathlib import Path
+          import re
+          import shutil
+          import struct
+          import subprocess
+          import tempfile
+
+          temp = Path(os.environ["RUNNER_TEMP"])
+          output = temp / "v012-editor-de"
+          output.mkdir()
+          receipt = json.loads((temp / "v012-combined-shipping.json").read_text(encoding="utf-8"))
+          app = Path("build/windows-x64-ninja-release/app/exosnap.exe").resolve(strict=True)
+          evidence = {"sourceCommit": receipt["checkedOutCommit"], "sourceTree": receipt["checkedOutTree"],
+                      "executableSha256": hashlib.sha256(app.read_bytes()).hexdigest(),
+                      "language": "de", "rendering": "Qt Quick software/offscreen", "cases": []}
+          warning = re.compile(r"--(?:visual|record-visual|overlay-visual|settings-visual)[a-z-]*:|SAVE FAILED|"
+                               r"\.qml:\d+.*(?:Error|Unable|Cannot|polish\(\) loop)|(?:Warning|QWARN).*\.qml:\d+", re.I)
+          try:
+              for scene in ("edit-project-menu", "edit-project-discard"):
+                  for theme in ("dark", "light"):
+                      name = f"{scene}-{theme}"
+                      case = {"scene": scene, "theme": theme, "ok": False}
+                      evidence["cases"].append(case)
+                      png = output / (name + ".png")
+                      logs = [output / (name + suffix) for suffix in (".stdout.log", ".stderr.log", ".app.log")]
+                      with tempfile.TemporaryDirectory(dir=temp, prefix="v012-editor-de-") as config:
+                          env = dict(os.environ, QT_QPA_PLATFORM="offscreen", QT_QUICK_BACKEND="software",
+                                     QT_FORCE_STDERR_LOGGING="1", EXOSNAP_CONFIG_DIR=config)
+                          with logs[0].open("wb") as stdout, logs[1].open("wb") as stderr:
+                              try:
+                                  run = subprocess.run([str(app), "--ui-language", "de", "--visual-test", str(png),
+                                      "--visual-test-size", "860x700", "--visual-page", "5", "--record-visual-state", scene,
+                                      "--visual-appearance", theme, "--visual-accent", "aqua"],
+                                      stdout=stdout, stderr=stderr, env=env, timeout=90, check=False)
+                                  case["exit"] = run.returncode
+                              except subprocess.TimeoutExpired:
+                                  case["timeout"] = True
+                          app_log = Path(config) / "logs" / "exosnap.log"
+                          if app_log.is_file():
+                              shutil.copyfile(app_log, logs[2])
+                      warnings = [line for file in logs if file.is_file()
+                                  for line in file.read_text(encoding="utf-8", errors="replace").splitlines()
+                                  if warning.search(line)]
+                      case["warningCount"] = len(warnings)
+                      data = png.read_bytes() if png.is_file() else b""
+                      if len(data) >= 24 and data[:16] == bytes.fromhex("89504e470d0a1a0a0000000d49484452"):
+                          case["size"] = list(struct.unpack(">II", data[16:24]))
+                          case["sha256"] = hashlib.sha256(data).hexdigest()
+                      case["ok"] = (case.get("exit") == 0 and case.get("size") == [860, 700]
+                                    and logs[2].is_file() and not warnings)
+                      print(name, json.dumps(case), flush=True)
+              if not all(case["ok"] for case in evidence["cases"]):
+                  raise RuntimeError("German visual qualification failed; inspect retained case logs")
+          finally:
+              (output / "source.json").write_text(json.dumps(evidence, indent=2) + "\n", encoding="utf-8")
+
+      - name: Record shipping build, portable smoke and visual outcomes
+        if: always()
+        shell: python
+        env:
+          SHIPPING_RESULT: ${{ steps.shipping.outcome }}
+          PORTABLE_RESULT: ${{ steps.portable.outcome }}
+          VISUAL_RESULT: ${{ steps.visuals.outcome }}
+        run: |
+          import json
+          import os
+          from pathlib import Path
+          path = Path(os.environ["RUNNER_TEMP"]) / "v012-combined-shipping.json"
+          if path.is_file():
+              receipt = json.loads(path.read_text(encoding="utf-8"))
+              receipt["shippingTargetOutcome"] = os.environ["SHIPPING_RESULT"]
+              receipt["portablePackageLaunchOutcome"] = os.environ["PORTABLE_RESULT"]
+              receipt["targets"] = ["exosnap", "exosnap_updater", "exosnap-diagnostics", "exosnap_setup_ui", "exosnap_setup_ba"]
+              receipt["germanEditorVisualOutcome"] = os.environ["VISUAL_RESULT"]
+              path.write_text(json.dumps(receipt, indent=2) + "\n", encoding="utf-8")
+      - name: Retain pinned inputs and integration receipt
+        if: always()
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        with:
+          name: v012-combined-shipping
+          path: |
+            ${{ runner.temp }}/v012-combined-shipping.json
+            ${{ runner.temp }}/v012-editor-de/
+          if-no-files-found: error
