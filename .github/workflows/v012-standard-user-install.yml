@@ -19,11 +19,11 @@ jobs:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
         with:
           persist-credentials: false
-          fetch-depth: 2
+          fetch-depth: 3
       - name: Verify qualification source
         shell: pwsh
         run: |
-          $parent = git rev-parse HEAD^
+          $parent = git rev-parse HEAD^^
           if ($LASTEXITCODE -or $parent -ne 'fdfc7def6bca7f9367f7a447d20810ccabdbe8ae') { throw 'Unexpected product parent' }
           $changed = @(git diff --name-only $parent HEAD)
           if ($LASTEXITCODE -or $changed.Count -ne 1 -or $changed[0] -ne '.github/workflows/v012-standard-user-install.yml') { throw 'Unexpected qualification diff' }
@@ -45,6 +45,9 @@ jobs:
           curl.exe -sSfL -o $redist https://aka.ms/vs/17/release/vc_redist.x64.exe
           $file = (Resolve-Path CMakeLists.txt).Path
           $source = [IO.File]::ReadAllText($file)
+          $noticeFile = (Resolve-Path KNOWN_LIMITATIONS.md).Path
+          $notice = [IO.File]::ReadAllText($noticeFile)
+          if (-not $notice.StartsWith('# ExoSnap 0.10.1: Known limitations')) { throw 'Unexpected fixture notice version' }
           $declaration = 'project(exosnap VERSION 0.10.1 LANGUAGES C CXX)'
           if (-not $source.Contains($declaration)) { throw 'Unexpected fixture source version' }
           try {
@@ -52,12 +55,14 @@ jobs:
               # The higher version exists only in this disposable checkout. Keep binaries,
               # MSI and Burn versions consistent through the ordinary build and validator.
               [IO.File]::WriteAllText($file, $source.Replace($declaration, $declaration.Replace('0.10.1',$version)))
+              [IO.File]::WriteAllText($noticeFile, $notice.Replace('ExoSnap 0.10.1','ExoSnap ' + $version))
               cmake --preset windows-x64-ninja-release -DEXOSNAP_USE_SCCACHE=ON
               cmake --build --preset windows-x64-ninja-release-exosnap --parallel 4
               cargo run --locked --manifest-path tools/Cargo.toml -p exo-verify -- package --build-dir build/windows-x64-ninja-release --out ".workspace/standard-$version" --repo-root . --vc-redist $redist
             }
           } finally {
             [IO.File]::WriteAllText($file, $source)
+            [IO.File]::WriteAllText($noticeFile, $notice)
           }
       - name: Install, upgrade, repair and uninstall as a distinct standard account
         shell: pwsh
@@ -194,7 +199,7 @@ jobs:
                   if (-not $entry.PSIsContainer -or ($entry.Attributes -band [IO.FileAttributes]::ReparsePoint)) { throw 'Unexpected evidence directory' }
                 }
                 $evidence = New-Item -ItemType Directory -Path '.workspace/standard-user-result' -Force
-                $receipt = [ordered]@{ workflowCommit=$env:GITHUB_SHA; productCommit='fdfc7def6bca7f9367f7a447d20810ccabdbe8ae'; versionEdit='0.10.1 -> 0.10.2' }
+                $receipt = [ordered]@{ workflowCommit=$env:GITHUB_SHA; productCommit='fdfc7def6bca7f9367f7a447d20810ccabdbe8ae'; versionEdit='0.10.1 -> 0.10.2 in project version and packaged limitations notice' }
                 foreach ($v in '0.10.1','0.10.2') {
                   if (Test-Path "$root\$v.exe") { $receipt[$v] = (Get-FileHash "$root\$v.exe").Hash }
                 }
