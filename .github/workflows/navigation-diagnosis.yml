@@ -69,8 +69,33 @@ jobs:
           after = after.replace("\n", newline)
           if original.count(before) != 1:
               raise ValueError("Unexpected navigation assertion")
+          changed = original.replace(before, after)
+          before_compact = r'''
+              if (navigation_overflows() || navigation_wordmark->isVisible() || !navigation_brand->isVisible() ||
+                  !navigation_title->property("compactBrand").toBool() || navigation_left_fade->isVisible() ||
+                  navigation_right_fade->isVisible())
+                  return failNavigationLifecycle("compact brand did not free width for complete navigation");
+          '''.strip("\n").replace("\n", newline)
+          after_compact = r'''
+              if (navigation_overflows() || navigation_wordmark->isVisible() || !navigation_brand->isVisible() ||
+                  !navigation_title->property("compactBrand").toBool() || navigation_left_fade->isVisible() ||
+                  navigation_right_fade->isVisible()) {
+                  std::fprintf(stderr,
+                               "navigation-compact: window=%dx%d titleWidth=%.3f requiredWidth=%.3f stripWidth=%.3f "
+                               "contentWidth=%.3f contentX=%.3f overflow=%d brand=%d wordmark=%d compact=%d left=%d right=%d\n",
+                               window->width(), window->height(), double(navigation_title->width()),
+                               navigation_title->property("fullBrandRequiredWidth").toDouble(), double(nav_strip->width()),
+                               nav_strip->property("contentWidth").toDouble(), nav_strip->property("contentX").toDouble(),
+                               int(navigation_overflows()), int(navigation_brand->isVisible()), int(navigation_wordmark->isVisible()),
+                               int(navigation_title->property("compactBrand").toBool()), int(navigation_left_fade->isVisible()),
+                               int(navigation_right_fade->isVisible()));
+                  return failNavigationLifecycle("compact brand did not free width for complete navigation");
+              }
+          '''.strip("\n").replace("\n", newline)
+          if changed.count(before_compact) != 1:
+              raise ValueError("Unexpected compact-brand assertion")
           with source.open("w", encoding="utf-8", newline="") as file:
-              file.write(original.replace(before, after))
+              file.write(changed.replace(before_compact, after_compact))
       - uses: ilammy/msvc-dev-cmd@0b201ec74fa43914dc39ae48a89fd1d8cb592756 # v1.13.0
       - uses: ./.github/actions/setup-qt
         with:
@@ -84,6 +109,8 @@ jobs:
           cmake --preset windows-x64-ninja-debug
           cmake --build build/windows-x64-ninja-debug --target exosnap --parallel $([Environment]::ProcessorCount)
       - name: Run registered native navigation test twice
+        env:
+          QT_QPA_PLATFORM: offscreen
         shell: pwsh
         run: |
           $PSNativeCommandUseErrorActionPreference = $false
