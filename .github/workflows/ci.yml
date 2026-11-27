@@ -816,7 +816,7 @@ jobs:
           curl.exe -sSfL -o $redist https://aka.ms/vs/17/release/vc_redist.x64.exe
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
           $out = '.workspace/installer-smoke'
-          cargo exo-verify package --build-dir build/windows-x64-ninja-release --repo-root . --out $out --vc-redist $redist
+          cargo run --locked --manifest-path tools/Cargo.toml -p exo-verify -- package --build-dir build/windows-x64-ninja-release --repo-root . --out $out --vc-redist $redist
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
           $report = Get-Content "$out/package.json" -Raw | ConvertFrom-Json
           foreach ($file in @($report.installer, $report.setup, $report.setupAllUsers)) {
