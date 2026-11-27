@@ -344,7 +344,7 @@ Overlays are stacked in their scene order. The item on top in the picture is the
 
 Settings owns format, quality, output, audio tracks, microphone, audio encoding and webcam configuration through one shared preset draft and track routing editor. Named preset apply retains environment-owned capture and HDR fields. During recording, Active recording is a frozen read-only view. Edit next recording explicitly exposes the separate next draft, whose changes take effect at the next start. Operational mute, webcam participation and editable recorded-overlay controls remain session actions.
 
-The transport uses compact source meters and a geometrically centered timer with reserved width for hours. Stop remains directly reachable while secondary actions use a named overflow at narrow widths. While recording or paused, and while clip jobs exist, the transport offers Save clip, which moves into the overflow at narrow widths. Opening the editor retains its existing availability rules.
+The transport uses compact source meters and a geometrically centered timer with reserved width for hours. Stop remains directly reachable while secondary actions use a named overflow at narrow widths. Opening the editor retains its existing availability rules.
 
 ### Runtime health and duration
 
@@ -547,7 +547,7 @@ Self-test, Hardware capabilities, Environment & configuration and Support bundle
 
 Audio resources retain distinct physical capture, logical source and track output rows. Opaque capture/clock IDs link shared resources without exposing endpoint paths, process IDs or window titles. Physical capture and source DSP counters are counted once per owner, independent of route count. Runtime rows show reader counts, clock quality, raw/residual drift and compensation, reinitialization, source gaps and reader overflow, source pre-mute RMS/peak, and track post-limiter RMS/peaks and current gain reduction.
 
-Processing costs are cumulative elapsed milliseconds for capture/clock conversion, logical source processing, and track mixing/limiting. They are not CPU utilization or an estimate from route counts. Unmeasured values show n/a with a reason; measured silence remains distinct. Clip jobs list each active job with exact counters projected by the clip adapter. A shared recording storage row shows the disk floor plus the current recording/remux allowance enforced by clip admission. It is shown once regardless of job count and is not a disk free-space measurement. Index commit lag and CPU utilization remain unavailable because the runtime does not publish those measurements.
+Processing costs are cumulative elapsed milliseconds for capture/clock conversion, logical source processing, and track mixing/limiting. They are not CPU utilization or an estimate from route counts. Unmeasured values show n/a with a reason; measured silence remains distinct. Index commit lag and CPU utilization remain unavailable because the runtime does not publish those measurements.
 
 Each diagnosis declares both severity (Pass/Notice/Blocker) and tier: Blocker, Measured problem, Optimization or Fact. Blockers prevent start. Measured problems remain represented and attention-colored. Optimization tips bundle quietly and cannot alone make readiness amber. Facts are neutral reference and do not count in the verdict.
 
