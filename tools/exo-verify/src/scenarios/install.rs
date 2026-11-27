@@ -1432,7 +1432,17 @@ mod tests {
                 identifies_product && line.contains("WIX_UPGRADE_DETECTED")
             });
             assert!(related, "missing original product in upgrade detection");
-            assert!(trace[..removed].contains("Removal success or error status: 0."));
+            let before = &trace[..removed];
+            assert!(before.contains("Executing op: ProductUnregister("));
+            assert!(before.lines().any(|line| {
+                line.contains("Executing op: FileRemove(") && line.contains("FileName=exosnap.exe,")
+            }));
+            let failed = "ForceFixtureRollback. Return value 3.";
+            let (_, after) = trace[removed..].split_once(failed).unwrap();
+            let destination = format!("DestName={},", exe.display());
+            assert!(after.lines().any(|line| {
+                line.contains("Executing op: FileCopy(") && line.contains(&destination)
+            }));
             let restored = exosnap_arp_rows()?;
             assert_eq!(restored.len(), 1);
             assert_eq!(restored[0].uninstall_string, *original_arp);
