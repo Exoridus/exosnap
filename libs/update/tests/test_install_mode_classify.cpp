@@ -104,7 +104,7 @@ TEST(ClassifyDistributionContext, MachineStampDoesNotMaskAUserInstallation) {
               (DistributionContext{InstallMode::Installed, DistributionOwner::Direct, InstallScope::User}));
     EXPECT_EQ(ClassifyDistributionContext(machine, user, machine.install_dir),
               (DistributionContext{InstallMode::Installed, DistributionOwner::WinGet, InstallScope::Machine}));
-    EXPECT_EQ(ClassifyDistributionContext(machine, user, L"D:\\Portable\\ExoSnap"), DistributionContext{});
+    EXPECT_EQ(ClassifyDistributionContext(machine, user, L"D:\\Portable\\ExoSnap", false), DistributionContext{});
 }
 
 TEST(ClassifyDistributionContext, MachineRegistrationWinsOnlyWhenBothPathsMatch) {
