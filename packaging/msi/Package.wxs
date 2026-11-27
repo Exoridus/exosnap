@@ -74,14 +74,6 @@
     <!-- AppSearch skips an empty REG_SZ, so a read-only presence probe must
          distinguish malformed existing markers from genuinely absent ones. -->
     <Binary Id="DistributionOwnerProbe" SourceFile="$(var.DistributionOwnerProbePath)" />
-    <Property Id="ExoSnapUserSetupManaged">
-      <RegistrySearch Id="UserSetupManagedSearch" Root="HKCU" Key="Software\ExoSnap"
-                      Name="SetupManaged" Type="raw" Bitness="always64" />
-    </Property>
-    <Property Id="ExoSnapMachineSetupManaged">
-      <RegistrySearch Id="MachineSetupManagedSearch" Root="HKLM" Key="Software\ExoSnap"
-                      Name="SetupManaged" Type="raw" Bitness="always64" />
-    </Property>
     <Launch Condition='Installed OR NOT WIX_UPGRADE_DETECTED OR ARPSYSTEMCOMPONENT OR (NOT ExoSnapHiddenRelatedMsi AND ((ALLUSERS AND ExoSnapMachineSetupManaged &lt;&gt; "1") OR (NOT ALLUSERS AND ExoSnapUserSetupManaged &lt;&gt; "1")))'
             Message="This installation is managed by ExoSnap Setup. Use the Setup package for its installation scope to update it." />
     <SetProperty Id="ARPSYSTEMCOMPONENT" Value="1" Before="CostInitialize" Sequence="both"
@@ -162,18 +154,6 @@
 
     <!-- Resolve the registered destination before costing or removing the old
          product. Machine installation paths must come from the machine hive. -->
-    <Property Id="ExoSnapMachineInstallPath">
-      <RegistrySearch Id="MachineInstallPathSearch" Root="HKLM" Key="Software\ExoSnap"
-                      Name="InstallPath" Type="raw" Bitness="always64" />
-    </Property>
-    <Property Id="ExoSnapUserInstallPath">
-      <RegistrySearch Id="UserInstallPathSearch" Root="HKCU" Key="Software\ExoSnap"
-                      Name="InstallPath" Type="raw" Bitness="always64" />
-    </Property>
-    <Property Id="ExoSnapLegacyMachineInstallPath">
-      <RegistrySearch Id="LegacyMachineInstallPathSearch" Root="HKLM" Key="Software\Codexo\ExoSnap"
-                      Name="InstallPath" Type="raw" Bitness="always64" />
-    </Property>
     <SetProperty Id="INSTALLFOLDER" Action="UseLegacyInstallPath" Value="[ExoSnapLegacyMachineInstallPath]"
                  Before="CostFinalize" Sequence="both"
                  Condition="ALLUSERS AND NOT ExoSnapMachineInstallPath AND ExoSnapLegacyMachineInstallPath AND WIX_UPGRADE_DETECTED" />

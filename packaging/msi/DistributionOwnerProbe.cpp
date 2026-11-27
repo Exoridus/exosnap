@@ -16,6 +16,20 @@ template <size_t N> bool ReadProperty(MSIHANDLE installer, const wchar_t* name, 
     return MsiGetPropertyW(installer, name, value, &size) == ERROR_SUCCESS;
 }
 
+// MSI registry searches require public properties. Read ownership and location
+// into private properties so callers cannot supply remembered registry values.
+UINT ReadRememberedString(MSIHANDLE installer, HKEY hive, const wchar_t* key, const wchar_t* name,
+                          const wchar_t* property) {
+    wchar_t value[32768]{};
+    DWORD bytes = sizeof(value);
+    const auto status = RegGetValueW(hive, key, name, RRF_RT_REG_SZ | RRF_SUBKEY_WOW6464KEY, nullptr, value, &bytes);
+    if (status == ERROR_FILE_NOT_FOUND || status == ERROR_PATH_NOT_FOUND)
+        return MsiSetPropertyW(installer, property, nullptr);
+    if (status != ERROR_SUCCESS)
+        return ERROR_INSTALL_FAILURE;
+    return MsiSetPropertyW(installer, property, value);
+}
+
 bool ReadRegistered(HKEY hive, bool& present) {
     for (const auto* path : {L"Software\\ExoSnap", L"Software\\Codexo\\ExoSnap"}) {
         DWORD marker = 0;
@@ -100,6 +114,14 @@ extern "C" __declspec(dllexport) UINT __stdcall ProbeDistributionOwner(MSIHANDLE
     const wchar_t* key_path = L"Software\\ExoSnap";
 #endif
 
+    const bool machine = root == HKEY_LOCAL_MACHINE;
+    if (ReadRememberedString(installer, root, key_path, L"SetupManaged",
+                             machine ? L"ExoSnapMachineSetupManaged" : L"ExoSnapUserSetupManaged") != ERROR_SUCCESS ||
+        ReadRememberedString(installer, root, key_path, L"InstallPath",
+                             machine ? L"ExoSnapMachineInstallPath" : L"ExoSnapUserInstallPath") != ERROR_SUCCESS ||
+        (machine && ReadRememberedString(installer, root, L"Software\\Codexo\\ExoSnap", L"InstallPath",
+                                         L"ExoSnapLegacyMachineInstallPath") != ERROR_SUCCESS))
+        return ERROR_INSTALL_FAILURE;
     if (CheckRelatedSetup(installer, root) != ERROR_SUCCESS)
         return ERROR_INSTALL_FAILURE;
     HKEY key = nullptr;
