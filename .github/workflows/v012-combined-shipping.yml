@@ -65,11 +65,17 @@ jobs:
               receipt["gitVersion"] = git("--version").stdout.strip()
               workflow = ".github/workflows/v012-combined-shipping.yml"
               if (git("rev-parse", "HEAD").stdout.strip() != receipt["workflowCommit"]
-                      or git("rev-parse", "HEAD^").stdout.strip() != missions["602"]
+                      or git("rev-parse", "HEAD^").stdout.strip() != "5dfd2d8102bc9f2e557b13612366a8cb2dab2444"
+                      or git("rev-parse", "HEAD~2").stdout.strip() != missions["602"]
                       or git("diff", "--name-only", missions["602"], "HEAD").stdout.splitlines() != [workflow]):
                   raise RuntimeError("Unexpected verification source or diff")
               heads = {**missions, **protected}
               for number, sha in heads.items():
+                  if git("cat-file", "-e", sha + "^{commit}", check=False).returncode:
+                      # A squash-merged PR may no longer have a branch. Its original PR ref
+                      # lets the read-only checkout recover the required commit object.
+                      git("fetch", "--no-tags", "--no-write-fetch-head",
+                          "https://github.com/Exoridus/exosnap.git", f"refs/pull/{number}/head")
                   if git("cat-file", "-t", sha).stdout.strip() != "commit":
                       raise RuntimeError("Expected a commit for PR " + number)
                   git("merge-base", "--is-ancestor", base, sha)
