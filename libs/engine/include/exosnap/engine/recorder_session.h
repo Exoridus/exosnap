@@ -218,6 +218,8 @@ struct CompletedSegment {
     uint64_t session_start_ns = 0;
     uint64_t duration_ns = 0;
     std::optional<RecordingSegmentSeal> seal;
+    // The next writer's admitted path, if it opened successfully at this boundary.
+    std::filesystem::path next_path;
 };
 
 // Invoked from the mux worker thread as each segment is finalized. Must be

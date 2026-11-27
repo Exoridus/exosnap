@@ -1228,15 +1228,13 @@ void QuickApplication::initializeRecordWorkflow() {
             return CaptureTargetSnapshot{std::move(*seeded)};
         return CaptureTargetSnapshot{recording_coordinator_->EnumerateTargets()};
     });
-    // Target stills for the source picker. The service runs only while the
-    // picker reports visible cards, and the identities it is handed are resolved
-    // here rather than in QML because the capture target is engine state.
+    // The picker captures only visible cards. Resolve their identities here so
+    // the worker can validate each native window before using its item.
     QObject::connect(
         &record_view_model_adapter_, &RecordViewModelAdapter::visibleTargetIdentitiesChanged,
         &record_view_model_adapter_, [this](const QStringList& identities) {
             if (identities.isEmpty()) {
                 target_still_service_.setVisibleTargets({});
-                target_still_service_.stop();
                 return;
             }
             if (HarnessCaptureTargets()) {
@@ -1284,8 +1282,6 @@ void QuickApplication::initializeRecordWorkflow() {
             target_still_service_.setVisibleTargets(std::move(requests));
             if (has_requests)
                 target_still_service_.start();
-            else
-                target_still_service_.stop();
         });
     QObject::connect(&target_still_service_, &CaptureTargetStillService::stillReady, &record_view_model_adapter_,
                      [this](const QString& identity, const QImage& image) {

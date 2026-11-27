@@ -74,9 +74,9 @@ class RecoveryService {
     // disk; fall back to fallback_output_folder_; last-resort: artefact parent.
     std::filesystem::path ResolveDestinationFolder(const RecoveryManifestEntry& entry) const;
 
-    // Returns a collision-safe path derived from `preferred`. If preferred does
-    // not exist it is returned as-is; otherwise tries "name (2).ext" ... "(N).ext".
-    static std::filesystem::path ResolveUniqueOutputPath(const std::filesystem::path& preferred);
+    // Try the preferred name, then "name (2).ext" through "name (999).ext".
+    static std::filesystem::path ResolveUniqueOutputPath(const std::filesystem::path& preferred,
+                                                         bool include_companions = false);
 };
 
 } // namespace exosnap

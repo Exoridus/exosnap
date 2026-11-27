@@ -119,9 +119,10 @@ class PartialArtifactTransaction {
 // `segment.succeeded` / `final_seg.succeeded` guards already used throughout
 // this file for the same purpose: skip the affected piece of work without
 // aborting the whole recording/remux session).
-static std::optional<std::filesystem::path> DeriveSegmentPathLogged(const std::filesystem::path& base, uint32_t index,
-                                                                    const char* context) {
-    const exosnap::engine::SegmentPathResult result = exosnap::engine::DeriveSegmentPath(base, index);
+static std::optional<std::filesystem::path>
+DeriveSegmentPathLogged(const std::filesystem::path& base, uint32_t index, const char* context,
+                        const exosnap::engine::SegmentPathExistsProbe& exists_probe = {}) {
+    const exosnap::engine::SegmentPathResult result = exosnap::engine::DeriveSegmentPath(base, index, exists_probe);
     if (!result.success) {
         diagnostics::AppLog::error(QStringLiteral("split"),
                                    QStringLiteral("DeriveSegmentPath failed (%1) base=\"%2\" index=%3: %4")
@@ -413,7 +414,7 @@ RecordingCoordinator::~RecordingCoordinator() {
 
     // 4) Low-disk monitor. Here the stop_token IS the cancel signal, and the poll
     //    sleep is sliced so it is observed within ~100 ms.
-    disk_monitor_thread_.request_stop();
+    StopDiskMonitor();
     if (disk_monitor_thread_.joinable())
         disk_monitor_thread_.join();
 
@@ -541,7 +542,10 @@ void RecordingCoordinator::StartDiskMonitor(const std::filesystem::path& output_
                                             const std::filesystem::path& transient_mkv,
                                             exosnap::engine::RecordRequestId request) {
     session_is_mp4_ = is_mp4;
-    session_transient_mkv_ = transient_mkv;
+    {
+        std::lock_guard lock(segment_remux_mutex_);
+        active_remux_source_ = transient_mkv;
+    }
     disk_stop_triggered_.store(false);
 
     // Lazily construct the Win32 provider if no stub was injected.
@@ -554,8 +558,7 @@ void RecordingCoordinator::StartDiskMonitor(const std::filesystem::path& output_
 
     diagnostics::IDiskSpaceProvider* provider = disk_space_provider_;
 
-    disk_monitor_thread_ = std::jthread([this, output_folder, is_mp4, transient_mkv, provider,
-                                         request](std::stop_token stop_token) {
+    disk_monitor_thread_ = std::jthread([this, output_folder, is_mp4, provider, request](std::stop_token stop_token) {
         // Poll every 5 seconds.
         constexpr auto kPollInterval = std::chrono::seconds(5);
 
@@ -602,28 +605,13 @@ void RecordingCoordinator::StartDiskMonitor(const std::filesystem::path& output_
             if (stop_token.stop_requested())
                 break;
 
-            // For MP4 sessions compute the remux reserve as the sum of:
-            //   (a) the current live transient MKV (segment being recorded now), and
-            //   (b) all segment MKV files that have an outstanding background remux
-            //       job (MP4-SPLIT-REMUX-R1: these coexist until each job finishes).
-            // This is conservative but correct: at worst we require enough space for
-            // all in-progress MKVs to have simultaneous output MP4 copies.
-            uint64_t remux_reserve = 0;
-            if (is_mp4) {
-                // (a) current live segment
-                if (!transient_mkv.empty()) {
-                    std::error_code ec;
-                    const auto mkv_size = std::filesystem::file_size(transient_mkv, ec);
-                    if (!ec)
-                        remux_reserve += static_cast<uint64_t>(mkv_size);
-                }
-                // (b) segments awaiting background remux
-                const uint64_t pending_reserve = this->PendingRemuxReserveBytes();
-                remux_reserve =
-                    pending_reserve > UINT64_MAX - remux_reserve ? UINT64_MAX : remux_reserve + pending_reserve;
+            const uint64_t remux_reserve = is_mp4 ? RemuxReserveBytes() : 0;
+            {
+                std::lock_guard lock(segment_remux_mutex_);
+                if (stop_token.stop_requested() || record_request_.load() != request)
+                    break;
+                primary_clip_reserve_bytes_.store(remux_reserve);
             }
-
-            primary_clip_reserve_bytes_.store(remux_reserve);
             const uint64_t threshold = diagnostics::ComputeHardStopThreshold(remux_reserve);
             if (free_bytes <= threshold) {
                 OnDiskSpaceLow(request, free_bytes, threshold);
@@ -634,11 +622,11 @@ void RecordingCoordinator::StartDiskMonitor(const std::filesystem::path& output_
 }
 
 void RecordingCoordinator::StopDiskMonitor() {
+    // An in-flight filesystem query can return after stop. Serialize the reset with publication.
+    std::lock_guard lock(segment_remux_mutex_);
     disk_monitor_thread_.request_stop();
-    // Do NOT join here — the thread may be sleeping; we just request_stop and
-    // let the jthread destructor join when it completes.  The jthread destructor
-    // is called when disk_monitor_thread_ is replaced or the coordinator is
-    // destroyed.
+    active_remux_source_.clear();
+    primary_clip_reserve_bytes_.store(0);
 }
 
 void RecordingCoordinator::OnDiskSpaceLow(exosnap::engine::RecordRequestId request, uint64_t free_bytes,
@@ -1605,6 +1593,7 @@ void RecordingCoordinator::PrepareAndRecordThreadProc(const PrepareContext& ctx)
         std::lock_guard<std::mutex> lock(segments_mutex_);
         segments_.clear();
         edit_master_paths_.clear();
+        published_segment_paths_.clear();
     }
     split_pending_.store(false);
     session_.SetSegmentCallback(MakeSegmentCallback());
@@ -1986,9 +1975,8 @@ void RecordingCoordinator::OnSegmentCompleted(const std::shared_ptr<WorkerCallba
     std::vector<RecordingMarker> markers;
     std::shared_ptr<RecoveryManifestStore> manifest;
     std::filesystem::path output_path;
-    std::filesystem::path transient_path;
     QString manifest_id;
-    bool was_split_boundary = false;
+    bool report_manual_split = false;
     bool remux_split = false;
     size_t segment_count = 0;
     {
@@ -2006,11 +1994,11 @@ void RecordingCoordinator::OnSegmentCompleted(const std::shared_ptr<WorkerCallba
             markers = coordinator->Markers();
 
         const bool pending_split = coordinator->split_pending_.exchange(false);
-        was_split_boundary = !segment.session_end && pending_split;
-        remux_split = was_split_boundary && segment.succeeded && coordinator->session_is_mp4_;
+        report_manual_split = !segment.next_path.empty() && pending_split;
+        // The manual request flag is unset for automatic splits. Use the muxer's boundary for delivery.
+        remux_split = !segment.session_end && segment.succeeded && coordinator->session_is_mp4_;
         if (remux_split) {
             output_path = coordinator->CurrentOutputPath();
-            transient_path = coordinator->session_transient_mkv_;
             manifest = coordinator->recovery_manifest_store_;
             manifest_id = coordinator->CurrentManifestId();
         }
@@ -2040,25 +2028,28 @@ void RecordingCoordinator::OnSegmentCompleted(const std::shared_ptr<WorkerCallba
     QString next_manifest_id;
     std::vector<QString> recovery_errors;
     if (remux_split) {
-        mp4_segment = DeriveSegmentPathLogged(output_path, segment.index, "intermediate segment remux target");
+        mp4_segment = DeriveSegmentPathLogged(output_path, segment.index, "intermediate segment remux target",
+                                              MediaPublicationPathOccupied);
         if (before_manifest_io)
             before_manifest_io();
         if (manifest) {
-            // The old mux can proceed to open its next partial after this callback resumes.
-            // Keep that partial eligible for recovery even if the coordinator has already retired the session.
+            // The old mux can write to the admitted partial after this callback resumes,
+            // even if the coordinator has already retired the session.
             if (!manifest_id.isEmpty() && !manifest->UpdateFinalized(manifest_id, true)) {
                 recovery_errors.push_back(
                     QStringLiteral("could not mark segment %1 as finalized in the recovery manifest")
                         .arg(segment.index));
             }
-            const auto next_mkv = DeriveSegmentPathLogged(transient_path, segment.index + 1, "next transient MKV");
-            const auto next_final = DeriveSegmentPathLogged(output_path, segment.index + 1, "next segment final MP4");
-            if (next_mkv && next_final) {
+            if (!segment.next_path.empty()) {
+                const auto next_final = DeriveSegmentPathLogged(output_path, segment.index + 1,
+                                                                "next segment final MP4", MediaPublicationPathOccupied);
                 RecoveryManifestEntry entry;
                 entry.id = QUuid::createUuid().toString(QUuid::WithoutBraces);
-                entry.artefact_path = QString::fromStdWString(next_mkv->wstring());
+                entry.artefact_path = QString::fromStdWString(segment.next_path.wstring());
                 entry.intended_container = QStringLiteral("mp4");
-                entry.final_output_path = QString::fromStdWString(next_final->wstring());
+                if (next_final)
+                    entry.final_output_path = QString::fromStdWString(next_final->wstring());
+                entry.final_output_is_preferred = true;
                 entry.started_at = QDateTime::currentDateTimeUtc().toString(Qt::ISODate);
                 if (manifest->Add(entry)) {
                     next_manifest_id = entry.id;
@@ -2084,6 +2075,7 @@ void RecordingCoordinator::OnSegmentCompleted(const std::shared_ptr<WorkerCallba
         if (remux_split) {
             {
                 std::lock_guard remux_lock(coordinator->segment_remux_mutex_);
+                coordinator->active_remux_source_ = segment.next_path;
                 coordinator->current_manifest_id_ = next_manifest_id;
                 coordinator->pending_segment_manifest_id_ = next_manifest_id;
                 if (mp4_segment) {
@@ -2091,9 +2083,11 @@ void RecordingCoordinator::OnSegmentCompleted(const std::shared_ptr<WorkerCallba
                     job->transient_mkv = segment.path;
                     job->output_mp4 = *mp4_segment;
                     job->manifest_id = manifest_id;
-                    coordinator->QueueSegmentRemux(
-                        *job, [coordinator, transient = job->transient_mkv, out = job->output_mp4,
-                               id = job->manifest_id] { return coordinator->RunSegmentRemuxWork(transient, out, id); });
+                    coordinator->QueueSegmentRemux(*job, [coordinator, transient = job->transient_mkv,
+                                                          out = job->output_mp4, id = job->manifest_id,
+                                                          replace = segment.index == 0] {
+                        return coordinator->RunSegmentRemuxWork(transient, out, id, replace);
+                    });
                     coordinator->segment_remux_jobs_.push_back(std::move(job));
                 }
             }
@@ -2114,7 +2108,7 @@ void RecordingCoordinator::OnSegmentCompleted(const std::shared_ptr<WorkerCallba
                     },
                     Qt::QueuedConnection);
             }
-            if (was_split_boundary && segment.succeeded && coordinator->is_recording_.load() &&
+            if (report_manual_split && segment.succeeded && coordinator->is_recording_.load() &&
                 coordinator->on_split_feedback_) {
                 QMetaObject::invokeMethod(
                     &coordinator->segment_remux_pool_,
@@ -2286,8 +2280,10 @@ void RecordingCoordinator::RecordingThreadProc(const exosnap::engine::RecorderCo
         ui_result.marker_sidecar_path = MarkerSidecarPath().wstring();
     }
 
+    bool reached_split = false;
     {
         std::lock_guard<std::mutex> lock(segments_mutex_);
+        reached_split = !segments_.empty() && segments_.front().succeeded && !segments_.front().session_end;
         ui_result.segments.reserve(segments_.size());
         for (const auto& seg : segments_) {
             CompletedRecordingSegment out;
@@ -2368,14 +2364,7 @@ void RecordingCoordinator::RecordingThreadProc(const exosnap::engine::RecorderCo
     // also remux the FINAL segment and then wait for ALL jobs to complete.
     const bool needs_remux = result.succeeded && (config.container == exosnap::engine::Container::Mp4);
     if (needs_remux) {
-        // Determine whether any intermediate segments were already scheduled.
-        bool has_split_segments = false;
-        {
-            std::lock_guard<std::mutex> lock(segment_remux_mutex_);
-            has_split_segments = !segment_remux_jobs_.empty();
-        }
-
-        if (!has_split_segments) {
+        if (!multi_segment) {
             // ── Single-file MP4 path (no splits) — unchanged from the original flow ──
             const std::filesystem::path transient_mkv = exosnap::engine::DeriveTransientMkvPath(output_path);
             // Mark the manifest entry as finalized before remux. A failed write is
@@ -2420,8 +2409,8 @@ void RecordingCoordinator::RecordingThreadProc(const exosnap::engine::RecorderCo
 
         // Schedule the final segment remux (same as intermediate segments).
         if (final_seg.succeeded && !final_seg.path.empty()) {
-            const std::optional<std::filesystem::path> mp4_final =
-                DeriveSegmentPathLogged(output_path, final_seg.index, "final segment remux target");
+            const auto mp4_final = DeriveSegmentPathLogged(output_path, final_seg.index, "final segment remux target",
+                                                           MediaPublicationPathOccupied);
             if (mp4_final.has_value()) {
                 {
                     // Handing the id to the job and giving it up are one
@@ -2432,9 +2421,10 @@ void RecordingCoordinator::RecordingThreadProc(const exosnap::engine::RecorderCo
                     job->transient_mkv = final_seg.path;
                     job->output_mp4 = *mp4_final;
                     job->manifest_id = current_manifest_id_;
-                    QueueSegmentRemux(*job,
-                                      [this, transient = job->transient_mkv, out = job->output_mp4,
-                                       id = job->manifest_id] { return RunSegmentRemuxWork(transient, out, id); });
+                    QueueSegmentRemux(
+                        *job, [this, transient = job->transient_mkv, out = job->output_mp4, id = job->manifest_id] {
+                            return RunSegmentRemuxWork(transient, out, id, false);
+                        });
                     segment_remux_jobs_.push_back(std::move(job));
                     current_manifest_id_.clear(); // now owned by the job
                 }
@@ -2451,35 +2441,9 @@ void RecordingCoordinator::RecordingThreadProc(const exosnap::engine::RecorderCo
         PostStateChange(UiRecordingState::Saving);
 
         // Drain: join all segment remux jobs (intermediate + final).
-        const bool all_ok = DrainSegmentRemuxJobs(/*cancel=*/false);
-
-        // Build the final UI result.
-        if (all_ok) {
-            // Rewrite each segment's file_path from the transient MKV to the output MP4,
-            // and accumulate the total output bytes across all segments.
-            uint64_t total_bytes = 0;
-            for (auto& seg : ui_result.segments) {
-                {
-                    std::lock_guard lock(segments_mutex_);
-                    const auto master = edit_master_paths_.find(std::filesystem::path(seg.file_path.toStdWString()));
-                    if (master != edit_master_paths_.end())
-                        seg.edit_master_path = QString::fromStdWString(master->second.wstring());
-                }
-                const std::optional<std::filesystem::path> seg_mp4 = DeriveSegmentPathLogged(
-                    output_path, static_cast<uint32_t>(seg.index), "final result segment path rewrite");
-                if (!seg_mp4.has_value()) {
-                    // Leave this segment's file_path/size as-is (still the transient
-                    // MKV path set earlier) rather than guess at a possibly-wrong MP4
-                    // path; the failure is already logged.
-                    continue;
-                }
-                seg.file_path = QString::fromStdWString(seg_mp4->wstring());
-                std::error_code sz_ec;
-                const auto sz = std::filesystem::file_size(*seg_mp4, sz_ec);
-                if (!sz_ec)
-                    total_bytes += static_cast<uint64_t>(sz);
-            }
-            ui_result.output_file_bytes = total_bytes;
+        const bool remux_ok = DrainSegmentRemuxJobs(/*cancel=*/false);
+        const bool delivery_ok = ApplyPublishedSegmentPaths(ui_result);
+        if (remux_ok && delivery_ok) {
             // Point the top-level output_path at the first segment for UI consistency
             // (same convention as single-file: the path the user asked for).
             ui_result.output_path = output_path.wstring();
@@ -2497,6 +2461,12 @@ void RecordingCoordinator::RecordingThreadProc(const exosnap::engine::RecorderCo
             PostStateChange(UiRecordingState::Failed);
         }
         return;
+    }
+
+    if (!result.succeeded && reached_split && config.container == exosnap::engine::Container::Mp4) {
+        PostStateChange(UiRecordingState::Saving);
+        (void)DrainSegmentRemuxJobs(/*cancel=*/false);
+        (void)ApplyPublishedSegmentPaths(ui_result);
     }
 
     if (result.succeeded) {
@@ -2871,8 +2841,36 @@ RecordingCoordinator::AcquireEditMasterLease(const std::filesystem::path& path) 
                                                     descriptor->file_identity);
 }
 
+bool RecordingCoordinator::ApplyPublishedSegmentPaths(UiRecordingResult& result) {
+    bool complete = true;
+    uint64_t total_bytes = 0;
+    for (auto& segment : result.segments) {
+        const std::filesystem::path transient(segment.file_path.toStdWString());
+        std::filesystem::path published;
+        {
+            std::lock_guard lock(segments_mutex_);
+            if (const auto path = published_segment_paths_.find(transient); path != published_segment_paths_.end())
+                published = path->second;
+            if (const auto master = edit_master_paths_.find(transient); master != edit_master_paths_.end())
+                segment.edit_master_path = QString::fromStdWString(master->second.wstring());
+        }
+        std::error_code size_error;
+        const auto size = published.empty() ? 0 : std::filesystem::file_size(published, size_error);
+        if (size_error || size == 0) {
+            complete = false;
+            continue;
+        }
+        segment.file_path = QString::fromStdWString(published.wstring());
+        segment.file_size_bytes = static_cast<qint64>(size);
+        total_bytes += static_cast<uint64_t>(size);
+    }
+    result.output_file_bytes = total_bytes;
+    return complete;
+}
+
 bool RecordingCoordinator::RunSegmentRemuxWork(const std::filesystem::path& transient_mkv,
-                                               const std::filesystem::path& output_mp4, const QString& manifest_id) {
+                                               const std::filesystem::path& output_mp4, const QString& manifest_id,
+                                               bool replace_existing) {
     diagnostics::AppLog::info(QStringLiteral("remux"),
                               QStringLiteral("segment start transient=\"%1\" output=\"%2\"")
                                   .arg(QString::fromStdWString(transient_mkv.filename().wstring()),
@@ -2903,7 +2901,8 @@ bool RecordingCoordinator::RunSegmentRemuxWork(const std::filesystem::path& tran
     if (result.success && remux_cancel_requested_.load())
         result = exosnap::engine::RemuxResult::Fail(0, "Metadata publication cancelled");
     if (result.success) {
-        if (const unsigned long move_err = PublishMediaAndIdentitySidecar(segment_temp, output_mp4); move_err != 0) {
+        if (const unsigned long move_err = PublishMediaAndIdentitySidecar(segment_temp, output_mp4, replace_existing);
+            move_err != 0) {
             if (const std::string left = DescribeFailedStagingRemoval(segment_temp); !left.empty())
                 diagnostics::AppLog::warning(QStringLiteral("remux"), QString::fromStdString(left));
             result = exosnap::engine::RemuxResult::Fail(0, "Atomic move to segment output failed (Win32 error " +
@@ -2919,6 +2918,11 @@ bool RecordingCoordinator::RunSegmentRemuxWork(const std::filesystem::path& tran
 
     if (result.success) {
         (void)RetainEditMaster(transient_mkv);
+        {
+            std::lock_guard lock(segments_mutex_);
+            // Deriving the name again would skip this file once it exists.
+            published_segment_paths_.insert_or_assign(transient_mkv, output_mp4);
+        }
 
         std::error_code size_ec;
         const auto mp4_size = std::filesystem::file_size(output_mp4, size_ec);
@@ -3020,22 +3024,18 @@ bool RecordingCoordinator::DrainSegmentRemuxJobs(bool cancel) {
     return all_succeeded;
 }
 
-uint64_t RecordingCoordinator::PendingRemuxReserveBytes() const {
-    // Sum the on-disk sizes of the transient MKV files of jobs that are still
-    // RUNNING. joinable() is not that question — a jthread reports joinable from
-    // construction until it is joined, so a job that finished in the first minute
-    // of a two-hour session would keep its bytes in the reserve for the rest of
-    // it, and a FAILED job (whose transient MKV is deliberately retained) would do
-    // so permanently. The explicit completion flag is the only honest signal.
-    std::vector<std::filesystem::path> pending_sources;
+uint64_t RecordingCoordinator::RemuxReserveBytes() const {
+    std::vector<std::filesystem::path> sources;
     {
         std::lock_guard<std::mutex> lock(segment_remux_mutex_);
+        if (!active_remux_source_.empty())
+            sources.push_back(active_remux_source_);
         for (const auto& job : segment_remux_jobs_)
             if (!job->completed.load(std::memory_order_acquire))
-                pending_sources.push_back(job->transient_mkv);
+                sources.push_back(job->transient_mkv);
     }
     uint64_t total = 0;
-    for (const auto& source : pending_sources) {
+    for (const auto& source : sources) {
         std::error_code ec;
         const auto sz = std::filesystem::file_size(source, ec);
         if (!ec) {
@@ -3068,8 +3068,8 @@ size_t RecordingCoordinator::SegmentRemuxJobCountForTest() const {
     return segment_remux_jobs_.size();
 }
 
-uint64_t RecordingCoordinator::PendingRemuxReserveBytesForTest() const {
-    return PendingRemuxReserveBytes();
+uint64_t RecordingCoordinator::RemuxReserveBytesForTest() const {
+    return RemuxReserveBytes();
 }
 
 void RecordingCoordinator::ReapFinishedSegmentRemuxJobsForTest() {

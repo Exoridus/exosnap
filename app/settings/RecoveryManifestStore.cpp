@@ -31,6 +31,7 @@ QJsonObject EntryToJson(const RecoveryManifestEntry& e) {
     obj[QStringLiteral("final_output_path")] = e.final_output_path;
     obj[QStringLiteral("started_at")] = e.started_at;
     obj[QStringLiteral("finalized")] = e.finalized;
+    obj[QStringLiteral("final_output_is_preferred")] = e.final_output_is_preferred;
     return obj;
 }
 
@@ -51,6 +52,7 @@ bool EntryFromJson(const QJsonObject& obj, RecoveryManifestEntry& out) {
     out.final_output_path = obj.value(QStringLiteral("final_output_path")).toString();
     out.started_at = obj.value(QStringLiteral("started_at")).toString();
     out.finalized = obj.value(QStringLiteral("finalized")).toBool(false);
+    out.final_output_is_preferred = obj.value(QStringLiteral("final_output_is_preferred")).toBool(false);
     return true;
 }
 

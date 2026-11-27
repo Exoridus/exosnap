@@ -41,6 +41,9 @@ unsigned long AtomicReplaceInPlace(const std::filesystem::path& from, const std:
 unsigned long StageCompletedMediaForPublication(const std::filesystem::path& source,
                                                 const std::filesystem::path& staging);
 
+// Probe the media target and its companion names. This does not reserve them.
+[[nodiscard]] bool MediaPublicationPathOccupied(const std::filesystem::path& target, std::error_code& error);
+
 // Installs identity and marker companions before renaming completed media.
 // Restores previous companions on failure. This is not a multi-file atomic
 // transaction. With replacement disabled, an existing media target is retained.

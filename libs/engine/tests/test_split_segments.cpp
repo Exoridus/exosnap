@@ -447,6 +447,57 @@ TEST(MuxSplitAudioTest, DelayedKeyframePartitionsAlignedAudioAndEosDrainsBothTra
     }
 }
 
+TEST(MuxSplitTest, CountsFinalizedOutputAfterOwnershipTransfer) {
+    using namespace exosnap::engine;
+    const auto output = exosnap_test::UniqueTempPath("mux_split_handoff.mkv");
+    const auto delivered = exosnap_test::UniqueTempPath("mux_split_handoff_delivered.mkv");
+    const auto occupied = DeriveSegmentPath(output, 1).path;
+    {
+        std::ofstream existing(occupied, std::ios::binary);
+        ASSERT_TRUE(existing << "unrelated");
+    }
+    std::vector<CompletedSegment> segments;
+    auto state = MakeSplitState(output, segments);
+    state->segment_callback = [&](const CompletedSegment& segment) {
+        segments.push_back(segment);
+        if (!segment.session_end) {
+            std::error_code error;
+            std::filesystem::rename(segment.path, delivered, error);
+            EXPECT_FALSE(error);
+        }
+    };
+    const auto video = [&](uint64_t pts_ns, std::optional<SplitSentinel> split = std::nullopt) {
+        EncodedVideoPacket packet;
+        packet.bytes = SplitAccessUnit();
+        packet.pts_ns = pts_ns;
+        packet.keyframe = true;
+        ASSERT_EQ(state->PushMuxItem(MuxItem{std::move(packet)}, split), MuxQueueWait::Ready);
+    };
+    video(0);
+    video(200'000'000, SplitSentinel{1, SplitTriggerSource::AutomaticDuration});
+    video(300'000'000);
+    state->mux_queue.PushSentinel(VideoEosSentinel{});
+    state->mux_queue.PushSentinel(AudioEosSentinel{0});
+    state->mux_queue.PushSentinel(AudioEosSentinel{1});
+
+    auto mux = std::make_shared<MuxThread>(state);
+    mux->Start();
+    ASSERT_TRUE(mux->Join(10000));
+    ASSERT_FALSE(state->HasFailure());
+    ASSERT_EQ(segments.size(), 2u);
+    EXPECT_EQ(segments[0].next_path, segments[1].path);
+    EXPECT_NE(segments[0].next_path, occupied);
+    EXPECT_TRUE(segments[1].next_path.empty());
+    ASSERT_GT(segments[0].file_size_bytes, 0u);
+    ASSERT_GT(segments[1].file_size_bytes, 0u);
+    EXPECT_EQ(state->stats.output_file_bytes, segments[0].file_size_bytes + segments[1].file_size_bytes);
+
+    std::error_code ignored;
+    std::filesystem::remove(occupied, ignored);
+    std::filesystem::remove(delivered, ignored);
+    std::filesystem::remove(segments[1].path, ignored);
+}
+
 TEST(MuxSplitAudioTest, StaticVfrProgressKeepsAudioBoundedBeyondOneMinuteUntilDelayedSplit) {
     using namespace exosnap::engine;
     using namespace std::chrono_literals;
