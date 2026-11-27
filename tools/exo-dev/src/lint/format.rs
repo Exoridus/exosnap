@@ -1,5 +1,5 @@
-//! Runs clang-format over the tracked or staged C++ source in `libs/`, `app/`
-//! and `tests/`.
+//! Runs clang-format over the tracked or staged C++ source in `libs/`, `app/`,
+//! `apps/diagnostics_helper/` and `tests/`.
 //!
 //! `--staged --fix` refuses to autoformat a file that is only partially
 //! staged: formatting the whole file and re-staging it would silently
@@ -16,7 +16,7 @@ use anyhow::{Context, bail};
 use crate::executor::ToolMissing;
 use crate::git::Git;
 
-const SCOPED_DIRS: [&str; 3] = ["libs/", "app/", "tests/"];
+const SCOPED_DIRS: [&str; 4] = ["libs/", "app/", "apps/diagnostics_helper/", "tests/"];
 const BATCH_SIZE: usize = 100;
 
 pub struct FormatReport {
@@ -267,6 +267,17 @@ mod tests {
         assert_eq!(report.files, Vec::<String>::new());
         assert!(!report.violations);
         assert!(fake.calls.borrow().is_empty());
+    }
+
+    #[test]
+    fn tracks_the_privileged_helper_without_widening_other_app_roots() {
+        let dir = fixture_repo_committed(&[
+            ("apps/diagnostics_helper/Peer.cpp", "int sample;\n"),
+            ("apps/other/peer.cpp", "int other;\n"),
+        ]);
+        let fake = FakeInvocations::always_ok();
+        let report = run(dir.path(), false, false, |a, b| fake.invoke(a, b)).unwrap();
+        assert_eq!(report.files, ["apps/diagnostics_helper/Peer.cpp"]);
     }
 
     #[test]

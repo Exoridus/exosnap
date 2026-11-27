@@ -32,5 +32,5 @@ inline void NoteFootprintMismatch() {
 namespace exosnap::diagnostics {
 bool ProbeSignedPackageAcquisition();
 HRESULT ProbeMachineBootstrap(ULONG version, bool invoke);
-}
+} // namespace exosnap::diagnostics
 #endif

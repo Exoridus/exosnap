@@ -11,7 +11,7 @@
 //!
 //! `base` restricts only the clang-tidy pass. Source changes intersect the
 //! compilation database. Header changes trigger all translation units so their
-//! consumers remain covered. cppcheck always analyses the `libs/` and `app/` trees,
+//! consumers remain covered. cppcheck always analyses `libs/`, `app/` and the privileged helper,
 //! regardless of `base`: it is a whole-program-shaped scan cppcheck's own
 //! result cache already keeps cheap on an unchanged tree.
 
@@ -679,6 +679,7 @@ fn cppcheck_arguments() -> Vec<String> {
         "libs/update/third_party",
         "libs",
         "app",
+        "apps/diagnostics_helper",
     ]
     .into_iter()
     .map(String::from)

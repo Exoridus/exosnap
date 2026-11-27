@@ -23,11 +23,12 @@ struct Activation {
 };
 
 class Bootstrap final : public RuntimeClass<RuntimeClassFlags<ClassicCom>, IExoSnapDiagnosticsBootstrap> {
-public:
-    explicit Bootstrap(std::shared_ptr<Activation> activation) : activation_(std::move(activation)) {}
+  public:
+    explicit Bootstrap(std::shared_ptr<Activation> activation) : activation_(std::move(activation)) {
+    }
 
-    HRESULT STDMETHODCALLTYPE Begin(LONG version, LONG a, LONG b, LONG c, LONG d, LONG pid,
-                                    LONG low, LONG high, LONG* result) override {
+    HRESULT STDMETHODCALLTYPE Begin(LONG version, LONG a, LONG b, LONG c, LONG d, LONG pid, LONG low, LONG high,
+                                    LONG* result) override {
         if (!result)
             return E_POINTER;
         *result = 0;
@@ -40,8 +41,8 @@ public:
         if (RpcServerInqCallAttributesW(nullptr, &call) != RPC_S_OK || call.IsClientLocal != rcclLocal ||
             call.NullSession || HandleToULong(call.ClientPID) != requested_pid || !requested_pid)
             return E_ACCESSDENIED;
-        Handle caller(OpenProcess(SYNCHRONIZE | PROCESS_QUERY_LIMITED_INFORMATION | PROCESS_DUP_HANDLE,
-                                  FALSE, requested_pid));
+        Handle caller(
+            OpenProcess(SYNCHRONIZE | PROCESS_QUERY_LIMITED_INFORMATION | PROCESS_DUP_HANDLE, FALSE, requested_pid));
         DWORD caller_session = 0, own_session = 0;
         const uint64_t creation = (static_cast<uint64_t>(WireBits(high)) << 32) | WireBits(low);
         if (!caller || !creation || CreationTime(caller.get()) != creation || !ApprovedClient(caller.get()) ||
@@ -68,13 +69,14 @@ public:
         return S_OK;
     }
 
-private:
+  private:
     std::shared_ptr<Activation> activation_;
 };
 
 class Factory final : public RuntimeClass<RuntimeClassFlags<ClassicCom>, IClassFactory> {
-public:
-    explicit Factory(std::shared_ptr<Activation> activation) : activation_(std::move(activation)) {}
+  public:
+    explicit Factory(std::shared_ptr<Activation> activation) : activation_(std::move(activation)) {
+    }
 
     HRESULT STDMETHODCALLTYPE CreateInstance(IUnknown* outer, REFIID iid, void** result) override {
         if (!result)
@@ -87,9 +89,11 @@ public:
         auto object = Make<Bootstrap>(activation_);
         return object ? object.CopyTo(iid, result) : E_OUTOFMEMORY;
     }
-    HRESULT STDMETHODCALLTYPE LockServer(BOOL) override { return E_NOTIMPL; }
+    HRESULT STDMETHODCALLTYPE LockServer(BOOL) override {
+        return E_NOTIMPL;
+    }
 
-private:
+  private:
     std::shared_ptr<Activation> activation_;
     std::atomic<bool> issued_{false};
 };
@@ -99,29 +103,31 @@ int Serve(CollectFunction collect) {
     // method; it independently authenticates the process before any operation.
     SECURITY_DESCRIPTOR descriptor{};
     PSECURITY_DESCRIPTOR relative = nullptr;
-    if (!ConvertStringSecurityDescriptorToSecurityDescriptorW(
-            L"O:SYG:SYD:(A;;0x3;;;SY)(A;;0x3;;;IU)(A;;0x3;;;BA)", SDDL_REVISION_1, &relative, nullptr))
+    if (!ConvertStringSecurityDescriptorToSecurityDescriptorW(L"O:SYG:SYD:(A;;0x3;;;SY)(A;;0x3;;;IU)(A;;0x3;;;BA)",
+                                                              SDDL_REVISION_1, &relative, nullptr))
         return 1;
     PACL dacl = nullptr;
     BOOL present = FALSE, defaulted = FALSE;
     PSID owner = nullptr, group = nullptr;
     const bool built = InitializeSecurityDescriptor(&descriptor, SECURITY_DESCRIPTOR_REVISION) &&
-        GetSecurityDescriptorDacl(relative, &present, &dacl, &defaulted) && present && dacl &&
-        SetSecurityDescriptorDacl(&descriptor, TRUE, dacl, FALSE) &&
-        GetSecurityDescriptorOwner(relative, &owner, &defaulted) &&
-        SetSecurityDescriptorOwner(&descriptor, owner, FALSE) &&
-        GetSecurityDescriptorGroup(relative, &group, &defaulted) &&
-        SetSecurityDescriptorGroup(&descriptor, group, FALSE);
+                       GetSecurityDescriptorDacl(relative, &present, &dacl, &defaulted) && present && dacl &&
+                       SetSecurityDescriptorDacl(&descriptor, TRUE, dacl, FALSE) &&
+                       GetSecurityDescriptorOwner(relative, &owner, &defaulted) &&
+                       SetSecurityDescriptorOwner(&descriptor, owner, FALSE) &&
+                       GetSecurityDescriptorGroup(relative, &group, &defaulted) &&
+                       SetSecurityDescriptorGroup(&descriptor, group, FALSE);
     const auto security = built ? CoInitializeSecurity(&descriptor, -1, nullptr, nullptr, RPC_C_AUTHN_LEVEL_PKT_PRIVACY,
-        RPC_C_IMP_LEVEL_IDENTIFY, nullptr, EOAC_NO_CUSTOM_MARSHAL | EOAC_DISABLE_AAA, nullptr) : E_FAIL;
+                                                       RPC_C_IMP_LEVEL_IDENTIFY, nullptr,
+                                                       EOAC_NO_CUSTOM_MARSHAL | EOAC_DISABLE_AAA, nullptr)
+                                : E_FAIL;
     LocalFree(relative);
     if (FAILED(security))
         return 1;
     auto activation = std::make_shared<Activation>();
     auto factory = Make<Factory>(activation);
     DWORD cookie = 0;
-    if (!activation->ready || !factory || FAILED(CoRegisterClassObject(kBootstrapClass, factory.Get(),
-            CLSCTX_LOCAL_SERVER, REGCLS_SINGLEUSE, &cookie)))
+    if (!activation->ready || !factory ||
+        FAILED(CoRegisterClassObject(kBootstrapClass, factory.Get(), CLSCTX_LOCAL_SERVER, REGCLS_SINGLEUSE, &cookie)))
         return 1;
     const auto wait = WaitForSingleObject(activation->ready.get(), 15000);
     CoRevokeClassObject(cookie);

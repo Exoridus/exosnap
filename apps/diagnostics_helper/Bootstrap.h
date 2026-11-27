@@ -14,8 +14,12 @@ inline constexpr wchar_t kBootstrapMoniker[] = L"Elevation:Administrator!new:{70
 inline constexpr LONG kBootstrapVersion = 1;
 
 // The same 128-bit one-use token identifies the existing local pipe on both sides.
-inline LONG WireLong(ULONG value) { return std::bit_cast<LONG>(value); }
-inline ULONG WireBits(LONG value) { return std::bit_cast<ULONG>(value); }
+inline LONG WireLong(ULONG value) {
+    return std::bit_cast<LONG>(value);
+}
+inline ULONG WireBits(LONG value) {
+    return std::bit_cast<ULONG>(value);
+}
 
 inline std::wstring BootstrapNonce(const std::array<ULONG, 4>& words) {
     constexpr wchar_t hex[] = L"0123456789abcdef";

@@ -18,10 +18,10 @@
 #include <wrl/client.h>
 
 #include <algorithm>
-#include <bit>
-#include <cstring>
 #include <array>
 #include <atomic>
+#include <bit>
+#include <cstring>
 #include <filesystem>
 #include <mutex>
 
@@ -44,8 +44,8 @@ bool Protected(HANDLE object, bool children, SE_OBJECT_TYPE type = SE_FILE_OBJEC
     PSID owner = nullptr;
     PACL acl = nullptr;
     PSECURITY_DESCRIPTOR descriptor = nullptr;
-    const auto status = GetSecurityInfo(object, type, OWNER_SECURITY_INFORMATION | DACL_SECURITY_INFORMATION,
-                                        &owner, nullptr, &acl, nullptr, &descriptor);
+    const auto status = GetSecurityInfo(object, type, OWNER_SECURITY_INFORMATION | DACL_SECURITY_INFORMATION, &owner,
+                                        nullptr, &acl, nullptr, &descriptor);
     if (status != ERROR_SUCCESS) {
         ReportFixtureStatus("GetSecurityInfo", status);
         return false;
@@ -53,8 +53,12 @@ bool Protected(HANDLE object, bool children, SE_OBJECT_TYPE type = SE_FILE_OBJEC
     bool safe = owner && acl && IsValidAcl(acl) && TrustedOwner(owner);
     if (!safe)
         ReportFixtureStatus("untrusted owner or missing DACL", ERROR_ACCESS_DENIED);
-    const DWORD danger = type == SE_REGISTRY_KEY ? WRITE_DAC | WRITE_OWNER | DELETE | KEY_SET_VALUE | KEY_CREATE_LINK | KEY_CREATE_SUB_KEY | GENERIC_WRITE | GENERIC_ALL : WRITE_DAC | WRITE_OWNER | DELETE | FILE_DELETE_CHILD | FILE_WRITE_ATTRIBUTES | FILE_WRITE_EA |
-                         GENERIC_ALL | GENERIC_WRITE | (children ? FILE_WRITE_DATA | FILE_APPEND_DATA : 0);
+    const DWORD danger = type == SE_REGISTRY_KEY
+                             ? WRITE_DAC | WRITE_OWNER | DELETE | KEY_SET_VALUE | KEY_CREATE_LINK | KEY_CREATE_SUB_KEY |
+                                   GENERIC_WRITE | GENERIC_ALL
+                             : WRITE_DAC | WRITE_OWNER | DELETE | FILE_DELETE_CHILD | FILE_WRITE_ATTRIBUTES |
+                                   FILE_WRITE_EA | GENERIC_ALL | GENERIC_WRITE |
+                                   (children ? FILE_WRITE_DATA | FILE_APPEND_DATA : 0);
     for (DWORD i = 0; safe && i < acl->AceCount; ++i) {
         void* entry = nullptr;
         if (!GetAce(acl, i, &entry)) {
@@ -63,7 +67,8 @@ bool Protected(HANDLE object, bool children, SE_OBJECT_TYPE type = SE_FILE_OBJEC
         }
         auto* header = static_cast<ACE_HEADER*>(entry);
         const auto grant = type == SE_REGISTRY_KEY && header->AceType == ACCESS_ALLOWED_CALLBACK_ACE_TYPE
-                               ? FileAceGrant::Invalid : InspectFileAce(*header, danger);
+                               ? FileAceGrant::Invalid
+                               : InspectFileAce(*header, danger);
         if (grant == FileAceGrant::Invalid) {
             ReportFixtureStatus("DACL rejected ACE type or rights", header->AceType);
             safe = false;
@@ -113,7 +118,8 @@ struct LockedPath {
                 return false;
             }
             if (protected_image && !Protected(handle.get(), leaf || current == path.parent_path())) {
-                ReportFixtureStatus(leaf ? "leaf security descriptor rejected" : "ancestor security descriptor rejected",
+                ReportFixtureStatus(leaf ? "leaf security descriptor rejected"
+                                         : "ancestor security descriptor rejected",
                                     ERROR_ACCESS_DENIED);
                 return false;
             }
@@ -157,7 +163,8 @@ bool Verified(const fs::path& path, const char* hash, LockedPath& locked, bool s
     }
     if (!system) {
         LARGE_INTEGER size{};
-        if (!GetFileSizeEx(locked.handles.back().get(), &size) || size.QuadPart <= 0 || size.QuadPart > 64 * 1024 * 1024)
+        if (!GetFileSizeEx(locked.handles.back().get(), &size) || size.QuadPart <= 0 ||
+            size.QuadPart > 64 * 1024 * 1024)
             return false;
     }
     const auto digest = update::VerifyPackageHandle(locked.handles.back().get(), hash);
@@ -175,8 +182,8 @@ bool RegistrationValue(const wchar_t* subkey, const wchar_t* value, DWORD type, 
     const std::wstring path(subkey);
     for (size_t separator = path.find(L'\\');; separator = path.find(L'\\', separator + 1)) {
         const auto prefix = path.substr(0, separator);
-        if (RegOpenKeyExW(HKEY_LOCAL_MACHINE, prefix.c_str(), REG_OPTION_OPEN_LINK, KEY_READ | KEY_WOW64_64KEY,
-                          &key) != ERROR_SUCCESS)
+        if (RegOpenKeyExW(HKEY_LOCAL_MACHINE, prefix.c_str(), REG_OPTION_OPEN_LINK, KEY_READ | KEY_WOW64_64KEY, &key) !=
+            ERROR_SUCCESS)
             return false;
         DWORD link_type = 0, link_size = 0;
         const auto link = RegQueryValueExW(key, L"SymbolicLinkValue", nullptr, &link_type, nullptr, &link_size);
@@ -405,18 +412,19 @@ PresentProviderState RemoteBackend::Run() {
     ReportFixtureStatus("machine bootstrap activation", static_cast<DWORD>(status));
     if (FAILED(status))
         return status == HRESULT_FROM_WIN32(ERROR_CANCELLED) ? PresentProviderState::ConsentDeclined
-                                                              : PresentProviderState::HelperUnavailable;
+                                                             : PresentProviderState::HelperUnavailable;
     if (WaitForSingleObject(stop_.get(), 0) != WAIT_TIMEOUT)
         return PresentProviderState::Stopped;
     status = CoSetProxyBlanket(bootstrap.Get(), RPC_C_AUTHN_DEFAULT, RPC_C_AUTHZ_DEFAULT, nullptr,
-                              RPC_C_AUTHN_LEVEL_PKT_PRIVACY, RPC_C_IMP_LEVEL_IDENTIFY, nullptr, EOAC_NONE);
+                               RPC_C_AUTHN_LEVEL_PKT_PRIVACY, RPC_C_IMP_LEVEL_IDENTIFY, nullptr, EOAC_NONE);
     if (FAILED(status))
         return PresentProviderState::Failed;
     const auto created = CreationTime(GetCurrentProcess());
     LONG restricted = 0;
-    status = bootstrap->Begin(kBootstrapVersion, WireLong(words[0]), WireLong(words[1]), WireLong(words[2]),
-                              WireLong(words[3]), WireLong(GetCurrentProcessId()), WireLong(static_cast<ULONG>(created)),
-                              WireLong(static_cast<ULONG>(created >> 32)), &restricted);
+    status =
+        bootstrap->Begin(kBootstrapVersion, WireLong(words[0]), WireLong(words[1]), WireLong(words[2]),
+                         WireLong(words[3]), WireLong(GetCurrentProcessId()), WireLong(static_cast<ULONG>(created)),
+                         WireLong(static_cast<ULONG>(created >> 32)), &restricted);
     ReportFixtureStatus("authenticated machine bootstrap", static_cast<DWORD>(status));
     if (FAILED(status) || !restricted)
         return PresentProviderState::Failed;
@@ -551,7 +559,8 @@ HRESULT ProbeMachineBootstrap(ULONG version, bool invoke) {
     const auto created = CreationTime(GetCurrentProcess());
     LONG restricted = 0;
     result = bootstrap->Begin(WireLong(version), 1, 2, 3, 4, WireLong(GetCurrentProcessId()),
-                              WireLong(static_cast<ULONG>(created)), WireLong(static_cast<ULONG>(created >> 32)), &restricted);
+                              WireLong(static_cast<ULONG>(created)), WireLong(static_cast<ULONG>(created >> 32)),
+                              &restricted);
     ReportFixtureStatus("fixture Begin returned", static_cast<DWORD>(result));
     Handle unexpected(ULongToHandle(WireBits(restricted)));
     return result;

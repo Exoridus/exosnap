@@ -71,8 +71,7 @@ std::vector<unsigned char> ReadFootprint(IAppxPackageReader* reader, APPX_FOOTPR
     return bytes;
 }
 
-template <typename Operation>
-bool WaitForCompletion(const Operation& operation, HANDLE stop) {
+template <typename Operation> bool WaitForCompletion(const Operation& operation, HANDLE stop) {
     bool cancelled = false;
     while (operation.Status() == AsyncStatus::Started) {
         if (cancelled) {
@@ -89,7 +88,8 @@ bool WaitForCompletion(const Operation& operation, HANDLE stop) {
     return !cancelled && WaitForSingleObject(stop, 0) == WAIT_TIMEOUT;
 }
 
-bool Acquire(HANDLE source, const std::filesystem::path& source_path, HANDLE stop, const VerifyRegisteredImage& verify) {
+bool Acquire(HANDLE source, const std::filesystem::path& source_path, HANDLE stop,
+             const VerifyRegisteredImage& verify) {
     if (WaitForSingleObject(stop, 0) != WAIT_TIMEOUT)
         return false;
     if (!Metadata::ApiInformation::IsPropertyPresent(L"Windows.Management.Deployment.AddPackageOptions",
