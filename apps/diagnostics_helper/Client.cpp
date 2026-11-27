@@ -6,26 +6,22 @@
 #include "NativeRead.h"
 #include "Peer.h"
 #include "RegistryAcePolicy.h"
-#ifdef EXOSNAP_SIGNED_FIXTURE_STATUS
-#include "MsixAcquisition.h"
-#endif
 #include "diagnostics/PrivilegedPresentBackend.h"
 
 #include <aclapi.h>
 #include <sddl.h>
-#include <shellapi.h>
 #include <shlobj.h>
 #include <update/package_verifier.h>
 
 #include <wrl/client.h>
 
-#include <algorithm>
 #include <array>
 #include <atomic>
 #include <bit>
 #include <cstring>
 #include <filesystem>
 #include <mutex>
+#include <utility>
 
 namespace exosnap::diagnostics {
 namespace {
@@ -93,7 +89,7 @@ struct LockedPath {
     std::vector<Handle> handles;
     fs::path canonical;
 
-    bool Open(const fs::path& path, bool protected_image, bool directory = false) {
+    bool Open(const fs::path& path) {
         if (!path.is_absolute() || path.root_name().native().size() != 2 ||
             path.native().find(L'"') != path.native().npos)
             return false;
@@ -104,26 +100,18 @@ struct LockedPath {
             current /= part;
             const bool leaf = current == path;
             // Walk top-down, retaining all handles until the OS consumer is done.
-            Handle handle;
-            if (protected_image) {
-                handle = OpenNativeRead(LR"(\GLOBAL??\)" + current.native(), leaf);
-            } else {
-                handle = Handle(CreateFileW(current.c_str(),
-                                            leaf ? GENERIC_READ | READ_CONTROL : FILE_READ_ATTRIBUTES | READ_CONTROL,
-                                            FILE_SHARE_READ, nullptr, OPEN_EXISTING,
-                                            FILE_FLAG_OPEN_REPARSE_POINT | FILE_FLAG_BACKUP_SEMANTICS, nullptr));
-            }
+            auto handle = OpenNativeRead(LR"(\GLOBAL??\)" + current.native(), leaf);
             FILE_ATTRIBUTE_TAG_INFO attr{};
             if (!handle || !GetFileInformationByHandleEx(handle.get(), FileAttributeTagInfo, &attr, sizeof(attr))) {
                 ReportFixtureStatus(leaf ? "leaf open or attributes" : "ancestor open or attributes", GetLastError());
                 return false;
             }
             if ((attr.FileAttributes & FILE_ATTRIBUTE_REPARSE_POINT) ||
-                ((attr.FileAttributes & FILE_ATTRIBUTE_DIRECTORY) != 0) != (!leaf || directory)) {
+                ((attr.FileAttributes & FILE_ATTRIBUTE_DIRECTORY) != 0) != !leaf) {
                 ReportFixtureStatus("unexpected file attributes", attr.FileAttributes);
                 return false;
             }
-            if (protected_image && !Protected(handle.get(), leaf || current == path.parent_path())) {
+            if (!Protected(handle.get(), leaf || current == path.parent_path())) {
                 ReportFixtureStatus(leaf ? "leaf security descriptor rejected"
                                          : "ancestor security descriptor rejected",
                                     ERROR_ACCESS_DENIED);
@@ -133,8 +121,7 @@ struct LockedPath {
         }
         if (handles.empty())
             return false;
-        // DOS drive mappings are per-logon. Bind the later privileged open to
-        // the same local volume even for alternate administrator credentials.
+        // Supply WinTrust a volume path alongside the retained physical image handle.
         std::wstring resolved(32768, L'\0');
         const DWORD count =
             GetFinalPathNameByHandleW(handles.back().get(), resolved.data(), static_cast<DWORD>(resolved.size()),
@@ -158,28 +145,22 @@ fs::path MachineImage() {
     return result / L"ExoSnap Diagnostics" / L"exosnap-diagnostics.exe";
 }
 
-bool Verified(const fs::path& path, const char* hash, LockedPath& locked, bool system) {
-    if (std::string_view(hash).size() != 64) {
+bool VerifiedMachineImage(const fs::path& path, LockedPath& locked) {
+    if (std::string_view(EXOSNAP_DIAGNOSTICS_IMAGE_SHA256).size() != 64) {
         ReportFixtureStatus("missing build digest", ERROR_INVALID_DATA);
         return false;
     }
-    if (!locked.Open(path, system)) {
-        ReportFixtureStatus(system ? "protected image path" : "MSIX path", GetLastError());
+    if (!locked.Open(path)) {
+        ReportFixtureStatus("protected image path", GetLastError());
         return false;
     }
-    if (!system) {
-        LARGE_INTEGER size{};
-        if (!GetFileSizeEx(locked.handles.back().get(), &size) || size.QuadPart <= 0 ||
-            size.QuadPart > 64 * 1024 * 1024)
-            return false;
-    }
-    const auto digest = update::VerifyPackageHandle(locked.handles.back().get(), hash);
+    const auto digest = update::VerifyPackageHandle(locked.handles.back().get(), EXOSNAP_DIAGNOSTICS_IMAGE_SHA256);
     if (digest != update::VerifyResult::Ok) {
         ReportFixtureStatus("digest", static_cast<DWORD>(digest));
         return false;
     }
     const bool approved = ApprovedPublisher(locked.canonical.native(), locked.handles.back());
-    ReportFixtureStatus(system ? "image publisher accepted" : "MSIX publisher accepted", approved);
+    ReportFixtureStatus("image publisher accepted", approved);
     return approved;
 }
 
@@ -239,65 +220,6 @@ bool BootstrapRegistered(const std::filesystem::path& machine_image) {
            text(iface + L"\\TypeLib", nullptr, L"{27962A35-7DED-411F-A679-CDD671A2A4B6}") &&
            text(iface + L"\\TypeLib", L"Version", L"1.0") && text(typelib, nullptr, physical);
 }
-
-#ifdef EXOSNAP_SIGNED_FIXTURE_STATUS
-bool LockFootprint(LockedPath& image, const fs::path& directory, const wchar_t* filename,
-                   std::span<const unsigned char> expected) {
-    // The image verification has already locked every ancestor in this directory.
-    // Resolve the sibling from the exact physical parent, never another DOS mapping.
-    Handle file(CreateFileW((directory / filename).c_str(), GENERIC_READ | READ_CONTROL, FILE_SHARE_READ, nullptr,
-                            OPEN_EXISTING, FILE_FLAG_OPEN_REPARSE_POINT, nullptr));
-    FILE_ATTRIBUTE_TAG_INFO attributes{};
-    LARGE_INTEGER length{};
-    if (!file || !GetFileInformationByHandleEx(file.get(), FileAttributeTagInfo, &attributes, sizeof(attributes)) ||
-        (attributes.FileAttributes & (FILE_ATTRIBUTE_REPARSE_POINT | FILE_ATTRIBUTE_DIRECTORY)) ||
-        !Protected(file.get(), true) || !GetFileSizeEx(file.get(), &length))
-        return false;
-    if (length.QuadPart != static_cast<LONGLONG>(expected.size())) {
-        NoteFootprintMismatch();
-        return false;
-    }
-    std::vector<unsigned char> actual(expected.size());
-    DWORD read = 0;
-    if (!ReadFile(file.get(), actual.data(), static_cast<DWORD>(actual.size()), &read, nullptr) ||
-        read != actual.size())
-        return false;
-    if (!std::equal(actual.begin(), actual.end(), expected.begin())) {
-        NoteFootprintMismatch();
-        return false;
-    }
-    image.handles.push_back(std::move(file));
-    return true;
-}
-
-bool AcquireMsix(HANDLE stop, LockedPath& image) {
-    std::wstring app(32768, L'\0');
-    const auto size = GetModuleFileNameW(nullptr, app.data(), static_cast<DWORD>(app.size()));
-    if (!size || size >= app.size())
-        return {};
-    app.resize(size);
-    const auto source = fs::path(app).parent_path() / L"diagnostics" / L"helper.msix";
-    LockedPath locked;
-    if (!Verified(source, EXOSNAP_DIAGNOSTICS_MSIX_SHA256, locked, false))
-        return {};
-    const auto verify = [&](const fs::path& executable, std::span<const unsigned char> manifest,
-                            std::span<const unsigned char> block_map) {
-        if (!Verified(executable, EXOSNAP_DIAGNOSTICS_IMAGE_SHA256, image, true))
-            return false;
-        std::wstring native(32768, L'\0');
-        const auto length = GetFinalPathNameByHandleW(image.handles.back().get(), native.data(),
-                                                      static_cast<DWORD>(native.size()), VOLUME_NAME_NT);
-        if (!length || length >= native.size())
-            return false;
-        native.resize(length);
-        const fs::path physical = GlobalLocalVolumePath(native);
-        return !physical.empty() && LockFootprint(image, physical.parent_path(), L"AppxManifest.xml", manifest) &&
-               LockFootprint(image, physical.parent_path(), L"AppxBlockMap.xml", block_map);
-    };
-    return AcquireRegisteredMsix(locked.handles.back().get(), source, stop, verify);
-}
-
-#endif
 
 class RemoteBackend final : public IPrivilegedDiagnosticsBackend {
   public:
@@ -386,7 +308,7 @@ PresentProviderState RemoteBackend::Run() {
         return PresentProviderState::HelperUnavailable;
     LockedPath verified;
     const auto machine = MachineImage();
-    if (!Verified(machine, EXOSNAP_DIAGNOSTICS_IMAGE_SHA256, verified, true) || !BootstrapRegistered(machine))
+    if (!VerifiedMachineImage(machine, verified) || !BootstrapRegistered(machine))
         return PresentProviderState::HelperUnavailable;
     GUID id{};
     if (FAILED(CoCreateGuid(&id)))
@@ -556,12 +478,6 @@ PresentProviderState RemoteBackend::Run() {
 } // namespace
 
 #ifdef EXOSNAP_SIGNED_FIXTURE_STATUS
-bool ProbeSignedPackageAcquisition() {
-    Handle stop(CreateEventW(nullptr, TRUE, FALSE, nullptr));
-    LockedPath image;
-    return stop && AcquireMsix(stop.get(), image);
-}
-
 HRESULT ProbeMachineBootstrap(ULONG version, bool invoke) {
     BIND_OPTS3 options{};
     options.cbStruct = sizeof(options);

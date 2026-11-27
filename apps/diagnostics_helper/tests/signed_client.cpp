@@ -73,12 +73,7 @@ int main(int argc, char** argv) {
         if (FAILED(com))
             return 1;
         bool passed = false;
-        if (mode == "--expect-registration-rejection")
-            passed = !exosnap::diagnostics::ProbeSignedPackageAcquisition() &&
-                     exosnap::diagnostics::ipc::fixture_footprint_mismatch.load();
-        else if (mode == "--verify-package-acquisition")
-            passed = exosnap::diagnostics::ProbeSignedPackageAcquisition();
-        else if (mode == "--expect-invalid-version")
+        if (mode == "--expect-invalid-version")
             passed = exosnap::diagnostics::ProbeMachineBootstrap(0, true) == E_INVALIDARG;
         else if (mode == "--expect-wrong-caller")
             passed = exosnap::diagnostics::ProbeMachineBootstrap(1, true) == E_ACCESSDENIED;
