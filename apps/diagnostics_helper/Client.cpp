@@ -172,7 +172,7 @@ bool Verified(const fs::path& path, const char* hash, LockedPath& locked, bool s
         ReportFixtureStatus("digest", static_cast<DWORD>(digest));
         return false;
     }
-    const bool approved = ApprovedPublisher(locked.canonical.native(), locked.handles.back().get());
+    const bool approved = ApprovedPublisher(locked.canonical.native(), locked.handles.back());
     ReportFixtureStatus(system ? "image publisher accepted" : "MSIX publisher accepted", approved);
     return approved;
 }

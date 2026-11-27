@@ -1,6 +1,6 @@
 set(EXOSNAP_DIAGNOSTICS_PUBLISHER_SHA256 "" CACHE STRING "SHA-256 fingerprint of the trusted Authenticode signing certificate")
-set(EXOSNAP_DIAGNOSTICS_SIGNED_MSIX "" CACHE FILEPATH "Signed diagnostics helper MSIX to bundle for on-demand provisioning")
-set(EXOSNAP_DIAGNOSTICS_SIGNED_IMAGE "" CACHE FILEPATH "Signed diagnostics helper image contained in the MSIX")
+set(EXOSNAP_DIAGNOSTICS_SIGNED_MSIX "" CACHE FILEPATH "Signed helper MSIX used only by the disposable acquisition fixture")
+set(EXOSNAP_DIAGNOSTICS_SIGNED_IMAGE "" CACHE FILEPATH "Signed executable installed by the matching machine diagnostics helper MSI")
 set(_publisher "${EXOSNAP_DIAGNOSTICS_PUBLISHER_SHA256}")
 if(_publisher)
     string(LENGTH "${_publisher}" _length)

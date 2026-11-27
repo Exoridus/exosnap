@@ -21,6 +21,6 @@ inline uint64_t CreationTime(HANDLE process) {
 
 // Windows validates the Authenticode chain. Pin the leaf certificate from the
 // verified provider state, never a certificate merely embedded alongside it.
-bool ApprovedPublisher(const std::wstring& image, HANDLE locked_file);
+bool ApprovedPublisher(const std::wstring& image, const Handle& locked_file);
 bool ApprovedClient(HANDLE process);
 } // namespace exosnap::diagnostics::ipc

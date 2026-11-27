@@ -10,14 +10,14 @@
 #include <string_view>
 
 namespace exosnap::diagnostics::ipc {
-bool ApprovedPublisher(const std::wstring& image, HANDLE locked_file) {
+bool ApprovedPublisher(const std::wstring& image, const Handle& locked_file) {
     constexpr std::string_view expected = EXOSNAP_DIAGNOSTICS_PUBLISHER_SHA256;
-    if (expected.size() != 64 || !locked_file || locked_file == INVALID_HANDLE_VALUE)
+    if (expected.size() != 64 || !locked_file)
         return false;
     WINTRUST_FILE_INFO file{};
     file.cbStruct = sizeof(file);
     file.pcwszFilePath = image.c_str();
-    file.hFile = locked_file;
+    file.hFile = locked_file.get();
     WINTRUST_DATA data{};
     data.cbStruct = sizeof(data);
     data.dwUIChoice = WTD_UI_NONE;
@@ -65,6 +65,6 @@ bool ApprovedClient(HANDLE process) {
         return false;
     Handle locked(CreateFileW(image.c_str(), GENERIC_READ, FILE_SHARE_READ, nullptr, OPEN_EXISTING,
                               FILE_ATTRIBUTE_NORMAL | FILE_FLAG_OPEN_REPARSE_POINT, nullptr));
-    return locked && ApprovedPublisher(image, locked.get());
+    return ApprovedPublisher(image, locked);
 }
 } // namespace exosnap::diagnostics::ipc
