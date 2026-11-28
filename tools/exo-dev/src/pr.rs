@@ -387,6 +387,23 @@ pub fn merge(
     gh: &dyn GhRunner,
     request: &MergeRequest,
 ) -> anyhow::Result<MergeOutcome> {
+    merge_with_strategy(repo_root, gh, request, false)
+}
+
+pub fn merge_preserving_ancestry(
+    repo_root: &Path,
+    gh: &dyn GhRunner,
+    request: &MergeRequest,
+) -> anyhow::Result<MergeOutcome> {
+    merge_with_strategy(repo_root, gh, request, true)
+}
+
+fn merge_with_strategy(
+    repo_root: &Path,
+    gh: &dyn GhRunner,
+    request: &MergeRequest,
+    preserve_ancestry: bool,
+) -> anyhow::Result<MergeOutcome> {
     let selector = match request.number {
         Some(number) if number > 0 => number.to_string(),
         _ => {
@@ -427,6 +444,16 @@ pub fn merge(
         bail!(
             "pull request #{number} title '{title}' is invalid: {}. CONTRIBUTING.md has the rules.",
             parsed_title.problem.clone().unwrap_or_default()
+        );
+    }
+    if preserve_ancestry {
+        anyhow::ensure!(
+            view["baseRefName"] == "next"
+                && view["headRefName"]
+                    .as_str()
+                    .is_some_and(|branch| branch.starts_with("release/v"))
+                && parsed_title.scope.as_deref() == Some("release"),
+            "preserving ancestry is reserved for release preparation pull requests into next"
         );
     }
 
@@ -505,13 +532,18 @@ pub fn merge(
     );
 
     let number_str = number.to_string();
+    let strategy = if preserve_ancestry {
+        "--merge"
+    } else {
+        "--squash"
+    };
     let mut merge_args: Vec<String> = vec![
         "pr".into(),
         "merge".into(),
         number_str,
         "--repo".into(),
         REPO.into(),
-        "--squash".into(),
+        strategy.into(),
         "--subject".into(),
         subject.clone(),
         "--body".into(),
@@ -1069,6 +1101,45 @@ mod tests {
             gh.calls().iter().filter(|call| call[1] == "view").count(),
             2
         );
+    }
+
+    #[test]
+    fn release_merge_preserves_commit_ancestry_and_pins_the_head() {
+        let dir = tempfile::tempdir().unwrap();
+        let mut view: serde_json::Value = serde_json::from_str(&merge_view(
+            "chore(release): prepare ExoSnap 0.11.0",
+            "OPEN",
+            false,
+            "CLEAN",
+        ))
+        .unwrap();
+        view["headRefName"] = serde_json::json!("release/v0.11.0");
+        let gh = FakeGh::new(&view.to_string());
+        let head = "a".repeat(40);
+        let request = MergeRequest {
+            number: Some(400),
+            confirm: true,
+            expected_head: Some(head.clone()),
+            delete_branch: false,
+            auto: false,
+        };
+
+        merge_preserving_ancestry(dir.path(), &gh, &request).unwrap();
+
+        assert!(gh.called(&[
+            "pr",
+            "merge",
+            "400",
+            "--repo",
+            REPO,
+            "--merge",
+            "--subject",
+            "chore(release): prepare ExoSnap 0.11.0 (#400)",
+            "--body",
+            "",
+            "--match-head-commit",
+            &head,
+        ]));
     }
 
     #[test]

@@ -39,6 +39,7 @@ Recording Clip creation remains outside the offered product scope. Its inclusive
 - Run the full gate: `cargo exo-dev verify --full`. Check the actual test receipt and every required CI result. A missing tool, stale binary, skipped configuration or absent crash-capture build is not equivalent to running it successfully.
 - Review current product behavior, limitations and privacy disclosures. Run the documentation check and privacy validators. Leave development narrative in the pull request.
 - At the release cut only, preview `cargo exo-dev release changelog`. Set `EXOSNAP_CHANGELOG_CUT=1` and use `--version <x.y.z> --apply` to perform the deliberate cut. Preview `cargo exo-dev release release-notes --version <x.y.z>`. Ordinary feature branches do not edit the changelog.
+- If `main` contains a patch absent from `next`, merge `main` into the release preparation branch. Merge that reviewed release PR with `cargo exo-dev pr merge --preserve-ancestry` and the normal exact-head and confirmation guards. Verify that `main` is an ancestor of the resulting `next` commit before dispatch.
 
 ## 2. Build and audit a candidate
 

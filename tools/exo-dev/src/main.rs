@@ -456,8 +456,8 @@ enum PrCommand {
         #[arg(long)]
         no_push: bool,
     },
-    /// Squash-merges a pull request with the exact subject the changelog cut
-    /// reads. Without --confirm, prints the subject and merges nothing.
+    /// Merges a pull request with its validated Conventional Commit subject.
+    /// Without --confirm, prints the subject and merges nothing.
     Merge {
         /// The pull request to merge. Defaults to the one for the current
         /// branch.
@@ -475,6 +475,9 @@ enum PrCommand {
         /// Enable auto-merge instead of merging now.
         #[arg(long)]
         auto: bool,
+        /// Use a merge commit for release preparation that carries main into next.
+        #[arg(long)]
+        preserve_ancestry: bool,
     },
     /// Validates every member and atomically squash-merges a native stack.
     /// Without --confirm, prints the exact subjects and merges nothing.
@@ -1078,6 +1081,7 @@ fn run_cli() -> anyhow::Result<ExitCode> {
                 expected_head,
                 delete_branch,
                 auto,
+                preserve_ancestry,
             } => pr_merge(
                 &repo_root,
                 number,
@@ -1085,6 +1089,7 @@ fn run_cli() -> anyhow::Result<ExitCode> {
                 confirm,
                 delete_branch,
                 auto,
+                preserve_ancestry,
             ),
             PrCommand::MergeStack {
                 number,
@@ -2253,6 +2258,7 @@ fn pr_merge(
     confirm: bool,
     delete_branch: bool,
     auto: bool,
+    preserve_ancestry: bool,
 ) -> anyhow::Result<ExitCode> {
     let request = exo_dev::pr::MergeRequest {
         number,
@@ -2261,7 +2267,12 @@ fn pr_merge(
         delete_branch,
         auto,
     };
-    let outcome = exo_dev::pr::merge(repo_root, &exo_dev::pr::RealGh::new(), &request)?;
+    let gh = exo_dev::pr::RealGh::new();
+    let outcome = if preserve_ancestry {
+        exo_dev::pr::merge_preserving_ancestry(repo_root, &gh, &request)?
+    } else {
+        exo_dev::pr::merge(repo_root, &gh, &request)?
+    };
     print!("{}", exo_dev::pr::render_merge(&outcome));
     Ok(ExitCode::SUCCESS)
 }
