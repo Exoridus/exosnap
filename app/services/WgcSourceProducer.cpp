@@ -29,23 +29,45 @@ constexpr int kPoolBuffers = 2;
 
 } // namespace
 
+WgcCaptureItem::WgcCaptureItem(const CaptureSourceKey& key) : key_(key) {
+    const auto interop = winrt::get_activation_factory<wgc::GraphicsCaptureItem, IGraphicsCaptureItemInterop>();
+    if (key.kind == CaptureSourceKey::Kind::Monitor) {
+        winrt::check_hresult(interop->CreateForMonitor(reinterpret_cast<HMONITOR>(key.native_id),
+                                                       winrt::guid_of<wgc::GraphicsCaptureItem>(),
+                                                       winrt::put_abi(item_)));
+    } else {
+        winrt::check_hresult(interop->CreateForWindow(
+            reinterpret_cast<HWND>(key.native_id), winrt::guid_of<wgc::GraphicsCaptureItem>(), winrt::put_abi(item_)));
+    }
+    diagnostics::AppLog::debug(QStringLiteral("wgc-producer"), QStringLiteral("capture item created"));
+    // A callback already queued at eviction may outlive the item's owner.
+    closed_revoker_ =
+        item_.Closed(winrt::auto_revoke, [closed = closed_](const auto&, const auto&) { closed->store(true); });
+}
+
 WgcSourceProducer::WgcSourceProducer(CaptureSourceKey key, winrt::com_ptr<ID3D11Device> device)
     : key_(key), device_(std::move(device)) {
 }
 
 WgcSourceProducer::~WgcSourceProducer() {
     Close();
-    if (frame_event_ != nullptr)
-        CloseHandle(frame_event_);
 }
 
-HANDLE WgcSourceProducer::FrameSignal() noexcept {
-    if (frame_event_ == nullptr)
-        frame_event_ = CreateEventW(nullptr, /*manual reset*/ FALSE, FALSE, nullptr);
-    return frame_event_;
+HANDLE WgcSourceProducer::FrameSignal() {
+    if (!frame_event_) {
+        winrt::handle signal(CreateEventW(nullptr, /*manual reset*/ FALSE, FALSE, nullptr));
+        if (signal)
+            frame_event_ = std::make_shared<winrt::handle>(std::move(signal));
+    }
+    return frame_event_ ? frame_event_->get() : nullptr;
 }
 
 bool WgcSourceProducer::Open(std::string& err) {
+    std::shared_ptr<WgcCaptureItem> item;
+    return Open(err, item);
+}
+
+bool WgcSourceProducer::Open(std::string& err, std::shared_ptr<WgcCaptureItem>& item) {
     if (!device_) {
         err = "no d3d device";
         return false;
@@ -59,18 +81,10 @@ bool WgcSourceProducer::Open(std::string& err) {
         winrt::check_hresult(CreateDirect3D11DeviceFromDXGIDevice(dxgi_dev.get(), insp.put()));
         winrt_device_ = insp.as<wgdx::Direct3D11::IDirect3DDevice>();
 
-        auto interop = winrt::get_activation_factory<wgc::GraphicsCaptureItem, IGraphicsCaptureItemInterop>();
-        if (key_.kind == CaptureSourceKey::Kind::Monitor) {
-            winrt::check_hresult(interop->CreateForMonitor(reinterpret_cast<HMONITOR>(key_.native_id),
-                                                           winrt::guid_of<wgc::GraphicsCaptureItem>(),
-                                                           winrt::put_abi(item_)));
-        } else {
-            winrt::check_hresult(interop->CreateForWindow(reinterpret_cast<HWND>(key_.native_id),
-                                                          winrt::guid_of<wgc::GraphicsCaptureItem>(),
-                                                          winrt::put_abi(item_)));
-        }
-
-        pool_size_ = item_.Size();
+        if (!item || item->IsClosed() || !item->Matches(key_))
+            item = std::make_shared<WgcCaptureItem>(key_);
+        item_ = item;
+        pool_size_ = item_->item_.Size();
         if (pool_size_.Width <= 0 || pool_size_.Height <= 0) {
             err = "capture item has empty size";
             Close();
@@ -78,10 +92,11 @@ bool WgcSourceProducer::Open(std::string& err) {
         }
 
         frame_pool_ = wgc::Direct3D11CaptureFramePool::Create(winrt_device_, kPoolFormat, kPoolBuffers, pool_size_);
-        if (frame_event_ != nullptr)
-            frame_token_ = frame_pool_.FrameArrived([this](const auto&, const auto&) { SetEvent(frame_event_); });
+        if (frame_event_)
+            frame_token_ = frame_pool_.FrameArrived(
+                [signal = frame_event_](const auto&, const auto&) { SetEvent(signal->get()); });
 
-        session_ = frame_pool_.CreateCaptureSession(item_);
+        session_ = frame_pool_.CreateCaptureSession(item_->item_);
         session_.IsBorderRequired(false);
 
         exosnap::engine::WgcMinUpdateIntervalResult interval_result;
@@ -108,13 +123,10 @@ bool WgcSourceProducer::Open(std::string& err) {
                                          interval_message + QStringLiteral(" fallback=OS-default"));
         }
 
-        // Cleared before the handler exists, never after: a Closed that fires on
-        // the very first pump must not be erased by this producer's own reset.
-        source_closed_.store(false);
-        closed_token_ = item_.Closed([this](const auto&, const auto&) { source_closed_.store(true); });
-
         session_.StartCapture();
     } catch (const winrt::hresult_error& e) {
+        if (item_ && e.code() == RPC_E_DISCONNECTED)
+            item_->closed_->store(true);
         err = winrt::to_string(e.message());
         Close();
         return false;
@@ -124,10 +136,6 @@ bool WgcSourceProducer::Open(std::string& err) {
 }
 
 void WgcSourceProducer::Close() {
-    if (item_ != nullptr && closed_token_)
-        item_.Closed(closed_token_);
-    closed_token_ = {};
-
     if (frame_pool_ != nullptr && frame_token_)
         frame_pool_.FrameArrived(frame_token_);
     frame_token_ = {};
@@ -144,11 +152,10 @@ void WgcSourceProducer::Close() {
     winrt_device_ = nullptr;
     context_ = nullptr;
     pool_size_ = {};
-    source_closed_.store(false);
 }
 
 ProducerPoll WgcSourceProducer::PollFrame(HubFrame& out) {
-    if (source_closed_.load())
+    if (!item_ || item_->IsClosed())
         return ProducerPoll::Lost;
 
     // Polling a producer that never opened is a caller's bug, but a null projected
@@ -225,6 +232,8 @@ ProducerPoll WgcSourceProducer::PollFrame(HubFrame& out) {
         case exosnap::engine::WgcAcquireFailure::DeviceLost:
             return ProducerPoll::Fatal;
         case exosnap::engine::WgcAcquireFailure::SourceLost:
+            if (e.code() == RPC_E_DISCONNECTED)
+                item_->closed_->store(true);
             return ProducerPoll::Lost;
         case exosnap::engine::WgcAcquireFailure::Unexpected:
             // Held like a source loss -- a preview must not take the app down --

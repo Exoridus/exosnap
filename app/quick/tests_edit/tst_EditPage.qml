@@ -51,6 +51,29 @@ Item {
             signalName: "historyRequestedUs"
         }
 
+        function test_projectCommandsProtectAuthoredChangesAtNarrowWidth() {
+            testEditHarness.seedReviewEditorWorkspace();
+            const page = make();
+            page.width = 640;
+            const access = findChild(page, "editProjectAccess");
+            verify(access && access.visible);
+            verify(testPageSession.projectDirty);
+            const before = testPageSession.durationUs;
+            access.requestProjectAction("new");
+            verify(before > 0);
+            compare(testPageSession.durationUs, before);
+            keyClick(Qt.Key_Escape);
+            compare(testPageSession.durationUs, before);
+            access.requestProjectAction("new");
+            const cancel = findChild(page, "editProjectCancel");
+            tryCompare(cancel, "activeFocus", true);
+            const discard = findChild(page, "editProjectDiscard");
+            verify(discard.visible);
+            mouseClick(discard);
+            compare(testPageSession.durationUs, 0);
+            compare(testPageSession.projectDirty, false);
+        }
+
         function test_recording_identity_survives_rename_but_not_replacement() {
             const result = testEditHarness.recordingIdentityProbe();
             compare(result.stable, true);

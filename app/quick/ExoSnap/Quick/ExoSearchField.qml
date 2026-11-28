@@ -44,6 +44,8 @@ Rectangle {
         TextField {
             id: input
 
+            objectName: "searchInput"
+
             selectByMouse: true
             color: ExoTheme.text
             placeholderTextColor: ExoTheme.textDim

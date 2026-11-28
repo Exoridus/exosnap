@@ -171,6 +171,13 @@ struct EditExportAdapter::PreparedExport {
             error = "The export identity proof does not match its admitted source.";
             return false;
         }
+        const auto imported =
+            std::find_if(assets.begin(), assets.end(), [&](const auto& asset) { return asset.id == source.id; });
+        if (imported == assets.end() || imported->state != edit::AssetState::Available) {
+            error = QCoreApplication::translate("EditExportAdapter", "Relink the unavailable source before exporting.")
+                        .toStdString();
+            return false;
+        }
         if (!source.access) {
             auto acquired = engine::AcquireMediaReadCapability(source.path);
             if (!acquired.succeeded()) {
@@ -179,10 +186,8 @@ struct EditExportAdapter::PreparedExport {
             }
             source.access = *acquired.value();
         }
-        std::optional<std::array<uint8_t, 32>> expected;
-        const auto imported =
-            std::find_if(assets.begin(), assets.end(), [&](const auto& asset) { return asset.id == source.id; });
-        if (imported != assets.end() && imported->source_descriptor) {
+        auto expected = imported->legacy_content_sha256;
+        if (imported->source_descriptor) {
             const auto& fingerprint = imported->source_descriptor->asset_identity_fingerprint;
             if (std::any_of(fingerprint.begin(), fingerprint.end(), [](uint8_t byte) { return byte != 0; }))
                 expected = fingerprint;

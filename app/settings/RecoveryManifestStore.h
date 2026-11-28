@@ -22,6 +22,8 @@ struct RecoveryManifestEntry {
     QString started_at;         // ISO-8601 timestamp
     bool finalized = false;     // true when MKV engine finished cleanly
                                 // (artefact is ready to rename/remux without repair)
+    // A generated path conveys no ownership of a file at that path.
+    bool final_output_is_preferred = false;
 };
 
 // Each entry commits independently, so a stalled split cannot pin the manifest

@@ -1,7 +1,8 @@
 #pragma once
 
-// A HubSourceProducer backed by Windows.Graphics.Capture (WGC), driving one
-// GraphicsCaptureItem for the lifetime of an Open()/Close() pair.
+// A HubSourceProducer backed by Windows.Graphics.Capture (WGC). The recording
+// hub owns an item per session. The thumbnail worker can retain an item
+// between one-shot sessions on its own apartment.
 //
 // The D3D device is injected, not created here: every WGC producer in the
 // process shares it, so a consumer can read back a HubFrame's texture on the
@@ -16,6 +17,7 @@
 
 #include <atomic>
 #include <cstdint>
+#include <memory>
 #include <string>
 
 #include <d3d11.h>
@@ -30,6 +32,27 @@
 
 namespace exosnap {
 
+class WgcCaptureItem final {
+  public:
+    explicit WgcCaptureItem(const CaptureSourceKey& key);
+
+    [[nodiscard]] bool Matches(const CaptureSourceKey& key) const {
+        return key_ == key;
+    }
+
+    [[nodiscard]] bool IsClosed() const noexcept {
+        return closed_->load();
+    }
+
+  private:
+    friend class WgcSourceProducer;
+
+    CaptureSourceKey key_;
+    winrt::Windows::Graphics::Capture::GraphicsCaptureItem item_{nullptr};
+    std::shared_ptr<std::atomic<bool>> closed_ = std::make_shared<std::atomic<bool>>(false);
+    winrt::Windows::Graphics::Capture::GraphicsCaptureItem::Closed_revoker closed_revoker_;
+};
+
 class WgcSourceProducer final : public HubSourceProducer {
   public:
     WgcSourceProducer(CaptureSourceKey key, winrt::com_ptr<ID3D11Device> device);
@@ -39,6 +62,8 @@ class WgcSourceProducer final : public HubSourceProducer {
     WgcSourceProducer& operator=(const WgcSourceProducer&) = delete;
 
     bool Open(std::string& err) override;
+    // The caller holds this slot on the same apartment and binds it to one source identity.
+    bool Open(std::string& err, std::shared_ptr<WgcCaptureItem>& item);
     void Close() override;
     ProducerPoll PollFrame(HubFrame& out) override;
 
@@ -49,7 +74,7 @@ class WgcSourceProducer final : public HubSourceProducer {
     // must still wake on messages; the event only tells a frame apart from any
     // other wake. Returns nullptr if the event cannot be created, which leaves
     // the caller on whatever cadence it had.
-    [[nodiscard]] HANDLE FrameSignal() noexcept;
+    [[nodiscard]] HANDLE FrameSignal();
 
     [[nodiscard]] ID3D11Device* Device() const noexcept {
         return device_.get();
@@ -64,22 +89,16 @@ class WgcSourceProducer final : public HubSourceProducer {
     winrt::com_ptr<ID3D11DeviceContext> context_;
     winrt::Windows::Graphics::DirectX::Direct3D11::IDirect3DDevice winrt_device_{nullptr};
 
-    winrt::Windows::Graphics::Capture::GraphicsCaptureItem item_{nullptr};
+    std::shared_ptr<WgcCaptureItem> item_;
     winrt::Windows::Graphics::Capture::Direct3D11CaptureFramePool frame_pool_{nullptr};
     winrt::Windows::Graphics::Capture::GraphicsCaptureSession session_{nullptr};
-    winrt::event_token closed_token_{};
 
     // Non-null only once FrameSignal() has been called. Auto-reset: a wait that
     // consumed it goes on to fetch the frame, and what matters afterwards is the
     // next arrival rather than the one already taken.
-    HANDLE frame_event_ = nullptr;
+    std::shared_ptr<winrt::handle> frame_event_;
     winrt::event_token frame_token_{};
     winrt::Windows::Graphics::SizeInt32 pool_size_{};
-
-    // Set from the item.Closed callback on the pumping thread, read by PollFrame
-    // on that same thread. Atomic only so the flag has a defined value across the
-    // callback boundary, not because a second thread ever touches it.
-    std::atomic<bool> source_closed_{false};
 
     // The frame pool recycles its surfaces, so a held frame must be a copy the
     // producer owns. Reallocated only when the frame's dimensions change.

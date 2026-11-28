@@ -1235,15 +1235,13 @@ void QuickApplication::initializeRecordWorkflow() {
             return CaptureTargetSnapshot{std::move(*seeded)};
         return CaptureTargetSnapshot{recording_coordinator_->EnumerateTargets()};
     });
-    // Target stills for the source picker. The service runs only while the
-    // picker reports visible cards, and the identities it is handed are resolved
-    // here rather than in QML because the capture target is engine state.
+    // The picker captures only visible cards. Resolve their identities here so
+    // the worker can validate each native window before using its item.
     QObject::connect(
         &record_view_model_adapter_, &RecordViewModelAdapter::visibleTargetIdentitiesChanged,
         &record_view_model_adapter_, [this](const QStringList& identities) {
             if (identities.isEmpty()) {
                 target_still_service_.setVisibleTargets({});
-                target_still_service_.stop();
                 return;
             }
             if (HarnessCaptureTargets()) {
@@ -1291,8 +1289,6 @@ void QuickApplication::initializeRecordWorkflow() {
             target_still_service_.setVisibleTargets(std::move(requests));
             if (has_requests)
                 target_still_service_.start();
-            else
-                target_still_service_.stop();
         });
     QObject::connect(&target_still_service_, &CaptureTargetStillService::stillReady, &record_view_model_adapter_,
                      [this](const QString& identity, const QImage& image) {
@@ -4986,6 +4982,10 @@ void QuickApplication::applyEditVisualScenario() {
         layout.insert(QStringLiteral("popup"), QStringLiteral("crossfade"));
     else if (scenario == QStringLiteral("edit-volume-popup"))
         layout.insert(QStringLiteral("popup"), QStringLiteral("volume"));
+    else if (scenario == QStringLiteral("edit-project-menu"))
+        layout.insert(QStringLiteral("popup"), QStringLiteral("project"));
+    else if (scenario == QStringLiteral("edit-project-discard"))
+        layout.insert(QStringLiteral("popup"), QStringLiteral("project-discard"));
     if (scenario == QStringLiteral("edit-video-automation"))
         layout.insert(QStringLiteral("inspectorField"), QStringLiteral("animation"));
     if (scenario == QStringLiteral("edit-clip-fades")) {
@@ -6449,8 +6449,10 @@ void QuickApplication::initializeShell() {
                      [this]() { recording_coordinator_->StopRecording(); });
     // The close is approved only after every guard cleared, so this is the last
     // moment anything can still be written to disk.
-    QObject::connect(&shell_adapter_, &ShellAdapter::closeApproved, &shell_adapter_,
-                     [this]() { flushPendingPersists(); });
+    QObject::connect(&shell_adapter_, &ShellAdapter::closeApproved, &shell_adapter_, [this]() {
+        edit_session_adapter_.discardProjectRecoveryOnQuit();
+        flushPendingPersists();
+    });
     // The other half of the tray-Quit story. Together the two lines say what was
     // asked for and what answered it, which is the difference between "the product
     // refused, correctly" and "the product hung" — indistinguishable to a user, and

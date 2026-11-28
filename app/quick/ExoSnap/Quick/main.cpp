@@ -40,6 +40,7 @@
 #include <QApplication>
 #include <QCoreApplication>
 #include <QElapsedTimer>
+#include <QFileInfo>
 #include <QGuiApplication>
 #include <QIcon>
 #include <QImage>
@@ -720,7 +721,7 @@ QObject* navTabAt(QObject* repeater, int index) {
 // Missing media exercises resident workspace navigation without opening a decoder.
 exosnap::EditContext navigationTestEditContext() {
     exosnap::EditContext context;
-    context.output_path = QStringLiteral("qcr001-navigation-lifecycle.mkv");
+    context.output_path = QFileInfo(QStringLiteral("navigation-missing-media.mkv")).absoluteFilePath();
     context.duration = QStringLiteral("2:34");
     context.duration_seconds = 154.0;
     return context;
