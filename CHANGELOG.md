@@ -4,7 +4,7 @@ All notable changes to ExoSnap are documented in this file.
 
 The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) and the project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html). ExoSnap is pre-v1 preview software: a minor version may break behaviour, and such a change is marked **BREAKING**.
 
-This file is assembled at the release cut by `scripts/new-changelog.ps1`, never edited in a pull request. `CONTRIBUTING.md` has the reasoning and `scripts/check-commit-policy.ps1` enforces it.
+The release preparation assembles this file with `cargo exo-dev release changelog`. See [CONTRIBUTING.md](CONTRIBUTING.md) for the release cut exception.
 
 Releases up to and including 0.9.0 predate this file; their notes are on the [releases page](https://github.com/Exoridus/exosnap/releases).
 
@@ -14,6 +14,7 @@ Releases up to and including 0.9.0 predate this file; their notes are on the [re
 
 ### Changed
 
+- **keep Recording Clip creation unavailable in the release.** Existing clips can still be opened as media. ([#606](https://github.com/Exoridus/exosnap/pull/606))
 - **BREAKING: integrate recording reliability and encoder input contracts.** ([#549](https://github.com/Exoridus/exosnap/pull/549))
 - **BREAKING: guard pull request integration.** ([#511](https://github.com/Exoridus/exosnap/pull/511))
 - **drive the interactive Setup from Rust UI Automation.** ([#460](https://github.com/Exoridus/exosnap/pull/460))
@@ -42,7 +43,6 @@ Releases up to and including 0.9.0 predate this file; their notes are on the [re
 - **restore settings cards and editable overlays.** ([#491](https://github.com/Exoridus/exosnap/pull/491))
 - **add compact setup, updater repair and preview fixes.** ([#485](https://github.com/Exoridus/exosnap/pull/485))
 - **integrate controller overlays with GPU preview and recording.** ([#483](https://github.com/Exoridus/exosnap/pull/483))
-- **enable Recording Clip creation for qualification.** ([#482](https://github.com/Exoridus/exosnap/pull/482))
 - **implement precise timeline editing and media workflows.** ([#479](https://github.com/Exoridus/exosnap/pull/479))
 - **per-stream audio, junctions and planned export.** ([#475](https://github.com/Exoridus/exosnap/pull/475))
 - **integrate v1.3 runtime, multitrack audio and workspace.** ([#473](https://github.com/Exoridus/exosnap/pull/473))
