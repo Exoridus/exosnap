@@ -29,19 +29,11 @@
 
 #include <string>
 #include <string_view>
+#include <update/release_key.h>
 #include <update/update_types.h>
 #include <variant>
 
 namespace exosnap::update {
-
-// Embedded ed25519 public key (32 bytes, set at build time via CMake).
-// The corresponding private key is NEVER stored in the repository; it lives
-// only in the CI secret EXOSNAP_UPDATE_SIGNING_KEY.
-//
-// This is a placeholder all-zero key for development builds
-// (EXOSNAP_OFFICIAL_BUILD=OFF).  The real key is injected by CMake when
-// EXOSNAP_OFFICIAL_BUILD=ON via -DEXOSNAP_UPDATE_PUBLIC_KEY_HEX=<64-hex-chars>.
-extern const uint8_t kUpdatePublicKey[32];
 
 // Parse a raw manifest JSON blob (the entire HTTP response body).
 // Returns UpdateManifest on success, or a string describing the parse error.

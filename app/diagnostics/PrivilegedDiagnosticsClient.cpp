@@ -117,12 +117,13 @@ void Publish(Connection& state, const Response& response) {
 }
 
 PrivilegedDiagnosticsState Run(Connection& state, bool capture_present) {
-    const auto location = OpenProtectedHelper();
-    if (!location)
-        return PrivilegedDiagnosticsState::Missing;
     const auto nonce = NewNonce();
     if (nonce.empty())
         return PrivilegedDiagnosticsState::Failed;
+    const auto sibling = OpenSiblingHelper(::GetCurrentProcess(), kRecorderName);
+    if (!sibling || !IsPairedRecorder(*sibling, ::GetCurrentProcess()))
+        return PrivilegedDiagnosticsState::Missing;
+    const auto& location = *sibling;
     Handle pipe = OpenPipe(nonce);
     const auto started_at = ProcessBirth(::GetCurrentProcess());
     if (!pipe || started_at == 0)
@@ -136,16 +137,17 @@ PrivilegedDiagnosticsState Run(Connection& state, bool capture_present) {
     shell.cbSize = sizeof(shell);
     shell.fMask = SEE_MASK_NOCLOSEPROCESS | SEE_MASK_NOASYNC | SEE_MASK_FLAG_NO_UI;
     shell.lpVerb = L"runas";
-    shell.lpFile = location->executable.c_str();
+    shell.lpFile = location.executable.c_str();
     shell.lpParameters = args.c_str();
-    shell.lpDirectory = location->directory.c_str();
+    shell.lpDirectory = location.directory.c_str();
     shell.nShow = SW_HIDE;
     if (!::ShellExecuteExW(&shell))
         return ::GetLastError() == ERROR_CANCELLED ? PrivilegedDiagnosticsState::Declined
                                                    : PrivilegedDiagnosticsState::Failed;
     const Handle helper(shell.hProcess);
     ULONG client_pid = 0;
-    if (!helper || !Connect(pipe.get(), helper.get(), state.stop.get()) ||
+    if (!helper || !ProcessImageMatchesFile(helper.get(), location.executable_pin.get()) ||
+        !Connect(pipe.get(), helper.get(), state.stop.get()) ||
         !::GetNamedPipeClientProcessId(pipe.get(), &client_pid) || client_pid != ::GetProcessId(helper.get()) ||
         !SameSession(client_pid) || ::WaitForSingleObject(helper.get(), 0) != WAIT_TIMEOUT)
         return PrivilegedDiagnosticsState::Failed;

@@ -1,10 +1,13 @@
 #include "diagnostics/PrivilegedDiagnosticsPath.h"
+#include "diagnostics/PrivilegedDiagnosticsIntegrity.h"
 
 #include <aclapi.h>
 #include <sddl.h>
-#include <shlobj.h>
 
 #include <memory>
+#include <string_view>
+#include <update/release_key.h>
+#include <vector>
 
 namespace exosnap::diagnostics::privileged {
 namespace {
@@ -25,7 +28,7 @@ bool IsWindowsTrustedSid(PSID sid) {
     return ::EqualSid(sid, installer.get()) != FALSE;
 }
 
-bool HasProtectedAcl(HANDLE file) {
+bool HasProtectedAcl(HANDLE file, DWORD allowed_mutations) {
     PSID owner = nullptr;
     PACL acl = nullptr;
     PSECURITY_DESCRIPTOR raw = nullptr;
@@ -47,47 +50,118 @@ bool HasProtectedAcl(HANDLE file) {
         if (header->AceType != ACCESS_ALLOWED_ACE_TYPE)
             return false;
         auto* ace = static_cast<ACCESS_ALLOWED_ACE*>(entry);
-        if ((ace->Mask & mutable_rights) != 0 && !IsWindowsTrustedSid(&ace->SidStart))
+        if ((ace->Mask & (mutable_rights & ~allowed_mutations)) != 0 && !IsWindowsTrustedSid(&ace->SidStart))
             return false;
     }
     return true;
 }
 
-Handle OpenProtectedPath(const std::wstring& path, bool directory) {
-    Handle file(::CreateFileW(path.c_str(), READ_CONTROL | FILE_READ_ATTRIBUTES, FILE_SHARE_READ, nullptr,
-                              OPEN_EXISTING, FILE_FLAG_OPEN_REPARSE_POINT | FILE_FLAG_BACKUP_SEMANTICS, nullptr));
+Handle OpenPinnedPath(const std::wstring& path, bool directory) {
+    const DWORD access = READ_CONTROL | (directory ? FILE_READ_ATTRIBUTES : GENERIC_READ);
+    Handle file(::CreateFileW(path.c_str(), access, FILE_SHARE_READ, nullptr, OPEN_EXISTING,
+                              FILE_FLAG_OPEN_REPARSE_POINT | FILE_FLAG_BACKUP_SEMANTICS, nullptr));
     FILE_ATTRIBUTE_TAG_INFO attributes{};
     if (!file || !::GetFileInformationByHandleEx(file.get(), FileAttributeTagInfo, &attributes, sizeof(attributes)) ||
         (attributes.FileAttributes & FILE_ATTRIBUTE_REPARSE_POINT) != 0 ||
-        ((attributes.FileAttributes & FILE_ATTRIBUTE_DIRECTORY) != 0) != directory || !HasProtectedAcl(file.get()))
+        ((attributes.FileAttributes & FILE_ATTRIBUTE_DIRECTORY) != 0) != directory)
         return {};
     return file;
 }
 
+Handle OpenProtectedPath(const std::wstring& path, bool directory, DWORD allowed_mutations = 0) {
+    auto file = OpenPinnedPath(path, directory);
+    if (!file || !HasProtectedAcl(file.get(), allowed_mutations))
+        return {};
+    return file;
+}
+
+std::wstring ProcessImagePath(HANDLE process, DWORD flags) {
+    std::wstring image(32768, L'\0');
+    DWORD size = static_cast<DWORD>(image.size());
+    if (!process || !::QueryFullProcessImageNameW(process, flags, image.data(), &size))
+        return {};
+    image.resize(size);
+    return image;
+}
+
+std::wstring NativeFilePath(HANDLE file) {
+    std::wstring path(32768, L'\0');
+    const DWORD size = ::GetFinalPathNameByHandleW(file, path.data(), static_cast<DWORD>(path.size()), VOLUME_NAME_NT);
+    if (size == 0 || size >= path.size())
+        return {};
+    path.resize(size);
+    return path;
+}
+
+bool HasNoLoaderSidecars(const std::wstring& executable) {
+    // Machine policy can honor .local redirection even for an embedded manifest.
+    for (const auto suffix : {L".local", L".manifest", L".config"}) {
+        if (::GetFileAttributesW((executable + suffix).c_str()) != INVALID_FILE_ATTRIBUTES ||
+            ::GetLastError() != ERROR_FILE_NOT_FOUND)
+            return false;
+    }
+    return true;
+}
+
 } // namespace
 
-std::optional<ProtectedHelper> OpenProtectedHelper() {
-    PWSTR raw = nullptr;
-    const HRESULT hr = ::SHGetKnownFolderPath(FOLDERID_ProgramFilesX64, KF_FLAG_DEFAULT_PATH, nullptr, &raw);
-    const std::unique_ptr<wchar_t, decltype(&::CoTaskMemFree)> folder(raw, &::CoTaskMemFree);
-    if (FAILED(hr) || !folder)
+std::optional<ProtectedHelper> OpenSiblingHelper(HANDLE process, const wchar_t* expected_name) {
+    const auto image = ProcessImagePath(process, 0);
+    const auto leaf = image.find_last_of(L'\\');
+    if (image.size() < 4 || image[1] != L':' || image[2] != L'\\' || leaf == image.npos || leaf < 3 ||
+        _wcsicmp(image.c_str() + leaf + 1, expected_name) != 0)
         return std::nullopt;
-    const std::wstring program_files(folder.get());
-    // The supported location is a direct, fixed-volume child of the system drive
-    // root. Do not resolve an alias through an unverified directory hierarchy.
-    if (program_files.size() < 4 || program_files[1] != L':' || program_files[2] != L'\\' ||
-        program_files.find_first_of(L"\\/:", 3) != std::wstring::npos ||
-        ::GetDriveTypeW(program_files.substr(0, 3).c_str()) != DRIVE_FIXED)
+
+    std::wstring path = image.substr(0, 3);
+    if (::GetDriveTypeW(path.c_str()) != DRIVE_FIXED)
         return std::nullopt;
-    ProtectedHelper target;
-    target.directory = program_files + L"\\" + kDirectoryName;
-    target.executable = target.directory + L"\\" + kExecutableName;
-    target.program_files_pin = OpenProtectedPath(program_files, true);
-    target.directory_pin = OpenProtectedPath(target.directory, true);
-    target.executable_pin = OpenProtectedPath(target.executable, false);
-    if (!target.program_files_pin || !target.directory_pin || !target.executable_pin)
+    ProtectedHelper location;
+    // Creating another directory at the volume root cannot change any pinned component.
+    auto root = OpenProtectedPath(path, true, FILE_ADD_SUBDIRECTORY);
+    const std::wstring global_prefix = L"\\\\?\\GLOBALROOT\\GLOBAL??\\";
+    auto global_root = OpenProtectedPath(global_prefix + path, true, FILE_ADD_SUBDIRECTORY);
+    const auto native_root = root ? NativeFilePath(root.get()) : std::wstring{};
+    if (!global_root || native_root.empty() || native_root != NativeFilePath(global_root.get()))
         return std::nullopt;
-    return target;
+    location.directory_pins.push_back(std::move(root));
+    for (size_t first = 3; first < leaf;) {
+        const auto separator = image.find(L'\\', first);
+        const auto component = std::wstring_view(image).substr(first, separator - first);
+        if (component.empty() || component.back() == L'.' || component.back() == L' ' ||
+            component.find_first_of(L"/:") != component.npos)
+            return std::nullopt;
+        path.append(component);
+        auto directory = OpenProtectedPath(global_prefix + path, true);
+        if (!directory)
+            return std::nullopt;
+        location.directory_pins.push_back(std::move(directory));
+        first = separator + 1;
+        if (separator < leaf)
+            path.push_back(L'\\');
+    }
+    location.directory = path;
+    location.executable = path + L"\\" + kExecutableName;
+    location.executable_pin = OpenProtectedPath(global_prefix + location.executable, false);
+    location.recorder_pin = OpenProtectedPath(global_prefix + path + L"\\" + kRecorderName, false);
+    if (!location.executable_pin || !location.recorder_pin || !HasNoLoaderSidecars(global_prefix + location.executable))
+        return std::nullopt;
+    const auto expected =
+        _wcsicmp(expected_name, kExecutableName) == 0 ? location.executable_pin.get() : location.recorder_pin.get();
+    if (!ProcessImageMatchesFile(process, expected))
+        return std::nullopt;
+    return location;
+}
+
+bool ProcessImageMatchesFile(HANDLE process, HANDLE file) {
+    // NTFS can distinguish images whose native paths differ only in case.
+    const auto image = ProcessImagePath(process, PROCESS_NAME_NATIVE);
+    return !image.empty() && image == NativeFilePath(file);
+}
+
+bool IsPairedRecorder(const ProtectedHelper& location, HANDLE process) {
+    return ProcessImageMatchesFile(process, location.recorder_pin.get()) &&
+           VerifyDiagnosticsImageFiles(location.directory, location.recorder_pin.get(), location.executable_pin.get(),
+                                       update::kUpdatePublicKey);
 }
 
 } // namespace exosnap::diagnostics::privileged

@@ -11,7 +11,10 @@ use super::common::secs;
 use crate::bundle::{FileRole, installer_name, portable_name, sha256_file};
 use crate::capability::Capability;
 use crate::context::{App, Context, extract_zip};
-use crate::package::{portable_dir_name, validate_tree, walk_files};
+use crate::package::{
+    portable_dir_name, validate_tree, verify_msi_runtime_parity, verify_staged_diagnostics,
+    walk_files,
+};
 use crate::plan::Tier;
 use crate::scenario::{Lane, Scenario, ScenarioClass, Step, Stop};
 use crate::{infra_ensure, product_ensure};
@@ -33,10 +36,10 @@ pub fn scenarios() -> Vec<Scenario> {
         },
         Scenario {
             id: "dist.portable-contents",
-            revision: 1,
+            revision: 2,
             title: "Portable package is complete, clean and self-contained",
             class: ScenarioClass::Contract,
-            contract: "the portable tree carries every runtime file and license, no development or user data, the candidate's embedded version, and no unresolved imports",
+            contract: "the portable tree carries every runtime file and license, the official signed diagnostics pair, no development or user data, the candidate's embedded version, and no unresolved imports",
             lane: Lane::CiCore,
             also: &[],
             tier: Tier::Required,
@@ -46,10 +49,10 @@ pub fn scenarios() -> Vec<Scenario> {
         },
         Scenario {
             id: "dist.msi-matches-portable",
-            revision: 1,
+            revision: 2,
             title: "MSI installs byte-identical files to the portable package",
             class: ScenarioClass::Contract,
-            contract: "every file of the portable package is inside the MSI with the same bytes, and the MSI carries no other binaries",
+            contract: "every portable file is in the MSI at the same application-relative path with identical bytes, and the MSI carries no other binaries or diagnostics artifacts",
             lane: Lane::CiCore,
             also: &[],
             tier: Tier::Required,
@@ -160,6 +163,14 @@ fn portable_contents(ctx: &mut Context) -> Step {
     let problems = validate_tree(&root, &version, &leaks)?;
     ctx.evidence.put("problems", json!(problems));
     product_ensure!(problems.is_empty(), "{}", problems.join("; "));
+    if let Ok(key) = std::env::var("EXO_VERIFY_UPDATE_PUBLIC_KEY_HEX") {
+        let public = crate::manifest::public_key_from_hex(&key).map_err(Stop::infra)?;
+        verify_staged_diagnostics(&root, &public).map_err(|err| Stop::fail(format!("{err:#}")))?;
+    } else if root.join(crate::diagnostics_pair::MANIFEST_NAME).is_file() {
+        return Err(Stop::unavailable(
+            "EXO_VERIFY_UPDATE_PUBLIC_KEY_HEX is needed to verify the signed diagnostics pair",
+        ));
+    }
     let audit = crate::pe::audit_tree(&root)?;
     ctx.evidence.put(
         "imports",
@@ -173,65 +184,13 @@ fn portable_contents(ctx: &mut Context) -> Step {
     Ok(())
 }
 
-fn msi_root(extracted: &Path) -> Step<PathBuf> {
-    let exe = walk_files(extracted)?
-        .into_iter()
-        .find(|p| {
-            p.file_name()
-                .is_some_and(|n| n.eq_ignore_ascii_case("exosnap.exe"))
-        })
-        .ok_or_else(|| Stop::fail("the MSI contains no exosnap.exe"))?;
-    Ok(exe.parent().unwrap().to_path_buf())
-}
-
-fn tree_hashes(root: &Path) -> Step<BTreeMap<String, String>> {
-    let mut out = BTreeMap::new();
-    for f in walk_files(root)? {
-        let rel = f
-            .strip_prefix(root)
-            .unwrap()
-            .to_string_lossy()
-            .replace('\\', "/")
-            .to_ascii_lowercase();
-        out.insert(rel, sha256_file(&f)?.0);
-    }
-    Ok(out)
-}
-
 fn msi_matches_portable(ctx: &mut Context) -> Step {
     let portable = extracted_portable(ctx)?;
     let extracted = ctx.scenario_dir.join("msi");
     crate::package::msi_extract(&ctx.package(FileRole::Installer)?, &extracted)?;
-    // An administrative image also carries a copy of the MSI itself.
-    let msi_root = msi_root(&extracted)?;
-    let expected = tree_hashes(&portable)?;
-    let actual = tree_hashes(&msi_root)?;
-    let missing: Vec<&String> = expected
-        .keys()
-        .filter(|k| !actual.contains_key(*k))
-        .collect();
-    let differing: Vec<&String> = expected
-        .iter()
-        .filter(|(k, v)| actual.get(*k).is_some_and(|a| a != *v))
-        .map(|(k, _)| k)
-        .collect();
-    let extra: Vec<&String> = actual
-        .keys()
-        .filter(|k| !expected.contains_key(*k) && (k.ends_with(".dll") || k.ends_with(".exe")))
-        .collect();
-    ctx.evidence.put("files", expected.len());
-    product_ensure!(
-        missing.is_empty(),
-        "files of the portable package missing from the MSI: {missing:?}"
-    );
-    product_ensure!(
-        differing.is_empty(),
-        "files whose MSI bytes differ from the portable package: {differing:?}"
-    );
-    product_ensure!(
-        extra.is_empty(),
-        "binaries in the MSI but not in the portable package: {extra:?}"
-    );
+    let files = verify_msi_runtime_parity(&portable, &extracted)
+        .map_err(|err| Stop::fail(format!("{err:#}")))?;
+    ctx.evidence.put("files", files);
     Ok(())
 }
 

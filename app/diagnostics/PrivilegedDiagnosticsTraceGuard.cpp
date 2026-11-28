@@ -29,11 +29,7 @@ HANDLE ReadHandle(std::wstring_view value) {
 }
 
 bool IsExpectedOwner(HANDLE process, const ProtectedHelper& location) {
-    std::array<wchar_t, 32768> image{};
-    DWORD size = static_cast<DWORD>(image.size());
-    return ::QueryFullProcessImageNameW(process, 0, image.data(), &size) &&
-           ::CompareStringOrdinal(image.data(), static_cast<int>(size), location.executable.c_str(), -1, TRUE) ==
-               CSTR_EQUAL;
+    return ProcessImageMatchesFile(process, location.executable_pin.get());
 }
 
 } // namespace

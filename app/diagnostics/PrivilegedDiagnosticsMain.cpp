@@ -25,14 +25,6 @@ bool IsElevated() {
            elevation.TokenIsElevated != 0;
 }
 
-bool IsSelf(const ProtectedHelper& location) {
-    std::wstring image(32768, L'\0');
-    const DWORD size = ::GetModuleFileNameW(nullptr, image.data(), static_cast<DWORD>(image.size()));
-    return size != 0 && size < image.size() &&
-           ::CompareStringOrdinal(image.data(), static_cast<int>(size), location.executable.c_str(), -1, TRUE) ==
-               CSTR_EQUAL;
-}
-
 uint64_t PositiveDecimal(std::wstring_view input) {
     if (input.empty() || input.size() > 19 || input.find_first_not_of(L"0123456789") != std::wstring_view::npos)
         return 0;
@@ -149,7 +141,7 @@ bool Collect(const ProtectedHelper& location, const std::wstring& pipe_nonce, DW
     if (owner_pid == 0 || owner_birth == 0 || !SameSession(owner_pid) || !::ProcessIdToSessionId(owner_pid, &session))
         return false;
     const Handle owner(::OpenProcess(PROCESS_QUERY_LIMITED_INFORMATION | SYNCHRONIZE, FALSE, owner_pid));
-    if (!owner || ProcessBirth(owner.get()) != owner_birth)
+    if (!owner || ProcessBirth(owner.get()) != owner_birth || !IsPairedRecorder(location, owner.get()))
         return false;
     const std::wstring name = kPipePrefix + pipe_nonce;
     const Handle pipe = OpenPipeClient(name);
@@ -202,8 +194,8 @@ int WINAPI wWinMain(HINSTANCE, HINSTANCE, PWSTR, int) {
     using namespace exosnap::diagnostics::privileged;
     if (!::SetDefaultDllDirectories(LOAD_LIBRARY_SEARCH_SYSTEM32) || !IsElevated())
         return 1;
-    const auto location = OpenProtectedHelper();
-    if (!location || !IsSelf(*location))
+    const auto location = OpenSiblingHelper(::GetCurrentProcess(), kExecutableName);
+    if (!location)
         return 1;
 
     int count = 0;

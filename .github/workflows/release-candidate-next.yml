@@ -1,14 +1,10 @@
 name: Build release candidate
 
 on:
-  push:
-    branches: [next]
-    paths:
-      - .github/workflows/release-candidate-next.yml
   workflow_dispatch:
     inputs:
       source_commit:
-        description: Full commit SHA on next
+        description: Full SHA of the current next head
         required: true
         type: string
       candidate_id:
@@ -20,28 +16,35 @@ permissions:
   contents: read
 
 concurrency:
-  group: candidate-${{ inputs.source_commit || github.sha }}-${{ inputs.candidate_id || format('v010-{0}', github.sha) }}
+  group: candidate-${{ inputs.source_commit }}-${{ inputs.candidate_id }}
   cancel-in-progress: false
 
 jobs:
-  build:
+  prepare:
     if: github.ref == 'refs/heads/next' && github.repository == 'Exoridus/exosnap'
     runs-on: windows-2022
     timeout-minutes: 30
+    outputs:
+      version: ${{ steps.source.outputs.version }}
+      source_date_epoch: ${{ steps.source.outputs.source_date_epoch }}
+      artifact_id: ${{ steps.prepared.outputs.artifact-id }}
     steps:
       - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
         with:
-          ref: ${{ inputs.source_commit || github.sha }}
+          ref: ${{ github.sha }}
           fetch-depth: 0
+          persist-credentials: false
 
       - name: Bind source and final version
+        id: source
         shell: pwsh
         env:
-          SOURCE_COMMIT: ${{ inputs.source_commit || github.sha }}
-          CANDIDATE_ID: ${{ inputs.candidate_id || format('v010-{0}', github.sha) }}
+          SOURCE_COMMIT: ${{ inputs.source_commit }}
+          CANDIDATE_ID: ${{ inputs.candidate_id }}
         run: |
           $ErrorActionPreference = 'Stop'
           if ($env:SOURCE_COMMIT -cnotmatch '^[0-9a-f]{40}$') { throw 'source_commit must be a full lowercase SHA' }
+          if ($env:SOURCE_COMMIT -cne $env:GITHUB_SHA) { throw 'source_commit must match the dispatched next revision' }
           if ($env:CANDIDATE_ID -cnotmatch '^[A-Za-z0-9][A-Za-z0-9.-]{0,63}$') { throw 'invalid candidate_id' }
           if ((git rev-parse HEAD).Trim() -cne $env:SOURCE_COMMIT) { throw 'checkout differs from source_commit' }
           git fetch origin '+refs/heads/main:refs/remotes/origin/main' '+refs/heads/next:refs/remotes/origin/next'
@@ -53,23 +56,18 @@ jobs:
           $source = Get-Content CMakeLists.txt -Raw
           $match = [regex]::Match($source, 'project\(exosnap VERSION ([0-9]+\.[0-9]+\.[0-9]+)')
           if (-not $match.Success) { throw 'CMake version is missing' }
-          "RELEASE_VERSION=$($match.Groups[1].Value)" | Add-Content $env:GITHUB_ENV
-          "SOURCE_DATE_EPOCH=$((git log -1 --format=%ct).Trim())" | Add-Content $env:GITHUB_ENV
+          $version = $match.Groups[1].Value
+          $sourceDate = (git log -1 --format=%ct).Trim()
+          "RELEASE_VERSION=$version" | Add-Content $env:GITHUB_ENV
+          "SOURCE_DATE_EPOCH=$sourceDate" | Add-Content $env:GITHUB_ENV
+          "version=$version" | Add-Content $env:GITHUB_OUTPUT
+          "source_date_epoch=$sourceDate" | Add-Content $env:GITHUB_OUTPUT
 
       - uses: ./.github/actions/setup-qt
         with:
           profile: quick
       - uses: ./.github/actions/setup-msvc
       - uses: mozilla-actions/sccache-action@9e7fa8a12102821edf02ca5dbea1acd0f89a2696 # v0.0.10
-      - name: Install WiX
-        shell: pwsh
-        run: dotnet tool install --global wix --version 4.0.5
-      - name: Install the WiX bootstrapper extensions
-        shell: pwsh
-        run: |
-          wix extension add -g WixToolset.Util.wixext/4.0.5
-          wix extension add -g WixToolset.Bal.wixext/4.0.5
-          if ($LASTEXITCODE -ne 0) { throw 'could not install the WiX extensions' }
       - name: Fetch the pinned Visual C++ x64 redistributable
         shell: pwsh
         run: |
@@ -101,15 +99,110 @@ jobs:
           cargo build --locked --release --manifest-path tools/Cargo.toml -p exo-verify
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
 
+      - name: Prepare immutable package inputs
+        shell: pwsh
+        run: |
+          $verify = 'tools/target/release/exo-verify.exe'
+          & $verify package --prepare-only --build-dir build/windows-x64-ninja-release `
+            --out candidate-prepared/inputs --version $env:RELEASE_VERSION --vc-redist vc_redist.x64.exe
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          Copy-Item -LiteralPath $verify -Destination candidate-prepared/exo-verify.exe
+
+      - name: Upload package inputs
+        id: prepared
+        uses: actions/upload-artifact@b7c566a772e6b6bfb58ed0dc250532a479d7789f # v6.0.0
+        with:
+          name: prepared-${{ inputs.candidate_id }}
+          path: candidate-prepared/
+          if-no-files-found: error
+          include-hidden-files: true
+          retention-days: 7
+
+  sign-diagnostics-pair:
+    needs: prepare
+    runs-on: windows-2022
+    timeout-minutes: 10
+    outputs:
+      artifact_id: ${{ steps.signed.outputs.artifact-id }}
+    steps:
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+        with:
+          ref: ${{ github.sha }}
+          persist-credentials: false
+      - name: Build the trusted verifier
+        shell: pwsh
+        run: cargo build --locked --manifest-path tools/Cargo.toml -p exo-verify
+      - name: Download exact package inputs
+        uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4.3.0
+        with:
+          artifact-ids: ${{ needs.prepare.outputs.artifact_id }}
+          path: candidate-prepared
+          merge-multiple: true
+      - name: Sign the prepared diagnostics pair
+        shell: pwsh
+        env:
+          EXOSNAP_UPDATE_SIGNING_KEY: ${{ secrets.EXOSNAP_UPDATE_SIGNING_KEY }}
+          UPDATE_PUBLIC_KEY: ${{ vars.EXOSNAP_UPDATE_PUBLIC_KEY_HEX }}
+        run: |
+          # The downloaded executables are inputs only. The signer comes from next.
+          & 'tools/target/debug/exo-verify.exe' manifest sign-diagnostics-pair `
+            --recorder candidate-prepared/inputs/runtime/exosnap.exe `
+            --helper candidate-prepared/inputs/runtime/exosnap-helper.exe `
+            --out candidate-diagnostics-pair --public-key-hex $env:UPDATE_PUBLIC_KEY
+          exit $LASTEXITCODE
+      - name: Upload signed diagnostics pair
+        id: signed
+        uses: actions/upload-artifact@b7c566a772e6b6bfb58ed0dc250532a479d7789f # v6.0.0
+        with:
+          name: diagnostics-pair-${{ inputs.candidate_id }}
+          path: candidate-diagnostics-pair/
+          if-no-files-found: error
+          retention-days: 7
+
+  build:
+    needs: [prepare, sign-diagnostics-pair]
+    runs-on: windows-2022
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+        with:
+          ref: ${{ github.sha }}
+          persist-credentials: false
+      - name: Download exact package inputs
+        uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4.3.0
+        with:
+          artifact-ids: ${{ needs.prepare.outputs.artifact_id }}
+          path: candidate-prepared
+          merge-multiple: true
+      - name: Download exact diagnostics pair
+        uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4.3.0
+        with:
+          artifact-ids: ${{ needs.sign-diagnostics-pair.outputs.artifact_id }}
+          path: candidate-diagnostics-pair
+          merge-multiple: true
+      - name: Install WiX
+        shell: pwsh
+        run: dotnet tool install --global wix --version 4.0.5
+      - name: Install the WiX bootstrapper extensions
+        shell: pwsh
+        run: |
+          wix extension add -g WixToolset.Util.wixext/4.0.5
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          wix extension add -g WixToolset.Bal.wixext/4.0.5
+          exit $LASTEXITCODE
+
       - name: Package and freeze bundle and plan
         shell: pwsh
         env:
-          SOURCE_COMMIT: ${{ inputs.source_commit || github.sha }}
-          CANDIDATE_ID: ${{ inputs.candidate_id || format('v010-{0}', github.sha) }}
+          SOURCE_COMMIT: ${{ github.sha }}
+          CANDIDATE_ID: ${{ inputs.candidate_id }}
+          RELEASE_VERSION: ${{ needs.prepare.outputs.version }}
+          SOURCE_DATE_EPOCH: ${{ needs.prepare.outputs.source_date_epoch }}
+          UPDATE_PUBLIC_KEY: ${{ vars.EXOSNAP_UPDATE_PUBLIC_KEY_HEX }}
         run: |
-          $verify = 'tools/target/release/exo-verify.exe'
-          & $verify package --build-dir build/windows-x64-ninja-release --out candidate-package --version $env:RELEASE_VERSION `
-            --vc-redist vc_redist.x64.exe
+          $verify = (Resolve-Path -LiteralPath 'candidate-prepared/exo-verify.exe').Path
+          & $verify package --prepared-dir candidate-prepared/inputs --out candidate-package `
+            --diagnostics-pair-dir candidate-diagnostics-pair --diagnostics-public-key-hex $env:UPDATE_PUBLIC_KEY
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
           $portable = "candidate-package/ExoSnap-$env:RELEASE_VERSION-windows-x64-portable.zip"
           $installer = "candidate-package/ExoSnap-$env:RELEASE_VERSION-windows-x64.msi"
@@ -163,6 +256,7 @@ jobs:
       - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
         with:
           ref: ${{ github.sha }}
+          persist-credentials: false
 
       - name: Build verifier from the workflow revision
         shell: pwsh

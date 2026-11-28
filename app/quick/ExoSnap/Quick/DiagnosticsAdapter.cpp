@@ -436,7 +436,8 @@ QVariantList DiagnosticsAdapter::measurementSources() const {
                 add(tr("DPC / ISR"), tr("Unavailable - kernel trace not running"), QStringLiteral("unavailable"));
             break;
         case PrivilegedDiagnosticsState::Missing:
-            add(tr("DPC / ISR"), tr("Install the ExoSnap Diagnostics companion"), QStringLiteral("unavailable"));
+            add(tr("DPC / ISR"), tr("Requires a verified ExoSnap package in a protected folder"),
+                QStringLiteral("unavailable"));
             break;
         case PrivilegedDiagnosticsState::Declined:
             add(tr("DPC / ISR"), tr("Administrator approval declined"), QStringLiteral("unavailable"));

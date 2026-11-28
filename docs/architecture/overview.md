@@ -4,7 +4,7 @@ This document owns subsystem boundaries and process composition. User-visible be
 
 ## Processes and layers
 
-ExoSnap is a Windows x64 application with a C++20 recording engine and a Qt Quick frontend. `exosnap.exe` uses `QApplication` for its system tray and Qt Quick for its rendered surfaces. The separate updater uses `QGuiApplication` and the `ExoSnap.Updater` QML module. The optional `exosnap-diagnostics.exe` is a temporary native process for privileged ETW measurements, installed separately and launched only on explicit request. See [diagnostic privileges and ownership](diagnostics.md#present-and-latency-observation).
+ExoSnap is a Windows x64 application with a C++20 recording engine and a Qt Quick frontend. `exosnap.exe` uses `QApplication` for its system tray and Qt Quick for its rendered surfaces. The separate updater uses `QGuiApplication` and the `ExoSnap.Updater` QML module. `exosnap-helper.exe` ships beside the application and runs only on explicit request for privileged ETW measurements. See [diagnostic privileges and ownership](diagnostics.md#present-and-latency-observation).
 
 | Owner | Responsibility | Must not own |
 |---|---|---|

@@ -12,6 +12,7 @@
 #include <array>
 #include <cstdint>
 #include <string>
+#include <string_view>
 #include <utility>
 
 namespace exosnap::diagnostics::privileged {
@@ -46,8 +47,8 @@ class Handle {
     HANDLE value_ = nullptr;
 };
 
-[[nodiscard]] inline bool IsPipeNonce(const std::wstring& value) {
-    return value.size() == 32 && value.find_first_not_of(L"0123456789abcdef") == std::wstring::npos;
+[[nodiscard]] inline bool IsPipeNonce(std::wstring_view value) {
+    return value.size() == 32 && value.find_first_not_of(L"0123456789abcdef") == std::wstring_view::npos;
 }
 
 [[nodiscard]] inline std::wstring NewNonce() {

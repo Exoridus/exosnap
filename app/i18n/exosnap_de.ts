@@ -12323,8 +12323,8 @@ Kleiner Text auf dem Bildschirm verliert früher an Qualität als Videoinhalte. 
         <translation>Warten auf Kernel-Trace-Daten</translation>
     </message>
     <message>
-        <source>Install the ExoSnap Diagnostics companion</source>
-        <translation>Installiere die Zusatzkomponente ExoSnap Diagnostics</translation>
+        <source>Requires a verified ExoSnap package in a protected folder</source>
+        <translation>Geprüftes ExoSnap in geschütztem Ordner erforderlich</translation>
     </message>
     <message>
         <source>Administrator approval declined</source>

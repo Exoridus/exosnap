@@ -36,18 +36,6 @@ Distribution ownership and package-manager delegation are implemented. Evaluate 
 
 Evaluate draw-on-start, explicit reuse of the previous region and optional saved areas against the current reusable-region workflow. Define hotkey, countdown, cancel/restore and source-preview behavior before changing the default. Preserve physical-coordinate, display-identity, DPI and capture-exclusion correctness. v0.10 keeps the existing region selection and recording-start semantics.
 
-### Installation scope (v0.12)
-
-Status: Accepted, not implemented. Target v0.12; v0.11 retains its per-machine installation.
-
-Default new direct installations to the current user under `%LOCALAPPDATA%\Programs\ExoSnap`, with an optional all-users installation under `C:\Program Files\ExoSnap`. Use matching user or machine registration and Start Menu entries, and retain normal Installed Apps management. Preserve the existing installation scope, path and distribution ownership through updates, repairs and removal. Do not silently migrate a machine installation or create a duplicate user installation. Keep application data separate from program files.
-
-User-scope updates should run without elevation when no system prerequisite needs changing. Define the VC++ runtime deployment policy before implementation. If retaining a shared runtime, detect a sufficient version, explain any required elevation, and install the prerequisite before application changes. A denied UAC request must produce a clear cancellation result and preserve an existing working installation. Never report installation success without usable dependencies. Validate both scopes through native install, upgrade, repair and uninstall scenarios, including missing prerequisites and UAC refusal.
-
-### Optional privileged diagnostics (v0.12)
-
-The protected companion replaces the application relaunch. Release qualification covers companion installation, repeated start/stop, UAC refusal, helper failure and application exit. See the [diagnostics architecture](architecture/diagnostics.md#present-and-latency-observation) and [native qualification procedure](dev/release-verify.md#privileged-diagnostics-companion).
-
 ### Overlay presentation policy (post-v0.10)
 
 Overlay publication is change-driven and coalesced, and the recording indicator is static. Focused HCIF acceptance covers the qualified configuration. Extend qualification to other hardware, VRR and PresentModes, and distinguish physical tearing/scanout behavior from presentation telemetry. Do not promise VRR, Independent Flip or DWM neutrality solely because an overlay is capture-excluded or redraws infrequently.

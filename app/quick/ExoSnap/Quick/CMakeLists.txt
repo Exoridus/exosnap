@@ -519,6 +519,7 @@ target_sources(exosnap
         # absent reading in every build there has ever been.
         ${PROJECT_SOURCE_DIR}/app/diagnostics/DpcLatencyProvider.h
         ${PROJECT_SOURCE_DIR}/app/diagnostics/PrivilegedDiagnosticsClient.cpp
+        ${PROJECT_SOURCE_DIR}/app/diagnostics/PrivilegedDiagnosticsIntegrity.cpp
         ${PROJECT_SOURCE_DIR}/app/diagnostics/PrivilegedDiagnosticsPath.cpp
         ${PROJECT_SOURCE_DIR}/app/diagnostics/PresentSnapshotOverlay.cpp
         ${PROJECT_SOURCE_DIR}/app/diagnostics/PresentSnapshotOverlay.h
@@ -812,7 +813,7 @@ add_dependencies(exosnap exosnap_build_info)
 # to review.
 #
 # A producer must ship in the application, its diagnostics support
-# library or the separately installed privileged companion.
+# library or the privileged diagnostics companion.
 set(EXOSNAP_UNSHIPPED_DIAGNOSTICS_PRODUCERS "")
 set(_exosnap_diagnostics_shipping_targets exosnap exosnap_diagnostics_test_support)
 if(TARGET exosnap_diagnostics)

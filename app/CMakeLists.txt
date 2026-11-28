@@ -930,7 +930,9 @@ exosnap_add_gtest(
     SOURCES
         tests/test_elevation.cpp
         tests/test_privileged_diagnostics_protocol.cpp
-    LIBRARIES bcrypt
+        diagnostics/PrivilegedDiagnosticsIntegrity.cpp
+        diagnostics/PrivilegedDiagnosticsPath.cpp
+    LIBRARIES exosnap::update exosnap_monocypher advapi32 bcrypt ole32 shell32
 )
 target_include_directories(elevation_tests PRIVATE ${CMAKE_CURRENT_SOURCE_DIR})
 target_compile_definitions(elevation_tests PRIVATE NOMINMAX)
@@ -942,8 +944,10 @@ exosnap_add_gtest(
     LABELS live
     SOURCES
         tests/test_privileged_diagnostics_trace_guard.cpp
+        diagnostics/PrivilegedDiagnosticsIntegrity.cpp
+        diagnostics/PrivilegedDiagnosticsPath.cpp
         diagnostics/PrivilegedDiagnosticsTraceGuard.cpp
-    LIBRARIES advapi32 bcrypt ole32
+    LIBRARIES exosnap::update advapi32 bcrypt ole32 shell32
 )
 target_include_directories(privileged_diagnostics_trace_guard_tests PRIVATE ${CMAKE_CURRENT_SOURCE_DIR})
 
