@@ -139,6 +139,7 @@ qt_add_qml_module(exosnap
         DiagnosticsSectionHeader.qml
         DiagnosticsSelfTestRow.qml
         EditPage.qml
+        EditProjectActions.qml
         EditActionButton.qml
         EditTimelineRuler.qml
         EditSourceBrowser.qml
@@ -286,6 +287,8 @@ qt_add_qml_module(exosnap
         RecordingReviewAdapter.h
         EditPlayerWorker.cpp
         EditPlayerWorker.h
+        ${PROJECT_SOURCE_DIR}/app/services/EditProjectStore.cpp
+        EditProjectSession.cpp
         EditWorkspaceSession.cpp
         EditSessionAdapter.cpp
         EditSessionAdapter.h
@@ -1366,6 +1369,8 @@ qt_add_qml_module(edit_timeline_qml_tests
         RecordingReviewAdapter.h
         EditPlayerWorker.cpp
         EditPlayerWorker.h
+        ${PROJECT_SOURCE_DIR}/app/services/EditProjectStore.cpp
+        EditProjectSession.cpp
         EditWorkspaceSession.cpp
         EditSessionAdapter.cpp
         EditSessionAdapter.h
@@ -1414,6 +1419,7 @@ qt_add_qml_module(edit_timeline_qml_tests
         EditMixPanel.qml
         EditExportPanel.qml
         ExoProgressBar.qml
+        EditProjectActions.qml
         EditActionButton.qml
         EditTimelineRuler.qml
         ExoButton.qml
@@ -2395,6 +2401,8 @@ exosnap_add_gtest(
         EditThumbnailImageProvider.h
         EditExportAdapter.cpp
         EditExportAdapter.h
+        ${PROJECT_SOURCE_DIR}/app/services/EditProjectStore.cpp
+        EditProjectSession.cpp
         EditWorkspaceSession.cpp
         EditSessionAdapter.cpp
         EditSessionAdapter.h

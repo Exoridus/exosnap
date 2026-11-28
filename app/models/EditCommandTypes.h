@@ -262,6 +262,9 @@ struct Asset {
     bool mix_decision_required = false;
     std::optional<OriginalRecipeAnchor> original_recipe;
     uint64_t source_version = 0;
+    // Legacy sources without a stream descriptor still require an exact
+    // content identity before reopening media from a project path.
+    std::optional<std::array<uint8_t, 32>> legacy_content_sha256;
 };
 
 struct Clip {
@@ -631,6 +634,12 @@ using EditCommand =
                  SetJunctionWindow, SetJunctionCurve, SetAudioLaw, SetHardCut, CopyJunctionToLinked, SetTimelineEnd,
                  AddSpacer, MoveSpacer, TrimSpacer, RemoveSpacer, CloseGap, SplitRange, AdjustRangeGain, RenameTrack,
                  PasteClips, ReplaceAssetSource, CrossfadeAtCut, RemoveOverlap>;
+
+struct ProjectSessionState {
+    std::vector<RecordingMarker> markers;
+    bool auto_crossfade = true;
+    bool operator==(const ProjectSessionState&) const = default;
+};
 
 struct EditSnapshot {
     Revision revision = 0;

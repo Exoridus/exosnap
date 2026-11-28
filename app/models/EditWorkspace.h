@@ -103,6 +103,94 @@ class Workspace {
         snapshot_cache_ = value;
         return value;
     }
+    // Rebuild into a detached candidate. Invalid documents cannot partially replace
+    // the live timeline, and undo commands from another project never cross over.
+    bool restoreProject(const EditSnapshot& saved) {
+        constexpr Time max_time = 10LL * 366 * 24 * 60 * 60 * 1'000'000;
+        constexpr auto max_fps_component = static_cast<uint32_t>((std::numeric_limits<int>::max)());
+        const auto time = [](Time value) { return value >= 0 && value <= max_time; };
+        if (saved.assets.size() > 2048 || saved.tracks.size() > 256 || saved.clips.size() > 4096 ||
+            saved.junctions.size() > 4096 || saved.spacers.size() > 2048 ||
+            saved.id_high_watermark == (std::numeric_limits<Id>::max)() ||
+            saved.source_version_high_watermark == (std::numeric_limits<uint64_t>::max)() || !saved.output_fps.den ||
+            saved.output_fps.den > max_fps_component || saved.output_fps.num > max_fps_component ||
+            static_cast<uint64_t>(saved.output_fps.num) > 1000ULL * saved.output_fps.den || saved.output_width < 0 ||
+            saved.output_width > 32768 || saved.output_height < 0 || saved.output_height > 32768 ||
+            !time(saved.timeline_end.end_us) || !time(saved.result_range.in_us) || !time(saved.result_range.out_us))
+            return false;
+        std::set<Id> ids;
+        const auto unique = [&](Id id) { return id && id <= saved.id_high_watermark && ids.insert(id).second; };
+        Workspace candidate;
+        for (const auto& asset : saved.assets) {
+            if (!asset || !unique(asset->id) || asset->path.empty() || !time(asset->duration) ||
+                asset->source_version > saved.source_version_high_watermark ||
+                asset->markers.size() > kMaxRecordingMarkers || asset->width < 0 || asset->width > 32768 ||
+                asset->height < 0 || asset->height > 32768 || !std::isfinite(asset->fps) || asset->fps < 0 ||
+                asset->fps > 1000 || asset->fps_num < 0 || asset->fps_den <= 0)
+                return false;
+            for (const auto& marker : asset->markers)
+                if (marker.time_ms > static_cast<uint64_t>(max_time / 1000))
+                    return false;
+            if (asset->source_descriptor) {
+                std::set<uint32_t> indices;
+                std::set<engine::AudioTrackId> identities;
+                for (const auto& stream : asset->source_descriptor->streams) {
+                    if (!time(stream.source_span.in_us) || !time(stream.source_span.out_us) ||
+                        stream.source_span.out_us <= stream.source_span.in_us ||
+                        stream.source_span.out_us > asset->duration || !time(stream.timeline_offset_us) ||
+                        !indices.insert(stream.ref.container_index).second ||
+                        !identities.insert(stream.ref.stream_identity).second)
+                        return false;
+                }
+                if (asset->input_mix_selection)
+                    for (const auto& id : asset->input_mix_selection->selected_stream_identities)
+                        if (!identities.contains(id))
+                            return false;
+            }
+            candidate.assets_.push_back(*asset);
+        }
+        for (const auto& track : saved.tracks)
+            if (!unique(track.id))
+                return false;
+        for (const auto& clip : saved.clips)
+            if (!unique(clip.id) || clip.group > saved.id_high_watermark || !time(clip.start) ||
+                !time(clip.source_in) || !time(clip.source_out) || clip.source_out <= clip.source_in ||
+                !time(clip.fade_in.duration_us) || !time(clip.fade_out.duration_us) ||
+                !engine::EvaluateCurve(clip.fade_in.curve, 0) || !engine::EvaluateCurve(clip.fade_out.curve, 0) ||
+                clip.gain_envelope.ranges.size() > 1024)
+                return false;
+        for (const auto& spacer : saved.spacers)
+            if (!unique(spacer.id) || !time(spacer.start_us) || !time(spacer.duration_us))
+                return false;
+        for (const auto& junction : saved.junctions)
+            if (!unique(junction.id) || !time(junction.duration) || !time(junction.in_us) || !time(junction.out_us) ||
+                !time(junction.cut_us) || !time(junction.incoming_anchor_us) ||
+                !engine::EvaluateCurve(junction.curve, 0))
+                return false;
+        if (std::any_of(saved.clips.begin(), saved.clips.end(),
+                        [&](const auto& clip) { return clip.group && ids.contains(clip.group); }))
+            return false;
+        candidate.tracks_ = saved.tracks;
+        for (const auto id : saved.locked_track_ids)
+            if (!candidate.mutableTrack(id) || !candidate.locked_tracks_.insert(id).second)
+                return false;
+        candidate.next_id_ = saved.id_high_watermark;
+        candidate.clips_ = saved.clips;
+        candidate.transitions_ = saved.junctions;
+        candidate.result_range_ = saved.result_range;
+        candidate.spacers_ = saved.spacers;
+        candidate.timeline_end_ = saved.timeline_end;
+        candidate.output_fps_ = saved.output_fps;
+        candidate.output_width_ = saved.output_width;
+        candidate.output_height_ = saved.output_height;
+        candidate.source_version_high_watermark_ = saved.source_version_high_watermark;
+        candidate.revision_ = revision_ + 1;
+        if (!candidate.validate() || candidate.clips_ != saved.clips || candidate.transitions_ != saved.junctions ||
+            candidate.result_range_ != saved.result_range || candidate.timeline_end_ != saved.timeline_end)
+            return false;
+        *this = std::move(candidate);
+        return true;
+    }
     CommandResult apply(const EditCommand& command, Revision expected_revision) {
         if (expected_revision != revision_)
             return rejected(EditErrorCode::StaleRevision);

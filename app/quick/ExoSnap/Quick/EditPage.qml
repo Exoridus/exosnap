@@ -369,7 +369,7 @@ FocusScope {
         if (layout.popup !== undefined && typeof layout.popup !== "string")
             return false;
         const popup = layout.popup || "";
-        if (["", "volume", "crossfade", "source-audio"].indexOf(popup) < 0)
+        if (["", "volume", "crossfade", "source-audio", "project", "project-discard"].indexOf(popup) < 0)
             return false;
         const selected = root.session.selectedJunctionDetails;
         if (popup === "crossfade" && selected.outgoing === undefined)
@@ -382,7 +382,13 @@ FocusScope {
             clips.view.setVisibleInterval(layout.viewFromUs, layout.viewToUs);
         else if (layout.fit)
             clips.fitTimeline();
-        if (popup === "volume")
+        if (popup === "project")
+            projectAccess.openMenu();
+        else if (popup === "project-discard") {
+            if (!root.session.projectDirty)
+                return false;
+            projectAccess.requestProjectAction("new");
+        } else if (popup === "volume")
             volumePopup.open();
         else if (popup === "crossfade")
             clips.openTransitionPopup(selected);
@@ -602,6 +608,11 @@ FocusScope {
                     x: 4
                     y: 4
                     spacing: 4
+                    EditProjectActions {
+                        id: projectAccess
+                        session: root.session
+                        dialogParent: root
+                    }
                     RailButton {
                         objectName: "editMediaAccess"
                         text: qsTr("Media")

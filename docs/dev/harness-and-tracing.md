@@ -105,6 +105,8 @@ cargo exo-dev screenshot
 cargo exo-dev screenshot shot --page record --dialog preset-rename
 cargo exo-dev screenshot shot --page record --popup source-picker-filters --sources many-windows --appearance dark,light --size 1120x850
 cargo exo-dev screenshot shot --page record --record-state completed --record-panel review-audio --appearance dark,light --size 1600x1000,860x700
+cargo exo-dev screenshot shot --page edit --edit edit-project-menu --appearance dark,light --size 1600x1000,860x700
+cargo exo-dev screenshot shot --page edit --edit edit-project-discard --appearance dark,light --size 1600x1000,860x700
 cargo exo-dev screenshot shot --page edit --edit edit-default --record-state completed --record-panel review-edit --appearance dark,light --size 1600x1000,860x700
 cargo exo-dev screenshot sweep --set pages,record --size 1600x1000,860x700
 cargo exo-dev screenshot sweep --set hud --scale 1,1.5,2
