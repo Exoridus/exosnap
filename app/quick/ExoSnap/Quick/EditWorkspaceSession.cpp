@@ -1822,6 +1822,10 @@ bool EditSessionAdapter::setTrackLocked(qulonglong id, bool locked) {
         return false;
     cancelClipDrag();
     publishSelection();
+    if (project_tracking_) {
+        (void)closeGuardRevision();
+        emit unsavedEditsChanged();
+    }
     return true;
 }
 

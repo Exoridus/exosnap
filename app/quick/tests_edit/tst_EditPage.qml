@@ -51,6 +51,27 @@ Item {
             signalName: "historyRequestedUs"
         }
 
+        function test_project_new_shortcut_requires_discard_consent_data() {
+            return [{tag: "dark", appearance: "dark"}, {tag: "light", appearance: "light"}];
+        }
+
+        function test_project_new_shortcut_requires_discard_consent(data) {
+            verify(testEditHarness.setVisualAppearance(data.appearance));
+            testEditHarness.seedReviewEditorWorkspace();
+            const page = make();
+            const before = JSON.stringify(testEditHarness.reviewEditorCheckpoint());
+            verify(testPageSession.hasUnsavedEdits);
+            const confirmation = findChild(page, "editProjectDiscard");
+            verify(confirmation);
+            keyClick(Qt.Key_N, Qt.ControlModifier);
+            tryCompare(confirmation, "visible", true);
+            tryVerify(() => page.Window.window.activeFocusItem?.text === confirmation.cancelText);
+            keyClick(Qt.Key_Escape);
+            tryCompare(confirmation, "visible", false);
+            compare(JSON.stringify(testEditHarness.reviewEditorCheckpoint()), before);
+            verify(testPageSession.hasUnsavedEdits);
+        }
+
         function test_recording_identity_survives_rename_but_not_replacement() {
             const result = testEditHarness.recordingIdentityProbe();
             compare(result.stable, true);

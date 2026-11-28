@@ -1028,6 +1028,14 @@ exosnap_add_gtest(
 )
 target_include_directories(test_edit_context PRIVATE ${CMAKE_CURRENT_SOURCE_DIR})
 
+exosnap_add_gtest(
+    NAME edit_project_file_tests
+    TEST_PREFIX edit_project_file.
+    SOURCES tests/test_edit_project_file.cpp models/EditProjectFile.cpp
+    LIBRARIES Qt6::Core
+)
+target_include_directories(edit_project_file_tests PRIVATE ${CMAKE_CURRENT_SOURCE_DIR} ${PROJECT_SOURCE_DIR}/libs/engine/include)
+
 # Pure logic behind the Edit timeline (timestamp formatting, trim clamping,
 # marker retiming) and the marker sidecar that rides along exports.
 exosnap_add_gtest(
