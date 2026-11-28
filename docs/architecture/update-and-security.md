@@ -114,6 +114,8 @@ DLL search policy is established before Qt/plugin loading. PATH is not a trusted
 
 The optional local automation endpoint is dormant unless explicitly armed by its argv run ID. Per-user DACL plus rejection of remote named-pipe clients constrains transport. The allowlist exposes product operations, not arbitrary methods, file reads, shell commands or Windows administration. A same-user process with the credential can drive the allowed real actions; it is not a sandbox against that user. Full control-channel invariants are in [verification boundaries](verification-boundaries.md#product-control-channel).
 
+The application MSI installs, repairs, updates and removes the [privileged diagnostics companion](diagnostics.md#present-and-latency-observation) alongside `exosnap.exe` in the protected application directory. The portable ZIP carries the same sibling executable. Both layouts carry a detached release signature binding the recorder and companion hashes. The outer signed update manifest covers the full MSI and ZIP. The recorder validates the paired files and protected launch path before requesting elevation. The companion restricts DLL resolution to the Windows system directory.
+
 ## Crash capture and reporting
 
 Official crash capture uses an out-of-process Crashpad handler. A local fallback exists for builds without that component. A missing clean-exit marker identifies an interrupted previous session, not necessarily a known exception or culprit module. Read previous-session context before starting a new sidecar and do not substitute current machine facts as crash evidence.

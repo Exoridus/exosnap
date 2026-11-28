@@ -185,7 +185,8 @@ struct PersistedAppSettings {
     // everything, review F1): main recorded every severity before this control was
     // wired, and Debug lines (DxgiPreviewRenderer, target enumeration, ...) are
     // exactly what support cases need. The filter only narrows on explicit user choice.
-    QString developer_log_level = QStringLiteral("Debug");
+    QString developer_log_level = QStringLiteral("Info");
+    bool ask_admin_for_diagnostics = false;
 
     // Transient — not written by Save(). Says which of the three load cases
     // produced the fields above; see SettingsLoadOutcome. Defaults to

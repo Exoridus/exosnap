@@ -150,9 +150,11 @@
         <Shortcut Id="StartMenuExoSnap"
                   Name="ExoSnap"
                   Description="Windows-native screen, window and region recorder"
-                  Target="[INSTALLFOLDER]exosnap.exe"
+                  Target="[INSTALLFOLDER]ExoSnap.exe"
                   WorkingDirectory="INSTALLFOLDER"
-                  Icon="ExoSnapAppIcon" />
+                  Icon="ExoSnapAppIcon">
+          <ShortcutProperty Key="System.AppUserModel.ID" Value="Exoridus.ExoSnap" />
+        </Shortcut>
         <RegistryValue Root="HKLM"
                        Key="Software\ExoSnap"
                        Name="installed"
@@ -223,9 +225,11 @@
         <Shortcut Id="DesktopExoSnap"
                   Name="ExoSnap"
                   Description="Windows-native screen, window and region recorder"
-                  Target="[INSTALLFOLDER]exosnap.exe"
+                  Target="[INSTALLFOLDER]ExoSnap.exe"
                   WorkingDirectory="INSTALLFOLDER"
-                  Icon="ExoSnapAppIcon" />
+                  Icon="ExoSnapAppIcon">
+          <ShortcutProperty Key="System.AppUserModel.ID" Value="Exoridus.ExoSnap" />
+        </Shortcut>
         <RegistryValue Root="HKLM"
                        Key="Software\ExoSnap"
                        Name="DesktopShortcut"

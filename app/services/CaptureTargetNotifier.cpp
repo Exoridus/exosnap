@@ -321,10 +321,10 @@ void CaptureTargetNotifier::refreshNow(DiscoveryReason reason) {
     if (fresh == last_snapshot_)
         return;
     last_snapshot_ = std::move(fresh);
-    diagnostics::AppLog::info(QStringLiteral("CaptureTargetDiscovery"),
-                              QStringLiteral("Snapshot changed — targets:%1 reason:%2")
-                                  .arg(last_snapshot_.targets.size())
-                                  .arg(QLatin1StringView(DiscoveryReasonName(reason))));
+    diagnostics::AppLog::debug(QStringLiteral("CaptureTargetDiscovery"),
+                               QStringLiteral("Snapshot changed — targets:%1 reason:%2")
+                                   .arg(last_snapshot_.targets.size())
+                                   .arg(QLatin1StringView(DiscoveryReasonName(reason))));
     emit snapshotChanged(last_snapshot_, reason);
 }
 

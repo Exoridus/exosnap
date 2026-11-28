@@ -11,7 +11,11 @@ use super::common::secs;
 use crate::bundle::{FileRole, installer_name, portable_name, sha256_file};
 use crate::capability::Capability;
 use crate::context::{App, Context, extract_zip};
-use crate::package::{portable_dir_name, validate_tree, walk_files};
+use crate::package::{
+    LAUNCHER_NAME, PORTABLE_CRT_FILES, RECORDER_NAME, RUNTIME_DIR, portable_dir_name,
+    validate_tree, verify_msi_runtime_parity, verify_portable_crt, verify_staged_diagnostics,
+    walk_files,
+};
 use crate::plan::Tier;
 use crate::scenario::{Lane, Scenario, ScenarioClass, Step, Stop};
 use crate::{infra_ensure, product_ensure};
@@ -33,10 +37,10 @@ pub fn scenarios() -> Vec<Scenario> {
         },
         Scenario {
             id: "dist.portable-contents",
-            revision: 1,
+            revision: 3,
             title: "Portable package is complete, clean and self-contained",
             class: ScenarioClass::Contract,
-            contract: "the portable tree carries every runtime file and license, no development or user data, the candidate's embedded version, and no unresolved imports",
+            contract: "the portable tree carries the launcher, pinned app-local Visual C++ runtime, official signed diagnostics pair, required runtime files and licenses, the candidate's embedded version, and no unresolved imports or development or user data",
             lane: Lane::CiCore,
             also: &[],
             tier: Tier::Required,
@@ -46,10 +50,10 @@ pub fn scenarios() -> Vec<Scenario> {
         },
         Scenario {
             id: "dist.msi-matches-portable",
-            revision: 1,
+            revision: 3,
             title: "MSI installs byte-identical files to the portable package",
             class: ScenarioClass::Contract,
-            contract: "every file of the portable package is inside the MSI with the same bytes, and the MSI carries no other binaries",
+            contract: "the shared portable and MSI files match by path and bytes, and only the ZIP carries the pinned app-local Visual C++ runtime",
             lane: Lane::CiCore,
             also: &[],
             tier: Tier::Required,
@@ -59,10 +63,10 @@ pub fn scenarios() -> Vec<Scenario> {
         },
         Scenario {
             id: "dist.portable-first-launch",
-            revision: 2,
+            revision: 3,
             title: "Portable package starts on a bare environment and reports the candidate identity",
             class: ScenarioClass::Contract,
-            contract: "the extracted package starts with only system directories on PATH, initialises its full UI with a native main window, reports the candidate's version, commit and executable hash, quits cleanly through its own shutdown, and leaves the user's real configuration untouched",
+            contract: "the extracted package contains its launcher and the recorder under runtime starts with only system directories on PATH, reports the candidate identity, creates the main window, quits cleanly, and leaves the user's real configuration untouched",
             lane: Lane::CiCore,
             also: &[Lane::Quick],
             tier: Tier::Required,
@@ -72,10 +76,10 @@ pub fn scenarios() -> Vec<Scenario> {
         },
         Scenario {
             id: "dist.updater-staged-launch",
-            revision: 2,
+            revision: 3,
             title: "The updater runs from the file subset the application stages",
             class: ScenarioClass::Contract,
-            contract: "exosnap-updater.exe loads and renders from exactly the runtime subset the application copies before a handoff",
+            contract: "exosnap-updater.exe loads and renders from the runtime subset the application copies before a handoff, including its app-local Visual C++ runtime when present",
             lane: Lane::CiCore,
             also: &[Lane::Quick],
             tier: Tier::Required,
@@ -160,78 +164,33 @@ fn portable_contents(ctx: &mut Context) -> Step {
     let problems = validate_tree(&root, &version, &leaks)?;
     ctx.evidence.put("problems", json!(problems));
     product_ensure!(problems.is_empty(), "{}", problems.join("; "));
-    let audit = crate::pe::audit_tree(&root)?;
+    if let Ok(key) = std::env::var("EXO_VERIFY_UPDATE_PUBLIC_KEY_HEX") {
+        let public = crate::manifest::public_key_from_hex(&key).map_err(Stop::infra)?;
+        verify_staged_diagnostics(&root, &public).map_err(|err| Stop::fail(format!("{err:#}")))?;
+    } else if root
+        .join(RUNTIME_DIR)
+        .join(crate::diagnostics_pair::MANIFEST_NAME)
+        .is_file()
+    {
+        return Err(Stop::unavailable(
+            "EXO_VERIFY_UPDATE_PUBLIC_KEY_HEX is needed to verify the signed diagnostics pair",
+        ));
+    }
+    let audit = verify_portable_crt(&root).map_err(|error| Stop::fail(format!("{error:#}")))?;
     ctx.evidence.put(
         "imports",
         json!({ "binaries": audit.binaries, "shipped": audit.shipped, "windows": audit.system, "msvcRuntime": audit.msvc }),
     );
-    product_ensure!(
-        audit.unresolved.is_empty(),
-        "unresolved runtime imports: {}",
-        audit.unresolved.join(", ")
-    );
     Ok(())
-}
-
-fn msi_root(extracted: &Path) -> Step<PathBuf> {
-    let exe = walk_files(extracted)?
-        .into_iter()
-        .find(|p| {
-            p.file_name()
-                .is_some_and(|n| n.eq_ignore_ascii_case("exosnap.exe"))
-        })
-        .ok_or_else(|| Stop::fail("the MSI contains no exosnap.exe"))?;
-    Ok(exe.parent().unwrap().to_path_buf())
-}
-
-fn tree_hashes(root: &Path) -> Step<BTreeMap<String, String>> {
-    let mut out = BTreeMap::new();
-    for f in walk_files(root)? {
-        let rel = f
-            .strip_prefix(root)
-            .unwrap()
-            .to_string_lossy()
-            .replace('\\', "/")
-            .to_ascii_lowercase();
-        out.insert(rel, sha256_file(&f)?.0);
-    }
-    Ok(out)
 }
 
 fn msi_matches_portable(ctx: &mut Context) -> Step {
     let portable = extracted_portable(ctx)?;
     let extracted = ctx.scenario_dir.join("msi");
     crate::package::msi_extract(&ctx.package(FileRole::Installer)?, &extracted)?;
-    // An administrative image also carries a copy of the MSI itself.
-    let msi_root = msi_root(&extracted)?;
-    let expected = tree_hashes(&portable)?;
-    let actual = tree_hashes(&msi_root)?;
-    let missing: Vec<&String> = expected
-        .keys()
-        .filter(|k| !actual.contains_key(*k))
-        .collect();
-    let differing: Vec<&String> = expected
-        .iter()
-        .filter(|(k, v)| actual.get(*k).is_some_and(|a| a != *v))
-        .map(|(k, _)| k)
-        .collect();
-    let extra: Vec<&String> = actual
-        .keys()
-        .filter(|k| !expected.contains_key(*k) && (k.ends_with(".dll") || k.ends_with(".exe")))
-        .collect();
-    ctx.evidence.put("files", expected.len());
-    product_ensure!(
-        missing.is_empty(),
-        "files of the portable package missing from the MSI: {missing:?}"
-    );
-    product_ensure!(
-        differing.is_empty(),
-        "files whose MSI bytes differ from the portable package: {differing:?}"
-    );
-    product_ensure!(
-        extra.is_empty(),
-        "binaries in the MSI but not in the portable package: {extra:?}"
-    );
+    let files = verify_msi_runtime_parity(&portable, &extracted)
+        .map_err(|err| Stop::fail(format!("{err:#}")))?;
+    ctx.evidence.put("files", files);
     Ok(())
 }
 
@@ -291,6 +250,13 @@ fn dir_snapshot(dir: &Path) -> BTreeMap<String, (u64, std::time::SystemTime)> {
 fn portable_first_launch(ctx: &mut Context) -> Step {
     suppress_error_dialogs();
     let product = ctx.product()?;
+    if ctx.bundle().is_ok() {
+        product_ensure!(
+            product.root.join(LAUNCHER_NAME).is_file()
+                && product.exe == product.root.join(RUNTIME_DIR).join(RECORDER_NAME),
+            "the candidate has no launcher and recorder at the expected paths"
+        );
+    }
     let real_config =
         PathBuf::from(std::env::var("LOCALAPPDATA").unwrap_or_default()).join("ExoSnap");
     let before = dir_snapshot(&real_config);
@@ -434,8 +400,14 @@ const UPDATER_STAGING_DIRS: &[&str] = &[
 /// Copies the updater's runtime subset out of `product_root` into `stage`, as
 /// the application does before a handoff, and returns the staged updater.
 pub(super) fn stage_updater(product_root: &Path, stage: &Path) -> Step<PathBuf> {
+    let nested = product_root.join(RUNTIME_DIR);
+    let source_root = if nested.join("exosnap-updater.exe").is_file() {
+        &nested
+    } else {
+        product_root
+    };
     for rel in UPDATER_STAGING_FILES {
-        let src = product_root.join(rel);
+        let src = source_root.join(rel);
         product_ensure!(
             src.is_file(),
             "the package lacks {rel}, which the application stages for its updater"
@@ -444,8 +416,14 @@ pub(super) fn stage_updater(product_root: &Path, stage: &Path) -> Step<PathBuf> 
         std::fs::create_dir_all(dst.parent().unwrap())?;
         std::fs::copy(&src, &dst)?;
     }
+    for (name, _) in PORTABLE_CRT_FILES {
+        let src = source_root.join(name);
+        if src.exists() {
+            std::fs::copy(src, stage.join(name))?;
+        }
+    }
     for rel_dir in UPDATER_STAGING_DIRS {
-        let src_root = product_root.join(rel_dir);
+        let src_root = source_root.join(rel_dir);
         product_ensure!(
             src_root.is_dir(),
             "the package lacks {rel_dir}, which the application stages for its updater"
@@ -513,6 +491,32 @@ fn embedded_update_key(ctx: &mut Context) -> Step {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn stages_the_nested_updater_and_copies_existing_app_local_runtime() {
+        let temp = tempfile::tempdir().unwrap();
+        let root = temp.path().join("package");
+        let runtime = root.join(RUNTIME_DIR);
+        let stage = temp.path().join("updater");
+        for rel in UPDATER_STAGING_FILES {
+            let path = runtime.join(rel);
+            std::fs::create_dir_all(path.parent().unwrap()).unwrap();
+            std::fs::write(path, rel).unwrap();
+        }
+        for rel in UPDATER_STAGING_DIRS {
+            std::fs::create_dir_all(runtime.join(rel)).unwrap();
+        }
+        let present = PORTABLE_CRT_FILES[0].0;
+        std::fs::write(runtime.join(present), b"fixture MSVC runtime").unwrap();
+        let updater = stage_updater(&root, &stage).unwrap();
+        assert_eq!(updater, stage.join("exosnap-updater.exe"));
+        assert_eq!(
+            std::fs::read(stage.join(present)).unwrap(),
+            b"fixture MSVC runtime"
+        );
+        assert!(!stage.join(PORTABLE_CRT_FILES[1].0).exists());
+        assert!(!stage.join(RUNTIME_DIR).exists());
+    }
 
     #[test]
     fn key_search_finds_only_the_exact_bytes() {

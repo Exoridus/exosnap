@@ -10,6 +10,23 @@ ExoCard {
     title: qsTr("Support & diagnostics")
 
     ExoSettingRow {
+        label: qsTr("Administrator rights for in-depth diagnostics")
+        stacked: root.stacked
+        Layout.fillWidth: true
+
+        ExoSelect {
+            options: [
+                { value: false, label: qsTr("Without administrator rights"), selectable: true },
+                { value: true, label: qsTr("Ask when enabled"), selectable: true }
+            ]
+            value: root.settings.askAdminForDiagnostics
+            Layout.fillWidth: true
+            Accessible.name: qsTr("Administrator rights for in-depth diagnostics")
+            onValueActivated: value => root.settings.askAdminForDiagnostics = value === true
+        }
+    }
+
+    ExoSettingRow {
         label: qsTr("Log level")
         stacked: root.stacked
         Layout.fillWidth: true

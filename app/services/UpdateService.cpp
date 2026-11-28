@@ -681,8 +681,12 @@ void UpdateService::LaunchUpdater() {
     // The document, then the command line that points at it. Written atomically
     // so the child can never observe a partial one: it is created as a temporary
     // sibling and renamed over the final name.
+    const QString install_dir =
+        state_now.distribution.install_mode == upd::InstallMode::Installed
+            ? QString::fromStdWString(upd::PackageRootForExecutableDirectory(app_dir.toStdWString()))
+            : app_dir;
     const exosnap::update_handoff::UpdateHandoff handoff = BuildUpdateHandoff(
-        state_now, prepared, app_dir, pid, QString::fromLatin1(exosnap::build::kVersion), verify_reinstall);
+        state_now, prepared, install_dir, pid, QString::fromLatin1(exosnap::build::kVersion), verify_reinstall);
     const QString handoff_path =
         QDir(prepared.directory).filePath(QString::fromLatin1(exosnap::update_handoff::kHandoffFileName));
     QString handoff_error;

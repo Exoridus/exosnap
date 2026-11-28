@@ -70,6 +70,10 @@ const QVector<LogEntry>& LogEntryModel::entries() const noexcept {
     return entries_;
 }
 
+bool LogEntryModel::hasErrors() const noexcept {
+    return error_count_ > 0;
+}
+
 void LogEntryModel::attachToAppLog() {
     connect(&AppLog::instance(), &AppLog::entriesAppended, this,
             [this](const QVector<LogEntry>& entries, int evicted_count) { onEntriesAppended(entries, evicted_count); });
@@ -106,8 +110,11 @@ void LogEntryModel::resetTo(QVector<LogEntry> entries) {
     beginResetModel();
     entries_ = std::move(entries);
     last_sequence_seen_ = 0;
-    for (const LogEntry& entry : entries_)
+    error_count_ = 0;
+    for (const LogEntry& entry : entries_) {
         last_sequence_seen_ = std::max(last_sequence_seen_, entry.sequence);
+        error_count_ += entry.severity >= diagnostics::LogSeverity::Error;
+    }
     endResetModel();
     ++full_reset_count_;
 }
@@ -133,12 +140,16 @@ void LogEntryModel::onEntriesAppended(const QVector<LogEntry>& entries, int evic
     const int evicted = std::min(evicted_count, static_cast<int>(entries_.size()));
     if (evicted > 0) {
         beginRemoveRows({}, 0, evicted - 1);
+        for (int i = 0; i < evicted; ++i)
+            error_count_ -= entries_.at(i).severity >= diagnostics::LogSeverity::Error;
         entries_.remove(0, evicted);
         endRemoveRows();
     }
 
     const int first = static_cast<int>(entries_.size());
     beginInsertRows({}, first, first + static_cast<int>(fresh.size()) - 1);
+    for (const LogEntry& entry : fresh)
+        error_count_ += entry.severity >= diagnostics::LogSeverity::Error;
     entries_.append(fresh);
     endInsertRows();
     ++incremental_append_count_;

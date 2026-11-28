@@ -36,14 +36,6 @@ Distribution ownership and package-manager delegation are implemented. Evaluate 
 
 Evaluate draw-on-start, explicit reuse of the previous region and optional saved areas against the current reusable-region workflow. Define hotkey, countdown, cancel/restore and source-preview behavior before changing the default. Preserve physical-coordinate, display-identity, DPI and capture-exclusion correctness. v0.10 keeps the existing region selection and recording-start semantics.
 
-### Optional privileged diagnostics helper
-
-Status: Accepted, pending implementation and release qualification.
-
-Replace the elevated application relaunch for PresentMon and other privileged diagnostics with a narrowly scoped helper. Keep the running ExoSnap application unelevated and allow the user to enable or disable privileged collection without restarting it. Request UAC consent when starting the helper, run it only while enabled, and stop collection and the helper when disabled or when ExoSnap exits. Do not introduce a permanently privileged background service. Core recording and ordinary diagnostics must remain useful when the helper is off, unavailable or denied elevation.
-
-Define authenticated, bounded IPC, permitted operations, process ownership, crash cleanup and update compatibility before implementation. Review executable and DLL loading from user-writable installations, and do not expose arbitrary elevated execution or file writes. Qualify repeated enable/disable, UAC refusal, helper failure and application exit without leaving privileged processes or tracing sessions behind.
-
 ### Overlay presentation policy (post-v0.10)
 
 Overlay publication is change-driven and coalesced, and the recording indicator is static. Focused HCIF acceptance covers the qualified configuration. Extend qualification to other hardware, VRR and PresentModes, and distinguish physical tearing/scanout behavior from presentation telemetry. Do not promise VRR, Independent Flip or DWM neutrality solely because an overlay is capture-excluded or redraws infrequently.

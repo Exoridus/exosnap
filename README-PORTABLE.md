@@ -4,9 +4,9 @@ ExoSnap records a screen, window or region with NVIDIA NVENC, independently rout
 
 ## Install and launch
 
-Use Windows 10/11 x64 (Windows 11 primary) and an NVIDIA GPU/driver supporting the selected NVENC codec. AMD, Intel and CPU video encoding are not available. The Microsoft Visual C++ 2022 x64 Redistributable is required and is not bundled with the portable ZIP. Install it from <https://aka.ms/vs/17/release/vc_redist.x64.exe> when missing.
+Use Windows 10/11 x64 (Windows 11 primary) and an NVIDIA GPU/driver supporting the selected NVENC codec. AMD, Intel and CPU video encoding are unavailable. The ZIP includes the Visual C++ runtime the recorder and updater need. Starting the portable application does not install a system prerequisite.
 
-Extract the entire `ExoSnap-<version>-windows-x64-portable` folder and run `exosnap.exe`. Keep its DLLs, plugins, QML runtime and other files together. Do not copy only the executable or mix files from releases. Current unsigned builds can trigger a SmartScreen warning.
+Extract the entire `ExoSnap-<version>-windows-x64-portable` folder and run `ExoSnap.exe`. The launcher starts the recorder in `runtime/`. Keep the whole folder together. Current unsigned builds can trigger a SmartScreen warning.
 
 SDL3.dll is the application-local controller runtime. Its zlib license is included in
 `licenses/sdl3.txt`. Controller input does not require a GameInput installation.
@@ -17,7 +17,9 @@ The built-in setup is MKV / AV1 / Opus / CFR 60. First-run codec reconciliation 
 
 ## Files and settings
 
-Portable describes application deployment, not settings stored beside the executable. Normal local application data is under `%LOCALAPPDATA%\ExoSnap`: `settings.ini`, `presets.toml`, `recording-history.json`, recovery state, logs and reports. Recordings use the chosen output directory. Back up important settings/presets before moving between preview versions; schemas are not frozen.
+The bundled `portable.toml` uses `data_path = "./data"`. ExoSnap creates `data/` beside the launcher on first use and stores settings, presets, history, caches, recovery state, logs and reports there. You can set an absolute or UNC path. Relative paths start at the launcher folder, and an inaccessible configured location produces an error.
+
+Remove `portable.toml` before launch to use normal per-user storage under `%LOCALAPPDATA%\ExoSnap`, including preferences from an earlier release. Both profiles retain their existing files and formats. Recordings use the separately configured output directory.
 
 Keep valuable `.partial` recordings if recovery fails. The next launch can offer Finish, Continue or Delete; Continue produces independent slices. MP4 delivery needs space for the transient recording and output together, and a completed single-file MP4 can retain an edit master.
 
@@ -33,7 +35,7 @@ After a completed recording, the development editor supports a multi-track video
 
 Update checks are off by default. Explicitly check or enable automatic checks in Settings > Updates. Stable excludes prereleases; Preview can offer them. The app's Update button authorizes the pinned version and opens a separate updater. A manually started `exosnap-updater.exe` instead asks separately to check, download and install.
 
-The updater verifies the manifest's Ed25519 signature before trusting its fields and verifies package SHA-256 before installing. Portable update stages a replacement and backup, verifies the result and relaunches. A canceled download leaves the install untouched; critical swap steps refuse close. Restoration failures remain possible and must be reported rather than called successful rollback. A user-writable portable tree normally needs no UAC.
+The updater verifies the manifest's Ed25519 signature and the package SHA-256 before installing. With the launcher layout, portable updates stage and replace `runtime/`. The launcher, `portable.toml` and data outside that subtree stay in place during the swap and rollback. A canceled download leaves the installation intact. Critical swap steps refuse close. A user-writable portable tree normally needs no UAC.
 
 Crash reporting is separate, next-launch and consent-controlled. Ask every time is the default; remembered automatic send and Never send are explicit choices. Official reports use the configured Sentry EU path, not a prefilled GitHub issue. Native minidumps are separate from structured-event scrubbing and can contain module paths. [Privacy](PRIVACY.md) states that boundary.
 
@@ -49,4 +51,4 @@ A checksum verifies bytes, not publisher identity. Keep it separate from executa
 
 For a recording problem, create a local support bundle from Logs/Diagnostics, review it, and report the version, GPU/driver, source and format through <https://github.com/Exoridus/exosnap/issues>. Nothing uploads that bundle automatically. Security issues go through [Security](SECURITY.md), not a public issue.
 
-ExoSnap is GPL-3.0-or-later. See `LICENSE`, [Third-party notices](THIRD_PARTY_NOTICES.md) and the bundled `licenses` directory.
+ExoSnap is GPL-3.0-or-later. The extracted package contains `licenses/LICENSE` and `licenses/THIRD_PARTY_NOTICES.md`.

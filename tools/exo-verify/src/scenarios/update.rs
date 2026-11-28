@@ -13,6 +13,7 @@ use crate::bundle::{FileRole, sha256_file};
 use crate::capability::Capability;
 use crate::context::Context;
 use crate::control::{self, Client};
+use crate::package::{LAUNCHER_NAME, RECORDER_NAME, RUNTIME_DIR};
 use crate::plan::Tier;
 use crate::scenario::{Lane, Scenario, ScenarioClass, Step, Stop};
 use crate::{infra_ensure, product_ensure};
@@ -21,10 +22,10 @@ pub fn scenarios() -> Vec<Scenario> {
     vec![
         Scenario {
             id: "update.portable",
-            revision: 4,
+            revision: 5,
             title: "Portable update installs and relaunches the candidate",
             class: ScenarioClass::Installer,
-            contract: "the old portable build accepts the signed candidate offer, installs the bound candidate bytes, taking at most the one retry the updater offers when the install step failed with the installation intact, and relaunches the candidate from the updated tree",
+            contract: "the old portable build accepts the signed candidate offer, installs the bound launcher and runtime bytes, taking at most the one retry the updater offers when the install step failed with the installation intact, and relaunches the recorder from the updated runtime",
             lane: Lane::CiUpdate,
             also: &[],
             tier: Tier::Required,
@@ -558,6 +559,24 @@ fn update_offer(client: &mut Client, version: &str) -> Step {
     }
 }
 
+fn portable_update_target(previous_exe: &Path, launcher_hash: &str) -> Step<PathBuf> {
+    let root = previous_exe
+        .parent()
+        .ok_or_else(|| Stop::infra("previous portable executable has no parent"))?;
+    let launcher = root.join(LAUNCHER_NAME);
+    let (hash, _) = sha256_file(&launcher).map_err(|error| {
+        Stop::fail(format!(
+            "cannot read the updated portable launcher {}: {error:#}",
+            launcher.display()
+        ))
+    })?;
+    product_ensure!(
+        hash == launcher_hash,
+        "updater did not install candidate portable launcher bytes"
+    );
+    Ok(root.join(RUNTIME_DIR).join(RECORDER_NAME))
+}
+
 fn drive_update(
     ctx: &mut Context,
     exe: &Path,
@@ -569,8 +588,13 @@ fn drive_update(
         let bundle = ctx.bundle()?;
         bundle.inventory.product_version.clone()
     };
-    let candidate_exe = ctx.product()?.exe;
-    let candidate_hash = sha256_file(&candidate_exe)?.0;
+    let candidate = ctx.product()?;
+    let candidate_hash = sha256_file(&candidate.exe)?.0;
+    let candidate_launcher_hash = if installed {
+        None
+    } else {
+        Some(sha256_file(&candidate.root.join(LAUNCHER_NAME))?.0)
+    };
     let before_hash = sha256_file(exe)?.0;
     infra_ensure!(
         before_hash != candidate_hash,
@@ -752,10 +776,12 @@ fn drive_update(
             old.try_wait()?.is_some(),
             "updater reported relaunch while the old app was still running"
         );
-        let target = if installed {
-            installed_exe()?.ok_or_else(|| Stop::fail("installed executable disappeared"))?
+        let target = if let Some(launcher_hash) = candidate_launcher_hash {
+            let target = portable_update_target(exe, &launcher_hash)?;
+            ctx.evidence.put("updatedLauncherSha256", launcher_hash);
+            target
         } else {
-            exe.to_path_buf()
+            installed_exe()?.ok_or_else(|| Stop::fail("installed executable disappeared"))?
         };
         let until = Instant::now() + Duration::from_secs(180);
         while sha256_file(&target)
@@ -993,6 +1019,32 @@ mod tests {
         );
         assert!(accepted_state(&json!({"phase":"failed", "failureCase":"launchFailed"})).is_err());
         assert!(accepted_state(&json!({"phase":"rebootRequired", "failureCase":null})).is_err());
+    }
+
+    #[test]
+    fn portable_update_matches_the_root_launcher_and_watches_the_runtime() {
+        let directory = tempfile::tempdir().unwrap();
+        let root = directory.path();
+        let launcher = root.join(crate::package::LAUNCHER_NAME);
+        std::fs::write(&launcher, b"candidate launcher").unwrap();
+        let launcher_hash = sha256_file(&launcher).unwrap().0;
+        let previous = root.join("exosnap.exe");
+        let target = portable_update_target(&previous, &launcher_hash).unwrap();
+        assert_eq!(target, root.join("runtime").join("exosnap.exe"));
+        assert_eq!(
+            relaunched_pid(&[(10, Some(launcher.clone()))], 9, &target),
+            None
+        );
+        assert_eq!(
+            relaunched_pid(&[(11, Some(target.clone()))], 9, &target),
+            Some(11)
+        );
+
+        std::fs::write(&launcher, b"different launcher").unwrap();
+        assert!(matches!(
+            portable_update_target(&previous, &launcher_hash),
+            Err(Stop::Fail(_))
+        ));
     }
 
     #[test]

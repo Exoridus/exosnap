@@ -8,6 +8,7 @@ mod capability;
 mod context;
 mod control;
 mod control_cli;
+mod diagnostics_pair;
 mod disposable;
 mod docs;
 mod edit_reference;
@@ -330,6 +331,34 @@ enum ManifestCommand {
         #[arg(long)]
         portable: PathBuf,
     },
+    /// Sign the recorder and privileged diagnostics helper as a pair.
+    SignDiagnosticsPair {
+        #[command(flatten)]
+        files: DiagnosticsPairFiles,
+        #[arg(long)]
+        out: PathBuf,
+        /// Environment variable holding the base64 Ed25519 seed.
+        #[arg(long, default_value = "EXOSNAP_UPDATE_SIGNING_KEY")]
+        key_env: String,
+    },
+    /// Verify the detached pair signature and the exact executable hashes.
+    VerifyDiagnosticsPair {
+        #[command(flatten)]
+        files: DiagnosticsPairFiles,
+        #[arg(long)]
+        pair_dir: PathBuf,
+    },
+}
+
+#[derive(Args)]
+struct DiagnosticsPairFiles {
+    #[arg(long)]
+    recorder: PathBuf,
+    #[arg(long)]
+    helper: PathBuf,
+    /// Public key the product embeds, hex.
+    #[arg(long)]
+    public_key_hex: String,
 }
 
 #[derive(Subcommand)]
@@ -808,6 +837,26 @@ fn real_main() -> Result<ExitCode> {
             )?;
             println!("manifest signature and package hashes verified");
         }
+        Command::Manifest(ManifestCommand::SignDiagnosticsPair {
+            files,
+            out,
+            key_env,
+        }) => {
+            let key = manifest::signing_key_from_env(&key_env)?;
+            manifest::check_key_pair(&key, &files.public_key_hex)?;
+            diagnostics_pair::sign_to_directory(&out, &files.recorder, &files.helper, &key)?;
+            println!("signed {}", diagnostics_pair::MANIFEST_NAME);
+        }
+        Command::Manifest(ManifestCommand::VerifyDiagnosticsPair { files, pair_dir }) => {
+            let public = manifest::public_key_from_hex(&files.public_key_hex)?;
+            diagnostics_pair::verify_in_directory(
+                &pair_dir,
+                &files.recorder,
+                &files.helper,
+                &public,
+            )?;
+            println!("diagnostics pair signature and executable hashes verified");
+        }
         Command::Docs(DocsCommand::Check { repo_root }) => {
             let root = std::fs::canonicalize(&repo_root)?;
             let paths = docs::repository_paths(&root)?;
@@ -950,8 +999,9 @@ fn real_main() -> Result<ExitCode> {
             other => bail!("no rehearsal is implemented for channel '{other}'"),
         },
         Command::Package(args) => {
-            let result = package::run(&args)?;
-            println!("{}", serde_json::to_string_pretty(&result)?);
+            if let Some(result) = package::run(&args)? {
+                println!("{}", serde_json::to_string_pretty(&result)?);
+            }
         }
         Command::Stimulus(args) => stimulus::run(args)?,
         Command::OverlayPresentation(args) => overlay_presentation::run(args)?,

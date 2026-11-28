@@ -79,16 +79,11 @@ Run installer and update lanes in a disposable guest. GPU and physical hardware 
 
 The CI update lane uses the production embedded Ed25519 public key. A separate signing job reads the production private key only from its GitHub secret and uploads only the test manifest and detached signature. The key is never written to a file, log, result or artifact. The manifest describes the candidate package hashes and local test-feed URLs. It is served only by a loopback HTTPS server in the disposable update job, where a temporary hosts entry and certificate redirect `api.github.com`. No release or Stable feed receives that manifest. The official application rejects `--update-base-url`; no user setting or environment variable enables a feed override. The temporary network redirect changes discovery transport only. The product still performs release discovery, version comparison, Ed25519 signature verification and package SHA-256 verification.
 
-The v0.9.0 Stable updater predates the injected UAC-decline fault.
-The hosted update lane checks the accepting path against that baseline.
-A real UAC refusal remains an external hardware-lane check.
-The simulated decline is reserved for a later baseline that contains the fault seam.
-The portable update from that baseline runs the v0.9.0 updater, which renames each directory exactly once.
-A handle still open in the old tree after the application exits can therefore fail `update.portable` with "The current installation is in use and could not be moved."
-One known holder: v0.9.0 always starts `crashpad_handler.exe` from the installation, the handler inherits the application's working directory and outlives it by up to about 50 ms.
-When the application was started with its working directory inside the tree, as a launch from Explorer does, the single rename falls into that window.
-The installation stays intact, and the updater offers Retry, which re-enters at the install step.
-The bounded rename retry of later updaters cannot change that first hop.
+The hosted upgrade lanes start from the published v0.10.1 ZIP and MSI. The flat portable updater verifies the candidate's versioned root launcher and waits for the recorder's existing instance mutex. The lane separately checks the launcher and the running recorder against the candidate bytes. A real UAC refusal remains an external hardware-lane check.
+
+On a candidate layout, the portable updater swaps only `runtime/`. Check that the marker and data survive successful updates and rollback. Verify the root launcher from a local path with spaces and Unicode. Where a disposable share is available, also check UNC application launch, portable data resolution, writable network recording output and an unavailable network destination. Record the available test environment with the outcome.
+
+If an old application or its Crashpad handler still holds the tree, the initial flat-layout rename can report that the installation is in use. The updater leaves the installation intact and offers Retry.
 The update scenarios record the evidence for such a failure as a timeline.
 `console-<run id>.log` holds the old application's console and that of the updater it launches, with a receive time per line; the updater reports its failure only there.
 `treeHolders` lists every process whose image or working directory lies in the old tree, and the application's children, with the time each ended relative to the application's exit.
@@ -147,6 +142,23 @@ Install/update tests should run in a disposable OS with copied artifacts and iso
 `EXOSNAP_UPDATE_FROM` / `EXOSNAP_UPDATE_FROM_MSI` identify an explicit older baseline for relevant gates. Ensure the target remains candidate-bound. MSI identity and hashes must be checked, not inferred from a neighboring filename.
 
 A Chocolatey rehearsal can install/upgrade its `vcredist140` dependency. Do not attempt an unsafe system runtime downgrade to undo it. Record that footprint. The package source is not edited in place for a rehearsal; use a scratch copy with the tested MSI/hash.
+
+### Privileged diagnostics companion
+
+Use the exact official Setup, MSI and portable ZIP in a disposable Windows 11 x64 VM with a standard ExoSnap session and a human operator for consent. Combine these observations with the candidate's install, update and repair lanes.
+
+1. Extract the official ZIP into an ordinary writable directory in a disposable guest. With the default **Without administrator rights**, turn on In-depth and verify ordinary measurement without a UAC prompt. Switch In-depth off, select **Ask when enabled** in Settings > Support & diagnostics, and turn In-depth back on. Verify the protected-path status, absence of a UAC prompt or helper process, continued ordinary diagnostics and successful recording. Repeat the protected-path check with the Windows developer DLL redirection override enabled in a separate disposable guest. Record the effective policy for each run.
+2. Install ExoSnap with the official Setup. Confirm that the same MSI owns `exosnap-helper.exe` next to `exosnap.exe`. Running the helper directly without an authorized recorder connection must exit without opening trace sessions. Launch ExoSnap normally, select **Ask when enabled** and start a real recording. With recording active, turn on In-depth from the Diagnostics page and decline. The DPC/ISR row should report refusal. Verify that no helper started, the app PID and integrity level are unchanged, and the same recording session continues.
+3. During that same recording, toggle In-depth off and on and approve. Use Task Manager's Details view with the **Elevated** column. Only the temporary `exosnap-helper.exe` processes should be elevated. Confirm that the app PID, integrity level and recording session remain unchanged. Verify presentation attribution and confirm that an unavailable DPC/ISR trace leaves presentation and recording usable. Inspect the finalized recording for A/V integrity and retain any capture interruption while Windows displays its consent prompt.
+4. Repeat the In-depth on/off cycle three times. After each stop, the helper processes and owned sessions should disappear, and recording should continue. Verify the same cleanup when quitting. Compare `logman.exe query -ets` before and after each pass and check for the `ExoSnapDiagnosticsPresent-` and `ExoSnapDiagnosticsDpc-` prefixes. Check that pre-existing sessions remain. Repeat refusal and approval from an administrator-provisioned protected directory containing the official ZIP contents. Use a capture-capable guest or a coordinated physical host for the active recording checks.
+5. From the VM's approved administrative context, use Task Manager to end only the collector process. Distinguish it from its guard by the command line `--collect`. The guard should exit and remove its owned sessions, and the live app should withdraw the readings and stay usable. Repeat by ending only the app and then only the guard, verifying that no companion process or owned session remains. Re-enable successfully after each pass.
+6. Repeat consent with alternate administrator credentials in the same interactive session. Verify the same process and trace behavior or record the exact process-access failure. After upgrade and repair, verify that the helper matches the installed candidate and still starts from the app. Uninstall ExoSnap through the same Setup lifecycle and confirm the helper is removed with it.
+7. With the developer DLL redirection override enabled in a disposable guest, repeat a successful protected-path start and inspect the helper's loaded module paths. In separate protected copies, verify refusal before UAC for a missing or mismatched pair and for an inert loader-redirection marker. Do not add or execute a replacement DLL.
+8. In the protected installation, start ExoSnap with an already elevated token and select **Ask when enabled**. Turn on In-depth and verify that the companion uses the existing token without an additional consent dialog.
+
+For the optional performance comparison, keep the candidate, capture workload, profile and observation window fixed. Compare ordinary recording, `diagnostics.setInDepth` with ordinary measurements, and the companion under **Ask when enabled** after consent. `diagnostics.setInDepth` with `enabled: false` stops both optional measurements and the companion. Retain per-process CPU and recording counters together with target frame times. For the visible versus hidden comparison, keep the measurement mode fixed and use `diagnostics.snapshot.trendPlotsVisible` to verify visibility. Do not count consent or navigation transitions in the steady-state windows.
+
+If an orphaned diagnostic session is left after both processes have exited, regard qualification as failed. Preserve the session listing and reboot the disposable VM to clear the session before another run.
 
 ## Operator protocol and faults
 

@@ -38,6 +38,7 @@ class PresentMonEtwSession {
     PresentMonEtwSession& operator=(const PresentMonEtwSession&) = delete;
 
     [[nodiscard]] bool Start();
+    [[nodiscard]] bool StartWithBackend(std::shared_ptr<IPresentTraceBackend> backend);
     void Stop();
     // Why the last Start() did or did not open the trace. Distinguishes a
     // standard token without trace rights from a name conflict and from a build

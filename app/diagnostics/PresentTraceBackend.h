@@ -13,7 +13,10 @@
 #include <cstdint>
 #include <memory>
 #include <optional>
+#include <string>
 #include <vector>
+
+struct _GUID;
 
 namespace exosnap::diagnostics {
 
@@ -108,5 +111,7 @@ class IPresentTraceBackend {
 // of this build. A null backend makes PresentMonEtwSession::Start() return false and
 // everything downstream report unavailable -- truthfully, and with no second code path.
 [[nodiscard]] std::shared_ptr<IPresentTraceBackend> MakePresentTraceBackend();
+[[nodiscard]] std::shared_ptr<IPresentTraceBackend> MakeNamedPresentTraceBackend(std::wstring session_name,
+                                                                                 const _GUID& session_id);
 
 } // namespace exosnap::diagnostics

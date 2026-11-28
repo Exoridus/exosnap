@@ -3258,6 +3258,10 @@ Wahrscheinliche Ursache: </translation>
         <source>Open the full log view inside Diagnostics</source>
         <translation>Vollständige Log-Ansicht in Diagnose öffnen</translation>
     </message>
+    <message>
+        <source>Errors in log</source>
+        <translation>Fehler im Log</translation>
+    </message>
 </context>
 <context>
     <name>DiagnosticsResourcesCard</name>
@@ -3284,8 +3288,8 @@ Wahrscheinliche Ursache: </translation>
     <message>
         <location line="+31"/>
         <location line="+0"/>
-        <source>n/a</source>
-        <translation>n/a</translation>
+        <source>Not measured</source>
+        <translation>Nicht gemessen</translation>
     </message>
     <message>
         <location line="+36"/>
@@ -3296,11 +3300,6 @@ Wahrscheinliche Ursache: </translation>
         <location line="+5"/>
         <source>Elapsed processing time is cumulative per owner. Shared capture and processing work is counted once, not once per route.</source>
         <translation>Die kumulierte Verarbeitungszeit wird pro Besitzer erfasst. Gemeinsam genutzte Aufnahme- und Verarbeitungsarbeit wird einmal gezählt, nicht einmal pro Route.</translation>
-    </message>
-    <message>
-        <location line="+108"/>
-        <source>Unavailable measurements</source>
-        <translation>Nicht verfügbare Messwerte</translation>
     </message>
 </context>
 <context>
@@ -9396,6 +9395,18 @@ Die Farben für Aufnahme, Vorsicht und Bereitschaft bleiben fest, damit ein Stat
         <translation>Support &amp; Diagnose</translation>
     </message>
     <message>
+        <source>Administrator rights for in-depth diagnostics</source>
+        <translation>Adminrechte für ausführliche Diagnose</translation>
+    </message>
+    <message>
+        <source>Without administrator rights</source>
+        <translation>Ohne Adminrechte</translation>
+    </message>
+    <message>
+        <source>Ask when enabled</source>
+        <translation>Beim Einschalten fragen</translation>
+    </message>
+    <message>
         <location line="+3"/>
         <location line="+8"/>
         <source>Log level</source>
@@ -12311,9 +12322,28 @@ Kleiner Text auf dem Bildschirm verliert früher an Qualität als Videoinhalte. 
         <translation>DPC / ISR</translation>
     </message>
     <message>
-        <location line="-4"/>
-        <source>Not running - elevated kernel trace required</source>
-        <translation>Nicht aktiv: Kernel-Trace mit Administratorrechten erforderlich</translation>
+        <source>Privileged diagnostics off</source>
+        <translation>Diagnose mit Administratorrechten ist aus</translation>
+    </message>
+    <message>
+        <source>Waiting for kernel trace data</source>
+        <translation>Warten auf Kernel-Trace-Daten</translation>
+    </message>
+    <message>
+        <source>Requires a verified ExoSnap package in a protected folder</source>
+        <translation>Geprüftes ExoSnap in geschütztem Ordner erforderlich</translation>
+    </message>
+    <message>
+        <source>Administrator approval declined</source>
+        <translation>Administratorfreigabe abgelehnt</translation>
+    </message>
+    <message>
+        <source>Diagnostics companion stopped or incompatible</source>
+        <translation>Zusatzkomponente beendet oder inkompatibel</translation>
+    </message>
+    <message>
+        <source>Stopping</source>
+        <translation>Wird beendet</translation>
     </message>
     <message>
         <location line="+4"/>
@@ -13460,6 +13490,10 @@ Kleiner Text auf dem Bildschirm verliert früher an Qualität als Videoinhalte. 
         <location line="+2"/>
         <source>Enforced recording reserve (bytes)</source>
         <translation>Für die Aufnahme vorgeschriebene Reserve (Bytes)</translation>
+    </message>
+    <message>
+        <source>Reserve for recording</source>
+        <translation>Reserve für die Aufnahme</translation>
     </message>
     <message>
         <location line="+16"/>
@@ -14709,6 +14743,21 @@ Kleiner Text auf dem Bildschirm verliert früher an Qualität als Videoinhalte. 
     <message>
         <source>Project</source>
         <translation>Projekt</translation>
+    </message>
+</context>
+<context>
+    <name>PortableConfig</name>
+    <message>
+        <source>Cannot use the portable data folder: %1</source>
+        <translation>Der portable Datenordner kann nicht verwendet werden: %1</translation>
+    </message>
+    <message>
+        <source>Cannot read portable.toml.</source>
+        <translation>portable.toml konnte nicht gelesen werden.</translation>
+    </message>
+    <message>
+        <source>portable.toml must contain a valid data_path.</source>
+        <translation>portable.toml muss einen gültigen data_path enthalten.</translation>
     </message>
 </context>
 </TS>

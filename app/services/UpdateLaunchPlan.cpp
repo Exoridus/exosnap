@@ -69,6 +69,17 @@ bool StageUpdaterRuntime(const QString& app_dir, const QString& staging_dir, QSt
             return false;
         }
     }
+    // Installed copies use the shared redistributable. A portable copy ships
+    // these DLLs, and its updater must be able to start without that prerequisite.
+    for (const QString& name : {QStringLiteral("vcruntime140.dll"), QStringLiteral("vcruntime140_1.dll"),
+                                QStringLiteral("msvcp140.dll"), QStringLiteral("msvcp140_1.dll"),
+                                QStringLiteral("msvcp140_2.dll"), QStringLiteral("msvcp140_atomic_wait.dll")}) {
+        const QString source = QDir(app_dir).filePath(name);
+        if (QFileInfo::exists(source) && !QFile::copy(source, QDir(staging_dir).filePath(name))) {
+            *error = QStringLiteral("Failed to stage updater file: %1").arg(name);
+            return false;
+        }
+    }
     return true;
 }
 

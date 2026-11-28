@@ -185,6 +185,24 @@ if(WIN32)
         "${CMAKE_CURRENT_BINARY_DIR}/exosnap_version.rc"
         @ONLY
     )
+
+    add_executable(exosnap_launcher WIN32
+        bootstrap/PortableLauncher.cpp
+        exosnap_launcher.rc
+        "${CMAKE_CURRENT_BINARY_DIR}/exosnap_version.rc"
+    )
+    target_include_directories(exosnap_launcher PRIVATE "${PROJECT_SOURCE_DIR}/libs/update/include")
+    target_link_libraries(exosnap_launcher PRIVATE exosnap::warnings user32)
+    target_link_options(exosnap_launcher PRIVATE /DEPENDENTLOADFLAG:0x800)
+    set_target_properties(exosnap_launcher PROPERTIES
+        AUTOMOC OFF
+        AUTOUIC OFF
+        AUTORCC OFF
+        OUTPUT_NAME "ExoSnap"
+        RUNTIME_OUTPUT_DIRECTORY "${CMAKE_CURRENT_BINARY_DIR}/launcher/$<CONFIG>"
+        MSVC_RUNTIME_LIBRARY "MultiThreaded$<$<CONFIG:Debug>:Debug>"
+    )
+    install(TARGETS exosnap_launcher RUNTIME DESTINATION .)
 endif()
 
 function(exosnap_add_app_test_support NAME)
@@ -877,8 +895,9 @@ exosnap_add_gtest(
     SOURCES
         tests/test_app_settings_store.cpp
         settings/AppSettingsStore.cpp
-        services/ElevatedRelaunch.cpp
-    LIBRARIES exosnap_capability exosnap_engine exosnap_app_log_test_support Qt6::Core Shell32.lib
+        settings/ConfigPaths.cpp
+    LIBRARIES exosnap_capability exosnap_engine exosnap_app_log_test_support exosnap_update
+        Qt6::Core Shell32.lib tomlplusplus::tomlplusplus
 )
 target_include_directories(app_settings_store_tests PRIVATE ${CMAKE_CURRENT_SOURCE_DIR})
 target_compile_definitions(app_settings_store_tests PRIVATE NOMINMAX)
@@ -925,18 +944,32 @@ exosnap_add_gtest(
 )
 target_include_directories(codec_labels_tests PRIVATE ${CMAKE_CURRENT_SOURCE_DIR})
 
-# ELEVATION-FOUNDATION-R1: elevation provider stub + relaunch handoff
-# arg builder/parser + RelaunchResult contract. Pure logic; no Win32 invocation.
 exosnap_add_gtest(
     NAME elevation_tests
     TEST_PREFIX elevation.
     SOURCES
         tests/test_elevation.cpp
-        services/ElevatedRelaunch.cpp
-    LIBRARIES exosnap_capability exosnap_engine exosnap_app_log_test_support Qt6::Core Shell32.lib
+        tests/test_privileged_diagnostics_protocol.cpp
+        diagnostics/PrivilegedDiagnosticsIntegrity.cpp
+        diagnostics/PrivilegedDiagnosticsPath.cpp
+    LIBRARIES exosnap::update exosnap_monocypher advapi32 bcrypt ole32 shell32
 )
 target_include_directories(elevation_tests PRIVATE ${CMAKE_CURRENT_SOURCE_DIR})
 target_compile_definitions(elevation_tests PRIVATE NOMINMAX)
+
+exosnap_add_gtest(
+    NAME privileged_diagnostics_trace_guard_tests
+    TEST_PREFIX privileged_diagnostics_trace_guard.
+    PHASE vm
+    LABELS live
+    SOURCES
+        tests/test_privileged_diagnostics_trace_guard.cpp
+        diagnostics/PrivilegedDiagnosticsIntegrity.cpp
+        diagnostics/PrivilegedDiagnosticsPath.cpp
+        diagnostics/PrivilegedDiagnosticsTraceGuard.cpp
+    LIBRARIES exosnap::update advapi32 bcrypt ole32 shell32
+)
+target_include_directories(privileged_diagnostics_trace_guard_tests PRIVATE ${CMAKE_CURRENT_SOURCE_DIR})
 
 # present-diagnostics provider. PresentMonProvider owns a
 # PresentMonEtwSession and attempts the trace when the session opt-in asks for
@@ -1562,17 +1595,17 @@ set_target_properties(recording_error_detail_text_tests PROPERTIES AUTOMOC ON)
 # its recorded QML imports. What stays here is the payload that has no target:
 # licenses and the portable documentation.
 if(WIN32 AND Qt6_FOUND)
-    # Root project license, third-party notices, and release-facing portable
-    # documentation (before TARGETS so they install even if the exe target is
-    # missing during dev iteration). These are the only docs shipped in the
-    # portable artifact; CMake install is the sole authority for the tree.
     install(
         FILES
             "${PROJECT_SOURCE_DIR}/LICENSE"
             "${PROJECT_SOURCE_DIR}/THIRD_PARTY_NOTICES.md"
+        DESTINATION licenses
+    )
+    install(
+        FILES
             "${PROJECT_SOURCE_DIR}/KNOWN_LIMITATIONS.md"
             "${PROJECT_SOURCE_DIR}/README-PORTABLE.md"
-        DESTINATION "."
+        DESTINATION docs
     )
 
     # Qt LGPLv3 license text staged with a clean name alongside other

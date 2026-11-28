@@ -309,7 +309,7 @@ class Bootstrapper final : public CBalBaseBootstrapperApplication {
                 status = engine_->Apply(window_);
                 break;
             case LaunchMessage: {
-                const auto executable = installPath_ + L"\\exosnap.exe";
+                const auto executable = installPath_ + L"\\ExoSnap.exe";
                 const auto result = reinterpret_cast<INT_PTR>(ShellExecuteW(reinterpret_cast<HWND>(message.wParam),
                                                                             L"open", executable.c_str(), nullptr,
                                                                             installPath_.c_str(), SW_SHOWNORMAL));

@@ -362,6 +362,8 @@ QVector<KeyDescriptor> BuildKeys() {
         BoolKey("app.expertMode", "Expert mode", &SettingsAdapter::expertMode, &SettingsAdapter::setExpertMode));
     keys.append(BoolKey("app.showNotifications", "Show notification toasts", &SettingsAdapter::showNotifications,
                         &SettingsAdapter::setShowNotifications));
+    keys.append(BoolKey("app.askAdminForDiagnostics", "Ask for administrator approval for in-depth diagnostics",
+                        &SettingsAdapter::askAdminForDiagnostics, &SettingsAdapter::setAskAdminForDiagnostics));
     keys.append(BoolKey("app.minimizeToTray", "Minimize to the system tray", &SettingsAdapter::minimizeToTray,
                         &SettingsAdapter::setMinimizeToTray));
     keys.append(BoolKey("app.hideWindowFromCapture", "Hide the window from screen capture",

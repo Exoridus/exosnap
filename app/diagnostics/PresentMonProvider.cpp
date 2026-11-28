@@ -77,4 +77,8 @@ void PresentMonProvider::SetOptIn(bool opt_in) {
     }
 }
 
+bool PresentMonProvider::AttachPrivilegedBackend(std::shared_ptr<IPresentTraceBackend> backend) {
+    return GateOpen() && !IsAvailable() && session_.StartWithBackend(std::move(backend));
+}
+
 } // namespace exosnap::diagnostics

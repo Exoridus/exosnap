@@ -16,7 +16,7 @@ Rectangle {
     property bool autoScroll: true
     readonly property int timeLaneWidth: 96
     readonly property int levelLaneWidth: 62
-    readonly property int categoryLaneWidth: 140
+    readonly property int categoryLaneWidth: Math.max(140, Math.min(250, Math.round(root.width * 0.27)))
 
     // Inclusive selection range over the entries' own SEQUENCE numbers, not
     // over row indices. A row index means nothing across a model change: the
@@ -232,10 +232,17 @@ Rectangle {
                                                  : ExoTheme.textSecondary
 
             width: list.width
-            height: messageLabel.implicitHeight + 2 * 3
+            height: Math.max(categoryLabel.implicitHeight, messageLabel.contentHeight) + 6
             // Zebra tint is one surface step up from the viewer's own ground — the
             // same "next surface" layering convention used for cards.
             color: row.selected ? ExoTheme.surfaceHover : (row.index % 2 === 1 ? ExoTheme.surface : "transparent")
+
+            Rectangle {
+                width: 2
+                height: parent.height
+                color: row.severityColor
+                visible: row.severityKey === "warning" || row.severityKey === "error" || row.severityKey === "critical"
+            }
 
             Rectangle {
                 anchors {
@@ -312,7 +319,7 @@ Rectangle {
                     top: parent.top
                     topMargin: 3
                     left: levelLabel.right
-                    leftMargin: ExoTheme.spacingXs
+                    leftMargin: ExoTheme.spacingSm
                 }
                 // Fixed lane, like the level column: the message must always start on
                 // the same x, whatever the category's own length.
@@ -320,11 +327,16 @@ Rectangle {
                 text: row.category === "" ? "" : "[" + row.category + "]"
                 textFormat: Text.PlainText
                 elide: Text.ElideRight
+                Accessible.name: row.category
+                ToolTip.text: row.category
+                ToolTip.visible: categoryHover.hovered && truncated
+                ToolTip.delay: 500
                 color: ExoTheme.textSecondary
                 font {
                     family: ExoTheme.monoFamily
                     pixelSize: ExoTheme.fontCaption
                 }
+                HoverHandler { id: categoryHover }
             }
 
             Label {

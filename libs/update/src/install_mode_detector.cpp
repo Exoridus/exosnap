@@ -204,6 +204,17 @@ std::optional<InstallStamp> ReadStamp(HKEY root) {
 
 } // namespace
 
+std::wstring PackageRootForExecutableDirectory(const std::wstring& executable_directory) {
+    const std::filesystem::path directory(executable_directory);
+    if (_wcsicmp(directory.filename().c_str(), L"runtime") != 0)
+        return executable_directory;
+    const auto parent = directory.parent_path();
+    std::error_code error;
+    if (std::filesystem::is_regular_file(parent / L"ExoSnap.exe", error))
+        return parent.wstring();
+    return executable_directory;
+}
+
 DistributionContext DetectDistributionContext(const std::wstring& application_directory) noexcept {
     try {
         // The first stamped record owns all installation facts. A portable copy
@@ -211,7 +222,8 @@ DistributionContext DetectDistributionContext(const std::wstring& application_di
         std::optional<InstallStamp> stamp = ReadStamp(HKEY_LOCAL_MACHINE);
         if (!stamp)
             stamp = ReadStamp(HKEY_CURRENT_USER);
-        const std::wstring directory = application_directory.empty() ? RunningExecutableDir() : application_directory;
+        const std::wstring directory = PackageRootForExecutableDirectory(
+            application_directory.empty() ? RunningExecutableDir() : application_directory);
         return ClassifyDistributionContext(stamp, directory, HasAdjacentScoopMetadata(directory));
     } catch (...) {
         return {InstallMode::Portable, DistributionOwner::UnknownManaged};

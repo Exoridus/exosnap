@@ -30,7 +30,7 @@ constexpr std::array<std::pair<NotificationType, const char*>, 20> kTypeNames{{
     {NotificationType::ElevationRequired, "elevationRequired"},
 }};
 
-constexpr std::array<std::pair<NotificationAction, const char*>, 13> kActionNames{{
+constexpr std::array<std::pair<NotificationAction, const char*>, 12> kActionNames{{
     {NotificationAction::None, "none"},
     {NotificationAction::OpenFolder, "openFolder"},
     {NotificationAction::OpenRecovery, "openRecovery"},
@@ -39,7 +39,6 @@ constexpr std::array<std::pair<NotificationAction, const char*>, 13> kActionName
     {NotificationAction::Discard, "discard"},
     {NotificationAction::OpenUpdate, "openUpdate"},
     {NotificationAction::Edit, "edit"},
-    {NotificationAction::RelaunchElevated, "relaunchElevated"},
     {NotificationAction::OpenDiagnostics, "openDiagnostics"},
     {NotificationAction::UndoPresetSwitch, "undoPresetSwitch"},
     {NotificationAction::OpenHotkeys, "openHotkeys"},

@@ -200,13 +200,13 @@ endif()
 # verify/close/swap/verify/relaunch flow. Without this rule the exe never lands in
 # the CMake install tree, so neither the portable ZIP nor the MSI (both derived
 # from that tree) contain it, and the update feature is non-functional in packaged
-# builds. It installs to the prefix root exactly like exosnap.exe; the MSI
+# builds. It installs beside the real application under runtime; the MSI
 # auto-harvest and the ZIP both pick it up automatically from the staging tree.
 # No separate Qt deploy is needed — windeployqt (driven by the exosnap target)
 # already stages the full Quick runtime and its `qml/` import trees flat in the
 # same tree, which is what the updater module imports at runtime.
 if(WIN32)
-    install(TARGETS exosnap_updater RUNTIME DESTINATION .)
+    install(TARGETS exosnap_updater RUNTIME DESTINATION runtime)
 endif()
 
 # ---- Dev convenience: stage the Qt runtime next to the build-tree exe ----

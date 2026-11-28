@@ -167,9 +167,9 @@ PersistedAppSettings AppSettingsStore::Load() const {
     settings.endGroup();
 
     settings.beginGroup(QStringLiteral("developer"));
-    // SETTINGS-HONESTY-R1: developer log-level filter (default "Debug" = record
-    // everything, review F1). Pre-1.0: no migration; missing key defaults to "Debug".
-    persisted.developer_log_level = settings.value(QStringLiteral("log_level"), QStringLiteral("Debug")).toString();
+    persisted.developer_log_level = settings.value(QStringLiteral("log_level"), QStringLiteral("Info")).toString();
+    persisted.ask_admin_for_diagnostics =
+        settings.value(QStringLiteral("ask_admin_for_diagnostics")).toString() == QStringLiteral("true");
     settings.endGroup();
 
     const int hidden_rule_count = settings.beginReadArray(QStringLiteral("hidden_windows"));
@@ -327,6 +327,7 @@ bool AppSettingsStore::Save(const PersistedAppSettings& settings_snapshot) const
     settings.beginGroup(QStringLiteral("developer"));
     // SETTINGS-HONESTY-R1: developer log-level filter.
     settings.setValue(QStringLiteral("log_level"), settings_snapshot.developer_log_level);
+    settings.setValue(QStringLiteral("ask_admin_for_diagnostics"), settings_snapshot.ask_admin_for_diagnostics);
     settings.endGroup();
 
     settings.remove(QStringLiteral("hidden_windows"));

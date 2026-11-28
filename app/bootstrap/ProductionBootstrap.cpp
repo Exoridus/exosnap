@@ -5,7 +5,6 @@
 #include <QDir>
 #include <QFile>
 #include <QGuiApplication>
-#include <QProcess>
 
 #include <utility>
 
@@ -15,7 +14,7 @@
 #include "diagnostics/StartupClock.h"
 #include "diagnostics/StartupTrace.h"
 #include "exosnap_resource.h"
-#include "services/ElevatedRelaunch.h"
+#include "settings/ConfigPaths.h"
 
 #if defined(Q_OS_WIN)
 #include <crash_capture/crash_capture.h>
@@ -26,6 +25,7 @@
 #include <filesystem>
 #include <system_error>
 
+#include <shobjidl_core.h>
 #include <windows.h>
 #endif
 
@@ -56,6 +56,7 @@ PreAppResult RunPreApplicationPhase() {
     // over the real one. LOAD_LIBRARY_SEARCH_APPLICATION_DIR keeps the app's own
     // directory (where the windeployqt-deployed Qt/FFmpeg DLLs live) searchable.
     SetDefaultDllDirectories(LOAD_LIBRARY_SEARCH_SYSTEM32 | LOAD_LIBRARY_SEARCH_APPLICATION_DIR);
+    SetCurrentProcessExplicitAppUserModelID(L"Exoridus.ExoSnap");
 
     // Self-heal an update swap interrupted between its two directory renames
     // (see swap_engine.h). A process kill in that narrow window -- or between a
@@ -103,13 +104,11 @@ bool IsolateHarnessConfigDir(const QString& harness_id) {
 }
 
 bool AlignQmlDiskCacheWithConfigDir() {
-    if (!qEnvironmentVariableIsSet("EXOSNAP_CONFIG_DIR"))
-        return false;
     // An explicit choice by the caller outranks this one.
     if (qEnvironmentVariableIsSet("QML_DISK_CACHE_PATH"))
         return false;
 
-    const QString config_dir = qEnvironmentVariable("EXOSNAP_CONFIG_DIR");
+    const QString config_dir = settings::ResolvePersistenceOverride();
     if (config_dir.isEmpty())
         return false;
 
@@ -189,8 +188,6 @@ ProductionBootstrap::~ProductionBootstrap() {
     // the "one instance" window closed for the whole teardown; releasing it a
     // few instructions earlier would let a launch racing our exit slip past the
     // guard and come up alongside a process still holding capture devices open.
-    // The one case that must hand it over -- the elevated relaunch -- releases
-    // it explicitly in RunPendingElevatedRelaunch().
 }
 
 void ProductionBootstrap::InitializeLogging(const PreAppResult& pre_app, const PostAppResult& post_app) {
@@ -260,14 +257,15 @@ void ProductionBootstrap::InitializeCrashCapture() {
     // the session sidecar and the next-launch dialog still work -- that is
     // intended, "the previous session never marked a clean exit" is detectable
     // without any upload channel.
-    crash_dir_ = crash_capture::ResolveCrashDir();
+    const auto persistence_root = QDir::toNativeSeparators(settings::ResolvePersistenceOverride());
+    crash_dir_ = crash_capture::ResolveCrashDir(persistence_root.toStdString());
     if (crash_dir_.empty()) {
         qWarning().noquote() << "Crash capture disabled: could not resolve crash dir.";
         return;
     }
 
     std::error_code ec;
-    std::filesystem::create_directories(std::filesystem::path(crash_dir_), ec);
+    std::filesystem::create_directories(QString::fromStdString(crash_dir_).toStdWString(), ec);
     if (ec) {
         qWarning().noquote() << "Failed to create crash dir:" << QString::fromStdString(crash_dir_)
                              << QString::fromStdString(ec.message());
@@ -300,50 +298,6 @@ SentryTestEventOutcome ProductionBootstrap::RunSentryTestEventIfRequested() {
 #endif
 }
 
-void ProductionBootstrap::requestElevatedRelaunch(const QStringList& args) {
-    elevated_relaunch_args_ = args;
-    elevated_relaunch_requested_ = true;
-}
-
-void ProductionBootstrap::RunPendingElevatedRelaunch() {
-    if (!elevated_relaunch_requested_)
-        return;
-    elevated_relaunch_requested_ = false;
-
-#if defined(Q_OS_WIN)
-    // The successor has to be able to take the single-instance guard,
-    // so hand it over first -- otherwise the elevated process comes up, finds
-    // the mutex still held by the exiting one, and activates a window that is
-    // already going away.
-    ReleaseSingleInstance();
-
-    const services::RelaunchResult relaunch_result =
-        services::RelaunchAsAdmin(QCoreApplication::applicationFilePath(), elevated_relaunch_args_);
-    if (relaunch_result == services::RelaunchResult::Launched)
-        return;
-
-    if (relaunch_result == services::RelaunchResult::UserDeclined) {
-        qInfo().noquote() << "Elevated relaunch cancelled by user (UAC declined).";
-    } else {
-        qWarning().noquote() << "Elevated relaunch failed (ShellExecuteEx).";
-    }
-
-    // a decline or a ShellExecuteEx failure must not strand the user
-    // with no ExoSnap running. Carry the page across, same as a successful
-    // elevation would, but drop the reenable-present-diagnostics flag: it was
-    // written for the elevated successor that never came up, and a process that
-    // is not elevated has nothing to measure with it. The in-depth switch is
-    // session state, so the recovered process comes back with it off and the
-    // user can ask again.
-    services::RelaunchHandoff recovery_handoff = services::ParseRelaunchArgs(elevated_relaunch_args_);
-    recovery_handoff.reenable_present_diag = false;
-    if (!QProcess::startDetached(QCoreApplication::applicationFilePath(),
-                                 services::BuildRelaunchArgs(recovery_handoff))) {
-        qWarning().noquote() << "Non-elevated recovery relaunch failed to start after a declined/failed elevation.";
-    }
-#endif
-}
-
 void ProductionBootstrap::Shutdown() {
     if (shut_down_)
         return;
@@ -362,21 +316,6 @@ void ProductionBootstrap::Shutdown() {
             crash_capture::MarkCleanExit(crash_dir_);
         crash_capture::Shutdown();
     }
-#endif
-
-    // Last, so the successor starts against a process that has already flushed
-    // its logs and released its crash session.
-    RunPendingElevatedRelaunch();
-}
-
-void ProductionBootstrap::ReleaseSingleInstance() {
-#if defined(Q_OS_WIN)
-    if (single_instance_mutex_ == nullptr)
-        return;
-    HANDLE mutex = static_cast<HANDLE>(single_instance_mutex_);
-    ReleaseMutex(mutex);
-    CloseHandle(mutex);
-    single_instance_mutex_ = nullptr;
 #endif
 }
 

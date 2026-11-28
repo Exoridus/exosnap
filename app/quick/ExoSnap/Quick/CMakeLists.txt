@@ -409,15 +409,13 @@ target_sources(exosnap
         PseudoLocalization.h
         # Process-level startup/shutdown contract, shared with the Widgets entry
         # point: DLL-search hardening, interrupted-swap self-heal, startup clock,
-        # log sink, crash capture, single-instance guard, elevated relaunch.
+        # Log sink, crash capture and single-instance guard.
         ${PROJECT_SOURCE_DIR}/app/bootstrap/ProductionBootstrap.cpp
         ${PROJECT_SOURCE_DIR}/app/bootstrap/ProductionBootstrap.h
         ${PROJECT_SOURCE_DIR}/app/diagnostics/EngineLogBridge.cpp
         ${PROJECT_SOURCE_DIR}/app/diagnostics/EngineLogBridge.h
         ${PROJECT_SOURCE_DIR}/app/diagnostics/StartupClock.h
         ${PROJECT_SOURCE_DIR}/app/diagnostics/StartupTrace.h
-        ${PROJECT_SOURCE_DIR}/app/services/ElevatedRelaunch.cpp
-        ${PROJECT_SOURCE_DIR}/app/services/ElevatedRelaunch.h
         # --verify-update-reinstall argv gate, shared with the Widgets
         # entry point.
         ${PROJECT_SOURCE_DIR}/app/services/VerifyReinstallMode.cpp
@@ -527,8 +525,10 @@ target_sources(exosnap
         # defect: this file was compiled by NO target at all, so the check that names
         # the kernel driver behind "smooth game, stuttery recording" evaluated an
         # absent reading in every build there has ever been.
-        ${PROJECT_SOURCE_DIR}/app/diagnostics/DpcLatencyProvider.cpp
         ${PROJECT_SOURCE_DIR}/app/diagnostics/DpcLatencyProvider.h
+        ${PROJECT_SOURCE_DIR}/app/diagnostics/PrivilegedDiagnosticsClient.cpp
+        ${PROJECT_SOURCE_DIR}/app/diagnostics/PrivilegedDiagnosticsIntegrity.cpp
+        ${PROJECT_SOURCE_DIR}/app/diagnostics/PrivilegedDiagnosticsPath.cpp
         ${PROJECT_SOURCE_DIR}/app/diagnostics/PresentSnapshotOverlay.cpp
         ${PROJECT_SOURCE_DIR}/app/diagnostics/PresentSnapshotOverlay.h
         ${PROJECT_SOURCE_DIR}/app/diagnostics/SupportBundle.cpp
@@ -596,6 +596,7 @@ target_sources(exosnap
         ${PROJECT_SOURCE_DIR}/app/services/UpdateCheckGate.h
         ${PROJECT_SOURCE_DIR}/app/settings/AppSettingsStore.cpp
         ${PROJECT_SOURCE_DIR}/app/settings/AppSettingsStore.h
+        ${PROJECT_SOURCE_DIR}/app/settings/ConfigPaths.cpp
         ${PROJECT_SOURCE_DIR}/app/settings/RecordingPresetStore.cpp
         ${PROJECT_SOURCE_DIR}/app/settings/RecordingPresetStore.h
         ${PROJECT_SOURCE_DIR}/app/settings/RecoveryManifestStore.cpp
@@ -674,6 +675,7 @@ target_sources(exosnap
 )
 
 if(WIN32)
+    add_dependencies(exosnap exosnap_launcher)
     # The two Windows resource scripts that make this a shippable executable:
     # exosnap.rc carries the three application icons (bootstrap's WM_SETICON path
     # loads IDI_EXOSNAP_APP_ICON out of the EXE's own resources, so a target
@@ -784,8 +786,9 @@ target_link_libraries(exosnap
         mf
         mfuuid
         ole32
+        bcrypt
         runtimeobject
-        # ShellExecuteExW (Shell32) for the elevated relaunch plus the
+        # ShellExecuteExW (Shell32) for the protected diagnostics companion and
         # token APIs behind the elevation check (Advapi32); Version.lib backs the
         # file-version queries the update/diagnostics paths make.
         Shell32
@@ -819,19 +822,22 @@ add_dependencies(exosnap exosnap_build_info)
 # binary at all" is a build fact, so it is asserted at configure time rather than left
 # to review.
 #
-# The two targets that may own such a file are the application itself and the
-# diagnostics support library it links. A producer that belongs in neither has to say so
-# in EXOSNAP_UNSHIPPED_DIAGNOSTICS_PRODUCERS below, with a reason -- the point is that
-# the decision is explicit and visible, never silent.
-set(EXOSNAP_UNSHIPPED_DIAGNOSTICS_PRODUCERS
-    # (empty: every diagnostics producer currently ships)
-)
+# A producer must ship in the application, its diagnostics support
+# library or the privileged diagnostics companion.
+set(EXOSNAP_UNSHIPPED_DIAGNOSTICS_PRODUCERS "")
+set(_exosnap_diagnostics_shipping_targets exosnap exosnap_diagnostics_test_support)
+if(TARGET exosnap_diagnostics)
+    list(APPEND _exosnap_diagnostics_shipping_targets exosnap_diagnostics)
+else()
+    # Builds without ETW tracing intentionally omit the companion.
+    list(APPEND EXOSNAP_UNSHIPPED_DIAGNOSTICS_PRODUCERS DpcLatencyProvider.cpp)
+endif()
 file(GLOB _exosnap_diag_producers CONFIGURE_DEPENDS
     "${PROJECT_SOURCE_DIR}/app/diagnostics/*Provider.cpp"
     "${PROJECT_SOURCE_DIR}/app/services/*Probe.cpp"
 )
 set(_exosnap_shipped_sources "")
-foreach(_shipping_target IN ITEMS exosnap exosnap_diagnostics_test_support)
+foreach(_shipping_target IN LISTS _exosnap_diagnostics_shipping_targets)
     get_target_property(_target_sources ${_shipping_target} SOURCES)
     get_target_property(_target_dir ${_shipping_target} SOURCE_DIR)
     foreach(_source IN LISTS _target_sources)
@@ -851,9 +857,7 @@ foreach(_producer IN LISTS _exosnap_diag_producers)
     if(NOT "${_producer}" IN_LIST _exosnap_shipped_sources)
         message(FATAL_ERROR
             "${_producer_name} produces diagnostics data but is compiled by no shipping target. "
-            "Whatever reads it can only ever see the absent/no-op answer. Add it to the exosnap "
-            "target (app/quick/ExoSnap/Quick/CMakeLists.txt) or to exosnap_diagnostics_test_support "
-            "(app/CMakeLists.txt) -- or, if it deliberately does not ship, to "
+            "Add it to the responsible shipping target or, if it deliberately does not ship, to "
             "EXOSNAP_UNSHIPPED_DIAGNOSTICS_PRODUCERS with the reason."
         )
     endif()
@@ -952,20 +956,7 @@ if(WIN32)
         DEPLOY_TOOL_OPTIONS --qmldir "${PROJECT_SOURCE_DIR}/app/quick/ExoSnap"
     )
 
-    install(TARGETS exosnap RUNTIME DESTINATION .)
-
-    # Deploy the Qt runtime (DLLs + qt.conf) flat next to exosnap.exe rather than
-    # into a bin/ subdirectory. exosnap.exe installs to the prefix root, and a
-    # root executable on Windows cannot load Qt DLLs from bin/ — a flat layout is
-    # required for the portable package to launch. Qt's deploy support honors a
-    # pre-set QT_DEPLOY_BIN_DIR (it only defaults the value when undefined), and
-    # this install(CODE) runs in the same cmake_install.cmake pass as the deploy
-    # script below, so the override is in effect when the script runs.
-    #
-    # QT_DEPLOY_QML_DIR is left at its default "qml". The generated qt.conf names
-    # it, so the deployed application resolves its QML imports relative to its own
-    # directory and never from the build tree or a developer Qt installation.
-    install(CODE "set(QT_DEPLOY_BIN_DIR \".\")")
+    install(TARGETS exosnap RUNTIME DESTINATION runtime)
 
     # Contract guard for the generated script installed below. Qt writes that
     # script to call qt6_deploy_qml_imports(), which only exists if
@@ -988,7 +979,18 @@ if(NOT COMMAND qt6_deploy_qml_imports)
         \"find_package(Qt6).\")
 endif()")
 
-    install(SCRIPT ${_exosnap_deploy_script})
+    # Qt's Windows deploy also writes files directly to its prefix. Scope that
+    # prefix to runtime so plugins, QML, and any support DLLs stay together.
+    install(CODE "
+        set(_exosnap_package_prefix \"\${CMAKE_INSTALL_PREFIX}\")
+        set(_exosnap_qt_prefix \"\${QT_DEPLOY_PREFIX}\")
+        set(CMAKE_INSTALL_PREFIX \"\${CMAKE_INSTALL_PREFIX}/runtime\")
+        set(QT_DEPLOY_PREFIX \"\$ENV{DESTDIR}\${CMAKE_INSTALL_PREFIX}\")
+        set(QT_DEPLOY_BIN_DIR \".\")
+        include(\"${_exosnap_deploy_script}\")
+        set(QT_DEPLOY_PREFIX \"\${_exosnap_qt_prefix}\")
+        set(CMAKE_INSTALL_PREFIX \"\${_exosnap_package_prefix}\")
+    ")
 endif()
 
 # EXOSNAP_CONFIG_DIR is where the QML bytecode cache ends up (see

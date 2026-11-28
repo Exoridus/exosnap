@@ -340,6 +340,8 @@ void DiagnosticsAdapter::setInDepthEnabledFromUi(bool enabled) {
     if (in_depth_enabled_ == enabled || !inDepthAvailable())
         return;
     emit inDepthToggled(enabled);
+    if (enabled)
+        emit privilegedDiagnosticsToggled(true);
 }
 
 QString DiagnosticsAdapter::inDepthStateText() const {
@@ -349,11 +351,26 @@ QString DiagnosticsAdapter::inDepthStateText() const {
 }
 
 bool DiagnosticsAdapter::inDepthAvailable() const noexcept {
-    return true;
+    return privileged_state_ != diagnostics::PrivilegedDiagnosticsState::Stopping;
 }
 
 QString DiagnosticsAdapter::presentProviderState() const {
     return QString::fromLatin1(diagnostics::PresentProviderStateKey(present_provider_state_));
+}
+
+bool DiagnosticsAdapter::trendPlotsVisible() const noexcept {
+    return trend_plots_visible_;
+}
+
+void DiagnosticsAdapter::setTrendPlotsVisible(bool visible) {
+    if (trend_plots_visible_ == visible)
+        return;
+    trend_plots_visible_ = visible;
+    if (!visible && !series_.empty()) {
+        resetSeries();
+        refreshLiveTiles();
+    }
+    emit trendPlotsVisibleChanged();
 }
 
 QVariantList DiagnosticsAdapter::measurementSources() const {
@@ -421,12 +438,38 @@ QVariantList DiagnosticsAdapter::measurementSources() const {
     // failure of the recording and never turns into a zero reading.
     if (!in_depth_enabled_)
         add(tr("DPC / ISR"), tr("Not requested"), QStringLiteral("idle"));
-    else if (!elevated())
-        add(tr("DPC / ISR"), tr("Not running - elevated kernel trace required"), QStringLiteral("unavailable"));
     else if (dpc_reading_.has_value() && dpc_reading_->available)
         add(tr("DPC / ISR"), tr("Measuring"), QStringLiteral("measuring"));
-    else
-        add(tr("DPC / ISR"), tr("Unavailable - kernel trace not running"), QStringLiteral("unavailable"));
+    else {
+        using diagnostics::PrivilegedDiagnosticsState;
+        switch (privileged_state_) {
+        case PrivilegedDiagnosticsState::Starting:
+            add(tr("DPC / ISR"), tr("Starting"), QStringLiteral("partial"));
+            break;
+        case PrivilegedDiagnosticsState::Running:
+            if (privileged_kernel_trace_open_)
+                add(tr("DPC / ISR"), tr("Waiting for kernel trace data"), QStringLiteral("partial"));
+            else
+                add(tr("DPC / ISR"), tr("Unavailable - kernel trace not running"), QStringLiteral("unavailable"));
+            break;
+        case PrivilegedDiagnosticsState::Missing:
+            add(tr("DPC / ISR"), tr("Requires a verified ExoSnap package in a protected folder"),
+                QStringLiteral("unavailable"));
+            break;
+        case PrivilegedDiagnosticsState::Declined:
+            add(tr("DPC / ISR"), tr("Administrator approval declined"), QStringLiteral("unavailable"));
+            break;
+        case PrivilegedDiagnosticsState::Failed:
+            add(tr("DPC / ISR"), tr("Diagnostics companion stopped or incompatible"), QStringLiteral("unavailable"));
+            break;
+        case PrivilegedDiagnosticsState::Stopping:
+            add(tr("DPC / ISR"), tr("Stopping"), QStringLiteral("partial"));
+            break;
+        case PrivilegedDiagnosticsState::Idle:
+            add(tr("DPC / ISR"), tr("Privileged diagnostics off"), QStringLiteral("idle"));
+            break;
+        }
+    }
 
     return rows;
 }
@@ -517,10 +560,8 @@ void DiagnosticsAdapter::appendSeriesSamples(const exosnap::engine::RecordingDia
     };
 
     push("framePacing", snapshot.capture.actual_fps);
-    if (snapshot.video_encoder.timing_availability == exosnap::engine::MetricAvailability::Available) {
+    if (snapshot.video_encoder.timing_availability == exosnap::engine::MetricAvailability::Available)
         push("encoder", snapshot.video_encoder.p99_ms);
-        encoder_session_worst_p99_ms_ = std::max(encoder_session_worst_p99_ms_, snapshot.video_encoder.p99_ms);
-    }
     // Only a measured drift is plotted: a zero here would draw perfect sync on a
     // recording whose drift nobody measured.
     if (snapshot.av_drift_availability == exosnap::engine::MetricAvailability::Available)
@@ -772,6 +813,16 @@ void DiagnosticsAdapter::setElevated(bool elevated) {
     emit changed();
 }
 
+void DiagnosticsAdapter::setPrivilegedDiagnosticsState(diagnostics::PrivilegedDiagnosticsState state,
+                                                       bool kernel_trace_open) {
+    if (privileged_state_ == state && privileged_kernel_trace_open_ == kernel_trace_open)
+        return;
+    privileged_state_ = state;
+    privileged_kernel_trace_open_ = kernel_trace_open;
+    emit inDepthChanged();
+    refreshSnapshot();
+}
+
 void DiagnosticsAdapter::setPresentProviderState(diagnostics::PresentProviderState state) {
     if (present_provider_state_ == state)
         return;
@@ -848,8 +899,12 @@ void DiagnosticsAdapter::applyLiveDiagnostics(const exosnap::engine::RecordingDi
             session_start_ =
                 QDateTime::currentDateTime().addMSecs(-static_cast<qint64>(snapshot.elapsed_seconds * 1000.0));
         }
-        if (!paused())
-            appendSeriesSamples(snapshot);
+        if (!paused()) {
+            if (snapshot.video_encoder.timing_availability == exosnap::engine::MetricAvailability::Available)
+                encoder_session_worst_p99_ms_ = std::max(encoder_session_worst_p99_ms_, snapshot.video_encoder.p99_ms);
+            if (trend_plots_visible_)
+                appendSeriesSamples(snapshot);
+        }
     }
 
     const bool left_recording = recording_ && !live;

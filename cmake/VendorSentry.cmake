@@ -146,7 +146,7 @@ set(EXOSNAP_CRASHPAD_HANDLER_EXE
 # `cmake --install` with "file INSTALL cannot find ...". $<TARGET_FILE:...>
 # resolves the per-config location for both Ninja and Visual Studio. Mirrors the
 # POST_BUILD staging rule in app/CMakeLists.txt.
-install(FILES "$<TARGET_FILE:crashpad_handler>" DESTINATION ".")
+install(FILES "$<TARGET_FILE:crashpad_handler>" DESTINATION runtime)
 
 # LICENSE staging
 set(_sentry_license "${_sentry_bindir}/../sentry_native-src/LICENSE")

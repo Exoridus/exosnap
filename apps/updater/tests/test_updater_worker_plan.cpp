@@ -120,6 +120,82 @@ TEST_F(ResolveStagedRootTest, TopLevelExeWinsOverSingleDir) {
     EXPECT_EQ(fs::path(*resolved), root_);
 }
 
+TEST_F(ResolveStagedRootTest, NestedInstallSwapsOnlyRuntimeAndPreservesPortableRoot) {
+    using namespace exosnap::update;
+    const fs::path portable = root_ / "installed";
+    const fs::path runtime = portable / "runtime";
+    const SwapPlan plan = MakeSwapPlan(runtime.wstring(), SemVer{});
+    Touch(portable / "exosnap.exe");
+    Touch(portable / "portable.toml");
+    Touch(portable / "data" / "settings.ini");
+    Touch(runtime / "exosnap.exe");
+    Touch(runtime / "old-runtime.txt");
+
+    const fs::path extracted = root_ / "extracted";
+    const fs::path package = extracted / "ExoSnap-0.11.0-windows-x64-portable";
+    Touch(package / "exosnap.exe");
+    Touch(package / "portable.toml");
+    Touch(package / "runtime" / "exosnap.exe");
+    Touch(package / "runtime" / "new-runtime.txt");
+
+    const auto resolved = ResolveStagedRoot(extracted.wstring(), plan);
+    ASSERT_TRUE(resolved.has_value());
+    ASSERT_EQ(fs::path(*resolved), package / "runtime");
+    fs::rename(*resolved, plan.staging_dir);
+    ASSERT_EQ(StageRename(plan), SwapError::None);
+    EXPECT_TRUE(fs::exists(runtime / "new-runtime.txt"));
+    EXPECT_FALSE(fs::exists(runtime / "runtime"));
+    EXPECT_FALSE(fs::exists(runtime / "portable.toml"));
+    EXPECT_TRUE(fs::exists(portable / "exosnap.exe"));
+    EXPECT_TRUE(fs::exists(portable / "data" / "settings.ini"));
+    EXPECT_TRUE(fs::exists(portable / "portable.toml"));
+
+    ASSERT_EQ(RestoreBackup(plan), SwapError::None);
+    EXPECT_TRUE(fs::exists(runtime / "old-runtime.txt"));
+    EXPECT_FALSE(fs::exists(runtime / "new-runtime.txt"));
+    EXPECT_TRUE(fs::exists(portable / "exosnap.exe"));
+    EXPECT_TRUE(fs::exists(portable / "portable.toml"));
+    EXPECT_TRUE(fs::exists(portable / "data" / "settings.ini"));
+}
+
+TEST_F(ResolveStagedRootTest, LegacyInstallNamedRuntimeUsesTheWholePackage) {
+    const fs::path install = root_ / "runtime";
+    Touch(install / "exosnap.exe");
+    const fs::path extracted = root_ / "extracted";
+    const fs::path package = extracted / "ExoSnap-0.11.0-windows-x64-portable";
+    Touch(package / "exosnap.exe");
+    Touch(package / "portable.toml");
+    Touch(package / "runtime" / "exosnap.exe");
+
+    const auto resolved = ResolveStagedRoot(extracted.wstring());
+    ASSERT_TRUE(resolved.has_value());
+    ASSERT_EQ(fs::path(*resolved), package);
+
+    using namespace exosnap::update;
+    const auto plan = MakeSwapPlan(install.wstring(), SemVer{});
+    fs::rename(*resolved, plan.staging_dir);
+    ASSERT_EQ(StageRename(plan), SwapError::None);
+    EXPECT_TRUE(fs::exists(install / "portable.toml"));
+    EXPECT_TRUE(fs::exists(install / "runtime" / "exosnap.exe"));
+}
+
+TEST_F(ResolveStagedRootTest, InterruptedNestedInstallStillRequiresNestedPayload) {
+    const fs::path portable = root_ / "installed";
+    const fs::path runtime = portable / "runtime";
+    const auto plan = exosnap::update::MakeSwapPlan(runtime.wstring(), exosnap::update::SemVer{});
+    Touch(portable / "exosnap.exe");
+    Touch(fs::path(plan.backup_dir) / "exosnap.exe");
+
+    const fs::path extracted = root_ / "extracted";
+    Touch(extracted / "exosnap.exe");
+    EXPECT_FALSE(ResolveStagedRoot(extracted.wstring(), plan).has_value());
+
+    Touch(extracted / "runtime" / "exosnap.exe");
+    const auto resolved = ResolveStagedRoot(extracted.wstring(), plan);
+    ASSERT_TRUE(resolved.has_value());
+    EXPECT_EQ(fs::path(*resolved), extracted / "runtime");
+}
+
 // ---------------------------------------------------------------------------
 // RetryEntryStep -- FailureCase -> pipeline re-entry mapping
 // ---------------------------------------------------------------------------

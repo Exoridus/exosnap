@@ -20,6 +20,7 @@
 
 #include <chrono>
 #include <cstdio>
+#include <cwchar>
 #include <filesystem>
 #include <fstream>
 #include <sstream>
@@ -31,6 +32,7 @@
 #include <update/manifest_io.h>
 #include <update/package_verifier.h>
 #include <update/release_locator.h>
+#include <update/runtime_swap_lock.h>
 #include <update/update_checker.h>
 #include <update/update_handoff.h>
 #include <update/zip_extract.h>
@@ -72,6 +74,7 @@ namespace {
 constexpr const wchar_t* kInstanceMutexName = L"ExoSnap_SingleInstance_Mutex";
 constexpr const wchar_t* kAppWindowTitle = L"ExoSnap";
 constexpr const wchar_t* kExeName = L"exosnap.exe";
+constexpr const wchar_t* kPortableRuntime = L"runtime";
 constexpr const char* kDefaultReleasesUrl = "https://api.github.com/repos/Exoridus/exosnap/releases";
 
 constexpr std::chrono::seconds kCloseAppTimeout{60};
@@ -140,16 +143,33 @@ constexpr std::chrono::minutes kMsiWaitTimeout{15};
 // Pure planning helpers
 // ---------------------------------------------------------------------------
 
-std::optional<std::wstring> ResolveStagedRoot(const std::wstring& extract_dir) {
+std::optional<std::wstring> ResolveStagedRoot(const std::wstring& extract_dir,
+                                              const exosnap::update::SwapPlan& runtime_plan) {
     std::error_code ec;
     const fs::path root(extract_dir);
     if (!fs::is_directory(root, ec)) {
         return std::nullopt;
     }
 
+    const auto select_payload = [&runtime_plan](const fs::path& package) -> std::optional<std::wstring> {
+        if (runtime_plan.install_dir.empty())
+            return package.wstring();
+
+        std::error_code error;
+        // The live runtime can be absent if an earlier swap was interrupted.
+        if (!fs::is_regular_file(fs::path(runtime_plan.install_dir) / kExeName, error) &&
+            !fs::is_regular_file(fs::path(runtime_plan.backup_dir) / kExeName, error))
+            return std::nullopt;
+
+        const fs::path runtime = package / kPortableRuntime;
+        if (!fs::is_regular_file(runtime / kExeName, error))
+            return std::nullopt;
+        return runtime.wstring();
+    };
+
     // Flat layout: the exe marks the root, regardless of any subdirectories.
     if (fs::exists(root / kExeName, ec)) {
-        return extract_dir;
+        return select_payload(root);
     }
 
     // Otherwise accept exactly one entry that is a directory (the ZIP's single
@@ -176,7 +196,7 @@ std::optional<std::wstring> ResolveStagedRoot(const std::wstring& extract_dir) {
     if (!fs::exists(*only_entry / kExeName, ec2)) {
         return std::nullopt;
     }
-    return only_entry->wstring();
+    return select_payload(*only_entry);
 }
 
 bool VersionsMatchExactly(const QString& a, const QString& b) {
@@ -281,6 +301,8 @@ UpdaterWorker::UpdaterWorker(UpdaterArgs args, QObject* parent) : QObject(parent
     qRegisterMetaType<FailureCase>("FailureCase");
 }
 
+UpdaterWorker::~UpdaterWorker() = default;
+
 void UpdaterWorker::repair() {
     if (args_.install_mode != InstallMode::Installed || !have_package_) {
         emit failed(FailureCase::VerifyInstallFailedMsi,
@@ -321,6 +343,9 @@ void UpdaterWorker::run(UpStep entry) {
             emit readyToApply();
             return;
         }
+    }
+    if (args_.install_mode == InstallMode::Portable && !LockPortableRuntime(FailureCase::InstallFailed)) {
+        return;
     }
     if (int(entry) <= int(UpStep::CloseApp) && !runCloseApp()) {
         return;
@@ -705,11 +730,14 @@ bool UpdaterWorker::fetchAndStage() {
 
     if (portable) {
         plan_ = MakeSwapPlan(args_.install_dir.toStdWString(), manifest_.version);
+        if (!LockPortableRuntime(FailureCase::DownloadFailed)) {
+            return false;
+        }
         QString stage_error;
         bool unusable_package = false;
         if (!StagePortablePackage(&stage_error, &unusable_package)) {
-            if (unusable_package) {
-                // The package itself is wrong, so only a fresh one can help.
+            if (unusable_package || (runtime_swap_lock_ && args_.mode == exosnap::update::UpdaterMode::Manual)) {
+                // Manual runtime staging must complete before asking to apply.
                 have_package_ = false;
                 emit failed(FailureCase::DownloadFailed, stage_error); // A1 -> re-download
             } else {
@@ -728,9 +756,33 @@ bool UpdaterWorker::fetchAndStage() {
     return true;
 }
 
+bool UpdaterWorker::LockPortableRuntime(FailureCase failure) {
+    if (runtime_swap_lock_)
+        return true;
+
+    const fs::path install(plan_.install_dir);
+    if (_wcsicmp(install.filename().c_str(), kPortableRuntime) != 0)
+        return true;
+
+    std::error_code error;
+    const fs::file_status launcher = fs::status(install.parent_path() / kExeName, error);
+    if (fs::status_known(launcher)) {
+        if (!fs::is_regular_file(launcher))
+            return true;
+        auto lock = std::make_unique<exosnap::update::RuntimeSwapLock>(install.parent_path().wstring());
+        if (*lock) {
+            runtime_swap_lock_ = std::move(lock);
+            return true;
+        }
+    }
+    emit failed(failure, tr("The portable runtime could not be locked for this update."));
+    return false;
+}
+
 // Wipe + extract + descend. ExtractZip leaves partial output on a mid-fail, so
 // the staging dir is always recreated from scratch (including on retry).
 bool UpdaterWorker::StagePortablePackage(QString* error, bool* unusable_package) {
+    runtime_stage_ready_ = false;
     if (!RemoveTree(plan_.staging_dir)) {
         *error = QStringLiteral("Can't clear the staging directory.");
         return false;
@@ -741,7 +793,8 @@ bool UpdaterWorker::StagePortablePackage(QString* error, bool* unusable_package)
         return false;
     }
 
-    const std::optional<std::wstring> staged_root = ResolveStagedRoot(plan_.staging_dir);
+    const auto staged_root =
+        runtime_swap_lock_ ? ResolveStagedRoot(plan_.staging_dir, plan_) : ResolveStagedRoot(plan_.staging_dir);
     if (!staged_root.has_value()) {
         (void)RemoveTree(plan_.staging_dir);
         // The package extracted but carries no usable exe: re-staging it can
@@ -756,8 +809,7 @@ bool UpdaterWorker::StagePortablePackage(QString* error, bool* unusable_package)
         return true; // flat zip: exosnap.exe already sits at the staging root
     }
 
-    // Descend the single top-level folder: move it beside staging, drop the
-    // now-empty wrapper, and rename it into place (same volume -> pure renames).
+    // Hoist the selected payload before removing the wrapper and its other files.
     const std::wstring hoist = plan_.staging_dir + L".hoist";
     (void)RemoveTree(hoist);
     if (::MoveFileExW(staged_root->c_str(), hoist.c_str(), 0) == 0 || !RemoveTree(plan_.staging_dir) ||
@@ -767,6 +819,7 @@ bool UpdaterWorker::StagePortablePackage(QString* error, bool* unusable_package)
         *error = QStringLiteral("Can't arrange the staged files next to the install directory.");
         return false;
     }
+    runtime_stage_ready_ = runtime_swap_lock_ != nullptr;
     return true;
 }
 
@@ -862,7 +915,7 @@ bool UpdaterWorker::runInstallPortable() {
     // incomplete, re-stage from the kept package; if even the package is gone,
     // fall back to the download-failed path so Retry restarts from Download.
     std::error_code ec;
-    if (!fs::exists(fs::path(plan_.staging_dir) / kExeName, ec)) {
+    if ((runtime_swap_lock_ && !runtime_stage_ready_) || !fs::exists(fs::path(plan_.staging_dir) / kExeName, ec)) {
         if (package_path_.empty() || !fs::exists(fs::path(package_path_), ec)) {
             have_package_ = false;
             emit failed(FailureCase::DownloadFailed, // A1 -> Retry re-downloads
@@ -886,6 +939,8 @@ bool UpdaterWorker::runInstallPortable() {
 
     RenameOutcome failed_rename;
     const SwapError swap_error = StageRename(plan_, {}, &failed_rename);
+    if (swap_error == SwapError::None)
+        runtime_stage_ready_ = false;
     if (swap_error != SwapError::None && failed_rename.attempts > 0) {
         std::fprintf(stderr, "exosnap-updater: directory rename failed after %u attempt(s), Windows error %lu\n",
                      failed_rename.attempts, failed_rename.error);
@@ -1067,6 +1122,7 @@ bool UpdaterWorker::runLaunch() {
 
     if (args_.install_mode == InstallMode::Portable) {
         (void)exosnap::update::CleanupBackup(plan_);
+        runtime_swap_lock_.reset();
     }
 
     // The new instance is confirmed up -- the downloaded manifest/signature/

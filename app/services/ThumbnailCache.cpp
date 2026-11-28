@@ -1,12 +1,12 @@
 #include "ThumbnailCache.h"
 
 #include "TimelineThumbnailSource.h"
+#include "settings/ConfigPaths.h"
 
 #include <QBuffer>
 #include <QByteArray>
 #include <QDir>
 #include <QImageReader>
-#include <QStandardPaths>
 
 #include <algorithm>
 #include <cmath>
@@ -32,7 +32,7 @@ void PutU64(std::vector<std::uint8_t>& out, std::uint64_t value) {
 }
 
 std::filesystem::path DefaultThumbnailRoot() {
-    const QString base = QStandardPaths::writableLocation(QStandardPaths::CacheLocation);
+    const QString base = settings::ResolveAppCacheDir();
     return std::filesystem::path(QDir(base).filePath(QStringLiteral("thumbnails")).toStdWString());
 }
 

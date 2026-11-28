@@ -51,6 +51,7 @@ Item {
         overviewLoader.setSource(Qt.resolvedUrl("DiagnosticsPage.qml"), {
             diagnostics: workspace.diagnostics,
             device: workspace.device,
+            logs: workspace.logs,
             shell: workspace.shell
         });
         if (workspace.section === ShellAdapter.DiagnosticsLogs)

@@ -347,22 +347,14 @@ distributed binary.
   shipped. NVENC runtime support is provided by the NVIDIA display driver,
   which is a system component.
 
-## System/runtime dependencies (not shipped)
+## System and runtime dependencies
 
-ExoSnap uses the following Windows system APIs and redistributables. These are
-provided by the Windows operating system and are not bundled.
+ExoSnap uses Windows system APIs and the following redistributable.
 
 - **Direct3D 11, DXGI** — Windows graphics infrastructure
 - **Media Foundation** — Windows multimedia framework
 - **WASAPI** — Windows audio session API
-- **Microsoft Visual C++ Runtime** — `exosnap.exe` and the shipped Qt6 DLLs
-  link the dynamic MSVC runtime (`/MD`). It is **not bundled** in any ExoSnap
-  artifact (MSI or portable ZIP). The WinGet
-  package declares `Microsoft.VCRedist.2015+.x64` as a dependency and installs
-  it automatically. The Chocolatey package declares `vcredist140` as its runtime dependency.
-  Users installing via the MSI, the portable ZIP, or Scoop must install the Microsoft Visual C++ 2015-2022
-  Redistributable (x64) themselves from
-  <https://aka.ms/vs/17/release/vc_redist.x64.exe> if it is not already present.
+- **Microsoft Visual C++ Runtime** — The recorder, updater and Qt DLLs link the dynamic x64 MSVC runtime. The portable ZIP contains the required app-local DLLs from the Microsoft toolchain redistributable. Offline Setup uses a private runtime for its UI and installs the shared redistributable for the installed product when necessary. The raw MSI requires the shared runtime. WinGet declares `Microsoft.VCRedist.2015+.x64` and Chocolatey declares `vcredist140`.
 
 ---
 *This document is maintained in the ExoSnap repository. For questions, see

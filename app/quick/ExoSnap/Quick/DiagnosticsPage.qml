@@ -19,6 +19,7 @@ Item {
     id: root
 
     required property DiagnosticsAdapter diagnostics
+    required property LogsAdapter logs
     required property ShellAdapter shell
     // Detected adapters and their encoder capabilities. Observed facts about the
     // machine, so they belong here rather than under a navigation destination of
@@ -45,6 +46,13 @@ Item {
     signal navigateToSettingsRequested()
 
     objectName: "quickDiagnosticsPage"
+
+    Binding {
+        target: root.diagnostics
+        property: "trendPlotsVisible"
+        value: root.visible && root.Window.window !== null && root.Window.window.visible
+               && root.Window.window.visibility !== Window.Minimized
+    }
 
     // ── Automation targets (protocol 2 ui.reveal) ────────────────────────────
     //
@@ -140,142 +148,71 @@ Item {
             margins: ExoTheme.pagePadding
         }
 
-        // ── Page header: identity and the in-depth switch ─────────────────────
-        //
-        // A page title on the same rung, the same axis and the same inset as
-        // Settings and Device. The one header action is the switch that decides
-        // how deep the live measurements go; creating a support bundle is a
-        // reference row at the bottom, where the rest of the export-shaped
-        // affordances live.
-        RowLayout {
-            spacing: ExoTheme.spacingMd
-            Layout.fillWidth: true
-            Layout.bottomMargin: ExoTheme.spacingXs
-            Layout.leftMargin: root.sideInset
-            Layout.rightMargin: root.sideInset + ExoTheme.spacingLg
-
-            Label {
-                text: qsTr("Diagnostics")
-                textFormat: Text.PlainText
-                color: ExoTheme.text
-                font {
-                    family: ExoTheme.sansFamily
-                    pixelSize: ExoTheme.fontPageTitle
-                    weight: Font.DemiBold
-                }
-            }
-
-            Item {
-                Layout.fillWidth: true
-            }
-
-            // Its own fixed gap rather than the header row's general item
-            // spacing: a label and the one switch it names read as a single
-            // control. Same value in SettingsPresetBar.qml, which carries the
-            // twin of this switch.
-            RowLayout {
-                spacing: ExoTheme.spacingSm
-                Layout.alignment: Qt.AlignVCenter
-                // Dimmed rather than hidden while recording: the gate is a fact
-                // about this session, and a control that vanishes reads as one
-                // the product forgot about.
-                opacity: root.diagnostics.inDepthAvailable ? 1.0 : 0.45
-
-                ColumnLayout {
-                    spacing: 2
-                    Layout.alignment: Qt.AlignVCenter
-
-                    Label {
-                        text: qsTr("In-depth diagnostics")
-                        textFormat: Text.PlainText
-                        horizontalAlignment: Text.AlignRight
-                        color: ExoTheme.text
-                        Layout.alignment: Qt.AlignRight
-                        font {
-                            family: ExoTheme.sansFamily
-                            pixelSize: ExoTheme.fontBody
-                        }
-                    }
-
-                    Label {
-                        objectName: "diagnosticsInDepthState"
-                        text: root.diagnostics.inDepthStateText
-                        textFormat: Text.PlainText
-                        horizontalAlignment: Text.AlignRight
-                        color: ExoTheme.textMuted
-                        Layout.alignment: Qt.AlignRight
-                        font {
-                            family: ExoTheme.sansFamily
-                            pixelSize: ExoTheme.fontCaption
-                        }
-                    }
-                }
-
-                ExoSwitch {
-                    objectName: "diagnosticsInDepthSwitch"
-                    checked: root.diagnostics.inDepthEnabled
-                    enabled: root.diagnostics.inDepthAvailable
-                    Accessible.name: qsTr("In-depth diagnostics")
-                    Layout.alignment: Qt.AlignVCenter
-                    onToggledByUser: function (value) {
-                        root.diagnostics.inDepthEnabled = value;
-                    }
-                }
-            }
-        }
-
-        // The four measurement sources, each with its own availability. Shown
-        // while the in-depth request is on, because that is exactly when a
-        // refused optional trace must not be mistaken for a failed recording or
-        // for a missing value. Successful sources stay quiet; unavailable ones
-        // state their real reason.
-        ColumnLayout {
-            objectName: "diagnosticsMeasurementSources"
-            visible: root.diagnostics.inDepthEnabled
+        Rectangle {
             Layout.fillWidth: true
             Layout.leftMargin: root.sideInset
             Layout.rightMargin: root.sideInset + ExoTheme.spacingLg
-            spacing: ExoTheme.spacingXs
+            implicitHeight: measurementCard.implicitHeight + 2 * ExoTheme.spacingMd
+            color: ExoTheme.surface
+            border.color: ExoTheme.line
+            border.width: 1
+            radius: ExoTheme.radiusMd
 
-            DiagnosticsSectionHeader {
-                title: qsTr("MEASUREMENT SOURCES")
-                Layout.fillWidth: true
-            }
+            ColumnLayout {
+                id: measurementCard
 
-            Repeater {
-                model: root.diagnostics.measurementSources
+                anchors.fill: parent
+                anchors.margins: ExoTheme.spacingMd
+                spacing: ExoTheme.spacingMd
 
-                delegate: RowLayout {
-                    id: sourceRow
-
-                    required property var modelData
-
+                RowLayout {
                     Layout.fillWidth: true
-                    spacing: ExoTheme.spacingSm
+                    spacing: ExoTheme.spacingMd
+                    opacity: root.diagnostics.inDepthAvailable ? 1.0 : 0.45
 
-                    Label {
+                    GridLayout {
+                        id: measurementHeading
+
                         Layout.fillWidth: true
-                        text: sourceRow.modelData.title
-                        textFormat: Text.PlainText
-                        elide: Text.ElideRight
-                        color: ExoTheme.textSecondary
-                        font {
-                            family: ExoTheme.sansFamily
-                            pixelSize: ExoTheme.fontCaption
+                        columns: width >= 620 ? 2 : 1
+                        columnSpacing: ExoTheme.spacingMd
+                        rowSpacing: 2
+
+                        Label {
+                            Layout.fillWidth: measurementHeading.columns === 1
+                            text: qsTr("In-depth diagnostics")
+                            textFormat: Text.PlainText
+                            elide: Text.ElideRight
+                            color: ExoTheme.text
+                            font {
+                                family: ExoTheme.sansFamily
+                                pixelSize: ExoTheme.fontBody
+                                weight: Font.DemiBold
+                            }
+                        }
+
+                        Label {
+                            objectName: "diagnosticsInDepthState"
+                            Layout.fillWidth: true
+                            text: root.diagnostics.inDepthStateText
+                            textFormat: Text.PlainText
+                            wrapMode: Text.Wrap
+                            color: ExoTheme.textMuted
+                            font {
+                                family: ExoTheme.sansFamily
+                                pixelSize: ExoTheme.fontCaption
+                            }
                         }
                     }
 
-                    Label {
-                        objectName: "measurementSourceState"
-                        text: sourceRow.modelData.state
-                        textFormat: Text.PlainText
-                        elide: Text.ElideRight
-                        color: sourceRow.modelData.tone === "measuring" ? ExoTheme.text : ExoTheme.textMuted
-                        font {
-                            family: ExoTheme.sansFamily
-                            pixelSize: ExoTheme.fontCaption
+                    ExoSwitch {
+                        objectName: "diagnosticsInDepthSwitch"
+                        checked: root.diagnostics.inDepthEnabled
+                        enabled: root.diagnostics.inDepthAvailable
+                        Accessible.name: qsTr("In-depth diagnostics")
+                        onToggledByUser: function (value) {
+                            root.diagnostics.inDepthEnabled = value;
                         }
-                        Layout.maximumWidth: root.contentWidth * 0.6
                     }
                 }
             }
@@ -294,11 +231,63 @@ Item {
 
             ColumnLayout {
                 spacing: ExoTheme.spacingLg
-                // Capped and centred: a healthy run is a short page, and stretching
-                // six tiles across a wide desktop reads as something missing.
                 width: root.contentWidth
                 x: root.sideInset
 
+                DiagnosticsSectionHeader {
+                    visible: root.diagnostics.inDepthEnabled
+                    title: qsTr("MEASUREMENT SOURCES")
+                    Layout.fillWidth: true
+                }
+
+                GridLayout {
+                    objectName: "diagnosticsMeasurementSources"
+                    visible: root.diagnostics.inDepthEnabled
+                    Layout.fillWidth: true
+                    columns: root.tileColumns
+                    uniformCellWidths: true
+                    rowSpacing: ExoTheme.spacingSm
+                    columnSpacing: ExoTheme.spacingLg
+
+                    Repeater {
+                        model: root.diagnostics.measurementSources
+
+                        delegate: ColumnLayout {
+                            id: sourceCell
+
+                            required property var modelData
+
+                            Layout.fillWidth: true
+                            spacing: 2
+
+                            Label {
+                                Layout.fillWidth: true
+                                text: sourceCell.modelData.title
+                                textFormat: Text.PlainText
+                                elide: Text.ElideRight
+                                color: ExoTheme.textSecondary
+                                font {
+                                    family: ExoTheme.sansFamily
+                                    pixelSize: ExoTheme.fontCaption
+                                    weight: Font.DemiBold
+                                }
+                            }
+
+                            Label {
+                                objectName: "measurementSourceState"
+                                Layout.fillWidth: true
+                                text: sourceCell.modelData.state
+                                textFormat: Text.PlainText
+                                wrapMode: Text.Wrap
+                                color: sourceCell.modelData.tone === "measuring" ? ExoTheme.text : ExoTheme.textMuted
+                                font {
+                                    family: ExoTheme.sansFamily
+                                    pixelSize: ExoTheme.fontCaption
+                                }
+                            }
+                        }
+                    }
+                }
                 // ── Verdict band ────────────────────────────────────────────────
                 //
                 // No action of its own. The page probes on first visit, every
@@ -836,29 +825,27 @@ Item {
                         }
                     }
 
-                    // The full log surface, at the end of the reference section
-                    // where the inspectable facts live. Opening it keeps this
-                    // destination selected and swaps the workspace to the log
-                    // view; nothing here renders a second history.
-                    ExoReferenceRow {
+                    RowLayout {
                         objectName: "logsReferenceRow"
-
-                        title: qsTr("Logs")
-                        summary: qsTr("Inspect recording events and startup timings")
+                        spacing: ExoTheme.spacingSm
                         Layout.fillWidth: true
 
-                        trailing: Component {
-                            ExoButton {
-                                objectName: "openLogsButton"
+                        ExoButton {
+                            objectName: "openLogsButton"
+                            text: qsTr("Open logs")
+                            trailingGlyph: ExoGlyph.ArrowRight
+                            Accessible.description: root.logs.hasErrors ? qsTr("Errors in log")
+                                                    : qsTr("Open the full log view inside Diagnostics")
+                            onClicked: root.diagnostics.openLogs()
+                        }
 
-                                text: qsTr("Open logs")
-                                quiet: true
-                                compact: true
-                                Accessible.description: qsTr("Open the full log view inside Diagnostics")
-                                // The same request Ctrl+4 and every "Show in
-                                // log" action make; the adapter routes it
-                                // through the shell's one navigation edge.
-                                onClicked: root.diagnostics.openLogs()
+                        ExoStatusPill {
+                            text: qsTr("Errors in log")
+                            tone: "error"
+                            visible: root.logs.hasErrors
+
+                            TapHandler {
+                                onTapped: root.diagnostics.openLogs()
                             }
                         }
                     }

@@ -5,7 +5,10 @@
 #include <atomic>
 #include <memory>
 #include <mutex>
+#include <string>
 #include <thread>
+
+struct _GUID;
 
 namespace exosnap::diagnostics {
 
@@ -44,9 +47,8 @@ class IDpcLatencyProvider {
 //     for the worker with a ceiling and abandons it past that, then resets impl_; the
 //     destructor calls Stop().
 //
-// Threading: Start()/Stop()/Read() are called from the GUI thread. The only blocking
-// call in the class -- ProcessTrace -- runs on worker_, and Read() takes a short
-// accumulator lock, so the Diagnostics refresh never waits on the kernel.
+// Start(), Stop() and Read() run on the companion control thread. ProcessTrace
+// runs on worker_, while Read() takes a short accumulator lock.
 class DpcLatencyProvider final : public IDpcLatencyProvider {
   public:
     DpcLatencyProvider();
@@ -54,7 +56,7 @@ class DpcLatencyProvider final : public IDpcLatencyProvider {
     DpcLatencyProvider(const DpcLatencyProvider&) = delete;
     DpcLatencyProvider& operator=(const DpcLatencyProvider&) = delete;
 
-    [[nodiscard]] bool Start();
+    [[nodiscard]] bool Start(std::wstring session_name, const _GUID& session_id);
     void Stop();
     // True while a consumer is actually consuming, not merely "Start() succeeded".
     // Same reasoning as PresentMonEtwSession::IsOpen(): a ProcessTrace that returned

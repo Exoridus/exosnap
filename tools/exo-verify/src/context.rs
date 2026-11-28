@@ -11,11 +11,11 @@ use crate::bundle::{Bundle, FileRole};
 use crate::capability::{Capability, CapabilitySet};
 use crate::control::{self, Client};
 use crate::job::Job;
+use crate::package::{LAUNCHER_NAME, RECORDER_NAME, RUNTIME_DIR};
 use crate::scenario::{Evidence, Lane, Step, Stop};
 
-/// An installed-layout product tree: `exosnap.exe` next to its runtime and
-/// the updater. Either the candidate's portable package, extracted once per
-/// run, or a local tree named on the command line for development lanes.
+/// An installed-layout product tree with a separate launcher and runtime
+/// process. Local development lanes can also use a flat build tree.
 #[derive(Debug, Clone)]
 pub struct Product {
     pub root: PathBuf,
@@ -27,12 +27,31 @@ pub struct Product {
 
 impl Product {
     pub fn from_dir(root: &Path, from_bundle: bool) -> Result<Product> {
-        let exe = find_file(root, "exosnap.exe")
-            .ok_or_else(|| anyhow!("{} contains no exosnap.exe", root.display()))?;
-        let dir = exe.parent().unwrap().to_path_buf();
-        let updater = dir.join("exosnap-updater.exe");
+        let entry = find_file(root, LAUNCHER_NAME)
+            .ok_or_else(|| anyhow!("{} contains no ExoSnap executable", root.display()))?;
+        let dir = entry.parent().unwrap();
+        let packaged_exe = dir.join(RUNTIME_DIR).join(RECORDER_NAME);
+        let (root, exe) = if packaged_exe.is_file() {
+            (dir.to_path_buf(), packaged_exe)
+        } else if from_bundle {
+            return Err(anyhow!(
+                "{} contains no packaged recorder runtime",
+                dir.display()
+            ));
+        } else if dir
+            .file_name()
+            .is_some_and(|name| name.eq_ignore_ascii_case(RUNTIME_DIR))
+            && dir
+                .parent()
+                .is_some_and(|parent| parent.join(LAUNCHER_NAME).is_file())
+        {
+            (dir.parent().unwrap().to_path_buf(), entry)
+        } else {
+            (dir.to_path_buf(), entry)
+        };
+        let updater = exe.with_file_name("exosnap-updater.exe");
         Ok(Product {
-            root: dir,
+            root,
             exe,
             updater,
             from_bundle,
@@ -463,6 +482,20 @@ pub fn empty() -> Value {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn packaged_product_holds_the_recorder_process_path() {
+        let tree = tempfile::tempdir().unwrap();
+        let wrapper = tree.path().join("ExoSnap-portable");
+        let runtime = wrapper.join(RUNTIME_DIR);
+        std::fs::create_dir_all(&runtime).unwrap();
+        std::fs::write(wrapper.join(LAUNCHER_NAME), b"launcher").unwrap();
+        std::fs::write(runtime.join(RECORDER_NAME), b"recorder").unwrap();
+        let product = Product::from_dir(tree.path(), true).unwrap();
+        assert_eq!(product.root, wrapper);
+        assert_eq!(product.exe, runtime.join(RECORDER_NAME));
+        assert_eq!(product.updater, runtime.join("exosnap-updater.exe"));
+    }
 
     #[test]
     fn process_log_fixture() {
