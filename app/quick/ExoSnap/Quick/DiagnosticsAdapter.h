@@ -115,6 +115,8 @@ class DiagnosticsAdapter : public QObject {
     // trace never turns another source's availability into a failure.
     Q_PROPERTY(QVariantList measurementSources READ measurementSources NOTIFY changed FINAL)
     Q_PROPERTY(QString presentProviderState READ presentProviderState NOTIFY changed FINAL)
+    Q_PROPERTY(
+        bool trendPlotsVisible READ trendPlotsVisible WRITE setTrendPlotsVisible NOTIFY trendPlotsVisibleChanged FINAL)
 
     Q_PROPERTY(bool bundleBusy READ bundleBusy NOTIFY bundleBusyChanged FINAL)
     Q_PROPERTY(QVariantMap audioResources READ audioResources NOTIFY audioResourcesChanged FINAL)
@@ -162,6 +164,8 @@ class DiagnosticsAdapter : public QObject {
     [[nodiscard]] bool inDepthAvailable() const noexcept;
     [[nodiscard]] QVariantList measurementSources() const;
     [[nodiscard]] QString presentProviderState() const;
+    [[nodiscard]] bool trendPlotsVisible() const noexcept;
+    void setTrendPlotsVisible(bool visible);
     [[nodiscard]] bool bundleBusy() const noexcept;
     [[nodiscard]] const QVariantMap& audioResources() const noexcept {
         return audio_resources_;
@@ -264,6 +268,7 @@ class DiagnosticsAdapter : public QObject {
     void sessionLedgerFrozen();
     void lastSessionChanged();
     void inDepthChanged();
+    void trendPlotsVisibleChanged();
     // The user moved the in-depth switch. The composition root owns the setting
     // and the elevation gate behind it.
     void inDepthToggled(bool enabled);
@@ -345,6 +350,7 @@ class DiagnosticsAdapter : public QObject {
     // design: the engine publishes instants, and a trend is a property of the
     // surface that watched them go by.
     std::unordered_map<std::string, std::deque<double>> series_;
+    bool trend_plots_visible_ = false;
     uint64_t series_generation_ = 0;
     // Bumped on every append. The tiles can be byte-identical while the trend
     // under them has moved, so the publish gate compares this too.

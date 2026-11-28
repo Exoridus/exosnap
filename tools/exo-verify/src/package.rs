@@ -1230,10 +1230,11 @@ fn package_version(base: &str, version: &str) -> Result<()> {
 
 fn empty_output(path: &Path, prepared: Option<&Path>) -> Result<PathBuf> {
     if let Some(prepared) = prepared {
+        let prepared = fs::canonicalize(prepared)?;
         let absolute = std::path::absolute(path)?;
         if let Some(ancestor) = absolute.ancestors().find(|path| path.exists()) {
             ensure!(
-                !external_path(&fs::canonicalize(ancestor)?).starts_with(prepared),
+                !fs::canonicalize(ancestor)?.starts_with(&prepared),
                 "the package output must be outside the prepared inputs"
             );
         }
@@ -1767,8 +1768,17 @@ mod tests {
         assert_eq!(loaded.version, "0.11.0");
 
         let inside = downloaded.join("bad-output");
-        assert!(empty_output(&inside, Some(&downloaded)).is_err());
-        assert!(!inside.exists());
+        let alias = external_path(&fs::canonicalize(&downloaded).unwrap())
+            .join("..")
+            .join("downloaded");
+        for prepared in [&alias, &downloaded] {
+            let error = empty_output(&inside, Some(prepared)).unwrap_err();
+            assert_eq!(
+                error.to_string(),
+                "the package output must be outside the prepared inputs"
+            );
+            assert!(!inside.exists());
+        }
         let out = dir.path().join("packages");
         let stage = out.join("staging");
         stage_prepared_runtime(&downloaded, &stage).unwrap();

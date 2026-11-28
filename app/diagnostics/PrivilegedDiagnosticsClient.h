@@ -14,7 +14,7 @@ class PrivilegedDiagnosticsClient final : public IDpcLatencyProvider {
     PrivilegedDiagnosticsClient(const PrivilegedDiagnosticsClient&) = delete;
     PrivilegedDiagnosticsClient& operator=(const PrivilegedDiagnosticsClient&) = delete;
 
-    void Start(bool capture_present);
+    void Start(bool capture_present, bool already_elevated);
     void Stop();
     [[nodiscard]] PrivilegedDiagnosticsState Status() const;
     [[nodiscard]] bool KernelTraceOpen() const;

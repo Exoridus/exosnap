@@ -241,5 +241,7 @@ TEST(RecordingClipAdapterTest, RecordingReserveIsExactAndSharedOnceAcrossJobs) {
     EXPECT_TRUE(shared_metrics.first().toMap().value("available").toBool());
     EXPECT_EQ(resources[1].toMap().value("metrics").toList().last().toMap().value("value").toString(), "111");
     EXPECT_EQ(resources[2].toMap().value("metrics").toList().last().toMap().value("value").toString(), "222");
+    const auto storage = adapter.diagnosticResources(524288000).first().toMap().value("metrics").toList();
+    EXPECT_EQ(storage.first().toMap().value("displayValue").toString().simplified(), "500 MiB");
 }
 } // namespace exosnap::quick

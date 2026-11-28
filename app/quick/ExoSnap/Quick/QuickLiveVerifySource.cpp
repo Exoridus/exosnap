@@ -999,6 +999,7 @@ QJsonObject QuickLiveVerifySource::DiagnosticsSnapshot() const {
     // standard token with trace rights measures, and an elevated one can still
     // be refused.
     json.insert(QStringLiteral("inDepth"), diagnostics->inDepthEnabled());
+    json.insert(QStringLiteral("trendPlotsVisible"), diagnostics->trendPlotsVisible());
     json.insert(QStringLiteral("presentState"), diagnostics->presentProviderState());
     json.insert(QStringLiteral("measurementSources"), QJsonValue::fromVariant(diagnostics->measurementSources()));
     return json;

@@ -31,11 +31,12 @@ ColumnLayout {
             Layout.fillWidth: true
 
             Label {
-                text: resourceMetric.metric.label || ""
+                text: resourceMetric.metric.displayLabel || resourceMetric.metric.label || ""
                 textFormat: Text.PlainText
                 wrapMode: Text.Wrap
                 color: ExoTheme.textSecondary
-                Layout.preferredWidth: Math.min(180, root.width * 0.3)
+                Layout.fillWidth: true
+                Layout.minimumWidth: 0
                 Layout.alignment: Qt.AlignTop
                 font {
                     family: ExoTheme.sansFamily
@@ -45,13 +46,16 @@ ColumnLayout {
 
             Label {
                 objectName: "diagnosticsAudioResourceValue"
-                text: resourceMetric.metric.available ? (resourceMetric.metric.value || qsTr("n/a")) : qsTr("n/a")
+                text: resourceMetric.metric.available
+                      ? (resourceMetric.metric.displayValue ?? resourceMetric.metric.value ?? "")
+                      : qsTr("Not measured")
                 textFormat: Text.PlainText
                 wrapMode: Text.Wrap
                 color: resourceMetric.metric.available ? ExoTheme.text : ExoTheme.textMuted
-                Layout.fillWidth: true
                 Layout.minimumWidth: 0
-                Layout.alignment: Qt.AlignTop
+                Layout.maximumWidth: root.width * 0.45
+                Layout.alignment: Qt.AlignTop | Qt.AlignRight
+                horizontalAlignment: Text.AlignRight
                 font {
                     family: ExoTheme.monoFamily
                     pixelSize: ExoTheme.fontCaption
@@ -77,7 +81,6 @@ ColumnLayout {
     objectName: "diagnosticsAudioResources"
     spacing: ExoTheme.spacingSm
     visible: root.audioResourceGroups.some(function (group) { return group.rows.length > 0; })
-             || (root.audioResourceSnapshot.unavailable || []).length > 0
     Layout.fillWidth: true
 
     DiagnosticsSectionHeader {
@@ -176,44 +179,4 @@ ColumnLayout {
         }
     }
 
-    Rectangle {
-        visible: (root.audioResourceSnapshot.unavailable || []).length > 0
-        implicitHeight: unavailableContent.implicitHeight + 2 * ExoTheme.spacingMd
-        color: ExoTheme.surface
-        border.width: 1
-        border.color: ExoTheme.line
-        radius: ExoTheme.radiusMd
-        Layout.fillWidth: true
-
-        ColumnLayout {
-            id: unavailableContent
-            anchors {
-                fill: parent
-                margins: ExoTheme.spacingMd
-            }
-            spacing: ExoTheme.spacingSm
-
-            Label {
-                text: qsTr("Unavailable measurements")
-                textFormat: Text.PlainText
-                color: ExoTheme.textSecondary
-                Layout.fillWidth: true
-                font {
-                    family: ExoTheme.sansFamily
-                    pixelSize: ExoTheme.fontSecondary
-                    weight: Font.DemiBold
-                }
-            }
-
-            Repeater {
-                model: root.audioResourceSnapshot.unavailable || []
-
-                ResourceMetric {
-                    id: unavailableMetricDelegate
-                    required property var modelData
-                    metric: unavailableMetricDelegate.modelData
-                }
-            }
-        }
-    }
 }

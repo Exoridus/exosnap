@@ -358,6 +358,21 @@ QString DiagnosticsAdapter::presentProviderState() const {
     return QString::fromLatin1(diagnostics::PresentProviderStateKey(present_provider_state_));
 }
 
+bool DiagnosticsAdapter::trendPlotsVisible() const noexcept {
+    return trend_plots_visible_;
+}
+
+void DiagnosticsAdapter::setTrendPlotsVisible(bool visible) {
+    if (trend_plots_visible_ == visible)
+        return;
+    trend_plots_visible_ = visible;
+    if (!visible && !series_.empty()) {
+        resetSeries();
+        refreshLiveTiles();
+    }
+    emit trendPlotsVisibleChanged();
+}
+
 QVariantList DiagnosticsAdapter::measurementSources() const {
     const auto now = std::chrono::steady_clock::now();
     const auto& probe = controller_.probeResult();
@@ -545,10 +560,8 @@ void DiagnosticsAdapter::appendSeriesSamples(const exosnap::engine::RecordingDia
     };
 
     push("framePacing", snapshot.capture.actual_fps);
-    if (snapshot.video_encoder.timing_availability == exosnap::engine::MetricAvailability::Available) {
+    if (snapshot.video_encoder.timing_availability == exosnap::engine::MetricAvailability::Available)
         push("encoder", snapshot.video_encoder.p99_ms);
-        encoder_session_worst_p99_ms_ = std::max(encoder_session_worst_p99_ms_, snapshot.video_encoder.p99_ms);
-    }
     // Only a measured drift is plotted: a zero here would draw perfect sync on a
     // recording whose drift nobody measured.
     if (snapshot.av_drift_availability == exosnap::engine::MetricAvailability::Available)
@@ -886,8 +899,12 @@ void DiagnosticsAdapter::applyLiveDiagnostics(const exosnap::engine::RecordingDi
             session_start_ =
                 QDateTime::currentDateTime().addMSecs(-static_cast<qint64>(snapshot.elapsed_seconds * 1000.0));
         }
-        if (!paused())
-            appendSeriesSamples(snapshot);
+        if (!paused()) {
+            if (snapshot.video_encoder.timing_availability == exosnap::engine::MetricAvailability::Available)
+                encoder_session_worst_p99_ms_ = std::max(encoder_session_worst_p99_ms_, snapshot.video_encoder.p99_ms);
+            if (trend_plots_visible_)
+                appendSeriesSamples(snapshot);
+        }
     }
 
     const bool left_recording = recording_ && !live;

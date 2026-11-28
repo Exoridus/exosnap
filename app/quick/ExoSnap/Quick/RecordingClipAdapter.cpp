@@ -1,10 +1,12 @@
 #include "RecordingClipAdapter.h"
 #include "models/RecordingCapabilities.h"
 
+#include <QLocale>
 #include <QStringList>
 #include <QVariantMap>
 
 #include <algorithm>
+#include <limits>
 #include <string>
 #include <utility>
 
@@ -235,13 +237,19 @@ void RecordingClipAdapter::openCompleted(const QString& asset_id) {
 QVariantList RecordingClipAdapter::diagnosticResources(std::optional<uint64_t> recording_reserve) const {
     QVariantList resources;
     if (recording_reserve) {
-        resources.push_back(
-            QVariantMap{{QStringLiteral("identity"), tr("Recording storage")},
-                        {QStringLiteral("metrics"),
-                         QVariantList{QVariantMap{{QStringLiteral("label"), tr("Enforced recording reserve (bytes)")},
-                                                  {QStringLiteral("value"), QString::number(*recording_reserve)},
-                                                  {QStringLiteral("available"), true},
-                                                  {QStringLiteral("reason"), QString()}}}}});
+        const auto value = QString::number(*recording_reserve);
+        const auto display_value =
+            *recording_reserve <= uint64_t(std::numeric_limits<qint64>::max())
+                ? QLocale().formattedDataSize(static_cast<qint64>(*recording_reserve), 0, QLocale::DataSizeIecFormat)
+                : value;
+        const QVariantMap metric{{QStringLiteral("label"), tr("Enforced recording reserve (bytes)")},
+                                 {QStringLiteral("value"), value},
+                                 {QStringLiteral("displayLabel"), tr("Reserve for recording")},
+                                 {QStringLiteral("displayValue"), display_value},
+                                 {QStringLiteral("available"), true},
+                                 {QStringLiteral("reason"), QString()}};
+        resources.push_back(QVariantMap{{QStringLiteral("identity"), tr("Recording storage")},
+                                        {QStringLiteral("metrics"), QVariantList{metric}}});
     }
     for (const auto& value : jobs_) {
         const auto job = value.toMap();

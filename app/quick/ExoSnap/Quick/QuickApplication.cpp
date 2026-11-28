@@ -624,10 +624,11 @@ void QuickApplication::applyShowNotifications() {
 
 void QuickApplication::setPrivilegedDiagnostics(bool enabled) {
     if (enabled) {
-        if (!in_depth_diagnostics_ || !present_provider_)
+        if (!settings_.ask_admin_for_diagnostics || !in_depth_diagnostics_ || !present_provider_)
             return;
         privileged_diagnostics_.Start(present_provider_->openResult() ==
-                                      diagnostics::PresentTraceOpenResult::AccessDenied);
+                                          diagnostics::PresentTraceOpenResult::AccessDenied,
+                                      elevation_provider_.IsElevated());
     } else {
         privileged_diagnostics_.Stop();
     }
@@ -2085,11 +2086,11 @@ void QuickApplication::refreshCaptureTargets(const CaptureTargetSnapshot& snapsh
             selectRegion(restored);
         }
     }
-    diagnostics::AppLog::info(QStringLiteral("CaptureTargetDiscovery"),
-                              QStringLiteral("Quick target model refreshed — targets:%1 selected:%2 reason:%3")
-                                  .arg(record_view_model_.targets.size())
-                                  .arg(resolved_index)
-                                  .arg(QLatin1StringView(DiscoveryReasonName(reason))));
+    diagnostics::AppLog::debug(QStringLiteral("CaptureTargetDiscovery"),
+                               QStringLiteral("Quick target model refreshed — targets:%1 selected:%2 reason:%3")
+                                   .arg(record_view_model_.targets.size())
+                                   .arg(resolved_index)
+                                   .arg(QLatin1StringView(DiscoveryReasonName(reason))));
     updateMeterServices();
     synchronizeRecordState();
 }
@@ -3265,7 +3266,10 @@ void QuickApplication::wireSettingsCommands() {
         });
     QObject::connect(&settings_adapter_, &SettingsAdapter::appSettingsEdited, &settings_adapter_, [this]() {
         const QString previous_update_channel = settings_.update_channel;
+        const bool previously_asked_admin = settings_.ask_admin_for_diagnostics;
         settings_ = settings_adapter_.appSettings();
+        if (previously_asked_admin && !settings_.ask_admin_for_diagnostics)
+            setPrivilegedDiagnostics(false);
         record_preview_adapter_.setPreviewFrameRate(settings_.preview_frame_rate);
         persistAppSettings(SettingsWriteIntent::UserEdit);
         if (settings_.update_channel != previous_update_channel)
@@ -4409,7 +4413,7 @@ void QuickApplication::applyDiagnosticsVisualScenarios() {
         if (log_scenario == "empty") {
             // deliberately left empty
         } else if (log_scenario == "long-message") {
-            entries.push_back(entry(0, diagnostics::LogSeverity::Warning, "Output",
+            entries.push_back(entry(0, diagnostics::LogSeverity::Warning, "CaptureTargetDiscovery",
                                     "Output folder validation returned a long recoverable warning with enough detail "
                                     // A placeholder root rather than a real one: the fixture exists to make the
                                     // surface wrap a long unbroken run, and it must not bake anybody's disk
@@ -4480,6 +4484,7 @@ void QuickApplication::applyDiagnosticsVisualScenarios() {
         // photograph neither feature. Each sample is pushed through the same
         // applyLiveDiagnostics() the engine uses; the explicit refresh after it
         // stands in for the 500 ms the live rail would otherwise wait.
+        diagnostics_adapter_.setTrendPlotsVisible(true);
         const int steps = visual::DiagnosticsLiveSampleCount(kind);
         for (int step = 0; step < steps; ++step) {
             diagnostics_adapter_.applyLiveDiagnostics(visual::MakeDiagnosticsLiveSample(kind, step, steps));

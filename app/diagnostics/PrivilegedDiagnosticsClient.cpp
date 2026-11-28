@@ -116,7 +116,7 @@ void Publish(Connection& state, const Response& response) {
     }
 }
 
-PrivilegedDiagnosticsState Run(Connection& state, bool capture_present) {
+PrivilegedDiagnosticsState Run(Connection& state, bool capture_present, bool already_elevated) {
     const auto nonce = NewNonce();
     if (nonce.empty())
         return PrivilegedDiagnosticsState::Failed;
@@ -136,7 +136,7 @@ PrivilegedDiagnosticsState Run(Connection& state, bool capture_present) {
     SHELLEXECUTEINFOW shell{};
     shell.cbSize = sizeof(shell);
     shell.fMask = SEE_MASK_NOCLOSEPROCESS | SEE_MASK_NOASYNC | SEE_MASK_FLAG_NO_UI;
-    shell.lpVerb = L"runas";
+    shell.lpVerb = already_elevated ? L"open" : L"runas";
     shell.lpFile = location.executable.c_str();
     shell.lpParameters = args.c_str();
     shell.lpDirectory = location.directory.c_str();
@@ -213,7 +213,7 @@ PrivilegedDiagnosticsClient::~PrivilegedDiagnosticsClient() {
     Stop();
 }
 
-void PrivilegedDiagnosticsClient::Start(bool capture_present) {
+void PrivilegedDiagnosticsClient::Start(bool capture_present, bool already_elevated) {
     if (connection_ && ::WaitForSingleObject(connection_->ended.get(), 0) != WAIT_OBJECT_0)
         return;
     auto state = std::make_shared<Connection>();
@@ -221,12 +221,12 @@ void PrivilegedDiagnosticsClient::Start(bool capture_present) {
         return;
     connection_ = state;
     try {
-        std::thread([state, capture_present]() {
+        std::thread([state, capture_present, already_elevated]() {
             const HRESULT com = ::CoInitializeEx(nullptr, COINIT_APARTMENTTHREADED | COINIT_DISABLE_OLE1DDE);
             auto outcome = PrivilegedDiagnosticsState::Failed;
             if (SUCCEEDED(com)) {
                 try {
-                    outcome = Run(*state, capture_present);
+                    outcome = Run(*state, capture_present, already_elevated);
                 } catch (const std::exception&) {
                     // Handle unwinding disconnects the elevated collector.
                 }

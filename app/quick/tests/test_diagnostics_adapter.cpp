@@ -762,6 +762,7 @@ TEST(DiagnosticsAdapterTest, SparklineSeriesAreCappedAndResetPerSession) {
     EnsureApplication();
     DiagnosticsAdapter adapter;
     adapter.setDiagnosticConfig(MakeConfig());
+    adapter.setTrendPlotsVisible(true);
 
     exosnap::engine::RecordingDiagnosticsSnapshot snapshot =
         visual::MakeDiagnosticsLiveSnapshot(QStringLiteral("healthy"));
@@ -776,6 +777,30 @@ TEST(DiagnosticsAdapterTest, SparklineSeriesAreCappedAndResetPerSession) {
     adapter.applyLiveDiagnostics(snapshot);
     adapter.refreshForTest();
     EXPECT_EQ(SeriesOf(adapter, QStringLiteral("framePacing")).size(), 1);
+}
+
+TEST(DiagnosticsAdapterTest, HiddenTrendsPreserveSessionTimingWithoutCollectingPlotSamples) {
+    EnsureApplication();
+    DiagnosticsAdapter adapter;
+    adapter.setDiagnosticConfig(MakeConfig());
+
+    auto snapshot = visual::MakeDiagnosticsLiveSnapshot(QStringLiteral("healthy"));
+    snapshot.video_encoder.timing_availability = exosnap::engine::MetricAvailability::Available;
+    snapshot.video_encoder.p99_ms = 8.75;
+    adapter.applyLiveDiagnostics(snapshot);
+    adapter.refreshForTest();
+    EXPECT_TRUE(SeriesOf(adapter, QStringLiteral("encoder")).isEmpty());
+
+    adapter.setTrendPlotsVisible(true);
+    snapshot.video_encoder.p99_ms = 2.0;
+    adapter.applyLiveDiagnostics(snapshot);
+    adapter.refreshForTest();
+    EXPECT_EQ(SeriesOf(adapter, QStringLiteral("encoder")).size(), 1);
+    const auto tile = TileWithKey(adapter.liveTiles(), QStringLiteral("encoder"));
+    EXPECT_TRUE(tile.value(QStringLiteral("sessionDetail")).toString().contains(QStringLiteral("8.75")));
+
+    adapter.setTrendPlotsVisible(false);
+    EXPECT_TRUE(SeriesOf(adapter, QStringLiteral("encoder")).isEmpty());
 }
 
 TEST(DiagnosticsAdapterTest, LiveTilesCarryTheTintOfTheCheckThatOwnsTheValue) {

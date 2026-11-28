@@ -19,6 +19,7 @@ Item {
     id: root
 
     required property DiagnosticsAdapter diagnostics
+    required property LogsAdapter logs
     required property ShellAdapter shell
     // Detected adapters and their encoder capabilities. Observed facts about the
     // machine, so they belong here rather than under a navigation destination of
@@ -45,6 +46,13 @@ Item {
     signal navigateToSettingsRequested()
 
     objectName: "quickDiagnosticsPage"
+
+    Binding {
+        target: root.diagnostics
+        property: "trendPlotsVisible"
+        value: root.visible && root.Window.window !== null && root.Window.window.visible
+               && root.Window.window.visibility !== Window.Minimized
+    }
 
     // ── Automation targets (protocol 2 ui.reveal) ────────────────────────────
     //
@@ -140,18 +148,6 @@ Item {
             margins: ExoTheme.pagePadding
         }
 
-        Label {
-            Layout.leftMargin: root.sideInset
-            text: qsTr("Diagnostics")
-            textFormat: Text.PlainText
-            color: ExoTheme.text
-            font {
-                family: ExoTheme.sansFamily
-                pixelSize: ExoTheme.fontPageTitle
-                weight: Font.DemiBold
-            }
-        }
-
         Rectangle {
             Layout.fillWidth: true
             Layout.leftMargin: root.sideInset
@@ -174,12 +170,16 @@ Item {
                     spacing: ExoTheme.spacingMd
                     opacity: root.diagnostics.inDepthAvailable ? 1.0 : 0.45
 
-                    ColumnLayout {
+                    GridLayout {
+                        id: measurementHeading
+
                         Layout.fillWidth: true
-                        spacing: 2
+                        columns: width >= 620 ? 2 : 1
+                        columnSpacing: ExoTheme.spacingMd
+                        rowSpacing: 2
 
                         Label {
-                            Layout.fillWidth: true
+                            Layout.fillWidth: measurementHeading.columns === 1
                             text: qsTr("In-depth diagnostics")
                             textFormat: Text.PlainText
                             elide: Text.ElideRight
@@ -194,8 +194,7 @@ Item {
                         Label {
                             objectName: "diagnosticsInDepthState"
                             Layout.fillWidth: true
-                            text: root.diagnostics.inDepthEnabled ? root.diagnostics.inDepthStateText
-                                                                  : qsTr("May request administrator approval.")
+                            text: root.diagnostics.inDepthStateText
                             textFormat: Text.PlainText
                             wrapMode: Text.Wrap
                             color: ExoTheme.textMuted
@@ -216,6 +215,24 @@ Item {
                         }
                     }
                 }
+            }
+        }
+
+        ExoScrollView {
+            id: scroll
+
+            contentWidth: availableWidth
+            clip: true
+            // The vertical scroll bar overlays content, so its gutter is reserved
+            // unconditionally — this page always scrolls.
+            rightPadding: ExoTheme.spacingLg
+            Layout.fillWidth: true
+            Layout.fillHeight: true
+
+            ColumnLayout {
+                spacing: ExoTheme.spacingLg
+                width: root.contentWidth
+                x: root.sideInset
 
                 DiagnosticsSectionHeader {
                     visible: root.diagnostics.inDepthEnabled
@@ -227,7 +244,7 @@ Item {
                     objectName: "diagnosticsMeasurementSources"
                     visible: root.diagnostics.inDepthEnabled
                     Layout.fillWidth: true
-                    columns: 2
+                    columns: root.tileColumns
                     uniformCellWidths: true
                     rowSpacing: ExoTheme.spacingSm
                     columnSpacing: ExoTheme.spacingLg
@@ -271,27 +288,6 @@ Item {
                         }
                     }
                 }
-            }
-        }
-
-        ExoScrollView {
-            id: scroll
-
-            contentWidth: availableWidth
-            clip: true
-            // The vertical scroll bar overlays content, so its gutter is reserved
-            // unconditionally — this page always scrolls.
-            rightPadding: ExoTheme.spacingLg
-            Layout.fillWidth: true
-            Layout.fillHeight: true
-
-            ColumnLayout {
-                spacing: ExoTheme.spacingLg
-                // Capped and centred: a healthy run is a short page, and stretching
-                // six tiles across a wide desktop reads as something missing.
-                width: root.contentWidth
-                x: root.sideInset
-
                 // ── Verdict band ────────────────────────────────────────────────
                 //
                 // No action of its own. The page probes on first visit, every
@@ -829,29 +825,27 @@ Item {
                         }
                     }
 
-                    // The full log surface, at the end of the reference section
-                    // where the inspectable facts live. Opening it keeps this
-                    // destination selected and swaps the workspace to the log
-                    // view; nothing here renders a second history.
-                    ExoReferenceRow {
+                    RowLayout {
                         objectName: "logsReferenceRow"
-
-                        title: qsTr("Logs")
-                        summary: qsTr("Inspect recording events and startup timings")
+                        spacing: ExoTheme.spacingSm
                         Layout.fillWidth: true
 
-                        trailing: Component {
-                            ExoButton {
-                                objectName: "openLogsButton"
+                        ExoButton {
+                            objectName: "openLogsButton"
+                            text: qsTr("Open logs")
+                            trailingGlyph: ExoGlyph.ArrowRight
+                            Accessible.description: root.logs.hasErrors ? qsTr("Errors in log")
+                                                    : qsTr("Open the full log view inside Diagnostics")
+                            onClicked: root.diagnostics.openLogs()
+                        }
 
-                                text: qsTr("Open logs")
-                                quiet: true
-                                compact: true
-                                Accessible.description: qsTr("Open the full log view inside Diagnostics")
-                                // The same request Ctrl+4 and every "Show in
-                                // log" action make; the adapter routes it
-                                // through the shell's one navigation edge.
-                                onClicked: root.diagnostics.openLogs()
+                        ExoStatusPill {
+                            text: qsTr("Errors in log")
+                            tone: "error"
+                            visible: root.logs.hasErrors
+
+                            TapHandler {
+                                onTapped: root.diagnostics.openLogs()
                             }
                         }
                     }

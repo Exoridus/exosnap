@@ -325,6 +325,8 @@ class SettingsAdapter : public QObject {
     Q_PROPERTY(bool showDiagnosticsOverlay READ showDiagnosticsOverlay WRITE setShowDiagnosticsOverlay NOTIFY
                    appSettingsChanged FINAL)
     Q_PROPERTY(bool showNotifications READ showNotifications WRITE setShowNotifications NOTIFY appSettingsChanged FINAL)
+    Q_PROPERTY(bool askAdminForDiagnostics READ askAdminForDiagnostics WRITE setAskAdminForDiagnostics NOTIFY
+                   appSettingsChanged FINAL)
 
     // Overlay content. The preset properties carry the persisted token; the
     // element properties are the RESOLVED set the overlay will actually draw,
@@ -754,6 +756,7 @@ class SettingsAdapter : public QObject {
     [[nodiscard]] bool showRecordingOverlay() const noexcept;
     [[nodiscard]] bool showDiagnosticsOverlay() const noexcept;
     [[nodiscard]] bool showNotifications() const noexcept;
+    [[nodiscard]] bool askAdminForDiagnostics() const noexcept;
     [[nodiscard]] bool showQuickControls() const noexcept;
     [[nodiscard]] bool minimizeToTray() const noexcept;
     [[nodiscard]] bool hideWindowFromCapture() const noexcept;
@@ -924,6 +927,7 @@ class SettingsAdapter : public QObject {
     void setShowRecordingOverlay(bool value);
     void setShowDiagnosticsOverlay(bool value);
     void setShowNotifications(bool value);
+    void setAskAdminForDiagnostics(bool value);
     void setRecordingOverlayPreset(const QString& value);
     void setDiagnosticsOverlayPreset(const QString& value);
     void setShowQuickControls(bool value);

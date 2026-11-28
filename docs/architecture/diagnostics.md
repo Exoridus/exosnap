@@ -42,6 +42,8 @@ The check declares its tier at creation. A downstream allowlist of diagnostic ID
 
 The application controller owns verdict construction and session-aware accounting. Adapters expose the result. Blocking probes, filesystem checks and self-tests execute asynchronously. An output-path write test is not repeated per frame or at the recording's telemetry rate.
 
+The Diagnostics overview collects its trend samples while that page can render. Hiding the overview or minimizing the window discards the display history. The engine snapshot cadence, session aggregates, incident ledger and report collection are independent of this visibility.
+
 ## Fix actions
 
 Fix actions describe intent, safety class, reversibility and consequences. Auto means an executable, reviewable change, not silent application. The confirmation path is structural: requesting a fix emits its summary; acceptance reaches the dispatcher. A target/scope or track-structure change always needs confirmation naming those consequences.
@@ -50,7 +52,7 @@ Assisted actions resolve stable video frame-pacing/frame-rate/resolution/quality
 
 ## Present and latency observation
 
-Core Recording Health and In-depth engine/GPU/memory evidence work without elevation. An In-depth request opens the direct PresentMon consumer with its existing token, reporting access denial, conflicts and unsupported builds independently. Enabling In-depth from the user interface also requests the optional ExoSnap Diagnostics companion with Windows consent. The automation command for ordinary measurement does not request the companion. The companion owns its dedicated DPC/ISR session and a separate PresentMon session if the direct open was denied. Presentation interval and target attribution still run in the main process. The original direct PresentMon session is never stopped by name.
+Core Recording Health and In-depth engine/GPU/memory evidence work without elevation. An In-depth request opens the direct PresentMon consumer with its existing token, reporting access denial, conflicts and unsupported builds independently. The user's administrator preference controls whether the switch also requests the optional companion. A standard process requests Windows consent and an elevated process uses its existing rights. The automation command for ordinary measurement does not request the companion. The companion owns its dedicated DPC/ISR session and a separate PresentMon session if the direct open was denied. Presentation interval and target attribution still run in the main process. The original direct PresentMon session is never stopped by name.
 
 The application MSI and portable ZIP both place `exosnap-helper.exe` next to `exosnap.exe`. The recorder opens the sibling files and checks the detached release signature covering their hashes before requesting consent. Directory and executable handles stay open across consent and collection. The launcher refuses reparse points, loader sidecars and directories where an ordinary process can alter the startup environment. The helper verifies the requesting recorder against the same signed pair before opening a trace.
 
