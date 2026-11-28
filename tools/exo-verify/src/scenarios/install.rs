@@ -1,7 +1,7 @@
 //! MSI installation on a disposable Windows machine.
 
 use anyhow::Result;
-use serde_json::json;
+use serde_json::{Value, json};
 use std::collections::BTreeMap;
 use std::fs;
 use std::path::{Path, PathBuf};
@@ -32,7 +32,7 @@ pub fn scenarios() -> Vec<Scenario> {
         // scenario, which asserts a clean machine, can follow it.
         Scenario {
             id: "install.setup-cycle",
-            revision: 1,
+            revision: 2,
             title: "The offline Setup installs, repairs and uninstalls without its original file",
             class: ScenarioClass::Installer,
             contract: "on a clean disposable Windows machine, ExoSnap Setup installs silently with the default options (no desktop shortcut, one Installed Apps entry, Start Menu entry), repairs from Burn's cache after the original Setup.exe is deleted, and uninstalls while preserving the shared runtime and user data",
@@ -68,7 +68,7 @@ pub fn scenarios() -> Vec<Scenario> {
         },
         Scenario {
             id: "install.msi-cycle",
-            revision: 3,
+            revision: 4,
             title: "The MSI installs, starts, uninstalls and reinstalls cleanly",
             class: ScenarioClass::Installer,
             contract: "on a clean disposable Windows machine, the MSI installs the shared portable files and uses the system Visual C++ runtime, starts cleanly, uninstalls the helper, preserves user settings, and reinstalls the same bytes",
@@ -87,7 +87,7 @@ pub fn scenarios() -> Vec<Scenario> {
         },
         Scenario {
             id: "install.msi-user-data-removal",
-            revision: 1,
+            revision: 2,
             title: "An explicit uninstall removes only the current user's local data",
             class: ScenarioClass::Installer,
             contract: "on a disposable Windows machine, an MSI uninstall with EXOSNAP_REMOVE_USER_DATA=1 removes the current user's %LOCALAPPDATA%\\ExoSnap and leaves recordings outside it byte-identical, then restores an installed product",
@@ -684,6 +684,27 @@ fn desktop_shortcut() -> Result<PathBuf> {
     Ok(PathBuf::from(std::env::var("PUBLIC")?).join(r"Desktop\ExoSnap.lnk"))
 }
 
+fn clean_start_differences_are_expected(settings: &Value) -> bool {
+    let requested = &settings["requested"]["video"]["nvencTuning"];
+    let effective = &settings["effective"]["video"]["nvencTuning"];
+    settings["differences"]
+        .as_array()
+        .is_some_and(|differences| {
+            differences.iter().all(|difference| {
+                // The encoder clears the depth while preserving the saved value for later use.
+                difference["field"] == "video.nvencTuning.lookaheadDepth"
+                    && requested["lookahead"] == false
+                    && effective["lookahead"] == false
+                    && requested["lookaheadDepth"]
+                        .as_u64()
+                        .is_some_and(|depth| depth > 0)
+                    && difference["requested"] == requested["lookaheadDepth"]
+                    && difference["effective"] == 0
+                    && effective["lookaheadDepth"] == 0
+            })
+        })
+}
+
 fn run_start(ctx: &mut Context, exe: &Path, version: &str, commit: &str) -> Step {
     let run_id = control::new_run_id("install");
     let mut child = ctx.spawn(Command::new(exe).args(["--live-verify-control", &run_id]))?;
@@ -740,10 +761,8 @@ fn run_start(ctx: &mut Context, exe: &Path, version: &str, commit: &str) -> Step
         );
     }
     product_ensure!(
-        settings["differences"]
-            .as_array()
-            .is_some_and(Vec::is_empty),
-        "defaults differ from effective settings: {}",
+        clean_start_differences_are_expected(&settings),
+        "defaults have unexpected effective settings: {}",
         settings["differences"]
     );
     ctx.evidence.put("installedIdentity", identity);
@@ -913,6 +932,25 @@ fn msi_user_data_removal(ctx: &mut Context) -> Step {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn clean_start_allows_only_the_disabled_lookahead_depth_to_be_cleared() {
+        let mut settings = json!({
+            "requested": {"video": {"nvencTuning": {"lookahead": false, "lookaheadDepth": 16}}},
+            "effective": {"video": {"nvencTuning": {"lookahead": false, "lookaheadDepth": 0}}},
+            "differences": [{"field": "video.nvencTuning.lookaheadDepth", "requested": 16, "effective": 0}]
+        });
+        assert!(clean_start_differences_are_expected(&settings));
+        settings["effective"]["video"]["nvencTuning"]["lookahead"] = json!(true);
+        assert!(!clean_start_differences_are_expected(&settings));
+        settings["effective"]["video"]["nvencTuning"]["lookahead"] = json!(false);
+        settings["differences"].as_array_mut().unwrap().push(json!({
+            "field": "video.frameRateNum", "requested": 60, "effective": 30
+        }));
+        assert!(!clean_start_differences_are_expected(&settings));
+        settings["differences"] = json!([]);
+        assert!(clean_start_differences_are_expected(&settings));
+    }
 
     #[test]
     fn installed_parity_requires_exact_helper_bytes_next_to_the_recorder() {
