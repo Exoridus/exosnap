@@ -347,7 +347,7 @@ distributed binary.
   shipped. NVENC runtime support is provided by the NVIDIA display driver,
   which is a system component.
 
-## System and runtime dependencies
+## System/runtime dependencies
 
 ExoSnap uses Windows system APIs and the following redistributable.
 
