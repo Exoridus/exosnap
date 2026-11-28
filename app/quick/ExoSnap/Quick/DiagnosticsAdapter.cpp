@@ -340,6 +340,8 @@ void DiagnosticsAdapter::setInDepthEnabledFromUi(bool enabled) {
     if (in_depth_enabled_ == enabled || !inDepthAvailable())
         return;
     emit inDepthToggled(enabled);
+    if (enabled)
+        emit privilegedDiagnosticsToggled(true);
 }
 
 QString DiagnosticsAdapter::inDepthStateText() const {
@@ -349,7 +351,7 @@ QString DiagnosticsAdapter::inDepthStateText() const {
 }
 
 bool DiagnosticsAdapter::inDepthAvailable() const noexcept {
-    return true;
+    return privileged_state_ != diagnostics::PrivilegedDiagnosticsState::Stopping;
 }
 
 QString DiagnosticsAdapter::presentProviderState() const {
@@ -796,26 +798,6 @@ void DiagnosticsAdapter::setElevated(bool elevated) {
     emit environmentChanged();
     emit inDepthChanged();
     emit changed();
-}
-
-QString DiagnosticsAdapter::privilegedActionText() const {
-    using diagnostics::PrivilegedDiagnosticsState;
-    return privileged_state_ == PrivilegedDiagnosticsState::Running ||
-                   privileged_state_ == PrivilegedDiagnosticsState::Starting
-               ? tr("Stop privileged diagnostics")
-               : tr("Start privileged diagnostics");
-}
-
-bool DiagnosticsAdapter::privilegedActionAvailable() const noexcept {
-    return in_depth_enabled_ && privileged_state_ != diagnostics::PrivilegedDiagnosticsState::Stopping;
-}
-
-void DiagnosticsAdapter::togglePrivilegedDiagnostics() {
-    if (!privilegedActionAvailable())
-        return;
-    using diagnostics::PrivilegedDiagnosticsState;
-    emit privilegedDiagnosticsToggled(privileged_state_ != PrivilegedDiagnosticsState::Running &&
-                                      privileged_state_ != PrivilegedDiagnosticsState::Starting);
 }
 
 void DiagnosticsAdapter::setPrivilegedDiagnosticsState(diagnostics::PrivilegedDiagnosticsState state,

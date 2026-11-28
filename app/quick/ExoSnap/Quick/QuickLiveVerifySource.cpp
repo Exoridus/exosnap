@@ -1932,10 +1932,9 @@ bool QuickLiveVerifySource::DiagnosticsSetInDepth(bool enabled, QString* error) 
         *error = QStringLiteral("The diagnostics surface is not available");
         return false;
     }
-    // The page's own switch, not the application setter: the switch is what
-    // refuses the change while a recording is in flight, and going around it
-    // would let the channel reach a state no user can.
-    diagnostics->setInDepthEnabledFromUi(enabled);
+    // Automation opts into ordinary measurements without requesting UAC.
+    if (diagnostics->inDepthAvailable())
+        application_.setInDepthDiagnostics(enabled);
     if (diagnostics->inDepthEnabled() != enabled) {
         *error = QStringLiteral("The in-depth diagnostics switch refused the change");
         return false;

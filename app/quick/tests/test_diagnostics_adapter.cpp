@@ -699,39 +699,35 @@ TEST(DiagnosticsAdapterTest, MeasurementSourcesSeparateTheOptionalProviders) {
     EXPECT_EQ(adapter.presentProviderState(), QStringLiteral("measuring"));
 }
 
-TEST(DiagnosticsAdapterTest, PrivilegedCollectionRequiresAnExplicitActionAndSupportsRetry) {
+TEST(DiagnosticsAdapterTest, PrivilegedCollectionIsRequestedOnlyByTheUserOptIn) {
     EnsureApplication();
     DiagnosticsAdapter adapter;
     BoolSignalCounter requested(&adapter, &DiagnosticsAdapter::privilegedDiagnosticsToggled);
     using diagnostics::PrivilegedDiagnosticsState;
 
-    EXPECT_FALSE(adapter.privilegedActionAvailable());
-    adapter.togglePrivilegedDiagnostics();
-    EXPECT_EQ(requested.count(), 0);
-
     adapter.setInDepthEnabled(true);
-    EXPECT_TRUE(adapter.privilegedActionAvailable());
     EXPECT_EQ(requested.count(), 0);
-    adapter.togglePrivilegedDiagnostics();
+    adapter.setInDepthEnabled(false);
+    adapter.setInDepthEnabledFromUi(true);
     EXPECT_EQ(requested.count(), 1);
     EXPECT_TRUE(requested.last());
 
+    adapter.setInDepthEnabled(true);
     adapter.setPrivilegedDiagnosticsState(PrivilegedDiagnosticsState::Declined);
     EXPECT_TRUE(adapter.inDepthEnabled());
-    EXPECT_TRUE(adapter.privilegedActionAvailable());
-    adapter.togglePrivilegedDiagnostics();
+    adapter.setInDepthEnabledFromUi(true);
+    adapter.setInDepthEnabledFromUi(false);
+    EXPECT_EQ(requested.count(), 1);
+
+    adapter.setInDepthEnabled(false);
+    adapter.setPrivilegedDiagnosticsState(PrivilegedDiagnosticsState::Stopping);
+    adapter.setInDepthEnabledFromUi(true);
+    EXPECT_EQ(requested.count(), 1);
+
+    adapter.setPrivilegedDiagnosticsState(PrivilegedDiagnosticsState::Idle);
+    adapter.setInDepthEnabledFromUi(true);
     EXPECT_EQ(requested.count(), 2);
     EXPECT_TRUE(requested.last());
-
-    adapter.setPrivilegedDiagnosticsState(PrivilegedDiagnosticsState::Running);
-    adapter.togglePrivilegedDiagnostics();
-    EXPECT_EQ(requested.count(), 3);
-    EXPECT_FALSE(requested.last());
-
-    adapter.setPrivilegedDiagnosticsState(PrivilegedDiagnosticsState::Stopping);
-    EXPECT_FALSE(adapter.privilegedActionAvailable());
-    adapter.togglePrivilegedDiagnostics();
-    EXPECT_EQ(requested.count(), 3);
 }
 TEST(DiagnosticsAdapterTest, InDepthCanBeViewedWhileRecording) {
     EnsureApplication();

@@ -110,8 +110,6 @@ class DiagnosticsAdapter : public QObject {
     Q_PROPERTY(bool inDepthEnabled READ inDepthEnabled WRITE setInDepthEnabledFromUi NOTIFY inDepthChanged FINAL)
     Q_PROPERTY(QString inDepthStateText READ inDepthStateText NOTIFY inDepthChanged FINAL)
     Q_PROPERTY(bool inDepthAvailable READ inDepthAvailable NOTIFY inDepthChanged FINAL)
-    Q_PROPERTY(QString privilegedActionText READ privilegedActionText NOTIFY inDepthChanged FINAL)
-    Q_PROPERTY(bool privilegedActionAvailable READ privilegedActionAvailable NOTIFY inDepthChanged FINAL)
     // The honest four-source projection under the switch. Each row is
     // {title, state, tone}; sources measure independently, so a refused optional
     // trace never turns another source's availability into a failure.
@@ -162,9 +160,6 @@ class DiagnosticsAdapter : public QObject {
     void setInDepthEnabledFromUi(bool enabled);
     [[nodiscard]] QString inDepthStateText() const;
     [[nodiscard]] bool inDepthAvailable() const noexcept;
-    [[nodiscard]] QString privilegedActionText() const;
-    [[nodiscard]] bool privilegedActionAvailable() const noexcept;
-    Q_INVOKABLE void togglePrivilegedDiagnostics();
     [[nodiscard]] QVariantList measurementSources() const;
     [[nodiscard]] QString presentProviderState() const;
     [[nodiscard]] bool bundleBusy() const noexcept;

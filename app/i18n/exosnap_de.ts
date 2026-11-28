@@ -3109,6 +3109,10 @@ Wahrscheinliche Ursache: </translation>
         <translation>Ausführliche Diagnose</translation>
     </message>
     <message>
+        <source>May request administrator approval.</source>
+        <translation>Kann eine Administratorfreigabe anfordern.</translation>
+    </message>
+    <message>
         <location line="+23"/>
         <source>MEASUREMENT SOURCES</source>
         <translation>MESSQUELLEN</translation>
@@ -12313,14 +12317,6 @@ Kleiner Text auf dem Bildschirm verliert früher an Qualität als Videoinhalte. 
     <message>
         <source>Privileged diagnostics off</source>
         <translation>Diagnose mit Administratorrechten ist aus</translation>
-    </message>
-    <message>
-        <source>Start privileged diagnostics</source>
-        <translation>Diagnose mit Administratorrechten starten</translation>
-    </message>
-    <message>
-        <source>Stop privileged diagnostics</source>
-        <translation>Diagnose mit Administratorrechten stoppen</translation>
     </message>
     <message>
         <source>Waiting for kernel trace data</source>

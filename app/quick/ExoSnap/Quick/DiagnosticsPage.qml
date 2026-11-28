@@ -140,153 +140,137 @@ Item {
             margins: ExoTheme.pagePadding
         }
 
-        // ── Page header: identity and the in-depth switch ─────────────────────
-        //
-        // A page title on the same rung, the same axis and the same inset as
-        // Settings and Device. The one header action is the switch that decides
-        // how deep the live measurements go; creating a support bundle is a
-        // reference row at the bottom, where the rest of the export-shaped
-        // affordances live.
-        RowLayout {
-            spacing: ExoTheme.spacingMd
-            Layout.fillWidth: true
-            Layout.bottomMargin: ExoTheme.spacingXs
+        Label {
             Layout.leftMargin: root.sideInset
-            Layout.rightMargin: root.sideInset + ExoTheme.spacingLg
-
-            Label {
-                text: qsTr("Diagnostics")
-                textFormat: Text.PlainText
-                color: ExoTheme.text
-                font {
-                    family: ExoTheme.sansFamily
-                    pixelSize: ExoTheme.fontPageTitle
-                    weight: Font.DemiBold
-                }
-            }
-
-            Item {
-                Layout.fillWidth: true
-            }
-
-            // Its own fixed gap rather than the header row's general item
-            // spacing: a label and the one switch it names read as a single
-            // control. Same value in SettingsPresetBar.qml, which carries the
-            // twin of this switch.
-            RowLayout {
-                spacing: ExoTheme.spacingSm
-                Layout.alignment: Qt.AlignVCenter
-                // Dimmed rather than hidden while recording: the gate is a fact
-                // about this session, and a control that vanishes reads as one
-                // the product forgot about.
-                opacity: root.diagnostics.inDepthAvailable ? 1.0 : 0.45
-
-                ColumnLayout {
-                    spacing: 2
-                    Layout.alignment: Qt.AlignVCenter
-
-                    Label {
-                        text: qsTr("In-depth diagnostics")
-                        textFormat: Text.PlainText
-                        horizontalAlignment: Text.AlignRight
-                        color: ExoTheme.text
-                        Layout.alignment: Qt.AlignRight
-                        font {
-                            family: ExoTheme.sansFamily
-                            pixelSize: ExoTheme.fontBody
-                        }
-                    }
-
-                    Label {
-                        objectName: "diagnosticsInDepthState"
-                        text: root.diagnostics.inDepthStateText
-                        textFormat: Text.PlainText
-                        horizontalAlignment: Text.AlignRight
-                        color: ExoTheme.textMuted
-                        Layout.alignment: Qt.AlignRight
-                        font {
-                            family: ExoTheme.sansFamily
-                            pixelSize: ExoTheme.fontCaption
-                        }
-                    }
-                }
-
-                ExoSwitch {
-                    objectName: "diagnosticsInDepthSwitch"
-                    checked: root.diagnostics.inDepthEnabled
-                    enabled: root.diagnostics.inDepthAvailable
-                    Accessible.name: qsTr("In-depth diagnostics")
-                    Layout.alignment: Qt.AlignVCenter
-                    onToggledByUser: function (value) {
-                        root.diagnostics.inDepthEnabled = value;
-                    }
-                }
+            text: qsTr("Diagnostics")
+            textFormat: Text.PlainText
+            color: ExoTheme.text
+            font {
+                family: ExoTheme.sansFamily
+                pixelSize: ExoTheme.fontPageTitle
+                weight: Font.DemiBold
             }
         }
 
-        // The four measurement sources, each with its own availability. Shown
-        // while the in-depth request is on, because that is exactly when a
-        // refused optional trace must not be mistaken for a failed recording or
-        // for a missing value. Successful sources stay quiet; unavailable ones
-        // state their real reason.
-        ColumnLayout {
-            objectName: "diagnosticsMeasurementSources"
-            visible: root.diagnostics.inDepthEnabled
+        Rectangle {
             Layout.fillWidth: true
             Layout.leftMargin: root.sideInset
             Layout.rightMargin: root.sideInset + ExoTheme.spacingLg
-            spacing: ExoTheme.spacingXs
+            implicitHeight: measurementCard.implicitHeight + 2 * ExoTheme.spacingMd
+            color: ExoTheme.surface
+            border.color: ExoTheme.line
+            border.width: 1
+            radius: ExoTheme.radiusMd
 
-            DiagnosticsSectionHeader {
-                title: qsTr("MEASUREMENT SOURCES")
-                Layout.fillWidth: true
-            }
+            ColumnLayout {
+                id: measurementCard
 
-            Repeater {
-                model: root.diagnostics.measurementSources
+                anchors.fill: parent
+                anchors.margins: ExoTheme.spacingMd
+                spacing: ExoTheme.spacingMd
 
-                delegate: RowLayout {
-                    id: sourceRow
-
-                    required property var modelData
-
+                RowLayout {
                     Layout.fillWidth: true
-                    spacing: ExoTheme.spacingSm
+                    spacing: ExoTheme.spacingMd
+                    opacity: root.diagnostics.inDepthAvailable ? 1.0 : 0.45
 
-                    Label {
+                    ColumnLayout {
                         Layout.fillWidth: true
-                        text: sourceRow.modelData.title
-                        textFormat: Text.PlainText
-                        elide: Text.ElideRight
-                        color: ExoTheme.textSecondary
-                        font {
-                            family: ExoTheme.sansFamily
-                            pixelSize: ExoTheme.fontCaption
+                        spacing: 2
+
+                        Label {
+                            Layout.fillWidth: true
+                            text: qsTr("In-depth diagnostics")
+                            textFormat: Text.PlainText
+                            elide: Text.ElideRight
+                            color: ExoTheme.text
+                            font {
+                                family: ExoTheme.sansFamily
+                                pixelSize: ExoTheme.fontBody
+                                weight: Font.DemiBold
+                            }
+                        }
+
+                        Label {
+                            objectName: "diagnosticsInDepthState"
+                            Layout.fillWidth: true
+                            text: root.diagnostics.inDepthEnabled ? root.diagnostics.inDepthStateText
+                                                                  : qsTr("May request administrator approval.")
+                            textFormat: Text.PlainText
+                            wrapMode: Text.Wrap
+                            color: ExoTheme.textMuted
+                            font {
+                                family: ExoTheme.sansFamily
+                                pixelSize: ExoTheme.fontCaption
+                            }
                         }
                     }
 
-                    Label {
-                        objectName: "measurementSourceState"
-                        text: sourceRow.modelData.state
-                        textFormat: Text.PlainText
-                        elide: Text.ElideRight
-                        color: sourceRow.modelData.tone === "measuring" ? ExoTheme.text : ExoTheme.textMuted
-                        font {
-                            family: ExoTheme.sansFamily
-                            pixelSize: ExoTheme.fontCaption
+                    ExoSwitch {
+                        objectName: "diagnosticsInDepthSwitch"
+                        checked: root.diagnostics.inDepthEnabled
+                        enabled: root.diagnostics.inDepthAvailable
+                        Accessible.name: qsTr("In-depth diagnostics")
+                        onToggledByUser: function (value) {
+                            root.diagnostics.inDepthEnabled = value;
                         }
-                        Layout.maximumWidth: root.contentWidth * 0.6
                     }
                 }
-            }
 
-            ExoButton {
-                objectName: "privilegedDiagnosticsButton"
-                Layout.alignment: Qt.AlignRight
-                compact: true
-                text: root.diagnostics.privilegedActionText
-                enabled: root.diagnostics.privilegedActionAvailable
-                onClicked: root.diagnostics.togglePrivilegedDiagnostics()
+                DiagnosticsSectionHeader {
+                    visible: root.diagnostics.inDepthEnabled
+                    title: qsTr("MEASUREMENT SOURCES")
+                    Layout.fillWidth: true
+                }
+
+                GridLayout {
+                    objectName: "diagnosticsMeasurementSources"
+                    visible: root.diagnostics.inDepthEnabled
+                    Layout.fillWidth: true
+                    columns: 2
+                    uniformCellWidths: true
+                    rowSpacing: ExoTheme.spacingSm
+                    columnSpacing: ExoTheme.spacingLg
+
+                    Repeater {
+                        model: root.diagnostics.measurementSources
+
+                        delegate: ColumnLayout {
+                            id: sourceCell
+
+                            required property var modelData
+
+                            Layout.fillWidth: true
+                            spacing: 2
+
+                            Label {
+                                Layout.fillWidth: true
+                                text: sourceCell.modelData.title
+                                textFormat: Text.PlainText
+                                elide: Text.ElideRight
+                                color: ExoTheme.textSecondary
+                                font {
+                                    family: ExoTheme.sansFamily
+                                    pixelSize: ExoTheme.fontCaption
+                                    weight: Font.DemiBold
+                                }
+                            }
+
+                            Label {
+                                objectName: "measurementSourceState"
+                                Layout.fillWidth: true
+                                text: sourceCell.modelData.state
+                                textFormat: Text.PlainText
+                                wrapMode: Text.Wrap
+                                color: sourceCell.modelData.tone === "measuring" ? ExoTheme.text : ExoTheme.textMuted
+                                font {
+                                    family: ExoTheme.sansFamily
+                                    pixelSize: ExoTheme.fontCaption
+                                }
+                            }
+                        }
+                    }
+                }
             }
         }
 
