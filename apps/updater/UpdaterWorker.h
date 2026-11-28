@@ -17,7 +17,9 @@
 #include <QString>
 #include <atomic>
 #include <chrono>
+#include <filesystem>
 #include <memory>
+#include <mutex>
 #include <optional>
 #include <string>
 
@@ -80,6 +82,11 @@ namespace exosnap::updater {
 // forces all files to be replaced from the verified source.
 [[nodiscard]] std::wstring BuildMsiexecParams(const std::wstring& msi_path, bool verification_reinstall,
                                               bool repair = false);
+
+// A repair/reinstall may only recache the MSI registered for this scope and directory.
+// The caller retains the authenticated package lock across this check and handoff.
+[[nodiscard]] bool MatchesRegisteredMsi(const std::wstring& package, exosnap::update::InstallScope scope,
+                                        const std::wstring& directory);
 
 // Terminal meaning of an msiexec process exit code for the silent
 // (/qn /norestart) install this app performs.
@@ -150,12 +157,12 @@ class UpdaterWorker : public QObject {
     // it, cancelling a download surfaced as FailureCase::DownloadFailed and
     // cancelling the msiexec wait as "The installer did not finish in time" --
     // both of which describe a fault that did not happen.
-    //
-    // Cleared by every run()/check() entry, so a cancellation cannot leak into
-    // the next attempt.
     void requestCancel() {
         cancel_.store(true);
     }
+    [[nodiscard]] bool tryCancelDownload();
+    // Reset before queuing a new operation so its worker entry cannot erase an accepted cancellation.
+    void prepareOperation();
 
   public slots:
     // Run the pipeline from `entry` to the end (initial run: Download; retries
@@ -189,10 +196,9 @@ class UpdaterWorker : public QObject {
     void allDone();
     void failed(FailureCase c, QString detail);
     void installerLogAvailable(QString path);
-    // The run stopped because requestCancel() was observed. Terminal, and NOT a
-    // failure: nothing was installed and nothing broke. Emitted instead of
-    // failed(...) at the points where the engine actually honours cancellation.
-    void cancelled();
+    // The updater stopped at a point that honors requestCancel(). Windows
+    // Installer can continue independently if its process has already started.
+    void cancelled(bool installer_started);
 
     // Manual-mode results.
     void checkStarted();
@@ -209,21 +215,22 @@ class UpdaterWorker : public QObject {
     void selfUpdateBlocked(QString reason);
 
   private:
+    friend struct UpdaterWorkerTestPeer;
+
     // Resolve the newest qualifying release for the channel into release_.
     // Emits failed(A1) and returns false when the feed cannot be read; sets
     // `no_release` (without emitting) when the feed is fine and simply carries
     // nothing for this channel, which is a result the manual check reports as
     // upToDate and the handoff path reports as A1.
-    // True when a step just aborted because cancellation was requested, and the
-    // cancelled() signal has been emitted in place of failed(...). Used only at
-    // the four sites where the engine honours the flag; everywhere else a
-    // failure is a failure even if a cancel happens to be pending.
-    [[nodiscard]] bool abortedByCancel();
+    // Report cancellation only at a point that honors the request.
+    [[nodiscard]] bool abortedByCancel(bool installer_started = false);
+    [[nodiscard]] bool admitInstallerLaunch();
     [[nodiscard]] bool selfUpdateAllowed();
 
     [[nodiscard]] bool resolveRelease(bool* no_release);
     // Manifest + signature + gates + package + hash + portable staging.
     [[nodiscard]] bool fetchAndStage();
+    [[nodiscard]] bool fetchPackage(const exosnap::update::PackageEntry& package, const std::filesystem::path& path);
     [[nodiscard]] bool runDownload();
     [[nodiscard]] bool runCloseApp();
     [[nodiscard]] bool runInstallPortable();
@@ -247,7 +254,10 @@ class UpdaterWorker : public QObject {
     [[nodiscard]] bool LockAndVerifyPackage(const std::string& expected_sha256, QString* error);
 
     const UpdaterArgs args_;
+    exosnap::update::InstallScope install_scope_ = exosnap::update::InstallScope::None;
     std::atomic<bool> cancel_{false};
+    std::mutex installer_launch_mutex_;
+    bool installer_launch_admitted_ = false;
 
     // Pipeline state kept across retries (B1/B2/B3/C1 re-enter mid-pipeline).
     // The release resolved for this run; the manual flow resolves it in check()

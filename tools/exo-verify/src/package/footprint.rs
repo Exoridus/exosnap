@@ -235,6 +235,9 @@ pub(super) fn write(out: &Path, package: &PackageResult, vc_redist: Option<&Path
     if let Some(msi) = &package.installer {
         artifacts.push(artifact("MSI", msi)?);
     }
+    if let Some(msi) = &package.user_installer {
+        artifacts.push(artifact("Per-user MSI", msi)?);
+    }
     if let Some(setup) = &package.setup {
         artifacts.push(artifact("Offline Setup", setup)?);
     }
@@ -297,6 +300,7 @@ mod tests {
             base_version: "0.10.1".into(),
             portable: zip,
             installer: None,
+            user_installer: None,
             setup: None,
             staging: stage,
             file_count: 3,

@@ -244,7 +244,7 @@ void UpdaterController::onSelfUpdateBlocked(const QString& reason) {
     flow_.retry_entry_step.reset();
 }
 
-void UpdaterController::onCancelled() {
+void UpdaterController::onCancelled(bool installer_started) {
     // The step that was running goes back to Queued rather than to Failed: it
     // did not fail, it was stopped, and a red cross in the checklist would say
     // the opposite of what happened.
@@ -257,9 +257,33 @@ void UpdaterController::onCancelled() {
     state_.status_line.clear();
     state_.determinate = false;
     state_.ring = 0.0;
+    if (installer_started) {
+        state_.repairing = false;
+        state_.headline = QCoreApplication::translate("UpdaterController", "Installation state unknown");
+        state_.detail_text =
+            QCoreApplication::translate("UpdaterController", "Windows Installer may still be running.");
+        state_.safety_text = QCoreApplication::translate(
+            "UpdaterController", "The installation is still unconfirmed. Repair ExoSnap before you use it.");
+        state_.primary_action = QCoreApplication::translate("UpdaterController", "Close");
+        state_.secondary_action.clear();
+        flow_.install_state = exosnap::update::InstallState::Unknown;
+        setPhase(UpdatePhase::Cancelled);
+        return;
+    }
     state_.headline = QCoreApplication::translate("UpdaterController", "Update canceled");
     state_.detail_text = QCoreApplication::translate("UpdaterController",
                                                      "The download was stopped and its partial files were discarded.");
+    if (state_.repairing) {
+        state_.repairing = false;
+        state_.headline = QCoreApplication::translate("UpdaterController", "Repair download canceled");
+        state_.safety_text = QCoreApplication::translate(
+            "UpdaterController", "The installation is still unconfirmed. Repair ExoSnap before you use it.");
+        state_.primary_action = QCoreApplication::translate("UpdaterController", "Repair ExoSnap");
+        state_.secondary_action = QCoreApplication::translate("UpdaterController", "Close");
+        setPhase(UpdatePhase::Cancelled);
+        flow_.retry_entry_step = UpStep::CloseApp;
+        return;
+    }
     state_.safety_text =
         state_.from_version.isEmpty()
             ? QCoreApplication::translate("UpdaterController", "Nothing was installed and nothing was changed.")
@@ -299,6 +323,8 @@ void UpdaterController::onStepStarted(UpStep s) {
         return;
     }
     if (s == UpStep::Download) {
+        if (state_.repairing && state_.steps[size_t(UpStep::CloseApp)] == StepStatus::Working)
+            state_.steps[size_t(UpStep::CloseApp)] = StepStatus::Queued;
         state_.downloaded_bytes = 0;
         state_.total_bytes = 0;
         flow_.downloaded_bytes = 0;

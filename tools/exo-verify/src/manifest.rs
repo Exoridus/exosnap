@@ -31,6 +31,8 @@ pub struct Manifest {
     pub version: String,
     pub minimum_accepted_version: String,
     pub packages: Vec<Package>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub user_installer: Option<Package>,
 }
 
 /// Loads the signing seed from `var` (base64 of the 32-byte Ed25519 seed).
@@ -88,6 +90,16 @@ pub fn for_bundle(bundle: &Bundle, installer_url: &str, portable_url: &str) -> R
             .sha256
             .clone())
     };
+    let user_installer = bundle.inventory.file(FileRole::UserInstaller).map(|entry| {
+        let base = installer_url
+            .rsplit_once('/')
+            .map_or(installer_url, |(base, _)| base);
+        Package {
+            kind: "installer".into(),
+            url: format!("{base}/{}", crate::bundle::user_installer_name(version)),
+            sha256: entry.sha256.clone(),
+        }
+    });
     Ok(Manifest {
         version: version.clone(),
         minimum_accepted_version: version.clone(),
@@ -103,6 +115,7 @@ pub fn for_bundle(bundle: &Bundle, installer_url: &str, portable_url: &str) -> R
                 sha256: sha(FileRole::Portable)?,
             },
         ],
+        user_installer,
     })
 }
 
@@ -159,6 +172,18 @@ pub fn verify_against_files(
                 path.display()
             );
         }
+    }
+    let user_path = installer.with_file_name(crate::bundle::user_installer_name(expected_version));
+    match &manifest.user_installer {
+        Some(package) => {
+            let (actual, _) = sha256_file(&user_path)?;
+            ensure!(
+                package.kind == "installer" && package.sha256.eq_ignore_ascii_case(&actual),
+                "manifest user installer does not match {}",
+                user_path.display()
+            );
+        }
+        None => ensure!(!user_path.exists(), "manifest omits the per-user installer"),
     }
     Ok(manifest)
 }
@@ -229,6 +254,43 @@ mod tests {
                 &portable
             )
             .is_err()
+        );
+    }
+
+    #[test]
+    fn user_installer_is_bound_without_changing_legacy_package_kinds() {
+        let dir = tempfile::tempdir().unwrap();
+        let version = "0.12.0";
+        let bundle = crate::bundle::tests::fixture_with_scope(dir.path(), version, true);
+        let document = for_bundle(&bundle, "https://h/i.msi", "https://h/p.zip").unwrap();
+        assert_eq!(document.packages.len(), 2);
+        assert_eq!(
+            document.user_installer.as_ref().unwrap().url,
+            "https://h/ExoSnap-0.12.0-windows-x64-user.msi"
+        );
+        let bytes = serialize(&document).unwrap();
+        let signature = sign(&bytes, &key());
+        let verify = || {
+            verify_against_files(
+                &bytes,
+                &signature,
+                &key().verifying_key(),
+                version,
+                &bundle.require(FileRole::Installer).unwrap(),
+                &bundle.require(FileRole::Portable).unwrap(),
+            )
+        };
+        verify().unwrap();
+        std::fs::write(
+            bundle.require(FileRole::UserInstaller).unwrap(),
+            b"replaced user package",
+        )
+        .unwrap();
+        let error = verify().unwrap_err();
+        assert!(
+            error
+                .to_string()
+                .contains("manifest user installer does not match")
         );
     }
 

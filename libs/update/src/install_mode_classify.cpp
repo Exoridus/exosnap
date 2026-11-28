@@ -52,10 +52,24 @@ DistributionOwner InstalledOwner(const std::optional<std::wstring>& marker) noex
 
 DistributionContext ClassifyDistributionContext(const std::optional<InstallStamp>& stamp,
                                                 const std::wstring& running_exe_dir, bool adjacent_scoop_metadata) {
-    if (stamp && !stamp->install_dir.empty() && !running_exe_dir.empty() &&
-        NormalizeDirForCompare(stamp->install_dir) == NormalizeDirForCompare(running_exe_dir)) {
-        return {InstallMode::Installed, InstalledOwner(stamp->distribution_owner)};
-    }
+    return ClassifyDistributionContext(stamp, std::nullopt, running_exe_dir, adjacent_scoop_metadata);
+}
+
+const InstallStamp* MatchInstallStamp(const std::optional<InstallStamp>& stamp, const std::wstring& directory) {
+    return stamp && !stamp->install_dir.empty() && !directory.empty() &&
+                   NormalizeDirForCompare(stamp->install_dir) == NormalizeDirForCompare(directory)
+               ? &*stamp
+               : nullptr;
+}
+
+DistributionContext ClassifyDistributionContext(const std::optional<InstallStamp>& machine_stamp,
+                                                const std::optional<InstallStamp>& user_stamp,
+                                                const std::wstring& running_exe_dir, bool adjacent_scoop_metadata) {
+    const auto* stamp = MatchInstallStamp(machine_stamp, running_exe_dir);
+    if (!stamp)
+        stamp = MatchInstallStamp(user_stamp, running_exe_dir);
+    if (stamp)
+        return {InstallMode::Installed, InstalledOwner(stamp->distribution_owner), stamp->scope};
     const auto owner = adjacent_scoop_metadata || HasScoopLayout(running_exe_dir) ? DistributionOwner::Scoop
                                                                                   : DistributionOwner::Direct;
     return {InstallMode::Portable, owner};

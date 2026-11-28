@@ -10,10 +10,11 @@
 
 TEST(SetupVisualTest, EveryFinalStateRendersWithoutQmlErrorsAtItsDeclaredSize) {
     const QStringList states{
-        QStringLiteral("checking"),  QStringLiteral("install"),        QStringLiteral("manage"),
-        QStringLiteral("uninstall"), QStringLiteral("uninstall-data"), QStringLiteral("progress"),
-        QStringLiteral("protected"), QStringLiteral("success"),        QStringLiteral("reboot"),
-        QStringLiteral("failure"),   QStringLiteral("removed"),        QStringLiteral("cancelled")};
+        QStringLiteral("checking"), QStringLiteral("install"),   QStringLiteral("install-all-users"),
+        QStringLiteral("manage"),   QStringLiteral("uninstall"), QStringLiteral("uninstall-data"),
+        QStringLiteral("progress"), QStringLiteral("protected"), QStringLiteral("success"),
+        QStringLiteral("reboot"),   QStringLiteral("failure"),   QStringLiteral("removed"),
+        QStringLiteral("cancelled")};
     QTemporaryDir directory;
     ASSERT_TRUE(directory.isValid());
     for (const QString& language : {QStringLiteral("en"), QStringLiteral("de")}) {
@@ -29,6 +30,8 @@ TEST(SetupVisualTest, EveryFinalStateRendersWithoutQmlErrorsAtItsDeclaredSize) {
             process.setProcessEnvironment(environment);
             process.start(QString::fromUtf8(EXOSNAP_SETUP_PREVIEW_EXE),
                           {QStringLiteral("--preview-state"), state, QStringLiteral("--ui-language"), language,
+                           QStringLiteral("--preview-appearance"),
+                           language == QStringLiteral("de") ? QStringLiteral("light") : QStringLiteral("dark"),
                            QStringLiteral("--screenshot"), path});
             ASSERT_TRUE(process.waitForStarted(10000));
             const bool finished = process.waitForFinished(15000);
@@ -45,9 +48,9 @@ TEST(SetupVisualTest, EveryFinalStateRendersWithoutQmlErrorsAtItsDeclaredSize) {
             const QImage image(path);
             ASSERT_FALSE(image.isNull());
             EXPECT_EQ(image.width(), 480);
-            const bool decision = state == QStringLiteral("install") || state == QStringLiteral("manage") ||
-                                  state.startsWith(QStringLiteral("uninstall"));
-            EXPECT_EQ(image.height(), decision ? 300 : 176);
+            const bool fresh = state.startsWith(QStringLiteral("install"));
+            const bool decision = state == QStringLiteral("manage") || state.startsWith(QStringLiteral("uninstall"));
+            EXPECT_EQ(image.height(), fresh ? 340 : decision ? 300 : 176);
         }
     }
 }

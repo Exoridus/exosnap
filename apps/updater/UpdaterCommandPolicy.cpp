@@ -49,6 +49,10 @@ PreconditionVerdict RequirePhase(const FlowState& state, UpdatePhase required, c
 PreconditionVerdict CanCheck(const FlowState& state) {
     if (const PreconditionVerdict manual = RequireManualMode(state, "updater.check"); !manual.allowed())
         return manual;
+    if (state.install_state == exosnap::update::InstallState::Unknown)
+        return Refuse(ec::kBlocked, QStringLiteral("Repair the unconfirmed installation before checking for updates"),
+                      QStringLiteral("installState"), QStringLiteral("intact"),
+                      QString::fromLatin1(exosnap::update::InstallStateName(state.install_state)));
     if (!state.checks_enabled) {
         // `blocked`, not `invalid_state`: the phase is right and a product rule
         // refuses anyway. A runner reads this as "the product said no", which is

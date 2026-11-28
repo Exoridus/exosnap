@@ -48,10 +48,12 @@ QString RuntimeDirectory(const SetupHost* host) {
 }
 
 bool Preview(SetupController& controller, const QString& name) {
-    const QStringList names{QStringLiteral("checking"),  QStringLiteral("install"),        QStringLiteral("manage"),
-                            QStringLiteral("uninstall"), QStringLiteral("uninstall-data"), QStringLiteral("progress"),
-                            QStringLiteral("protected"), QStringLiteral("success"),        QStringLiteral("reboot"),
-                            QStringLiteral("failure"),   QStringLiteral("removed"),        QStringLiteral("cancelled")};
+    const QStringList names{
+        QStringLiteral("checking"), QStringLiteral("install"),   QStringLiteral("install-all-users"),
+        QStringLiteral("manage"),   QStringLiteral("uninstall"), QStringLiteral("uninstall-data"),
+        QStringLiteral("progress"), QStringLiteral("protected"), QStringLiteral("success"),
+        QStringLiteral("reboot"),   QStringLiteral("failure"),   QStringLiteral("removed"),
+        QStringLiteral("cancelled")};
     if (!names.contains(name))
         return false;
     if (name == QStringLiteral("checking"))
@@ -61,6 +63,10 @@ bool Preview(SetupController& controller, const QString& name) {
                       name == QStringLiteral("removed");
     event.version = event.installed ? L"0.11.0" : nullptr;
     controller.receive(event);
+    if (name == QStringLiteral("install-all-users")) {
+        controller.setAllUsers(true);
+        return true;
+    }
     if (name == QStringLiteral("manage") || name == QStringLiteral("install"))
         return true;
     if (name.startsWith(QStringLiteral("uninstall"))) {
@@ -162,11 +168,15 @@ extern "C" __declspec(dllexport) std::uint32_t RunSetupUi(const exosnap::setup::
     if (!host && preview.isEmpty())
         return ERROR_INVALID_PARAMETER;
 
-    SetupController controller(host ? QString::fromWCharArray(host->version) : QStringLiteral("0.11.0"),
-                               QDir::toNativeSeparators(host ? QString::fromWCharArray(host->install_path)
-                                                             : QStringLiteral("C:/Program Files/ExoSnap")),
-                               host && host->passive, host && host->uninstall_requested,
-                               host && host->repair_requested);
+    SetupController controller(
+        host ? QString::fromWCharArray(host->version) : QStringLiteral("0.11.0"),
+        QDir::toNativeSeparators(host ? QString::fromWCharArray(host->install_path)
+                                      : QStringLiteral("C:/Users/Player/AppData/Local/Programs/ExoSnap")),
+        host && host->passive, host && host->uninstall_requested, host && host->repair_requested);
+    controller.setScopeOptions(host ? QString::fromWCharArray(host->machine_install_path)
+                                    : QStringLiteral("C:\\Program Files\\ExoSnap"),
+                               host && host->scope_locked, host && host->all_users, host && host->scope_conflict);
+    controller.setCanRemoveUserData(!host || host->allow_data_cleanup);
     QFile license(QStringLiteral(":/setup/LICENSE"));
     if (!license.open(QIODevice::ReadOnly))
         return ERROR_FILE_NOT_FOUND;
@@ -187,13 +197,16 @@ extern "C" __declspec(dllexport) std::uint32_t RunSetupUi(const exosnap::setup::
         return ERROR_INVALID_DATA;
     if (auto* tokens = engine.singletonInstance<exosnap::quick::QuickThemeTokens*>(QStringLiteral("ExoSnap.Setup"),
                                                                                    QStringLiteral("QuickThemeTokens")))
-        tokens->setAppearance(QStringLiteral("dark"), QStringLiteral("aqua"));
+        tokens->setAppearance(!host && option(QStringLiteral("--preview-appearance")) == QStringLiteral("light")
+                                  ? QStringLiteral("light")
+                                  : QStringLiteral("dark"),
+                              QStringLiteral("aqua"));
     QObject::connect(&controller, &SetupController::finished, &app,
                      [&app](std::uint32_t code) { app.exit(static_cast<int>(code)); });
     if (host) {
         QObject::connect(&controller, &SetupController::applyRequested, &app,
-                         [host, window](SetupAction action, bool shortcut, bool remove) {
-                             host->apply(host->context, action, shortcut, remove, window->winId());
+                         [host, window](SetupAction action, bool shortcut, bool remove, bool all_users) {
+                             host->apply(host->context, action, shortcut, remove, all_users, window->winId());
                          });
         QObject::connect(&controller, &SetupController::cancelRequested, &app, [host] { host->cancel(host->context); });
         QObject::connect(&controller, &SetupController::launchRequested, &app,

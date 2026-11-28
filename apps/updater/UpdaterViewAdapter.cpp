@@ -121,8 +121,6 @@ void UpdaterViewAdapter::render(const UpdaterUiState& state) {
     } else if (prompting) {
         eyebrow_ = state.prompt == PromptKind::UpToDate
                        ? QCoreApplication::translate("UpdaterViewAdapter", "EXOSNAP IS UP TO DATE")
-                   : state.prompt == PromptKind::Cancelled
-                       ? QCoreApplication::translate("UpdaterViewAdapter", "EXOSNAP WAS NOT UPDATED")
                        : QCoreApplication::translate("UpdaterViewAdapter", "EXOSNAP UPDATER");
     } else {
         eyebrow_ = state.verification_reinstall
@@ -281,8 +279,11 @@ void UpdaterViewAdapter::render(const UpdaterUiState& state) {
                                    : QCoreApplication::translate("UpdaterViewAdapter", "Downloading update");
                 panel_detail_ =
                     QCoreApplication::translate("UpdaterViewAdapter", "Fetching and checking the signed update.");
-                panel_safety_ = QCoreApplication::translate(
-                    "UpdaterViewAdapter", "Your installed version remains unchanged until installation begins.");
+                panel_safety_ = state.repairing
+                                    ? QCoreApplication::translate("UpdaterViewAdapter", "Installation state unknown")
+                                    : QCoreApplication::translate(
+                                          "UpdaterViewAdapter",
+                                          "Your installed version remains unchanged until installation begins.");
                 panel_glyph_ = QStringLiteral("download");
                 break;
             case UpStep::CloseApp:
@@ -328,7 +329,8 @@ void UpdaterViewAdapter::render(const UpdaterUiState& state) {
     }
 
     // Action row.
-    const bool critical = (state.repairing && state.variant == TerminalVariant::None) ||
+    const bool repair_download = state.repairing && state.steps[size_t(UpStep::Download)] == StepStatus::Working;
+    const bool critical = (state.repairing && !repair_download && state.variant == TerminalVariant::None) ||
                           state.steps[size_t(UpStep::Install)] == StepStatus::Working ||
                           state.steps[size_t(UpStep::Verify)] == StepStatus::Working ||
                           state.steps[size_t(UpStep::Launch)] == StepStatus::Working;
@@ -345,6 +347,10 @@ void UpdaterViewAdapter::render(const UpdaterUiState& state) {
             // Deliberately no hint: the panel already states what happens next.
             hint_.clear();
             close_action_label_ = QCoreApplication::translate("UpdaterViewAdapter", "Close");
+            close_action_enabled_ = true;
+        } else if (repair_download) {
+            hint_.clear();
+            close_action_label_ = QCoreApplication::translate("UpdaterViewAdapter", "Cancel download");
             close_action_enabled_ = true;
         } else if (!critical) {
             hint_ = QCoreApplication::translate("UpdaterViewAdapter", "Cancelling discards this update run.");
@@ -370,7 +376,9 @@ void UpdaterViewAdapter::render(const UpdaterUiState& state) {
                                  ? QCoreApplication::translate("UpdaterViewAdapter", "Close unavailable while updating")
                              : settled ? QCoreApplication::translate("UpdaterViewAdapter", "Close updater")
                                        : QCoreApplication::translate("UpdaterViewAdapter", "Cancel update and close");
-    cancel_confirmation_required_ = !settled && !close_blocked_;
+    if (repair_download)
+        close_accessible_name_ = close_tooltip_ = close_action_label_;
+    cancel_confirmation_required_ = !settled && !close_blocked_ && !repair_download;
     if (!cancel_confirmation_required_ && cancel_confirmation_visible_) {
         cancel_confirmation_visible_ = false;
         emit cancelConfirmationVisibleChanged();
@@ -554,6 +562,10 @@ QStringList UpdaterViewAdapter::footerButtonLabels() const {
 bool UpdaterViewAdapter::requestClose() {
     if (close_blocked_)
         return false;
+    if (state_.repairing && state_.steps[size_t(UpStep::Download)] == StepStatus::Working) {
+        emit cancelDownloadRequested();
+        return false;
+    }
     if (cancel_confirmation_required_) {
         setCancelConfirmationVisible(true);
         emit cancelConfirmationRequested();

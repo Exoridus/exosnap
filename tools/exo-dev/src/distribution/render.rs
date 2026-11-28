@@ -112,6 +112,10 @@ pub fn render_winget(
         crate::packaging::winget::has_distribution_owner_switch(&text),
         "the WinGet template lost EXOSNAP_DISTRIBUTION_OWNER=winget"
     );
+    ensure!(
+        crate::packaging::winget::requires_machine_elevation(&text),
+        "the WinGet machine MSI template lost its required elevation"
+    );
     let placeholder = format!("'{}'", "0".repeat(64));
     ensure!(
         text.contains(&placeholder),

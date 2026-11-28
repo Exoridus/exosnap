@@ -124,7 +124,7 @@ class UpdaterController {
     // and neither a success nor a failure: no failureCase, no retry entry, and
     // the installation is provably untouched (cancellation is only honoured
     // before anything is put in place).
-    void onCancelled();
+    void onCancelled(bool installer_started = false);
 
     // --- Pipeline events -----------------------------------------------------
     void onStepStarted(UpStep s);                         // marks Working + status line

@@ -161,6 +161,7 @@ class UpdaterViewAdapter : public QObject {
     void cancelConfirmationVisibleChanged();
     // The close was refused and the confirmation must be shown.
     void cancelConfirmationRequested();
+    void cancelDownloadRequested();
 
     void retryRequested();
     void openLogRequested();

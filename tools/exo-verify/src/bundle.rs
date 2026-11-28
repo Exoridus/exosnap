@@ -20,6 +20,7 @@ pub const INVENTORY_NAME: &str = "bundle.json";
 #[serde(rename_all = "kebab-case")]
 pub enum FileRole {
     Installer,
+    UserInstaller,
     Setup,
     Portable,
     Runtime,
@@ -59,7 +60,12 @@ impl Inventory {
     pub fn packages(&self) -> BTreeMap<String, String> {
         self.files
             .iter()
-            .filter(|f| matches!(f.role, FileRole::Installer | FileRole::Portable))
+            .filter(|f| {
+                matches!(
+                    f.role,
+                    FileRole::Installer | FileRole::UserInstaller | FileRole::Portable
+                )
+            })
             .map(|f| (file_name(&f.path).to_string(), f.sha256.clone()))
             .collect()
     }
@@ -100,6 +106,7 @@ pub struct CreateRequest {
     pub source_commit: String,
     pub candidate_id: String,
     pub installer: PathBuf,
+    pub user_installer: Option<PathBuf>,
     /// The offline Setup bootstrapper; optional so a bundle can be assembled
     /// before the Burn toolchain exists.
     pub setup: Option<PathBuf>,
@@ -146,6 +153,10 @@ pub fn installer_name(version: &str) -> String {
     format!("ExoSnap-{version}-windows-x64.msi")
 }
 
+pub fn user_installer_name(version: &str) -> String {
+    format!("ExoSnap-{version}-windows-x64-user.msi")
+}
+
 pub fn setup_name(version: &str) -> String {
     format!("ExoSnap-{version}-Setup.exe")
 }
@@ -187,6 +198,12 @@ pub fn create(request: &CreateRequest) -> Result<Bundle> {
     let expected_installer = installer_name(&request.product_version);
     let expected_portable = portable_name(&request.product_version);
     check_name(&request.installer, &expected_installer)?;
+    if let Some(user_installer) = &request.user_installer {
+        check_name(
+            user_installer,
+            &user_installer_name(&request.product_version),
+        )?;
+    }
     check_name(&request.portable, &expected_portable)?;
     if let Some(setup) = &request.setup {
         check_name(setup, &setup_name(&request.product_version))?;
@@ -216,6 +233,9 @@ pub fn create(request: &CreateRequest) -> Result<Bundle> {
         Ok(())
     };
     place(&request.installer, "packages", FileRole::Installer)?;
+    if let Some(user_installer) = &request.user_installer {
+        place(user_installer, "packages", FileRole::UserInstaller)?;
+    }
     if let Some(setup) = &request.setup {
         place(setup, "packages", FileRole::Setup)?;
     }
@@ -406,18 +426,28 @@ pub mod tests {
     use super::*;
 
     pub fn fixture(dir: &Path, version: &str) -> Bundle {
+        fixture_with_scope(dir, version, false)
+    }
+
+    pub fn fixture_with_scope(dir: &Path, version: &str, per_user: bool) -> Bundle {
         let src = dir.join("src");
         fs::create_dir_all(&src).unwrap();
         let installer = src.join(installer_name(version));
         let portable = src.join(portable_name(version));
         fs::write(&installer, b"msi bytes").unwrap();
         fs::write(&portable, b"zip bytes").unwrap();
+        let user_installer = per_user.then(|| {
+            let file = src.join(user_installer_name(version));
+            fs::write(&file, b"user msi bytes").unwrap();
+            file
+        });
         create(&CreateRequest {
             out_dir: dir.join("bundle"),
             product_version: version.to_string(),
             source_commit: "0123456789abcdef0123456789abcdef01234567".to_string(),
             candidate_id: format!("{version}-test"),
             installer,
+            user_installer,
             setup: None,
             portable,
             runtimes: vec![],
@@ -445,6 +475,7 @@ pub mod tests {
             source_commit: "0123456789abcdef0123456789abcdef01234567".to_string(),
             candidate_id: "0.10.1-test".to_string(),
             installer,
+            user_installer: None,
             setup: Some(setup),
             portable,
             runtimes: vec![],
@@ -528,6 +559,7 @@ pub mod tests {
             source_commit: "0123456789abcdef0123456789abcdef01234567".into(),
             candidate_id: "c".into(),
             installer: src.clone(),
+            user_installer: None,
             setup: None,
             portable: src,
             runtimes: vec![],

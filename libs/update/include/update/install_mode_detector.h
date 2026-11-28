@@ -15,8 +15,8 @@ namespace exosnap::update {
 // Reports only the physical installation axis of DetectDistributionContext().
 [[nodiscard]] InstallMode DetectInstallMode() noexcept;
 
-// Reads InstallPath (REG_SZ) from Software\ExoSnap, then the legacy
-// Software\Codexo\ExoSnap key. HKLM precedes HKCU. Missing values return nullopt.
-[[nodiscard]] std::optional<std::wstring> ReadInstallPath();
+// Returns the stamped path for the named application directory, or for the running
+// executable when omitted. An unrelated registration never supplies a path.
+[[nodiscard]] std::optional<std::wstring> ReadInstallPath(const std::wstring& application_directory = {});
 
 } // namespace exosnap::update

@@ -13,6 +13,8 @@
 #define WIN32_LEAN_AND_MEAN
 #include <windows.h>
 #include <shellapi.h>
+#include <msi.h>
+#include <msiquery.h>
 // clang-format on
 
 #include <QCoreApplication>
@@ -45,6 +47,7 @@ using exosnap::update::ExtractZip;
 using exosnap::update::FetchReleasesJson;
 using exosnap::update::FindTopLevelWindowForProcess;
 using exosnap::update::InstallMode;
+using exosnap::update::InstallScope;
 using exosnap::update::IsDowngrade;
 using exosnap::update::IsInstanceMutexPresent;
 using exosnap::update::LocateRelease;
@@ -256,6 +259,30 @@ bool WaitForProcessOrCancel(void* process_handle, std::chrono::milliseconds time
     }
 }
 
+bool MatchesRegisteredMsi(const std::wstring& package, InstallScope scope, const std::wstring& directory) {
+    if (scope != InstallScope::Machine && scope != InstallScope::User)
+        return false;
+    PMSIHANDLE database, view, row;
+    if (MsiOpenDatabaseW(package.c_str(), nullptr, &database) != ERROR_SUCCESS ||
+        MsiDatabaseOpenViewW(database, L"SELECT `Value` FROM `Property` WHERE `Property`='ProductCode'", &view) !=
+            ERROR_SUCCESS ||
+        MsiViewExecute(view, 0) != ERROR_SUCCESS || MsiViewFetch(view, &row) != ERROR_SUCCESS)
+        return false;
+
+    wchar_t product[39]{};
+    DWORD product_length = _countof(product);
+    if (MsiRecordGetStringW(row, 1, product, &product_length) != ERROR_SUCCESS || product_length != 38)
+        return false;
+    wchar_t location[32768]{};
+    DWORD length = _countof(location);
+    const auto context = scope == InstallScope::Machine ? MSIINSTALLCONTEXT_MACHINE : MSIINSTALLCONTEXT_USERUNMANAGED;
+    if (MsiGetProductInfoExW(product, nullptr, context, L"InstallLocation", location, &length) != ERROR_SUCCESS ||
+        length == 0)
+        return false;
+    std::error_code error;
+    return fs::equivalent(fs::path(location), fs::path(directory), error);
+}
+
 bool LaunchExoSnapFrom(const std::wstring& install_dir) {
     const std::wstring exe = (fs::path(install_dir) / kExeName).wstring();
     std::wstring cmdline = L"\"" + exe + L"\""; // CreateProcessW may modify the buffer
@@ -292,8 +319,7 @@ void UpdaterWorker::repair() {
 }
 
 void UpdaterWorker::run(UpStep entry) {
-    cancel_.store(false);
-    if (!selfUpdateAllowed()) {
+    if (abortedByCancel() || !selfUpdateAllowed()) {
         return;
     }
 
@@ -312,7 +338,22 @@ void UpdaterWorker::run(UpStep entry) {
         entry = UpStep::Download;
     }
 
-    if (int(entry) <= int(UpStep::Download)) {
+    if (repair_msi_) {
+        if (!locked_package_) {
+            const auto* package = SelectPackage(manifest_, args_.install_mode, install_scope_);
+            if (!package) {
+                emit failed(FailureCase::VerifyInstallFailedMsi,
+                            QStringLiteral("The verified MSI package is unavailable for repair."));
+                return;
+            }
+            emit stepStarted(UpStep::Download);
+            if (!fetchPackage(*package, fs::path(download_dir_) / L"package.msi"))
+                return;
+            emit stepDone(UpStep::Download);
+        }
+        if (abortedByCancel())
+            return;
+    } else if (int(entry) <= int(UpStep::Download)) {
         if (!runDownload()) {
             return;
         }
@@ -326,6 +367,8 @@ void UpdaterWorker::run(UpStep entry) {
     if (int(entry) <= int(UpStep::CloseApp) && !runCloseApp()) {
         return;
     }
+    if (repair_msi_ && abortedByCancel())
+        return;
     if (int(entry) <= int(UpStep::Install)) {
         const bool ok = args_.install_mode == InstallMode::Portable ? runInstallPortable() : runInstallMsi();
         if (!ok) {
@@ -338,11 +381,34 @@ void UpdaterWorker::run(UpStep entry) {
     (void)runLaunch();
 }
 
-bool UpdaterWorker::abortedByCancel() {
+bool UpdaterWorker::abortedByCancel(bool installer_started) {
     if (!cancel_.load()) {
         return false;
     }
-    emit cancelled();
+    emit cancelled(installer_started);
+    return true;
+}
+
+bool UpdaterWorker::tryCancelDownload() {
+    std::lock_guard lock(installer_launch_mutex_);
+    if (installer_launch_admitted_)
+        return false;
+    requestCancel();
+    return true;
+}
+
+void UpdaterWorker::prepareOperation() {
+    std::lock_guard lock(installer_launch_mutex_);
+    cancel_.store(false);
+    installer_launch_admitted_ = false;
+}
+
+bool UpdaterWorker::admitInstallerLaunch() {
+    std::lock_guard lock(installer_launch_mutex_);
+    // GUI progress is queued, so cancel and MSI admission must be ordered here.
+    if (cancel_.load())
+        return false;
+    installer_launch_admitted_ = true;
     return true;
 }
 
@@ -363,13 +429,19 @@ QString SelfUpdateRefusalReason(exosnap::update::DistributionContext distributio
 
 bool UpdaterWorker::selfUpdateAllowed() {
     // A staged updater runs outside the installation it would replace.
-    const QString reason =
-        SelfUpdateRefusalReason(exosnap::update::DetectDistributionContext(args_.install_dir.toStdWString()));
-    if (reason.isEmpty()) {
-        return true;
+    const auto distribution = exosnap::update::DetectDistributionContext(args_.install_dir.toStdWString());
+    const QString reason = SelfUpdateRefusalReason(distribution);
+    if (!reason.isEmpty()) {
+        emit selfUpdateBlocked(reason);
+        return false;
     }
-    emit selfUpdateBlocked(reason);
-    return false;
+    if (distribution.install_mode != args_.install_mode || (have_package_ && distribution.scope != install_scope_)) {
+        emit selfUpdateBlocked(QCoreApplication::translate(
+            "UpdaterWorker", "The installation changed. Open ExoSnap and check for updates again."));
+        return false;
+    }
+    install_scope_ = distribution.scope;
+    return true;
 }
 
 // ── Manual mode ──────────────────────────────────────────────────────────────
@@ -378,7 +450,8 @@ bool UpdaterWorker::selfUpdateAllowed() {
 // download, no second verification and no second swap.
 
 void UpdaterWorker::check() {
-    cancel_.store(false);
+    if (abortedByCancel())
+        return;
     emit checkStarted();
 
     // The official-build gate is an update-check POLICY (update_checker.h), and
@@ -418,8 +491,7 @@ void UpdaterWorker::check() {
 }
 
 void UpdaterWorker::download() {
-    cancel_.store(false);
-    if (!selfUpdateAllowed()) {
+    if (abortedByCancel() || !selfUpdateAllowed()) {
         return;
     }
     emit stepStarted(UpStep::Download);
@@ -655,50 +727,19 @@ bool UpdaterWorker::fetchAndStage() {
         return false;
     }
 
-    const exosnap::update::PackageEntry* package = SelectPackage(manifest, args_.install_mode);
+    const exosnap::update::PackageEntry* package = SelectPackage(manifest, args_.install_mode, install_scope_);
     if (package == nullptr) {
         emit failed(FailureCase::DownloadFailed, // A1
                     QStringLiteral("The update manifest has no %1 package.")
                         .arg(args_.install_mode == InstallMode::Portable ? QStringLiteral("portable")
+                             : install_scope_ == InstallScope::User      ? QStringLiteral("per-user installer")
                                                                          : QStringLiteral("installer")));
         return false;
     }
 
-    // Package download, with byte progress (throttled to ~12 Hz).
     const bool portable = args_.install_mode == InstallMode::Portable;
-    const fs::path package_path = download_dir / (portable ? L"package.zip" : L"package.msi");
-    QElapsedTimer throttle;
-    throttle.start();
-    const auto on_progress = [this, &throttle](const DownloadProgress& p) {
-        if (throttle.elapsed() >= 80 || (p.bytes_total != 0 && p.bytes_received >= p.bytes_total)) {
-            throttle.restart();
-            emit downloadProgress(p.bytes_received, p.bytes_total);
-        }
-    };
-    // Release any lock from a previous attempt so a retry's re-download can
-    // overwrite the file (a held deny-write/deny-delete handle would block it).
-    locked_package_.reset();
-    if (const auto err = DownloadToFile(package->url, package_path.wstring(), on_progress, cancel_)) {
-        // The one abort a person can cause on purpose. DownloadToFile deletes
-        // its partial file either way, so the installation is untouched and
-        // there is nothing to report as broken.
-        if (abortedByCancel())
-            return false;
-        emit failed(FailureCase::DownloadFailed, QString::fromStdString(*err)); // A1
+    if (!fetchPackage(*package, download_dir / (portable ? L"package.zip" : L"package.msi")))
         return false;
-    }
-
-    // SHA-256 gate. Lock the downloaded file (deny-write/deny-delete) and hash it
-    // THROUGH that handle, then keep the handle open through consumption: the
-    // verified bytes cannot be swapped before the (elevated) installer / extractor
-    // reads them. A mismatch deletes the file inside LockAndVerifyPackage.
-    package_path_ = package_path.wstring();
-    package_sha256_ = package->sha256_hex;
-    QString verify_error;
-    if (!LockAndVerifyPackage(package_sha256_, &verify_error)) {
-        emit failed(FailureCase::VerifyDownloadFailed, verify_error); // A2 -- hard stop
-        return false;
-    }
 
     manifest_ = std::move(manifest);
     have_package_ = true;
@@ -726,6 +767,45 @@ bool UpdaterWorker::fetchAndStage() {
 
     emit stepDone(UpStep::Download);
     return true;
+}
+
+bool UpdaterWorker::fetchPackage(const exosnap::update::PackageEntry& package, const fs::path& path) {
+    QElapsedTimer throttle;
+    throttle.start();
+    const auto on_progress = [this, &throttle](const DownloadProgress& p) {
+        if (throttle.elapsed() >= 80 || (p.bytes_total != 0 && p.bytes_received >= p.bytes_total)) {
+            throttle.restart();
+            emit downloadProgress(p.bytes_received, p.bytes_total);
+        }
+    };
+    // Release any lock from a previous attempt so a retry's re-download can
+    // overwrite the file (a held deny-write/deny-delete handle would block it).
+    locked_package_.reset();
+    if (const auto err = DownloadToFile(package.url, path.wstring(), on_progress, cancel_)) {
+        // The one abort a person can cause on purpose. DownloadToFile deletes
+        // its partial file either way, so the installation is untouched and
+        // there is nothing to report as broken.
+        if (abortedByCancel())
+            return false;
+        emit failed(FailureCase::DownloadFailed, QString::fromStdString(*err)); // A1
+        return false;
+    }
+
+    // SHA-256 gate. Lock the downloaded file (deny-write/deny-delete) and hash it
+    // THROUGH that handle, then keep the handle open through consumption: the
+    // verified bytes cannot be swapped before the (elevated) installer / extractor
+    // reads them. A mismatch deletes the file inside LockAndVerifyPackage.
+    package_path_ = path.wstring();
+    package_sha256_ = package.sha256_hex;
+    QString verify_error;
+    if (!LockAndVerifyPackage(package_sha256_, &verify_error)) {
+        if (abortedByCancel())
+            return false;
+        emit failed(FailureCase::VerifyDownloadFailed, verify_error); // A2 -- hard stop
+        return false;
+    }
+
+    return !abortedByCancel();
 }
 
 // Wipe + extract + descend. ExtractZip leaves partial output on a mid-fail, so
@@ -920,6 +1000,8 @@ bool UpdaterWorker::runInstallPortable() {
 // ── Step 3b: Install (MSI handoff) ───────────────────────────────────────────
 bool UpdaterWorker::runInstallMsi() {
     emit stepStarted(UpStep::Install);
+    if (!selfUpdateAllowed())
+        return false;
 
     // The deny-write lock must be held across the elevated handoff so the exact
     // verified bytes are what msiexec reads. It is normally taken at Download and
@@ -940,22 +1022,45 @@ bool UpdaterWorker::runInstallMsi() {
     // recovery -- and is read here rather than earlier so it applies to this
     // elevation attempt and not to a retry that was never armed. See
     // UpdaterFaultInjection.h for why the seam is limited to failures.
-    if (CurrentInjectedFault() == InjectedFault::UacDeclined) {
+    const bool elevate = install_scope_ == InstallScope::Machine;
+    if (elevate && CurrentInjectedFault() == InjectedFault::UacDeclined) {
         emit failed(FailureCase::UacDeclined, QString()); // C1 -- Retry re-handoffs
         return false;
     }
 
+    // A repair recaches the installed product, not a different signed product.
+    // Normal version upgrades may intentionally carry a new ProductCode.
+    if ((repair_msi_ || args_.verify_reinstall) &&
+        !MatchesRegisteredMsi(package_path_, install_scope_, args_.install_dir.toStdWString())) {
+        emit failed(FailureCase::MsiFailed,
+                    QCoreApplication::translate(
+                        "UpdaterWorker",
+                        "The verified repair MSI does not match the registered product and install location."));
+        return false;
+    }
     const std::wstring params = BuildMsiexecParams(package_path_, args_.verify_reinstall, repair_msi_);
+    wchar_t system_directory[MAX_PATH]{};
+    const UINT system_directory_length = ::GetSystemDirectoryW(system_directory, MAX_PATH);
+    if (system_directory_length == 0 || system_directory_length >= MAX_PATH) {
+        emit failed(FailureCase::MsiFailed, QString::number(::GetLastError()));
+        return false;
+    }
+    const auto msiexec = (fs::path(system_directory) / L"msiexec.exe").wstring();
     SHELLEXECUTEINFOW sei{};
     sei.cbSize = sizeof(sei);
     sei.fMask = SEE_MASK_NOCLOSEPROCESS;
-    sei.lpVerb = L"runas"; // UAC elevation
-    sei.lpFile = L"msiexec.exe";
+    sei.lpVerb = elevate ? L"runas" : L"open";
+    sei.lpFile = msiexec.c_str();
     sei.lpParameters = params.c_str();
+    sei.lpDirectory = system_directory;
     sei.nShow = SW_HIDE;
 
+    if (!admitInstallerLaunch()) {
+        (void)abortedByCancel();
+        return false;
+    }
     if (::ShellExecuteExW(&sei) == 0) {
-        if (::GetLastError() == ERROR_CANCELLED) {
+        if (elevate && ::GetLastError() == ERROR_CANCELLED) {
             emit failed(FailureCase::UacDeclined, QString()); // C1 -- Retry re-handoffs
         } else {
             emit failed(FailureCase::MsiFailed, QString::number(::GetLastError())); // C2
@@ -980,14 +1085,20 @@ bool UpdaterWorker::runInstallMsi() {
         // truths. msiexec keeps running in either case -- this process only
         // stops WATCHING it -- so the honest report for a requested stop is a
         // cancellation, not "the installer did not finish in time".
-        if (abortedByCancel())
+        if (abortedByCancel(true))
             return false;
-        emit failed(FailureCase::MsiFailed, QStringLiteral("The installer did not finish in time.")); // C2
+        emit failed(FailureCase::VerifyInstallFailedMsi,
+                    QCoreApplication::translate("UpdaterWorker", "Windows Installer did not report an outcome."));
         return false;
     }
     DWORD exit_code = 0;
-    ::GetExitCodeProcess(sei.hProcess, &exit_code);
+    const BOOL have_exit_code = ::GetExitCodeProcess(sei.hProcess, &exit_code);
     ::CloseHandle(sei.hProcess);
+    if (!have_exit_code) {
+        emit failed(FailureCase::VerifyInstallFailedMsi,
+                    QCoreApplication::translate("UpdaterWorker", "Windows Installer did not report an outcome."));
+        return false;
+    }
     switch (ClassifyMsiExit(exit_code)) {
     case MsiExitClass::Success:
         break;
@@ -1022,13 +1133,14 @@ bool UpdaterWorker::runVerify() {
     } else {
         // The MSI stamps [INSTALLFOLDER] (may carry a trailing backslash --
         // MakeSwapPlan normalises it) into the registry post-install.
-        const std::wstring install_dir = ReadInstallPath().value_or(args_.install_dir.toStdWString());
-        if (install_dir.empty()) {
+        const auto target = args_.install_dir.toStdWString();
+        const auto install_dir = ReadInstallPath(target);
+        if (!install_dir || exosnap::update::DetectDistributionContext(target).scope != install_scope_) {
             emit failed(FailureCase::VerifyInstallFailedMsi,
-                        QStringLiteral("The installer did not record an install location.")); // B3-MSI
+                        QCoreApplication::translate("UpdaterWorker", "The installation changed scope or location."));
             return false;
         }
-        const exosnap::update::SwapPlan msi_plan = MakeSwapPlan(install_dir, manifest_.version);
+        const exosnap::update::SwapPlan msi_plan = MakeSwapPlan(*install_dir, manifest_.version);
         if (!VerifyInstalledVersion(msi_plan)) {
             emit failed(FailureCase::VerifyInstallFailedMsi, QString()); // B3-MSI
             return false;

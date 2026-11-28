@@ -7,28 +7,25 @@
           Version="$(var.BundleVersion)"
           Manufacturer="Codexo"
           UpgradeCode="{15DD5AFF-4C08-4549-BB4E-ECBF10913E77}"
+          DisableModify="yes"
+          DisableRemove="yes"
           IconSourceFile="$(var.IconPath)"
           AboutUrl="https://github.com/Exoridus/exosnap"
           HelpUrl="https://github.com/Exoridus/exosnap/issues"
           Copyright="Copyright 2026 Codexo">
 
-    <!-- The installed x64 runtime publishes this key. A version-typed
-         variable keeps the comparison numeric; a missing or older value
-         fails the condition below and the embedded redistributable runs. -->
+    <!-- Test the same binary as the MSI launch condition so stale runtime
+         registration alone cannot skip prerequisite installation. -->
     <Variable Name="VCRedistVersion" Type="version" Value="0.0.0.0" />
-    <util:RegistrySearch Id="VCRedistVersionSearch"
-                         Variable="VCRedistVersion"
-                         Root="HKLM"
-                         Key="SOFTWARE\Microsoft\VisualStudio\14.0\VC\Runtimes\x64"
-                         Value="Version"
-                         Result="value"
-                         Bitness="always64" />
+    <Variable Name="VCRedistFloor" Type="version" Value="$(var.VCRedistMinVersion)" />
+    <util:FileSearch Id="VCRedistVersionSearch"
+                     Variable="VCRedistVersion"
+                     Path="[System64Folder]vcruntime140.dll"
+                     Result="version" />
 
-    <!-- Direct Setup options. Both default off and are passed to the MSI as
-         properties; the MSI owns the shortcut component and the local-data
-         removal, so nothing here is a second implementation. -->
+    <!-- The selected MSI owns the optional desktop shortcut. -->
     <Variable Name="ExoSnapDesktopShortcut" Type="numeric" Value="0" />
-    <Variable Name="ExoSnapRemoveUserData" Type="numeric" Value="0" />
+    <Variable Name="ExoSnapAllUsers" Type="numeric" Value="0" />
 
     <BootstrapperApplication>
       <BootstrapperApplicationDll Id="ExoSnapNativeBA" SourceFile="$(var.BootstrapperPath)" />
@@ -40,6 +37,7 @@
                   SourceFile="$(var.VCRedistPath)"
                   Compressed="yes"
                   Vital="yes"
+                  PerMachine="yes"
                   Permanent="yes"
                   InstallArguments="/install /quiet /norestart"
                   DetectCondition="VCRedistVersion &gt;= $(var.VCRedistMinVersion)">
@@ -54,13 +52,21 @@
                   SourceFile="$(var.MsiPath)"
                   Compressed="yes"
                   Vital="yes"
-                  Visible="no">
-        <!-- The bundle owns the single Installed Apps entry; the chained MSI
-             is still fully registered with Windows Installer for repair and
-             upgrade. A raw MSI install keeps its normal ARP entry. -->
-        <MsiProperty Name="ARPSYSTEMCOMPONENT" Value="1" />
+                  InstallCondition="ExoSnapAllUsers = 1"
+                  Visible="yes">
+        <MsiProperty Name="EXOSNAP_SETUP_MAINTENANCE" Value="1" />
         <MsiProperty Name="EXOSNAP_DESKTOP_SHORTCUT" Value="[ExoSnapDesktopShortcut]" />
-        <MsiProperty Name="EXOSNAP_REMOVE_USER_DATA" Value="[ExoSnapRemoveUserData]" />
+      </MsiPackage>
+
+      <!-- Burn 4 fixes the bundle registry scope at build time. Let the selected
+           MSI own the visible Installed Apps entry in its own registration scope. -->
+      <MsiPackage Id="ExoSnapUserMsi"
+                  SourceFile="$(var.UserMsiPath)"
+                  Compressed="yes"
+                  Vital="yes"
+                  InstallCondition="ExoSnapAllUsers = 0"
+                  Visible="yes">
+        <MsiProperty Name="EXOSNAP_DESKTOP_SHORTCUT" Value="[ExoSnapDesktopShortcut]" />
       </MsiPackage>
     </Chain>
   </Bundle>

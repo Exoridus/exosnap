@@ -116,6 +116,7 @@ struct UpdateManifest {
     std::string version_raw;
     SemVer minimum_accepted_version;
     std::vector<PackageEntry> packages;
+    std::optional<PackageEntry> user_installer;
     // The ed25519 signature is detached: it lives in a sibling `.sig` asset and
     // covers the exact manifest bytes, so it is never carried inside this struct.
 };
@@ -129,6 +130,8 @@ enum class InstallMode : uint8_t {
     Portable = 1,  // extracted ZIP -> staged swap via external updater
 };
 
+enum class InstallScope : uint8_t { None, Machine, User };
+
 enum class DistributionOwner : uint8_t {
     Direct = 0,
     WinGet = 1,
@@ -140,6 +143,7 @@ enum class DistributionOwner : uint8_t {
 struct DistributionContext {
     InstallMode install_mode = InstallMode::Portable;
     DistributionOwner owner = DistributionOwner::Direct;
+    InstallScope scope = InstallScope::None;
 
     [[nodiscard]] bool operator==(const DistributionContext&) const noexcept = default;
 };

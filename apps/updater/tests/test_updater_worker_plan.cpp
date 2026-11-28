@@ -11,7 +11,12 @@
 // clang-format off
 #define WIN32_LEAN_AND_MEAN
 #include <windows.h>
+#include <msi.h>
+#include <msiquery.h>
 // clang-format on
+
+#include <QTemporaryDir>
+#include <QUuid>
 
 #include <atomic>
 #include <chrono>
@@ -29,6 +34,14 @@
 using namespace exosnap::updater;
 
 namespace fs = std::filesystem;
+
+namespace exosnap::updater {
+struct UpdaterWorkerTestPeer {
+    static bool admitInstallerLaunch(UpdaterWorker& worker) {
+        return worker.admitInstallerLaunch();
+    }
+};
+} // namespace exosnap::updater
 
 namespace {
 
@@ -276,6 +289,50 @@ TEST(BuildMsiexecParams, RepairForcesAllFilesAndRecachesTheVerifiedPackage) {
                   L" /L*V \"C:\\Temp\\msiexec.log\"");
 }
 
+TEST(MatchesRegisteredMsi, RejectsMissingInvalidAndUnregisteredPackagesWithoutInstalling) {
+    QTemporaryDir temp;
+    ASSERT_TRUE(temp.isValid());
+    const auto directory = temp.path().toStdWString();
+    const auto missing = temp.filePath(QStringLiteral("missing.msi")).toStdWString();
+    const auto invalid = temp.filePath(QStringLiteral("invalid.msi")).toStdWString();
+    const auto unrelated = temp.filePath(QStringLiteral("unrelated.msi")).toStdWString();
+    {
+        std::ofstream file{fs::path(invalid)};
+        file << "not an MSI";
+    }
+    // The fixture is a real MSI database, not an installed product. A fresh
+    // ProductCode cannot identify an existing registration.
+    {
+        PMSIHANDLE database, create, insert;
+        ASSERT_EQ(MsiOpenDatabaseW(unrelated.c_str(), reinterpret_cast<LPCWSTR>(MSIDBOPEN_CREATE), &database),
+                  ERROR_SUCCESS);
+        ASSERT_EQ(MsiDatabaseOpenViewW(database,
+                                       L"CREATE TABLE `Property` (`Property` CHAR(72) NOT NULL, "
+                                       L"`Value` CHAR(255) NOT NULL PRIMARY KEY `Property`)",
+                                       &create),
+                  ERROR_SUCCESS);
+        ASSERT_EQ(MsiViewExecute(create, 0), ERROR_SUCCESS);
+        ASSERT_EQ(MsiViewClose(create), ERROR_SUCCESS);
+        ASSERT_EQ(
+            MsiDatabaseOpenViewW(database, L"INSERT INTO `Property` (`Property`, `Value`) VALUES (?, ?)", &insert),
+            ERROR_SUCCESS);
+        PMSIHANDLE record(MsiCreateRecord(2));
+        ASSERT_EQ(MsiRecordSetStringW(record, 1, L"ProductCode"), ERROR_SUCCESS);
+        const auto product = QUuid::createUuid().toString().toUpper().toStdWString();
+        ASSERT_EQ(MsiRecordSetStringW(record, 2, product.c_str()), ERROR_SUCCESS);
+        ASSERT_EQ(MsiViewExecute(insert, record), ERROR_SUCCESS);
+        ASSERT_EQ(MsiViewClose(insert), ERROR_SUCCESS);
+        ASSERT_EQ(MsiDatabaseCommit(database), ERROR_SUCCESS);
+    }
+
+    using exosnap::update::InstallScope;
+    for (const auto scope : {InstallScope::Machine, InstallScope::User, InstallScope::None}) {
+        EXPECT_FALSE(MatchesRegisteredMsi(missing, scope, directory));
+        EXPECT_FALSE(MatchesRegisteredMsi(invalid, scope, directory));
+        EXPECT_FALSE(MatchesRegisteredMsi(unrelated, scope, directory));
+    }
+}
+
 TEST(UpdaterWorker, RepairRefusesMissingVerifiedPackageWithoutStartingAnyStep) {
     for (auto mode : {exosnap::update::InstallMode::Installed, exosnap::update::InstallMode::Portable}) {
         UpdaterArgs args;
@@ -292,6 +349,36 @@ TEST(UpdaterWorker, RepairRefusesMissingVerifiedPackageWithoutStartingAnyStep) {
         EXPECT_EQ(failures, 1);
         EXPECT_EQ(steps, 0);
     }
+}
+
+TEST(UpdaterWorker, CancellationBeforeQueuedDownloadIsHonored) {
+    for (const bool manual : {false, true}) {
+        UpdaterWorker worker(UpdaterArgs{});
+        int cancellations = 0;
+        int steps = 0;
+        QObject::connect(&worker, &UpdaterWorker::cancelled, [&](bool installer_started) {
+            ++cancellations;
+            EXPECT_FALSE(installer_started);
+        });
+        QObject::connect(&worker, &UpdaterWorker::stepStarted, [&](UpStep) { ++steps; });
+        ASSERT_TRUE(worker.tryCancelDownload());
+        if (manual)
+            worker.download();
+        else
+            worker.run(UpStep::Download);
+        EXPECT_EQ(cancellations, 1);
+        EXPECT_EQ(steps, 0);
+    }
+}
+
+TEST(UpdaterWorker, DownloadCancellationAndInstallerAdmissionExcludeEachOther) {
+    UpdaterWorker cancelled(UpdaterArgs{});
+    ASSERT_TRUE(cancelled.tryCancelDownload());
+    EXPECT_FALSE(UpdaterWorkerTestPeer::admitInstallerLaunch(cancelled));
+
+    UpdaterWorker admitted(UpdaterArgs{});
+    ASSERT_TRUE(UpdaterWorkerTestPeer::admitInstallerLaunch(admitted));
+    EXPECT_FALSE(admitted.tryCancelDownload());
 }
 
 // ---------------------------------------------------------------------------

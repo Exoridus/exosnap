@@ -86,7 +86,7 @@ target_include_directories(exosnap_setup_ba SYSTEM PRIVATE
 target_link_libraries(exosnap_setup_ba PRIVATE
     "${wix_balutil_SOURCE_DIR}/build/native/v14/x64/balutil.lib"
     "${wix_dutil_SOURCE_DIR}/build/native/v14/x64/dutil.lib"
-    ole32 oleaut32 shell32 shlwapi version msi advapi32 wininet)
+    ole32 oleaut32 shell32 shlwapi version msi advapi32 wininet uuid)
 target_compile_options(exosnap_setup_ba PRIVATE /W4 /WX /EHsc /utf-8)
 
 get_target_property(_setup_qt_core Qt6::Core IMPORTED_LOCATION_RELEASE)

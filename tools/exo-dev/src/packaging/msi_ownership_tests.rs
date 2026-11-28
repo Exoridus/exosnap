@@ -385,10 +385,12 @@ fn build_registry_msi(
     let search = &source[node.range()];
     let mut fixture = source.replace(
         search,
-        &search.replace("Root=\"HKLM\"", "Root=\"HKCU\"").replace(
-            "Key=\"Software\\ExoSnap\"",
-            &format!("Key=\"{}\"", registry.path),
-        ),
+        &search
+            .replace("Root=\"$(var.ProductHive)\"", "Root=\"HKCU\"")
+            .replace(
+                "Key=\"Software\\ExoSnap\"",
+                &format!("Key=\"{}\"", registry.path),
+            ),
     );
     // The fixture retains the production search schema and resolver actions,
     // but AppSearch can read only the unique scratch key, never product state.

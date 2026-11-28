@@ -90,10 +90,29 @@ TEST(ClassifyDistributionContext, InstalledOwnerMarkerIsScopedToMatchingRecord) 
     for (const auto& item : cases) {
         InstallStamp stamp{L"C:\\Program Files\\ExoSnap", item.marker};
         EXPECT_EQ(ClassifyDistributionContext(stamp, L"c:/program files/exosnap/", true),
-                  (DistributionContext{InstallMode::Installed, item.expected}));
+                  (DistributionContext{InstallMode::Installed, item.expected, InstallScope::Machine}));
         EXPECT_EQ(ClassifyDistributionContext(stamp, L"D:\\Portable\\ExoSnap"),
                   (DistributionContext{InstallMode::Portable, DistributionOwner::Direct}));
     }
+}
+
+TEST(ClassifyDistributionContext, MachineStampDoesNotMaskAUserInstallation) {
+    using namespace exosnap::update;
+    const InstallStamp machine{L"D:\\ExoSnap", L"winget", InstallScope::Machine};
+    const InstallStamp user{L"C:\\Users\\Person\\AppData\\Local\\Programs\\ExoSnap", L"direct", InstallScope::User};
+    EXPECT_EQ(ClassifyDistributionContext(machine, user, user.install_dir),
+              (DistributionContext{InstallMode::Installed, DistributionOwner::Direct, InstallScope::User}));
+    EXPECT_EQ(ClassifyDistributionContext(machine, user, machine.install_dir),
+              (DistributionContext{InstallMode::Installed, DistributionOwner::WinGet, InstallScope::Machine}));
+    EXPECT_EQ(ClassifyDistributionContext(machine, user, L"D:\\Portable\\ExoSnap", false), DistributionContext{});
+}
+
+TEST(ClassifyDistributionContext, MachineRegistrationWinsOnlyWhenBothPathsMatch) {
+    using namespace exosnap::update;
+    const InstallStamp machine{L"D:\\ExoSnap", L"chocolatey", InstallScope::Machine};
+    const InstallStamp user{machine.install_dir, L"direct", InstallScope::User};
+    EXPECT_EQ(ClassifyDistributionContext(machine, user, user.install_dir),
+              (DistributionContext{InstallMode::Installed, DistributionOwner::Chocolatey, InstallScope::Machine}));
 }
 
 TEST(ClassifyDistributionContext, ScoopLayoutsSupportUserGlobalAndRelocatedRoots) {

@@ -68,8 +68,10 @@ pub struct Run<'a> {
     pub expected_exe: &'a Path,
     pub screenshots: &'a Path,
     pub desktop_shortcut: bool,
+    pub all_users: bool,
     pub remove_user_data: bool,
     pub click_launch: bool,
+    pub data_cleanup_available: bool,
 }
 
 pub fn drive(run: &Run<'_>) -> Result<()> {
@@ -104,7 +106,7 @@ pub fn drive(run: &Run<'_>) -> Result<()> {
 fn install_flow(automation: &IUIAutomation, run: &Run<'_>) -> Result<()> {
     // ExoSnap is GPL-3.0-or-later: no acceptance control exists and the
     // Install button must already be enabled when the page appears.
-    let install = wait_control(automation, "Install ExoSnap", Some("Button"), 90.0)?;
+    let install = wait_control(automation, "Install", Some("Button"), 90.0)?;
     ensure!(
         enabled(&install),
         "the Install button is disabled without a licence acceptance control"
@@ -137,6 +139,11 @@ fn install_flow(automation: &IUIAutomation, run: &Run<'_>) -> Result<()> {
         state == "Off",
         "the desktop shortcut option defaulted to {state}"
     );
+    let scope = wait_control(automation, "Install for all users", Some("Button"), 30.0)?;
+    ensure!(
+        enabled(&scope) && check_state(&scope)? == "Off",
+        "Setup did not default to the current user"
+    );
     screenshot(automation, run.screenshots, "install-1-install-page.png")?;
 
     // The canonical GPL text must be viewable inside Setup, offline.
@@ -151,44 +158,56 @@ fn install_flow(automation: &IUIAutomation, run: &Run<'_>) -> Result<()> {
     if run.desktop_shortcut {
         toggle(&desktop)?;
     }
+    if run.all_users {
+        toggle(&scope)?;
+    }
     invoke(&install)?;
     sleep(Duration::from_millis(800));
     screenshot(automation, run.screenshots, "install-3-progress.png")?;
 
-    let _ = wait_control(automation, "Launch", Some("Button"), 900.0)?;
+    let launch = wait_control(automation, "Launch ExoSnap", Some("Button"), 900.0)?;
     screenshot(automation, run.screenshots, "install-4-success.png")?;
     if run.click_launch {
-        let launch = wait_control(automation, "Launch", Some("Button"), 30.0)?;
         invoke(&launch)?;
         let pid = wait_started(run.expected_exe, 90.0)?;
         terminate(pid);
-        // WixStdBA closes the Success window itself after launching the target.
-    } else {
-        let close = wait_control(automation, "Close", Some("Button"), 30.0)?;
-        invoke(&close)?;
     }
+    let close = wait_control(automation, "Close", Some("Button"), 30.0)?;
+    invoke(&close)?;
     Ok(())
 }
 
 fn uninstall_flow(automation: &IUIAutomation, run: &Run<'_>) -> Result<()> {
     let remove = wait_control(
         automation,
-        "Also remove local ExoSnap data",
+        "Also delete my ExoSnap data",
         Some("Button"),
         120.0,
     )?;
-    ensure!(enabled(&remove), "the remove-data checkbox is disabled");
+    ensure!(
+        enabled(&remove) == run.data_cleanup_available,
+        "profile data removal availability does not follow Setup elevation"
+    );
     let state = check_state(&remove)?;
     ensure!(
         state == "Off",
         "the remove-data option defaulted to {state}"
     );
     screenshot(automation, run.screenshots, "uninstall-1-modify.png")?;
-    if run.remove_user_data {
+    if run.remove_user_data && enabled(&remove) {
         toggle(&remove)?;
     }
 
-    let uninstall = wait_control(automation, "Uninstall", Some("Button"), 30.0)?;
+    let uninstall = wait_control(
+        automation,
+        if run.remove_user_data && enabled(&remove) {
+            "Uninstall and delete data"
+        } else {
+            "Uninstall"
+        },
+        Some("Button"),
+        30.0,
+    )?;
     invoke(&uninstall)?;
     sleep(Duration::from_millis(800));
     screenshot(automation, run.screenshots, "uninstall-2-progress.png")?;

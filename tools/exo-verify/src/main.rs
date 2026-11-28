@@ -165,6 +165,8 @@ enum BundleCommand {
         candidate_id: String,
         #[arg(long)]
         installer: PathBuf,
+        #[arg(long)]
+        user_installer: Option<PathBuf>,
         /// The offline Setup bootstrapper, when the Burn toolchain built one.
         #[arg(long)]
         setup: Option<PathBuf>,
@@ -587,6 +589,7 @@ fn real_main() -> Result<ExitCode> {
             commit,
             candidate_id,
             installer,
+            user_installer,
             setup,
             portable,
             runtimes,
@@ -600,6 +603,7 @@ fn real_main() -> Result<ExitCode> {
                 source_commit: commit,
                 candidate_id,
                 installer,
+                user_installer,
                 setup,
                 portable,
                 runtimes,

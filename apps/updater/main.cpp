@@ -289,7 +289,7 @@ void PlaceNearAppWindow(QWindow& w, quint32 app_pid) {
 // registry-stamped InstallPath, falling back to --install-dir.
 std::wstring ResolveOpenDir(const UpdaterArgs& args) {
     if (args.install_mode == exosnap::update::InstallMode::Installed) {
-        if (const auto path = exosnap::update::ReadInstallPath(); path.has_value() && !path->empty()) {
+        if (const auto path = exosnap::update::ReadInstallPath(args.install_dir.toStdWString()); path.has_value()) {
             return *path;
         }
     }
@@ -682,9 +682,9 @@ int main(int argc, char** argv) {
         render();
     });
 
-    QObject::connect(&worker, &UpdaterWorker::cancelled, &view_adapter, [&] {
+    QObject::connect(&worker, &UpdaterWorker::cancelled, &view_adapter, [&](bool installer_started) {
         in_flight = false;
-        controller->onCancelled();
+        controller->onCancelled(installer_started);
         render();
     });
 
@@ -720,12 +720,13 @@ int main(int argc, char** argv) {
     const auto start = [&](void (UpdaterWorker::*slot)()) {
         if (in_flight)
             return false; // a call is already queued/running -- ignore the double-fire
+        worker.prepareOperation();
         in_flight = true;
         QMetaObject::invokeMethod(&worker, [&worker, slot] { (worker.*slot)(); }, Qt::QueuedConnection);
         return true;
     };
     const auto doCheck = [&] {
-        if (in_flight)
+        if (in_flight || controller->flowState().install_state == exosnap::update::InstallState::Unknown)
             return false;
         // A re-check starts from a clean slate: the previous answer's step marks
         // and target version describe a resolution that is being replaced.
@@ -749,6 +750,8 @@ int main(int argc, char** argv) {
         const bool repairing = args.install_mode == exosnap::update::InstallMode::Installed &&
                                controller->flowState().install_state == exosnap::update::InstallState::Unknown;
         const UpStep entry = *controller->flowState().retry_entry_step;
+        worker.prepareOperation();
+        in_flight = true;
         // Reset the UI to a clean in-progress state: steps before the re-entry
         // point are already done (their artifacts are kept by the worker).
         controller = MakeController(to_version);
@@ -759,7 +762,6 @@ int main(int argc, char** argv) {
         }
         render();
         if (repairing) {
-            in_flight = true;
             QMetaObject::invokeMethod(&worker, &UpdaterWorker::repair, Qt::QueuedConnection);
             return true;
         }
@@ -769,7 +771,6 @@ int main(int argc, char** argv) {
             // found, re-fetch when one was, and otherwise resume at the failed
             // apply step. run(Download) here would download AND install without
             // the confirmation this mode exists to require.
-            in_flight = true;
             if (entry <= UpStep::Download) {
                 const bool resolved = !to_version.isEmpty();
                 QMetaObject::invokeMethod(
@@ -780,7 +781,6 @@ int main(int argc, char** argv) {
             }
             return true;
         }
-        in_flight = true;
         QMetaObject::invokeMethod(&worker, [&worker, entry] { worker.run(entry); }, Qt::QueuedConnection);
         return true;
     };
@@ -795,6 +795,8 @@ int main(int argc, char** argv) {
     // time these fire, so the decision to leave has been made.
     const auto exitNow = [] { QCoreApplication::exit(0); };
     QObject::connect(&view_adapter, &UpdaterViewAdapter::closeRequested, &app, exitNow);
+    QObject::connect(&view_adapter, &UpdaterViewAdapter::cancelDownloadRequested, &app,
+                     [&] { (void)worker.tryCancelDownload(); });
     const auto openAndQuit = [&] {
         (void)LaunchExoSnapFrom(ResolveOpenDir(args));
         exitNow();
@@ -835,11 +837,11 @@ int main(int argc, char** argv) {
             }
             return true;
         };
-        intents.cancel = [&](QString*) {
-            // Cooperative, and only meaningful where the engine observes it --
-            // the policy has already refused every phase where it would not.
-            worker.requestCancel();
-            return true;
+        intents.cancel = [&](QString* error) {
+            if (worker.tryCancelDownload())
+                return true;
+            *error = QStringLiteral("Installer handoff has already started");
+            return false;
         };
         intents.close = [&](QString*) {
             // Accepted, then the process ends. The client sees the response and
@@ -897,12 +899,13 @@ int main(int argc, char** argv) {
     } else {
         // First paint mirrors the pipeline's first event so the window never
         // shows an all-queued limbo state.
+        worker.prepareOperation();
+        in_flight = true;
         controller->onStepStarted(UpStep::Download);
         render();
         window->show();
         PlaceNearAppWindow(*window, args.app_pid);
 
-        in_flight = true;
         QMetaObject::invokeMethod(&worker, [&worker] { worker.run(UpStep::Download); }, Qt::QueuedConnection);
     }
 

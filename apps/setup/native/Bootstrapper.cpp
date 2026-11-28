@@ -3,6 +3,7 @@
 #include <msxml6.h>
 #include <objbase.h>
 #include <shellapi.h>
+#include <shlobj.h>
 #include <shlwapi.h>
 
 #include <dutil.h>
@@ -16,6 +17,7 @@
 #include "../SetupBridge.h"
 
 #include <atomic>
+#include <filesystem>
 #include <memory>
 #include <mutex>
 #include <new>
@@ -30,13 +32,77 @@ constexpr UINT PlanMessage = WM_APP + 2;
 constexpr UINT ApplyMessage = WM_APP + 3;
 constexpr UINT QuitMessage = WM_APP + 4;
 constexpr UINT LaunchMessage = WM_APP + 5;
+constexpr wchar_t MachinePackage[] = L"ExoSnapMsi";
+constexpr wchar_t UserPackage[] = L"ExoSnapUserMsi";
+
+struct InstallRecord {
+    bool exists = false;
+    std::wstring path;
+};
+
+InstallRecord ReadInstallRecord(HKEY root) {
+    for (const auto* key : {L"Software\\ExoSnap", L"Software\\Codexo\\ExoSnap"}) {
+        constexpr DWORD flags = RRF_SUBKEY_WOW6464KEY;
+        DWORD installed = 0;
+        DWORD size = sizeof(installed);
+        if (RegGetValueW(root, key, L"installed", flags | RRF_RT_REG_DWORD, nullptr, &installed, &size) !=
+                ERROR_SUCCESS ||
+            installed != 1) {
+            continue;
+        }
+        std::wstring path(32768, L'\0');
+        size = static_cast<DWORD>(path.size() * sizeof(wchar_t));
+        if (RegGetValueW(root, key, L"InstallPath", flags | RRF_RT_REG_SZ, nullptr, path.data(), &size) ==
+            ERROR_SUCCESS) {
+            path.resize(wcslen(path.c_str()));
+            return {true, std::move(path)};
+        }
+        return {true, {}};
+    }
+    return {};
+}
+
+bool IsUnelevated() {
+    HANDLE token = nullptr;
+    if (!OpenProcessToken(GetCurrentProcess(), TOKEN_QUERY, &token))
+        return false;
+    TOKEN_ELEVATION elevation{};
+    DWORD length = 0;
+    const bool result = GetTokenInformation(token, TokenElevation, &elevation, sizeof(elevation), &length) &&
+                        !elevation.TokenIsElevated;
+    CloseHandle(token);
+    return result;
+}
+
+bool RemoveLocalData() {
+    if (!IsUnelevated())
+        return false;
+    PWSTR local = nullptr;
+    if (FAILED(SHGetKnownFolderPath(FOLDERID_LocalAppData, 0, nullptr, &local)))
+        return false;
+    const std::filesystem::path target = std::filesystem::path(local) / L"ExoSnap";
+    CoTaskMemFree(local);
+    const DWORD attributes = GetFileAttributesW(target.c_str());
+    if (attributes == INVALID_FILE_ATTRIBUTES) {
+        const auto error = GetLastError();
+        return error == ERROR_FILE_NOT_FOUND || error == ERROR_PATH_NOT_FOUND;
+    }
+    if (!(attributes & FILE_ATTRIBUTE_DIRECTORY) || (attributes & FILE_ATTRIBUTE_REPARSE_POINT))
+        return false;
+    std::error_code error;
+    (void)std::filesystem::remove_all(target, error);
+    return !error;
+}
 
 class Bootstrapper final : public CBalBaseBootstrapperApplication {
   public:
     Bootstrapper(IBootstrapperEngine* engine, const BOOTSTRAPPER_COMMAND& command)
         : CBalBaseBootstrapperApplication(engine), engine_(engine), action_(command.action), display_(command.display),
           workingDirectory_(command.wzBootstrapperWorkingFolder),
+          machineInstall_(ReadInstallRecord(HKEY_LOCAL_MACHINE)), userInstall_(ReadInstallRecord(HKEY_CURRENT_USER)),
+          scope_(ResolveSetupScope(machineInstall_.exists, userInstall_.exists, false)),
           host_{this,
+                nullptr,
                 nullptr,
                 nullptr,
                 nullptr,
@@ -46,6 +112,10 @@ class Bootstrapper final : public CBalBaseBootstrapperApplication {
                      command.action != BOOTSTRAPPER_ACTION_REPAIR && command.action != BOOTSTRAPPER_ACTION_UNINSTALL),
                 command.action == BOOTSTRAPPER_ACTION_UNINSTALL,
                 command.action == BOOTSTRAPPER_ACTION_REPAIR,
+                machineInstall_.exists || userInstall_.exists,
+                scope_ == SetupScope::Machine,
+                scope_ == SetupScope::Conflict,
+                IsUnelevated(),
                 Subscribe,
                 Detect,
                 Apply,
@@ -55,14 +125,14 @@ class Bootstrapper final : public CBalBaseBootstrapperApplication {
                 Restart} {
         version_ = Variable(L"WixBundleVersion");
         logPath_ = Variable(L"WixBundleLog");
-        wchar_t path[32768]{};
-        SIZE_T length = _countof(path);
-        if (SUCCEEDED(engine_->FormatString(L"[ProgramFiles64Folder]ExoSnap", path, &length))) {
-            installPath_ = path;
-        }
+        userPath_ =
+            userInstall_.path.empty() ? FormatPath(L"[LocalAppDataFolder]Programs\\ExoSnap") : userInstall_.path;
+        machinePath_ =
+            machineInstall_.path.empty() ? FormatPath(L"[ProgramFiles64Folder]ExoSnap") : machineInstall_.path;
         host_.version = version_.c_str();
         host_.log_path = logPath_.c_str();
-        host_.install_path = installPath_.c_str();
+        host_.install_path = userPath_.c_str();
+        host_.machine_install_path = machinePath_.c_str();
         host_.runtime_path = workingDirectory_.c_str();
     }
 
@@ -88,7 +158,7 @@ class Bootstrapper final : public CBalBaseBootstrapperApplication {
     }
 
     STDMETHODIMP OnDetectPackageComplete(LPCWSTR id, HRESULT status, BOOTSTRAPPER_PACKAGE_STATE state, BOOL) override {
-        if (SUCCEEDED(status) && wcscmp(id, L"ExoSnapMsi") == 0) {
+        if (SUCCEEDED(status) && IsSelectedPackage(id)) {
             installed_ = state == BOOTSTRAPPER_PACKAGE_STATE_PRESENT;
         }
         return S_OK;
@@ -104,13 +174,22 @@ class Bootstrapper final : public CBalBaseBootstrapperApplication {
 
     STDMETHODIMP OnDetectRelatedMsiPackage(LPCWSTR id, LPCWSTR, LPCWSTR, BOOL, LPCWSTR version,
                                            BOOTSTRAPPER_RELATED_OPERATION operation, BOOL*) override {
-        if (wcscmp(id, L"ExoSnapMsi") == 0 && operation == BOOTSTRAPPER_RELATED_OPERATION_MAJOR_UPGRADE) {
+        if (IsSelectedPackage(id) && operation == BOOTSTRAPPER_RELATED_OPERATION_MAJOR_UPGRADE) {
             RememberPreviousVersion(version);
         }
         return S_OK;
     }
 
     STDMETHODIMP OnDetectComplete(HRESULT status, BOOL) override {
+        if (scope_ == SetupScope::Conflict) {
+            Finish(HRESULT_FROM_WIN32(ERROR_PRODUCT_VERSION), false);
+            return S_OK;
+        }
+        BOOL runtimeInstalled = FALSE;
+        if (SUCCEEDED(status)) {
+            status = engine_->EvaluateCondition(L"VCRedistVersion >= VCRedistFloor", &runtimeInstalled);
+        }
+        runtimeMissing_ = !runtimeInstalled;
         if (FAILED(status)) {
             Finish(status, false);
             return S_OK;
@@ -120,6 +199,16 @@ class Bootstrapper final : public CBalBaseBootstrapperApplication {
             (action_ != BOOTSTRAPPER_ACTION_INSTALL && action_ != BOOTSTRAPPER_ACTION_MODIFY &&
              action_ != BOOTSTRAPPER_ACTION_REPAIR && action_ != BOOTSTRAPPER_ACTION_UNINSTALL)) {
             PostThreadMessageW(workerId_, PlanMessage, 0, 0);
+        }
+        return S_OK;
+    }
+
+    STDMETHODIMP OnPlanPackageBegin(LPCWSTR id, BOOTSTRAPPER_PACKAGE_STATE, BOOL, BOOTSTRAPPER_PACKAGE_CONDITION_RESULT,
+                                    BOOTSTRAPPER_PACKAGE_CONDITION_RESULT, BOOTSTRAPPER_REQUEST_STATE,
+                                    BOOTSTRAPPER_CACHE_TYPE, BOOTSTRAPPER_REQUEST_STATE* state,
+                                    BOOTSTRAPPER_CACHE_TYPE*, BOOL*) override {
+        if ((wcscmp(id, MachinePackage) == 0 || wcscmp(id, UserPackage) == 0) && !IsSelectedPackage(id)) {
+            *state = BOOTSTRAPPER_REQUEST_STATE_NONE;
         }
         return S_OK;
     }
@@ -210,8 +299,19 @@ class Bootstrapper final : public CBalBaseBootstrapperApplication {
         SetupAction action;
         bool desktopShortcut;
         bool removeUserData;
+        bool allUsers;
         HWND window;
     };
+
+    bool IsSelectedPackage(LPCWSTR id) const {
+        return wcscmp(id, scope_ == SetupScope::Machine ? MachinePackage : UserPackage) == 0;
+    }
+
+    std::wstring FormatPath(LPCWSTR format) {
+        wchar_t path[32768]{};
+        SIZE_T length = _countof(path);
+        return SUCCEEDED(engine_->FormatString(format, path, &length)) ? path : L"";
+    }
 
     std::wstring Variable(LPCWSTR name) {
         wchar_t value[32768]{};
@@ -234,20 +334,25 @@ class Bootstrapper final : public CBalBaseBootstrapperApplication {
               bool restart = false) {
         std::lock_guard lock(callbackMutex_);
         if (callback_) {
-            const SetupEvent event{
-                kind,
-                status,
-                progress,
-                installed_,
-                restart,
-                canCancel_,
-                text,
-                installed_ ? version_.c_str() : previousVersion_.empty() ? nullptr : previousVersion_.c_str()};
+            const SetupEvent event{kind,
+                                   status,
+                                   progress,
+                                   installed_,
+                                   restart,
+                                   canCancel_,
+                                   text,
+                                   installed_                 ? version_.c_str()
+                                   : previousVersion_.empty() ? nullptr
+                                                              : previousVersion_.c_str(),
+                                   runtimeMissing_,
+                                   dataCleanupFailed_};
             callback_(callbackContext_, &event);
         }
     }
 
     void Finish(HRESULT status, bool restart) {
+        if (SUCCEEDED(status) && action_ == BOOTSTRAPPER_ACTION_UNINSTALL && removeUserData_)
+            dataCleanupFailed_ = !RemoveLocalData();
         canCancel_ = false;
         busy_ = false;
         exitCode_ = FAILED(status) ? (HRESULT_FACILITY(status) == FACILITY_WIN32 ? HRESULT_CODE(status)
@@ -293,12 +398,12 @@ class Bootstrapper final : public CBalBaseBootstrapperApplication {
                               : request->action == SetupAction::Repair  ? BOOTSTRAPPER_ACTION_REPAIR
                                                                         : BOOTSTRAPPER_ACTION_INSTALL;
                     window_ = request->window;
+                    scope_ = ResolveSetupScope(machineInstall_.exists, userInstall_.exists, request->allUsers);
                     status = engine_->SetVariableNumeric(L"ExoSnapDesktopShortcut", request->desktopShortcut);
-                    if (SUCCEEDED(status)) {
-                        status = engine_->SetVariableNumeric(L"ExoSnapRemoveUserData",
-                                                             action_ == BOOTSTRAPPER_ACTION_UNINSTALL &&
-                                                                 request->removeUserData);
-                    }
+                    removeUserData_ = request->removeUserData && host_.allow_data_cleanup;
+                }
+                if (SUCCEEDED(status)) {
+                    status = engine_->SetVariableNumeric(L"ExoSnapAllUsers", scope_ == SetupScope::Machine);
                 }
                 if (SUCCEEDED(status)) {
                     status = engine_->Plan(action_);
@@ -309,10 +414,11 @@ class Bootstrapper final : public CBalBaseBootstrapperApplication {
                 status = engine_->Apply(window_);
                 break;
             case LaunchMessage: {
-                const auto executable = installPath_ + L"\\exosnap.exe";
+                const auto& installPath = scope_ == SetupScope::Machine ? machinePath_ : userPath_;
+                const auto executable = installPath + L"\\exosnap.exe";
                 const auto result = reinterpret_cast<INT_PTR>(ShellExecuteW(reinterpret_cast<HWND>(message.wParam),
                                                                             L"open", executable.c_str(), nullptr,
-                                                                            installPath_.c_str(), SW_SHOWNORMAL));
+                                                                            installPath.c_str(), SW_SHOWNORMAL));
                 if (result <= 32) {
                     LaunchFailed(HRESULT_FROM_WIN32(result ? static_cast<DWORD>(result) : ERROR_GEN_FAILURE));
                 }
@@ -372,7 +478,8 @@ class Bootstrapper final : public CBalBaseBootstrapperApplication {
         auto& self = *static_cast<Bootstrapper*>(context);
         PostThreadMessageW(self.workerId_, DetectMessage, 0, 0);
     }
-    static void Apply(void* context, SetupAction action, bool shortcut, bool remove, std::uintptr_t window) {
+    static void Apply(void* context, SetupAction action, bool shortcut, bool remove, bool allUsers,
+                      std::uintptr_t window) {
         auto& self = *static_cast<Bootstrapper*>(context);
         HRESULT status = S_OK;
         {
@@ -380,8 +487,8 @@ class Bootstrapper final : public CBalBaseBootstrapperApplication {
             if (self.busy_ || self.pendingRequest_) {
                 return;
             }
-            self.pendingRequest_ =
-                std::make_unique<ApplyRequest>(ApplyRequest{action, shortcut, remove, reinterpret_cast<HWND>(window)});
+            self.pendingRequest_ = std::make_unique<ApplyRequest>(
+                ApplyRequest{action, shortcut, remove, allUsers, reinterpret_cast<HWND>(window)});
             self.busy_ = true;
             self.cancelRequested_ = false;
             if (!PostThreadMessageW(self.workerId_, PlanMessage, 0, 0)) {
@@ -419,12 +526,17 @@ class Bootstrapper final : public CBalBaseBootstrapperApplication {
     IBootstrapperEngine* engine_;
     BOOTSTRAPPER_ACTION action_;
     BOOTSTRAPPER_DISPLAY display_;
-    std::wstring workingDirectory_, version_, logPath_, installPath_, previousVersion_;
+    std::wstring workingDirectory_, version_, logPath_, userPath_, machinePath_, previousVersion_;
+    const InstallRecord machineInstall_, userInstall_;
+    SetupScope scope_;
     SetupHost host_;
     std::thread worker_, ui_;
     DWORD workerId_ = 0;
     HWND window_ = nullptr;
     bool quitting_ = false;
+    bool runtimeMissing_ = false;
+    bool removeUserData_ = false;
+    bool dataCleanupFailed_ = false;
     std::atomic<bool> busy_{false}, canCancel_{false}, cancelRequested_{false}, installed_{false};
     std::atomic<DWORD> exitCode_{0};
     std::atomic<bool> restartRequested_{false};
