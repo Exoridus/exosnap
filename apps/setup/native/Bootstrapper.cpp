@@ -55,14 +55,18 @@ class Bootstrapper final : public CBalBaseBootstrapperApplication {
                 Restart} {
         version_ = Variable(L"WixBundleVersion");
         logPath_ = Variable(L"WixBundleLog");
+        machineScope_ = Variable(L"ExoSnapScope") == L"machine";
         wchar_t path[32768]{};
         SIZE_T length = _countof(path);
-        if (SUCCEEDED(engine_->FormatString(L"[ProgramFiles64Folder]ExoSnap", path, &length))) {
+        if (SUCCEEDED(engine_->FormatString(machineScope_ ? L"[ProgramFiles64Folder]ExoSnap"
+                                                          : L"[LocalAppDataFolder]Programs\\ExoSnap",
+                                            path, &length))) {
             installPath_ = path;
         }
         host_.version = version_.c_str();
         host_.log_path = logPath_.c_str();
-        host_.install_path = installPath_.c_str();
+        defaultInstallPath_ = installPath_;
+        host_.install_path = defaultInstallPath_.c_str();
         host_.runtime_path = workingDirectory_.c_str();
     }
 
@@ -88,6 +92,8 @@ class Bootstrapper final : public CBalBaseBootstrapperApplication {
     }
 
     STDMETHODIMP OnDetectPackageComplete(LPCWSTR id, HRESULT status, BOOTSTRAPPER_PACKAGE_STATE state, BOOL) override {
+        if (SUCCEEDED(status) && wcscmp(id, L"VCRedistX64") == 0)
+            runtimeRequired_ = state != BOOTSTRAPPER_PACKAGE_STATE_PRESENT;
         if (SUCCEEDED(status) && wcscmp(id, L"ExoSnapMsi") == 0) {
             installed_ = state == BOOTSTRAPPER_PACKAGE_STATE_PRESENT;
         }
@@ -115,13 +121,41 @@ class Bootstrapper final : public CBalBaseBootstrapperApplication {
             Finish(status, false);
             return S_OK;
         }
-        Emit(SetupEventKind::Detected, status);
+        const auto userPath = Variable(L"UserInstallPath");
+        const auto machinePath = Variable(L"MachineInstallPath");
+        const auto legacyMachinePath = Variable(L"LegacyMachineInstallPath");
+        if (action_ != BOOTSTRAPPER_ACTION_UNINSTALL &&
+            (machineScope_ ? !userPath.empty() : (!machinePath.empty() || !legacyMachinePath.empty()))) {
+            const auto failure = HRESULT_FROM_WIN32(ERROR_PRODUCT_VERSION);
+            const auto message = machineScope_ ? L"ExoSnap is installed for this user. Use the current-user Setup."
+                                               : L"ExoSnap is installed for all users. Use Setup-AllUsers.exe.";
+            engine_->Log(BOOTSTRAPPER_LOG_LEVEL_ERROR, message);
+            Emit(SetupEventKind::Error, failure, 0, message);
+            Finish(failure, false);
+            return S_OK;
+        }
+        const auto recordedPath = RegisteredSetupPath(machineScope_, userPath, machinePath, legacyMachinePath);
+        if (!recordedPath.empty())
+            installPath_ = recordedPath;
+        Emit(SetupEventKind::Detected, status, 0, installPath_.c_str());
         if (display_ != BOOTSTRAPPER_DISPLAY_FULL ||
             (action_ != BOOTSTRAPPER_ACTION_INSTALL && action_ != BOOTSTRAPPER_ACTION_MODIFY &&
              action_ != BOOTSTRAPPER_ACTION_REPAIR && action_ != BOOTSTRAPPER_ACTION_UNINSTALL)) {
             PostThreadMessageW(workerId_, PlanMessage, 0, 0);
         }
         return S_OK;
+    }
+
+    STDMETHODIMP OnPlanMsiPackage(LPCWSTR id, BOOL execute, BOOTSTRAPPER_ACTION_STATE action,
+                                  BOOTSTRAPPER_MSI_FILE_VERSIONING recommended, BOOL* cancel,
+                                  BURN_MSI_PROPERTY* property, INSTALLUILEVEL* ui, BOOL* disableExternalUi,
+                                  BOOTSTRAPPER_MSI_FILE_VERSIONING* versioning) override {
+        const auto result = CBalBaseBootstrapperApplication::OnPlanMsiPackage(
+            id, execute, action, recommended, cancel, property, ui, disableExternalUi, versioning);
+        if (SUCCEEDED(result) && execute && action == BOOTSTRAPPER_ACTION_STATE_REPAIR &&
+            wcscmp(id, L"ExoSnapMsi") == 0)
+            *versioning = BOOTSTRAPPER_MSI_FILE_VERSIONING_ALL;
+        return result;
     }
 
     STDMETHODIMP OnPlanComplete(HRESULT status) override {
@@ -242,7 +276,9 @@ class Bootstrapper final : public CBalBaseBootstrapperApplication {
                 restart,
                 canCancel_,
                 text,
-                installed_ ? version_.c_str() : previousVersion_.empty() ? nullptr : previousVersion_.c_str()};
+                installed_ ? version_.c_str() : previousVersion_.empty() ? nullptr : previousVersion_.c_str(),
+                machineScope_,
+                runtimeRequired_};
             callback_(callbackContext_, &event);
         }
     }
@@ -267,6 +303,7 @@ class Bootstrapper final : public CBalBaseBootstrapperApplication {
 
     void Run() {
         CoInitializeEx(nullptr, COINIT_MULTITHREADED);
+        HWND applyOwner = nullptr;
         MSG message{};
         PeekMessageW(&message, nullptr, WM_USER, WM_USER, PM_NOREMOVE);
         workerId_ = GetCurrentThreadId();
@@ -306,7 +343,17 @@ class Bootstrapper final : public CBalBaseBootstrapperApplication {
                 break;
             }
             case ApplyMessage:
-                status = engine_->Apply(window_);
+                // Burn requires an owner even for quiet Apply. Keep this hidden
+                // window alive on its message-pumping thread until shutdown.
+                if (!window_ && !applyOwner) {
+                    applyOwner = CreateWindowExW(WS_EX_TOOLWINDOW, L"STATIC", L"ExoSnap Setup", WS_POPUP, 0, 0, 0, 0,
+                                                 nullptr, nullptr, nullptr, nullptr);
+                    if (!applyOwner) {
+                        status = HRESULT_FROM_WIN32(GetLastError());
+                        break;
+                    }
+                }
+                status = engine_->Apply(window_ ? window_ : applyOwner);
                 break;
             case LaunchMessage: {
                 const auto executable = installPath_ + L"\\exosnap.exe";
@@ -333,6 +380,8 @@ class Bootstrapper final : public CBalBaseBootstrapperApplication {
                 Finish(status, false);
             }
         }
+        if (applyOwner)
+            DestroyWindow(applyOwner);
         CoUninitialize();
     }
 
@@ -419,6 +468,8 @@ class Bootstrapper final : public CBalBaseBootstrapperApplication {
     IBootstrapperEngine* engine_;
     BOOTSTRAPPER_ACTION action_;
     BOOTSTRAPPER_DISPLAY display_;
+    bool machineScope_ = false, runtimeRequired_ = false;
+    std::wstring defaultInstallPath_;
     std::wstring workingDirectory_, version_, logPath_, installPath_, previousVersion_;
     SetupHost host_;
     std::thread worker_, ui_;

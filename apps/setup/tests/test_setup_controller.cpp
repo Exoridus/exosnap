@@ -1,3 +1,4 @@
+#include <cstdint>
 #include <gtest/gtest.h>
 
 #include "SetupController.h"
@@ -15,6 +16,13 @@ SetupEvent Detected(bool installed = false) {
 
 } // namespace
 
+TEST(SetupInstallPath, LegacyCustomDirectoryBelongsToTheMachineScopeOnly) {
+    EXPECT_EQ(RegisteredSetupPath(true, L"", L"", L"D:\\Legacy"), L"D:\\Legacy");
+    EXPECT_EQ(RegisteredSetupPath(true, L"", L"E:\\Current", L"D:\\Legacy"), L"E:\\Current");
+    EXPECT_EQ(RegisteredSetupPath(false, L"F:\\User", L"", L"D:\\Legacy"), L"F:\\User");
+    EXPECT_TRUE(RegisteredSetupPath(false, L"", L"", L"D:\\Legacy").empty());
+}
+
 TEST(SetupControllerTest, FreshInstallHasFixedPathAndOptInShortcut) {
     SetupController controller("0.11.0", "C:/Program Files/ExoSnap");
     controller.receive(Detected());
@@ -23,6 +31,26 @@ TEST(SetupControllerTest, FreshInstallHasFixedPathAndOptInShortcut) {
     EXPECT_FALSE(controller.desktopShortcut());
     EXPECT_FALSE(controller.removeUserData());
     EXPECT_EQ(controller.primaryText(), "Install");
+}
+
+TEST(SetupControllerTest, ExplainsScopeRuntimeAndDeniedConsent) {
+    SetupController controller("0.12.0", "initial");
+    SetupEvent detected = Detected();
+    detected.text = L"D:\\Apps\\ExoSnap";
+    controller.receive(detected);
+    EXPECT_EQ(controller.installPath(), "D:\\Apps\\ExoSnap");
+    EXPECT_TRUE(controller.description().contains("your Windows account"));
+    EXPECT_FALSE(controller.description().contains("administrator"));
+    detected.machine_scope = true;
+    detected.runtime_required = true;
+    controller.receive(detected);
+    EXPECT_TRUE(controller.description().contains("everyone"));
+    EXPECT_TRUE(controller.description().contains("administrator approval"));
+    SetupEvent cancelled{SetupEventKind::Completed};
+    cancelled.status = static_cast<std::int32_t>(0x800704C7U);
+    controller.receive(cancelled);
+    EXPECT_EQ(controller.page(), "cancelled");
+    EXPECT_TRUE(controller.description().contains("declined"));
 }
 
 TEST(SetupControllerTest, ExistingInstallOpensManageAndKeepsDataByDefault) {

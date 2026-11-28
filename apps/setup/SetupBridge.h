@@ -1,8 +1,16 @@
 #pragma once
 
 #include <cstdint>
+#include <string_view>
 
 namespace exosnap::setup {
+
+inline std::wstring_view RegisteredSetupPath(bool machine, std::wstring_view user_path, std::wstring_view machine_path,
+                                             std::wstring_view legacy_machine_path) {
+    if (!machine)
+        return user_path;
+    return machine_path.empty() ? legacy_machine_path : machine_path;
+}
 
 enum class SetupAction : std::uint32_t { Install, Repair, Uninstall };
 enum class SetupEventKind : std::uint32_t {
@@ -25,6 +33,8 @@ struct SetupEvent {
     bool can_cancel = false;
     const wchar_t* text = nullptr;
     const wchar_t* version = nullptr;
+    bool machine_scope = false;
+    bool runtime_required = false;
 };
 
 using SetupEventCallback = void (*)(void* context, const SetupEvent* event);

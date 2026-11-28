@@ -12,6 +12,8 @@
 #include <QJsonValue>
 #include <QRandomGenerator>
 #include <QSaveFile>
+#include <optional>
+#include <string>
 
 #include <update/install_mode_detector.h>
 #include <update/swap_engine.h>
@@ -300,7 +302,8 @@ InstallContextRejection ValidateInstallContextOnDisk(const UpdateHandoff& handof
     }
 
     if (handoff.install_mode == InstallMode::Installed) {
-        if (const std::optional<std::wstring> recorded = exosnap::update::ReadInstallPath();
+        if (const std::optional<std::wstring> recorded =
+                exosnap::update::ReadInstallPath(handoff.install_dir.toStdWString());
             recorded.has_value() && !recorded->empty())
             facts.registry_install_dir = QString::fromStdWString(*recorded);
     }

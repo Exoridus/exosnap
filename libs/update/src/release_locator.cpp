@@ -169,4 +169,11 @@ const PackageEntry* SelectPackage(const UpdateManifest& m, InstallMode mode) {
     return nullptr;
 }
 
+const PackageEntry* SelectSetupManagedPackage(const UpdateManifest& manifest, MsiInstallScope scope, bool repair) {
+    if (repair)
+        return SelectPackage(manifest, InstallMode::Installed);
+    const auto& setup = scope == MsiInstallScope::Machine ? manifest.machine_setup : manifest.user_setup;
+    return setup ? &*setup : nullptr;
+}
+
 } // namespace exosnap::update

@@ -1,6 +1,7 @@
 // manifest_io.cpp -- ExoSnap update manifest parsing and verification.
 
 #include <array>
+#include <charconv>
 
 #include <cstdint>
 #include <cstring>
@@ -9,6 +10,7 @@
 #include <optional>
 #include <string>
 #include <string_view>
+#include <system_error>
 #include <update/ed25519_verify.h>
 #include <update/manifest_io.h>
 #include <update/update_types.h>
@@ -60,6 +62,22 @@ static std::optional<std::array<uint8_t, 64>> ParseHex64(std::string_view hex) n
     return out;
 }
 
+static bool ValidRuntimeVersion(std::string_view version) {
+    for (int field = 0; field < 4; ++field) {
+        const auto separator = version.find('.');
+        if ((field == 3) != (separator == std::string_view::npos))
+            return false;
+        const auto part = version.substr(0, separator);
+        unsigned value = 0;
+        const auto [end, error] = std::from_chars(part.data(), part.data() + part.size(), value);
+        if (error != std::errc{} || end != part.data() + part.size() || value > 65535)
+            return false;
+        if (field < 3)
+            version.remove_prefix(separator + 1);
+    }
+    return true;
+}
+
 // ---------------------------------------------------------------------------
 // ParseManifest
 // ---------------------------------------------------------------------------
@@ -84,6 +102,12 @@ ParseResult ParseManifest(std::string_view json) noexcept {
             return std::string{"invalid minimum_accepted_version: "} + min_sv;
         m.minimum_accepted_version = *minver;
 
+        if (const auto runtime = j.find("vc_runtime_minimum"); runtime != j.end()) {
+            m.vc_runtime_minimum = runtime->get<std::string>();
+            if (!ValidRuntimeVersion(m.vc_runtime_minimum))
+                return std::string{"invalid shared runtime minimum"};
+        }
+
         // packages
         for (const auto& pkg : j.at("packages")) {
             PackageEntry e;
@@ -101,6 +125,22 @@ ParseResult ParseManifest(std::string_view json) noexcept {
             m.packages.push_back(std::move(e));
         }
 
+        if (const auto setups = j.find("setup_packages"); setups != j.end()) {
+            if (!setups->is_array())
+                return std::string{"invalid setup_packages"};
+            for (const auto& package : *setups) {
+                const auto scope = package.at("kind").get<std::string>();
+                if (scope != "user" && scope != "machine")
+                    return std::string{"invalid Setup scope"};
+                auto& target = scope == "user" ? m.user_setup : m.machine_setup;
+                const auto hash = package.at("sha256").get<std::string>();
+                const auto url = package.at("url").get<std::string>();
+                if (target || !url.starts_with("https://") || hash.size() != 64 ||
+                    hash.find_first_not_of("0123456789ABCDEFabcdef") != std::string::npos)
+                    return std::string{"invalid or duplicate Setup package"};
+                target = PackageEntry{PackageKind::Installer, url, hash};
+            }
+        }
         return m;
     } catch (const nlohmann::json::exception& ex) {
         return std::string{"json parse error: "} + ex.what();

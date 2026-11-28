@@ -13,16 +13,22 @@
 #define WIN32_LEAN_AND_MEAN
 #include <windows.h>
 #include <shellapi.h>
+#include <msi.h>
+#include <msiquery.h>
 // clang-format on
 
 #include <QCoreApplication>
 #include <QElapsedTimer>
+#include <QSettings>
+#include <QVersionNumber>
 
 #include <chrono>
 #include <cstdio>
 #include <filesystem>
 #include <fstream>
 #include <sstream>
+#include <string>
+#include <system_error>
 #include <variant>
 
 #include <update/distribution_context.h>
@@ -49,9 +55,10 @@ using exosnap::update::IsDowngrade;
 using exosnap::update::IsInstanceMutexPresent;
 using exosnap::update::LocateRelease;
 using exosnap::update::MakeSwapPlan;
+using exosnap::update::MsiInstallScope;
 using exosnap::update::ParseManifest;
 using exosnap::update::ParseSemVer;
-using exosnap::update::ReadInstallPath;
+using exosnap::update::ReadRegisteredInstallation;
 using exosnap::update::RenameOutcome;
 using exosnap::update::RepairOrphanedSwap;
 using exosnap::update::RestoreBackup;
@@ -256,6 +263,32 @@ bool WaitForProcessOrCancel(void* process_handle, std::chrono::milliseconds time
     }
 }
 
+// A verified repair may recache only the MSI that is already registered at
+// this location. A different ProductCode would strand Burn's maintenance record.
+bool MatchesRegisteredMsi(const std::wstring& package, MsiInstallScope scope, const std::wstring& directory) {
+    PMSIHANDLE database, view, row;
+    if (MsiOpenDatabaseW(package.c_str(), MSIDBOPEN_READONLY, &database) != ERROR_SUCCESS ||
+        MsiDatabaseOpenViewW(database, L"SELECT `Value` FROM `Property` WHERE `Property`='ProductCode'", &view) !=
+            ERROR_SUCCESS ||
+        MsiViewExecute(view, 0) != ERROR_SUCCESS || MsiViewFetch(view, &row) != ERROR_SUCCESS)
+        return false;
+
+    wchar_t product[39]{};
+    DWORD productLength = _countof(product);
+    if (MsiRecordGetStringW(row, 1, product, &productLength) != ERROR_SUCCESS)
+        return false;
+    wchar_t location[32768]{};
+    DWORD length = _countof(location);
+    const auto context =
+        scope == MsiInstallScope::Machine ? MSIINSTALLCONTEXT_MACHINE : MSIINSTALLCONTEXT_USERUNMANAGED;
+    if (MsiGetProductInfoExW(product, nullptr, context, INSTALLPROPERTY_INSTALLLOCATION, location, &length) !=
+            ERROR_SUCCESS ||
+        length == 0)
+        return false;
+    std::error_code error;
+    return fs::equivalent(fs::path(location), fs::path(directory), error);
+}
+
 bool LaunchExoSnapFrom(const std::wstring& install_dir) {
     const std::wstring exe = (fs::path(install_dir) / kExeName).wstring();
     std::wstring cmdline = L"\"" + exe + L"\""; // CreateProcessW may modify the buffer
@@ -282,12 +315,23 @@ UpdaterWorker::UpdaterWorker(UpdaterArgs args, QObject* parent) : QObject(parent
 }
 
 void UpdaterWorker::repair() {
-    if (args_.install_mode != InstallMode::Installed || !have_package_) {
+    // A failed repair download releases the Setup file lock. Its authenticated
+    // manifest still identifies the exact MSI that runDownload must verify.
+    const bool pending_setup_repair = repair_msi_ && package_is_setup_ && setup_scope_ &&
+                                      exosnap::update::SelectSetupManagedPackage(manifest_, *setup_scope_, true);
+    if (args_.install_mode != InstallMode::Installed || (!have_package_ && !pending_setup_repair)) {
         emit failed(FailureCase::VerifyInstallFailedMsi,
                     QStringLiteral("The verified MSI package is unavailable for repair."));
         return;
     }
+    if (!selfUpdateAllowed())
+        return;
     repair_msi_ = true;
+    if (package_is_setup_) {
+        cancel_.store(false);
+        if (!runDownload())
+            return;
+    }
     run(UpStep::CloseApp);
 }
 
@@ -478,6 +522,22 @@ bool UpdaterWorker::resolveRelease(bool* no_release) {
 // ── Step 1: Download ─────────────────────────────────────────────────────────
 bool UpdaterWorker::runDownload() {
     emit stepStarted(UpStep::Download);
+    if (repair_msi_ && setup_scope_) {
+        // Keep the manifest which authorized the applied bundle across download
+        // retries. A newly published version must never become the repair source.
+        const auto* msi = exosnap::update::SelectSetupManagedPackage(manifest_, *setup_scope_, true);
+        if (!msi) {
+            emit failed(
+                FailureCase::VerifyInstallFailedMsi,
+                QCoreApplication::translate("UpdaterWorker", "The signed update manifest has no MSI for repair."));
+            return false;
+        }
+        if (!downloadVerifiedPackage(*msi, (fs::path(download_dir_) / L"package.msi").wstring()))
+            return false;
+        package_is_setup_ = false;
+        emit stepDone(UpStep::Download);
+        return true;
+    }
 
     // A handoff run resolves nothing. The application already picked the release
     // and handed over the manifest bytes that prove it; re-reading the feed here
@@ -656,6 +716,23 @@ bool UpdaterWorker::fetchAndStage() {
     }
 
     const exosnap::update::PackageEntry* package = SelectPackage(manifest, args_.install_mode);
+    setup_scope_.reset();
+    package_is_setup_ = false;
+    if (args_.install_mode == InstallMode::Installed) {
+        const auto registered = ReadRegisteredInstallation(args_.install_dir.toStdWString());
+        if (registered && registered->setup_managed) {
+            setup_scope_ = registered->scope;
+            package_is_setup_ = !args_.verify_reinstall;
+            package = exosnap::update::SelectSetupManagedPackage(manifest, *setup_scope_, args_.verify_reinstall);
+            if (!package && package_is_setup_) {
+                emit failed(
+                    FailureCase::DownloadFailed,
+                    QCoreApplication::translate(
+                        "UpdaterWorker", "The signed update manifest has no Setup for this installation scope."));
+                return false;
+            }
+        }
+    }
     if (package == nullptr) {
         emit failed(FailureCase::DownloadFailed, // A1
                     QStringLiteral("The update manifest has no %1 package.")
@@ -666,42 +743,13 @@ bool UpdaterWorker::fetchAndStage() {
 
     // Package download, with byte progress (throttled to ~12 Hz).
     const bool portable = args_.install_mode == InstallMode::Portable;
-    const fs::path package_path = download_dir / (portable ? L"package.zip" : L"package.msi");
-    QElapsedTimer throttle;
-    throttle.start();
-    const auto on_progress = [this, &throttle](const DownloadProgress& p) {
-        if (throttle.elapsed() >= 80 || (p.bytes_total != 0 && p.bytes_received >= p.bytes_total)) {
-            throttle.restart();
-            emit downloadProgress(p.bytes_received, p.bytes_total);
-        }
-    };
-    // Release any lock from a previous attempt so a retry's re-download can
-    // overwrite the file (a held deny-write/deny-delete handle would block it).
-    locked_package_.reset();
-    if (const auto err = DownloadToFile(package->url, package_path.wstring(), on_progress, cancel_)) {
-        // The one abort a person can cause on purpose. DownloadToFile deletes
-        // its partial file either way, so the installation is untouched and
-        // there is nothing to report as broken.
-        if (abortedByCancel())
-            return false;
-        emit failed(FailureCase::DownloadFailed, QString::fromStdString(*err)); // A1
+    const fs::path package_path = download_dir / (portable            ? L"package.zip"
+                                                  : package_is_setup_ ? L"package.exe"
+                                                                      : L"package.msi");
+    if (!downloadVerifiedPackage(*package, package_path.wstring()))
         return false;
-    }
-
-    // SHA-256 gate. Lock the downloaded file (deny-write/deny-delete) and hash it
-    // THROUGH that handle, then keep the handle open through consumption: the
-    // verified bytes cannot be swapped before the (elevated) installer / extractor
-    // reads them. A mismatch deletes the file inside LockAndVerifyPackage.
-    package_path_ = package_path.wstring();
-    package_sha256_ = package->sha256_hex;
-    QString verify_error;
-    if (!LockAndVerifyPackage(package_sha256_, &verify_error)) {
-        emit failed(FailureCase::VerifyDownloadFailed, verify_error); // A2 -- hard stop
-        return false;
-    }
 
     manifest_ = std::move(manifest);
-    have_package_ = true;
 
     if (portable) {
         plan_ = MakeSwapPlan(args_.install_dir.toStdWString(), manifest_.version);
@@ -767,6 +815,45 @@ bool UpdaterWorker::StagePortablePackage(QString* error, bool* unusable_package)
         *error = QStringLiteral("Can't arrange the staged files next to the install directory.");
         return false;
     }
+    return true;
+}
+
+bool UpdaterWorker::downloadVerifiedPackage(const exosnap::update::PackageEntry& package, const std::wstring& path) {
+    QElapsedTimer throttle;
+    throttle.start();
+    const auto on_progress = [this, &throttle](const DownloadProgress& p) {
+        if (throttle.elapsed() >= 80 || (p.bytes_total != 0 && p.bytes_received >= p.bytes_total)) {
+            throttle.restart();
+            emit downloadProgress(p.bytes_received, p.bytes_total);
+        }
+    };
+    // Release any lock from a previous attempt so a retry's re-download can
+    // overwrite the file (a held deny-write/deny-delete handle would block it).
+    have_package_ = false;
+    locked_package_.reset();
+    if (const auto err = DownloadToFile(package.url, path, on_progress, cancel_)) {
+        // The one abort a person can cause on purpose. DownloadToFile deletes
+        // its partial file either way, so the installation is untouched and
+        // there is nothing to report as broken.
+        if (abortedByCancel())
+            return false;
+        emit failed(FailureCase::DownloadFailed, QString::fromStdString(*err)); // A1
+        return false;
+    }
+
+    // SHA-256 gate. Lock the downloaded file (deny-write/deny-delete) and hash it
+    // THROUGH that handle, then keep the handle open through consumption: the
+    // verified bytes cannot be swapped before the (elevated) installer / extractor
+    // reads them. A mismatch deletes the file inside LockAndVerifyPackage.
+    package_path_ = path;
+    package_sha256_ = package.sha256_hex;
+    QString verify_error;
+    if (!LockAndVerifyPackage(package_sha256_, &verify_error)) {
+        emit failed(FailureCase::VerifyDownloadFailed, verify_error); // A2 -- hard stop
+        return false;
+    }
+
+    have_package_ = true;
     return true;
 }
 
@@ -945,14 +1032,58 @@ bool UpdaterWorker::runInstallMsi() {
         return false;
     }
 
-    const std::wstring params = BuildMsiexecParams(package_path_, args_.verify_reinstall, repair_msi_);
+    const auto scope = ReadRegisteredInstallation(args_.install_dir.toStdWString());
+    if (!scope || scope->setup_managed != setup_scope_.has_value() || (setup_scope_ && scope->scope != *setup_scope_)) {
+        emit failed(FailureCase::MsiFailed,
+                    QCoreApplication::translate(
+                        "UpdaterWorker", "The registered installation no longer matches the selected directory."));
+        return false;
+    }
+    bool needs_runtime = false;
+    if (!manifest_.vc_runtime_minimum.empty()) {
+        QSettings runtime(
+            QStringLiteral("HKEY_LOCAL_MACHINE\\SOFTWARE\\Microsoft\\VisualStudio\\14.0\\VC\\Runtimes\\x64"),
+            QSettings::Registry64Format);
+        const auto version = runtime.value(QStringLiteral("Version")).toString();
+        const auto actual = QVersionNumber::fromString(
+            QStringView(version).sliced(version.startsWith(u'v', Qt::CaseInsensitive) ? 1 : 0));
+        const auto minimum = QVersionNumber::fromString(QString::fromStdString(manifest_.vc_runtime_minimum));
+        needs_runtime = actual.isNull() || actual < minimum;
+        if (needs_runtime && !package_is_setup_) {
+            emit failed(
+                FailureCase::MsiFailed,
+                QCoreApplication::translate(
+                    "UpdaterWorker", "Install the Microsoft Visual C++ x64 Runtime %1 or newer, then retry the update.")
+                    .arg(minimum.toString()));
+            return false;
+        }
+    }
+    const bool machine = scope->scope == MsiInstallScope::Machine;
+    auto params = BuildMsiexecParams(package_path_, args_.verify_reinstall, repair_msi_);
+    params += machine ? L" ALLUSERS=1 EXOSNAP_REQUESTED_SCOPE=machine" : L" EXOSNAP_REQUESTED_SCOPE=user";
+    if (setup_scope_ && !package_is_setup_) {
+        if (!MatchesRegisteredMsi(package_path_, scope->scope, args_.install_dir.toStdWString())) {
+            emit failed(FailureCase::MsiFailed,
+                        QCoreApplication::translate(
+                            "UpdaterWorker",
+                            "The verified repair MSI does not match the registered product and install location."));
+            return false;
+        }
+        params += L" ARPSYSTEMCOMPONENT=1 EXOSNAP_SETUP_REPAIR=1";
+    }
+    if (package_is_setup_) {
+        params = L"/install";
+        if (!needs_runtime)
+            params += L" /quiet";
+        params += L" /norestart /log \"" + (fs::path(package_path_).parent_path() / L"msiexec.log").wstring() + L"\"";
+    }
     SHELLEXECUTEINFOW sei{};
     sei.cbSize = sizeof(sei);
     sei.fMask = SEE_MASK_NOCLOSEPROCESS;
-    sei.lpVerb = L"runas"; // UAC elevation
-    sei.lpFile = L"msiexec.exe";
+    sei.lpVerb = machine && !package_is_setup_ ? L"runas" : L"open";
+    sei.lpFile = package_is_setup_ ? package_path_.c_str() : L"msiexec.exe";
     sei.lpParameters = params.c_str();
-    sei.nShow = SW_HIDE;
+    sei.nShow = needs_runtime && package_is_setup_ ? SW_SHOWNORMAL : SW_HIDE;
 
     if (::ShellExecuteExW(&sei) == 0) {
         if (::GetLastError() == ERROR_CANCELLED) {
@@ -988,6 +1119,10 @@ bool UpdaterWorker::runInstallMsi() {
     DWORD exit_code = 0;
     ::GetExitCodeProcess(sei.hProcess, &exit_code);
     ::CloseHandle(sei.hProcess);
+    if (exit_code == ERROR_CANCELLED || exit_code == ERROR_INSTALL_USEREXIT) {
+        emit failed(FailureCase::UacDeclined, QString());
+        return false;
+    }
     switch (ClassifyMsiExit(exit_code)) {
     case MsiExitClass::Success:
         break;
@@ -1022,8 +1157,8 @@ bool UpdaterWorker::runVerify() {
     } else {
         // The MSI stamps [INSTALLFOLDER] (may carry a trailing backslash --
         // MakeSwapPlan normalises it) into the registry post-install.
-        const std::wstring install_dir = ReadInstallPath().value_or(args_.install_dir.toStdWString());
-        if (install_dir.empty()) {
+        const std::wstring install_dir = args_.install_dir.toStdWString();
+        if (!ReadRegisteredInstallation(install_dir)) {
             emit failed(FailureCase::VerifyInstallFailedMsi,
                         QStringLiteral("The installer did not record an install location.")); // B3-MSI
             return false;

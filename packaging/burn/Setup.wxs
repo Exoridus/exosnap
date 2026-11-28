@@ -6,7 +6,7 @@
   <Bundle Name="ExoSnap"
           Version="$(var.BundleVersion)"
           Manufacturer="Codexo"
-          UpgradeCode="{15DD5AFF-4C08-4549-BB4E-ECBF10913E77}"
+          UpgradeCode="$(var.BundleUpgradeCode)"
           IconSourceFile="$(var.IconPath)"
           AboutUrl="https://github.com/Exoridus/exosnap"
           HelpUrl="https://github.com/Exoridus/exosnap/issues"
@@ -30,6 +30,14 @@
     <Variable Name="ExoSnapDesktopShortcut" Type="numeric" Value="0" />
     <Variable Name="ExoSnapRemoveUserData" Type="numeric" Value="0" />
 
+    <Variable Name="ExoSnapScope" Type="string" Value="$(var.InstallScope)" />
+    <util:RegistrySearch Id="UserInstallPath" Variable="UserInstallPath" Root="HKCU"
+                         Key="Software\ExoSnap" Value="InstallPath" Result="value" Bitness="always64" />
+    <util:RegistrySearch Id="MachineInstallPath" Variable="MachineInstallPath" Root="HKLM"
+                         Key="Software\ExoSnap" Value="InstallPath" Result="value" Bitness="always64" />
+    <util:RegistrySearch Id="LegacyMachineInstallPath" Variable="LegacyMachineInstallPath" Root="HKLM"
+                         Key="Software\Codexo\ExoSnap" Value="InstallPath" Result="value" Bitness="always64" />
+
     <BootstrapperApplication>
       <BootstrapperApplicationDll Id="ExoSnapNativeBA" SourceFile="$(var.BootstrapperPath)" />
       <PayloadGroupRef Id="ExoSnapSetupUiPayloads" />
@@ -37,6 +45,7 @@
 
     <Chain>
       <ExePackage Id="VCRedistX64"
+                  PerMachine="$(var.IsMachine)"
                   SourceFile="$(var.VCRedistPath)"
                   Compressed="yes"
                   Vital="yes"
@@ -51,6 +60,7 @@
       </ExePackage>
 
       <MsiPackage Id="ExoSnapMsi"
+                  ForcePerMachine="$(var.IsMachine)"
                   SourceFile="$(var.MsiPath)"
                   Compressed="yes"
                   Vital="yes"
@@ -58,6 +68,7 @@
         <!-- The bundle owns the single Installed Apps entry; the chained MSI
              is still fully registered with Windows Installer for repair and
              upgrade. A raw MSI install keeps its normal ARP entry. -->
+        <MsiProperty Name="EXOSNAP_REQUESTED_SCOPE" Value="$(var.InstallScope)" />
         <MsiProperty Name="ARPSYSTEMCOMPONENT" Value="1" />
         <MsiProperty Name="EXOSNAP_DESKTOP_SHORTCUT" Value="[ExoSnapDesktopShortcut]" />
         <MsiProperty Name="EXOSNAP_REMOVE_USER_DATA" Value="[ExoSnapRemoveUserData]" />

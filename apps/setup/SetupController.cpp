@@ -32,12 +32,16 @@ void SetupController::receive(const SetupEvent& event) {
             break;
         }
         installed_ = event.installed;
+        machine_scope_ = event.machine_scope;
+        runtime_required_ = event.runtime_required;
+        if (event.text && *event.text)
+            install_path_ = QString::fromWCharArray(event.text);
         installed_version_ = QString::fromWCharArray(event.version ? event.version : L"");
         page_ = passive_               ? QStringLiteral("applying")
                 : !installed_          ? QStringLiteral("install")
                 : uninstall_requested_ ? QStringLiteral("uninstall")
                                        : QStringLiteral("manage");
-        if (repair_requested_ && installed_ && !passive_) {
+        if (repair_requested_ && installed_ && !passive_ && !runtime_required_) {
             begin(SetupAction::Repair);
         }
         break;
@@ -72,7 +76,7 @@ void SetupController::receive(const SetupEvent& event) {
         if ((event.restart_required && exit_code_ == 0) || exit_code_ == 3010U || exit_code_ == 1641U) {
             exit_code_ = 3010U;
             page_ = QStringLiteral("restart");
-        } else if (exit_code_ == 1602U && !files_in_use_) {
+        } else if ((exit_code_ == 1602U || exit_code_ == 1223U) && !files_in_use_) {
             page_ = QStringLiteral("cancelled");
         } else {
             page_ = exit_code_ == 0 ? QStringLiteral("success") : QStringLiteral("failure");
@@ -161,8 +165,13 @@ QString SetupController::headline() const {
     return tr("Checking installation");
 }
 QString SetupController::description() const {
-    if (page_ == QStringLiteral("install"))
-        return tr("For everyone on this computer. Everything Setup needs is included.");
+    if (page_ == QStringLiteral("install") || (page_ == QStringLiteral("manage") && runtime_required_)) {
+        const auto scope = machine_scope_ ? tr("For everyone on this computer.") : tr("For your Windows account.");
+        return runtime_required_ ? scope + QStringLiteral(" ") +
+                                       tr("The included Microsoft Visual C++ Runtime requires administrator approval "
+                                          "before ExoSnap can be installed.")
+                                 : scope;
+    }
     if (page_ == QStringLiteral("uninstall"))
         return tr(
             "Removes the app, its Start menu entry and its shortcut. Recordings and exported files are never touched.");
@@ -187,7 +196,8 @@ QString SetupController::description() const {
     if (page_ == QStringLiteral("restart"))
         return tr("Restart Windows to complete the operation.");
     if (page_ == QStringLiteral("cancelled"))
-        return tr("Setup stopped. Recordings and exported files were kept.");
+        return exit_code_ == 1223U ? tr("Administrator approval was declined. Setup stopped.")
+                                   : tr("Setup stopped. Recordings and exported files were kept.");
     if (page_ == QStringLiteral("failure") && files_in_use_)
         return tr("Close ExoSnap and any apps using its files, then try Setup again.");
     if (page_ == QStringLiteral("failure"))

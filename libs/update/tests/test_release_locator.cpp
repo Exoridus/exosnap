@@ -196,3 +196,18 @@ TEST(CollectAllReleaseNotesForChannel, EmptyArrayYieldsEmpty) {
     auto notes = CollectAllReleaseNotesForChannel("[]", UpdateChannel::Stable);
     EXPECT_TRUE(notes.empty());
 }
+
+TEST(ReleaseLocator, SetupManagedUpgradesUseTheirBundleAndRepairsUseTheIdenticalMsi) {
+    UpdateManifest manifest;
+    manifest.user_setup = PackageEntry{PackageKind::Installer, "user-setup", "user-hash"};
+    manifest.machine_setup = PackageEntry{PackageKind::Installer, "machine-setup", "machine-hash"};
+    EXPECT_EQ(SelectSetupManagedPackage(manifest, MsiInstallScope::User, true), nullptr);
+    manifest.packages.push_back({PackageKind::Installer, "msi", "msi-hash"});
+    for (const auto scope : {MsiInstallScope::User, MsiInstallScope::Machine}) {
+        EXPECT_EQ(SelectSetupManagedPackage(manifest, scope, true), &manifest.packages.front());
+        const auto& bundle = scope == MsiInstallScope::User ? manifest.user_setup : manifest.machine_setup;
+        EXPECT_EQ(SelectSetupManagedPackage(manifest, scope, false), &*bundle);
+    }
+    manifest.user_setup.reset();
+    EXPECT_EQ(SelectSetupManagedPackage(manifest, MsiInstallScope::User, false), nullptr);
+}

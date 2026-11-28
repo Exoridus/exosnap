@@ -106,6 +106,8 @@ pub fn scenarios() -> Vec<Scenario> {
 
 /// One Add/Remove Programs row, from either registry view.
 struct ArpRow {
+    registry_key: String,
+    display_version: String,
     display_name: String,
     publisher: String,
     system_component: bool,
@@ -125,6 +127,7 @@ fn is_product_code(name: &str) -> bool {
 /// Every Uninstall-registry row on the machine, both views.
 fn arp_rows() -> Result<Vec<ArpRow>> {
     let roots = [
+        r"HKCU\SOFTWARE\Microsoft\Windows\CurrentVersion\Uninstall",
         r"HKLM\SOFTWARE\Microsoft\Windows\CurrentVersion\Uninstall",
         r"HKLM\SOFTWARE\WOW6432Node\Microsoft\Windows\CurrentVersion\Uninstall",
     ];
@@ -147,6 +150,8 @@ fn arp_rows() -> Result<Vec<ArpRow>> {
             }
             let value = |key: &str| parse_reg_value(&props.stdout, key).unwrap_or_default();
             rows.push(ArpRow {
+                registry_key: subkey,
+                display_version: value("DisplayVersion"),
                 display_name: value("DisplayName"),
                 publisher: value("Publisher"),
                 system_component: value("SystemComponent").trim() == "0x1",
@@ -219,6 +224,7 @@ fn setup_cycle(ctx: &mut Context) -> Step {
     );
     fs::copy(&setup_source, &setup)?;
 
+    let user_desktop = PathBuf::from(std::env::var("USERPROFILE")?).join(r"Desktop\ExoSnap.lnk");
     let runtime_before = vc_runtime_version();
     ctx.evidence.put("vcRuntimeBefore", json!(runtime_before));
 
@@ -234,12 +240,12 @@ fn setup_cycle(ctx: &mut Context) -> Step {
         json!(install.code().map(|code| code.to_string())),
     );
 
-    let exe = PathBuf::from(r"C:\Program Files\ExoSnap\exosnap.exe");
-    let shortcut = PathBuf::from(std::env::var("ProgramData")?)
+    let exe = PathBuf::from(std::env::var("LOCALAPPDATA")?).join(r"Programs\ExoSnap\exosnap.exe");
+    let shortcut = PathBuf::from(std::env::var("APPDATA")?)
         .join(r"Microsoft\Windows\Start Menu\Programs\ExoSnap.lnk");
     product_ensure!(exe.is_file(), "Setup did not install exosnap.exe");
     product_ensure!(
-        reg_value("installed")?.is_some(),
+        scoped_reg_value(USER_KEY, "installed")?.is_some(),
         "Setup did not write the product registry marker"
     );
     product_ensure!(
@@ -247,10 +253,29 @@ fn setup_cycle(ctx: &mut Context) -> Step {
         "Setup did not create the Start Menu shortcut"
     );
     product_ensure!(
-        !desktop_shortcut()?.exists(),
+        !user_desktop.exists(),
         "a silent Setup created a desktop shortcut without the option"
     );
+    product_ensure!(
+        reg_value("installed")?.is_none(),
+        "current-user Setup wrote machine registration"
+    );
+    let opposite = ctx.package(FileRole::SetupAllUsers)?;
+    let conflict = run_setup(ctx, &opposite, "/install", "/quiet", "opposite-scope.log")?;
+    product_ensure!(
+        conflict.code() == Some(1638),
+        "all-users Setup did not refuse the existing user registration"
+    );
+    product_ensure!(
+        exe.is_file() && reg_value("installed")?.is_none(),
+        "scope refusal changed the installation"
+    );
     let rows = exosnap_arp_rows()?;
+    let registrations: BTreeMap<_, _> = rows
+        .iter()
+        .map(|row| (&row.registry_key, &row.display_version))
+        .collect();
+    ctx.evidence.put("setupRegistrations", json!(registrations));
     let visible: Vec<&ArpRow> = rows.iter().filter(|row| !row.system_component).collect();
     let hidden = rows.iter().filter(|row| row.system_component).count();
     product_ensure!(
@@ -312,6 +337,51 @@ fn setup_cycle(ctx: &mut Context) -> Step {
         "the cached bundle is the deleted original"
     );
 
+    // A newer-version foreign executable distinguishes forced replacement
+    // from Windows Installer's usual equal-or-older version repair. Never start
+    // the altered file; the hash of the original installed bytes is the oracle.
+    let original_hash = sha256_file(&exe)?.0;
+    let higher_version = PathBuf::from(std::env::var("SystemRoot")?).join(r"System32\cmd.exe");
+    fs::copy(&higher_version, &exe)?;
+    product_ensure!(
+        sha256_file(&exe)?.0 != original_hash,
+        "repair fixture did not change the installed executable"
+    );
+    let verified_msi = ctx.package(FileRole::Installer)?;
+    let repair_log = ctx.scenario_dir.join("verified-msi-recache.log");
+    let forced = crate::tools::run(
+        Command::new("msiexec.exe")
+            .arg("/i")
+            .arg(&verified_msi)
+            .args([
+                "/qn",
+                "/norestart",
+                "EXOSNAP_REQUESTED_SCOPE=user",
+                "ARPSYSTEMCOMPONENT=1",
+                "EXOSNAP_SETUP_REPAIR=1",
+                "REINSTALL=ALL",
+                "REINSTALLMODE=vamus",
+                "/l*v",
+            ])
+            .arg(&repair_log),
+        secs(360.0),
+    )?;
+    ctx.keep(&repair_log);
+    product_ensure!(
+        matches!(forced.code(), Some(0 | 3010)) && sha256_file(&exe)?.0 == original_hash,
+        "the verified release MSI did not restore the full executable; see {}",
+        repair_log.display()
+    );
+    let visible_after_repair: Vec<_> = exosnap_arp_rows()?
+        .into_iter()
+        .filter(|r| !r.system_component)
+        .collect();
+    product_ensure!(
+        visible_after_repair.len() == 1
+            && quoted_exe(&visible_after_repair[0].uninstall_string).as_ref() == Some(&cached),
+        "verified MSI repair changed the cached bundle's Installed Apps ownership"
+    );
+    fs::copy(&higher_version, &exe)?;
     let repair = run_setup(ctx, &cached, "/repair", "/quiet", "setup-repair.log")?;
     product_ensure!(
         matches!(repair.code(), Some(0 | 3010)),
@@ -320,8 +390,8 @@ fn setup_cycle(ctx: &mut Context) -> Step {
         ctx.scenario_dir.join("setup-repair.log").display()
     );
     product_ensure!(
-        exe.is_file() && reg_value("installed")?.is_some(),
-        "repair did not leave the product installed"
+        sha256_file(&exe)?.0 == original_hash && scoped_reg_value(USER_KEY, "installed")?.is_some(),
+        "cached Setup repair did not restore the original executable"
     );
 
     // The quiet uninstall below removes Burn's cached bundle, and the passive
@@ -339,9 +409,9 @@ fn setup_cycle(ctx: &mut Context) -> Step {
     );
     product_ensure!(
         !exe.exists()
-            && reg_value("installed")?.is_none()
+            && scoped_reg_value(USER_KEY, "installed")?.is_none()
             && !shortcut.exists()
-            && !desktop_shortcut()?.exists(),
+            && !user_desktop.exists(),
         "uninstall left application files, registry or shortcuts"
     );
     product_ensure!(
@@ -376,7 +446,9 @@ fn setup_cycle(ctx: &mut Context) -> Step {
         passive_install.code()
     );
     product_ensure!(
-        exe.is_file() && reg_value("installed")?.is_some() && !desktop_shortcut()?.exists(),
+        exe.is_file()
+            && scoped_reg_value(USER_KEY, "installed")?.is_some()
+            && !user_desktop.exists(),
         "a passive install did not leave the expected product state"
     );
     let passive_uninstall = run_setup(
@@ -392,7 +464,7 @@ fn setup_cycle(ctx: &mut Context) -> Step {
         passive_uninstall.code()
     );
     product_ensure!(
-        !exe.exists() && reg_value("installed")?.is_none(),
+        !exe.exists() && scoped_reg_value(USER_KEY, "installed")?.is_none(),
         "a passive uninstall left the product installed"
     );
 
@@ -478,7 +550,7 @@ fn setup_interactive(ctx: &mut Context) -> Step {
         "the disposable machine is not clean: {}",
         residue.join("; ")
     );
-    let setup = ctx.package(FileRole::Setup)?;
+    let setup = ctx.package(FileRole::SetupAllUsers)?;
     let screenshots = ctx.scenario_dir.join("screenshots");
     let install_log = ctx.scenario_dir.join("setup-ui-install.log");
     let uninstall_log = ctx.scenario_dir.join("setup-ui-uninstall.log");
@@ -594,8 +666,12 @@ fn setup_interactive(ctx: &mut Context) -> Step {
 
 /// Reads one value from [`INSTALL_KEY`], the product's own registry state.
 pub(crate) fn reg_value(name: &str) -> Result<Option<String>> {
+    scoped_reg_value(INSTALL_KEY, name)
+}
+
+fn scoped_reg_value(key: &str, name: &str) -> Result<Option<String>> {
     let out = crate::tools::run(
-        Command::new("reg.exe").args(["query", INSTALL_KEY, "/v", name]),
+        Command::new("reg.exe").args(["query", key, "/v", name]),
         secs(10.0),
     )?;
     if !out.success() {
@@ -648,7 +724,13 @@ fn msi(ctx: &mut Context, verb: &str, path: &Path, log_name: &str) -> Step {
         Command::new("msiexec.exe")
             .arg(verb)
             .arg(path)
-            .args(["/qn", "/norestart", "/l*v"])
+            .args([
+                "/qn",
+                "/norestart",
+                "ALLUSERS=1",
+                "EXOSNAP_REQUESTED_SCOPE=machine",
+                "/l*v",
+            ])
             .arg(&log),
         secs(360.0),
     )?;
@@ -883,6 +965,16 @@ mod tests {
     use super::*;
 
     #[cfg(windows)]
+    fn set_msi_install_folder(command: &mut Command, folder: &str) -> Result<()> {
+        use std::os::windows::process::CommandExt;
+
+        // msiexec requires the quotes around the property value, after '='.
+        anyhow::ensure!(!folder.contains('"'));
+        command.raw_arg(format!(r#"INSTALLFOLDER="{folder}""#));
+        Ok(())
+    }
+
+    #[cfg(windows)]
     fn smoke_msi(
         path: &Path,
         verb: &str,
@@ -893,7 +985,13 @@ mod tests {
         command
             .arg(verb)
             .arg(path)
-            .args(["/qn", "/norestart", "/l*v"])
+            .args([
+                "/qn",
+                "/norestart",
+                "ALLUSERS=1",
+                "EXOSNAP_REQUESTED_SCOPE=machine",
+                "/l*v",
+            ])
             .arg(log);
         if let Some(owner) = owner {
             command.arg(format!("EXOSNAP_DISTRIBUTION_OWNER={owner}"));
@@ -1066,6 +1164,68 @@ mod tests {
         assert!(!reg_key_exists(INSTALL_KEY)?);
         assert!(!root.exists());
         assert!(exosnap_arp_rows()?.is_empty());
+        // Exercise a real change of ProductCode in the user context, retaining a
+        // non-default destination. The second install deliberately supplies no path.
+        let custom = out.join("user programs").join("ExoSnap");
+        for (index, path) in paths.iter().enumerate() {
+            let mut command = Command::new("msiexec.exe");
+            command
+                .arg("/i")
+                .arg(path)
+                .args(["/qn", "/norestart", "EXOSNAP_REQUESTED_SCOPE=user"]);
+            if index == 0 {
+                set_msi_install_folder(&mut command, custom.to_str().unwrap())?;
+            }
+            let log = out.join(format!("user-scope-{index}.log"));
+            command.arg("/l*v").arg(&log);
+            let result = crate::tools::run(&mut command, secs(360.0))?;
+            assert!(
+                matches!(result.code(), Some(0 | 3010)),
+                "user install or upgrade: {result:?}"
+            );
+            assert!(custom.join("exosnap.exe").is_file());
+            assert_eq!(
+                scoped_reg_value(USER_KEY, "DistributionOwner")?.as_deref(),
+                Some("direct")
+            );
+            assert!(reg_value("installed")?.is_none());
+            assert_eq!(exosnap_arp_rows()?.len(), 1);
+            if index == 0 {
+                let original = tree_hashes(&custom)?;
+                let wrong_product = crate::tools::run(
+                    Command::new("msiexec.exe").arg("/i").arg(&paths[1]).args([
+                        "/qn",
+                        "/norestart",
+                        "EXOSNAP_REQUESTED_SCOPE=user",
+                        "ARPSYSTEMCOMPONENT=1",
+                        "EXOSNAP_SETUP_REPAIR=1",
+                        "REINSTALL=ALL",
+                        "REINSTALLMODE=vamus",
+                    ]),
+                    secs(360.0),
+                )?;
+                assert!(
+                    matches!(wrong_product.code(), Some(1603 | 1605)),
+                    "repair must reject a different ProductCode: {wrong_product:?}"
+                );
+                assert_eq!(tree_hashes(&custom)?, original);
+                assert_eq!(exosnap_arp_rows()?.len(), 1);
+            }
+        }
+        let opposite = smoke_msi(&paths[0], "/i", None, &out.join("machine-conflict.log"))?;
+        assert_eq!(opposite.code(), Some(1603));
+        assert!(custom.join("exosnap.exe").is_file());
+        let removed = crate::tools::run(
+            Command::new("msiexec.exe")
+                .arg("/x")
+                .arg(&paths[1])
+                .args(["/qn", "/norestart"]),
+            secs(360.0),
+        )?;
+        assert!(matches!(removed.code(), Some(0 | 3010)));
+        assert!(!custom.join("exosnap.exe").exists());
+        assert!(scoped_reg_value(USER_KEY, "installed")?.is_none());
+        assert!(exosnap_arp_rows()?.is_empty());
         let residue = super::super::clean::residue()?;
         assert!(residue.is_empty(), "uninstall residue: {residue:?}");
         results.push(json!({"scenario": "uninstall", "exitCode": removed.code(), "productMarkerRemoved": true, "residue": residue}));
@@ -1077,6 +1237,343 @@ mod tests {
             }))?,
         )?;
         println!("PASS invalid-owner, uninstall, clean-machine");
+        Ok(())
+    }
+
+    #[cfg(windows)]
+    fn installed_contexts(code: &str) -> Result<Vec<(u32, String)>> {
+        #[link(name = "msi")]
+        unsafe extern "system" {
+            fn MsiGetProductInfoExW(
+                code: *const u16,
+                sid: *const u16,
+                context: u32,
+                property: *const u16,
+                value: *mut u16,
+                length: *mut u32,
+            ) -> u32;
+        }
+        let wide = |text: &str| text.encode_utf16().chain([0]).collect::<Vec<_>>();
+        let code = wide(code);
+        let property = wide("VersionString");
+        let mut installed = Vec::new();
+        // USERMANAGED, USERUNMANAGED, MACHINE. A null SID selects the current user.
+        for context in [1, 2, 4] {
+            let mut value = [0u16; 64];
+            let mut length = value.len() as u32;
+            let status = unsafe {
+                MsiGetProductInfoExW(
+                    code.as_ptr(),
+                    std::ptr::null(),
+                    context,
+                    property.as_ptr(),
+                    value.as_mut_ptr(),
+                    &mut length,
+                )
+            };
+            if status == 1605 {
+                continue;
+            }
+            anyhow::ensure!(status == 0, "query product context {context}: {status}");
+            installed.push((context, String::from_utf16(&value[..length as usize])?));
+        }
+        Ok(installed)
+    }
+
+    #[cfg(windows)]
+    fn build_rollback_fixture(output: &Path, out: &Path, version: &str) -> Result<PathBuf> {
+        let root = Path::new(env!("CARGO_MANIFEST_DIR")).join("../..");
+        let source = root.join("packaging/msi/Package.wxs");
+        let production = fs::read_to_string(&source)?;
+        anyhow::ensure!(production.matches("</Package>").count() == 1);
+        anyhow::ensure!(production.contains("Schedule=\"afterInstallInitialize\""));
+        let fixture_source = out.join("Rollback.wxs");
+        fs::write(
+            &fixture_source,
+            production.replace(
+                "</Package>",
+                r#"<CustomAction Id="ForceFixtureRollback" Error="Deliberate rollback fixture failure." />
+                   <InstallExecuteSequence>
+                     <Custom Action="ForceFixtureRollback" After="RemoveExistingProducts" />
+                   </InstallExecuteSequence>
+                 </Package>"#,
+            ),
+        )?;
+        let fields: Vec<_> = version.split('.').collect();
+        let [major, minor, patch] = fields.as_slice() else {
+            anyhow::bail!("expected a numeric three-field MSI ProductVersion, got {version}");
+        };
+        let major = major.parse::<u8>()?;
+        let minor = minor.parse::<u8>()?;
+        let patch = patch.parse::<u16>()?;
+        let next = patch
+            .checked_add(1)
+            .ok_or_else(|| anyhow::anyhow!("no higher MSI patch version after {version}"))?;
+        let higher = format!("{major}.{minor}.{next}");
+        let fixture = out.join("rollback-fixture.msi");
+        let wix = PathBuf::from(std::env::var("USERPROFILE")?).join(".dotnet/tools/wix.exe");
+        let icon = root.join("app/assets/brand/exosnap-app.ico");
+        let probe = root
+            .join("build/windows-x64-ninja-release/packaging/msi")
+            .join("exosnap-msi-owner-probe.dll");
+        let floor = crate::package::VC_REDIST_MIN_VERSION.trim_start_matches('v');
+        let built = crate::tools::run(
+            Command::new(wix)
+                .args(["build", "-arch", "x64", "-ext"])
+                .arg("WixToolset.Util.wixext/4.0.5")
+                .arg("-d")
+                .arg(format!("ProductVersion={higher}"))
+                .arg("-d")
+                .arg(format!("VCRedistMinVersion={floor}"))
+                .arg("-d")
+                .arg(format!("AppIconPath={}", icon.display()))
+                .arg("-d")
+                .arg(format!("DistributionOwnerProbePath={}", probe.display()))
+                .arg(&fixture_source)
+                .arg(output.join("_harvest.wxs"))
+                .arg("-o")
+                .arg(&fixture),
+            secs(360.0),
+        )?;
+        anyhow::ensure!(built.success(), "rollback fixture build: {built:?}");
+        let receipt = json!({
+            "productionWxsSha256": sha256_file(&source)?.0,
+            "fixtureWxsSha256": sha256_file(&fixture_source)?.0,
+            "fixtureMsiSha256": sha256_file(&fixture)?.0,
+            "installedVersion": version,
+            "attemptedVersion": higher,
+            "injectedAction": "ForceFixtureRollback after RemoveExistingProducts",
+        });
+        let evidence = serde_json::to_vec_pretty(&receipt)?;
+        fs::write(out.join("fixture.json"), evidence)?;
+        Ok(fixture)
+    }
+
+    #[cfg(windows)]
+    #[test]
+    #[ignore = "installs real packages on a disposable GitHub-hosted Windows runner"]
+    fn hosted_installer_lifecycle() -> Result<()> {
+        let runner = std::env::var("EXOSNAP_RUNNER_ENVIRONMENT")?;
+        anyhow::ensure!(runner == "github-hosted");
+        anyhow::ensure!(std::env::var("GITHUB_ACTIONS").as_deref() == Ok("true"));
+        let output = PathBuf::from(std::env::var("EXOSNAP_INSTALLER_SMOKE")?);
+        let report: serde_json::Value =
+            serde_json::from_slice(&fs::read(output.join("package.json"))?)?;
+        let artifact = |key: &str| -> Result<PathBuf> {
+            let path = PathBuf::from(
+                report[key]
+                    .as_str()
+                    .ok_or_else(|| anyhow::anyhow!("missing artifact: {key}"))?,
+            );
+            anyhow::ensure!(path.is_file() && path.parent() == Some(output.as_path()));
+            Ok(path)
+        };
+        let installer = artifact("installer")?;
+        let user_setup = artifact("setup")?;
+        let machine_setup = artifact("setupAllUsers")?;
+        let out = output.join("lifecycle");
+        fs::create_dir(&out)?;
+        let version = report["baseVersion"]
+            .as_str()
+            .ok_or_else(|| anyhow::anyhow!("package report has no baseVersion"))?;
+        let rollback = build_rollback_fixture(&output, &out, version)?;
+        let invoke = |program: &Path, args: &[&str], log: &str| -> Result<i32> {
+            let mut command = Command::new(program);
+            for &arg in args {
+                if let Some(folder) = arg.strip_prefix("INSTALLFOLDER=") {
+                    anyhow::ensure!(program == Path::new("msiexec.exe"));
+                    set_msi_install_folder(&mut command, folder)?;
+                } else {
+                    command.arg(arg);
+                }
+            }
+            command.arg(if program == Path::new("msiexec.exe") {
+                "/l*v!"
+            } else {
+                "/log"
+            });
+            command.arg(out.join(format!("{log}.log")));
+            let result = crate::tools::run(&mut command, secs(360.0))?;
+            result
+                .code()
+                .ok_or_else(|| anyhow::anyhow!("{log}: process did not exit"))
+        };
+        let successful = |program: &Path, args: &[&str], log: &str| -> Result<()> {
+            let code = invoke(program, args, log)?;
+            anyhow::ensure!(matches!(code, 0 | 3010), "{log}: exit {code}");
+            Ok(())
+        };
+        let msi = Path::new("msiexec.exe");
+        let package = installer.to_str().unwrap();
+        let local = PathBuf::from(std::env::var("LOCALAPPDATA")?);
+        let program_files = PathBuf::from(std::env::var("ProgramFiles")?);
+        let user_menu = PathBuf::from(std::env::var("APPDATA")?);
+        let machine_menu = PathBuf::from(std::env::var("ProgramData")?);
+        let mut results = Vec::new();
+        for (scope, key, other_key, default, menu, setup, opposite) in [
+            (
+                "user",
+                USER_KEY,
+                INSTALL_KEY,
+                local.join(r"Programs\ExoSnap"),
+                user_menu,
+                &user_setup,
+                &machine_setup,
+            ),
+            (
+                "machine",
+                INSTALL_KEY,
+                USER_KEY,
+                program_files.join("ExoSnap"),
+                machine_menu,
+                &machine_setup,
+                &user_setup,
+            ),
+        ] {
+            let shortcut = menu.join(r"Microsoft\Windows\Start Menu\Programs\ExoSnap.lnk");
+            anyhow::ensure!(!reg_key_exists(key)? && !reg_key_exists(other_key)?);
+            anyhow::ensure!(!reg_key_exists(r"HKLM\SOFTWARE\Codexo\ExoSnap")?);
+            anyhow::ensure!(exosnap_arp_rows()?.is_empty());
+            anyhow::ensure!(!default.exists() && !shortcut.exists());
+            let custom = out.join(format!("{scope} custom")).join("ExoSnap");
+            let request = format!("EXOSNAP_REQUESTED_SCOPE={scope}");
+            let folder = format!("INSTALLFOLDER={}", custom.display());
+            let log = |stage: &str| format!("{scope}-{stage}");
+            successful(
+                msi,
+                &["/i", package, "/qn", "/norestart", &request, &folder],
+                &log("install"),
+            )?;
+            let actual = scoped_reg_value(key, "InstallPath")?.unwrap();
+            assert_eq!(Path::new(&actual), custom);
+            let owner = scoped_reg_value(key, "DistributionOwner")?;
+            assert_eq!(owner.as_deref(), Some("direct"));
+            assert!(!reg_key_exists(other_key)? && shortcut.is_file());
+            let rows = exosnap_arp_rows()?;
+            assert_eq!(rows.len(), 1);
+            assert!(!rows[0].system_component);
+            let original = &rows[0];
+            println!(
+                "{scope} original ARP: {} version {}",
+                original.registry_key, original.display_version
+            );
+            let original_arp = &rows[0].uninstall_string;
+            let start = original_arp.find('{').unwrap();
+            let code = &original_arp[start..start + 38];
+            assert!(is_product_code(code));
+            let expected_context = if scope == "user" { 2 } else { 4 };
+            let expected = vec![(expected_context, version.to_string())];
+            let contexts = installed_contexts(code)?;
+            println!("{scope} original Windows Installer contexts: {contexts:?}");
+            assert_eq!(contexts, expected);
+            // Windows Installer may also place its Uninstall metadata under HKLM
+            // for a USERUNMANAGED product. Its API reports the installation context.
+            // Compare the actual ARP key across rollback and check our scoped hive.
+            let hive = original.registry_key.split('\\').next().unwrap();
+            if scope == "machine" {
+                assert_eq!(hive, "HKLM");
+            } else {
+                assert!(matches!(hive, "HKCU" | "HKLM"));
+            }
+            assert!(original.registry_key.ends_with(code));
+            assert_eq!(original.display_version, version);
+            let exe = custom.join("exosnap.exe");
+            let hash = sha256_file(&exe)?.0;
+            fs::remove_file(&exe)?;
+            let repair = ["/fvamus", package, "/qn", "/norestart"];
+            successful(msi, &repair, &log("repair"))?;
+            assert_eq!(sha256_file(&exe)?.0, hash);
+            fs::write(custom.join("unrelated.txt"), b"preserve")?;
+            let upgrade = rollback.to_str().unwrap();
+            let failed_upgrade = ["/i", upgrade, "/qn", "/norestart", &request];
+            let status = invoke(msi, &failed_upgrade, &log("rollback"))?;
+            assert_eq!(status, 1603);
+            let rollback_log = out.join(format!("{scope}-rollback.log"));
+            let trace = crate::tools::read_diagnostic_log(&rollback_log, "msiexec")?;
+            let success = "RemoveExistingProducts. Return value 1.";
+            let removed = trace.find(success).unwrap();
+            assert!(trace[removed..].contains("Deliberate rollback fixture failure."));
+            let upper_code = code.to_ascii_uppercase();
+            let related = trace[..removed].lines().any(|line| {
+                let identifies_product = line.to_ascii_uppercase().contains(&upper_code);
+                identifies_product && line.contains("WIX_UPGRADE_DETECTED")
+            });
+            assert!(related, "missing original product in upgrade detection");
+            let before = &trace[..removed];
+            assert!(before.contains("Executing op: ProductUnregister("));
+            assert!(before.lines().any(|line| {
+                line.contains("Executing op: FileRemove(") && line.contains("FileName=exosnap.exe,")
+            }));
+            let failed = "ForceFixtureRollback. Return value 3.";
+            let (_, after) = trace[removed..].split_once(failed).unwrap();
+            let destination = format!("DestName={},", exe.display());
+            assert!(after.lines().any(|line| {
+                line.contains("Executing op: FileCopy(") && line.contains(&destination)
+            }));
+            let restored = exosnap_arp_rows()?;
+            assert_eq!(restored.len(), 1);
+            assert_eq!(restored[0].uninstall_string, *original_arp);
+            assert!(!restored[0].system_component);
+            println!(
+                "{scope} restored ARP: {} version {}",
+                restored[0].registry_key, restored[0].display_version
+            );
+            assert_eq!(restored[0].registry_key, original.registry_key);
+            assert_eq!(restored[0].display_version, version);
+            let contexts = installed_contexts(code)?;
+            println!("{scope} restored Windows Installer contexts: {contexts:?}");
+            assert_eq!(contexts, expected);
+            let actual = scoped_reg_value(key, "InstallPath")?.unwrap();
+            assert_eq!(Path::new(&actual), custom);
+            let owner = scoped_reg_value(key, "DistributionOwner")?;
+            assert_eq!(owner.as_deref(), Some("direct"));
+            assert!(!reg_key_exists(other_key)? && shortcut.is_file());
+            assert_eq!(sha256_file(&exe)?.0, hash);
+            assert_eq!(fs::read(custom.join("unrelated.txt"))?, b"preserve");
+            let uninstall = ["/x", package, "/qn", "/norestart"];
+            successful(msi, &uninstall, &log("uninstall"))?;
+            assert_eq!(fs::read(custom.join("unrelated.txt"))?, b"preserve");
+            assert!(!exe.exists() && !shortcut.exists() && !reg_key_exists(key)?);
+            assert!(exosnap_arp_rows()?.is_empty());
+
+            let quiet_install = ["/install", "/quiet", "/norestart"];
+            successful(setup, &quiet_install, &log("setup"))?;
+            let exe = default.join("exosnap.exe");
+            let hash = sha256_file(&exe)?.0;
+            let actual = scoped_reg_value(key, "InstallPath")?.unwrap();
+            assert_eq!(Path::new(&actual), default);
+            assert!(shortcut.is_file() && !reg_key_exists(other_key)?);
+            let rows = exosnap_arp_rows()?;
+            assert_eq!(rows.iter().filter(|r| r.system_component).count(), 1);
+            let visible: Vec<_> = rows.iter().filter(|r| !r.system_component).collect();
+            assert_eq!(visible.len(), 1);
+            let cached = quoted_exe(&visible[0].uninstall_string).unwrap();
+            let cache_root = if scope == "user" {
+                local.join("Package Cache")
+            } else {
+                PathBuf::from(std::env::var("ProgramData")?).join("Package Cache")
+            };
+            anyhow::ensure!(cached.starts_with(cache_root) && cached.is_file());
+            let refused = invoke(opposite, &quiet_install, &log("conflict"))?;
+            assert_eq!(refused, 1638);
+            assert_eq!(sha256_file(&exe)?.0, hash);
+            assert!(!reg_key_exists(other_key)?);
+            fs::remove_file(&exe)?;
+            let repair = ["/repair", "/quiet", "/norestart"];
+            successful(&cached, &repair, &log("cached-repair"))?;
+            assert_eq!(sha256_file(&exe)?.0, hash);
+            let remove = ["/uninstall", "/quiet", "/norestart"];
+            successful(&cached, &remove, &log("cached-remove"))?;
+            assert!(!exe.exists() && !shortcut.exists() && !reg_key_exists(key)?);
+            assert!(exosnap_arp_rows()?.is_empty());
+            results.push(
+                json!({"scope": scope, "msiCustomPath": custom, "setupPath": default,
+                "repairedSha256": hash, "oppositeScopeExit": refused, "uninstalled": true,
+                "rolledBackProductCode": code, "failedUpgradeExit": status}),
+            );
+        }
+        let receipt = serde_json::to_vec_pretty(&results)?;
+        fs::write(out.join("result.json"), receipt)?;
         Ok(())
     }
 

@@ -31,12 +31,13 @@
            Manufacturer="Codexo"
            Version="$(var.ProductVersion)"
            UpgradeCode="8988DAFC-3AE4-4788-BA6D-62E3F73C7A7D"
-           Scope="perMachine"
+           Scope="perUser"
            Language="1033"
            Codepage="1252">
 
     <MajorUpgrade DowngradeErrorMessage="A newer version of ExoSnap is already installed."
-                  AllowSameVersionUpgrades="yes" />
+                  AllowSameVersionUpgrades="yes"
+                  Schedule="afterInstallInitialize" />
 
     <!-- Detects an upgrade from the 0.10.0 product or older. The legacy
          handoff component below needs exactly that transition, not every
@@ -73,6 +74,18 @@
     <!-- AppSearch skips an empty REG_SZ, so a read-only presence probe must
          distinguish malformed existing markers from genuinely absent ones. -->
     <Binary Id="DistributionOwnerProbe" SourceFile="$(var.DistributionOwnerProbePath)" />
+    <Launch Condition='Installed OR NOT WIX_UPGRADE_DETECTED OR ARPSYSTEMCOMPONENT OR (NOT ExoSnapHiddenRelatedMsi AND ((ALLUSERS AND ExoSnapMachineSetupManaged &lt;&gt; "1") OR (NOT ALLUSERS AND ExoSnapUserSetupManaged &lt;&gt; "1")))'
+            Message="This installation is managed by ExoSnap Setup. Use the Setup package for its installation scope to update it." />
+    <SetProperty Id="ARPSYSTEMCOMPONENT" Value="1" Before="CostInitialize" Sequence="both"
+                 Condition='Installed AND ((ALLUSERS AND ExoSnapMachineSetupManaged = "1") OR (NOT ALLUSERS AND ExoSnapUserSetupManaged = "1"))' />
+    <Property Id="EXOSNAP_SETUP_REPAIR" Secure="yes" />
+    <Launch Condition="NOT EXOSNAP_SETUP_REPAIR OR Installed"
+            Message="Repair requires this MSI product to be installed in the selected scope. Run the matching ExoSnap Setup to install or upgrade it." />
+    <Property Id="EXOSNAP_REQUESTED_SCOPE" Secure="yes" />
+    <CustomAction Id="SelectInstallScope" BinaryRef="DistributionOwnerProbe"
+                  DllEntry="SelectInstallScope" Execute="immediate" Return="check" />
+    <Launch Condition="NOT EXOSNAP_SCOPE_CONFLICT"
+            Message="ExoSnap is already registered in another installation scope. Use Setup for the existing installation, or uninstall it before changing scope." />
     <CustomAction Id="ProbeDistributionOwner"
                   BinaryRef="DistributionOwnerProbe"
                   DllEntry="ProbeDistributionOwner"
@@ -91,6 +104,7 @@
                   Property="EXOSNAP_RESOLVED_DISTRIBUTION_OWNER"
                   Value="direct" />
     <InstallUISequence>
+      <Custom Action="SelectInstallScope" Before="FindRelatedProducts" />
       <Custom Action="ProbeDistributionOwner" After="AppSearch" />
       <Custom Action="ResolveDistributionOwnerFromCaller" After="ProbeDistributionOwner" Condition="EXOSNAP_DISTRIBUTION_OWNER" />
       <Custom Action="ResolveDistributionOwnerFromRegistry" After="ResolveDistributionOwnerFromCaller" Condition="NOT EXOSNAP_DISTRIBUTION_OWNER AND EXOSNAP_DISTRIBUTION_OWNER_REMEMBERED AND EXOSNAP_DISTRIBUTION_OWNER_STRING" />
@@ -98,6 +112,7 @@
       <Custom Action="ResolveDistributionOwnerDefault" After="ResolveDistributionOwnerUnknown" Condition="NOT EXOSNAP_DISTRIBUTION_OWNER AND NOT EXOSNAP_DISTRIBUTION_OWNER_REMEMBERED AND NOT EXOSNAP_DISTRIBUTION_OWNER_PRESENT" />
     </InstallUISequence>
     <InstallExecuteSequence>
+      <Custom Action="SelectInstallScope" Before="FindRelatedProducts" />
       <Custom Action="ProbeDistributionOwner" After="AppSearch" />
       <Custom Action="ResolveDistributionOwnerFromCaller" After="ProbeDistributionOwner" Condition="EXOSNAP_DISTRIBUTION_OWNER" />
       <Custom Action="ResolveDistributionOwnerFromRegistry" After="ResolveDistributionOwnerFromCaller" Condition="NOT EXOSNAP_DISTRIBUTION_OWNER AND EXOSNAP_DISTRIBUTION_OWNER_REMEMBERED AND EXOSNAP_DISTRIBUTION_OWNER_STRING" />
@@ -134,17 +149,31 @@
                     Languages="1033" />
       </DirectorySearch>
     </Property>
-    <Launch Condition="Installed OR VCREDISTX64_RUNTIME"
+    <Launch Condition='VCREDISTX64_RUNTIME OR (Installed AND (REMOVE~="ALL" OR UPGRADINGPRODUCTCODE))'
             Message="ExoSnap requires the Microsoft Visual C++ 2015-2022 x64 Redistributable version $(var.VCRedistMinVersion) or newer. Install it from https://aka.ms/vs/17/release/vc_redist.x64.exe, or use ExoSnap Setup, and run this installer again." />
 
-    <!-- Install-root directory skeleton. The product installs directly under
-         Program Files; there is no vendor directory and no repeated ExoSnap
-         layer. Subdirectories (plugins/, licenses/, …) come from _harvest.wxs. -->
+    <!-- Resolve the registered destination before costing or removing the old
+         product. Machine installation paths must come from the machine hive. -->
+    <SetProperty Id="INSTALLFOLDER" Action="UseLegacyInstallPath" Value="[ExoSnapLegacyMachineInstallPath]"
+                 Before="CostFinalize" Sequence="both"
+                 Condition="ALLUSERS AND NOT ExoSnapMachineInstallPath AND ExoSnapLegacyMachineInstallPath AND WIX_UPGRADE_DETECTED" />
+    <SetProperty Id="INSTALLFOLDER" Action="UseMachineInstallPath" Value="[ExoSnapMachineInstallPath]"
+                 Before="CostFinalize" Sequence="both"
+                 Condition="ALLUSERS AND ExoSnapMachineInstallPath AND (Installed OR WIX_UPGRADE_DETECTED)" />
+    <SetProperty Id="INSTALLFOLDER" Action="UseUserInstallPath" Value="[ExoSnapUserInstallPath]"
+                 Before="CostFinalize" Sequence="both"
+                 Condition="NOT ALLUSERS AND ExoSnapUserInstallPath AND (Installed OR WIX_UPGRADE_DETECTED)" />
+    <SetProperty Id="INSTALLFOLDER" Action="UseDefaultUserPath" Value="[LocalAppDataFolder]Programs\ExoSnap"
+                 Before="CostFinalize" Sequence="both"
+                 Condition="NOT ALLUSERS AND NOT INSTALLFOLDER AND NOT (ExoSnapUserInstallPath AND (Installed OR WIX_UPGRADE_DETECTED))" />
+
+    <!-- Machine installations use Program Files. User installations resolve
+         INSTALLFOLDER under the local Programs directory before costing. Subdirectories (plugins/, licenses/, …) come from _harvest.wxs. -->
     <StandardDirectory Id="ProgramFiles64Folder">
       <Directory Id="INSTALLFOLDER" Name="ExoSnap" />
     </StandardDirectory>
 
-    <!-- Start Menu shortcut (all-users, per-machine) — stable component GUID across releases -->
+    <!-- Start Menu shortcut follows Windows Installer context; keep its stable component GUID. -->
     <StandardDirectory Id="ProgramMenuFolder">
       <Component Id="StartMenuShortcut" Guid="{C1D2E3F4-A5B6-7890-CDEF-1234567890AB}" KeyPath="yes">
         <Shortcut Id="StartMenuExoSnap"
@@ -153,27 +182,29 @@
                   Target="[INSTALLFOLDER]exosnap.exe"
                   WorkingDirectory="INSTALLFOLDER"
                   Icon="ExoSnapAppIcon" />
-        <RegistryValue Root="HKLM"
+        <RegistryValue Root="HKMU"
                        Key="Software\ExoSnap"
                        Name="installed"
                        Value="1"
                        Type="integer" />
-        <RegistryValue Root="HKLM"
+        <RegistryValue Root="HKMU"
                        Key="Software\ExoSnap"
                        Name="InstallPath"
                        Value="[INSTALLFOLDER]"
                        Type="string" />
-        <RegistryValue Root="HKLM"
+        <RegistryValue Root="HKMU"
                        Key="Software\ExoSnap"
                        Name="DistributionOwner"
                        Value="[EXOSNAP_RESOLVED_DISTRIBUTION_OWNER]"
                        Type="string" />
+        <RegistryValue Root="HKMU" Key="Software\ExoSnap" Name="SetupManaged"
+                       Value="[ARPSYSTEMCOMPONENT]" Type="string" />
         <!-- Clear any stale v0.10.0 product marker under the vendor key. A
              legacy handoff component below rewrites only the two values the
              immutable v0.10.0 updater reads after its handoff; the runtime's
              installed-mode detection also accepts the legacy key as a fallback
              while an old version is still present. -->
-        <RemoveRegistryKey Root="HKLM" Key="Software\Codexo\ExoSnap" Action="removeOnInstall" />
+        <RemoveRegistryKey Root="HKMU" Key="Software\Codexo\ExoSnap" Action="removeOnInstall" />
       </Component>
     </StandardDirectory>
 
@@ -188,7 +219,7 @@
     <Component Id="LegacyHandoff"
                Guid="{EA1AE131-D32E-422C-A610-3BFB1C4E642A}"
                Directory="INSTALLFOLDER"
-               Condition="EXOSNAP_V010_OR_OLDER">
+               Condition="ALLUSERS AND EXOSNAP_V010_OR_OLDER">
       <RegistryValue Root="HKLM"
                      Key="Software\Codexo\ExoSnap"
                      Name="installed"
@@ -216,17 +247,21 @@
                       Name="DesktopShortcut"
                       Bitness="always64" />
     </Property>
+    <Property Id="EXOSNAP_USER_DESKTOP_SHORTCUT_REMEMBERED">
+      <RegistrySearch Id="ExoSnapUserDesktopShortcutRemembered" Root="HKCU" Key="Software\ExoSnap"
+                      Name="DesktopShortcut" Type="raw" Bitness="always64" />
+    </Property>
     <StandardDirectory Id="DesktopFolder">
       <Component Id="DesktopShortcut"
                  Guid="{9BEDB693-BF11-4589-B5A4-AD17A96F1F7E}"
-                 Condition='EXOSNAP_DESKTOP_SHORTCUT = 1 OR EXOSNAP_DESKTOP_SHORTCUT_REMEMBERED = "#1"'>
+                 Condition='EXOSNAP_DESKTOP_SHORTCUT = 1 OR (ALLUSERS AND EXOSNAP_DESKTOP_SHORTCUT_REMEMBERED = "#1") OR (NOT ALLUSERS AND EXOSNAP_USER_DESKTOP_SHORTCUT_REMEMBERED = "#1")'>
         <Shortcut Id="DesktopExoSnap"
                   Name="ExoSnap"
                   Description="Windows-native screen, window and region recorder"
                   Target="[INSTALLFOLDER]exosnap.exe"
                   WorkingDirectory="INSTALLFOLDER"
                   Icon="ExoSnapAppIcon" />
-        <RegistryValue Root="HKLM"
+        <RegistryValue Root="HKMU"
                        Key="Software\ExoSnap"
                        Name="DesktopShortcut"
                        Value="1"
@@ -258,7 +293,7 @@
     <Component Id="ExoSnapUserDataCleanup"
                Guid="{E8E337A2-AAEA-43AE-AC1F-9FB82D6377B5}"
                Directory="INSTALLFOLDER">
-      <RegistryValue Root="HKLM"
+      <RegistryValue Root="HKMU"
                      Key="Software\ExoSnap"
                      Name="UserDataCleanup"
                      Value="1"

@@ -68,4 +68,9 @@ struct ReleaseAssets {
 // Installed -> PackageKind::Installer, Portable -> PackageKind::Portable; nullptr if absent.
 [[nodiscard]] const PackageEntry* SelectPackage(const UpdateManifest& m, InstallMode mode);
 
+// Version-changing upgrades replace the cached bundle. An exact-version repair
+// uses the release's identical chained MSI as the authenticated recache source.
+[[nodiscard]] const PackageEntry* SelectSetupManagedPackage(const UpdateManifest& manifest, MsiInstallScope scope,
+                                                            bool repair);
+
 } // namespace exosnap::update

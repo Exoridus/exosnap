@@ -260,6 +260,18 @@ void UpdaterController::onCancelled() {
     state_.headline = QCoreApplication::translate("UpdaterController", "Update canceled");
     state_.detail_text = QCoreApplication::translate("UpdaterController",
                                                      "The download was stopped and its partial files were discarded.");
+    if (state_.repairing && flow_.phase == UpdatePhase::Downloading &&
+        flow_.install_state == exosnap::update::InstallState::Unknown) {
+        state_.repairing = false;
+        state_.headline = QCoreApplication::translate("UpdaterController", "Repair download canceled");
+        state_.safety_text = QCoreApplication::translate(
+            "UpdaterController", "The installation is still unconfirmed. Repair ExoSnap before you use it.");
+        state_.primary_action = QCoreApplication::translate("UpdaterController", "Repair ExoSnap");
+        state_.secondary_action = QCoreApplication::translate("UpdaterController", "Close");
+        setPhase(UpdatePhase::Cancelled);
+        flow_.retry_entry_step = UpStep::CloseApp;
+        return;
+    }
     state_.safety_text =
         state_.from_version.isEmpty()
             ? QCoreApplication::translate("UpdaterController", "Nothing was installed and nothing was changed.")

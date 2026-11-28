@@ -3,6 +3,7 @@ PackageIdentifier: Codexo.ExoSnap
 PackageVersion: 0.10.1
 InstallerType: wix
 Scope: machine
+ElevationRequirement: elevationRequired
 InstallerSwitches:
   Custom: EXOSNAP_DISTRIBUTION_OWNER=winget
 InstallModes:

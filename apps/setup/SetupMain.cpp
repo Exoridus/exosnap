@@ -48,20 +48,28 @@ QString RuntimeDirectory(const SetupHost* host) {
 }
 
 bool Preview(SetupController& controller, const QString& name) {
-    const QStringList names{QStringLiteral("checking"),  QStringLiteral("install"),        QStringLiteral("manage"),
-                            QStringLiteral("uninstall"), QStringLiteral("uninstall-data"), QStringLiteral("progress"),
-                            QStringLiteral("protected"), QStringLiteral("success"),        QStringLiteral("reboot"),
-                            QStringLiteral("failure"),   QStringLiteral("removed"),        QStringLiteral("cancelled")};
+    const QStringList names{QStringLiteral("checking"),        QStringLiteral("install"),
+                            QStringLiteral("manage"),          QStringLiteral("uninstall"),
+                            QStringLiteral("uninstall-data"),  QStringLiteral("progress"),
+                            QStringLiteral("protected"),       QStringLiteral("success"),
+                            QStringLiteral("reboot"),          QStringLiteral("failure"),
+                            QStringLiteral("removed"),         QStringLiteral("cancelled"),
+                            QStringLiteral("install-machine"), QStringLiteral("install-prerequisite"),
+                            QStringLiteral("denied")};
     if (!names.contains(name))
         return false;
     if (name == QStringLiteral("checking"))
         return true;
     SetupEvent event{SetupEventKind::Detected};
+    event.machine_scope = name == QStringLiteral("install-machine");
+    event.runtime_required = name == QStringLiteral("install-prerequisite");
+    event.text =
+        event.machine_scope ? L"C:\\Program Files\\ExoSnap" : L"C:\\Users\\Example\\AppData\\Local\\Programs\\ExoSnap";
     event.installed = name == QStringLiteral("manage") || name.startsWith(QStringLiteral("uninstall")) ||
                       name == QStringLiteral("removed");
     event.version = event.installed ? L"0.11.0" : nullptr;
     controller.receive(event);
-    if (name == QStringLiteral("manage") || name == QStringLiteral("install"))
+    if (name == QStringLiteral("manage") || name.startsWith(QStringLiteral("install")))
         return true;
     if (name.startsWith(QStringLiteral("uninstall"))) {
         controller.chooseUninstall();
@@ -89,7 +97,10 @@ bool Preview(SetupController& controller, const QString& name) {
     }
     event = SetupEvent{SetupEventKind::Completed};
     event.restart_required = name == QStringLiteral("reboot");
-    event.status = name == QStringLiteral("failure") ? 1603 : name == QStringLiteral("cancelled") ? 1602 : 0;
+    event.status = name == QStringLiteral("failure")     ? 1603
+                   : name == QStringLiteral("cancelled") ? 1602
+                   : name == QStringLiteral("denied")    ? 1223
+                                                         : 0;
     controller.receive(event);
     return true;
 }
@@ -162,11 +173,11 @@ extern "C" __declspec(dllexport) std::uint32_t RunSetupUi(const exosnap::setup::
     if (!host && preview.isEmpty())
         return ERROR_INVALID_PARAMETER;
 
-    SetupController controller(host ? QString::fromWCharArray(host->version) : QStringLiteral("0.11.0"),
-                               QDir::toNativeSeparators(host ? QString::fromWCharArray(host->install_path)
-                                                             : QStringLiteral("C:/Program Files/ExoSnap")),
-                               host && host->passive, host && host->uninstall_requested,
-                               host && host->repair_requested);
+    SetupController controller(
+        host ? QString::fromWCharArray(host->version) : QStringLiteral("0.11.0"),
+        QDir::toNativeSeparators(host ? QString::fromWCharArray(host->install_path)
+                                      : QStringLiteral("C:/Users/Example/AppData/Local/Programs/ExoSnap")),
+        host && host->passive, host && host->uninstall_requested, host && host->repair_requested);
     QFile license(QStringLiteral(":/setup/LICENSE"));
     if (!license.open(QIODevice::ReadOnly))
         return ERROR_FILE_NOT_FOUND;

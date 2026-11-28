@@ -114,10 +114,11 @@ jobs:
           $portable = "candidate-package/ExoSnap-$env:RELEASE_VERSION-windows-x64-portable.zip"
           $installer = "candidate-package/ExoSnap-$env:RELEASE_VERSION-windows-x64.msi"
           $setup = "candidate-package/ExoSnap-$env:RELEASE_VERSION-Setup.exe"
+          $setupAllUsers = "candidate-package/ExoSnap-$env:RELEASE_VERSION-Setup-AllUsers.exe"
           if (-not (Test-Path -LiteralPath $setup)) { throw 'the candidate package has no Setup bootstrapper' }
           & $verify bundle create --out candidate-bundle --version $env:RELEASE_VERSION `
             --commit $env:SOURCE_COMMIT --candidate-id $env:CANDIDATE_ID `
-            --installer $installer --setup $setup --portable $portable --runtime $verify `
+            --installer $installer --setup $setup --setup-all-users $setupAllUsers --portable $portable --runtime $verify `
             --metadata candidate-package/package.json `
             --toolchain 'generator=Ninja' --toolchain 'runner=windows-2022'
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }

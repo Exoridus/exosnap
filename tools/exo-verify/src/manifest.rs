@@ -30,7 +30,12 @@ pub struct Package {
 pub struct Manifest {
     pub version: String,
     pub minimum_accepted_version: String,
+    #[serde(default, skip_serializing_if = "String::is_empty")]
+    pub vc_runtime_minimum: String,
     pub packages: Vec<Package>,
+    // Older clients reject extra kinds in packages, but ignore optional top-level fields.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub setup_packages: Vec<Package>,
 }
 
 /// Loads the signing seed from `var` (base64 of the 32-byte Ed25519 seed).
@@ -88,9 +93,44 @@ pub fn for_bundle(bundle: &Bundle, installer_url: &str, portable_url: &str) -> R
             .sha256
             .clone())
     };
+    let mut setup_packages = Vec::new();
+    // Candidates predating scoped Setup have a single machine bundle with the
+    // ordinary Setup name. Only the paired format establishes scope identity.
+    let scoped = bundle.inventory.file(FileRole::SetupAllUsers).is_some();
+    if scoped {
+        for (role, kind) in [
+            (FileRole::Setup, "user"),
+            (FileRole::SetupAllUsers, "machine"),
+        ] {
+            let file = bundle
+                .inventory
+                .file(role)
+                .context("scoped release lacks a Setup package")?;
+            let (base, _) = installer_url
+                .rsplit_once('/')
+                .context("installer URL has no parent")?;
+            let name = Path::new(&file.path)
+                .file_name()
+                .and_then(|s| s.to_str())
+                .context("invalid Setup file name")?;
+            setup_packages.push(Package {
+                kind: kind.into(),
+                url: format!("{base}/{name}"),
+                sha256: file.sha256.clone(),
+            });
+        }
+    }
     Ok(Manifest {
         version: version.clone(),
         minimum_accepted_version: version.clone(),
+        vc_runtime_minimum: if scoped {
+            crate::package::VC_REDIST_MIN_VERSION
+                .trim_start_matches('v')
+                .into()
+        } else {
+            String::new()
+        },
+        setup_packages,
         packages: vec![
             Package {
                 kind: "installer".into(),
@@ -159,6 +199,19 @@ pub fn verify_against_files(
                 path.display()
             );
         }
+    }
+    for package in &manifest.setup_packages {
+        let file = match package.kind.as_str() {
+            "user" => crate::bundle::setup_name(expected_version),
+            "machine" => crate::bundle::setup_all_users_name(expected_version),
+            other => bail!("unsupported Setup scope {other}"),
+        };
+        let path = installer.with_file_name(file);
+        ensure!(
+            package.sha256.eq_ignore_ascii_case(&sha256_file(&path)?.0),
+            "Setup hash does not match {}",
+            path.display()
+        );
     }
     Ok(manifest)
 }

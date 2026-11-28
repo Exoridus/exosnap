@@ -116,6 +116,9 @@ struct UpdateManifest {
     std::string version_raw;
     SemVer minimum_accepted_version;
     std::vector<PackageEntry> packages;
+    std::string vc_runtime_minimum;
+    std::optional<PackageEntry> user_setup;
+    std::optional<PackageEntry> machine_setup;
     // The ed25519 signature is detached: it lives in a sibling `.sig` asset and
     // covers the exact manifest bytes, so it is never carried inside this struct.
 };
@@ -128,6 +131,8 @@ enum class InstallMode : uint8_t {
     Installed = 0, // installed via installer -> full update flow
     Portable = 1,  // extracted ZIP -> staged swap via external updater
 };
+
+enum class MsiInstallScope { User, Machine };
 
 enum class DistributionOwner : uint8_t {
     Direct = 0,
