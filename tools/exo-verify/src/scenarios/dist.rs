@@ -13,8 +13,8 @@ use crate::capability::Capability;
 use crate::context::{App, Context, extract_zip};
 use crate::package::{
     LAUNCHER_NAME, PORTABLE_CRT_FILES, RECORDER_NAME, RUNTIME_DIR, portable_dir_name,
-    validate_tree, verify_msi_runtime_parity, verify_portable_crt, verify_staged_diagnostics,
-    walk_files,
+    validate_tree, verify_msi_runtime_parity, verify_portable_config, verify_portable_crt,
+    verify_staged_diagnostics, walk_files,
 };
 use crate::plan::Tier;
 use crate::scenario::{Lane, Scenario, ScenarioClass, Step, Stop};
@@ -37,10 +37,10 @@ pub fn scenarios() -> Vec<Scenario> {
         },
         Scenario {
             id: "dist.portable-contents",
-            revision: 3,
+            revision: 4,
             title: "Portable package is complete, clean and self-contained",
             class: ScenarioClass::Contract,
-            contract: "the portable tree carries the launcher, pinned app-local Visual C++ runtime, official signed diagnostics pair, required runtime files and licenses, the candidate's embedded version, and no unresolved imports or development or user data",
+            contract: "the portable tree carries the launcher, the default portable.toml, pinned app-local Visual C++ runtime, official signed diagnostics pair, required runtime files and licenses, the candidate's embedded version, and no unresolved imports or development or user data",
             lane: Lane::CiCore,
             also: &[],
             tier: Tier::Required,
@@ -50,10 +50,10 @@ pub fn scenarios() -> Vec<Scenario> {
         },
         Scenario {
             id: "dist.msi-matches-portable",
-            revision: 3,
+            revision: 4,
             title: "MSI installs byte-identical files to the portable package",
             class: ScenarioClass::Contract,
-            contract: "the shared portable and MSI files match by path and bytes, and only the ZIP carries the pinned app-local Visual C++ runtime",
+            contract: "the shared portable and MSI files match by path and bytes, and only the ZIP carries portable.toml and the pinned app-local Visual C++ runtime",
             lane: Lane::CiCore,
             also: &[],
             tier: Tier::Required,
@@ -155,6 +155,7 @@ fn extracted_portable(ctx: &mut Context) -> Step<PathBuf> {
 fn portable_contents(ctx: &mut Context) -> Step {
     let version = ctx.bundle()?.inventory.product_version.clone();
     let root = extracted_portable(ctx)?;
+    verify_portable_config(&root).map_err(|err| Stop::fail(format!("{err:#}")))?;
     let leaks = vec![
         r"C:\Users\".to_string(),
         ".workspace".into(),

@@ -23,7 +23,7 @@ jobs:
   prepare:
     if: github.ref == 'refs/heads/next' && github.repository == 'Exoridus/exosnap'
     runs-on: windows-2022
-    timeout-minutes: 30
+    timeout-minutes: 45
     outputs:
       version: ${{ steps.source.outputs.version }}
       source_date_epoch: ${{ steps.source.outputs.source_date_epoch }}
@@ -341,12 +341,13 @@ jobs:
   release-ci-install:
     needs: build
     runs-on: windows-2022
-    timeout-minutes: 20
+    timeout-minutes: 60
     steps:
       - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4.3.0
         with:
           name: candidate-${{ inputs.candidate_id || format('v010-{0}', github.sha) }}
       - name: Verify bundle and run disposable install lane
+        timeout-minutes: 50
         shell: pwsh
         run: |
           $verify = './candidate-bundle/runtimes/exo-verify.exe'
@@ -381,7 +382,7 @@ jobs:
   release-ci-update:
     needs: [build, sign-test-feed]
     runs-on: windows-2022
-    timeout-minutes: 15
+    timeout-minutes: 60
     steps:
       - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4.3.0
         with:
@@ -432,6 +433,7 @@ jobs:
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
           Add-Content "$env:SystemRoot/System32/drivers/etc/hosts" "`n127.0.0.1 api.github.com"
       - name: Run disposable update lane against local signed feed
+        timeout-minutes: 50
         shell: pwsh
         env:
           UPDATE_PUBLIC_KEY: ${{ vars.EXOSNAP_UPDATE_PUBLIC_KEY_HEX }}

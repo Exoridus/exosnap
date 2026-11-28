@@ -132,6 +132,8 @@ fn external_path(path: &Path) -> PathBuf {
 pub(crate) const LAUNCHER_NAME: &str = "ExoSnap.exe";
 pub(crate) const RUNTIME_DIR: &str = "runtime";
 pub(crate) const RECORDER_NAME: &str = "exosnap.exe";
+pub(crate) const PORTABLE_CONFIG_NAME: &str = "portable.toml";
+pub(crate) const PORTABLE_CONFIG_DEFAULT: &str = "data_path = \"./data\"\n";
 
 const REQUIRED_ROOT_FILES: &[&str] = &[
     LAUNCHER_NAME,
@@ -822,12 +824,33 @@ fn reject_app_local_crt(hashes: &BTreeMap<String, String>) -> Result<()> {
 
 pub(crate) fn installed_runtime_hashes(root: &Path) -> Result<BTreeMap<String, String>> {
     let hashes = package_runtime_hashes(root)?;
+    ensure!(
+        !hashes.contains_key(PORTABLE_CONFIG_NAME),
+        "the MSI contains {PORTABLE_CONFIG_NAME}"
+    );
     reject_app_local_crt(&hashes)?;
     Ok(hashes)
 }
 
+pub(crate) fn verify_portable_config(root: &Path) -> Result<()> {
+    let config = fs::read(root.join(PORTABLE_CONFIG_NAME))
+        .with_context(|| format!("read packaged {PORTABLE_CONFIG_NAME}"))?;
+    ensure!(
+        config == PORTABLE_CONFIG_DEFAULT.as_bytes(),
+        "packaged {PORTABLE_CONFIG_NAME} must select ./data"
+    );
+    ensure!(
+        !root.join("data").exists(),
+        "portable ZIP contains user data"
+    );
+    Ok(())
+}
+
 pub(crate) fn portable_runtime_hashes(root: &Path) -> Result<BTreeMap<String, String>> {
     let mut hashes = package_runtime_hashes(root)?;
+    if hashes.remove(PORTABLE_CONFIG_NAME).is_some() {
+        verify_portable_config(root)?;
+    }
     if hashes.keys().any(|path| is_msvc_runtime(path)) {
         for (name, expected) in PORTABLE_CRT_FILES {
             let path = format!("{RUNTIME_DIR}/{name}");
@@ -1595,6 +1618,7 @@ pub fn run(args: &PackageArgs) -> Result<Option<PackageResult>> {
     } else {
         common_audit
     };
+    fs::write(staging.join(PORTABLE_CONFIG_NAME), PORTABLE_CONFIG_DEFAULT)?;
     let portable = out.join(format!("{top}.zip"));
     println!("==> {}", portable.display());
     write_zip(&staging, &top, &portable)?;
@@ -1822,6 +1846,20 @@ mod tests {
     }
 
     #[test]
+    fn portable_config_requires_the_default_marker_and_no_user_data() {
+        let dir = tempfile::tempdir().unwrap();
+        let root = dir.path();
+        let marker = root.join(PORTABLE_CONFIG_NAME);
+        assert!(verify_portable_config(root).is_err());
+        fs::write(&marker, "data_path = \"./other\"\n").unwrap();
+        assert!(verify_portable_config(root).is_err());
+        fs::write(marker, PORTABLE_CONFIG_DEFAULT).unwrap();
+        verify_portable_config(root).unwrap();
+        fs::create_dir(root.join("data")).unwrap();
+        assert!(verify_portable_config(root).is_err());
+    }
+
+    #[test]
     fn portable_tree_allows_diagnostics_payload_only_beside_the_recorder() {
         let dir = tempfile::tempdir().unwrap();
         let runtime = dir.path().join(RUNTIME_DIR);
@@ -2024,6 +2062,12 @@ mod tests {
         let helper = installed_runtime.join(DIAGNOSTICS_HELPER);
         fs::copy(&source, &helper).unwrap();
         assert_eq!(verify_msi_runtime_parity(&portable, &extracted).unwrap(), 5);
+        fs::write(portable.join(PORTABLE_CONFIG_NAME), PORTABLE_CONFIG_DEFAULT).unwrap();
+        assert_eq!(verify_msi_runtime_parity(&portable, &extracted).unwrap(), 5);
+        let installed_marker = app.join(PORTABLE_CONFIG_NAME);
+        fs::write(&installed_marker, PORTABLE_CONFIG_DEFAULT).unwrap();
+        assert!(verify_msi_runtime_parity(&portable, &extracted).is_err());
+        fs::remove_file(installed_marker).unwrap();
 
         fs::write(&helper, b"different helper").unwrap();
         assert!(verify_msi_runtime_parity(&portable, &extracted).is_err());

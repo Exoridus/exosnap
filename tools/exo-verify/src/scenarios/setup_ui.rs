@@ -1,13 +1,6 @@
-//! UI Automation driver for the installed WixStdBA Setup window.
-//!
-//! thmutil hosts every control in a custom window class and offers no UIA
-//! provider of its own, so the controls surface through the generic HWND and
-//! MSAA bridges as panes whose Name is the window text. This module drives the
-//! real controls by name: it activates patterns the element supports and falls
-//! back to the button's own window messages (`BM_CLICK`, `BM_GETCHECK`), the
-//! same notification path a mouse press takes. It never moves the pointer or
-//! synthesizes keyboard input, and every screenshot is captured from the
-//! window itself with `PrintWindow`.
+//! UI Automation driver for the Setup window. Select controls by accessible
+//! name and role so the provider's implementation class is irrelevant. Capture
+//! the window with `PrintWindow` without moving the pointer or typing.
 //!
 //! The flow mirrors what the interactive Setup contract expects: the Install
 //! button is enabled without any licence acceptance control, the option
@@ -16,7 +9,7 @@
 //! the uninstall page offers the unchecked local-data option.
 
 use std::fs;
-use std::path::{Path, PathBuf};
+use std::path::Path;
 use std::process::Command;
 use std::thread::sleep;
 use std::time::{Duration, Instant};
@@ -34,13 +27,15 @@ use windows::Win32::System::Variant::VARIANT;
 use windows::Win32::UI::Accessibility::{
     CUIAutomation, IUIAutomation, IUIAutomationCondition, IUIAutomationElement,
     IUIAutomationInvokePattern, IUIAutomationTogglePattern, ToggleState_On, TreeScope_Children,
-    TreeScope_Descendants, UIA_InvokePatternId, UIA_NamePropertyId, UIA_TogglePatternId,
+    TreeScope_Descendants, UIA_ButtonControlTypeId, UIA_CONTROLTYPE_ID, UIA_CheckBoxControlTypeId,
+    UIA_InvokePatternId, UIA_NamePropertyId, UIA_TogglePatternId,
 };
 use windows::Win32::UI::Input::KeyboardAndMouse::IsWindowEnabled;
 use windows::Win32::UI::WindowsAndMessaging::{BM_CLICK, BM_GETCHECK, GetWindowRect, SendMessageW};
 use windows::core::BSTR;
 
 use super::update::{exosnap_processes, terminate};
+use crate::context::Context;
 
 /// `BST_CHECKED`, the checked result of `BM_GETCHECK`.
 const BST_CHECKED: isize = 1;
@@ -72,7 +67,7 @@ pub struct Run<'a> {
     pub click_launch: bool,
 }
 
-pub fn drive(run: &Run<'_>) -> Result<()> {
+pub fn drive(run: &Run<'_>, ctx: &Context) -> Result<()> {
     fs::create_dir_all(run.screenshots)
         .with_context(|| format!("create {}", run.screenshots.display()))?;
     unsafe {
@@ -86,25 +81,25 @@ pub fn drive(run: &Run<'_>) -> Result<()> {
         Mode::Install => "/install",
         Mode::Uninstall => "/uninstall",
     };
-    let mut child = Command::new(run.setup)
-        .arg(verb)
-        .arg("/log")
-        .arg(run.log)
-        .spawn()
-        .with_context(|| format!("start {}", run.setup.display()))?;
+    let mut child = ctx.spawn(Command::new(run.setup).arg(verb).arg("/log").arg(run.log))?;
 
     let result = wait_window(&automation, 120.0).and_then(|_| match run.mode {
         Mode::Install => install_flow(&automation, run),
         Mode::Uninstall => uninstall_flow(&automation, run),
     });
-    let _ = child.wait();
-    result
+    if result.is_err() {
+        write_control_dump(&automation, &run.screenshots.join("setup-ui-controls.txt"));
+        return result;
+    }
+    let status = crate::tools::wait(&mut child, Duration::from_secs(30))?;
+    ensure!(status.success(), "Setup exited with {status}");
+    Ok(())
 }
 
 fn install_flow(automation: &IUIAutomation, run: &Run<'_>) -> Result<()> {
     // ExoSnap is GPL-3.0-or-later: no acceptance control exists and the
     // Install button must already be enabled when the page appears.
-    let install = wait_control(automation, "Install ExoSnap", Some("Button"), 90.0)?;
+    let install = wait_control(automation, "Install", Some(UIA_ButtonControlTypeId), 90.0)?;
     ensure!(
         enabled(&install),
         "the Install button is disabled without a licence acceptance control"
@@ -112,20 +107,17 @@ fn install_flow(automation: &IUIAutomation, run: &Run<'_>) -> Result<()> {
     if find_control(
         automation,
         "I agree to the license terms and conditions",
-        Some("Button"),
+        Some(UIA_CheckBoxControlTypeId),
     )
     .is_some()
     {
         bail!("the removed licence acceptance checkbox is still present");
     }
 
-    // The checkbox caption is clipped to the glyph; the readable text beside
-    // it is a Label. Find the real button by class, assert it is enabled and
-    // unchecked by default.
     let desktop = wait_control(
         automation,
         "Create a desktop shortcut",
-        Some("Button"),
+        Some(UIA_CheckBoxControlTypeId),
         30.0,
     )?;
     ensure!(
@@ -142,7 +134,7 @@ fn install_flow(automation: &IUIAutomation, run: &Run<'_>) -> Result<()> {
     // The canonical GPL text must be viewable inside Setup, offline.
     let view_license = wait_control(automation, "View license", None, 30.0)?;
     invoke(&view_license)?;
-    let back = wait_control(automation, "Back", Some("Button"), 60.0)?;
+    let back = wait_control(automation, "Back", Some(UIA_ButtonControlTypeId), 60.0)?;
     sleep(Duration::from_millis(500));
     screenshot(automation, run.screenshots, "install-2-license.png")?;
     invoke(&back)?;
@@ -155,26 +147,28 @@ fn install_flow(automation: &IUIAutomation, run: &Run<'_>) -> Result<()> {
     sleep(Duration::from_millis(800));
     screenshot(automation, run.screenshots, "install-3-progress.png")?;
 
-    let _ = wait_control(automation, "Launch", Some("Button"), 900.0)?;
+    let launch = wait_control(
+        automation,
+        "Launch ExoSnap",
+        Some(UIA_ButtonControlTypeId),
+        900.0,
+    )?;
     screenshot(automation, run.screenshots, "install-4-success.png")?;
     if run.click_launch {
-        let launch = wait_control(automation, "Launch", Some("Button"), 30.0)?;
         invoke(&launch)?;
         let pid = wait_started(run.expected_exe, 90.0)?;
         terminate(pid);
-        // WixStdBA closes the Success window itself after launching the target.
-    } else {
-        let close = wait_control(automation, "Close", Some("Button"), 30.0)?;
-        invoke(&close)?;
     }
+    let close = wait_control(automation, "Close", Some(UIA_ButtonControlTypeId), 30.0)?;
+    invoke(&close)?;
     Ok(())
 }
 
 fn uninstall_flow(automation: &IUIAutomation, run: &Run<'_>) -> Result<()> {
     let remove = wait_control(
         automation,
-        "Also remove local ExoSnap data",
-        Some("Button"),
+        "Also delete my ExoSnap data",
+        Some(UIA_CheckBoxControlTypeId),
         120.0,
     )?;
     ensure!(enabled(&remove), "the remove-data checkbox is disabled");
@@ -188,14 +182,18 @@ fn uninstall_flow(automation: &IUIAutomation, run: &Run<'_>) -> Result<()> {
         toggle(&remove)?;
     }
 
-    let uninstall = wait_control(automation, "Uninstall", Some("Button"), 30.0)?;
+    let action = if run.remove_user_data {
+        "Uninstall and delete data"
+    } else {
+        "Uninstall"
+    };
+    let uninstall = wait_control(automation, action, Some(UIA_ButtonControlTypeId), 30.0)?;
     invoke(&uninstall)?;
     sleep(Duration::from_millis(800));
     screenshot(automation, run.screenshots, "uninstall-2-progress.png")?;
 
-    let _ = wait_control(automation, "Close", Some("Button"), 900.0)?;
+    let close = wait_control(automation, "Close", Some(UIA_ButtonControlTypeId), 900.0)?;
     screenshot(automation, run.screenshots, "uninstall-3-success.png")?;
-    let close = wait_control(automation, "Close", Some("Button"), 30.0)?;
     invoke(&close)?;
     Ok(())
 }
@@ -222,13 +220,11 @@ fn wait_window(automation: &IUIAutomation, seconds: f64) -> Result<IUIAutomation
     }
 }
 
-/// The first descendant whose name matches; thmutil controls surface as panes
-/// with the window text as Name, so a class filter separates a real control
-/// from a label that shares its text.
+/// A control type distinguishes a control from a label that shares its name.
 fn find_control(
     automation: &IUIAutomation,
     text: &str,
-    class: Option<&str>,
+    control_type: Option<UIA_CONTROLTYPE_ID>,
 ) -> Option<IUIAutomationElement> {
     let window = setup_window(automation).ok()?;
     let all =
@@ -244,11 +240,11 @@ fn find_control(
         if name.to_string().replace('&', "") != text {
             continue;
         }
-        if let Some(class) = class {
-            let Ok(actual) = (unsafe { element.CurrentClassName() }) else {
+        if let Some(control_type) = control_type {
+            let Ok(actual) = (unsafe { element.CurrentControlType() }) else {
                 continue;
             };
-            if actual != class {
+            if actual != control_type {
                 continue;
             }
         }
@@ -260,19 +256,15 @@ fn find_control(
 fn wait_control(
     automation: &IUIAutomation,
     text: &str,
-    class: Option<&str>,
+    control_type: Option<UIA_CONTROLTYPE_ID>,
     seconds: f64,
 ) -> Result<IUIAutomationElement> {
     let deadline = Instant::now() + Duration::from_secs_f64(seconds);
     loop {
-        if let Some(control) = find_control(automation, text, class) {
+        if let Some(control) = find_control(automation, text, control_type) {
             return Ok(control);
         }
         if Instant::now() >= deadline {
-            let dump = std::env::current_dir()
-                .unwrap_or_else(|_| PathBuf::from("."))
-                .join("setup-ui-controls.txt");
-            write_control_dump(automation, &dump);
             bail!("control '{text}' did not appear");
         }
         sleep(Duration::from_millis(250));
