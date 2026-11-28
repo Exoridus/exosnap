@@ -3105,6 +3105,10 @@ Wahrscheinliche Ursache: </translation>
     <message>
         <location line="+31"/>
         <location line="+29"/>
+        <source>Privileged diagnostics</source>
+        <translation>Privilegierte Diagnose</translation>
+    </message>
+    <message>
         <source>In-depth diagnostics</source>
         <translation>Ausführliche Diagnose</translation>
     </message>
@@ -6873,8 +6877,8 @@ Ermittelte SHA-256: %2</translation>
     <message>
         <location line="+2"/>
         <location filename="../notifications/NotificationEvent.h" line="+28"/>
-        <source>Restart as administrator</source>
-        <translation>Als Administrator neu starten</translation>
+        <source>Start diagnostics helper</source>
+        <translation>Diagnosehelfer starten</translation>
     </message>
     <message>
         <location line="+2"/>
@@ -6906,8 +6910,8 @@ Ermittelte SHA-256: %2</translation>
     </message>
     <message>
         <location filename="../notifications/NotificationEvent.h" line="+1"/>
-        <source>In-depth diagnostics need an elevated process. Restart ExoSnap as administrator to start the traces.</source>
-        <translation>Für die Detaildiagnose benötigt ExoSnap Administratorrechte. Starten Sie ExoSnap als Administrator neu, um die Traces zu starten.</translation>
+        <source>Collect presentation and kernel latency measurements for this session. First use registers the signed helper when supported.</source>
+        <translation>Präsentations- und Kernellatenzmessungen für diese Sitzung starten. Auf unterstützten Systemen wird das signierte Hilfsprogramm beim ersten Start registriert.</translation>
     </message>
 </context>
 <context>
@@ -12299,6 +12303,14 @@ Kleiner Text auf dem Bildschirm verliert früher an Qualität als Videoinhalte. 
     </message>
     <message>
         <location line="+3"/>
+        <source>Install the helper MSI as administrator</source>
+        <translation>Installieren Sie das passende Helfer-MSI als Administrator.</translation>
+    </message>
+    <message>
+        <source>Administrator consent declined</source>
+        <translation>Administratorfreigabe abgelehnt</translation>
+    </message>
+    <message>
         <source>Unavailable - trace error</source>
         <translation>Nicht verfügbar: Trace-Fehler</translation>
     </message>

@@ -106,6 +106,7 @@ class DiagnosticsAdapter : public QObject {
     // opt-in, which lives for this session only. The adapter never decides it --
     // it reports the user's intent as inDepthToggled and the composition root
     // answers.
+    Q_PROPERTY(bool privilegedRequested READ privilegedRequested NOTIFY changed FINAL)
     Q_PROPERTY(bool inDepthEnabled READ inDepthEnabled WRITE setInDepthEnabledFromUi NOTIFY inDepthChanged FINAL)
     Q_PROPERTY(QString inDepthStateText READ inDepthStateText NOTIFY inDepthChanged FINAL)
     Q_PROPERTY(bool inDepthAvailable READ inDepthAvailable NOTIFY inDepthChanged FINAL)
@@ -157,6 +158,13 @@ class DiagnosticsAdapter : public QObject {
     // The QML write path. Changes nothing here: the setting is owned by the
     // composition root, which pushes the result back through setInDepthEnabled().
     void setInDepthEnabledFromUi(bool enabled);
+    [[nodiscard]] bool privilegedRequested() const {
+        return helper_state_ != diagnostics::DiagnosticsHelperState::Local;
+    }
+    Q_INVOKABLE void requestPrivilegedCollection(bool enabled) {
+        if (enabled != privilegedRequested() && (!enabled || in_depth_enabled_))
+            emit privilegedToggled(enabled);
+    }
     [[nodiscard]] QString inDepthStateText() const;
     [[nodiscard]] bool inDepthAvailable() const noexcept;
     [[nodiscard]] QVariantList measurementSources() const;
@@ -265,6 +273,7 @@ class DiagnosticsAdapter : public QObject {
     // The user moved the in-depth switch. The composition root owns the setting
     // and the elevation gate behind it.
     void inDepthToggled(bool enabled);
+    void privilegedToggled(bool enabled);
     void tilesChanged();
     void liveTilesChanged();
     void issuesChanged();
@@ -314,6 +323,9 @@ class DiagnosticsAdapter : public QObject {
     capability::CapabilitySet caps_;
     // Borrowed from the composition root, which must outlive this adapter (see
     // QuickApplication's member declaration order).
+    void refreshHelperState();
+    diagnostics::DiagnosticsHelperState helper_state_ = diagnostics::DiagnosticsHelperState::Local;
+    QTimer helper_state_timer_;
     diagnostics::IDpcLatencyProvider* dpc_provider_ = nullptr;
     DiagnosticIssueModel issue_model_;
     PipelineStageModel pipeline_stage_model_;

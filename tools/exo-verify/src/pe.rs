@@ -106,6 +106,7 @@ pub fn imports_of(path: &Path) -> Result<Vec<String>> {
 /// Anything imported that is neither shipped, listed here, nor part of the
 /// MSVC redistributable is an unresolved dependency.
 pub const WINDOWS_SYSTEM_DLLS: &[&str] = &[
+    "msi.dll",
     "kernel32.dll",
     "advapi32.dll",
     "ntdll.dll",
@@ -134,6 +135,7 @@ pub const WINDOWS_SYSTEM_DLLS: &[&str] = &[
     "ole32.dll",
     "oleaut32.dll",
     "crypt32.dll",
+    "wintrust.dll",
     "bcrypt.dll",
     "ncrypt.dll",
     "authz.dll",
@@ -312,6 +314,38 @@ pub(crate) mod tests {
         assert_eq!(
             imports(&synthetic_pe(&["KERNEL32.dll", "Qt6Core.dll"])).unwrap(),
             vec!["KERNEL32.dll", "Qt6Core.dll"]
+        );
+    }
+
+    #[test]
+    fn updater_windows_installer_import_is_supplied_by_windows() {
+        let dir = tempfile::tempdir().unwrap();
+        std::fs::write(
+            dir.path().join("exosnap-updater.exe"),
+            synthetic_pe(&["MSI.DLL", "missing-updater.dll"]),
+        )
+        .unwrap();
+        let audit = audit_tree(dir.path()).unwrap();
+        assert_eq!(audit.system, 1);
+        assert_eq!(
+            audit.unresolved,
+            vec!["exosnap-updater.exe -> missing-updater.dll".to_string()]
+        );
+    }
+
+    #[test]
+    fn authenticode_import_is_system_but_missing_helpers_are_not() {
+        let dir = tempfile::tempdir().unwrap();
+        std::fs::write(
+            dir.path().join("exosnap.exe"),
+            synthetic_pe(&["WINTRUST.DLL", "wintrust-helper.dll"]),
+        )
+        .unwrap();
+        let audit = audit_tree(dir.path()).unwrap();
+        assert_eq!(audit.system, 1);
+        assert_eq!(
+            audit.unresolved,
+            vec!["exosnap.exe -> wintrust-helper.dll".to_string()]
         );
     }
 

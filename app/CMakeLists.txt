@@ -877,7 +877,6 @@ exosnap_add_gtest(
     SOURCES
         tests/test_app_settings_store.cpp
         settings/AppSettingsStore.cpp
-        services/ElevatedRelaunch.cpp
     LIBRARIES exosnap_capability exosnap_engine exosnap_app_log_test_support Qt6::Core Shell32.lib
 )
 target_include_directories(app_settings_store_tests PRIVATE ${CMAKE_CURRENT_SOURCE_DIR})
@@ -932,11 +931,24 @@ exosnap_add_gtest(
     TEST_PREFIX elevation.
     SOURCES
         tests/test_elevation.cpp
-        services/ElevatedRelaunch.cpp
     LIBRARIES exosnap_capability exosnap_engine exosnap_app_log_test_support Qt6::Core Shell32.lib
 )
 target_include_directories(elevation_tests PRIVATE ${CMAKE_CURRENT_SOURCE_DIR})
 target_compile_definitions(elevation_tests PRIVATE NOMINMAX)
+
+# Native ownership test: open an isolated empty ETW session, never a product session.
+exosnap_add_gtest(
+    NAME diagnostics_helper_trace_cleanup_tests
+    TEST_PREFIX diagnostics_helper_trace_cleanup.
+    PHASE vm
+    LABELS live
+    SOURCES
+        tests/test_diagnostics_helper_trace_cleanup.cpp
+        ../apps/diagnostics_helper/Guardian.cpp
+    LIBRARIES advapi32 ole32
+)
+target_include_directories(diagnostics_helper_trace_cleanup_tests PRIVATE ${CMAKE_CURRENT_SOURCE_DIR})
+target_compile_definitions(diagnostics_helper_trace_cleanup_tests PRIVATE NOMINMAX UNICODE _UNICODE)
 
 # present-diagnostics provider. PresentMonProvider owns a
 # PresentMonEtwSession and attempts the trace when the session opt-in asks for
@@ -951,6 +963,7 @@ exosnap_add_gtest(
     TEST_PREFIX present.
     SOURCES
         tests/test_present_provider.cpp
+        tests/test_diagnostics_helper_protocol.cpp
         tests/test_present_session.cpp
         diagnostics/PresentMonProvider.cpp
         diagnostics/PresentMonEtwSession.cpp

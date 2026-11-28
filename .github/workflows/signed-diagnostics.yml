@@ -1,0 +1,157 @@
+name: Signed diagnostics integration
+
+on:
+  pull_request:
+    branches: [next]
+    paths:
+      - '.github/workflows/signed-diagnostics.yml'
+      - 'apps/diagnostics_helper/**'
+      - 'app/diagnostics/**'
+      - 'libs/update/**'
+
+permissions:
+  contents: read
+
+jobs:
+  signed-diagnostics:
+    runs-on: windows-2025
+    timeout-minutes: 45
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+        with:
+          persist-credentials: false
+      - uses: ilammy/msvc-dev-cmd@0b201ec74fa43914dc39ae48a89fd1d8cb592756 # v1.13.0
+      - uses: ./.github/actions/setup-qt
+        with:
+          profile: quick
+      - name: Install WiX
+        run: dotnet tool install --global wix --version 4.0.5
+      - name: Exercise the signed production client on this disposable administrator VM
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $PSNativeCommandUseErrorActionPreference = $true
+          $build = Join-Path $PWD 'build/windows-x64-ninja-release'
+          $out = Join-Path $build 'apps/diagnostics_helper'
+          $image = Join-Path $out 'exosnap-diagnostics.exe'
+          $msi = Join-Path $out 'exosnap-diagnostics.msi'
+          $client = Join-Path $out 'signed-fixture/exosnap.exe'
+          $installed = Join-Path $env:ProgramFiles 'ExoSnap Diagnostics/exosnap-diagnostics.exe'
+          if (Test-Path $installed) { throw "Expected a clean diagnostics installation" }
+          if (Get-Process -Name exosnap-diagnostics -ErrorAction SilentlyContinue) { throw "Expected no diagnostics processes" }
+          $certificate = New-SelfSignedCertificate -Type CodeSigningCert -Subject 'CN=Disposable ExoSnap CI' -KeyExportPolicy NonExportable -CertStoreLocation Cert:\CurrentUser\My
+          $thumb = $certificate.Thumbprint
+          try {
+            $public = Export-Certificate -Cert $certificate -FilePath "$env:RUNNER_TEMP/diagnostics-ci.cer"
+            Import-Certificate -FilePath $public.FullName -CertStoreLocation Cert:\LocalMachine\Root | Out-Null
+            Import-Certificate -FilePath $public.FullName -CertStoreLocation Cert:\LocalMachine\TrustedPeople | Out-Null
+            $pin = [Convert]::ToHexString([Security.Cryptography.SHA256]::HashData($certificate.RawData)).ToLowerInvariant()
+            $wix = Join-Path $env:USERPROFILE '.dotnet/tools/wix.exe'
+            cmake --preset windows-x64-ninja-release "-DEXOSNAP_DIAGNOSTICS_PUBLISHER_SHA256=$pin" "-DEXOSNAP_WIX_EXECUTABLE=$wix"
+            cmake --build $build --target exosnap-diagnostics
+            signtool sign /fd SHA256 /sha1 $thumb $image
+            cmake --build $build --target diagnostics-helper-msi
+            signtool sign /fd SHA256 /sha1 $thumb $msi
+            # Keep signed configure inputs separate from Ninja's generated helper outputs.
+            $inputs = New-Item -ItemType Directory -Path "$env:RUNNER_TEMP/signed-diagnostics-inputs"
+            $signedImage = (Copy-Item $image $inputs.FullName -PassThru).FullName
+            $signedMsi = (Copy-Item $msi $inputs.FullName -PassThru).FullName
+            cmake --preset windows-x64-ninja-release "-DEXOSNAP_DIAGNOSTICS_SIGNED_IMAGE=$signedImage" -DEXOSNAP_SIGNED_DIAGNOSTICS_FIXTURE=ON
+            cmake --build $build --target diagnostics_signed_fixture
+            signtool sign /fd SHA256 /sha1 $thumb $client
+            function Invoke-SignedFixture([string]$mode) {
+              $start = @{ FilePath = $client; PassThru = $true; NoNewWindow = $true }
+              if ($mode) { $start.ArgumentList = $mode }
+              $process = Start-Process @start
+              if (!$process.WaitForExit(300000)) {
+                $process.Kill()
+                $process.WaitForExit()
+                throw "Signed diagnostics fixture timed out"
+              }
+              return $process.ExitCode
+            }
+            if ((Invoke-SignedFixture '--expect-machine-unavailable') -ne 0) { throw "Missing machine helper did not fail closed" }
+            $setup = Start-Process msiexec.exe -ArgumentList "/i ""$signedMsi"" /qn /norestart" -Wait -PassThru
+            if ($setup.ExitCode -ne 0) { throw "Controlled fixture installation returned $($setup.ExitCode)" }
+            if ((Get-FileHash $installed).Hash -ne (Get-FileHash $signedImage).Hash) { throw "Controlled image digest mismatch" }
+            $expectedHash = (Get-FileHash $signedImage).Hash
+            if (Get-Process -Name exosnap-diagnostics -ErrorAction SilentlyContinue) { throw "Unexpected process before replacement control" }
+            try {
+              $stream = [IO.File]::Open($installed, [IO.FileMode]::Append, [IO.FileAccess]::Write, [IO.FileShare]::None)
+              try { $stream.WriteByte(0) } finally { $stream.Dispose() }
+              if ((Get-FileHash $installed).Hash -eq $expectedHash) { throw "Installed fixture bytes did not change" }
+              if ((Invoke-SignedFixture '--expect-machine-unavailable') -ne 0) { throw "Modified installed helper accepted" }
+              if (Get-Process -Name exosnap-diagnostics -ErrorAction SilentlyContinue) { throw "Modified helper started" }
+            } finally {
+              Copy-Item -LiteralPath $signedImage -Destination $installed -Force
+              if ((Get-FileHash $installed).Hash -ne $expectedHash) { throw "Signed helper restoration failed" }
+            }
+            Write-Host "Modified installed image rejected before collection, signed original restored"
+            $marker = 'HKCU:\Software\Classes\CLSID\{70E064CA-A7D4-43EA-A075-CE4303BF12E5}'
+            if (Test-Path $marker) { throw "Unexpected preexisting fixture marker" }
+            try {
+              New-Item $marker -Force | Out-Null
+              if ((Invoke-SignedFixture '--expect-machine-unavailable') -ne 0) { throw "Per-user class conflict accepted" }
+            } finally {
+              if (Test-Path $marker) { Remove-Item $marker }
+            }
+            function Assert-NoHelper {
+              $limit = (Get-Date).AddSeconds(30)
+              while ((Get-Process -Name exosnap-diagnostics -ErrorAction SilentlyContinue) -and (Get-Date) -lt $limit) {
+                Start-Sleep -Milliseconds 100
+              }
+              if (Get-Process -Name exosnap-diagnostics -ErrorAction SilentlyContinue) { throw "Activation remained alive" }
+            }
+            foreach ($mode in '--empty-activation','--expect-invalid-version') {
+              if ((Invoke-SignedFixture $mode) -ne 0) {
+                $ids = 10000,10001,10010,10016
+                $since = (Get-Date).AddMinutes(-2)
+                $class = '70e064ca-a7d4-43ea-a075-ce4303bf12e5'
+                $events = @(Get-WinEvent -FilterHashtable @{LogName='System'; ProviderName='Microsoft-Windows-DistributedCOM'; Id=$ids; StartTime=$since} -ErrorAction SilentlyContinue)
+                foreach ($event in $events) {
+                  if ($event.Message -like "*$class*") {
+                    $codes = @($event.Properties | ForEach-Object { [string]$_.Value } | Where-Object { $_ -match '^(0x[0-9a-f]+|[0-9]+)$' })
+                    Write-Host "Diagnostics class DCOM event $($event.Id), numeric fields $($codes -join ', ')"
+                  }
+                }
+                throw "Machine activation fixture failed: $mode"
+              }
+              Assert-NoHelper
+            }
+            $originalClient = $client
+            $client = (Copy-Item $client (Join-Path (Split-Path $client) 'unapproved-client.exe') -PassThru).FullName
+            try {
+              if ((Invoke-SignedFixture '--expect-wrong-caller') -ne 0) { throw "Incorrect client identity accepted" }
+              Assert-NoHelper
+            } finally {
+              $client = $originalClient
+            }
+            $preinstalledExit = Invoke-SignedFixture
+            Write-Host "Controlled preinstalled lifecycle exit: $preinstalledExit"
+            if ($preinstalledExit -ne 0) { throw "Preinstalled lifecycle failed" }
+            if ((Invoke-SignedFixture '--forced-exit-cases') -ne 0) { throw "Exact process failure and retirement checks failed" }
+            $deadline = (Get-Date).AddSeconds(30)
+            do {
+              $remaining = @(Get-Process -Name exosnap-diagnostics -ErrorAction SilentlyContinue)
+              if (!$remaining.Count) { break }
+              Start-Sleep -Milliseconds 100
+            } while ((Get-Date) -lt $deadline)
+            if ($remaining.Count) { throw "Installed collector or guardian still running after disable" }
+          } finally {
+            try {
+              if (Test-Path $msi) {
+                $remove = Start-Process msiexec.exe -ArgumentList "/x ""$msi"" /qn /norestart" -PassThru -Wait
+                if ($remove.ExitCode -notin 0,1605) { throw "MSI cleanup returned $($remove.ExitCode)" }
+              }
+            } finally {
+              try {
+                if (Test-Path "Cert:\LocalMachine\TrustedPeople\$thumb") { Remove-Item "Cert:\LocalMachine\TrustedPeople\$thumb" }
+              } finally {
+                try {
+                  if (Test-Path "Cert:\LocalMachine\Root\$thumb") { Remove-Item "Cert:\LocalMachine\Root\$thumb" }
+                } finally {
+                  Remove-Item "Cert:\CurrentUser\My\$thumb" -DeleteKey
+                }
+              }
+            }
+          }

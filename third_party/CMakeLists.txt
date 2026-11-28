@@ -340,8 +340,10 @@ endif()
 # Pinned to a fixed release tag (never a rolling latest — BtbN-pin lesson).
 if(EXOSNAP_WITH_PRESENTMON)
     set(presentmon_patch "${CMAKE_CURRENT_SOURCE_DIR}/patches/presentmon-clang.patch")
-    set_property(DIRECTORY APPEND PROPERTY CMAKE_CONFIGURE_DEPENDS "${presentmon_patch}")
+    set(presentmon_session_patch "${CMAKE_CURRENT_SOURCE_DIR}/patches/presentmon-session-guid.patch")
+    set_property(DIRECTORY APPEND PROPERTY CMAKE_CONFIGURE_DEPENDS "${presentmon_patch}" "${presentmon_session_patch}")
     file(SHA256 "${presentmon_patch}" presentmon_patch_sha256)
+    file(SHA256 "${presentmon_session_patch}" presentmon_session_patch_sha256)
     FetchContent_Declare(
         presentmon
         GIT_REPOSITORY https://github.com/GameTechDev/PresentMon.git
@@ -352,6 +354,11 @@ if(EXOSNAP_WITH_PRESENTMON)
             --manifest-path "${PROJECT_SOURCE_DIR}/tools/Cargo.toml" -p exo-dev --
             apply-dependency-patch --source <SOURCE_DIR> --patch "${presentmon_patch}"
             --patch-sha256 "${presentmon_patch_sha256}"
+        # Apply independently: restored dependency trees may carry only the clang fixes.
+        COMMAND cargo run --quiet --locked
+            --manifest-path "${PROJECT_SOURCE_DIR}/tools/Cargo.toml" -p exo-dev --
+            apply-dependency-patch --source <SOURCE_DIR> --patch "${presentmon_session_patch}"
+            --patch-sha256 "${presentmon_session_patch_sha256}"
     )
     FetchContent_MakeAvailable(presentmon)
 

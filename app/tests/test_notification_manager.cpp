@@ -632,15 +632,15 @@ TEST(AdvisoryStatusForTypeTest, EveryTypeResolvesToAKnownStatus) {
 // elevated.
 
 TEST(ElevatedRelaunchOffer, RaisedOnlyWhenAStandardProcessTurnsTheOptInOn) {
-    EXPECT_TRUE(ShouldOfferElevatedRelaunch(/*opt_in_now=*/true, /*opt_in_before=*/false, /*elevated=*/false));
+    EXPECT_TRUE(ShouldOfferDiagnosticsHelper(/*opt_in_now=*/true, /*opt_in_before=*/false, /*elevated=*/false));
     // Already elevated: the traces start on the spot, there is nothing to offer.
-    EXPECT_FALSE(ShouldOfferElevatedRelaunch(true, false, true));
+    EXPECT_FALSE(ShouldOfferDiagnosticsHelper(true, false, true));
     // Not an edge -- a refresh, a re-publish, any second look at a setting that
     // was already on.
-    EXPECT_FALSE(ShouldOfferElevatedRelaunch(true, true, false));
+    EXPECT_FALSE(ShouldOfferDiagnosticsHelper(true, true, false));
     // Turning it off asks for nothing.
-    EXPECT_FALSE(ShouldOfferElevatedRelaunch(false, true, false));
-    EXPECT_FALSE(ShouldOfferElevatedRelaunch(false, false, false));
+    EXPECT_FALSE(ShouldOfferDiagnosticsHelper(false, true, false));
+    EXPECT_FALSE(ShouldOfferDiagnosticsHelper(false, false, false));
 }
 
 TEST_F(NotificationManagerTest, ElevatedRelaunchOfferIsRaisedExactlyOncePerToggleOn) {
@@ -651,8 +651,8 @@ TEST_F(NotificationManagerTest, ElevatedRelaunchOfferIsRaisedExactlyOncePerToggl
     // One toggle-on in a standard process, then four states that must stay
     // silent: the setting merely staying on, and the same edge while elevated.
     const auto offer = [this](bool now, bool before, bool elevated) {
-        if (ShouldOfferElevatedRelaunch(now, before, elevated))
-            mgr.Enqueue(MakeElevatedRelaunchOfferEvent());
+        if (ShouldOfferDiagnosticsHelper(now, before, elevated))
+            mgr.Enqueue(MakeDiagnosticsHelperOfferEvent());
     };
     offer(/*now=*/true, /*before=*/false, /*elevated=*/false);
     offer(true, true, false);
@@ -666,8 +666,8 @@ TEST_F(NotificationManagerTest, ElevatedRelaunchOfferIsRaisedExactlyOncePerToggl
     ASSERT_EQ(mgr.VisibleEvents().size(), 1);
     const NotificationEvent& event = mgr.VisibleEvents()[0];
     EXPECT_EQ(event.type, NotificationType::ElevationRequired);
-    EXPECT_EQ(event.title, QStringLiteral("Restart as administrator"));
-    EXPECT_EQ(event.action, NotificationAction::RelaunchElevated);
+    EXPECT_EQ(event.title, QStringLiteral("Start diagnostics helper"));
+    EXPECT_EQ(event.action, NotificationAction::StartDiagnosticsHelper);
     // Nothing is claimed to have failed: the setting is on and stays on.
     EXPECT_EQ(AdvisoryStatusForType(event.type), QStringLiteral("caution"));
     // Timed, not standing -- the condition it reports does not clear itself

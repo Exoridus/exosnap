@@ -306,6 +306,7 @@ add_subdirectory(libs/gamepad)
 # the shared update-handoff document (one schema, two processes).
 add_subdirectory(libs/control)
 add_subdirectory(libs/update_handoff)
+add_subdirectory(apps/diagnostics_helper)
 add_subdirectory(app)
 add_subdirectory(apps/updater)
 add_subdirectory(apps/setup)

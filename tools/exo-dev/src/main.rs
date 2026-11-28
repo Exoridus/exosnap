@@ -608,8 +608,8 @@ enum CheckCommand {
         #[arg(long)]
         require_pull_request: bool,
     },
-    /// clang-format over the tracked (or staged) C++ source in libs/, app/
-    /// and tests/.
+    /// clang-format over tracked (or staged) C++ in libs/, app/,
+    /// apps/diagnostics_helper/ and tests/.
     Format {
         /// Scope to staged files instead of every tracked source file.
         #[arg(long)]

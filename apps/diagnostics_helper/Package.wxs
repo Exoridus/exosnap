@@ -1,0 +1,27 @@
+<Wix xmlns="http://wixtoolset.org/schemas/v4/wxs">
+  <Package Name="ExoSnap Diagnostics Helper" Manufacturer="Codexo"
+           Version="$(var.ProductVersion)" UpgradeCode="2CD6BB6B-5C97-46BE-B23C-25E9DA69B56B"
+           Language="1033" Scope="perMachine">
+    <MajorUpgrade DowngradeErrorMessage="A newer ExoSnap Diagnostics Helper is already installed."
+                  AllowSameVersionUpgrades="yes" />
+    <MediaTemplate EmbedCab="yes" />
+    <StandardDirectory Id="ProgramFiles64Folder">
+      <Directory Id="ExoSnapDiagnosticsDirectory" Name="ExoSnap Diagnostics">
+        <Component Id="DiagnosticsImage" Guid="36E82C88-F99F-4845-B615-6DD1978CE1F7">
+          <File Id="DiagnosticsExecutable" Source="$(var.HelperImage)" Name="exosnap-diagnostics.exe" KeyPath="yes" />
+          <RegistryValue Root="HKLM" Key="Software\Classes\CLSID\{70E064CA-A7D4-43EA-A075-CE4303BF12E5}" Name="LocalizedString" Type="string" Value="@\\?\GLOBALROOT\GLOBAL??\[#DiagnosticsExecutable],-101" />
+          <RegistryValue Root="HKLM" Key="Software\Classes\CLSID\{70E064CA-A7D4-43EA-A075-CE4303BF12E5}\Elevation" Name="Enabled" Type="integer" Value="1" />
+          <RegistryValue Root="HKLM" Key="Software\Classes\CLSID\{70E064CA-A7D4-43EA-A075-CE4303BF12E5}\LocalServer32" Type="string" Value="&quot;\\.\GLOBALROOT\GLOBAL??\[#DiagnosticsExecutable]&quot;" />
+          <RegistryValue Root="HKLM" Key="Software\Classes\CLSID\{70E064CA-A7D4-43EA-A075-CE4303BF12E5}\LocalServer32" Name="ServerExecutable" Type="string" Value="\\.\GLOBALROOT\GLOBAL??\[#DiagnosticsExecutable]" />
+          <RegistryValue Root="HKLM" Key="Software\Classes\Interface\{F9405F36-29C5-4393-8C0F-74D1B6613E21}\ProxyStubClsid32" Type="string" Value="{00020424-0000-0000-C000-000000000046}" />
+          <RegistryValue Root="HKLM" Key="Software\Classes\Interface\{F9405F36-29C5-4393-8C0F-74D1B6613E21}\TypeLib" Type="string" Value="{27962A35-7DED-411F-A679-CDD671A2A4B6}" />
+          <RegistryValue Root="HKLM" Key="Software\Classes\Interface\{F9405F36-29C5-4393-8C0F-74D1B6613E21}\TypeLib" Name="Version" Type="string" Value="1.0" />
+          <RegistryValue Root="HKLM" Key="Software\Classes\TypeLib\{27962A35-7DED-411F-A679-CDD671A2A4B6}\1.0\0\win64" Type="string" Value="\\?\GLOBALROOT\GLOBAL??\[#DiagnosticsExecutable]" />
+        </Component>
+      </Directory>
+    </StandardDirectory>
+    <Feature Id="Diagnostics" Title="ExoSnap Diagnostics Helper" Level="1">
+      <ComponentRef Id="DiagnosticsImage" />
+    </Feature>
+  </Package>
+</Wix>

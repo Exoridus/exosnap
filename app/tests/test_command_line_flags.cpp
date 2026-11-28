@@ -77,9 +77,8 @@ TEST(CommandLineFlags, HarnessAndServiceInvocationsAreAccepted) {
                                     &error))
         << error.toStdString();
     EXPECT_TRUE(ValidateCommandLine(Cmd({"--live-verify-control", "run-12345678"}), &error)) << error.toStdString();
-    EXPECT_TRUE(ValidateCommandLine(Cmd({"--verify-update-reinstall", "--relaunch-page", "settings",
-                                         "--reenable-present-diag", "--update-base-url", "https://example.invalid/f"}),
-                                    &error))
+    EXPECT_TRUE(ValidateCommandLine(
+        Cmd({"--verify-update-reinstall", "--update-base-url", "https://example.invalid/f"}), &error))
         << error.toStdString();
 }
 

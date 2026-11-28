@@ -13,9 +13,9 @@
 #include "NotificationHubPolicy.h"
 #include "QuickWindowChrome.h"
 
+#include "diagnostics/PrivilegedPresentBackend.h"
 #include "services/DisplayIdentityEnumerator.h"
 #include "services/DisplayIdentityResolver.h"
-#include "services/ElevatedRelaunch.h"
 #include "services/RecordingCoordinator.h"
 #include "services/TargetDisplayFacts.h"
 #include "services/UpdateService.h"
@@ -562,9 +562,7 @@ QuickApplication::~QuickApplication() {
     // FIRST, before anything else can be freed. QCoreApplication holds a raw
     // pointer to this filter, and the destruction order here is the wrong way
     // round: QGuiApplication in main() outlives QuickApplication, so a Win32
-    // message dispatched during Qt's own teardown -- or by the ShellExecuteEx in
-    // ProductionBootstrap's pending elevated relaunch, which pumps -- would reach
-    // a freed filter. Same shape QuickWindowChrome::detach() already uses.
+    // message dispatched during Qt's own teardown would reach a freed filter.
     if (hotkey_event_filter_)
         QCoreApplication::instance()->removeNativeEventFilter(hotkey_event_filter_.get());
     if (updater_handoff_filter_)
@@ -2624,6 +2622,14 @@ void QuickApplication::initializeDiagnosticsArea() {
     // reaches the settings store.
     QObject::connect(&diagnostics_adapter_, &DiagnosticsAdapter::inDepthToggled, &diagnostics_adapter_,
                      [this](bool enabled) { setInDepthDiagnostics(enabled); });
+
+    QObject::connect(&diagnostics_adapter_, &DiagnosticsAdapter::privilegedToggled, &diagnostics_adapter_,
+                     [this](bool enabled) {
+                         if (enabled)
+                             startDiagnosticsHelper();
+                         else
+                             stopDiagnosticsHelper();
+                     });
 
     // "Show in log" opens the internal log view with the diagnostic id already
     // revealed. The reveal temporarily widens the severity filter and names
@@ -5535,57 +5541,6 @@ void QuickApplication::presentPostUpdateWhatsNew(const QVector<WhatsNewNote>& no
     whats_new_adapter_.present(notes, /*post_update_mode=*/true, last_releases_page_url_);
 }
 
-namespace {
-
-// The nav labels the elevated relaunch hands across, in both
-// directions. One table, so the page a relaunch is asked for and the page it
-// lands on cannot drift apart.
-constexpr std::array<std::pair<const char*, ShellAdapter::Page>, 6> kRelaunchNavLabels{{
-    {"Record", ShellAdapter::RecordPage},
-    {"Edit", ShellAdapter::EditPage},
-    {"Settings", ShellAdapter::SettingsPage},
-    {"Diagnostics", ShellAdapter::DiagnosticsPage},
-    {"Logs", ShellAdapter::LogsPage},
-    {"About", ShellAdapter::AboutPage},
-}};
-
-QString RelaunchNavLabel(ShellAdapter::Page page) {
-    for (const auto& [label, value] : kRelaunchNavLabels) {
-        if (value == page)
-            return QString::fromLatin1(label);
-    }
-    return {};
-}
-
-} // namespace
-
-void QuickApplication::setElevatedRelaunchHandler(std::function<void(const QStringList&)> handler) {
-    elevated_relaunch_handler_ = std::move(handler);
-}
-
-void QuickApplication::applyStartupRelaunchHandoff(const QString& page_name, bool arm_in_depth_diagnostics) {
-    // Land on the page the pre-elevation instance was showing.
-    for (const auto& [label, page] : kRelaunchNavLabels) {
-        if (page_name.compare(QLatin1StringView(label), Qt::CaseInsensitive) == 0) {
-            pending_landing_page_ = page;
-            break;
-        }
-    }
-
-    // The opt-in is session state and nothing on disk carries it across the
-    // relaunch, so this argument IS the handoff: without it an accepted UAC
-    // prompt would produce an elevated process with the feature off, which reads
-    // as the restart having done nothing at all. Applied through the ordinary
-    // setter, which is what opens the two traces -- the diagnostics area was
-    // constructed with the flag off, before this argument was parsed.
-    if (arm_in_depth_diagnostics && !in_depth_diagnostics_) {
-        setInDepthDiagnostics(true);
-        diagnostics::AppLog::info(QStringLiteral("diagnostics"),
-                                  QStringLiteral("In-depth diagnostics armed for this session by the "
-                                                 "elevated relaunch handoff."));
-    }
-}
-
 void QuickApplication::setInDepthDiagnostics(bool enabled) {
     if (in_depth_diagnostics_ == enabled) {
         // Still pushed back: the switch's own binding is the adapter's copy, and
@@ -5608,13 +5563,11 @@ void QuickApplication::setInDepthDiagnostics(bool enabled) {
                                                                    : diagnostics::PresentProviderState::NotBuilt);
     applyDpcLatencyGate();
 
-    // Not a prompt: the toast has to be pressed, and declining the UAC prompt
-    // behind it leaves the switch on and this process running, which is the
-    // "not measuring, needs an admin relaunch" state the sub-text then reports.
-    if (!record_view_model_adapter_.recording() && !record_view_model_adapter_.paused() &&
-        notifications::ShouldOfferElevatedRelaunch(in_depth_diagnostics_, was_enabled,
-                                                   elevation_provider_.IsElevated())) {
-        notifications::NotificationEvent event = notifications::MakeElevatedRelaunchOfferEvent();
+    if (!enabled)
+        stopDiagnosticsHelper();
+    if (notifications::ShouldOfferDiagnosticsHelper(in_depth_diagnostics_, was_enabled,
+                                                    elevation_provider_.IsElevated())) {
+        notifications::NotificationEvent event = notifications::MakeDiagnosticsHelperOfferEvent();
         notifications_adapter_.manager().Enqueue(std::move(event));
     }
 }
@@ -6401,8 +6354,8 @@ void QuickApplication::dispatchNotificationAction(notifications::NotificationAct
         // was not looking at when they pressed the button.
         sendNonFatalReport(QStringLiteral("notification"), payload);
         break;
-    case NotificationAction::RelaunchElevated:
-        requestElevatedRelaunch();
+    case NotificationAction::StartDiagnosticsHelper:
+        startDiagnosticsHelper();
         break;
     case NotificationAction::None:
     case NotificationAction::Discard:
@@ -6416,39 +6369,36 @@ void QuickApplication::dispatchNotificationAction(notifications::NotificationAct
     }
 }
 
-void QuickApplication::requestElevatedRelaunch() {
-    if (!elevated_relaunch_handler_) {
-        diagnostics::AppLog::warning(QStringLiteral("shell"),
-                                     QStringLiteral("Elevated relaunch requested but no handler is installed."));
+void QuickApplication::startDiagnosticsHelper() {
+    if (!in_depth_diagnostics_ || privileged_backend_ || !present_provider_)
         return;
+    const bool need_presents = present_provider_->openResult() != diagnostics::PresentTraceOpenResult::Opened;
+    privileged_backend_ = diagnostics::MakePrivilegedDiagnosticsBackend(need_presents);
+    auto session =
+        std::make_unique<diagnostics::PresentMonProvider>(true, [backend = privileged_backend_] { return backend; });
+    diagnostics_adapter_.setDpcLatencyProvider(privileged_backend_.get());
+    if (need_presents) {
+        present_provider_ = std::move(session);
+        updatePresentAttribution(present_target_pid_, true);
+    } else {
+        // A standard token with presentation rights retains its local samples
+        // across UAC refusal, helper failure and DPC-only collection.
+        dpc_only_session_ = std::move(session);
     }
+}
 
-    // The guard first, and the arming only afterwards. Asking the shell to close
-    // is what makes a recording refuse the restart -- the same chain the window
-    // close and the tray Quit pass through -- and doing it before anything is
-    // armed means a refused close leaves no pending relaunch behind to fire on
-    // some later, unrelated exit.
-    if (!shell_adapter_.requestClose()) {
-        diagnostics::AppLog::info(
-            QStringLiteral("shell"),
-            QStringLiteral("Elevated relaunch refused by a close guard; staying in this process."));
+void QuickApplication::stopDiagnosticsHelper() {
+    if (!privileged_backend_)
         return;
+    diagnostics_adapter_.setDpcLatencyProvider(&dpc_provider_);
+    if (dpc_only_session_) {
+        dpc_only_session_.reset();
+    } else {
+        present_provider_->SetOptIn(false);
+        present_provider_ = std::make_unique<diagnostics::PresentMonProvider>(in_depth_diagnostics_);
+        updatePresentAttribution(present_target_pid_, true);
     }
-
-    services::RelaunchHandoff handoff;
-    // The page the user is on, so the elevated instance comes back where they
-    // left it rather than on Record.
-    handoff.page_name = RelaunchNavLabel(static_cast<ShellAdapter::Page>(shell_adapter_.currentPage()));
-    handoff.reenable_present_diag = in_depth_diagnostics_;
-    elevated_relaunch_handler_(services::BuildRelaunchArgs(handoff));
-
-    // requestClose() answering "allow" quits through closeDecided rather than
-    // closeApproved, so the debounced writes have to be flushed here -- the same
-    // reason the tray Quit does it.
-    flushPendingPersists();
-    diagnostics::AppLog::info(QStringLiteral("shell"),
-                              QStringLiteral("Elevated relaunch armed (page=%1); restarting after shutdown.")
-                                  .arg(handoff.page_name.isEmpty() ? QStringLiteral("none") : handoff.page_name));
+    privileged_backend_.reset();
 }
 
 void QuickApplication::publishRecordingResultNotification(const UiRecordingResult& result) {
@@ -7126,8 +7076,7 @@ bool QuickApplication::load(bool no_activate) {
         // up, and the single navigation edge (QCR-001) refuses a navigation
         // behind a blocking surface -- which would silently drop a restore that
         // is not a navigation at all.
-        {QStringLiteral("landingPage"),
-         QVariant::fromValue(static_cast<int>(pending_landing_page_.value_or(ShellAdapter::RecordPage)))},
+        {QStringLiteral("landingPage"), QVariant::fromValue(static_cast<int>(ShellAdapter::RecordPage))},
     });
     applyThemeFromSettings();
     applyDiagnosticsVisualScenarios();
@@ -7143,7 +7092,6 @@ bool QuickApplication::load(bool no_activate) {
 
     // Consumed by the initial property above; cleared so a second load() in the
     // same process cannot re-apply it.
-    pending_landing_page_.reset();
 
     if (auto* root_window = qobject_cast<QQuickWindow*>(engine_.rootObjects().constFirst())) {
         root_window_ = root_window;

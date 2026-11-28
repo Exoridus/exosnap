@@ -111,8 +111,8 @@ namespace exosnap::notifications {
         return QCoreApplication::translate("Notifications", "View update");
     case NotificationAction::Edit:
         return QCoreApplication::translate("Notifications", "Edit");
-    case NotificationAction::RelaunchElevated:
-        return QCoreApplication::translate("Notifications", "Restart as administrator");
+    case NotificationAction::StartDiagnosticsHelper:
+        return QCoreApplication::translate("Notifications", "Start diagnostics helper");
     case NotificationAction::OpenDiagnostics:
         return QCoreApplication::translate("Notifications", "View diagnostics");
     case NotificationAction::UndoPresetSwitch:

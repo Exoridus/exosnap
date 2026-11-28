@@ -501,6 +501,10 @@ class FakeDpcProvider final : public diagnostics::IDpcLatencyProvider {
         return reading_;
     }
 
+    diagnostics::DiagnosticsHelperState state = diagnostics::DiagnosticsHelperState::Local;
+    diagnostics::DiagnosticsHelperState HelperState() const override {
+        return state;
+    }
     void setReading(diagnostics::DpcLatencyReading reading) {
         reading_ = std::move(reading);
     }
@@ -700,6 +704,46 @@ TEST(DiagnosticsAdapterTest, MeasurementSourcesSeparateTheOptionalProviders) {
     EXPECT_EQ(adapter.presentProviderState(), QStringLiteral("measuring"));
 }
 
+TEST(DiagnosticsAdapterTest, DpcHelperOutcomeIsIndependentOfLocalPresentation) {
+    EnsureApplication();
+    FakeDpcProvider provider;
+    DiagnosticsAdapter adapter;
+    adapter.setInDepthEnabled(true);
+    adapter.setPresentProviderState(diagnostics::PresentProviderState::Measuring);
+    const auto dpcState = [&] {
+        for (const auto& row : adapter.measurementSources()) {
+            const auto source = row.toMap();
+            if (source.value(QStringLiteral("title")) == QStringLiteral("DPC / ISR"))
+                return source.value(QStringLiteral("state")).toString();
+        }
+        return QString{};
+    };
+    using diagnostics::DiagnosticsHelperState;
+    for (const auto& outcome :
+         {std::pair{DiagnosticsHelperState::ConsentDeclined, QStringLiteral("Administrator consent declined")},
+          std::pair{DiagnosticsHelperState::Unavailable, QStringLiteral("Install the helper MSI as administrator")}}) {
+        provider.state = DiagnosticsHelperState::Starting;
+        adapter.setDpcLatencyProvider(&provider);
+        EXPECT_TRUE(adapter.privilegedRequested());
+        EXPECT_EQ(dpcState(), QStringLiteral("Starting"));
+        QEventLoop loop;
+        QObject::connect(&adapter, &DiagnosticsAdapter::changed, &loop, [&] {
+            if (dpcState() == outcome.second)
+                loop.quit();
+        });
+        provider.state = outcome.first;
+        QTimer::singleShot(3000, &loop, &QEventLoop::quit);
+        loop.exec();
+        EXPECT_EQ(dpcState(), outcome.second);
+        EXPECT_EQ(adapter.presentProviderState(), QStringLiteral("measuring"));
+
+        adapter.setDpcLatencyProvider(nullptr);
+        EXPECT_FALSE(adapter.privilegedRequested());
+        EXPECT_TRUE(dpcState().contains(QStringLiteral("elevated kernel trace required")));
+        EXPECT_EQ(adapter.presentProviderState(), QStringLiteral("measuring"));
+    }
+}
+
 // The switch is session state: off at every start, and the offer to restart
 // elevated hangs off its off -> on edge. This drives the adapter through the
 // same edge the composition root wires up, so the three facts the product
@@ -719,8 +763,8 @@ TEST(DiagnosticsAdapterTest, TurningInDepthOnOffersTheRestartOnlyInAStandardProc
     QObject::connect(&adapter, &DiagnosticsAdapter::inDepthToggled, &adapter, [&](bool enabled) {
         const bool before = adapter.inDepthEnabled();
         adapter.setInDepthEnabled(enabled);
-        if (notifications::ShouldOfferElevatedRelaunch(enabled, before, adapter.elevated()))
-            manager.Enqueue(notifications::MakeElevatedRelaunchOfferEvent());
+        if (notifications::ShouldOfferDiagnosticsHelper(enabled, before, adapter.elevated()))
+            manager.Enqueue(notifications::MakeDiagnosticsHelperOfferEvent());
     });
 
     // Off at every start. Nothing seeds this from disk any more.
