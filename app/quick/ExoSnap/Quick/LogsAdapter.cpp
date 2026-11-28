@@ -112,6 +112,10 @@ int LogsAdapter::totalCount() const {
     return source_model_.rowCount();
 }
 
+bool LogsAdapter::hasErrors() const noexcept {
+    return source_model_.hasErrors();
+}
+
 int LogsAdapter::visibleCount() const {
     return proxy_model_.rowCount();
 }

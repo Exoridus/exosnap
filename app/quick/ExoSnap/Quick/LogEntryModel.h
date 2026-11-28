@@ -50,6 +50,7 @@ class LogEntryModel : public QAbstractListModel {
 
     [[nodiscard]] const diagnostics::LogEntry& entryAt(int row) const;
     [[nodiscard]] const QVector<diagnostics::LogEntry>& entries() const noexcept;
+    [[nodiscard]] bool hasErrors() const noexcept;
 
     // Starts mirroring diagnostics::AppLog: seeds from its history and follows
     // entriesAppended / cleared from then on.
@@ -74,6 +75,7 @@ class LogEntryModel : public QAbstractListModel {
     void resetTo(QVector<diagnostics::LogEntry> entries);
 
     QVector<diagnostics::LogEntry> entries_;
+    int error_count_ = 0;
     quint64 last_sequence_seen_ = 0;
     bool synthetic_ = false;
     int incremental_append_count_ = 0;

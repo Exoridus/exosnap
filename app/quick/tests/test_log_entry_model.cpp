@@ -147,6 +147,21 @@ TEST(LogEntryModelTest, EvictionNeverRemovesMoreRowsThanExist) {
     EXPECT_EQ(RoleAt(model, 0, LogEntryModel::SequenceRole).toULongLong(), 3U);
 }
 
+TEST(LogEntryModelTest, ErrorBadgeTracksRetainedEntries) {
+    EnsureApplication();
+    LogEntryModel model;
+    model.applyAppendedForTesting({MakeEntry(1, LogSeverity::Warning, "Record", "warning")}, 0);
+    EXPECT_FALSE(model.hasErrors());
+    model.applyAppendedForTesting({MakeEntry(2, LogSeverity::Critical, "Record", "critical")}, 0);
+    EXPECT_TRUE(model.hasErrors());
+    model.applyAppendedForTesting(MakeEntries(1, 3), 2);
+    EXPECT_FALSE(model.hasErrors());
+    model.setSyntheticEntries({MakeEntry(4, LogSeverity::Error, "Record", "error")});
+    EXPECT_TRUE(model.hasErrors());
+    model.clear();
+    EXPECT_FALSE(model.hasErrors());
+}
+
 TEST(LogEntryModelTest, SyntheticHistoryStopsFollowingAppends) {
     EnsureApplication();
     LogEntryModel model;

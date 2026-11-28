@@ -28,7 +28,6 @@
 #include "live_verify/LiveVerifyControlServer.h"
 #include "live_verify/LiveVerifyOptions.h"
 #include "observability/WindowIdentity.h"
-#include "services/ElevatedRelaunch.h"
 #include "services/RecordingCoordinator.h"
 #include "services/UpdateFeedOverride.h"
 #include "services/VerifyReinstallMode.h"
@@ -1530,21 +1529,6 @@ int main(int argc, char* argv[]) {
         installPseudoLocalization(app);
 
     exosnap::quick::QuickApplication quick_application;
-    // the handoff a prior elevated self-relaunch put in our own argv.
-    // Applied before load() so the shell's landing page is decided once, rather
-    // than navigating away from Record after the first frame. Verification reinstall: the
-    // verification-reinstall arming is argv-only and never persisted.
-    const exosnap::services::RelaunchHandoff startup_handoff = exosnap::services::ParseRelaunchArgs(arguments);
-    quick_application.applyStartupRelaunchHandoff(startup_handoff.page_name, startup_handoff.reenable_present_diag);
-    // Elevation handoff. The frontend decides WHETHER to restart (it
-    // owns the close guards) and WHAT to carry across; the bootstrap owns WHEN,
-    // which is after exec() returns -- the successor cannot take the
-    // single-instance mutex or the log file while this process still holds them.
-    // Only the handoff arguments travel: this process's own argv may carry
-    // harness and automation options that must not survive into a user-facing
-    // elevated launch.
-    quick_application.setElevatedRelaunchHandler(
-        [&bootstrap](const QStringList& relaunch_args) { bootstrap.requestElevatedRelaunch(relaunch_args); });
     quick_application.applyVerifyUpdateReinstallMode(exosnap::services::HasVerifyUpdateReinstallRequest(arguments));
     quick_application.applyUpdateFeedOverride(update_feed_override.base_url);
     // The child updater gets an automation endpoint ONLY when this process has

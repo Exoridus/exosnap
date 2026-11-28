@@ -38,9 +38,9 @@
 #include "services/RecordingArtifactRegistry.h"
 
 #include "diagnostics/AudioSourceDegradation.h"
-#include "diagnostics/DpcLatencyProvider.h"
 #include "diagnostics/ElevationProvider.h"
 #include "diagnostics/PresentMonProvider.h"
+#include "diagnostics/PrivilegedDiagnosticsClient.h"
 #include "diagnostics/WindowCaptureStall.h"
 #include "models/RecordingPreset.h"
 #include "models/RecordingPresetRegistry.h"
@@ -130,16 +130,10 @@ class QuickApplication {
     // GUI-thread-only -- which every caller is, because the control channel
     // marshals its dispatch onto the GUI thread before touching this.
     [[nodiscard]] diagnostics::PresentMonProvider* presentProvider() noexcept;
-    // The in-depth diagnostics opt-in, which lives for this process only:
-    // the traces behind it need an elevated process, and an elevated process lasts
-    // one session, so there is nothing for a persisted answer to be true about at
-    // the next start.
+    // The session-only in-depth diagnostics opt-in.
     [[nodiscard]] bool inDepthDiagnosticsEnabled() const noexcept {
         return in_depth_diagnostics_;
     }
-    // Applies the opt-in for this session: starts or stops both traces, pushes the
-    // answer back to the Diagnostics switch, and -- when the process is not elevated
-    // and this is a fresh turn-on -- offers the restart that would let them run.
     void setInDepthDiagnostics(bool enabled);
     // Read-only view of the shared record state. The adapter above exposes what
     // QML binds to; the Live Verify result snapshot needs the typed result
@@ -244,18 +238,6 @@ class QuickApplication {
     // never touches the manifest, the crash sidecar or persisted settings.
     [[nodiscard]] bool applyOverlayVisualScenario(const QString& scenario);
 
-    // applies the handoff a prior elevated self-relaunch put in our own
-    // argv. Called by the entry point straight after construction, before the
-    // window loads, exactly as the Widgets frontend does — the page choice has to
-    // be in place before the shell picks its landing page.
-    void applyStartupRelaunchHandoff(const QString& page_name, bool arm_in_depth_diagnostics);
-    // The seam through which the "Restart as
-    // administrator" toast action reaches the bootstrap. The frontend builds the
-    // handoff (it is the only side that knows which page the user is on) and the
-    // entry point arms it, because the relaunch itself may only run once the
-    // event loop has ended and this object is gone. Without a handler installed
-    // the action is refused rather than silently ignored.
-    void setElevatedRelaunchHandler(std::function<void(const QStringList&)> handler);
     // armed from --verify-update-reinstall for this run only. Nothing is
     // persisted, so a plain restart drops back to normal update behaviour.
     void applyVerifyUpdateReinstallMode(bool enabled);
@@ -386,10 +368,8 @@ class QuickApplication {
     // Pushes `hide_window_from_capture` onto the shell window. Fail-open: a
     // refused platform call leaves the window visible and logs it.
     void applyWindowCaptureExclusion();
-    // Opens or closes the kernel DPC/ISR trace against the same gate the present
-    // provider evaluates (opt-in AND elevation). Graceful: an unelevated process or a
-    // refused session simply keeps measuring nothing, and nothing is then reported.
-    void applyDpcLatencyGate();
+    void setPrivilegedDiagnostics(bool enabled);
+    void refreshPrivilegedDiagnostics();
     void initializeRecordWorkflow();
     // Hardware capability query, off the GUI thread. Until it lands the
     // coordinator stays in LoadingCapabilities and the surfaces render against
@@ -537,12 +517,6 @@ class QuickApplication {
     // handoff, and the updater reports the honest appWontClose instead.
     void closeForUpdaterHandoff();
     void dispatchNotificationAction(notifications::NotificationAction action, const QString& payload);
-    // Restarts ExoSnap elevated by asking the shell to close, so the
-    // relaunch inherits every close guard: a running, preparing or finalizing
-    // recording refuses it, and nothing is armed in the bootstrap until the
-    // close has actually been allowed. The relaunch itself runs after the event
-    // loop ends -- see ProductionBootstrap::RunPendingElevatedRelaunch.
-    void requestElevatedRelaunch();
     // The one consent-and-send path. Every surface that offers a Send-report
     // control routes through it.
     void sendNonFatalReport(const QString& phase, const QString& detail);
@@ -757,24 +731,15 @@ class QuickApplication {
     QTimer audio_routing_meter_timer_;
     std::optional<engine::ConfigRevision> audio_routing_active_revision_;
     DeviceAdapter device_adapter_;
-    // DPC/ISR latency. Declared BEFORE the adapter that borrows it: the
-    // adapter samples it on every evaluation, so this member has to outlive it —
-    // members are destroyed in reverse declaration order. Owns a real kernel trace
-    // only while the same gate the present provider uses (opt-in AND elevation) is
-    // open, and nothing at all otherwise.
-    diagnostics::DpcLatencyProvider dpc_provider_;
+    // The adapter borrows the client, so the client must outlive it.
+    diagnostics::PrivilegedDiagnosticsClient privileged_diagnostics_;
+    QTimer privileged_diagnostics_timer_;
+    bool using_privileged_present_ = false;
     // Harness-only stand-in for the kernel trace, installed by a --visual-test
-    // scenario that photographs the in-depth tiles. Declared here for the same
-    // reason as dpc_provider_: the adapter borrows whichever one is installed.
+    // scenario that photographs the in-depth tiles.
     std::unique_ptr<diagnostics::IDpcLatencyProvider> visual_dpc_provider_;
     DiagnosticsAdapter diagnostics_adapter_;
-    // present diagnostics. Declared BEFORE the provider that borrows it:
-    // PresentMonProvider holds a reference to the elevation provider for its whole
-    // lifetime, so this member must outlive it.
     diagnostics::Win32ElevationProvider elevation_provider_;
-    // Null until initializeDiagnosticsArea() runs. Owns a real ETW session while the
-    // gate (opt-in AND elevation) is open and nothing at all otherwise -- an
-    // unelevated launch never opens a session and never prompts for one.
     std::unique_ptr<diagnostics::PresentMonProvider> present_provider_;
     // Session-scoped, never persisted, off at every start.
     bool in_depth_diagnostics_ = false;
@@ -885,16 +850,6 @@ class QuickApplication {
     // the surfaces this developer's real GPU a second or two into the capture.
     std::optional<capability::CapabilitySet> canonical_machine_;
     bool reapplying_visual_scenarios_ = false;
-    // The relaunch handoff is applied before load(), so the page is parked here
-    // and handed to the shell as its STARTING destination (`landingPage`) when
-    // the engine is loaded. Empty means "no handoff" — it used to be a -1
-    // sentinel in an int, which is exactly the bare-integer navigation QCR-716
-    // removed.
-    std::optional<ShellAdapter::Page> pending_landing_page_;
-    // Empty in every build that has no bootstrap to arm -- the tests
-    // and the harnesses -- which is why the toast action checks it instead of
-    // assuming a relaunch is reachable.
-    std::function<void(const QStringList&)> elevated_relaunch_handler_;
 #if defined(Q_OS_WIN)
     std::unique_ptr<Win32HotkeyRegistrar> hotkey_registrar_;
     std::unique_ptr<QAbstractNativeEventFilter> hotkey_event_filter_;

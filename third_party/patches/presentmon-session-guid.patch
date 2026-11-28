@@ -1,0 +1,35 @@
+diff --git a/PresentData/TraceSession.cpp b/PresentData/TraceSession.cpp
+index f8445b7..3192169 100644
+--- a/PresentData/TraceSession.cpp
++++ b/PresentData/TraceSession.cpp
+@@ -482,5 +482,6 @@ ULONG TraceSession::Start(
+     MRTraceConsumer* mrConsumer,
+     wchar_t const* etlPath,
+-    wchar_t const* sessionName)
++    wchar_t const* sessionName,
++    GUID const* sessionGuid)
+ {
+     assert(mSessionHandle == 0);
+@@ -533,6 +534,9 @@ ULONG TraceSession::Start(
+         sessionProps.LogFileNameOffset = 0;                       // 0 means no output log file
+         sessionProps.LoggerNameOffset = offsetof(TraceProperties, mSessionName);  // Location of session name; will be written by StartTrace()
++        if (sessionGuid != nullptr) {
++            sessionProps.Wnode.Guid = *sessionGuid;
++            sessionProps.Wnode.Flags = WNODE_FLAG_TRACED_GUID;
++        }
+         /* Not used:
+-        sessionProps.Wnode.Guid               // Only needed for private or kernel sessions, otherwise it's an output
+         sessionProps.FlushTimer               // How often in seconds buffers are flushed; 0=min (1 second)
+         sessionProps.EnableFlags              // Which kernel providers to include in trace
+diff --git a/PresentData/TraceSession.hpp b/PresentData/TraceSession.hpp
+index 85d4563..4aec2e2 100644
+--- a/PresentData/TraceSession.hpp
++++ b/PresentData/TraceSession.hpp
+@@ -27,5 +27,6 @@ struct TraceSession {
+         MRTraceConsumer* mrConsumer,  // If nullptr, no WinMR tracing
+         wchar_t const* etlPath,       // If nullptr, live/realtime tracing session
+-        wchar_t const* sessionName);  // Required session name
++        wchar_t const* sessionName,  // Required session name
++        GUID const* sessionGuid = nullptr); // Null lets ETW generate the session GUID
+ 
+     void Stop();

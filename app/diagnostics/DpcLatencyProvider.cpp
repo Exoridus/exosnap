@@ -12,8 +12,6 @@
 #include <evntcons.h>
 // clang-format on
 
-#include <QtCore/QtGlobal> // qWarning -> the installed Qt handler -> exosnap.log
-
 #include <atomic>
 #include <chrono>
 #include <condition_variable>
@@ -21,20 +19,15 @@
 #include <cstring>
 #include <span>
 #include <string>
+#include <utility>
 #include <vector>
 
 namespace exosnap::diagnostics {
 
 namespace {
-constexpr wchar_t kSessionName[] = L"ExoSnapDpcLatency";
-
 // --- Well-known kernel trace GUIDs (defined locally to avoid pulling in INITGUID,
 //     which would materialise every DEFINE_GUID in the SDK headers in this TU) --------
 //
-// SystemTraceControlGuid {9e814aad-3204-11d2-9a82-006008a86939} — the named system
-// logger control GUID (Win8.1+ allows multiple named system loggers via
-// EVENT_TRACE_SYSTEM_LOGGER_MODE; this is NOT the singleton NT Kernel Logger).
-constexpr GUID kSystemTraceControlGuid = {0x9e814aad, 0x3204, 0x11d2, {0x9a, 0x82, 0x00, 0x60, 0x08, 0xa8, 0x69, 0x39}};
 // PerfInfoGuid {ce1dbfb4-137e-4da6-87b0-3f59aa102cbc} — DPC / ISR events.
 constexpr GUID kPerfInfoGuid = {0xce1dbfb4, 0x137e, 0x4da6, {0x87, 0xb0, 0x3f, 0x59, 0xaa, 0x10, 0x2c, 0xbc}};
 // Image kernel-provider GUID {2cb15d1d-5fc1-11d2-abe1-00a0c911f518} — image load/unload.
@@ -51,6 +44,7 @@ struct ImageRange {
 };
 
 struct SessionImpl {
+    std::wstring session_name;
     TRACEHANDLE control_handle = 0;
     TRACEHANDLE trace_handle = INVALID_PROCESSTRACE_HANDLE;
     int64_t qpc_freq = 0;
@@ -63,10 +57,6 @@ struct SessionImpl {
     // shared_ptr for the whole call, so writing it after ProcessTrace can never touch
     // a destroyed object.
     std::atomic<bool> consuming{false};
-    // Set by Stop() before CloseTrace, so the worker can tell "I was asked to end"
-    // from "the trace ended under me" -- the same ProcessTrace return, two very
-    // different facts about the machine.
-    std::atomic<bool> stop_requested{false};
     // The worker's "I have left ProcessTrace" handshake, so Stop() can wait with a
     // deadline instead of joining forever. It lives in SessionImpl, which the worker
     // itself holds a shared_ptr to, precisely so that a thread abandoned after the
@@ -96,22 +86,32 @@ struct SessionImpl {
 // to the buffer end. Robust to layout drift; returns "" if not found.  [DEV-VERIFY]
 std::string ExtractImageBasename(const uint8_t* data, uint32_t len, uint32_t ptr_size) {
     const size_t wcount = len / sizeof(wchar_t);
-    const wchar_t* w = reinterpret_cast<const wchar_t*>(data);
+    const auto read_char = [data](size_t index) {
+        wchar_t value{};
+        std::memcpy(&value, data + index * sizeof(value), sizeof(value));
+        return value;
+    };
     // Skip at least ImageBase+ImageSize before scanning for the path.
     const size_t start = (2u * ptr_size) / sizeof(wchar_t);
     for (size_t i = start; i < wcount; ++i) {
-        if (w[i] != L'\\')
+        if (read_char(i) != L'\\')
             continue;
         std::wstring path;
         bool ok = true;
-        for (size_t j = i; j < wcount && w[j] != L'\0'; ++j) {
-            if (w[j] < 0x20 || w[j] > 0x7e) { // non-ASCII/control => not the path we want
+        bool terminated = false;
+        for (size_t j = i; j < wcount && j - i < 1024; ++j) {
+            const auto ch = read_char(j);
+            if (ch == L'\0') {
+                terminated = true;
+                break;
+            }
+            if (ch < 0x20 || ch > 0x7e) {
                 ok = false;
                 break;
             }
-            path.push_back(w[j]);
+            path.push_back(ch);
         }
-        if (!ok || path.size() < 4)
+        if (!ok || !terminated || path.size() < 4)
             continue;
         // Reduce to the basename (component after the last backslash).
         const size_t slash = path.find_last_of(L'\\');
@@ -162,59 +162,47 @@ void WINAPI DpcEventRecordCallback(EVENT_RECORD* record) {
         const uint64_t size = ReadTracePointer(data + ps, ps);
         std::string name = ExtractImageBasename(data, len, ps);
         std::lock_guard<std::mutex> lk(s->acc_mutex);
-        s->images.push_back(ImageRange{base, size, std::move(name)});
+        if (s->images.size() < 4096)
+            s->images.push_back(ImageRange{base, size, std::move(name)});
         return;
     }
 }
 
 // Build the EVENT_TRACE_PROPERTIES blob (struct + trailing session name) into `out`.
-EVENT_TRACE_PROPERTIES* BuildProps(std::vector<uint8_t>& out) {
-    const size_t name_bytes = (std::wcslen(kSessionName) + 1) * sizeof(wchar_t);
+EVENT_TRACE_PROPERTIES* BuildProps(std::vector<uint8_t>& out, const wchar_t* session_name) {
+    const size_t name_bytes = (std::wcslen(session_name) + 1) * sizeof(wchar_t);
     const size_t total = sizeof(EVENT_TRACE_PROPERTIES) + name_bytes;
     out.assign(total, 0);
     auto* props = reinterpret_cast<EVENT_TRACE_PROPERTIES*>(out.data());
     props->Wnode.BufferSize = static_cast<ULONG>(total);
     props->Wnode.Flags = WNODE_FLAG_TRACED_GUID;
     props->Wnode.ClientContext = 1; // 1 = QPC timestamps
-    props->Wnode.Guid = kSystemTraceControlGuid;
     props->LogFileMode = EVENT_TRACE_REAL_TIME_MODE | EVENT_TRACE_SYSTEM_LOGGER_MODE;
     props->EnableFlags = EVENT_TRACE_FLAG_DPC | EVENT_TRACE_FLAG_INTERRUPT | EVENT_TRACE_FLAG_IMAGE_LOAD;
     props->LoggerNameOffset = sizeof(EVENT_TRACE_PROPERTIES);
     return props;
 }
 
-// Stop a stale named session left behind by a previously crashed instance.
-void StopStaleSession() {
-    std::vector<uint8_t> buf;
-    EVENT_TRACE_PROPERTIES* props = BuildProps(buf);
-    ::ControlTraceW(0, kSessionName, props, EVENT_TRACE_CONTROL_STOP);
-}
 } // namespace
 
 DpcLatencyProvider::DpcLatencyProvider() = default;
 
-bool DpcLatencyProvider::Start() {
+bool DpcLatencyProvider::Start(std::wstring session_name, const GUID& session_id) {
     if (open_.load(std::memory_order_acquire))
         return true;
     auto s = std::make_shared<SessionImpl>();
-    EVENT_TRACE_PROPERTIES* props = BuildProps(s->props_storage);
+    s->session_name = std::move(session_name);
+    EVENT_TRACE_PROPERTIES* props = BuildProps(s->props_storage, s->session_name.c_str());
+    props->Wnode.Guid = session_id;
 
-    // A stale session from a crashed prior instance would block StartTrace; clear it.
-    StopStaleSession();
-
-    ULONG st = ::StartTraceW(&s->control_handle, kSessionName, props);
-    if (st == ERROR_ALREADY_EXISTS) {
-        StopStaleSession();
-        props = BuildProps(s->props_storage); // StartTrace mutates props; rebuild clean
-        st = ::StartTraceW(&s->control_handle, kSessionName, props);
-    }
+    const ULONG st = ::StartTraceW(&s->control_handle, s->session_name.c_str(), props);
     if (st != ERROR_SUCCESS) {
         // ERROR_ACCESS_DENIED when not elevated -> graceful degrade (no throw).
         return false; // s drops here; SessionImpl destroyed.
     }
 
     EVENT_TRACE_LOGFILEW log = {};
-    log.LoggerName = const_cast<wchar_t*>(kSessionName);
+    log.LoggerName = s->session_name.data();
     // ProcessTrace would otherwise convert the header timestamp to system time while InitialTime stays in QPC ticks.
     log.ProcessTraceMode =
         PROCESS_TRACE_MODE_REAL_TIME | PROCESS_TRACE_MODE_EVENT_RECORD | PROCESS_TRACE_MODE_RAW_TIMESTAMP;
@@ -253,12 +241,6 @@ void DpcLatencyProvider::ConsumeLoop(std::shared_ptr<void> sp) {
     s->consuming.store(true, std::memory_order_release);
     ::ProcessTrace(&s->trace_handle, 1, nullptr, nullptr);
     s->consuming.store(false, std::memory_order_release);
-    if (!s->stop_requested.load(std::memory_order_acquire)) {
-        // Nobody asked for this. The session is gone (stopped by another process, a
-        // driver reset, an ETW buffer error) and the peak it measured stops being
-        // reported as of now -- see Read().
-        qWarning("[dpc] kernel trace ended without being asked; DPC/ISR latency is no longer measured");
-    }
     {
         std::lock_guard<std::mutex> lk(s->finish_mutex);
         s->finished = true;
@@ -302,7 +284,7 @@ DpcLatencyReading DpcLatencyProvider::Read() const {
     r.avg_latency_us = s->count != 0 ? s->sum_us / static_cast<double>(s->count) : 0.0;
     if (s->worst_routine != 0) {
         for (const auto& img : s->images) {
-            if (img.size != 0 && s->worst_routine >= img.base && s->worst_routine < img.base + img.size) {
+            if (s->worst_routine >= img.base && s->worst_routine - img.base < img.size) {
                 r.worst_driver = img.name; // may be empty if the path was unresolved
                 break;
             }
@@ -321,7 +303,6 @@ void DpcLatencyProvider::Stop() {
     }
     if (sp) {
         auto* s = static_cast<SessionImpl*>(sp.get());
-        s->stop_requested.store(true, std::memory_order_release);
         if (s->control_handle != 0) {
             auto* props = reinterpret_cast<EVENT_TRACE_PROPERTIES*>(s->props_storage.data());
             ::ControlTraceW(s->control_handle, nullptr, props, EVENT_TRACE_CONTROL_STOP);
@@ -349,7 +330,6 @@ void DpcLatencyProvider::Stop() {
         if (finished) {
             worker_.join();
         } else {
-            qWarning("[dpc] kernel trace consumer did not return within the shutdown ceiling; abandoning it");
             worker_.detach();
         }
     }
@@ -370,7 +350,7 @@ DpcLatencyProvider::~DpcLatencyProvider() {
 namespace exosnap::diagnostics {
 DpcLatencyProvider::DpcLatencyProvider() = default;
 DpcLatencyProvider::~DpcLatencyProvider() = default;
-bool DpcLatencyProvider::Start() {
+bool DpcLatencyProvider::Start(std::wstring, const _GUID&) {
     return false;
 }
 void DpcLatencyProvider::Stop() {

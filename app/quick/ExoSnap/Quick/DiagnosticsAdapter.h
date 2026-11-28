@@ -7,6 +7,7 @@
 #include "diagnostics/DiagnosticsController.h"
 #include "diagnostics/DpcLatencyProvider.h"
 #include "diagnostics/PresentProvider.h"
+#include "diagnostics/PrivilegedDiagnosticsClient.h"
 #include "services/SupportBundleService.h"
 
 #include <capability/capability_set.h>
@@ -114,6 +115,8 @@ class DiagnosticsAdapter : public QObject {
     // trace never turns another source's availability into a failure.
     Q_PROPERTY(QVariantList measurementSources READ measurementSources NOTIFY changed FINAL)
     Q_PROPERTY(QString presentProviderState READ presentProviderState NOTIFY changed FINAL)
+    Q_PROPERTY(
+        bool trendPlotsVisible READ trendPlotsVisible WRITE setTrendPlotsVisible NOTIFY trendPlotsVisibleChanged FINAL)
 
     Q_PROPERTY(bool bundleBusy READ bundleBusy NOTIFY bundleBusyChanged FINAL)
     Q_PROPERTY(QVariantMap audioResources READ audioResources NOTIFY audioResourcesChanged FINAL)
@@ -161,6 +164,8 @@ class DiagnosticsAdapter : public QObject {
     [[nodiscard]] bool inDepthAvailable() const noexcept;
     [[nodiscard]] QVariantList measurementSources() const;
     [[nodiscard]] QString presentProviderState() const;
+    [[nodiscard]] bool trendPlotsVisible() const noexcept;
+    void setTrendPlotsVisible(bool visible);
     [[nodiscard]] bool bundleBusy() const noexcept;
     [[nodiscard]] const QVariantMap& audioResources() const noexcept {
         return audio_resources_;
@@ -202,6 +207,7 @@ class DiagnosticsAdapter : public QObject {
     // rate the display now supports.
     void refreshDisplayFacts();
     void setElevated(bool elevated);
+    void setPrivilegedDiagnosticsState(diagnostics::PrivilegedDiagnosticsState state, bool kernel_trace_open = false);
     // Pushed by the composition root from the real provider, so the page reports
     // what the OS answered rather than inferring it from the process token.
     void setPresentProviderState(diagnostics::PresentProviderState state);
@@ -262,9 +268,11 @@ class DiagnosticsAdapter : public QObject {
     void sessionLedgerFrozen();
     void lastSessionChanged();
     void inDepthChanged();
+    void trendPlotsVisibleChanged();
     // The user moved the in-depth switch. The composition root owns the setting
     // and the elevation gate behind it.
     void inDepthToggled(bool enabled);
+    void privilegedDiagnosticsToggled(bool enabled);
     void tilesChanged();
     void liveTilesChanged();
     void issuesChanged();
@@ -315,6 +323,8 @@ class DiagnosticsAdapter : public QObject {
     // Borrowed from the composition root, which must outlive this adapter (see
     // QuickApplication's member declaration order).
     diagnostics::IDpcLatencyProvider* dpc_provider_ = nullptr;
+    diagnostics::PrivilegedDiagnosticsState privileged_state_ = diagnostics::PrivilegedDiagnosticsState::Idle;
+    bool privileged_kernel_trace_open_ = false;
     DiagnosticIssueModel issue_model_;
     PipelineStageModel pipeline_stage_model_;
     SessionLedgerModel ledger_model_;
@@ -340,6 +350,7 @@ class DiagnosticsAdapter : public QObject {
     // design: the engine publishes instants, and a trend is a property of the
     // surface that watched them go by.
     std::unordered_map<std::string, std::deque<double>> series_;
+    bool trend_plots_visible_ = false;
     uint64_t series_generation_ = 0;
     // Bumped on every append. The tiles can be byte-identical while the trend
     // under them has moved, so the publish gate compares this too.

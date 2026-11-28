@@ -72,7 +72,6 @@ enum class NotificationAction : uint8_t {
     Discard,          // discard recovery session (secondary button on RecoveryAvailable)
     OpenUpdate,       // navigate to Settings → Software updates card (UpdateAvailable type)
     Edit,             // navigate to the Edit/Output page for the saved recording (primary on Saved type)
-    RelaunchElevated, // relaunch ExoSnap as administrator to unlock elevation-gated diagnostics
     OpenDiagnostics,  // navigate to the Diagnostics page for the frame-drop breakdown (FramesDropped type)
     UndoPresetSwitch, // restore the previous live config and selection (PresetSwitched type)
     OpenHotkeys,      // navigate to Settings → Hotkeys to rebind a shortcut (HotkeyConflict type)
@@ -314,35 +313,6 @@ struct NotificationEvent {
                                                   " The display is off or asleep; wake it, or stop the recording.");
     }
     event.action = NotificationAction::OpenDiagnostics;
-    return event;
-}
-
-// ---------------------------------------------------------------------------
-// ShouldOfferElevatedRelaunch / MakeElevatedRelaunchOfferEvent
-// ---------------------------------------------------------------------------
-// The in-depth diagnostics opt-in cannot measure anything in a standard
-// process, so turning it on there offers the restart that would let it.
-//
-// Only the off -> on edge, and only when the process is not already elevated: an
-// elevated process starts the traces on the spot and has nothing to offer, and a
-// toast on every evaluation of an opt-in that is simply on would be a standing
-// nag for a state the switch's own sub-text already names.
-[[nodiscard]] inline bool ShouldOfferElevatedRelaunch(bool opt_in_now, bool opt_in_before, bool elevated) noexcept {
-    return opt_in_now && !opt_in_before && !elevated;
-}
-
-// The offer itself. The switch is already on when this is raised, so the text
-// promises the traces rather than the switch -- declining the UAC prompt leaves
-// the switch on and this process running, which is what its
-// "On · not measuring · needs an admin relaunch" sub-text then reports.
-[[nodiscard]] inline NotificationEvent MakeElevatedRelaunchOfferEvent() {
-    NotificationEvent event;
-    event.type = NotificationType::ElevationRequired;
-    event.title = QCoreApplication::translate("Notifications", "Restart as administrator");
-    event.body = QCoreApplication::translate(
-        "Notifications",
-        "In-depth diagnostics need an elevated process. Restart ExoSnap as administrator to start the traces.");
-    event.action = NotificationAction::RelaunchElevated;
     return event;
 }
 

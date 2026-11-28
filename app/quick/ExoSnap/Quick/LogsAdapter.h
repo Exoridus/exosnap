@@ -34,6 +34,7 @@ class LogsAdapter : public QObject {
     Q_PROPERTY(bool autoScroll READ autoScroll WRITE setAutoScroll NOTIFY autoScrollChanged FINAL)
 
     Q_PROPERTY(int totalCount READ totalCount NOTIFY countsChanged FINAL)
+    Q_PROPERTY(bool hasErrors READ hasErrors NOTIFY countsChanged FINAL)
     Q_PROPERTY(int visibleCount READ visibleCount NOTIFY countsChanged FINAL)
     Q_PROPERTY(QString statusText READ statusText NOTIFY statusChanged FINAL)
     Q_PROPERTY(bool canCopy READ canCopy NOTIFY countsChanged FINAL)
@@ -75,6 +76,7 @@ class LogsAdapter : public QObject {
     void setAutoScroll(bool enabled);
 
     [[nodiscard]] int totalCount() const;
+    [[nodiscard]] bool hasErrors() const noexcept;
     [[nodiscard]] int visibleCount() const;
     [[nodiscard]] const QString& statusText() const noexcept;
     [[nodiscard]] bool canCopy() const;

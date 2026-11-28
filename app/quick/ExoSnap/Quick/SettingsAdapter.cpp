@@ -2935,6 +2935,10 @@ bool SettingsAdapter::showDiagnosticsOverlay() const noexcept {
 bool SettingsAdapter::showNotifications() const noexcept {
     return app_settings_.show_notifications;
 }
+
+bool SettingsAdapter::askAdminForDiagnostics() const noexcept {
+    return app_settings_.ask_admin_for_diagnostics;
+}
 bool SettingsAdapter::showQuickControls() const noexcept {
     return app_settings_.show_quick_controls;
 }
@@ -3836,6 +3840,13 @@ void SettingsAdapter::setShowNotifications(bool value) {
         return;
     }
     app_settings_.show_notifications = value;
+    commitAppSettingsEdit();
+}
+
+void SettingsAdapter::setAskAdminForDiagnostics(bool value) {
+    if (app_settings_.ask_admin_for_diagnostics == value)
+        return;
+    app_settings_.ask_admin_for_diagnostics = value;
     commitAppSettingsEdit();
 }
 

@@ -11,7 +11,6 @@
 #include "diagnostics/DiagnosticsProbe.h"
 #include "diagnostics/WindowTargetFacts.h"
 #include "notifications/NotificationEvent.h"
-#include "notifications/NotificationManager.h"
 #include "services/SupportBundleService.h"
 #include "visual_tests/DiagnosticsLiveScenario.h"
 
@@ -689,7 +688,7 @@ TEST(DiagnosticsAdapterTest, MeasurementSourcesSeparateTheOptionalProviders) {
 
     EXPECT_EQ(adapter.presentProviderState(), QStringLiteral("accessDenied"));
     EXPECT_TRUE(stateOf(QStringLiteral("Presentation")).contains(QStringLiteral("access denied")));
-    EXPECT_TRUE(stateOf(QStringLiteral("DPC / ISR")).contains(QStringLiteral("elevated kernel trace required")));
+    EXPECT_TRUE(stateOf(QStringLiteral("DPC / ISR")).contains(QStringLiteral("Privileged diagnostics off")));
     // The core sources remain their own states; a refused optional trace does
     // not turn them into failures.
     EXPECT_FALSE(stateOf(QStringLiteral("Recording pipeline")).isEmpty());
@@ -700,52 +699,36 @@ TEST(DiagnosticsAdapterTest, MeasurementSourcesSeparateTheOptionalProviders) {
     EXPECT_EQ(adapter.presentProviderState(), QStringLiteral("measuring"));
 }
 
-// The switch is session state: off at every start, and the offer to restart
-// elevated hangs off its off -> on edge. This drives the adapter through the
-// same edge the composition root wires up, so the three facts the product
-// promises are pinned end to end rather than one predicate at a time.
-TEST(DiagnosticsAdapterTest, TurningInDepthOnOffersTheRestartOnlyInAStandardProcess) {
+TEST(DiagnosticsAdapterTest, PrivilegedCollectionIsRequestedOnlyByTheUserOptIn) {
     EnsureApplication();
     DiagnosticsAdapter adapter;
-    notifications::NotificationManager manager;
-    int offers = 0;
-    QObject::connect(&manager, &notifications::NotificationManager::eventRecorded, &manager,
-                     [&offers](const notifications::NotificationEvent& event) {
-                         if (event.type == notifications::NotificationType::ElevationRequired)
-                             ++offers;
-                     });
-    // The composition root's own edge: the switch asks, the answer comes back,
-    // and the offer is raised from the transition.
-    QObject::connect(&adapter, &DiagnosticsAdapter::inDepthToggled, &adapter, [&](bool enabled) {
-        const bool before = adapter.inDepthEnabled();
-        adapter.setInDepthEnabled(enabled);
-        if (notifications::ShouldOfferElevatedRelaunch(enabled, before, adapter.elevated()))
-            manager.Enqueue(notifications::MakeElevatedRelaunchOfferEvent());
-    });
+    BoolSignalCounter requested(&adapter, &DiagnosticsAdapter::privilegedDiagnosticsToggled);
+    using diagnostics::PrivilegedDiagnosticsState;
 
-    // Off at every start. Nothing seeds this from disk any more.
-    EXPECT_FALSE(adapter.inDepthEnabled());
-    EXPECT_EQ(offers, 0);
-
+    adapter.setInDepthEnabled(true);
+    EXPECT_EQ(requested.count(), 0);
+    adapter.setInDepthEnabled(false);
     adapter.setInDepthEnabledFromUi(true);
-    // The switch stays ON -- the offer is not a precondition, it is an offer.
+    EXPECT_EQ(requested.count(), 1);
+    EXPECT_TRUE(requested.last());
+
+    adapter.setInDepthEnabled(true);
+    adapter.setPrivilegedDiagnosticsState(PrivilegedDiagnosticsState::Declined);
     EXPECT_TRUE(adapter.inDepthEnabled());
-    EXPECT_EQ(offers, 1);
-    // A second look at a switch that is already on is not an edge.
     adapter.setInDepthEnabledFromUi(true);
-    EXPECT_EQ(offers, 1);
-
     adapter.setInDepthEnabledFromUi(false);
-    EXPECT_FALSE(adapter.inDepthEnabled());
-    EXPECT_EQ(offers, 1);
+    EXPECT_EQ(requested.count(), 1);
 
-    // Elevated: the traces start on the spot and there is nothing to offer.
-    adapter.setElevated(true);
+    adapter.setInDepthEnabled(false);
+    adapter.setPrivilegedDiagnosticsState(PrivilegedDiagnosticsState::Stopping);
     adapter.setInDepthEnabledFromUi(true);
-    EXPECT_TRUE(adapter.inDepthEnabled());
-    EXPECT_EQ(offers, 1);
-}
+    EXPECT_EQ(requested.count(), 1);
 
+    adapter.setPrivilegedDiagnosticsState(PrivilegedDiagnosticsState::Idle);
+    adapter.setInDepthEnabledFromUi(true);
+    EXPECT_EQ(requested.count(), 2);
+    EXPECT_TRUE(requested.last());
+}
 TEST(DiagnosticsAdapterTest, InDepthCanBeViewedWhileRecording) {
     EnsureApplication();
     DiagnosticsAdapter adapter;
@@ -779,6 +762,7 @@ TEST(DiagnosticsAdapterTest, SparklineSeriesAreCappedAndResetPerSession) {
     EnsureApplication();
     DiagnosticsAdapter adapter;
     adapter.setDiagnosticConfig(MakeConfig());
+    adapter.setTrendPlotsVisible(true);
 
     exosnap::engine::RecordingDiagnosticsSnapshot snapshot =
         visual::MakeDiagnosticsLiveSnapshot(QStringLiteral("healthy"));
@@ -793,6 +777,30 @@ TEST(DiagnosticsAdapterTest, SparklineSeriesAreCappedAndResetPerSession) {
     adapter.applyLiveDiagnostics(snapshot);
     adapter.refreshForTest();
     EXPECT_EQ(SeriesOf(adapter, QStringLiteral("framePacing")).size(), 1);
+}
+
+TEST(DiagnosticsAdapterTest, HiddenTrendsPreserveSessionTimingWithoutCollectingPlotSamples) {
+    EnsureApplication();
+    DiagnosticsAdapter adapter;
+    adapter.setDiagnosticConfig(MakeConfig());
+
+    auto snapshot = visual::MakeDiagnosticsLiveSnapshot(QStringLiteral("healthy"));
+    snapshot.video_encoder.timing_availability = exosnap::engine::MetricAvailability::Available;
+    snapshot.video_encoder.p99_ms = 8.75;
+    adapter.applyLiveDiagnostics(snapshot);
+    adapter.refreshForTest();
+    EXPECT_TRUE(SeriesOf(adapter, QStringLiteral("encoder")).isEmpty());
+
+    adapter.setTrendPlotsVisible(true);
+    snapshot.video_encoder.p99_ms = 2.0;
+    adapter.applyLiveDiagnostics(snapshot);
+    adapter.refreshForTest();
+    EXPECT_EQ(SeriesOf(adapter, QStringLiteral("encoder")).size(), 1);
+    const auto tile = TileWithKey(adapter.liveTiles(), QStringLiteral("encoder"));
+    EXPECT_TRUE(tile.value(QStringLiteral("sessionDetail")).toString().contains(QStringLiteral("8.75")));
+
+    adapter.setTrendPlotsVisible(false);
+    EXPECT_TRUE(SeriesOf(adapter, QStringLiteral("encoder")).isEmpty());
 }
 
 TEST(DiagnosticsAdapterTest, LiveTilesCarryTheTintOfTheCheckThatOwnsTheValue) {

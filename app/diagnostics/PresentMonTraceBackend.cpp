@@ -20,6 +20,8 @@
 #include "PresentMonTraceConsumer.hpp"
 #include "TraceSession.hpp"
 
+#include <utility>
+
 namespace exosnap::diagnostics {
 namespace {
 
@@ -27,6 +29,10 @@ constexpr wchar_t kSessionName[] = L"ExoSnapPresentMon";
 
 class PresentMonTraceBackend final : public IPresentTraceBackend {
   public:
+    explicit PresentMonTraceBackend(std::wstring session_name, const GUID& session_id = {})
+        : session_name_(std::move(session_name)), session_id_(session_id) {
+    }
+
     PresentTraceOpenResult Open() override {
         // Ownership is checked BEFORE opening, and nothing is stopped by name. A
         // session already carrying this name may belong to another ExoSnap
@@ -34,18 +40,19 @@ class PresentMonTraceBackend final : public IPresentTraceBackend {
         // break whichever of those owns it. A stale session therefore has to be
         // cleaned up deliberately and is reported as a conflict until then.
         {
-            std::vector<wchar_t> buffer(sizeof(EVENT_TRACE_PROPERTIES) + (sizeof(kSessionName) + 1) * sizeof(wchar_t));
+            std::vector<wchar_t> buffer(sizeof(EVENT_TRACE_PROPERTIES) + (session_name_.size() + 1) * sizeof(wchar_t));
             auto* properties = reinterpret_cast<EVENT_TRACE_PROPERTIES*>(buffer.data());
             properties->Wnode.BufferSize = static_cast<ULONG>(buffer.size() * sizeof(wchar_t));
             properties->LoggerNameOffset = sizeof(EVENT_TRACE_PROPERTIES);
-            const ULONG query = ::ControlTraceW(0, kSessionName, properties, EVENT_TRACE_CONTROL_QUERY);
+            const ULONG query = ::ControlTraceW(0, session_name_.c_str(), properties, EVENT_TRACE_CONTROL_QUERY);
             if (query == ERROR_SUCCESS)
                 return PresentTraceOpenResult::SessionConflict;
         }
         // realtime: etlPath=nullptr; no WinMR: mrConsumer=nullptr.
-        const ULONG status = session_.Start(&consumer_, nullptr, nullptr, kSessionName);
+        const ULONG status = session_.Start(&consumer_, nullptr, nullptr, session_name_.c_str(), &session_id_);
         switch (status) {
         case ERROR_SUCCESS:
+            consumer_handle_ = session_.mTraceHandle;
             return PresentTraceOpenResult::Opened;
         case ERROR_ACCESS_DENIED:
             return PresentTraceOpenResult::AccessDenied;
@@ -63,7 +70,8 @@ class PresentMonTraceBackend final : public IPresentTraceBackend {
     void Consume() override {
         // Blocks, routing events into consumer_ (TraceSession installed the callback),
         // until Close() -> CloseTrace unblocks it.
-        ::ProcessTrace(&session_.mTraceHandle, 1, nullptr, nullptr);
+        TRACEHANDLE trace = consumer_handle_;
+        ::ProcessTrace(&trace, 1, nullptr, nullptr);
     }
 
     void Close() override {
@@ -110,6 +118,9 @@ class PresentMonTraceBackend final : public IPresentTraceBackend {
     }
 
   private:
+    std::wstring session_name_;
+    GUID session_id_;
+    TRACEHANDLE consumer_handle_ = INVALID_PROCESSTRACE_HANDLE;
     PMTraceConsumer consumer_; // default ctor: mTrackDisplay=true, mTrackGPU/Input=false
     TraceSession session_;     // PresentMon's session helper (open + enable + OpenTrace)
 };
@@ -117,7 +128,11 @@ class PresentMonTraceBackend final : public IPresentTraceBackend {
 } // namespace
 
 std::shared_ptr<IPresentTraceBackend> MakePresentTraceBackend() {
-    return std::make_shared<PresentMonTraceBackend>();
+    return std::make_shared<PresentMonTraceBackend>(kSessionName);
+}
+
+std::shared_ptr<IPresentTraceBackend> MakeNamedPresentTraceBackend(std::wstring session_name, const GUID& session_id) {
+    return std::make_shared<PresentMonTraceBackend>(std::move(session_name), session_id);
 }
 
 } // namespace exosnap::diagnostics
@@ -130,6 +145,10 @@ namespace exosnap::diagnostics {
 // treats an ETW session that refused to open: Start() is false and everything reports
 // unavailable. One code path, not two.
 std::shared_ptr<IPresentTraceBackend> MakePresentTraceBackend() {
+    return nullptr;
+}
+
+std::shared_ptr<IPresentTraceBackend> MakeNamedPresentTraceBackend(std::wstring, const _GUID&) {
     return nullptr;
 }
 

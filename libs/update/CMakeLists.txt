@@ -28,21 +28,21 @@ Required when EXOSNAP_OFFICIAL_BUILD=ON. Leave empty for dev builds.")
 # Vendored Monocypher sources (C, not C++) -- compiled without exosnap::warnings
 # to avoid MSVC /W4 /WX noise on third-party code.
 # ---------------------------------------------------------------------------
-set(_monocypher_dir "${CMAKE_CURRENT_SOURCE_DIR}/third_party/monocypher")
+function(exosnap_add_monocypher target)
+    set(_monocypher_dir "${CMAKE_CURRENT_FUNCTION_LIST_DIR}/third_party/monocypher")
+    add_library(${target} STATIC
+        ${_monocypher_dir}/monocypher.c
+        ${_monocypher_dir}/monocypher-ed25519.c
+    )
+    target_include_directories(${target} PUBLIC ${_monocypher_dir})
+    target_compile_options(${target} PRIVATE
+        $<$<CXX_COMPILER_ID:MSVC>:/W0>
+        $<$<CXX_COMPILER_ID:Clang>:-w>
+        $<$<CXX_COMPILER_ID:GNU>:-w>
+    )
+endfunction()
 
-add_library(exosnap_monocypher STATIC
-    ${_monocypher_dir}/monocypher.c
-    ${_monocypher_dir}/monocypher-ed25519.c
-)
-# Public so that consumers can #include the headers without repeating the path.
-target_include_directories(exosnap_monocypher PUBLIC ${_monocypher_dir})
-
-# Suppress all warnings on this third-party target (MSVC: /W0; Clang/GCC: -w).
-target_compile_options(exosnap_monocypher PRIVATE
-    $<$<CXX_COMPILER_ID:MSVC>:/W0>
-    $<$<CXX_COMPILER_ID:Clang>:-w>
-    $<$<CXX_COMPILER_ID:GNU>:-w>
-)
+exosnap_add_monocypher(exosnap_monocypher)
 
 # ---------------------------------------------------------------------------
 # Vendored miniz sources (C, not C++) -- compiled without exosnap::warnings
@@ -70,7 +70,9 @@ add_library(exosnap_update STATIC
     src/semver.cpp
     src/update_flow_state.cpp
     src/ed25519_verify.cpp
+    src/file_sha256.cpp
     src/manifest_io.cpp
+    src/release_key.cpp
     src/update_checker.cpp
     src/release_locator.cpp
     src/package_verifier.cpp
@@ -133,6 +135,7 @@ to be exactly 64 hex characters. Got: '${EXOSNAP_UPDATE_PUBLIC_KEY_HEX}'")
 
     target_compile_definitions(exosnap_update PRIVATE
         "EXOSNAP_UPDATE_PUBLIC_KEY_BYTES=${_byte_list}")
+    set_property(TARGET exosnap_update PROPERTY EXOSNAP_EMBEDDED_UPDATE_KEY "${_byte_list}")
 endif()
 
 # ---------------------------------------------------------------------------

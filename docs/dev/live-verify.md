@@ -147,6 +147,8 @@ Review path `Copy` is recorded as copy/export coverage, not evaluator or preview
 | `diagnostics.snapshot`, `diagnostics.setInDepth` | Measured diagnostic state and the session-scoped in-depth switch |
 | `settings.*`, `pipeline.*`, `notifications.*`, other discovered surfaces | Use the schema/allowlist returned by this build; fixture paths must match emitted data |
 
+`diagnostics.setInDepth` starts or stops ordinary measurement. The `app.askAdminForDiagnostics` global preference governs the user-facing switch. Changing that preference through `settings.set` does not request elevation. `diagnostics.snapshot.trendPlotsVisible` confirms whether the Diagnostics overview is collecting its visual trends.
+
 Reveal/scroll commands require the target page to be the current page, even if another page's object remains resident. A syntactically valid target name is not proof that it reached the viewport. Navigation goes through the same guard as tabs and Ctrl+1…5. Pages other than Record load asynchronously on their first visit, so an accepted `ui.navigate` waits, bounded, for the destination's content before it answers `settled:true`. A page that does not finish loading in time is `operation_failed`.
 
 `ui.navigate logs` remains a documented legacy alias: the shell normalizes it to the Diagnostics destination with the logs subview. `ui.getState` answers page `diagnostics` plus `diagnosticsSection` (`overview` or `logs`) -- never a fifth top-level page -- and `ui.scrollHome`/`ui.scrollEnd`/`ui.reveal` with surface `logs` address the internal log view, which is one instance loaded on first request and kept resident. `app.snapshot.currentPage` keeps its integer shape and reports Diagnostics (2) while the logs subview is showing; About keeps its own value (4).

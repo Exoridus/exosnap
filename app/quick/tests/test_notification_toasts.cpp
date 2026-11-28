@@ -171,7 +171,7 @@ TEST_F(ToastStackTest, AnActionTheEventDoesNotOfferIsIgnored) {
 
     QSignalSpy spy(&adapter_, &NotificationsAdapter::actionTriggered);
     // A stale delegate must not be able to replay an action this card never had.
-    adapter_.triggerToastAction(static_cast<qint64>(sequence), static_cast<int>(NotificationAction::RelaunchElevated));
+    adapter_.triggerToastAction(static_cast<qint64>(sequence), static_cast<int>(NotificationAction::OpenDiagnostics));
 
     EXPECT_EQ(spy.count(), 0);
     EXPECT_EQ(adapter_.toastModel()->rowCount(), 1);

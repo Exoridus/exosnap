@@ -12,7 +12,7 @@ use crate::bundle::{FileRole, sha256_file};
 use crate::capability::Capability;
 use crate::context::Context;
 use crate::control::{self, Client};
-use crate::package::walk_files;
+use crate::package::{DIAGNOSTICS_HELPER, package_runtime_hashes, walk_files};
 use crate::plan::Tier;
 use crate::scenario::{Lane, Scenario, ScenarioClass, Step, Stop};
 use crate::{infra_ensure, product_ensure};
@@ -65,10 +65,10 @@ pub fn scenarios() -> Vec<Scenario> {
         },
         Scenario {
             id: "install.msi-cycle",
-            revision: 1,
+            revision: 2,
             title: "The MSI installs, starts, uninstalls and reinstalls cleanly",
             class: ScenarioClass::Installer,
-            contract: "on a clean disposable Windows machine, the MSI installs the portable bytes, first and second starts are healthy, uninstall preserves user settings, and reinstall restores the product",
+            contract: "on a clean disposable Windows machine, the MSI installs the portable bytes at matching application-relative paths, first and second starts are healthy, uninstall removes the helper and preserves user settings, and reinstall restores the product",
             lane: Lane::CiInstall,
             also: &[],
             tier: Tier::Required,
@@ -769,8 +769,9 @@ fn msi_cycle(ctx: &mut Context) -> Step {
         "InstallPath does not exist: {}",
         root.display()
     );
-    let expected = tree_hashes(&portable)?;
-    let actual = tree_hashes(&root)?;
+    let expected =
+        package_runtime_hashes(&portable).map_err(|error| Stop::fail(format!("{error:#}")))?;
+    let actual = package_runtime_hashes(&root).map_err(|error| Stop::fail(format!("{error:#}")))?;
     product_ensure!(
         actual == expected,
         "installed file hashes differ from the portable package"
@@ -801,12 +802,17 @@ fn msi_cycle(ctx: &mut Context) -> Step {
         "uninstall left application files, registry or shortcut"
     );
     product_ensure!(
+        !root.join(DIAGNOSTICS_HELPER).exists(),
+        "uninstall left the diagnostics helper"
+    );
+    product_ensure!(
         tree_hashes(&config)? == config_before,
         "uninstall changed user configuration"
     );
     msi(ctx, "/i", &installer, "reinstall.log")?;
+    let actual = package_runtime_hashes(&root).map_err(|error| Stop::fail(format!("{error:#}")))?;
     product_ensure!(
-        tree_hashes(&root)? == expected,
+        actual == expected,
         "reinstall did not restore the candidate bytes"
     );
     ctx.evidence.put("installedFiles", expected.len());
@@ -881,6 +887,31 @@ fn msi_user_data_removal(ctx: &mut Context) -> Step {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn installed_parity_requires_exact_helper_bytes_next_to_the_recorder() {
+        let temp = tempfile::tempdir().unwrap();
+        let portable = temp.path().join("portable");
+        let program_files = temp.path().join("Program Files");
+        let installed = program_files.join("ExoSnap");
+        let misplaced_dir = program_files.join("ExoSnap Diagnostics");
+        for dir in [&portable, &installed, &misplaced_dir] {
+            fs::create_dir_all(dir).unwrap();
+        }
+        let helper = installed.join(DIAGNOSTICS_HELPER);
+        let portable_helper = portable.join(DIAGNOSTICS_HELPER);
+        fs::write(portable.join("exosnap.exe"), b"recorder").unwrap();
+        fs::write(installed.join("exosnap.exe"), b"recorder").unwrap();
+        fs::write(portable_helper, b"helper").unwrap();
+        fs::write(&helper, b"helper").unwrap();
+        let expected = package_runtime_hashes(&portable).unwrap();
+        assert_eq!(package_runtime_hashes(&installed).unwrap(), expected);
+        fs::write(&helper, b"different helper").unwrap();
+        assert_ne!(package_runtime_hashes(&installed).unwrap(), expected);
+        fs::remove_file(&helper).unwrap();
+        fs::write(misplaced_dir.join(DIAGNOSTICS_HELPER), b"helper").unwrap();
+        assert!(package_runtime_hashes(&installed).is_err());
+    }
 
     #[cfg(windows)]
     fn smoke_msi(

@@ -340,8 +340,10 @@ endif()
 # Pinned to a fixed release tag (never a rolling latest — BtbN-pin lesson).
 if(EXOSNAP_WITH_PRESENTMON)
     set(presentmon_patch "${CMAKE_CURRENT_SOURCE_DIR}/patches/presentmon-clang.patch")
-    set_property(DIRECTORY APPEND PROPERTY CMAKE_CONFIGURE_DEPENDS "${presentmon_patch}")
+    set(presentmon_session_patch "${CMAKE_CURRENT_SOURCE_DIR}/patches/presentmon-session-guid.patch")
+    set_property(DIRECTORY APPEND PROPERTY CMAKE_CONFIGURE_DEPENDS "${presentmon_patch}" "${presentmon_session_patch}")
     file(SHA256 "${presentmon_patch}" presentmon_patch_sha256)
+    file(SHA256 "${presentmon_session_patch}" presentmon_session_patch_sha256)
     FetchContent_Declare(
         presentmon
         GIT_REPOSITORY https://github.com/GameTechDev/PresentMon.git
@@ -352,6 +354,10 @@ if(EXOSNAP_WITH_PRESENTMON)
             --manifest-path "${PROJECT_SOURCE_DIR}/tools/Cargo.toml" -p exo-dev --
             apply-dependency-patch --source <SOURCE_DIR> --patch "${presentmon_patch}"
             --patch-sha256 "${presentmon_patch_sha256}"
+        COMMAND cargo run --quiet --locked
+            --manifest-path "${PROJECT_SOURCE_DIR}/tools/Cargo.toml" -p exo-dev --
+            apply-dependency-patch --source <SOURCE_DIR> --patch "${presentmon_session_patch}"
+            --patch-sha256 "${presentmon_session_patch_sha256}"
     )
     FetchContent_MakeAvailable(presentmon)
 
@@ -383,6 +389,14 @@ if(EXOSNAP_WITH_PRESENTMON)
     # PresentData consumes ETW/TDH directly.
     target_link_libraries(presentmon_consumer PUBLIC tdh advapi32)
     add_library(PresentMon::consumer ALIAS presentmon_consumer)
+    add_library(presentmon_consumer_privileged STATIC EXCLUDE_FROM_ALL ${_presentmon_consumer_sources})
+    foreach(_property IN ITEMS INCLUDE_DIRECTORIES COMPILE_OPTIONS COMPILE_DEFINITIONS)
+        get_target_property(_value presentmon_consumer ${_property})
+        set_target_properties(presentmon_consumer_privileged PROPERTIES ${_property} "${_value}")
+    endforeach()
+    target_link_libraries(presentmon_consumer_privileged PUBLIC tdh advapi32)
+    set_target_properties(presentmon_consumer_privileged PROPERTIES
+        MSVC_RUNTIME_LIBRARY "MultiThreaded$<$<CONFIG:Debug>:Debug>")
     _exosnap_install_license("PresentMon (MIT)"
         "${presentmon_SOURCE_DIR}/LICENSE.txt" "presentmon.txt")
 endif()

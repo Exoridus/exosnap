@@ -49,6 +49,7 @@ class PresentMonProvider final : public IPresentProvider {
 
     // Updates the opt-in and starts/stops the ETW session to match the gate.
     void SetOptIn(bool opt_in);
+    [[nodiscard]] bool AttachPrivilegedBackend(std::shared_ptr<IPresentTraceBackend> backend);
 
     // Scope present attribution to the recorded target's process (0 == global / any).
     // Set to the captured window's PID on record-start (Window targets only) so present-

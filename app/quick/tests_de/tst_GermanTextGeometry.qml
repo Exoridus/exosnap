@@ -225,14 +225,13 @@ TestCase {
 
             const values = [];
             namedDescendants(card, "diagnosticsAudioResourceValue", values);
-            compare(values.length, 5);
-            compare(values.filter(function (value) { return value.text === "n/a"; }).length, 2);
+            compare(values.length, 4);
+            compare(values.filter(function (value) { return value.text === "Nicht gemessen"; }).length, 1);
 
             const reasons = [];
             namedDescendants(card, "diagnosticsAudioResourceReason", reasons);
-            compare(reasons.filter(function (reason) { return reason.visible; }).length, 2);
+            compare(reasons.filter(function (reason) { return reason.visible; }).length, 1);
             verify(reasons.some(function (reason) { return reason.text === "No measured limiter activity is available."; }));
-            verify(reasons.some(function (reason) { return reason.text === "No committed index has been observed."; }));
         }
     }
 

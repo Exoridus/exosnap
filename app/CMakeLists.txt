@@ -877,7 +877,6 @@ exosnap_add_gtest(
     SOURCES
         tests/test_app_settings_store.cpp
         settings/AppSettingsStore.cpp
-        services/ElevatedRelaunch.cpp
     LIBRARIES exosnap_capability exosnap_engine exosnap_app_log_test_support Qt6::Core Shell32.lib
 )
 target_include_directories(app_settings_store_tests PRIVATE ${CMAKE_CURRENT_SOURCE_DIR})
@@ -925,18 +924,32 @@ exosnap_add_gtest(
 )
 target_include_directories(codec_labels_tests PRIVATE ${CMAKE_CURRENT_SOURCE_DIR})
 
-# ELEVATION-FOUNDATION-R1: elevation provider stub + relaunch handoff
-# arg builder/parser + RelaunchResult contract. Pure logic; no Win32 invocation.
 exosnap_add_gtest(
     NAME elevation_tests
     TEST_PREFIX elevation.
     SOURCES
         tests/test_elevation.cpp
-        services/ElevatedRelaunch.cpp
-    LIBRARIES exosnap_capability exosnap_engine exosnap_app_log_test_support Qt6::Core Shell32.lib
+        tests/test_privileged_diagnostics_protocol.cpp
+        diagnostics/PrivilegedDiagnosticsIntegrity.cpp
+        diagnostics/PrivilegedDiagnosticsPath.cpp
+    LIBRARIES exosnap::update exosnap_monocypher advapi32 bcrypt ole32 shell32
 )
 target_include_directories(elevation_tests PRIVATE ${CMAKE_CURRENT_SOURCE_DIR})
 target_compile_definitions(elevation_tests PRIVATE NOMINMAX)
+
+exosnap_add_gtest(
+    NAME privileged_diagnostics_trace_guard_tests
+    TEST_PREFIX privileged_diagnostics_trace_guard.
+    PHASE vm
+    LABELS live
+    SOURCES
+        tests/test_privileged_diagnostics_trace_guard.cpp
+        diagnostics/PrivilegedDiagnosticsIntegrity.cpp
+        diagnostics/PrivilegedDiagnosticsPath.cpp
+        diagnostics/PrivilegedDiagnosticsTraceGuard.cpp
+    LIBRARIES exosnap::update advapi32 bcrypt ole32 shell32
+)
+target_include_directories(privileged_diagnostics_trace_guard_tests PRIVATE ${CMAKE_CURRENT_SOURCE_DIR})
 
 # present-diagnostics provider. PresentMonProvider owns a
 # PresentMonEtwSession and attempts the trace when the session opt-in asks for

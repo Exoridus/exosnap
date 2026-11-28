@@ -44,11 +44,12 @@ PresentMonEtwSession::PresentMonEtwSession(std::function<std::shared_ptr<IPresen
 bool PresentMonEtwSession::Start() {
     if (open_.load(std::memory_order_acquire))
         return true;
-    if (!backend_factory_) {
-        open_result_.store(static_cast<int>(PresentTraceOpenResult::NotBuilt), std::memory_order_release);
+    return StartWithBackend(backend_factory_ ? backend_factory_() : nullptr);
+}
+
+bool PresentMonEtwSession::StartWithBackend(std::shared_ptr<IPresentTraceBackend> backend) {
+    if (open_.load(std::memory_order_acquire))
         return false;
-    }
-    auto backend = backend_factory_();
     if (!backend) {
         // No trace backend in this build. Identical outcome to a trace that refused to
         // open, and deliberately not a separate code path.

@@ -57,10 +57,8 @@ struct LogState {
     bool qt_handler_installed = false;
     QtMessageHandler previous_qt_handler = nullptr;
     std::function<QDateTime()> timestamp_provider;
-    // SETTINGS-HONESTY-R1: nullopt = "Off" (record nothing); otherwise the minimum
-    // severity (inclusive) that gets recorded. Default = record everything, so
-    // behavior is unchanged until something explicitly narrows the filter.
-    std::optional<LogSeverity> min_severity = LogSeverity::Debug;
+    // Before loading preferences, record Info and above. nullopt disables logging.
+    std::optional<LogSeverity> min_severity = LogSeverity::Info;
 };
 
 LogState& state() {
@@ -310,7 +308,7 @@ void resetUnlocked(int max_entries) {
     s.max_log_file_bytes_override.reset();
     s.initialized = false;
     s.timestamp_provider = nullptr;
-    s.min_severity = LogSeverity::Debug;
+    s.min_severity = LogSeverity::Info;
 }
 
 } // namespace
@@ -624,9 +622,9 @@ std::optional<LogSeverity> DeveloperLogLevelFromString(const QString& level) {
         return LogSeverity::Error;
     if (level.compare(QStringLiteral("Warning"), Qt::CaseInsensitive) == 0)
         return LogSeverity::Warning;
-    if (level.compare(QStringLiteral("Info"), Qt::CaseInsensitive) == 0)
-        return LogSeverity::Info;
-    return LogSeverity::Debug;
+    if (level.compare(QStringLiteral("Debug"), Qt::CaseInsensitive) == 0)
+        return LogSeverity::Debug;
+    return LogSeverity::Info;
 }
 
 } // namespace exosnap::diagnostics

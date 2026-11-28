@@ -11,28 +11,11 @@
 #include <string_view>
 #include <update/ed25519_verify.h>
 #include <update/manifest_io.h>
+#include <update/release_key.h>
 #include <update/update_types.h>
 #include <utility>
 
 namespace exosnap::update {
-
-// ---------------------------------------------------------------------------
-// Embedded public key
-//
-// Development builds use an all-zero placeholder (EXOSNAP_OFFICIAL_BUILD=OFF).
-// Official release builds replace this with the real key injected at configure
-// time from the CMake variable EXOSNAP_UPDATE_PUBLIC_KEY_BYTES (generated from
-// the hex string in EXOSNAP_UPDATE_PUBLIC_KEY_HEX).
-// ---------------------------------------------------------------------------
-#ifndef EXOSNAP_UPDATE_PUBLIC_KEY_BYTES
-// Development placeholder: y=2 does not encode a valid curve point, so
-// ge_frombytes() rejects it and every signature verify returns false.
-// Official release builds inject the real key via EXOSNAP_UPDATE_PUBLIC_KEY_BYTES.
-#define EXOSNAP_UPDATE_PUBLIC_KEY_BYTES                                                                                \
-    2, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0
-#endif
-
-const uint8_t kUpdatePublicKey[32] = {EXOSNAP_UPDATE_PUBLIC_KEY_BYTES};
 
 // ---------------------------------------------------------------------------
 // Helpers

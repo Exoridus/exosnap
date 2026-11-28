@@ -8,7 +8,6 @@
 
 #include <string>
 
-#include "services/ElevatedRelaunch.h"
 #include "settings/AppSettingsStore.h"
 
 namespace exosnap {
@@ -43,6 +42,8 @@ TEST(AppSettingsStoreTest, AppSettingsStore_LoadMissingFile_ReturnsDefaults) {
 
     AppSettingsStore store(TempSettingsPath(temp_dir));
     const PersistedAppSettings loaded = store.Load();
+    EXPECT_FALSE(loaded.ask_admin_for_diagnostics);
+    EXPECT_EQ(loaded.developer_log_level, QStringLiteral("Info"));
 
     // Every hotkey ships unset; no action has a non-empty factory default.
     EXPECT_TRUE(loaded.hotkey_bindings[0].isEmpty());
@@ -73,6 +74,23 @@ TEST(AppSettingsStoreTest, AppSettingsStore_SaveAndLoad_HotkeyBindings) {
     EXPECT_EQ(loaded.hotkey_bindings[1], QStringLiteral("Ctrl+Shift+F11"));
     EXPECT_EQ(loaded.hotkey_bindings[2], QStringLiteral("Alt+F8"));
     EXPECT_EQ(loaded.hotkey_bindings[3], QStringLiteral("Ctrl+Alt+M"));
+}
+
+TEST(AppSettingsStoreTest, DiagnosticsElevationRequiresAnExplicitOptIn) {
+    QTemporaryDir temp_dir;
+    ASSERT_TRUE(temp_dir.isValid());
+    const QString path = TempSettingsPath(temp_dir);
+    AppSettingsStore store(path);
+
+    PersistedAppSettings settings;
+    settings.ask_admin_for_diagnostics = true;
+    ASSERT_TRUE(store.Save(settings));
+    EXPECT_TRUE(store.Load().ask_admin_for_diagnostics);
+
+    QSettings raw(path, QSettings::IniFormat);
+    raw.setValue(QStringLiteral("developer/ask_admin_for_diagnostics"), QStringLiteral("invalid"));
+    raw.sync();
+    EXPECT_FALSE(store.Load().ask_admin_for_diagnostics);
 }
 
 TEST(AppSettingsStoreTest, AppSettingsStore_SaveAndLoad_WindowGeometry) {
