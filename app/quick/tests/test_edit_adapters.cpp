@@ -9,6 +9,7 @@
 #include "EditTransportFixture.h"
 #include "EditViewportAdapter.h"
 #include "models/EditTransportBounds.h"
+#include "visual_tests/EditVisualMedia.h"
 
 #include "models/EditTimelineModel.h"
 #include "models/OutputSettingsModel.h"
@@ -32,6 +33,7 @@
 #include <QJsonArray>
 #include <QJsonDocument>
 #include <QJsonObject>
+#include <QLockFile>
 #include <QMimeData>
 #include <QPersistentModelIndex>
 #include <QPointer>
@@ -84,6 +86,23 @@ class EditExportAdapterTestPeer {
 
 class EditSessionAdapterTestPeer {
   public:
+    static void initializeRecovery(EditSessionAdapter& adapter, const QString& dir) {
+        adapter.initializeProjectRecovery(dir);
+    }
+    static void replaceMarkers(EditSessionAdapter& adapter, std::vector<RecordingMarker> markers) {
+        adapter.markers_ = std::move(markers);
+        emit adapter.markersChanged();
+    }
+    static QString checkpoint(EditSessionAdapter& adapter) {
+        adapter.checkpointProject();
+        return adapter.recovery_path_;
+    }
+    static bool finishProjectIo(EditSessionAdapter& adapter) {
+        if (!adapter.project_pool_.waitForDone(5000))
+            return false;
+        QCoreApplication::processEvents();
+        return true;
+    }
     static QThreadPool& metadataPool(EditSessionAdapter& adapter) {
         return adapter.metadata_pool_;
     }
@@ -267,6 +286,279 @@ EditContext MakeContext(double duration_seconds = 100.0) {
 }
 
 // ── Edit outcomes ───────────────────────────────────────────────────────────
+
+TEST(EditProjectSession, SaveOpenOfflineUndoAndExternalConflictUseTheLiveWorkspace) {
+    EnsureApplication();
+    QTemporaryDir temp;
+    ASSERT_TRUE(temp.isValid());
+    const auto url = QUrl::fromLocalFile(temp.filePath(QStringLiteral("Schnitt.exoproj")));
+    EditSessionAdapter session;
+    EditSessionAdapterTestPeer::initializeRecovery(session, temp.path());
+    engine::EditMediaMetadata media;
+    media.duration_us = 3'000'000;
+    const auto asset = session.addProbedMediaForHarness(temp.filePath(QStringLiteral("missing.mkv")), media, true);
+    ASSERT_NE(asset, 0U);
+    EXPECT_TRUE(session.projectDirty());
+    const auto clips = session.workspace().clips();
+    session.saveProject(url);
+    ASSERT_TRUE(EditSessionAdapterTestPeer::finishProjectIo(session));
+    EXPECT_FALSE(session.projectDirty());
+    EXPECT_EQ(session.projectPath(), url.toLocalFile());
+    session.newProject();
+    ASSERT_TRUE(session.workspace().clips().empty());
+    session.openProject(url);
+    ASSERT_TRUE(EditSessionAdapterTestPeer::finishProjectIo(session));
+    EXPECT_EQ(clips, session.workspace().clips());
+    ASSERT_NE(session.workspace().asset(asset), nullptr);
+    EXPECT_EQ(session.workspace().asset(asset)->state, edit::AssetState::Missing);
+    EXPECT_FALSE(session.canUndo());
+    EXPECT_FALSE(session.projectDirty());
+
+    QFile changed(url.toLocalFile());
+    ASSERT_TRUE(changed.open(QIODevice::WriteOnly | QIODevice::Truncate));
+    ASSERT_EQ(changed.write("external"), 8);
+    changed.close();
+    QString error;
+    QObject::connect(&session, &EditSessionAdapter::projectError, &session,
+                     [&](const QString& reason) { error = reason; });
+    session.saveCurrentProject();
+    ASSERT_TRUE(EditSessionAdapterTestPeer::finishProjectIo(session));
+    EXPECT_FALSE(error.isEmpty());
+    ASSERT_TRUE(changed.open(QIODevice::ReadOnly));
+    EXPECT_EQ(changed.readAll(), QByteArray("external"));
+    changed.close();
+    error.clear();
+    session.openProject(url, session.closeGuardRevision(), true);
+    ASSERT_TRUE(EditSessionAdapterTestPeer::finishProjectIo(session));
+    EXPECT_FALSE(error.isEmpty());
+    EXPECT_EQ(clips, session.workspace().clips());
+}
+
+TEST(EditProjectSession, ActiveRecoveryIsExcludedAndOrphanRecoveryRequiresSaveAs) {
+    EnsureApplication();
+    QTemporaryDir temp;
+    ASSERT_TRUE(temp.isValid());
+    EditSessionAdapter author;
+    EditSessionAdapterTestPeer::initializeRecovery(author, temp.path());
+    engine::EditMediaMetadata media;
+    media.duration_us = 2'000'000;
+    ASSERT_NE(author.addProbedMediaForHarness(temp.filePath(QStringLiteral("offline.mkv")), media, true), 0U);
+    const auto checkpoint = EditSessionAdapterTestPeer::checkpoint(author);
+    ASSERT_TRUE(EditSessionAdapterTestPeer::finishProjectIo(author));
+    ASSERT_TRUE(QFileInfo::exists(checkpoint));
+    const auto orphan = QFileInfo(checkpoint).absoluteDir().filePath(QStringLiteral("interrupted.exorecovery"));
+    ASSERT_TRUE(QFile::copy(checkpoint, orphan));
+    EditSessionAdapter reader;
+    EditSessionAdapterTestPeer::initializeRecovery(reader, temp.path());
+    EXPECT_EQ(reader.recoverableProjects(), QStringList{orphan});
+    reader.recoverProject(orphan);
+    ASSERT_TRUE(EditSessionAdapterTestPeer::finishProjectIo(reader));
+    EXPECT_TRUE(reader.projectPath().isEmpty());
+    EXPECT_TRUE(reader.projectDirty());
+    EXPECT_EQ(reader.workspace().clips(), author.workspace().clips());
+    EXPECT_TRUE(QFileInfo::exists(orphan));
+    const auto output = QUrl::fromLocalFile(temp.filePath(QStringLiteral("recovered.exoproj")));
+    reader.saveProject(output);
+    ASSERT_TRUE(EditSessionAdapterTestPeer::finishProjectIo(reader));
+    EXPECT_FALSE(reader.projectDirty());
+    EXPECT_FALSE(QFileInfo::exists(orphan));
+    EXPECT_TRUE(QFileInfo::exists(checkpoint));
+}
+
+TEST(EditProjectSession, SuccessfulSaveReportsLockedRecoveryAndRetriesCleanup) {
+    EnsureApplication();
+    QTemporaryDir temp;
+    ASSERT_TRUE(temp.isValid());
+    EditSessionAdapter author;
+    EditSessionAdapterTestPeer::initializeRecovery(author, temp.path());
+    author.setAutoCrossfade(false);
+    const auto checkpoint = EditSessionAdapterTestPeer::checkpoint(author);
+    ASSERT_TRUE(EditSessionAdapterTestPeer::finishProjectIo(author));
+    ASSERT_TRUE(QFileInfo::exists(checkpoint));
+    const auto orphan = QFileInfo(checkpoint).absoluteDir().filePath(QStringLiteral("interrupted.exorecovery"));
+    ASSERT_TRUE(QFile::copy(checkpoint, orphan));
+
+    EditSessionAdapter reader;
+    EditSessionAdapterTestPeer::initializeRecovery(reader, temp.path());
+    ASSERT_TRUE(reader.recoverableProjects().contains(orphan));
+    reader.recoverProject(orphan);
+    ASSERT_TRUE(EditSessionAdapterTestPeer::finishProjectIo(reader));
+    ASSERT_TRUE(reader.projectDirty());
+    ASSERT_FALSE(reader.autoCrossfadeEnabled());
+
+    QLockFile blocker(orphan + QStringLiteral(".lock"));
+    blocker.setStaleLockTime(0);
+    ASSERT_TRUE(blocker.tryLock(0));
+    QString error;
+    int saves = 0;
+    QObject::connect(&reader, &EditSessionAdapter::projectError, &reader,
+                     [&](const QString& reason) { error = reason; });
+    QObject::connect(&reader, &EditSessionAdapter::projectSaved, &reader, [&] { ++saves; });
+
+    const auto output = QUrl::fromLocalFile(temp.filePath(QStringLiteral("recovered.exoproj")));
+    reader.saveProject(output);
+    ASSERT_TRUE(EditSessionAdapterTestPeer::finishProjectIo(reader));
+    EXPECT_EQ(saves, 1);
+    EXPECT_FALSE(reader.projectDirty());
+    EXPECT_EQ(reader.projectPath(), output.toLocalFile());
+    EXPECT_TRUE(QFileInfo::exists(output.toLocalFile()));
+    EXPECT_TRUE(QFileInfo::exists(orphan));
+    EXPECT_FALSE(error.isEmpty());
+
+    blocker.unlock();
+    error.clear();
+    reader.saveCurrentProject();
+    ASSERT_TRUE(EditSessionAdapterTestPeer::finishProjectIo(reader));
+    EXPECT_EQ(saves, 2);
+    EXPECT_FALSE(reader.projectDirty());
+    EXPECT_TRUE(error.isEmpty());
+    EXPECT_FALSE(QFileInfo::exists(orphan));
+    EXPECT_TRUE(QFileInfo::exists(checkpoint));
+}
+
+TEST(EditProjectSession, LateCheckpointCannotRestoreRetiredStateAndMarkerChangesRevokeCloseConsent) {
+    EnsureApplication();
+    QTemporaryDir temp;
+    ASSERT_TRUE(temp.isValid());
+    EditSessionAdapter session;
+    EditSessionAdapterTestPeer::initializeRecovery(session, temp.path());
+    const auto initial = session.closeGuardRevision();
+    EditSessionAdapterTestPeer::replaceMarkers(session, {{100, RecordingMarkerType::Highlight, "one"}});
+    const auto consent = session.closeGuardRevision();
+    EXPECT_GT(consent, initial);
+    EXPECT_TRUE(session.hasUnsavedEdits());
+    EditSessionAdapterTestPeer::replaceMarkers(session, {{200, RecordingMarkerType::Highlight, "two"}});
+    EXPECT_GT(session.closeGuardRevision(), consent);
+    const auto path = EditSessionAdapterTestPeer::checkpoint(session);
+    session.newProject(consent, true);
+    EXPECT_TRUE(session.projectDirty());
+    EXPECT_GT(session.closeGuardRevision(), consent);
+    session.newProject(session.closeGuardRevision(), true);
+    ASSERT_TRUE(EditSessionAdapterTestPeer::finishProjectIo(session));
+    EXPECT_FALSE(QFileInfo::exists(path));
+    EXPECT_FALSE(session.projectDirty());
+    const auto empty = session.closeGuardRevision();
+    session.setAutoCrossfade(false);
+    EXPECT_GT(session.closeGuardRevision(), empty);
+    EXPECT_TRUE(session.projectDirty());
+}
+
+TEST(EditProjectSession, FailedOrCancelledSaveLeavesRecoverableAuthorshipAfterShutdown) {
+    EnsureApplication();
+    QTemporaryDir temp;
+    ASSERT_TRUE(temp.isValid());
+    for (const bool failed : {true, false}) {
+        QString path;
+        {
+            EditSessionAdapter session;
+            EditSessionAdapterTestPeer::initializeRecovery(session, temp.path());
+            session.setAutoCrossfade(false);
+            if (failed) {
+                session.saveProject(QUrl::fromLocalFile(temp.filePath(QStringLiteral("missing/unsaved.exoproj"))));
+                ASSERT_TRUE(EditSessionAdapterTestPeer::finishProjectIo(session));
+            } else {
+                session.preserveProjectRecovery();
+            }
+            path = EditSessionAdapterTestPeer::checkpoint(session);
+        }
+        ASSERT_TRUE(QFileInfo::exists(path));
+        EditSessionAdapter reader;
+        EditSessionAdapterTestPeer::initializeRecovery(reader, temp.path());
+        reader.recoverProject(path);
+        ASSERT_TRUE(EditSessionAdapterTestPeer::finishProjectIo(reader));
+        EXPECT_TRUE(reader.projectDirty());
+        EXPECT_FALSE(reader.autoCrossfadeEnabled());
+    }
+}
+
+TEST(EditProjectSession, QuitDiscardRetiresOnlyTheCurrentRecovery) {
+    EnsureApplication();
+    QTemporaryDir temp;
+    ASSERT_TRUE(temp.isValid());
+    QString checkpoint;
+    QString earlier;
+    {
+        EditSessionAdapter session;
+        EditSessionAdapterTestPeer::initializeRecovery(session, temp.path());
+        session.setAutoCrossfade(false);
+        session.preserveProjectRecovery();
+        checkpoint = EditSessionAdapterTestPeer::checkpoint(session);
+        ASSERT_TRUE(EditSessionAdapterTestPeer::finishProjectIo(session));
+        earlier = QFileInfo(checkpoint).absoluteDir().filePath(QStringLiteral("earlier.exorecovery"));
+        ASSERT_TRUE(QFile::copy(checkpoint, earlier));
+
+        session.saveProject(QUrl::fromLocalFile(temp.filePath(QStringLiteral("missing/unsaved.exoproj"))));
+        session.discardProjectRecoveryOnQuit();
+        ASSERT_TRUE(EditSessionAdapterTestPeer::finishProjectIo(session));
+    }
+    EXPECT_FALSE(QFileInfo::exists(checkpoint));
+    EditSessionAdapter reader;
+    EditSessionAdapterTestPeer::initializeRecovery(reader, temp.path());
+    EXPECT_EQ(reader.recoverableProjects(), QStringList{earlier});
+}
+
+TEST(EditProjectSession, RecoveryReopensVerifiedOriginalAndLeavesReplacedBytesOffline) {
+    EnsureApplication();
+    QTemporaryDir temp;
+    ASSERT_TRUE(temp.isValid());
+    const auto source_path = temp.filePath(QStringLiteral("commentary.mkv"));
+    const auto native_path = std::filesystem::path(source_path.toStdWString());
+    std::string reason;
+    ASSERT_TRUE(visual_tests::WriteEditVisualAudioFixture(native_path, 21, reason)) << reason;
+    QString orphan;
+    edit::Id asset = 0;
+    std::vector<edit::Clip> clips;
+    {
+        EditSessionAdapter author;
+        EditSessionAdapterTestPeer::initializeRecovery(author, temp.path());
+        author.importMedia(QUrl::fromLocalFile(source_path), true);
+        QElapsedTimer timer;
+        timer.start();
+        while (timer.elapsed() < 10000) {
+            QCoreApplication::processEvents(QEventLoop::AllEvents, 10);
+            if (!author.workspace().assets().empty()) {
+                asset = author.workspace().assets().front().id;
+                if (author.sourceProof(asset))
+                    break;
+            }
+            QThread::msleep(1);
+        }
+        ASSERT_NE(author.sourceProof(asset), nullptr);
+        clips = author.workspace().clips();
+        ASSERT_FALSE(clips.empty());
+        const auto path = EditSessionAdapterTestPeer::checkpoint(author);
+        ASSERT_TRUE(EditSessionAdapterTestPeer::finishProjectIo(author));
+        orphan = QFileInfo(path).absoluteDir().filePath(QStringLiteral("interrupted.exorecovery"));
+        ASSERT_TRUE(QFile::copy(path, orphan));
+    }
+    for (const bool replaced : {false, true}) {
+        if (replaced) {
+            ASSERT_TRUE(QFile::remove(source_path));
+            ASSERT_TRUE(visual_tests::WriteEditVisualAudioFixture(native_path, 22, reason)) << reason;
+        }
+        EditSessionAdapter reader;
+        EditSessionAdapterTestPeer::initializeRecovery(reader, temp.path());
+        reader.recoverProject(orphan);
+        ASSERT_TRUE(EditSessionAdapterTestPeer::finishProjectIo(reader));
+        EXPECT_EQ(reader.workspace().clips(), clips);
+        ASSERT_NE(reader.workspace().asset(asset), nullptr);
+        EXPECT_EQ(reader.workspace().asset(asset)->state,
+                  replaced ? edit::AssetState::Missing : edit::AssetState::Available);
+        EXPECT_EQ(bool(reader.sourceProof(asset)), !replaced);
+        EXPECT_EQ(bool(reader.sourceAccess(asset)), !replaced);
+        EXPECT_EQ(bool(reader.sourceMetadata(asset)), !replaced);
+        if (!replaced) {
+            const auto metadata = reader.sourceMetadata(asset);
+            for (const auto& clip : clips) {
+                if (!clip.stream || clip.stream->kind != engine::TimelineStreamKind::Audio)
+                    continue;
+                EXPECT_TRUE(std::any_of(
+                    metadata->audio_metadata.actual_tracks.begin(), metadata->audio_metadata.actual_tracks.end(),
+                    [&](const auto& track) { return track.track_id == clip.stream->stream_identity; }));
+            }
+        }
+    }
+}
 
 TEST(EditWorkspaceMarkers, SidecarUsesMetadataWorkerAndRejectsAReplacedContext) {
     EnsureApplication();
@@ -3795,6 +4087,24 @@ TEST(EditWorkspaceAdapter, RealEditingHistoryAndBlankTimeReachScopedExportsWitho
     EXPECT_EQ(reopened.decoderOpensForTest(), 0u);
     EXPECT_EQ(reopened.decodeCallsForTest(), 0u);
     EXPECT_EQ(reopened.decoderSeeksForTest(), 0u);
+    const auto project = QUrl::fromLocalFile(output.filePath(QStringLiteral("render.exoproj")));
+    const std::vector<RecordingMarker> markers{{1250, RecordingMarkerType::Highlight, "Trimmed source"}};
+    EditSessionAdapterTestPeer::replaceMarkers(session, markers);
+    session.saveProject(project);
+    ASSERT_TRUE(EditSessionAdapterTestPeer::finishProjectIo(session));
+    ASSERT_EQ(session.projectPath(), project.toLocalFile());
+    ASSERT_FALSE(session.projectDirty());
+    session.close();
+    ASSERT_TRUE(session.projectPath().isEmpty());
+    ASSERT_TRUE(session.workspace().clips().empty());
+    session.openProject(project);
+    ASSERT_TRUE(EditSessionAdapterTestPeer::finishProjectIo(session));
+    ASSERT_EQ(session.projectPath(), project.toLocalFile());
+    EXPECT_EQ(session.workspace().clips(), blank->clips);
+    EXPECT_EQ(session.workspace().snapshot()->spacers, blank->spacers);
+    EXPECT_EQ(session.markers(), markers);
+    EXPECT_FALSE(session.workspace().canUndo());
+    ASSERT_EQ(session.durationMs(), 6000);
     const auto timeline = session.workspace().timeline();
     for (const auto& [time_us, asset, source_us] :
          {std::tuple{250'000ll, edit::Id{0}, 0ll}, std::tuple{1'250'000ll, red_asset, 1'250'000ll},
@@ -6475,6 +6785,61 @@ std::optional<engine::AudioManifest1> WriteRecordedDefaultFixture(const QString&
     if (!engine::WriteMediaIdentitySidecar(std::filesystem::path(path.toStdWString()), manifest).succeeded())
         return std::nullopt;
     return manifest;
+}
+
+TEST(EditProjectSession, SaveWhileRecordedDefaultIsPendingRestoresTheVerifiedMixAndExplicitChoices) {
+    EnsureApplication();
+    QTemporaryDir directory;
+    ASSERT_TRUE(directory.isValid());
+    const auto path = directory.filePath(QStringLiteral("recorded-default.mkv"));
+    ASSERT_TRUE(QFile::copy(test::TransportAmbiguousFixture(), path));
+    const auto manifest = WriteRecordedDefaultFixture(path);
+    ASSERT_TRUE(manifest);
+    for (bool explicit_choice : {false, true}) {
+        SCOPED_TRACE(explicit_choice);
+        const auto project =
+            QUrl::fromLocalFile(directory.filePath(explicit_choice ? "explicit.exoproj" : "default.exoproj"));
+        edit::Id id = 0;
+        std::vector<edit::Clip> clips;
+        std::optional<edit::InputMixSelection> mix;
+        {
+            EditSessionAdapter session;
+            EditSessionAdapterTestPeer::initializeRecovery(session, directory.path());
+            session.setBackgroundAnalysisSuspended(true);
+            session.importMedia(QUrl::fromLocalFile(path), true);
+            ASSERT_TRUE(WaitForMediaCondition([&] { return !session.importPending(); }));
+            ASSERT_EQ(session.workspace().assets().size(), 1U);
+            id = session.workspace().assets().front().id;
+            ASSERT_TRUE(session.workspace().asset(id)->mix_decision_required);
+            if (explicit_choice) {
+                ASSERT_TRUE(session.beginSourceAudioChoice(id));
+                const auto alternative =
+                    session.sourceAudioChoice().value(QStringLiteral("tracks")).toList().back().toMap();
+                session.setSourceAudioTrack(alternative.value(QStringLiteral("id")).toString(), true);
+                ASSERT_TRUE(session.applySourceAudioChoice());
+                ASSERT_TRUE(
+                    WaitForMediaCondition([&] { return !session.workspace().asset(id)->mix_decision_required; }));
+            }
+            session.saveProject(project);
+            ASSERT_TRUE(EditSessionAdapterTestPeer::finishProjectIo(session));
+            ASSERT_FALSE(session.projectDirty());
+            session.setBackgroundAnalysisSuspended(false);
+            ASSERT_TRUE(WaitForMediaCondition([&] { return bool(session.sourceProof(id)); }));
+            ASSERT_FALSE(session.projectDirty());
+            ASSERT_FALSE(session.workspace().asset(id)->mix_decision_required);
+            clips = session.workspace().clips();
+            mix = session.workspace().asset(id)->input_mix_selection;
+        }
+        EditSessionAdapter reopened;
+        EditSessionAdapterTestPeer::initializeRecovery(reopened, directory.path());
+        reopened.openProject(project);
+        ASSERT_TRUE(EditSessionAdapterTestPeer::finishProjectIo(reopened));
+        ASSERT_TRUE(reopened.sourceProof(id));
+        EXPECT_FALSE(reopened.projectDirty());
+        EXPECT_FALSE(reopened.workspace().asset(id)->mix_decision_required);
+        EXPECT_EQ(reopened.workspace().asset(id)->input_mix_selection, mix);
+        EXPECT_EQ(reopened.workspace().clips(), clips);
+    }
 }
 
 TEST(EditRecordedDefault, VerifiedStartingDefaultFinalizesWithoutAnAuthoredStepAndSurvivesMoveUndoRedo) {

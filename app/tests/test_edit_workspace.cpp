@@ -1,5 +1,6 @@
 #include "models/EditClipboard.h"
 #include "models/EditExportProfile.h"
+#include "models/EditProjectMedia.h"
 #include "models/EditSelection.h"
 #include "models/EditSourceImport.h"
 #include "models/EditTime.h"
@@ -1925,6 +1926,39 @@ std::vector<bool> ImportedAudioEnables(const exosnap::engine::EditMediaMetadata&
     return enabled;
 }
 } // namespace
+
+TEST(EditProject, PendingRecordedDefaultMatchesLiveImportAndPreservesAuthoredOverrides) {
+    using namespace exosnap;
+    auto metadata = ProbedSource({2, 1});
+    const auto pending = edit::DescribeSourceImport(metadata);
+    ASSERT_TRUE(pending.mix_decision_required);
+    edit::Asset asset;
+    asset.path = L"recorded.mkv";
+    asset.duration = metadata.duration_us;
+    asset.source_descriptor = pending.descriptor;
+    asset.input_mix_selection = pending.input_mix;
+    asset.mix_decision_required = true;
+    Workspace workspace;
+    auto id = workspace.addAsset(asset);
+    ASSERT_TRUE(workspace.insert(id));
+    asset = *workspace.asset(id);
+    auto clips = workspace.clips();
+    metadata.audio_metadata.status = engine::AudioMetadataStatus::Verified;
+    metadata.audio_metadata.monitoring_confirmation_required = false;
+    metadata.audio_metadata.manifest.emplace().default_monitor_track_ids = {*metadata.streams[1].stream_identity};
+    const auto recorded = edit::DescribeSourceImport(metadata);
+    ASSERT_TRUE(recorded.input_mix);
+    ASSERT_TRUE(workspace.establishRecordedDefault(id, asset.source_version, *recorded.input_mix, recorded.descriptor));
+    edit::FinalizeProjectRecordedDefault(asset, clips, recorded);
+    EXPECT_EQ(clips, workspace.clips());
+    EXPECT_EQ(asset.input_mix_selection, workspace.asset(id)->input_mix_selection);
+    EXPECT_FALSE(asset.mix_decision_required);
+    asset.input_mix_selection->authority = edit::InputMixAuthority::UserConfirmed;
+    asset.input_mix_selection->selected_stream_identities = {*metadata.streams[2].stream_identity};
+    const auto chosen = asset.input_mix_selection;
+    edit::FinalizeProjectRecordedDefault(asset, clips, recorded);
+    EXPECT_EQ(asset.input_mix_selection, chosen);
+}
 
 TEST(EditSourceImport, SingleAudioStreamIsSelectedWithoutAQuestion) {
     const auto metadata = ProbedSource({2});
