@@ -355,6 +355,7 @@ class Bootstrapper final : public CBalBaseBootstrapperApplication {
         SetDefaultDllDirectories(LOAD_LIBRARY_SEARCH_SYSTEM32 | LOAD_LIBRARY_SEARCH_USER_DIRS);
         const auto directory = AddDllDirectory(workingDirectory_.c_str());
         const auto dllPath = workingDirectory_ + L"\\exosnap-setup-ui.dll";
+        // QML's process-wide type registry needs the UI module's metadata through shutdown.
         const auto module = LoadLibraryExW(dllPath.c_str(), nullptr,
                                            LOAD_LIBRARY_SEARCH_DLL_LOAD_DIR | LOAD_LIBRARY_SEARCH_SYSTEM32 |
                                                LOAD_LIBRARY_SEARCH_USER_DIRS);
@@ -367,9 +368,6 @@ class Bootstrapper final : public CBalBaseBootstrapperApplication {
         } else {
             engine_->Log(BOOTSTRAPPER_LOG_LEVEL_ERROR, L"Cannot load the private Setup UI runtime.");
             PostThreadMessageW(workerId_, QuitMessage, ERROR_DLL_INIT_FAILED, 0);
-        }
-        if (module) {
-            FreeLibrary(module);
         }
         if (directory) {
             RemoveDllDirectory(directory);
