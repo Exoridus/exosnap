@@ -7,6 +7,10 @@
 
 namespace exosnap::update {
 
+// Returns the package root for a deployed runtime directory, otherwise the
+// executable directory itself (for flat and developer builds).
+[[nodiscard]] std::wstring PackageRootForExecutableDirectory(const std::wstring& executable_directory);
+
 // A matching MSI registry record determines physical installation and ownership.
 // Portable ownership uses adjacent Scoop metadata or a recognized Scoop layout.
 // Empty application_directory uses the running executable directory.

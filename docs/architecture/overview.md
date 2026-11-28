@@ -6,6 +6,8 @@ This document owns subsystem boundaries and process composition. User-visible be
 
 ExoSnap is a Windows x64 application with a C++20 recording engine and a Qt Quick frontend. `exosnap.exe` uses `QApplication` for its system tray and Qt Quick for its rendered surfaces. The separate updater uses `QGuiApplication` and the `ExoSnap.Updater` QML module. `exosnap-helper.exe` ships beside the application and runs only on explicit request for privileged ETW measurements. See [diagnostic privileges and ownership](diagnostics.md#present-and-latency-observation).
 
+The root launcher starts the fixed `runtime/exosnap.exe` path and exits. The recorder owns process identity and the instance mutex. The launcher's version resource also allows the previous flat-layout updater to verify the initial layout upgrade. Later portable updates verify and swap the runtime directory, which keeps the user's root marker and data outside the transaction. An exclusive file handle in the stable root prevents startup recovery from restoring a backup during an active swap.
+
 | Owner | Responsibility | Must not own |
 |---|---|---|
 | Process bootstrap | DLL search policy, install self-heal, application identity, logging lifetime, clean-exit bookkeeping and relaunch | Page state or recording policy |

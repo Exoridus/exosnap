@@ -720,21 +720,19 @@ int main(int argc, char** argv) {
     const auto start = [&](void (UpdaterWorker::*slot)()) {
         if (in_flight)
             return false; // a call is already queued/running -- ignore the double-fire
+        worker.prepareOperation();
         in_flight = true;
+        if (slot == &UpdaterWorker::check) {
+            // A re-check replaces the previous resolution and its step marks.
+            controller = MakeController(QString());
+            to_version.clear();
+            render();
+        }
         QMetaObject::invokeMethod(&worker, [&worker, slot] { (worker.*slot)(); }, Qt::QueuedConnection);
         return true;
     };
-    const auto doCheck = [&] {
-        if (in_flight)
-            return false;
-        // A re-check starts from a clean slate: the previous answer's step marks
-        // and target version describe a resolution that is being replaced.
-        controller = MakeController(QString());
-        to_version.clear();
-        render();
-        return start(&UpdaterWorker::check);
-    };
-    QObject::connect(&view_adapter, &UpdaterViewAdapter::checkRequested, &view_adapter, [&] { (void)doCheck(); });
+    QObject::connect(&view_adapter, &UpdaterViewAdapter::checkRequested, &view_adapter,
+                     [&] { (void)start(&UpdaterWorker::check); });
     QObject::connect(&view_adapter, &UpdaterViewAdapter::downloadRequested, &view_adapter,
                      [&] { (void)start(&UpdaterWorker::download); });
     QObject::connect(&view_adapter, &UpdaterViewAdapter::applyRequested, &view_adapter,
@@ -749,6 +747,8 @@ int main(int argc, char** argv) {
         const bool repairing = args.install_mode == exosnap::update::InstallMode::Installed &&
                                controller->flowState().install_state == exosnap::update::InstallState::Unknown;
         const UpStep entry = *controller->flowState().retry_entry_step;
+        worker.prepareOperation();
+        in_flight = true;
         // Reset the UI to a clean in-progress state: steps before the re-entry
         // point are already done (their artifacts are kept by the worker).
         controller = MakeController(to_version);
@@ -759,7 +759,6 @@ int main(int argc, char** argv) {
         }
         render();
         if (repairing) {
-            in_flight = true;
             QMetaObject::invokeMethod(&worker, &UpdaterWorker::repair, Qt::QueuedConnection);
             return true;
         }
@@ -769,7 +768,6 @@ int main(int argc, char** argv) {
             // found, re-fetch when one was, and otherwise resume at the failed
             // apply step. run(Download) here would download AND install without
             // the confirmation this mode exists to require.
-            in_flight = true;
             if (entry <= UpStep::Download) {
                 const bool resolved = !to_version.isEmpty();
                 QMetaObject::invokeMethod(
@@ -780,7 +778,6 @@ int main(int argc, char** argv) {
             }
             return true;
         }
-        in_flight = true;
         QMetaObject::invokeMethod(&worker, [&worker, entry] { worker.run(entry); }, Qt::QueuedConnection);
         return true;
     };
@@ -808,7 +805,7 @@ int main(int argc, char** argv) {
     if (control_options.requested) {
         UpdaterAutomation::Intents intents;
         intents.check = [&](QString* error) {
-            if (!doCheck()) {
+            if (!start(&UpdaterWorker::check)) {
                 *error = QStringLiteral("Another updater operation is already running");
                 return false;
             }
@@ -897,12 +894,13 @@ int main(int argc, char** argv) {
     } else {
         // First paint mirrors the pipeline's first event so the window never
         // shows an all-queued limbo state.
+        worker.prepareOperation();
+        in_flight = true;
         controller->onStepStarted(UpStep::Download);
         render();
         window->show();
         PlaceNearAppWindow(*window, args.app_pid);
 
-        in_flight = true;
         QMetaObject::invokeMethod(&worker, [&worker] { worker.run(UpStep::Download); }, Qt::QueuedConnection);
     }
 

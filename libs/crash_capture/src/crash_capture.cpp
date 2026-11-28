@@ -147,7 +147,10 @@ static sentry_value_t BeforeSendHook(sentry_value_t event, void* /*hint*/, void*
 // ---------------------------------------------------------------------------
 // ResolveCrashDir
 // ---------------------------------------------------------------------------
-std::string ResolveCrashDir() {
+std::string ResolveCrashDir(const std::string& application_data_dir) {
+    if (!application_data_dir.empty())
+        return application_data_dir + "\\crashes";
+
     // EXOSNAP_CONFIG_DIR override for test isolation
     wchar_t env_buf[MAX_PATH] = {};
     if (GetEnvironmentVariableW(L"EXOSNAP_CONFIG_DIR", env_buf, MAX_PATH) > 0) {
@@ -216,7 +219,7 @@ bool Initialize(const CrashCaptureConfig& config) {
     // Ensure crash dir exists
     if (!s_crash_dir.empty()) {
         std::error_code ec;
-        std::filesystem::create_directories(s_crash_dir, ec);
+        std::filesystem::create_directories(std::u8string(s_crash_dir.begin(), s_crash_dir.end()), ec);
         // Non-fatal; sentry will fail gracefully if the dir is missing
     }
 

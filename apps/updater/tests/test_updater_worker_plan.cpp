@@ -22,6 +22,9 @@
 #include <string>
 #include <vector>
 
+#include <QCoreApplication>
+#include <QEvent>
+
 #include <update/package_verifier.h>
 
 #include "UpdaterWorker.h"
@@ -115,6 +118,82 @@ TEST_F(ResolveStagedRootTest, TopLevelExeWinsOverSingleDir) {
     const std::optional<std::wstring> resolved = ResolveStagedRoot(root_.wstring());
     ASSERT_TRUE(resolved.has_value());
     EXPECT_EQ(fs::path(*resolved), root_);
+}
+
+TEST_F(ResolveStagedRootTest, NestedInstallSwapsOnlyRuntimeAndPreservesPortableRoot) {
+    using namespace exosnap::update;
+    const fs::path portable = root_ / "installed";
+    const fs::path runtime = portable / "runtime";
+    const SwapPlan plan = MakeSwapPlan(runtime.wstring(), SemVer{});
+    Touch(portable / "exosnap.exe");
+    Touch(portable / "portable.toml");
+    Touch(portable / "data" / "settings.ini");
+    Touch(runtime / "exosnap.exe");
+    Touch(runtime / "old-runtime.txt");
+
+    const fs::path extracted = root_ / "extracted";
+    const fs::path package = extracted / "ExoSnap-0.11.0-windows-x64-portable";
+    Touch(package / "exosnap.exe");
+    Touch(package / "portable.toml");
+    Touch(package / "runtime" / "exosnap.exe");
+    Touch(package / "runtime" / "new-runtime.txt");
+
+    const auto resolved = ResolveStagedRoot(extracted.wstring(), plan);
+    ASSERT_TRUE(resolved.has_value());
+    ASSERT_EQ(fs::path(*resolved), package / "runtime");
+    fs::rename(*resolved, plan.staging_dir);
+    ASSERT_EQ(StageRename(plan), SwapError::None);
+    EXPECT_TRUE(fs::exists(runtime / "new-runtime.txt"));
+    EXPECT_FALSE(fs::exists(runtime / "runtime"));
+    EXPECT_FALSE(fs::exists(runtime / "portable.toml"));
+    EXPECT_TRUE(fs::exists(portable / "exosnap.exe"));
+    EXPECT_TRUE(fs::exists(portable / "data" / "settings.ini"));
+    EXPECT_TRUE(fs::exists(portable / "portable.toml"));
+
+    ASSERT_EQ(RestoreBackup(plan), SwapError::None);
+    EXPECT_TRUE(fs::exists(runtime / "old-runtime.txt"));
+    EXPECT_FALSE(fs::exists(runtime / "new-runtime.txt"));
+    EXPECT_TRUE(fs::exists(portable / "exosnap.exe"));
+    EXPECT_TRUE(fs::exists(portable / "portable.toml"));
+    EXPECT_TRUE(fs::exists(portable / "data" / "settings.ini"));
+}
+
+TEST_F(ResolveStagedRootTest, LegacyInstallNamedRuntimeUsesTheWholePackage) {
+    const fs::path install = root_ / "runtime";
+    Touch(install / "exosnap.exe");
+    const fs::path extracted = root_ / "extracted";
+    const fs::path package = extracted / "ExoSnap-0.11.0-windows-x64-portable";
+    Touch(package / "exosnap.exe");
+    Touch(package / "portable.toml");
+    Touch(package / "runtime" / "exosnap.exe");
+
+    const auto resolved = ResolveStagedRoot(extracted.wstring());
+    ASSERT_TRUE(resolved.has_value());
+    ASSERT_EQ(fs::path(*resolved), package);
+
+    using namespace exosnap::update;
+    const auto plan = MakeSwapPlan(install.wstring(), SemVer{});
+    fs::rename(*resolved, plan.staging_dir);
+    ASSERT_EQ(StageRename(plan), SwapError::None);
+    EXPECT_TRUE(fs::exists(install / "portable.toml"));
+    EXPECT_TRUE(fs::exists(install / "runtime" / "exosnap.exe"));
+}
+
+TEST_F(ResolveStagedRootTest, InterruptedNestedInstallStillRequiresNestedPayload) {
+    const fs::path portable = root_ / "installed";
+    const fs::path runtime = portable / "runtime";
+    const auto plan = exosnap::update::MakeSwapPlan(runtime.wstring(), exosnap::update::SemVer{});
+    Touch(portable / "exosnap.exe");
+    Touch(fs::path(plan.backup_dir) / "exosnap.exe");
+
+    const fs::path extracted = root_ / "extracted";
+    Touch(extracted / "exosnap.exe");
+    EXPECT_FALSE(ResolveStagedRoot(extracted.wstring(), plan).has_value());
+
+    Touch(extracted / "runtime" / "exosnap.exe");
+    const auto resolved = ResolveStagedRoot(extracted.wstring(), plan);
+    ASSERT_TRUE(resolved.has_value());
+    EXPECT_EQ(fs::path(*resolved), extracted / "runtime");
 }
 
 // ---------------------------------------------------------------------------
@@ -652,6 +731,49 @@ TEST_F(ResolveStagedRootTest, DirectPortableTargetRetainsDownloadPlan) {
     EXPECT_EQ(detail, QStringLiteral("base URL must be https://"));
     EXPECT_TRUE(fs::exists(root_ / "exosnap.exe"));
 }
+
+TEST_F(ManagedTargetWorkerTest, CancellationBeforeQueuedDispatchSkipsUpdaterWork) {
+    int argc = 1;
+    char program[] = "test_updater_worker_plan";
+    char* argv[] = {program, nullptr};
+    const QCoreApplication app(argc, argv);
+    Touch(root_ / "exosnap.exe");
+
+    using exosnap::update::InstallMode;
+    using exosnap::update::UpdaterMode;
+    const auto expect_cancelled = [&](const char* name, UpdaterMode mode, auto invoke) {
+        SCOPED_TRACE(name);
+        UpdaterWorker worker(Args(mode, InstallMode::Portable));
+        int cancellations = 0;
+        int steps = 0;
+        int failures = 0;
+        QObject::connect(&worker, &UpdaterWorker::cancelled, [&] { ++cancellations; });
+        QObject::connect(&worker, &UpdaterWorker::stepStarted, [&](UpStep) { ++steps; });
+        QObject::connect(&worker, &UpdaterWorker::checkStarted, [&] { ++steps; });
+        QObject::connect(&worker, &UpdaterWorker::failed, [&](FailureCase, const QString&) { ++failures; });
+
+        bool dispatched = false;
+        ASSERT_TRUE(QMetaObject::invokeMethod(
+            &worker,
+            [&] {
+                dispatched = true;
+                invoke(worker);
+            },
+            Qt::QueuedConnection));
+        ASSERT_FALSE(dispatched);
+        worker.requestCancel();
+        QCoreApplication::sendPostedEvents(&worker, QEvent::MetaCall);
+        ASSERT_TRUE(dispatched);
+        EXPECT_EQ(cancellations, 1);
+        EXPECT_EQ(steps, 0);
+        EXPECT_EQ(failures, 0);
+    };
+
+    expect_cancelled("handoff", UpdaterMode::AppHandoff, [](UpdaterWorker& worker) { worker.run(UpStep::Download); });
+    expect_cancelled("download", UpdaterMode::Manual, [](UpdaterWorker& worker) { worker.download(); });
+    expect_cancelled("check", UpdaterMode::Manual, [](UpdaterWorker& worker) { worker.check(); });
+}
+
 TEST(UpdaterWorkerSmoke, InvalidBaseUrlEmitsDownloadFailed) {
     UpdaterArgs args;
     args.channel = exosnap::update::UpdateChannel::Stable;

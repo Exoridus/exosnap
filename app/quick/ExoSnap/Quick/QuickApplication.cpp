@@ -18,6 +18,7 @@
 #include "services/RecordingCoordinator.h"
 #include "services/TargetDisplayFacts.h"
 #include "services/UpdateService.h"
+#include "settings/ConfigPaths.h"
 
 #include "EditTrackLayoutModel.h"
 #include "diagnostics/AppLog.h"
@@ -690,7 +691,8 @@ void QuickApplication::initializeCrashSession() {
     // BeginSession overwrites the sidecar with this session's marker. Honest
     // crash detection is "the previous session never marked a clean exit", which
     // works even in the OFF/stub build with no Crashpad behind it.
-    crash_dir_ = crash_capture::ResolveCrashDir();
+    const auto persistence_root = QDir::toNativeSeparators(settings::ResolvePersistenceOverride());
+    crash_dir_ = crash_capture::ResolveCrashDir(persistence_root.toStdString());
     if (crash_dir_.empty()) {
         diagnostics::AppLog::warning(QStringLiteral("crash"),
                                      QStringLiteral("Crash dir unavailable — session tracking disabled"));

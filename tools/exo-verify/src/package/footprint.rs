@@ -60,7 +60,8 @@ struct Report {
 
 fn category(path: &str) -> &'static str {
     let lower = path.replace('\\', "/").to_ascii_lowercase();
-    let name = lower.rsplit('/').next().unwrap_or(&lower);
+    let lower = lower.strip_prefix("runtime/").unwrap_or(&lower);
+    let name = lower.rsplit('/').next().unwrap_or(lower);
     if lower.starts_with("qml/qt/labs/platform/") {
         "Qt Labs Platform"
     } else if name == "qt6widgets.dll" {

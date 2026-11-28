@@ -38,15 +38,20 @@ target_include_directories(gamepad_sprite_tests PRIVATE
     ${CMAKE_CURRENT_SOURCE_DIR} ${PROJECT_SOURCE_DIR}/app ${PROJECT_SOURCE_DIR}/libs/engine/include)
 target_compile_definitions(gamepad_sprite_tests PRIVATE
     EXOSNAP_GAMEPAD_ASSET_DIR="${PROJECT_SOURCE_DIR}/app/assets/gamepad")
-# The focused sprite tests link the same delay-loaded gamepad provider as the
-# application. They must remain runnable after building only this test target,
-# without relying on exosnap.exe's independent POST_BUILD DLL staging.
-add_custom_command(TARGET gamepad_sprite_tests POST_BUILD
+# The sprite tests share the app runtime directory. Stage SDL once before
+# windeployqt scans the app, even when both targets build in parallel.
+add_custom_target(exosnap_stage_app_sdl
+    COMMAND ${CMAKE_COMMAND} -E make_directory
+        "$<TARGET_FILE_DIR:gamepad_sprite_tests>" "$<TARGET_FILE_DIR:exosnap>"
     COMMAND ${CMAKE_COMMAND} -E copy_if_different
         "$<TARGET_FILE:SDL3::SDL3>" "$<TARGET_FILE_DIR:gamepad_sprite_tests>"
-    COMMENT "Staging SDL3 runtime next to gamepad sprite tests"
+    COMMAND ${CMAKE_COMMAND} -E copy_if_different
+        "$<TARGET_FILE:SDL3::SDL3>" "$<TARGET_FILE_DIR:exosnap>"
+    DEPENDS SDL3::SDL3
+    COMMENT "Staging the shared app SDL3 runtime"
     VERBATIM
 )
+add_dependencies(gamepad_sprite_tests exosnap_stage_app_sdl)
 
 set_source_files_properties(ExoTheme.qml PROPERTIES
     QT_QML_SINGLETON_TYPE TRUE
@@ -591,6 +596,7 @@ target_sources(exosnap
         ${PROJECT_SOURCE_DIR}/app/services/UpdateCheckGate.h
         ${PROJECT_SOURCE_DIR}/app/settings/AppSettingsStore.cpp
         ${PROJECT_SOURCE_DIR}/app/settings/AppSettingsStore.h
+        ${PROJECT_SOURCE_DIR}/app/settings/ConfigPaths.cpp
         ${PROJECT_SOURCE_DIR}/app/settings/RecordingPresetStore.cpp
         ${PROJECT_SOURCE_DIR}/app/settings/RecordingPresetStore.h
         ${PROJECT_SOURCE_DIR}/app/settings/RecoveryManifestStore.cpp
@@ -669,6 +675,7 @@ target_sources(exosnap
 )
 
 if(WIN32)
+    add_dependencies(exosnap exosnap_launcher)
     # The two Windows resource scripts that make this a shippable executable:
     # exosnap.rc carries the three application icons (bootstrap's WM_SETICON path
     # loads IDI_EXOSNAP_APP_ICON out of the EXE's own resources, so a target
@@ -868,11 +875,7 @@ foreach(_exosnap_ffmpeg_dll IN LISTS EXOSNAP_FFMPEG_DLLS)
     )
 endforeach()
 exosnap_stage_asan_runtime(exosnap)
-add_custom_command(TARGET exosnap POST_BUILD
-    COMMAND ${CMAKE_COMMAND} -E copy_if_different
-        "$<TARGET_FILE:SDL3::SDL3>" "$<TARGET_FILE_DIR:exosnap>"
-    VERBATIM
-)
+add_dependencies(exosnap exosnap_stage_app_sdl)
 
 # ---- Qt runtime staging (build tree) ----
 # A correctness requirement, not a convenience. The
@@ -953,20 +956,7 @@ if(WIN32)
         DEPLOY_TOOL_OPTIONS --qmldir "${PROJECT_SOURCE_DIR}/app/quick/ExoSnap"
     )
 
-    install(TARGETS exosnap RUNTIME DESTINATION .)
-
-    # Deploy the Qt runtime (DLLs + qt.conf) flat next to exosnap.exe rather than
-    # into a bin/ subdirectory. exosnap.exe installs to the prefix root, and a
-    # root executable on Windows cannot load Qt DLLs from bin/ — a flat layout is
-    # required for the portable package to launch. Qt's deploy support honors a
-    # pre-set QT_DEPLOY_BIN_DIR (it only defaults the value when undefined), and
-    # this install(CODE) runs in the same cmake_install.cmake pass as the deploy
-    # script below, so the override is in effect when the script runs.
-    #
-    # QT_DEPLOY_QML_DIR is left at its default "qml". The generated qt.conf names
-    # it, so the deployed application resolves its QML imports relative to its own
-    # directory and never from the build tree or a developer Qt installation.
-    install(CODE "set(QT_DEPLOY_BIN_DIR \".\")")
+    install(TARGETS exosnap RUNTIME DESTINATION runtime)
 
     # Contract guard for the generated script installed below. Qt writes that
     # script to call qt6_deploy_qml_imports(), which only exists if
@@ -989,7 +979,18 @@ if(NOT COMMAND qt6_deploy_qml_imports)
         \"find_package(Qt6).\")
 endif()")
 
-    install(SCRIPT ${_exosnap_deploy_script})
+    # Qt's Windows deploy also writes files directly to its prefix. Scope that
+    # prefix to runtime so plugins, QML, and any support DLLs stay together.
+    install(CODE "
+        set(_exosnap_package_prefix \"\${CMAKE_INSTALL_PREFIX}\")
+        set(_exosnap_qt_prefix \"\${QT_DEPLOY_PREFIX}\")
+        set(CMAKE_INSTALL_PREFIX \"\${CMAKE_INSTALL_PREFIX}/runtime\")
+        set(QT_DEPLOY_PREFIX \"\$ENV{DESTDIR}\${CMAKE_INSTALL_PREFIX}\")
+        set(QT_DEPLOY_BIN_DIR \".\")
+        include(\"${_exosnap_deploy_script}\")
+        set(QT_DEPLOY_PREFIX \"\${_exosnap_qt_prefix}\")
+        set(CMAKE_INSTALL_PREFIX \"\${_exosnap_package_prefix}\")
+    ")
 endif()
 
 # EXOSNAP_CONFIG_DIR is where the QML bytecode cache ends up (see

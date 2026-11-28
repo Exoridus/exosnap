@@ -32,8 +32,13 @@ pub fn validate_scoop(repo_root: &Path, version: &str) -> anyhow::Result<Validat
     })?;
 
     let mut report = ValidationReport::default();
-    if manifest.get("shortcuts") != Some(&serde_json::json!([["exosnap.exe", "ExoSnap"]])) {
-        report.errors.push("shortcuts must target exosnap.exe at the Scoop version root beside Scoop's install and manifest metadata".into());
+    if manifest.get("shortcuts") != Some(&serde_json::json!([["ExoSnap.exe", "ExoSnap"]])) {
+        report.errors.push("shortcuts must target ExoSnap.exe at the Scoop version root beside Scoop's install and manifest metadata".into());
+    }
+    if manifest.get("persist") != Some(&serde_json::json!(["data", "portable.toml"])) {
+        report.errors.push(
+            "persist must retain the data directory and portable.toml across upgrades".into(),
+        );
     }
 
     let manifest_version = manifest
@@ -137,7 +142,6 @@ mod tests {
     "description": "Windows-native screen recorder.",
     "homepage": "https://github.com/Exoridus/exosnap",
     "license": "GPL-3.0-or-later",
-    "depends": "extras/vcredist2022",
     "notes": [
         "ExoSnap 0.10.0 is a pre-v1 preview."
     ],
@@ -149,8 +153,9 @@ mod tests {
         }
     },
     "shortcuts": [
-        ["exosnap.exe", "ExoSnap"]
+        ["ExoSnap.exe", "ExoSnap"]
     ],
+    "persist": ["data", "portable.toml"],
     "checkver": {
         "github": "https://github.com/Exoridus/exosnap"
     },
@@ -188,8 +193,8 @@ mod tests {
         std::fs::write(
             dir.path().join("packaging/scoop/exosnap.json"),
             MANIFEST.replace(
-                "[\"exosnap.exe\", \"ExoSnap\"]",
-                "[\"bin/exosnap.exe\", \"ExoSnap\"]",
+                "[\"ExoSnap.exe\", \"ExoSnap\"]",
+                "[\"runtime/exosnap.exe\", \"ExoSnap\"]",
             ),
         )
         .unwrap();

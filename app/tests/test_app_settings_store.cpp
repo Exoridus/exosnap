@@ -9,12 +9,85 @@
 #include <string>
 
 #include "settings/AppSettingsStore.h"
+#include "settings/ConfigPaths.h"
 
 namespace exosnap {
 namespace {
 
 QString TempSettingsPath(const QTemporaryDir& temp_dir) {
     return QDir(temp_dir.path()).filePath(QStringLiteral("settings.ini"));
+}
+
+class PortableDataDirectoryTest : public ::testing::Test {
+  protected:
+    void SetUp() override {
+        qunsetenv("EXOSNAP_CONFIG_DIR");
+        ASSERT_TRUE(package_.isValid());
+        const QDir root(package_.path());
+        ASSERT_TRUE(root.mkdir(QStringLiteral("runtime")));
+        runtime_ = root.filePath(QStringLiteral("runtime"));
+        QFile launcher(root.filePath(QStringLiteral("ExoSnap.exe")));
+        ASSERT_TRUE(launcher.open(QIODevice::WriteOnly));
+    }
+
+    void TearDown() override {
+        EXPECT_TRUE(settings::InitializePortableDataDir({}).isEmpty());
+        if (original_override_.isNull())
+            qunsetenv("EXOSNAP_CONFIG_DIR");
+        else
+            qputenv("EXOSNAP_CONFIG_DIR", original_override_);
+    }
+
+    void WriteMarker(const QByteArray& contents) {
+        QFile marker(QDir(package_.path()).filePath(QStringLiteral("portable.toml")));
+        ASSERT_TRUE(marker.open(QIODevice::WriteOnly | QIODevice::Truncate));
+        EXPECT_EQ(marker.write(contents), contents.size());
+    }
+
+    QByteArray original_override_ = qgetenv("EXOSNAP_CONFIG_DIR");
+    QTemporaryDir package_;
+    QString runtime_;
+};
+
+TEST_F(PortableDataDirectoryTest, RelativeDataIsResolvedFromLauncherAndKeepsItsFormat) {
+    ASSERT_TRUE(settings::InitializePortableDataDir(runtime_).isEmpty());
+    EXPECT_TRUE(settings::ResolvePersistenceOverride().isEmpty());
+    WriteMarker("data_path = \"./data\"\n");
+    ASSERT_TRUE(settings::InitializePortableDataDir(runtime_).isEmpty());
+    const QString data = QDir(package_.path()).filePath(QStringLiteral("data"));
+    EXPECT_EQ(settings::ResolveAppConfigDir(), data);
+    EXPECT_EQ(settings::ResolveAppDataDir(), data);
+    EXPECT_EQ(settings::ResolveAppCacheDir(), QDir(data).filePath(QStringLiteral("cache")));
+    EXPECT_TRUE(QFileInfo::exists(data));
+}
+
+TEST_F(PortableDataDirectoryTest, AbsolutePathIsSupportedAndRuntimeCannotOwnData) {
+    const QTemporaryDir external;
+    ASSERT_TRUE(external.isValid());
+    WriteMarker("data_path = '" + external.path().toUtf8() + "'\n");
+    ASSERT_TRUE(settings::InitializePortableDataDir(runtime_).isEmpty());
+    EXPECT_EQ(settings::ResolvePersistenceOverride(), external.path());
+
+    WriteMarker("data_path = \"./runtime/data\"\n");
+    EXPECT_FALSE(settings::InitializePortableDataDir(runtime_).isEmpty());
+    EXPECT_FALSE(QFileInfo::exists(QDir(runtime_).filePath(QStringLiteral("data"))));
+    EXPECT_TRUE(settings::ResolvePersistenceOverride().isEmpty());
+    WriteMarker("data_path = \"./runtime.old/data\"\n");
+    EXPECT_FALSE(settings::InitializePortableDataDir(runtime_).isEmpty());
+    EXPECT_FALSE(QFileInfo::exists(QDir(package_.path()).filePath(QStringLiteral("runtime.old"))));
+    WriteMarker("data_path = \"./runtime.new.hoist/data\"\n");
+    EXPECT_FALSE(settings::InitializePortableDataDir(runtime_).isEmpty());
+}
+
+TEST_F(PortableDataDirectoryTest, InvalidOrUnwritableMarkerFailsUnlessToolingOverridesIt) {
+    WriteMarker("data_path = \"./ExoSnap.exe\"\n");
+    EXPECT_FALSE(settings::InitializePortableDataDir(runtime_).isEmpty());
+    WriteMarker("data_path = false\n");
+    EXPECT_FALSE(settings::InitializePortableDataDir(runtime_).isEmpty());
+
+    qputenv("EXOSNAP_CONFIG_DIR", "tooling-profile");
+    EXPECT_TRUE(settings::InitializePortableDataDir(runtime_).isEmpty());
+    EXPECT_EQ(settings::ResolvePersistenceOverride(), QStringLiteral("tooling-profile"));
 }
 
 } // namespace

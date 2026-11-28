@@ -146,8 +146,8 @@ jobs:
         run: |
           # The downloaded executables are inputs only. The signer comes from next.
           & 'tools/target/debug/exo-verify.exe' manifest sign-diagnostics-pair `
-            --recorder candidate-prepared/inputs/runtime/exosnap.exe `
-            --helper candidate-prepared/inputs/runtime/exosnap-helper.exe `
+            --recorder candidate-prepared/inputs/runtime/runtime/exosnap.exe `
+            --helper candidate-prepared/inputs/runtime/runtime/exosnap-helper.exe `
             --out candidate-diagnostics-pair --public-key-hex $env:UPDATE_PUBLIC_KEY
           exit $LASTEXITCODE
       - name: Upload signed diagnostics pair
@@ -396,26 +396,26 @@ jobs:
           GH_TOKEN: ${{ github.token }}
         run: |
           New-Item -ItemType Directory -Path previous -Force | Out-Null
-          gh release download v0.9.0 --repo Exoridus/exosnap --dir previous `
-            --pattern 'ExoSnap-0.9.0-windows-x64.msi' `
-            --pattern 'ExoSnap-0.9.0-windows-x64.msi.sha256' `
-            --pattern 'ExoSnap-0.9.0-windows-x64-portable.zip' `
-            --pattern 'ExoSnap-0.9.0-windows-x64-portable.sha256'
+          gh release download v0.10.1 --repo Exoridus/exosnap --dir previous `
+            --pattern 'ExoSnap-0.10.1-windows-x64.msi' `
+            --pattern 'ExoSnap-0.10.1-windows-x64.msi.sha256' `
+            --pattern 'ExoSnap-0.10.1-windows-x64-portable.zip' `
+            --pattern 'ExoSnap-0.10.1-windows-x64-portable.sha256'
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
           $checksums = @{
-            'ExoSnap-0.9.0-windows-x64.msi' = 'ExoSnap-0.9.0-windows-x64.msi.sha256'
-            'ExoSnap-0.9.0-windows-x64-portable.zip' = 'ExoSnap-0.9.0-windows-x64-portable.sha256'
+            'ExoSnap-0.10.1-windows-x64.msi' = 'ExoSnap-0.10.1-windows-x64.msi.sha256'
+            'ExoSnap-0.10.1-windows-x64-portable.zip' = 'ExoSnap-0.10.1-windows-x64-portable.sha256'
           }
           foreach ($name in $checksums.Keys) {
             $declared = (Get-Content -LiteralPath "previous/$($checksums[$name])" -Raw).Trim().Split(' ')[0]
             $actual = (Get-FileHash -LiteralPath "previous/$name" -Algorithm SHA256).Hash
             if ($declared -notmatch '^[0-9a-fA-F]{64}$' -or $declared -ine $actual) { throw "previous Stable asset hash mismatch: $name" }
           }
-          Expand-Archive -LiteralPath previous/ExoSnap-0.9.0-windows-x64-portable.zip -DestinationPath previous/portable
+          Expand-Archive -LiteralPath previous/ExoSnap-0.10.1-windows-x64-portable.zip -DestinationPath previous/portable
           $oldExe = @(Get-ChildItem -LiteralPath previous/portable -Recurse -Filter exosnap.exe -File)
           if ($oldExe.Count -ne 1) { throw 'previous Stable ZIP must contain one exosnap.exe' }
           "EXOSNAP_UPDATE_FROM=$($oldExe[0].FullName)" | Add-Content $env:GITHUB_ENV
-          "EXOSNAP_UPDATE_FROM_MSI=$((Resolve-Path previous/ExoSnap-0.9.0-windows-x64.msi).Path)" | Add-Content $env:GITHUB_ENV
+          "EXOSNAP_UPDATE_FROM_MSI=$((Resolve-Path previous/ExoSnap-0.10.1-windows-x64.msi).Path)" | Add-Content $env:GITHUB_ENV
       - name: Prepare local signed HTTPS feed
         shell: pwsh
         env:

@@ -10,7 +10,6 @@ use std::fs;
 use std::path::{Path, PathBuf};
 
 use anyhow::{Context as _, Result, ensure};
-use regex::Regex;
 
 use super::msi::MsiIdentity;
 use super::release::{DistributionRelease, is_sha256};
@@ -164,10 +163,7 @@ fn replace_release_date(text: &str, date: &str) -> Result<String> {
     Ok(out)
 }
 
-/// Copies and fills `packaging/scoop/exosnap.json`; returns it. The bucket
-/// copy drops `depends`, because `extras/vcredist2022` only resolves for a
-/// user who has the Extras bucket; the standalone bucket documents the
-/// requirement in its notes instead.
+/// Writes the Scoop manifest bound to the qualified portable archive.
 pub fn render_scoop(
     repo_root: &Path,
     out_root: &Path,
@@ -188,12 +184,6 @@ pub fn render_scoop(
         &format!("\"hash\": \"{}\"", "0".repeat(64)),
         &format!("\"hash\": \"{}\"", release.portable.sha256),
     );
-    let depends = Regex::new(r#"(?m)^\s*"depends":\s*"[^"]*",\r?\n"#).unwrap();
-    ensure!(
-        depends.find_iter(&text).count() == 1,
-        "the Scoop template must carry exactly one depends field to drop"
-    );
-    let text = depends.replace(&text, "").into_owned();
     write(&target, &text)?;
     Ok(target)
 }
@@ -278,14 +268,17 @@ mod tests {
         ));
         assert!(!installer.contains("ReleaseDate: 2026-09-07"));
         let tracked = fs::read_to_string(dir.path().join("packaging/scoop/exosnap.json")).unwrap();
-        assert!(tracked.contains("\"depends\""));
+        assert!(!tracked.contains("\"depends\""));
         let scoop = fs::read_to_string(out.join("packaging/scoop/exosnap.json")).unwrap();
         assert!(scoop.contains(&format!("\"hash\": \"{}\"", "fedcba9876543210".repeat(4))));
         assert!(!scoop.contains(&"0".repeat(64)));
         assert!(
             !scoop.contains("\"depends\""),
-            "the bucket copy drops the Extras-only dependency"
+            "the app-local portable runtime needs no package dependency"
         );
+        let tracked: serde_json::Value = serde_json::from_str(&tracked).unwrap();
+        let published: serde_json::Value = serde_json::from_str(&scoop).unwrap();
+        assert_eq!(published["persist"], tracked["persist"]);
         assert!(scoop.contains("checkver") && scoop.contains("autoupdate"));
         assert!(nuspec.is_file());
     }

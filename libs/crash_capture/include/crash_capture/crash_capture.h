@@ -218,7 +218,7 @@ std::optional<SessionContext> ReadPreviousCrashContext(const std::string& crash_
 // Returns an empty string on failure (e.g., LOCALAPPDATA not set).
 // The caller is responsible for creating the directory if it does not exist.
 // ---------------------------------------------------------------------------
-std::string ResolveCrashDir();
+std::string ResolveCrashDir(const std::string& application_data_dir = {});
 
 // ---------------------------------------------------------------------------
 // Resolve the crashpad_handler.exe path relative to the running executable.

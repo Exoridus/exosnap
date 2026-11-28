@@ -28,20 +28,21 @@
 #include "UpdaterArgs.h"
 #include "UpdaterController.h" // UpStep / FailureCase
 
+namespace exosnap::update {
+class RuntimeSwapLock;
+}
+
 namespace exosnap::updater {
 
 // ---------------------------------------------------------------------------
 // Pure planning helpers
 // ---------------------------------------------------------------------------
 
-// Where the usable application root sits under `extract_dir` after a portable
-// ZIP extraction. The release ZIP wraps everything in a single top-level
-// folder ("ExoSnap-<ver>-windows-x64-portable/"); a flat layout is accepted
-// too:
-//   - extract_dir itself contains exosnap.exe                -> extract_dir
-//   - exactly one entry, a directory that contains exosnap.exe -> that directory
-//   - anything else (missing, empty, several entries, no exe) -> nullopt
-[[nodiscard]] std::optional<std::wstring> ResolveStagedRoot(const std::wstring& extract_dir);
+// Finds the payload in a flat extraction or its single top-level directory.
+// Pass the locked runtime-only plan to select its required runtime subdirectory.
+// A whole install takes the package root, including during migration from a flat layout.
+[[nodiscard]] std::optional<std::wstring> ResolveStagedRoot(const std::wstring& extract_dir,
+                                                            const exosnap::update::SwapPlan& runtime_plan = {});
 
 // RetryEntryStep now lives with the failure matrix it belongs to
 // (update/update_flow_state.h) and is visible here through UpdaterController.h,
@@ -140,6 +141,7 @@ class UpdaterWorker : public QObject {
     Q_OBJECT
   public:
     explicit UpdaterWorker(UpdaterArgs args, QObject* parent = nullptr);
+    ~UpdaterWorker() override;
 
     // Cooperative cancel for the operations that observe it (the download loop
     // and the bounded msiexec wait). Safe from any thread.
@@ -150,11 +152,12 @@ class UpdaterWorker : public QObject {
     // it, cancelling a download surfaced as FailureCase::DownloadFailed and
     // cancelling the msiexec wait as "The installer did not finish in time" --
     // both of which describe a fault that did not happen.
-    //
-    // Cleared by every run()/check() entry, so a cancellation cannot leak into
-    // the next attempt.
     void requestCancel() {
         cancel_.store(true);
+    }
+    // Reset before dispatch so the worker cannot erase an accepted cancellation.
+    void prepareOperation() {
+        cancel_.store(false);
     }
 
   public slots:
@@ -230,6 +233,7 @@ class UpdaterWorker : public QObject {
     [[nodiscard]] bool runInstallMsi();
     [[nodiscard]] bool runVerify();
     [[nodiscard]] bool runLaunch();
+    [[nodiscard]] bool LockPortableRuntime(FailureCase failure);
 
     // Wipe plan_.staging_dir, extract the kept package into it and descend the
     // single top-level ZIP folder so exosnap.exe sits directly in staging. When
@@ -271,6 +275,9 @@ class UpdaterWorker : public QObject {
     std::wstring download_dir_;
     bool have_package_ = false; // Download completed at least once
     bool repair_msi_ = false;
+    // Manual confirmation and retries can pause between staging and the swap.
+    std::unique_ptr<exosnap::update::RuntimeSwapLock> runtime_swap_lock_;
+    bool runtime_stage_ready_ = false;
 
     // Deny-write / deny-delete lock on package_path_, held from verification
     // until the package is consumed (closes the verify->consume TOCTOU window).

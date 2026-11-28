@@ -1,10 +1,10 @@
 #include "WaveformCacheService.h"
+#include "settings/ConfigPaths.h"
 
 #include <exosnap/engine/edit_timeline.h>
 
 #include <QDir>
 #include <QMetaObject>
-#include <QStandardPaths>
 
 #include <algorithm>
 #include <chrono>
@@ -28,7 +28,7 @@ constexpr auto kProgressInterval = std::chrono::milliseconds(100);
 constexpr std::size_t kMaxLayouts = 4096;
 
 std::filesystem::path DefaultRoot() {
-    const QString base = QStandardPaths::writableLocation(QStandardPaths::CacheLocation);
+    const QString base = settings::ResolveAppCacheDir();
     return std::filesystem::path(QDir(base).filePath(QStringLiteral("waveforms")).toStdWString());
 }
 

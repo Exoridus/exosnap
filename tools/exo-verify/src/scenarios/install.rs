@@ -12,7 +12,10 @@ use crate::bundle::{FileRole, sha256_file};
 use crate::capability::Capability;
 use crate::context::Context;
 use crate::control::{self, Client};
-use crate::package::{DIAGNOSTICS_HELPER, package_runtime_hashes, walk_files};
+use crate::package::{
+    DIAGNOSTICS_HELPER, LAUNCHER_NAME, RECORDER_NAME, RUNTIME_DIR, installed_runtime_hashes,
+    portable_runtime_hashes, walk_files,
+};
 use crate::plan::Tier;
 use crate::scenario::{Lane, Scenario, ScenarioClass, Step, Stop};
 use crate::{infra_ensure, product_ensure};
@@ -65,10 +68,10 @@ pub fn scenarios() -> Vec<Scenario> {
         },
         Scenario {
             id: "install.msi-cycle",
-            revision: 2,
+            revision: 3,
             title: "The MSI installs, starts, uninstalls and reinstalls cleanly",
             class: ScenarioClass::Installer,
-            contract: "on a clean disposable Windows machine, the MSI installs the portable bytes at matching application-relative paths, first and second starts are healthy, uninstall removes the helper and preserves user settings, and reinstall restores the product",
+            contract: "on a clean disposable Windows machine, the MSI installs the shared portable files and uses the system Visual C++ runtime, starts cleanly, uninstalls the helper, preserves user settings, and reinstalls the same bytes",
             lane: Lane::CiInstall,
             also: &[],
             tier: Tier::Required,
@@ -234,10 +237,15 @@ fn setup_cycle(ctx: &mut Context) -> Step {
         json!(install.code().map(|code| code.to_string())),
     );
 
-    let exe = PathBuf::from(r"C:\Program Files\ExoSnap\exosnap.exe");
+    let install_root = Path::new(r"C:\Program Files\ExoSnap");
+    let launcher = install_root.join(LAUNCHER_NAME);
+    let exe = install_root.join(RUNTIME_DIR).join(RECORDER_NAME);
     let shortcut = PathBuf::from(std::env::var("ProgramData")?)
         .join(r"Microsoft\Windows\Start Menu\Programs\ExoSnap.lnk");
-    product_ensure!(exe.is_file(), "Setup did not install exosnap.exe");
+    product_ensure!(
+        launcher.is_file() && exe.is_file(),
+        "Setup did not install the launcher and recorder"
+    );
     product_ensure!(
         reg_value("installed")?.is_some(),
         "Setup did not write the product registry marker"
@@ -320,7 +328,7 @@ fn setup_cycle(ctx: &mut Context) -> Step {
         ctx.scenario_dir.join("setup-repair.log").display()
     );
     product_ensure!(
-        exe.is_file() && reg_value("installed")?.is_some(),
+        launcher.is_file() && exe.is_file() && reg_value("installed")?.is_some(),
         "repair did not leave the product installed"
     );
 
@@ -338,7 +346,8 @@ fn setup_cycle(ctx: &mut Context) -> Step {
         ctx.scenario_dir.join("setup-uninstall.log").display()
     );
     product_ensure!(
-        !exe.exists()
+        !launcher.exists()
+            && !exe.exists()
             && reg_value("installed")?.is_none()
             && !shortcut.exists()
             && !desktop_shortcut()?.exists(),
@@ -376,7 +385,10 @@ fn setup_cycle(ctx: &mut Context) -> Step {
         passive_install.code()
     );
     product_ensure!(
-        exe.is_file() && reg_value("installed")?.is_some() && !desktop_shortcut()?.exists(),
+        launcher.is_file()
+            && exe.is_file()
+            && reg_value("installed")?.is_some()
+            && !desktop_shortcut()?.exists(),
         "a passive install did not leave the expected product state"
     );
     let passive_uninstall = run_setup(
@@ -392,7 +404,7 @@ fn setup_cycle(ctx: &mut Context) -> Step {
         passive_uninstall.code()
     );
     product_ensure!(
-        !exe.exists() && reg_value("installed")?.is_none(),
+        !launcher.exists() && !exe.exists() && reg_value("installed")?.is_none(),
         "a passive uninstall left the product installed"
     );
 
@@ -483,7 +495,9 @@ fn setup_interactive(ctx: &mut Context) -> Step {
     let install_log = ctx.scenario_dir.join("setup-ui-install.log");
     let uninstall_log = ctx.scenario_dir.join("setup-ui-uninstall.log");
 
-    let exe = PathBuf::from(r"C:\Program Files\ExoSnap\exosnap.exe");
+    let install_root = Path::new(r"C:\Program Files\ExoSnap");
+    let launcher = install_root.join(LAUNCHER_NAME);
+    let exe = install_root.join(RUNTIME_DIR).join(RECORDER_NAME);
     let shortcut = PathBuf::from(std::env::var("ProgramData")?)
         .join(r"Microsoft\Windows\Start Menu\Programs\ExoSnap.lnk");
     let config = PathBuf::from(std::env::var("LOCALAPPDATA")?).join("ExoSnap");
@@ -507,7 +521,10 @@ fn setup_interactive(ctx: &mut Context) -> Step {
             click_launch: true,
         },
     )?;
-    product_ensure!(exe.is_file(), "the interactive install left no exosnap.exe");
+    product_ensure!(
+        launcher.is_file() && exe.is_file(),
+        "the interactive install left no launcher and recorder"
+    );
     product_ensure!(
         reg_value("installed")?.is_some(),
         "the interactive install wrote no product marker"
@@ -559,7 +576,7 @@ fn setup_interactive(ctx: &mut Context) -> Step {
         },
     )?;
     product_ensure!(
-        !exe.exists() && reg_value("installed")?.is_none(),
+        !launcher.exists() && !exe.exists() && reg_value("installed")?.is_none(),
         "the interactive uninstall left the product installed"
     );
     product_ensure!(
@@ -770,8 +787,9 @@ fn msi_cycle(ctx: &mut Context) -> Step {
         root.display()
     );
     let expected =
-        package_runtime_hashes(&portable).map_err(|error| Stop::fail(format!("{error:#}")))?;
-    let actual = package_runtime_hashes(&root).map_err(|error| Stop::fail(format!("{error:#}")))?;
+        portable_runtime_hashes(&portable).map_err(|error| Stop::fail(format!("{error:#}")))?;
+    let actual =
+        installed_runtime_hashes(&root).map_err(|error| Stop::fail(format!("{error:#}")))?;
     product_ensure!(
         actual == expected,
         "installed file hashes differ from the portable package"
@@ -792,17 +810,22 @@ fn msi_cycle(ctx: &mut Context) -> Step {
         !reg_key_exists(r"HKLM\SOFTWARE\Codexo\ExoSnap")?,
         "a fresh install wrote the legacy product key"
     );
-    let exe = root.join("exosnap.exe");
+    let launcher = root.join(LAUNCHER_NAME);
+    let runtime = root.join(RUNTIME_DIR);
+    let exe = runtime.join(RECORDER_NAME);
     run_start(ctx, &exe, &version, &commit)?;
     run_start(ctx, &exe, &version, &commit)?;
     let config_before = tree_hashes(&config)?;
     msi(ctx, "/x", &installer, "uninstall.log")?;
     product_ensure!(
-        !exe.exists() && reg_value("InstallPath")?.is_none() && !shortcut.exists(),
+        !launcher.exists()
+            && !exe.exists()
+            && reg_value("InstallPath")?.is_none()
+            && !shortcut.exists(),
         "uninstall left application files, registry or shortcut"
     );
     product_ensure!(
-        !root.join(DIAGNOSTICS_HELPER).exists(),
+        !runtime.join(DIAGNOSTICS_HELPER).exists(),
         "uninstall left the diagnostics helper"
     );
     product_ensure!(
@@ -810,7 +833,8 @@ fn msi_cycle(ctx: &mut Context) -> Step {
         "uninstall changed user configuration"
     );
     msi(ctx, "/i", &installer, "reinstall.log")?;
-    let actual = package_runtime_hashes(&root).map_err(|error| Stop::fail(format!("{error:#}")))?;
+    let actual =
+        installed_runtime_hashes(&root).map_err(|error| Stop::fail(format!("{error:#}")))?;
     product_ensure!(
         actual == expected,
         "reinstall did not restore the candidate bytes"
@@ -873,7 +897,9 @@ fn msi_user_data_removal(ctx: &mut Context) -> Step {
     );
 
     msi(ctx, "/i", &installer, "removal-restore.log")?;
-    let exe = PathBuf::from(r"C:\Program Files\ExoSnap\exosnap.exe");
+    let exe = Path::new(r"C:\Program Files\ExoSnap")
+        .join(RUNTIME_DIR)
+        .join(RECORDER_NAME);
     product_ensure!(
         exe.is_file() && reg_value("installed")?.is_some(),
         "the product was not restored after the removal scenario"
@@ -895,22 +921,29 @@ mod tests {
         let program_files = temp.path().join("Program Files");
         let installed = program_files.join("ExoSnap");
         let misplaced_dir = program_files.join("ExoSnap Diagnostics");
-        for dir in [&portable, &installed, &misplaced_dir] {
+        let portable_runtime = portable.join(RUNTIME_DIR);
+        let installed_runtime = installed.join(RUNTIME_DIR);
+        for dir in [&portable_runtime, &installed_runtime, &misplaced_dir] {
             fs::create_dir_all(dir).unwrap();
         }
-        let helper = installed.join(DIAGNOSTICS_HELPER);
-        let portable_helper = portable.join(DIAGNOSTICS_HELPER);
-        fs::write(portable.join("exosnap.exe"), b"recorder").unwrap();
-        fs::write(installed.join("exosnap.exe"), b"recorder").unwrap();
+        let helper = installed_runtime.join(DIAGNOSTICS_HELPER);
+        let portable_helper = portable_runtime.join(DIAGNOSTICS_HELPER);
+        for (root, runtime) in [
+            (&portable, &portable_runtime),
+            (&installed, &installed_runtime),
+        ] {
+            fs::write(root.join(LAUNCHER_NAME), b"launcher").unwrap();
+            fs::write(runtime.join(RECORDER_NAME), b"recorder").unwrap();
+        }
         fs::write(portable_helper, b"helper").unwrap();
         fs::write(&helper, b"helper").unwrap();
-        let expected = package_runtime_hashes(&portable).unwrap();
-        assert_eq!(package_runtime_hashes(&installed).unwrap(), expected);
+        let expected = portable_runtime_hashes(&portable).unwrap();
+        assert_eq!(installed_runtime_hashes(&installed).unwrap(), expected);
         fs::write(&helper, b"different helper").unwrap();
-        assert_ne!(package_runtime_hashes(&installed).unwrap(), expected);
+        assert_ne!(installed_runtime_hashes(&installed).unwrap(), expected);
         fs::remove_file(&helper).unwrap();
         fs::write(misplaced_dir.join(DIAGNOSTICS_HELPER), b"helper").unwrap();
-        assert!(package_runtime_hashes(&installed).is_err());
+        assert!(installed_runtime_hashes(&installed).is_err());
     }
 
     #[cfg(windows)]
@@ -1034,7 +1067,9 @@ mod tests {
                 reg_value("InstallPath")?.ok_or_else(|| anyhow::anyhow!("InstallPath absent"))?,
             );
             assert!(
-                root.join("exosnap.exe").is_file() && root.join("exosnap-updater.exe").is_file()
+                root.join(LAUNCHER_NAME).is_file()
+                    && (root.join(RUNTIME_DIR).join("exosnap-updater.exe").is_file()
+                        || root.join("exosnap-updater.exe").is_file())
             );
             let arp = exosnap_arp_rows()?;
             assert_eq!(arp.len(), 1, "{name}: stale product registration");

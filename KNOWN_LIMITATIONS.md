@@ -1,6 +1,6 @@
-# ExoSnap 0.10.1: Known limitations
+# ExoSnap 0.11.0: Known limitations
 
-ExoSnap 0.10.1 is pre-1.0 Windows preview software. This page qualifies the [product contract](docs/product-spec.md), not a list of every theoretical capability of its dependencies. Settings, presets and recording-history schemas are not frozen; keep backups before switching preview versions.
+ExoSnap 0.11.0 is pre-1.0 Windows preview software. This page qualifies the [product contract](docs/product-spec.md), not a list of every theoretical capability of its dependencies. Settings, presets and recording-history schemas are not frozen; keep backups before switching preview versions.
 
 ## Platform and encoding
 
@@ -74,7 +74,7 @@ Low-disk protection depends on a usable free-space reading. A reachable/writable
 
 ## Recording clips
 
-Recording Clips are enabled for qualification and not yet released. The engine implements MKV stream copy with PCM or Opus audio. AAC, FLAC and MP4 clip output have no qualified decoder-start/priming contract and are rejected. HEVC/AV1 clip profiles, long split-spanning compressed multitrack clips and concurrent recording/export/storage pressure still require qualification. The inclusive 32 MiB per-job working-buffer limit is not yet proven by the existing component capacity guards. Opus clips use packet-duration-specific priming metadata. The initial GOP of a 2.5 ms Opus recording with a measured 5 ms startup gap is rejected because the gap exceeds one packet; later eligible GOPs remain available. A 5 ms packet profile can retain its measured one-packet startup gap.
+Recording Clip creation is unavailable. Previously saved clips can be imported as ordinary media. The retained engine implements MKV stream copy with PCM or Opus audio. AAC, FLAC and MP4 clip output have no qualified decoder-start/priming contract and are rejected. HEVC/AV1 clip profiles, long split-spanning compressed multitrack clips and concurrent recording/export/storage pressure still require qualification. The inclusive 32 MiB per-job working-buffer limit is not yet proven by the existing component capacity guards. Opus clips use packet-duration-specific priming metadata. The initial GOP of a 2.5 ms Opus recording with a measured 5 ms startup gap is rejected because the gap exceeds one packet; later eligible GOPs remain available. A 5 ms packet profile can retain its measured one-packet startup gap.
 
 ## Editor
 

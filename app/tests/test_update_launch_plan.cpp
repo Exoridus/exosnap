@@ -751,6 +751,35 @@ TEST(StageUpdaterRuntime, ProducesASelfContainedQuickRuntimeThatLaunches) {
     EXPECT_EQ(process.exitCode(), 0) << process.readAllStandardError().toStdString();
 }
 
+TEST(StageUpdaterRuntime, CopiesTheAppLocalPortableRuntimeWhenPresent) {
+    QTemporaryDir source;
+    QTemporaryDir stage;
+    ASSERT_TRUE(source.isValid());
+    ASSERT_TRUE(stage.isValid());
+    const QDir directory(source.path());
+    for (const QString& relative : exosnap::UpdaterStagingFileList()) {
+        const QString path = directory.filePath(relative);
+        if (relative.endsWith(QLatin1Char('/'))) {
+            ASSERT_TRUE(QDir().mkpath(path));
+        } else {
+            ASSERT_TRUE(QDir().mkpath(QFileInfo(path).absolutePath()));
+            QFile file(path);
+            ASSERT_TRUE(file.open(QIODevice::WriteOnly));
+        }
+    }
+    const QString runtime = QStringLiteral("vcruntime140_1.dll");
+    {
+        QFile file(directory.filePath(runtime));
+        ASSERT_TRUE(file.open(QIODevice::WriteOnly));
+        ASSERT_EQ(file.write("portable"), 8);
+    }
+    QString error;
+    ASSERT_TRUE(exosnap::StageUpdaterRuntime(source.path(), stage.path(), &error)) << error.toStdString();
+    QFile deployed(QDir(stage.path()).filePath(runtime));
+    ASSERT_TRUE(deployed.open(QIODevice::ReadOnly));
+    EXPECT_EQ(deployed.readAll(), QByteArray("portable"));
+}
+
 TEST(BuildUpdaterArgs, PreservesTheRunningEffectiveLanguage) {
     static int argc = 1;
     static char name[] = "update_launch_plan_tests";

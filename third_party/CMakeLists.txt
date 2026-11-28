@@ -419,7 +419,7 @@ set_target_properties(exosnap_sdl3 PROPERTIES
 add_library(SDL3::SDL3 ALIAS exosnap_sdl3)
 _exosnap_install_license("SDL3 3.4.20 (zlib)"
     "${sdl3_SOURCE_DIR}/LICENSE.txt" "sdl3.txt")
-install(FILES "$<TARGET_FILE:SDL3::SDL3>" DESTINATION ".")
+install(FILES "$<TARGET_FILE:SDL3::SDL3>" DESTINATION runtime)
 _exosnap_install_license("Gamepad artwork (CC0)"
     "${PROJECT_SOURCE_DIR}/third_party/gamepad/xelu.txt" "gamepad-artwork.txt")
 _exosnap_install_license("Controller artwork (MIT)"

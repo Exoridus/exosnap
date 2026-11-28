@@ -209,7 +209,7 @@ set(EXOSNAP_FFMPEG_DLLS
     CACHE INTERNAL "FFmpeg mux-only DLL paths for deployment")
 
 # Install rules: flat next to exosnap.exe (mirrors Qt deploy approach)
-install(FILES ${EXOSNAP_FFMPEG_DLLS} DESTINATION ".")
+install(FILES ${EXOSNAP_FFMPEG_DLLS} DESTINATION runtime)
 
 # ---------------------------------------------------------------------------
 # License staging (mirrors the pattern in third_party/CMakeLists.txt)

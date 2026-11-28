@@ -26,15 +26,12 @@ The [mandatory v0.11 hardware gates](../release-checklist.md#mandatory-v011-hard
 
 ## Candidate and execution lanes
 
-Recording Clip creation is offered. The required `clip.recording-live` scenario
-(revision 4) records through the candidate's production control endpoint, saves an
-offered last-30-seconds clip while capture continues and opens it in Edit. It
-belongs to release-gpu and also runs in ordinary preflight. The negative
-`clip.creation-unavailable` implementation retains revision 1 outside the active
-registry for a source-level deactivation. New candidate plans require the positive
-contract, and a passing negative result cannot stand in for it. Existing frozen
-plans and historical results keep their identities; plan validation never rewrites
-or waives a failure.
+Recording Clip creation is disabled. New candidate plans require `clip.creation-unavailable`
+(revision 1) in release-ci-core. It also runs in release-gpu and preflight. The
+production control endpoint must refuse creation and stale confirmations without
+creating jobs or media. The live-creation scenario remains available in source for
+future qualification. Frozen plans keep their original scenario identities. A historical
+`clip.recording-live` result cannot satisfy the current refusal contract.
 
 The `Build release candidate` workflow creates one official final-version build from a commit on `next`. Download `candidate-bundle/` and `candidate-plan.json` from the same Actions run. Keep them together with the separately signed disposable test-feed artifact. The bundle inventories the exact MSI, portable ZIP and verifier bytes; the plan freezes the source registry for that candidate.
 
@@ -82,16 +79,11 @@ Run installer and update lanes in a disposable guest. GPU and physical hardware 
 
 The CI update lane uses the production embedded Ed25519 public key. A separate signing job reads the production private key only from its GitHub secret and uploads only the test manifest and detached signature. The key is never written to a file, log, result or artifact. The manifest describes the candidate package hashes and local test-feed URLs. It is served only by a loopback HTTPS server in the disposable update job, where a temporary hosts entry and certificate redirect `api.github.com`. No release or Stable feed receives that manifest. The official application rejects `--update-base-url`; no user setting or environment variable enables a feed override. The temporary network redirect changes discovery transport only. The product still performs release discovery, version comparison, Ed25519 signature verification and package SHA-256 verification.
 
-The v0.9.0 Stable updater predates the injected UAC-decline fault.
-The hosted update lane checks the accepting path against that baseline.
-A real UAC refusal remains an external hardware-lane check.
-The simulated decline is reserved for a later baseline that contains the fault seam.
-The portable update from that baseline runs the v0.9.0 updater, which renames each directory exactly once.
-A handle still open in the old tree after the application exits can therefore fail `update.portable` with "The current installation is in use and could not be moved."
-One known holder: v0.9.0 always starts `crashpad_handler.exe` from the installation, the handler inherits the application's working directory and outlives it by up to about 50 ms.
-When the application was started with its working directory inside the tree, as a launch from Explorer does, the single rename falls into that window.
-The installation stays intact, and the updater offers Retry, which re-enters at the install step.
-The bounded rename retry of later updaters cannot change that first hop.
+The hosted upgrade lanes start from the published v0.10.1 ZIP and MSI. The flat portable updater verifies the candidate's versioned root launcher and waits for the recorder's existing instance mutex. The lane separately checks the launcher and the running recorder against the candidate bytes. A real UAC refusal remains an external hardware-lane check.
+
+On a candidate layout, the portable updater swaps only `runtime/`. Check that the marker and data survive successful updates and rollback. Verify the root launcher from a local path with spaces and Unicode. Where a disposable share is available, also check UNC application launch, portable data resolution, writable network recording output and an unavailable network destination. Record the available test environment with the outcome.
+
+If an old application or its Crashpad handler still holds the tree, the initial flat-layout rename can report that the installation is in use. The updater leaves the installation intact and offers Retry.
 The update scenarios record the evidence for such a failure as a timeline.
 `console-<run id>.log` holds the old application's console and that of the updater it launches, with a receive time per line; the updater reports its failure only there.
 `treeHolders` lists every process whose image or working directory lies in the old tree, and the application's children, with the time each ended relative to the application's exit.

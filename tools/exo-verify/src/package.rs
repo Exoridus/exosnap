@@ -129,7 +129,19 @@ fn external_path(path: &Path) -> PathBuf {
 /// Files and directories every runtime tree must carry. Qt Quick modules are
 /// load-bearing: without them the process starts and dies at QML load, which
 /// no compile or link step can catch.
-const REQUIRED_FILES: &[&str] = &[
+pub(crate) const LAUNCHER_NAME: &str = "ExoSnap.exe";
+pub(crate) const RUNTIME_DIR: &str = "runtime";
+pub(crate) const RECORDER_NAME: &str = "exosnap.exe";
+
+const REQUIRED_ROOT_FILES: &[&str] = &[
+    LAUNCHER_NAME,
+    "licenses/LICENSE",
+    "licenses/THIRD_PARTY_NOTICES.md",
+    "docs/KNOWN_LIMITATIONS.md",
+    "docs/README-PORTABLE.md",
+];
+
+const REQUIRED_RUNTIME_FILES: &[&str] = &[
     "exosnap.exe",
     "exosnap-updater.exe",
     "SDL3.dll",
@@ -152,10 +164,6 @@ const REQUIRED_FILES: &[&str] = &[
     "Qt6Quick3D.dll",
     "Qt6Quick3DRuntimeRender.dll",
     "Qt6Quick3DUtils.dll",
-    "LICENSE",
-    "THIRD_PARTY_NOTICES.md",
-    "KNOWN_LIMITATIONS.md",
-    "README-PORTABLE.md",
     // A QML module directory without its qmldir cannot be resolved by the engine.
     "qml/QtQuick/qmldir",
     "qml/QtQuick/Controls/qmldir",
@@ -164,7 +172,6 @@ const REQUIRED_FILES: &[&str] = &[
 
 const REQUIRED_DIRS: &[&str] = &[
     "plugins/platforms",
-    "licenses",
     "qml/QtQuick",
     "qml/QtQuick/Controls",
     "qml/QtQuick/Controls/Basic",
@@ -231,6 +238,33 @@ const DIAGNOSTICS_ARTIFACTS: &[&str] = &[
     DIAGNOSTICS_HELPER,
     diagnostics_pair::MANIFEST_NAME,
     diagnostics_pair::SIGNATURE_NAME,
+];
+// The x64 release files in the MSVC 14.44.35211.0 redistributable toolchain.
+pub(crate) const PORTABLE_CRT_FILES: &[(&str, &str)] = &[
+    (
+        "msvcp140.dll",
+        "0f885b509a685d2bbfa652fed26b5fb31d88fbdab0a978c641d1c7b8aa460aa9",
+    ),
+    (
+        "msvcp140_1.dll",
+        "bfad5aef4c63a669e3c140655cdfdf395b6c979b400a447bd5dcb65ed8826c3d",
+    ),
+    (
+        "msvcp140_2.dll",
+        "3ea06f0ee098b4823cb79599df3780e7f23cce52c19aac31d2a0d47efe33a5e9",
+    ),
+    (
+        "msvcp140_atomic_wait.dll",
+        "640b2aefced484d0368eea5bdd06addd0658a3a70a49256e560d6923b404a479",
+    ),
+    (
+        "vcruntime140.dll",
+        "d5e4d9a3e835fa679450145d6a7d94e36573a509317111904d9b3712c30d9066",
+    ),
+    (
+        "vcruntime140_1.dll",
+        "1f2d41c4aa5db0bc33ebf7b66d72943a817d7ce6cbe880502a9403823633093f",
+    ),
 ];
 const PREPARED_INVENTORY: &str = "package-inputs.json";
 const SETUP_RUNTIME: &str = "setup-runtime";
@@ -346,7 +380,7 @@ fn stage_diagnostics_helper(staging: &Path, helper: &Path) -> Result<()> {
             relative(staging, &path)
         );
     }
-    let staged_helper = staging.join(DIAGNOSTICS_HELPER);
+    let staged_helper = staging.join(RUNTIME_DIR).join(DIAGNOSTICS_HELPER);
     fs::copy(helper, &staged_helper).with_context(|| {
         format!(
             "stage the Release diagnostics helper from {}",
@@ -357,12 +391,13 @@ fn stage_diagnostics_helper(staging: &Path, helper: &Path) -> Result<()> {
 }
 
 fn stage_diagnostics_pair(staging: &Path, pair_dir: &Path, public: &VerifyingKey) -> Result<()> {
+    let runtime = staging.join(RUNTIME_DIR);
     for leaf in [
         diagnostics_pair::MANIFEST_NAME,
         diagnostics_pair::SIGNATURE_NAME,
     ] {
         let source = pair_dir.join(leaf);
-        let destination = staging.join(leaf);
+        let destination = runtime.join(leaf);
         ensure!(
             !destination.exists(),
             "unexpected diagnostics artifact: {leaf}"
@@ -373,10 +408,11 @@ fn stage_diagnostics_pair(staging: &Path, pair_dir: &Path, public: &VerifyingKey
 }
 
 pub fn verify_staged_diagnostics(root: &Path, public: &VerifyingKey) -> Result<()> {
+    let runtime = root.join(RUNTIME_DIR);
     diagnostics_pair::verify_in_directory(
-        root,
-        &root.join("exosnap.exe"),
-        &root.join(DIAGNOSTICS_HELPER),
+        &runtime,
+        &runtime.join(RECORDER_NAME),
+        &runtime.join(DIAGNOSTICS_HELPER),
         public,
     )
 }
@@ -385,22 +421,29 @@ pub fn verify_staged_diagnostics(root: &Path, public: &VerifyingKey) -> Result<(
 /// empty list means the tree is shippable as far as its contents can tell.
 pub fn validate_tree(root: &Path, version: &str, leak_patterns: &[String]) -> Result<Vec<String>> {
     let mut errors = Vec::new();
-    for f in REQUIRED_FILES {
+    let runtime = root.join(RUNTIME_DIR);
+    for f in REQUIRED_ROOT_FILES {
         if !root.join(f).is_file() {
             errors.push(format!("missing required file: {f}"));
         }
     }
-    if !root.join(DIAGNOSTICS_HELPER).is_file() {
-        errors.push(format!("missing required file: {DIAGNOSTICS_HELPER}"));
+    for f in REQUIRED_RUNTIME_FILES
+        .iter()
+        .copied()
+        .chain([DIAGNOSTICS_HELPER])
+    {
+        if !runtime.join(f).is_file() {
+            errors.push(format!("missing required file: {RUNTIME_DIR}/{f}"));
+        }
     }
-    if root.join(diagnostics_pair::MANIFEST_NAME).is_file()
-        != root.join(diagnostics_pair::SIGNATURE_NAME).is_file()
+    if runtime.join(diagnostics_pair::MANIFEST_NAME).is_file()
+        != runtime.join(diagnostics_pair::SIGNATURE_NAME).is_file()
     {
         errors.push("incomplete diagnostics pair in package".into());
     }
     for d in REQUIRED_DIRS {
-        if !root.join(d).is_dir() {
-            errors.push(format!("missing required directory: {d}"));
+        if !runtime.join(d).is_dir() {
+            errors.push(format!("missing required directory: {RUNTIME_DIR}/{d}"));
         }
     }
     for lic in REQUIRED_LICENSES {
@@ -408,7 +451,7 @@ pub fn validate_tree(root: &Path, version: &str, leak_patterns: &[String]) -> Re
             errors.push(format!("missing third-party license: licenses/{lic}"));
         }
     }
-    if root.join("crashpad_handler.exe").is_file() {
+    if runtime.join("crashpad_handler.exe").is_file() {
         for lic in CRASH_CAPTURE_LICENSES {
             if !root.join("licenses").join(lic).is_file() {
                 errors.push(format!(
@@ -418,7 +461,7 @@ pub fn validate_tree(root: &Path, version: &str, leak_patterns: &[String]) -> Re
         }
     }
     for d in FORBIDDEN_DIRS {
-        if root.join(d).is_dir() {
+        if root.join(d).is_dir() || runtime.join(d).is_dir() {
             errors.push(format!("forbidden directory in package: {d}/"));
         }
     }
@@ -443,9 +486,12 @@ pub fn validate_tree(root: &Path, version: &str, leak_patterns: &[String]) -> Re
             errors.push(format!("superseded executable in package: {rel}"));
         }
         if let Some(leaf) = diagnostics_artifact(&file)
-            && rel != leaf
+            && file != runtime.join(leaf)
         {
             errors.push(format!("misplaced diagnostics artifact: {rel}"));
+        }
+        if is_binary(&name) && !file.starts_with(&runtime) && rel != LAUNCHER_NAME {
+            errors.push(format!("binary outside {RUNTIME_DIR}/: {rel}"));
         }
         if let Some(fragment) = FORBIDDEN_NAME_FRAGMENTS
             .iter()
@@ -461,6 +507,9 @@ pub fn validate_tree(root: &Path, version: &str, leak_patterns: &[String]) -> Re
         if is_debug_qt(&name) {
             errors.push(format!("debug Qt DLL in package: {rel}"));
         }
+        if is_debug_msvc(&name) {
+            errors.push(format!("debug MSVC runtime in package: {rel}"));
+        }
         if matches!(ext.as_str(), "md" | "txt" | "json" | "ini" | "conf")
             && let Ok(text) = fs::read_to_string(&file)
         {
@@ -473,7 +522,11 @@ pub fn validate_tree(root: &Path, version: &str, leak_patterns: &[String]) -> Re
     }
     let base = version.split('-').next().unwrap_or(version);
     #[cfg(windows)]
-    for exe in ["exosnap.exe", "exosnap-updater.exe"] {
+    for exe in [
+        LAUNCHER_NAME,
+        "runtime/exosnap.exe",
+        "runtime/exosnap-updater.exe",
+    ] {
         let path = root.join(exe);
         if !path.is_file() {
             continue;
@@ -503,10 +556,12 @@ pub fn validate_tree(root: &Path, version: &str, leak_patterns: &[String]) -> Re
             Err(e) => errors.push(format!("{exe}: {e:#}")),
         }
     }
-    if let Ok(limits) = fs::read_to_string(root.join("KNOWN_LIMITATIONS.md"))
-        && !limits.contains(base)
-    {
-        errors.push(format!("KNOWN_LIMITATIONS.md does not name version {base}"));
+    for document in ["docs/KNOWN_LIMITATIONS.md", "docs/README-PORTABLE.md"] {
+        if let Ok(text) = fs::read_to_string(root.join(document))
+            && !text.contains(base)
+        {
+            errors.push(format!("{document} does not name version {base}"));
+        }
     }
     Ok(errors)
 }
@@ -706,12 +761,25 @@ fn is_binary(path: &str) -> bool {
     path.ends_with(".exe") || path.ends_with(".dll")
 }
 
-pub(crate) fn package_runtime_hashes(root: &Path) -> Result<BTreeMap<String, String>> {
+fn package_runtime_hashes(root: &Path) -> Result<BTreeMap<String, String>> {
     let mut hashes = BTreeMap::new();
+    let runtime = root.join(RUNTIME_DIR);
     for file in walk_files(root)? {
         let rel = relative(root, &file);
         if let Some(leaf) = diagnostics_artifact(&file) {
-            ensure!(rel == leaf, "misplaced diagnostics artifact: {rel}");
+            ensure!(
+                file == runtime.join(leaf),
+                "misplaced diagnostics artifact: {rel}"
+            );
+        }
+        if file
+            .file_name()
+            .is_some_and(|name| name.eq_ignore_ascii_case(RECORDER_NAME))
+        {
+            ensure!(
+                rel == LAUNCHER_NAME || file == runtime.join(RECORDER_NAME),
+                "misplaced recorder or launcher: {rel}"
+            );
         }
         ensure!(
             hashes
@@ -720,35 +788,116 @@ pub(crate) fn package_runtime_hashes(root: &Path) -> Result<BTreeMap<String, Str
             "duplicate package file: {rel}"
         );
     }
+    for rel in [
+        LAUNCHER_NAME.to_ascii_lowercase(),
+        format!("{RUNTIME_DIR}/{RECORDER_NAME}"),
+        format!("{RUNTIME_DIR}/{DIAGNOSTICS_HELPER}"),
+    ] {
+        ensure!(hashes.contains_key(&rel), "missing package file: {rel}");
+    }
     ensure!(
-        hashes.contains_key(DIAGNOSTICS_HELPER),
-        "the package lacks the diagnostics helper next to exosnap.exe"
-    );
-    ensure!(
-        hashes.contains_key(diagnostics_pair::MANIFEST_NAME)
-            == hashes.contains_key(diagnostics_pair::SIGNATURE_NAME),
+        hashes.contains_key(&format!(
+            "{RUNTIME_DIR}/{}",
+            diagnostics_pair::MANIFEST_NAME
+        )) == hashes.contains_key(&format!(
+            "{RUNTIME_DIR}/{}",
+            diagnostics_pair::SIGNATURE_NAME
+        )),
         "incomplete diagnostics pair"
     );
     Ok(hashes)
 }
 
-/// Compares every portable file with the same relative path in the MSI administrative image.
+fn is_msvc_runtime(path: &str) -> bool {
+    let leaf = path.rsplit('/').next().unwrap_or(path);
+    pe::MSVC_RUNTIME_DLLS.contains(&leaf)
+}
+
+fn reject_app_local_crt(hashes: &BTreeMap<String, String>) -> Result<()> {
+    if let Some(path) = hashes.keys().find(|path| is_msvc_runtime(path)) {
+        bail!("unexpected app-local MSVC runtime outside portable ZIP: {path}");
+    }
+    Ok(())
+}
+
+pub(crate) fn installed_runtime_hashes(root: &Path) -> Result<BTreeMap<String, String>> {
+    let hashes = package_runtime_hashes(root)?;
+    reject_app_local_crt(&hashes)?;
+    Ok(hashes)
+}
+
+pub(crate) fn portable_runtime_hashes(root: &Path) -> Result<BTreeMap<String, String>> {
+    let mut hashes = package_runtime_hashes(root)?;
+    if hashes.keys().any(|path| is_msvc_runtime(path)) {
+        for (name, expected) in PORTABLE_CRT_FILES {
+            let path = format!("{RUNTIME_DIR}/{name}");
+            ensure!(
+                hashes.remove(&path).as_deref() == Some(*expected),
+                "missing or mismatched pinned MSVC runtime: {path}"
+            );
+        }
+        reject_app_local_crt(&hashes)?;
+    }
+    Ok(hashes)
+}
+
+fn verify_crt_directory(directory: &Path) -> Result<()> {
+    for (name, expected) in PORTABLE_CRT_FILES {
+        let path = directory.join(name);
+        let (actual, _) = sha256_file(&path)
+            .with_context(|| format!("read pinned MSVC runtime {}", path.display()))?;
+        ensure!(
+            actual == *expected,
+            "MSVC runtime {} differs from the pinned x64 {VC_REDIST_MIN_VERSION} file",
+            path.display()
+        );
+    }
+    Ok(())
+}
+
+pub(crate) fn verify_portable_crt(root: &Path) -> Result<pe::Audit> {
+    verify_crt_directory(&root.join(RUNTIME_DIR))?;
+    validate_launcher_imports(&root.join(LAUNCHER_NAME))?;
+    let audit = pe::audit_tree(root)?;
+    ensure!(
+        audit.msvc == 0,
+        "portable ZIP still has {} imports requiring the shared MSVC runtime",
+        audit.msvc
+    );
+    ensure!(
+        audit.unresolved.is_empty(),
+        "unresolved portable runtime imports: {}",
+        audit.unresolved.join(", ")
+    );
+    Ok(audit)
+}
+
+fn stage_portable_crt(staging: &Path, source: &Path) -> Result<pe::Audit> {
+    let runtime = staging.join(RUNTIME_DIR);
+    for (name, _) in PORTABLE_CRT_FILES {
+        fs::copy(source.join(name), runtime.join(name)).with_context(|| {
+            format!("stage the pinned x64 {VC_REDIST_MIN_VERSION} MSVC runtime file {name}")
+        })?;
+    }
+    verify_portable_crt(staging)
+}
+
+/// Compares shared runtime paths and bytes in the MSI administrative image and portable package.
 pub fn verify_msi_runtime_parity(portable: &Path, extracted: &Path) -> Result<usize> {
     let msi_files = walk_files(extracted)?;
-    let mut recorders = msi_files.iter().filter(|path| {
-        path.file_name()
-            .is_some_and(|name| name.eq_ignore_ascii_case("exosnap.exe"))
-    });
-    let msi_root = recorders
+    let mut launchers = msi_files
+        .iter()
+        .filter(|path| path.file_name().is_some_and(|name| name == LAUNCHER_NAME));
+    let msi_root = launchers
         .next()
         .and_then(|exe| exe.parent())
-        .context("the MSI contains no exosnap.exe")?;
+        .context("the MSI contains no ExoSnap.exe launcher")?;
     ensure!(
-        recorders.next().is_none(),
-        "the MSI contains multiple exosnap.exe files"
+        launchers.next().is_none(),
+        "the MSI contains multiple ExoSnap.exe launchers"
     );
-    let expected = package_runtime_hashes(portable)?;
-    let actual = package_runtime_hashes(msi_root)?;
+    let expected = portable_runtime_hashes(portable)?;
+    let actual = installed_runtime_hashes(msi_root)?;
     for file in msi_files.iter().filter(|file| !file.starts_with(msi_root)) {
         let rel = relative(extracted, file);
         ensure!(
@@ -770,7 +919,7 @@ pub fn verify_msi_runtime_parity(portable: &Path, extracted: &Path) -> Result<us
         .keys()
         .filter(|key| {
             !expected.contains_key(*key)
-                && (is_binary(key) || DIAGNOSTICS_ARTIFACTS.contains(&key.as_str()))
+                && (is_binary(key) || diagnostics_artifact(Path::new(key)).is_some())
         })
         .collect();
     ensure!(
@@ -896,7 +1045,7 @@ fn prepare_setup_runtime(
     }
     fs::copy(repo_root.join("LICENSE"), out.join("LICENSE"))?;
     fs::copy(
-        staging.join("THIRD_PARTY_NOTICES.md"),
+        staging.join("licenses/THIRD_PARTY_NOTICES.md"),
         out.join("THIRD_PARTY_NOTICES.md"),
     )?;
     copy_tree(&staging.join("licenses"), &out.join("licenses"))?;
@@ -1014,15 +1163,13 @@ fn prepare_runtime(build_dir: &Path, staging: &Path) -> Result<()> {
     )?;
     // Vendored static dependencies install headers and import libraries the
     // product never loads; they carry no switch to turn that off.
-    for dev in ["lib", "include"] {
+    for dev in ["lib", "include", "bin"] {
         remove_if_exists(&staging.join(dev))?;
     }
     // Software OpenGL, translations, network plugins, development-only QML
     // tooling and the unattached Controls styles are not used. The compiler
-    // runtime belongs to Burn and the package-manager dependencies, never to
-    // the application tree. `bin/` holds nothing but upstream Crashpad's
-    // duplicate handler and WER shim; the root handler is the one the
-    // application resolves.
+    // runtime is added only to the ZIP after the MSI has been assembled.
+    let runtime = staging.join(RUNTIME_DIR);
     for unused in [
         "opengl32sw.dll",
         "translations",
@@ -1038,9 +1185,9 @@ fn prepare_runtime(build_dir: &Path, staging: &Path) -> Result<()> {
         "qml/QtQuick/NativeStyle",
         "bin",
     ] {
-        remove_if_exists(&staging.join(unused))?;
+        remove_if_exists(&runtime.join(unused))?;
     }
-    for entry in fs::read_dir(staging)? {
+    for entry in fs::read_dir(&runtime)? {
         let entry = entry?;
         let name = entry.file_name().to_string_lossy().to_ascii_lowercase();
         if name.starts_with("vc_redist") && name.ends_with(".exe") {
@@ -1066,6 +1213,17 @@ fn validate_runtime(repo_root: &Path, staging: &Path, version: &str) -> Result<p
     }
     println!("==> validating the install tree");
     let mut errors = validate_tree(staging, version, &leaks)?;
+    let launcher = staging.join(LAUNCHER_NAME);
+    if launcher.is_file()
+        && let Err(error) = validate_launcher_imports(&launcher)
+    {
+        errors.push(format!("{error:#}"));
+    }
+    errors.extend(walk_files(staging)?.iter().filter_map(|file| {
+        let path = relative(staging, file);
+        is_msvc_runtime(&path.to_ascii_lowercase())
+            .then(|| format!("unexpected MSVC runtime in common staging: {path}"))
+    }));
     println!("==> auditing static runtime dependencies");
     let audit = pe::audit_tree(staging)?;
     errors.extend(
@@ -1088,6 +1246,19 @@ fn validate_runtime(repo_root: &Path, staging: &Path, version: &str) -> Result<p
         audit.binaries, audit.shipped, audit.system, audit.msvc
     );
     Ok(audit)
+}
+
+fn validate_launcher_imports(launcher: &Path) -> Result<()> {
+    for import in pe::imports_of(launcher)? {
+        let name = import.to_ascii_lowercase();
+        ensure!(
+            pe::WINDOWS_SYSTEM_DLLS.contains(&name.as_str())
+                || name.starts_with("api-ms-win-")
+                || name.starts_with("ext-ms-"),
+            "{LAUNCHER_NAME} depends on a DLL outside Windows: {import}"
+        );
+    }
+    Ok(())
 }
 
 fn copy_tree(source: &Path, target: &Path) -> Result<()> {
@@ -1147,7 +1318,7 @@ fn load_prepared_inventory(root: &Path) -> Result<PreparedInventory> {
 
 fn stage_prepared_runtime(root: &Path, staging: &Path) -> Result<()> {
     let runtime = root.join("runtime");
-    let expected_helper = runtime.join(DIAGNOSTICS_HELPER);
+    let expected_helper = runtime.join(RUNTIME_DIR).join(DIAGNOSTICS_HELPER);
     for file in walk_files(&runtime)? {
         if diagnostics_artifact(&file).is_some() {
             ensure!(
@@ -1271,6 +1442,7 @@ fn export_prepared(
         fs::copy(inputs.owner_probe, out.join(MSI_OWNER_PROBE))?;
         if let Some(setup) = inputs.setup {
             validate_setup_inputs(&setup)?;
+            verify_crt_directory(&setup.runtime)?;
             fs::copy(setup.bootstrapper, out.join(SETUP_BOOTSTRAPPER))?;
             fs::copy(setup.vc_redist, out.join(SETUP_REDIST))?;
         }
@@ -1348,15 +1520,7 @@ pub fn run(args: &PackageArgs) -> Result<Option<PackageResult>> {
         )?;
         stage_diagnostics_pair(&staging, pair_dir, &public)?;
     }
-    let audit = validate_runtime(&repo_root, &staging, &version)?;
-
-    let portable = out.join(format!("{top}.zip"));
-    println!("==> {}", portable.display());
-    write_zip(&staging, &top, &portable)?;
-    if args.launch_smoke {
-        println!("==> launch smoke");
-        launch_smoke(&staging)?;
-    }
+    let common_audit = validate_runtime(&repo_root, &staging, &version)?;
 
     let installer_inputs = if args.skip_msi {
         None
@@ -1426,6 +1590,19 @@ pub fn run(args: &PackageArgs) -> Result<Option<PackageResult>> {
         _ => None,
     };
 
+    let audit = if let Some(inputs) = setup_inputs {
+        stage_portable_crt(&staging, &inputs.runtime)?
+    } else {
+        common_audit
+    };
+    let portable = out.join(format!("{top}.zip"));
+    println!("==> {}", portable.display());
+    write_zip(&staging, &top, &portable)?;
+    if args.launch_smoke {
+        println!("==> launch smoke");
+        launch_smoke(&staging)?;
+    }
+
     let file_count = walk_files(&staging)?.len();
     let result = PackageResult {
         version,
@@ -1462,7 +1639,7 @@ pub fn run(args: &PackageArgs) -> Result<Option<PackageResult>> {
 /// and hard-error dialogs suppressed, so a missing DLL exits instead of
 /// waiting on a modal box.
 fn launch_smoke(staging: &Path) -> Result<()> {
-    let exe = staging.join("exosnap.exe");
+    let exe = staging.join(RUNTIME_DIR).join(RECORDER_NAME);
     ensure!(exe.is_file(), "{} is missing", exe.display());
     let scratch = std::env::temp_dir().join(crate::control::new_run_id("exosnap-smoke"));
     let (config, temp) = (scratch.join("config"), scratch.join("temp"));
@@ -1645,15 +1822,17 @@ mod tests {
     }
 
     #[test]
-    fn portable_tree_allows_diagnostics_payload_only_at_root() {
+    fn portable_tree_allows_diagnostics_payload_only_beside_the_recorder() {
         let dir = tempfile::tempdir().unwrap();
-        fs::write(dir.path().join(DIAGNOSTICS_HELPER), b"helper").unwrap();
+        let runtime = dir.path().join(RUNTIME_DIR);
+        fs::create_dir(&runtime).unwrap();
+        fs::write(runtime.join(DIAGNOSTICS_HELPER), b"helper").unwrap();
         let errors = validate_tree(dir.path(), "0.11.0", &[]).unwrap();
         assert!(
             errors
                 .iter()
                 .all(|error| !error.contains(DIAGNOSTICS_HELPER)),
-            "the portable root helper was rejected"
+            "the recorder's sibling helper was rejected"
         );
         let helper = dir.path().join("nested/EXOSNAP-HELPER.EXE");
         fs::create_dir_all(helper.parent().unwrap()).unwrap();
@@ -1671,8 +1850,10 @@ mod tests {
         let pair = dir.path().join("pair");
         let helper = dir.path().join(DIAGNOSTICS_HELPER);
         let staging = dir.path().join("staging");
-        fs::create_dir(&staging).unwrap();
-        let recorder = staging.join("exosnap.exe");
+        let runtime = staging.join("runtime");
+        fs::create_dir_all(&runtime).unwrap();
+        fs::write(staging.join("ExoSnap.exe"), b"launcher").unwrap();
+        let recorder = runtime.join("exosnap.exe");
         fs::write(&recorder, b"recorder").unwrap();
         fs::write(&helper, b"helper").unwrap();
         let key = ed25519_dalek::SigningKey::from_bytes(&[7; 32]);
@@ -1693,7 +1874,7 @@ mod tests {
         assert!(xml.contains(diagnostics_pair::SIGNATURE_NAME));
 
         for leaf in DIAGNOSTICS_ARTIFACTS {
-            fs::remove_file(staging.join(leaf)).unwrap();
+            fs::remove_file(runtime.join(leaf)).unwrap();
         }
         fs::create_dir(staging.join("nested")).unwrap();
         fs::write(staging.join("nested/DIAGNOSTICS-PAIR.TXT"), []).unwrap();
@@ -1718,8 +1899,9 @@ mod tests {
             ("malformed", "signature is not 64 bytes"),
         ] {
             let staging = dir.path().join(folder);
-            fs::create_dir(&staging).unwrap();
-            let recorder = staging.join("exosnap.exe");
+            let runtime = staging.join(RUNTIME_DIR);
+            fs::create_dir_all(&runtime).unwrap();
+            let recorder = runtime.join(RECORDER_NAME);
             fs::write(&recorder, b"recorder").unwrap();
             diagnostics_pair::sign_to_directory(&pair, &recorder, &helper, &key).unwrap();
             if folder == "mismatched" {
@@ -1737,9 +1919,11 @@ mod tests {
     fn prepared_inputs_relocate_and_stage_the_signed_runtime_and_setup_inputs() {
         let dir = tempfile::tempdir().unwrap();
         let prepare = dir.path().join("prepare");
-        let runtime = prepare.join("runtime");
+        let package = prepare.join("runtime");
+        let runtime = package.join(RUNTIME_DIR);
         fs::create_dir_all(&runtime).unwrap();
-        let recorder = runtime.join("exosnap.exe");
+        fs::write(package.join(LAUNCHER_NAME), b"launcher").unwrap();
+        let recorder = runtime.join(RECORDER_NAME);
         let helper = runtime.join(DIAGNOSTICS_HELPER);
         fs::write(&recorder, b"recorder").unwrap();
         fs::write(&helper, b"helper").unwrap();
@@ -1783,7 +1967,10 @@ mod tests {
         let stage = out.join("staging");
         stage_prepared_runtime(&downloaded, &stage).unwrap();
         stage_diagnostics_pair(&stage, &pair, &key.verifying_key()).unwrap();
-        assert_eq!(fs::read(stage.join(DIAGNOSTICS_HELPER)).unwrap(), b"helper");
+        assert_eq!(
+            fs::read(stage.join(RUNTIME_DIR).join(DIAGNOSTICS_HELPER)).unwrap(),
+            b"helper"
+        );
         let installer = installer_inputs_from_prepared(&downloaded, &out).unwrap();
         assert_eq!(
             fs::read(installer.owner_probe).unwrap(),
@@ -1814,40 +2001,58 @@ mod tests {
         let program_files = extracted.join("Program Files");
         let app = program_files.join("ExoSnap");
         let misplaced_dir = program_files.join("ExoSnap Diagnostics");
-        fs::create_dir(&portable).unwrap();
-        fs::create_dir_all(&app).unwrap();
+        let portable_runtime = portable.join(RUNTIME_DIR);
+        let installed_runtime = app.join(RUNTIME_DIR);
+        fs::create_dir_all(&portable_runtime).unwrap();
+        fs::create_dir_all(&installed_runtime).unwrap();
         fs::create_dir_all(&misplaced_dir).unwrap();
+        for root in [&portable, &app] {
+            fs::write(root.join(LAUNCHER_NAME), b"launcher").unwrap();
+        }
         for leaf in [
-            "exosnap.exe",
+            RECORDER_NAME,
             diagnostics_pair::MANIFEST_NAME,
             diagnostics_pair::SIGNATURE_NAME,
         ] {
-            fs::write(portable.join(leaf), leaf).unwrap();
-            fs::write(app.join(leaf), leaf).unwrap();
+            fs::write(portable_runtime.join(leaf), leaf).unwrap();
+            fs::write(installed_runtime.join(leaf), leaf).unwrap();
         }
-        let source = portable.join(DIAGNOSTICS_HELPER);
+        let source = portable_runtime.join(DIAGNOSTICS_HELPER);
         fs::write(&source, b"helper").unwrap();
         assert!(verify_msi_runtime_parity(&portable, &extracted).is_err());
 
-        let helper = app.join(DIAGNOSTICS_HELPER);
+        let helper = installed_runtime.join(DIAGNOSTICS_HELPER);
         fs::copy(&source, &helper).unwrap();
-        assert_eq!(verify_msi_runtime_parity(&portable, &extracted).unwrap(), 4);
+        assert_eq!(verify_msi_runtime_parity(&portable, &extracted).unwrap(), 5);
 
         fs::write(&helper, b"different helper").unwrap();
         assert!(verify_msi_runtime_parity(&portable, &extracted).is_err());
 
         fs::copy(&source, &helper).unwrap();
-        assert_eq!(verify_msi_runtime_parity(&portable, &extracted).unwrap(), 4);
+        assert_eq!(verify_msi_runtime_parity(&portable, &extracted).unwrap(), 5);
         let misplaced = misplaced_dir.join(DIAGNOSTICS_HELPER);
         fs::copy(&source, &misplaced).unwrap();
         assert!(verify_msi_runtime_parity(&portable, &extracted).is_err());
         fs::remove_file(&misplaced).unwrap();
 
-        let signature = app.join(diagnostics_pair::SIGNATURE_NAME);
+        let signature = installed_runtime.join(diagnostics_pair::SIGNATURE_NAME);
         fs::remove_file(&signature).unwrap();
         assert!(verify_msi_runtime_parity(&portable, &extracted).is_err());
-        fs::copy(portable.join(diagnostics_pair::SIGNATURE_NAME), &signature).unwrap();
-        fs::write(misplaced_dir.join("DIAGNOSTICS-PAIR.TXT"), []).unwrap();
+        fs::copy(
+            portable_runtime.join(diagnostics_pair::SIGNATURE_NAME),
+            &signature,
+        )
+        .unwrap();
+        let bad_signature = misplaced_dir.join("DIAGNOSTICS-PAIR.TXT");
+        fs::write(&bad_signature, []).unwrap();
+        assert!(verify_msi_runtime_parity(&portable, &extracted).is_err());
+        fs::remove_file(bad_signature).unwrap();
+
+        let bad_crt = portable_runtime.join(PORTABLE_CRT_FILES[0].0);
+        fs::write(&bad_crt, b"untrusted runtime").unwrap();
+        assert!(verify_msi_runtime_parity(&portable, &extracted).is_err());
+        fs::remove_file(bad_crt).unwrap();
+        fs::write(installed_runtime.join(PORTABLE_CRT_FILES[0].0), []).unwrap();
         assert!(verify_msi_runtime_parity(&portable, &extracted).is_err());
     }
 
@@ -2031,6 +2236,29 @@ mod tests {
         assert!(cmake.contains("CMAKE_INSTALL_SYSTEM_RUNTIME_LIBS"));
         assert!(cmake.contains("qt_add_resources(exosnap_setup_ui setup_license"));
         assert!(cmake.contains(r#"FILES "${PROJECT_SOURCE_DIR}/LICENSE""#));
+    }
+
+    #[test]
+    fn launcher_uses_windows_dependencies_even_when_the_runtime_supplies_qt() {
+        let root = tempfile::tempdir().unwrap();
+        let launcher = root.path().join(LAUNCHER_NAME);
+        let runtime = root.path().join(RUNTIME_DIR);
+        fs::create_dir(&runtime).unwrap();
+        fs::write(runtime.join("Qt6Core.dll"), pe::tests::synthetic_pe(&[])).unwrap();
+        fs::write(
+            &launcher,
+            pe::tests::synthetic_pe(&["KERNEL32.dll", "Qt6Core.dll"]),
+        )
+        .unwrap();
+        assert!(pe::audit_tree(root.path()).unwrap().unresolved.is_empty());
+        assert!(validate_launcher_imports(&launcher).is_err());
+
+        fs::write(
+            &launcher,
+            pe::tests::synthetic_pe(&["KERNEL32.dll", "api-ms-win-crt-runtime-l1-1-0.dll"]),
+        )
+        .unwrap();
+        validate_launcher_imports(&launcher).unwrap();
     }
 
     #[test]

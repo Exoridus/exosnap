@@ -746,7 +746,7 @@ mod tests {
     }
 
     #[test]
-    fn offered_clip_creation_is_required_and_the_negative_contract_cannot_stand_in() {
+    fn clip_refusal_is_required_and_historical_creation_cannot_stand_in() {
         let mut plan = plan();
         plan.scenarios = crate::scenarios::clips::scenarios()
             .iter()
@@ -759,26 +759,32 @@ mod tests {
             })
             .collect();
         assert_eq!(plan.scenarios.len(), 1);
-        assert_eq!(plan.scenarios[0].id, "clip.recording-live");
+        assert_eq!(plan.scenarios[0].id, "clip.creation-unavailable");
         let missing = merge(&plan, &[], None).unwrap();
         assert!(!missing.ready_for_approval);
-        assert_eq!(missing.blocking, vec!["clip.recording-live (not run)"]);
+        assert_eq!(
+            missing.blocking,
+            vec!["clip.creation-unavailable (not run)"]
+        );
         let planned = plan.scenarios[0].clone();
-        let gpu_lane = |verdicts: &[(&str, Verdict)]| {
-            let mut result = lane(Some(SHA), verdicts);
+        for verdict in [Verdict::Pass, Verdict::Fail, Verdict::Unavailable] {
+            let mut result = lane(Some(SHA), &[("clip.creation-unavailable", verdict)]);
             result.lane = planned.lane.clone();
             result.scenarios[0].scenario_revision = planned.scenario_revision;
-            result
-        };
-        for verdict in [Verdict::Pass, Verdict::Fail, Verdict::Unavailable] {
-            let results = [gpu_lane(&[("clip.recording-live", verdict)])];
+            let results = [result];
             let report = merge(&plan, &results, None).unwrap();
             assert_eq!(report.ready_for_approval, verdict == Verdict::Pass);
             assert_eq!(report.scenarios[0].tier, Tier::Required);
             verify(&report, &plan, &results, None).unwrap();
         }
-        let historical = [gpu_lane(&[("clip.creation-unavailable", Verdict::Pass)])];
-        assert!(!merge(&plan, &historical, None).unwrap().ready_for_approval);
+        let mut historical = lane(Some(SHA), &[("clip.recording-live", Verdict::Pass)]);
+        historical.lane = crate::scenario::Lane::Gpu.name().into();
+        historical.scenarios[0].scenario_revision = 4;
+        assert!(
+            !merge(&plan, &[historical], None)
+                .unwrap()
+                .ready_for_approval
+        );
     }
 
     #[test]

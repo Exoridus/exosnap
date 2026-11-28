@@ -12,6 +12,7 @@
 #include "QuickWindowGeometry.h"
 #include "i18n/Language.h"
 #include "settings/AppSettingsStore.h"
+#include "settings/ConfigPaths.h"
 #if defined(EXOSNAP_ENABLE_AUTO_RECORD_HARNESS)
 #include "NotificationsAdapter.h"
 #include "QuickAutoEditHarness.h"
@@ -47,6 +48,7 @@
 #include <QJsonArray>
 #include <QJsonDocument>
 #include <QJsonObject>
+#include <QMessageBox>
 #include <QMetaMethod>
 #include <QMetaProperty>
 #include <QPainter>
@@ -1481,6 +1483,12 @@ int main(int argc, char* argv[]) {
     // tree alone. The QML engine's cache is the one thing EXOSNAP_CONFIG_DIR
     // does not reach on its own. Must precede QuickApplication, which owns the
     // engine.
+    const QString config_error = exosnap::settings::InitializePortableDataDir(QCoreApplication::applicationDirPath());
+    if (!config_error.isEmpty()) {
+        reportStartupError(config_error);
+        QMessageBox::critical(nullptr, QCoreApplication::applicationName(), config_error);
+        return 2;
+    }
     (void)exosnap::bootstrap::AlignQmlDiskCacheWithConfigDir();
 
     exosnap::bootstrap::BootstrapOptions bootstrap_options;
