@@ -78,7 +78,7 @@ pub fn scenarios() -> Vec<Scenario> {
         },
         Scenario {
             id: "update.msi-accept",
-            revision: 3,
+            revision: 4,
             title: "MSI update installs and relaunches the candidate",
             class: ScenarioClass::Installer,
             contract: "accepting the signed candidate offer installs the bound candidate into the MSI installation, the old process ends, and the installed candidate executable runs again",
@@ -193,6 +193,15 @@ fn portable(ctx: &mut Context) -> Step {
     drive_update(ctx, &exe, false, None)
 }
 
+fn installed_recorder(root: &Path) -> Option<PathBuf> {
+    let runtime = root.join(RUNTIME_DIR).join(RECORDER_NAME);
+    if runtime.is_file() {
+        return Some(runtime);
+    }
+    let legacy = root.join(RECORDER_NAME);
+    legacy.is_file().then_some(legacy)
+}
+
 fn installed_exe() -> Step<Option<PathBuf>> {
     // The product marker moved to Software\ExoSnap in 0.10.1; a baseline older
     // than that (the previous official MSI this lane installs) still publishes
@@ -207,11 +216,13 @@ fn installed_exe() -> Step<Option<PathBuf>> {
         }
         let path = out.stdout.lines().find_map(|line| {
             let (_, value) = line.split_once("REG_SZ")?;
-            line.contains("InstallPath")
-                .then_some(PathBuf::from(value.trim()).join("exosnap.exe"))
+            if !line.contains("InstallPath") {
+                return None;
+            }
+            installed_recorder(Path::new(value.trim()))
         });
-        if let Some(path) = path.filter(|p| p.is_file()) {
-            return Ok(Some(path));
+        if path.is_some() {
+            return Ok(path);
         }
     }
     Ok(None)
@@ -1019,6 +1030,36 @@ mod tests {
         );
         assert!(accepted_state(&json!({"phase":"failed", "failureCase":"launchFailed"})).is_err());
         assert!(accepted_state(&json!({"phase":"rebootRequired", "failureCase":null})).is_err());
+    }
+
+    #[test]
+    fn installed_update_replaces_flat_recorder_with_nested_recorder() {
+        let directory = tempfile::tempdir().unwrap();
+        let root = directory.path();
+        assert_eq!(installed_recorder(root), None);
+
+        let legacy = root.join(RECORDER_NAME);
+        std::fs::write(&legacy, b"previous recorder").unwrap();
+        assert_eq!(installed_recorder(root), Some(legacy.clone()));
+
+        std::fs::remove_file(legacy).unwrap();
+        let launcher = root.join(LAUNCHER_NAME);
+        let runtime = root.join(RUNTIME_DIR);
+        let recorder = runtime.join(RECORDER_NAME);
+        std::fs::create_dir(&runtime).unwrap();
+        std::fs::write(&launcher, b"candidate launcher").unwrap();
+        std::fs::write(&recorder, b"candidate recorder").unwrap();
+
+        let target = installed_recorder(root).unwrap();
+        assert_eq!(target, recorder);
+        assert_ne!(
+            sha256_file(&target).unwrap().0,
+            sha256_file(&launcher).unwrap().0
+        );
+        assert_eq!(
+            relaunched_pid(&[(10, Some(launcher)), (11, Some(recorder))], 9, &target),
+            Some(11)
+        );
     }
 
     #[test]
