@@ -24,6 +24,8 @@ This selection does not alter an already frozen candidate plan. Several speciali
 
 The [mandatory v0.11 hardware gates](../release-checklist.md#mandatory-v011-hardware-acceptance) remain RELEASE-BLOCKING - NOT YET QUALIFIED. The current Recommended tier of `audio.mixed-clock-soak` does not make that product obligation optional. Its 30-minute recording is supporting evidence, not the required 2-3-hour independent SYS/MIC reference qualification. The release approver also requires comparable runtime/background-load evidence, including supported MP4 remux work. Review exact binary/environment/reference identities and the existing acceptance criteria before publication. No disabled ClipJob is required, and this schedule does not enable Recording Clips.
 
+Run the required `diagnostics.present-unelevated` scenario in `release-hardware` from a standard Windows session. The verifier and the recorder must both run without elevation.
+
 ## Candidate and execution lanes
 
 Recording Clip creation is disabled. New candidate plans require `clip.creation-unavailable`
@@ -44,7 +46,8 @@ exo-verify run --profile release-ci --lane release-ci-core --bundle candidate-bu
 exo-verify run --profile release-ci --lane release-ci-install --bundle candidate-bundle --out results/install
 exo-verify run --profile release-ci --lane release-ci-update --bundle candidate-bundle --out results/update
 exo-verify run --profile release-gpu --bundle candidate-bundle --out results/gpu
-# Set this list from the reviewed qualification scope; leave empty when none is selected.
+# Run this required scenario without elevation. Add scenarios selected by the qualification scope.
+$selectedHardwareScenarios = @('diagnostics.present-unelevated')
 if ($selectedHardwareScenarios) {
     exo-verify run --profile release-hardware --bundle candidate-bundle --only $selectedHardwareScenarios --out results/hardware
 }

@@ -41,10 +41,10 @@ pub fn scenarios() -> Vec<Scenario> {
         },
         Scenario {
             id: "app.navigation-surfaces",
-            revision: 2,
+            revision: 3,
             title: "Every page and popup is reachable and settles",
             class: ScenarioClass::Contract,
-            contract: "each page navigates and settles idempotently, Edit is not a navigation target, and the source picker, notification hub and settings reveal behave as specified",
+            contract: "each page, including Edit, navigates and settles idempotently, invalid destinations are rejected, and the source picker, notification hub and settings reveal behave as specified",
             lane: Lane::CiCore,
             also: &[Lane::Quick],
             tier: Tier::Required,
@@ -67,14 +67,14 @@ pub fn scenarios() -> Vec<Scenario> {
         },
         Scenario {
             id: "diagnostics.present-unelevated",
-            revision: 2,
+            revision: 3,
             title: "Unelevated present diagnostics report the trace's own truth",
             class: ScenarioClass::Contract,
             contract: "with in-depth diagnostics opted in but no elevation, present diagnostics report an unelevated process and either a named refusal (accessDenied or conflict) with no measurement fields or a real sample when this token holds the trace right",
-            lane: Lane::CiCore,
+            lane: Lane::Hardware,
             also: &[Lane::Quick],
             tier: Tier::Required,
-            requires: &[Capability::InteractiveDesktop],
+            requires: &[Capability::Windows, Capability::InteractiveDesktop],
             timeout: secs(90.0),
             run: present_unelevated,
         },
@@ -174,7 +174,7 @@ fn canonical_page(requested: &str) -> &str {
 
 fn navigation_surfaces(ctx: &mut Context) -> Step {
     let mut app = ctx.launch(&[])?;
-    for page in PAGES {
+    for page in PAGES.into_iter().chain(["edit"]) {
         for attempt in 0..2 {
             let result = app
                 .client
@@ -204,16 +204,14 @@ fn navigation_surfaces(ctx: &mut Context) -> Step {
     }
     match app
         .client
-        .request("ui.navigate", json!({ "page": "edit" }), secs(10.0))?
+        .request("ui.navigate", json!({ "page": "invalid-page" }), secs(10.0))?
     {
         Ok(_) => {
-            return Err(Stop::fail(
-                "Edit was accepted as a navigation destination; it is an overlay",
-            ));
+            return Err(Stop::fail("an invalid navigation destination was accepted"));
         }
         Err(r) => product_ensure!(
             r.code == "invalid_params",
-            "navigating to edit was refused with {} instead of invalid_params",
+            "the invalid navigation destination was refused with {} instead of invalid_params",
             r.code
         ),
     }

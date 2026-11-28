@@ -23,7 +23,7 @@ jobs:
   prepare:
     if: github.ref == 'refs/heads/next' && github.repository == 'Exoridus/exosnap'
     runs-on: windows-2022
-    timeout-minutes: 30
+    timeout-minutes: 45
     outputs:
       version: ${{ steps.source.outputs.version }}
       source_date_epoch: ${{ steps.source.outputs.source_date_epoch }}
