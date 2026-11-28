@@ -50,7 +50,7 @@ pub fn scenarios() -> Vec<Scenario> {
         },
         Scenario {
             id: "install.setup-interactive",
-            revision: 1,
+            revision: 2,
             title: "The interactive Setup honors its checkboxes and Launch action",
             class: ScenarioClass::Installer,
             contract: "on a clean disposable Windows machine, the interactive ExoSnap Setup shows an unchecked desktop-shortcut option, creates the shortcut only when it is selected, launches the installed application from the success page, and its uninstall page shows an unchecked remove-local-data option that removes only local user data when selected",
@@ -463,7 +463,7 @@ fn runtime_sufficient(version: &Option<(u64, u64, u64, u64)>) -> bool {
 /// and turns a driver failure into a product failure with the log path.
 #[cfg(windows)]
 fn run_uia(ctx: &mut Context, run: &super::setup_ui::Run<'_>) -> Step {
-    let result = super::setup_ui::drive(run)
+    let result = super::setup_ui::drive(run, ctx)
         .map_err(|error| Stop::fail(format!("the interactive Setup failed: {error:#}")));
     ctx.keep(run.log);
     if let Ok(entries) = fs::read_dir(run.screenshots) {
