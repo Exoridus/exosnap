@@ -1,6 +1,6 @@
-# ExoSnap 0.10.1: Known limitations
+# ExoSnap 0.11.0: Known limitations
 
-ExoSnap 0.10.1 is pre-1.0 Windows preview software. This page qualifies the [product contract](docs/product-spec.md), not a list of every theoretical capability of its dependencies. Settings, presets and recording-history schemas are not frozen; keep backups before switching preview versions.
+ExoSnap 0.11.0 is pre-1.0 Windows preview software. This page qualifies the [product contract](docs/product-spec.md), not a list of every theoretical capability of its dependencies. Settings, presets and recording-history schemas are not frozen; keep backups before switching preview versions.
 
 ## Platform and encoding
 
